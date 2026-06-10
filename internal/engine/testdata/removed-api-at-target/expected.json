@@ -33,7 +33,7 @@
       "teams": [
         "core"
       ],
-      "title": "batch/v1beta1 CronJob deprecated since 1.21 (1 objects)"
+      "title": "batch/v1beta1 CronJob deprecated since 1.21 (1 object)"
     }
   ],
   "kbVersion": "test-kb-1",

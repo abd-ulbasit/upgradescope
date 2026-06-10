@@ -90,7 +90,7 @@ func TestEvalAPIUsageRemovedAtTargetPlusOne(t *testing.T) {
 	if len(fs) != 1 || fs[0].Severity != SevWarning || fs[0].Category != CatRemovedAPI {
 		t.Fatalf("want one removed-api warning, got %+v", fs)
 	}
-	if fs[0].Title != "extensions/v1beta1 Ingress removed in 1.22 (1 objects)" {
+	if fs[0].Title != "extensions/v1beta1 Ingress removed in 1.22 (1 object)" {
 		t.Fatalf("title = %q", fs[0].Title)
 	}
 }
@@ -108,7 +108,7 @@ func TestEvalAPIUsageDeprecatedBeyondWindowIsInfo(t *testing.T) {
 	if len(fs) != 1 || fs[0].Severity != SevInfo || fs[0].Category != CatDeprecatedAPI {
 		t.Fatalf("want one deprecated-api info, got %+v", fs)
 	}
-	if fs[0].Title != "batch/v1beta1 CronJob deprecated since 1.21 (1 objects)" {
+	if fs[0].Title != "batch/v1beta1 CronJob deprecated since 1.21 (1 object)" {
 		t.Fatalf("title = %q", fs[0].Title)
 	}
 	if fs[0].Remediation != "migrate to batch/v1 CronJob" {
@@ -127,7 +127,7 @@ func TestEvalAPIUsageCoreGroupRendering(t *testing.T) {
 	if len(fs) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
-	if fs[0].Title != "v1 ComponentStatus deprecated since 1.19 (1 objects)" {
+	if fs[0].Title != "v1 ComponentStatus deprecated since 1.19 (1 object)" {
 		t.Fatalf("core group must render as bare version; title = %q", fs[0].Title)
 	}
 	if fs[0].Detail != "1 object(s) still stored/served at this version: cluster-scoped (1)." {

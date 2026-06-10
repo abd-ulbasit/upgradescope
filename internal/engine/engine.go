@@ -28,6 +28,15 @@ func lifecycleIndex(k kb.KB) map[gvkKey]kb.APILifecycleEntry {
 	return idx
 }
 
+// pluralObjects renders an object count with grammatical number:
+// "1 object", "3 objects".
+func pluralObjects(n int) string {
+	if n == 1 {
+		return "1 object"
+	}
+	return fmt.Sprintf("%d objects", n)
+}
+
 // gvString renders "group/version"; the core group renders as just "version".
 func gvString(group, version string) string {
 	if group == "" {
@@ -104,15 +113,15 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 		case e.Removed != nil && e.Removed.Compare(target) <= 0:
 			f.Category = CatRemovedAPI
 			f.Severity = SevBlocker
-			f.Title = fmt.Sprintf("%s %s removed in %s (%d objects)", gv, u.Kind, e.Removed, u.Count)
+			f.Title = fmt.Sprintf("%s %s removed in %s (%s)", gv, u.Kind, e.Removed, pluralObjects(u.Count))
 		case e.Removed != nil && e.Removed.Compare(target.Next()) == 0:
 			f.Category = CatRemovedAPI
 			f.Severity = SevWarning
-			f.Title = fmt.Sprintf("%s %s removed in %s (%d objects)", gv, u.Kind, e.Removed, u.Count)
+			f.Title = fmt.Sprintf("%s %s removed in %s (%s)", gv, u.Kind, e.Removed, pluralObjects(u.Count))
 		case e.Deprecated != nil:
 			f.Category = CatDeprecatedAPI
 			f.Severity = SevInfo
-			f.Title = fmt.Sprintf("%s %s deprecated since %s (%d objects)", gv, u.Kind, e.Deprecated, u.Count)
+			f.Title = fmt.Sprintf("%s %s deprecated since %s (%s)", gv, u.Kind, e.Deprecated, pluralObjects(u.Count))
 		default:
 			continue // KB entry exists but is neither deprecated nor removed
 		}
@@ -142,7 +151,11 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 		if c.RemovedRelease == "" || perr != nil {
 			f.Severity = SevInfo
 			f.Title = fmt.Sprintf("clients still requesting %s %s (deprecated)", gv, res)
-			f.Detail = "apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; no removal release is recorded."
+			if c.RemovedRelease == "" {
+				f.Detail = "apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; no removal release is recorded."
+			} else {
+				f.Detail = fmt.Sprintf("apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; removal release %q could not be parsed.", c.RemovedRelease)
+			}
 			out = append(out, f)
 			continue
 		}
@@ -198,14 +211,21 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 		}
 		switch {
 		case a.Support.Status == "eol" || (hasDate && !eolDate.After(now)):
+			// Tense follows the date: status "eol" can carry a future
+			// effective date (upstream already declared EOL).
 			title := fmt.Sprintf("%s is end-of-life", a.DisplayName)
-			if a.Support.EOLDate != "" {
+			detail := located + " Upstream support has ended."
+			switch {
+			case hasDate && eolDate.After(now):
+				title = fmt.Sprintf("%s is end-of-life on %s", a.DisplayName, a.Support.EOLDate)
+				detail = located + fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate)
+			case a.Support.EOLDate != "":
 				title = fmt.Sprintf("%s is end-of-life since %s", a.DisplayName, a.Support.EOLDate)
 			}
 			out = append(out, Finding{
 				Category: CatEOLAddon, Severity: SevBlocker,
 				Title:       title,
-				Detail:      located + " Upstream support has ended.",
+				Detail:      detail,
 				Teams:       teams,
 				Namespaces:  ns,
 				Remediation: a.Recommendation,

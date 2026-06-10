@@ -44,6 +44,23 @@ func TestEvalDeprecatedCallsUnparseableIsInfo(t *testing.T) {
 	if fs[0].Title != "clients still requesting extensions/v1beta1 ingresses (deprecated)" {
 		t.Fatalf("title = %q", fs[0].Title)
 	}
+	if fs[0].Detail != "apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; no removal release is recorded." {
+		t.Fatalf("detail = %q", fs[0].Detail)
+	}
+}
+
+func TestEvalDeprecatedCallsUnparseableReleaseIsInfo(t *testing.T) {
+	row := inventory.DeprecatedCall{Group: "extensions", Version: "v1beta1", Resource: "ingresses", RemovedRelease: "soon"}
+	fs := evalDeprecatedCalls(callsInv(row), inventory.Version{Major: 1, Minor: 34})
+	if len(fs) != 1 || fs[0].Severity != SevInfo {
+		t.Fatalf("unparseable removedRelease must yield info, got %+v", fs)
+	}
+	if fs[0].Title != "clients still requesting extensions/v1beta1 ingresses (deprecated)" {
+		t.Fatalf("title = %q", fs[0].Title)
+	}
+	if fs[0].Detail != `apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; removal release "soon" could not be parsed.` {
+		t.Fatalf("detail = %q", fs[0].Detail)
+	}
 }
 
 func TestEvalDeprecatedCallsSubresource(t *testing.T) {
