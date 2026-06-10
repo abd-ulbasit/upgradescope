@@ -82,8 +82,24 @@ func exportFilename(cluster, target, ext string) string {
 	return fmt.Sprintf("upgradescope-%s-%s.%s", cluster, target, ext)
 }
 
+// csvSafe guards against spreadsheet formula injection: cluster names,
+// namespaces, and team labels are attacker-influenceable, and a cell
+// starting with = + - @ (or a tab/CR remnant) executes as a formula when
+// the CSV is opened in Excel/Sheets. Prefixing with ' forces text.
+func csvSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
+}
+
 // writeExportCSV emits one row per finding. Multi-valued columns (teams,
-// namespaces, citations) are ";"-joined inside a single CSV field.
+// namespaces, citations) are ";"-joined inside a single CSV field. All
+// non-numeric fields pass through csvSafe.
 func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engine.Report) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write([]string{
@@ -94,17 +110,17 @@ func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engi
 	}
 	for _, f := range rep.Findings {
 		if err := cw.Write([]string{
-			cluster,
+			csvSafe(cluster),
 			rep.Target.String(),
 			eval.CreatedAt.UTC().Format(time.RFC3339),
 			string(f.Severity),
 			string(f.Category),
-			f.Key,
-			f.Title,
-			f.Detail,
-			strings.Join(f.Teams, ";"),
-			strings.Join(f.Namespaces, ";"),
-			strings.Join(f.Citations, ";"),
+			csvSafe(f.Key),
+			csvSafe(f.Title),
+			csvSafe(f.Detail),
+			csvSafe(strings.Join(f.Teams, ";")),
+			csvSafe(strings.Join(f.Namespaces, ";")),
+			csvSafe(strings.Join(f.Citations, ";")),
 		}); err != nil {
 			return err
 		}
