@@ -29,10 +29,13 @@ type serveOptions struct {
 	slackWebhook string
 	webhook      string
 	targets      string
+	teamMap      string
 
 	// parsedTargets is opts.targets parsed once by validateServeOptions;
 	// runServe consumes it instead of re-parsing the raw CSV.
 	parsedTargets []inventory.Version
+	// parsedTeamMap is opts.teamMap loaded once by validateServeOptions.
+	parsedTeamMap server.TeamMap
 }
 
 // runServe is the real wiring: openStore (SQLite --db or Postgres
@@ -72,6 +75,8 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		IngestToken:  opts.ingestToken,
 		ReadToken:    opts.readToken,
 		ExtraTargets: extraTargets,
+		TeamMap:      opts.parsedTeamMap,
+		Version:      version,
 	})
 	if err != nil {
 		return err
@@ -132,14 +137,23 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.slackWebhook, "slack-webhook", "", "Slack incoming-webhook URL for delta notifications")
 	cmd.Flags().StringVar(&opts.webhook, "webhook", "", "generic webhook URL (POSTed the raw event JSON)")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
+	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	_ = cmd.MarkFlagRequired("ingest-token")
 
 	return cmd
 }
 
-// validateServeOptions parses --targets once into opts.parsedTargets
-// (single parse site — runServe never sees the raw CSV).
+// validateServeOptions parses --targets and loads --team-map once into
+// opts.parsedTargets/parsedTeamMap (single parse site — runServe never sees
+// the raw values).
 func validateServeOptions(opts *serveOptions) error {
+	if opts.teamMap != "" {
+		tm, err := server.LoadTeamMap(opts.teamMap)
+		if err != nil {
+			return fmt.Errorf("invalid --team-map: %w", err)
+		}
+		opts.parsedTeamMap = tm
+	}
 	if opts.targets == "" {
 		return nil
 	}

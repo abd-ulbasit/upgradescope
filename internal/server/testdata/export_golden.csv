@@ -1,0 +1,2 @@
+cluster,target,evaluatedAt,severity,category,key,title,detail,teams,namespaces,citations
+prod-eu-1,1.35,2026-06-10T12:00:00Z,blocker,removed-api,removed-api/policy/v1beta1/PodSecurityPolicy,policy/v1beta1 PodSecurityPolicy removed in 1.35 (2 objects),2 object(s) still stored/served at this version: payments-prod (2).,payments,payments-prod,https://kubernetes.io/docs/reference/using-api/deprecation-guide/

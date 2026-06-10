@@ -1,0 +1,74 @@
+name: upgradescope gate
+description: >-
+  Scan rendered Kubernetes manifests for upgrade-readiness blockers
+  (removed/deprecated APIs) and emit SARIF for code-scanning annotations.
+  Exit code 2 (findings at/above fail-on) fails the step.
+author: abd-ulbasit
+
+inputs:
+  path:
+    description: Directory of rendered manifests to scan (e.g. the output of helm template / kustomize build).
+    required: true
+  target:
+    description: Target Kubernetes minor version, e.g. "1.38".
+    required: true
+  fail-on:
+    description: "Fail the gate when findings at/above this severity exist: blocker | warning | never."
+    required: false
+    default: blocker
+  version:
+    description: upgradescope release tag to install (e.g. v0.3.0), or "latest". Falls back to `go install` when no release asset matches.
+    required: false
+    default: latest
+
+outputs:
+  sarif-file:
+    description: Path to the generated SARIF report (upload with github/codeql-action/upload-sarif).
+    value: ${{ steps.scan.outputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install upgradescope
+      shell: bash
+      run: |
+        set -euo pipefail
+        os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        arch="$(uname -m)"; case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+        if [ "${{ inputs.version }}" = "latest" ]; then
+          url="https://github.com/abd-ulbasit/upgradescope/releases/latest/download/upgradescope_${os}_${arch}"
+        else
+          url="https://github.com/abd-ulbasit/upgradescope/releases/download/${{ inputs.version }}/upgradescope_${os}_${arch}"
+        fi
+        bin_dir="${RUNNER_TEMP}/upgradescope-bin"
+        mkdir -p "$bin_dir"
+        if curl -fsSL --retry 3 -o "$bin_dir/upgradescope" "$url"; then
+          chmod +x "$bin_dir/upgradescope"
+          echo "$bin_dir" >> "$GITHUB_PATH"
+          echo "installed release binary from $url"
+        else
+          echo "no release binary at $url — falling back to go install"
+          go install "github.com/abd-ulbasit/upgradescope/cmd/upgradescope@${{ inputs.version }}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+        fi
+
+    - name: Scan manifests
+      id: scan
+      shell: bash
+      run: |
+        set -uo pipefail
+        sarif="${RUNNER_TEMP}/upgradescope-results.sarif"
+        echo "sarif-file=$sarif" >> "$GITHUB_OUTPUT"
+        upgradescope scan \
+          --files "${{ inputs.path }}" \
+          --target "${{ inputs.target }}" \
+          --output sarif \
+          --fail-on "${{ inputs.fail-on }}" > "$sarif"
+        status=$?
+        # exit 0: gate passed; exit 2: scan worked, gate failed (SARIF is
+        # still complete — upload it with `if: always()`); exit 1: scan broke.
+        exit $status
+
+branding:
+  icon: arrow-up-circle
+  color: blue

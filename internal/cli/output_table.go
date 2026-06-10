@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -52,10 +53,59 @@ func WriteTable(w io.Writer, r engine.Report) {
 		fmt.Fprintf(w, "\nNo findings.\n")
 	}
 
+	writeTeamsSection(w, r)
+
 	if len(r.NotAssessed) > 0 {
 		fmt.Fprintf(w, "\nNOT ASSESSED\n")
 		for _, g := range r.NotAssessed {
 			fmt.Fprintf(w, "  %s: %s\n", g.Capability, g.Reason)
 		}
+	}
+}
+
+// writeTeamsSection renders per-team scores, only when at least one finding
+// is attributed to a named team. Teams sort alphabetically; the teamless
+// bucket renders as "unattributed", last.
+func writeTeamsSection(w io.Writer, r engine.Report) {
+	scores := engine.TeamScores(r)
+	names := make([]string, 0, len(scores))
+	hasNamed := false
+	for name := range scores {
+		if name != "" {
+			hasNamed = true
+		}
+		names = append(names, name)
+	}
+	if !hasNamed {
+		return
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if (names[i] == "") != (names[j] == "") {
+			return names[j] == "" // teamless bucket sorts last
+		}
+		return names[i] < names[j]
+	})
+	width := 0
+	for _, name := range names {
+		if name == "" {
+			name = "unattributed"
+		}
+		if len(name) > width {
+			width = len(name)
+		}
+	}
+	fmt.Fprintf(w, "\nTEAMS\n")
+	for _, name := range names {
+		ts := scores[name]
+		label := name
+		if label == "" {
+			label = "unattributed"
+		}
+		ready := "no"
+		if ts.Ready {
+			ready = "yes"
+		}
+		fmt.Fprintf(w, "  %-*s  %3d/100  ready %-3s  blockers %d  warnings %d\n",
+			width, label, ts.Score, ready, ts.Blockers, ts.Warnings)
 	}
 }
