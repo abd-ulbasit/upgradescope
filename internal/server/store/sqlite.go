@@ -27,9 +27,18 @@ var _ Store = (*SQLite)(nil)
 // embedded migrations. Every pooled connection gets WAL journaling, a 5s
 // busy timeout and foreign-key enforcement via DSN pragmas.
 //
-// path must not contain '?' — it is interpolated into a SQLite URI.
+// path must not contain '?' or '#' — it is interpolated into a SQLite URI,
+// where either character corrupts the path.
 func Open(path string) (*SQLite, error) {
-	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+	// _txlock=immediate makes every transaction start as BEGIN IMMEDIATE,
+	// taking the write lock up front. Without it, a deferred transaction
+	// that reads before writing (InsertSnapshot: SELECT latest, then INSERT)
+	// fails with SQLITE_BUSY under concurrent ingest — busy_timeout is never
+	// consulted for the read→write lock upgrade. This is safe because every
+	// BeginTx call site in this package (InsertSnapshot, applyMigration) is
+	// a write path; a read-only transaction here would needlessly take the
+	// write lock, so keep it that way.
+	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
