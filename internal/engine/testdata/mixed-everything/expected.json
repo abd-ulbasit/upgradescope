@@ -86,7 +86,7 @@
       "category": "kb-stale",
       "detail": "Findings may be incomplete; regenerate the knowledge base (kb version test-kb-1).",
       "severity": "warning",
-      "title": "knowledge base does not cover Kubernetes 1.37 (newest known: 1.36)"
+      "title": "knowledge base does not cover Kubernetes 1.38 (newest known: 1.36)"
     },
     {
       "category": "version-skew",

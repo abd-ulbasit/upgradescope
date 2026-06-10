@@ -338,16 +338,22 @@ func minorsBehind(ctrl, kubelet inventory.Version) int {
 	return (ctrl.Major*1000 + ctrl.Minor) - (kubelet.Major*1000 + kubelet.Minor)
 }
 
-// evalKBStale: control plane newer than anything the embedded KB knows about
-// → the scan itself may be missing removals → warning.
-func evalKBStale(inv inventory.Inventory, k kb.KB) []Finding {
-	server, err := inventory.ParseVersion(inv.ServerVersion)
-	if err != nil || server.Compare(k.MaxKnownK8s) <= 0 {
+// evalKBStale: the cluster (current control plane) or the upgrade target is
+// newer than anything the embedded KB knows about → the scan itself may be
+// missing removals → warning. Evaluated against max(serverVersion, target);
+// an unparseable/missing server version still leaves the target-driven check
+// active.
+func evalKBStale(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
+	newest := target
+	if server, err := inventory.ParseVersion(inv.ServerVersion); err == nil && server.Compare(newest) > 0 {
+		newest = server
+	}
+	if newest.Compare(k.MaxKnownK8s) <= 0 {
 		return nil
 	}
 	return []Finding{{
 		Category: CatKBStale, Severity: SevWarning,
-		Title:  fmt.Sprintf("knowledge base does not cover Kubernetes %s (newest known: %s)", server, k.MaxKnownK8s),
+		Title:  fmt.Sprintf("knowledge base does not cover Kubernetes %s (newest known: %s)", newest, k.MaxKnownK8s),
 		Detail: fmt.Sprintf("Findings may be incomplete; regenerate the knowledge base (kb version %s).", k.Version),
 	}}
 }
@@ -361,7 +367,7 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalDeprecatedCalls(inv, target)...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
 	findings = append(findings, evalSkew(inv, k, target)...)
-	findings = append(findings, evalKBStale(inv, k)...)
+	findings = append(findings, evalKBStale(inv, k, target)...)
 	sortFindings(findings)
 	score, ready := Score(findings)
 
