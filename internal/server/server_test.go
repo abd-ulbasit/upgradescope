@@ -71,13 +71,17 @@ func TestStartShutdown(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("server never became ready")
 	}
-	resp, err := http.Get(fmt.Sprintf("http://%s/nope", s.Addr()))
+	// /nope.txt: a path with an extension never hits the SPA index.html
+	// fallback, so this 404s whether or not `make web` has staged a real
+	// dashboard bundle into webdist/ (extensionless /nope would be 200
+	// index.html in a post-`make web` tree).
+	resp, err := http.Get(fmt.Sprintf("http://%s/nope.txt", s.Addr()))
 	if err != nil {
 		t.Fatalf("GET while serving: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /nope status = %d, want 404 (mux serving, route unregistered)", resp.StatusCode)
+		t.Fatalf("GET /nope.txt status = %d, want 404 (unknown file, no SPA fallback)", resp.StatusCode)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
