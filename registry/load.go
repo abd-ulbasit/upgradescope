@@ -33,7 +33,20 @@ func loadFS(fsys fs.FS, dir string) ([]AddOn, error) {
 		seen   = map[string]string{} // id → file that defined it
 	)
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+		if e.IsDir() {
+			continue
+		}
+		// Convention: registry entries are .yaml-only, matching the
+		// data/*.yaml embed glob. A .yml file in the source tree would
+		// never reach the embedded FS and so be silently invisible —
+		// reject the extension loudly instead of ignoring it. (The embed
+		// directive cannot carry a data/*.yml guard glob: go:embed fails
+		// the build when a glob matches nothing.)
+		if strings.HasSuffix(e.Name(), ".yml") {
+			errs = append(errs, fmt.Errorf("registry: %s/%s: registry entries must use the .yaml extension (rename to .yaml)", dir, e.Name()))
+			continue
+		}
+		if !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
 		name := dir + "/" + e.Name()

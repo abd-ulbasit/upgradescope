@@ -45,6 +45,13 @@ func TestLoadFS(t *testing.T) {
 			wantIDs: []string{"addon-a"},
 		},
 		{
+			// The registry convention is .yaml-only; a .yml file would be
+			// silently skipped by the embed glob, so loadFS rejects it loudly.
+			name:    "yml extension rejected with rename hint",
+			files:   map[string]string{"a.yaml": validYAML("addon-a"), "b.yml": validYAML("addon-b")},
+			wantErr: `data/b.yml: registry entries must use the .yaml extension (rename to .yaml)`,
+		},
+		{
 			name:    "duplicate id across files",
 			files:   map[string]string{"a.yaml": validYAML("addon-a"), "b.yaml": validYAML("addon-a")},
 			wantErr: `duplicate id "addon-a"`,
