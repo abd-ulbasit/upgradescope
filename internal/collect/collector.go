@@ -7,6 +7,7 @@ package collect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"k8s.io/client-go/discovery"
@@ -100,4 +101,23 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			return collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
 		}},
 	}
+}
+
+// NewClients builds the concrete client set from a rest.Config.
+// The sole construction point — everything else consumes the interfaces.
+func NewClients(cfg *rest.Config) (Clients, error) {
+	kube, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return Clients{}, fmt.Errorf("build kubernetes client: %w", err)
+	}
+	md, err := metadata.NewForConfig(cfg)
+	if err != nil {
+		return Clients{}, fmt.Errorf("build metadata client: %w", err)
+	}
+	return Clients{
+		Kube:       kube,
+		Metadata:   md,
+		Discovery:  kube.Discovery(),
+		RESTClient: kube.CoreV1().RESTClient(),
+	}, nil
 }
