@@ -5,12 +5,31 @@ import (
 	"testing"
 	"time"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
 )
+
+// fakeAPIExt returns an apiextensions fake whose created CRDs immediately
+// report Established=True, like a real apiserver — otherwise crd.EnsureCRD's
+// establishment poll would run out its full timeout inside tests.
+func fakeAPIExt() *apiextfake.Clientset {
+	fc := apiextfake.NewSimpleClientset()
+	fc.PrependReactor("create", "customresourcedefinitions",
+		func(action k8stesting.Action) (bool, runtime.Object, error) {
+			obj := action.(k8stesting.CreateAction).GetObject().(*apiextensionsv1.CustomResourceDefinition)
+			obj.Status.Conditions = append(obj.Status.Conditions, apiextensionsv1.CustomResourceDefinitionCondition{
+				Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue,
+			})
+			return false, nil, nil // fall through to the default tracker reactor
+		})
+	return fc
+}
 
 func TestJitterBounds(t *testing.T) {
 	d := 10 * time.Minute
@@ -25,7 +44,7 @@ func TestJitterBounds(t *testing.T) {
 
 func TestRunInvalidConfig(t *testing.T) {
 	err := Run(context.Background(), fakeClients(t, "v1.35.2"), fakeDyn(),
-		apiextfake.NewSimpleClientset(), mustKB(t), Config{Interval: time.Second})
+		fakeAPIExt(), mustKB(t), Config{Interval: time.Second})
 	if err == nil {
 		t.Fatal("Run with sub-minimum interval: want error")
 	}
@@ -38,7 +57,7 @@ func TestRunInvalidConfig(t *testing.T) {
 // any timer, and 1m never elapses inside the test.
 func TestRunFirstTickThenGracefulStop(t *testing.T) {
 	dyn := fakeDyn()
-	apiext := apiextfake.NewSimpleClientset()
+	apiext := fakeAPIExt()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
