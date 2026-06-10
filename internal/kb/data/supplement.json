@@ -1,0 +1,32 @@
+{
+  "generatedFrom": "hand-curated supplement — types deleted from current k8s.io/api so absent from the generated dataset; removed/replacement verified against https://kubernetes.io/docs/reference/using-api/deprecation-guide/, introduced/deprecated against zz_generated.prerelease-lifecycle.go in k8s.io/api@kubernetes-1.28.0; maxKnownK8s here is informational only (Load() uses the generated dataset's)",
+  "maxKnownK8s": "1.26",
+  "entries": [
+    {
+      "group": "autoscaling",
+      "version": "v2beta1",
+      "kind": "HorizontalPodAutoscaler",
+      "introduced": {"Major": 1, "Minor": 8},
+      "deprecated": {"Major": 1, "Minor": 22},
+      "removed": {"Major": 1, "Minor": 25},
+      "replacement": {"group": "autoscaling", "version": "v2", "kind": "HorizontalPodAutoscaler"}
+    },
+    {
+      "group": "autoscaling",
+      "version": "v2beta2",
+      "kind": "HorizontalPodAutoscaler",
+      "introduced": {"Major": 1, "Minor": 12},
+      "deprecated": {"Major": 1, "Minor": 23},
+      "removed": {"Major": 1, "Minor": 26},
+      "replacement": {"group": "autoscaling", "version": "v2", "kind": "HorizontalPodAutoscaler"}
+    },
+    {
+      "group": "policy",
+      "version": "v1beta1",
+      "kind": "PodSecurityPolicy",
+      "introduced": {"Major": 1, "Minor": 10},
+      "deprecated": {"Major": 1, "Minor": 21},
+      "removed": {"Major": 1, "Minor": 25}
+    }
+  ]
+}
