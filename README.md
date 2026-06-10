@@ -1,8 +1,8 @@
-# upgradepilot
+# upgradescope
 
-**Continuous Kubernetes upgrade-readiness for everyone — the open-source alternative to commercial "operational safety" platforms.**
+**Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
 
-> Status: pre-design. Start here, then read `docs/research.md` (why this should exist) and `docs/design-brief.md` (what to build). This repo is meant to be opened in a fresh Claude Code session — `CLAUDE.md` carries the working context.
+> Status: design approved, implementation starting. Read `docs/superpowers/specs/2026-06-10-upgradescope-design.md` (the spec), `docs/research.md` (why this should exist). `docs/design-brief.md` is the superseded pre-design seed. (Project was seeded as "upgradepilot"; renamed during design — chkk's flagship is branded "Upgrade Copilot", and this is a clean-room build.)
 
 ## The problem
 
