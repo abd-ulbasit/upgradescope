@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/server"
 )
 
 // execServe runs the serve command with args, swapping the wiring for stub
@@ -61,6 +62,41 @@ func TestServePassesParsedTargets(t *testing.T) {
 	want := []inventory.Version{{Major: 1, Minor: 37}, {Major: 1, Minor: 38}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parsedTargets = %v, want %v", got, want)
+	}
+}
+
+// --team-map is loaded exactly once, in validateServeOptions; runServe
+// receives the parsed server.TeamMap, never the file path.
+func TestServePassesParsedTeamMap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "teams.yaml")
+	if err := os.WriteFile(path, []byte("- pattern: \"payments-*\"\n  team: payments\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var got server.TeamMap
+	err := execServe(t, []string{"--ingest-token", "t", "--team-map", path},
+		func(_ context.Context, opts serveOptions) error {
+			got = opts.parsedTeamMap
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := server.TeamMap{server.TeamMapRule{Pattern: "payments-*", Team: "payments"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parsedTeamMap = %v, want %v", got, want)
+	}
+}
+
+func TestServeRejectsBadTeamMap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "teams.yaml")
+	if err := os.WriteFile(path, []byte("- pattern: \"[\"\n  team: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{"missing file": filepath.Join(t.TempDir(), "nope.yaml"), "bad glob": path} {
+		err := execServe(t, []string{"--ingest-token", "t", "--team-map", p}, serveOK())
+		if err == nil || !strings.Contains(err.Error(), "--team-map") {
+			t.Fatalf("%s: want invalid --team-map error, got %v", name, err)
+		}
 	}
 }
 

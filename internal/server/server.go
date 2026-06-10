@@ -28,6 +28,8 @@ type Config struct {
 	Notifier     notify.Notifier // nil = notifications disabled
 	IngestToken  string          // required bearer for POST /api/v1/snapshots
 	ReadToken    string          // optional bearer for the read API; "" = open (document loudly)
+	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
+	Version      string          // build version stamped into SARIF tool metadata ("" = omitted)
 }
 
 // Server serves the ingest + read API. Construct with New; a Server is
@@ -84,6 +86,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/report", s.readAuth(s.handleReport))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/findings", s.readAuth(s.handleFindings))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/history", s.readAuth(s.handleHistory))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/teams", s.readAuth(s.handleTeams))
+	s.mux.HandleFunc("GET /api/v1/fleet", s.readAuth(s.handleFleet))
+	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.handleFleetTeams))
+	s.mux.HandleFunc("POST /api/v1/gate", s.readAuth(s.handleGate))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/export", s.readAuth(s.handleExport))
 }
 
 // Handler exposes the full route table for httptest and embedding.
