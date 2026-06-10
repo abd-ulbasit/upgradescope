@@ -141,6 +141,14 @@ func TestMatchesRange(t *testing.T) {
 		{"4.7.1-beta.1", ">=4.7.0", true}, // pre-release suffix trimmed
 		{"not-a-version", ">=1.0.0", false},
 		{"4.7.1", "", false}, // empty constraint never matches
+		// Constraint grammar the registry validates as legal must match here too.
+		{"4.7.1", "^4.0.0", true},
+		{"5.1.0", "^4.0.0", false},
+		{"4.7.1", "4.x", true},
+		{"5.0.0", "4.x", false},
+		{"4.7.1", ">= 4.0.0", true},          // space after operator
+		{"4.7.9", "~4.7", true},              // tilde range
+		{"3.9.0", "<4.0.0 || >=5.0.0", true}, // union
 	}
 	for _, tc := range cases {
 		if got := matchesRange(tc.version, tc.constraint); got != tc.want {

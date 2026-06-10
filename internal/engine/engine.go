@@ -3,9 +3,10 @@ package engine
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Masterminds/semver/v3"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
@@ -229,6 +230,9 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 			if !matchesRange(inst.Version, c.Range) {
 				continue
 			}
+			// Registry validation (registry.Validate) guarantees K8sMax is
+			// MAJOR.MINOR (^[0-9]+\.[0-9]+$), so this parse cannot fail for
+			// data that passed validation; the err check is defensive only.
 			kmax, err := inventory.ParseVersion(c.K8sMax)
 			if err == nil && kmax.Compare(target) < 0 {
 				out = append(out, Finding{
@@ -247,90 +251,38 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 	return out
 }
 
-// matchesRange is a minimal semver-constraint matcher (stdlib only): clauses
-// separated by spaces/commas, each ">=x.y.z", "<=x.y.z", ">x.y.z", "<x.y.z",
-// or "=x.y.z" (bare versions mean "="). Pre-release/build suffixes on the
-// candidate version are trimmed. An empty constraint never matches.
+// matchesRange reports whether the detected add-on version satisfies a
+// registry Compat.Range. It uses github.com/Masterminds/semver/v3 — the SAME
+// grammar registry.Validate accepts (">=", "^", "~", ".x" wildcards, "||"
+// unions, operator whitespace) — so every range that passes registry
+// validation is matchable here; no silent false negatives.
+//
+// Pre-release/build suffixes on the candidate version are stripped before
+// checking: a detected pre-release build of an add-on must still be evaluated
+// against compat ranges (Masterminds would otherwise exclude pre-releases
+// from non-pre-release constraints). An empty or unparseable constraint, or
+// an unparseable version, never matches.
 func matchesRange(version, constraint string) bool {
-	if strings.TrimSpace(constraint) == "" {
+	c, err := semver.NewConstraint(constraint)
+	if err != nil {
 		return false
 	}
-	v, ok := parseSemver(version)
-	if !ok {
+	v, err := semver.NewVersion(strings.TrimSpace(version))
+	if err != nil {
 		return false
 	}
-	clauses := strings.FieldsFunc(constraint, func(r rune) bool { return r == ',' || r == ' ' })
-	for _, clause := range clauses {
-		op, rest := "=", clause
-		for _, o := range []string{">=", "<=", ">", "<", "="} {
-			if strings.HasPrefix(clause, o) {
-				op, rest = o, strings.TrimPrefix(clause, o)
-				break
-			}
-		}
-		w, ok := parseSemver(rest)
-		if !ok {
+	if v.Prerelease() != "" || v.Metadata() != "" {
+		stripped, err := v.SetPrerelease("")
+		if err != nil {
 			return false
 		}
-		c := compareSemver(v, w)
-		switch op {
-		case ">=":
-			if c < 0 {
-				return false
-			}
-		case "<=":
-			if c > 0 {
-				return false
-			}
-		case ">":
-			if c <= 0 {
-				return false
-			}
-		case "<":
-			if c >= 0 {
-				return false
-			}
-		case "=":
-			if c != 0 {
-				return false
-			}
+		stripped, err = stripped.SetMetadata("")
+		if err != nil {
+			return false
 		}
+		v = &stripped
 	}
-	return true
-}
-
-type semver [3]int
-
-func parseSemver(s string) (semver, bool) {
-	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
-	if i := strings.IndexAny(s, "-+"); i >= 0 {
-		s = s[:i] // drop pre-release/build metadata
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) == 0 || len(parts) > 3 || s == "" {
-		return semver{}, false
-	}
-	var v semver
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 {
-			return semver{}, false
-		}
-		v[i] = n
-	}
-	return v, true
-}
-
-func compareSemver(a, b semver) int {
-	for i := 0; i < 3; i++ {
-		if a[i] != b[i] {
-			if a[i] < b[i] {
-				return -1
-			}
-			return 1
-		}
-	}
-	return 0
+	return c.Check(v)
 }
 
 // evalSkew evaluates ONLY the kubelet rule in P1: kubelets more than
