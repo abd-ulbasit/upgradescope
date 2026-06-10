@@ -1,0 +1,13 @@
+# registry/data/coredns.yaml
+schema_version: 1
+id: coredns
+display_name: CoreDNS
+matchers:
+  images:
+    - registry.k8s.io/coredns/coredns
+  charts:
+    - coredns
+support:
+  status: supported
+  citations:
+    - https://github.com/coredns/deployment/blob/master/kubernetes/CoreDNS-k8s_version.md

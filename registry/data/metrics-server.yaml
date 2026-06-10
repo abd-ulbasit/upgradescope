@@ -1,0 +1,13 @@
+# registry/data/metrics-server.yaml
+schema_version: 1
+id: metrics-server
+display_name: Kubernetes Metrics Server
+matchers:
+  images:
+    - registry.k8s.io/metrics-server/metrics-server
+  charts:
+    - metrics-server
+support:
+  status: supported
+  citations:
+    - https://github.com/kubernetes-sigs/metrics-server#compatibility-matrix
