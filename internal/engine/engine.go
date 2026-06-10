@@ -317,10 +317,11 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 		return nil // versions capability degraded; surfaced via NotAssessed
 	}
 	maxBehind := k.Skew.KubeletMaxBehind
-	var nowBad, postBad []string
+	var nowBad, postBad, unparseable []string
 	for _, n := range inv.Nodes {
 		kv, err := inventory.ParseVersion(n.KubeletVersion)
 		if err != nil {
+			unparseable = append(unparseable, fmt.Sprintf("%s (%q)", n.Name, n.KubeletVersion))
 			continue
 		}
 		entry := fmt.Sprintf("%s (%s)", n.Name, n.KubeletVersion)
@@ -347,6 +348,15 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 			Category: CatVersionSkew, Severity: SevWarning,
 			Title:     fmt.Sprintf("%d node(s) exceed kubelet version skew vs control plane %s", len(nowBad), server),
 			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, strings.Join(nowBad, ", ")),
+			Citations: []string{skewPolicyURL},
+		})
+	}
+	if len(unparseable) > 0 {
+		sort.Strings(unparseable)
+		out = append(out, Finding{
+			Category: CatVersionSkew, Severity: SevInfo,
+			Title:     fmt.Sprintf("%d node(s) have unparseable kubelet versions", len(unparseable)),
+			Detail:    fmt.Sprintf("These nodes could not be evaluated against the kubelet skew policy: %s.", strings.Join(unparseable, ", ")),
 			Citations: []string{skewPolicyURL},
 		})
 	}

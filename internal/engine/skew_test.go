@@ -53,6 +53,27 @@ func TestEvalSkewWithinPolicyNoFindings(t *testing.T) {
 	}
 }
 
+func TestEvalSkewUnparseableKubeletVersionsReportedAsInfo(t *testing.T) {
+	inv := inventory.Inventory{
+		ServerVersion: "v1.34.2",
+		Nodes: []inventory.NodeInfo{
+			{Name: "node-a", KubeletVersion: "v1.34.2"},     // fine, ignored
+			{Name: "node-weird", KubeletVersion: "garbage"}, // unparseable
+			{Name: "node-blank", KubeletVersion: ""},        // unparseable
+		},
+	}
+	fs := evalSkew(inv, testKB(), inventory.Version{Major: 1, Minor: 35})
+	if len(fs) != 1 || fs[0].Severity != SevInfo || fs[0].Category != CatVersionSkew {
+		t.Fatalf("want one version-skew info, got %+v", fs)
+	}
+	if fs[0].Title != "2 node(s) have unparseable kubelet versions" {
+		t.Fatalf("title = %q", fs[0].Title)
+	}
+	if fs[0].Detail != `These nodes could not be evaluated against the kubelet skew policy: node-blank (""), node-weird ("garbage").` {
+		t.Fatalf("detail = %q", fs[0].Detail)
+	}
+}
+
 func TestEvalSkewNoServerVersionNoFindings(t *testing.T) {
 	inv := inventory.Inventory{Nodes: []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.20.0"}}}
 	if fs := evalSkew(inv, testKB(), inventory.Version{Major: 1, Minor: 35}); len(fs) != 0 {
