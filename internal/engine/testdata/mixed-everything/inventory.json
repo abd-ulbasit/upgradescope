@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "44444444-4444-4444-4444-444444444444",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "serverVersion": "v1.37.0",
+  "capabilities": {
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "apiUsage": [
+    {"group": "extensions", "version": "v1beta1", "kind": "Ingress", "count": 2, "namespaces": {"shop": 2}},
+    {"group": "", "version": "v1", "kind": "ComponentStatus", "count": 1, "namespaces": {"": 1}}
+  ],
+  "deprecatedCalls": [
+    {"group": "batch", "version": "v1beta1", "resource": "cronjobs", "removedRelease": "1.25"}
+  ],
+  "addOns": [
+    {"id": "ingress-nginx", "version": "4.7.1", "namespaces": ["ingress-nginx"], "source": "chart"},
+    {"id": "legacy-mesh", "version": "1.2.0", "namespaces": ["mesh"], "source": "image"}
+  ],
+  "nodes": [
+    {"name": "node-a", "kubeletVersion": "v1.37.0"},
+    {"name": "node-b", "kubeletVersion": "v1.33.0"}
+  ],
+  "namespaces": [
+    {"name": "shop", "team": "storefront"},
+    {"name": "ingress-nginx", "team": "platform"},
+    {"name": "mesh", "team": "platform"}
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "33333333-3333-3333-3333-333333333333",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "serverVersion": "v1.21.3",
+  "capabilities": {
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "apiUsage": [
+    {"group": "extensions", "version": "v1beta1", "kind": "Ingress", "count": 3, "namespaces": {"default": 2, "shop": 1}},
+    {"group": "batch", "version": "v1beta1", "kind": "CronJob", "count": 1, "namespaces": {"default": 1}}
+  ],
+  "nodes": [{"name": "node-a", "kubeletVersion": "v1.21.3"}],
+  "namespaces": [
+    {"name": "default", "team": "core"},
+    {"name": "shop", "team": "storefront"}
+  ]
+}

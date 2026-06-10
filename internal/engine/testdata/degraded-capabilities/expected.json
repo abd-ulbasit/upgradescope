@@ -1,0 +1,21 @@
+{
+  "clusterId": "55555555-5555-5555-5555-555555555555",
+  "findings": [],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "deprecated-calls",
+      "reason": "GET /metrics forbidden"
+    },
+    {
+      "capability": "helm",
+      "reason": "secrets list forbidden in namespace kube-system"
+    }
+  ],
+  "ready": true,
+  "score": 100,
+  "target": {
+    "Major": 1,
+    "Minor": 34
+  }
+}

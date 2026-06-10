@@ -1,0 +1,117 @@
+{
+  "clusterId": "44444444-4444-4444-4444-444444444444",
+  "findings": [
+    {
+      "category": "chart-incompat",
+      "citations": [
+        "https://github.com/kubernetes/ingress-nginx#supported-versions-table"
+      ],
+      "detail": "Installed version 4.7.1 matches compatibility range \"\u003e=4.0.0\", which supports Kubernetes 1.21 through 1.33.",
+      "namespaces": [
+        "ingress-nginx"
+      ],
+      "remediation": "migrate to Gateway API (ingress2gateway) or another maintained ingress controller",
+      "severity": "blocker",
+      "teams": [
+        "platform"
+      ],
+      "title": "ingress-nginx 4.7.1 supports Kubernetes up to 1.33 (target 1.38)"
+    },
+    {
+      "category": "deprecated-api-in-use",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; it is removed in 1.25.",
+      "severity": "blocker",
+      "title": "clients still requesting batch/v1beta1 cronjobs (removed in 1.25)"
+    },
+    {
+      "category": "eol-addon",
+      "citations": [
+        "https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/"
+      ],
+      "detail": "Detected ingress-nginx version 4.7.1 via chart in namespace(s): ingress-nginx. Upstream support has ended.",
+      "namespaces": [
+        "ingress-nginx"
+      ],
+      "remediation": "migrate to Gateway API (ingress2gateway) or another maintained ingress controller",
+      "severity": "blocker",
+      "teams": [
+        "platform"
+      ],
+      "title": "ingress-nginx is end-of-life since 2026-03-26"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "2 object(s) still stored/served at this version: shop (2).",
+      "namespaces": [
+        "shop"
+      ],
+      "remediation": "migrate to networking.k8s.io/v1 Ingress",
+      "severity": "blocker",
+      "teams": [
+        "storefront"
+      ],
+      "title": "extensions/v1beta1 Ingress removed in 1.22 (2 objects)"
+    },
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "After upgrading the control plane to 1.38 these nodes would be more than 3 minor versions behind: node-b (v1.33.0).",
+      "severity": "blocker",
+      "title": "1 node(s) would exceed kubelet version skew after upgrading to 1.38"
+    },
+    {
+      "category": "eol-approaching",
+      "citations": [
+        "https://endoflife.date/legacy-mesh"
+      ],
+      "detail": "Detected Legacy Mesh version 1.2.0 via image in namespace(s): mesh. Upstream support ends on 2026-08-15.",
+      "namespaces": [
+        "mesh"
+      ],
+      "severity": "warning",
+      "teams": [
+        "platform"
+      ],
+      "title": "Legacy Mesh reaches end-of-life on 2026-08-15"
+    },
+    {
+      "category": "kb-stale",
+      "detail": "Findings may be incomplete; regenerate the knowledge base (kb version test-kb-1).",
+      "severity": "warning",
+      "title": "knowledge base does not cover Kubernetes 1.38 (newest known: 1.36)"
+    },
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "Nodes more than 3 minor versions behind: node-b (v1.33.0).",
+      "severity": "warning",
+      "title": "1 node(s) exceed kubelet version skew vs control plane 1.37"
+    },
+    {
+      "category": "deprecated-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 object(s) still stored/served at this version: cluster-scoped (1).",
+      "severity": "info",
+      "title": "v1 ComponentStatus deprecated since 1.19 (1 object)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "ready": false,
+  "score": 10,
+  "target": {
+    "Major": 1,
+    "Minor": 38
+  }
+}

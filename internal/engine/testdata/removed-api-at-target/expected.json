@@ -1,0 +1,46 @@
+{
+  "clusterId": "33333333-3333-3333-3333-333333333333",
+  "findings": [
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "3 object(s) still stored/served at this version: default (2), shop (1).",
+      "namespaces": [
+        "default",
+        "shop"
+      ],
+      "remediation": "migrate to networking.k8s.io/v1 Ingress",
+      "severity": "blocker",
+      "teams": [
+        "core",
+        "storefront"
+      ],
+      "title": "extensions/v1beta1 Ingress removed in 1.22 (3 objects)"
+    },
+    {
+      "category": "deprecated-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 object(s) still stored/served at this version: default (1).",
+      "namespaces": [
+        "default"
+      ],
+      "remediation": "migrate to batch/v1 CronJob",
+      "severity": "info",
+      "teams": [
+        "core"
+      ],
+      "title": "batch/v1beta1 CronJob deprecated since 1.21 (1 object)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "ready": false,
+  "score": 75,
+  "target": {
+    "Major": 1,
+    "Minor": 22
+  }
+}
