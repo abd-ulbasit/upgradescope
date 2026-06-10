@@ -71,14 +71,27 @@ func (v Version) MarshalJSON() ([]byte, error) {
 func (v *Version) UnmarshalJSON(data []byte) error {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) > 0 && trimmed[0] == '{' { // legacy object form
-		type legacy struct{ Major, Minor int }
+		type legacy struct{ Major, Minor *int } // pointers so absence is detectable
 		dec := json.NewDecoder(bytes.NewReader(trimmed))
 		dec.DisallowUnknownFields()
 		var l legacy
 		if err := dec.Decode(&l); err != nil {
 			return fmt.Errorf("invalid kubernetes version object %s: %w", trimmed, err)
 		}
-		*v = Version{Major: l.Major, Minor: l.Minor}
+		if l.Major == nil && l.Minor == nil {
+			return fmt.Errorf("invalid kubernetes version object %s: missing Major and Minor", trimmed)
+		}
+		var maj, min int
+		if l.Major != nil {
+			maj = *l.Major
+		}
+		if l.Minor != nil {
+			min = *l.Minor
+		}
+		if maj < 0 || min < 0 {
+			return fmt.Errorf("invalid kubernetes version object %s: components must be non-negative", trimmed)
+		}
+		*v = Version{Major: maj, Minor: min}
 		return nil
 	}
 	var s string
