@@ -52,6 +52,7 @@ func TestEvaluateGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	visited := make(map[string]bool, len(goldenParams))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue // kb.json
@@ -61,6 +62,7 @@ func TestEvaluateGolden(t *testing.T) {
 		if !ok {
 			t.Fatalf("no goldenParams entry for testdata/%s", name)
 		}
+		visited[name] = true
 		t.Run(name, func(t *testing.T) {
 			invRaw, err := os.ReadFile(filepath.Join("testdata", name, "inventory.json"))
 			if err != nil {
@@ -101,5 +103,12 @@ func TestEvaluateGolden(t *testing.T) {
 				t.Errorf("report mismatch for %s\n got:\n%s\nwant:\n%s", name, gotJSON, want)
 			}
 		})
+	}
+	// Reverse check: every declared golden case must have a testdata
+	// directory — a deleted/renamed dir must not silently skip its case.
+	for name := range goldenParams {
+		if !visited[name] {
+			t.Errorf("goldenParams entry %q has no testdata/%s directory", name, name)
+		}
 	}
 }

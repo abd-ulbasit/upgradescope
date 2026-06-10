@@ -18,16 +18,6 @@ const (
 	skewPolicyURL       = "https://kubernetes.io/releases/version-skew-policy/"
 )
 
-type gvkKey struct{ group, version, kind string }
-
-func lifecycleIndex(k kb.KB) map[gvkKey]kb.APILifecycleEntry {
-	idx := make(map[gvkKey]kb.APILifecycleEntry, len(k.APILifecycle))
-	for _, e := range k.APILifecycle {
-		idx[gvkKey{e.Group, e.Version, e.Kind}] = e
-	}
-	return idx
-}
-
 // pluralObjects renders an object count with grammatical number:
 // "1 object", "3 objects".
 func pluralObjects(n int) string {
@@ -91,10 +81,10 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 //   - removed exactly at target+1  → warning, removed-api
 //   - deprecated, removal beyond the window or unset → info, deprecated-api
 func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
-	idx := lifecycleIndex(k)
+	idx := kb.NewIndex(k.APILifecycle)
 	var out []Finding
 	for _, u := range inv.APIUsage {
-		e, ok := idx[gvkKey{u.Group, u.Version, u.Kind}]
+		e, ok := idx.Lookup(u.Group, u.Version, u.Kind)
 		if !ok {
 			continue
 		}
