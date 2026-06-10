@@ -62,10 +62,28 @@ func TestScanFilesMutuallyExclusive(t *testing.T) {
 	for _, args := range [][]string{
 		{"--target", "1.36", "--files", "./m", "--context", "prod"},
 		{"--target", "1.36", "--files", "./m", "--kubeconfig", "/tmp/kc"},
+		{"--target", "1.36", "--files", "./m", "--team-label", "owner"},
 	} {
 		if _, err := execScan(t, args, okStub(engine.Report{})); err == nil {
 			t.Errorf("args %v: want mutual-exclusion error, got nil", args)
 		}
+	}
+}
+
+// --target is parsed exactly once, in validateScanOptions; runScan receives
+// the already-parsed version instead of re-parsing the raw string.
+func TestScanPassesParsedTarget(t *testing.T) {
+	var got inventory.Version
+	_, err := execScan(t, []string{"--target", "v1.36.2"},
+		func(opts scanOptions) (engine.Report, error) {
+			got = opts.targetVersion
+			return engine.Report{}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (inventory.Version{Major: 1, Minor: 36}); got != want {
+		t.Fatalf("targetVersion = %v, want %v", got, want)
 	}
 }
 

@@ -58,8 +58,8 @@ type sarifLogicalLocation struct {
 // WriteSARIF renders the report as minimal SARIF 2.1.0 for CI annotation.
 // One rule per finding Category (first-seen order — findings are pre-sorted,
 // so this is deterministic), one result per finding. Cluster mode has no
-// file paths, so results carry logicalLocations (namespaces) instead of
-// physicalLocation.
+// file paths, so results carry one location per affected namespace (each a
+// single logicalLocation of kind "namespace") instead of physicalLocation.
 func WriteSARIF(w io.Writer, r engine.Report) error {
 	rules := []sarifRule{}
 	seen := map[engine.Category]bool{}
@@ -83,11 +83,15 @@ func WriteSARIF(w io.Writer, r engine.Report) error {
 			Message: sarifText{Text: msg},
 		}
 		if len(f.Namespaces) > 0 {
-			lls := make([]sarifLogicalLocation, 0, len(f.Namespaces))
+			// SARIF 2.1.0: each location describes one place, so emit one
+			// location per namespace rather than packing them into one.
+			locs := make([]sarifLocation, 0, len(f.Namespaces))
 			for _, ns := range f.Namespaces {
-				lls = append(lls, sarifLogicalLocation{Name: ns, Kind: "namespace"})
+				locs = append(locs, sarifLocation{
+					LogicalLocations: []sarifLogicalLocation{{Name: ns, Kind: "namespace"}},
+				})
 			}
-			res.Locations = []sarifLocation{{LogicalLocations: lls}}
+			res.Locations = locs
 		}
 		results = append(results, res)
 	}
