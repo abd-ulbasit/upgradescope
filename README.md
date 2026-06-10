@@ -2,7 +2,7 @@
 
 **Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
 
-> Status: **P1 + P2 shipped** — `upgradescope scan` (point-in-time CLI) and continuous mode: an in-cluster agent that maintains a `ClusterReadiness` CRD and pushes to a self-hosted server (history, REST API, what-if, Slack alerts). Fleet features and dashboard are in development (P3–P4).
+> Status: **P1–P3 shipped** — point-in-time scan, continuous agent + `ClusterReadiness` CRD + server (SQLite/Postgres), fleet rollups, per-team scores, CI gate endpoint + GitHub Action, auditor CSV/HTML export, per-cluster tokens. P4 (web dashboard + community registry pipeline) in development.
 
 ## Install
 
