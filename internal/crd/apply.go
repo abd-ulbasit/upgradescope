@@ -12,6 +12,9 @@ import (
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
 )
@@ -52,6 +55,68 @@ func EnsureCRD(ctx context.Context, apiext apiextensionsclient.Interface) error 
 	})
 	if err != nil {
 		return fmt.Errorf("update ClusterReadiness CRD: %w", err)
+	}
+	return nil
+}
+
+// ReadSpec returns the ClusterReadiness spec. found=false (with nil error)
+// means the object does not exist; callers typically EnsureObject then.
+func ReadSpec(ctx context.Context, dyn dynamic.Interface, name string) (Spec, bool, error) {
+	obj, err := dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return Spec{}, false, nil
+	}
+	if err != nil {
+		return Spec{}, false, fmt.Errorf("get clusterreadiness %q: %w", name, err)
+	}
+	raw, found, err := unstructured.NestedMap(obj.Object, "spec")
+	if err != nil {
+		return Spec{}, true, fmt.Errorf("read spec of clusterreadiness %q: %w", name, err)
+	}
+	if !found {
+		return Spec{}, true, nil
+	}
+	var s Spec
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &s); err != nil {
+		return Spec{}, true, fmt.Errorf("decode spec of clusterreadiness %q: %w", name, err)
+	}
+	return s, true, nil
+}
+
+// EnsureObject creates the ClusterReadiness CR with an empty spec if absent.
+// It never overwrites an existing object (user-set spec.targets survive).
+func EnsureObject(ctx context.Context, dyn dynamic.Interface, name string) error {
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": Group + "/" + Version,
+		"kind":       Kind,
+		"metadata":   map[string]interface{}{"name": name},
+		"spec":       map[string]interface{}{},
+	}}
+	_, err := dyn.Resource(GVR()).Create(ctx, obj, metav1.CreateOptions{})
+	if err == nil || apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return fmt.Errorf("create clusterreadiness %q: %w", name, err)
+}
+
+// WriteStatus replaces the status subresource, retrying on conflict with a
+// fresh read each attempt.
+func WriteStatus(ctx context.Context, dyn dynamic.Interface, name string, st Status) error {
+	stMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&st)
+	if err != nil {
+		return fmt.Errorf("convert status: %w", err)
+	}
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		obj, gerr := dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
+		if gerr != nil {
+			return gerr
+		}
+		obj.Object["status"] = stMap
+		_, uerr := dyn.Resource(GVR()).UpdateStatus(ctx, obj, metav1.UpdateOptions{})
+		return uerr
+	})
+	if err != nil {
+		return fmt.Errorf("update clusterreadiness %q status: %w", name, err)
 	}
 	return nil
 }
