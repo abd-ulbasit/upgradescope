@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,8 +33,11 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("UpsertClusterInsertThenUpdate", func(t *testing.T) { testUpsertCluster(t, newStore(t)) })
 	t.Run("UpsertClusterZeroTimesDefault", func(t *testing.T) { testZeroTimes(t, newStore(t)) })
 	t.Run("SnapshotDedup", func(t *testing.T) { testSnapshotDedup(t, newStore(t)) })
+	t.Run("SnapshotDedupClusterScoped", func(t *testing.T) { testSnapshotDedupClusterScoped(t, newStore(t)) })
+	t.Run("ConcurrentIngestSerializes", func(t *testing.T) { testConcurrentIngest(t, newStore(t)) })
 	t.Run("LatestSnapshotRoundTrip", func(t *testing.T) { testLatestSnapshot(t, newStore(t)) })
 	t.Run("EvaluationsLatestPerTarget", func(t *testing.T) { testEvaluations(t, newStore(t)) })
+	t.Run("LatestEvaluationTieBreakHigherID", func(t *testing.T) { testLatestEvaluationTieBreak(t, newStore(t)) })
 	t.Run("ScoreHistoryOldestFirstLimitNewest", func(t *testing.T) { testScoreHistory(t, newStore(t)) })
 	t.Run("NotFound", func(t *testing.T) { testNotFound(t, newStore(t)) })
 	t.Run("Close", func(t *testing.T) { testClose(t, newStore(t)) })
@@ -174,6 +179,128 @@ func testSnapshotDedup(t *testing.T, s store.Store) {
 	}
 }
 
+// testSnapshotDedupClusterScoped pins that dedup compares against the same
+// cluster's latest snapshot only: the same hash pushed to a different
+// cluster is a fresh, non-duplicate row.
+func testSnapshotDedupClusterScoped(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	cidA := mustCluster(t, s, "cluster-a")
+	cidB := mustCluster(t, s, "cluster-b")
+	idA := mustSnapshot(t, s, cidA, "aaa", base)
+
+	idB, dup, err := s.InsertSnapshot(ctx, store.Snapshot{
+		ClusterID: cidB, Hash: "aaa", ReceivedAt: at(1), Inventory: []byte(`{"hash":"aaa"}`),
+	})
+	if err != nil {
+		t.Fatalf("push same hash to other cluster: %v", err)
+	}
+	if dup {
+		t.Error("duplicate = true across clusters, want false (dedup is cluster-scoped)")
+	}
+	if idB == idA {
+		t.Errorf("cross-cluster push reused id %d, want a fresh row", idB)
+	}
+	latestA, err := s.LatestSnapshot(ctx, cidA)
+	if err != nil {
+		t.Fatalf("LatestSnapshot(A): %v", err)
+	}
+	if latestA.ID != idA {
+		t.Errorf("cluster A latest = id %d, want %d (B's push must not affect A)", latestA.ID, idA)
+	}
+	latestB, err := s.LatestSnapshot(ctx, cidB)
+	if err != nil {
+		t.Fatalf("LatestSnapshot(B): %v", err)
+	}
+	if latestB.ID != idB || latestB.ClusterID != cidB {
+		t.Errorf("cluster B latest = id %d cluster %d, want id %d cluster %d", latestB.ID, latestB.ClusterID, idB, cidB)
+	}
+}
+
+// testConcurrentIngest pins that any backend serializes concurrent
+// InsertSnapshot calls correctly: no errors, and dedup-vs-latest holds
+// exactly once when all writers push the same hash.
+func testConcurrentIngest(t *testing.T, s store.Store) {
+	const writers = 16
+	cid := mustCluster(t, s, "prod")
+
+	type pushResult struct {
+		id  int64
+		dup bool
+		err error
+	}
+	run := func(hash func(i int) string) []pushResult {
+		results := make([]pushResult, writers)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := range writers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				h := hash(i)
+				id, dup, err := s.InsertSnapshot(context.Background(), store.Snapshot{
+					ClusterID: cid, Hash: h, ReceivedAt: base, Inventory: []byte(`{"hash":"` + h + `"}`),
+				})
+				results[i] = pushResult{id, dup, err}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		return results
+	}
+
+	// Phase 1: same hash from every writer — exactly one insert wins, the
+	// rest dedup against it.
+	same := run(func(int) string { return "same" })
+	var winnerID int64
+	var nonDup int
+	for i, r := range same {
+		if r.err != nil {
+			t.Fatalf("phase 1 writer %d: %v", i, r.err)
+		}
+		if !r.dup {
+			nonDup++
+			winnerID = r.id
+		}
+	}
+	if nonDup != 1 {
+		t.Fatalf("phase 1: %d non-duplicate inserts, want exactly 1", nonDup)
+	}
+	for i, r := range same {
+		if r.dup && r.id != winnerID {
+			t.Errorf("phase 1 writer %d: duplicate id = %d, want winner %d", i, r.id, winnerID)
+		}
+	}
+	latest, err := s.LatestSnapshot(context.Background(), cid)
+	if err != nil {
+		t.Fatalf("LatestSnapshot after phase 1: %v", err)
+	}
+	if latest.ID != winnerID || latest.Hash != "same" {
+		t.Errorf("latest = id %d hash %q, want id %d hash same", latest.ID, latest.Hash, winnerID)
+	}
+
+	// Phase 2: distinct hashes — every push is a fresh row, distinct ids.
+	distinct := run(func(i int) string { return fmt.Sprintf("h-%d", i) })
+	seen := map[int64]bool{winnerID: true}
+	for i, r := range distinct {
+		if r.err != nil {
+			t.Fatalf("phase 2 writer %d: %v", i, r.err)
+		}
+		if r.dup {
+			t.Errorf("phase 2 writer %d: duplicate = true for unique hash", i)
+		}
+		if seen[r.id] {
+			t.Errorf("phase 2 writer %d: id %d reused", i, r.id)
+		}
+		seen[r.id] = true
+	}
+	if latest, err := s.LatestSnapshot(context.Background(), cid); err != nil {
+		t.Fatalf("LatestSnapshot after phase 2: %v", err)
+	} else if !seen[latest.ID] || latest.ID == winnerID {
+		t.Errorf("latest id %d is not one of phase 2's inserts", latest.ID)
+	}
+}
+
 func testLatestSnapshot(t *testing.T, s store.Store) {
 	ctx := context.Background()
 	cid := mustCluster(t, s, "prod")
@@ -250,6 +377,33 @@ func testEvaluations(t *testing.T, s store.Store) {
 	}
 }
 
+// testLatestEvaluationTieBreak pins the tie-break on equal created_at: the
+// later insert (higher id) wins.
+func testLatestEvaluationTieBreak(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	cid := mustCluster(t, s, "prod")
+	sid := mustSnapshot(t, s, cid, "aaa", base)
+
+	if _, err := s.InsertEvaluation(ctx, store.Evaluation{
+		ClusterID: cid, SnapshotID: sid, Target: "1.36", Score: 60, CreatedAt: base,
+	}); err != nil {
+		t.Fatalf("first InsertEvaluation: %v", err)
+	}
+	if _, err := s.InsertEvaluation(ctx, store.Evaluation{
+		ClusterID: cid, SnapshotID: sid, Target: "1.36", Score: 65, CreatedAt: base, // same created_at
+	}); err != nil {
+		t.Fatalf("second InsertEvaluation: %v", err)
+	}
+
+	got, err := s.LatestEvaluation(ctx, cid, "1.36")
+	if err != nil {
+		t.Fatalf("LatestEvaluation: %v", err)
+	}
+	if got.Score != 65 {
+		t.Errorf("latest score = %d, want 65 (equal created_at: later insert / higher id wins)", got.Score)
+	}
+}
+
 func testScoreHistory(t *testing.T, s store.Store) {
 	ctx := context.Background()
 	cid := mustCluster(t, s, "prod")
@@ -282,6 +436,7 @@ func testScoreHistory(t *testing.T, s store.Store) {
 		wantScores []int
 	}{
 		{"zero limit means all", 0, []int{70, 75, 80, 92}},
+		{"negative limit means all", -1, []int{70, 75, 80, 92}},
 		{"limit selects most recent N, returned oldest-first", 2, []int{80, 92}},
 		{"limit one", 1, []int{92}},
 		{"limit beyond rows", 10, []int{70, 75, 80, 92}},
