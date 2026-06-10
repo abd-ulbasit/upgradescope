@@ -38,9 +38,9 @@ type Store interface {
 	// Per-cluster ingest tokens (P3, spec §8). Tokens are keyed by cluster
 	// NAME (not id): a token may be minted before the cluster's first push
 	// registers it. Only the sha256 of the plaintext is ever stored.
-	CreateToken(ctx context.Context, clusterName, token string) error    // errors if the token is already issued (any cluster)
-	ValidToken(ctx context.Context, token string) (string, bool, error)  // (clusterName, true) for active; ("", false, nil) for unknown/revoked
-	RevokeToken(ctx context.Context, clusterName string) error           // revokes ALL active tokens; ErrNotFound when none are active
+	CreateToken(ctx context.Context, clusterName, token string) error   // errors if the token is already issued (any cluster)
+	ValidToken(ctx context.Context, token string) (string, bool, error) // (clusterName, true) for active; ("", false, nil) for unknown/revoked
+	RevokeToken(ctx context.Context, clusterName string) error          // revokes ALL active tokens; ErrNotFound when none are active
 
 	Close() error
 }
