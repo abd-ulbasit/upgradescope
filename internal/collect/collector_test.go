@@ -46,6 +46,22 @@ func TestRunStepsDegradesFailedCapabilityAndKeepsOthers(t *testing.T) {
 	}
 }
 
+func TestRunStepsPartialErrorKeepsCapabilityAvailable(t *testing.T) {
+	inv := inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+	runSteps(context.Background(), &inv, []step{
+		{cap: inventory.CapAPIUsage, run: func(context.Context, *inventory.Inventory) error {
+			return partialError{msg: "partial: list policy/v1beta1 podsecuritypolicies: forbidden"}
+		}},
+	})
+	got := inv.Capabilities[inventory.CapAPIUsage]
+	if !got.Available {
+		t.Errorf("capability = %+v, want available despite partial error", got)
+	}
+	if got.Reason == "" {
+		t.Error("partial error must surface as the capability Reason")
+	}
+}
+
 func TestCollectDefaults(t *testing.T) {
 	inv := Collect(context.Background(), Clients{}, kb.KB{}, Options{})
 	if inv.SchemaVersion != 1 {
