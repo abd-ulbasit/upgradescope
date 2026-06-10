@@ -11,8 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math/rand/v2"
 	"time"
 
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 
@@ -212,4 +215,42 @@ func snapshotHash(inv inventory.Inventory) (hash string, raw []byte, err error) 
 	}
 	sum := sha256.Sum256(canon)
 	return hex.EncodeToString(sum[:]), raw, nil
+}
+
+// Run executes the continuous loop until ctx is canceled (returns nil — a
+// cancel is a graceful stop, not an error). The first tick runs immediately;
+// later ticks fire every Interval ±10% jitter. Tick errors are logged and
+// counted, never fatal: the loop never dies on a tick error.
+func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, apiext apiextensionsclient.Interface, k kb.KB, cfg Config) error {
+	if err := cfg.applyDefaults(); err != nil {
+		return err
+	}
+	if err := crd.EnsureCRD(ctx, apiext); err != nil {
+		// Non-fatal: the Helm chart installs the CRD via crds/, and RBAC may
+		// deny apiextensions writes. WriteStatus failures will surface loudly
+		// per tick if the CRD is truly absent.
+		slog.Warn("ensure ClusterReadiness CRD failed; assuming it is pre-installed", "err", err)
+	}
+	r := newRunner(clients, dyn, k, cfg)
+	for {
+		if err := r.tick(ctx); err != nil {
+			r.tickErrs++
+			slog.Error("tick failed", "err", err, "consecutiveInfo", r.tickErrs)
+		} else {
+			r.tickErrs = 0
+		}
+		timer := time.NewTimer(jitter(cfg.Interval))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+// jitter returns d ±10%, so a fleet of agents installed at the same moment
+// does not thundering-herd the apiserver and the upgradescope server.
+func jitter(d time.Duration) time.Duration {
+	return time.Duration(float64(d) * (0.9 + 0.2*rand.Float64()))
 }
