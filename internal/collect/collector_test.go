@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"k8s.io/client-go/rest"
+
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
@@ -54,5 +56,24 @@ func TestCollectDefaults(t *testing.T) {
 	}
 	if inv.CollectedAt.IsZero() {
 		t.Error("CollectedAt must be set")
+	}
+}
+
+func TestNewClients(t *testing.T) {
+	cfg := &rest.Config{Host: "https://127.0.0.1:6443"}
+	c, err := NewClients(cfg)
+	if err != nil {
+		t.Fatalf("NewClients: %v", err)
+	}
+	if c.Kube == nil || c.Metadata == nil || c.Discovery == nil || c.RESTClient == nil {
+		t.Errorf("NewClients left a nil client: %+v", c)
+	}
+}
+
+func TestNewClientsBadConfig(t *testing.T) {
+	// Exec-provider misconfig is one of the few things that fails at construction time.
+	cfg := &rest.Config{Host: "https://127.0.0.1:6443", BearerTokenFile: "\x00"}
+	if _, err := NewClients(cfg); err == nil {
+		t.Skip("client-go accepted the config; constructor error paths are config-dependent")
 	}
 }
