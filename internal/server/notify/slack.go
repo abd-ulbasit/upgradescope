@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -32,8 +33,14 @@ func NewSlack(url string) *SlackNotifier {
 	return &SlackNotifier{URL: url, Client: &http.Client{Timeout: webhookTimeout}}
 }
 
+// slackEscaper escapes the three characters Slack treats as control
+// characters in message text (&, <, >), per
+// https://docs.slack.dev/messaging/formatting-message-text. Applied to the
+// whole formatted line at delivery time; FormatLine itself stays plain text.
+var slackEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
 func (s *SlackNotifier) Notify(ctx context.Context, ev Event) error {
-	payload, err := json.Marshal(map[string]string{"text": FormatLine(ev)})
+	payload, err := json.Marshal(map[string]string{"text": slackEscaper.Replace(FormatLine(ev))})
 	if err != nil {
 		return fmt.Errorf("slack: encode payload: %w", err)
 	}
