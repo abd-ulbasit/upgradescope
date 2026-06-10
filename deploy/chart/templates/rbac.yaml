@@ -1,0 +1,50 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "upgradescope.fullname" . }}-agent
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+rules:
+  # Cluster-wide READ-ONLY. Why a wildcard instead of an enumerated list
+  # (nodes, namespaces, pods, secrets, ...):
+  #   - versions collector: nodes (kubelet versions), /version
+  #   - team attribution: namespaces (labels)
+  #   - add-on detection: pods (container images)
+  #   - Helm releases: secrets of type helm.sh/release.v1 — RBAC cannot
+  #     filter secrets by type, so this is cluster-wide secret read; the
+  #     trade-off is documented in values.yaml (rbac.create) and README
+  #   - deprecated-API usage: metadata-only lists at KB-flagged deprecated
+  #     group/versions — the group set is data-driven, enumerating it here
+  #     would rot on every KB update
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # apiserver /metrics (apiserver_requested_deprecated_apis) and /version
+  - nonResourceURLs: ["/metrics", "/version"]
+    verbs: ["get"]
+  # EnsureCRD: server-side apply (= PATCH) of the ClusterReadiness CRD
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["create", "get", "update", "patch"]
+  # The ONLY thing the agent ever writes: its own CR + status
+  - apiGroups: ["upgradescope.dev"]
+    resources: ["clusterreadinesses"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  - apiGroups: ["upgradescope.dev"]
+    resources: ["clusterreadinesses/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "upgradescope.fullname" . }}-agent
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "upgradescope.fullname" . }}-agent
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "upgradescope.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

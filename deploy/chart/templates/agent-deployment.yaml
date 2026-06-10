@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "upgradescope.fullname" . }}-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: {{ include "upgradescope.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - agent
+            - --interval={{ .Values.agent.interval }}
+            - --cr-name={{ .Values.agent.crName }}
+            - --team-label={{ .Values.agent.teamLabel }}
+            {{- if .Values.agent.clusterName }}
+            - --cluster-name={{ .Values.agent.clusterName }}
+            {{- end }}
+            {{- if include "upgradescope.pushEnabled" . }}
+            - --server-url={{ include "upgradescope.serverUrl" . }}
+            - --server-token=$(UPGRADESCOPE_SERVER_TOKEN)
+            {{- end }}
+          {{- if include "upgradescope.pushEnabled" . }}
+          env:
+            - name: UPGRADESCOPE_SERVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "upgradescope.agentTokenSecretName" . }}
+                  key: serverToken
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources: {{- toYaml .Values.agent.resources | nindent 12 }}
