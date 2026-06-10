@@ -20,6 +20,9 @@ var (
 	idPattern     = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	k8sVerPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
 	validStatuses = map[string]bool{"supported": true, "eol": true, "unknown": true}
+	// endoflife.date product slugs: lowercase alphanumerics separated by
+	// single dashes or dots (e.g. "argo-cd", "graalvm-ce.17").
+	eolSlugPattern = regexp.MustCompile(`^[a-z0-9]+([.-][a-z0-9]+)*$`)
 )
 
 // Validate checks one AddOn against the schema_version 1 rules and returns
@@ -47,6 +50,9 @@ func Validate(a AddOn) []error {
 		if err := validateCitationURL(c); err != nil {
 			errs = append(errs, fmt.Errorf("%s: support citation %q: %w", a.ID, c, err))
 		}
+	}
+	if a.EndoflifeProduct != "" && !eolSlugPattern.MatchString(a.EndoflifeProduct) {
+		errs = append(errs, fmt.Errorf("%s: endoflife_product %q must be a lowercase endoflife.date slug (e.g. \"argo-cd\")", a.ID, a.EndoflifeProduct))
 	}
 	if a.Support.EOLDate != "" {
 		if _, err := time.Parse("2006-01-02", a.Support.EOLDate); err != nil {

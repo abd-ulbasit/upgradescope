@@ -1,0 +1,18 @@
+# registry/data/kyverno.yaml
+# support.status / support.eol_date are synced from the endoflife.date API
+# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+schema_version: 1
+id: kyverno
+display_name: Kyverno
+endoflife_product: kyverno
+matchers:
+  images:
+    - ghcr.io/kyverno/kyverno
+    - reg.kyverno.io/kyverno/kyverno
+  charts:
+    - kyverno
+support:
+  status: supported
+  citations:
+    - https://endoflife.date/kyverno
+    - https://kyverno.io/docs/releases/

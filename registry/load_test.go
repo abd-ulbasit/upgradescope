@@ -130,22 +130,51 @@ func TestLoadCuratedEntries(t *testing.T) {
 		got[a.ID] = a
 	}
 	tests := []struct {
-		id       string
-		status   string
-		image    string
-		chart    string
-		citation string
+		id         string
+		status     string
+		image      string
+		chart      string
+		citation   string
+		eolProduct string // endoflife_product slug; "" = hand-curated
 	}{
 		{"ingress-nginx", "eol", "registry.k8s.io/ingress-nginx/controller", "ingress-nginx",
-			"https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/"},
+			"https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/", ""},
 		{"cert-manager", "supported", "quay.io/jetstack/cert-manager-controller", "cert-manager",
-			"https://cert-manager.io/docs/releases/"},
+			"https://cert-manager.io/docs/releases/", ""},
 		{"coredns", "supported", "registry.k8s.io/coredns/coredns", "coredns",
-			"https://github.com/coredns/deployment/blob/master/kubernetes/CoreDNS-k8s_version.md"},
+			"https://github.com/coredns/deployment/blob/master/kubernetes/CoreDNS-k8s_version.md", ""},
 		{"metrics-server", "supported", "registry.k8s.io/metrics-server/metrics-server", "metrics-server",
-			"https://github.com/kubernetes-sigs/metrics-server#compatibility-matrix"},
+			"https://github.com/kubernetes-sigs/metrics-server#compatibility-matrix", ""},
 		{"kube-state-metrics", "supported", "registry.k8s.io/kube-state-metrics/kube-state-metrics", "kube-state-metrics",
-			"https://github.com/kubernetes/kube-state-metrics#compatibility-matrix"},
+			"https://github.com/kubernetes/kube-state-metrics#compatibility-matrix", ""},
+		// API-synced entries (status/eol_date maintained by tools/eol-sync).
+		{"istio", "supported", "docker.io/istio", "istiod",
+			"https://endoflife.date/istio", "istio"},
+		{"cilium", "supported", "quay.io/cilium/cilium", "cilium",
+			"https://endoflife.date/cilium", "cilium"},
+		{"calico", "supported", "docker.io/calico", "tigera-operator",
+			"https://endoflife.date/calico", "calico"},
+		{"argo-cd", "supported", "quay.io/argoproj/argocd", "argo-cd",
+			"https://endoflife.date/argo-cd", "argo-cd"},
+		{"flux", "supported", "ghcr.io/fluxcd", "flux2",
+			"https://endoflife.date/flux", "flux"},
+		{"keda", "supported", "ghcr.io/kedacore", "keda",
+			"https://endoflife.date/keda", "keda"},
+		{"kyverno", "supported", "ghcr.io/kyverno/kyverno", "kyverno",
+			"https://endoflife.date/kyverno", "kyverno"},
+		{"traefik", "supported", "docker.io/traefik", "traefik",
+			"https://endoflife.date/traefik", "traefik"},
+		{"etcd", "supported", "registry.k8s.io/etcd", "",
+			"https://endoflife.date/etcd", "etcd"},
+		{"containerd", "supported", "containerd", "",
+			"https://endoflife.date/containerd", "containerd"},
+		// Hand-curated entries with upstream compatibility-matrix citations.
+		{"external-dns", "supported", "registry.k8s.io/external-dns/external-dns", "external-dns",
+			"https://github.com/kubernetes-sigs/external-dns#kubernetes-version-compatibility", ""},
+		{"prometheus-operator", "supported", "quay.io/prometheus-operator/prometheus-operator", "kube-prometheus-stack",
+			"https://github.com/prometheus-operator/prometheus-operator/blob/main/Documentation/getting-started/compatibility.md", ""},
+		{"velero", "supported", "docker.io/velero/velero", "velero",
+			"https://github.com/vmware-tanzu/velero#velero-compatibility-matrix", ""},
 	}
 	if len(addons) != len(tests) {
 		t.Errorf("embedded registry has %d entries, want %d", len(addons), len(tests))
@@ -162,11 +191,14 @@ func TestLoadCuratedEntries(t *testing.T) {
 			if !slices.Contains(a.Matchers.Images, tt.image) {
 				t.Errorf("images %v missing %q", a.Matchers.Images, tt.image)
 			}
-			if !slices.Contains(a.Matchers.Charts, tt.chart) {
+			if tt.chart != "" && !slices.Contains(a.Matchers.Charts, tt.chart) {
 				t.Errorf("charts %v missing %q", a.Matchers.Charts, tt.chart)
 			}
 			if !slices.Contains(a.Support.Citations, tt.citation) {
 				t.Errorf("citations %v missing %q", a.Support.Citations, tt.citation)
+			}
+			if a.EndoflifeProduct != tt.eolProduct {
+				t.Errorf("endoflife_product = %q, want %q", a.EndoflifeProduct, tt.eolProduct)
 			}
 		})
 	}
