@@ -50,6 +50,9 @@ func TestWrite(t *testing.T) {
 	if run.Tool.Driver.Name != "upgradescope" {
 		t.Errorf("driver name = %q, want upgradescope", run.Tool.Driver.Name)
 	}
+	if run.Tool.Driver.Version != "v-test" {
+		t.Errorf("driver version = %q, want v-test", run.Tool.Driver.Version)
+	}
 	if len(run.Tool.Driver.Rules) != 3 { // one rule per distinct category
 		t.Errorf("rules = %d, want 3", len(run.Tool.Driver.Rules))
 	}
