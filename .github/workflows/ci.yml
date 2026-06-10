@@ -27,6 +27,8 @@ jobs:
       - name: gofmt
         run: gofmt -l cmd internal registry tools && test -z "$(gofmt -l cmd internal registry tools)"
       - run: go test ./...
+      - name: eol-sync unit tests (separate module)
+        run: cd tools/eol-sync && go test ./...
 
   build:
     runs-on: ubuntu-latest
@@ -36,6 +38,31 @@ jobs:
         with:
           go-version: '1.26.x'
       - run: make build
+
+  registry:
+    name: registry dataset valid + in sync with endoflife.date
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Did this PR touch registry/?
+        id: changed
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          if git diff --name-only "origin/$GITHUB_BASE_REF"...HEAD | grep -q '^registry/'; then
+            echo "registry=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "registry=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Validate registry entries
+        if: steps.changed.outputs.registry == 'true'
+        run: go test ./registry/ -count=1
+      - name: Registry in sync with endoflife.date
+        if: steps.changed.outputs.registry == 'true'
+        run: make eol-check
 
   kb-freshness:
     name: kb dataset is not stale
