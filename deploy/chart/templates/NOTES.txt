@@ -1,0 +1,23 @@
+upgradescope {{ .Chart.AppVersion }} installed.
+
+Watch readiness:
+  kubectl get clusterreadiness {{ .Values.agent.crName }}
+  kubectl get clusterreadiness {{ .Values.agent.crName }} -o jsonpath='{.status.targets[0].score}'
+{{- if .Values.server.enabled }}
+
+Server API (port-forward):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "upgradescope.serverFullname" . }} 8080:{{ .Values.server.service.port }}
+  curl http://127.0.0.1:8080/api/v1/clusters
+{{- if not .Values.server.readToken }}
+
+NOTE: the read API has no token (server.readToken is empty). Fine behind a
+ClusterIP Service; set one before exposing it.
+{{- end }}
+{{- end }}
+
+The agent is READ-ONLY except for the ClusterReadiness resource. For the
+RBAC trade-offs (cluster-wide secret read for Helm detection), see the
+rbac.create comment in values.yaml.
+
+Uninstall: helm uninstall keeps the CRD (Helm crds/ semantics). Full removal:
+  kubectl delete crd clusterreadinesses.upgradescope.dev
