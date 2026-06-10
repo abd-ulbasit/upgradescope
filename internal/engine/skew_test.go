@@ -62,14 +62,58 @@ func TestEvalSkewNoServerVersionNoFindings(t *testing.T) {
 
 func TestEvalKBStale(t *testing.T) {
 	k := testKB() // MaxKnownK8s = 1.36
-	fs := evalKBStale(inventory.Inventory{ServerVersion: "v1.37.0"}, k)
-	if len(fs) != 1 || fs[0].Category != CatKBStale || fs[0].Severity != SevWarning {
-		t.Fatalf("want one kb-stale warning, got %+v", fs)
+	cases := []struct {
+		name      string
+		inv       inventory.Inventory
+		target    inventory.Version
+		wantTitle string // "" means no finding
+	}{
+		{
+			"server beyond kb",
+			inventory.Inventory{ServerVersion: "v1.37.0"},
+			inventory.Version{Major: 1, Minor: 36},
+			"knowledge base does not cover Kubernetes 1.37 (newest known: 1.36)",
+		},
+		{
+			"target beyond kb",
+			inventory.Inventory{ServerVersion: "v1.36.1"},
+			inventory.Version{Major: 1, Minor: 38},
+			"knowledge base does not cover Kubernetes 1.38 (newest known: 1.36)",
+		},
+		{
+			"target beyond kb with missing server version",
+			inventory.Inventory{},
+			inventory.Version{Major: 1, Minor: 37},
+			"knowledge base does not cover Kubernetes 1.37 (newest known: 1.36)",
+		},
+		{
+			"server beyond kb and beyond target",
+			inventory.Inventory{ServerVersion: "v1.38.0"},
+			inventory.Version{Major: 1, Minor: 37},
+			"knowledge base does not cover Kubernetes 1.38 (newest known: 1.36)",
+		},
+		{
+			"both within kb",
+			inventory.Inventory{ServerVersion: "v1.36.1"},
+			inventory.Version{Major: 1, Minor: 36},
+			"",
+		},
 	}
-	if fs[0].Title != "knowledge base does not cover Kubernetes 1.37 (newest known: 1.36)" {
-		t.Fatalf("title = %q", fs[0].Title)
-	}
-	if fs := evalKBStale(inventory.Inventory{ServerVersion: "v1.36.1"}, k); len(fs) != 0 {
-		t.Fatalf("server ≤ MaxKnownK8s must yield nothing, got %+v", fs)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := evalKBStale(tc.inv, k, tc.target)
+			if tc.wantTitle == "" {
+				if len(fs) != 0 {
+					t.Fatalf("want no findings, got %+v", fs)
+				}
+				return
+			}
+			if len(fs) != 1 || fs[0].Category != CatKBStale || fs[0].Severity != SevWarning {
+				t.Fatalf("want one kb-stale warning, got %+v", fs)
+			}
+			if fs[0].Title != tc.wantTitle {
+				t.Fatalf("title = %q, want %q", fs[0].Title, tc.wantTitle)
+			}
+		})
 	}
 }
