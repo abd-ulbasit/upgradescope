@@ -175,6 +175,10 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 // are logged and skipped — the snapshot is already stored, and ingest must
 // not fail because one target could not be evaluated.
 func (s *Server) evaluateSnapshot(ctx context.Context, cluster store.Cluster, snapshotID int64, inv inventory.Inventory) {
+	// Server-side team override (spec: labels + server override) — rewrite
+	// namespace→team attribution before evaluation; stored reports carry the
+	// mapped teams. The stored snapshot keeps the original labels.
+	inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	targets := make([]inventory.Version, 0, len(s.extraTargets)+1)
 	if server, err := inventory.ParseVersion(inv.ServerVersion); err == nil {
 		targets = append(targets, server.Next())
@@ -475,7 +479,7 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 		}
 		return rep, nil
 	case errors.Is(err, store.ErrNotFound):
-		return WhatIf(ctx, s.cfg.Store, s.cfg.KB, clusterID, target, s.now())
+		return WhatIf(ctx, s.cfg.Store, s.cfg.KB, s.cfg.TeamMap, clusterID, target, s.now())
 	default:
 		return engine.Report{}, fmt.Errorf("loading latest evaluation: %w", err)
 	}

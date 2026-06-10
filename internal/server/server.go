@@ -28,6 +28,7 @@ type Config struct {
 	Notifier     notify.Notifier // nil = notifications disabled
 	IngestToken  string          // required bearer for POST /api/v1/snapshots
 	ReadToken    string          // optional bearer for the read API; "" = open (document loudly)
+	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
 }
 
 // Server serves the ingest + read API. Construct with New; a Server is

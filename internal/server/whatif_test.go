@@ -39,7 +39,7 @@ func TestWhatIfEvaluatesLatestSnapshot(t *testing.T) {
 
 	// PSP is removed in 1.35: target 1.35 → blocker; target 1.34 → warning
 	// (removed exactly at target+1). The target visibly changes the verdict.
-	rep, err := WhatIf(context.Background(), st, testKB(), id, inventory.Version{Major: 1, Minor: 35}, now)
+	rep, err := WhatIf(context.Background(), st, testKB(), nil, id, inventory.Version{Major: 1, Minor: 35}, now)
 	if err != nil {
 		t.Fatalf("WhatIf 1.35: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestWhatIfEvaluatesLatestSnapshot(t *testing.T) {
 		t.Fatalf("1.35 report = score %d ready %v findings %+v, want 75 false [1 blocker]", rep.Score, rep.Ready, rep.Findings)
 	}
 
-	rep34, err := WhatIf(context.Background(), st, testKB(), id, inventory.Version{Major: 1, Minor: 34}, now)
+	rep34, err := WhatIf(context.Background(), st, testKB(), nil, id, inventory.Version{Major: 1, Minor: 34}, now)
 	if err != nil {
 		t.Fatalf("WhatIf 1.34: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestWhatIfEvaluatesLatestSnapshot(t *testing.T) {
 
 func TestWhatIfNoSnapshot(t *testing.T) {
 	st := newFakeStore()
-	_, err := WhatIf(context.Background(), st, testKB(), 42, inventory.Version{Major: 1, Minor: 35}, time.Now())
+	_, err := WhatIf(context.Background(), st, testKB(), nil, 42, inventory.Version{Major: 1, Minor: 35}, time.Now())
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v, want store.ErrNotFound (wrapped)", err)
 	}
@@ -77,7 +77,7 @@ func TestWhatIfCorruptStoredInventory(t *testing.T) {
 	if _, _, err := st.InsertSnapshot(ctx, store.Snapshot{ClusterID: id, Hash: "h", Inventory: []byte("{not json")}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = WhatIf(ctx, st, testKB(), id, inventory.Version{Major: 1, Minor: 35}, time.Now())
+	_, err = WhatIf(ctx, st, testKB(), nil, id, inventory.Version{Major: 1, Minor: 35}, time.Now())
 	if err == nil || errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v, want non-nil non-NotFound corrupt-inventory error", err)
 	}
