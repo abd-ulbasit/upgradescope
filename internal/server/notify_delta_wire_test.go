@@ -76,6 +76,76 @@ func pushInventory(t *testing.T, baseURL, token string, inv inventory.Inventory)
 	}
 }
 
+// TestIngestSurvivesCorruptStoredReport covers the corrupt-prev path in
+// notifyDelta: when the latest stored evaluation's Report blob is not
+// valid JSON, the delta is skipped (logged server-side) but ingestion
+// still succeeds — the push returns 202 and zero events are delivered.
+// Without the corrupt row this exact sequence emits one became-ready
+// event (see TestIngestEmitsDeltaNotifications), so zero events proves
+// the corrupt branch ran.
+func TestIngestSurvivesCorruptStoredReport(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	kbData, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &recordingNotifier{}
+	srv, err := New(Config{Store: st, KB: kbData, Notifier: rec, IngestToken: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	base := inventory.Inventory{
+		SchemaVersion: 1,
+		ClusterID:     "uid-1",
+		CollectedAt:   time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+		ServerVersion: "v1.35.0", // default target = next minor = 1.36
+		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{},
+	}
+	withPSP := base
+	withPSP.APIUsage = []inventory.APIUsage{
+		{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Count: 1},
+	}
+	pushInventory(t, ts.URL, "tok", withPSP)
+
+	// Plant a corrupt evaluation as the LATEST row for (cluster, 1.36):
+	// the next push's prev-fetch will load it and fail to decode.
+	ctx := context.Background()
+	clusters, err := st.ListClusters(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clusters) != 1 {
+		t.Fatalf("want 1 cluster after first push, got %d", len(clusters))
+	}
+	snap, err := st.LatestSnapshot(ctx, clusters[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.InsertEvaluation(ctx, store.Evaluation{
+		ClusterID:  clusters[0].ID,
+		SnapshotID: snap.ID,
+		Target:     "1.36",
+		Report:     []byte("{not json"),
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clean := base                          // PSP gone: would emit became-ready if prev were readable
+	pushInventory(t, ts.URL, "tok", clean) // asserts the 202 itself
+
+	if evs := rec.all(); len(evs) != 0 {
+		t.Fatalf("corrupt previous report must suppress delta events, got %+v", evs)
+	}
+}
+
 // TestIngestEmitsDeltaNotifications drives two snapshots end-to-end:
 // snapshot 1 carries PodSecurityPolicy usage (removed 1.25 → blocker for
 // target 1.36) and must NOT notify (first-ever evaluation); snapshot 2 has
