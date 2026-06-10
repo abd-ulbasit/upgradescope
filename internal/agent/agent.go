@@ -170,8 +170,11 @@ func (r *runner) tick(ctx context.Context) error {
 }
 
 // maybePush sends the snapshot iff its content hash changed since the last
-// successful push, or ForceSyncEvery elapsed. lastHash/lastPush only advance
-// on success, so a failed push is naturally re-offered next tick.
+// successful push, or ForceSyncEvery elapsed. Retry across ticks works via
+// the hash gate, not the pusher's buffer: lastHash/lastPush only advance on
+// success, so after a failed push the same content still differs from
+// lastHash next tick and a fresh payload is offered (replacing any payload
+// the pusher kept buffered) and flushed again.
 func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) error {
 	hash, raw, err := snapshotHash(inv)
 	if err != nil {
@@ -235,7 +238,7 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	for {
 		if err := r.tick(ctx); err != nil {
 			r.tickErrs++
-			slog.Error("tick failed", "err", err, "consecutiveInfo", r.tickErrs)
+			slog.Error("tick failed", "err", err, "consecutiveFailures", r.tickErrs)
 		} else {
 			r.tickErrs = 0
 		}
