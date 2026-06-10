@@ -1,0 +1,18 @@
+# registry/data/prometheus-operator.yaml
+# Hand-curated: endoflife.date has no prometheus-operator product; status
+# comes from the upstream compatibility document (prometheus-operator
+# >= v0.84.0 requires Kubernetes >= 1.25; no upper bound is published, so
+# no bounded compat row is recorded).
+schema_version: 1
+id: prometheus-operator
+display_name: Prometheus Operator
+matchers:
+  images:
+    - quay.io/prometheus-operator/prometheus-operator
+  charts:
+    - kube-prometheus-stack
+    - prometheus-operator
+support:
+  status: supported
+  citations:
+    - https://github.com/prometheus-operator/prometheus-operator/blob/main/Documentation/getting-started/compatibility.md

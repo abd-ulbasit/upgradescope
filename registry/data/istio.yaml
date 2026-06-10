@@ -1,0 +1,19 @@
+# registry/data/istio.yaml
+# support.status / support.eol_date are synced from the endoflife.date API
+# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+schema_version: 1
+id: istio
+display_name: Istio
+endoflife_product: istio
+matchers:
+  images:
+    - docker.io/istio
+    - istio
+  charts:
+    - istiod
+support:
+  status: supported
+  eol_date: "2026-11-30"
+  citations:
+    - https://endoflife.date/istio
+    - https://istio.io/latest/docs/releases/supported-releases/

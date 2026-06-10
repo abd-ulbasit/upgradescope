@@ -1,0 +1,21 @@
+# registry/data/containerd.yaml
+# support.status / support.eol_date are synced from the endoflife.date API
+# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+#
+# containerd is a node-level daemon, not a pod, so the image matchers below
+# are best-effort (they only catch containerd-in-a-container setups). The
+# entry primarily carries the upstream support-horizon data.
+schema_version: 1
+id: containerd
+display_name: containerd
+endoflife_product: containerd
+matchers:
+  images:
+    - containerd
+    - docker.io/library/containerd
+support:
+  status: supported
+  eol_date: "2028-04-30"
+  citations:
+    - https://endoflife.date/containerd
+    - https://containerd.io/releases/
