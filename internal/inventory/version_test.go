@@ -151,6 +151,9 @@ func TestVersionUnmarshalJSON(t *testing.T) {
 		{name: "null rejected", in: `null`, wantErr: true},
 		{name: "legacy object unknown key rejected", in: `{"Major":1,"Minor":38,"Patch":2}`, wantErr: true},
 		{name: "malformed object", in: `{"Major":"x"}`, wantErr: true},
+		{name: "legacy object negative major rejected", in: `{"Major":-1,"Minor":5}`, wantErr: true},
+		{name: "legacy object negative minor rejected", in: `{"Major":1,"Minor":-5}`, wantErr: true},
+		{name: "legacy empty object rejected", in: `{}`, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
