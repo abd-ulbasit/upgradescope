@@ -1,0 +1,11 @@
+{
+  "clusterId": "11111111-1111-1111-1111-111111111111",
+  "findings": [],
+  "kbVersion": "test-kb-1",
+  "ready": true,
+  "score": 100,
+  "target": {
+    "Major": 1,
+    "Minor": 34
+  }
+}

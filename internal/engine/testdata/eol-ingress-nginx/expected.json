@@ -1,0 +1,28 @@
+{
+  "clusterId": "22222222-2222-2222-2222-222222222222",
+  "findings": [
+    {
+      "category": "eol-addon",
+      "citations": [
+        "https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/"
+      ],
+      "detail": "Detected ingress-nginx version 4.7.1 via chart in namespace(s): ingress-nginx. Upstream support has ended.",
+      "namespaces": [
+        "ingress-nginx"
+      ],
+      "remediation": "migrate to Gateway API (ingress2gateway) or another maintained ingress controller",
+      "severity": "blocker",
+      "teams": [
+        "platform"
+      ],
+      "title": "ingress-nginx is end-of-life since 2026-03-26"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "ready": false,
+  "score": 75,
+  "target": {
+    "Major": 1,
+    "Minor": 30
+  }
+}
