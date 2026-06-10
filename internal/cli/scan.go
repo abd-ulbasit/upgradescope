@@ -41,6 +41,10 @@ type scanOptions struct {
 	output      string
 	teamLabel   string
 	failOn      string
+
+	// targetVersion is opts.target parsed once by validateScanOptions;
+	// runScan consumes it instead of re-parsing the raw string.
+	targetVersion inventory.Version
 }
 
 // runScan is the real I/O pipeline: kb.Load → collect (cluster or files) →
@@ -49,10 +53,6 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 	kbData, err := kb.Load()
 	if err != nil {
 		return engine.Report{}, fmt.Errorf("load knowledge base: %w", err)
-	}
-	target, err := inventory.ParseVersion(opts.target)
-	if err != nil {
-		return engine.Report{}, fmt.Errorf("invalid --target %q: %w", opts.target, err)
 	}
 
 	var inv inventory.Inventory
@@ -71,7 +71,7 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 		inv = collect.Collect(ctx, clients, kbData, collect.Options{TeamLabel: opts.teamLabel})
 	}
 
-	return engine.Evaluate(inv, kbData, target, time.Now()), nil
+	return engine.Evaluate(inv, kbData, opts.targetVersion, time.Now()), nil
 }
 
 // buildClients uses clientcmd's standard loading rules ($KUBECONFIG, ~/.kube/config)
@@ -99,7 +99,7 @@ func newScanCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := validateScanOptions(opts); err != nil {
+			if err := validateScanOptions(&opts); err != nil {
 				return err
 			}
 			report, err := runScan(opts)
@@ -126,14 +126,19 @@ func newScanCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("target")
 	cmd.MarkFlagsMutuallyExclusive("files", "kubeconfig")
 	cmd.MarkFlagsMutuallyExclusive("files", "context")
+	cmd.MarkFlagsMutuallyExclusive("files", "team-label")
 
 	return cmd
 }
 
-func validateScanOptions(opts scanOptions) error {
-	if _, err := inventory.ParseVersion(opts.target); err != nil {
+// validateScanOptions checks flag values and stores the parsed --target into
+// opts.targetVersion (the single parse site — runScan does not re-parse).
+func validateScanOptions(opts *scanOptions) error {
+	target, err := inventory.ParseVersion(opts.target)
+	if err != nil {
 		return fmt.Errorf("invalid --target %q: %w", opts.target, err)
 	}
+	opts.targetVersion = target
 	switch opts.output {
 	case "table", "json", "sarif":
 	default:

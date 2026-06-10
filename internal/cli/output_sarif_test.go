@@ -18,7 +18,7 @@ func TestWriteSARIF(t *testing.T) {
 			{
 				Category: engine.CatEOLAddon, Severity: engine.SevBlocker,
 				Title: "ingress-nginx is past end of life", Detail: "EOL 2026-03-24",
-				Namespaces: []string{"ingress-nginx"},
+				Namespaces: []string{"ingress-nginx", "edge"},
 			},
 			{
 				Category: engine.CatVersionSkew, Severity: engine.SevWarning,
@@ -72,12 +72,19 @@ func TestWriteSARIF(t *testing.T) {
 	if got := run.Results[2].Message.Text; got != "batch/v1beta1 CronJob is deprecated" {
 		t.Errorf("message.text = %q", got)
 	}
-	// Cluster mode: logical locations only, namespace kind.
+	// Cluster mode: one location per namespace, each holding a single
+	// logicalLocation of kind "namespace" (SARIF 2.1.0 semantics — a
+	// location is one place, not a bag of places).
 	locs := run.Results[0].Locations
-	if len(locs) != 1 || len(locs[0].LogicalLocations) != 1 ||
-		locs[0].LogicalLocations[0].Name != "ingress-nginx" ||
-		locs[0].LogicalLocations[0].Kind != "namespace" {
-		t.Errorf("results[0].locations = %+v", locs)
+	if len(locs) != 2 {
+		t.Fatalf("results[0].locations = %d, want 2 (one per namespace): %+v", len(locs), locs)
+	}
+	for i, wantNS := range []string{"ingress-nginx", "edge"} {
+		if len(locs[i].LogicalLocations) != 1 ||
+			locs[i].LogicalLocations[0].Name != wantNS ||
+			locs[i].LogicalLocations[0].Kind != "namespace" {
+			t.Errorf("results[0].locations[%d] = %+v, want single logicalLocation %q/namespace", i, locs[i], wantNS)
+		}
 	}
 	if len(run.Results[1].Locations) != 0 { // no namespaces → no locations
 		t.Errorf("results[1] should have no locations, got %+v", run.Results[1].Locations)
