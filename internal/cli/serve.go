@@ -81,6 +81,7 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		ReadToken:    opts.readToken,
 		ExtraTargets: extraTargets,
 		TeamMap:      opts.parsedTeamMap,
+		Version:      version,
 	})
 	if err != nil {
 		return err
