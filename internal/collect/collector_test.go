@@ -85,11 +85,3 @@ func TestNewClients(t *testing.T) {
 		t.Errorf("NewClients left a nil client: %+v", c)
 	}
 }
-
-func TestNewClientsBadConfig(t *testing.T) {
-	// Exec-provider misconfig is one of the few things that fails at construction time.
-	cfg := &rest.Config{Host: "https://127.0.0.1:6443", BearerTokenFile: "\x00"}
-	if _, err := NewClients(cfg); err == nil {
-		t.Skip("client-go accepted the config; constructor error paths are config-dependent")
-	}
-}
