@@ -93,5 +93,11 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			}
 			return collectAddOns(ctx, c.Kube, k.AddOns, inv)
 		}},
+		{cap: inventory.CapAPIUsage, run: func(ctx context.Context, inv *inventory.Inventory) error {
+			if c.Discovery == nil || c.Metadata == nil {
+				return errors.New("discovery/metadata client not configured")
+			}
+			return collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
+		}},
 	}
 }
