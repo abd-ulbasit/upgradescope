@@ -1,6 +1,16 @@
 .PHONY: build test it lint
 build:
 	go build -o bin/upgradescope ./cmd/upgradescope
+
+# web builds the dashboard and stages it for go:embed: `make web build`
+# yields a binary serving the SPA at /. Without `make web` the binary still
+# builds (webdist/ holds only .gitkeep) and / explains how to get the UI.
+.PHONY: web
+web:
+	cd web && npm install --no-fund --no-audit && npm run build
+	find internal/server/webdist -type f ! -name .gitkeep -delete
+	find internal/server/webdist -type d -mindepth 1 -empty -delete
+	cp -R web/dist/. internal/server/webdist/
 test:
 	go test ./...
 it:

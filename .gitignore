@@ -3,3 +3,7 @@ dist/
 *.test
 .DS_Store
 .claude/
+node_modules/
+# built dashboard staged for go:embed — only the placeholder is tracked
+internal/server/webdist/*
+!internal/server/webdist/.gitkeep
