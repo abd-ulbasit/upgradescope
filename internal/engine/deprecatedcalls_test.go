@@ -31,6 +31,9 @@ func TestEvalDeprecatedCallsSeverityVsTarget(t *testing.T) {
 			if fs[0].Title != "clients still requesting batch/v1beta1 cronjobs (removed in 1.25)" {
 				t.Fatalf("title = %q", fs[0].Title)
 			}
+			if fs[0].Key != "deprecated-api-in-use/batch/v1beta1/cronjobs" {
+				t.Fatalf("key = %q", fs[0].Key)
+			}
 		})
 	}
 }
@@ -43,6 +46,9 @@ func TestEvalDeprecatedCallsUnparseableIsInfo(t *testing.T) {
 	}
 	if fs[0].Title != "clients still requesting extensions/v1beta1 ingresses (deprecated)" {
 		t.Fatalf("title = %q", fs[0].Title)
+	}
+	if fs[0].Key != "deprecated-api-in-use/extensions/v1beta1/ingresses" {
+		t.Fatalf("key = %q", fs[0].Key)
 	}
 	if fs[0].Detail != "apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; no removal release is recorded." {
 		t.Fatalf("detail = %q", fs[0].Detail)
@@ -69,5 +75,8 @@ func TestEvalDeprecatedCallsSubresource(t *testing.T) {
 	fs := evalDeprecatedCalls(callsInv(row), inventory.Version{Major: 1, Minor: 34})
 	if len(fs) != 1 || fs[0].Title != "clients still requesting apps/v1beta2 deployments/scale (removed in 1.16)" {
 		t.Fatalf("got %+v", fs)
+	}
+	if fs[0].Key != "deprecated-api-in-use/apps/v1beta2/deployments/scale" {
+		t.Fatalf("key = %q", fs[0].Key)
 	}
 }

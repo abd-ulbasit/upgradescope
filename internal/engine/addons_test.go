@@ -61,6 +61,7 @@ func TestEvalAddOnsEOLBlocker(t *testing.T) {
 	want := []Finding{{
 		Category:    CatEOLAddon,
 		Severity:    SevBlocker,
+		Key:         "eol-addon/ingress-nginx",
 		Title:       "ingress-nginx is end-of-life since 2026-03-26",
 		Detail:      "Detected ingress-nginx version 4.7.1 via chart in namespace(s): ingress-nginx. Upstream support has ended.",
 		Teams:       []string{"platform"},
@@ -83,6 +84,9 @@ func TestEvalAddOnsApproachingEOLWarning(t *testing.T) {
 	}
 	if fs[0].Title != "Legacy Mesh reaches end-of-life on 2026-08-15" {
 		t.Fatalf("title = %q", fs[0].Title)
+	}
+	if fs[0].Key != "eol-approaching/legacy-mesh" {
+		t.Fatalf("key = %q", fs[0].Key)
 	}
 	// Same fixture, now pushed past the window → no finding at all.
 	later := testNow.AddDate(0, 0, -100) // 90-day window not yet open
@@ -107,6 +111,9 @@ func TestEvalAddOnsChartIncompatBlocker(t *testing.T) {
 	}
 	if compat.Title != "ingress-nginx 4.7.1 supports Kubernetes up to 1.33 (target 1.38)" {
 		t.Fatalf("title = %q", compat.Title)
+	}
+	if compat.Key != "chart-incompat/ingress-nginx" {
+		t.Fatalf("key = %q", compat.Key)
 	}
 	if compat.Detail != `Installed version 4.7.1 matches compatibility range ">=4.0.0", which supports Kubernetes 1.21 through 1.33.` {
 		t.Fatalf("detail = %q", compat.Detail)

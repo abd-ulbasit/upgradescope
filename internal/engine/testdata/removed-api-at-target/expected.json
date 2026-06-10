@@ -7,6 +7,7 @@
         "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
       ],
       "detail": "3 object(s) still stored/served at this version: default (2), shop (1).",
+      "key": "removed-api/extensions/v1beta1/Ingress",
       "namespaces": [
         "default",
         "shop"
@@ -25,6 +26,7 @@
         "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
       ],
       "detail": "1 object(s) still stored/served at this version: default (1).",
+      "key": "deprecated-api/batch/v1beta1/CronJob",
       "namespaces": [
         "default"
       ],

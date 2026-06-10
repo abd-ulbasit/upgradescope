@@ -65,6 +65,7 @@ func TestEvalAPIUsageRemovedAtTarget(t *testing.T) {
 	want := Finding{
 		Category:    CatRemovedAPI,
 		Severity:    SevBlocker,
+		Key:         "removed-api/extensions/v1beta1/Ingress",
 		Title:       "extensions/v1beta1 Ingress removed in 1.22 (3 objects)",
 		Detail:      "3 object(s) still stored/served at this version: default (2), shop (1).",
 		Teams:       []string{"core", "storefront"},
@@ -93,6 +94,36 @@ func TestEvalAPIUsageRemovedAtTargetPlusOne(t *testing.T) {
 	if fs[0].Title != "extensions/v1beta1 Ingress removed in 1.22 (1 object)" {
 		t.Fatalf("title = %q", fs[0].Title)
 	}
+	if fs[0].Key != "removed-api/extensions/v1beta1/Ingress" {
+		t.Fatalf("key = %q", fs[0].Key)
+	}
+}
+
+// TestEvalAPIUsageKeyIsCountFree pins the notification-identity contract:
+// the same GVK with a different object count keeps the SAME key, so count
+// fluctuations never re-alert as a "new" blocker downstream.
+func TestEvalAPIUsageKeyIsCountFree(t *testing.T) {
+	target := inventory.Version{Major: 1, Minor: 22}
+	mk := func(count int) Finding {
+		inv := inventory.Inventory{
+			APIUsage: []inventory.APIUsage{{
+				Group: "extensions", Version: "v1beta1", Kind: "Ingress",
+				Count: count, Namespaces: map[string]int{"default": count},
+			}},
+		}
+		fs := evalAPIUsage(inv, testKB(), target)
+		if len(fs) != 1 {
+			t.Fatalf("want 1 finding, got %d", len(fs))
+		}
+		return fs[0]
+	}
+	three, two := mk(3), mk(2)
+	if three.Title == two.Title {
+		t.Fatal("titles should differ (they embed counts) for this test to be meaningful")
+	}
+	if three.Key == "" || three.Key != two.Key {
+		t.Fatalf("keys must be equal and count-free: %q vs %q", three.Key, two.Key)
+	}
 }
 
 func TestEvalAPIUsageDeprecatedBeyondWindowIsInfo(t *testing.T) {
@@ -110,6 +141,9 @@ func TestEvalAPIUsageDeprecatedBeyondWindowIsInfo(t *testing.T) {
 	}
 	if fs[0].Title != "batch/v1beta1 CronJob deprecated since 1.21 (1 object)" {
 		t.Fatalf("title = %q", fs[0].Title)
+	}
+	if fs[0].Key != "deprecated-api/batch/v1beta1/CronJob" {
+		t.Fatalf("key = %q", fs[0].Key)
 	}
 	if fs[0].Remediation != "migrate to batch/v1 CronJob" {
 		t.Fatalf("remediation = %q", fs[0].Remediation)
@@ -129,6 +163,9 @@ func TestEvalAPIUsageCoreGroupRendering(t *testing.T) {
 	}
 	if fs[0].Title != "v1 ComponentStatus deprecated since 1.19 (1 object)" {
 		t.Fatalf("core group must render as bare version; title = %q", fs[0].Title)
+	}
+	if fs[0].Key != "deprecated-api/core/v1/ComponentStatus" {
+		t.Fatalf("core group must render as \"core\" in keys; key = %q", fs[0].Key)
 	}
 	if fs[0].Detail != "1 object(s) still stored/served at this version: cluster-scoped (1)." {
 		t.Fatalf("detail = %q", fs[0].Detail)

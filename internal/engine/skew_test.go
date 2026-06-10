@@ -26,9 +26,15 @@ func TestEvalSkewCurrentViolationWarnsAndBlocksPostUpgrade(t *testing.T) {
 	if blocker.Detail != "After upgrading the control plane to 1.35 these nodes would be more than 3 minor versions behind: node-old (v1.30.0)." {
 		t.Fatalf("blocker detail = %q", blocker.Detail)
 	}
+	if blocker.Key != "version-skew/kubelet-post-upgrade" {
+		t.Fatalf("blocker key = %q", blocker.Key)
+	}
 	if warning.Severity != SevWarning ||
 		warning.Title != "1 node(s) exceed kubelet version skew vs control plane 1.34" {
 		t.Fatalf("warning = %+v", warning)
+	}
+	if warning.Key != "version-skew/kubelet-current" {
+		t.Fatalf("warning key = %q", warning.Key)
 	}
 }
 
@@ -68,6 +74,9 @@ func TestEvalSkewUnparseableKubeletVersionsReportedAsInfo(t *testing.T) {
 	}
 	if fs[0].Title != "2 node(s) have unparseable kubelet versions" {
 		t.Fatalf("title = %q", fs[0].Title)
+	}
+	if fs[0].Key != "version-skew/kubelet-unparseable" {
+		t.Fatalf("key = %q", fs[0].Key)
 	}
 	if fs[0].Detail != `These nodes could not be evaluated against the kubelet skew policy: node-blank (""), node-weird ("garbage").` {
 		t.Fatalf("detail = %q", fs[0].Detail)
@@ -134,6 +143,9 @@ func TestEvalKBStale(t *testing.T) {
 			}
 			if fs[0].Title != tc.wantTitle {
 				t.Fatalf("title = %q, want %q", fs[0].Title, tc.wantTitle)
+			}
+			if fs[0].Key != "kb-stale" {
+				t.Fatalf("key = %q, want kb-stale", fs[0].Key)
 			}
 		})
 	}

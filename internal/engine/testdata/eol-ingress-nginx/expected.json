@@ -7,6 +7,7 @@
         "https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/"
       ],
       "detail": "Detected ingress-nginx version 4.7.1 via chart in namespace(s): ingress-nginx. Upstream support has ended.",
+      "key": "eol-addon/ingress-nginx",
       "namespaces": [
         "ingress-nginx"
       ],
