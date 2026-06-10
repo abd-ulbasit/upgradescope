@@ -399,3 +399,39 @@ func evalKBStale(inv inventory.Inventory, k kb.KB) []Finding {
 		Detail: fmt.Sprintf("Findings may be incomplete; regenerate the knowledge base (kb version %s).", k.Version),
 	}}
 }
+
+// Evaluate is the pure evaluation entrypoint: no I/O, no clock reads — now is
+// injected for EOL-window math. Output is fully deterministic for a given
+// (inventory, kb, target, now).
+func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) Report {
+	findings := []Finding{} // non-nil so JSON renders "findings": []
+	findings = append(findings, evalAPIUsage(inv, k, target)...)
+	findings = append(findings, evalDeprecatedCalls(inv, target)...)
+	findings = append(findings, evalAddOns(inv, k, target, now)...)
+	findings = append(findings, evalSkew(inv, k, target)...)
+	findings = append(findings, evalKBStale(inv, k)...)
+	sortFindings(findings)
+	score, ready := Score(findings)
+
+	caps := make([]inventory.Capability, 0, len(inv.Capabilities))
+	for c := range inv.Capabilities {
+		caps = append(caps, c)
+	}
+	sort.Slice(caps, func(i, j int) bool { return caps[i] < caps[j] })
+	var gaps []CapabilityGap
+	for _, c := range caps {
+		if st := inv.Capabilities[c]; !st.Available {
+			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason})
+		}
+	}
+
+	return Report{
+		ClusterID:   inv.ClusterID,
+		Target:      target,
+		KBVersion:   k.Version,
+		Score:       score,
+		Ready:       ready,
+		Findings:    findings,
+		NotAssessed: gaps,
+	}
+}
