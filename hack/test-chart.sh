@@ -88,6 +88,37 @@ else
 fi
 
 # --- SERVER ASSERTIONS (H4) ---
+echo "== server assertions: default render has no server objects"
+assert_no_line "$TMP/default.yaml" 'kind: Service'               "no Service when server disabled"
+assert_no_line "$TMP/default.yaml" 'kind: PersistentVolumeClaim' "no PVC when server disabled"
+
+echo "== server assertions: server-enabled render"
+assert_line "$TMP/server.yaml" 'kind: Service'               "server Service rendered"
+assert_line "$TMP/server.yaml" 'kind: PersistentVolumeClaim' "server PVC rendered"
+assert_line "$TMP/server.yaml" 'kind: Secret'                "Secrets rendered"
+assert_contains "$TMP/server.yaml" 'name: upgradescope-server' "server resources named *-server"
+assert_contains "$TMP/server.yaml" 'type: Recreate' "Recreate strategy (single SQLite writer)"
+assert_contains "$TMP/server.yaml" '--db=/data/upgradescope.sqlite' "db on the data volume"
+assert_contains "$TMP/server.yaml" '--ingest-token=$(UPGRADESCOPE_INGEST_TOKEN)' "ingest token via env expansion"
+assert_contains "$TMP/server.yaml" 'ingestToken: "test-token"' "ingest token in Secret stringData"
+assert_contains "$TMP/server.yaml" 'serverToken: "test-token"' "agent token defaults to ingestToken"
+assert_contains "$TMP/server.yaml" '--server-url=http://upgradescope-server.upgradescope.svc:8080' "agent points at in-chart server"
+assert_contains "$TMP/server.yaml" 'path: /healthz' "healthz probes"
+assert_not_contains "$TMP/server.yaml" '--read-token' "no read-token flag unless set"
+
+echo "== server assertions: render fails without ingest token"
+if helm template upgradescope "$CHART" --set server.enabled=true >/dev/null 2>&1; then
+  fail "server.enabled without ingestToken should fail the required check"
+else
+  pass "server without ingestToken fails render"
+fi
+
+echo "== server assertions: emptyDir when persistence disabled"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set server.persistence.enabled=false > "$TMP/nopvc.yaml"
+assert_no_line "$TMP/nopvc.yaml" 'kind: PersistentVolumeClaim' "no PVC when persistence disabled"
+assert_contains "$TMP/nopvc.yaml" 'emptyDir: {}' "emptyDir fallback"
 
 [ "$FAILED" -eq 0 ] || { echo "chart-test: FAILED" >&2; exit 1; }
 echo "chart-test: all assertions passed"

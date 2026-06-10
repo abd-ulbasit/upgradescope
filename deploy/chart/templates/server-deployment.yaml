@@ -1,0 +1,98 @@
+{{- if .Values.server.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "upgradescope.serverFullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --listen=:{{ .Values.server.service.port }}
+            - --db=/data/upgradescope.sqlite
+            - --ingest-token=$(UPGRADESCOPE_INGEST_TOKEN)
+            {{- if .Values.server.readToken }}
+            - --read-token=$(UPGRADESCOPE_READ_TOKEN)
+            {{- end }}
+            {{- if .Values.server.slackWebhook }}
+            - --slack-webhook={{ .Values.server.slackWebhook }}
+            {{- end }}
+            {{- if .Values.server.webhook }}
+            - --webhook={{ .Values.server.webhook }}
+            {{- end }}
+            {{- if .Values.server.targets }}
+            - --targets={{ join "," .Values.server.targets }}
+            {{- end }}
+          env:
+            - name: UPGRADESCOPE_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "upgradescope.serverSecretName" . }}
+                  key: ingestToken
+            {{- if .Values.server.readToken }}
+            - name: UPGRADESCOPE_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "upgradescope.serverSecretName" . }}
+                  key: readToken
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.service.port }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources: {{- toYaml .Values.server.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          {{- if .Values.server.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "upgradescope.serverFullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
