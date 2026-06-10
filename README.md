@@ -30,6 +30,7 @@ Exit codes: `0` ready (or below `--fail-on` threshold), `1` scan error, `2` gate
 
 > **Status — P1:** `scan` is a point-in-time scan. The continuous in-cluster
 > agent (`ClusterReadiness` CRD, history, server) lands in P2.
+> Integration tests are env-gated: `make demo-up && make it` (kind + Helm required).
 
 ## The problem
 
