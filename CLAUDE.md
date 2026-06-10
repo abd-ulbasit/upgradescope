@@ -6,7 +6,7 @@
 (Seeded as "upgradepilot"; renamed during design — chkk.io's flagship is branded "Upgrade Copilot". Local dir may still say upgradepilot.)
 
 ## Current state
-**Design approved 2026-06-10; implementation in progress.** Read in order:
+**P1 (scan CLI) and P2 (continuous: agent + ClusterReadiness CRD + serve/SQLite + Helm chart) shipped 2026-06-11.** P3 (fleet/Postgres/CI gate/reports) and P4 (dashboard/registry pipeline) remain. Read in order:
 1. `docs/superpowers/specs/2026-06-10-upgradescope-design.md` — THE spec (architecture, decisions log, scoring, phases)
 2. `docs/superpowers/plans/` — implementation plans
 3. `docs/research.md` — market evidence; `docs/design-brief.md` — superseded seed

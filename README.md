@@ -2,7 +2,7 @@
 
 **Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
 
-> Status: **P1 shipped** — `upgradescope scan` works against live clusters and rendered manifests (see Quickstart). The continuous in-cluster agent, `ClusterReadiness` CRD, and fleet server are in development (P2–P4). Design: `docs/superpowers/specs/2026-06-10-upgradescope-design.md`; market evidence: `docs/research.md`.
+> Status: **P1 + P2 shipped** — `upgradescope scan` (point-in-time CLI) and continuous mode: an in-cluster agent that maintains a `ClusterReadiness` CRD and pushes to a self-hosted server (history, REST API, what-if, Slack alerts). Fleet features and dashboard are in development (P3–P4). Design: `docs/superpowers/specs/2026-06-10-upgradescope-design.md`.
 
 ## Install
 
@@ -41,9 +41,23 @@ Blockers are findings that break at the target version (a removed API in use, an
 warnings break one version later or are approaching EOL; info findings are listed but never
 scored. Caps keep one noisy category from zeroing the score.
 
-> **Status — P1:** `scan` is a point-in-time scan. The continuous in-cluster
-> agent (`ClusterReadiness` CRD, history, server) lands in P2.
-> Integration tests are env-gated: `make demo-up && make it` (kind + Helm required).
+## Continuous mode (P2)
+
+Run the agent in-cluster via the Helm chart — it keeps a `ClusterReadiness` resource up to date and (optionally) pushes to a self-hosted server:
+
+```sh
+helm install upgradescope ./deploy/chart -n upgradescope --create-namespace \
+  --set server.enabled=true        # single-cluster all-in-one
+
+kubectl get ucr                    # ClusterReadiness: TARGET / SCORE / READY
+curl -s $SERVER/api/v1/clusters    # fleet API: clusters, findings, history, what-if (?target=1.38)
+```
+
+- Agent is **read-only** (plus status on its own CRD); works with no server at all.
+- Server: single binary + SQLite (Postgres in P3), Slack/webhook alerts on *new* blockers only.
+- Auth: bearer tokens (`--ingest-token`, optional `--read-token`).
+
+> Integration tests are env-gated: `make demo-up && make it`; full agent e2e: `make agent-e2e` (kind + Helm + Docker/Colima required).
 
 ## The problem
 
