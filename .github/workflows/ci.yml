@@ -48,3 +48,9 @@ jobs:
             tools/gen-kb/go.sum
       - run: make gen-kb
       - run: git diff --exit-code internal/kb/data/apilifecycle.json
+      - name: gen-kb import list covers all k8s.io/api group/versions
+        run: |
+          diff \
+            <(cd tools/gen-kb && go list k8s.io/api/... | grep -E '/v[0-9][a-z0-9]*$' | sort) \
+            <(grep -oE '"k8s\.io/api/[a-z]+/v[0-9][a-z0-9]*"' tools/gen-kb/main.go | tr -d '"' | sort) \
+            || { echo "::error::gen-kb import list is out of sync with k8s.io/api packages (left: module, right: main.go) — reconcile the imports in tools/gen-kb/main.go"; exit 1; }

@@ -7,6 +7,12 @@
 // Output JSON mirrors internal/kb's lifecycleFile / APILifecycleEntry shape
 // (this module cannot import internal/kb; the sanity test in internal/kb
 // and the CI freshness check keep the shapes in sync).
+//
+// IMPORTANT — when bumping k8s.io/api: reconcile the import list below
+// against `go list k8s.io/api/...`. A new group/version package that is
+// missing from the imports still compiles and the CI freshness check still
+// passes (the dataset just silently lacks that group); only the
+// import-list drift check in CI (and this note) guard against it.
 package main
 
 import (
@@ -196,6 +202,13 @@ func main() {
 		entries = append(entries, e)
 	}
 
+	// A near-empty result means the APILifecycle* type assertions stopped
+	// matching (e.g. upstream renamed the generated methods) — refuse to
+	// write a dataset that would make every scan silently green.
+	if len(entries) < 100 {
+		log.Fatalf("gen-kb: only %d entries extracted (want >= 100) — did upstream rename the APILifecycle* methods?", len(entries))
+	}
+
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
 		if a.Group != b.Group {
@@ -259,6 +272,11 @@ func maxKnownK8s(apiVersion string) string {
 	parts := strings.Split(strings.TrimPrefix(apiVersion, "v"), ".")
 	if len(parts) < 2 || parts[0] != "0" {
 		log.Fatalf("gen-kb: unexpected k8s.io/api version %q", apiVersion)
+	}
+	if parts[1] == "0" {
+		// A pseudo-version like v0.0.0-20260101000000-abcdef would silently
+		// map to "1.0"; require a real tagged release instead.
+		log.Fatalf("gen-kb: k8s.io/api version %q looks like a pseudo-version; pin a tagged release", apiVersion)
 	}
 	return "1." + parts[1]
 }
