@@ -59,6 +59,107 @@ curl -s $SERVER/api/v1/clusters    # fleet API: clusters, findings, history, wha
 
 > Integration tests are env-gated: `make demo-up && make it`; full agent e2e: `make agent-e2e` (kind + Helm + Docker/Colima required).
 
+## Fleet mode (P3)
+
+With several clusters pushing to one server, the read API rolls them up:
+
+```sh
+# Cluster × target score matrix (latest stored evaluations; no recompute)
+curl -s "$SERVER/api/v1/fleet?targets=1.37,1.38"
+
+# Per-team rollup across the fleet: worst score, total blockers, affected clusters
+curl -s "$SERVER/api/v1/fleet/teams?target=1.38"
+
+# Per-team scores for one cluster (also embedded as `teams` in /report)
+curl -s "$SERVER/api/v1/clusters/1/teams?target=1.38"
+```
+
+Team attribution comes from namespace labels (`--team-label`, default `team`),
+optionally overridden server-side with `serve --team-map teams.yaml`:
+
+```yaml
+# first matching glob wins; namespaces matching nothing keep their label
+- pattern: "payments-*"
+  team: payments
+- pattern: "kube-*"
+  team: platform
+```
+
+The CLI table output grows a `TEAMS` section whenever at least one finding is
+attributed to a named team.
+
+## CI gate
+
+Two ways to block a PR that adds a removed API:
+
+**1. CLI (no server needed):**
+
+```sh
+helm template ./chart > rendered.yaml   # or kustomize build
+upgradescope scan --files . --target 1.38 --output sarif --fail-on blocker > results.sarif
+```
+
+**2. Server gate endpoint** — evaluates manifests *inside a known cluster's
+context* (its add-ons, version skew, and namespace→team labels are merged in;
+the manifests replace the cluster's API usage):
+
+```sh
+curl -sf -X POST "$SERVER/api/v1/gate?target=1.38&cluster=prod-eu-1&format=sarif" \
+  -H "Authorization: Bearer $READ_TOKEN" \
+  -H "Content-Type: application/x-yaml" \
+  --data-binary @rendered.yaml > results.sarif
+```
+
+Omit `cluster=` to evaluate the manifests standalone; `format=json` (default)
+returns the full report.
+
+**GitHub Action** (composite, in `action/`):
+
+```yaml
+jobs:
+  upgrade-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # for SARIF upload
+    steps:
+      - uses: actions/checkout@v4
+      - run: helm template ./chart --output-dir rendered
+      - uses: abd-ulbasit/upgradescope/action@main
+        id: gate
+        with:
+          path: rendered
+          target: "1.38"
+          fail-on: blocker
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()           # annotate the PR even when the gate fails
+        with:
+          sarif_file: ${{ steps.gate.outputs.sarif-file }}
+```
+
+## Auditor export
+
+One self-contained artifact per cluster per target — no JS, no CDN, prints cleanly:
+
+```sh
+# findings as CSV (one row per finding, citations included)
+curl -s "$SERVER/api/v1/clusters/1/export?target=1.38&format=csv" -o report.csv
+
+# single-file HTML report: score badge, findings by severity, score-history sparkline
+curl -s "$SERVER/api/v1/clusters/1/export?target=1.38&format=html" -o report.html
+```
+
+Exports always reflect the latest **stored** evaluation (what the system
+actually recorded, with its `evaluatedAt`), never an on-the-fly recompute.
+
+## Ingest tokens
+
+- Dev / single cluster: one shared `serve --ingest-token <secret>` for all agents.
+- Fleet: per-cluster tokens — `upgradescope tokens create <cluster> --db ...`
+  prints a token (once) valid **only** for that cluster name (403 on mismatch);
+  revoke with `upgradescope tokens revoke <cluster>`. The shared `--ingest-token`
+  keeps working as a back-compat/dev path.
+- Postgres backend: `serve --db-url postgres://...` (mutually exclusive with `--db`).
+
 ## The problem
 
 Upgrading a Kubernetes cluster safely requires answering, *continuously*, questions that today are answered by one-shot CLIs or expensive commercial tools:
