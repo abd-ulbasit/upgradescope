@@ -112,3 +112,67 @@ func TestLoadEmbedded(t *testing.T) {
 	}
 	t.Fatalf("ingress-nginx not found in embedded registry (%d entries)", len(addons))
 }
+
+func TestLoadCuratedEntries(t *testing.T) {
+	addons, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	got := map[string]AddOn{}
+	for _, a := range addons {
+		got[a.ID] = a
+	}
+	tests := []struct {
+		id       string
+		status   string
+		image    string
+		chart    string
+		citation string
+	}{
+		{"ingress-nginx", "eol", "registry.k8s.io/ingress-nginx/controller", "ingress-nginx",
+			"https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/"},
+		{"cert-manager", "supported", "quay.io/jetstack/cert-manager-controller", "cert-manager",
+			"https://cert-manager.io/docs/releases/"},
+		{"coredns", "supported", "registry.k8s.io/coredns/coredns", "coredns",
+			"https://github.com/coredns/deployment/blob/master/kubernetes/CoreDNS-k8s_version.md"},
+		{"metrics-server", "supported", "registry.k8s.io/metrics-server/metrics-server", "metrics-server",
+			"https://github.com/kubernetes-sigs/metrics-server#compatibility-matrix"},
+		{"kube-state-metrics", "supported", "registry.k8s.io/kube-state-metrics/kube-state-metrics", "kube-state-metrics",
+			"https://github.com/kubernetes/kube-state-metrics#compatibility-matrix"},
+	}
+	if len(addons) != len(tests) {
+		t.Errorf("embedded registry has %d entries, want %d", len(addons), len(tests))
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			a, ok := got[tt.id]
+			if !ok {
+				t.Fatalf("%s not found in embedded registry", tt.id)
+			}
+			if a.Support.Status != tt.status {
+				t.Errorf("status = %q, want %q", a.Support.Status, tt.status)
+			}
+			if !slices.Contains(a.Matchers.Images, tt.image) {
+				t.Errorf("images %v missing %q", a.Matchers.Images, tt.image)
+			}
+			if !slices.Contains(a.Matchers.Charts, tt.chart) {
+				t.Errorf("charts %v missing %q", a.Matchers.Charts, tt.chart)
+			}
+			if !slices.Contains(a.Support.Citations, tt.citation) {
+				t.Errorf("citations %v missing %q", a.Support.Citations, tt.citation)
+			}
+		})
+	}
+	// ingress-nginx specifics: the demo centerpiece must carry both citations,
+	// the EOL date, and a remediation hint.
+	in := got["ingress-nginx"]
+	if in.Support.EOLDate != "2026-03-24" {
+		t.Errorf("ingress-nginx eol_date = %q, want 2026-03-24", in.Support.EOLDate)
+	}
+	if !slices.Contains(in.Support.Citations, "https://kubernetes.io/blog/2026/01/29/ingress-nginx-statement/") {
+		t.Errorf("ingress-nginx missing 2026-01-29 statement citation, got %v", in.Support.Citations)
+	}
+	if !strings.Contains(in.Recommendation, "Gateway API") {
+		t.Errorf("ingress-nginx recommendation = %q, want Gateway API migration hint", in.Recommendation)
+	}
+}
