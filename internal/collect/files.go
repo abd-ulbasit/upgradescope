@@ -1,22 +1,23 @@
 package collect
 
 import (
+	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
-
-// docSeparator splits multi-document YAML on lines containing only "---".
-var docSeparator = regexp.MustCompile(`(?m)^---\s*$`)
 
 // manifestDoc decodes only TypeMeta + the ObjectMeta fields we need.
 type manifestDoc struct {
@@ -65,18 +66,26 @@ func CollectFiles(dir string) (inventory.Inventory, error) {
 		if err != nil {
 			return err
 		}
-		var docs []string
-		if ext == ".json" {
-			docs = []string{string(data)}
-		} else {
-			docs = docSeparator.Split(string(data), -1)
-		}
-		for _, raw := range docs {
-			if strings.TrimSpace(raw) == "" {
+		// Document splitting via apimachinery's YAMLReader — the same
+		// kubectl-compatible splitter (handles "--- # comment" separator
+		// lines that a plain `^---$` split would corrupt). JSON files are
+		// a single document and pass through unchanged.
+		// Known limitation: kind:List items are not expanded; the List
+		// object itself is counted.
+		reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
+		for {
+			raw, rerr := reader.Read()
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
+			if rerr != nil {
+				return fmt.Errorf("%s: %w", path, rerr)
+			}
+			if strings.TrimSpace(string(raw)) == "" {
 				continue
 			}
 			var doc manifestDoc
-			if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+			if err := yaml.Unmarshal(raw, &doc); err != nil {
 				return fmt.Errorf("%s: %w", path, err)
 			}
 			if doc.APIVersion == "" || doc.Kind == "" {
