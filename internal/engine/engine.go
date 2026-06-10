@@ -35,6 +35,15 @@ func gvString(group, version string) string {
 	return group + "/" + version
 }
 
+// keyGroup renders an API group for Finding.Key; the core group's empty
+// string becomes "core" so keys never contain an empty path segment.
+func keyGroup(group string) string {
+	if group == "" {
+		return "core"
+	}
+	return group
+}
+
 // namespaceBreakdown renders "ns (count)" parts sorted by namespace name and
 // returns the sorted namespace names. The cluster-scoped key "" renders as
 // "cluster-scoped" in the detail and is excluded from the returned names.
@@ -115,6 +124,7 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 		default:
 			continue // KB entry exists but is neither deprecated nor removed
 		}
+		f.Key = fmt.Sprintf("%s/%s/%s/%s", f.Category, keyGroup(u.Group), u.Version, u.Kind)
 		if nsDetail == "" {
 			f.Detail = fmt.Sprintf("%d object(s) still stored/served at this version.", u.Count)
 		} else {
@@ -136,7 +146,11 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 			res += "/" + c.Subresource
 		}
 		gv := gvString(c.Group, c.Version)
-		f := Finding{Category: CatDeprecatedAPIInUse, Citations: []string{deprecationGuideURL}}
+		f := Finding{
+			Category:  CatDeprecatedAPIInUse,
+			Key:       fmt.Sprintf("%s/%s/%s/%s", CatDeprecatedAPIInUse, keyGroup(c.Group), c.Version, res),
+			Citations: []string{deprecationGuideURL},
+		}
 		removed, perr := inventory.ParseVersion(c.RemovedRelease)
 		if c.RemovedRelease == "" || perr != nil {
 			f.Severity = SevInfo
@@ -214,6 +228,7 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 			}
 			out = append(out, Finding{
 				Category: CatEOLAddon, Severity: SevBlocker,
+				Key:         string(CatEOLAddon) + "/" + a.ID,
 				Title:       title,
 				Detail:      detail,
 				Teams:       teams,
@@ -224,6 +239,7 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 		case hasDate && eolDate.After(now) && !eolDate.After(now.Add(90*24*time.Hour)):
 			out = append(out, Finding{
 				Category: CatEOLApproaching, Severity: SevWarning,
+				Key:         string(CatEOLApproaching) + "/" + a.ID,
 				Title:       fmt.Sprintf("%s reaches end-of-life on %s", a.DisplayName, a.Support.EOLDate),
 				Detail:      located + fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate),
 				Teams:       teams,
@@ -247,6 +263,7 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 			if err == nil && kmax.Compare(target) < 0 {
 				out = append(out, Finding{
 					Category: CatChartIncompat, Severity: SevBlocker,
+					Key:         string(CatChartIncompat) + "/" + a.ID,
 					Title:       fmt.Sprintf("%s %s supports Kubernetes up to %s (target %s)", a.DisplayName, inst.Version, c.K8sMax, target),
 					Detail:      fmt.Sprintf("Installed version %s matches compatibility range %q, which supports Kubernetes %s through %s.", inst.Version, c.Range, c.K8sMin, c.K8sMax),
 					Teams:       teams,
@@ -328,6 +345,7 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 	if len(postBad) > 0 {
 		out = append(out, Finding{
 			Category: CatVersionSkew, Severity: SevBlocker,
+			Key:       string(CatVersionSkew) + "/kubelet-post-upgrade",
 			Title:     fmt.Sprintf("%d node(s) would exceed kubelet version skew after upgrading to %s", len(postBad), target),
 			Detail:    fmt.Sprintf("After upgrading the control plane to %s these nodes would be more than %d minor versions behind: %s.", target, maxBehind, strings.Join(postBad, ", ")),
 			Citations: []string{skewPolicyURL},
@@ -336,6 +354,7 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 	if len(nowBad) > 0 {
 		out = append(out, Finding{
 			Category: CatVersionSkew, Severity: SevWarning,
+			Key:       string(CatVersionSkew) + "/kubelet-current",
 			Title:     fmt.Sprintf("%d node(s) exceed kubelet version skew vs control plane %s", len(nowBad), server),
 			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, strings.Join(nowBad, ", ")),
 			Citations: []string{skewPolicyURL},
@@ -345,6 +364,7 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 		sort.Strings(unparseable)
 		out = append(out, Finding{
 			Category: CatVersionSkew, Severity: SevInfo,
+			Key:       string(CatVersionSkew) + "/kubelet-unparseable",
 			Title:     fmt.Sprintf("%d node(s) have unparseable kubelet versions", len(unparseable)),
 			Detail:    fmt.Sprintf("These nodes could not be evaluated against the kubelet skew policy: %s.", strings.Join(unparseable, ", ")),
 			Citations: []string{skewPolicyURL},
@@ -373,6 +393,7 @@ func evalKBStale(inv inventory.Inventory, k kb.KB, target inventory.Version) []F
 	}
 	return []Finding{{
 		Category: CatKBStale, Severity: SevWarning,
+		Key:    string(CatKBStale),
 		Title:  fmt.Sprintf("knowledge base does not cover Kubernetes %s (newest known: %s)", newest, k.MaxKnownK8s),
 		Detail: fmt.Sprintf("Findings may be incomplete; regenerate the knowledge base (kb version %s).", k.Version),
 	}}

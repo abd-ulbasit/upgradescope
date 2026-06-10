@@ -28,8 +28,15 @@ const (
 )
 
 type Finding struct {
-	Category    Category `json:"category"`
-	Severity    Severity `json:"severity"`
+	Category Category `json:"category"`
+	Severity Severity `json:"severity"`
+	// Key is the finding's stable, count-free identity: it never embeds
+	// object counts, node counts, or other volatile numbers, so the same
+	// underlying problem keeps the same Key across snapshots even as Title
+	// fluctuates ("3 objects" → "2 objects"). Notification delta diffing
+	// keys on it. Convention: category + "/" + stable discriminator
+	// (e.g. "removed-api/extensions/v1beta1/Ingress", "eol-addon/ingress-nginx").
+	Key         string   `json:"key,omitempty"`
 	Title       string   `json:"title"`           // one line, deterministic
 	Detail      string   `json:"detail"`          // evidence sentence(s), deterministic
 	Teams       []string `json:"teams,omitempty"` // sorted, deduped
