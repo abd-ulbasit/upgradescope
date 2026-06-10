@@ -1,4 +1,4 @@
-package cli
+package sarif
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
-func TestWriteSARIF(t *testing.T) {
+func TestWrite(t *testing.T) {
 	r := engine.Report{
 		ClusterID: "prod-eu-1",
 		Target:    inventory.Version{Major: 1, Minor: 36},
@@ -32,8 +32,8 @@ func TestWriteSARIF(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := WriteSARIF(&buf, r); err != nil {
-		t.Fatalf("WriteSARIF: %v", err)
+	if err := Write(&buf, r, "v-test"); err != nil {
+		t.Fatalf("Write: %v", err)
 	}
 
 	var log sarifLog
