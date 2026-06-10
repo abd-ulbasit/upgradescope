@@ -88,6 +88,28 @@ optionally overridden server-side with `serve --team-map teams.yaml`:
 The CLI table output grows a `TEAMS` section whenever at least one finding is
 attributed to a named team.
 
+## Dashboard (P4)
+
+`serve` embeds a web dashboard at `/`: the fleet score matrix, per-cluster
+drill-down (findings with category/team filters, score trend, team table),
+and a browser for the add-on registry this binary evaluates against
+(`GET /api/v1/registry`).
+
+![upgradescope dashboard](docs/img/dashboard.png)
+
+```sh
+make web && make build      # build the SPA, stage it for go:embed, build the binary
+./bin/upgradescope serve --ingest-token $TOKEN
+# open http://localhost:8080/
+```
+
+- No runtime JS dependencies beyond react/react-dom; charts are hand-rolled SVG.
+- If the server runs with `--read-token`, set the token in the dashboard
+  header (stored in browser localStorage, sent as a bearer header).
+- Without `make web` the binary still builds and serves the API; `go build
+  -tags nodashboard` skips the embed entirely.
+- Dashboard dev loop: `cd web && npm run dev` (Vite proxies `/api` to `:8080`).
+
 ## CI gate
 
 Two ways to block a PR that adds a removed API:
