@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -64,6 +65,19 @@ func splitImage(image string) (repo, tag string) {
 		return image[:colon], image[colon+1:]
 	}
 	return image, ""
+}
+
+// versionLess orders detected versions for the conservative-oldest merge:
+// semver compare when both sides parse ("1.9.4" < "1.10.0"), falling back
+// to lexicographic for unparseable versions. Plain string `<` would rank
+// "1.10.0" before "1.9.4" and mask the older install's EOL risk.
+func versionLess(a, b string) bool {
+	av, aerr := semver.NewVersion(a)
+	bv, berr := semver.NewVersion(b)
+	if aerr == nil && berr == nil {
+		return av.LessThan(bv)
+	}
+	return a < b
 }
 
 // repoMatches reports whether repo equals the matcher or sits beneath it,
@@ -125,7 +139,7 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 			switch {
 			case e.source == "chart" && inst.Source != "chart":
 				inst.Source, inst.Version = "chart", e.version
-			case e.source == inst.Source && e.version != "" && (inst.Version == "" || e.version < inst.Version):
+			case e.source == inst.Source && e.version != "" && (inst.Version == "" || versionLess(e.version, inst.Version)):
 				inst.Version = e.version
 			}
 		}
