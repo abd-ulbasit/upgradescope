@@ -5,10 +5,19 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
 )
+
+// HashToken is the storage form of an ingest token: lowercase hex sha256.
+// Exported so callers (CLI, tests) can locate rows without the plaintext.
+func HashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
 
 // ErrNotFound is returned (possibly wrapped) by lookups that match no row.
 // Test with errors.Is.
@@ -25,6 +34,14 @@ type Store interface {
 	InsertEvaluation(ctx context.Context, e Evaluation) (int64, error)
 	LatestEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error)
 	ScoreHistory(ctx context.Context, clusterID int64, target string, limit int) ([]ScorePoint, error)
+
+	// Per-cluster ingest tokens (P3, spec §8). Tokens are keyed by cluster
+	// NAME (not id): a token may be minted before the cluster's first push
+	// registers it. Only the sha256 of the plaintext is ever stored.
+	CreateToken(ctx context.Context, clusterName, token string) error    // errors if the token is already issued (any cluster)
+	ValidToken(ctx context.Context, token string) (string, bool, error)  // (clusterName, true) for active; ("", false, nil) for unknown/revoked
+	RevokeToken(ctx context.Context, clusterName string) error           // revokes ALL active tokens; ErrNotFound when none are active
+
 	Close() error
 }
 

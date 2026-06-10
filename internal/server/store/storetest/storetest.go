@@ -40,6 +40,9 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("LatestEvaluationTieBreakHigherID", func(t *testing.T) { testLatestEvaluationTieBreak(t, newStore(t)) })
 	t.Run("ScoreHistoryOldestFirstLimitNewest", func(t *testing.T) { testScoreHistory(t, newStore(t)) })
 	t.Run("NotFound", func(t *testing.T) { testNotFound(t, newStore(t)) })
+	t.Run("TokensCreateValidateRevoke", func(t *testing.T) { testTokens(t, newStore(t)) })
+	t.Run("TokensMultiplePerCluster", func(t *testing.T) { testTokensMultiplePerCluster(t, newStore(t)) })
+	t.Run("TokensDuplicateRejected", func(t *testing.T) { testTokensDuplicate(t, newStore(t)) })
 	t.Run("Close", func(t *testing.T) { testClose(t, newStore(t)) })
 }
 
@@ -486,6 +489,101 @@ func testNotFound(t *testing.T, s store.Store) {
 				t.Errorf("err = %v, want errors.Is(err, store.ErrNotFound)", err)
 			}
 		})
+	}
+}
+
+// testTokens pins the per-cluster ingest-token lifecycle. Note tokens are
+// keyed by cluster NAME, not id: a token may be minted before the cluster's
+// first push registers it.
+func testTokens(t *testing.T, s store.Store) {
+	ctx := context.Background()
+
+	if err := s.CreateToken(ctx, "prod", "tok-prod"); err != nil {
+		t.Fatalf("CreateToken(prod): %v", err)
+	}
+	if err := s.CreateToken(ctx, "dev", "tok-dev"); err != nil {
+		t.Fatalf("CreateToken(dev): %v", err)
+	}
+
+	name, ok, err := s.ValidToken(ctx, "tok-prod")
+	if err != nil || !ok || name != "prod" {
+		t.Errorf("ValidToken(tok-prod) = (%q, %v, %v), want (prod, true, nil)", name, ok, err)
+	}
+	name, ok, err = s.ValidToken(ctx, "tok-dev")
+	if err != nil || !ok || name != "dev" {
+		t.Errorf("ValidToken(tok-dev) = (%q, %v, %v), want (dev, true, nil)", name, ok, err)
+	}
+	// Unknown token: not an error — (\"\", false, nil).
+	name, ok, err = s.ValidToken(ctx, "no-such-token")
+	if err != nil || ok || name != "" {
+		t.Errorf("ValidToken(unknown) = (%q, %v, %v), want (\"\", false, nil)", name, ok, err)
+	}
+
+	if err := s.RevokeToken(ctx, "prod"); err != nil {
+		t.Fatalf("RevokeToken(prod): %v", err)
+	}
+	if _, ok, err := s.ValidToken(ctx, "tok-prod"); err != nil || ok {
+		t.Errorf("ValidToken after revoke = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+	if name, ok, _ := s.ValidToken(ctx, "tok-dev"); !ok || name != "dev" {
+		t.Errorf("dev token must survive prod revoke, got (%q, %v)", name, ok)
+	}
+
+	// Revoking a cluster with no active tokens (already revoked, or never
+	// had any) reports ErrNotFound.
+	if err := s.RevokeToken(ctx, "prod"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("second RevokeToken(prod) err = %v, want ErrNotFound", err)
+	}
+	if err := s.RevokeToken(ctx, "never-existed"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("RevokeToken(unknown cluster) err = %v, want ErrNotFound", err)
+	}
+
+	// A fresh token after revocation is independent of the revoked one.
+	if err := s.CreateToken(ctx, "prod", "tok-prod-2"); err != nil {
+		t.Fatalf("CreateToken(prod, second): %v", err)
+	}
+	if name, ok, _ := s.ValidToken(ctx, "tok-prod-2"); !ok || name != "prod" {
+		t.Errorf("re-issued prod token = (%q, %v), want (prod, true)", name, ok)
+	}
+}
+
+// testTokensMultiplePerCluster pins that a cluster may hold several active
+// tokens (rotation) and RevokeToken revokes them all at once.
+func testTokensMultiplePerCluster(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	for _, tok := range []string{"rot-a", "rot-b"} {
+		if err := s.CreateToken(ctx, "prod", tok); err != nil {
+			t.Fatalf("CreateToken(%s): %v", tok, err)
+		}
+	}
+	for _, tok := range []string{"rot-a", "rot-b"} {
+		if name, ok, err := s.ValidToken(ctx, tok); err != nil || !ok || name != "prod" {
+			t.Errorf("ValidToken(%s) = (%q, %v, %v), want (prod, true, nil)", tok, name, ok, err)
+		}
+	}
+	if err := s.RevokeToken(ctx, "prod"); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+	for _, tok := range []string{"rot-a", "rot-b"} {
+		if _, ok, err := s.ValidToken(ctx, tok); err != nil || ok {
+			t.Errorf("ValidToken(%s) after revoke = (ok %v, err %v), want (false, nil)", tok, ok, err)
+		}
+	}
+}
+
+// testTokensDuplicate pins that the same plaintext token cannot exist twice
+// — even for different clusters, since ValidToken could not disambiguate.
+func testTokensDuplicate(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	if err := s.CreateToken(ctx, "prod", "dup-tok"); err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+	if err := s.CreateToken(ctx, "dev", "dup-tok"); err == nil {
+		t.Error("CreateToken with an already-issued token succeeded, want error")
+	}
+	// The original binding must be untouched.
+	if name, ok, _ := s.ValidToken(ctx, "dup-tok"); !ok || name != "prod" {
+		t.Errorf("ValidToken(dup-tok) = (%q, %v), want (prod, true)", name, ok)
 	}
 }
 
