@@ -33,6 +33,10 @@ type Options struct {
 	TeamLabel string // namespace label used for team attribution; default "team"
 }
 
+// listPageSize bounds every cluster-wide list call: large clusters must
+// never be read in one unbounded request.
+const listPageSize = 500
+
 // step is one independently-degradable sub-collector bound to a capability.
 type step struct {
 	cap inventory.Capability
