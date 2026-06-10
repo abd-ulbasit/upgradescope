@@ -224,11 +224,32 @@ func (s *Server) evaluateSnapshot(ctx context.Context, cluster store.Cluster, sn
 // this target) against cur and emits Config.Notifier events per the delta
 // rule (new-blocker, became-ready, eol-approaching).
 //
-// This body is a no-op stub: the NOTIFY-CLI section's "wire notifyDelta"
-// task replaces it with the real delta computation. The signature is the
-// fixed contract between the two sections — do not change it there.
+// The caller (evaluateSnapshot) loads prev via LatestEvaluation BEFORE
+// InsertEvaluation stores cur — loading after would return the row just
+// written and every delta would be empty. Event.Cluster is stamped with
+// the human name from the push envelope (ComputeDelta only has the
+// inventory UID). Failures are logged and never fail ingestion — this
+// method deliberately returns nothing.
 func (s *Server) notifyDelta(ctx context.Context, cluster store.Cluster, target string, prev *store.Evaluation, cur store.Evaluation) {
-	_, _, _, _, _ = ctx, cluster, target, prev, cur
+	if s.cfg.Notifier == nil || prev == nil {
+		return // notifications disabled, or first-ever evaluation: no delta
+	}
+	var prevRep engine.Report
+	if err := json.Unmarshal(prev.Report, &prevRep); err != nil {
+		log.Printf("server: decoding previous report (cluster %d, target %s): %v", cluster.ID, target, err)
+		return
+	}
+	var curRep engine.Report
+	if err := json.Unmarshal(cur.Report, &curRep); err != nil {
+		log.Printf("server: decoding current report (cluster %d, target %s): %v", cluster.ID, target, err)
+		return
+	}
+	for _, ev := range ComputeDelta(&prevRep, curRep) {
+		ev.Cluster = cluster.Name
+		if err := s.cfg.Notifier.Notify(ctx, ev); err != nil {
+			log.Printf("server: notification failed (cluster %s, target %s, kind %s): %v", cluster.Name, ev.Target, ev.Kind, err)
+		}
+	}
 }
 
 // ----- read API -----
