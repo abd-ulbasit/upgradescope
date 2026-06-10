@@ -67,6 +67,30 @@ func TestCollectHelmLatestRevisionPerRelease(t *testing.T) {
 	}
 }
 
+func TestCollectHelmSkipsCorruptSecretKeepsValid(t *testing.T) {
+	cs := kubefake.NewClientset(
+		helmSecret(t, "cert-manager", "cert-manager", 1, "cert-manager", "v1.13.0", "v1.13.0", "deployed"),
+		&corev1.Secret{ // helm-typed but corrupt payload: skipped, not fatal
+			ObjectMeta: metav1.ObjectMeta{Name: "sh.helm.release.v1.broken.v1", Namespace: "shop"},
+			Type:       "helm.sh/release.v1",
+			Data:       map[string][]byte{"release": []byte("%%% not base64 %%%")},
+		},
+		helmSecret(t, "ingress-nginx", "ingress-nginx", 1, "ingress-nginx", "4.7.1", "1.8.4", "deployed"),
+	)
+
+	var inv inventory.Inventory
+	if err := collectHelm(context.Background(), cs, &inv); err != nil {
+		t.Fatalf("one corrupt secret must not fail the capability: %v", err)
+	}
+	want := []inventory.HelmRelease{
+		{Name: "cert-manager", Namespace: "cert-manager", ChartName: "cert-manager", ChartVersion: "v1.13.0", AppVersion: "v1.13.0", Status: "deployed"},
+		{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", AppVersion: "1.8.4", Status: "deployed"},
+	}
+	if !reflect.DeepEqual(inv.HelmReleases, want) {
+		t.Errorf("releases = %#v\nwant      %#v (valid secrets must survive the corrupt one)", inv.HelmReleases, want)
+	}
+}
+
 func TestDecodeHelmReleaseRejectsNonGzip(t *testing.T) {
 	if _, err := decodeHelmRelease([]byte(base64.StdEncoding.EncodeToString([]byte("plain")))); err == nil {
 		t.Fatal("want error for payload without gzip magic bytes")
