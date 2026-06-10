@@ -139,3 +139,18 @@ func TestExportErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestCSVSafeBlocksFormulaInjection(t *testing.T) {
+	for in, want := range map[string]string{
+		"=HYPERLINK(\"x\")": "'=HYPERLINK(\"x\")",
+		"+1":                "'+1",
+		"-cmd":              "'-cmd",
+		"@SUM":              "'@SUM",
+		"":                  "",
+		"payments":          "payments",
+	} {
+		if got := csvSafe(in); got != want {
+			t.Errorf("csvSafe(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
