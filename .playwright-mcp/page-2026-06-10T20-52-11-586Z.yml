@@ -1,0 +1,63 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - link "upgradescope" [ref=e5] [cursor=pointer]:
+      - /url: "#/"
+    - navigation "Primary" [ref=e6]:
+      - link "Fleet" [ref=e7] [cursor=pointer]:
+        - /url: "#/"
+      - link "Registry" [ref=e8] [cursor=pointer]:
+        - /url: "#/registry"
+    - button "○ set token" [ref=e10] [cursor=pointer]
+  - main [ref=e11]:
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - heading "Fleet" [level=1] [ref=e16]
+        - paragraph [ref=e17]: Readiness score per cluster and upgrade target — latest stored evaluations only.
+      - table [ref=e19]:
+        - rowgroup [ref=e20]:
+          - row "Cluster → 1.32 → 1.33 → 1.34" [ref=e21]:
+            - columnheader "Cluster" [ref=e22]
+            - columnheader "→ 1.32" [ref=e23]
+            - columnheader "→ 1.33" [ref=e24]
+            - columnheader "→ 1.34" [ref=e25]
+        - rowgroup [ref=e26]:
+          - 'row "kind-demo kind-demo → 1.32: score 25 kind-demo → 1.33: score 25 —" [ref=e27]':
+            - rowheader "kind-demo" [ref=e28]:
+              - link "kind-demo" [ref=e29] [cursor=pointer]:
+                - /url: "#/cluster/1"
+            - 'cell "kind-demo → 1.32: score 25" [ref=e30]':
+              - 'link "kind-demo → 1.32: score 25" [ref=e31] [cursor=pointer]':
+                - /url: "#/cluster/1?target=1.32"
+                - generic "not ready" [ref=e32]:
+                  - text: "25"
+                  - generic [ref=e33]: ✗
+                  - generic [ref=e34]: not ready
+                - generic [ref=e35]: 3 blockers
+            - 'cell "kind-demo → 1.33: score 25" [ref=e36]':
+              - 'link "kind-demo → 1.33: score 25" [ref=e37] [cursor=pointer]':
+                - /url: "#/cluster/1?target=1.33"
+                - generic "not ready" [ref=e38]:
+                  - text: "25"
+                  - generic [ref=e39]: ✗
+                  - generic [ref=e40]: not ready
+                - generic [ref=e41]: 4 blockers
+            - cell "—" [ref=e42]
+          - 'row "prod-eu — prod-eu → 1.33: score 100 prod-eu → 1.34: score 100" [ref=e43]':
+            - rowheader "prod-eu" [ref=e44]:
+              - link "prod-eu" [ref=e45] [cursor=pointer]:
+                - /url: "#/cluster/4"
+            - cell "—" [ref=e46]
+            - 'cell "prod-eu → 1.33: score 100" [ref=e47]':
+              - 'link "prod-eu → 1.33: score 100" [ref=e48] [cursor=pointer]':
+                - /url: "#/cluster/4?target=1.33"
+                - generic "ready" [ref=e49]:
+                  - text: "100"
+                  - generic [ref=e50]: ✓
+                  - generic [ref=e51]: ready
+            - 'cell "prod-eu → 1.34: score 100" [ref=e52]':
+              - 'link "prod-eu → 1.34: score 100" [ref=e53] [cursor=pointer]':
+                - /url: "#/cluster/4?target=1.34"
+                - generic "ready" [ref=e54]:
+                  - text: "100"
+                  - generic [ref=e55]: ✓
+                  - generic [ref=e56]: ready

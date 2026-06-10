@@ -2,7 +2,7 @@
 
 **Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
 
-> Status: **P1–P3 shipped** — point-in-time scan, continuous agent + `ClusterReadiness` CRD + server (SQLite/Postgres), fleet rollups, per-team scores, CI gate endpoint + GitHub Action, auditor CSV/HTML export, per-cluster tokens. **P4 in progress** — community registry pipeline + weekly KB auto-refresh shipped; web dashboard in development. Design: `docs/superpowers/specs/2026-06-10-upgradescope-design.md`.
+> Status: **v0.1 — all four phases shipped.** Point-in-time scan, continuous agent + `ClusterReadiness` CRD, self-hosted server (SQLite/Postgres) with embedded web dashboard, fleet rollups, per-team scores, CI gate + GitHub Action, auditor exports, community registry pipeline. Design: `docs/superpowers/specs/2026-06-10-upgradescope-design.md`.
 
 ## Install
 
