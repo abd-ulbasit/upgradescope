@@ -1,0 +1,19 @@
+{{- if .Values.server.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "upgradescope.serverFullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: {{ .Values.server.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.server.service.port }}
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: server
+{{- end }}
