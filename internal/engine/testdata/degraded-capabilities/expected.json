@@ -14,8 +14,5 @@
   ],
   "ready": true,
   "score": 100,
-  "target": {
-    "Major": 1,
-    "Minor": 34
-  }
+  "target": "1.34"
 }

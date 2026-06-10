@@ -6,45 +6,27 @@
       "group": "",
       "version": "v1",
       "kind": "Binding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "ComponentStatus",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.0",
+      "deprecated": "1.19"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "ConfigMap",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      }
+      "introduced": "1.2"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "Endpoints",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 33
-      },
+      "introduced": "1.0",
+      "deprecated": "1.33",
       "replacement": {
         "group": "discovery.k8s.io",
         "version": "v1",
@@ -55,171 +37,111 @@
       "group": "",
       "version": "v1",
       "kind": "Event",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "LimitRange",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "Namespace",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "Node",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "PersistentVolume",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "PersistentVolumeClaim",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "Pod",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "PodStatusResult",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "PodTemplate",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "RangeAllocation",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "ReplicationController",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "ResourceQuota",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "Secret",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "SerializedReference",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "Service",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "",
       "version": "v1",
       "kind": "ServiceAccount",
-      "introduced": {
-        "Major": 1,
-        "Minor": 0
-      }
+      "introduced": "1.0"
     },
     {
       "group": "admission.k8s.io",
       "version": "v1",
       "kind": "AdmissionReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.19"
     },
     {
       "group": "admission.k8s.io",
       "version": "v1beta1",
       "kind": "AdmissionReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.9",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "admission.k8s.io",
         "version": "v1",
@@ -230,140 +152,77 @@
       "group": "admissionregistration.k8s.io",
       "version": "v1",
       "kind": "MutatingAdmissionPolicy",
-      "introduced": {
-        "Major": 1,
-        "Minor": 36
-      }
+      "introduced": "1.36"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1",
       "kind": "MutatingAdmissionPolicyBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 36
-      }
+      "introduced": "1.36"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1",
       "kind": "MutatingWebhookConfiguration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 16
-      }
+      "introduced": "1.16"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1",
       "kind": "ValidatingAdmissionPolicy",
-      "introduced": {
-        "Major": 1,
-        "Minor": 30
-      }
+      "introduced": "1.30"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1",
       "kind": "ValidatingAdmissionPolicyBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 30
-      }
+      "introduced": "1.30"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1",
       "kind": "ValidatingWebhookConfiguration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 16
-      }
+      "introduced": "1.16"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1alpha1",
       "kind": "MutatingAdmissionPolicy",
-      "introduced": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 38
-      }
+      "introduced": "1.32",
+      "deprecated": "1.35",
+      "removed": "1.38"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1alpha1",
       "kind": "MutatingAdmissionPolicyBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 38
-      }
+      "introduced": "1.32",
+      "deprecated": "1.35",
+      "removed": "1.38"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1alpha1",
       "kind": "ValidatingAdmissionPolicy",
-      "introduced": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 29
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 32
-      }
+      "introduced": "1.26",
+      "deprecated": "1.29",
+      "removed": "1.32"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1alpha1",
       "kind": "ValidatingAdmissionPolicyBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 29
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 32
-      }
+      "introduced": "1.26",
+      "deprecated": "1.29",
+      "removed": "1.32"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1beta1",
       "kind": "MutatingAdmissionPolicy",
-      "introduced": {
-        "Major": 1,
-        "Minor": 34
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 37
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 40
-      },
+      "introduced": "1.34",
+      "deprecated": "1.37",
+      "removed": "1.40",
       "replacement": {
         "group": "admissionregistration.k8s.io",
         "version": "v1",
@@ -374,18 +233,9 @@
       "group": "admissionregistration.k8s.io",
       "version": "v1beta1",
       "kind": "MutatingAdmissionPolicyBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 34
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 37
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 40
-      },
+      "introduced": "1.34",
+      "deprecated": "1.37",
+      "removed": "1.40",
       "replacement": {
         "group": "admissionregistration.k8s.io",
         "version": "v1",
@@ -396,18 +246,9 @@
       "group": "admissionregistration.k8s.io",
       "version": "v1beta1",
       "kind": "MutatingWebhookConfiguration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 16
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.9",
+      "deprecated": "1.16",
+      "removed": "1.22",
       "replacement": {
         "group": "admissionregistration.k8s.io",
         "version": "v1",
@@ -418,52 +259,25 @@
       "group": "admissionregistration.k8s.io",
       "version": "v1beta1",
       "kind": "ValidatingAdmissionPolicy",
-      "introduced": {
-        "Major": 1,
-        "Minor": 28
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 31
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 34
-      }
+      "introduced": "1.28",
+      "deprecated": "1.31",
+      "removed": "1.34"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1beta1",
       "kind": "ValidatingAdmissionPolicyBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 28
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 31
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 34
-      }
+      "introduced": "1.28",
+      "deprecated": "1.31",
+      "removed": "1.34"
     },
     {
       "group": "admissionregistration.k8s.io",
       "version": "v1beta1",
       "kind": "ValidatingWebhookConfiguration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 16
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.9",
+      "deprecated": "1.16",
+      "removed": "1.22",
       "replacement": {
         "group": "admissionregistration.k8s.io",
         "version": "v1",
@@ -474,89 +288,53 @@
       "group": "apidiscovery.k8s.io",
       "version": "v2",
       "kind": "APIGroupDiscovery",
-      "introduced": {
-        "Major": 1,
-        "Minor": 30
-      }
+      "introduced": "1.30"
     },
     {
       "group": "apidiscovery.k8s.io",
       "version": "v2beta1",
       "kind": "APIGroupDiscovery",
-      "introduced": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 35
-      }
+      "introduced": "1.26",
+      "deprecated": "1.32",
+      "removed": "1.35"
     },
     {
       "group": "apps",
       "version": "v1",
       "kind": "ControllerRevision",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      }
+      "introduced": "1.9"
     },
     {
       "group": "apps",
       "version": "v1",
       "kind": "DaemonSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      }
+      "introduced": "1.9"
     },
     {
       "group": "apps",
       "version": "v1",
       "kind": "Deployment",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      }
+      "introduced": "1.9"
     },
     {
       "group": "apps",
       "version": "v1",
       "kind": "ReplicaSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      }
+      "introduced": "1.9"
     },
     {
       "group": "apps",
       "version": "v1",
       "kind": "StatefulSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      }
+      "introduced": "1.9"
     },
     {
       "group": "apps",
       "version": "v1beta1",
       "kind": "ControllerRevision",
-      "introduced": {
-        "Major": 1,
-        "Minor": 7
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.7",
+      "deprecated": "1.8",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -567,18 +345,9 @@
       "group": "apps",
       "version": "v1beta1",
       "kind": "Deployment",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.6",
+      "deprecated": "1.8",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -589,18 +358,9 @@
       "group": "apps",
       "version": "v1beta1",
       "kind": "DeploymentRollback",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.6",
+      "deprecated": "1.8",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -611,18 +371,9 @@
       "group": "apps",
       "version": "v1beta1",
       "kind": "Scale",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.6",
+      "deprecated": "1.8",
+      "removed": "1.16",
       "replacement": {
         "group": "autoscaling",
         "version": "v1",
@@ -633,18 +384,9 @@
       "group": "apps",
       "version": "v1beta1",
       "kind": "StatefulSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 5
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.5",
+      "deprecated": "1.8",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -655,18 +397,9 @@
       "group": "apps",
       "version": "v1beta2",
       "kind": "ControllerRevision",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.8",
+      "deprecated": "1.9",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -677,18 +410,9 @@
       "group": "apps",
       "version": "v1beta2",
       "kind": "DaemonSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.8",
+      "deprecated": "1.9",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -699,18 +423,9 @@
       "group": "apps",
       "version": "v1beta2",
       "kind": "Deployment",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.8",
+      "deprecated": "1.9",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -721,18 +436,9 @@
       "group": "apps",
       "version": "v1beta2",
       "kind": "ReplicaSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.8",
+      "deprecated": "1.9",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -743,18 +449,9 @@
       "group": "apps",
       "version": "v1beta2",
       "kind": "Scale",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.8",
+      "deprecated": "1.9",
+      "removed": "1.16",
       "replacement": {
         "group": "autoscaling",
         "version": "v1",
@@ -765,18 +462,9 @@
       "group": "apps",
       "version": "v1beta2",
       "kind": "StatefulSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.8",
+      "deprecated": "1.9",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -787,79 +475,43 @@
       "group": "authentication.k8s.io",
       "version": "v1",
       "kind": "SelfSubjectReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 28
-      }
+      "introduced": "1.28"
     },
     {
       "group": "authentication.k8s.io",
       "version": "v1",
       "kind": "TokenRequest",
-      "introduced": {
-        "Major": 1,
-        "Minor": 10
-      }
+      "introduced": "1.10"
     },
     {
       "group": "authentication.k8s.io",
       "version": "v1",
       "kind": "TokenReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      }
+      "introduced": "1.6"
     },
     {
       "group": "authentication.k8s.io",
       "version": "v1alpha1",
       "kind": "SelfSubjectReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 29
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 32
-      }
+      "introduced": "1.26",
+      "deprecated": "1.29",
+      "removed": "1.32"
     },
     {
       "group": "authentication.k8s.io",
       "version": "v1beta1",
       "kind": "SelfSubjectReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 27
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 30
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 33
-      }
+      "introduced": "1.27",
+      "deprecated": "1.30",
+      "removed": "1.33"
     },
     {
       "group": "authentication.k8s.io",
       "version": "v1beta1",
       "kind": "TokenReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 4
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.4",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "authentication.k8s.io",
         "version": "v1",
@@ -870,54 +522,33 @@
       "group": "authorization.k8s.io",
       "version": "v1",
       "kind": "LocalSubjectAccessReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.19"
     },
     {
       "group": "authorization.k8s.io",
       "version": "v1",
       "kind": "SelfSubjectAccessReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.19"
     },
     {
       "group": "authorization.k8s.io",
       "version": "v1",
       "kind": "SelfSubjectRulesReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.19"
     },
     {
       "group": "authorization.k8s.io",
       "version": "v1",
       "kind": "SubjectAccessReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      }
+      "introduced": "1.6"
     },
     {
       "group": "authorization.k8s.io",
       "version": "v1beta1",
       "kind": "LocalSubjectAccessReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.2",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "authorization.k8s.io",
         "version": "v1",
@@ -928,18 +559,9 @@
       "group": "authorization.k8s.io",
       "version": "v1beta1",
       "kind": "SelfSubjectAccessReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.2",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "authorization.k8s.io",
         "version": "v1",
@@ -950,18 +572,9 @@
       "group": "authorization.k8s.io",
       "version": "v1beta1",
       "kind": "SelfSubjectRulesReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.8",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "authorization.k8s.io",
         "version": "v1",
@@ -972,18 +585,9 @@
       "group": "authorization.k8s.io",
       "version": "v1beta1",
       "kind": "SubjectAccessReview",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.2",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "authorization.k8s.io",
         "version": "v1",
@@ -994,63 +598,39 @@
       "group": "autoscaling",
       "version": "v1",
       "kind": "HorizontalPodAutoscaler",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      }
+      "introduced": "1.2"
     },
     {
       "group": "autoscaling",
       "version": "v1",
       "kind": "Scale",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      }
+      "introduced": "1.2"
     },
     {
       "group": "autoscaling",
       "version": "v2",
       "kind": "HorizontalPodAutoscaler",
-      "introduced": {
-        "Major": 1,
-        "Minor": 23
-      }
+      "introduced": "1.23"
     },
     {
       "group": "batch",
       "version": "v1",
       "kind": "CronJob",
-      "introduced": {
-        "Major": 1,
-        "Minor": 21
-      }
+      "introduced": "1.21"
     },
     {
       "group": "batch",
       "version": "v1",
       "kind": "Job",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      }
+      "introduced": "1.2"
     },
     {
       "group": "batch",
       "version": "v1beta1",
       "kind": "CronJob",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 21
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 25
-      },
+      "introduced": "1.8",
+      "deprecated": "1.21",
+      "removed": "1.25",
       "replacement": {
         "group": "batch",
         "version": "v1",
@@ -1061,44 +641,23 @@
       "group": "certificates.k8s.io",
       "version": "v1",
       "kind": "CertificateSigningRequest",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.19"
     },
     {
       "group": "certificates.k8s.io",
       "version": "v1alpha1",
       "kind": "ClusterTrustBundle",
-      "introduced": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 34
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 37
-      }
+      "introduced": "1.26",
+      "deprecated": "1.34",
+      "removed": "1.37"
     },
     {
       "group": "certificates.k8s.io",
       "version": "v1beta1",
       "kind": "CertificateSigningRequest",
-      "introduced": {
-        "Major": 1,
-        "Minor": 12
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.12",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "certificates.k8s.io",
         "version": "v1",
@@ -1109,78 +668,39 @@
       "group": "certificates.k8s.io",
       "version": "v1beta1",
       "kind": "ClusterTrustBundle",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 37
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 40
-      }
+      "introduced": "1.33",
+      "deprecated": "1.37",
+      "removed": "1.40"
     },
     {
       "group": "certificates.k8s.io",
       "version": "v1beta1",
       "kind": "PodCertificateRequest",
-      "introduced": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 38
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 41
-      }
+      "introduced": "1.35",
+      "deprecated": "1.38",
+      "removed": "1.41"
     },
     {
       "group": "coordination.k8s.io",
       "version": "v1",
       "kind": "Lease",
-      "introduced": {
-        "Major": 1,
-        "Minor": 14
-      }
+      "introduced": "1.14"
     },
     {
       "group": "coordination.k8s.io",
       "version": "v1alpha2",
       "kind": "LeaseCandidate",
-      "introduced": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 38
-      }
+      "introduced": "1.32",
+      "deprecated": "1.35",
+      "removed": "1.38"
     },
     {
       "group": "coordination.k8s.io",
       "version": "v1beta1",
       "kind": "Lease",
-      "introduced": {
-        "Major": 1,
-        "Minor": 12
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.12",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "coordination.k8s.io",
         "version": "v1",
@@ -1191,44 +711,23 @@
       "group": "coordination.k8s.io",
       "version": "v1beta1",
       "kind": "LeaseCandidate",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 36
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 39
-      }
+      "introduced": "1.33",
+      "deprecated": "1.36",
+      "removed": "1.39"
     },
     {
       "group": "discovery.k8s.io",
       "version": "v1",
       "kind": "EndpointSlice",
-      "introduced": {
-        "Major": 1,
-        "Minor": 21
-      }
+      "introduced": "1.21"
     },
     {
       "group": "discovery.k8s.io",
       "version": "v1beta1",
       "kind": "EndpointSlice",
-      "introduced": {
-        "Major": 1,
-        "Minor": 16
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 21
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 25
-      },
+      "introduced": "1.16",
+      "deprecated": "1.21",
+      "removed": "1.25",
       "replacement": {
         "group": "discovery.k8s.io",
         "version": "v1",
@@ -1239,44 +738,23 @@
       "group": "events.k8s.io",
       "version": "v1",
       "kind": "Event",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.19"
     },
     {
       "group": "events.k8s.io",
       "version": "v1beta1",
       "kind": "Event",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 22
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 25
-      }
+      "introduced": "1.8",
+      "deprecated": "1.22",
+      "removed": "1.25"
     },
     {
       "group": "extensions",
       "version": "v1beta1",
       "kind": "DaemonSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 1
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.1",
+      "deprecated": "1.8",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -1287,18 +765,9 @@
       "group": "extensions",
       "version": "v1beta1",
       "kind": "Deployment",
-      "introduced": {
-        "Major": 1,
-        "Minor": 1
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.1",
+      "deprecated": "1.8",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -1309,35 +778,17 @@
       "group": "extensions",
       "version": "v1beta1",
       "kind": "DeploymentRollback",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      }
+      "introduced": "1.2",
+      "deprecated": "1.8",
+      "removed": "1.16"
     },
     {
       "group": "extensions",
       "version": "v1beta1",
       "kind": "Ingress",
-      "introduced": {
-        "Major": 1,
-        "Minor": 1
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 14
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.1",
+      "deprecated": "1.14",
+      "removed": "1.22",
       "replacement": {
         "group": "networking.k8s.io",
         "version": "v1",
@@ -1348,18 +799,9 @@
       "group": "extensions",
       "version": "v1beta1",
       "kind": "NetworkPolicy",
-      "introduced": {
-        "Major": 1,
-        "Minor": 3
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.3",
+      "deprecated": "1.9",
+      "removed": "1.16",
       "replacement": {
         "group": "networking.k8s.io",
         "version": "v1",
@@ -1370,18 +812,9 @@
       "group": "extensions",
       "version": "v1beta1",
       "kind": "ReplicaSet",
-      "introduced": {
-        "Major": 1,
-        "Minor": 2
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 8
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      },
+      "introduced": "1.2",
+      "deprecated": "1.8",
+      "removed": "1.16",
       "replacement": {
         "group": "apps",
         "version": "v1",
@@ -1392,53 +825,29 @@
       "group": "extensions",
       "version": "v1beta1",
       "kind": "Scale",
-      "introduced": {
-        "Major": 1,
-        "Minor": 1
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 2
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 16
-      }
+      "introduced": "1.1",
+      "deprecated": "1.2",
+      "removed": "1.16"
     },
     {
       "group": "flowcontrol.apiserver.k8s.io",
       "version": "v1",
       "kind": "FlowSchema",
-      "introduced": {
-        "Major": 1,
-        "Minor": 29
-      }
+      "introduced": "1.29"
     },
     {
       "group": "flowcontrol.apiserver.k8s.io",
       "version": "v1",
       "kind": "PriorityLevelConfiguration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 29
-      }
+      "introduced": "1.29"
     },
     {
       "group": "flowcontrol.apiserver.k8s.io",
       "version": "v1beta1",
       "kind": "FlowSchema",
-      "introduced": {
-        "Major": 1,
-        "Minor": 20
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 23
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 26
-      },
+      "introduced": "1.20",
+      "deprecated": "1.23",
+      "removed": "1.26",
       "replacement": {
         "group": "flowcontrol.apiserver.k8s.io",
         "version": "v1beta3",
@@ -1449,18 +858,9 @@
       "group": "flowcontrol.apiserver.k8s.io",
       "version": "v1beta1",
       "kind": "PriorityLevelConfiguration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 20
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 23
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 26
-      },
+      "introduced": "1.20",
+      "deprecated": "1.23",
+      "removed": "1.26",
       "replacement": {
         "group": "flowcontrol.apiserver.k8s.io",
         "version": "v1beta3",
@@ -1471,18 +871,9 @@
       "group": "flowcontrol.apiserver.k8s.io",
       "version": "v1beta2",
       "kind": "FlowSchema",
-      "introduced": {
-        "Major": 1,
-        "Minor": 23
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 29
-      },
+      "introduced": "1.23",
+      "deprecated": "1.26",
+      "removed": "1.29",
       "replacement": {
         "group": "flowcontrol.apiserver.k8s.io",
         "version": "v1beta3",
@@ -1493,18 +884,9 @@
       "group": "flowcontrol.apiserver.k8s.io",
       "version": "v1beta2",
       "kind": "PriorityLevelConfiguration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 23
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 29
-      },
+      "introduced": "1.23",
+      "deprecated": "1.26",
+      "removed": "1.29",
       "replacement": {
         "group": "flowcontrol.apiserver.k8s.io",
         "version": "v1beta3",
@@ -1515,18 +897,9 @@
       "group": "flowcontrol.apiserver.k8s.io",
       "version": "v1beta3",
       "kind": "FlowSchema",
-      "introduced": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 29
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 32
-      },
+      "introduced": "1.26",
+      "deprecated": "1.29",
+      "removed": "1.32",
       "replacement": {
         "group": "flowcontrol.apiserver.k8s.io",
         "version": "v1",
@@ -1537,18 +910,9 @@
       "group": "flowcontrol.apiserver.k8s.io",
       "version": "v1beta3",
       "kind": "PriorityLevelConfiguration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 26
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 29
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 32
-      },
+      "introduced": "1.26",
+      "deprecated": "1.29",
+      "removed": "1.32",
       "replacement": {
         "group": "flowcontrol.apiserver.k8s.io",
         "version": "v1",
@@ -1559,80 +923,47 @@
       "group": "networking.k8s.io",
       "version": "v1",
       "kind": "IPAddress",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      }
+      "introduced": "1.33"
     },
     {
       "group": "networking.k8s.io",
       "version": "v1",
       "kind": "Ingress",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.19"
     },
     {
       "group": "networking.k8s.io",
       "version": "v1",
       "kind": "IngressClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      }
+      "introduced": "1.19"
     },
     {
       "group": "networking.k8s.io",
       "version": "v1",
       "kind": "NetworkPolicy",
-      "introduced": {
-        "Major": 1,
-        "Minor": 7
-      }
+      "introduced": "1.7"
     },
     {
       "group": "networking.k8s.io",
       "version": "v1",
       "kind": "ServiceCIDR",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      }
+      "introduced": "1.33"
     },
     {
       "group": "networking.k8s.io",
       "version": "v1beta1",
       "kind": "IPAddress",
-      "introduced": {
-        "Major": 1,
-        "Minor": 31
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 34
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 37
-      }
+      "introduced": "1.31",
+      "deprecated": "1.34",
+      "removed": "1.37"
     },
     {
       "group": "networking.k8s.io",
       "version": "v1beta1",
       "kind": "Ingress",
-      "introduced": {
-        "Major": 1,
-        "Minor": 14
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.14",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "networking.k8s.io",
         "version": "v1",
@@ -1643,18 +974,9 @@
       "group": "networking.k8s.io",
       "version": "v1beta1",
       "kind": "IngressClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 18
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.18",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "networking.k8s.io",
         "version": "v1",
@@ -1665,96 +987,51 @@
       "group": "networking.k8s.io",
       "version": "v1beta1",
       "kind": "ServiceCIDR",
-      "introduced": {
-        "Major": 1,
-        "Minor": 31
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 34
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 37
-      }
+      "introduced": "1.31",
+      "deprecated": "1.34",
+      "removed": "1.37"
     },
     {
       "group": "node.k8s.io",
       "version": "v1",
       "kind": "RuntimeClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 20
-      }
+      "introduced": "1.20"
     },
     {
       "group": "node.k8s.io",
       "version": "v1beta1",
       "kind": "RuntimeClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 13
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 22
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 25
-      }
+      "introduced": "1.13",
+      "deprecated": "1.22",
+      "removed": "1.25"
     },
     {
       "group": "policy",
       "version": "v1",
       "kind": "Eviction",
-      "introduced": {
-        "Major": 1,
-        "Minor": 22
-      }
+      "introduced": "1.22"
     },
     {
       "group": "policy",
       "version": "v1",
       "kind": "PodDisruptionBudget",
-      "introduced": {
-        "Major": 1,
-        "Minor": 21
-      }
+      "introduced": "1.21"
     },
     {
       "group": "policy",
       "version": "v1beta1",
       "kind": "Eviction",
-      "introduced": {
-        "Major": 1,
-        "Minor": 5
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 22
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 25
-      }
+      "introduced": "1.5",
+      "deprecated": "1.22",
+      "removed": "1.25"
     },
     {
       "group": "policy",
       "version": "v1beta1",
       "kind": "PodDisruptionBudget",
-      "introduced": {
-        "Major": 1,
-        "Minor": 5
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 21
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 25
-      },
+      "introduced": "1.5",
+      "deprecated": "1.21",
+      "removed": "1.25",
       "replacement": {
         "group": "policy",
         "version": "v1",
@@ -1765,54 +1042,33 @@
       "group": "rbac.authorization.k8s.io",
       "version": "v1",
       "kind": "ClusterRole",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      }
+      "introduced": "1.8"
     },
     {
       "group": "rbac.authorization.k8s.io",
       "version": "v1",
       "kind": "ClusterRoleBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      }
+      "introduced": "1.8"
     },
     {
       "group": "rbac.authorization.k8s.io",
       "version": "v1",
       "kind": "Role",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      }
+      "introduced": "1.8"
     },
     {
       "group": "rbac.authorization.k8s.io",
       "version": "v1",
       "kind": "RoleBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 8
-      }
+      "introduced": "1.8"
     },
     {
       "group": "rbac.authorization.k8s.io",
       "version": "v1beta1",
       "kind": "ClusterRole",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 17
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.6",
+      "deprecated": "1.17",
+      "removed": "1.22",
       "replacement": {
         "group": "rbac.authorization.k8s.io",
         "version": "v1",
@@ -1823,18 +1079,9 @@
       "group": "rbac.authorization.k8s.io",
       "version": "v1beta1",
       "kind": "ClusterRoleBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 17
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.6",
+      "deprecated": "1.17",
+      "removed": "1.22",
       "replacement": {
         "group": "rbac.authorization.k8s.io",
         "version": "v1",
@@ -1845,18 +1092,9 @@
       "group": "rbac.authorization.k8s.io",
       "version": "v1beta1",
       "kind": "Role",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 17
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.6",
+      "deprecated": "1.17",
+      "removed": "1.22",
       "replacement": {
         "group": "rbac.authorization.k8s.io",
         "version": "v1",
@@ -1867,18 +1105,9 @@
       "group": "rbac.authorization.k8s.io",
       "version": "v1beta1",
       "kind": "RoleBinding",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 17
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.6",
+      "deprecated": "1.17",
+      "removed": "1.22",
       "replacement": {
         "group": "rbac.authorization.k8s.io",
         "version": "v1",
@@ -1889,250 +1118,127 @@
       "group": "resource.k8s.io",
       "version": "v1",
       "kind": "DeviceClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 34
-      }
+      "introduced": "1.34"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1",
       "kind": "ResourceClaim",
-      "introduced": {
-        "Major": 1,
-        "Minor": 34
-      }
+      "introduced": "1.34"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1",
       "kind": "ResourceClaimTemplate",
-      "introduced": {
-        "Major": 1,
-        "Minor": 34
-      }
+      "introduced": "1.34"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1",
       "kind": "ResourceSlice",
-      "introduced": {
-        "Major": 1,
-        "Minor": 34
-      }
+      "introduced": "1.34"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1alpha3",
       "kind": "DeviceTaintRule",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 36
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 39
-      }
+      "introduced": "1.33",
+      "deprecated": "1.36",
+      "removed": "1.39"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1alpha3",
       "kind": "ResourcePoolStatusRequest",
-      "introduced": {
-        "Major": 1,
-        "Minor": 36
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 39
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 42
-      }
+      "introduced": "1.36",
+      "deprecated": "1.39",
+      "removed": "1.42"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta1",
       "kind": "DeviceClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 38
-      }
+      "introduced": "1.32",
+      "deprecated": "1.35",
+      "removed": "1.38"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta1",
       "kind": "ResourceClaim",
-      "introduced": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 38
-      }
+      "introduced": "1.32",
+      "deprecated": "1.35",
+      "removed": "1.38"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta1",
       "kind": "ResourceClaimTemplate",
-      "introduced": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 38
-      }
+      "introduced": "1.32",
+      "deprecated": "1.35",
+      "removed": "1.38"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta1",
       "kind": "ResourceSlice",
-      "introduced": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 38
-      }
+      "introduced": "1.32",
+      "deprecated": "1.35",
+      "removed": "1.38"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta2",
       "kind": "DeviceClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 36
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 39
-      }
+      "introduced": "1.33",
+      "deprecated": "1.36",
+      "removed": "1.39"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta2",
       "kind": "DeviceTaintRule",
-      "introduced": {
-        "Major": 1,
-        "Minor": 36
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 39
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 42
-      }
+      "introduced": "1.36",
+      "deprecated": "1.39",
+      "removed": "1.42"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta2",
       "kind": "ResourceClaim",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 36
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 39
-      }
+      "introduced": "1.33",
+      "deprecated": "1.36",
+      "removed": "1.39"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta2",
       "kind": "ResourceClaimTemplate",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 36
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 39
-      }
+      "introduced": "1.33",
+      "deprecated": "1.36",
+      "removed": "1.39"
     },
     {
       "group": "resource.k8s.io",
       "version": "v1beta2",
       "kind": "ResourceSlice",
-      "introduced": {
-        "Major": 1,
-        "Minor": 33
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 36
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 39
-      }
+      "introduced": "1.33",
+      "deprecated": "1.36",
+      "removed": "1.39"
     },
     {
       "group": "scheduling.k8s.io",
       "version": "v1",
       "kind": "PriorityClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 14
-      }
+      "introduced": "1.14"
     },
     {
       "group": "scheduling.k8s.io",
       "version": "v1beta1",
       "kind": "PriorityClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 11
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 14
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.11",
+      "deprecated": "1.14",
+      "removed": "1.22",
       "replacement": {
         "group": "scheduling.k8s.io",
         "version": "v1",
@@ -2143,72 +1249,45 @@
       "group": "storage.k8s.io",
       "version": "v1",
       "kind": "CSIDriver",
-      "introduced": {
-        "Major": 1,
-        "Minor": 18
-      }
+      "introduced": "1.18"
     },
     {
       "group": "storage.k8s.io",
       "version": "v1",
       "kind": "CSINode",
-      "introduced": {
-        "Major": 1,
-        "Minor": 17
-      }
+      "introduced": "1.17"
     },
     {
       "group": "storage.k8s.io",
       "version": "v1",
       "kind": "CSIStorageCapacity",
-      "introduced": {
-        "Major": 1,
-        "Minor": 24
-      }
+      "introduced": "1.24"
     },
     {
       "group": "storage.k8s.io",
       "version": "v1",
       "kind": "StorageClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 6
-      }
+      "introduced": "1.6"
     },
     {
       "group": "storage.k8s.io",
       "version": "v1",
       "kind": "VolumeAttachment",
-      "introduced": {
-        "Major": 1,
-        "Minor": 13
-      }
+      "introduced": "1.13"
     },
     {
       "group": "storage.k8s.io",
       "version": "v1",
       "kind": "VolumeAttributesClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 34
-      }
+      "introduced": "1.34"
     },
     {
       "group": "storage.k8s.io",
       "version": "v1alpha1",
       "kind": "CSIStorageCapacity",
-      "introduced": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 21
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 24
-      },
+      "introduced": "1.19",
+      "deprecated": "1.21",
+      "removed": "1.24",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1beta1",
@@ -2219,18 +1298,9 @@
       "group": "storage.k8s.io",
       "version": "v1alpha1",
       "kind": "VolumeAttachment",
-      "introduced": {
-        "Major": 1,
-        "Minor": 9
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 21
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 24
-      },
+      "introduced": "1.9",
+      "deprecated": "1.21",
+      "removed": "1.24",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
@@ -2241,18 +1311,9 @@
       "group": "storage.k8s.io",
       "version": "v1alpha1",
       "kind": "VolumeAttributesClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 29
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 32
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 35
-      },
+      "introduced": "1.29",
+      "deprecated": "1.32",
+      "removed": "1.35",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
@@ -2263,18 +1324,9 @@
       "group": "storage.k8s.io",
       "version": "v1beta1",
       "kind": "CSIDriver",
-      "introduced": {
-        "Major": 1,
-        "Minor": 14
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.14",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
@@ -2285,18 +1337,9 @@
       "group": "storage.k8s.io",
       "version": "v1beta1",
       "kind": "CSINode",
-      "introduced": {
-        "Major": 1,
-        "Minor": 14
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 17
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.14",
+      "deprecated": "1.17",
+      "removed": "1.22",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
@@ -2307,18 +1350,9 @@
       "group": "storage.k8s.io",
       "version": "v1beta1",
       "kind": "CSIStorageCapacity",
-      "introduced": {
-        "Major": 1,
-        "Minor": 21
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 24
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 27
-      },
+      "introduced": "1.21",
+      "deprecated": "1.24",
+      "removed": "1.27",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
@@ -2329,18 +1363,9 @@
       "group": "storage.k8s.io",
       "version": "v1beta1",
       "kind": "StorageClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 4
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.4",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
@@ -2351,18 +1376,9 @@
       "group": "storage.k8s.io",
       "version": "v1beta1",
       "kind": "VolumeAttachment",
-      "introduced": {
-        "Major": 1,
-        "Minor": 10
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 19
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 22
-      },
+      "introduced": "1.10",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
@@ -2373,18 +1389,9 @@
       "group": "storage.k8s.io",
       "version": "v1beta1",
       "kind": "VolumeAttributesClass",
-      "introduced": {
-        "Major": 1,
-        "Minor": 31
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 34
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 37
-      },
+      "introduced": "1.31",
+      "deprecated": "1.34",
+      "removed": "1.37",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
@@ -2395,18 +1402,9 @@
       "group": "storagemigration.k8s.io",
       "version": "v1beta1",
       "kind": "StorageVersionMigration",
-      "introduced": {
-        "Major": 1,
-        "Minor": 35
-      },
-      "deprecated": {
-        "Major": 1,
-        "Minor": 38
-      },
-      "removed": {
-        "Major": 1,
-        "Minor": 41
-      }
+      "introduced": "1.35",
+      "deprecated": "1.38",
+      "removed": "1.41"
     }
   ]
 }

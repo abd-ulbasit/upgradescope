@@ -129,9 +129,13 @@ type replacementIface interface {
 	APILifecycleReplacement() schema.GroupVersionKind
 }
 
-// JSON mirrors of internal/kb types. inventory.Version has no JSON tags,
-// hence the exported Major/Minor keys.
+// JSON mirrors of internal/kb types. version marshals to the same canonical
+// string form ("1.38") as inventory.Version.MarshalJSON.
 type version struct{ Major, Minor int }
+
+func (v version) MarshalJSON() ([]byte, error) {
+	return json.Marshal(fmt.Sprintf("%d.%d", v.Major, v.Minor))
+}
 
 type gvkOut struct {
 	Group   string `json:"group"`
