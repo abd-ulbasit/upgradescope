@@ -1,0 +1,100 @@
+# Default values for upgradescope.
+
+image:
+  repository: ghcr.io/abd-ulbasit/upgradescope
+  tag: dev
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  # Create the agent ServiceAccount. Set false to bring your own (set name).
+  create: true
+  name: ""
+
+rbac:
+  # Create the agent ClusterRole/ClusterRoleBinding.
+  #
+  # HONEST TRADE-OFF — read before installing:
+  # The agent ClusterRole grants get/list/watch on ALL resources in ALL API
+  # groups (cluster-wide, strictly read-only). Two collectors force this:
+  #   1. Helm release detection reads Secrets of type helm.sh/release.v1.
+  #      RBAC cannot filter Secrets by type and release names are dynamic,
+  #      so Helm detection requires cluster-wide secret get+list. If that is
+  #      unacceptable in your environment, set rbac.create=false and bind a
+  #      narrower role of your own — the Helm collector then degrades to
+  #      "not assessed (secrets list forbidden)" instead of failing.
+  #   2. Deprecated-API detection lists objects (metadata-only) at whatever
+  #      deprecated group/versions the embedded KB flags. The group set is
+  #      data-driven and grows with every KB update, so enumerating groups
+  #      in RBAC would silently rot.
+  # Write access is limited to exactly one resource: the ClusterReadiness
+  # CR and its CRD. Nothing else in the cluster is ever mutated (spec §12).
+  create: true
+
+agent:
+  # Evaluation interval (minimum 1m).
+  interval: 10m
+  # Name of the ClusterReadiness object the agent manages.
+  crName: cluster
+  # Namespace label used for team attribution.
+  teamLabel: team
+  # Human-readable cluster name sent to the server (default: cluster UID).
+  clusterName: ""
+  # Target Kubernetes minors written into the ClusterReadiness spec at
+  # install time, e.g. ["1.37", "1.38"]. Empty = agent creates the CR with
+  # an empty spec and defaults to the next minor above the server version.
+  targets: []
+  # URL of an upgradescope server to push snapshots to. Empty = CRD-only
+  # mode. If server.enabled=true and this is empty, it defaults to the
+  # in-chart server Service.
+  serverUrl: ""
+  # Bearer token for snapshot pushes. Ignored when existingSecret is set.
+  # When empty and server.enabled=true, defaults to server.ingestToken.
+  serverToken: ""
+  # Name of an existing Secret with key "serverToken" (preferred over an
+  # inline token for anything beyond dev).
+  existingSecret: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+server:
+  # Run the upgradescope server in-cluster too (single-cluster combined
+  # install). The agent will push to it automatically.
+  enabled: false
+  # Shared bearer token agents must present on POST /api/v1/snapshots.
+  # Required when enabled (unless existingSecret is set).
+  ingestToken: ""
+  # Optional bearer token for the read API. EMPTY = READ API IS OPEN —
+  # acceptable behind a ClusterIP Service on a private cluster, but set one
+  # before exposing the Service in any way.
+  readToken: ""
+  # Name of an existing Secret with key "ingestToken" (and optionally
+  # "readToken" — only read when server.readToken is also set; P2 keeps
+  # secret wiring simple).
+  existingSecret: ""
+  # Optional Slack incoming-webhook URL for finding-delta notifications.
+  slackWebhook: ""
+  # Optional generic webhook URL (POSTs the Event JSON).
+  webhook: ""
+  # Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"].
+  targets: []
+  service:
+    type: ClusterIP
+    port: 8080
+  persistence:
+    # PVC for the SQLite database. false = emptyDir (history lost on
+    # pod restart — demo only).
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
