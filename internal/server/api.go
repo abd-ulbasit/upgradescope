@@ -508,13 +508,14 @@ func (s *Server) reportForRequest(w http.ResponseWriter, r *http.Request) (engin
 	return rep, true
 }
 
-// handleReport: GET /api/v1/clusters/{id}/report?target= — full engine.Report.
+// handleReport: GET /api/v1/clusters/{id}/report?target= — full engine.Report
+// plus presentation-time per-team scores (`teams`, omitted when empty).
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	rep, ok := s.reportForRequest(w, r)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, rep)
+	writeJSON(w, http.StatusOK, withTeams(rep))
 }
 
 // handleFindings: GET /api/v1/clusters/{id}/findings?target=&severity=&category=

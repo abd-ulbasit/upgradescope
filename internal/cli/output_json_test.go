@@ -43,4 +43,28 @@ func TestWriteJSON(t *testing.T) {
 	if back.Score != 75 || back.Ready || back.KBVersion != "test-kb" || len(back.Findings) != 1 {
 		t.Errorf("round-trip mismatch: %+v", back)
 	}
+
+	// Presentation-time teams field: the blocker has no team → bucket
+	// "unattributed".
+	var withTeams struct {
+		Teams map[string]engine.TeamScore `json:"teams"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &withTeams); err != nil {
+		t.Fatalf("unmarshal teams: %v", err)
+	}
+	want := map[string]engine.TeamScore{"unattributed": {Score: 75, Ready: false, Blockers: 1}}
+	if len(withTeams.Teams) != 1 || withTeams.Teams["unattributed"] != want["unattributed"] {
+		t.Errorf("teams = %+v, want %+v", withTeams.Teams, want)
+	}
+}
+
+// A report with no findings emits no teams key at all (omitempty).
+func TestWriteJSONNoFindingsOmitsTeams(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteJSON(&buf, engine.Report{ClusterID: "c", Target: inventory.Version{Major: 1, Minor: 36}}); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	if strings.Contains(buf.String(), "\"teams\"") {
+		t.Errorf("teams key present for empty report:\n%s", buf.String())
+	}
 }

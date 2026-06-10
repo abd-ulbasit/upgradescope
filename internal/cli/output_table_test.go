@@ -59,11 +59,31 @@ WARNING (1)
 INFO (1)
   [deprecated-api] batch/v1beta1 CronJob is deprecated
 
+TEAMS
+  platform       75/100  ready no   blockers 1  warnings 0
+  unattributed   95/100  ready yes  blockers 0  warnings 1
+
 NOT ASSESSED
   deprecated-calls: GET /metrics forbidden
 `
 	if got := buf.String(); got != want {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// No named team anywhere → no TEAMS section, even with findings present.
+func TestWriteTableNoTeamsSectionWithoutNamedTeams(t *testing.T) {
+	r := engine.Report{
+		ClusterID: "c",
+		Target:    inventory.Version{Major: 1, Minor: 36},
+		Findings: []engine.Finding{
+			{Category: engine.CatVersionSkew, Severity: engine.SevWarning, Title: "w"},
+		},
+	}
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	if bytes.Contains(buf.Bytes(), []byte("TEAMS")) {
+		t.Fatalf("TEAMS section rendered without any named team:\n%s", buf.String())
 	}
 }
 
