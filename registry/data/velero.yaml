@@ -1,0 +1,19 @@
+# registry/data/velero.yaml
+# Hand-curated: endoflife.date has no velero product; status comes from the
+# upstream "Velero compatibility matrix" (every maintained Velero release
+# >= 1.14 is expected to work on Kubernetes 1.18-latest — open-ended, so no
+# bounded compat row is recorded).
+schema_version: 1
+id: velero
+display_name: Velero
+matchers:
+  images:
+    - docker.io/velero/velero
+    - velero/velero
+  charts:
+    - velero
+support:
+  status: supported
+  citations:
+    - https://github.com/vmware-tanzu/velero#velero-compatibility-matrix
+    - https://velero.io/docs/latest/support-process/

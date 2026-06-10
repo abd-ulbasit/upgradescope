@@ -1,0 +1,17 @@
+# registry/data/argo-cd.yaml
+# support.status / support.eol_date are synced from the endoflife.date API
+# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+schema_version: 1
+id: argo-cd
+display_name: Argo CD
+endoflife_product: argo-cd
+matchers:
+  images:
+    - quay.io/argoproj/argocd
+  charts:
+    - argo-cd
+support:
+  status: supported
+  citations:
+    - https://endoflife.date/argo-cd
+    - https://argo-cd.readthedocs.io/en/stable/developer-guide/release-process-and-cadence/

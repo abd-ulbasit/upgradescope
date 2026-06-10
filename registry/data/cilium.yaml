@@ -1,0 +1,17 @@
+# registry/data/cilium.yaml
+# support.status / support.eol_date are synced from the endoflife.date API
+# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+schema_version: 1
+id: cilium
+display_name: Cilium
+endoflife_product: cilium
+matchers:
+  images:
+    - quay.io/cilium/cilium
+  charts:
+    - cilium
+support:
+  status: supported
+  citations:
+    - https://endoflife.date/cilium
+    - https://docs.cilium.io/en/stable/network/kubernetes/compatibility/

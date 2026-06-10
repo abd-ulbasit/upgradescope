@@ -1,0 +1,19 @@
+# registry/data/traefik.yaml
+# support.status / support.eol_date are synced from the endoflife.date API
+# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+schema_version: 1
+id: traefik
+display_name: Traefik Proxy
+endoflife_product: traefik
+matchers:
+  images:
+    - docker.io/traefik
+    - docker.io/library/traefik
+    - traefik
+  charts:
+    - traefik
+support:
+  status: supported
+  citations:
+    - https://endoflife.date/traefik
+    - https://doc.traefik.io/traefik/deprecation/releases/
