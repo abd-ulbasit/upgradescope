@@ -57,9 +57,9 @@ func TestMatchAddOns(t *testing.T) {
 			want:   []inventory.AddOnInstance{{ID: "cilium", Version: "", Namespaces: []string{"kube-system"}, Source: "image"}},
 		},
 		{
-			name:     "chart evidence wins over image for source and version",
+			name:     "chart evidence wins over image for source and version, v-prefix stripped",
 			images:   []nsImage{{"ingress-nginx", "registry.k8s.io/ingress-nginx/controller:v1.9.4"}},
-			releases: []inventory.HelmRelease{{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", Status: "deployed"}},
+			releases: []inventory.HelmRelease{{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "v4.7.1", Status: "deployed"}},
 			want:     []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "4.7.1", Namespaces: []string{"ingress-nginx"}, Source: "chart"}},
 		},
 		{
