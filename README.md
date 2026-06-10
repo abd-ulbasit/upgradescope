@@ -1,8 +1,8 @@
-# upgradepilot
+# upgradescope
 
-**Continuous Kubernetes upgrade-readiness for everyone — the open-source alternative to commercial "operational safety" platforms.**
+**Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
 
-> Status: pre-design. Start here, then read `docs/research.md` — why this should exist.
+> Status: design approved, implementation starting. Read `docs/research.md` — why this should exist, and the clean-room disclosure. (Project was seeded as "upgradepilot"; renamed during design — chkk brands its flagship "Upgrade Copilot".)
 
 ## The problem
 
