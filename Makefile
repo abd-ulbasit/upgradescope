@@ -12,6 +12,24 @@ lint:
 gen-kb:
 	cd tools/gen-kb && go run . -out ../../internal/kb/data/apilifecycle.json
 
+IMAGE ?= ghcr.io/abd-ulbasit/upgradescope
+TAG ?= dev
+VERSION ?= dev
+
+.PHONY: docker-build kind-load
+docker-build:
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(TAG) .
+kind-load: docker-build
+	kind load docker-image $(IMAGE):$(TAG) --name upgradescope-demo
+
+.PHONY: chart-test
+chart-test:
+	./hack/test-chart.sh
+
+.PHONY: agent-e2e
+agent-e2e:
+	./hack/demo/agent-e2e.sh
+
 .PHONY: demo-up demo-down
 demo-up:
 	./hack/demo/kind-setup.sh
