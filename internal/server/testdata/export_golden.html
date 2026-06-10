@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>upgradescope report — prod-eu-1 → 1.35</title>
+<style>
+  :root { color-scheme: light; }
+  body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #111827; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: .05em; margin: 1.5rem 0 .5rem; }
+  .meta { color: #6b7280; margin: 0 0 1rem; }
+  .meta span { margin-right: 1.25rem; }
+  .badge { display: inline-block; font-weight: 700; padding: .15rem .6rem; border-radius: .375rem; color: #fff; }
+  .badge.ok { background: #16a34a; } .badge.warn { background: #d97706; } .badge.bad { background: #dc2626; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; vertical-align: top; padding: .4rem .6rem; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f9fafb; font-weight: 600; }
+  .sev-blocker td:first-child { color: #dc2626; font-weight: 700; }
+  .sev-warning td:first-child { color: #d97706; font-weight: 700; }
+  .sev-info td:first-child { color: #6b7280; }
+  .detail { color: #4b5563; }
+  .cites a { color: #2563eb; word-break: break-all; }
+  .spark { vertical-align: middle; }
+  .gaps { color: #6b7280; }
+  @media print {
+    body { margin: 0; max-width: none; }
+    a { color: inherit; text-decoration: none; }
+    .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<h1>upgradescope upgrade-readiness report</h1>
+<p class="meta">
+  <span>Cluster: <strong>prod-eu-1</strong></span>
+  <span>Target: <strong>1.35</strong></span>
+  <span>KB: test-kb</span>
+  <span>Evaluated: 2026-06-10 12:00 UTC</span>
+  <span>Generated: 2026-06-10 12:00 UTC</span>
+</p>
+<p>
+  <span class="badge warn">score 75/100</span>
+  <span class="badge bad">not ready</span>
+  <svg class="spark" width="260" height="48" viewBox="0 0 260 48" role="img" aria-label="score history"><polyline fill="none" stroke="#2563eb" stroke-width="2" points="4.0,14.0 256.0,14.0"/><circle cx="256.0" cy="14.0" r="3" fill="#2563eb"/></svg>
+</p>
+
+<h2>blocker (1)</h2>
+<table>
+  <tr><th>severity</th><th>category</th><th>finding</th><th>teams</th><th>namespaces</th></tr>
+  
+  <tr class="sev-blocker">
+    <td>blocker</td>
+    <td>removed-api</td>
+    <td>
+      <strong>policy/v1beta1 PodSecurityPolicy removed in 1.35 (2 objects)</strong>
+      <div class="detail">2 object(s) still stored/served at this version: payments-prod (2).</div>
+      
+      <div class="cites"><a href="https://kubernetes.io/docs/reference/using-api/deprecation-guide/">https://kubernetes.io/docs/reference/using-api/deprecation-guide/</a> </div>
+    </td>
+    <td>payments</td>
+    <td>payments-prod</td>
+  </tr>
+  
+</table>
+
+
+</body>
+</html>

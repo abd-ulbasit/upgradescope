@@ -90,6 +90,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/fleet", s.readAuth(s.handleFleet))
 	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.handleFleetTeams))
 	s.mux.HandleFunc("POST /api/v1/gate", s.readAuth(s.handleGate))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/export", s.readAuth(s.handleExport))
 }
 
 // Handler exposes the full route table for httptest and embedding.

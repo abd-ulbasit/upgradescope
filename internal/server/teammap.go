@@ -38,8 +38,8 @@ func LoadTeamMap(p string) (TeamMap, error) {
 
 // ParseTeamMap parses YAML of the form:
 //
-//	- pattern: "payments-*"
-//	  team: payments
+//   - pattern: "payments-*"
+//     team: payments
 //
 // Every rule must have a non-empty pattern (valid path.Match glob) and team.
 func ParseTeamMap(data []byte) (TeamMap, error) {
