@@ -110,8 +110,5 @@
   "kbVersion": "test-kb-1",
   "ready": false,
   "score": 10,
-  "target": {
-    "Major": 1,
-    "Minor": 38
-  }
+  "target": "1.38"
 }

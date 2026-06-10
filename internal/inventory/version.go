@@ -1,7 +1,9 @@
 package inventory
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -54,6 +56,41 @@ func parseComponent(p string) (int, error) {
 // String renders the minor version, e.g. "1.34". Never includes a "v" prefix.
 func (v Version) String() string {
 	return fmt.Sprintf("%d.%d", v.Major, v.Minor)
+}
+
+// MarshalJSON emits the canonical wire form, a string like "1.38" —
+// matching String() and the camelCase report contract.
+func (v Version) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.String())
+}
+
+// UnmarshalJSON accepts the canonical string form ("1.38", anything
+// ParseVersion takes) and, for back-compat with datasets written before
+// the string form existed, the legacy object form {"Major":1,"Minor":38}
+// (strict: unknown keys rejected).
+func (v *Version) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '{' { // legacy object form
+		type legacy struct{ Major, Minor int }
+		dec := json.NewDecoder(bytes.NewReader(trimmed))
+		dec.DisallowUnknownFields()
+		var l legacy
+		if err := dec.Decode(&l); err != nil {
+			return fmt.Errorf("invalid kubernetes version object %s: %w", trimmed, err)
+		}
+		*v = Version{Major: l.Major, Minor: l.Minor}
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("kubernetes version must be a string like \"1.38\": %w", err)
+	}
+	parsed, err := ParseVersion(s)
+	if err != nil {
+		return err
+	}
+	*v = parsed
+	return nil
 }
 
 // Compare returns -1 if v < o, 0 if equal, 1 if v > o.

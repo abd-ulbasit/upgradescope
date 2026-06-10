@@ -1,33 +1,33 @@
 {
   "Version": "test-kb-1",
-  "MaxKnownK8s": {"Major": 1, "Minor": 36},
+  "MaxKnownK8s": "1.36",
   "Skew": {"KubeletMaxBehind": 3, "KubectlMaxSkew": 1, "APIServerHASpread": 1},
   "APILifecycle": [
     {
       "group": "extensions", "version": "v1beta1", "kind": "Ingress",
-      "introduced": {"Major": 1, "Minor": 1},
-      "deprecated": {"Major": 1, "Minor": 14},
-      "removed": {"Major": 1, "Minor": 22},
+      "introduced": "1.1",
+      "deprecated": "1.14",
+      "removed": "1.22",
       "replacement": {"group": "networking.k8s.io", "version": "v1", "kind": "Ingress"}
     },
     {
       "group": "networking.k8s.io", "version": "v1beta1", "kind": "Ingress",
-      "introduced": {"Major": 1, "Minor": 14},
-      "deprecated": {"Major": 1, "Minor": 19},
-      "removed": {"Major": 1, "Minor": 22},
+      "introduced": "1.14",
+      "deprecated": "1.19",
+      "removed": "1.22",
       "replacement": {"group": "networking.k8s.io", "version": "v1", "kind": "Ingress"}
     },
     {
       "group": "batch", "version": "v1beta1", "kind": "CronJob",
-      "introduced": {"Major": 1, "Minor": 8},
-      "deprecated": {"Major": 1, "Minor": 21},
-      "removed": {"Major": 1, "Minor": 25},
+      "introduced": "1.8",
+      "deprecated": "1.21",
+      "removed": "1.25",
       "replacement": {"group": "batch", "version": "v1", "kind": "CronJob"}
     },
     {
       "group": "", "version": "v1", "kind": "ComponentStatus",
-      "introduced": {"Major": 1, "Minor": 0},
-      "deprecated": {"Major": 1, "Minor": 19}
+      "introduced": "1.0",
+      "deprecated": "1.19"
     }
   ],
   "AddOns": [

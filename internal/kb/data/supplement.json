@@ -6,27 +6,27 @@
       "group": "autoscaling",
       "version": "v2beta1",
       "kind": "HorizontalPodAutoscaler",
-      "introduced": {"Major": 1, "Minor": 8},
-      "deprecated": {"Major": 1, "Minor": 22},
-      "removed": {"Major": 1, "Minor": 25},
+      "introduced": "1.8",
+      "deprecated": "1.22",
+      "removed": "1.25",
       "replacement": {"group": "autoscaling", "version": "v2", "kind": "HorizontalPodAutoscaler"}
     },
     {
       "group": "autoscaling",
       "version": "v2beta2",
       "kind": "HorizontalPodAutoscaler",
-      "introduced": {"Major": 1, "Minor": 12},
-      "deprecated": {"Major": 1, "Minor": 23},
-      "removed": {"Major": 1, "Minor": 26},
+      "introduced": "1.12",
+      "deprecated": "1.23",
+      "removed": "1.26",
       "replacement": {"group": "autoscaling", "version": "v2", "kind": "HorizontalPodAutoscaler"}
     },
     {
       "group": "policy",
       "version": "v1beta1",
       "kind": "PodSecurityPolicy",
-      "introduced": {"Major": 1, "Minor": 10},
-      "deprecated": {"Major": 1, "Minor": 21},
-      "removed": {"Major": 1, "Minor": 25}
+      "introduced": "1.10",
+      "deprecated": "1.21",
+      "removed": "1.25"
     }
   ]
 }

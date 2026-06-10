@@ -48,9 +48,9 @@ func TestParseLifecycleFile(t *testing.T) {
 		"maxKnownK8s": "1.36",
 		"entries": [
 			{"group":"batch","version":"v1beta1","kind":"CronJob",
-			 "introduced":{"Major":1,"Minor":8},
-			 "deprecated":{"Major":1,"Minor":21},
-			 "removed":{"Major":1,"Minor":25},
+			 "introduced":"1.8",
+			 "deprecated":"1.21",
+			 "removed":"1.25",
 			 "replacement":{"group":"batch","version":"v1","kind":"CronJob"}}
 		]
 	}`)
@@ -63,6 +63,32 @@ func TestParseLifecycleFile(t *testing.T) {
 	}
 	if len(f.Entries) != 1 || f.Entries[0].Kind != "CronJob" {
 		t.Errorf("Entries = %+v, want one CronJob entry", f.Entries)
+	}
+	if f.Entries[0].Introduced != (inventory.Version{Major: 1, Minor: 8}) {
+		t.Errorf("Introduced = %v, want 1.8", f.Entries[0].Introduced)
+	}
+	if f.Entries[0].Removed == nil || *f.Entries[0].Removed != (inventory.Version{Major: 1, Minor: 25}) {
+		t.Errorf("Removed = %v, want 1.25", f.Entries[0].Removed)
+	}
+
+	// Legacy datasets (written before the canonical string form) encoded
+	// versions as {"Major":1,"Minor":25} objects — those must keep parsing.
+	legacy := []byte(`{
+		"generatedFrom": "k8s.io/api v0.36.1",
+		"maxKnownK8s": "1.36",
+		"entries": [
+			{"group":"batch","version":"v1beta1","kind":"CronJob",
+			 "introduced":{"Major":1,"Minor":8},
+			 "deprecated":{"Major":1,"Minor":21},
+			 "removed":{"Major":1,"Minor":25}}
+		]
+	}`)
+	lf, err := parseLifecycle(legacy)
+	if err != nil {
+		t.Fatalf("parseLifecycle(legacy object form) error = %v", err)
+	}
+	if lf.Entries[0].Removed == nil || *lf.Entries[0].Removed != (inventory.Version{Major: 1, Minor: 25}) {
+		t.Errorf("legacy Removed = %v, want 1.25", lf.Entries[0].Removed)
 	}
 
 	if _, err := parseLifecycle([]byte(`{not json`)); err == nil {
