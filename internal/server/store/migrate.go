@@ -9,6 +9,25 @@ import (
 	"time"
 )
 
+// migrationDialect carries the only driver-specific piece of Migrate: the
+// placeholder style of its two bookkeeping queries. The migration files
+// themselves are placeholder-free DDL/DML, so everything else is shared.
+type migrationDialect struct {
+	checkStmt  string // SELECT COUNT(*) ... WHERE version = <ph1>
+	insertStmt string // INSERT INTO schema_migrations ... VALUES (<ph1>, <ph2>)
+}
+
+var (
+	sqliteMigrations = migrationDialect{
+		checkStmt:  `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`,
+		insertStmt: `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+	}
+	postgresMigrations = migrationDialect{
+		checkStmt:  `SELECT COUNT(*) FROM schema_migrations WHERE version = $1`,
+		insertStmt: `INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)`,
+	}
+)
+
 // Migrate applies every "*.sql" file in fsys that has not been applied yet,
 // in lexicographic filename order. Each migration runs in its own
 // transaction and its filename is recorded in schema_migrations inside that
@@ -16,8 +35,14 @@ import (
 // again is a no-op for already-recorded files. Returns the filenames
 // applied on this run.
 //
-// Driver-agnostic on purpose (plain *sql.DB): P3's Postgres store reuses it.
+// Migrate speaks '?' placeholders (SQLite); the Postgres store calls
+// migrate with postgresMigrations. applied_at stays TEXT (RFC 3339) in both
+// backends — it is bookkeeping written and read only by this file.
 func Migrate(ctx context.Context, db *sql.DB, fsys fs.FS) ([]string, error) {
+	return migrate(ctx, db, fsys, sqliteMigrations)
+}
+
+func migrate(ctx context.Context, db *sql.DB, fsys fs.FS, d migrationDialect) ([]string, error) {
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    TEXT PRIMARY KEY,
@@ -32,7 +57,7 @@ func Migrate(ctx context.Context, db *sql.DB, fsys fs.FS) ([]string, error) {
 	slices.Sort(names)
 	var applied []string
 	for _, name := range names {
-		ok, err := applyMigration(ctx, db, fsys, name)
+		ok, err := applyMigration(ctx, db, fsys, name, d)
 		if err != nil {
 			return applied, err
 		}
@@ -43,10 +68,9 @@ func Migrate(ctx context.Context, db *sql.DB, fsys fs.FS) ([]string, error) {
 	return applied, nil
 }
 
-func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, name string) (bool, error) {
+func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, name string, d migrationDialect) (bool, error) {
 	var n int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, name).Scan(&n); err != nil {
+	if err := db.QueryRowContext(ctx, d.checkStmt, name).Scan(&n); err != nil {
 		return false, fmt.Errorf("check migration %s: %w", name, err)
 	}
 	if n > 0 {
@@ -64,8 +88,7 @@ func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, name string) (b
 	if _, err := tx.ExecContext(ctx, string(src)); err != nil {
 		return false, fmt.Errorf("apply migration %s: %w", name, err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+	if _, err := tx.ExecContext(ctx, d.insertStmt,
 		name, formatTime(time.Now())); err != nil {
 		return false, fmt.Errorf("record migration %s: %w", name, err)
 	}
