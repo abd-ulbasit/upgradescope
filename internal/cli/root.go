@@ -13,5 +13,6 @@ func Root() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(newScanCmd())
+	root.AddCommand(newAgentCmd())
 	return root
 }
