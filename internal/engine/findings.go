@@ -30,8 +30,8 @@ const (
 type Finding struct {
 	Category    Category `json:"category"`
 	Severity    Severity `json:"severity"`
-	Title       string   `json:"title"`  // one line, deterministic
-	Detail      string   `json:"detail"` // evidence sentence(s), deterministic
+	Title       string   `json:"title"`           // one line, deterministic
+	Detail      string   `json:"detail"`          // evidence sentence(s), deterministic
 	Teams       []string `json:"teams,omitempty"` // sorted, deduped
 	Namespaces  []string `json:"namespaces,omitempty"`
 	Remediation string   `json:"remediation,omitempty"`

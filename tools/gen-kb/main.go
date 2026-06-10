@@ -129,8 +129,14 @@ type replacementIface interface {
 	APILifecycleReplacement() schema.GroupVersionKind
 }
 
-// JSON mirrors of internal/kb types. version marshals to the same canonical
-// string form ("1.38") as inventory.Version.MarshalJSON.
+// JSON mirrors of internal/kb types. version intentionally mirrors
+// inventory.Version's JSON form — it marshals to the same canonical string
+// ("1.38") as inventory.Version.MarshalJSON. It CANNOT import
+// internal/inventory: gen-kb is a separate Go module pinned to its own
+// k8s.io/api release, so importing the main module would entangle the two
+// dependency graphs. Drift between this mirror and the real type is caught
+// by internal/kb's dataset tests (which unmarshal the generated JSON with
+// inventory.Version) and the CI kb-freshness job.
 type version struct{ Major, Minor int }
 
 func (v version) MarshalJSON() ([]byte, error) {
