@@ -63,6 +63,14 @@ func TestMatchAddOns(t *testing.T) {
 			want:     []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "4.7.1", Namespaces: []string{"ingress-nginx"}, Source: "chart"}},
 		},
 		{
+			name: "oldest version wins semver-aware, not lexicographically",
+			images: []nsImage{
+				{"kube-system", "quay.io/cilium/cilium:v1.10.0"},
+				{"kube-system", "quay.io/cilium/cilium:v1.9.4"},
+			},
+			want: []inventory.AddOnInstance{{ID: "cilium", Version: "1.9.4", Namespaces: []string{"kube-system"}, Source: "image"}},
+		},
+		{
 			name:      "unrecognized images deduped by repo, tag-stripped",
 			images:    []nsImage{{"shop", "docker.io/library/redis:7"}, {"crm", "docker.io/library/redis:7.2"}},
 			wantUnrec: []string{"docker.io/library/redis"},
