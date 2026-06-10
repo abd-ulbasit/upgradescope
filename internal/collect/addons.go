@@ -25,19 +25,28 @@ type nsImage struct {
 // the pure matcher over images, already-collected Helm releases
 // (inv.HelmReleases — the helm step runs first), and the registry.
 func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory) error {
-	pods, err := kube.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("list pods: %w", err)
-	}
 	var images []nsImage
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		for _, c := range p.Spec.InitContainers {
-			images = append(images, nsImage{Namespace: p.Namespace, Image: c.Image})
+	opts := metav1.ListOptions{Limit: listPageSize}
+	for {
+		pods, err := kube.CoreV1().Pods(metav1.NamespaceAll).List(ctx, opts)
+		if err != nil {
+			return fmt.Errorf("list pods: %w", err)
 		}
-		for _, c := range p.Spec.Containers {
-			images = append(images, nsImage{Namespace: p.Namespace, Image: c.Image})
+		// Extract (namespace, image) pairs per page so only the pairs are
+		// retained — never the accumulated PodList of a large cluster.
+		for i := range pods.Items {
+			p := &pods.Items[i]
+			for _, c := range p.Spec.InitContainers {
+				images = append(images, nsImage{Namespace: p.Namespace, Image: c.Image})
+			}
+			for _, c := range p.Spec.Containers {
+				images = append(images, nsImage{Namespace: p.Namespace, Image: c.Image})
+			}
 		}
+		if pods.Continue == "" {
+			break
+		}
+		opts.Continue = pods.Continue
 	}
 	inv.AddOns, inv.UnrecognizedImages = matchAddOns(images, inv.HelmReleases, addons)
 	return nil

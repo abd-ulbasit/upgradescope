@@ -8,7 +8,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/registry"
@@ -122,5 +124,45 @@ func TestCollectAddOnsUsesPodImagesAndHelmReleases(t *testing.T) {
 	}
 	if !reflect.DeepEqual(inv.UnrecognizedImages, []string{"docker.io/library/busybox"}) {
 		t.Errorf("unrecognized = %#v, want busybox repo (init container counted)", inv.UnrecognizedImages)
+	}
+}
+
+func TestCollectAddOnsFollowsListPagination(t *testing.T) {
+	pod := func(name, image string) corev1.Pod {
+		return corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system"},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: image}}},
+		}
+	}
+	cs := kubefake.NewClientset()
+	calls := 0
+	cs.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		calls++
+		switch calls {
+		case 1:
+			return true, &corev1.PodList{
+				ListMeta: metav1.ListMeta{Continue: "page-2"},
+				Items:    []corev1.Pod{pod("cilium-1", "quay.io/cilium/cilium:v1.14.0")},
+			}, nil
+		default:
+			return true, &corev1.PodList{
+				Items: []corev1.Pod{pod("nginx-1", "registry.k8s.io/ingress-nginx/controller:v1.9.4")},
+			}, nil
+		}
+	})
+
+	var inv inventory.Inventory
+	if err := collectAddOns(context.Background(), cs, testRegistry(), &inv); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Errorf("list calls = %d, want 2 (Continue token must be followed)", calls)
+	}
+	want := []inventory.AddOnInstance{
+		{ID: "cilium", Version: "1.14.0", Namespaces: []string{"kube-system"}, Source: "image"},
+		{ID: "ingress-nginx", Version: "1.9.4", Namespaces: []string{"kube-system"}, Source: "image"},
+	}
+	if !reflect.DeepEqual(inv.AddOns, want) {
+		t.Errorf("addons = %#v\nwant   %#v (images from every page must count)", inv.AddOns, want)
 	}
 }

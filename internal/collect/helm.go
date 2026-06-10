@@ -41,40 +41,48 @@ type helmReleaseDoc struct {
 // revision per (namespace, release name) — max N from the secret name
 // suffix "sh.helm.release.v1.<name>.v<N>".
 func collectHelm(ctx context.Context, kube kubernetes.Interface, inv *inventory.Inventory) error {
-	secrets, err := kube.CoreV1().Secrets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
-		FieldSelector: "type=" + helmSecretType,
-	})
-	if err != nil {
-		return fmt.Errorf("list helm release secrets: %w", err)
-	}
-
 	type candidate struct {
 		rev int
 		rel inventory.HelmRelease
 	}
 	latest := map[string]candidate{} // "<namespace>/<release name>"
-	for i := range secrets.Items {
-		s := &secrets.Items[i]
-		if s.Type != corev1.SecretType(helmSecretType) { // fake clients ignore field selectors
-			continue
-		}
-		doc, err := decodeHelmRelease(s.Data["release"])
+
+	opts := metav1.ListOptions{
+		FieldSelector: "type=" + helmSecretType,
+		Limit:         listPageSize,
+	}
+	for {
+		secrets, err := kube.CoreV1().Secrets(metav1.NamespaceAll).List(ctx, opts)
 		if err != nil {
-			continue // one corrupt secret must not fail the capability
+			return fmt.Errorf("list helm release secrets: %w", err)
 		}
-		rev := releaseRevision(s.Name)
-		key := s.Namespace + "/" + doc.Name
-		if cur, ok := latest[key]; ok && cur.rev >= rev {
-			continue
+		for i := range secrets.Items {
+			s := &secrets.Items[i]
+			if s.Type != corev1.SecretType(helmSecretType) { // fake clients ignore field selectors
+				continue
+			}
+			doc, err := decodeHelmRelease(s.Data["release"])
+			if err != nil {
+				continue // one corrupt secret must not fail the capability
+			}
+			rev := releaseRevision(s.Name)
+			key := s.Namespace + "/" + doc.Name
+			if cur, ok := latest[key]; ok && cur.rev >= rev {
+				continue
+			}
+			latest[key] = candidate{rev: rev, rel: inventory.HelmRelease{
+				Name:         doc.Name,
+				Namespace:    s.Namespace,
+				ChartName:    doc.Chart.Metadata.Name,
+				ChartVersion: doc.Chart.Metadata.Version,
+				AppVersion:   doc.Chart.Metadata.AppVersion,
+				Status:       doc.Info.Status,
+			}}
 		}
-		latest[key] = candidate{rev: rev, rel: inventory.HelmRelease{
-			Name:         doc.Name,
-			Namespace:    s.Namespace,
-			ChartName:    doc.Chart.Metadata.Name,
-			ChartVersion: doc.Chart.Metadata.Version,
-			AppVersion:   doc.Chart.Metadata.AppVersion,
-			Status:       doc.Info.Status,
-		}}
+		if secrets.Continue == "" {
+			break
+		}
+		opts.Continue = secrets.Continue
 	}
 
 	rels := make([]inventory.HelmRelease, 0, len(latest))
