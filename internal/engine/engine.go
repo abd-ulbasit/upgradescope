@@ -3,10 +3,13 @@ package engine
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/registry"
 )
 
 const (
@@ -155,4 +158,177 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 		out = append(out, f)
 	}
 	return out
+}
+
+// evalAddOns: registry lookup by instance ID.
+//   - support.status == "eol" OR eol_date ≤ now            → blocker, eol-addon
+//   - eol_date in (now, now+90d]                           → warning, eol-approaching
+//   - version matches a Compat range with K8sMax < target  → blocker, chart-incompat
+//
+// An instance with no detected version produces no compat finding; an ID
+// absent from the registry produces nothing.
+func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) []Finding {
+	byID := make(map[string]registry.AddOn, len(k.AddOns))
+	for _, a := range k.AddOns {
+		byID[a.ID] = a
+	}
+	var out []Finding
+	for _, inst := range inv.AddOns {
+		a, ok := byID[inst.ID]
+		if !ok {
+			continue
+		}
+		ns := append([]string(nil), inst.Namespaces...)
+		sort.Strings(ns)
+		teams := teamsFor(ns, inv.Namespaces)
+		ver := inst.Version
+		if ver == "" {
+			ver = "(unknown)"
+		}
+		located := fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
+			a.DisplayName, ver, inst.Source, strings.Join(ns, ", "))
+
+		var eolDate time.Time
+		hasDate := false
+		if a.Support.EOLDate != "" {
+			if d, err := time.Parse("2006-01-02", a.Support.EOLDate); err == nil {
+				eolDate, hasDate = d, true
+			}
+		}
+		switch {
+		case a.Support.Status == "eol" || (hasDate && !eolDate.After(now)):
+			title := fmt.Sprintf("%s is end-of-life", a.DisplayName)
+			if a.Support.EOLDate != "" {
+				title = fmt.Sprintf("%s is end-of-life since %s", a.DisplayName, a.Support.EOLDate)
+			}
+			out = append(out, Finding{
+				Category: CatEOLAddon, Severity: SevBlocker,
+				Title:       title,
+				Detail:      located + " Upstream support has ended.",
+				Teams:       teams,
+				Namespaces:  ns,
+				Remediation: a.Recommendation,
+				Citations:   append([]string(nil), a.Support.Citations...),
+			})
+		case hasDate && eolDate.After(now) && !eolDate.After(now.Add(90*24*time.Hour)):
+			out = append(out, Finding{
+				Category: CatEOLApproaching, Severity: SevWarning,
+				Title:       fmt.Sprintf("%s reaches end-of-life on %s", a.DisplayName, a.Support.EOLDate),
+				Detail:      located + fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate),
+				Teams:       teams,
+				Namespaces:  ns,
+				Remediation: a.Recommendation,
+				Citations:   append([]string(nil), a.Support.Citations...),
+			})
+		}
+
+		if inst.Version == "" {
+			continue // cannot match a compat range without a detected version
+		}
+		for _, c := range a.Compat {
+			if !matchesRange(inst.Version, c.Range) {
+				continue
+			}
+			kmax, err := inventory.ParseVersion(c.K8sMax)
+			if err == nil && kmax.Compare(target) < 0 {
+				out = append(out, Finding{
+					Category: CatChartIncompat, Severity: SevBlocker,
+					Title:       fmt.Sprintf("%s %s supports Kubernetes up to %s (target %s)", a.DisplayName, inst.Version, c.K8sMax, target),
+					Detail:      fmt.Sprintf("Installed version %s matches compatibility range %q, which supports Kubernetes %s through %s.", inst.Version, c.Range, c.K8sMin, c.K8sMax),
+					Teams:       teams,
+					Namespaces:  ns,
+					Remediation: a.Recommendation,
+					Citations:   append([]string(nil), c.Citations...),
+				})
+			}
+			break // first matching range wins
+		}
+	}
+	return out
+}
+
+// matchesRange is a minimal semver-constraint matcher (stdlib only): clauses
+// separated by spaces/commas, each ">=x.y.z", "<=x.y.z", ">x.y.z", "<x.y.z",
+// or "=x.y.z" (bare versions mean "="). Pre-release/build suffixes on the
+// candidate version are trimmed. An empty constraint never matches.
+func matchesRange(version, constraint string) bool {
+	if strings.TrimSpace(constraint) == "" {
+		return false
+	}
+	v, ok := parseSemver(version)
+	if !ok {
+		return false
+	}
+	clauses := strings.FieldsFunc(constraint, func(r rune) bool { return r == ',' || r == ' ' })
+	for _, clause := range clauses {
+		op, rest := "=", clause
+		for _, o := range []string{">=", "<=", ">", "<", "="} {
+			if strings.HasPrefix(clause, o) {
+				op, rest = o, strings.TrimPrefix(clause, o)
+				break
+			}
+		}
+		w, ok := parseSemver(rest)
+		if !ok {
+			return false
+		}
+		c := compareSemver(v, w)
+		switch op {
+		case ">=":
+			if c < 0 {
+				return false
+			}
+		case "<=":
+			if c > 0 {
+				return false
+			}
+		case ">":
+			if c <= 0 {
+				return false
+			}
+		case "<":
+			if c >= 0 {
+				return false
+			}
+		case "=":
+			if c != 0 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+type semver [3]int
+
+func parseSemver(s string) (semver, bool) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		s = s[:i] // drop pre-release/build metadata
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) == 0 || len(parts) > 3 || s == "" {
+		return semver{}, false
+	}
+	var v semver
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return semver{}, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+func compareSemver(a, b semver) int {
+	for i := 0; i < 3; i++ {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
