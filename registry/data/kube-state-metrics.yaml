@@ -1,0 +1,13 @@
+# registry/data/kube-state-metrics.yaml
+schema_version: 1
+id: kube-state-metrics
+display_name: kube-state-metrics
+matchers:
+  images:
+    - registry.k8s.io/kube-state-metrics/kube-state-metrics
+  charts:
+    - kube-state-metrics
+support:
+  status: supported
+  citations:
+    - https://github.com/kubernetes/kube-state-metrics#compatibility-matrix

@@ -1,0 +1,13 @@
+# registry/data/cert-manager.yaml
+schema_version: 1
+id: cert-manager
+display_name: cert-manager
+matchers:
+  images:
+    - quay.io/jetstack/cert-manager-controller
+  charts:
+    - cert-manager
+support:
+  status: supported
+  citations:
+    - https://cert-manager.io/docs/releases/
