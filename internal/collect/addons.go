@@ -67,6 +67,14 @@ func splitImage(image string) (repo, tag string) {
 	return image, ""
 }
 
+// normalizeVersion is the single normalization point for every value
+// that lands in AddOnInstance.Version: the leading "v" is stripped from
+// image tags AND chart versions so registry Compat ranges and findings
+// compare against one uniform form.
+func normalizeVersion(v string) string {
+	return strings.TrimPrefix(v, "v")
+}
+
 // versionLess orders detected versions for the conservative-oldest merge:
 // semver compare when both sides parse ("1.9.4" < "1.10.0"), falling back
 // to lexicographic for unparseable versions. Plain string `<` would rank
@@ -107,7 +115,7 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 				if repoMatches(repo, m) {
 					byID[a.ID] = append(byID[a.ID], evidence{
 						source:  "image",
-						version: strings.TrimPrefix(tag, "v"),
+						version: normalizeVersion(tag),
 						ns:      img.Namespace,
 					})
 					matched = true
@@ -124,7 +132,7 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 		for _, a := range addons {
 			for _, chart := range a.Matchers.Charts {
 				if rel.ChartName == chart {
-					byID[a.ID] = append(byID[a.ID], evidence{source: "chart", version: rel.ChartVersion, ns: rel.Namespace})
+					byID[a.ID] = append(byID[a.ID], evidence{source: "chart", version: normalizeVersion(rel.ChartVersion), ns: rel.Namespace})
 				}
 			}
 		}
