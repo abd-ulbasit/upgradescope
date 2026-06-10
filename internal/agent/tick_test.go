@@ -123,7 +123,7 @@ func testRunner(t *testing.T, dyn dynamic.Interface, serverURL string) *runner {
 	}
 	r := newRunner(fakeClients(t, "v1.35.2"), dyn, mustKB(t), cfg)
 	if r.pusher != nil {
-		r.pusher.sleep = func(time.Duration) {} // never really sleep in tests
+		r.pusher.wait = func(context.Context, time.Duration) error { return nil } // never really wait in tests
 	}
 	return r
 }

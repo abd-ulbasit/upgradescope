@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -80,7 +81,10 @@ func newTestPusher(t *testing.T, rec *pushRecorder, statuses ...int) (*pusher, *
 	t.Cleanup(srv.Close)
 	p := newPusher(srv.URL+"/", "sekret") // trailing slash must be trimmed
 	var slept []time.Duration
-	p.sleep = func(d time.Duration) { slept = append(slept, d) }
+	p.wait = func(_ context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		return nil
+	}
 	return p, &slept
 }
 
@@ -200,6 +204,79 @@ func TestFlush422DropsPayloadWithServerError(t *testing.T) {
 	}
 	if rec.requests() != 1 {
 		t.Errorf("422 retried: %d requests", rec.requests())
+	}
+}
+
+func TestFlushOther4xxPermanentDropsPayload(t *testing.T) {
+	rec := &pushRecorder{}
+	p, slept := newTestPusher(t, rec, http.StatusForbidden)
+	p.offer(testPayload("c"))
+	err := p.flush(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("err = %v, want 403 mention (permanent)", err)
+	}
+	if rec.requests() != 1 || len(*slept) != 0 {
+		t.Errorf("403 retried: %d requests, waits %v", rec.requests(), *slept)
+	}
+	if err := p.flush(context.Background()); err != nil || rec.requests() != 1 {
+		t.Error("payload not dropped after 403")
+	}
+}
+
+func TestFlush429IsTransientRetried(t *testing.T) {
+	rec := &pushRecorder{}
+	p, slept := newTestPusher(t, rec, http.StatusTooManyRequests, http.StatusAccepted)
+	p.offer(testPayload("c"))
+	if err := p.flush(context.Background()); err != nil {
+		t.Fatalf("429 then 202 should succeed: %v", err)
+	}
+	if rec.requests() != 2 || len(*slept) != 1 {
+		t.Errorf("requests/waits = %d/%d, want 2/1 (429 retried once)", rec.requests(), len(*slept))
+	}
+}
+
+func TestWaitForReturnsPromptlyOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	if err := waitFor(ctx, 10*time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("waitFor blocked %v after cancel, want prompt return", elapsed)
+	}
+}
+
+func TestFlushCancelDuringBackoffKeepsPayload(t *testing.T) {
+	rec := &pushRecorder{}
+	p, _ := newTestPusher(t, rec, http.StatusInternalServerError)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Real ctx-aware wait; cancel fires as the backoff starts.
+	p.wait = func(c context.Context, d time.Duration) error {
+		cancel()
+		return waitFor(c, d)
+	}
+	p.offer(testPayload("c"))
+	start := time.Now()
+	err := p.flush(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if rec.requests() != 1 {
+		t.Errorf("requests = %d, want 1 (no retry after cancel)", rec.requests())
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("flush blocked %v during canceled backoff", elapsed)
+	}
+	p.mu.Lock()
+	kept := p.pending != nil
+	p.mu.Unlock()
+	if !kept {
+		t.Error("payload dropped on ctx cancel; must stay buffered")
 	}
 }
 

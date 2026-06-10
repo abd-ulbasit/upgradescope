@@ -43,7 +43,7 @@ type pusher struct {
 	url   string // base server URL, trailing slash trimmed
 	token string
 	hc    *http.Client
-	sleep func(time.Duration) // injectable for deterministic tests
+	wait  func(ctx context.Context, d time.Duration) error // injectable for deterministic tests
 
 	mu      sync.Mutex
 	pending *pushPayload
@@ -54,7 +54,20 @@ func newPusher(serverURL, token string) *pusher {
 		url:   strings.TrimRight(serverURL, "/"),
 		token: token,
 		hc:    &http.Client{Timeout: 30 * time.Second},
-		sleep: time.Sleep,
+		wait:  waitFor,
+	}
+}
+
+// waitFor blocks for d or until ctx is canceled, whichever comes first, so a
+// SIGTERM during backoff never stalls shutdown for the backoff duration.
+func waitFor(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
@@ -66,10 +79,13 @@ func (p *pusher) offer(pl pushPayload) {
 }
 
 // flush sends the pending snapshot, if any. Transient failures (network,
-// 5xx) retry up to pushRetries times with exponential backoff; the payload
-// stays buffered on exhaustion so the next tick retries. Permanent failures
-// (401 bad token, 422 invalid body) drop the payload — resending identical
-// bytes cannot succeed — and return the error for logging.
+// 5xx, 408, 429) retry up to pushRetries times with exponential backoff; the
+// payload stays buffered on exhaustion so a later flush can retry it (in
+// practice the runner re-offers a fresh payload on the next push-worthy
+// tick). Permanent failures (any other 4xx: bad token, invalid body, ...)
+// drop the payload — resending identical bytes cannot succeed — and return
+// the error for logging. A context cancel during backoff returns promptly
+// with ctx's error, payload kept.
 func (p *pusher) flush(ctx context.Context) error {
 	p.mu.Lock()
 	pl := p.pending
@@ -92,10 +108,9 @@ func (p *pusher) flush(ctx context.Context) error {
 		if attempt == pushRetries {
 			break
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if werr := p.wait(ctx, backoff(attempt)); werr != nil {
+			return werr
 		}
-		p.sleep(backoff(attempt))
 	}
 	return fmt.Errorf("push snapshot after %d attempts (kept buffered): %w", pushRetries+1, lastErr)
 }
@@ -135,15 +150,24 @@ func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, err 
 		return false, fmt.Errorf("push snapshot: %w", err)
 	}
 	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusAccepted, http.StatusOK: // 202 accepted, 200 duplicate
+	switch {
+	case resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusOK: // 202 accepted, 200 duplicate
+		// Drain (bounded) so the keep-alive connection can be reused.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return false, nil
-	case http.StatusUnauthorized:
+	case resp.StatusCode == http.StatusUnauthorized:
 		return true, fmt.Errorf("server rejected push (401): check --server-token")
-	case http.StatusUnprocessableEntity:
+	case resp.StatusCode == http.StatusUnprocessableEntity:
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return true, fmt.Errorf("server rejected snapshot (422): %s", strings.TrimSpace(string(msg)))
-	default:
+	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests:
+		// Retryable by definition despite being 4xx.
+		return false, fmt.Errorf("server returned %s", resp.Status)
+	case resp.StatusCode >= 400 && resp.StatusCode < 500:
+		// Any other 4xx: the request itself is wrong; identical retries cannot succeed.
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return true, fmt.Errorf("server rejected push (%s): %s", resp.Status, strings.TrimSpace(string(msg)))
+	default: // 5xx and anything unexpected: transient
 		return false, fmt.Errorf("server returned %s", resp.Status)
 	}
 }
