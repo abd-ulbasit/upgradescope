@@ -116,9 +116,14 @@ func (f *fakeStore) GetCluster(_ context.Context, id int64) (store.Cluster, erro
 	return c, nil
 }
 
-func (f *fakeStore) InsertEvaluation(_ context.Context, e store.Evaluation) (int64, error) {
+// InsertEvaluation honors ctx cancellation (like a real DB driver) so tests
+// can prove the evaluation fan-out runs detached from the request context.
+func (f *fakeStore) InsertEvaluation(ctx context.Context, e store.Evaluation) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if err := f.errs["InsertEvaluation"]; err != nil {
 		return 0, err
 	}
@@ -127,9 +132,12 @@ func (f *fakeStore) InsertEvaluation(_ context.Context, e store.Evaluation) (int
 	return e.ID, nil
 }
 
-func (f *fakeStore) LatestEvaluation(_ context.Context, clusterID int64, target string) (store.Evaluation, error) {
+func (f *fakeStore) LatestEvaluation(ctx context.Context, clusterID int64, target string) (store.Evaluation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return store.Evaluation{}, err
+	}
 	if err := f.errs["LatestEvaluation"]; err != nil {
 		return store.Evaluation{}, err
 	}
