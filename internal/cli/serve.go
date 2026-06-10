@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -16,7 +15,6 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
-	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 // shutdownTimeout bounds the graceful drain after SIGINT/SIGTERM.
@@ -25,6 +23,7 @@ const shutdownTimeout = 10 * time.Second
 type serveOptions struct {
 	listen       string
 	db           string
+	dbURL        string
 	ingestToken  string
 	readToken    string
 	slackWebhook string
@@ -36,18 +35,14 @@ type serveOptions struct {
 	parsedTargets []inventory.Version
 }
 
-// runServe is the real wiring: store.Open → kb.Load → notify.Multi →
-// server.New → Start (blocks until ctx is cancelled, then graceful stop).
+// runServe is the real wiring: openStore (SQLite --db or Postgres
+// --db-url) → kb.Load → notify.Multi → server.New → Start (blocks until
+// ctx is cancelled, then graceful stop).
 // A package var so command tests can stub it, same seam as runScan.
 var runServe = func(ctx context.Context, opts serveOptions) error {
-	if dir := filepath.Dir(opts.db); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create db directory: %w", err)
-		}
-	}
-	st, err := store.Open(opts.db)
+	st, err := dbFlags{db: opts.db, dbURL: opts.dbURL}.openStore()
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer st.Close()
 
@@ -130,7 +125,9 @@ func newServeCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.listen, "listen", ":8080", "address to listen on")
 	cmd.Flags().StringVar(&opts.db, "db", "upgradescope.db", "path to the SQLite database (parent directory is created)")
-	cmd.Flags().StringVar(&opts.ingestToken, "ingest-token", "", "bearer token agents must present to push snapshots (required)")
+	cmd.Flags().StringVar(&opts.dbURL, "db-url", "", "Postgres URL (postgres://user:pass@host:5432/db); mutually exclusive with --db")
+	cmd.MarkFlagsMutuallyExclusive("db", "db-url")
+	cmd.Flags().StringVar(&opts.ingestToken, "ingest-token", "", "shared bearer token agents present to push snapshots (required; per-cluster tokens via 'upgradescope tokens create' are also accepted on ingest)")
 	cmd.Flags().StringVar(&opts.readToken, "read-token", "", "bearer token for the read API (empty = OPEN read access)")
 	cmd.Flags().StringVar(&opts.slackWebhook, "slack-webhook", "", "Slack incoming-webhook URL for delta notifications")
 	cmd.Flags().StringVar(&opts.webhook, "webhook", "", "generic webhook URL (POSTed the raw event JSON)")
