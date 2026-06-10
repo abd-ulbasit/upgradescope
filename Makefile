@@ -11,3 +11,9 @@ lint:
 .PHONY: gen-kb
 gen-kb:
 	cd tools/gen-kb && go run . -out ../../internal/kb/data/apilifecycle.json
+
+.PHONY: demo-up demo-down
+demo-up:
+	./hack/demo/kind-setup.sh
+demo-down:
+	kind delete cluster --name upgradescope-demo
