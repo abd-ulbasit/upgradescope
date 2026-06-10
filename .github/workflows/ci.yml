@@ -34,3 +34,17 @@ jobs:
         with:
           go-version: '1.26.x'
       - run: make build
+
+  kb-freshness:
+    name: kb dataset is not stale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: |
+            go.sum
+            tools/gen-kb/go.sum
+      - run: make gen-kb
+      - run: git diff --exit-code internal/kb/data/apilifecycle.json
