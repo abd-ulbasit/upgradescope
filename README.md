@@ -4,6 +4,33 @@
 
 > Status: design approved, implementation starting. Read `docs/superpowers/specs/2026-06-10-upgradescope-design.md` (the spec), `docs/research.md` (why this should exist). `docs/design-brief.md` is the superseded pre-design seed. (Project was seeded as "upgradepilot"; renamed during design — chkk's flagship is branded "Upgrade Copilot", and this is a clean-room build.)
 
+## Install
+
+```sh
+go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@latest
+```
+
+## Quickstart
+
+```sh
+# Scan the current kubeconfig context for readiness against Kubernetes 1.36
+upgradescope scan --target 1.36
+
+# Machine-readable report
+upgradescope scan --target 1.36 --output json
+
+# CI annotation: SARIF output + gate (exit 2 if any blocker, exit 1 on error)
+upgradescope scan --target 1.36 --output sarif --fail-on blocker > scan.sarif
+
+# Offline / CI: scan rendered manifests instead of a live cluster
+upgradescope scan --target 1.36 --files ./rendered-manifests
+```
+
+Exit codes: `0` ready (or below `--fail-on` threshold), `1` scan error, `2` gate failed.
+
+> **Status — P1:** `scan` is a point-in-time scan. The continuous in-cluster
+> agent (`ClusterReadiness` CRD, history, server) lands in P2.
+
 ## The problem
 
 Upgrading a Kubernetes cluster safely requires answering, *continuously*, questions that today are answered by one-shot CLIs or expensive commercial tools:
