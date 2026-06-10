@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,7 +71,7 @@ func New(cfg Config) (*Server, error) {
 	s.routes()
 	s.httpSrv = &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           s.mux,
+		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s, nil
@@ -91,10 +92,30 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.handleFleetTeams))
 	s.mux.HandleFunc("POST /api/v1/gate", s.readAuth(s.handleGate))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/export", s.readAuth(s.handleExport))
+	s.mux.HandleFunc("GET /api/v1/registry", s.readAuth(s.handleRegistry))
 }
 
-// Handler exposes the full route table for httptest and embedding.
-func (s *Server) Handler() http.Handler { return s.mux }
+// handler is the served root: /healthz and /api/* go to the mux, everything
+// else is the embedded dashboard. Routing by prefix — not a "GET /"
+// catch-all route, and not mux.Handler() no-match detection — keeps the
+// mux's wrong-method semantics intact: a DELETE on a GET-only API path must
+// stay 405 + Allow, and both alternatives turn it into the SPA (mux.Handler
+// returns an empty pattern on method mismatch). Static assets are
+// unauthenticated — the SPA itself sends the read token with every API call.
+func (s *Server) handler() http.Handler {
+	spa := spaHandler(distFS())
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/api/") {
+			s.mux.ServeHTTP(w, r)
+			return
+		}
+		spa.ServeHTTP(w, r)
+	})
+}
+
+// Handler exposes the full route table (API + dashboard fallback) for
+// httptest and embedding.
+func (s *Server) Handler() http.Handler { return s.handler() }
 
 // Start binds Config.Listen and serves until Shutdown. It returns nil after
 // a clean Shutdown, otherwise the listen/serve error. Once Ready() is
