@@ -1,0 +1,69 @@
+{
+  "Version": "test-kb-1",
+  "MaxKnownK8s": {"Major": 1, "Minor": 36},
+  "Skew": {"KubeletMaxBehind": 3, "KubectlMaxSkew": 1, "APIServerHASpread": 1},
+  "APILifecycle": [
+    {
+      "group": "extensions", "version": "v1beta1", "kind": "Ingress",
+      "introduced": {"Major": 1, "Minor": 1},
+      "deprecated": {"Major": 1, "Minor": 14},
+      "removed": {"Major": 1, "Minor": 22},
+      "replacement": {"group": "networking.k8s.io", "version": "v1", "kind": "Ingress"}
+    },
+    {
+      "group": "networking.k8s.io", "version": "v1beta1", "kind": "Ingress",
+      "introduced": {"Major": 1, "Minor": 14},
+      "deprecated": {"Major": 1, "Minor": 19},
+      "removed": {"Major": 1, "Minor": 22},
+      "replacement": {"group": "networking.k8s.io", "version": "v1", "kind": "Ingress"}
+    },
+    {
+      "group": "batch", "version": "v1beta1", "kind": "CronJob",
+      "introduced": {"Major": 1, "Minor": 8},
+      "deprecated": {"Major": 1, "Minor": 21},
+      "removed": {"Major": 1, "Minor": 25},
+      "replacement": {"group": "batch", "version": "v1", "kind": "CronJob"}
+    },
+    {
+      "group": "", "version": "v1", "kind": "ComponentStatus",
+      "introduced": {"Major": 1, "Minor": 0},
+      "deprecated": {"Major": 1, "Minor": 19}
+    }
+  ],
+  "AddOns": [
+    {
+      "schema_version": 1,
+      "id": "ingress-nginx",
+      "display_name": "ingress-nginx",
+      "matchers": {
+        "images": ["registry.k8s.io/ingress-nginx/controller"],
+        "charts": ["ingress-nginx"]
+      },
+      "support": {
+        "status": "eol",
+        "eol_date": "2026-03-26",
+        "citations": ["https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/"]
+      },
+      "compat": [
+        {
+          "range": ">=4.0.0",
+          "k8s_min": "1.21",
+          "k8s_max": "1.33",
+          "citations": ["https://github.com/kubernetes/ingress-nginx#supported-versions-table"]
+        }
+      ],
+      "recommendation": "migrate to Gateway API (ingress2gateway) or another maintained ingress controller"
+    },
+    {
+      "schema_version": 1,
+      "id": "legacy-mesh",
+      "display_name": "Legacy Mesh",
+      "matchers": {"images": ["example.com/legacy-mesh"]},
+      "support": {
+        "status": "supported",
+        "eol_date": "2026-08-15",
+        "citations": ["https://endoflife.date/legacy-mesh"]
+      }
+    }
+  ]
+}
