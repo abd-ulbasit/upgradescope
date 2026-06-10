@@ -16,6 +16,12 @@ pg-test:
 gen-kb:
 	cd tools/gen-kb && go run . -out ../../internal/kb/data/apilifecycle.json
 
+.PHONY: eol-sync eol-check
+eol-sync:
+	cd tools/eol-sync && go run . -dir ../../registry/data
+eol-check:
+	cd tools/eol-sync && go run . -dir ../../registry/data -check
+
 IMAGE ?= ghcr.io/abd-ulbasit/upgradescope
 TAG ?= dev
 VERSION ?= dev
