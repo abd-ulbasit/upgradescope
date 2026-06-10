@@ -6,6 +6,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"k8s.io/client-go/discovery"
@@ -67,5 +68,12 @@ func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
 // before addons: the add-on matcher consumes inv.HelmReleases).
 // Tasks C2–C6 append one entry each as the sub-collectors land.
 func steps(c Clients, k kb.KB, opts Options) []step {
-	return []step{}
+	return []step{
+		{cap: inventory.CapVersions, run: func(ctx context.Context, inv *inventory.Inventory) error {
+			if c.Kube == nil || c.Discovery == nil {
+				return errors.New("kubernetes client not configured")
+			}
+			return collectVersions(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv)
+		}},
+	}
 }
