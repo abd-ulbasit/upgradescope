@@ -107,7 +107,10 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Ready is closed once the listener is bound.
+// Ready is closed once the listener is bound. It is NEVER closed when
+// Listen fails — Start just returns the error — so callers must not block
+// on Ready alone: run Start in a goroutine and select on Ready() AND the
+// goroutine's error channel, or a bad Listen address hangs the caller.
 func (s *Server) Ready() <-chan struct{} { return s.ready }
 
 // Addr returns the bound listen address ("" before Ready is closed).
