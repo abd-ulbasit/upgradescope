@@ -72,6 +72,22 @@ func TestValidate(t *testing.T) {
 			a.Compat[0].Citations = []string{"file:///etc/passwd"}
 		}, "http(s)"},
 		{"no compat rows is fine", func(a *AddOn) { a.Compat = nil }, ""},
+		{"compat k8s_min above k8s_max (transposed)", func(a *AddOn) {
+			a.Compat[0].K8sMin = "1.30"
+			a.Compat[0].K8sMax = "1.21"
+		}, `k8s_min "1.30" must not exceed k8s_max "1.21"`},
+		{"compat k8s_min equals k8s_max is fine", func(a *AddOn) {
+			a.Compat[0].K8sMin = "1.28"
+			a.Compat[0].K8sMax = "1.28"
+		}, ""},
+		{"compat minors compared numerically not lexicographically", func(a *AddOn) {
+			a.Compat[0].K8sMin = "1.9" // "1.9" > "1.21" as strings, but 9 < 21
+			a.Compat[0].K8sMax = "1.21"
+		}, ""},
+		{"compat major beats minor in comparison", func(a *AddOn) {
+			a.Compat[0].K8sMin = "2.0"
+			a.Compat[0].K8sMax = "1.34"
+		}, `k8s_min "2.0" must not exceed k8s_max "1.34"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
