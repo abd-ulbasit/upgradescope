@@ -88,6 +88,30 @@ func TestServeDefaults(t *testing.T) {
 	}
 }
 
+func TestServeDBURLPassedThrough(t *testing.T) {
+	var got serveOptions
+	err := execServe(t, []string{"--ingest-token", "t", "--db-url", "postgres://u:p@h:5432/db"},
+		func(_ context.Context, opts serveOptions) error {
+			got = opts
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.dbURL != "postgres://u:p@h:5432/db" {
+		t.Errorf("dbURL = %q, want the flag value", got.dbURL)
+	}
+}
+
+// --db and --db-url are mutually exclusive; --db's DEFAULT value plus
+// --db-url is fine (exclusivity is on explicitly set flags).
+func TestServeDBAndDBURLMutuallyExclusive(t *testing.T) {
+	err := execServe(t, []string{"--ingest-token", "t", "--db", "x.db", "--db-url", "postgres://h/db"}, serveOK())
+	if err == nil || !strings.Contains(err.Error(), "db-url") {
+		t.Fatalf("want mutual-exclusion error naming db-url, got %v", err)
+	}
+}
+
 func TestServeReceivesContext(t *testing.T) {
 	var got context.Context
 	err := execServe(t, []string{"--ingest-token", "t"},

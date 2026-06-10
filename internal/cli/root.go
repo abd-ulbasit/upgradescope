@@ -15,5 +15,6 @@ func Root() *cobra.Command {
 	root.AddCommand(newScanCmd())
 	root.AddCommand(newAgentCmd())
 	root.AddCommand(newServeCmd())
+	root.AddCommand(newTokensCmd())
 	return root
 }
