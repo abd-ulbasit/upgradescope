@@ -1,8 +1,11 @@
--- 0001_init.sql — clusters / snapshots / evaluations.
+-- 0001_init.sql (SQLite) — clusters / snapshots / evaluations.
 -- Times are TEXT: RFC 3339 UTC with fixed nine-digit fractional seconds,
 -- so lexicographic order == instant order. Booleans are INTEGER 0/1.
 -- AUTOINCREMENT guarantees ids are strictly monotonic (insertion order):
 -- "latest snapshot" relies on max(id).
+-- Deliberate divergence from pgmigrations/0001_init.sql (Postgres):
+-- AUTOINCREMENT↔BIGSERIAL, TEXT times↔TIMESTAMPTZ, BLOB↔BYTEA, INTEGER
+-- 0/1↔BOOLEAN. Same semantics, pinned by storetest.RunStoreConformance.
 
 CREATE TABLE clusters (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

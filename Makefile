@@ -8,6 +8,10 @@ it:
 lint:
 	command -v golangci-lint >/dev/null && golangci-lint run || echo "golangci-lint not installed, skipping"
 
+.PHONY: pg-test
+pg-test:
+	./hack/pg-test.sh
+
 .PHONY: gen-kb
 gen-kb:
 	cd tools/gen-kb && go run . -out ../../internal/kb/data/apilifecycle.json
