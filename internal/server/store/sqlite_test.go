@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -448,6 +450,112 @@ func TestTimesStoredUTCFixedWidth(t *testing.T) {
 	const want = "2026-06-10T12:00:00.123456789Z"
 	if raw != want {
 		t.Errorf("stored text = %q, want %q (UTC, RFC 3339, fixed 9-digit nanos)", raw, want)
+	}
+}
+
+type pushResult struct {
+	id  int64
+	dup bool
+	err error
+}
+
+// runConcurrentPushes fires writers goroutines, each calling InsertSnapshot
+// for the same cluster with hash(i), all released at once.
+func runConcurrentPushes(t *testing.T, s *SQLite, cid int64, writers int, hash func(i int) string) []pushResult {
+	t.Helper()
+	results := make([]pushResult, writers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			h := hash(i)
+			id, dup, err := s.InsertSnapshot(context.Background(), Snapshot{
+				ClusterID: cid, Hash: h, ReceivedAt: tBase, Inventory: []byte(`{"hash":"` + h + `"}`),
+			})
+			results[i] = pushResult{id, dup, err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	return results
+}
+
+func TestInsertSnapshotConcurrentIngest(t *testing.T) {
+	const writers = 16
+	s := newTestStore(t)
+	cid := mustCluster(t, s, "prod")
+
+	// Phase 1: all writers push the SAME hash. Exactly one insert must win;
+	// the rest must observe it as the latest and dedup. Without write
+	// transactions starting as BEGIN IMMEDIATE, the deferred read→write lock
+	// upgrade inside InsertSnapshot fails with SQLITE_BUSY under contention.
+	same := runConcurrentPushes(t, s, cid, writers, func(int) string { return "same" })
+	var winnerID int64
+	var nonDup int
+	for i, r := range same {
+		if r.err != nil {
+			t.Fatalf("phase 1 writer %d: %v", i, r.err)
+		}
+		if !r.dup {
+			nonDup++
+			winnerID = r.id
+		}
+	}
+	if nonDup != 1 {
+		t.Fatalf("phase 1: %d non-duplicate inserts, want exactly 1", nonDup)
+	}
+	for i, r := range same {
+		if r.dup && r.id != winnerID {
+			t.Errorf("phase 1 writer %d: duplicate id = %d, want winner %d", i, r.id, winnerID)
+		}
+	}
+
+	// Phase 2: all writers push DISTINCT hashes. Every insert is new.
+	distinct := runConcurrentPushes(t, s, cid, writers, func(i int) string { return fmt.Sprintf("h-%d", i) })
+	seen := make(map[int64]bool, writers)
+	for i, r := range distinct {
+		if r.err != nil {
+			t.Fatalf("phase 2 writer %d: %v", i, r.err)
+		}
+		if r.dup {
+			t.Errorf("phase 2 writer %d: duplicate = true for unique hash", i)
+		}
+		if seen[r.id] {
+			t.Errorf("phase 2 writer %d: id %d returned twice", i, r.id)
+		}
+		seen[r.id] = true
+	}
+
+	// Storage invariants: 1 (same) + 16 (distinct) rows, and dedup-vs-latest
+	// means no two consecutive rows for the cluster share a hash.
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM snapshots WHERE cluster_id = ?`, cid).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != writers+1 {
+		t.Errorf("snapshot rows = %d, want %d", n, writers+1)
+	}
+	rows, err := s.db.Query(`SELECT hash FROM snapshots WHERE cluster_id = ? ORDER BY id`, cid)
+	if err != nil {
+		t.Fatalf("select hashes: %v", err)
+	}
+	defer rows.Close()
+	prev := ""
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			t.Fatalf("scan hash: %v", err)
+		}
+		if h == prev {
+			t.Errorf("consecutive snapshots share hash %q — dedup raced", h)
+		}
+		prev = h
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
 	}
 }
 
