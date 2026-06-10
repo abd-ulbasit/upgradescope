@@ -1,0 +1,41 @@
+# GoReleaser config — binaries only, no publishing pipeline yet.
+# Local dry-run: goreleaser build --snapshot --clean
+version: 2
+
+project_name: upgradescope
+
+builds:
+  - main: ./cmd/upgradescope
+    binary: upgradescope
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/abd-ulbasit/upgradescope/internal/cli.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: git
+  filters:
+    exclude:
+      - '^docs'
+      - '^chore'
+      - '^test'
+
+release:
+  draft: true # never auto-publish; a human presses the button

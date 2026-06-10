@@ -1,0 +1,60 @@
+name: kb-refresh
+
+# Weekly knowledge-base refresh:
+#  1. bump tools/gen-kb to the latest tagged k8s.io/api and regenerate the
+#     API lifecycle dataset (the bump happens on the PR branch only),
+#  2. sync registry entries against the live endoflife.date API,
+# then open a PR if anything changed. CI on that PR re-validates everything
+# (kb-freshness, registry tests, eol-sync -check).
+
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: |
+            go.sum
+            tools/gen-kb/go.sum
+
+      - name: Bump gen-kb to latest k8s.io/api and regenerate dataset
+        run: |
+          cd tools/gen-kb
+          go get k8s.io/api@latest k8s.io/apimachinery@latest
+          go mod tidy
+          go run . -out ../../internal/kb/data/apilifecycle.json
+
+      - name: Sync registry with endoflife.date
+        run: make eol-sync
+
+      - name: Open PR if anything changed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: bot/kb-refresh
+          commit-message: |
+            chore(kb): weekly knowledge-base refresh
+
+            Automated: gen-kb against latest k8s.io/api + eol-sync against
+            the endoflife.date API.
+          title: 'chore(kb): weekly knowledge-base refresh'
+          body: |
+            Automated weekly refresh:
+            - `tools/gen-kb` bumped to the latest tagged `k8s.io/api`; `internal/kb/data/apilifecycle.json` regenerated
+            - `tools/eol-sync` run against the live endoflife.date API
+
+            Review checklist:
+            - [ ] CI green (kb-freshness, registry job)
+            - [ ] Any `status: eol` flips are real (check the cited endoflife.date page)
+          labels: kb-refresh
+          delete-branch: true

@@ -72,6 +72,12 @@ func TestValidate(t *testing.T) {
 			a.Compat[0].Citations = []string{"file:///etc/passwd"}
 		}, "http(s)"},
 		{"no compat rows is fine", func(a *AddOn) { a.Compat = nil }, ""},
+		{"no endoflife_product is fine", func(a *AddOn) { a.EndoflifeProduct = "" }, ""},
+		{"valid endoflife_product slug", func(a *AddOn) { a.EndoflifeProduct = "argo-cd" }, ""},
+		{"endoflife_product with uppercase", func(a *AddOn) { a.EndoflifeProduct = "Istio" }, "endoflife_product"},
+		{"endoflife_product with space", func(a *AddOn) { a.EndoflifeProduct = "argo cd" }, "endoflife_product"},
+		{"endoflife_product trailing dash", func(a *AddOn) { a.EndoflifeProduct = "istio-" }, "endoflife_product"},
+		{"endoflife_product with dot is fine", func(a *AddOn) { a.EndoflifeProduct = "graalvm-ce.17" }, ""},
 		{"compat k8s_min above k8s_max (transposed)", func(a *AddOn) {
 			a.Compat[0].K8sMin = "1.30"
 			a.Compat[0].K8sMax = "1.21"

@@ -10,6 +10,12 @@ type AddOn struct {
 	Support        Support  `json:"support" yaml:"support"`
 	Compat         []Compat `json:"compat,omitempty" yaml:"compat,omitempty"`
 	Recommendation string   `json:"recommendation,omitempty" yaml:"recommendation,omitempty"`
+
+	// EndoflifeProduct, when set, is the endoflife.date product slug for
+	// this add-on (https://endoflife.date/api/<slug>.json). Entries that
+	// carry it have support.status / support.eol_date kept in sync by
+	// tools/eol-sync; hand-curated entries leave it empty.
+	EndoflifeProduct string `json:"endoflife_product,omitempty" yaml:"endoflife_product,omitempty"`
 }
 
 type Matchers struct {

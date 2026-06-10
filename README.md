@@ -2,7 +2,7 @@
 
 **Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
 
-> Status: **P1–P3 shipped** — point-in-time scan, continuous agent + `ClusterReadiness` CRD + server (SQLite/Postgres), fleet rollups, per-team scores, CI gate endpoint + GitHub Action, auditor CSV/HTML export, per-cluster tokens. P4 (web dashboard + community registry pipeline) in development.
+> Status: **P1–P3 shipped** — point-in-time scan, continuous agent + `ClusterReadiness` CRD + server (SQLite/Postgres), fleet rollups, per-team scores, CI gate endpoint + GitHub Action, auditor CSV/HTML export, per-cluster tokens. **P4 in progress** — community registry pipeline + weekly KB auto-refresh shipped; web dashboard in development.
 
 ## Install
 
@@ -202,6 +202,63 @@ A self-hosted service + in-cluster agent that **continuously** watches what actu
 - a live findings feed (what breaks at 1.37? what's EOL today?),
 - compliance-friendly reports and a CI gate webhook ("block this PR — it adds a removed API").
 
+## Architecture
+
+One binary, three subcommands, one pure evaluation core embedded everywhere:
+
+```
+                    knowledge base (versioned with the code)
+                    ├── internal/kb/data/apilifecycle.json   ← gen-kb ← k8s.io/api source
+                    └── registry/data/*.yaml (cited)         ← eol-sync ← endoflife.date API
+                                      │
+                                      ▼
+   CLI / CI                engine.Evaluate(inventory, kb, target) → report
+   ───────────             (pure, deterministic, golden-file tested)
+   upgradescope scan ──────────┐      ▲      ┌────────────────────────────────┐
+   (kubeconfig or --files,     │      │      │ in-cluster (Helm chart)        │
+    table/json/sarif,          │      └──────│ upgradescope agent             │
+    exit codes for gating)     │             │  · read-only collectors       ─┼─► apiserver,
+                               │             │  · ClusterReadiness CRD status │   metrics, Helm
+                               ▼             └───────────────┬────────────────┘
+                        ┌─────────────────────────┐          │ push (bearer token,
+                        │ upgradescope serve      │◄─────────┘  per-cluster)
+                        │  SQLite / Postgres      │
+                        │  /api/v1: fleet matrix, │
+                        │  reports, history, gate,│
+                        │  CSV/HTML export        │
+                        └─────────────────────────┘
+```
+
+The agent degrades gracefully: each collector (objects, apiserver metrics,
+Helm, nodes) fails independently and the report says what it could not see.
+
+## Measured numbers
+
+Measured 2026-06-11 on an Apple-silicon MacBook (Docker via Colima), against
+the kind demo cluster (single node, Kubernetes v1.35, demo workloads + EOL
+ingress-nginx installed):
+
+| What                                                              | Measured                          |
+|-------------------------------------------------------------------|-----------------------------------|
+| `upgradescope scan --target 1.36` against the live demo cluster   | 0.22–0.30 s wall (3 runs)         |
+| Release binary, darwin/arm64 (`-ldflags "-s -w"`)                  | 52 MB (75 MB unstripped)          |
+| Docker image (multi-stage, distroless static, nonroot)             | 47 MB                             |
+| API lifecycle dataset                                              | 160 entries from k8s.io/api v0.36.1 |
+| Add-on registry                                                    | 18 add-ons, every claim cited     |
+
+## The knowledge base stays fresh by itself
+
+- `tools/gen-kb` regenerates the API lifecycle dataset from upstream
+  `k8s.io/api` source (the same generated lifecycle methods the apiserver
+  uses) — never hand-copied tables.
+- `tools/eol-sync` syncs registry entries that declare an
+  `endoflife_product` slug against the live endoflife.date API; CI fails on
+  drift (`make eol-check`).
+- A weekly GitHub Actions cron (`kb-refresh.yml`) bumps `k8s.io/api`, reruns
+  both tools, and opens a reviewable PR — no silent dataset changes.
+
+Want to add an add-on? See [`registry/CONTRIBUTING.md`](registry/CONTRIBUTING.md).
+
 ## How it compares
 
 | | pluto | kubent | upgradescope |
@@ -212,7 +269,8 @@ A self-hosted service + in-cluster agent that **continuously** watches what actu
 | Version-skew checks | — | — | ✅ |
 | Helm chart ↔ K8s compatibility | — | — | ✅ |
 | Readiness score + CI gate | — | — | ✅ (SARIF, exit codes) |
-| Continuous, in-cluster | — | — | P2 (in development) |
+| Continuous, in-cluster | — | — | ✅ (agent + CRD + server) |
+| Fleet rollups, team scores, auditor export | — | — | ✅ |
 
 Every EOL claim in the knowledge base carries an upstream citation URL — auditable, not a black box. The API lifecycle dataset is generated from upstream `k8s.io/api` source, not hand-copied.
 
