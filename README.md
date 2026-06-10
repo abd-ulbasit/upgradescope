@@ -2,7 +2,7 @@
 
 **Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
 
-> Status: design approved, implementation starting. Read `docs/research.md` — why this should exist, and the clean-room disclosure. (Project was seeded as "upgradepilot"; renamed during design — chkk brands its flagship "Upgrade Copilot".)
+> Status: **P1 shipped** — `upgradescope scan` works against live clusters and rendered manifests (see Quickstart). The continuous in-cluster agent, `ClusterReadiness` CRD, and fleet server are in development (P2–P4). Market evidence: `docs/research.md`.
 
 ## Install
 
@@ -28,6 +28,19 @@ upgradescope scan --target 1.36 --files ./rendered-manifests
 
 Exit codes: `0` ready (or below `--fail-on` threshold), `1` scan error, `2` gate failed.
 
+### The readiness score
+
+The score is deterministic and explainable — same inventory, same knowledge base, same number:
+
+```
+score = max(0, 100 − min(75, 25 × blockers) − min(20, 5 × warnings))
+ready = (blockers == 0)        # what --fail-on blocker gates on
+```
+
+Blockers are findings that break at the target version (a removed API in use, an EOL add-on);
+warnings break one version later or are approaching EOL; info findings are listed but never
+scored. Caps keep one noisy category from zeroing the score.
+
 > **Status — P1:** `scan` is a point-in-time scan. The continuous in-cluster
 > agent (`ClusterReadiness` CRD, history, server) lands in P2.
 > Integration tests are env-gated: `make demo-up && make it` (kind + Helm required).
@@ -42,23 +55,30 @@ Upgrading a Kubernetes cluster safely requires answering, *continuously*, questi
 - Are my Helm releases compatible with the target Kubernetes version?
 - Can I prove all of the above to a compliance auditor, per team, over time?
 
-Open-source answers (pluto, kubent) are **point-in-time CLI scans** that depend on where manifests live and require manual wiring into CI. The continuous, in-cluster, fleet-aware version of this is commercial-only (chkk.io and similar).
+Open-source answers (pluto, kubent) are **point-in-time CLI scans** that depend on where manifests live and require manual wiring into CI. The continuous, in-cluster, fleet-aware version of this is commercial-only.
 
-## What upgradepilot is
+## What upgradescope is
 
 A self-hosted service + in-cluster agent that **continuously** watches what actually runs in your clusters, evaluates it against a curated knowledge base (API deprecations/removals per Kubernetes version, add-on EOL data, chart compatibility), and produces:
 
 - a **readiness score per cluster per target version**, broken down by team/namespace,
-- a live findings feed (what breaks at 1.34? what's EOL today?),
+- a live findings feed (what breaks at 1.37? what's EOL today?),
 - compliance-friendly reports and a CI gate webhook ("block this PR — it adds a removed API").
 
-## Why this is a strong portfolio project
+## How it compares
 
-- Validated gap (see research doc): OSS = stale one-shot CLIs; continuous = commercial.
-- Timely hook: the Ingress NGINX retirement (March 2026) made "EOL software running in the data path" a compliance fire across the industry.
-- Builder's edge: the author interned at chkk.io — domain familiarity without copying anything proprietary.
-- Honest scope for a solo build: the curated knowledge base is the moat *and* the main ongoing cost — the design brief proposes starting with Kubernetes API lifecycle data (machine-derivable) plus a small hand-curated add-on EOL registry.
+| | pluto | kubent | upgradescope |
+|---|---|---|---|
+| Deprecated/removed API detection | manifests in repos | live cluster, one-shot | live cluster + manifests |
+| Detects *clients still calling* deprecated APIs | — | — | ✅ (apiserver metrics) |
+| Add-on EOL detection (e.g. ingress-nginx) | — | — | ✅ (curated, cited registry) |
+| Version-skew checks | — | — | ✅ |
+| Helm chart ↔ K8s compatibility | — | — | ✅ |
+| Readiness score + CI gate | — | — | ✅ (SARIF, exit codes) |
+| Continuous, in-cluster | — | — | P2 (in development) |
+
+Every EOL claim in the knowledge base carries an upstream citation URL — auditable, not a black box. The API lifecycle dataset is generated from upstream `k8s.io/api` source, not hand-copied.
 
 ## License
 
-Apache-2.0 (intended).
+Apache-2.0.
