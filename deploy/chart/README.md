@@ -52,6 +52,11 @@ With `server.enabled=true` and `server.readToken` unset, the read API is
 **unauthenticated** behind the ClusterIP Service. Set `server.readToken`
 before exposing it via Ingress/LoadBalancer.
 
+The server also serves the web dashboard at `/` (images built from the
+repo Dockerfile embed it). Static assets are unauthenticated; every API
+call the dashboard makes carries the read token you set in its header
+settings, so `server.readToken` still protects all data.
+
 ## Uninstall
 
     helm -n upgradescope uninstall upgradescope
