@@ -87,5 +87,11 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			}
 			return collectDeprecatedCalls(ctx, c.RESTClient, inv)
 		}},
+		{cap: inventory.CapAddOns, run: func(ctx context.Context, inv *inventory.Inventory) error { // after helm: consumes inv.HelmReleases
+			if c.Kube == nil {
+				return errors.New("kubernetes client not configured")
+			}
+			return collectAddOns(ctx, c.Kube, k.AddOns, inv)
+		}},
 	}
 }
