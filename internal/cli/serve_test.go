@@ -1,0 +1,135 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+)
+
+// execServe runs the serve command with args, swapping the wiring for stub
+// (same seam pattern as execScan).
+func execServe(t *testing.T, args []string, stub func(context.Context, serveOptions) error) error {
+	t.Helper()
+	orig := runServe
+	runServe = stub
+	t.Cleanup(func() { runServe = orig })
+
+	cmd := newServeCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+func serveOK() func(context.Context, serveOptions) error {
+	return func(context.Context, serveOptions) error { return nil }
+}
+
+func TestServeRequiresIngestToken(t *testing.T) {
+	err := execServe(t, []string{}, serveOK())
+	if err == nil || !strings.Contains(err.Error(), "ingest-token") {
+		t.Fatalf("want missing --ingest-token error, got %v", err)
+	}
+}
+
+func TestServeRejectsBadTargets(t *testing.T) {
+	err := execServe(t, []string{"--ingest-token", "t", "--targets", "1.37,banana"}, serveOK())
+	if err == nil || !strings.Contains(err.Error(), "--targets") {
+		t.Fatalf("want invalid --targets error, got %v", err)
+	}
+}
+
+// --targets is parsed exactly once, in validateServeOptions; runServe
+// receives []inventory.Version, never the raw CSV.
+func TestServePassesParsedTargets(t *testing.T) {
+	var got []inventory.Version
+	err := execServe(t, []string{"--ingest-token", "t", "--targets", "1.37, 1.38"},
+		func(_ context.Context, opts serveOptions) error {
+			got = opts.parsedTargets
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.Version{{Major: 1, Minor: 37}, {Major: 1, Minor: 38}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parsedTargets = %v, want %v", got, want)
+	}
+}
+
+func TestServeDefaults(t *testing.T) {
+	var got serveOptions
+	err := execServe(t, []string{"--ingest-token", "t"},
+		func(_ context.Context, opts serveOptions) error {
+			got = opts
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.listen != ":8080" {
+		t.Errorf("listen = %q, want :8080", got.listen)
+	}
+	if got.db != "upgradescope.db" {
+		t.Errorf("db = %q, want upgradescope.db", got.db)
+	}
+	if got.readToken != "" || got.slackWebhook != "" || got.webhook != "" {
+		t.Errorf("optional flags must default empty, got %+v", got)
+	}
+	if got.parsedTargets != nil {
+		t.Errorf("parsedTargets = %v, want nil when --targets omitted", got.parsedTargets)
+	}
+}
+
+func TestServeReceivesContext(t *testing.T) {
+	var got context.Context
+	err := execServe(t, []string{"--ingest-token", "t"},
+		func(ctx context.Context, _ serveOptions) error {
+			got = ctx
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("runServe must receive the signal-aware context, got nil")
+	}
+}
+
+// TestRunServeCreatesDBParentDir exercises the REAL runServe wiring
+// (store.Open → kb.Load → server.New → Start) with an already-cancelled
+// context: the server shuts down immediately (SERVER-API graceful-stop
+// contract) and the nested --db parent directory must have been created.
+func TestRunServeCreatesDBParentDir(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "nested", "dir", "db.sqlite")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := runServe(ctx, serveOptions{
+		listen:      "127.0.0.1:0",
+		db:          dbPath,
+		ingestToken: "t",
+	})
+	if err != nil {
+		t.Fatalf("runServe with cancelled ctx: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Dir(dbPath)); statErr != nil {
+		t.Fatalf("db parent dir not created: %v", statErr)
+	}
+}
+
+func TestRootRegistersServe(t *testing.T) {
+	for _, c := range Root().Commands() {
+		if c.Name() == "serve" {
+			return
+		}
+	}
+	t.Fatal("serve command not registered on root")
+}
