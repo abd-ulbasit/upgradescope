@@ -7,13 +7,16 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apiextensionsv1typed "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
@@ -26,10 +29,47 @@ import (
 //go:embed manifest.yaml
 var Manifest []byte
 
+// Establishment polling knobs (vars so tests can shrink the timeout).
+var (
+	establishPollInterval = 100 * time.Millisecond
+	establishTimeout      = 10 * time.Second
+)
+
+// isEstablished reports whether the apiserver serves the CRD's endpoints
+// (condition Established=True).
+func isEstablished(c *apiextensionsv1.CustomResourceDefinition) bool {
+	for _, cond := range c.Status.Conditions {
+		if cond.Type == apiextensionsv1.Established && cond.Status == apiextensionsv1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// waitEstablished polls until the named CRD reports Established=True. Without
+// this, a freshly created CRD's CR endpoint 404s the first tick and the next
+// attempt is a full interval away.
+func waitEstablished(ctx context.Context, crds apiextensionsv1typed.CustomResourceDefinitionInterface, name string) error {
+	err := wait.PollUntilContextTimeout(ctx, establishPollInterval, establishTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			got, gerr := crds.Get(ctx, name, metav1.GetOptions{})
+			if gerr != nil {
+				return false, nil // transient; keep polling until timeout
+			}
+			return isEstablished(got), nil
+		})
+	if err != nil {
+		return fmt.Errorf("ClusterReadiness CRD created but not Established within %s: %w", establishTimeout, err)
+	}
+	return nil
+}
+
 // EnsureCRD installs or updates the ClusterReadiness CRD from the embedded
 // manifest. Create-or-update semantics: existing CRDs are overwritten with
-// the manifest's spec (conflicts retried). Callers may treat failure as
-// non-fatal when the CRD is pre-installed out of band (e.g. Helm crds/).
+// the manifest's spec (conflicts retried). After a fresh create it waits for
+// the Established condition so the first tick can write status immediately.
+// Callers may treat failure as non-fatal when the CRD is pre-installed out
+// of band (e.g. Helm crds/).
 func EnsureCRD(ctx context.Context, apiext apiextensionsclient.Interface) error {
 	var want apiextensionsv1.CustomResourceDefinition
 	if err := yaml.UnmarshalStrict(Manifest, &want); err != nil {
@@ -38,7 +78,7 @@ func EnsureCRD(ctx context.Context, apiext apiextensionsclient.Interface) error 
 	crds := apiext.ApiextensionsV1().CustomResourceDefinitions()
 	_, err := crds.Create(ctx, &want, metav1.CreateOptions{})
 	if err == nil {
-		return nil
+		return waitEstablished(ctx, crds, want.Name)
 	}
 	if !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create ClusterReadiness CRD: %w", err)

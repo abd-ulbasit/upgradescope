@@ -2,15 +2,32 @@ package crd
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
 )
 
 const crdName = "clusterreadinesses.upgradescope.dev"
+
+// establishOnCreate makes the fake behave like a real apiserver: a created
+// CRD immediately reports Established=True (mutate-then-fall-through reactor).
+func establishOnCreate(fc *apiextfake.Clientset) {
+	fc.PrependReactor("create", "customresourcedefinitions",
+		func(action k8stesting.Action) (bool, k8sruntime.Object, error) {
+			obj := action.(k8stesting.CreateAction).GetObject().(*apiextensionsv1.CustomResourceDefinition)
+			obj.Status.Conditions = append(obj.Status.Conditions, apiextensionsv1.CustomResourceDefinitionCondition{
+				Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue,
+			})
+			return false, nil, nil // fall through to the default tracker reactor
+		})
+}
 
 func parseManifest(t *testing.T) apiextensionsv1.CustomResourceDefinition {
 	t.Helper()
@@ -65,6 +82,7 @@ func TestManifestShape(t *testing.T) {
 func TestEnsureCRDCreates(t *testing.T) {
 	ctx := context.Background()
 	fc := apiextfake.NewSimpleClientset()
+	establishOnCreate(fc)
 	if err := EnsureCRD(ctx, fc); err != nil {
 		t.Fatalf("EnsureCRD: %v", err)
 	}
@@ -80,6 +98,7 @@ func TestEnsureCRDCreates(t *testing.T) {
 func TestEnsureCRDUpdatesExisting(t *testing.T) {
 	ctx := context.Background()
 	fc := apiextfake.NewSimpleClientset()
+	establishOnCreate(fc)
 	if err := EnsureCRD(ctx, fc); err != nil {
 		t.Fatalf("first EnsureCRD: %v", err)
 	}
@@ -102,5 +121,40 @@ func TestEnsureCRDUpdatesExisting(t *testing.T) {
 	}
 	if len(got2.Spec.Versions[0].AdditionalPrinterColumns) == 0 {
 		t.Error("EnsureCRD did not restore printer columns on the update path")
+	}
+}
+
+func TestIsEstablished(t *testing.T) {
+	var c apiextensionsv1.CustomResourceDefinition
+	if isEstablished(&c) {
+		t.Error("no conditions: want not established")
+	}
+	c.Status.Conditions = []apiextensionsv1.CustomResourceDefinitionCondition{
+		{Type: apiextensionsv1.NamesAccepted, Status: apiextensionsv1.ConditionTrue},
+		{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionFalse},
+	}
+	if isEstablished(&c) {
+		t.Error("Established=False: want not established")
+	}
+	c.Status.Conditions[1].Status = apiextensionsv1.ConditionTrue
+	if !isEstablished(&c) {
+		t.Error("Established=True: want established")
+	}
+}
+
+func TestEnsureCRDCreateTimesOutWhenNeverEstablished(t *testing.T) {
+	oldTimeout, oldInterval := establishTimeout, establishPollInterval
+	establishTimeout, establishPollInterval = 150*time.Millisecond, 20*time.Millisecond
+	defer func() { establishTimeout, establishPollInterval = oldTimeout, oldInterval }()
+
+	fc := apiextfake.NewSimpleClientset() // fake never sets conditions
+	err := EnsureCRD(context.Background(), fc)
+	if err == nil || !strings.Contains(err.Error(), "Established") {
+		t.Fatalf("err = %v, want not-Established timeout error", err)
+	}
+	// The CRD itself was still created; only establishment timed out.
+	if _, gerr := fc.ApiextensionsV1().CustomResourceDefinitions().Get(
+		context.Background(), crdName, metav1.GetOptions{}); gerr != nil {
+		t.Errorf("CRD not created despite establishment timeout: %v", gerr)
 	}
 }
