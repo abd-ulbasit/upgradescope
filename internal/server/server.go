@@ -74,10 +74,16 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// routes registers all endpoints (Go 1.22 method+path patterns).
-// Read API handlers land in V4.
+// routes registers all endpoints (Go 1.22 method+path patterns — ServeMux
+// emits 405 + Allow for wrong methods on registered paths).
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
+	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.handleListClusters))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.handleGetCluster))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/report", s.readAuth(s.handleReport))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/findings", s.readAuth(s.handleFindings))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/history", s.readAuth(s.handleHistory))
 }
 
 // Handler exposes the full route table for httptest and embedding.
