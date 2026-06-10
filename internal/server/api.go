@@ -34,6 +34,14 @@ func errJSON(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// internalErr logs the real error server-side and returns a fixed 500 body:
+// store/internal error text (paths, DSNs, SQL) must never reach clients.
+// 4xx responses keep their detail — that's useful to agents and operators.
+func internalErr(w http.ResponseWriter, what string, err error) {
+	log.Printf("server: %s: %v", what, err)
+	errJSON(w, http.StatusInternalServerError, "internal error")
+}
+
 // bearerOK does a constant-time check of "Authorization: Bearer <token>".
 func bearerOK(r *http.Request, token string) bool {
 	const prefix = "Bearer "
@@ -120,7 +128,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	inv.CollectedAt = time.Time{}
 	canonical, err := json.Marshal(inv)
 	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "canonicalizing inventory: "+err.Error())
+		internalErr(w, "canonicalizing inventory", err)
 		return
 	}
 	hash := fmt.Sprintf("%x", sha256.Sum256(canonical))
@@ -133,7 +141,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		LastSeen:   now,
 	})
 	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "storing cluster: "+err.Error())
+		internalErr(w, "storing cluster", err)
 		return
 	}
 	snapID, duplicate, err := s.cfg.Store.InsertSnapshot(ctx, store.Snapshot{
@@ -145,7 +153,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		Inventory:    canonical,
 	})
 	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "storing snapshot: "+err.Error())
+		internalErr(w, "storing snapshot", err)
 		return
 	}
 	if duplicate {
@@ -153,7 +161,10 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cluster := store.Cluster{ID: clusterID, Name: req.ClusterName, ClusterUID: inv.ClusterID}
-	s.evaluateSnapshot(ctx, cluster, snapID, inv)
+	// Detach the fan-out from the request context: the snapshot is already
+	// durable here, so an agent that disconnects mid-evaluation must not
+	// cancel the evaluation writes and hole the score history.
+	s.evaluateSnapshot(context.WithoutCancel(ctx), cluster, snapID, inv)
 	writeJSON(w, http.StatusAccepted, map[string]any{"snapshotId": snapID})
 }
 
@@ -192,6 +203,11 @@ func (s *Server) evaluateSnapshot(ctx context.Context, cluster store.Cluster, sn
 				warnings++
 			}
 		}
+		// Note: this prev-fetch → InsertEvaluation pair is not linearized
+		// across concurrent pushes of the same cluster+target — two racing
+		// pushes could both read the same prev and emit overlapping deltas.
+		// Benign today: one agent per cluster pushes serially. Revisit if a
+		// multi-writer ingest path ever exists.
 		var prev *store.Evaluation
 		if p, err := s.cfg.Store.LatestEvaluation(ctx, cluster.ID, target.String()); err == nil {
 			prev = &p
@@ -294,7 +310,7 @@ func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.C
 		return store.Cluster{}, false
 	}
 	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "loading cluster: "+err.Error())
+		internalErr(w, "loading cluster", err)
 		return store.Cluster{}, false
 	}
 	return c, true
@@ -374,11 +390,17 @@ type clusterSummary struct {
 
 // handleListClusters: GET /api/v1/clusters — every cluster plus its latest
 // default-target score summary (omitted when no snapshot/evaluation exists).
+//
+// Known cost (P3/P4 optimization point, fine at current fleet sizes): this
+// is N+1 store round-trips — LatestSnapshot + LatestEvaluation per cluster —
+// and defaultTarget unmarshals each cluster's full inventory blob just to
+// read ServerVersion. A latest-evals join or a denormalized server-version
+// column would fix both; no behavior change now.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	clusters, err := s.cfg.Store.ListClusters(ctx)
 	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "listing clusters: "+err.Error())
+		internalErr(w, "listing clusters", err)
 		return
 	}
 	out := make([]clusterSummary, 0, len(clusters))
@@ -439,16 +461,24 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 
 // loadOrComputeReport returns the stored evaluation's report for (cluster,
 // target) when one exists, else computes a what-if from the latest snapshot.
+// Only a missing evaluation (store.ErrNotFound) falls through to the
+// what-if path — any other store failure is returned, never masked by a
+// recompute that would hide a broken store behind a 200.
 // A store.ErrNotFound result means the cluster has no snapshots at all.
 func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version) (engine.Report, error) {
-	if e, err := s.cfg.Store.LatestEvaluation(ctx, clusterID, target.String()); err == nil {
+	e, err := s.cfg.Store.LatestEvaluation(ctx, clusterID, target.String())
+	switch {
+	case err == nil:
 		var rep engine.Report
 		if err := json.Unmarshal(e.Report, &rep); err != nil {
 			return engine.Report{}, fmt.Errorf("stored report for evaluation %d is corrupt: %w", e.ID, err)
 		}
 		return rep, nil
+	case errors.Is(err, store.ErrNotFound):
+		return WhatIf(ctx, s.cfg.Store, s.cfg.KB, clusterID, target, s.now())
+	default:
+		return engine.Report{}, fmt.Errorf("loading latest evaluation: %w", err)
 	}
-	return WhatIf(ctx, s.cfg.Store, s.cfg.KB, clusterID, target, s.now())
 }
 
 // reportForRequest is the shared resolve-cluster → resolve-target → load/
@@ -468,7 +498,7 @@ func (s *Server) reportForRequest(w http.ResponseWriter, r *http.Request) (engin
 		return engine.Report{}, false
 	}
 	if err != nil {
-		errJSON(w, http.StatusInternalServerError, err.Error())
+		internalErr(w, "loading or computing report", err)
 		return engine.Report{}, false
 	}
 	return rep, true
@@ -531,7 +561,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	points, err := s.cfg.Store.ScoreHistory(r.Context(), c.ID, target.String(), limit)
 	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "loading history: "+err.Error())
+		internalErr(w, "loading history", err)
 		return
 	}
 	if points == nil {
