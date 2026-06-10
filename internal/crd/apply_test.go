@@ -52,6 +52,12 @@ func TestManifestShape(t *testing.T) {
 	if c.Spec.Names.Plural != "clusterreadinesses" || c.Spec.Names.Kind != "ClusterReadiness" {
 		t.Errorf("names = %+v, want plural clusterreadinesses kind ClusterReadiness", c.Spec.Names)
 	}
+	if len(c.Spec.Names.ShortNames) != 1 || c.Spec.Names.ShortNames[0] != "ucr" {
+		t.Errorf("shortNames = %v, want [ucr]", c.Spec.Names.ShortNames)
+	}
+	if len(c.Spec.Names.Categories) != 1 || c.Spec.Names.Categories[0] != "upgradescope" {
+		t.Errorf("categories = %v, want [upgradescope]", c.Spec.Names.Categories)
+	}
 	if len(c.Spec.Versions) != 1 || c.Spec.Versions[0].Name != "v1alpha1" {
 		t.Fatalf("versions = %+v, want exactly v1alpha1", c.Spec.Versions)
 	}
