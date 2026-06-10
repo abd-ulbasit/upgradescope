@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
+      - name: gofmt
+        run: gofmt -l cmd internal registry tools && test -z "$(gofmt -l cmd internal registry tools)"
       - run: go test ./...
 
   build:

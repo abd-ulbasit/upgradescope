@@ -62,7 +62,7 @@ func TestCollectAPIUsage(t *testing.T) {
 		{Group: "networking.k8s.io", Version: "v1beta1", Kind: "Ingress", Introduced: inventory.Version{Major: 1, Minor: 14}, Deprecated: ver(1, 19), Removed: ver(1, 22)},
 		{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Introduced: inventory.Version{Major: 1, Minor: 10}, Deprecated: ver(1, 21), Removed: ver(1, 25)},
 		{Group: "extensions", Version: "v1beta1", Kind: "Ingress", Introduced: inventory.Version{Major: 1, Minor: 1}, Deprecated: ver(1, 14), Removed: ver(1, 22)}, // not served: skipped
-		{Group: "apps", Version: "v1", Kind: "Deployment", Introduced: inventory.Version{Major: 1, Minor: 9}}, // served but not deprecated: skipped
+		{Group: "apps", Version: "v1", Kind: "Deployment", Introduced: inventory.Version{Major: 1, Minor: 9}},                                                      // served but not deprecated: skipped
 	}
 
 	var inv inventory.Inventory
