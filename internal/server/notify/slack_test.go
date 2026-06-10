@@ -50,6 +50,37 @@ func TestSlackPostsFormattedText(t *testing.T) {
 	}
 }
 
+// TestSlackEscapesControlCharacters: Slack treats &, < and > as control
+// characters in message text (https://docs.slack.dev/messaging/formatting-message-text),
+// so a title like "deployments <scale>" would render mangled (or be
+// interpreted as markup) unless escaped.
+func TestSlackEscapesControlCharacters(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ev := Event{
+		Cluster: "prod & staging",
+		Target:  "1.37",
+		Kind:    KindNewBlocker,
+		Title:   "clients still requesting apps/v1beta2 deployments <scale>",
+	}
+	if err := NewSlack(srv.URL).Notify(context.Background(), ev); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("payload not JSON: %v (%s)", err, gotBody)
+	}
+	want := "[upgradescope] prod &amp; staging → 1.37: new-blocker: clients still requesting apps/v1beta2 deployments &lt;scale&gt;"
+	if payload["text"] != want {
+		t.Errorf("text = %q\nwant   %q", payload["text"], want)
+	}
+}
+
 func TestSlackDefaultTimeoutIsTwoSeconds(t *testing.T) {
 	if got := NewSlack("http://example.invalid").Client.Timeout; got != 2*time.Second {
 		t.Fatalf("default timeout = %v, want 2s", got)
