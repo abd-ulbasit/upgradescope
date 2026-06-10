@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -139,6 +140,87 @@ func TestIngestAuth(t *testing.T) {
 				t.Fatalf("want JSON error body, got %v", out)
 			}
 		})
+	}
+}
+
+// TestIngestPerClusterTokens pins P3's token model: a per-cluster token
+// authenticates pushes for exactly its own cluster (403 on mismatch, not
+// 401 — the token is real, just not for that cluster), revoked tokens are
+// 401, and the shared --ingest-token keeps working for any cluster.
+func TestIngestPerClusterTokens(t *testing.T) {
+	newStoreWithTokens := func() *fakeStore {
+		st := newFakeStore()
+		st.tokens["prod-tok"] = &fakeToken{cluster: "prod-eu-1"}
+		st.tokens["other-tok"] = &fakeToken{cluster: "staging-us-1"}
+		st.tokens["dead-tok"] = &fakeToken{cluster: "prod-eu-1", revoked: true}
+		return st
+	}
+	body := pushReqBody(t, testInventory()) // clusterName: prod-eu-1
+
+	tests := []struct {
+		name       string
+		token      string
+		wantStatus int
+	}{
+		{"matching per-cluster token", "prod-tok", http.StatusAccepted},
+		{"shared token still valid", "ingest-tok", http.StatusAccepted},
+		{"cluster mismatch", "other-tok", http.StatusForbidden},
+		{"revoked token", "dead-tok", http.StatusUnauthorized},
+		{"unknown token", "bogus", http.StatusUnauthorized},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStoreWithTokens()
+			ts := httptest.NewServer(newTestServer(t, st).Handler())
+			defer ts.Close()
+			resp, out := postSnapshot(t, ts, tc.token, body, true)
+			if resp.StatusCode != tc.wantStatus {
+				t.Fatalf("status = %d (body %v), want %d", resp.StatusCode, out, tc.wantStatus)
+			}
+			if tc.wantStatus == http.StatusAccepted {
+				if len(st.snapshots) != 1 {
+					t.Fatalf("stored snapshots = %d, want 1", len(st.snapshots))
+				}
+				return
+			}
+			if len(st.snapshots) != 0 {
+				t.Fatalf("rejected push stored %d snapshots, want 0", len(st.snapshots))
+			}
+			if msg, _ := out["error"].(string); msg == "" {
+				t.Fatalf("want JSON error body, got %v", out)
+			}
+		})
+	}
+}
+
+// A mismatched per-cluster token must not even register the cluster: the
+// 403 fires before any store write.
+func TestIngestMismatchedTokenWritesNothing(t *testing.T) {
+	st := newFakeStore()
+	st.tokens["other-tok"] = &fakeToken{cluster: "staging-us-1"}
+	ts := httptest.NewServer(newTestServer(t, st).Handler())
+	defer ts.Close()
+	resp, _ := postSnapshot(t, ts, "other-tok", pushReqBody(t, testInventory()), true)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	if len(st.clusters) != 0 || len(st.snapshots) != 0 || len(st.evals) != 0 {
+		t.Fatalf("403 push left writes behind: clusters %d snapshots %d evals %d",
+			len(st.clusters), len(st.snapshots), len(st.evals))
+	}
+}
+
+func TestIngestTokenLookupStoreError(t *testing.T) {
+	st := newFakeStore()
+	st.errs["ValidToken"] = context.DeadlineExceeded
+	ts := httptest.NewServer(newTestServer(t, st).Handler())
+	defer ts.Close()
+	resp, out := postSnapshot(t, ts, "any-non-shared", pushReqBody(t, testInventory()), true)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	if msg, _ := out["error"].(string); msg != "internal error" {
+		t.Fatalf("500 body = %v, want fixed \"internal error\" (no store detail)", out)
 	}
 }
 

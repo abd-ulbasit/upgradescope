@@ -42,14 +42,53 @@ func internalErr(w http.ResponseWriter, what string, err error) {
 	errJSON(w, http.StatusInternalServerError, "internal error")
 }
 
-// bearerOK does a constant-time check of "Authorization: Bearer <token>".
-func bearerOK(r *http.Request, token string) bool {
+// bearerToken extracts the raw "Authorization: Bearer <token>" value, ""
+// when the header is absent or malformed.
+func bearerToken(r *http.Request) string {
 	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
 	if len(h) <= len(prefix) || !strings.HasPrefix(h, prefix) {
+		return ""
+	}
+	return h[len(prefix):]
+}
+
+// bearerOK does a constant-time check of "Authorization: Bearer <token>".
+func bearerOK(r *http.Request, token string) bool {
+	presented := bearerToken(r)
+	if presented == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(h[len(prefix):]), []byte(token)) == 1
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1
+}
+
+// authIngest authorizes a snapshot push. Two token kinds are accepted:
+// the shared Config.IngestToken (fleet-wide; single-cluster/dev setups)
+// and per-cluster tokens minted via `upgradescope tokens create` (P3,
+// spec §8) — those return the cluster name the token is bound to.
+// boundCluster == "" means the push may target any cluster. The HTTP error
+// (401 / 500) is written here; the cluster-match check happens in
+// handleIngest once the body names its cluster (403 there).
+func (s *Server) authIngest(w http.ResponseWriter, r *http.Request) (boundCluster string, ok bool) {
+	token := bearerToken(r)
+	if token != "" && s.cfg.IngestToken != "" &&
+		subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.IngestToken)) == 1 {
+		return "", true
+	}
+	if token == "" {
+		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
+		return "", false
+	}
+	name, valid, err := s.cfg.Store.ValidToken(r.Context(), token)
+	if err != nil {
+		internalErr(w, "validating ingest token", err)
+		return "", false
+	}
+	if !valid {
+		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
+		return "", false
+	}
+	return name, true
 }
 
 // pushRequest is the snapshot push protocol body (schemaVersion 1).
@@ -65,8 +104,8 @@ type pushRequest struct {
 // identity body, schema validation, canonical-JSON content-hash dedup,
 // upsert+insert, then synchronous evaluation fan-out for accepted snapshots.
 func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
-	if !bearerOK(r, s.cfg.IngestToken) {
-		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
+	boundCluster, ok := s.authIngest(w, r)
+	if !ok {
 		return
 	}
 	body := http.MaxBytesReader(w, r.Body, maxSnapshotBody)
@@ -113,6 +152,14 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ClusterName == "" {
 		errJSON(w, http.StatusUnprocessableEntity, "clusterName is required")
+		return
+	}
+	// Per-cluster tokens authenticate exactly one cluster. 403 (not 401):
+	// the token is genuine, the target cluster is what's wrong. Checked
+	// before any store write so a mismatched push registers nothing.
+	if boundCluster != "" && boundCluster != req.ClusterName {
+		errJSON(w, http.StatusForbidden,
+			fmt.Sprintf("token is not valid for cluster %q", req.ClusterName))
 		return
 	}
 	var inv inventory.Inventory
