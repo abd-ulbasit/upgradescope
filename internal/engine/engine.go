@@ -332,3 +332,70 @@ func compareSemver(a, b semver) int {
 	}
 	return 0
 }
+
+// evalSkew evaluates ONLY the kubelet rule in P1: kubelets more than
+// policy.KubeletMaxBehind minors behind the CURRENT control plane → warning
+// (skew is about today); kubelets that WOULD exceed the limit after the
+// control plane reaches target → blocker. KubectlMaxSkew and
+// APIServerHASpread are skipped in P1 — the scan collector gathers no kubectl
+// or per-apiserver version data (re-added in P2 agent mode).
+func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
+	server, err := inventory.ParseVersion(inv.ServerVersion)
+	if err != nil {
+		return nil // versions capability degraded; surfaced via NotAssessed
+	}
+	maxBehind := k.Skew.KubeletMaxBehind
+	var nowBad, postBad []string
+	for _, n := range inv.Nodes {
+		kv, err := inventory.ParseVersion(n.KubeletVersion)
+		if err != nil {
+			continue
+		}
+		entry := fmt.Sprintf("%s (%s)", n.Name, n.KubeletVersion)
+		if minorsBehind(server, kv) > maxBehind {
+			nowBad = append(nowBad, entry)
+		}
+		if minorsBehind(target, kv) > maxBehind {
+			postBad = append(postBad, entry)
+		}
+	}
+	sort.Strings(nowBad)
+	sort.Strings(postBad)
+	var out []Finding
+	if len(postBad) > 0 {
+		out = append(out, Finding{
+			Category: CatVersionSkew, Severity: SevBlocker,
+			Title:     fmt.Sprintf("%d node(s) would exceed kubelet version skew after upgrading to %s", len(postBad), target),
+			Detail:    fmt.Sprintf("After upgrading the control plane to %s these nodes would be more than %d minor versions behind: %s.", target, maxBehind, strings.Join(postBad, ", ")),
+			Citations: []string{skewPolicyURL},
+		})
+	}
+	if len(nowBad) > 0 {
+		out = append(out, Finding{
+			Category: CatVersionSkew, Severity: SevWarning,
+			Title:     fmt.Sprintf("%d node(s) exceed kubelet version skew vs control plane %s", len(nowBad), server),
+			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, strings.Join(nowBad, ", ")),
+			Citations: []string{skewPolicyURL},
+		})
+	}
+	return out
+}
+
+// minorsBehind flattens (major, minor) so cross-major comparisons stay sane.
+func minorsBehind(ctrl, kubelet inventory.Version) int {
+	return (ctrl.Major*1000 + ctrl.Minor) - (kubelet.Major*1000 + kubelet.Minor)
+}
+
+// evalKBStale: control plane newer than anything the embedded KB knows about
+// → the scan itself may be missing removals → warning.
+func evalKBStale(inv inventory.Inventory, k kb.KB) []Finding {
+	server, err := inventory.ParseVersion(inv.ServerVersion)
+	if err != nil || server.Compare(k.MaxKnownK8s) <= 0 {
+		return nil
+	}
+	return []Finding{{
+		Category: CatKBStale, Severity: SevWarning,
+		Title:  fmt.Sprintf("knowledge base does not cover Kubernetes %s (newest known: %s)", server, k.MaxKnownK8s),
+		Detail: fmt.Sprintf("Findings may be incomplete; regenerate the knowledge base (kb version %s).", k.Version),
+	}}
+}
