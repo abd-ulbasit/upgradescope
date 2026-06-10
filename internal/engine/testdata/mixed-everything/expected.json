@@ -104,7 +104,7 @@
       ],
       "detail": "1 object(s) still stored/served at this version: cluster-scoped (1).",
       "severity": "info",
-      "title": "v1 ComponentStatus deprecated since 1.19 (1 objects)"
+      "title": "v1 ComponentStatus deprecated since 1.19 (1 object)"
     }
   ],
   "kbVersion": "test-kb-1",

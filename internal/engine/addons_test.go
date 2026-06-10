@@ -116,6 +116,38 @@ func TestEvalAddOnsChartIncompatBlocker(t *testing.T) {
 	}
 }
 
+func TestEvalAddOnsEOLStatusWithFutureDateUsesFutureTense(t *testing.T) {
+	k := kb.KB{
+		Version: "test-kb-1",
+		AddOns: []registry.AddOn{{
+			SchemaVersion: 1,
+			ID:            "sunsetting",
+			DisplayName:   "Sunsetting",
+			Matchers:      registry.Matchers{Images: []string{"example.com/sunsetting"}},
+			Support: registry.Support{
+				Status:    "eol", // upstream already declared EOL, effective at a future date
+				EOLDate:   "2026-09-01",
+				Citations: []string{"https://example.com/sunsetting-eol"},
+			},
+		}},
+		Skew:        kb.DefaultSkewPolicy(),
+		MaxKnownK8s: inventory.Version{Major: 1, Minor: 36},
+	}
+	inv := inventory.Inventory{
+		AddOns: []inventory.AddOnInstance{{ID: "sunsetting", Version: "2.0.0", Namespaces: []string{"infra"}, Source: "image"}},
+	}
+	fs := evalAddOns(inv, k, inventory.Version{Major: 1, Minor: 34}, testNow)
+	if len(fs) != 1 || fs[0].Category != CatEOLAddon || fs[0].Severity != SevBlocker {
+		t.Fatalf("want one eol-addon blocker, got %+v", fs)
+	}
+	if fs[0].Title != "Sunsetting is end-of-life on 2026-09-01" {
+		t.Fatalf("future-dated EOL must use future tense; title = %q", fs[0].Title)
+	}
+	if fs[0].Detail != "Detected Sunsetting version 2.0.0 via image in namespace(s): infra. Upstream support ends on 2026-09-01." {
+		t.Fatalf("detail = %q", fs[0].Detail)
+	}
+}
+
 func TestEvalAddOnsNoVersionSkipsCompat(t *testing.T) {
 	inv := inventory.Inventory{
 		AddOns: []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "", Namespaces: []string{"ingress-nginx"}, Source: "image"}},
