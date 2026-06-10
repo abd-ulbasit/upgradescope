@@ -121,3 +121,38 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 	}
 	return out
 }
+
+// evalDeprecatedCalls turns apiserver_requested_deprecated_apis rows into
+// findings: removal ≤ target → blocker; removal == target+1 → warning;
+// otherwise (incl. missing/unparseable removedRelease) → info.
+func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Finding {
+	var out []Finding
+	for _, c := range inv.DeprecatedCalls {
+		res := c.Resource
+		if c.Subresource != "" {
+			res += "/" + c.Subresource
+		}
+		gv := gvString(c.Group, c.Version)
+		f := Finding{Category: CatDeprecatedAPIInUse, Citations: []string{deprecationGuideURL}}
+		removed, perr := inventory.ParseVersion(c.RemovedRelease)
+		if c.RemovedRelease == "" || perr != nil {
+			f.Severity = SevInfo
+			f.Title = fmt.Sprintf("clients still requesting %s %s (deprecated)", gv, res)
+			f.Detail = "apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; no removal release is recorded."
+			out = append(out, f)
+			continue
+		}
+		f.Title = fmt.Sprintf("clients still requesting %s %s (removed in %s)", gv, res, removed)
+		f.Detail = fmt.Sprintf("apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; it is removed in %s.", removed)
+		switch {
+		case removed.Compare(target) <= 0:
+			f.Severity = SevBlocker
+		case removed.Compare(target.Next()) == 0:
+			f.Severity = SevWarning
+		default:
+			f.Severity = SevInfo
+		}
+		out = append(out, f)
+	}
+	return out
+}
