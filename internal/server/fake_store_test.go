@@ -20,6 +20,7 @@ type fakeStore struct {
 	clusters  map[int64]store.Cluster
 	snapshots []store.Snapshot
 	evals     []store.Evaluation
+	tokens    map[string]*fakeToken // keyed by plaintext token
 
 	// errs injects failures by method name, e.g. errs["InsertSnapshot"].
 	errs map[string]error
@@ -27,8 +28,17 @@ type fakeStore struct {
 
 var _ store.Store = (*fakeStore)(nil)
 
+type fakeToken struct {
+	cluster string
+	revoked bool
+}
+
 func newFakeStore() *fakeStore {
-	return &fakeStore{clusters: map[int64]store.Cluster{}, errs: map[string]error{}}
+	return &fakeStore{
+		clusters: map[int64]store.Cluster{},
+		tokens:   map[string]*fakeToken{},
+		errs:     map[string]error{},
+	}
 }
 
 func (f *fakeStore) id() int64 { f.nextID++; return f.nextID }
@@ -165,6 +175,51 @@ func (f *fakeStore) ScoreHistory(_ context.Context, clusterID int64, target stri
 		all = all[len(all)-limit:] // most recent N, still oldest-first
 	}
 	return all, nil // oldest first — matches the store contract
+}
+
+func (f *fakeStore) CreateToken(_ context.Context, clusterName, token string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["CreateToken"]; err != nil {
+		return err
+	}
+	if _, exists := f.tokens[token]; exists {
+		return store.ErrNotFound // any error works; real stores fail on UNIQUE
+	}
+	f.tokens[token] = &fakeToken{cluster: clusterName}
+	return nil
+}
+
+func (f *fakeStore) ValidToken(_ context.Context, token string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["ValidToken"]; err != nil {
+		return "", false, err
+	}
+	tk, ok := f.tokens[token]
+	if !ok || tk.revoked {
+		return "", false, nil
+	}
+	return tk.cluster, true, nil
+}
+
+func (f *fakeStore) RevokeToken(_ context.Context, clusterName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["RevokeToken"]; err != nil {
+		return err
+	}
+	revoked := false
+	for _, tk := range f.tokens {
+		if tk.cluster == clusterName && !tk.revoked {
+			tk.revoked = true
+			revoked = true
+		}
+	}
+	if !revoked {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 func (f *fakeStore) Close() error { return nil }

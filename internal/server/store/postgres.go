@@ -244,6 +244,55 @@ func (p *Postgres) LatestEvaluation(ctx context.Context, clusterID int64, target
 	return e, nil
 }
 
+// CreateToken stores a new active ingest token for clusterName; only the
+// sha256 of token is persisted. Fails if the token is already issued.
+func (p *Postgres) CreateToken(ctx context.Context, clusterName, token string) error {
+	if clusterName == "" || token == "" {
+		return errors.New("create token: cluster name and token must be non-empty")
+	}
+	if _, err := p.db.ExecContext(ctx,
+		`INSERT INTO tokens (cluster_name, token_hash, created_at) VALUES ($1, $2, $3)`,
+		clusterName, HashToken(token), time.Now().UTC()); err != nil {
+		return fmt.Errorf("create token for %q: %w", clusterName, err)
+	}
+	return nil
+}
+
+// ValidToken resolves a presented plaintext token to its cluster name.
+// Unknown or revoked tokens are ("", false, nil) — not an error.
+func (p *Postgres) ValidToken(ctx context.Context, token string) (string, bool, error) {
+	var name string
+	err := p.db.QueryRowContext(ctx,
+		`SELECT cluster_name FROM tokens WHERE token_hash = $1 AND revoked_at IS NULL`,
+		HashToken(token)).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("validate token: %w", err)
+	}
+	return name, true, nil
+}
+
+// RevokeToken revokes every active token of clusterName, or ErrNotFound
+// when the cluster has none.
+func (p *Postgres) RevokeToken(ctx context.Context, clusterName string) error {
+	res, err := p.db.ExecContext(ctx,
+		`UPDATE tokens SET revoked_at = $1 WHERE cluster_name = $2 AND revoked_at IS NULL`,
+		time.Now().UTC(), clusterName)
+	if err != nil {
+		return fmt.Errorf("revoke tokens for %q: %w", clusterName, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("revoke tokens for %q: %w", clusterName, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("no active tokens for cluster %q: %w", clusterName, ErrNotFound)
+	}
+	return nil
+}
+
 // ScoreHistory returns score points for (cluster, target), oldest-first
 // ascending by created_at. limit > 0 selects the most recent N rows (still
 // returned oldest-first); limit <= 0 returns all. An unknown cluster or
