@@ -1,8 +1,13 @@
 package crd
 
 import (
+	"fmt"
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
 const (
@@ -51,4 +56,58 @@ type Status struct {
 	Targets               []TargetStatus `json:"targets,omitempty"`
 	NotAssessed           []string       `json:"notAssessed,omitempty"` // "helm: secrets list forbidden"
 	AgentVersion          string         `json:"agentVersion,omitempty"`
+}
+
+// maxTopFindings bounds CRD status size; the full list lives in server/CLI.
+const maxTopFindings = 20
+
+// TargetStatusFromReport summarizes one engine.Report for CRD status:
+// severity/category counts over all findings, plus the first maxTopFindings
+// findings (Report.Findings is already severity-sorted per engine contract).
+func TargetStatusFromReport(r engine.Report) TargetStatus {
+	ts := TargetStatus{Target: r.Target.String(), Score: r.Score, Ready: r.Ready}
+	for _, f := range r.Findings {
+		switch f.Severity {
+		case engine.SevBlocker:
+			ts.Blockers++
+		case engine.SevWarning:
+			ts.Warnings++
+		case engine.SevInfo:
+			ts.Infos++
+		}
+		if ts.ByCategory == nil {
+			ts.ByCategory = make(map[string]int)
+		}
+		ts.ByCategory[string(f.Category)]++
+		if len(ts.TopFindings) < maxTopFindings {
+			ts.TopFindings = append(ts.TopFindings, TopFinding{
+				Category:    string(f.Category),
+				Severity:    string(f.Severity),
+				Title:       f.Title,
+				Remediation: f.Remediation,
+			})
+		}
+	}
+	return ts
+}
+
+// StatusFromReports builds the full CRD status from per-target reports.
+// All reports come from the same inventory, so KBVersion and NotAssessed are
+// taken from the first report. NotAssessed gaps render as "capability: reason".
+func StatusFromReports(reports []engine.Report, observedServerVersion, agentVersion string, now time.Time) Status {
+	st := Status{
+		ObservedServerVersion: observedServerVersion,
+		LastEvaluated:         metav1.NewTime(now.UTC()),
+		AgentVersion:          agentVersion,
+	}
+	for _, r := range reports {
+		st.Targets = append(st.Targets, TargetStatusFromReport(r))
+	}
+	if len(reports) > 0 {
+		st.KBVersion = reports[0].KBVersion
+		for _, g := range reports[0].NotAssessed {
+			st.NotAssessed = append(st.NotAssessed, fmt.Sprintf("%s: %s", g.Capability, g.Reason))
+		}
+	}
+	return st
 }
