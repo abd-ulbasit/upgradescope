@@ -75,11 +75,9 @@ func New(cfg Config) (*Server, error) {
 }
 
 // routes registers all endpoints (Go 1.22 method+path patterns).
-// Handlers land with their tasks:
-//
-//	V2 — POST /api/v1/snapshots (ingest)
-//	V4 — GET /healthz + the read API
+// Read API handlers land in V4.
 func (s *Server) routes() {
+	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
 }
 
 // Handler exposes the full route table for httptest and embedding.
