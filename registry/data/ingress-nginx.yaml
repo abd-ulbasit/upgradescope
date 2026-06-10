@@ -1,0 +1,16 @@
+# registry/data/ingress-nginx.yaml
+schema_version: 1
+id: ingress-nginx
+display_name: Ingress NGINX Controller
+matchers:
+  images:
+    - registry.k8s.io/ingress-nginx/controller
+  charts:
+    - ingress-nginx
+support:
+  status: eol
+  eol_date: "2026-03-24"
+  citations:
+    - https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/
+    - https://kubernetes.io/blog/2026/01/29/ingress-nginx-statement/
+recommendation: Migrate to Gateway API (see ingress2gateway) or a maintained ingress controller.
