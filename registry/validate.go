@@ -2,9 +2,12 @@
 package registry
 
 import (
+	"cmp"
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -54,11 +57,19 @@ func Validate(a AddOn) []error {
 		if _, err := semver.NewConstraint(c.Range); err != nil {
 			errs = append(errs, fmt.Errorf("%s: compat[%d].range %q: invalid semver constraint: %w", a.ID, i, c.Range, err))
 		}
-		if !k8sVerPattern.MatchString(c.K8sMin) {
+		minOK := k8sVerPattern.MatchString(c.K8sMin)
+		maxOK := k8sVerPattern.MatchString(c.K8sMax)
+		if !minOK {
 			errs = append(errs, fmt.Errorf("%s: compat[%d].k8s_min %q must be MAJOR.MINOR (e.g. \"1.21\")", a.ID, i, c.K8sMin))
 		}
-		if !k8sVerPattern.MatchString(c.K8sMax) {
+		if !maxOK {
 			errs = append(errs, fmt.Errorf("%s: compat[%d].k8s_max %q must be MAJOR.MINOR (e.g. \"1.36\")", a.ID, i, c.K8sMax))
+		}
+		// Cross-check only when both parse — a transposed range like
+		// min "1.30" / max "1.21" would match no cluster at all and
+		// silently disable the compat row.
+		if minOK && maxOK && compareK8sVer(c.K8sMin, c.K8sMax) > 0 {
+			errs = append(errs, fmt.Errorf("%s: compat[%d]: k8s_min %q must not exceed k8s_max %q", a.ID, i, c.K8sMin, c.K8sMax))
 		}
 		if len(c.Citations) == 0 {
 			errs = append(errs, fmt.Errorf("%s: compat[%d]: at least one citation required", a.ID, i))
@@ -70,6 +81,25 @@ func Validate(a AddOn) []error {
 		}
 	}
 	return errs
+}
+
+// compareK8sVer numerically compares two MAJOR.MINOR strings that already
+// matched k8sVerPattern: -1 if a < b, 0 if equal, 1 if a > b.
+// Numeric, not lexicographic — "1.9" < "1.21".
+func compareK8sVer(a, b string) int {
+	amaj, amin := splitK8sVer(a)
+	bmaj, bmin := splitK8sVer(b)
+	if amaj != bmaj {
+		return cmp.Compare(amaj, bmaj)
+	}
+	return cmp.Compare(amin, bmin)
+}
+
+func splitK8sVer(s string) (major, minor int) {
+	maj, min, _ := strings.Cut(s, ".")
+	major, _ = strconv.Atoi(maj) // pattern-checked: cannot fail
+	minor, _ = strconv.Atoi(min)
+	return major, minor
 }
 
 func validateCitationURL(s string) error {
