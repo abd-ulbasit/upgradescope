@@ -47,6 +47,45 @@ helm template upgradescope "$CHART" --namespace upgradescope \
   --set 'agent.targets={1.37,1.38}' > "$TMP/targets.yaml"
 
 # --- AGENT ASSERTIONS (H3) ---
+echo "== agent assertions: default render"
+assert_line "$TMP/default.yaml" 'kind: ServiceAccount'     "ServiceAccount rendered"
+assert_line "$TMP/default.yaml" 'kind: ClusterRole'        "ClusterRole rendered"
+assert_line "$TMP/default.yaml" 'kind: ClusterRoleBinding' "ClusterRoleBinding rendered"
+assert_line "$TMP/default.yaml" 'kind: Deployment'         "agent Deployment rendered"
+assert_contains "$TMP/default.yaml" 'verbs: ["get", "list", "watch"]'        "broad rule is read-only"
+assert_contains "$TMP/default.yaml" 'nonResourceURLs: ["/metrics", "/version"]' "metrics+version nonResourceURLs"
+assert_contains "$TMP/default.yaml" 'clusterreadinesses/status'              "status subresource rule"
+assert_not_contains "$TMP/default.yaml" '"delete"'           "no delete verb anywhere"
+assert_not_contains "$TMP/default.yaml" '"deletecollection"' "no deletecollection verb"
+assert_not_contains "$TMP/default.yaml" '"escalate"'         "no escalate verb"
+assert_contains "$TMP/default.yaml" 'image: "ghcr.io/abd-ulbasit/upgradescope:dev"' "default image ref"
+assert_contains "$TMP/default.yaml" 'imagePullPolicy: IfNotPresent'   "pullPolicy IfNotPresent"
+assert_contains "$TMP/default.yaml" 'runAsNonRoot: true'              "runAsNonRoot"
+assert_contains "$TMP/default.yaml" 'readOnlyRootFilesystem: true'    "readOnlyRootFilesystem"
+assert_contains "$TMP/default.yaml" 'allowPrivilegeEscalation: false' "no privilege escalation"
+assert_contains "$TMP/default.yaml" 'drop: ["ALL"]'                   "all capabilities dropped"
+assert_contains "$TMP/default.yaml" '--interval=10m'   "default interval flag"
+assert_contains "$TMP/default.yaml" '--cr-name=cluster' "default cr-name flag"
+assert_contains "$TMP/default.yaml" '--team-label=team' "default team-label flag"
+assert_not_contains "$TMP/default.yaml" '--server-url' "CRD-only mode: no server-url flag"
+assert_no_line "$TMP/default.yaml" 'kind: Secret'           "no token Secret in CRD-only mode"
+assert_no_line "$TMP/default.yaml" 'kind: ClusterReadiness' "no CR without agent.targets"
+
+echo "== agent assertions: external-server render"
+assert_contains "$TMP/external.yaml" '--server-url=https://uscope.example.com' "explicit serverUrl wins"
+assert_contains "$TMP/external.yaml" 'name: my-secret' "existingSecret referenced"
+assert_no_line "$TMP/external.yaml" 'kind: Secret' "no generated Secret when existingSecret set"
+
+echo "== agent assertions: targets render"
+assert_line "$TMP/targets.yaml" 'kind: ClusterReadiness' "CR rendered when agent.targets set"
+assert_contains "$TMP/targets.yaml" '- "1.37"' "target 1.37 in CR spec"
+
+echo "== render must fail when pushing without any token"
+if helm template upgradescope "$CHART" --set agent.serverUrl=https://x.example >/dev/null 2>&1; then
+  fail "agent.serverUrl without a token should fail the required check"
+else
+  pass "push without token fails render"
+fi
 
 # --- SERVER ASSERTIONS (H4) ---
 

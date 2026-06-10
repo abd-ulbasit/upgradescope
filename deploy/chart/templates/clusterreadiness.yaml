@@ -1,0 +1,12 @@
+{{- if .Values.agent.targets }}
+apiVersion: upgradescope.dev/v1alpha1
+kind: ClusterReadiness
+metadata:
+  name: {{ .Values.agent.crName }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+spec:
+  targets:
+    {{- range .Values.agent.targets }}
+    - {{ . | quote }}
+    {{- end }}
+{{- end }}
