@@ -81,5 +81,11 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			}
 			return collectHelm(ctx, c.Kube, inv)
 		}},
+		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error {
+			if c.RESTClient == nil {
+				return errors.New("rest client not configured")
+			}
+			return collectDeprecatedCalls(ctx, c.RESTClient, inv)
+		}},
 	}
 }
