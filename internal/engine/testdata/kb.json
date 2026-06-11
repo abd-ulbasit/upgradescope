@@ -1,7 +1,7 @@
 {
   "Version": "test-kb-1",
   "MaxKnownK8s": "1.36",
-  "Skew": {"KubeletMaxBehind": 3, "KubectlMaxSkew": 1, "APIServerHASpread": 1},
+  "Skew": {"KubeletMaxBehind": 3, "KubectlMaxSkew": 1, "APIServerHASpread": 1, "KubeProxyMaxBehind": 3, "CtrlMgrMaxBehind": 1},
   "APILifecycle": [
     {
       "group": "extensions", "version": "v1beta1", "kind": "Ingress",

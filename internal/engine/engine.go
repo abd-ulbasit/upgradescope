@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -312,12 +313,14 @@ func matchesRange(version, constraint string) bool {
 	return c.Check(v)
 }
 
-// evalSkew evaluates ONLY the kubelet rule in P1: kubelets more than
+// evalSkew evaluates the kubelet rule: kubelets more than
 // policy.KubeletMaxBehind minors behind the CURRENT control plane → warning
 // (skew is about today); kubelets that WOULD exceed the limit after the
-// control plane reaches target → blocker. KubectlMaxSkew and
-// APIServerHASpread are skipped in P1 — the scan collector gathers no kubectl
-// or per-apiserver version data (re-added in P2 agent mode).
+// control plane reaches target → blocker. Control-plane component rules
+// (HA apiserver spread, controller-manager/scheduler, kube-proxy) live in
+// evalControlPlaneSkew. KubectlMaxSkew is NOT evaluated by design: client
+// kubectl versions are only visible in apiserver audit logs (User-Agent),
+// which no collector reads — there is no cluster-state signal for them.
 func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
 	server, err := inventory.ParseVersion(inv.ServerVersion)
 	if err != nil {
@@ -378,6 +381,108 @@ func minorsBehind(ctrl, kubelet inventory.Version) int {
 	return (ctrl.Major*1000 + ctrl.Minor) - (kubelet.Major*1000 + kubelet.Minor)
 }
 
+// evalControlPlaneSkew evaluates the control-plane rules of the upstream
+// version-skew policy against inv.ControlPlane (component versions observed
+// from kube-system pod image tags):
+//
+//   - HA apiserver spread: >1 distinct kube-apiserver minor with a spread
+//     beyond policy.APIServerHASpread → warning.
+//   - kube-controller-manager / kube-scheduler: newer than the OLDEST
+//     apiserver → blocker (must never be newer than an apiserver they talk
+//     to); more than policy.CtrlMgrMaxBehind behind the NEWEST → warning.
+//   - kube-proxy: newer than the oldest apiserver, or more than
+//     policy.KubeProxyMaxBehind behind the newest → warning.
+//
+// An empty ControlPlane (managed control planes — EKS/GKE/AKS run these
+// components outside the cluster) yields no findings. When apiserver pods
+// are not observed but other components are, inv.ServerVersion stands in
+// as the apiserver version.
+func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
+	if len(inv.ControlPlane) == 0 {
+		return nil
+	}
+	byComp := map[string][]inventory.Version{} // distinct minors per component, ascending
+	for _, cv := range inv.ControlPlane {
+		v, err := inventory.ParseVersion(cv.Version)
+		if err != nil {
+			continue // collector only emits parseable versions; defensive
+		}
+		if !slices.Contains(byComp[cv.Component], v) {
+			byComp[cv.Component] = append(byComp[cv.Component], v)
+		}
+	}
+	for _, vs := range byComp {
+		slices.SortFunc(vs, inventory.Version.Compare)
+	}
+
+	var out []Finding
+	api := byComp["kube-apiserver"]
+	if len(api) > 1 {
+		oldest, newest := api[0], api[len(api)-1]
+		if spread := minorsBehind(newest, oldest); spread > k.Skew.APIServerHASpread {
+			vers := make([]string, len(api))
+			for i, v := range api {
+				vers[i] = v.String()
+			}
+			out = append(out, Finding{
+				Category: CatVersionSkew, Severity: SevWarning,
+				Key:       string(CatVersionSkew) + "/apiserver-ha-spread",
+				Title:     fmt.Sprintf("HA kube-apiserver replicas span %d minor versions", spread),
+				Detail:    fmt.Sprintf("Observed kube-apiserver versions: %s. The version-skew policy requires HA kube-apiserver instances to be within %d minor version of each other.", strings.Join(vers, ", "), k.Skew.APIServerHASpread),
+				Citations: []string{skewPolicyURL},
+			})
+		}
+	}
+	if len(api) == 0 { // apiserver pods not observed: fall back to the reported server version
+		sv, err := inventory.ParseVersion(inv.ServerVersion)
+		if err != nil {
+			return out // nothing to compare components against
+		}
+		api = []inventory.Version{sv}
+	}
+	oldest, newest := api[0], api[len(api)-1]
+
+	for _, rule := range []struct {
+		component   string
+		maxBehind   int
+		newerSev    Severity
+		newerDetail string
+	}{
+		{"kube-controller-manager", k.Skew.CtrlMgrMaxBehind, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
+		{"kube-scheduler", k.Skew.CtrlMgrMaxBehind, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
+		{"kube-proxy", k.Skew.KubeProxyMaxBehind, SevWarning, "kube-proxy must not be newer than kube-apiserver"},
+	} {
+		var newer, behind []string
+		for _, v := range byComp[rule.component] {
+			switch {
+			case v.Compare(oldest) > 0:
+				newer = append(newer, v.String())
+			case minorsBehind(newest, v) > rule.maxBehind:
+				behind = append(behind, v.String())
+			}
+		}
+		if len(newer) > 0 {
+			out = append(out, Finding{
+				Category: CatVersionSkew, Severity: rule.newerSev,
+				Key:       string(CatVersionSkew) + "/" + rule.component,
+				Title:     fmt.Sprintf("%s is newer than kube-apiserver", rule.component),
+				Detail:    fmt.Sprintf("%s %s is newer than the oldest kube-apiserver (%s); %s.", rule.component, strings.Join(newer, ", "), oldest, rule.newerDetail),
+				Citations: []string{skewPolicyURL},
+			})
+		}
+		if len(behind) > 0 {
+			out = append(out, Finding{
+				Category: CatVersionSkew, Severity: SevWarning,
+				Key:       string(CatVersionSkew) + "/" + rule.component,
+				Title:     fmt.Sprintf("%s exceeds version skew vs kube-apiserver", rule.component),
+				Detail:    fmt.Sprintf("%s %s is more than %d minor version(s) behind the newest kube-apiserver (%s).", rule.component, strings.Join(behind, ", "), rule.maxBehind, newest),
+				Citations: []string{skewPolicyURL},
+			})
+		}
+	}
+	return out
+}
+
 // evalKBStale: the cluster (current control plane) or the upgrade target is
 // newer than anything the embedded KB knows about → the scan itself may be
 // missing removals → warning. Evaluated against max(serverVersion, target);
@@ -408,6 +513,7 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalDeprecatedCalls(inv, target)...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
 	findings = append(findings, evalSkew(inv, k, target)...)
+	findings = append(findings, evalControlPlaneSkew(inv, k)...)
 	findings = append(findings, evalKBStale(inv, k, target)...)
 	sortFindings(findings)
 	score, ready := Score(findings)

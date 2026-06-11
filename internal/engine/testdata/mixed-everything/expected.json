@@ -73,6 +73,16 @@
       "title": "1 node(s) would exceed kubelet version skew after upgrading to 1.38"
     },
     {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "kube-scheduler 1.37 is newer than the oldest kube-apiserver (1.35); control-plane components must not be newer than the apiservers they talk to.",
+      "key": "version-skew/kube-scheduler",
+      "severity": "blocker",
+      "title": "kube-scheduler is newer than kube-apiserver"
+    },
+    {
       "category": "eol-approaching",
       "citations": [
         "https://endoflife.date/legacy-mesh"
@@ -106,6 +116,36 @@
       "title": "1 node(s) exceed kubelet version skew vs control plane 1.37"
     },
     {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "Observed kube-apiserver versions: 1.35, 1.37. The version-skew policy requires HA kube-apiserver instances to be within 1 minor version of each other.",
+      "key": "version-skew/apiserver-ha-spread",
+      "severity": "warning",
+      "title": "HA kube-apiserver replicas span 2 minor versions"
+    },
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "kube-controller-manager 1.35 is more than 1 minor version(s) behind the newest kube-apiserver (1.37).",
+      "key": "version-skew/kube-controller-manager",
+      "severity": "warning",
+      "title": "kube-controller-manager exceeds version skew vs kube-apiserver"
+    },
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "kube-proxy 1.33 is more than 3 minor version(s) behind the newest kube-apiserver (1.37).",
+      "key": "version-skew/kube-proxy",
+      "severity": "warning",
+      "title": "kube-proxy exceeds version skew vs kube-apiserver"
+    },
+    {
       "category": "deprecated-api",
       "citations": [
         "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
@@ -118,6 +158,6 @@
   ],
   "kbVersion": "test-kb-1",
   "ready": false,
-  "score": 10,
+  "score": 5,
   "target": "1.38"
 }

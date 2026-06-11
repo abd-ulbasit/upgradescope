@@ -21,6 +21,13 @@
     {"id": "ingress-nginx", "version": "4.7.1", "namespaces": ["ingress-nginx"], "source": "chart"},
     {"id": "legacy-mesh", "version": "1.2.0", "namespaces": ["mesh"], "source": "image"}
   ],
+  "controlPlane": [
+    {"component": "kube-apiserver", "version": "v1.35.0"},
+    {"component": "kube-apiserver", "version": "v1.37.0"},
+    {"component": "kube-controller-manager", "version": "v1.35.0"},
+    {"component": "kube-proxy", "version": "v1.33.0"},
+    {"component": "kube-scheduler", "version": "v1.37.0"}
+  ],
   "nodes": [
     {"name": "node-a", "kubeletVersion": "v1.37.0"},
     {"name": "node-b", "kubeletVersion": "v1.33.0"}
