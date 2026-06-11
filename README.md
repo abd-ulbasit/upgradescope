@@ -2,6 +2,8 @@
 
 **Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
 
+[![CI](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml/badge.svg)](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/abd-ulbasit/upgradescope)](https://github.com/abd-ulbasit/upgradescope/releases) [![Go Report Card](https://goreportcard.com/badge/github.com/abd-ulbasit/upgradescope)](https://goreportcard.com/report/github.com/abd-ulbasit/upgradescope) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 > Status: **v0.1 — all four phases shipped.** Point-in-time scan, continuous agent + `ClusterReadiness` CRD, self-hosted server (SQLite/Postgres) with embedded web dashboard, fleet rollups, per-team scores, CI gate + GitHub Action, auditor exports, community registry pipeline.
 
 ![demo](docs/img/demo.gif)
