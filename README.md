@@ -4,6 +4,8 @@
 
 > Status: **v0.1 — all four phases shipped.** Point-in-time scan, continuous agent + `ClusterReadiness` CRD, self-hosted server (SQLite/Postgres) with embedded web dashboard, fleet rollups, per-team scores, CI gate + GitHub Action, auditor exports, community registry pipeline.
 
+![demo](docs/img/demo.gif)
+
 ## Install
 
 ```sh
