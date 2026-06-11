@@ -232,6 +232,27 @@ One binary, three subcommands, one pure evaluation core embedded everywhere:
 The agent degrades gracefully: each collector (objects, apiserver metrics,
 Helm, nodes) fails independently and the report says what it could not see.
 
+### Managed clusters (EKS/GKE/AKS)
+
+Zero config — point `scan` or the agent at a managed cluster and it works.
+What changes because the provider owns the control plane:
+
+- **Deprecated-calls metric degrades** — providers often block the
+  apiserver `/metrics` endpoint regardless of your RBAC. The capability is
+  then reported as unavailable with the reason
+  `apiserver /metrics forbidden (managed control planes often block this; …)`.
+  You lose the *active caller* signal (who is still hitting a deprecated
+  API); the static signal (which deprecated/removed objects exist) is
+  unaffected.
+- **Control-plane pods are absent** from `kube-system` on managed
+  offerings. This costs nothing: version skew is always computed from the
+  API server version and node kubelet versions, never from control-plane
+  pods.
+
+Everything else — object inventory, API lifecycle findings, add-on EOL,
+Helm chart compatibility, scoring, CRD status, server push — works
+identically on managed and self-managed clusters.
+
 ## Measured numbers
 
 Measured 2026-06-11 on an Apple-silicon MacBook (Docker via Colima), against
