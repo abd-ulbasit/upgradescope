@@ -28,6 +28,7 @@ type Inventory struct {
 	HelmReleases       []HelmRelease                   `json:"helmReleases,omitempty"`
 	AddOns             []AddOnInstance                 `json:"addOns,omitempty"`
 	Nodes              []NodeInfo                      `json:"nodes,omitempty"`
+	ControlPlane       []ComponentVersion              `json:"controlPlane,omitempty"`
 	Namespaces         []NamespaceInfo                 `json:"namespaces,omitempty"`
 	UnrecognizedImages []string                        `json:"unrecognizedImages,omitempty"` // deduped, sorted, cap 200
 }
@@ -62,6 +63,16 @@ type AddOnInstance struct {
 	Version    string   `json:"version"` // semver as detected, may be ""
 	Namespaces []string `json:"namespaces"`
 	Source     string   `json:"source"` // "image" | "chart"
+}
+
+// ComponentVersion is one observed control-plane component version,
+// detected from kube-system pod image tags (kube-apiserver,
+// kube-controller-manager, kube-scheduler, kube-proxy). The list is
+// (Component, Version)-deduped and sorted; managed control planes
+// (EKS/GKE) expose no such pods, so the slice is empty there.
+type ComponentVersion struct {
+	Component string `json:"component"` // e.g. "kube-apiserver"
+	Version   string `json:"version"`   // raw image tag, e.g. "v1.34.2"; always ParseVersion-able
 }
 
 type NodeInfo struct {

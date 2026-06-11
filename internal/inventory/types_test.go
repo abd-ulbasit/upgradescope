@@ -39,6 +39,7 @@ func TestInventoryJSONRoundTrip(t *testing.T) {
 			Namespaces: []string{"ingress-nginx"}, Source: "image",
 		}},
 		Nodes:              []NodeInfo{{Name: "node-1", KubeletVersion: "v1.33.1"}},
+		ControlPlane:       []ComponentVersion{{Component: "kube-apiserver", Version: "v1.34.2"}},
 		Namespaces:         []NamespaceInfo{{Name: "payments", Team: "payments-team"}},
 		UnrecognizedImages: []string{"registry.example.com/internal/app"},
 	}
@@ -72,7 +73,7 @@ func TestInventoryOmitEmpty(t *testing.T) {
 
 	absent := []string{
 		`"serverVersion"`, `"apiUsage"`, `"deprecatedCalls"`, `"helmReleases"`,
-		`"addOns"`, `"nodes"`, `"namespaces"`, `"unrecognizedImages"`,
+		`"addOns"`, `"nodes"`, `"controlPlane"`, `"namespaces"`, `"unrecognizedImages"`,
 	}
 	for _, key := range absent {
 		if bytes.Contains(data, []byte(key)) {
@@ -119,7 +120,11 @@ func TestInventoryWireFormat(t *testing.T) {
 			ID: "ingress-nginx", Version: "1.8.1",
 			Namespaces: []string{"ingress-nginx"}, Source: "image",
 		}},
-		Nodes:              []NodeInfo{{Name: "node-1", KubeletVersion: "v1.33.1"}},
+		Nodes: []NodeInfo{{Name: "node-1", KubeletVersion: "v1.33.1"}},
+		ControlPlane: []ComponentVersion{
+			{Component: "kube-apiserver", Version: "v1.34.2"},
+			{Component: "kube-proxy", Version: "v1.33.1"},
+		},
 		Namespaces:         []NamespaceInfo{{Name: "payments", Team: "payments-team"}},
 		UnrecognizedImages: []string{"registry.example.com/internal/app"},
 	}
@@ -183,6 +188,16 @@ func TestInventoryWireFormat(t *testing.T) {
     {
       "name": "node-1",
       "kubeletVersion": "v1.33.1"
+    }
+  ],
+  "controlPlane": [
+    {
+      "component": "kube-apiserver",
+      "version": "v1.34.2"
+    },
+    {
+      "component": "kube-proxy",
+      "version": "v1.33.1"
     }
   ],
   "namespaces": [
