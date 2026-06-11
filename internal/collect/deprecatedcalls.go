@@ -8,6 +8,7 @@ import (
 
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -23,6 +24,12 @@ const deprecatedAPIsMetric = "apiserver_requested_deprecated_apis"
 func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, inv *inventory.Inventory) error {
 	raw, err := rc.Get().AbsPath("/metrics").DoRaw(ctx)
 	if err != nil {
+		// 401/403 is the expected state on managed control planes
+		// (EKS/GKE/AKS often deny /metrics regardless of RBAC) — make
+		// the capability reason say so instead of a raw client error.
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			return fmt.Errorf("apiserver /metrics forbidden (managed control planes often block this; see README §Managed clusters): %w", err)
+		}
 		return fmt.Errorf("get /metrics: %w", err)
 	}
 	// prometheus/common >= v0.66 requires an explicit name-validation

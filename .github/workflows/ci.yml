@@ -64,6 +64,97 @@ jobs:
         if: steps.changed.outputs.registry == 'true'
         run: make eol-check
 
+  pg-conformance:
+    name: postgres store conformance (real postgres:17)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci-test
+          POSTGRES_DB: upgradescope
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d upgradescope"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: wait for postgres (entrypoint restarts once after initdb)
+        run: |
+          for _ in $(seq 1 60); do
+            if PGPASSWORD=ci-test psql -h 127.0.0.1 -p 5432 -U postgres -d upgradescope -c 'SELECT 1' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::postgres not ready after 60s"
+          exit 1
+      - run: go test ./internal/server/store/ -run TestPostgresConformance -v -race
+        env:
+          UPGRADESCOPE_PG_TEST_DSN: postgres://postgres:ci-test@127.0.0.1:5432/upgradescope?sslmode=disable
+
+  # kind-e2e is the only expensive job — let '[skip-e2e]' in the head
+  # commit message bypass it. For PRs the checked-out ref is a merge
+  # commit, so read the message from HEAD^2 (the PR head).
+  e2e-gate:
+    name: e2e gate ([skip-e2e]?)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # merge commit + both parents
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            MSG="$(git log -1 --format=%B HEAD^2 2>/dev/null || git log -1 --format=%B)"
+          else
+            MSG="$(git log -1 --format=%B)"
+          fi
+          if printf '%s' "$MSG" | grep -qF '[skip-e2e]'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "kind-e2e skipped by [skip-e2e] in commit message"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  kind-e2e:
+    name: kind e2e (scan IT + agent + chart)
+    needs: e2e-gate
+    if: needs.e2e-gate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: create kind cluster
+        uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: upgradescope-demo
+      # kind-setup.sh reuses an existing 'upgradescope-demo' cluster and
+      # only needs kind/helm/kubectl (all present on the runner); it
+      # installs the EOL ingress-nginx chart the tests assert on.
+      - name: install EOL ingress-nginx demo blocker
+        run: ./hack/demo/kind-setup.sh
+      - run: make build
+      - name: scan + agent integration tests against kind
+        run: go test ./internal/cli/ -run Integration -v
+        env:
+          UPGRADESCOPE_IT: '1'
+      - name: agent e2e (docker build, kind load, helm install, CRD + server asserts)
+        run: ./hack/demo/agent-e2e.sh
+
   kb-freshness:
     name: kb dataset is not stale
     runs-on: ubuntu-latest
