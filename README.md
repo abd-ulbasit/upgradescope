@@ -54,6 +54,7 @@ curl -s $SERVER/api/v1/clusters    # fleet API: clusters, findings, history, wha
 ```
 
 - Agent is **read-only** (plus status on its own CRD); works with no server at all.
+- Version-skew checks cover kubelet, HA apiserver spread, controller-manager/scheduler, and kube-proxy; kubectl skew is out of scope by design — client versions only appear in apiserver audit logs, which upgradescope never reads.
 - Server: single binary + SQLite (Postgres in P3), Slack/webhook alerts on *new* blockers only.
 - Auth: bearer tokens (`--ingest-token`, optional `--read-token`).
 
