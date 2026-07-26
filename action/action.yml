@@ -35,19 +35,25 @@ runs:
         set -euo pipefail
         os="$(uname -s | tr '[:upper:]' '[:lower:]')"
         arch="$(uname -m)"; case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+        # Asset name must match .goreleaser.yml archives.name_template, which
+        # deliberately omits the version so /releases/latest/download resolves.
+        asset="upgradescope_${os}_${arch}.tar.gz"
         if [ "${{ inputs.version }}" = "latest" ]; then
-          url="https://github.com/abd-ulbasit/upgradescope/releases/latest/download/upgradescope_${os}_${arch}"
+          url="https://github.com/abd-ulbasit/upgradescope/releases/latest/download/${asset}"
         else
-          url="https://github.com/abd-ulbasit/upgradescope/releases/download/${{ inputs.version }}/upgradescope_${os}_${arch}"
+          url="https://github.com/abd-ulbasit/upgradescope/releases/download/${{ inputs.version }}/${asset}"
         fi
         bin_dir="${RUNNER_TEMP}/upgradescope-bin"
         mkdir -p "$bin_dir"
-        if curl -fsSL --retry 3 -o "$bin_dir/upgradescope" "$url"; then
+        if curl -fsSL --retry 3 -o "$bin_dir/${asset}" "$url" \
+          && tar -xzf "$bin_dir/${asset}" -C "$bin_dir" upgradescope; then
           chmod +x "$bin_dir/upgradescope"
           echo "$bin_dir" >> "$GITHUB_PATH"
           echo "installed release binary from $url"
         else
-          echo "no release binary at $url — falling back to go install"
+          # No published release for this os/arch (or no release at all yet):
+          # build from source. Slower, but the gate still runs.
+          echo "no usable release archive at $url — falling back to go install"
           go install "github.com/abd-ulbasit/upgradescope/cmd/upgradescope@${{ inputs.version }}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
         fi

@@ -15,8 +15,12 @@ test:
 	go test ./...
 it:
 	UPGRADESCOPE_IT=1 go test ./... -run Integration -v
+# Same checks CI runs. golangci-lint-action lags Go releases (its binary must
+# be built with a Go >= our toolchain), so vet + staticcheck are the gate.
 lint:
-	command -v golangci-lint >/dev/null && golangci-lint run || echo "golangci-lint not installed, skipping"
+	go vet ./...
+	command -v staticcheck >/dev/null || go install honnef.co/go/tools/cmd/staticcheck@latest
+	staticcheck ./...
 
 .PHONY: pg-test
 pg-test:

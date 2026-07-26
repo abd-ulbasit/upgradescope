@@ -21,7 +21,12 @@ builds:
 
 archives:
   - formats: [tar.gz]
-    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    # No {{ .Version }} in the archive name, on purpose: the GitHub Action
+    # installs from https://github.com/.../releases/latest/download/<asset>,
+    # which only resolves when the asset filename is version-independent.
+    # The version still lives in the tag, the release title, and the binary's
+    # -X ...cli.version stamp.
+    name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
     files:
       - LICENSE
       - README.md
