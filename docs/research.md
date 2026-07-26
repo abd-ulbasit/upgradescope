@@ -1,6 +1,9 @@
-# Market research — Kubernetes upgrade readiness (June 2026)
+# Where the gap is — Kubernetes upgrade readiness (June 2026)
 
-Compiled 2026-06-10 from live web research during project selection. This is the evidence base for why upgradepilot should exist.
+Compiled 2026-06-10 from public sources. This is the evidence base for the
+problem upgradescope targets, and the record of which adjacent tools were
+checked first so as not to rebuild them. Every claim below is linked; nothing
+here is inferred from private or internal information.
 
 ## The gap in one paragraph
 
@@ -23,9 +26,10 @@ Open-source tooling for upgrade safety is **point-in-time and manifest-shaped**:
 - 2026 platform-engineering surveys: orgs run dozens of clusters with no complete inventory; "patching windows, certificate rotations, and incident response" dominate operational cost; >60% of Kubernetes incidents trace to misconfiguration. (platformengineering.org 2026 tooling report; Medium/F8010 "Don't waste 2026 on the wrong Kubernetes practices")
 - Multi-cluster config-drift tools (Argo/Flux/KubeFleet) reconcile *desired vs live* — none evaluate *live vs version-lifecycle knowledge*.
 
-### 4. The commercial benchmark (and what to learn from it)
-- chkk.io sells exactly this: Kubernetes "operational safety" — upgrade readiness, add-on EOL tracking ("Keep your Ingress NGINX safe" campaigns), curated risk signatures, preverified upgrade plans. The author interned there (domain familiarity; build clean-room, no proprietary reuse).
-- What makes it commercial-grade: the **curated knowledge base** (risk signatures per add-on version) and the **collectors** (safe, read-only, fleet-scale). The OSS opportunity is making the 80% case free: API lifecycle data is machine-derivable from upstream Kubernetes; add-on EOL data for the top ~30 add-ons is a maintainable hand-curated registry.
+### 4. The commercial benchmark, and the disclosure that goes with it
+- chkk.io sells exactly this: Kubernetes "operational safety" — upgrade readiness, add-on EOL tracking ("Keep your Ingress NGINX safe" campaigns), curated risk signatures, preverified upgrade plans.
+- **Disclosure:** I interned at chkk.io. upgradescope is clean-room — no proprietary code, data, schemas, or internal documents were used or consulted. Every entry in the knowledge base is derived from upstream `k8s.io/api` source or carries a public citation URL, and both are machine-checked in CI.
+- What makes the commercial product commercial-grade is the **curated knowledge base** (risk signatures per add-on version) and the **collectors** (safe, read-only, fleet-scale). The open-source opening is the 80% case: API lifecycle data is machine-derivable from upstream Kubernetes, and add-on EOL data for the top ~30 add-ons is a maintainable curated registry.
 
 ## Adjacent tools (do not rebuild these)
 - **ingress2gateway** — migration executor; we detect and recommend, optionally link to it.

@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml/badge.svg)](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/abd-ulbasit/upgradescope)](https://github.com/abd-ulbasit/upgradescope/releases) [![Go Report Card](https://goreportcard.com/badge/github.com/abd-ulbasit/upgradescope)](https://goreportcard.com/report/github.com/abd-ulbasit/upgradescope) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-> Status: **v0.1 — all four phases shipped.** Point-in-time scan, continuous agent + `ClusterReadiness` CRD, self-hosted server (SQLite/Postgres) with embedded web dashboard, fleet rollups, per-team scores, CI gate + GitHub Action, auditor exports, community registry pipeline.
+> Status: **v0.1.** Point-in-time scan, continuous in-cluster agent + `ClusterReadiness` CRD, self-hosted server (SQLite/Postgres) with an embedded web dashboard, fleet rollups, per-team scores, CI gate + GitHub Action, CSV/HTML auditor exports, and a cited add-on registry kept in sync with upstream EOL data. What it deliberately is *not* — an operator — is explained in [Design boundaries](#design-boundaries).
 
 ![demo](docs/img/demo.gif)
 
@@ -45,7 +45,7 @@ Blockers are findings that break at the target version (a removed API in use, an
 warnings break one version later or are approaching EOL; info findings are listed but never
 scored. Caps keep one noisy category from zeroing the score.
 
-## Continuous mode (P2)
+## Continuous mode
 
 Run the agent in-cluster via the Helm chart — it keeps a `ClusterReadiness` resource up to date and (optionally) pushes to a self-hosted server:
 
@@ -57,14 +57,24 @@ kubectl get ucr                    # ClusterReadiness: TARGET / SCORE / READY
 curl -s $SERVER/api/v1/clusters    # fleet API: clusters, findings, history, what-if (?target=1.38)
 ```
 
-- Agent is **read-only** (plus status on its own CRD); works with no server at all.
+- Agent RBAC is cluster-wide **`get`/`list`/`watch` only**. The only things it
+  ever writes are the `ClusterReadiness` CRD registration and its own
+  `ClusterReadiness` object plus that object's `status` subresource
+  (`deploy/chart/templates/rbac.yaml`). No webhooks, no finalizers, nothing in
+  your cluster changes because of a finding.
+- Works with no server at all — the CRD status is written every tick regardless
+  of whether the server is reachable.
 - Version-skew checks cover kubelet, HA apiserver spread, controller-manager/scheduler, and kube-proxy; kubectl skew is out of scope by design — client versions only appear in apiserver audit logs, which upgradescope never reads.
-- Server: single binary + SQLite (Postgres in P3), Slack/webhook alerts on *new* blockers only.
+- Server: single binary + SQLite or Postgres. Slack/webhook notifications fire
+  on *changes* only — a blocker that appeared since the previous evaluation, a
+  warning that newly entered its approaching-EOL window, or a cluster that went
+  from blocked to ready. Unchanged findings never re-alert (identity is a
+  count-free finding key, so "3 objects" → "2 objects" is not a new event).
 - Auth: bearer tokens (`--ingest-token`, optional `--read-token`).
 
-> Integration tests are env-gated: `make demo-up && make it`; full agent e2e: `make agent-e2e` (kind + Helm + Docker/Colima required).
+> Integration tests are env-gated: `make demo-up && make it`; full agent e2e: `make agent-e2e` (kind + Helm + Docker required).
 
-## Fleet mode (P3)
+## Fleet mode
 
 With several clusters pushing to one server, the read API rolls them up:
 
@@ -93,7 +103,7 @@ optionally overridden server-side with `serve --team-map teams.yaml`:
 The CLI table output grows a `TEAMS` section whenever at least one finding is
 attributed to a named team.
 
-## Dashboard (P4)
+## Dashboard
 
 `serve` embeds a web dashboard at `/`: the fleet score matrix, per-cluster
 drill-down (findings with category/team filters, score trend, team table),
@@ -237,6 +247,48 @@ One binary, three subcommands, one pure evaluation core embedded everywhere:
 The agent degrades gracefully: each collector (objects, apiserver metrics,
 Helm, nodes) fails independently and the report says what it could not see.
 
+## Design boundaries
+
+**This is not an operator, and that is deliberate.** There is no
+controller-runtime or kubebuilder dependency in `go.mod` — no manager, no
+informer cache, no workqueue, no reconciler, no leader election, no webhooks,
+no finalizers or owner references. The agent (`internal/agent/agent.go`) is a
+timer loop: one tick immediately at startup, then every `--interval` (default
+10m, minimum 1m) with ±10% jitter so a fleet installed in one `helm install`
+sweep does not thundering-herd the apiservers. A tick is
+collect → `engine.Evaluate` once per target → write `ClusterReadiness.status`
+→ push the inventory snapshot to the server only if its canonical hash changed
+since the last successful push (or `--force-sync-every`, default 1h, has
+elapsed). Ticks never fail the loop: sub-collector errors become
+`capabilities[x].available=false` with a reason, and a whole failed tick is
+logged with a consecutive-failure count and retried on the next interval. The
+single replica runs without leader election because the tick is idempotent and
+the status write goes through `RetryOnConflict` — a second agent would compute
+the same status from the same cluster, and any lost write is corrected one
+interval later.
+
+**Why a reconciler would be the wrong shape here.** A controller earns its
+machinery by *actuating*: it converges the world toward a spec, so it needs
+level-triggered watches, a rate-limited workqueue, and ownership semantics.
+upgradescope actuates nothing — a finding is a report, not a desired state, and
+`ClusterReadiness` is a status projection whose only user input is
+`spec.targets`. Worse, watches would be pointed at the wrong inputs: the verdict
+is a function of (cluster inventory, knowledge base, target version), and two of
+those three change with **no Kubernetes event at all** — the KB is compiled into
+the binary and moves when the binary is upgraded or the weekly registry refresh
+lands, and the target moves when a new minor ships upstream. A watch-driven
+reconciler would requeue on every unrelated pod churn and still not re-run on
+the day ingress-nginx's EOL date passes. The read cost points the same way: an
+informer cache over every API group holds memory proportional to the whole
+cluster, whereas each tick issues bounded, paged (`limit=500`),
+**metadata-only** lists restricted to the group/versions the KB flags as
+deprecated. For a question whose answer is measured in calendar weeks, ten
+minutes of staleness is free and a full-fidelity cache is not. Finally, the
+fleet answers — cross-cluster rollups, score history, auditor exports — cannot
+live in CRD status at all; they need a database, which is why the server owns
+them and the CRD is only the per-cluster projection for `kubectl get ucr` and
+for GitOps/policy tooling that should not have to reach the server.
+
 ### Managed clusters (EKS/GKE/AKS)
 
 Zero config — point `scan` or the agent at a managed cluster and it works.
@@ -274,14 +326,21 @@ ingress-nginx installed):
 
 ## The knowledge base stays fresh by itself
 
-- `tools/gen-kb` regenerates the API lifecycle dataset from upstream
-  `k8s.io/api` source (the same generated lifecycle methods the apiserver
-  uses) — never hand-copied tables.
-- `tools/eol-sync` syncs registry entries that declare an
-  `endoflife_product` slug against the live endoflife.date API; CI fails on
-  drift (`make eol-check`).
-- A weekly GitHub Actions cron (`kb-refresh.yml`) bumps `k8s.io/api`, reruns
-  both tools, and opens a reviewable PR — no silent dataset changes.
+- `tools/gen-kb` regenerates the API lifecycle dataset by type-asserting every
+  registered `k8s.io/api` type against the generated `APILifecycleIntroduced` /
+  `Deprecated` / `Removed` / `Replacement` methods — the same source of truth
+  the apiserver compiles in, never a hand-copied table. CI (`kb-freshness`)
+  reruns the generator on every push and fails if the committed dataset differs,
+  and separately diffs the generator's import list against `go list
+  k8s.io/api/...` so a new group/version cannot be silently missed.
+- `tools/eol-sync` reconciles the 10 of 18 registry entries that declare an
+  `endoflife_product` slug against the live endoflife.date API; `make eol-check`
+  fails a PR that touches `registry/` when the committed dates have drifted. The
+  remaining 8 entries have no endoflife.date product and are hand-curated
+  against the citations in the entry.
+- A weekly GitHub Actions cron (`kb-refresh.yml`, Mondays 06:17 UTC) bumps
+  `k8s.io/api`, reruns both tools, and opens a reviewable PR — no silent
+  dataset changes.
 
 Want to add an add-on? See [`registry/CONTRIBUTING.md`](registry/CONTRIBUTING.md).
 
@@ -290,15 +349,22 @@ Want to add an add-on? See [`registry/CONTRIBUTING.md`](registry/CONTRIBUTING.md
 | | pluto | kubent | upgradescope |
 |---|---|---|---|
 | Deprecated/removed API detection | manifests in repos | live cluster, one-shot | live cluster + manifests |
-| Detects *clients still calling* deprecated APIs | — | — | ✅ (apiserver metrics) |
+| Detects *clients still calling* deprecated APIs | — | — | ✅ (apiserver metrics, where exposed — see [Managed clusters](#managed-clusters-eksgkeaks)) |
 | Add-on EOL detection (e.g. ingress-nginx) | — | — | ✅ (curated, cited registry) |
 | Version-skew checks | — | — | ✅ |
 | Helm chart ↔ K8s compatibility | — | — | ✅ |
-| Readiness score + CI gate | — | — | ✅ (SARIF, exit codes) |
+| Readiness score (deterministic, per target) | — | — | ✅ |
+| SARIF output for code-scanning annotation | — | — | ✅ |
 | Continuous, in-cluster | — | — | ✅ (agent + CRD + server) |
 | Fleet rollups, team scores, auditor export | — | — | ✅ |
 
-Every EOL claim in the knowledge base carries an upstream citation URL — auditable, not a black box. The API lifecycle dataset is generated from upstream `k8s.io/api` source, not hand-copied.
+Two things the table deliberately does not claim: pluto and kubent both support
+CI exit codes, so "fails your pipeline" is not a differentiator — the score and
+the SARIF document are. And both remain the better fit when all you want is one
+`detect-files` run over a repo; upgradescope is heavier because it is aimed at
+the always-on, fleet-wide question.
+
+Every EOL claim in the knowledge base carries an upstream citation URL — auditable, not a black box. Citations are enforced by `registry.Validate`, not by review discipline: an entry whose `support.status` is anything but `unknown`, and every `compat` entry, fails validation with zero citations. The API lifecycle dataset is generated from upstream `k8s.io/api` source, not hand-copied.
 
 ## License
 
