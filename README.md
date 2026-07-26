@@ -1,12 +1,32 @@
 # upgradescope
 
-**Continuous Kubernetes upgrade-readiness for everyone — the standalone, Apache-2.0 alternative to commercial "operational safety" platforms.**
+Answers one question, continuously, for a live cluster or a directory of rendered manifests: **what breaks when this cluster moves to Kubernetes 1.38?** Removed APIs still in use, add-ons past end-of-life, version skew outside policy, Helm charts that do not support the target — as a deterministic score, a SARIF document for CI, and a `ClusterReadiness` object in the cluster.
 
 [![CI](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml/badge.svg)](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/abd-ulbasit/upgradescope)](https://github.com/abd-ulbasit/upgradescope/releases) [![Go Report Card](https://goreportcard.com/badge/github.com/abd-ulbasit/upgradescope)](https://goreportcard.com/report/github.com/abd-ulbasit/upgradescope) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-> Status: **v0.1.** Point-in-time scan, continuous in-cluster agent + `ClusterReadiness` CRD, self-hosted server (SQLite/Postgres) with an embedded web dashboard, fleet rollups, per-team scores, CI gate + GitHub Action, CSV/HTML auditor exports, and a cited add-on registry kept in sync with upstream EOL data. What it deliberately is *not* — an operator — is explained in [Design boundaries](#design-boundaries).
+```sh
+upgradescope scan --target 1.36   # 0.22–0.30 s wall against the kind demo cluster (3 runs, 2026-06-11)
+```
+
+**It is not an operator, and that is the load-bearing design decision.** The verdict is a
+function of (cluster inventory, knowledge base, target version) — and two of those three
+change with **no Kubernetes event at all**: the knowledge base moves when the binary is
+upgraded or the weekly registry refresh lands, the target moves when a new minor ships
+upstream. A watch-driven reconciler would requeue on unrelated pod churn and still not
+re-run on the day ingress-nginx's EOL date passes. So the agent is a jittered polling tick
+with an idempotent status write under `RetryOnConflict` — no controller-runtime, no informer
+cache over every API group, no leader election, no webhooks. The full argument, including the
+read-cost comparison against an informer cache, is in
+[Design boundaries](#design-boundaries).
+
+Every add-on EOL claim carries an upstream citation, enforced by `registry.Validate` rather
+than by review discipline; the API-lifecycle dataset is generated from `k8s.io/api` source
+and CI fails when the committed copy drifts. Every number in this README is dated and says
+how it was measured — see [Measured numbers](#measured-numbers).
 
 ![demo](docs/img/demo.gif)
+
+> v0.1: point-in-time scan, continuous in-cluster agent + `ClusterReadiness` CRD, self-hosted server (SQLite/Postgres) with an embedded web dashboard, fleet rollups, per-team scores, CI gate + GitHub Action, CSV/HTML auditor exports, and a cited add-on registry kept in sync with upstream EOL data.
 
 ## Install
 
@@ -209,6 +229,13 @@ Upgrading a Kubernetes cluster safely requires answering, *continuously*, questi
 
 Open-source answers (pluto, kubent) are **point-in-time CLI scans** that depend on where manifests live and require manual wiring into CI. The continuous, in-cluster, fleet-aware version of this is commercial-only.
 
+That last claim is not an assertion: the tool-by-tool evidence, with links, is in
+[`docs/research.md`](docs/research.md) — which also carries the disclosure that belongs next
+to it. **I interned at chkk.io, which sells in this category. upgradescope is clean-room: no
+proprietary code, data, schemas, or internal documents were used or consulted.** Every entry
+in the knowledge base is either generated from upstream `k8s.io/api` source or carries a
+public citation URL, and CI checks both — so the claim is auditable rather than a promise.
+
 ## What upgradescope is
 
 A self-hosted service + in-cluster agent that **continuously** watches what actually runs in your clusters, evaluates it against a curated knowledge base (API deprecations/removals per Kubernetes version, add-on EOL data, chart compatibility), and produces:
@@ -365,6 +392,9 @@ the SARIF document are. And both remain the better fit when all you want is one
 the always-on, fleet-wide question.
 
 Every EOL claim in the knowledge base carries an upstream citation URL — auditable, not a black box. Citations are enforced by `registry.Validate`, not by review discipline: an entry whose `support.status` is anything but `unknown`, and every `compat` entry, fails validation with zero citations. The API lifecycle dataset is generated from upstream `k8s.io/api` source, not hand-copied.
+
+Where the commercial comparison comes from, and the chkk.io disclosure that goes with it:
+[`docs/research.md`](docs/research.md).
 
 ## License
 
