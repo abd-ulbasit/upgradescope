@@ -1,5 +1,5 @@
 {
-  "generatedFrom": "k8s.io/api v0.36.1",
+  "generatedFrom": "k8s.io/api v0.36.3",
   "maxKnownK8s": "1.36",
   "entries": [
     {
