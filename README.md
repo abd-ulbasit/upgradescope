@@ -407,15 +407,12 @@ Where the commercial comparison comes from, and the chkk.io disclosure that goes
 
 ## How this was built
 
-Most of this was written by coding agents working from a spec and per-phase
-plans that I wrote and reviewed — those plans are committed, not tidied away:
-[`docs/superpowers/specs/`](docs/superpowers/specs) is the design and its
-decisions log, [`docs/superpowers/plans/`](docs/superpowers/plans) is the
-phase-by-phase implementation each agent ran against. Unlike my other repos, the
-commits here carry no `Co-authored-by: Claude` trailer — the trailer was simply
-not configured for this one, so `git log --grep='^Co-authored-by: Claude' -i`
-returns nothing and their absence proves nothing either way. Hence this
-paragraph.
+Most of this was written by coding agents, working from a spec and per-phase
+plans that I wrote and reviewed. Unlike my other repositories, almost none of
+the commits here carry a `Co-authored-by: Claude` trailer, because the trailer
+was never configured for this one. Their absence is a configuration artifact and
+proves nothing either way, which is why this paragraph exists rather than a
+commit-count you could check.
 
 What is mine is the part that decided the shape of the tool: the argument in
 [Design boundaries](#design-boundaries) for a polling agent instead of a
