@@ -17,10 +17,12 @@ it:
 	UPGRADESCOPE_IT=1 go test ./... -run Integration -v
 # Same checks CI runs. golangci-lint-action lags Go releases (its binary must
 # be built with a Go >= our toolchain), so vet + staticcheck are the gate.
+# STATICCHECK_VERSION is pinned and must match .github/workflows/ci.yml, so a
+# clean `make lint` means a clean CI lint on the same day and every day after.
+STATICCHECK_VERSION ?= v0.7.0
 lint:
 	go vet ./...
-	command -v staticcheck >/dev/null || go install honnef.co/go/tools/cmd/staticcheck@latest
-	staticcheck ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
 .PHONY: pg-test
 pg-test:

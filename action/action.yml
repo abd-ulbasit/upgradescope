@@ -10,7 +10,7 @@ inputs:
     description: Directory of rendered manifests to scan (e.g. the output of helm template / kustomize build).
     required: true
   target:
-    description: Target Kubernetes minor version, e.g. "1.38".
+    description: Target Kubernetes minor version, e.g. "1.36".
     required: true
   fail-on:
     description: "Fail the gate when findings at/above this severity exist: blocker | warning | never."

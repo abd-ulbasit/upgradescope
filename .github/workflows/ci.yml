@@ -16,7 +16,9 @@ jobs:
       # golangci-lint-action lags Go releases (its binary must be built with a
       # Go >= our toolchain); vet + staticcheck track the toolchain directly.
       - run: go vet ./...
-      - run: go install honnef.co/go/tools/cmd/staticcheck@latest && staticcheck ./...
+      # Pinned, not @latest: an unpinned linter turns an upstream release into
+      # a red build on an unrelated PR. Keep in sync with Makefile's lint target.
+      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 && staticcheck ./...
 
   test:
     runs-on: ubuntu-latest

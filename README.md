@@ -1,8 +1,8 @@
 # upgradescope
 
-Answers one question, continuously, for a live cluster or a directory of rendered manifests: **what breaks when this cluster moves to Kubernetes 1.38?** Removed APIs still in use, add-ons past end-of-life, version skew outside policy, Helm charts that do not support the target — as a deterministic score, a SARIF document for CI, and a `ClusterReadiness` object in the cluster.
+Answers one question, continuously, for a live cluster or a directory of rendered manifests: **what breaks when this cluster moves to Kubernetes 1.36?** Removed APIs still in use, add-ons past end-of-life, version skew outside policy, Helm charts that do not support the target — as a deterministic score, a SARIF document for CI, and a `ClusterReadiness` object in the cluster.
 
-[![CI](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml/badge.svg)](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/abd-ulbasit/upgradescope)](https://github.com/abd-ulbasit/upgradescope/releases) [![Go Report Card](https://goreportcard.com/badge/github.com/abd-ulbasit/upgradescope)](https://goreportcard.com/report/github.com/abd-ulbasit/upgradescope) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![CI](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml/badge.svg)](https://github.com/abd-ulbasit/upgradescope/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/abd-ulbasit/upgradescope)](https://github.com/abd-ulbasit/upgradescope/releases) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ```sh
 upgradescope scan --target 1.36   # 0.22–0.30 s wall against the kind demo cluster (3 runs, 2026-06-11)
@@ -74,7 +74,7 @@ helm install upgradescope ./deploy/chart -n upgradescope --create-namespace \
   --set server.enabled=true        # single-cluster all-in-one
 
 kubectl get ucr                    # ClusterReadiness: TARGET / SCORE / READY
-curl -s $SERVER/api/v1/clusters    # fleet API: clusters, findings, history, what-if (?target=1.38)
+curl -s $SERVER/api/v1/clusters    # fleet API: clusters, findings, history, what-if (?target=1.36)
 ```
 
 - Agent RBAC is cluster-wide **`get`/`list`/`watch` only**. The only things it
@@ -100,13 +100,13 @@ With several clusters pushing to one server, the read API rolls them up:
 
 ```sh
 # Cluster × target score matrix (latest stored evaluations; no recompute)
-curl -s "$SERVER/api/v1/fleet?targets=1.37,1.38"
+curl -s "$SERVER/api/v1/fleet?targets=1.35,1.36"
 
 # Per-team rollup across the fleet: worst score, total blockers, affected clusters
-curl -s "$SERVER/api/v1/fleet/teams?target=1.38"
+curl -s "$SERVER/api/v1/fleet/teams?target=1.36"
 
 # Per-team scores for one cluster (also embedded as `teams` in /report)
-curl -s "$SERVER/api/v1/clusters/1/teams?target=1.38"
+curl -s "$SERVER/api/v1/clusters/1/teams?target=1.36"
 ```
 
 Team attribution comes from namespace labels (`--team-label`, default `team`),
@@ -153,7 +153,7 @@ Two ways to block a PR that adds a removed API:
 
 ```sh
 helm template ./chart > rendered.yaml   # or kustomize build
-upgradescope scan --files . --target 1.38 --output sarif --fail-on blocker > results.sarif
+upgradescope scan --files . --target 1.36 --output sarif --fail-on blocker > results.sarif
 ```
 
 **2. Server gate endpoint** — evaluates manifests *inside a known cluster's
@@ -161,7 +161,7 @@ context* (its add-ons, version skew, and namespace→team labels are merged in;
 the manifests replace the cluster's API usage):
 
 ```sh
-curl -sf -X POST "$SERVER/api/v1/gate?target=1.38&cluster=prod-eu-1&format=sarif" \
+curl -sf -X POST "$SERVER/api/v1/gate?target=1.36&cluster=prod-eu-1&format=sarif" \
   -H "Authorization: Bearer $READ_TOKEN" \
   -H "Content-Type: application/x-yaml" \
   --data-binary @rendered.yaml > results.sarif
@@ -185,7 +185,7 @@ jobs:
         id: gate
         with:
           path: rendered
-          target: "1.38"
+          target: "1.36"
           fail-on: blocker
       - uses: github/codeql-action/upload-sarif@v3
         if: always()           # annotate the PR even when the gate fails
@@ -199,10 +199,10 @@ One self-contained artifact per cluster per target — no JS, no CDN, prints cle
 
 ```sh
 # findings as CSV (one row per finding, citations included)
-curl -s "$SERVER/api/v1/clusters/1/export?target=1.38&format=csv" -o report.csv
+curl -s "$SERVER/api/v1/clusters/1/export?target=1.36&format=csv" -o report.csv
 
 # single-file HTML report: score badge, findings by severity, score-history sparkline
-curl -s "$SERVER/api/v1/clusters/1/export?target=1.38&format=html" -o report.html
+curl -s "$SERVER/api/v1/clusters/1/export?target=1.36&format=html" -o report.html
 ```
 
 Exports always reflect the latest **stored** evaluation (what the system
@@ -241,7 +241,7 @@ public citation URL, and CI checks both — so the claim is auditable rather tha
 A self-hosted service + in-cluster agent that **continuously** watches what actually runs in your clusters, evaluates it against a curated knowledge base (API deprecations/removals per Kubernetes version, add-on EOL data, chart compatibility), and produces:
 
 - a **readiness score per cluster per target version**, broken down by team/namespace,
-- a live findings feed (what breaks at 1.37? what's EOL today?),
+- a live findings feed (what breaks at the next minor? what's EOL today?),
 - compliance-friendly reports and a CI gate webhook ("block this PR — it adds a removed API").
 
 ## Architecture
@@ -369,6 +369,15 @@ ingress-nginx installed):
   `k8s.io/api`, reruns both tools, and opens a reviewable PR — no silent
   dataset changes.
 
+The dataset therefore has a horizon: the newest minor it can describe is the
+newest minor upstream has actually released (`maxKnownK8s` in
+`internal/kb/data/apilifecycle.json` — currently **1.36**). Scanning against a
+target above that horizon is allowed and is what `--target` is for when you are
+planning ahead, but the report says so, with a `kb-stale` warning: the answer is
+computed from a knowledge base that cannot yet know what the target removes. The
+examples in this README target the horizon, so what they print is the tool's
+verdict on your cluster rather than a caveat about itself.
+
 Want to add an add-on? See [`registry/CONTRIBUTING.md`](registry/CONTRIBUTING.md).
 
 ## How it compares
@@ -395,6 +404,25 @@ Every EOL claim in the knowledge base carries an upstream citation URL — audit
 
 Where the commercial comparison comes from, and the chkk.io disclosure that goes with it:
 [`docs/research.md`](docs/research.md).
+
+## How this was built
+
+Most of this was written by coding agents working from a spec and per-phase
+plans that I wrote and reviewed — those plans are committed, not tidied away:
+[`docs/superpowers/specs/`](docs/superpowers/specs) is the design and its
+decisions log, [`docs/superpowers/plans/`](docs/superpowers/plans) is the
+phase-by-phase implementation each agent ran against. Unlike my other repos, the
+commits here carry no `Co-authored-by: Claude` trailer — the trailer was simply
+not configured for this one, so `git log --grep='^Co-authored-by: Claude' -i`
+returns nothing and their absence proves nothing either way. Hence this
+paragraph.
+
+What is mine is the part that decided the shape of the tool: the argument in
+[Design boundaries](#design-boundaries) for a polling agent instead of a
+controller-runtime reconciler, the choice to generate the API-lifecycle dataset
+from `k8s.io/api` source rather than hand-copy a table, and the rule that every
+EOL claim fails validation without an upstream citation. To judge the
+engineering rather than the tooling, read those three.
 
 ## License
 
