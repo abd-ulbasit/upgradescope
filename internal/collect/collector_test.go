@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"k8s.io/client-go/rest"
@@ -72,6 +73,21 @@ func TestCollectDefaults(t *testing.T) {
 	}
 	if inv.CollectedAt.IsZero() {
 		t.Error("CollectedAt must be set")
+	}
+	if inv.Source != inventory.SourceCluster {
+		t.Errorf("Source = %q, want %q", inv.Source, inventory.SourceCluster)
+	}
+}
+
+// Offline inventories must say so: the engine does not require the versions
+// capability for them.
+func TestManifestInventoriesAreFilesSource(t *testing.T) {
+	inv, err := CollectManifests(strings.NewReader("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.Source != inventory.SourceFiles {
+		t.Errorf("Source = %q, want %q", inv.Source, inventory.SourceFiles)
 	}
 }
 

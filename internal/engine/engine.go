@@ -323,7 +323,7 @@ func matchesRange(version, constraint string) bool {
 func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
 	server, err := inventory.ParseVersion(inv.ServerVersion)
 	if err != nil {
-		return nil // versions capability degraded; surfaced via NotAssessed
+		return nil // a required versions gap; recorded by assessmentGaps
 	}
 	maxBehind := k.Skew.KubeletMaxBehind
 	var nowBad, postBad, unparseable []string
@@ -503,6 +503,60 @@ func evalKBStale(inv inventory.Inventory, k kb.KB, target inventory.Version) []F
 	}}
 }
 
+// assessmentGaps lists what the evaluation could not assess, sorted by
+// capability: every unavailable inventory capability, a versions gap when
+// the server version is missing or unparseable (unless versions is already
+// unavailable), and a kb-coverage gap when the target is beyond the KB
+// horizon. Required is set per the verdict rules on CapabilityGap. A
+// capability absent from inv.Capabilities is not a gap: collectors always
+// report all of theirs, so absence only occurs in hand-built inventories.
+func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
+	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
+	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
+		required[inventory.CapVersions] = true
+	}
+	var gaps []CapabilityGap
+	for c, st := range inv.Capabilities {
+		if !st.Available {
+			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason})
+		}
+	}
+	if st, ok := inv.Capabilities[inventory.CapVersions]; !ok || st.Available {
+		const notEvaluated = "kubelet and control-plane skew were not evaluated"
+		if inv.ServerVersion == "" {
+			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Reason: "server version not reported; " + notEvaluated})
+		} else if _, err := inventory.ParseVersion(inv.ServerVersion); err != nil {
+			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions,
+				Reason: fmt.Sprintf("server version %q could not be parsed; %s", inv.ServerVersion, notEvaluated)})
+		}
+	}
+	if target.Compare(k.MaxKnownK8s) > 0 {
+		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage,
+			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed", k.MaxKnownK8s, target)})
+	}
+	for i := range gaps {
+		gaps[i].Required = required[gaps[i].Capability]
+	}
+	sort.Slice(gaps, func(i, j int) bool { return gaps[i].Capability < gaps[j].Capability })
+	return gaps
+}
+
+// verdictFor: blocked on any blocker; otherwise unknown on any required gap
+// (a blocker may have gone unseen); otherwise ready.
+func verdictFor(findings []Finding, gaps []CapabilityGap) Verdict {
+	for _, f := range findings {
+		if f.Severity == SevBlocker {
+			return VerdictBlocked
+		}
+	}
+	for _, g := range gaps {
+		if g.Required {
+			return VerdictUnknown
+		}
+	}
+	return VerdictReady
+}
+
 // Evaluate is the pure evaluation entrypoint: no I/O, no clock reads — now is
 // injected for EOL-window math. Output is fully deterministic for a given
 // (inventory, kb, target, now).
@@ -515,26 +569,17 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalControlPlaneSkew(inv, k)...)
 	findings = append(findings, evalKBStale(inv, k, target)...)
 	sortFindings(findings)
-	score, ready := Score(findings)
-
-	caps := make([]inventory.Capability, 0, len(inv.Capabilities))
-	for c := range inv.Capabilities {
-		caps = append(caps, c)
-	}
-	sort.Slice(caps, func(i, j int) bool { return caps[i] < caps[j] })
-	var gaps []CapabilityGap
-	for _, c := range caps {
-		if st := inv.Capabilities[c]; !st.Available {
-			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason})
-		}
-	}
+	score, _ := Score(findings)
+	gaps := assessmentGaps(inv, k, target)
+	verdict := verdictFor(findings, gaps)
 
 	return Report{
 		ClusterID:   inv.ClusterID,
 		Target:      target,
 		KBVersion:   k.Version,
 		Score:       score,
-		Ready:       ready,
+		Ready:       verdict == VerdictReady,
+		Verdict:     verdict,
 		Findings:    findings,
 		NotAssessed: gaps,
 	}

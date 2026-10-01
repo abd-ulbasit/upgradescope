@@ -17,9 +17,23 @@ type CapabilityStatus struct {
 	Reason    string `json:"reason,omitempty"` // e.g. `nodes list forbidden`
 }
 
+// Source records how an inventory was collected. It decides which
+// capabilities the engine requires before it can call a cluster ready.
+type Source string
+
+const (
+	// SourceCluster: collected from a live cluster (scan, agent). The empty
+	// Source means the same — v0.1 agents push inventories without it.
+	SourceCluster Source = "cluster"
+	// SourceFiles: built from rendered manifests (scan --files, the server's
+	// manifest gate). There is no cluster, so no versions to collect.
+	SourceFiles Source = "files"
+)
+
 type Inventory struct {
 	SchemaVersion      int                             `json:"schemaVersion"` // 1
 	ClusterID          string                          `json:"clusterId"`     // kube-system ns UID, or "files"
+	Source             Source                          `json:"source,omitempty"`
 	CollectedAt        time.Time                       `json:"collectedAt"`
 	ServerVersion      string                          `json:"serverVersion,omitempty"` // raw GitVersion, e.g. "v1.34.2", "v1.34.2-gke.100"
 	Capabilities       map[Capability]CapabilityStatus `json:"capabilities"`

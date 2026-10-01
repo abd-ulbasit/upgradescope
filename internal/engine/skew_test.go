@@ -2,6 +2,7 @@ package engine
 
 import (
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
@@ -83,10 +84,23 @@ func TestEvalSkewUnparseableKubeletVersionsReportedAsInfo(t *testing.T) {
 	}
 }
 
-func TestEvalSkewNoServerVersionNoFindings(t *testing.T) {
-	inv := inventory.Inventory{Nodes: []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.20.0"}}}
-	if fs := evalSkew(inv, testKB(), inventory.Version{Major: 1, Minor: 35}); len(fs) != 0 {
-		t.Fatalf("unparseable server version must yield nothing, got %+v", fs)
+// Without a parseable server version (and no observed apiserver pods) the
+// kubelet rules have no reference point. That must not read as "no skew":
+// Evaluate records a required versions gap and the verdict is unknown.
+func TestEvaluateUnparseableServerVersionIsVersionsGap(t *testing.T) {
+	for _, sv := range []string{"", "garbage"} {
+		inv := inventory.Inventory{
+			ServerVersion: sv,
+			Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true}},
+			Nodes:         []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.20.0"}},
+		}
+		r := Evaluate(inv, testKB(), inventory.Version{Major: 1, Minor: 35}, time.Now())
+		if r.Verdict != VerdictUnknown || r.Ready {
+			t.Errorf("server %q: verdict = %q ready = %v, want unknown/false", sv, r.Verdict, r.Ready)
+		}
+		if len(r.NotAssessed) != 1 || r.NotAssessed[0].Capability != inventory.CapVersions || !r.NotAssessed[0].Required {
+			t.Errorf("server %q: NotAssessed = %+v, want one required versions gap", sv, r.NotAssessed)
+		}
 	}
 }
 

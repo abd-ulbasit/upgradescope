@@ -157,7 +157,15 @@
     }
   ],
   "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "kb-coverage",
+      "reason": "knowledge base covers Kubernetes up to 1.36; target 1.38 cannot be assessed",
+      "required": true
+    }
+  ],
   "ready": false,
   "score": 5,
-  "target": "1.38"
+  "target": "1.38",
+  "verdict": "blocked"
 }
