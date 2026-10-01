@@ -3,9 +3,14 @@ package collect
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -99,5 +104,56 @@ func TestNewClients(t *testing.T) {
 	}
 	if c.Kube == nil || c.Metadata == nil || c.Discovery == nil || c.RESTClient == nil {
 		t.Errorf("NewClients left a nil client: %+v", c)
+	}
+}
+
+// recordWarnings stands in for client-go's default warning handler, which
+// prints every apiserver Warning header to stderr as a klog line.
+type recordWarnings struct{ got *[]string }
+
+func (r recordWarnings) HandleWarningHeaderWithContext(_ context.Context, _ int, _ string, msg string) {
+	*r.got = append(*r.got, msg)
+}
+
+func TestNewClientsDiscardsAPIWarnings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Warning", `299 - "batch/v1beta1 CronJob is deprecated in v1.21+, unavailable in v1.25+; use batch/v1 CronJob"`)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"NamespaceList","apiVersion":"v1","metadata":{},"items":[]}`))
+	}))
+	defer srv.Close()
+	var got []string
+	rest.SetDefaultWarningHandlerWithContext(recordWarnings{&got})
+	defer rest.SetDefaultWarningHandler(rest.WarningLogger{}) // client-go's default
+
+	ctx := context.Background()
+	cfg := &rest.Config{Host: srv.URL}
+	// Control: a client left on the default handler does see the warning.
+	plain, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plain.CoreV1().Namespaces().List(ctx, metav1.ListOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("control client recorded %d warnings, want 1 (the test server must send one)", len(got))
+	}
+	got = nil
+
+	c, err := NewClients(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Kube.CoreV1().Namespaces().List(ctx, metav1.ListOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = c.Metadata.Resource(schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}).List(ctx, metav1.ListOptions{})
+	_, _ = c.RESTClient.Get().AbsPath("/metrics").DoRaw(ctx)
+	if len(got) != 0 {
+		t.Errorf("NewClients clients passed %d warnings to the default (stderr) handler: %q", len(got), got)
+	}
+	if cfg.WarningHandler != nil || cfg.WarningHandlerWithContext != nil {
+		t.Error("NewClients must not modify the caller's rest.Config")
 	}
 }
