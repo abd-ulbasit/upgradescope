@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -18,6 +19,21 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+)
+
+// Connection limits. Without them a client that sends headers and then
+// stalls the body (or just idles a keep-alive) holds a goroutine and its
+// buffers forever — no token needed, since the server drains up to 256 KiB
+// of body before it even writes a 401. ReadTimeout covers the whole
+// request: 60s carries the default 20 MiB snapshot cap at ~350 KiB/s.
+// WriteTimeout runs from the end of the headers, so it also bounds the
+// handler (ingest evaluates and notifies synchronously).
+const (
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 60 * time.Second
+	writeTimeout      = 120 * time.Second
+	idleTimeout       = 120 * time.Second
+	maxHeaderBytes    = 64 << 10 // a bearer token needs <1 KiB; Go's default is 1 MiB
 )
 
 // Config wires a Server.
@@ -72,7 +88,11 @@ func New(cfg Config) (*Server, error) {
 	s.httpSrv = &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           s.handler(),
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 	return s, nil
 }
@@ -148,7 +168,16 @@ func (s *Server) Addr() string {
 	return s.addr
 }
 
-// Shutdown gracefully drains in-flight requests, then unblocks Start.
+// Shutdown gracefully drains in-flight requests until ctx ends, then
+// closes whatever is still open, and unblocks Start. A connection still
+// active at the deadline is a stalled or abusive client (ReadTimeout and
+// WriteTimeout bound every legitimate request), so cutting it off is the
+// expected end of the drain, not a shutdown failure.
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.httpSrv.Shutdown(ctx)
+	err := s.httpSrv.Shutdown(ctx)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		log.Printf("server: drain window ended with connections still open; closing them")
+		return s.httpSrv.Close()
+	}
+	return err
 }
