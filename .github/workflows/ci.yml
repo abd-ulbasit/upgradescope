@@ -395,3 +395,13 @@ jobs:
           git diff tools/gen-kb internal/kb/data
           test -z "$(git status --porcelain tools/gen-kb internal/kb/data)" \
             || { echo "::error::generated KB files are stale — run 'make gen-kb' and commit the result"; exit 1; }
+      # The checks above only compare against the pinned k8s.io/api; this
+      # one notices upstream moving on (a warning, not a failure).
+      - name: newer k8s.io/api release?
+        working-directory: tools/gen-kb
+        run: |
+          pinned="$(go list -m -f '{{.Version}}' k8s.io/api)"
+          latest="$(go list -m -f '{{.Version}}' k8s.io/api@latest)"
+          if [ "$pinned" != "$latest" ]; then
+            echo "::warning::k8s.io/api $latest is available but gen-kb pins $pinned — check the kb-refresh PR or the 'kb-refresh is failing' issue"
+          fi
