@@ -259,3 +259,19 @@ func targetAboveKBHorizon(t *testing.T) string {
 	}
 	return k.MaxKnownK8s.Next().String()
 }
+
+// The Action's step summary: object paths resolve from the working
+// directory (like table and SARIF), and --fail-on still sets the exit code.
+func TestScanFilesMarkdown(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"rendered/all.yaml": removedAPIs})
+	t.Chdir(dir)
+	out, _, err := execScanFiles(t, "--files", "rendered", "--output", "markdown")
+	if ExitCode(err) != 2 {
+		t.Fatalf("ExitCode = %d (err %v), want 2", ExitCode(err), err)
+	}
+	for _, want := range []string{"### upgradescope: blocked\n", "`rendered/all.yaml:1` nightly", "`rendered/all.yaml:6` web"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown lacks %q:\n%s", want, out)
+		}
+	}
+}

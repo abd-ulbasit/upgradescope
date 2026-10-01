@@ -162,6 +162,14 @@ func TestScanWritesSelectedFormat(t *testing.T) {
 		t.Errorf("sarif output:\n%s", out)
 	}
 
+	out, err = execScan(t, []string{"--target", "1.36", "--output", "markdown"}, okStub(r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "score **100/100**") {
+		t.Errorf("markdown output:\n%s", out)
+	}
+
 	out, err = execScan(t, []string{"--target", "1.36"}, okStub(r)) // default: table
 	if err != nil {
 		t.Fatal(err)
