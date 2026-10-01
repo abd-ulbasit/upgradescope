@@ -180,8 +180,9 @@ that resource. On 1.33 and later this happens on every cluster for core
 `v1` Endpoints and ComponentStatus, which only the deprecated `v1` serves.
 Then, per flagged group/version:
 
-- **The kind goes away** (the knowledge base entry has no replacement, and
-  no non-deprecated version is served, e.g. `policy/v1beta1`
+- **The kind goes away** (the knowledge base entry has no replacement, the
+  knowledge base has no version of the kind that is neither deprecated nor
+  removed, and no non-deprecated version is served, e.g. `policy/v1beta1`
   PodSecurityPolicy): every object counts.
 - **The kind continues** under another version: an object counts only when
   some writer still writes it through the flagged group/version. The

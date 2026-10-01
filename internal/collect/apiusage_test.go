@@ -499,7 +499,8 @@ func TestCollectAPIUsageAPFAutoUpdateAnnotationExcludesObject(t *testing.T) {
 // A kind with no KB replacement that is also served at a non-deprecated
 // version continues there (ServiceCIDR, IPAddress, ValidatingAdmission-
 // Policy and the DRA kinds have no replacement recorded): it does not go
-// away, so only authorship counts, never residency. Issue #3's 1.34 repro.
+// away, so only authorship counts, never residency. Issue #3's 1.34 repro,
+// judged by the real KB.
 func TestCollectAPIUsageNoReplacementButGAServedCountsOnlyAuthors(t *testing.T) {
 	const beta = "networking.k8s.io/v1beta1"
 	meta := metaClient(servedAt("ServiceCIDR", []string{"networking.k8s.io/v1", beta},
@@ -509,13 +510,9 @@ func TestCollectAPIUsageNoReplacementButGAServedCountsOnlyAuthors(t *testing.T) 
 	))
 	servicecidrs := metav1.APIResource{Name: "servicecidrs", Kind: "ServiceCIDR", Verbs: metav1.Verbs{"list"}}
 	disc := fakeDiscovery(resources("networking.k8s.io/v1", servicecidrs), resources(beta, servicecidrs))
-	lifecycle := []kb.APILifecycleEntry{
-		{Group: "networking.k8s.io", Version: "v1beta1", Kind: "ServiceCIDR", Introduced: inventory.Version{Major: 1, Minor: 31}, Deprecated: ver(1, 34), Removed: ver(1, 37)},
-		{Group: "networking.k8s.io", Version: "v1", Kind: "ServiceCIDR", Introduced: inventory.Version{Major: 1, Minor: 33}},
-	}
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
+	if err := collectAPIUsage(context.Background(), disc, meta, loadKB(t).APILifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.APIUsage{{
@@ -525,6 +522,148 @@ func TestCollectAPIUsageNoReplacementButGAServedCountsOnlyAuthors(t *testing.T) 
 	}}
 	if !reflect.DeepEqual(inv.APIUsage, want) {
 		t.Errorf("api usage = %#v\nwant       %#v", inv.APIUsage, want)
+	}
+}
+
+// loadKB loads the embedded knowledge base: tests of which kinds go away
+// must judge by the real lifecycle data, not a hand-built subset of it.
+func loadKB(t *testing.T) kb.KB {
+	t.Helper()
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// evaluateAt runs the engine on a live inventory whose versions and
+// api-usage capabilities are available.
+func evaluateAt(inv inventory.Inventory, k kb.KB, server string, target inventory.Version) engine.Report {
+	inv.ServerVersion = server
+	inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
+		inventory.CapAPIUsage: {Available: true},
+		inventory.CapVersions: {Available: true},
+	}
+	return engine.Evaluate(inv, k, target, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+}
+
+// removedAPIFindings returns the report's removed-api findings.
+func removedAPIFindings(rep engine.Report) []engine.Finding {
+	var out []engine.Finding
+	for _, f := range rep.Findings {
+		if f.Category == engine.CatRemovedAPI {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// A 1.32 cluster serves ServiceCIDR and IPAddress only at
+// networking.k8s.io/v1beta1 (v1 arrives in 1.33), and the apiserver
+// writes the default `kubernetes` ServiceCIDR and the service IPAddresses
+// itself. The KB records no replacement for either beta, but both kinds
+// continue at v1, so these objects are not blockers for a later upgrade:
+// the apiserver rewrites them, nobody's manifest is behind them.
+func TestCollectAPIUsageServiceCIDROnlyBetaServedApiserverObjectsAreNotBlockers(t *testing.T) {
+	const beta = "networking.k8s.io/v1beta1"
+	meta := metaClient(
+		servedAt("ServiceCIDR", []string{beta},
+			obj{name: "kubernetes", managed: []metav1.ManagedFieldsEntry{wrote("kube-apiserver", beta)}}),
+		servedAt("IPAddress", []string{beta},
+			obj{name: "10.96.0.1", managed: []metav1.ManagedFieldsEntry{wrote("kube-apiserver", beta)}}),
+	)
+	disc := fakeDiscovery(
+		resources("networking.k8s.io/v1", ingresses),
+		resources(beta,
+			metav1.APIResource{Name: "servicecidrs", Kind: "ServiceCIDR", Verbs: metav1.Verbs{"list"}},
+			metav1.APIResource{Name: "ipaddresses", Kind: "IPAddress", Verbs: metav1.Verbs{"list"}},
+		),
+	)
+	k := loadKB(t)
+
+	var inv inventory.Inventory
+	if err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.APIUsage) != 0 {
+		t.Errorf("api usage = %#v, want none: only the apiserver wrote these objects", inv.APIUsage)
+	}
+	rep := evaluateAt(inv, k, "v1.32.5", inventory.Version{Major: 1, Minor: 37})
+	if fs := removedAPIFindings(rep); len(fs) != 0 {
+		t.Errorf("1.32 → 1.37: removed-api findings %+v (score %d, ready=%v), want none", fs, rep.Score, rep.Ready)
+	}
+}
+
+// A 1.29 cluster serves ValidatingAdmissionPolicy at v1alpha1 and v1beta1
+// (v1 arrives in 1.30), and the policy was written through v1beta1. Both
+// served versions are flagged and neither has a KB replacement, but the
+// kind continues at v1: the policy must not count under v1alpha1, which
+// nobody wrote it through, and so is no v1alpha1 removed-api blocker at 1.32.
+func TestCollectAPIUsageVAPWrittenViaBetaIsNotAlphaUsage(t *testing.T) {
+	const alpha, beta = "admissionregistration.k8s.io/v1alpha1", "admissionregistration.k8s.io/v1beta1"
+	meta := metaClient(servedAt("ValidatingAdmissionPolicy", []string{alpha, beta},
+		obj{name: "require-labels",
+			managed:     []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", beta)},
+			annotations: lastApplied(beta, "ValidatingAdmissionPolicy")},
+	))
+	vap := func(gv string) *metav1.APIResourceList {
+		return resources(gv,
+			metav1.APIResource{Name: "validatingadmissionpolicies", Kind: "ValidatingAdmissionPolicy", Verbs: metav1.Verbs{"list"}},
+			metav1.APIResource{Name: "validatingadmissionpolicies/status", Kind: "ValidatingAdmissionPolicy", Verbs: metav1.Verbs{"get"}},
+			metav1.APIResource{Name: "validatingadmissionpolicybindings", Kind: "ValidatingAdmissionPolicyBinding", Verbs: metav1.Verbs{"list"}},
+		)
+	}
+	disc := fakeDiscovery(
+		resources("admissionregistration.k8s.io/v1",
+			metav1.APIResource{Name: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Verbs: metav1.Verbs{"list"}}),
+		vap(beta),
+		vap(alpha),
+	)
+	k := loadKB(t)
+
+	var inv inventory.Inventory
+	if err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.APIUsage{{
+		Group: "admissionregistration.k8s.io", Version: "v1beta1", Kind: "ValidatingAdmissionPolicy", Count: 1,
+		Namespaces: map[string]int{"": 1},
+		Objects:    []inventory.ObjectRef{{Name: "require-labels", Manager: "kubectl-client-side-apply"}},
+	}}
+	if !reflect.DeepEqual(inv.APIUsage, want) {
+		t.Errorf("api usage = %#v\nwant       %#v", inv.APIUsage, want)
+	}
+	rep := evaluateAt(inv, k, "v1.29.10", inventory.Version{Major: 1, Minor: 32})
+	if fs := removedAPIFindings(rep); len(fs) != 0 {
+		t.Errorf("1.29 → 1.32: removed-api findings %+v (score %d, ready=%v), want none", fs, rep.Score, rep.Ready)
+	}
+}
+
+// policy/v1beta1 PodSecurityPolicy has no surviving version in the KB:
+// the type goes away in 1.25, so every stored PSP blocks, however (or by
+// whom) it was written.
+func TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject(t *testing.T) {
+	meta := metaClient(servedAt("PodSecurityPolicy", []string{"policy/v1beta1"},
+		obj{name: "restricted", managed: []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", "policy/v1beta1")}},
+		obj{name: "privileged"},
+		obj{name: "from-controller", managed: []metav1.ManagedFieldsEntry{wrote("kube-controller-manager", "policy/v1beta1")}},
+	))
+	disc := fakeDiscovery(
+		resources("policy/v1", pdbs),
+		resources("policy/v1beta1", pdbs, psps),
+	)
+	k := loadKB(t)
+
+	var inv inventory.Inventory
+	if err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Kind != "PodSecurityPolicy" || inv.APIUsage[0].Count != 3 {
+		t.Fatalf("api usage = %#v, want all 3 PodSecurityPolicies", inv.APIUsage)
+	}
+	rep := evaluateAt(inv, k, "v1.24.17", inventory.Version{Major: 1, Minor: 25})
+	if fs := removedAPIFindings(rep); len(fs) != 1 || fs[0].Severity != engine.SevBlocker {
+		t.Errorf("1.24 → 1.25: removed-api findings %+v, want one PodSecurityPolicy blocker", fs)
 	}
 }
 

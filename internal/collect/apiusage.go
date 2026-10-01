@@ -54,8 +54,10 @@ var internalManagers = map[string]bool{
 // listVersion and replacementList; resources that share storage across
 // groups share the LIST), and each object is attributed per flagged entry:
 //
-//   - the KB entry has no replacement and no non-deprecated version of the
-//     resource is served: the type itself goes away, so every object counts;
+//   - the KB entry has no replacement, the KB records no version of the
+//     kind that is neither deprecated nor removed, and no non-deprecated
+//     version of the resource is served: the type itself goes away, so
+//     every object counts;
 //   - otherwise only objects authored via the flagged group/version count:
 //     some manager's newest managedFields entry (not an internal manager,
 //     not the status subresource) names it, or, for an object with no such
@@ -72,9 +74,16 @@ var internalManagers = map[string]bool{
 // flagged resource failed, the capability degrades fully.
 func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
 	flagged := map[kb.GVK]kb.APILifecycleEntry{}
+	// continues holds the kinds the KB records a version of that is neither
+	// deprecated nor removed. They outlive their flagged versions even when
+	// no replacement is recorded (ServiceCIDR, ValidatingAdmissionPolicy and
+	// the DRA kinds graduated within their own group).
+	continues := map[schema.GroupKind]bool{}
 	for _, e := range lifecycle {
 		if e.Deprecated != nil || e.Removed != nil {
 			flagged[kb.GVK{Group: e.Group, Version: e.Version, Kind: e.Kind}] = e
+		} else {
+			continues[schema.GroupKind{Group: e.Group, Kind: e.Kind}] = true
 		}
 	}
 
@@ -157,8 +166,10 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 			e := flagged[kb.GVK{Group: gr.Group, Version: s.version, Kind: s.kind}]
 			targetsOf[gvr] = append(targetsOf[gvr], usageTarget{
 				gv: schema.GroupVersion{Group: gr.Group, Version: s.version}.String(),
-				// listV is flagged only when every listable served version is.
-				allObjects: e.Replacement == nil && listV.flagged,
+				// The kind goes away: no replacement, no surviving version in
+				// the KB, and none served (listV is flagged only when every
+				// listable served version is).
+				allObjects: e.Replacement == nil && !continues[schema.GroupKind{Group: gr.Group, Kind: s.kind}] && listV.flagged,
 				usage: inventory.APIUsage{Group: gr.Group, Version: s.version, Kind: s.kind,
 					Namespaces: map[string]int{}},
 			})
