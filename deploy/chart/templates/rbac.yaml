@@ -19,12 +19,18 @@ rules:
   - nonResourceURLs: ["/version", "/metrics"]
     verbs: ["get"]
   {{- if .Values.rbac.helmSecrets }}
-  # Helm release detection reads Secrets of type helm.sh/release.v1. RBAC
-  # cannot filter Secrets by type, so this is get/list on EVERY Secret in
-  # the cluster. rbac.helmSecrets=false drops it; Helm releases are then
-  # reported as not assessed.
+  # Helm release detection lists Secrets labelled owner=helm metadata-only
+  # and GETs one per release (Helm's default secrets driver). RBAC cannot
+  # filter Secrets by label or type, so this is get/list on EVERY Secret in
+  # the cluster. rbac.helmSecrets=false drops it and the ConfigMap rule
+  # below; Helm releases are then reported as not assessed.
   - apiGroups: [""]
     resources: ["secrets"]
+    verbs: ["get", "list"]
+  # Releases stored by Helm's configmaps driver (HELM_DRIVER=configmap):
+  # ConfigMaps labelled owner=helm, read the same way.
+  - apiGroups: [""]
+    resources: ["configmaps"]
     verbs: ["get", "list"]
   {{- end }}
   # --- files/kb-rbac-rules.yaml ---

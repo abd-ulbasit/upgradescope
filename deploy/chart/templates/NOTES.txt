@@ -32,7 +32,7 @@ ClusterIP Service; set one before exposing it.
 {{- end }}
 
 The agent reads namespaces, nodes, pods, the deprecated API resources the
-KB tracks{{ if .Values.rbac.helmSecrets }}, and every Secret (Helm release detection;
+KB tracks{{ if .Values.rbac.helmSecrets }}, and every Secret and ConfigMap (Helm release detection;
 rbac.helmSecrets=false turns that off){{ end }}. It may create ClusterReadiness
 objects (RBAC cannot scope create by name), and updates only
 ClusterReadiness/{{ .Values.agent.crName }}{{ if .Values.agent.manageCRD }} and the clusterreadinesses.upgradescope.dev CRD{{ end }}.
