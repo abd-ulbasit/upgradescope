@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "files",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "capabilities": {
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": false, "reason": "files mode"},
+    "helm": {"available": false, "reason": "files mode"},
+    "addons": {"available": false, "reason": "files mode"},
+    "versions": {"available": false, "reason": "files mode"}
+  },
+  "apiUsage": [
+    {"group": "batch", "version": "v1beta1", "kind": "CronJob", "count": 1, "namespaces": {"": 1},
+     "objects": [{"name": "nightly", "file": "rendered/all.yaml", "line": 14, "renderedFrom": "shop/templates/cronjob.yaml"}]},
+    {"group": "extensions", "version": "v1beta1", "kind": "Ingress", "count": 3, "namespaces": {"": 1, "shop": 2},
+     "objects": [
+       {"namespace": "shop", "name": "web", "file": "rendered/all.yaml", "line": 3, "renderedFrom": "shop/templates/ingress.yaml"},
+       {"name": "admin", "file": "legacy/ingress.yaml", "line": 1}
+     ],
+     "objectsOmitted": 1}
+  ]
+}

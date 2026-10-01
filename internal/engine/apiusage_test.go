@@ -175,6 +175,45 @@ func TestEvalAPIUsageCoreGroupRendering(t *testing.T) {
 	}
 }
 
+// Manifest objects (refs with a line) carry through to the finding in a
+// deterministic order, and the detail uses manifest wording: an empty
+// namespace in a manifest means metadata.namespace is unset, not that the
+// object is cluster-scoped, and nothing is "stored/served" yet.
+func TestEvalAPIUsageManifestObjects(t *testing.T) {
+	inv := inventory.Inventory{
+		APIUsage: []inventory.APIUsage{{
+			Group: "batch", Version: "v1beta1", Kind: "CronJob",
+			Count: 4, Namespaces: map[string]int{"": 2, "shop": 1, "jobs": 1},
+			Objects: []inventory.ObjectRef{
+				{Name: "z", File: "b.yaml", Line: 9},
+				{Namespace: "shop", Name: "a", File: "b.yaml", Line: 1},
+				{Name: "y", File: "a.yaml", Line: 3, RenderedFrom: "demo/templates/cron.yaml"},
+			},
+			ObjectsOmitted: 1,
+		}},
+	}
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 25})
+	if len(fs) != 1 {
+		t.Fatalf("want 1 finding, got %d", len(fs))
+	}
+	f := fs[0]
+	if want := "4 manifest object(s) use this API: namespace unset (2), jobs (1), shop (1)."; f.Detail != want {
+		t.Errorf("detail = %q, want %q", f.Detail, want)
+	}
+	wantObjs := []inventory.ObjectRef{
+		{Name: "y", File: "a.yaml", Line: 3, RenderedFrom: "demo/templates/cron.yaml"},
+		{Namespace: "shop", Name: "a", File: "b.yaml", Line: 1},
+		{Name: "z", File: "b.yaml", Line: 9},
+	}
+	if !reflect.DeepEqual(f.Objects, wantObjs) || f.ObjectsOmitted != 1 {
+		t.Errorf("objects = %+v (omitted %d)\nwant      %+v (omitted 1)", f.Objects, f.ObjectsOmitted, wantObjs)
+	}
+	// The finding owns its slice: sorting must not reorder the inventory.
+	if inv.APIUsage[0].Objects[0].Name != "z" {
+		t.Error("evalAPIUsage mutated the inventory's Objects")
+	}
+}
+
 func TestEvalAPIUsageUnknownGVKIgnored(t *testing.T) {
 	inv := inventory.Inventory{
 		APIUsage: []inventory.APIUsage{{Group: "apps", Version: "v1", Kind: "Deployment", Count: 5}},

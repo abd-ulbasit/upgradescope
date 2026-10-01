@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/internal/sarif"
 )
 
 // ErrGateFailed signals findings at or above the --fail-on threshold.
@@ -54,6 +58,11 @@ type scanOptions struct {
 	// targetVersion is opts.target parsed once by validateScanOptions;
 	// runScan consumes it instead of re-parsing the raw string.
 	targetVersion inventory.Version
+	// fileBase is the directory files-mode object paths are relative to,
+	// as seen from the working directory (see manifestBase).
+	fileBase string
+	// stderr receives files-mode warnings; nil discards them.
+	stderr io.Writer
 }
 
 // runScan is the real I/O pipeline: kb.Load → collect (cluster or files) →
@@ -66,9 +75,22 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 
 	var inv inventory.Inventory
 	if opts.filesDir != "" {
-		inv, err = collect.CollectFiles(opts.filesDir)
+		var sum collect.FilesSummary
+		inv, sum, err = collect.CollectFiles(opts.filesDir)
 		if err != nil {
 			return engine.Report{}, fmt.Errorf("collect inventory: %w", err)
+		}
+		stderr := opts.stderr
+		if stderr == nil {
+			stderr = io.Discard
+		}
+		for _, w := range sum.Warnings {
+			fmt.Fprintf(stderr, "warning: skipped %s:%d: %v\n", path.Join(opts.fileBase, w.File), w.Line, w.Err)
+		}
+		// Nothing scanned is not "nothing to fix": an empty render, a wrong
+		// path or an unexpected extension must not report 100/100.
+		if sum.Objects == 0 {
+			return engine.Report{}, fmt.Errorf("no Kubernetes manifests found under %s (%d files skipped)", opts.filesDir, sum.Skipped)
 		}
 	} else {
 		clients, where, cerr := buildClients(opts.kubeconfig, opts.kubecontext)
@@ -153,12 +175,33 @@ func newScanCmd() *cobra.Command {
 			if err := validateScanOptions(&opts); err != nil {
 				return err
 			}
+			opts.stderr = cmd.ErrOrStderr()
+			if opts.filesDir != "" {
+				opts.fileBase = manifestBase(opts.filesDir)
+			}
 			report, err := runScan(opts)
 			if err != nil {
 				return err
 			}
-			if err := writeReport(cmd.OutOrStdout(), opts.output, report); err != nil {
+			// JSON keeps object paths relative to the scanned root (the
+			// inventory contract) and records that root as filesBase;
+			// people and SARIF consumers resolve them from the working
+			// directory.
+			out := report
+			var filesBase *string
+			if opts.output != "json" {
+				out = withFileBase(report, opts.fileBase)
+			} else if opts.filesDir != "" {
+				filesBase = &opts.fileBase
+			}
+			if err := writeReport(cmd.OutOrStdout(), opts.output, out, filesBase); err != nil {
 				return err
+			}
+			if opts.output == "sarif" && filepath.IsAbs(filepath.FromSlash(opts.fileBase)) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: --files %s is outside the working directory, so SARIF locations are absolute file:// URIs that GitHub code scanning cannot place in the repository; run from the repository root\n", opts.filesDir)
+			}
+			if n := sarif.Unanchored(report); opts.output == "sarif" && n > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: %d finding(s) have no file location, so they are not SARIF results (GitHub rejects results without one); the SARIF lists them as tool execution notifications, and --output table or json shows them in full\n", n)
 			}
 			return gate(report, opts.failOn, opts.allowIncomplete)
 		},
@@ -167,7 +210,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "target Kubernetes minor version, e.g. 1.36 (required)")
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
-	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this directory instead of a live cluster")
+	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
 	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never")
@@ -178,6 +221,57 @@ func newScanCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("files", "team-label")
 
 	return cmd
+}
+
+// manifestBase returns the directory that --files object paths
+// (collect.CollectFiles: relative to the scanned root; a single file's base
+// name) resolve against, slash-separated and relative to the working
+// directory when it lies inside it and absolute otherwise (also for a
+// relative "../x": SARIF then carries an unambiguous file:// URI instead of
+// a path that escapes the repository). CI runs from the repository root,
+// and SARIF URIs must be repository-relative for GitHub to place
+// annotations.
+func manifestBase(filesDir string) string {
+	base := filesDir
+	if fi, err := os.Stat(filesDir); err == nil && !fi.IsDir() {
+		base = filepath.Dir(filesDir)
+	}
+	if abs, err := filepath.Abs(base); err == nil {
+		base = abs
+		if wd, err := os.Getwd(); err == nil {
+			if rel, err := filepath.Rel(wd, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				base = rel
+			}
+		}
+	}
+	if base = filepath.ToSlash(filepath.Clean(base)); base == "." {
+		return ""
+	}
+	return base
+}
+
+// withFileBase returns a copy of r whose finding object paths are prefixed
+// with base (see manifestBase); r itself is not modified.
+func withFileBase(r engine.Report, base string) engine.Report {
+	if base == "" {
+		return r
+	}
+	findings := make([]engine.Finding, len(r.Findings))
+	for i, f := range r.Findings {
+		if len(f.Objects) > 0 {
+			objs := make([]inventory.ObjectRef, len(f.Objects))
+			for j, o := range f.Objects {
+				if o.File != "" {
+					o.File = path.Join(base, o.File)
+				}
+				objs[j] = o
+			}
+			f.Objects = objs
+		}
+		findings[i] = f
+	}
+	r.Findings = findings
+	return r
 }
 
 // validateScanOptions checks flag values and stores the parsed --target into
@@ -201,10 +295,12 @@ func validateScanOptions(opts *scanOptions) error {
 	return nil
 }
 
-func writeReport(w io.Writer, format string, r engine.Report) error {
+// writeReport renders r; filesBase is the JSON filesBase (nil outside
+// --files mode).
+func writeReport(w io.Writer, format string, r engine.Report, filesBase *string) error {
 	switch format {
 	case "json":
-		return WriteJSON(w, r)
+		return writeJSON(w, r, filesBase)
 	case "sarif":
 		return WriteSARIF(w, r)
 	default: // "table", already validated

@@ -28,8 +28,9 @@ func TestWriteJSON(t *testing.T) {
 	}
 	out := buf.String()
 
-	// Canonical: indented, clusterId first (struct order), trailing newline.
-	if !strings.HasPrefix(out, "{\n  \"clusterId\": \"files\",") {
+	// Canonical: indented, struct order (schemaVersion, toolVersion, then the
+	// report fields), trailing newline.
+	if !strings.Contains(out, "\n  \"toolVersion\": \""+version+"\",\n  \"clusterId\": \"files\",") {
 		t.Errorf("not canonical indented JSON, got:\n%s", out)
 	}
 	if !strings.HasSuffix(out, "}\n") {
@@ -55,6 +56,19 @@ func TestWriteJSON(t *testing.T) {
 	want := map[string]engine.TeamScore{"unattributed": {Score: 75, Ready: false, Blockers: 1}}
 	if len(withTeams.Teams) != 1 || withTeams.Teams["unattributed"] != want["unattributed"] {
 		t.Errorf("teams = %+v, want %+v", withTeams.Teams, want)
+	}
+}
+
+// The report states its shape version and the producing binary, ahead of
+// the existing fields, which keep their names and order.
+func TestWriteJSONSchemaAndToolVersion(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteJSON(&buf, engine.Report{ClusterID: "c", Target: inventory.Version{Major: 1, Minor: 36}}); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	want := "{\n  \"schemaVersion\": 1,\n  \"toolVersion\": \"" + version + "\",\n  \"clusterId\": \"c\","
+	if !strings.HasPrefix(buf.String(), want) {
+		t.Errorf("JSON head:\n%s\nwant prefix:\n%s", buf.String(), want)
 	}
 }
 

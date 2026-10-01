@@ -28,6 +28,7 @@ var goldenParams = map[string]struct{ target, now string }{
 	// GKE GitVersions: the 1.30 node pool is within skew today (3 behind
 	// 1.33) but not after the control plane reaches 1.34 → blocker.
 	"gke-vendor-versions": {"1.34", "2026-06-10T00:00:00Z"},
+	"files-mode":          {"1.36", "2026-06-10T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte
