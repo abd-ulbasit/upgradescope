@@ -121,7 +121,13 @@ run "a cluster on the wrong minor fails the run" 1 STUB_SERVER_MINOR=30
 has "the version mismatch is explained" "$work/out" "cluster runs Kubernetes 1.30, want 1.31"
 
 run "an unknown minor fails before anything runs" 1 E2E_MINOR=1.12
-has "nothing was created" "$work/out" "no kind node image for 1.12"
+has "the unknown minor is named" "$work/out" "no kind node image for 1.12"
+if [ -s "$work/log" ]; then
+  echo "FAIL an unknown minor still ran:" >&2; sed 's/^/     /' "$work/log" >&2
+  echo "FAIL unknown minor ran commands" >>"$work/results"
+else
+  echo "ok   an unknown minor runs no command at all" | tee -a "$work/results"
+fi
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)

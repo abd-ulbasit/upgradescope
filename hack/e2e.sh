@@ -51,6 +51,9 @@ TAG=e2e
 TOKEN=e2e-token
 CR=cluster
 
+NODE_IMAGE=$(hack/kind-images.sh image "$MINOR")
+NEXT=$(hack/kind-images.sh next "$MINOR")
+
 for tool in docker helm go jq curl; do
   command -v "$tool" >/dev/null || { echo "ERROR: $tool not found in PATH" >&2; exit 1; }
 done
@@ -59,8 +62,6 @@ kubectl=$("$INSTALL_TOOL" kubectl)
 PATH="$(dirname "$kind"):$(dirname "$kubectl"):$PATH"
 export PATH
 
-NODE_IMAGE=$(hack/kind-images.sh image "$MINOR")
-NEXT=$(hack/kind-images.sh next "$MINOR")
 k() { kubectl --context "$CTX" "$@"; }
 h() { helm --kube-context "$CTX" "$@"; }
 nap() { sleep "${E2E_NAP:-$1}"; }
