@@ -6,16 +6,19 @@ package crd
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apiextensionsv1typed "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
@@ -64,39 +67,70 @@ func waitEstablished(ctx context.Context, crds apiextensionsv1typed.CustomResour
 	return nil
 }
 
-// EnsureCRD installs or updates the ClusterReadiness CRD from the embedded
-// manifest. Create-or-update semantics: existing CRDs are overwritten with
-// the manifest's spec (conflicts retried). After a fresh create it waits for
-// the Established condition so the first tick can write status immediately.
-// Callers may treat failure as non-fatal when the CRD is pre-installed out
-// of band (e.g. Helm crds/).
+// FieldManager is the server-side apply field manager EnsureCRD writes the
+// CRD spec under. Fields other managers own (GitOps labels and annotations,
+// kubectl's last-applied annotation) are left alone.
+const FieldManager = "upgradescope-agent"
+
+// ErrCRDNotInstalled means the ClusterReadiness CRD is absent and the agent
+// may not create it. The Helm chart grants no CRD create: its crds/
+// directory installs the CRD, and the agent only keeps the schema current.
+var ErrCRDNotInstalled = errors.New("ClusterReadiness CRD is not installed")
+
+// EnsureCRD keeps the ClusterReadiness CRD in step with the embedded
+// manifest. An in-sync CRD gets no write at all. A drifted one is fixed with
+// a forced server-side apply of the manifest under FieldManager, so the spec
+// matches this binary while labels and annotations owned by others survive.
+// A missing CRD is created (and waited on until Established) when the
+// caller may create CRDs, as with an admin kubeconfig; under the chart's
+// RBAC the create is forbidden and the error wraps ErrCRDNotInstalled.
 func EnsureCRD(ctx context.Context, apiext apiextensionsclient.Interface) error {
 	var want apiextensionsv1.CustomResourceDefinition
 	if err := yaml.UnmarshalStrict(Manifest, &want); err != nil {
 		return fmt.Errorf("parse embedded CRD manifest: %w", err)
 	}
 	crds := apiext.ApiextensionsV1().CustomResourceDefinitions()
-	_, err := crds.Create(ctx, &want, metav1.CreateOptions{})
-	if err == nil {
-		return waitEstablished(ctx, crds, want.Name)
+	existing, err := crds.Get(ctx, want.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return createCRD(ctx, crds, &want)
 	}
-	if !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create ClusterReadiness CRD: %w", err)
-	}
-	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		existing, gerr := crds.Get(ctx, want.Name, metav1.GetOptions{})
-		if gerr != nil {
-			return gerr
-		}
-		updated := want.DeepCopy()
-		updated.ResourceVersion = existing.ResourceVersion
-		_, uerr := crds.Update(ctx, updated, metav1.UpdateOptions{})
-		return uerr
-	})
 	if err != nil {
-		return fmt.Errorf("update ClusterReadiness CRD: %w", err)
+		return fmt.Errorf("get ClusterReadiness CRD: %w", err)
+	}
+
+	// Compare against the manifest as the apiserver stores it (defaulted),
+	// or every restart would see spurious drift.
+	defaulted := want.DeepCopy()
+	apiextensionsv1.SetObjectDefaults_CustomResourceDefinition(defaulted)
+	if equality.Semantic.DeepEqual(existing.Spec, defaulted.Spec) {
+		return nil
+	}
+	body, err := yaml.YAMLToJSON(Manifest)
+	if err != nil {
+		return fmt.Errorf("convert embedded CRD manifest: %w", err)
+	}
+	// Force: the schema must match this binary even if another manager
+	// last touched those spec fields.
+	force := true
+	_, err = crds.Patch(ctx, want.Name, types.ApplyPatchType, body,
+		metav1.PatchOptions{FieldManager: FieldManager, Force: &force})
+	if err != nil {
+		return fmt.Errorf("apply ClusterReadiness CRD: %w", err)
 	}
 	return nil
+}
+
+// createCRD installs a missing CRD and waits for it to be Established.
+func createCRD(ctx context.Context, crds apiextensionsv1typed.CustomResourceDefinitionInterface, want *apiextensionsv1.CustomResourceDefinition) error {
+	_, err := crds.Create(ctx, want, metav1.CreateOptions{FieldManager: FieldManager})
+	if apierrors.IsForbidden(err) {
+		return fmt.Errorf("%w and the agent may not create it: install it from the Helm chart's crds/ "+
+			"(helm install, or kubectl apply -f deploy/chart/crds/): %w", ErrCRDNotInstalled, err)
+	}
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create ClusterReadiness CRD: %w", err)
+	}
+	return waitEstablished(ctx, crds, want.Name)
 }
 
 // ReadSpec returns the ClusterReadiness spec. found=false (with nil error)
