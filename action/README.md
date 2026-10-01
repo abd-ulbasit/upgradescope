@@ -24,7 +24,12 @@ full commit SHA. Set `version` too: if you pin only the action ref, the
 binary still floats to the latest release, and with it the knowledge base
 and the gate's verdicts. The examples below use v0.2.0, the first release
 that ships this action (root `action.yml`, outputs, step summary). Put the
-release you pin in its place. There is no moving `v0` tag.
+release you pin in its place.
+
+There is no moving `v0` tag, so `@v0` does not resolve. This is
+deliberate. A major tag that moves with each release would change the
+action, and with `version: latest` also the knowledge base, under a
+workflow that looks pinned. Pinning is meant to prevent exactly that.
 
 ```yaml
 jobs:
