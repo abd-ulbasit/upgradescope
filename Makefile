@@ -30,10 +30,10 @@ test:
 # use a different disposable cluster.
 it:
 	UPGRADESCOPE_IT=1 go test ./... -run Integration -v
-# Same checks CI runs. golangci-lint-action lags Go releases (its binary must
-# be built with a Go >= our toolchain), so vet + staticcheck are the gate.
-# STATICCHECK_VERSION is pinned and must match .github/workflows/ci.yml, so a
-# clean `make lint` means a clean CI lint on the same day and every day after.
+# CI's lint job runs exactly this. golangci-lint-action lags Go releases (its
+# binary must be built with a Go >= our toolchain), so vet + staticcheck are
+# the gate. STATICCHECK_VERSION is pinned, so a clean `make lint` means a
+# clean CI lint on the same day and every day after.
 STATICCHECK_VERSION ?= v0.7.0
 lint:
 	go vet ./...
