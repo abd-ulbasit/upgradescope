@@ -57,6 +57,9 @@ func OpenPostgres(dsn string) (*Postgres, error) {
 // Close closes the underlying connection pool.
 func (p *Postgres) Close() error { return p.db.Close() }
 
+// Ping checks the server answers (the server's /readyz).
+func (p *Postgres) Ping(ctx context.Context) error { return p.db.PingContext(ctx) }
+
 // UpsertCluster inserts the cluster or, if a row with the same name exists,
 // bumps last_seen (first_seen never moves) and adopts c.ClusterUID when the
 // stored one is empty. A different non-empty UID is refused: the guarded
