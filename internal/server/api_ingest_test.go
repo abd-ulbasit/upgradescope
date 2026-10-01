@@ -386,7 +386,7 @@ func TestIngestBodyLimits(t *testing.T) {
 	defer ts.Close()
 
 	t.Run("identity over 20MiB", func(t *testing.T) {
-		huge := bytes.Repeat([]byte("a"), maxSnapshotBody+1)
+		huge := bytes.Repeat([]byte("a"), DefaultMaxSnapshotBytes+1)
 		resp, _ := postSnapshot(t, ts, "ingest-tok", huge, false)
 		if resp.StatusCode != http.StatusRequestEntityTooLarge {
 			t.Fatalf("status = %d, want 413", resp.StatusCode)
@@ -396,7 +396,7 @@ func TestIngestBodyLimits(t *testing.T) {
 	t.Run("gzip bomb", func(t *testing.T) {
 		// Tiny on the wire, >20MiB decompressed: the post-decompression cap
 		// must fire.
-		bomb := gzipBytes(t, make([]byte, maxSnapshotBody+2))
+		bomb := gzipBytes(t, make([]byte, DefaultMaxSnapshotBytes+2))
 		req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/snapshots", bytes.NewReader(bomb))
 		if err != nil {
 			t.Fatal(err)

@@ -122,6 +122,31 @@ func TestServeDefaults(t *testing.T) {
 	if got.parsedTargets != nil {
 		t.Errorf("parsedTargets = %v, want nil when --targets omitted", got.parsedTargets)
 	}
+	if got.maxSnapshotBytes != server.DefaultMaxSnapshotBytes || got.maxGateBytes != server.DefaultMaxGateBytes {
+		t.Errorf("body caps = %d/%d, want server defaults %d/%d", got.maxSnapshotBytes, got.maxGateBytes,
+			server.DefaultMaxSnapshotBytes, server.DefaultMaxGateBytes)
+	}
+}
+
+func TestServeBodyLimitFlags(t *testing.T) {
+	var got serveOptions
+	err := execServe(t, []string{"--ingest-token", "t", "--max-snapshot-bytes", "1048576", "--max-gate-bytes", "4096"},
+		func(_ context.Context, opts serveOptions) error {
+			got = opts
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.maxSnapshotBytes != 1<<20 || got.maxGateBytes != 4096 {
+		t.Fatalf("body caps = %d/%d, want 1048576/4096", got.maxSnapshotBytes, got.maxGateBytes)
+	}
+	for _, flag := range []string{"--max-snapshot-bytes", "--max-gate-bytes"} {
+		err := execServe(t, []string{"--ingest-token", "t", flag, "0"}, serveOK())
+		if err == nil || !strings.Contains(err.Error(), flag) {
+			t.Errorf("%s 0: want an error naming the flag, got %v", flag, err)
+		}
+	}
 }
 
 func TestServeDBURLPassedThrough(t *testing.T) {

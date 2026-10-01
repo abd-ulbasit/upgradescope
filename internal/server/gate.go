@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,13 +66,23 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	manifests, err := collect.CollectManifests(http.MaxBytesReader(w, r.Body, maxSnapshotBody))
+	// The body stays charged to the shared buffered-body budget until it is
+	// decoded, and the evaluation slot is held only for decoding and
+	// evaluation: a client that stops reading the response must not pin it.
+	// Both releases are idempotent; the defers cover the early returns.
+	body, releaseBody, ok := s.readManifestBody(w, r)
+	if !ok {
+		return
+	}
+	defer releaseBody()
+	releaseSlot, ok := s.acquireGateSlot(w, r)
+	if !ok {
+		return
+	}
+	defer releaseSlot()
+	manifests, err := collect.CollectManifests(bytes.NewReader(body))
+	releaseBody()
 	if err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			errJSON(w, http.StatusRequestEntityTooLarge, "manifest stream exceeds the 20MiB limit")
-			return
-		}
 		errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
 		return
 	}
@@ -96,6 +107,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 
 	rep := engine.Evaluate(inv, s.cfg.KB, target, s.now())
+	releaseSlot()
 	if format == "sarif" {
 		w.Header().Set("Content-Type", "application/sarif+json")
 		w.WriteHeader(http.StatusOK)

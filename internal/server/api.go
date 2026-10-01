@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -13,16 +15,193 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
-// maxSnapshotBody caps the snapshot push body — enforced on the wire bytes
-// AND on the decompressed stream (gzip-bomb guard).
-const maxSnapshotBody = 20 << 20 // 20 MiB
+// DefaultMaxSnapshotBytes caps the snapshot push body when
+// Config.MaxSnapshotBytes is unset — enforced on the wire bytes AND on the
+// decompressed stream (gzip-bomb guard).
+const DefaultMaxSnapshotBytes = 20 << 20 // 20 MiB
+
+// DefaultMaxGateBytes caps the /gate manifest stream when
+// Config.MaxGateBytes is unset. Lower than the snapshot cap: the gate body
+// is buffered whole and is reachable with only the read token (or none).
+const DefaultMaxGateBytes = 10 << 20 // 10 MiB
+
+// Manifest stream shape limits for /gate, checked on the raw bytes before
+// any YAML is decoded. Decoding a document builds a generic tree and then
+// JSON — measured at 25-50x the document's size in heap — so the
+// per-document cap, not the body cap, is what bounds one request's memory.
+// 4 MiB fits any single Kubernetes object (etcd stores at most ~1.5 MiB)
+// and a multi-MiB `kubectl get -o yaml` List. The document count bounds
+// CPU on streams of many tiny documents.
+const (
+	maxManifestDocBytes = 4 << 20
+	maxManifestDocs     = 20000
+)
+
+// sizeString renders a byte limit for error messages: "20MiB" when it is
+// a whole number of MiB, otherwise "1024 bytes".
+func sizeString(n int64) string {
+	if n >= 1<<20 && n%(1<<20) == 0 {
+		return fmt.Sprintf("%dMiB", n>>20)
+	}
+	return fmt.Sprintf("%d bytes", n)
+}
+
+func (s *Server) maxSnapshotBytes() int64 {
+	if s.cfg.MaxSnapshotBytes > 0 {
+		return s.cfg.MaxSnapshotBytes
+	}
+	return DefaultMaxSnapshotBytes
+}
+
+func (s *Server) maxGateBytes() int64 {
+	if s.cfg.MaxGateBytes > 0 {
+		return s.cfg.MaxGateBytes
+	}
+	return DefaultMaxGateBytes
+}
+
+// byteBudget is a counting semaphore over bytes: the /gate bodies held in
+// memory across all requests at once.
+type byteBudget struct {
+	mu      sync.Mutex
+	used    int64
+	max     int64
+	changed chan struct{} // closed (and replaced) whenever bytes are given back
+}
+
+func newByteBudget(max int64) *byteBudget {
+	return &byteBudget{max: max, changed: make(chan struct{})}
+}
+
+// take charges n bytes, waiting up to timeout for room. It reports false
+// (charging nothing) on timeout or when ctx ends first.
+func (b *byteBudget) take(ctx context.Context, n int64, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		b.mu.Lock()
+		if b.used+n <= b.max {
+			b.used += n
+			b.mu.Unlock()
+			return true
+		}
+		changed := b.changed
+		b.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func (b *byteBudget) give(n int64) {
+	b.mu.Lock()
+	b.used -= n
+	close(b.changed)
+	b.changed = make(chan struct{})
+	b.mu.Unlock()
+}
+
+func (b *byteBudget) inUse() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used
+}
+
+// readManifestBody reads a /gate manifest stream under the body cap and the
+// shared buffered-body budget, then splits it (the same kubectl-compatible
+// splitter collect uses) to check the document count and each document's
+// size before anything decodes it. It writes the 413/422/503 itself.
+//
+// The budget is charged before the first byte is read: the declared
+// Content-Length, or the whole body cap for a chunked upload (the unused
+// part is given back once the body is in). Charging up front means a
+// request never holds half a body while it waits for room, so waiting
+// requests cannot deadlock each other, and a request that cannot get room
+// in time is refused before its body is read. On success the caller must
+// call release once it no longer needs the body; release is idempotent.
+func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body []byte, release func(), ok bool) {
+	limit := s.maxGateBytes()
+	tooLarge := "manifest stream exceeds the " + sizeString(limit) + " limit"
+	if r.ContentLength > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+		return nil, nil, false
+	}
+	held := limit
+	if r.ContentLength >= 0 {
+		held = r.ContentLength
+	}
+	if !s.gateBuffered.take(r.Context(), held, s.gateQueueTimeout) {
+		if r.Context().Err() == nil {
+			w.Header().Set("Retry-After", "10")
+			errJSON(w, http.StatusServiceUnavailable, "too many concurrent gate requests; retry shortly")
+		}
+		return nil, nil, false
+	}
+
+	var err error
+	if r.ContentLength >= 0 {
+		// Exactly the declared size: net/http stops the body there.
+		body = make([]byte, r.ContentLength)
+		_, err = io.ReadFull(r.Body, body)
+	} else {
+		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+		if err == nil {
+			s.gateBuffered.give(held - int64(len(body)))
+			held = int64(len(body))
+		}
+	}
+	release = sync.OnceFunc(func() { s.gateBuffered.give(held) })
+	if err != nil {
+		release()
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+			return nil, nil, false
+		}
+		errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
+		return nil, nil, false
+	}
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(body)))
+	for n := 1; ; n++ {
+		doc, err := docs.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			release()
+			errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
+			return nil, nil, false
+		}
+		if n > maxManifestDocs {
+			release()
+			errJSON(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("manifest stream has more than %d documents", maxManifestDocs))
+			return nil, nil, false
+		}
+		if len(doc) > maxManifestDocBytes {
+			release()
+			errJSON(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("manifest document %d is %d bytes, over the %s per-document limit (split large Lists into separate documents)",
+					n, len(doc), sizeString(maxManifestDocBytes)))
+			return nil, nil, false
+		}
+	}
+	return body, release, true
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -108,7 +287,8 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body := http.MaxBytesReader(w, r.Body, maxSnapshotBody)
+	limit := s.maxSnapshotBytes()
+	body := http.MaxBytesReader(w, r.Body, limit)
 	var reader io.Reader = body
 	switch enc := r.Header.Get("Content-Encoding"); enc {
 	case "", "identity":
@@ -122,7 +302,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		// Cap the decompressed stream too: a tiny gzip bomb must not bypass
 		// the wire-byte limit. Read one byte past the cap so overflow is
 		// detectable below.
-		reader = io.LimitReader(gz, maxSnapshotBody+1)
+		reader = io.LimitReader(gz, limit+1)
 	default:
 		errJSON(w, http.StatusUnsupportedMediaType, fmt.Sprintf("unsupported Content-Encoding %q (use gzip or identity)", enc))
 		return
@@ -131,14 +311,14 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the 20MiB limit")
+			errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the "+sizeString(limit)+" limit")
 			return
 		}
 		errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
 		return
 	}
-	if len(raw) > maxSnapshotBody {
-		errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the 20MiB limit after decompression")
+	if int64(len(raw)) > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the "+sizeString(limit)+" limit after decompression")
 		return
 	}
 	var req pushRequest

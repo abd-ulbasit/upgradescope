@@ -229,7 +229,7 @@ func TestLargeSnapshotWithinDefaultTimeouts(t *testing.T) {
 	if err := json.Unmarshal(pushReqBody(t, testInventory()), &body); err != nil {
 		t.Fatal(err)
 	}
-	body["padding"] = strings.Repeat("x", maxSnapshotBody-(1<<20)) // unknown field: ignored, but on the wire
+	body["padding"] = strings.Repeat("x", DefaultMaxSnapshotBytes-(1<<20)) // unknown field: ignored, but on the wire
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)

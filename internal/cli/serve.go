@@ -31,6 +31,9 @@ type serveOptions struct {
 	targets      string
 	teamMap      string
 
+	maxSnapshotBytes int64
+	maxGateBytes     int64
+
 	// parsedTargets is opts.targets parsed once by validateServeOptions;
 	// runServe consumes it instead of re-parsing the raw CSV.
 	parsedTargets []inventory.Version
@@ -77,6 +80,9 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		ExtraTargets: extraTargets,
 		TeamMap:      opts.parsedTeamMap,
 		Version:      version,
+
+		MaxSnapshotBytes: opts.maxSnapshotBytes,
+		MaxGateBytes:     opts.maxGateBytes,
 	})
 	if err != nil {
 		return err
@@ -138,6 +144,8 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.webhook, "webhook", "", "generic webhook URL (POSTed the raw event JSON)")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
+	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression)")
+	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes")
 	_ = cmd.MarkFlagRequired("ingest-token")
 
 	return cmd
@@ -147,6 +155,12 @@ func newServeCmd() *cobra.Command {
 // opts.parsedTargets/parsedTeamMap (single parse site — runServe never sees
 // the raw values).
 func validateServeOptions(opts *serveOptions) error {
+	if opts.maxSnapshotBytes <= 0 {
+		return fmt.Errorf("--max-snapshot-bytes must be positive, got %d", opts.maxSnapshotBytes)
+	}
+	if opts.maxGateBytes <= 0 {
+		return fmt.Errorf("--max-gate-bytes must be positive, got %d", opts.maxGateBytes)
+	}
 	if opts.teamMap != "" {
 		tm, err := server.LoadTeamMap(opts.teamMap)
 		if err != nil {

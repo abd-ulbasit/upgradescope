@@ -47,7 +47,31 @@ type Config struct {
 	ReadToken    string          // optional bearer for the read API; "" = open (document loudly)
 	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
 	Version      string          // build version stamped into SARIF tool metadata ("" = omitted)
+
+	MaxSnapshotBytes int64 // POST /api/v1/snapshots body cap; 0 = DefaultMaxSnapshotBytes
+	MaxGateBytes     int64 // POST /api/v1/gate body cap; 0 = DefaultMaxGateBytes
 }
+
+// /gate concurrency. Each evaluation decodes its manifests in memory: the
+// worst document that passes maxManifestDocBytes peaks the process at
+// ~260 MB RSS, and two at once at ~480 MB — too close to the chart's 512Mi
+// limit. So evaluations run one at a time (a normal one takes
+// milliseconds); the rest wait for the slot, then get 503 + Retry-After.
+// The body is read before the slot is taken, so slow uploaders cannot
+// hold it.
+//
+// Waiting bodies are themselves held in memory, so they are bounded too:
+// at most maxBufferedGateBodies × the body cap across every request that
+// is reading or waiting. Bytes are charged as they arrive (a slow uploader
+// holds only what it has sent) and returned once the manifests are
+// decoded; a request that would overflow gets 503 + Retry-After at once.
+// Without this, 30 concurrent 9.5 MiB streams of small documents — each
+// under every per-request cap — buffered ~800 MB.
+const (
+	maxConcurrentGates    = 1
+	gateQueueTimeout      = 30 * time.Second
+	maxBufferedGateBodies = 3
+)
 
 // Server serves the ingest + read API. Construct with New; a Server is
 // single-use (one Start/Shutdown cycle).
@@ -57,6 +81,10 @@ type Server struct {
 	mux          *http.ServeMux
 	httpSrv      *http.Server
 	now          func() time.Time // injected clock: EOL math + timestamps stay testable
+
+	gateSlots        chan struct{} // semaphore: one token per running /gate evaluation
+	gateQueueTimeout time.Duration // how long a /gate request waits for a slot
+	gateBuffered     *byteBudget   // /gate body bytes held across requests
 
 	ready chan struct{} // closed once the listener is bound
 	mu    sync.Mutex
@@ -72,11 +100,14 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("server: Config.IngestToken is required")
 	}
 	s := &Server{
-		cfg:   cfg,
-		now:   time.Now,
-		mux:   http.NewServeMux(),
-		ready: make(chan struct{}),
+		cfg:              cfg,
+		now:              time.Now,
+		mux:              http.NewServeMux(),
+		gateSlots:        make(chan struct{}, maxConcurrentGates),
+		gateQueueTimeout: gateQueueTimeout,
+		ready:            make(chan struct{}),
 	}
+	s.gateBuffered = newByteBudget(maxBufferedGateBodies * s.maxGateBytes())
 	for _, t := range cfg.ExtraTargets {
 		v, err := inventory.ParseVersion(t)
 		if err != nil {
@@ -136,6 +167,24 @@ func (s *Server) handler() http.Handler {
 // Handler exposes the full route table (API + dashboard fallback) for
 // httptest and embedding.
 func (s *Server) Handler() http.Handler { return s.handler() }
+
+// acquireGateSlot waits for a /gate evaluation slot. On success the caller
+// must call release (idempotent); otherwise the 503 (or nothing, for a
+// client that went away) has been written.
+func (s *Server) acquireGateSlot(w http.ResponseWriter, r *http.Request) (release func(), ok bool) {
+	timer := time.NewTimer(s.gateQueueTimeout)
+	defer timer.Stop()
+	select {
+	case s.gateSlots <- struct{}{}:
+		return sync.OnceFunc(func() { <-s.gateSlots }), true
+	case <-r.Context().Done():
+		return nil, false
+	case <-timer.C:
+		w.Header().Set("Retry-After", "10")
+		errJSON(w, http.StatusServiceUnavailable, "too many concurrent gate evaluations; retry shortly")
+		return nil, false
+	}
+}
 
 // Start binds Config.Listen and serves until Shutdown. It returns nil after
 // a clean Shutdown, otherwise the listen/serve error. Once Ready() is
