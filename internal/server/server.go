@@ -197,11 +197,22 @@ func (s *Server) Start() error {
 	s.mu.Lock()
 	s.addr = ln.Addr().String()
 	s.mu.Unlock()
+	s.logStartup()
 	close(s.ready)
 	if err := s.httpSrv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// logStartup reports the bound address and warns about configurations an
+// operator should know they are running: a silent start used to hide that
+// every read endpoint was open.
+func (s *Server) logStartup() {
+	log.Printf("server: listening on http://%s", s.Addr())
+	if s.cfg.ReadToken == "" {
+		log.Printf("WARN server: no read token: the read API, dashboard data and /api/v1/gate are open to anyone who can reach %s", s.Addr())
+	}
 }
 
 // Ready is closed once the listener is bound. It is NEVER closed when

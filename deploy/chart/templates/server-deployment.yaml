@@ -40,6 +40,10 @@ spec:
             - --ingest-token=$(UPGRADESCOPE_INGEST_TOKEN)
             {{- if .Values.server.readToken }}
             - --read-token=$(UPGRADESCOPE_READ_TOKEN)
+            {{- else }}
+            # serve refuses an open read API on a non-loopback address
+            # unless told otherwise; see server.readToken in values.yaml.
+            - --allow-anonymous-read
             {{- end }}
             {{- if .Values.server.slackWebhook }}
             - --slack-webhook={{ .Values.server.slackWebhook }}

@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -216,6 +218,54 @@ func TestShutdownWithStalledClient(t *testing.T) {
 		t.Fatalf("shutdown took %s, want it bounded by the drain window", took)
 	}
 	waitClosed(t, conn, 2*time.Second)
+}
+
+// captureLog redirects the standard logger for the rest of the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf syncBuffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &buf.Buffer
+}
+
+// syncBuffer is a bytes.Buffer safe for the logger's concurrent writes.
+type syncBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+// Start announces where it listens, and warns loudly when the read API is
+// open because no read token is configured.
+func TestStartLogsListenAndOpenReadWarning(t *testing.T) {
+	out := captureLog(t)
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.Listen = "127.0.0.1:0" })
+	startServer(t, s)
+	got := out.String()
+	if !strings.Contains(got, "listening on http://"+s.Addr()) {
+		t.Errorf("log %q lacks the listening line", got)
+	}
+	if !strings.Contains(got, "WARN") || !strings.Contains(got, "no read token") {
+		t.Errorf("log %q lacks the open-read WARN", got)
+	}
+}
+
+func TestStartNoOpenReadWarningWithReadToken(t *testing.T) {
+	out := captureLog(t)
+	s := newTestServer(t, newFakeStore(), func(c *Config) {
+		c.Listen = "127.0.0.1:0"
+		c.ReadToken = "read-tok"
+	})
+	startServer(t, s)
+	if got := out.String(); !strings.Contains(got, "listening on") || strings.Contains(got, "no read token") {
+		t.Errorf("log %q: want the listening line and no open-read WARN", got)
+	}
 }
 
 // The connection limits must not break the largest legitimate request: a

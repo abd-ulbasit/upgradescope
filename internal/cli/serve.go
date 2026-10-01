@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -31,8 +32,9 @@ type serveOptions struct {
 	targets      string
 	teamMap      string
 
-	maxSnapshotBytes int64
-	maxGateBytes     int64
+	maxSnapshotBytes   int64
+	maxGateBytes       int64
+	allowAnonymousRead bool
 
 	// parsedTargets is opts.targets parsed once by validateServeOptions;
 	// runServe consumes it instead of re-parsing the raw CSV.
@@ -134,12 +136,13 @@ func newServeCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.listen, "listen", ":8080", "address to listen on")
+	cmd.Flags().StringVar(&opts.listen, "listen", "127.0.0.1:8080", "address to listen on (loopback by default; use :8080 for all interfaces)")
 	cmd.Flags().StringVar(&opts.db, "db", "upgradescope.db", "path to the SQLite database (parent directory is created)")
 	cmd.Flags().StringVar(&opts.dbURL, "db-url", "", "Postgres URL (postgres://user:pass@host:5432/db); mutually exclusive with --db")
 	cmd.MarkFlagsMutuallyExclusive("db", "db-url")
 	cmd.Flags().StringVar(&opts.ingestToken, "ingest-token", "", "shared bearer token agents present to push snapshots (required; per-cluster tokens via 'upgradescope tokens create' are also accepted on ingest)")
-	cmd.Flags().StringVar(&opts.readToken, "read-token", "", "bearer token for the read API (empty = OPEN read access)")
+	cmd.Flags().StringVar(&opts.readToken, "read-token", "", "bearer token for the read API and /api/v1/gate (empty = OPEN read access; refused on non-loopback --listen without --allow-anonymous-read)")
+	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
 	cmd.Flags().StringVar(&opts.slackWebhook, "slack-webhook", "", "Slack incoming-webhook URL for delta notifications")
 	cmd.Flags().StringVar(&opts.webhook, "webhook", "", "generic webhook URL (POSTed the raw event JSON)")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
@@ -151,6 +154,21 @@ func newServeCmd() *cobra.Command {
 	return cmd
 }
 
+// isLoopbackListen reports whether a --listen address binds only loopback:
+// "localhost" or a loopback IP. An empty host (":8080"), a wildcard IP and
+// any other hostname count as exposed — fail closed rather than resolve.
+func isLoopbackListen(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // validateServeOptions parses --targets and loads --team-map once into
 // opts.parsedTargets/parsedTeamMap (single parse site — runServe never sees
 // the raw values).
@@ -160,6 +178,10 @@ func validateServeOptions(opts *serveOptions) error {
 	}
 	if opts.maxGateBytes <= 0 {
 		return fmt.Errorf("--max-gate-bytes must be positive, got %d", opts.maxGateBytes)
+	}
+	if opts.readToken == "" && !opts.allowAnonymousRead && !isLoopbackListen(opts.listen) {
+		return fmt.Errorf("refusing to serve the read API and /api/v1/gate without a token on %q: "+
+			"set --read-token, listen on loopback, or pass --allow-anonymous-read to accept open reads", opts.listen)
 	}
 	if opts.teamMap != "" {
 		tm, err := server.LoadTeamMap(opts.teamMap)

@@ -110,8 +110,12 @@ func TestServeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.listen != ":8080" {
-		t.Errorf("listen = %q, want :8080", got.listen)
+	// Loopback by default: a bare `serve` must not publish the read API.
+	if got.listen != "127.0.0.1:8080" {
+		t.Errorf("listen = %q, want 127.0.0.1:8080", got.listen)
+	}
+	if got.allowAnonymousRead {
+		t.Error("allowAnonymousRead must default to false")
 	}
 	if got.db != "upgradescope.db" {
 		t.Errorf("db = %q, want upgradescope.db", got.db)
@@ -125,6 +129,42 @@ func TestServeDefaults(t *testing.T) {
 	if got.maxSnapshotBytes != server.DefaultMaxSnapshotBytes || got.maxGateBytes != server.DefaultMaxGateBytes {
 		t.Errorf("body caps = %d/%d, want server defaults %d/%d", got.maxSnapshotBytes, got.maxGateBytes,
 			server.DefaultMaxSnapshotBytes, server.DefaultMaxGateBytes)
+	}
+}
+
+// Without a read token the read API and /gate are open, so serve refuses a
+// non-loopback listen address unless open reads are explicitly accepted.
+func TestServeAnonymousReadGuard(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantErr bool
+	}{
+		{"default loopback", nil, false},
+		{"ipv4 loopback", []string{"--listen", "127.0.0.1:9000"}, false},
+		{"ipv6 loopback", []string{"--listen", "[::1]:9000"}, false},
+		{"localhost", []string{"--listen", "localhost:9000"}, false},
+		{"all interfaces", []string{"--listen", ":8080"}, true},
+		{"wildcard ip", []string{"--listen", "0.0.0.0:8080"}, true},
+		{"routable ip", []string{"--listen", "10.0.0.5:8080"}, true},
+		{"hostname", []string{"--listen", "uscope.internal:8080"}, true},
+		{"all interfaces with read token", []string{"--listen", ":8080", "--read-token", "r"}, false},
+		{"all interfaces, explicitly open", []string{"--listen", ":8080", "--allow-anonymous-read"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := execServe(t, append([]string{"--ingest-token", "t"}, tc.args...), serveOK())
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "--allow-anonymous-read") ||
+					!strings.Contains(err.Error(), "--read-token") {
+					t.Fatalf("want a refusal naming --read-token and --allow-anonymous-read, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
