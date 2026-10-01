@@ -50,14 +50,26 @@ This is a single-maintainer project, so these are targets rather than an SLA:
 
 In scope:
 
-- **Agent RBAC and in-cluster footprint.** The chart grants the agent
-  cluster-wide `get`/`list`/`watch` on all resources, including Secrets,
-  because Helm release Secrets cannot be filtered by type in RBAC. It also
-  grants `get` on `/metrics` and `/version`, write access to the
-  `ClusterReadiness` CRD, and write access to `clusterreadinesses`. Report
-  anything that lets the agent, or someone abusing its ServiceAccount, write
-  outside that surface, or that leaks Secret contents beyond the Helm release
-  metadata the agent needs.
+- **Agent RBAC and in-cluster footprint.** The chart's ClusterRole
+  (`deploy/chart/templates/rbac.yaml`) grants the agent's ServiceAccount:
+  - cluster-wide `get`/`list`/`watch` on all resources, including Secrets,
+    because Helm release Secrets cannot be filtered by type in RBAC;
+  - `get` on the `/metrics` and `/version` endpoints;
+  - `create`/`get`/`update`/`patch` on `customresourcedefinitions`, **not
+    restricted by `resourceNames`**. The agent uses this at startup to create
+    or update the `ClusterReadiness` CRD (`crd.EnsureCRD`). Because the rule
+    is not narrowed by name, the ServiceAccount can modify **any** CRD in the
+    cluster, including its schema and conversion webhook. Treat its token as
+    privileged;
+  - `get`/`list`/`watch`/`create`/`update` on `clusterreadinesses`, and
+    `get`/`update`/`patch` on `clusterreadinesses/status`.
+
+  The agent's code writes only the `ClusterReadiness` CRD and its own
+  `ClusterReadiness` object. Report anything that makes the agent write
+  anything else, any way to obtain or abuse its ServiceAccount token, and any
+  leak of Secret contents beyond the Helm release metadata the agent needs.
+  The breadth of the grants listed above is known, so a report that only
+  restates them is not a new finding.
 - **Server authentication and authorization.** This covers the ingest bearer
   tokens (the shared `--ingest-token` and per-cluster tokens from
   `upgradescope tokens`), the read token, the cluster binding of per-cluster
