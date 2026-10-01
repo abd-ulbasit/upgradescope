@@ -2,10 +2,10 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -193,8 +193,12 @@ func serveGate(s *Server, w http.ResponseWriter, body string) {
 // across every waiting request must be bounded too, not only the
 // evaluation. With the slot busy, n concurrent maximum-size streams of
 // small documents (each under every per-request cap) may hold at most
-// maxBufferedGateBodies bodies; the rest wait unread, and every one is
-// evaluated once the slot frees.
+// maxBufferedGateBodies bodies. Four do not fit, so exactly
+// maxBufferedGateBodies are read whole and wait for the slot (a refused
+// request gives its bytes back as it is refused, so it never crowds out
+// one that fits); every other request is refused with 503 + Retry-After
+// as soon as its bytes stop fitting, without waiting for the slot to
+// free. The held ones are evaluated once it does.
 func TestGateBufferedBodiesAreBounded(t *testing.T) {
 	const limit = 1 << 20
 	s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxGateBytes = limit })
@@ -203,46 +207,66 @@ func TestGateBufferedBodiesAreBounded(t *testing.T) {
 		s.gateSlots <- struct{}{} // hold the evaluation slot
 	}
 	body := smallConfigMaps(limit - 4<<10)
+	budget := int64(maxBufferedGateBodies * len(body))
+	if int64(len(body)) > limit || budget+int64(len(body)) <= s.gateBuffered.max {
+		t.Fatalf("fixture is %d bytes: want %d bodies to fit the %d-byte budget and one more not to",
+			len(body), maxBufferedGateBodies, s.gateBuffered.max)
+	}
 	var before runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 
 	const n = 12
 	type result struct {
-		code int
-		body string
+		code       int
+		retryAfter string
+		body       string
 	}
 	results := make(chan result, n)
 	for range n {
 		go func() {
 			rec := httptest.NewRecorder()
 			serveGate(s, rec, body)
-			results <- result{rec.Code, rec.Body.String()}
+			results <- result{rec.Code, rec.Header().Get("Retry-After"), rec.Body.String()}
 		}()
 	}
-	budget := int64(maxBufferedGateBodies * len(body))
-	for deadline := time.Now().Add(10 * time.Second); s.gateBuffered.inUse() < budget; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("buffered %d bytes, want the full %d-byte budget in use while the slot is busy", s.gateBuffered.inUse(), budget)
+	for range n - maxBufferedGateBodies {
+		select {
+		case r := <-results:
+			if r.code != http.StatusServiceUnavailable || r.retryAfter == "" {
+				t.Fatalf("status = %d (%s), Retry-After %q; want 503 with Retry-After while the budget is full",
+					r.code, r.body, r.retryAfter)
+			}
+		case <-time.After(time.Minute):
+			t.Fatalf("fewer than %d requests were refused while the slot was busy", n-maxBufferedGateBodies)
 		}
 	}
-	time.Sleep(200 * time.Millisecond) // let any unbounded reader show up
-	var during runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&during)
+	// The last refusal can come before the last kept body is fully read.
+	waitBuffered(t, s, budget)
 	// Unbounded, the 12 bodies alone are 12 MiB (plus read slack); bounded,
 	// 3 are 3 MiB. 2x the budget leaves room for the test's own garbage.
-	if grew := int64(during.HeapAlloc) - int64(before.HeapAlloc); grew > 2*budget {
-		t.Fatalf("heap grew %d MiB with %d requests waiting; budget is %d MiB", grew>>20, n, budget>>20)
+	// Sampled until it settles: the last kept request may still be running
+	// its document check, whose garbage is not the bodies being held.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		var during runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&during)
+		grew := int64(during.HeapAlloc) - int64(before.HeapAlloc)
+		if grew <= 2*budget {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("heap grew %d MiB with %d requests waiting; budget is %d MiB", grew>>20, maxBufferedGateBodies, budget>>20)
+		}
 	}
 	if used := s.gateBuffered.inUse(); used != budget {
-		t.Fatalf("%d bytes charged, want exactly the %d-byte budget", used, budget)
+		t.Fatalf("%d bytes charged, want exactly the %d bodies waiting for the slot (%d bytes)", used, maxBufferedGateBodies, budget)
 	}
 
 	for range cap(s.gateSlots) {
 		<-s.gateSlots
 	}
-	for range n {
+	for range maxBufferedGateBodies {
 		select {
 		case r := <-results:
 			if r.code != http.StatusOK {
@@ -257,26 +281,129 @@ func TestGateBufferedBodiesAreBounded(t *testing.T) {
 	}
 }
 
-// A request that cannot get room for its body before the queue timeout is
-// refused with 503 + Retry-After, without its body being read.
-func TestGateBodyBudgetTimeout(t *testing.T) {
+// With the budget full, a request is refused with 503 + Retry-After at
+// once — not after the queue timeout — having read no more than its first
+// chunk, and gets in as soon as there is room.
+func TestGateBodyBudgetFull(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
-	s.gateQueueTimeout = 50 * time.Millisecond
-	s.gateBuffered.take(context.Background(), s.gateBuffered.max, 0)
-	rd := &countingReader{r: strings.NewReader(pspManifest)}
+	s.gateQueueTimeout = time.Minute
+	if !s.gateBuffered.charge(0, s.gateBuffered.max) {
+		t.Fatal("could not fill an empty budget")
+	}
+	body := smallConfigMaps(64 << 10)
+	rd := &countingReader{r: strings.NewReader(body)}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate?target=1.35", rd)
-	req.ContentLength = int64(len(pspManifest))
+	req.ContentLength = int64(len(body))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rec := httptest.NewRecorder()
+	began := time.Now()
 	s.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" || rd.n != 0 {
-		t.Fatalf("status = %d (%s), Retry-After %q, %d body bytes read; want 503 with Retry-After and an unread body",
-			rec.Code, rec.Body, rec.Header().Get("Retry-After"), rd.n)
+	if took := time.Since(began); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" ||
+		rd.n > minGateChunk || took > 10*time.Second {
+		t.Fatalf("status = %d (%s), Retry-After %q, %d body bytes read, after %s; want 503 with Retry-After at once, at most %d bytes read",
+			rec.Code, rec.Body, rec.Header().Get("Retry-After"), rd.n, took.Round(time.Millisecond), minGateChunk)
+	}
+	if used := s.gateBuffered.inUse(); used != s.gateBuffered.max {
+		t.Fatalf("refused request left %d bytes charged, want the %d it found", used, s.gateBuffered.max)
 	}
 	s.gateBuffered.give(s.gateBuffered.max)
-	if code, _, raw := gateStatus(t, s, pspManifest); code != http.StatusOK {
+	if code, _, raw := gateStatus(t, s, body); code != http.StatusOK {
 		t.Fatalf("with room: status = %d (%s), want 200", code, raw)
 	}
+	if used := s.gateBuffered.inUse(); used != 0 {
+		t.Fatalf("%d body bytes still charged after the request finished", used)
+	}
+}
+
+// stallUpload opens a raw connection, sends /gate request headers declaring
+// a Content-Length of declared bytes, sends the first sent bytes of that
+// body and then stalls. The connection is closed at cleanup.
+func stallUpload(t *testing.T, ts *httptest.Server, declared int64, sent int) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if _, err := fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: gate\r\n"+
+		"Content-Type: application/x-yaml\r\nContent-Length: %d\r\n\r\n%s",
+		declared, strings.Repeat("#", sent)); err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+// readSignal sends on reading, once, when the handler first reads the
+// request body.
+type readSignal struct {
+	io.ReadCloser
+	once    sync.Once
+	reading chan<- struct{}
+}
+
+func (b *readSignal) Read(p []byte) (int, error) {
+	b.once.Do(func() { b.reading <- struct{}{} })
+	return b.ReadCloser.Read(p)
+}
+
+// waitBuffered waits until exactly want /gate body bytes are charged.
+func waitBuffered(t *testing.T, s *Server, want int64) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); s.gateBuffered.inUse() != want; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d body bytes charged, want %d", s.gateBuffered.inUse(), want)
+		}
+	}
+}
+
+// Connections that declare a maximum-size body and never send it must not
+// hold the buffered-body budget. When a request reserved its whole
+// Content-Length before reading, maxBufferedGateBodies of them filled the
+// budget until ReadTimeout, and every legitimate /gate request waited out
+// the queue timeout and got 503.
+func TestGateStalledUploadsDoNotBlockGate(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	s.gateQueueTimeout = 3 * time.Second
+	reading := make(chan struct{}, maxBufferedGateBodies+1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = &readSignal{ReadCloser: r.Body, reading: reading}
+		s.Handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close) // runs after the stalled connections close
+	for range maxBufferedGateBodies {
+		stallUpload(t, ts, s.maxGateBytes(), 0)
+	}
+	for range maxBufferedGateBodies {
+		select {
+		case <-reading:
+		case <-time.After(10 * time.Second):
+			t.Fatal("stalled requests never started reading their bodies")
+		}
+	}
+
+	began := time.Now()
+	resp, raw := postGate(t, ts, "?target=1.35", "", pspManifest, "application/x-yaml")
+	if took := time.Since(began); resp.StatusCode != http.StatusOK || took >= s.gateQueueTimeout {
+		t.Fatalf("with %d stalled uploads: status = %d (%s) after %s; want 200 well inside the %s queue timeout",
+			maxBufferedGateBodies, resp.StatusCode, raw, took.Round(time.Millisecond), s.gateQueueTimeout)
+	}
+}
+
+// A stalled upload is charged for the bytes it has sent, not for the
+// Content-Length it declared, and gives them back when its connection ends.
+func TestGateStalledUploadHoldsOnlyWhatItSent(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	const sent = 1000
+	conn := stallUpload(t, ts, s.maxGateBytes(), sent)
+	waitBuffered(t, s, sent)
+	time.Sleep(100 * time.Millisecond) // nothing more arrives, so nothing more is charged
+	if used := s.gateBuffered.inUse(); used != sent {
+		t.Fatalf("%d body bytes charged for an upload that sent %d", used, sent)
+	}
+	conn.Close()
+	waitBuffered(t, s, 0)
 }
 
 type countingReader struct {

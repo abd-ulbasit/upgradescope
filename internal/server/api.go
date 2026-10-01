@@ -70,48 +70,35 @@ func (s *Server) maxGateBytes() int64 {
 	return DefaultMaxGateBytes
 }
 
-// byteBudget is a counting semaphore over bytes: the /gate bodies held in
-// memory across all requests at once.
+// byteBudget caps the /gate body bytes held in memory across all requests.
+// It never blocks: a charge either fits now or is refused.
 type byteBudget struct {
-	mu      sync.Mutex
-	used    int64
-	max     int64
-	changed chan struct{} // closed (and replaced) whenever bytes are given back
+	mu   sync.Mutex
+	used int64
+	max  int64
 }
 
-func newByteBudget(max int64) *byteBudget {
-	return &byteBudget{max: max, changed: make(chan struct{})}
+func newByteBudget(limit int64) *byteBudget {
+	return &byteBudget{max: limit}
 }
 
-// take charges n bytes, waiting up to timeout for room. It reports false
-// (charging nothing) on timeout or when ctx ends first.
-func (b *byteBudget) take(ctx context.Context, n int64, timeout time.Duration) bool {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	for {
-		b.mu.Lock()
-		if b.used+n <= b.max {
-			b.used += n
-			b.mu.Unlock()
-			return true
-		}
-		changed := b.changed
-		b.mu.Unlock()
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return false
-		case <-timer.C:
-			return false
-		}
+// charge adds n bytes to a request that already holds held. If they do
+// not fit, it gives back held in the same step and reports false, so a
+// refused request's bytes never count against another request's charge.
+func (b *byteBudget) charge(held, n int64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used+n > b.max {
+		b.used -= held
+		return false
 	}
+	b.used += n
+	return true
 }
 
 func (b *byteBudget) give(n int64) {
 	b.mu.Lock()
 	b.used -= n
-	close(b.changed)
-	b.changed = make(chan struct{})
 	b.mu.Unlock()
 }
 
@@ -121,61 +108,92 @@ func (b *byteBudget) inUse() int64 {
 	return b.used
 }
 
+// /gate bodies are read into chunks: the first is minGateChunk bytes and
+// each next one is as large as everything received so far, up to
+// maxGateChunk. A client that declares a large Content-Length and then
+// sends little has little allocated, and a large body costs no copying.
+const (
+	minGateChunk = 512
+	maxGateChunk = 64 << 10
+)
+
+// gateBody is a buffered /gate request body, in the chunks it was read in.
+type gateBody [][]byte
+
+// reader returns a fresh reader over the whole body.
+func (b gateBody) reader() io.Reader {
+	rs := make([]io.Reader, len(b))
+	for i, c := range b {
+		rs[i] = bytes.NewReader(c)
+	}
+	return io.MultiReader(rs...)
+}
+
 // readManifestBody reads a /gate manifest stream under the body cap and the
 // shared buffered-body budget, then splits it (the same kubectl-compatible
 // splitter collect uses) to check the document count and each document's
 // size before anything decodes it. It writes the 413/422/503 itself.
 //
-// The budget is charged before the first byte is read: the declared
-// Content-Length, or the whole body cap for a chunked upload (the unused
-// part is given back once the body is in). Charging up front means a
-// request never holds half a body while it waits for room, so waiting
-// requests cannot deadlock each other, and a request that cannot get room
-// in time is refused before its body is read. On success the caller must
-// call release once it no longer needs the body; release is idempotent.
-func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body []byte, release func(), ok bool) {
+// Each read is charged to the budget for exactly the bytes it returned,
+// as they arrive. A declared Content-Length reserves nothing (it only
+// bounds the reads, and one over the cap is refused before any are made),
+// so a client that stalls mid-upload holds only what it has sent, until
+// ReadTimeout ends its request. When a charge does not fit, the request
+// gives back everything it holds, in the same step, and gets 503 +
+// Retry-After immediately. Nothing waits for budget, let alone while
+// holding some, so concurrent uploads cannot deadlock or queue behind a
+// stalled one. On success the caller must call release once it no longer
+// needs the body; release is idempotent. On failure everything has
+// already been given back.
+func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body gateBody, release func(), ok bool) {
 	limit := s.maxGateBytes()
 	tooLarge := "manifest stream exceeds the " + sizeString(limit) + " limit"
 	if r.ContentLength > limit {
 		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
 		return nil, nil, false
 	}
-	held := limit
-	if r.ContentLength >= 0 {
-		held = r.ContentLength
-	}
-	if !s.gateBuffered.take(r.Context(), held, s.gateQueueTimeout) {
-		if r.Context().Err() == nil {
-			w.Header().Set("Retry-After", "10")
-			errJSON(w, http.StatusServiceUnavailable, "too many concurrent gate requests; retry shortly")
-		}
-		return nil, nil, false
-	}
 
-	var err error
-	if r.ContentLength >= 0 {
-		// Exactly the declared size: net/http stops the body there.
-		body = make([]byte, r.ContentLength)
-		_, err = io.ReadFull(r.Body, body)
-	} else {
-		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
-		if err == nil {
-			s.gateBuffered.give(held - int64(len(body)))
-			held = int64(len(body))
-		}
-	}
+	var held int64 // bytes received and charged so far
 	release = sync.OnceFunc(func() { s.gateBuffered.give(held) })
-	if err != nil {
-		release()
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+	src := http.MaxBytesReader(w, r.Body, limit)
+	for {
+		if len(body) == 0 || len(body[len(body)-1]) == cap(body[len(body)-1]) {
+			size := min(max(held, minGateChunk), maxGateChunk)
+			if r.ContentLength >= 0 {
+				size = min(size, r.ContentLength-held)
+			}
+			if size == 0 {
+				break // the whole declared Content-Length is in
+			}
+			body = append(body, make([]byte, 0, size))
+		}
+		chunk := body[len(body)-1]
+		n, err := src.Read(chunk[len(chunk):cap(chunk)])
+		if n > 0 {
+			if !s.gateBuffered.charge(held, int64(n)) { // gives back held too
+				w.Header().Set("Retry-After", "10")
+				errJSON(w, http.StatusServiceUnavailable, "too many concurrent gate requests; retry shortly")
+				return nil, nil, false
+			}
+			held += int64(n)
+			body[len(body)-1] = chunk[:len(chunk)+n]
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			release()
+			var mbe *http.MaxBytesError
+			if errors.As(err, &mbe) {
+				errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+				return nil, nil, false
+			}
+			errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
 			return nil, nil, false
 		}
-		errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
-		return nil, nil, false
 	}
-	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(body)))
+
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(body.reader()))
 	for n := 1; ; n++ {
 		doc, err := docs.Read()
 		if errors.Is(err, io.EOF) {

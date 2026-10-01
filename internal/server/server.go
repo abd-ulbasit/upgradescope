@@ -58,21 +58,28 @@ type Config struct {
 	TLSKeyFile  string
 }
 
-// /gate concurrency. Each evaluation decodes its manifests in memory: the
-// worst document that passes maxManifestDocBytes peaks the process at
-// ~260 MB RSS, and two at once at ~480 MB — too close to the chart's 512Mi
-// limit. So evaluations run one at a time (a normal one takes
-// milliseconds); the rest wait for the slot, then get 503 + Retry-After.
-// The body is read before the slot is taken, so slow uploaders cannot
-// hold it.
+// /gate concurrency and memory. Each evaluation decodes its manifests in
+// memory: the worst document that passes maxManifestDocBytes peaks the
+// process at ~260 MB RSS, and two at once at ~480 MB — too close to the
+// chart's 512Mi limit. So evaluations run one at a time (a normal one
+// takes milliseconds). A request asks for the slot only once its whole
+// body is in, so a slow uploader cannot hold it; it waits up to
+// gateQueueTimeout for the slot, then gets 503 + Retry-After.
 //
-// Waiting bodies are themselves held in memory, so they are bounded too:
-// at most maxBufferedGateBodies × the body cap across every request that
-// is reading or waiting. Bytes are charged as they arrive (a slow uploader
-// holds only what it has sent) and returned once the manifests are
-// decoded; a request that would overflow gets 503 + Retry-After at once.
-// Without this, 30 concurrent 9.5 MiB streams of small documents — each
-// under every per-request cap — buffered ~800 MB.
+// Bodies sit in memory while they arrive and while they wait for the
+// slot, so the bytes held across all /gate requests are capped at
+// maxBufferedGateBodies × --max-gate-bytes (30 MiB by default). A request
+// is charged for its body bytes as each read returns them — a declared
+// Content-Length reserves nothing — and gives them all back once its
+// manifests are decoded or it fails. A charge that does not fit is never
+// waited for: the request gives back everything it holds, in the same
+// step, and gets 503 + Retry-After at once. No request waits for budget,
+// so none can deadlock on it or queue behind a stalled upload; filling the
+// cap takes really sending that many bytes. A stalled uploader holds the
+// bytes it has sent, plus the unfilled rest of one read chunk (at most
+// 64 KiB, uncharged), until ReadTimeout ends its request — and never the
+// evaluation slot. Without the cap, 30 concurrent 9.5 MiB streams of small
+// documents — each under every per-request cap — buffered ~800 MB.
 const (
 	maxConcurrentGates    = 1
 	gateQueueTimeout      = 30 * time.Second
