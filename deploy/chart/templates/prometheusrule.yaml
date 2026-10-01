@@ -1,0 +1,58 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+{{- $agentJob := printf "%s-agent-metrics" (include "upgradescope.fullname" .) }}
+{{- $serverJob := include "upgradescope.serverFullname" . }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "upgradescope.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: upgradescope-agent
+      rules:
+        - alert: UpgradescopeUpgradeBlocked
+          expr: upgradescope_readiness_verdict{job="{{ $agentJob }}",verdict="blocked"} == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `Upgrade to Kubernetes {{ $labels.target }} is blocked` | quote }}
+            description: {{ `The upgradescope agent ({{ $labels.namespace }}/{{ $labels.pod }}) found blockers for target {{ $labels.target }}. kubectl get clusterreadiness -o yaml lists them.` | quote }}
+        - alert: UpgradescopeVerdictUnknown
+          expr: upgradescope_readiness_verdict{job="{{ $agentJob }}",verdict="unknown"} == 1
+          for: 1h
+          labels:
+            severity: info
+          annotations:
+            summary: {{ `Upgrade readiness for {{ $labels.target }} has been unknown for over 1h` | quote }}
+            description: {{ `No blockers were found for target {{ $labels.target }}, but a required check was not assessed, so the cluster cannot be called ready. status.notAssessed on the ClusterReadiness object says which and why (usually missing RBAC).` | quote }}
+        - alert: UpgradescopeAgentNotTicking
+          # Two missed intervals plus the 5m tick deadline, or no agent
+          # being scraped at all.
+          expr: |-
+            time() - upgradescope_agent_last_success_timestamp_seconds{job="{{ $agentJob }}"}
+              > 2 * upgradescope_agent_interval_seconds{job="{{ $agentJob }}"} + 300
+            or absent(up{job="{{ $agentJob }}"} == 1)
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: The upgradescope agent has not completed a tick recently
+            description: {{ printf "The ClusterReadiness status is going stale. kubectl -n %s logs deploy/%s-agent shows each tick's error." .Release.Namespace (include "upgradescope.fullname" .) | quote }}
+    {{- if .Values.server.enabled }}
+    - name: upgradescope-server
+      rules:
+        - alert: UpgradescopeClusterStale
+          expr: upgradescope_cluster_last_push_age_seconds{job="{{ $serverJob }}"} > {{ int .Values.metrics.prometheusRule.clusterStaleAfterSeconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `Cluster {{ $labels.cluster }} stopped pushing snapshots` | quote }}
+            description: {{ `The upgradescope server has had no snapshot from {{ $labels.cluster }} for {{ $value | humanizeDuration }}. Its agent is down, cannot reach the server, or its token was revoked; the fleet view shows its last known state.` | quote }}
+    {{- end }}
+{{- end }}

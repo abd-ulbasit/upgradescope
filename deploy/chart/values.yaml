@@ -78,6 +78,14 @@ agent:
   # inline token for anything beyond dev). The token reaches the agent as
   # $UPGRADESCOPE_SERVER_TOKEN from a secretKeyRef, never as an argument.
   existingSecret: ""
+  # Port of the agent's /healthz (liveness), /readyz (a tick succeeded
+  # within two intervals) and /metrics (Prometheus) listener, named "http"
+  # on the pod. See docs/observability.md.
+  healthPort: 8081
+  # Log format, text (logfmt) or json, and level: debug, info, warn, error.
+  # The agent logs one line at startup and one per tick.
+  logFormat: text
+  logLevel: info
   # Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"].
   extraArgs: []
   # Extra container env, volumes and mounts. Private CA for pushes to a
@@ -212,6 +220,46 @@ networkPolicy:
   # server.enabled, or on a CNI that does not enforce NetworkPolicy).
   enabled: false
   # Extra NetworkPolicyPeer entries allowed to reach the server, e.g. the
-  # ingress controller or the CI runners that call /api/v1/gate:
+  # ingress controller or the CI runners that call /api/v1/gate. The
+  # server's /metrics is on the same port, so list Prometheus here when
+  # metrics.serviceMonitor is enabled:
   #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
   serverIngressFrom: []
+
+# Prometheus Operator and Grafana integration, all off by default. The
+# metrics themselves are always served: the agent's on agent.healthPort,
+# the server's on its Service port (behind the read token when one is
+# set). docs/observability.md lists every metric and alert.
+metrics:
+  serviceMonitor:
+    # Render monitoring.coreos.com/v1 ServiceMonitors for the agent (plus a
+    # headless Service for its metrics port) and, with server.enabled, the
+    # server. Needs the Prometheus Operator CRDs.
+    enabled: false
+    interval: 1m
+    # Labels your Prometheus selects ServiceMonitors by, e.g.
+    # {release: kube-prometheus-stack}.
+    labels: {}
+  prometheusRule:
+    # Render a monitoring.coreos.com/v1 PrometheusRule: upgrade blocked,
+    # verdict unknown for over 1h, agent not ticking and (with
+    # server.enabled) a cluster that stopped pushing. Scrape the metrics
+    # with serviceMonitor or your own config: the rules select the jobs
+    # serviceMonitor produces, <fullname>-agent-metrics and
+    # <fullname>-server (upgradescope-agent-metrics and upgradescope-server
+    # for a release named upgradescope).
+    enabled: false
+    labels: {}
+    # A cluster whose agent has not pushed for this long is stale. Agents
+    # push on every change and at least hourly (--force-sync-every), so
+    # keep it above that.
+    clusterStaleAfterSeconds: 7200
+  grafanaDashboard:
+    # Ship deploy/grafana/upgradescope-dashboard.json as a ConfigMap for
+    # the Grafana sidecar, which loads ConfigMaps labeled
+    # grafana_dashboard: "1" by default.
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+    # e.g. {grafana_folder: Kubernetes} for the sidecar's folder annotation.
+    annotations: {}

@@ -1,0 +1,19 @@
+{{- if .Values.metrics.grafanaDashboard.enabled }}
+# deploy/grafana/upgradescope-dashboard.json (a copy lives in files/ because
+# Helm reads only files inside the chart), for the Grafana sidecar.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "upgradescope.fullname" . }}-grafana-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    {{- with .Values.metrics.grafanaDashboard.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.metrics.grafanaDashboard.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  upgradescope-dashboard.json: |-
+{{ .Files.Get "files/grafana/upgradescope-dashboard.json" | trim | indent 4 }}
+{{- end }}
