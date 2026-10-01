@@ -106,9 +106,10 @@ echo "== RBAC: rendered rules vs collector calls (upstream rbac Covers) and KB s
 # deploy/chart/rbac_test.go renders the chart, then requires ALLOW for every
 # call the collectors make and DENY for nodes/proxy, pods/log, pods/exec,
 # foreign CRDs and CRs; it also fails when files/kb-rbac-rules.yaml drifts
-# from the embedded KB.
+# from the embedded KB. -count=1: the test cache cannot see template edits
+# (helm reads them in a subprocess), so a cached pass could be stale.
 command -v go >/dev/null || { echo "ERROR: go not found in PATH (needed for the RBAC tests)" >&2; exit 1; }
-if (cd "$ROOT" && UPGRADESCOPE_CHART_TEST=1 go test ./deploy/chart/); then
+if (cd "$ROOT" && UPGRADESCOPE_CHART_TEST=1 go test -count=1 ./deploy/chart/); then
   pass "go test ./deploy/chart"
 else
   fail "go test ./deploy/chart (RBAC coverage)"
