@@ -435,6 +435,53 @@ func TestReadPathsUseLatestSnapshotOnly(t *testing.T) {
 	}
 }
 
+// TestReadPathsIgnoreOldSnapshotEvaluations: a target evaluated on an old
+// snapshot but not on the latest (here: dropped from --targets before the
+// next push) is applicable to the cluster, so only the store lookup keeps
+// the old snapshot's result off the read paths.
+func TestReadPathsIgnoreOldSnapshotEvaluations(t *testing.T) {
+	inv := testInventoryWithPSP()
+	inv.Namespaces = []inventory.NamespaceInfo{{Name: "", Team: "payments"}}
+	h := newHarness(t, Config{KB: testKB(), ExtraTargets: []string{"1.36"}}, aug1)
+	h.push("prod", inv)
+	h.restart(Config{KB: testKB()})
+	h.push("prod", testInventory()) // PSP gone; evaluated for 1.35 only
+	prod := h.clusterID("prod")
+	if _, err := h.st.LatestEvaluation(context.Background(), prod, "1.36"); err != nil {
+		t.Fatalf("precondition: the old snapshot's 1.36 evaluation: %v", err)
+	}
+
+	if c := h.fleetCell("prod", "1.36"); c != nil && (c.Blockers != 0 || c.Source == "stored") {
+		t.Errorf("fleet 1.36 cell = %+v, want no stored cell from the old snapshot", c)
+	}
+	var teams struct {
+		Evaluated []struct {
+			Name   string `json:"name"`
+			Source string `json:"source"`
+		} `json:"evaluated"`
+	}
+	h.get("/api/v1/fleet/teams?target=1.36", &teams)
+	if len(teams.Evaluated) != 1 || teams.Evaluated[0].Source != "what-if" {
+		t.Errorf("fleet teams 1.36 evaluated = %+v, want prod as what-if, not the old snapshot's stored row", teams.Evaluated)
+	}
+	var rep struct {
+		Findings []struct{ Title string } `json:"findings"`
+		Source   string                   `json:"source"`
+	}
+	h.get("/api/v1/clusters/"+itoa(prod)+"/report?target=1.36", &rep)
+	if rep.Source == "stored" {
+		t.Errorf("report 1.36 source = stored, want what-if (nothing stored for the latest snapshot)")
+	}
+	for _, f := range rep.Findings {
+		if strings.Contains(f.Title, "PodSecurityPolicy") {
+			t.Errorf("report 1.36 still lists %q", f.Title)
+		}
+	}
+	if resp, body := getExportFor(t, h.ts, prod, "?target=1.36&format=csv"); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("export 1.36 = %d %s, want 404 (no evaluation of the latest snapshot)", resp.StatusCode, body)
+	}
+}
+
 // TestUnknownVerdictNeverReadyOrAlerting: a transient collector failure
 // (api-usage unavailable → verdict unknown) must not alert became-ready,
 // must not render a ready cell, and its recovery must not re-alert the
