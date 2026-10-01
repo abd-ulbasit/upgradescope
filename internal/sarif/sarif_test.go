@@ -164,6 +164,29 @@ func TestWrite(t *testing.T) {
 	}
 }
 
+// Objects with the same identity in the same file (unnamed, or one name
+// reused by two documents) still get distinct fingerprints, in file
+// order; the first keeps the plain identity fingerprint.
+func TestWriteFingerprintsDistinctForSameIdentity(t *testing.T) {
+	r := testReport()
+	r.Findings = []engine.Finding{r.Findings[4]}
+	r.Findings[0].Objects = []inventory.ObjectRef{
+		{File: "a.yaml", Line: 1}, {File: "a.yaml", Line: 9}, {File: "a.yaml", Line: 20},
+	}
+	log, _ := writeLog(t, r)
+	seen := map[string]bool{}
+	for i, res := range log.Runs[0].Results {
+		fp := res.PartialFingerprints[fingerprintKey]
+		if seen[fp] {
+			t.Errorf("results[%d] repeats fingerprint %s", i, fp)
+		}
+		seen[fp] = true
+	}
+	if got := log.Runs[0].Results[0].PartialFingerprints[fingerprintKey]; got != fingerprint(r.Findings[0].Key, r.Findings[0].Objects[0], 0) {
+		t.Errorf("first occurrence fingerprint = %s, want the plain identity fingerprint", got)
+	}
+}
+
 func TestUnanchored(t *testing.T) {
 	if got := Unanchored(testReport()); got != 3 { // eol-addon, live PSP, kb-stale
 		t.Errorf("Unanchored = %d, want 3", got)

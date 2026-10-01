@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -190,6 +191,7 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 	ruleIndex := map[string]int{}
 	results := []sarifResult{}
 	notes := []sarifNotification{}
+	occurrences := map[string]int{} // results per identity fingerprint
 	omitted := 0
 
 	for _, f := range r.Findings {
@@ -213,6 +215,12 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 			rules = append(rules, rule(id, f))
 		}
 		for _, o := range objs {
+			base := fingerprint(id, o, 0)
+			fp := base
+			if n := occurrences[base]; n > 0 {
+				fp = fingerprint(id, o, n)
+			}
+			occurrences[base]++
 			results = append(results, sarifResult{
 				RuleID:    id,
 				RuleIndex: idx,
@@ -222,7 +230,7 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 					ArtifactLocation: sarifArtifactLocation{URI: fileURI(o.File)},
 					Region:           &sarifRegion{StartLine: o.Line},
 				}}},
-				PartialFingerprints: map[string]string{fingerprintKey: fingerprint(id, o)},
+				PartialFingerprints: map[string]string{fingerprintKey: fp},
 			})
 		}
 	}
@@ -413,8 +421,15 @@ func fileURI(p string) string {
 
 // fingerprint identifies a result by rule and object, not line, so an
 // alert survives unrelated edits that move the object within its file.
-func fingerprint(id string, o inventory.ObjectRef) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{id, o.File, o.Namespace, o.Name}, "\x00")))
+// occurrence (0-based, in file order) separates objects that share that
+// identity — unnamed objects, or one name in two documents of a file —
+// and leaves the first one's fingerprint unchanged.
+func fingerprint(id string, o inventory.ObjectRef, occurrence int) string {
+	parts := []string{id, o.File, o.Namespace, o.Name}
+	if occurrence > 0 {
+		parts = append(parts, strconv.Itoa(occurrence))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 
