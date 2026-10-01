@@ -75,7 +75,7 @@ type SuppressedFinding struct {
 	Finding
 	Reason string `json:"reason"`
 	// Source names what suppressed it: the config file, "annotation", or
-	// "ClusterReadiness spec.ignore".
+	// "spec.ignore" (the agent).
 	Source  string `json:"source"`
 	Expires string `json:"expires,omitempty"` // YYYY-MM-DD, as the rule gave it
 }

@@ -27,11 +27,15 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // AgentVersion is stamped into CRD status and push envelopes. The CLI sets it
 // from the build version; "dev" otherwise.
 var AgentVersion = "dev"
+
+// ignoreSource labels spec.ignore suppressions and warnings.
+const ignoreSource = "spec.ignore"
 
 type Config struct {
 	Interval       time.Duration // default 10m, min 1m
@@ -208,9 +212,19 @@ func (r *runner) tick(ctx context.Context) error {
 		// unknown-verdict alert; failing the tick is what surfaces it.
 		errs = append(errs, terr)
 	} else {
+		// spec.ignore and object annotations apply per report; their
+		// warnings (expired or invalid rules, reason-less annotations) are
+		// the same for every target, so each is noted once.
 		reports := make([]engine.Report, 0, len(targets))
 		for _, target := range targets {
-			reports = append(reports, engine.Evaluate(inv, r.kb, target, r.now()))
+			report, warnings := suppress.Apply(engine.Evaluate(inv, r.kb, target, r.now()), spec.Ignore,
+				suppress.Options{Now: r.now(), Source: ignoreSource})
+			for _, w := range warnings {
+				if !slices.Contains(notes, w) {
+					notes = append(notes, w)
+				}
+			}
+			reports = append(reports, report)
 		}
 		st = crd.StatusFromReports(reports, inv.ServerVersion, AgentVersion, r.now())
 		st.NotAssessed = append(st.NotAssessed, notes...)
