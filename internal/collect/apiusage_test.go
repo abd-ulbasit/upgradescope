@@ -56,6 +56,12 @@ func lastApplied(apiVersion, kind string) map[string]string {
 	}
 }
 
+// withAutoUpdate adds apf.kubernetes.io/autoupdate-spec="true" to annotations.
+func withAutoUpdate(annotations map[string]string) map[string]string {
+	annotations["apf.kubernetes.io/autoupdate-spec"] = "true"
+	return annotations
+}
+
 func servedAt(kind string, apiVersions []string, objs ...obj) []runtime.Object {
 	var out []runtime.Object
 	for _, av := range apiVersions {
@@ -381,6 +387,75 @@ func TestCollectAPIUsageAPFBootstrapObjectsAreNotBlockers(t *testing.T) {
 	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 32}, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
 	if !rep.Ready {
 		t.Errorf("1.31 → 1.32 with only bootstrap APF objects: ready=false, findings %+v", rep.Findings)
+	}
+}
+
+// The autoupdate annotation alone excludes an APF object: the apiserver
+// rewrites its spec on every start, so even an entry from a user tool
+// that once wrote it via the beta says nothing about what will break.
+// The same object without the annotation is a real authored use.
+func TestCollectAPIUsageAPFAutoUpdateAnnotationExcludesObject(t *testing.T) {
+	const beta3 = "flowcontrol.apiserver.k8s.io/v1beta3"
+	served := []string{"flowcontrol.apiserver.k8s.io/v1", beta3}
+	meta := metaClient(servedAt("FlowSchema", served,
+		obj{name: "auto-managed",
+			annotations: map[string]string{"apf.kubernetes.io/autoupdate-spec": "true"},
+			managed:     []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", beta3)}},
+		obj{name: "auto-last-applied", annotations: withAutoUpdate(lastApplied(beta3, "FlowSchema"))},
+		obj{name: "user-owned",
+			annotations: map[string]string{"apf.kubernetes.io/autoupdate-spec": "false"},
+			managed:     []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", beta3)}},
+	))
+	flowschemas := metav1.APIResource{Name: "flowschemas", Kind: "FlowSchema", Verbs: metav1.Verbs{"list"}}
+	disc := fakeDiscovery(resources("flowcontrol.apiserver.k8s.io/v1", flowschemas), resources(beta3, flowschemas))
+	lifecycle := []kb.APILifecycleEntry{
+		{Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3", Kind: "FlowSchema", Introduced: inventory.Version{Major: 1, Minor: 26}, Deprecated: ver(1, 29), Removed: ver(1, 32),
+			Replacement: &kb.GVK{Group: "flowcontrol.apiserver.k8s.io", Version: "v1", Kind: "FlowSchema"}},
+	}
+
+	var inv inventory.Inventory
+	if err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.APIUsage{{
+		Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3", Kind: "FlowSchema", Count: 1,
+		Namespaces: map[string]int{"": 1},
+		Objects:    []inventory.ObjectRef{{Name: "user-owned", Manager: "kubectl-client-side-apply"}},
+	}}
+	if !reflect.DeepEqual(inv.APIUsage, want) {
+		t.Errorf("api usage = %#v\nwant       %#v", inv.APIUsage, want)
+	}
+}
+
+// A kind with no KB replacement that is also served at a non-deprecated
+// version continues there (ServiceCIDR, IPAddress, ValidatingAdmission-
+// Policy and the DRA kinds have no replacement recorded): it does not go
+// away, so only authorship counts, never residency. Issue #3's 1.34 repro.
+func TestCollectAPIUsageNoReplacementButGAServedCountsOnlyAuthors(t *testing.T) {
+	const beta = "networking.k8s.io/v1beta1"
+	meta := metaClient(servedAt("ServiceCIDR", []string{"networking.k8s.io/v1", beta},
+		obj{name: "kubernetes", managed: []metav1.ManagedFieldsEntry{wrote("kube-apiserver", beta)}},
+		obj{name: "via-v1", managed: []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", "networking.k8s.io/v1")}},
+		obj{name: "via-beta", managed: []metav1.ManagedFieldsEntry{wrote("terraform", beta)}},
+	))
+	servicecidrs := metav1.APIResource{Name: "servicecidrs", Kind: "ServiceCIDR", Verbs: metav1.Verbs{"list"}}
+	disc := fakeDiscovery(resources("networking.k8s.io/v1", servicecidrs), resources(beta, servicecidrs))
+	lifecycle := []kb.APILifecycleEntry{
+		{Group: "networking.k8s.io", Version: "v1beta1", Kind: "ServiceCIDR", Introduced: inventory.Version{Major: 1, Minor: 31}, Deprecated: ver(1, 34), Removed: ver(1, 37)},
+		{Group: "networking.k8s.io", Version: "v1", Kind: "ServiceCIDR", Introduced: inventory.Version{Major: 1, Minor: 33}},
+	}
+
+	var inv inventory.Inventory
+	if err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.APIUsage{{
+		Group: "networking.k8s.io", Version: "v1beta1", Kind: "ServiceCIDR", Count: 1,
+		Namespaces: map[string]int{"": 1},
+		Objects:    []inventory.ObjectRef{{Name: "via-beta", Manager: "terraform"}},
+	}}
+	if !reflect.DeepEqual(inv.APIUsage, want) {
+		t.Errorf("api usage = %#v\nwant       %#v", inv.APIUsage, want)
 	}
 }
 
