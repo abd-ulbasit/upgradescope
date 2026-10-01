@@ -129,6 +129,11 @@ commit worked there; now it must be a release tag, `latest` or
 | `blockers` | Number of blocker findings. |
 | `warnings` | Number of warning findings. |
 
+Each use of the action writes its reports to a new directory under
+`RUNNER_TEMP`. You can run it several times in one job, for example once
+per chart or per target. A later run does not overwrite the files that an
+earlier run's `sarif-file` and `report-json` point to.
+
 The action takes `verdict`, `ready`, `score`, `blockers`, `warnings` and
 `report-json` from the JSON report with `jq`. GitHub-hosted runners have
 `jq`. On a self-hosted runner without it, the gate and `sarif-file` still

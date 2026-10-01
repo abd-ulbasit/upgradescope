@@ -142,9 +142,12 @@ escaped() {
 }
 
 scan() {
-  local sarif="$RUNNER_TEMP/upgradescope-results.sarif"
-  local json="$RUNNER_TEMP/upgradescope-report.json"
-  local md="$RUNNER_TEMP/upgradescope-summary.md"
+  # Its own directory per scan: RUNNER_TEMP is shared by every step of the
+  # job, and a later use of the action must not overwrite the reports an
+  # earlier one's sarif-file and report-json outputs point at.
+  local out
+  out=$(mktemp -d "$RUNNER_TEMP/upgradescope.XXXXXX")
+  local sarif="$out/results.sarif" json="$out/report.json" md="$out/summary.md"
   local args=(--files="$INPUT_PATH" --target="$INPUT_TARGET")
   echo "sarif-file=$sarif" >>"$GITHUB_OUTPUT"
 
@@ -162,7 +165,7 @@ scan() {
   # log). --fail-on never: the gate above already decided the exit code.
   if ! command -v jq >/dev/null; then
     echo "::warning::jq is not installed, so the verdict, score, blockers and warnings outputs and the annotations are not set"
-  elif upgradescope scan "${args[@]}" --output json --fail-on never >"$json" 2>"$RUNNER_TEMP/upgradescope-json.err"; then
+  elif upgradescope scan "${args[@]}" --output json --fail-on never >"$json" 2>"$out/json.err"; then
     echo "report-json=$json" >>"$GITHUB_OUTPUT"
     # v0.1.x reports have no verdict: derive it as the engine does (a
     # blocker is blocked; else ready, or unknown when not ready).
@@ -175,13 +178,13 @@ scan() {
     ' "$json" >>"$GITHUB_OUTPUT"
     annotations "$json"
   else
-    echo "::warning::upgradescope --output json failed, so the outputs and annotations are not set: $(escaped "$RUNNER_TEMP/upgradescope-json.err")"
+    echo "::warning::upgradescope --output json failed, so the outputs and annotations are not set: $(escaped "$out/json.err")"
   fi
-  if upgradescope scan "${args[@]}" --output markdown --fail-on never >"$md" 2>"$RUNNER_TEMP/upgradescope-md.err"; then
+  if upgradescope scan "${args[@]}" --output markdown --fail-on never >"$md" 2>"$out/md.err"; then
     cat "$md"
     cat "$md" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
   else
-    echo "::warning::this upgradescope cannot write the step summary (it predates --output markdown, added after v0.1.1): $(escaped "$RUNNER_TEMP/upgradescope-md.err")"
+    echo "::warning::this upgradescope cannot write the step summary (it predates --output markdown, added after v0.1.1): $(escaped "$out/md.err")"
   fi
   exit "$status"
 }

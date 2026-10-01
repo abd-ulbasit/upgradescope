@@ -129,16 +129,19 @@ release v9.9.5 none
 mkdir -p "$work/real"
 go build -o "$work/real/upgradescope" ./cmd/upgradescope
 
-# run <cmd> <path-prefix> [env...]: action/run.sh <cmd> in a fresh runner
-# environment; output in $work/out, runner files in $rt.
+# run <cmd> <path-prefix> [env...]: action/run.sh <cmd> as a step of a fresh
+# job; output in $work/out, the step's runner files in $rt, RUNNER_TEMP in
+# $tmp. With same_job=1, a later step of the last run's job: its own runner
+# files, the same RUNNER_TEMP.
 run() {
   local cmd=$1 prefix=$2
   shift 2
   rt="$work/rt$((++n))"
-  mkdir -p "$rt"
+  [ -n "${same_job:-}" ] || tmp="$rt/tmp"
+  mkdir -p "$rt" "$tmp"
   : >"$rt/output" && : >"$rt/path" && : >"$rt/summary" && : >"$work/calls"
   code=0
-  env -i HOME="$HOME" PATH="$prefix$work/sys" RUNNER_TEMP="$rt" \
+  env -i HOME="$HOME" PATH="$prefix$work/sys" RUNNER_TEMP="$tmp" \
     GITHUB_OUTPUT="$rt/output" GITHUB_PATH="$rt/path" GITHUB_STEP_SUMMARY="$rt/summary" \
     INPUT_PATH=action/testdata/removed INPUT_TARGET=1.36 INPUT_FAIL_ON=blocker INPUT_VERSION=v9.9.9 \
     "$@" bash action/run.sh "$cmd" >"$work/out" 2>&1 || code=$?
@@ -151,6 +154,8 @@ expect() {
     fail "$1" "$work/out"
   fi
 }
+# output <name>: the last run's step output <name>.
+output() { sed -n "s/^$1=//p" "$rt/output" | tail -n 1; }
 # has <name> <file> <substring>
 has() { if grep -qF -- "$3" "$2"; then ok "$1"; else fail "$1" "$2"; fi; }
 hasnt() { if grep -qF -- "$3" "$2"; then fail "$1" "$2"; else ok "$1"; fi; }
@@ -173,8 +178,8 @@ expect "empty path is rejected" 1 "path is required"
 
 run install "$work/stub-curl:"
 expect "release install verifies the checksum" 0 "sha256 OK: $asset"
-has "release install puts the binary on GITHUB_PATH" "$rt/path" "$rt/upgradescope-bin"
-[ -x "$rt/upgradescope-bin/upgradescope" ] && ok "release install extracts the binary" ||
+has "release install puts the binary on GITHUB_PATH" "$rt/path" "$tmp/upgradescope-bin"
+[ -x "$tmp/upgradescope-bin/upgradescope" ] && ok "release install extracts the binary" ||
   fail "release install extracts the binary" "$work/out"
 
 run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST=v9.9.9
@@ -183,7 +188,7 @@ has "latest downloads the resolved tag" "$work/calls" "$releases/download/v9.9.9
 
 run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=v9.9.8
 expect "checksum mismatch fails closed" 1 "sha256 mismatch for $asset"
-[ ! -e "$rt/upgradescope-bin/upgradescope" ] && [ ! -s "$rt/path" ] && ok "checksum mismatch installs nothing" ||
+[ ! -e "$tmp/upgradescope-bin/upgradescope" ] && [ ! -s "$rt/path" ] && ok "checksum mismatch installs nothing" ||
   fail "checksum mismatch installs nothing" "$work/out"
 hasnt "checksum mismatch does not fall back to go install" "$work/calls" "go install"
 
@@ -212,10 +217,13 @@ expect "preinstalled without a binary fails" 1 "no upgradescope on PATH"
 
 run scan "$work/real:"
 expect "removed APIs fail the gate with exit 2" 2 "readiness gate failed"
-has "sarif-file output" "$rt/output" "sarif-file=$rt/upgradescope-results.sarif"
-jq -e '.runs[0].results | length == 2' "$rt/upgradescope-results.sarif" >/dev/null &&
-  ok "SARIF is complete when the gate fails" || fail "SARIF is complete when the gate fails" "$rt/upgradescope-results.sarif"
-for kv in verdict=blocked score=50 ready=false blockers=2 warnings=0 "report-json=$rt/upgradescope-report.json"; do
+sarif=$(output sarif-file) report=$(output report-json)
+case $sarif in "$tmp"/*.sarif) ok "sarif-file output is under RUNNER_TEMP" ;; *) fail "sarif-file output is under RUNNER_TEMP" "$rt/output" ;; esac
+jq -e '.runs[0].results | length == 2' "$sarif" >/dev/null &&
+  ok "SARIF is complete when the gate fails" || fail "SARIF is complete when the gate fails" "$rt/output"
+jq -e '.findings | length == 2' "$report" >/dev/null &&
+  ok "report-json output is the JSON report" || fail "report-json output is the JSON report" "$rt/output"
+for kv in verdict=blocked score=50 ready=false blockers=2 warnings=0; do
   has "output $kv" "$rt/output" "$kv"
 done
 has "summary has the findings table" "$rt/summary" "| blocker | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | \`action/testdata/removed/all.yaml:2\` shop/web | migrate to networking.k8s.io/v1 Ingress |"
@@ -227,6 +235,20 @@ run scan "$work/real:" INPUT_PATH=action/testdata/clean
 expect "clean manifests pass the gate" 0 "### upgradescope: ready"
 for kv in verdict=ready score=100 ready=true blockers=0 warnings=0; do has "clean output $kv" "$rt/output" "$kv"; done
 has "clean summary is written" "$rt/summary" "No findings."
+
+# Two uses of the action in one job (CI's action job: removed, then clean,
+# then checks on removed's files) share RUNNER_TEMP; the second must not
+# overwrite the first one's reports.
+run scan "$work/real:"
+sarif=$(output sarif-file) report=$(output report-json)
+same_job=1 run scan "$work/real:" INPUT_PATH=action/testdata/clean
+expect "a second scan in the same job runs" 0 "### upgradescope: ready"
+[ "$(output sarif-file)" != "$sarif" ] && [ "$(output report-json)" != "$report" ] &&
+  ok "each scan in a job writes its own report files" || fail "each scan in a job writes its own report files" "$rt/output"
+jq -e '.runs[0].results | length == 2' "$sarif" >/dev/null &&
+  ok "a later scan in the job leaves the first sarif-file intact" || fail "a later scan in the job leaves the first sarif-file intact" "$sarif"
+jq -e '.findings | length == 2' "$report" >/dev/null &&
+  ok "a later scan in the job leaves the first report-json intact" || fail "a later scan in the job leaves the first report-json intact" "$report"
 
 run scan "$work/real:" INPUT_FAIL_ON=never
 expect "fail-on never passes with blockers" 0 "### upgradescope: blocked"
