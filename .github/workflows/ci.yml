@@ -442,6 +442,10 @@ jobs:
           jq -e '.verdict == "ready" and .ready == "true" and .score == "100" and .blockers == "0" and .warnings == "0"' <<<"$CLEAN_OUTPUTS" \
             || fail "clean outputs are not ready, 100, 0 blockers, 0 warnings"
 
+      # This leaves the fixture's two blockers as open alerts on
+      # action/testdata/removed/all.yaml in the Security tab: dismiss them
+      # once as "used in tests"; later uploads of the same results match
+      # the dismissed alerts.
       - name: GitHub code scanning accepts the SARIF
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest'
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
