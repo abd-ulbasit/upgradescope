@@ -2,7 +2,9 @@
 package registry
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -60,6 +62,26 @@ type Cycle struct {
 	Citations []string  `json:"citations" yaml:"citations"`
 }
 
+// UnmarshalJSON decodes a cycle strictly. Being a json.Unmarshaler also
+// stops sigs.k8s.io/yaml from coercing unquoted numbers into the string
+// fields, which reads `cycle: 1.10` as "1.1" (another release line) and
+// `k8s_max: 1.30` as "1.3"; an unquoted version now fails the load.
+func (c *Cycle) UnmarshalJSON(b []byte) error {
+	type plain Cycle
+	var p plain
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Value == "number" {
+			return fmt.Errorf("cycle field %q: quote versions (\"1.10\", not 1.10)", typeErr.Field)
+		}
+		return err
+	}
+	*c = Cycle(p)
+	return nil
+}
+
 // CycleEOL is a cycle's end of life as endoflife.date publishes it: a
 // "YYYY-MM-DD" date, or a boolean — true means ended on an unpublished date,
 // false means no end announced.
@@ -82,7 +104,7 @@ func (e *CycleEOL) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var date string
-	if err := json.Unmarshal(b, &date); err != nil {
+	if err := json.Unmarshal(b, &date); err != nil || date == "" {
 		return fmt.Errorf("eol must be a YYYY-MM-DD date, true or false, got %s", b)
 	}
 	*e = CycleEOL{Date: date}

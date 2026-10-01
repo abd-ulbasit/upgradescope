@@ -90,7 +90,9 @@ recommendation: Optional one-line remediation hint shown with findings.
 `cycles` are the add-on's release lines, keyed on the app version: `cycle`
 holds the leading components ("1.31" covers 1.31.x), `eol` is a date, `true`
 (ended, no date published) or `false` (no end announced), and the optional
-`k8s_min`/`k8s_max` give the Kubernetes versions that line supports.
+`k8s_min`/`k8s_max` give the Kubernetes versions that line supports. Quote
+every version (`cycle: "1.10"`): unquoted, YAML reads 1.10 as the number
+1.1, so the loader rejects it.
 
 If the add-on is tracked by [endoflife.date](https://endoflife.date), set
 `endoflife_product` to its slug (the path segment in

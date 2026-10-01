@@ -89,6 +89,36 @@ func TestLoadFS(t *testing.T) {
 			},
 			wantErr: "eol must be a YYYY-MM-DD date, true or false",
 		},
+		{
+			// An empty string would otherwise read as "no end announced".
+			name: "cycle eol empty string rejected",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: \"\", citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: "eol must be a YYYY-MM-DD date, true or false",
+		},
+		{
+			// Unquoted, YAML reads 1.10 as the number 1.1: the wrong cycle.
+			name: "unquoted cycle rejected",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: 1.10, eol: false, citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: `quote versions`,
+		},
+		{
+			name: "unquoted cycle k8s_max rejected",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: false, k8s_max: 1.30, citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: `quote versions`,
+		},
+		{
+			name: "unknown cycle field rejected (strict mode)",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: false, lts: true, citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: "unknown field",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
