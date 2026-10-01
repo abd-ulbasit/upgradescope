@@ -64,6 +64,10 @@ import (
 	storagev1alpha1 "k8s.io/api/storage/v1alpha1"
 	storagev1beta1 "k8s.io/api/storage/v1beta1"
 	storagemigrationv1beta1 "k8s.io/api/storagemigration/v1beta1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
+	apiregistrationv1beta1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1beta1"
 )
 
 // addToSchemes registers every upstream group/version package that exports
@@ -127,4 +131,8 @@ var addToSchemes = []func(*runtime.Scheme) error{
 	storagev1alpha1.AddToScheme,
 	storagev1beta1.AddToScheme,
 	storagemigrationv1beta1.AddToScheme,
+	apiextensionsv1.AddToScheme,
+	apiextensionsv1beta1.AddToScheme,
+	apiregistrationv1.AddToScheme,
+	apiregistrationv1beta1.AddToScheme,
 }

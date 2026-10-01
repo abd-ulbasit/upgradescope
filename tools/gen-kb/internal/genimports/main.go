@@ -30,9 +30,14 @@ import (
 )
 
 // patterns are the upstream trees whose types carry generated APILifecycle*
-// methods.
+// methods. apiextensions-apiserver and kube-aggregator serve
+// CustomResourceDefinition and APIService, which k8s.io/api does not hold.
+// Their modules must be required in tools/gen-kb/go.mod at the same
+// release as k8s.io/api.
 var patterns = []string{
 	"k8s.io/api/...",
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/...",
+	"k8s.io/kube-aggregator/pkg/apis/apiregistration/...",
 }
 
 func main() {

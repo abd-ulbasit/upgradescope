@@ -299,6 +299,63 @@
       "removed": "1.35"
     },
     {
+      "group": "apiextensions.k8s.io",
+      "version": "v1",
+      "kind": "ConversionReview",
+      "introduced": "1.16"
+    },
+    {
+      "group": "apiextensions.k8s.io",
+      "version": "v1",
+      "kind": "CustomResourceDefinition",
+      "introduced": "1.16"
+    },
+    {
+      "group": "apiextensions.k8s.io",
+      "version": "v1beta1",
+      "kind": "ConversionReview",
+      "introduced": "1.13",
+      "deprecated": "1.19",
+      "removed": "1.22",
+      "replacement": {
+        "group": "apiextensions.k8s.io",
+        "version": "v1",
+        "kind": "ConversionReview"
+      }
+    },
+    {
+      "group": "apiextensions.k8s.io",
+      "version": "v1beta1",
+      "kind": "CustomResourceDefinition",
+      "introduced": "1.7",
+      "deprecated": "1.16",
+      "removed": "1.22",
+      "replacement": {
+        "group": "apiextensions.k8s.io",
+        "version": "v1",
+        "kind": "CustomResourceDefinition"
+      }
+    },
+    {
+      "group": "apiregistration.k8s.io",
+      "version": "v1",
+      "kind": "APIService",
+      "introduced": "1.10"
+    },
+    {
+      "group": "apiregistration.k8s.io",
+      "version": "v1beta1",
+      "kind": "APIService",
+      "introduced": "1.7",
+      "deprecated": "1.19",
+      "removed": "1.22",
+      "replacement": {
+        "group": "apiregistration.k8s.io",
+        "version": "v1",
+        "kind": "APIService"
+      }
+    },
+    {
       "group": "apps",
       "version": "v1",
       "kind": "ControllerRevision",

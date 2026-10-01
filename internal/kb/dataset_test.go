@@ -27,6 +27,9 @@ func TestDatasetSanity(t *testing.T) {
 		{"batch", "v1beta1", "CronJob", inventory.Version{Major: 1, Minor: 25}},
 		// note: full group name as registered in the scheme
 		{"flowcontrol.apiserver.k8s.io", "v1beta3", "FlowSchema", inventory.Version{Major: 1, Minor: 32}},
+		// generated from k8s.io/apiextensions-apiserver and k8s.io/kube-aggregator
+		{"apiextensions.k8s.io", "v1beta1", "CustomResourceDefinition", inventory.Version{Major: 1, Minor: 22}},
+		{"apiregistration.k8s.io", "v1beta1", "APIService", inventory.Version{Major: 1, Minor: 22}},
 	}
 	for _, c := range cases {
 		e, ok := idx.Lookup(c.group, c.version, c.kind)
