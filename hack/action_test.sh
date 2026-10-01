@@ -227,20 +227,33 @@ expect "an injection payload in path is scanned as a path" 0 "### upgradescope: 
 [ ! -e "$work/pwned" ] && [ ! -e "$work/pwned2" ] && ! grep -qx INJECTED-COMMAND-RAN "$work/out" &&
   ok "the injection payload did not run" || fail "the injection payload did not run" "$work/out"
 
-# A release older than --output markdown: the gate and outputs still work.
+# A v0.1.x release (what version: latest resolves to until v0.2.0 ships):
+# no --output markdown, and JSON in the v0.1.1 Report shape, without
+# verdict, filesBase or finding objects. The gate and every output still
+# work. STUB_REPORT replaces the jq filter that reshapes the JSON.
 mkdir -p "$work/old"
 cat >"$work/old/upgradescope" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
   *"--output markdown"*) echo 'invalid --output "markdown" (want table, json, or sarif)' >&2; exit 1 ;;
-  *"--output json"*) "$work/real/upgradescope" "\$@" ;;
+  *"--output json"*)
+    "$work/real/upgradescope" "\$@" | jq "\${STUB_REPORT:-del(.verdict, .filesBase) | .findings |= map(del(.objects))}" ;;
   *) "$work/real/upgradescope" "\$@" ;;
 esac
 EOF
 chmod +x "$work/old/upgradescope"
 run scan "$work/old:"
-expect "an upgradescope without markdown still gates" 2 "cannot write the step summary"
-has "an upgradescope without markdown still sets outputs" "$rt/output" "verdict=blocked"
+expect "a v0.1.x upgradescope still gates" 2 "cannot write the step summary"
+for kv in verdict=blocked score=50 ready=false blockers=2 warnings=0; do
+  has "a v0.1.x upgradescope sets output $kv" "$rt/output" "$kv"
+done
+hasnt "a v0.1.x upgradescope sets no output to null" "$rt/output" "=null"
+has "a v0.1.x blocker annotation has no file" "$work/out" "::error title=upgradescope blocker (removed-api)::networking.k8s.io/v1beta1 Ingress removed in 1.22"
+run scan "$work/old:" INPUT_PATH=action/testdata/clean
+has "a v0.1.x clean scan sets verdict=ready" "$rt/output" "verdict=ready"
+# Not ready without a blocker (v0.2's unknown) is neither ready nor blocked.
+run scan "$work/old:" INPUT_PATH=action/testdata/clean STUB_REPORT='del(.verdict) | .ready = false'
+has "a v0.1.x not-ready report without blockers sets verdict=unknown" "$rt/output" "verdict=unknown"
 
 mkdir -p "$work/broken"
 printf '#!/bin/sh\necho "load knowledge base: boom" >&2\nexit 1\n' >"$work/broken/upgradescope"

@@ -158,8 +158,12 @@ scan() {
     echo "::warning::jq is not installed, so the verdict, score, blockers and warnings outputs and the annotations are not set"
   elif upgradescope scan "${args[@]}" --output json --fail-on never >"$json" 2>"$RUNNER_TEMP/upgradescope-json.err"; then
     echo "report-json=$json" >>"$GITHUB_OUTPUT"
+    # v0.1.x reports have no verdict: derive it as the engine does (a
+    # blocker is blocked; else ready, or unknown when not ready).
     jq -r '
-      "verdict=\(.verdict)", "score=\(.score)", "ready=\(.ready)",
+      (.verdict // (if any((.findings // [])[]; .severity == "blocker") then "blocked"
+                    elif .ready then "ready" else "unknown" end)) as $verdict
+      | "verdict=\($verdict)", "score=\(.score)", "ready=\(.ready)",
       "blockers=\([(.findings // [])[] | select(.severity == "blocker")] | length)",
       "warnings=\([(.findings // [])[] | select(.severity == "warning")] | length)"
     ' "$json" >>"$GITHUB_OUTPUT"
