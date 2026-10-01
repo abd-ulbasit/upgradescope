@@ -2,6 +2,7 @@ package cli
 
 import (
 	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -18,7 +19,8 @@ func init() { version = resolveVersion(version, debug.ReadBuildInfo) }
 // resolveVersion returns stamped unless it is the "dev" placeholder;
 // otherwise the main module version recorded by the go command (set for
 // `go install …@vX` and, since Go 1.24, for builds inside a tagged git
-// checkout), then the VCS revision ("dev+<12 hex>[.dirty]"), then "dev".
+// checkout) without its leading "v", matching GoReleaser's {{ .Version }}
+// stamp; then the VCS revision ("dev+<12 hex>[.dirty]"), then "dev".
 func resolveVersion(stamped string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
 	if stamped != "" && stamped != "dev" {
 		return stamped
@@ -28,7 +30,7 @@ func resolveVersion(stamped string, readBuildInfo func() (*debug.BuildInfo, bool
 		return "dev"
 	}
 	if v := info.Main.Version; v != "" && v != "(devel)" {
-		return v
+		return strings.TrimPrefix(v, "v")
 	}
 	var rev string
 	var dirty bool

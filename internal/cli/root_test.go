@@ -26,8 +26,11 @@ func TestResolveVersion(t *testing.T) {
 		want    string
 	}{
 		{"ldflags stamp wins", "0.2.0", buildInfo("v0.1.1"), "0.2.0"},
-		{"go install @vX: module version", "dev", buildInfo("v0.1.1"), "v0.1.1"},
-		{"go install @commit: pseudo-version", "dev", buildInfo("v0.1.2-0.20261001120000-4bca610f1e2d"), "v0.1.2-0.20261001120000-4bca610f1e2d"},
+		// Same form as GoReleaser's {{ .Version }} stamp (no leading v), so
+		// one release reads the same in SARIF and agent snapshots however it
+		// was installed.
+		{"go install @vX: module version without the v", "dev", buildInfo("v0.1.1"), "0.1.1"},
+		{"go install @commit: pseudo-version without the v", "dev", buildInfo("v0.1.2-0.20261001120000-4bca610f1e2d"), "0.1.2-0.20261001120000-4bca610f1e2d"},
 		{"local build without version: revision", "dev", buildInfo("(devel)", rev, clean), "dev+4bca610f1e2d"},
 		{"local build with edits: revision marked dirty", "dev", buildInfo("(devel)", rev, dirty), "dev+4bca610f1e2d.dirty"},
 		{"no module version, no vcs", "dev", buildInfo("(devel)"), "dev"},
