@@ -218,6 +218,44 @@ metadata:
 	}
 }
 
+// `--files .` in a repository must not descend into VCS metadata or
+// dependency trees: Go module vendor directories and node packages ship
+// test manifests that are not the repository's, and every file in them
+// would inflate the skipped count. A vendor/ without Go's modules.txt is
+// kept: GitOps repositories vendor upstream manifests they deploy. Naming
+// a skipped directory explicitly scans it.
+func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"rendered.yaml":                       ingressV1beta1,
+		".git/HEAD":                           "ref: refs/heads/main\n",
+		".git/hooks/x.yaml":                   ingressV1beta1,
+		"node_modules/pkg/fixture.yaml":       ingressV1beta1,
+		"vendor/modules.txt":                  "# k8s.io/api v0.30.0\n",
+		"vendor/k8s.io/api/testdata/ing.yaml": ingressV1beta1,
+		"deploy/vendor/upstream/ing.yml":      ingressV1beta1,
+	})
+	inv, sum, err := CollectFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	for _, u := range inv.APIUsage {
+		for _, o := range u.Objects {
+			files = append(files, o.File)
+		}
+	}
+	if want := []string{"deploy/vendor/upstream/ing.yml", "rendered.yaml"}; !reflect.DeepEqual(files, want) || sum.Files != 2 || sum.Skipped != 0 {
+		t.Errorf("objects in %v, summary %+v; want %v walked", files, sum, want)
+	}
+	inv, _, err = CollectFiles(filepath.Join(dir, "vendor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.APIUsage) != 1 {
+		t.Errorf("api usage = %+v, want the vendored manifest when vendor/ is the root", inv.APIUsage)
+	}
+}
+
 // A file named explicitly is parsed whatever its extension
 // (`kustomize build overlays/prod > rendered`).
 func TestCollectFilesSingleFileAnyExtension(t *testing.T) {

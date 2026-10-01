@@ -344,6 +344,22 @@ type FileWarning struct {
 
 func (w FileWarning) String() string { return fmt.Sprintf("%s:%d: %v", w.File, w.Line, w.Err) }
 
+// skipDir reports whether a directory below the scan root holds files that
+// are not the repository's manifests: VCS metadata, node packages, and a
+// Go module vendor directory (recognised by its modules.txt; vendored Go
+// modules ship test manifests with old API versions). Any other vendor/
+// is walked — GitOps repositories vendor upstream manifests they deploy.
+func skipDir(path, name string) bool {
+	switch name {
+	case ".git", ".hg", ".svn", "node_modules":
+		return true
+	case "vendor":
+		_, err := os.Stat(filepath.Join(path, "modules.txt"))
+		return err == nil
+	}
+	return false
+}
+
 // CollectFiles builds an Inventory from rendered manifests on disk
 // (--files mode, CI gating). root is a directory, walked recursively in
 // lexical order for *.yaml/*.yml/*.json, or a single file, parsed whatever
@@ -355,7 +371,8 @@ func (w FileWarning) String() string { return fmt.Sprintf("%s:%d: %v", w.File, w
 // skipped and documents that fail to parse become warnings in the summary,
 // never an error; the caller decides what to do when no object was found.
 // Object refs carry paths relative to root (the base name for a single
-// file). Only I/O errors fail the walk.
+// file). VCS metadata and dependency trees below root are not walked (see
+// skipDir). Only I/O errors fail the walk.
 func CollectFiles(root string) (inventory.Inventory, FilesSummary, error) {
 	counts := map[gvk]*inventory.APIUsage{}
 	var sum FilesSummary
@@ -364,6 +381,9 @@ func CollectFiles(root string) (inventory.Inventory, FilesSummary, error) {
 			return err
 		}
 		if d.IsDir() {
+			if path != root && skipDir(path, d.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		sum.Files++
