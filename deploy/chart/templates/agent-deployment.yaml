@@ -44,15 +44,14 @@ spec:
             {{- end }}
             {{- if include "upgradescope.pushEnabled" . }}
             - --server-url={{ include "upgradescope.serverUrl" . }}
-            - --server-token=$(UPGRADESCOPE_SERVER_TOKEN)
             {{- end }}
           {{- if include "upgradescope.pushEnabled" . }}
+          # The push token reaches the agent only through the environment,
+          # never argv (argv is readable via /proc/<pid>/cmdline).
           env:
             - name: UPGRADESCOPE_SERVER_TOKEN
               valueFrom:
-                secretKeyRef:
-                  name: {{ include "upgradescope.agentTokenSecretName" . }}
-                  key: serverToken
+                secretKeyRef: {{- include "upgradescope.agentTokenRef" . | nindent 18 }}
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false

@@ -55,11 +55,14 @@ agent:
   # mode. If server.enabled=true and this is empty, it defaults to the
   # in-chart server Service.
   serverUrl: ""
-  # Bearer token for snapshot pushes. Ignored when existingSecret is set.
-  # When empty and server.enabled=true, defaults to server.ingestToken.
+  # Bearer token for snapshot pushes, stored in a chart Secret. Ignored when
+  # existingSecret is set. When both are empty and server.enabled=true, the
+  # agent uses the in-chart server's ingest token (key ingestToken of its
+  # Secret, generated or server.existingSecret).
   serverToken: ""
   # Name of an existing Secret with key "serverToken" (preferred over an
-  # inline token for anything beyond dev).
+  # inline token for anything beyond dev). The token reaches the agent as
+  # $UPGRADESCOPE_SERVER_TOKEN from a secretKeyRef, never as an argument.
   existingSecret: ""
   resources:
     requests:
@@ -74,19 +77,33 @@ server:
   # install). The agent will push to it automatically.
   enabled: false
   # Shared bearer token agents must present on POST /api/v1/snapshots.
-  # Required when enabled (unless existingSecret is set).
+  # Empty = the chart generates a random 40-character token into its Secret
+  # on first install and keeps it on upgrades (Helm lookup). NOTES.txt
+  # prints the command to read it back for agents in other clusters
+  # (Secret <fullname>-server-tokens, e.g. upgradescope-server-tokens).
+  # Renderers without cluster access (helm template, Argo CD) cannot look
+  # the old token up and generate a new one on every render: under GitOps
+  # set this or existingSecret. Ignored when existingSecret is set.
   ingestToken: ""
   # Optional bearer token for the read API. EMPTY = READ API IS OPEN —
   # acceptable behind a ClusterIP Service on a private cluster, but set one
-  # before exposing the Service in any way.
+  # before exposing the Service in any way. Ignored when existingSecret is
+  # set (use readTokenFromSecret).
   readToken: ""
-  # Name of an existing Secret with key "ingestToken" (and optionally
-  # "readToken" — only read when server.readToken is also set; P2 keeps
-  # secret wiring simple).
+  # Name of an existing Secret to use instead of the chart's. Keys:
+  #   ingestToken   required; the in-chart agent pushes with it too
+  #   readToken     read when readTokenFromSecret=true
+  #   slackWebhook  optional; Slack notifications when present
+  #   webhook       optional; generic webhook when present
   existingSecret: ""
+  # With existingSecret: protect the read API with its readToken key.
+  readTokenFromSecret: false
   # Optional Slack incoming-webhook URL for finding-delta notifications.
+  # Stored in the chart Secret and passed as $UPGRADESCOPE_SLACK_WEBHOOK; it
+  # never appears in the Deployment. Ignored when existingSecret is set.
   slackWebhook: ""
-  # Optional generic webhook URL (POSTs the Event JSON).
+  # Optional generic webhook URL (POSTs the Event JSON). Stored like
+  # slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL.
   webhook: ""
   # Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"].
   targets: []

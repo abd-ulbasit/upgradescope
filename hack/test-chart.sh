@@ -16,6 +16,18 @@ assert_not_contains() { grep -qF -- "$2" "$1" && fail "$3 (unexpected: $2)" || p
 # Exact-line assertions ('kind: Service' must not match 'kind: ServiceAccount').
 assert_line()    { grep -qxF -- "$2" "$1" && pass "$3" || fail "$3 (missing line: $2)"; }
 assert_no_line() { grep -qxF -- "$2" "$1" && fail "$3 (unexpected line: $2)" || pass "$3"; }
+# assert_env_secret FILE ENV SECRET KEY DESC: env var ENV is set from
+# secretKeyRef SECRET/KEY (the lines right after "- name: ENV").
+assert_env_secret() {
+  local block
+  block="$(grep -A5 -xE "[[:space:]]*- name: $2" "$1" || true)"
+  if printf '%s\n' "$block" | grep -qxE "[[:space:]]*name: $3" &&
+     printf '%s\n' "$block" | grep -qxE "[[:space:]]*key: $4"; then
+    pass "$5"
+  else
+    fail "$5 (env $2 is not secretKeyRef $3/$4)"
+  fi
+}
 
 echo "== helm lint"
 helm lint --strict "$CHART"
@@ -125,8 +137,14 @@ assert_not_contains "$TMP/devtag.yaml" "upgradescope:$APP_VERSION\"" "no appVers
 
 echo "== agent assertions: external-server render"
 assert_contains "$TMP/external.yaml" '--server-url=https://uscope.example.com' "explicit serverUrl wins"
-assert_contains "$TMP/external.yaml" 'name: my-secret' "existingSecret referenced"
+assert_env_secret "$TMP/external.yaml" UPGRADESCOPE_SERVER_TOKEN my-secret serverToken "agent token from agent.existingSecret"
 assert_no_line "$TMP/external.yaml" 'kind: Secret' "no generated Secret when existingSecret set"
+
+echo "== agent assertions: inline agent.serverToken goes into a chart Secret"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set agent.serverUrl=https://uscope.example.com --set agent.serverToken=s3cret > "$TMP/inline-agent.yaml"
+assert_env_secret "$TMP/inline-agent.yaml" UPGRADESCOPE_SERVER_TOKEN upgradescope-agent-token serverToken "agent token from the chart's agent Secret"
+assert_contains "$TMP/inline-agent.yaml" 'serverToken: "s3cret"' "inline token stored in the Secret"
 
 echo "== agent assertions: targets render"
 # The agent creates ClusterReadiness/<crName> on its first tick. Were the
@@ -164,28 +182,75 @@ assert_line "$TMP/server.yaml" 'kind: Secret'                "Secrets rendered"
 assert_contains "$TMP/server.yaml" 'name: upgradescope-server' "server resources named *-server"
 assert_contains "$TMP/server.yaml" 'type: Recreate' "Recreate strategy (single SQLite writer)"
 assert_contains "$TMP/server.yaml" '--db=/data/upgradescope.sqlite' "db on the data volume"
-assert_contains "$TMP/server.yaml" '--ingest-token=$(UPGRADESCOPE_INGEST_TOKEN)' "ingest token via env expansion"
+assert_env_secret "$TMP/server.yaml" UPGRADESCOPE_INGEST_TOKEN upgradescope-server-tokens ingestToken "ingest token from the Secret via env"
 assert_contains "$TMP/server.yaml" 'ingestToken: "test-token"' "ingest token in Secret stringData"
-assert_contains "$TMP/server.yaml" 'serverToken: "test-token"' "agent token defaults to ingestToken"
+assert_env_secret "$TMP/server.yaml" UPGRADESCOPE_SERVER_TOKEN upgradescope-server-tokens ingestToken "agent pushes with the server's ingest token"
+assert_no_line "$TMP/server.yaml" '  serverToken: "test-token"' "no copy of the ingest token in a second Secret"
 assert_contains "$TMP/server.yaml" '--server-url=http://upgradescope-server.upgradescope.svc:8080' "agent points at in-chart server"
 assert_contains "$TMP/server.yaml" 'path: /healthz' "healthz probes"
-assert_not_contains "$TMP/server.yaml" '--read-token' "no read-token flag unless set"
+assert_not_contains "$TMP/server.yaml" 'UPGRADESCOPE_READ_TOKEN' "no read token unless set"
 # serve refuses an open read API on a non-loopback --listen; the chart's
 # empty readToken default opts in explicitly (NOTES.txt warns about it).
 assert_contains "$TMP/server.yaml" '--allow-anonymous-read' "empty readToken opts in to anonymous reads"
+
+echo "== secrets never reach argv (no \$(VAR) expansion into args)"
+for f in "$TMP"/*.yaml; do
+  assert_not_contains "$f" '$(UPGRADESCOPE_' "$(basename "$f"): no \$(UPGRADESCOPE_*) in args"
+  assert_not_contains "$f" '--ingest-token' "$(basename "$f"): no --ingest-token arg"
+  assert_not_contains "$f" '--server-token' "$(basename "$f"): no --server-token arg"
+done
 
 echo "== server assertions: read token set"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.enabled=true --set server.ingestToken=t \
   --set server.readToken=r > "$TMP/readtoken.yaml"
-assert_contains "$TMP/readtoken.yaml" '--read-token=$(UPGRADESCOPE_READ_TOKEN)' "read token via env expansion"
+assert_env_secret "$TMP/readtoken.yaml" UPGRADESCOPE_READ_TOKEN upgradescope-server-tokens readToken "read token from the Secret via env"
+assert_not_contains "$TMP/readtoken.yaml" '--read-token' "no read token in args"
 assert_not_contains "$TMP/readtoken.yaml" '--allow-anonymous-read' "no anonymous reads with a read token"
 
-echo "== server assertions: render fails without ingest token"
-if helm template upgradescope "$CHART" --set server.enabled=true >/dev/null 2>&1; then
-  fail "server.enabled without ingestToken should fail the required check"
+echo "== server assertions: no ingest token supplied -> chart generates one (one-command install)"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true > "$TMP/gentoken.yaml"
+if grep -qE '^  ingestToken: "[A-Za-z0-9]{40}"$' "$TMP/gentoken.yaml"; then
+  pass "random 40-char ingest token generated"
 else
-  pass "server without ingestToken fails render"
+  fail "no generated ingestToken in the server Secret"
+fi
+assert_env_secret "$TMP/gentoken.yaml" UPGRADESCOPE_SERVER_TOKEN upgradescope-server-tokens ingestToken "agent uses the generated token"
+
+echo "== server assertions: webhook URLs live only in the Secret"
+SLACK='https://hooks.slack.com/services/T000/B000/XXXX'
+HOOK='https://hooks.example.com/upgradescope'
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set server.slackWebhook="$SLACK" --set server.webhook="$HOOK" > "$TMP/webhooks.yaml"
+perl -0777 -ne 'print grep { !/^kind: Secret$/m } split /^---$/m' "$TMP/webhooks.yaml" > "$TMP/webhooks-nosecret.txt"
+assert_contains "$TMP/webhooks.yaml" "slackWebhook: \"$SLACK\"" "Slack URL in the Secret"
+assert_not_contains "$TMP/webhooks-nosecret.txt" "$SLACK" "Slack URL nowhere outside the Secret"
+assert_not_contains "$TMP/webhooks-nosecret.txt" "$HOOK" "webhook URL nowhere outside the Secret"
+assert_env_secret "$TMP/webhooks.yaml" UPGRADESCOPE_SLACK_WEBHOOK upgradescope-server-tokens slackWebhook "Slack URL via env"
+assert_env_secret "$TMP/webhooks.yaml" UPGRADESCOPE_WEBHOOK_URL upgradescope-server-tokens webhook "webhook URL via env"
+
+echo "== server assertions: server.existingSecret alone wires every key"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.existingSecret=mysec > "$TMP/existing.yaml"
+assert_no_line "$TMP/existing.yaml" 'kind: Secret' "no chart Secret with server.existingSecret"
+assert_env_secret "$TMP/existing.yaml" UPGRADESCOPE_INGEST_TOKEN mysec ingestToken "server ingest token from existingSecret"
+assert_env_secret "$TMP/existing.yaml" UPGRADESCOPE_SERVER_TOKEN mysec ingestToken "agent token from the same existingSecret"
+assert_env_secret "$TMP/existing.yaml" UPGRADESCOPE_SLACK_WEBHOOK mysec slackWebhook "optional slackWebhook key"
+assert_env_secret "$TMP/existing.yaml" UPGRADESCOPE_WEBHOOK_URL mysec webhook "optional webhook key"
+assert_contains "$TMP/existing.yaml" '--allow-anonymous-read' "no read token unless asked for"
+
+echo "== server assertions: read token from existingSecret, no inline value"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.existingSecret=mysec \
+  --set server.readTokenFromSecret=true > "$TMP/existing-read.yaml"
+assert_env_secret "$TMP/existing-read.yaml" UPGRADESCOPE_READ_TOKEN mysec readToken "read token from existingSecret"
+assert_not_contains "$TMP/existing-read.yaml" '--allow-anonymous-read' "no anonymous reads"
+if helm template upgradescope "$CHART" --set server.enabled=true --set server.readTokenFromSecret=true >/dev/null 2>&1; then
+  fail "readTokenFromSecret without existingSecret should fail"
+else
+  pass "readTokenFromSecret requires existingSecret"
 fi
 
 echo "== server assertions: emptyDir when persistence disabled"
