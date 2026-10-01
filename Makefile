@@ -13,6 +13,14 @@ web:
 	find internal/server/webdist -type f ! -name .gitkeep -delete
 	find internal/server/webdist -mindepth 1 -type d -empty -delete
 	cp -R web/dist/. internal/server/webdist/
+
+# The CI dashboard gate: npm ci, vitest, typecheck + vite build, production
+# dependency advisories, and the committed webdist equals the fresh build.
+# Read-only outside web/. Needs Node (CI runs it on Node 22 and 24).
+.PHONY: web-test
+web-test:
+	./hack/web-test.sh
+
 # The CI unit gate: gofmt, go vet, go test -race -count=1, for the main
 # module and every tools/ module. Needs only Go.
 test:
