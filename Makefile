@@ -13,8 +13,10 @@ web:
 	find internal/server/webdist -type f ! -name .gitkeep -delete
 	find internal/server/webdist -mindepth 1 -type d -empty -delete
 	cp -R web/dist/. internal/server/webdist/
+# The CI unit gate: gofmt, go vet, go test -race -count=1, for the main
+# module and every tools/ module. Needs only Go.
 test:
-	go test ./...
+	./hack/test.sh
 # it writes to a cluster (the agent IT installs a CRD), so the tests refuse
 # any context that is not kind-*; set UPGRADESCOPE_IT_CONTEXT=<context> to
 # use a different disposable cluster.
