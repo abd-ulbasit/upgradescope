@@ -3,10 +3,12 @@
 # cosign signatures and the multi-arch GHCR image (the Helm chart is pushed
 # by the workflow itself). ci.yml proves this file on PRs that touch it.
 #
-# Local dry run (no publish, no signing, no SBOMs, no images):
-#   goreleaser release --snapshot --clean --skip=publish,sign,sbom,docker
-# Without `docker` in --skip, a snapshot still builds the per-arch images
-# locally (never pushed) — that is what CI's release-snapshot job does.
+# Local dry run with the pinned GoReleaser (no publish, no signing, no SBOMs),
+# the same command CI's release-check job runs:
+#   make release-check
+# It builds the per-arch images locally too (never pushed); on a machine
+# without a Docker engine add docker to the skip list:
+#   make release-check GORELEASER_SKIP=publish,sign,sbom,docker
 version: 2
 
 project_name: upgradescope
@@ -46,7 +48,7 @@ archives:
     # installs from https://github.com/.../releases/latest/download/<asset>,
     # which only resolves when the asset filename is version-independent.
     # The version still lives in the tag, the release title, and the binary's
-    # -X ...cli.version stamp. ci.yml's release-snapshot job fails if these
+    # -X ...cli.version stamp. ci.yml's release-check job fails if these
     # names drift from what action/action.yml downloads.
     name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
     files:
@@ -87,6 +89,15 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+    # Supply-chain metadata on every published image, as BuildKit
+    # attestations: an SPDX SBOM (GoReleaser's default, spelled out) and
+    # SLSA provenance in max mode (build args, sources, the full build
+    # definition). Snapshots --load single-platform images, which cannot
+    # carry attestations, so the provenance flag is publish-only;
+    # release.yml's verify job checks both are on the published image.
+    sbom: true
+    flags:
+      - '{{ if not .IsSnapshot }}--provenance=mode=max{{ end }}'
     labels:
       org.opencontainers.image.title: upgradescope
       org.opencontainers.image.description: Continuous Kubernetes upgrade-readiness scanner

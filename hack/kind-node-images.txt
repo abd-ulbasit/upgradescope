@@ -1,0 +1,29 @@
+# Kubernetes minors the kube CI job runs on, one kind node image each.
+# Read by hack/kind-images.sh (the job's matrix and its --image).
+#
+#   <minor> <kindest/node image, pinned by digest> <pr|weekly> <kind release that built it>
+#
+# pr      every pull request and push to main (plus weekly)
+# weekly  the scheduled run and workflow_dispatch only
+#
+# PRs run the oldest minor with the flowcontrol.apiserver.k8s.io v1beta3
+# window (1.31, the #3 false-blocker case) and the newest; the weekly run
+# covers every minor from 1.29 up.
+#
+# Each image is the newest patch of its minor that a kind release built,
+# with the digest copied from that release's notes
+# (https://github.com/kubernetes-sigs/kind/releases); always pin the digest,
+# a kindest/node tag alone is not tied to one kind release. hack/install-tool.sh
+# pins kind itself (v0.33.0). Images from older kind releases are not
+# guaranteed to work with a newer kind; if one stops booting or `kind load`
+# fails on it, take that minor's image from the newest kind release that
+# built it, or drop the minor to weekly with a note.
+1.29 kindest/node:v1.29.14@sha256:8703bd94ee24e51b778d5556ae310c6c0fa67d761fae6379c8e0bb480e6fea29 weekly v0.27.0
+1.30 kindest/node:v1.30.13@sha256:397209b3d947d154f6641f2d0ce8d473732bd91c87d9575ade99049aa33cd648 weekly v0.29.0
+1.31 kindest/node:v1.31.14@sha256:6f86cf509dbb42767b6e79debc3f2c32e4ee01386f0489b3b2be24b0a55aac2b pr v0.31.0
+1.32 kindest/node:v1.32.11@sha256:5fc52d52a7b9574015299724bd68f183702956aa4a2116ae75a63cb574b35af8 weekly v0.31.0
+1.33 kindest/node:v1.33.12@sha256:3f5c8443c620245e4d355cfe09e96a91ead32ceaa569d3f1ca9edf0cb2fe2ff4 weekly v0.32.0
+1.34 kindest/node:v1.34.11@sha256:44e222ee2132dab25ff87301682f89eb82c7880ea3a1bf543bfe9708fd08d67d weekly v0.33.0
+1.35 kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0 weekly v0.33.0
+1.36 kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed weekly v0.33.0
+1.37 kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5 pr v0.33.0
