@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
+	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files under testdata")
@@ -211,6 +212,22 @@ func TestScanWriteBaselineRoundTrip(t *testing.T) {
 	for _, want := range []string{"READY  no", "BASELINE  3 unchanged, 0 new"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("table missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// SARIF carries suppressions and baseline states end to end.
+func TestScanFilesSARIFSuppressedAndBaseline(t *testing.T) {
+	cfg := writeConfig(t, "ignore:\n  - key: removed-api/batch/v1beta1/CronJob\n    reason: nightly job retires with 1.36\n")
+	out, _, err := execScanFiles(t, "--files", "testdata/baseline/manifests", "--config", cfg,
+		"--baseline", "testdata/baseline/baseline.json", "--output", "sarif")
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("err = %v, want ErrGateFailed (new Ingress and PDB)", err)
+	}
+	sariftest.AssertGitHubAcceptable(t, []byte(out))
+	for _, want := range []string{`"kind": "external"`, `"justification": "nightly job retires with 1.36"`, `"baselineState": "new"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("SARIF lacks %s:\n%s", want, out)
 		}
 	}
 }
