@@ -13,7 +13,7 @@ matchers:
     - istiod
 support:
   status: supported
-  eol_date: "2026-11-30"
+  eol_date: "2027-02-28"
   citations:
     - https://endoflife.date/istio
     - https://istio.io/latest/docs/releases/supported-releases/

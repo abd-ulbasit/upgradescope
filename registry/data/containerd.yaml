@@ -15,7 +15,7 @@ matchers:
     - docker.io/library/containerd
 support:
   status: supported
-  eol_date: "2028-04-30"
+  eol_date: "2027-05-16"
   citations:
     - https://endoflife.date/containerd
     - https://containerd.io/releases/
