@@ -218,6 +218,8 @@ func (o *observer) handler() http.Handler {
 var (
 	descLastSuccess = prometheus.NewDesc("upgradescope_agent_last_success_timestamp_seconds",
 		"Unix time of the last successful tick (0 before the first).", nil, nil)
+	descInterval = prometheus.NewDesc("upgradescope_agent_interval_seconds",
+		"Configured tick interval (ticks fire every interval ±10%), for staleness alerts.", nil, nil)
 	descScore = prometheus.NewDesc("upgradescope_readiness_score",
 		"Readiness score (0-100) per target, from the last successful tick.", []string{"target"}, nil)
 	descVerdict = prometheus.NewDesc("upgradescope_readiness_verdict",
@@ -234,7 +236,7 @@ var verdicts = []engine.Verdict{engine.VerdictReady, engine.VerdictBlocked, engi
 
 // Describe implements prometheus.Collector for the state gauges.
 func (o *observer) Describe(ch chan<- *prometheus.Desc) {
-	for _, d := range []*prometheus.Desc{descLastSuccess, descScore, descVerdict, descFindings, descCapability, descKBInfo} {
+	for _, d := range []*prometheus.Desc{descLastSuccess, descInterval, descScore, descVerdict, descFindings, descCapability, descKBInfo} {
 		ch <- d
 	}
 }
@@ -253,6 +255,7 @@ func (o *observer) Collect(ch chan<- prometheus.Metric) {
 		ts = float64(last.UnixNano()) / 1e9
 	}
 	ch <- prometheus.MustNewConstMetric(descLastSuccess, prometheus.GaugeValue, ts)
+	ch <- prometheus.MustNewConstMetric(descInterval, prometheus.GaugeValue, o.interval.Seconds())
 	ch <- prometheus.MustNewConstMetric(descKBInfo, prometheus.GaugeValue, 1, o.kb.Version, o.kb.MaxKnownK8s.String())
 	for c, st := range good.caps {
 		ch <- prometheus.MustNewConstMetric(descCapability, prometheus.GaugeValue, boolValue(st.Available), string(c))

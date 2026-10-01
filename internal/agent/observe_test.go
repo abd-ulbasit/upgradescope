@@ -179,6 +179,8 @@ func TestRunServesHealthAndMetrics(t *testing.T) {
 		`upgradescope_agent_tick_duration_seconds_count 1`,
 		`upgradescope_agent_tick_errors_total 0`,
 		`upgradescope_agent_last_success_timestamp_seconds `,
+		// Alert rules compare the last-success age with the interval.
+		`upgradescope_agent_interval_seconds 600`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics has no %s", want)
