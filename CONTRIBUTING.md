@@ -80,7 +80,7 @@ hack/                  test and demo scripts (kind setup, chart tests, Postgres 
 make test                              # go test ./...
 go test -race ./internal/agent/...     # run -race on the packages you touched
 (cd tools/eol-sync && go test ./...)   # tools/ are separate modules: test them separately
-(cd tools/gen-kb && go build ./...)
+(cd tools/gen-kb && go vet ./...)
 ```
 
 CI also runs these checks, and you should run them before pushing:
