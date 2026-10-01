@@ -1,0 +1,3 @@
+# Go tests for the chart (rbac_test.go) are not part of the package.
+*.go
+.DS_Store

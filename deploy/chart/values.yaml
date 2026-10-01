@@ -13,24 +13,20 @@ serviceAccount:
   name: ""
 
 rbac:
-  # Create the agent ClusterRole/ClusterRoleBinding.
-  #
-  # HONEST TRADE-OFF — read before installing:
-  # The agent ClusterRole grants get/list/watch on ALL resources in ALL API
-  # groups (cluster-wide, strictly read-only). Two collectors force this:
-  #   1. Helm release detection reads Secrets of type helm.sh/release.v1.
-  #      RBAC cannot filter Secrets by type and release names are dynamic,
-  #      so Helm detection requires cluster-wide secret get+list. If that is
-  #      unacceptable in your environment, set rbac.create=false and bind a
-  #      narrower role of your own — the Helm collector then degrades to
-  #      "not assessed (secrets list forbidden)" instead of failing.
-  #   2. Deprecated-API detection lists objects (metadata-only) at whatever
-  #      deprecated group/versions the embedded KB flags. The group set is
-  #      data-driven and grows with every KB update, so enumerating groups
-  #      in RBAC would silently rot.
-  # Write access is limited to exactly one resource: the ClusterReadiness
-  # CR and its CRD. Nothing else in the cluster is ever mutated (spec §12).
+  # Create the agent ClusterRole/ClusterRoleBinding. Every rule is listed
+  # and explained in templates/rbac.yaml and the chart README: get/list on
+  # namespaces, nodes, pods and the API group/resources the embedded KB
+  # flags as deprecated; get on /version and /metrics; writes only to the
+  # ClusterReadiness CR named agent.crName (and, with agent.manageCRD, to the
+  # clusterreadinesses.upgradescope.dev CRD). No wildcards, no watch, no
+  # subresources such as nodes/proxy or pods/log.
   create: true
+  # Cluster-wide get/list on Secrets, for Helm release detection (Secrets of
+  # type helm.sh/release.v1). RBAC cannot filter Secrets by type, so true
+  # means the agent can read EVERY Secret in the cluster. false removes the
+  # rule; the Helm collector then reports "not assessed (secrets list
+  # forbidden)" and Helm chart findings are missing from the report.
+  helmSecrets: true
 
 agent:
   # Evaluation interval (minimum 1m).
@@ -41,6 +37,12 @@ agent:
   teamLabel: team
   # Human-readable cluster name sent to the server (default: cluster UID).
   clusterName: ""
+  # Keep the ClusterReadiness CRD schema in step with the agent binary at
+  # startup (agent --manage-crd). Grants get/update/patch on that one CRD
+  # only. The CRD itself is installed by the chart's crds/ directory; set
+  # false when the CRD is managed elsewhere (e.g. GitOps) to drop all CRD
+  # permissions.
+  manageCRD: true
   # Target Kubernetes minors written into the ClusterReadiness spec at
   # install time, e.g. ["1.37", "1.38"]. Empty = agent creates the CR with
   # an empty spec and defaults to the next minor above the server version.

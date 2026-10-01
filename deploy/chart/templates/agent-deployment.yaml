@@ -35,6 +35,7 @@ spec:
             - --interval={{ .Values.agent.interval }}
             - --cr-name={{ .Values.agent.crName }}
             - --team-label={{ .Values.agent.teamLabel }}
+            - --manage-crd={{ .Values.agent.manageCRD }}
             {{- if .Values.agent.clusterName }}
             - --cluster-name={{ .Values.agent.clusterName }}
             {{- end }}

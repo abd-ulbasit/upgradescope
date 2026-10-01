@@ -12,6 +12,7 @@ require (
 	k8s.io/apiextensions-apiserver v0.37.1
 	k8s.io/apimachinery v0.37.1
 	k8s.io/client-go v0.37.1
+	k8s.io/component-helpers v0.37.1
 	modernc.org/sqlite v1.60.1
 	sigs.k8s.io/yaml v1.6.0
 )

@@ -64,12 +64,43 @@ assert_line "$TMP/default.yaml" 'kind: ServiceAccount'     "ServiceAccount rende
 assert_line "$TMP/default.yaml" 'kind: ClusterRole'        "ClusterRole rendered"
 assert_line "$TMP/default.yaml" 'kind: ClusterRoleBinding' "ClusterRoleBinding rendered"
 assert_line "$TMP/default.yaml" 'kind: Deployment'         "agent Deployment rendered"
-assert_contains "$TMP/default.yaml" 'verbs: ["get", "list", "watch"]'        "broad rule is read-only"
-assert_contains "$TMP/default.yaml" 'nonResourceURLs: ["/metrics", "/version"]' "metrics+version nonResourceURLs"
+assert_contains "$TMP/default.yaml" 'nonResourceURLs: ["/version", "/metrics"]' "version+metrics nonResourceURLs"
 assert_contains "$TMP/default.yaml" 'clusterreadinesses/status'              "status subresource rule"
+assert_contains "$TMP/default.yaml" 'resourceNames: ["clusterreadinesses.upgradescope.dev"]' "CRD writes scoped to our CRD"
+assert_contains "$TMP/default.yaml" 'resourceNames: ["cluster"]' "CR writes scoped to agent.crName"
+assert_contains "$TMP/default.yaml" 'resources: ["secrets"]' "Helm Secret read on by default (rbac.helmSecrets)"
+assert_contains "$TMP/default.yaml" '--manage-crd=true' "agent manages the CRD schema by default"
 assert_not_contains "$TMP/default.yaml" '"delete"'           "no delete verb anywhere"
 assert_not_contains "$TMP/default.yaml" '"deletecollection"' "no deletecollection verb"
 assert_not_contains "$TMP/default.yaml" '"escalate"'         "no escalate verb"
+assert_not_contains "$TMP/default.yaml" '"watch"'            "no watch verb (the agent polls)"
+grep -vE '^[[:space:]]*#' "$TMP/default.yaml" > "$TMP/default.nocomments.yaml"  # rules only, not their prose
+assert_not_contains "$TMP/default.nocomments.yaml" '"*"'         "no wildcard group/resource/verb"
+assert_not_contains "$TMP/default.nocomments.yaml" 'nodes/proxy' "no nodes/proxy (kubelet exec)"
+assert_not_contains "$TMP/default.nocomments.yaml" '/*'         "no wildcard subresources"
+
+echo "== RBAC: rbac.helmSecrets=false drops the Secret rule"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set rbac.helmSecrets=false > "$TMP/nosecrets.yaml"
+assert_not_contains "$TMP/nosecrets.yaml" '"secrets"' "no Secret rule without helmSecrets"
+
+echo "== RBAC: agent.manageCRD=false drops all CRD write access"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set agent.manageCRD=false > "$TMP/nocrd.yaml"
+assert_not_contains "$TMP/nocrd.yaml" 'resourceNames: ["clusterreadinesses.upgradescope.dev"]' "no CRD write rule"
+assert_contains "$TMP/nocrd.yaml" '--manage-crd=false' "agent told not to touch the CRD"
+
+echo "== RBAC: rendered rules vs collector calls (upstream rbac Covers) and KB sync"
+# deploy/chart/rbac_test.go renders the chart, then requires ALLOW for every
+# call the collectors make and DENY for nodes/proxy, pods/log, pods/exec,
+# foreign CRDs and CRs; it also fails when files/kb-rbac-rules.yaml drifts
+# from the embedded KB.
+command -v go >/dev/null || { echo "ERROR: go not found in PATH (needed for the RBAC tests)" >&2; exit 1; }
+if (cd "$ROOT" && UPGRADESCOPE_CHART_TEST=1 go test ./deploy/chart/); then
+  pass "go test ./deploy/chart"
+else
+  fail "go test ./deploy/chart (RBAC coverage)"
+fi
 assert_contains "$TMP/default.yaml" "image: \"ghcr.io/abd-ulbasit/upgradescope:$APP_VERSION\"" "default image tag is the chart appVersion"
 assert_not_contains "$TMP/default.yaml" 'upgradescope:dev"' "default image is not the unpublished :dev"
 assert_contains "$TMP/default.yaml" 'imagePullPolicy: IfNotPresent'   "pullPolicy IfNotPresent"
