@@ -52,6 +52,7 @@ func Collect(ctx context.Context, c Clients, k kb.KB, opts Options) inventory.In
 	}
 	inv := inventory.Inventory{
 		SchemaVersion: 1,
+		Source:        inventory.SourceCluster,
 		CollectedAt:   time.Now().UTC(),
 		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{},
 	}

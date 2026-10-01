@@ -45,19 +45,53 @@ type Finding struct {
 	Citations   []string `json:"citations,omitempty"`
 }
 
+// CapabilityGap is one thing the evaluation could not assess. Capability is
+// usually a collector capability whose sub-collector failed (Reason is its
+// error). The engine also adds gaps of its own:
+//
+//   - capability "versions", when the inventory's versions capability is
+//     available but the server version is missing or unparseable — the
+//     kubelet and control-plane skew rules then had no reference version;
+//   - capability "kb-coverage" (GapKBCoverage), when the target is newer
+//     than the knowledge base's MaxKnownK8s — removals in releases the KB
+//     does not know about cannot be found.
+//
+// Required marks gaps that make the verdict unknown: api-usage and
+// kb-coverage always, versions for cluster inventories. Other gaps only
+// narrow what the report covers.
 type CapabilityGap struct {
 	Capability inventory.Capability `json:"capability"`
 	Reason     string               `json:"reason"`
+	Required   bool                 `json:"required,omitempty"`
 }
 
+// GapKBCoverage is the CapabilityGap capability recorded when the target is
+// beyond the knowledge base horizon. It is not a collector capability.
+const GapKBCoverage inventory.Capability = "kb-coverage"
+
+// Verdict is the report's readiness answer.
+type Verdict string
+
+const (
+	// VerdictReady: no blockers, and everything required was assessed.
+	VerdictReady Verdict = "ready"
+	// VerdictBlocked: at least one blocker finding.
+	VerdictBlocked Verdict = "blocked"
+	// VerdictUnknown: no blockers found, but a required gap (see
+	// CapabilityGap.Required) means blockers may have been missed.
+	VerdictUnknown Verdict = "unknown"
+)
+
 type Report struct {
-	ClusterID   string            `json:"clusterId"`
-	Target      inventory.Version `json:"target"`
-	KBVersion   string            `json:"kbVersion"`
-	Score       int               `json:"score"`
-	Ready       bool              `json:"ready"`
-	Findings    []Finding         `json:"findings"` // sorted: severity desc, category, title
-	NotAssessed []CapabilityGap   `json:"notAssessed,omitempty"`
+	ClusterID string            `json:"clusterId"`
+	Target    inventory.Version `json:"target"`
+	KBVersion string            `json:"kbVersion"`
+	Score     int               `json:"score"` // from findings only; see Score
+	// Ready is Verdict == VerdictReady, kept for v0.1 consumers.
+	Ready       bool            `json:"ready"`
+	Verdict     Verdict         `json:"verdict"`
+	Findings    []Finding       `json:"findings"`              // sorted: severity desc, category, title
+	NotAssessed []CapabilityGap `json:"notAssessed,omitempty"` // sorted by capability
 }
 
 var severityRank = map[Severity]int{SevBlocker: 0, SevWarning: 1, SevInfo: 2}

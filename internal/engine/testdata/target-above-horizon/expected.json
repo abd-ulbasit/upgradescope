@@ -1,0 +1,24 @@
+{
+  "clusterId": "66666666-6666-6666-6666-666666666666",
+  "findings": [
+    {
+      "category": "kb-stale",
+      "detail": "Findings may be incomplete; regenerate the knowledge base (kb version test-kb-1).",
+      "key": "kb-stale",
+      "severity": "warning",
+      "title": "knowledge base does not cover Kubernetes 1.37 (newest known: 1.36)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "kb-coverage",
+      "reason": "knowledge base covers Kubernetes up to 1.36; target 1.37 cannot be assessed",
+      "required": true
+    }
+  ],
+  "ready": false,
+  "score": 95,
+  "target": "1.37",
+  "verdict": "unknown"
+}
