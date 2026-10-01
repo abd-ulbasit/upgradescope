@@ -1,15 +1,21 @@
 # registry/data/calico.yaml
 # support.status / support.eol_date are synced from the endoflife.date API
 # by tools/eol-sync (newest-cycle rule); do not edit them by hand.
-schema_version: 1
+schema_version: 2
 id: calico
 display_name: Calico
 endoflife_product: calico
 matchers:
   images:
-    - docker.io/calico
-    - quay.io/calico
-    - calico
+    # Every calico/* image carries the Calico release as its tag;
+    # tigera/operator does not (it has its own version line).
+    - calico/node
+    - calico/cni
+    - calico/kube-controllers
+    - calico/typha
+    - calico/apiserver
+    - calico/csi
+    - calico/pod2daemon-flexvol
   charts:
     - tigera-operator
 support:

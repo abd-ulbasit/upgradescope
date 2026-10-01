@@ -1,0 +1,20 @@
+# registry/data/aks-app-routing-nginx.yaml
+# Hand-curated: the managed NGINX of the AKS application routing add-on,
+# Microsoft's build of ingress-nginx. Microsoft provides critical security
+# patches for it "through November 2026", after upstream's March 2026
+# retirement, so it is a separate product from upstream ingress-nginx (whose
+# EOL verdict would be false here). The sources give a month, not a day:
+# eol_date is the last day of that month.
+schema_version: 2
+id: aks-app-routing-nginx
+display_name: AKS application routing NGINX
+matchers:
+  images:
+    - oss/kubernetes/ingress/nginx-ingress-controller # mcr.microsoft.com
+support:
+  status: supported
+  eol_date: "2026-11-30"
+  citations:
+    - https://blog.aks.azure.com/2025/11/13/ingress-nginx-update
+    - https://learn.microsoft.com/en-us/azure/aks/app-routing-nginx-to-gateway-api-migration
+recommendation: Migrate to the application routing Gateway API implementation (see the AKS migration guide).

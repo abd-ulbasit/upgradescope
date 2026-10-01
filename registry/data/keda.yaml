@@ -1,13 +1,15 @@
 # registry/data/keda.yaml
 # support.status / support.eol_date are synced from the endoflife.date API
 # by tools/eol-sync (newest-cycle rule); do not edit them by hand.
-schema_version: 1
+schema_version: 2
 id: keda
 display_name: KEDA
 endoflife_product: keda
 matchers:
   images:
-    - ghcr.io/kedacore
+    - kedacore/keda
+    - kedacore/keda-metrics-apiserver
+    - kedacore/keda-admission-webhooks
   charts:
     - keda
 support:

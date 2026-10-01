@@ -1,0 +1,27 @@
+# registry/data/rke2-ingress-nginx.yaml
+# Hand-curated: SUSE's build of ingress-nginx bundled with RKE2. Upstream
+# ingress-nginx retired in March 2026, but SUSE keeps backporting critical
+# and important CVE fixes for this build in every RKE2 release up to and
+# including v1.36, so it is a separate product from upstream ingress-nginx
+# (whose EOL verdict would be false here). RKE2 v1.37 offers only best-effort
+# support and later releases drop it; an RKE2 release is a Kubernetes minor,
+# so that bound is a k8s_max.
+schema_version: 2
+id: rke2-ingress-nginx
+display_name: RKE2 Ingress NGINX
+matchers:
+  images:
+    - rancher/nginx-ingress-controller # tagged nginx-<version>-hardenedN
+  charts:
+    - rke2-ingress-nginx
+support:
+  status: supported
+  citations:
+    - https://www.suse.com/c/kubecon-eu-2026-rke2-nginx-traefik-support/
+    - https://docs.rke2.io/reference/ingress_migration
+compat:
+  - range: ">=0.0.0"
+    k8s_max: "1.36"
+    citations:
+      - https://www.suse.com/c/kubecon-eu-2026-rke2-nginx-traefik-support/
+recommendation: Migrate to Traefik, the default RKE2 ingress controller from v1.36 (see the RKE2 ingress migration guide).

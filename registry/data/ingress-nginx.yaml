@@ -1,10 +1,12 @@
 # registry/data/ingress-nginx.yaml
-schema_version: 1
+schema_version: 2
 id: ingress-nginx
 display_name: Ingress NGINX Controller
 matchers:
   images:
-    - registry.k8s.io/ingress-nginx/controller
+    - ingress-nginx/controller
+    - ingress-nginx/controller-chroot
+    - bitnami/nginx-ingress-controller # Bitnami rebuild of the upstream controller
   charts:
     - ingress-nginx
 support:

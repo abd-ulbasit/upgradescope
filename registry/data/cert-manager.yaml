@@ -1,10 +1,12 @@
 # registry/data/cert-manager.yaml
-schema_version: 1
+schema_version: 2
 id: cert-manager
 display_name: cert-manager
 matchers:
   images:
-    - quay.io/jetstack/cert-manager-controller
+    - jetstack/cert-manager-controller
+    - jetstack/cert-manager-webhook
+    - jetstack/cert-manager-cainjector
   charts:
     - cert-manager
 support:

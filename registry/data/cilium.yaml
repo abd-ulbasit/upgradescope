@@ -1,13 +1,18 @@
 # registry/data/cilium.yaml
 # support.status / support.eol_date are synced from the endoflife.date API
 # by tools/eol-sync (newest-cycle rule); do not edit them by hand.
-schema_version: 1
+schema_version: 2
 id: cilium
 display_name: Cilium
 endoflife_product: cilium
 matchers:
   images:
-    - quay.io/cilium/cilium
+    - cilium/cilium
+    - cilium/operator
+    - cilium/operator-generic
+    - cilium/operator-aws
+    - cilium/operator-azure
+    - cilium/hubble-relay
   charts:
     - cilium
 support:

@@ -1,15 +1,15 @@
 # registry/data/etcd.yaml
 # support.status / support.eol_date are synced from the endoflife.date API
 # by tools/eol-sync (newest-cycle rule); do not edit them by hand.
-schema_version: 1
+schema_version: 2
 id: etcd
 display_name: etcd
 endoflife_product: etcd
 matchers:
   images:
-    - registry.k8s.io/etcd
-    - gcr.io/etcd-development/etcd
-    - quay.io/coreos/etcd
+    # Any repository named etcd: registry.k8s.io/etcd,
+    # gcr.io/etcd-development/etcd, quay.io/coreos/etcd, bitnami/etcd.
+    - etcd
 support:
   status: supported
   citations:

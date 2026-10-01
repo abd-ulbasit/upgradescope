@@ -1,12 +1,13 @@
 # registry/data/external-dns.yaml
 # Hand-curated: endoflife.date has no external-dns product; status and the
 # compat row come from the upstream Kubernetes-version-compatibility matrix.
-schema_version: 1
+schema_version: 2
 id: external-dns
 display_name: ExternalDNS
 matchers:
   images:
-    - registry.k8s.io/external-dns/external-dns
+    - external-dns/external-dns
+    - bitnami/external-dns
   charts:
     - external-dns
 support:

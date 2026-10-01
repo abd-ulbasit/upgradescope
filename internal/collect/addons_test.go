@@ -19,11 +19,11 @@ import (
 func testRegistry() []registry.AddOn {
 	return []registry.AddOn{
 		{ID: "ingress-nginx", Matchers: registry.Matchers{
-			Images: []string{"registry.k8s.io/ingress-nginx"},
+			Images: []string{"ingress-nginx/controller"},
 			Charts: []string{"ingress-nginx"},
 		}},
 		{ID: "cilium", Matchers: registry.Matchers{
-			Images: []string{"quay.io/cilium/cilium"},
+			Images: []string{"cilium/cilium"},
 		}},
 	}
 }
@@ -95,6 +95,120 @@ func TestMatchAddOns(t *testing.T) {
 				t.Errorf("unrecognized = %#v, want %#v", unrec, tc.wantUnrec)
 			}
 		})
+	}
+}
+
+func TestParseImage(t *testing.T) {
+	cases := []struct {
+		image string
+		want  imageRef
+	}{
+		{"registry.k8s.io/ingress-nginx/controller:v1.9.4", imageRef{"registry.k8s.io", "ingress-nginx/controller", "v1.9.4"}},
+		{"redis", imageRef{"docker.io", "library/redis", ""}},
+		{"redis:7.2", imageRef{"docker.io", "library/redis", "7.2"}},
+		{"velero/velero:v1.14.0", imageRef{"docker.io", "velero/velero", "v1.14.0"}},
+		{"index.docker.io/library/traefik:v3.1", imageRef{"docker.io", "library/traefik", "v3.1"}},
+		{"registry-1.docker.io/bitnami/etcd:3.5.15", imageRef{"docker.io", "bitnami/etcd", "3.5.15"}},
+		{"localhost/app:1", imageRef{"localhost", "app", "1"}},
+		{"reg.example:5000/team/app:1.2@sha256:0123", imageRef{"reg.example:5000", "team/app", "1.2"}},
+		{"quay.io/cilium/cilium@sha256:0123", imageRef{"quay.io", "cilium/cilium", ""}},
+		{"harbor.corp.example/registry.k8s.io/ingress-nginx/controller:v1.10.0",
+			imageRef{"harbor.corp.example", "registry.k8s.io/ingress-nginx/controller", "v1.10.0"}},
+	}
+	for _, tc := range cases {
+		if got := parseImage(tc.image); got != tc.want {
+			t.Errorf("parseImage(%q) = %+v, want %+v", tc.image, got, tc.want)
+		}
+	}
+}
+
+func TestVersionFromTag(t *testing.T) {
+	cases := map[string]string{
+		"v1.9.4":                 "1.9.4",
+		"1.11.3-debian-12-r0":    "1.11.3",
+		"nginx-1.9.4-hardened1":  "1.9.4",
+		"v1.11.1-eksbuild.4":     "1.11.1",
+		"3.5.15-0":               "3.5.15",
+		"1.31.1-distroless":      "1.31.1",
+		"v1.20.0-rc.1":           "1.20.0-rc.1",
+		"1.31.0-beta.2":          "1.31.0-beta.2",
+		"v3.1":                   "3.1",
+		"latest":                 "",
+		"":                       "",
+		"sha-1a2b3c":             "",
+		"v2.8.3+fips":            "2.8.3",
+		"release-v1.7.27-ubuntu": "1.7.27",
+	}
+	for tag, want := range cases {
+		if got := versionFromTag(tag); got != want {
+			t.Errorf("versionFromTag(%q) = %q, want %q", tag, got, want)
+		}
+	}
+}
+
+// Real-world image references against the embedded registry: each must map
+// to the expected add-on whatever registry, mirror, pull-through cache,
+// digest or tag suffix it carries. Vendor forks map to their own entries,
+// never to upstream ingress-nginx (whose EOL verdict would be false there).
+func TestMatchAddOnsRealWorldImages(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		image, wantID, wantVersion string
+	}{
+		{"registry.k8s.io/ingress-nginx/controller:v1.11.3", "ingress-nginx", "1.11.3"},
+		{"k8s.gcr.io/ingress-nginx/controller:v1.1.1", "ingress-nginx", "1.1.1"},
+		{"registry.k8s.io/ingress-nginx/controller-chroot:v1.11.3", "ingress-nginx", "1.11.3"},
+		{"123456789012.dkr.ecr.us-east-1.amazonaws.com/registry-k8s-io/ingress-nginx/controller:v1.11.2", "ingress-nginx", "1.11.2"},
+		{"harbor.corp.example/k8s/ingress-nginx/controller:v1.11.2", "ingress-nginx", "1.11.2"},
+		{"harbor.corp.example/registry.k8s.io/ingress-nginx/controller:v1.10.0", "ingress-nginx", "1.10.0"},
+		{"registry.k8s.io/ingress-nginx/controller:v1.9.4@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "ingress-nginx", "1.9.4"},
+		{"registry.k8s.io/ingress-nginx/controller@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "ingress-nginx", ""},
+		{"docker.io/bitnami/nginx-ingress-controller:1.11.3-debian-12-r0", "ingress-nginx", "1.11.3"},
+		{"bitnami/nginx-ingress-controller:1.11.3", "ingress-nginx", "1.11.3"},
+		{"rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", "rke2-ingress-nginx", "1.9.4"},
+		{"mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller:v1.11.5", "aks-app-routing-nginx", "1.11.5"},
+		{"coredns/coredns:1.11.1", "coredns", "1.11.1"},
+		{"registry.k8s.io/coredns/coredns:v1.11.3", "coredns", "1.11.3"},
+		{"602401143452.dkr.ecr.us-west-2.amazonaws.com/eks/coredns:v1.11.1-eksbuild.4", "coredns", "1.11.1"},
+		{"quay.io/coreos/kube-state-metrics:v1.9.8", "kube-state-metrics", "1.9.8"},
+		{"registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0", "kube-state-metrics", "2.13.0"},
+		{"docker.io/istio/proxyv2:1.31.1", "istio", "1.31.1"},
+		{"istio/pilot:1.31.1-distroless", "istio", "1.31.1"},
+		{"gcr.io/istio-release/proxyv2:1.30.2", "istio", "1.30.2"},
+		{"traefik:v3.1.2", "traefik", "3.1.2"},
+		{"velero/velero:v1.14.0", "velero", "1.14.0"},
+		{"quay.io/jetstack/cert-manager-controller:v1.15.3", "cert-manager", "1.15.3"},
+		{"docker.io/calico/node:v3.26.1", "calico", "3.26.1"},
+		{"quay.io/calico/cni:v3.28.0", "calico", "3.28.0"},
+		{"quay.io/cilium/cilium:v1.16.1", "cilium", "1.16.1"},
+		{"ghcr.io/kedacore/keda:2.15.1", "keda", "2.15.1"},
+		{"ghcr.io/kyverno/kyverno:v1.12.5", "kyverno", "1.12.5"},
+		{"reg.kyverno.io/kyverno/kyverno:v1.14.1", "kyverno", "1.14.1"},
+		{"quay.io/argoproj/argocd:v2.12.3", "argo-cd", "2.12.3"},
+		{"registry.k8s.io/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"registry.k8s.io/external-dns/external-dns:v0.14.2", "external-dns", "0.14.2"},
+		{"bitnami/external-dns:0.14.2-debian-12-r4", "external-dns", "0.14.2"},
+		{"registry.k8s.io/metrics-server/metrics-server:v0.7.2", "metrics-server", "0.7.2"},
+		{"quay.io/prometheus-operator/prometheus-operator:v0.75.0", "prometheus-operator", "0.75.0"},
+		// Not add-ons the registry tracks.
+		{"nginx/nginx-ingress:3.6.0", "", ""}, // F5 NGINX Ingress Controller, a different product
+		{"docker.io/library/redis:7", "", ""},
+		{"ghcr.io/fluxcd/source-controller:v1.4.1", "", ""}, // controller versions are not Flux versions
+	}
+	for _, tc := range cases {
+		got, unrec := matchAddOns([]nsImage{{"ns", tc.image}}, nil, addons)
+		if tc.wantID == "" {
+			if len(got) != 0 || len(unrec) != 1 {
+				t.Errorf("%s: want unrecognized, got addons=%+v unrecognized=%v", tc.image, got, unrec)
+			}
+			continue
+		}
+		if len(got) != 1 || got[0].ID != tc.wantID || got[0].Version != tc.wantVersion {
+			t.Errorf("%s: got %+v, want %s %q", tc.image, got, tc.wantID, tc.wantVersion)
+		}
 	}
 }
 

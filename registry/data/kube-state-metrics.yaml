@@ -1,10 +1,11 @@
 # registry/data/kube-state-metrics.yaml
-schema_version: 1
+schema_version: 2
 id: kube-state-metrics
 display_name: kube-state-metrics
 matchers:
   images:
-    - registry.k8s.io/kube-state-metrics/kube-state-metrics
+    - kube-state-metrics/kube-state-metrics
+    - coreos/kube-state-metrics # legacy quay.io/coreos image
   charts:
     - kube-state-metrics
 support:

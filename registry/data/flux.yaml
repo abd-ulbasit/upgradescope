@@ -1,13 +1,14 @@
 # registry/data/flux.yaml
 # support.status / support.eol_date are synced from the endoflife.date API
 # by tools/eol-sync (newest-cycle rule); do not edit them by hand.
-schema_version: 1
+schema_version: 2
 id: flux
 display_name: Flux
 endoflife_product: flux
 matchers:
-  images:
-    - ghcr.io/fluxcd
+  # Chart only: the fluxcd/* controller images carry their own version
+  # lines (source-controller v1.x), not the Flux release, so an image match
+  # would map to the wrong release cycle.
   charts:
     - flux2
 support:

@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -67,12 +68,52 @@ func splitImage(image string) (repo, tag string) {
 	return image, ""
 }
 
-// normalizeVersion is the single normalization point for every value
-// that lands in AddOnInstance.Version: the leading "v" is stripped from
-// image tags AND chart versions so registry Compat ranges and findings
-// compare against one uniform form.
-func normalizeVersion(v string) string {
-	return strings.TrimPrefix(v, "v")
+// imageRef is a container image reference normalised for matching: the
+// registry host (Docker Hub spelled "docker.io"), the repository path below
+// it ("library/" added for Docker Hub official images) and the tag.
+type imageRef struct {
+	host, path, tag string
+}
+
+// parseImage normalises an image reference the way the container runtime
+// resolves it: the first segment is a registry host only when it contains
+// "." or ":" or is "localhost"; otherwise the image lives on Docker Hub.
+// The digest is dropped.
+func parseImage(image string) imageRef {
+	repo, tag := splitImage(image)
+	host, path, ok := strings.Cut(repo, "/")
+	if !ok || (!strings.ContainsAny(host, ".:") && host != "localhost") {
+		host, path = "docker.io", repo
+	}
+	switch host {
+	case "index.docker.io", "registry-1.docker.io":
+		host = "docker.io"
+	}
+	if host == "docker.io" && !strings.Contains(path, "/") {
+		path = "library/" + path
+	}
+	return imageRef{host: host, path: path, tag: tag}
+}
+
+// pathMatches reports whether the repository path ends with the matcher on
+// whole segments, so "ingress-nginx/controller" matches the canonical path
+// and every mirror or pull-through-cache path that keeps it as a suffix
+// ("registry-k8s-io/ingress-nginx/controller").
+func pathMatches(path, matcher string) bool {
+	return path == matcher || strings.HasSuffix(path, "/"+matcher)
+}
+
+// versionRe finds a version anywhere in an image tag or chart appVersion:
+// "nginx-1.9.4-hardened1" → "1.9.4". A semver pre-release ("-rc.1") is kept;
+// distro and build suffixes ("-debian-12-r0", "-eksbuild.4") are not.
+var versionRe = regexp.MustCompile(`\d+\.\d+(\.\d+)?(-(alpha|beta|rc)(\.?\d+)*)?`)
+
+// versionFromTag is the single normalization point for every value that
+// lands in AddOnInstance.Version, so registry cycles, compat ranges and
+// findings compare against one uniform form; "" when the tag carries no
+// version ("latest", a digest-only reference).
+func versionFromTag(tag string) string {
+	return versionRe.FindString(tag)
 }
 
 // versionLess orders detected versions for the conservative-oldest merge:
@@ -86,12 +127,6 @@ func versionLess(a, b string) bool {
 		return av.LessThan(bv)
 	}
 	return a < b
-}
-
-// repoMatches reports whether repo equals the matcher or sits beneath it,
-// e.g. "registry.k8s.io/ingress-nginx" matches ".../ingress-nginx/controller".
-func repoMatches(repo, matcher string) bool {
-	return repo == matcher || strings.HasPrefix(repo, matcher+"/")
 }
 
 // matchAddOns is pure: images + helm releases + registry → detected
@@ -108,14 +143,14 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 	unmatched := map[string]bool{}
 
 	for _, img := range images {
-		repo, tag := splitImage(img.Image)
+		ref := parseImage(img.Image)
 		matched := false
 		for _, a := range addons {
 			for _, m := range a.Matchers.Images {
-				if repoMatches(repo, m) {
+				if pathMatches(ref.path, m) {
 					byID[a.ID] = append(byID[a.ID], evidence{
 						source:  "image",
-						version: normalizeVersion(tag),
+						version: versionFromTag(ref.tag),
 						ns:      img.Namespace,
 					})
 					matched = true
@@ -124,7 +159,7 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 			}
 		}
 		if !matched {
-			unmatched[repo] = true
+			unmatched[ref.host+"/"+ref.path] = true
 		}
 	}
 
@@ -132,7 +167,7 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 		for _, a := range addons {
 			for _, chart := range a.Matchers.Charts {
 				if rel.ChartName == chart {
-					byID[a.ID] = append(byID[a.ID], evidence{source: "chart", version: normalizeVersion(rel.ChartVersion), ns: rel.Namespace})
+					byID[a.ID] = append(byID[a.ID], evidence{source: "chart", version: strings.TrimPrefix(rel.ChartVersion, "v"), ns: rel.Namespace})
 				}
 			}
 		}
