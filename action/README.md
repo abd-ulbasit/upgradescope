@@ -8,9 +8,11 @@ step when findings reach `fail-on`, and it reports in three places:
 - **Step summary.** The job's summary page gets a table with one row per
   finding: severity, title, the objects as `file:line`, and the fix. This
   happens whether the gate passes or fails.
-- **Job log and annotations.** The log gets the same table. Each blocker
-  becomes an `::error` annotation and each warning a `::warning`, placed at
-  the finding's first file and line.
+- **Job log and annotations.** The log gets the same table. Each finding
+  that fails the gate at your `fail-on` becomes an `::error` annotation, and
+  every other blocker or warning a `::warning`. Annotations sit at the
+  finding's first file and line. With `fail-on: never`, nothing fails the
+  gate, so every annotation is a warning.
 - **SARIF and outputs.** The SARIF file is complete even when the gate fails,
   so you can upload it to code scanning. The action also sets the verdict,
   score and counts as outputs for later steps.

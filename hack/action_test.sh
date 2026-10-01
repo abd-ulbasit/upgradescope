@@ -252,6 +252,9 @@ jq -e '.findings | length == 2' "$report" >/dev/null &&
 
 run scan "$work/real:" INPUT_FAIL_ON=never
 expect "fail-on never passes with blockers" 0 "### upgradescope: blocked"
+# ::error marks the findings that fail the gate; with fail-on never, none.
+has "fail-on never annotates a blocker as a warning" "$work/out" "::warning file=action/testdata/removed/all.yaml,line=2,title=upgradescope blocker (removed-api)::"
+if grep -q '^::error' "$work/out"; then fail "fail-on never emits no ::error" "$work/out"; else ok "fail-on never emits no ::error"; fi
 
 # The audit's payload, and a command substitution, as a directory name.
 payload="$work/x\" ; echo INJECTED-COMMAND-RAN ; touch $work/pwned ; echo \"\$(touch $work/pwned2)"
@@ -288,6 +291,12 @@ has "a v0.1.x clean scan sets verdict=ready" "$rt/output" "verdict=ready"
 # Not ready without a blocker (v0.2's unknown) is neither ready nor blocked.
 run scan "$work/old:" INPUT_PATH=action/testdata/clean STUB_REPORT='del(.verdict) | .ready = false'
 has "a v0.1.x not-ready report without blockers sets verdict=unknown" "$rt/output" "verdict=unknown"
+# Warning findings (the stub's JSON relabels the fixture's blockers) are
+# ::error when fail-on warning makes them fail the gate, else ::warning.
+run scan "$work/old:" INPUT_FAIL_ON=warning STUB_REPORT='.findings |= map(.severity = "warning")'
+has "fail-on warning annotates a warning as an error" "$work/out" "::error file=action/testdata/removed/all.yaml,line=2,title=upgradescope warning (removed-api)::"
+run scan "$work/old:" STUB_REPORT='.findings |= map(.severity = "warning")'
+has "fail-on blocker annotates a warning as a warning" "$work/out" "::warning file=action/testdata/removed/all.yaml,line=2,title=upgradescope warning (removed-api)::"
 
 # A failing JSON or Markdown pass: its stderr goes into one ::warning, so a
 # later stderr line cannot be read as a workflow command.

@@ -116,18 +116,22 @@ install() {
   echo "installed $("$bin_dir/upgradescope" --version) from $releases/download/$tag/$asset"
 }
 
-# annotations: one ::error (blocker) or ::warning per finding, at its first
-# object's file and line when it has one. Values are escaped per the
+# annotations: one annotation per blocker or warning finding, at its first
+# object's file and line when it has one: ::error when the finding fails
+# the gate at INPUT_FAIL_ON, else ::warning (so with fail-on never, a
+# passing step shows no errors). Values are escaped per the
 # workflow-command format.
 annotations() {
-  jq -r '
+  jq -r --arg failon "$INPUT_FAIL_ON" '
     def data: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
     def prop: data | gsub(":"; "%3A") | gsub(","; "%2C");
     (.filesBase // "") as $base
     | (.findings // [])[]
     | select(.severity == "blocker" or .severity == "warning")
     | ([(.objects // [])[] | select(.file)] | first) as $o
-    | "::" + (if .severity == "blocker" then "error" else "warning" end) + " "
+    | (if $failon == "warning" or (.severity == "blocker" and $failon == "blocker")
+       then "error" else "warning" end) as $level
+    | "::" + $level + " "
       + (if $o then "file=" + ((if $base == "" then $o.file else $base + "/" + $o.file end) | prop)
            + ",line=" + ($o.line | tostring) + "," else "" end)
       + "title=" + ("upgradescope \(.severity) (\(.category))" | prop)
