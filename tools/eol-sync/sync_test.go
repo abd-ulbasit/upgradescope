@@ -1,62 +1,55 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-var today = time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
-
-func TestComputeSupport(t *testing.T) {
+func TestComputeCycles(t *testing.T) {
 	tests := []struct {
-		name       string
-		cycles     string // endoflife.date API response (newest cycle first)
-		wantStatus string
-		wantDate   string
-		wantErr    string
+		name    string
+		api     string // endoflife.date API response (newest cycle first)
+		want    []cycleRow
+		wantErr string
 	}{
 		{
-			name:       "newest cycle eol boolean false → supported, empty date",
-			cycles:     `[{"cycle":"1.19","eol":false},{"cycle":"1.18","eol":false}]`,
-			wantStatus: "supported",
+			name: "dates, booleans and both Kubernetes-range field spellings",
+			api: `[{"cycle":"1.31","eol":"2027-02-28","supportedKubernetesVersions":"1.32 - 1.36"},
+			       {"cycle":"1.19","eol":false,"supportedK8sVersions":"1.33 - 1.35"},
+			       {"cycle":"1.5","eol":true,"supportedKubernetesVersions":"1.13+"},
+			       {"cycle":"3.4","eol":"2025-07-23"}]`,
+			want: []cycleRow{
+				{cycle: "1.31", eol: `"2027-02-28"`, k8sMin: "1.32", k8sMax: "1.36"},
+				{cycle: "1.19", eol: "false", k8sMin: "1.33", k8sMax: "1.35"},
+				{cycle: "1.5", eol: "true", k8sMin: "1.13"},
+				{cycle: "3.4", eol: `"2025-07-23"`},
+			},
 		},
 		{
-			name:       "newest cycle eol boolean true → eol, empty date",
-			cycles:     `[{"cycle":"0.9","eol":true}]`,
-			wantStatus: "eol",
+			name: "patch-level Kubernetes bound is cut to MAJOR.MINOR",
+			api:  `[{"cycle":"1.8","eol":"2023-11-10","supportedK8sVersions":"1.23.3 - 1.25"}]`,
+			want: []cycleRow{{cycle: "1.8", eol: `"2023-11-10"`, k8sMin: "1.23", k8sMax: "1.25"}},
 		},
 		{
-			name:       "newest cycle future eol date → supported with date",
-			cycles:     `[{"cycle":"1.30","eol":"2026-11-30"},{"cycle":"1.29","eol":"2026-08-31"}]`,
-			wantStatus: "supported",
-			wantDate:   "2026-11-30",
+			name: "numeric cycle",
+			api:  `[{"cycle":2,"eol":false}]`,
+			want: []cycleRow{{cycle: "2", eol: "false"}},
 		},
-		{
-			name:       "newest cycle past eol date → eol with date",
-			cycles:     `[{"cycle":"2.0","eol":"2025-01-01"}]`,
-			wantStatus: "eol",
-			wantDate:   "2025-01-01",
-		},
-		{
-			name:       "eol date equal to today counts as eol",
-			cycles:     `[{"cycle":"3.1","eol":"2026-06-11"}]`,
-			wantStatus: "eol",
-			wantDate:   "2026-06-11",
-		},
-		{
-			name:       "older cycles being eol does not flip status (newest-cycle rule)",
-			cycles:     `[{"cycle":"3.6","eol":false},{"cycle":"3.4","eol":"2020-01-01"}]`,
-			wantStatus: "supported",
-		},
-		{name: "empty cycle list", cycles: `[]`, wantErr: "no cycles"},
-		{name: "invalid json", cycles: `{nope`, wantErr: "parse"},
-		{name: "unparseable eol date", cycles: `[{"cycle":"1","eol":"soon"}]`, wantErr: "eol date"},
-		{name: "eol field of unexpected type", cycles: `[{"cycle":"1","eol":42}]`, wantErr: "eol field"},
+		{name: "empty cycle list", api: `[]`, wantErr: "no cycles"},
+		{name: "invalid json", api: `{nope`, wantErr: "parse"},
+		{name: "unparseable eol date", api: `[{"cycle":"1","eol":"soon"}]`, wantErr: "eol date"},
+		{name: "eol field of unexpected type", api: `[{"cycle":"1","eol":42}]`, wantErr: "eol field"},
+		{name: "non-numeric cycle", api: `[{"cycle":"focal","eol":false}]`, wantErr: "cycle"},
+		{name: "unparseable Kubernetes range", api: `[{"cycle":"1.0","eol":false,"supportedKubernetesVersions":"latest"}]`, wantErr: "supported Kubernetes versions"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status, date, err := computeSupport([]byte(tt.cycles), today)
+			got, err := computeCycles([]byte(tt.api))
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("want error containing %q, got %v", tt.wantErr, err)
@@ -66,25 +59,49 @@ func TestComputeSupport(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if status != tt.wantStatus || date != tt.wantDate {
-				t.Fatalf("got (%q, %q), want (%q, %q)", status, date, tt.wantStatus, tt.wantDate)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d rows %+v, want %+v", len(got), got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("row %d = %+v, want %+v", i, got[i], tt.want[i])
+				}
 			}
 		})
 	}
 }
 
+func TestRenderCycles(t *testing.T) {
+	got := renderCycles([]cycleRow{
+		{cycle: "1.31", eol: `"2027-02-28"`, k8sMin: "1.32", k8sMax: "1.36"},
+		{cycle: "1.5", eol: "true", k8sMin: "1.13"},
+		{cycle: "3.4", eol: "false"},
+	}, "https://endoflife.date/istio")
+	want := `cycles:
+  - {cycle: "1.31", eol: "2027-02-28", k8s_min: "1.32", k8s_max: "1.36", citations: ["https://endoflife.date/istio"]}
+  - {cycle: "1.5", eol: true, k8s_min: "1.13", citations: ["https://endoflife.date/istio"]}
+  - {cycle: "3.4", eol: false, citations: ["https://endoflife.date/istio"]}
+`
+	if string(got) != want {
+		t.Fatalf("renderCycles:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 const sampleEntry = `# registry/data/istio.yaml
-schema_version: 1
+schema_version: 2
 id: istio
 endoflife_product: istio
 matchers:
   images:
-    - docker.io/istio
+    - istio/proxyv2
 support:
   status: supported
-  eol_date: "2026-11-30"
   citations:
     - https://endoflife.date/istio
+`
+
+const sampleBlock = `cycles:
+  - {cycle: "1.31", eol: "2027-02-28", citations: ["https://endoflife.date/istio"]}
 `
 
 func TestExtractSlug(t *testing.T) {
@@ -97,91 +114,110 @@ func TestExtractSlug(t *testing.T) {
 	}
 }
 
-func TestRewriteSupport(t *testing.T) {
+func TestRewriteCycles(t *testing.T) {
+	newBlock := "cycles:\n  - {cycle: \"1.32\", eol: false, citations: [\"https://endoflife.date/istio\"]}\n"
 	tests := []struct {
-		name    string
-		in      string
-		status  string
-		date    string
-		want    string // full expected output; "" means expect in unchanged
-		wantErr string
+		name, in, want string
 	}{
 		{
-			name:   "no changes needed is byte-identical",
-			in:     sampleEntry,
-			status: "supported", date: "2026-11-30",
+			name: "missing block is appended",
+			in:   sampleEntry,
+			want: sampleEntry + sampleBlock,
 		},
 		{
-			name:   "status flip preserved everything else",
-			in:     sampleEntry,
-			status: "eol", date: "2026-11-30",
-			want: strings.Replace(sampleEntry, "status: supported", "status: eol", 1),
+			name: "missing trailing newline before appending",
+			in:   strings.TrimSuffix(sampleEntry, "\n"),
+			want: sampleEntry + sampleBlock,
 		},
 		{
-			name:   "date change rewrites the eol_date line",
-			in:     sampleEntry,
-			status: "supported", date: "2027-01-15",
-			want: strings.Replace(sampleEntry, `eol_date: "2026-11-30"`, `eol_date: "2027-01-15"`, 1),
+			name: "block at end of file is replaced",
+			in:   sampleEntry + "cycles:\n  - {cycle: \"1.0\", eol: true, citations: [\"https://e.x/\"]}\n  - {cycle: \"0.9\", eol: true, citations: [\"https://e.x/\"]}\n",
+			want: sampleEntry + sampleBlock,
 		},
 		{
-			name:   "empty date removes the eol_date line",
-			in:     sampleEntry,
-			status: "supported", date: "",
-			want: strings.Replace(sampleEntry, "  eol_date: \"2026-11-30\"\n", "", 1),
-		},
-		{
-			name:   "missing eol_date line is inserted after status",
-			in:     strings.Replace(sampleEntry, "  eol_date: \"2026-11-30\"\n", "", 1),
-			status: "supported", date: "2026-11-30",
-			want: sampleEntry,
-		},
-		{
-			name:    "no support block",
-			in:      "schema_version: 1\nid: x\n",
-			status:  "supported",
-			wantErr: "support",
-		},
-		{
-			name:   "status line outside support block is not touched",
-			in:     "top:\n  status: bogus\nsupport:\n  status: supported\n  citations:\n    - https://e.x/\n",
-			status: "eol", date: "",
-			want: "top:\n  status: bogus\nsupport:\n  status: eol\n  citations:\n    - https://e.x/\n",
+			name: "block in the middle is replaced; the keys after it are kept",
+			in:   sampleEntry + "cycles:\n  - {cycle: \"1.0\", eol: true, citations: [\"https://e.x/\"]}\ncompat:\n  - range: \"<1.0.0\"\n",
+			want: sampleEntry + sampleBlock + "compat:\n  - range: \"<1.0.0\"\n",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := rewriteSupport([]byte(tt.in), tt.status, tt.date)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("want error containing %q, got %v", tt.wantErr, err)
-				}
-				return
+			got := rewriteCycles([]byte(tt.in), []byte(sampleBlock))
+			if string(got) != tt.want {
+				t.Fatalf("rewriteCycles:\n--- got ---\n%s\n--- want ---\n%s", got, tt.want)
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			// Idempotent: applying the same block again changes nothing,
+			// and a different block replaces rather than accumulates.
+			if again := rewriteCycles(got, []byte(sampleBlock)); !bytes.Equal(again, got) {
+				t.Fatalf("not idempotent:\n%s", again)
 			}
-			want := tt.want
-			if want == "" {
-				want = tt.in
-			}
-			if string(got) != want {
-				t.Fatalf("rewriteSupport mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+			if other := rewriteCycles(got, []byte(newBlock)); strings.Count(string(other), "cycles:") != 1 {
+				t.Fatalf("second rewrite duplicated the block:\n%s", other)
 			}
 		})
 	}
 }
 
-// Idempotence: applying the same desired state twice changes nothing.
-func TestRewriteSupportIdempotent(t *testing.T) {
-	once, err := rewriteSupport([]byte(sampleEntry), "eol", "2026-01-01")
-	if err != nil {
-		t.Fatal(err)
+// run end to end against a temp registry dir: drift is reported in check
+// mode without writing, then fixed in write mode; support and every other
+// byte of the entry are left alone; hand-curated entries are skipped.
+func TestRun(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	twice, err := rewriteSupport(once, "eol", "2026-01-01")
-	if err != nil {
-		t.Fatal(err)
+	write("istio.yaml", sampleEntry)
+	write("velero.yaml", strings.ReplaceAll(strings.Replace(sampleEntry, "endoflife_product: istio\n", "", 1), "istio", "velero"))
+	fetch := func(slug string) ([]byte, error) {
+		if slug != "istio" {
+			return nil, errors.New("unexpected slug " + slug)
+		}
+		return []byte(`[{"cycle":"1.31","eol":"2027-02-28"}]`), nil
 	}
-	if string(once) != string(twice) {
-		t.Fatalf("not idempotent:\n%s\nvs\n%s", once, twice)
+
+	var out bytes.Buffer
+	drift, err := run(dir, true, fetch, today, &out)
+	if err != nil || drift != 1 {
+		t.Fatalf("check run: drift=%d err=%v", drift, err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "istio.yaml")); string(raw) != sampleEntry {
+		t.Fatalf("check mode wrote the file:\n%s", raw)
+	}
+	if !strings.Contains(out.String(), "DRIFT") {
+		t.Errorf("check output does not report drift:\n%s", out.String())
+	}
+
+	drift, err = run(dir, false, fetch, today, &out)
+	if err != nil || drift != 1 {
+		t.Fatalf("write run: drift=%d err=%v", drift, err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "istio.yaml")); string(raw) != sampleEntry+sampleBlock {
+		t.Fatalf("istio.yaml after sync:\n%s", raw)
+	}
+	if drift, err = run(dir, true, fetch, today, &out); err != nil || drift != 0 {
+		t.Fatalf("re-check after sync: drift=%d err=%v", drift, err)
 	}
 }
+
+// A product whose every cycle has ended may be retired as a whole; eol-sync
+// leaves support.status to a human but says so.
+func TestRunFlagsAllCyclesEnded(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "istio.yaml"), []byte(sampleEntry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fetch := func(string) ([]byte, error) {
+		return []byte(`[{"cycle":"1.1","eol":"2020-01-01"},{"cycle":"1.0","eol":true}]`), nil
+	}
+	var out bytes.Buffer
+	if _, err := run(dir, false, fetch, today, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "every cycle has ended") {
+		t.Fatalf("output does not flag a fully ended product:\n%s", out.String())
+	}
+}
+
+var today = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)

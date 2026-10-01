@@ -178,6 +178,19 @@ func TestEmbeddedEntriesProperties(t *testing.T) {
 			if !slices.Contains(a.Support.Citations, page) {
 				t.Errorf("synced entry must cite %s in support.citations, got %v", page, a.Support.Citations)
 			}
+			if len(a.Cycles) == 0 {
+				t.Error("synced entry has no cycles — run `make eol-sync`")
+			}
+			for _, c := range a.Cycles {
+				if !slices.Contains(c.Citations, page) {
+					t.Errorf("cycle %s must cite %s, got %v", c.Cycle, page, c.Citations)
+				}
+			}
+			// A product-level date on a synced entry is the newest-cycle
+			// time bomb of v0.1: per-version dates belong in cycles.
+			if a.Support.EOLDate != "" {
+				t.Errorf("synced entry carries a product-level eol_date %q; per-version dates belong in cycles", a.Support.EOLDate)
+			}
 		})
 	}
 }

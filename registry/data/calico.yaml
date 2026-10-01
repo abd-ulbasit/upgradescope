@@ -1,6 +1,7 @@
 # registry/data/calico.yaml
-# support.status / support.eol_date are synced from the endoflife.date API
-# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+# cycles are generated from the endoflife.date API by tools/eol-sync; do not
+# edit them by hand. support is hand-curated: status eol is only for a
+# product upstream retired as a whole.
 schema_version: 2
 id: calico
 display_name: Calico
@@ -23,3 +24,12 @@ support:
   citations:
     - https://endoflife.date/calico
     - https://docs.tigera.io/calico/latest/getting-started/kubernetes/requirements
+cycles:
+  - {cycle: "3.32", eol: false, citations: ["https://endoflife.date/calico"]}
+  - {cycle: "3.31", eol: false, citations: ["https://endoflife.date/calico"]}
+  - {cycle: "3.30", eol: "2026-04-30", citations: ["https://endoflife.date/calico"]}
+  - {cycle: "3.29", eol: "2025-10-21", citations: ["https://endoflife.date/calico"]}
+  - {cycle: "3.28", eol: "2025-05-05", citations: ["https://endoflife.date/calico"]}
+  - {cycle: "3.27", eol: "2024-10-29", citations: ["https://endoflife.date/calico"]}
+  - {cycle: "3.26", eol: "2024-05-11", citations: ["https://endoflife.date/calico"]}
+  - {cycle: "3.25", eol: "2023-12-15", citations: ["https://endoflife.date/calico"]}

@@ -3,24 +3,21 @@
 //
 // For every registry/data/*.yaml containing `endoflife_product: <slug>` it
 // GETs https://endoflife.date/api/<slug>.json and rewrites ONLY the
-// support.status and support.eol_date lines; every other byte of the file
-// (matchers, citations, comments, compat rows) is preserved.
+// top-level `cycles:` block (appending one when missing); every other byte
+// of the file (matchers, support, citations, comments, compat rows) is
+// preserved.
 //
-// # The EOL rule
+// # Cycles, not a product date
 //
-// The endoflife.date API returns release cycles newest-first; each cycle's
-// "eol" field is either a boolean or a "YYYY-MM-DD" date. eol-sync looks at
-// the NEWEST cycle only:
+// The engine maps an installed add-on version to its release cycle and
+// judges that cycle's end of life, so every cycle the API publishes is
+// written — date or boolean eol, plus the supported Kubernetes range where
+// the product publishes one — each citing https://endoflife.date/<slug>.
+// eol-sync never touches support.status: a product-level "eol" means the
+// whole product was retired (ingress-nginx), which a human records. When
+// every cycle has ended, eol-sync says so in its output for that review.
 //
-//   - eol == false          → status=supported, eol_date cleared
-//   - eol == true           → status=eol,       eol_date cleared (date unknown)
-//   - eol == "YYYY-MM-DD"   → eol_date recorded; status=eol when the date is
-//     today or earlier (UTC), else supported
-//
-// Rationale: older cycles going EOL means "upgrade the add-on", not "the
-// add-on is dead" — an add-on is flagged EOL only when its newest release
-// line is EOL (that is product-level end of life, e.g. ingress-nginx).
-//
+
 // Usage:
 //
 //	go run . -dir ../../registry/data          # rewrite files in place
@@ -81,14 +78,11 @@ func run(dir string, check bool, fetch func(slug string) ([]byte, error), now ti
 		if err != nil {
 			return drift, fmt.Errorf("%s: fetch %q: %w", filepath.Base(path), slug, err)
 		}
-		status, date, err := computeSupport(body, now)
+		rows, err := computeCycles(body)
 		if err != nil {
 			return drift, fmt.Errorf("%s: %w", filepath.Base(path), err)
 		}
-		updated, err := rewriteSupport(raw, status, date)
-		if err != nil {
-			return drift, fmt.Errorf("%s: %w", filepath.Base(path), err)
-		}
+		updated := rewriteCycles(raw, renderCycles(rows, "https://endoflife.date/"+slug))
 		state := "in sync"
 		if string(updated) != string(raw) {
 			drift++
@@ -101,17 +95,13 @@ func run(dir string, check bool, fetch func(slug string) ([]byte, error), now ti
 				state = "updated"
 			}
 		}
-		fmt.Fprintf(out, "eol-sync: %-28s slug=%-12s status=%-9s eol_date=%-10s %s\n",
-			filepath.Base(path), slug, status, orDash(date), state)
+		fmt.Fprintf(out, "eol-sync: %-28s slug=%-12s cycles=%-3d newest=%-6s eol=%-12s %s\n",
+			filepath.Base(path), slug, len(rows), rows[0].cycle, rows[0].eol, state)
+		if allEnded(rows, now) {
+			fmt.Fprintf(out, "eol-sync: NOTE %s: every cycle has ended; if upstream retired the product, set support.status: eol by hand\n", filepath.Base(path))
+		}
 	}
 	return drift, nil
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }
 
 func fetchProduct(url string, timeout time.Duration) ([]byte, error) {

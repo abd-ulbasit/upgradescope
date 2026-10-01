@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -20,86 +21,130 @@ func extractSlug(raw []byte) string {
 	return string(m[1])
 }
 
-// computeSupport applies the newest-cycle EOL rule (see package doc) to an
-// endoflife.date API response and returns the desired support.status and
-// support.eol_date values.
-func computeSupport(apiJSON []byte, now time.Time) (status, eolDate string, err error) {
-	var cycles []struct {
-		Cycle json.RawMessage `json:"cycle"`
-		EOL   json.RawMessage `json:"eol"`
-	}
-	if err := json.Unmarshal(apiJSON, &cycles); err != nil {
-		return "", "", fmt.Errorf("parse endoflife.date response: %w", err)
-	}
-	if len(cycles) == 0 {
-		return "", "", fmt.Errorf("endoflife.date response has no cycles")
-	}
-	newest := cycles[0] // API returns cycles newest-first
-
-	var b bool
-	if err := json.Unmarshal(newest.EOL, &b); err == nil {
-		if b {
-			return "eol", "", nil
-		}
-		return "supported", "", nil
-	}
-	var s string
-	if err := json.Unmarshal(newest.EOL, &s); err != nil {
-		return "", "", fmt.Errorf("newest cycle eol field %s is neither bool nor string", newest.EOL)
-	}
-	d, err := time.Parse("2006-01-02", s)
-	if err != nil {
-		return "", "", fmt.Errorf("newest cycle eol date %q: not YYYY-MM-DD", s)
-	}
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	if !d.After(today) {
-		return "eol", s, nil
-	}
-	return "supported", s, nil
+// cycleRow is one generated registry cycle. eol is already a YAML scalar:
+// a quoted date, true or false.
+type cycleRow struct {
+	cycle, eol, k8sMin, k8sMax string
 }
 
 var (
-	statusLineRe  = regexp.MustCompile(`^[ \t]*status:`)
-	eolDateLineRe = regexp.MustCompile(`^[ \t]*eol_date:`)
+	// registry.Validate's cycle grammar: the leading components of a version.
+	cycleNameRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
+	// "1.32 - 1.36", "1.23.3 - 1.25" (bounds cut to MAJOR.MINOR), "1.17+".
+	k8sRangeRe = regexp.MustCompile(`^(\d+\.\d+)(?:\.\d+)?\s*(?:(\+)|-\s*(\d+\.\d+)(?:\.\d+)?)$`)
 )
 
-// rewriteSupport returns raw with the support block's status and eol_date
-// lines set to the given values; every other byte is preserved. An empty
-// date removes the eol_date line; a missing one is inserted right after
-// status. Only lines inside the top-level `support:` block are touched.
-func rewriteSupport(raw []byte, status, eolDate string) ([]byte, error) {
+// computeCycles turns an endoflife.date API response into registry cycle
+// rows, newest first as the API returns them. Each cycle's "eol" is a date
+// or a boolean; the supported Kubernetes range is copied where the product
+// publishes one (Istio and KEDA as supportedKubernetesVersions, Kyverno as
+// supportedK8sVersions).
+func computeCycles(apiJSON []byte) ([]cycleRow, error) {
+	var cycles []struct {
+		Cycle         json.RawMessage `json:"cycle"`
+		EOL           json.RawMessage `json:"eol"`
+		K8sVersions   string          `json:"supportedKubernetesVersions"`
+		K8sVersionsV2 string          `json:"supportedK8sVersions"`
+	}
+	if err := json.Unmarshal(apiJSON, &cycles); err != nil {
+		return nil, fmt.Errorf("parse endoflife.date response: %w", err)
+	}
+	if len(cycles) == 0 {
+		return nil, fmt.Errorf("endoflife.date response has no cycles")
+	}
+	rows := make([]cycleRow, 0, len(cycles))
+	for _, c := range cycles {
+		var row cycleRow
+		if err := json.Unmarshal(c.Cycle, &row.cycle); err != nil {
+			row.cycle = string(c.Cycle) // some products publish numeric cycles
+		}
+		if !cycleNameRe.MatchString(row.cycle) {
+			return nil, fmt.Errorf("cycle %s is not a dotted version; the registry cannot map installed versions to it", c.Cycle)
+		}
+		var ended bool
+		var date string
+		switch {
+		case json.Unmarshal(c.EOL, &ended) == nil:
+			row.eol = fmt.Sprint(ended)
+		case json.Unmarshal(c.EOL, &date) == nil:
+			if _, err := time.Parse("2006-01-02", date); err != nil {
+				return nil, fmt.Errorf("cycle %s: eol date %q: not YYYY-MM-DD", row.cycle, date)
+			}
+			row.eol = `"` + date + `"`
+		default:
+			return nil, fmt.Errorf("cycle %s: eol field %s is neither bool nor string", row.cycle, c.EOL)
+		}
+		if k8s := strings.TrimSpace(c.K8sVersions + c.K8sVersionsV2); k8s != "" {
+			m := k8sRangeRe.FindStringSubmatch(k8s)
+			if m == nil {
+				return nil, fmt.Errorf("cycle %s: supported Kubernetes versions %q: want \"1.32 - 1.36\" or \"1.17+\"", row.cycle, k8s)
+			}
+			row.k8sMin, row.k8sMax = m[1], m[3]
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+// allEnded reports whether every cycle has ended by now: the product may
+// be retired as a whole, which only a human records (support.status).
+func allEnded(rows []cycleRow, now time.Time) bool {
+	today := now.UTC().Format("2006-01-02")
+	for _, r := range rows {
+		switch {
+		case r.eol == "false":
+			return false
+		case r.eol != "true" && strings.Trim(r.eol, `"`) > today:
+			return false
+		}
+	}
+	return true
+}
+
+// renderCycles renders the registry cycles block: one flow mapping per
+// cycle, so a refresh diff shows exactly which release lines changed.
+func renderCycles(rows []cycleRow, citation string) []byte {
+	var b bytes.Buffer
+	b.WriteString("cycles:\n")
+	for _, r := range rows {
+		fmt.Fprintf(&b, "  - {cycle: %q, eol: %s", r.cycle, r.eol)
+		if r.k8sMin != "" {
+			fmt.Fprintf(&b, ", k8s_min: %q", r.k8sMin)
+		}
+		if r.k8sMax != "" {
+			fmt.Fprintf(&b, ", k8s_max: %q", r.k8sMax)
+		}
+		fmt.Fprintf(&b, ", citations: [%q]}\n", citation)
+	}
+	return b.Bytes()
+}
+
+// rewriteCycles returns raw with its top-level cycles block replaced by
+// block, or block appended when there is none. The block runs from the
+// "cycles:" line to the next top-level line; every other byte is preserved.
+func rewriteCycles(raw, block []byte) []byte {
 	lines := bytes.SplitAfter(raw, []byte("\n"))
 	var out [][]byte
-	inSupport, statusSeen := false, false
+	inBlock, replaced := false, false
 	for _, line := range lines {
 		trimmed := bytes.TrimRight(line, "\n")
 		switch {
-		case bytes.Equal(trimmed, []byte("support:")):
-			inSupport = true
-			out = append(out, line)
+		case bytes.Equal(trimmed, []byte("cycles:")):
+			inBlock, replaced = true, true
+			out = append(out, block)
 			continue
-		case inSupport && len(trimmed) > 0 && trimmed[0] != ' ' && trimmed[0] != '\t':
-			inSupport = false // left the block (next top-level key)
+		case inBlock && len(trimmed) > 0 && trimmed[0] != ' ' && trimmed[0] != '\t':
+			inBlock = false // next top-level key
 		}
-		if !inSupport {
-			out = append(out, line)
-			continue
-		}
-		switch {
-		case statusLineRe.Match(trimmed):
-			statusSeen = true
-			out = append(out, []byte("  status: "+status+"\n"))
-			if eolDate != "" {
-				out = append(out, []byte("  eol_date: \""+eolDate+"\"\n"))
-			}
-		case eolDateLineRe.Match(trimmed):
-			// dropped: re-emitted (with the desired value) right after status
-		default:
+		if !inBlock {
 			out = append(out, line)
 		}
 	}
-	if !statusSeen {
-		return nil, fmt.Errorf("no status line found inside a top-level support: block")
+	if !replaced {
+		if len(raw) > 0 && raw[len(raw)-1] != '\n' {
+			out = append(out, []byte("\n"))
+		}
+		out = append(out, block)
 	}
-	return bytes.Join(out, nil), nil
+	return bytes.Join(out, nil)
 }

@@ -1,6 +1,7 @@
 # registry/data/cilium.yaml
-# support.status / support.eol_date are synced from the endoflife.date API
-# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+# cycles are generated from the endoflife.date API by tools/eol-sync; do not
+# edit them by hand. support is hand-curated: status eol is only for a
+# product upstream retired as a whole.
 schema_version: 2
 id: cilium
 display_name: Cilium
@@ -20,3 +21,12 @@ support:
   citations:
     - https://endoflife.date/cilium
     - https://docs.cilium.io/en/stable/network/kubernetes/compatibility/
+cycles:
+  - {cycle: "1.20", eol: false, citations: ["https://endoflife.date/cilium"]}
+  - {cycle: "1.19", eol: false, citations: ["https://endoflife.date/cilium"]}
+  - {cycle: "1.18", eol: false, citations: ["https://endoflife.date/cilium"]}
+  - {cycle: "1.17", eol: "2026-07-29", citations: ["https://endoflife.date/cilium"]}
+  - {cycle: "1.16", eol: "2026-02-03", citations: ["https://endoflife.date/cilium"]}
+  - {cycle: "1.15", eol: "2025-07-29", citations: ["https://endoflife.date/cilium"]}
+  - {cycle: "1.14", eol: "2025-02-04", citations: ["https://endoflife.date/cilium"]}
+  - {cycle: "1.13", eol: "2024-07-24", citations: ["https://endoflife.date/cilium"]}
