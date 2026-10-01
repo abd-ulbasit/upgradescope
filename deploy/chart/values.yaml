@@ -1,4 +1,6 @@
-# Default values for upgradescope.
+# Default values for upgradescope. values.schema.json validates them: an
+# unknown key (a typo such as server.enable) or a bad interval or target
+# fails the render instead of being ignored.
 
 image:
   repository: ghcr.io/abd-ulbasit/upgradescope
@@ -6,6 +8,10 @@ image:
   # published with. Release tags are immutable, so IfNotPresent is safe.
   tag: ""
   pullPolicy: IfNotPresent
+
+# Pull secrets for a private registry or mirror, set on both pods,
+# e.g. [{name: regcred}].
+imagePullSecrets: []
 
 serviceAccount:
   # Create the agent ServiceAccount. Set false to bring your own (set name).
@@ -64,6 +70,37 @@ agent:
   # inline token for anything beyond dev). The token reaches the agent as
   # $UPGRADESCOPE_SERVER_TOKEN from a secretKeyRef, never as an argument.
   existingSecret: ""
+  # Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"].
+  extraArgs: []
+  # Extra container env, volumes and mounts. Private CA for pushes to a
+  # server behind a corporate CA: mount the PEM bundle and point
+  # SSL_CERT_DIR at it (Go adds those certificates to the image's roots):
+  #   extraVolumes: [{name: ca, configMap: {name: corp-ca}}]
+  #   extraVolumeMounts: [{name: ca, mountPath: /etc/upgradescope/ca, readOnly: true}]
+  #   extraEnv: [{name: SSL_CERT_DIR, value: /etc/upgradescope/ca}]
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  # Pod and container security contexts, merged over these defaults. For
+  # OpenShift's restricted-v2 SCC, which assigns the UID itself, unset the
+  # IDs: podSecurityContext: {runAsUser: null, runAsGroup: null}.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   resources:
     requests:
       cpu: 50m
@@ -87,8 +124,8 @@ server:
   ingestToken: ""
   # Optional bearer token for the read API. EMPTY = READ API IS OPEN —
   # acceptable behind a ClusterIP Service on a private cluster, but set one
-  # before exposing the Service in any way. Ignored when existingSecret is
-  # set (use readTokenFromSecret).
+  # before exposing the Service in any way. With existingSecret the value
+  # itself is not used; a non-empty one acts like readTokenFromSecret=true.
   readToken: ""
   # Name of an existing Secret to use instead of the chart's. Keys:
   #   ingestToken   required; the in-chart agent pushes with it too
@@ -107,6 +144,13 @@ server:
   webhook: ""
   # Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"].
   targets: []
+  serviceAccount:
+    # The server never calls the Kubernetes API: it gets its own
+    # ServiceAccount and its pod mounts no API token. create=false with an
+    # empty name runs it as the namespace's default ServiceAccount (still
+    # without a mounted token).
+    create: true
+    name: ""
   service:
     type: ClusterIP
     port: 8080
@@ -116,6 +160,32 @@ server:
     enabled: true
     size: 1Gi
     storageClass: ""
+  # Extra `upgradescope serve` flags, e.g. ["--team-map=/etc/upgradescope/teams.yaml"]
+  # (mount the file with extraVolumes/extraVolumeMounts).
+  extraArgs: []
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  # As agent.podSecurityContext; fsGroup makes the data volume writable.
+  # OpenShift restricted-v2: {runAsUser: null, runAsGroup: null, fsGroup: null}.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   resources:
     requests:
       cpu: 100m
@@ -123,3 +193,13 @@ server:
     limits:
       cpu: 500m
       memory: 512Mi
+
+networkPolicy:
+  # Render a NetworkPolicy that admits traffic to the server only from this
+  # release's agent pods and the peers below (no effect without
+  # server.enabled, or on a CNI that does not enforce NetworkPolicy).
+  enabled: false
+  # Extra NetworkPolicyPeer entries allowed to reach the server, e.g. the
+  # ingress controller or the CI runners that call /api/v1/gate:
+  #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+  serverIngressFrom: []

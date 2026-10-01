@@ -15,47 +15,60 @@ spec:
   template:
     metadata:
       labels:
+        {{- with .Values.agent.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: agent
+      {{- with .Values.agent.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "upgradescope.serviceAccountName" . }}
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
+      {{- include "upgradescope.podOptions" (dict "root" . "c" .Values.agent) | trim | nindent 6 }}
       containers:
         - name: agent
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - agent
-            - --interval={{ .Values.agent.interval }}
-            - --cr-name={{ .Values.agent.crName }}
-            - --team-label={{ .Values.agent.teamLabel }}
-            - --manage-crd={{ .Values.agent.manageCRD }}
+            - {{ printf "--interval=%s" .Values.agent.interval | quote }}
+            - {{ printf "--cr-name=%s" .Values.agent.crName | quote }}
+            - {{ printf "--team-label=%s" .Values.agent.teamLabel | quote }}
+            - {{ printf "--manage-crd=%t" .Values.agent.manageCRD | quote }}
             {{- with .Values.agent.targets }}
             - {{ printf "--targets=%s" (join "," .) | quote }}
             {{- end }}
-            {{- if .Values.agent.clusterName }}
-            - --cluster-name={{ .Values.agent.clusterName }}
+            {{- with .Values.agent.clusterName }}
+            - {{ printf "--cluster-name=%s" . | quote }}
             {{- end }}
             {{- if include "upgradescope.pushEnabled" . }}
-            - --server-url={{ include "upgradescope.serverUrl" . }}
+            - {{ printf "--server-url=%s" (include "upgradescope.serverUrl" .) | quote }}
             {{- end }}
-          {{- if include "upgradescope.pushEnabled" . }}
-          # The push token reaches the agent only through the environment,
-          # never argv (argv is readable via /proc/<pid>/cmdline).
+            {{- range .Values.agent.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- if or (include "upgradescope.pushEnabled" .) .Values.agent.extraEnv }}
           env:
+            {{- if include "upgradescope.pushEnabled" . }}
+            # The push token reaches the agent only through the environment,
+            # never argv (argv is readable via /proc/<pid>/cmdline).
             - name: UPGRADESCOPE_SERVER_TOKEN
               valueFrom:
                 secretKeyRef: {{- include "upgradescope.agentTokenRef" . | nindent 18 }}
+            {{- end }}
+            {{- with .Values.agent.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+          {{- with .Values.agent.securityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources: {{- toYaml .Values.agent.resources | nindent 12 }}
+          {{- with .Values.agent.extraVolumeMounts }}
+          volumeMounts: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.agent.extraVolumes }}
+      volumes: {{- toYaml . | nindent 8 }}
+      {{- end }}

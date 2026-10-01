@@ -119,7 +119,7 @@ assert_contains "$TMP/default.yaml" 'imagePullPolicy: IfNotPresent'   "pullPolic
 assert_contains "$TMP/default.yaml" 'runAsNonRoot: true'              "runAsNonRoot"
 assert_contains "$TMP/default.yaml" 'readOnlyRootFilesystem: true'    "readOnlyRootFilesystem"
 assert_contains "$TMP/default.yaml" 'allowPrivilegeEscalation: false' "no privilege escalation"
-assert_contains "$TMP/default.yaml" 'drop: ["ALL"]'                   "all capabilities dropped"
+assert_line "$TMP/default.yaml" '              - ALL'                "all capabilities dropped"
 assert_contains "$TMP/default.yaml" '--interval=10m'   "default interval flag"
 assert_contains "$TMP/default.yaml" '--cr-name=cluster' "default cr-name flag"
 assert_contains "$TMP/default.yaml" '--team-label=team' "default team-label flag"
@@ -259,6 +259,108 @@ helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.persistence.enabled=false > "$TMP/nopvc.yaml"
 assert_no_line "$TMP/nopvc.yaml" 'kind: PersistentVolumeClaim' "no PVC when persistence disabled"
 assert_contains "$TMP/nopvc.yaml" 'emptyDir: {}' "emptyDir fallback"
+
+# --- PRODUCTION KNOBS (#42) ---
+echo "== knobs: pull secrets, scheduling, extra env/volumes/args render on both pods"
+cat > "$TMP/knobs-values.yaml" <<'EOF'
+imagePullSecrets:
+  - name: regcred
+server:
+  enabled: true
+  ingestToken: t
+  nodeSelector: {pool: srv}
+  tolerations: [{key: dedicated, operator: Exists, effect: NoSchedule}]
+  affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: srv-aff, operator: Exists}]}]}}}
+  priorityClassName: srv-priority
+  podAnnotations: {srv-ann: "1"}
+  podLabels: {srv-label: "1"}
+  extraArgs: ["--team-map=/etc/upgradescope/teams.yaml"]
+  extraEnv: [{name: SRV_EXTRA, value: "1"}]
+  extraVolumes: [{name: teams, configMap: {name: team-map}}]
+  extraVolumeMounts: [{name: teams, mountPath: /etc/upgradescope}]
+agent:
+  nodeSelector: {pool: agent}
+  tolerations: [{key: agent-taint, operator: Exists}]
+  affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: agent-aff, operator: Exists}]}]}}}
+  priorityClassName: agent-priority
+  podAnnotations: {agent-ann: "1"}
+  podLabels: {agent-label: "1"}
+  extraArgs: ["--force-sync-every=2h"]
+  # Private CA for pushes: Go adds every PEM file in SSL_CERT_DIR to the
+  # system roots it already loads from the image's CA bundle file.
+  extraEnv: [{name: SSL_CERT_DIR, value: /etc/upgradescope/ca}]
+  extraVolumes: [{name: ca, configMap: {name: corp-ca}}]
+  extraVolumeMounts: [{name: ca, mountPath: /etc/upgradescope/ca, readOnly: true}]
+EOF
+helm template upgradescope "$CHART" --namespace upgradescope -f "$TMP/knobs-values.yaml" > "$TMP/knobs.yaml"
+[ "$(grep -cxF '        - name: regcred' "$TMP/knobs.yaml")" = 2 ] && pass "imagePullSecrets on both pods" || fail "imagePullSecrets not on both pods"
+for c in srv agent; do
+  assert_contains "$TMP/knobs.yaml" "pool: $c"              "$c nodeSelector"
+  assert_contains "$TMP/knobs.yaml" "key: $c-aff"           "$c affinity"
+  assert_contains "$TMP/knobs.yaml" "priorityClassName: \"$c-priority\"" "$c priorityClassName"
+  assert_contains "$TMP/knobs.yaml" "$c-ann: \"1\""         "$c podAnnotations"
+  assert_contains "$TMP/knobs.yaml" "$c-label: \"1\""       "$c podLabels"
+done
+assert_contains "$TMP/knobs.yaml" 'key: dedicated'    "server tolerations"
+assert_contains "$TMP/knobs.yaml" 'key: agent-taint'  "agent tolerations"
+assert_contains "$TMP/knobs.yaml" '- "--team-map=/etc/upgradescope/teams.yaml"' "server extraArgs"
+assert_contains "$TMP/knobs.yaml" '- "--force-sync-every=2h"' "agent extraArgs"
+assert_contains "$TMP/knobs.yaml" 'name: SRV_EXTRA'   "server extraEnv"
+assert_contains "$TMP/knobs.yaml" 'name: SSL_CERT_DIR' "agent extraEnv (CA bundle)"
+assert_contains "$TMP/knobs.yaml" 'name: corp-ca'     "agent extraVolumes"
+assert_contains "$TMP/knobs.yaml" 'mountPath: /etc/upgradescope/ca' "agent extraVolumeMounts"
+assert_contains "$TMP/knobs.yaml" 'name: team-map'    "server extraVolumes"
+assert_contains "$TMP/knobs.yaml" 'mountPath: /data'  "server data mount kept alongside extra mounts"
+
+echo "== knobs: OpenShift restricted-v2 (unset UID/GID/fsGroup)"
+cat > "$TMP/openshift-values.yaml" <<'EOF'
+server:
+  enabled: true
+  ingestToken: t
+  podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}
+agent:
+  podSecurityContext: {runAsUser: null, runAsGroup: null}
+EOF
+helm template upgradescope "$CHART" --namespace upgradescope -f "$TMP/openshift-values.yaml" > "$TMP/openshift.yaml"
+assert_not_contains "$TMP/openshift.yaml" 'runAsUser:'  "no runAsUser"
+assert_not_contains "$TMP/openshift.yaml" 'runAsGroup:' "no runAsGroup"
+assert_not_contains "$TMP/openshift.yaml" 'fsGroup:'    "no fsGroup"
+[ "$(grep -cF 'runAsNonRoot: true' "$TMP/openshift.yaml")" = 2 ] && pass "runAsNonRoot kept on both pods" || fail "runAsNonRoot missing"
+[ "$(grep -cF 'type: RuntimeDefault' "$TMP/openshift.yaml")" = 2 ] && pass "seccomp RuntimeDefault kept on both pods" || fail "seccompProfile missing"
+assert_contains "$TMP/default.yaml" 'runAsUser: 65532' "default UID still 65532"
+
+echo "== knobs: templated args are quoted (YAML-special characters survive)"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set-string 'agent.clusterName=team: payments #2' > "$TMP/clustername.yaml"
+assert_line "$TMP/clustername.yaml" '            - "--cluster-name=team: payments #2"' "cluster name is one exact arg"
+
+echo "== knobs: server ServiceAccount without an API token"
+assert_contains "$TMP/server.yaml" 'serviceAccountName: upgradescope-server' "server pod has its own SA"
+assert_contains "$TMP/server.yaml" 'automountServiceAccountToken: false' "server SA token not mounted"
+assert_not_contains "$TMP/default.yaml" 'automountServiceAccountToken: false' "agent keeps its API token"
+
+echo "== knobs: NetworkPolicy (opt-in)"
+assert_no_line "$TMP/server.yaml" 'kind: NetworkPolicy' "no NetworkPolicy by default"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t --set networkPolicy.enabled=true > "$TMP/netpol.yaml"
+assert_line "$TMP/netpol.yaml" 'kind: NetworkPolicy' "NetworkPolicy rendered when enabled"
+assert_contains "$TMP/netpol.yaml" 'app.kubernetes.io/component: agent' "agent pods may reach the server"
+
+echo "== values.schema.json rejects bad values"
+for bad in 'server.enable=true' 'agent.interval=30s' 'agent.interval=10' 'agent.targets={latest}' 'rbac.helmSecret=false'; do
+  if helm template upgradescope "$CHART" --set "$bad" >/dev/null 2>&1; then
+    fail "schema accepted --set $bad"
+  else
+    pass "schema rejects --set $bad"
+  fi
+done
+for good in 'agent.interval=1m' 'agent.interval=1h30m' 'agent.targets={1.37,v1.38}'; do
+  if helm template upgradescope "$CHART" --set "$good" >/dev/null 2>&1; then
+    pass "schema accepts --set $good"
+  else
+    fail "schema rejected --set $good"
+  fi
+done
 
 [ "$FAILED" -eq 0 ] || { echo "chart-test: FAILED" >&2; exit 1; }
 echo "chart-test: all assertions passed"

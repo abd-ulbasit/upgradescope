@@ -18,32 +18,40 @@ spec:
   template:
     metadata:
       labels:
+        {{- with .Values.server.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: server
+      {{- with .Values.server.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
+      {{- with include "upgradescope.serverServiceAccountName" . }}
+      serviceAccountName: {{ . }}
+      {{- end }}
+      # serve never calls the Kubernetes API.
+      automountServiceAccountToken: false
+      {{- include "upgradescope.podOptions" (dict "root" . "c" .Values.server) | trim | nindent 6 }}
       containers:
         - name: server
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - serve
-            - --listen=:{{ .Values.server.service.port }}
+            - {{ printf "--listen=:%d" (int .Values.server.service.port) | quote }}
             - --db=/data/upgradescope.sqlite
             {{- if not (include "upgradescope.readTokenEnabled" .) }}
             # serve refuses an open read API on a non-loopback address
             # unless told otherwise; see server.readToken in values.yaml.
             - --allow-anonymous-read
             {{- end }}
-            {{- if .Values.server.targets }}
-            - --targets={{ join "," .Values.server.targets }}
+            {{- with .Values.server.targets }}
+            - {{ printf "--targets=%s" (join "," .) | quote }}
+            {{- end }}
+            {{- range .Values.server.extraArgs }}
+            - {{ . | quote }}
             {{- end }}
           # Tokens and webhook URLs reach serve only through the environment
           # (it reads UPGRADESCOPE_* when the flag is unset), never argv, and
@@ -81,6 +89,9 @@ spec:
                   optional: true
                   {{- end }}
             {{- end }}
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.server.service.port }}
@@ -96,15 +107,16 @@ spec:
               port: http
             initialDelaySeconds: 2
             periodSeconds: 5
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+          {{- with .Values.server.securityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources: {{- toYaml .Values.server.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- with .Values.server.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: data
           {{- if .Values.server.persistence.enabled }}
@@ -113,4 +125,7 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- with .Values.server.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
 {{- end }}
