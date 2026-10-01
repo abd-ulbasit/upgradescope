@@ -96,13 +96,17 @@ dockers_v2:
       org.opencontainers.image.created: '{{ .CommitDate }}'
       org.opencontainers.image.licenses: Apache-2.0
     # The same on the multi-arch index, where GHCR reads them to link the
-    # package to the repository.
+    # package to the repository. Keys are deliberately unscoped: GoReleaser
+    # prefixes `index:` itself when a build has more than one platform (the
+    # publish build), while a snapshot builds and --loads one platform at a
+    # time, and BuildKit rejects index annotations on a single-platform
+    # export ("index annotations not supported for single platform export").
     annotations:
-      'index:org.opencontainers.image.source': https://github.com/abd-ulbasit/upgradescope
-      'index:org.opencontainers.image.revision': '{{ .FullCommit }}'
-      'index:org.opencontainers.image.version': '{{ .Version }}'
-      'index:org.opencontainers.image.licenses': Apache-2.0
-      'index:org.opencontainers.image.description': Continuous Kubernetes upgrade-readiness scanner
+      org.opencontainers.image.source: https://github.com/abd-ulbasit/upgradescope
+      org.opencontainers.image.revision: '{{ .FullCommit }}'
+      org.opencontainers.image.version: '{{ .Version }}'
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.description: Continuous Kubernetes upgrade-readiness scanner
 
 docker_signs:
   # Default artifacts: the dockers_v2 images. Keyless, like signs above.
