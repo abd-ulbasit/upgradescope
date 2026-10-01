@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -259,6 +260,35 @@ func TestUnchangedReevaluationRefreshesInsteadOfAddingHistory(t *testing.T) {
 	}
 	if evs := h.drain(); len(evs) != 0 {
 		t.Errorf("unchanged re-evaluation notified: %+v", evs)
+	}
+}
+
+// TestRowsFromPreFreshnessBinaryHeal: after a rollback to a binary that
+// predates migration 0004, its evaluations land with an empty evaluated_at.
+// Re-upgraded, the server must still serve /fleet and accept duplicate
+// pushes, and the next pass must stamp a real evaluatedAt.
+func TestRowsFromPreFreshnessBinaryHeal(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", testInventoryWithPSP())
+	db, err := sql.Open("sqlite", h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE evaluations SET evaluated_at = ''`); err != nil {
+		t.Fatal(err)
+	}
+
+	if c := h.fleetCell("prod", "1.35"); c == nil || !c.EvaluatedAt.Equal(aug1) {
+		t.Fatalf("cell = %+v, want evaluatedAt read as created %v", c, aug1)
+	}
+	next := aug1.Add(30 * time.Hour)
+	h.clock.set(next)
+	if code, _ := h.push("prod", testInventoryWithPSP()); code != http.StatusOK {
+		t.Fatalf("duplicate push = %d", code)
+	}
+	if c := h.fleetCell("prod", "1.35"); c == nil || !c.EvaluatedAt.Equal(next) {
+		t.Errorf("cell after duplicate push = %+v, want evaluatedAt %v", c, next)
 	}
 }
 

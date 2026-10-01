@@ -9,11 +9,16 @@
 -- outbox: notifications committed with their evaluations and delivered
 -- after commit, one row per (event, sink), with bounded retries.
 -- Divergence from migrations/0004: TIMESTAMPTZ↔TEXT times,
--- BIGSERIAL↔AUTOINCREMENT, BYTEA↔BLOB.
+-- BIGSERIAL↔AUTOINCREMENT, BYTEA↔BLOB, evaluated_at DEFAULT now()↔''.
 
 ALTER TABLE evaluations ADD COLUMN evaluated_at TIMESTAMPTZ;
 UPDATE evaluations SET evaluated_at = created_at;
 ALTER TABLE evaluations ALTER COLUMN evaluated_at SET NOT NULL;
+-- A pre-0004 binary (an old replica mid-rollout, or after a rollback)
+-- inserts without evaluated_at; it stamps created_at with its own clock at
+-- insert time, so now() matches it closely, and the insert succeeds instead
+-- of failing NOT NULL.
+ALTER TABLE evaluations ALTER COLUMN evaluated_at SET DEFAULT now();
 ALTER TABLE evaluations ADD COLUMN team_map_hash TEXT NOT NULL DEFAULT '';
 
 -- Read paths look up evaluations of one snapshot.

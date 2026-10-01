@@ -80,6 +80,49 @@ func TestPostgresConformance(t *testing.T) {
 	pgDSN(t)
 	storetest.RunStoreConformance(t, func(t *testing.T) store.Store { return freshPostgres(t) })
 	t.Run("ConcurrentMigrations", testConcurrentMigrations)
+	t.Run("PreFreshnessWriter", testPreFreshnessWriter)
+}
+
+// testPreFreshnessWriter: during a rolling upgrade (or after a rollback) a
+// binary that predates migration 0004 inserts evaluations without
+// evaluated_at. The column's DEFAULT must let that insert succeed — NOT
+// NULL alone would drop the old replica's evaluations — and the row must
+// read back with a real evaluatedAt.
+func testPreFreshnessWriter(t *testing.T) {
+	ctx := context.Background()
+	dsn := freshSchemaDSN(t)
+	s, err := store.OpenPostgres(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres: %v", err)
+	}
+	defer s.Close()
+	cid, err := s.UpsertCluster(ctx, store.Cluster{Name: "prod", ClusterUID: "uid-prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, _, err := s.InsertSnapshot(ctx, store.Snapshot{ClusterID: cid, Hash: "aaa", Inventory: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	// The pre-0004 INSERT column list.
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at)
+		VALUES ($1, $2, '1.36', 'kb-old', 70, false, 1, 0, $3, now())`, cid, sid, []byte(`{}`)); err != nil {
+		t.Fatalf("pre-0004 insert: %v", err)
+	}
+	got, err := s.CurrentEvaluation(ctx, cid, "1.36")
+	if err != nil {
+		t.Fatalf("CurrentEvaluation: %v", err)
+	}
+	if got.EvaluatedAt.IsZero() || got.KBVersion != "kb-old" {
+		t.Errorf("read back evaluated %v kb %q, want a set evaluatedAt and kb-old", got.EvaluatedAt, got.KBVersion)
+	}
 }
 
 // testConcurrentMigrations starts several stores against one empty schema at

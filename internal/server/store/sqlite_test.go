@@ -568,3 +568,53 @@ func TestCloseThenOperationsFail(t *testing.T) {
 		t.Error("GetCluster after Close succeeded, want error")
 	}
 }
+
+// TestEvaluationWrittenWithoutEvaluatedAtStaysReadable: a binary that
+// predates migration 0004 (a rollback after it ran) inserts evaluations
+// without evaluated_at, so the column's empty-string default lands. Reads must treat
+// that as "last evaluated when created" rather than fail — CurrentEvaluation
+// feeds /fleet and duplicate-push handling — and a refresh must then stamp
+// a real time.
+func TestEvaluationWrittenWithoutEvaluatedAtStaysReadable(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	cid := mustCluster(t, s, "prod")
+	sid := mustSnapshot(t, s, cid, "aaa", tBase)
+	// The pre-0004 INSERT column list.
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at)
+		VALUES (?, ?, '1.36', 'kb-old', 70, 0, 1, 0, ?, ?)`, cid, sid, []byte(`{}`), formatTime(tPlus(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+
+	reads := map[string]func(context.Context, int64, string) (Evaluation, error){
+		"CurrentEvaluation":     s.CurrentEvaluation,
+		"LatestEvaluation":      s.LatestEvaluation,
+		"LatestKnownEvaluation": s.LatestKnownEvaluation,
+	}
+	for name, read := range reads {
+		got, err := read(ctx, cid, "1.36")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.ID != id || !got.EvaluatedAt.Equal(tPlus(1)) || !got.CreatedAt.Equal(tPlus(1)) {
+			t.Errorf("%s = id %d created %v evaluated %v, want id %d, both %v", name, got.ID, got.CreatedAt, got.EvaluatedAt, id, tPlus(1))
+		}
+	}
+
+	if _, _, err := s.CommitEvaluations(ctx, EvaluationBatch{
+		ClusterID: cid, SnapshotID: sid, Current: map[string]int64{"1.36": id},
+		Refresh: []Evaluation{{ID: id, KBVersion: "kb-new", Blockers: 1, Report: []byte(`{}`), EvaluatedAt: tPlus(30)}},
+	}); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	got, err := s.CurrentEvaluation(ctx, cid, "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.EvaluatedAt.Equal(tPlus(30)) || got.KBVersion != "kb-new" {
+		t.Errorf("after refresh: evaluated %v kb %q, want %v kb-new", got.EvaluatedAt, got.KBVersion, tPlus(30))
+	}
+}

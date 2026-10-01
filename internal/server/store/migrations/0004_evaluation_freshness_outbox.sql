@@ -3,13 +3,14 @@
 -- evaluated_at: when the row's result was last confirmed. A re-evaluation
 -- with the same verdict, score and finding keys refreshes it instead of
 -- adding a history row (created_at stays the history point). Existing rows
--- were last evaluated when created.
+-- were last evaluated when created. A pre-0004 binary (after a rollback)
+-- inserts without it, leaving '': reads treat that as created_at.
 -- team_map_hash: the server --team-map the report was computed with, so an
 -- edited map triggers a re-evaluation ('' = none, or a pre-0004 row).
 -- outbox: notifications committed with their evaluations and delivered
 -- after commit, one row per (event, sink), with bounded retries.
 -- Divergence from pgmigrations/0004: TEXT times↔TIMESTAMPTZ,
--- AUTOINCREMENT↔BIGSERIAL, BLOB↔BYTEA.
+-- AUTOINCREMENT↔BIGSERIAL, BLOB↔BYTEA, evaluated_at DEFAULT ''↔now().
 
 ALTER TABLE evaluations ADD COLUMN evaluated_at TEXT NOT NULL DEFAULT '';
 UPDATE evaluations SET evaluated_at = created_at;

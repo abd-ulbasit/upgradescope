@@ -239,7 +239,13 @@ func scanEvaluation(rs rowScanner) (Evaluation, error) {
 	if e.CreatedAt, err = parseStoredTime(created); err != nil {
 		return Evaluation{}, err
 	}
-	if e.EvaluatedAt, err = parseStoredTime(evaluated); err != nil {
+	// '' is the 0004 column default: a binary that predates it (a rollback
+	// after the migration ran) inserts without evaluated_at. Such a row was
+	// last evaluated when created; it reads as stale-but-valid and the next
+	// pass refreshes it, instead of failing every read of the cluster.
+	if evaluated == "" {
+		e.EvaluatedAt = e.CreatedAt
+	} else if e.EvaluatedAt, err = parseStoredTime(evaluated); err != nil {
 		return Evaluation{}, err
 	}
 	return e, nil
