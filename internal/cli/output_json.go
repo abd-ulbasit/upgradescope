@@ -7,17 +7,37 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
+// reportSchemaVersion versions the shape of the JSON report. Stability
+// promise: within one schemaVersion, fields are only ever added — never
+// renamed, removed, retyped or given a new meaning — so consumers must
+// ignore fields they do not know. Any breaking change bumps it. toolVersion
+// is informational (the binary that produced the report) and carries no
+// compatibility meaning.
+const reportSchemaVersion = 1
+
 // WriteJSON renders the report as canonical two-space-indented JSON with a
 // trailing newline. This is the machine-readable contract; field names come
-// from the engine.Report struct tags and must stay stable. A `teams` field
-// (per-team scores, teamless bucket keyed "unattributed") is added at
-// presentation time when any finding exists — it is computed here, never
-// stored in the engine report.
+// from the engine.Report struct tags and must stay stable (see
+// reportSchemaVersion). schemaVersion and toolVersion lead the object. A
+// `teams` field (per-team scores, teamless bucket keyed "unattributed") is
+// added at presentation time when any finding exists — it is computed here,
+// never stored in the engine report.
 func WriteJSON(w io.Writer, r engine.Report) error {
+	return writeJSON(w, r, nil)
+}
+
+// writeJSON is WriteJSON for a --files scan: filesBase (when non-nil) is
+// emitted as `filesBase`, the scanned directory relative to the working
+// directory ("" = the working directory itself; absolute when outside it)
+// that the findings' object file paths are relative to.
+func writeJSON(w io.Writer, r engine.Report, filesBase *string) error {
 	out := struct {
+		SchemaVersion int     `json:"schemaVersion"`
+		ToolVersion   string  `json:"toolVersion"`
+		FilesBase     *string `json:"filesBase,omitempty"`
 		engine.Report
 		Teams map[string]engine.TeamScore `json:"teams,omitempty"`
-	}{Report: r, Teams: teamScoresForOutput(r)}
+	}{SchemaVersion: reportSchemaVersion, ToolVersion: version, FilesBase: filesBase, Report: r, Teams: teamScoresForOutput(r)}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)

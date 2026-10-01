@@ -27,9 +27,12 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make -C "$ROOT" kind-load
 
 # interval=1m so the e2e doesn't wait 10 minutes for the second tick; the
-# first tick fires immediately either way.
+# first tick fires immediately either way. image.tag=dev runs the image
+# kind-load just built from this tree; the chart default (appVersion) is the
+# published release image.
 helm upgrade --install "$RELEASE" "$ROOT/deploy/chart" \
   --namespace "$NS" --create-namespace \
+  --set image.tag=dev \
   --set server.enabled=true \
   --set server.ingestToken="$TOKEN" \
   --set agent.interval=1m \

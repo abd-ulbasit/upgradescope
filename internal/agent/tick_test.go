@@ -155,6 +155,29 @@ func TestTickWritesStatusWithDefaultTarget(t *testing.T) {
 	}
 }
 
+// Chart defaults (targets: []) on a GKE cluster: the default target derives
+// from the vendor-suffixed server version and a score and verdict are
+// written. The fakes leave api-usage unassessed (nil metadata client), so
+// the verdict is unknown, never ready.
+func TestTickVendorServerVersionWritesScoreAndVerdict(t *testing.T) {
+	dyn := fakeDyn()
+	cfg := Config{}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	r := newRunner(fakeClients(t, "v1.35.2-gke.1080000"), dyn, mustKB(t), cfg)
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	st := readCRStatus(t, dyn, crd.DefaultName)
+	if len(st.Targets) != 1 || st.Targets[0].Target != "1.36" {
+		t.Fatalf("Targets = %+v, want default next minor 1.36", st.Targets)
+	}
+	if got := st.Targets[0]; got.Verdict != "unknown" || got.Ready {
+		t.Errorf("target status verdict = %q ready = %v, want unknown/false", got.Verdict, got.Ready)
+	}
+}
+
 func TestTickPushesWithClusterIDWhenNameUnset(t *testing.T) {
 	ctx := context.Background()
 	srv := newSnapServer(t)

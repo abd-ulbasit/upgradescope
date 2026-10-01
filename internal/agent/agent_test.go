@@ -93,9 +93,43 @@ func TestResolveTargetsNoServerVersion(t *testing.T) {
 	}
 }
 
+// Chart default is targets: [] — the default target must derive from the
+// vendor-suffixed GitVersion managed clusters report.
+func TestResolveTargetsDefaultFromVendorServerVersion(t *testing.T) {
+	for _, sv := range []string{
+		"v1.34.2-gke.100", "v1.34.2-eks-aeac579", "v1.34.2+k3s1", "v1.34.2+rke2r1", "v1.34.2+29a0aa9",
+	} {
+		targets, notes, err := resolveTargets(crd.Spec{}, inventory.Inventory{ServerVersion: sv})
+		if err != nil || len(notes) != 0 {
+			t.Fatalf("%s: err=%v notes=%v", sv, err, notes)
+		}
+		if len(targets) != 1 || targets[0] != (inventory.Version{Major: 1, Minor: 35}) {
+			t.Errorf("%s: targets = %v, want [1.35]", sv, targets)
+		}
+	}
+}
+
 func TestResolveTargetsUnparseableServerVersion(t *testing.T) {
-	_, _, err := resolveTargets(crd.Spec{}, inventory.Inventory{ServerVersion: "v1.34.2-gke.100"})
-	if err == nil || !strings.Contains(err.Error(), "gke") {
+	_, _, err := resolveTargets(crd.Spec{}, inventory.Inventory{ServerVersion: "garbage"})
+	if err == nil || !strings.Contains(err.Error(), "garbage") {
 		t.Fatalf("err = %v, want unparseable-version error naming the version", err)
+	}
+}
+
+// Kubernetes has only ever shipped major 1: a spec target like "2.0" is a
+// typo, not a version to evaluate against.
+func TestResolveTargetsSkipsNonMajorOneSpecTarget(t *testing.T) {
+	targets, notes, err := resolveTargets(
+		crd.Spec{Targets: []string{"2.0", "1.37"}},
+		inventory.Inventory{ServerVersion: "v1.35.2"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0] != (inventory.Version{Major: 1, Minor: 37}) {
+		t.Errorf("targets = %v, want [1.37]", targets)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], `"2.0"`) {
+		t.Errorf("notes = %v, want one naming \"2.0\"", notes)
 	}
 }

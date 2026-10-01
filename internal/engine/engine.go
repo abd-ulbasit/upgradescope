@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"sort"
@@ -46,9 +47,9 @@ func keyGroup(group string) string {
 }
 
 // namespaceBreakdown renders "ns (count)" parts sorted by namespace name and
-// returns the sorted namespace names. The cluster-scoped key "" renders as
-// "cluster-scoped" in the detail and is excluded from the returned names.
-func namespaceBreakdown(counts map[string]int) (detail string, names []string) {
+// returns the sorted namespace names. The empty key "" renders as
+// emptyLabel in the detail and is excluded from the returned names.
+func namespaceBreakdown(counts map[string]int, emptyLabel string) (detail string, names []string) {
 	keys := make([]string, 0, len(counts))
 	for ns := range counts {
 		keys = append(keys, ns)
@@ -58,7 +59,7 @@ func namespaceBreakdown(counts map[string]int) (detail string, names []string) {
 	for _, ns := range keys {
 		label := ns
 		if ns == "" {
-			label = "cluster-scoped"
+			label = emptyLabel
 		} else {
 			names = append(names, ns)
 		}
@@ -98,15 +99,25 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 		if !ok {
 			continue
 		}
-		nsDetail, nsNames := namespaceBreakdown(u.Namespaces)
-		f := Finding{
-			Teams:      teamsFor(nsNames, inv.Namespaces),
-			Namespaces: nsNames,
-			Citations:  []string{deprecationGuideURL},
+		// Manifest objects (refs read from text carry a line) are proposed
+		// state, not stored objects, and an empty namespace there means
+		// metadata.namespace is unset — helm template output usually omits
+		// it — not that the object is cluster-scoped.
+		manifests := len(u.Objects) > 0 && u.Objects[0].Line > 0
+		emptyNS := "cluster-scoped"
+		if manifests {
+			emptyNS = "namespace unset"
 		}
-		if e.Replacement != nil {
-			f.Remediation = fmt.Sprintf("migrate to %s %s",
-				gvString(e.Replacement.Group, e.Replacement.Version), e.Replacement.Kind)
+		nsDetail, nsNames := namespaceBreakdown(u.Namespaces, emptyNS)
+		f := Finding{
+			Teams:          teamsFor(nsNames, inv.Namespaces),
+			Namespaces:     nsNames,
+			Citations:      []string{deprecationGuideURL},
+			Objects:        sortedObjects(u.Objects),
+			ObjectsOmitted: u.ObjectsOmitted,
+		}
+		if r, ok := idx.ResolveReplacement(e, target); ok {
+			f.Remediation = fmt.Sprintf("migrate to %s %s", gvString(r.Group, r.Version), r.Kind)
 		}
 		gv := gvString(u.Group, u.Version)
 		switch {
@@ -126,13 +137,36 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 			continue // KB entry exists but is neither deprecated nor removed
 		}
 		f.Key = fmt.Sprintf("%s/%s/%s/%s", f.Category, keyGroup(u.Group), u.Version, u.Kind)
+		detail := "%d object(s) still stored/served at this version"
+		if manifests {
+			detail = "%d manifest object(s) use this API"
+		}
 		if nsDetail == "" {
-			f.Detail = fmt.Sprintf("%d object(s) still stored/served at this version.", u.Count)
+			f.Detail = fmt.Sprintf(detail+".", u.Count)
 		} else {
-			f.Detail = fmt.Sprintf("%d object(s) still stored/served at this version: %s.", u.Count, nsDetail)
+			f.Detail = fmt.Sprintf(detail+": %s.", u.Count, nsDetail)
 		}
 		out = append(out, f)
 	}
+	return out
+}
+
+// sortedObjects returns a sorted copy of refs (file, line, namespace, name)
+// so findings are deterministic whatever order a collector produced; nil
+// stays nil.
+func sortedObjects(refs []inventory.ObjectRef) []inventory.ObjectRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := slices.Clone(refs)
+	slices.SortStableFunc(out, func(a, b inventory.ObjectRef) int {
+		return cmp.Or(
+			cmp.Compare(a.File, b.File),
+			cmp.Compare(a.Line, b.Line),
+			cmp.Compare(a.Namespace, b.Namespace),
+			cmp.Compare(a.Name, b.Name),
+		)
+	})
 	return out
 }
 
@@ -313,21 +347,31 @@ func matchesRange(version, constraint string) bool {
 	return c.Check(v)
 }
 
-// evalSkew evaluates the kubelet rule: kubelets more than
-// policy.KubeletMaxBehind minors behind the CURRENT control plane → warning
-// (skew is about today); kubelets that WOULD exceed the limit after the
-// control plane reaches target → blocker. Control-plane component rules
-// (HA apiserver spread, controller-manager/scheduler, kube-proxy) live in
-// evalControlPlaneSkew. KubectlMaxSkew is NOT evaluated by design: client
-// kubectl versions are only visible in apiserver audit logs (User-Agent),
-// which no collector reads — there is no cluster-state signal for them.
+// evalSkew evaluates the kubelet rules of the upstream version-skew policy
+// against every observed kube-apiserver version (apiserverVersions):
+//
+//   - a kubelet more than KubeletMaxBehind minors behind the NEWEST
+//     apiserver → warning (skew is about today);
+//   - a kubelet that WOULD exceed that limit once the control plane reaches
+//     target → blocker;
+//   - a kubelet newer than the OLDEST apiserver → warning ("kubelet must not
+//     be newer than kube-apiserver"; with HA skew the oldest replica narrows
+//     the allowed versions).
+//
+// Kubelets older than 1.25 may only be 2 minors behind (legacyMaxBehind).
+// Control-plane component rules live in evalControlPlaneSkew.
+// KubectlMaxSkew is NOT evaluated by design: client kubectl versions are only
+// visible in apiserver audit logs (User-Agent), which no collector reads —
+// there is no cluster-state signal for them.
 func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
-	server, err := inventory.ParseVersion(inv.ServerVersion)
-	if err != nil {
-		return nil // versions capability degraded; surfaced via NotAssessed
+	apis := apiserverVersions(inv)
+	if len(apis) == 0 {
+		return nil // no reference version: a required versions gap, recorded by assessmentGaps
 	}
+	oldest, newest := apis[0], apis[len(apis)-1]
 	maxBehind := k.Skew.KubeletMaxBehind
-	var nowBad, postBad, unparseable []string
+	var nowBad, postBad, newer, unparseable []string
+	var postLegacy, nowLegacy bool
 	for _, n := range inv.Nodes {
 		kv, err := inventory.ParseVersion(n.KubeletVersion)
 		if err != nil {
@@ -335,22 +379,29 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 			continue
 		}
 		entry := fmt.Sprintf("%s (%s)", n.Name, n.KubeletVersion)
-		if minorsBehind(server, kv) > maxBehind {
+		limit := legacyMaxBehind(maxBehind, kv)
+		if minorsBehind(newest, kv) > limit {
 			nowBad = append(nowBad, entry)
+			nowLegacy = nowLegacy || limit < maxBehind
 		}
-		if minorsBehind(target, kv) > maxBehind {
+		if minorsBehind(target, kv) > limit {
 			postBad = append(postBad, entry)
+			postLegacy = postLegacy || limit < maxBehind
+		}
+		if kv.Compare(oldest) > 0 {
+			newer = append(newer, entry)
 		}
 	}
 	sort.Strings(nowBad)
 	sort.Strings(postBad)
+	sort.Strings(newer)
 	var out []Finding
 	if len(postBad) > 0 {
 		out = append(out, Finding{
 			Category: CatVersionSkew, Severity: SevBlocker,
 			Key:       string(CatVersionSkew) + "/kubelet-post-upgrade",
 			Title:     fmt.Sprintf("%d node(s) would exceed kubelet version skew after upgrading to %s", len(postBad), target),
-			Detail:    fmt.Sprintf("After upgrading the control plane to %s these nodes would be more than %d minor versions behind: %s.", target, maxBehind, strings.Join(postBad, ", ")),
+			Detail:    fmt.Sprintf("After upgrading the control plane to %s these nodes would be more than %d minor versions behind: %s.", target, maxBehind, strings.Join(postBad, ", ")) + legacyNote("Kubelets", postLegacy),
 			Citations: []string{skewPolicyURL},
 		})
 	}
@@ -358,8 +409,17 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 		out = append(out, Finding{
 			Category: CatVersionSkew, Severity: SevWarning,
 			Key:       string(CatVersionSkew) + "/kubelet-current",
-			Title:     fmt.Sprintf("%d node(s) exceed kubelet version skew vs control plane %s", len(nowBad), server),
-			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, strings.Join(nowBad, ", ")),
+			Title:     fmt.Sprintf("%d node(s) exceed kubelet version skew vs control plane %s", len(nowBad), newest),
+			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, strings.Join(nowBad, ", ")) + legacyNote("Kubelets", nowLegacy),
+			Citations: []string{skewPolicyURL},
+		})
+	}
+	if len(newer) > 0 {
+		out = append(out, Finding{
+			Category: CatVersionSkew, Severity: SevWarning,
+			Key:       string(CatVersionSkew) + "/kubelet-newer-than-apiserver",
+			Title:     fmt.Sprintf("%d node(s) run a kubelet newer than kube-apiserver %s", len(newer), oldest),
+			Detail:    fmt.Sprintf("kubelet must not be newer than kube-apiserver; when kube-apiserver versions differ, the oldest one (%s) bounds the allowed kubelet versions. Newer nodes: %s.", oldest, strings.Join(newer, ", ")),
 			Citations: []string{skewPolicyURL},
 		})
 	}
@@ -374,6 +434,45 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 		})
 	}
 	return out
+}
+
+// apiserverVersions returns the distinct kube-apiserver minors observed,
+// ascending: the server version the collector was answered with, plus any
+// kube-apiserver pods (self-hosted HA control planes). Empty when neither
+// is available or parseable.
+func apiserverVersions(inv inventory.Inventory) []inventory.Version {
+	var vs []inventory.Version
+	add := func(raw string) {
+		if v, err := inventory.ParseVersion(raw); err == nil && !slices.Contains(vs, v) {
+			vs = append(vs, v)
+		}
+	}
+	add(inv.ServerVersion)
+	for _, cv := range inv.ControlPlane {
+		if cv.Component == "kube-apiserver" {
+			add(cv.Version)
+		}
+	}
+	slices.SortFunc(vs, inventory.Version.Compare)
+	return vs
+}
+
+// legacyMaxBehind narrows a kubelet / kube-proxy skew limit for components
+// older than 1.25, which the policy allows only 2 minors behind.
+func legacyMaxBehind(limit int, v inventory.Version) int {
+	if v.Major == 1 && v.Minor < 25 {
+		return min(limit, 2)
+	}
+	return limit
+}
+
+// legacyNote is appended to a skew detail when a pre-1.25 component's
+// narrower limit applied.
+func legacyNote(components string, applied bool) string {
+	if !applied {
+		return ""
+	}
+	return fmt.Sprintf(" %s older than 1.25 may be at most 2 minor versions behind.", components)
 }
 
 // minorsBehind flattens (major, minor) so cross-major comparisons stay sane.
@@ -391,13 +490,16 @@ func minorsBehind(ctrl, kubelet inventory.Version) int {
 //     apiserver → blocker (must never be newer than an apiserver they talk
 //     to); more than policy.CtrlMgrMaxBehind behind the NEWEST → warning.
 //   - kube-proxy: newer than the oldest apiserver, or more than
-//     policy.KubeProxyMaxBehind behind the newest → warning.
+//     policy.KubeProxyMaxBehind behind the newest → warning; more than
+//     KubeProxyMaxBehind behind target → blocker, since the control-plane
+//     upgrade would put it out of policy (mirrors the kubelet rule). A
+//     kube-proxy older than 1.25 may only be 2 minors behind.
 //
 // An empty ControlPlane (managed control planes — EKS/GKE/AKS run these
 // components outside the cluster) yields no findings. When apiserver pods
 // are not observed but other components are, inv.ServerVersion stands in
 // as the apiserver version.
-func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
+func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
 	if len(inv.ControlPlane) == 0 {
 		return nil
 	}
@@ -416,6 +518,26 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
 	}
 
 	var out []Finding
+	// Post-upgrade kube-proxy needs only the target, not today's apiservers.
+	var proxyPost []string
+	proxyLegacy := false
+	for _, v := range byComp["kube-proxy"] {
+		limit := legacyMaxBehind(k.Skew.KubeProxyMaxBehind, v)
+		if minorsBehind(target, v) > limit {
+			proxyPost = append(proxyPost, v.String())
+			proxyLegacy = proxyLegacy || limit < k.Skew.KubeProxyMaxBehind
+		}
+	}
+	if len(proxyPost) > 0 {
+		out = append(out, Finding{
+			Category: CatVersionSkew, Severity: SevBlocker,
+			Key:       string(CatVersionSkew) + "/kube-proxy-post-upgrade",
+			Title:     fmt.Sprintf("kube-proxy would exceed version skew after upgrading to %s", target),
+			Detail:    fmt.Sprintf("After upgrading the control plane to %s, kube-proxy %s would be more than %d minor versions behind kube-apiserver; upgrade kube-proxy first.", target, strings.Join(proxyPost, ", "), k.Skew.KubeProxyMaxBehind) + legacyNote("kube-proxy versions", proxyLegacy),
+			Citations: []string{skewPolicyURL},
+		})
+	}
+
 	api := byComp["kube-apiserver"]
 	if len(api) > 1 {
 		oldest, newest := api[0], api[len(api)-1]
@@ -445,20 +567,27 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
 	for _, rule := range []struct {
 		component   string
 		maxBehind   int
+		legacy      bool // pre-1.25 versions may only be 2 minors behind
 		newerSev    Severity
 		newerDetail string
 	}{
-		{"kube-controller-manager", k.Skew.CtrlMgrMaxBehind, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
-		{"kube-scheduler", k.Skew.CtrlMgrMaxBehind, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
-		{"kube-proxy", k.Skew.KubeProxyMaxBehind, SevWarning, "kube-proxy must not be newer than kube-apiserver"},
+		{"kube-controller-manager", k.Skew.CtrlMgrMaxBehind, false, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
+		{"kube-scheduler", k.Skew.CtrlMgrMaxBehind, false, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
+		{"kube-proxy", k.Skew.KubeProxyMaxBehind, true, SevWarning, "kube-proxy must not be newer than kube-apiserver"},
 	} {
 		var newer, behind []string
+		behindLegacy := false
 		for _, v := range byComp[rule.component] {
+			limit := rule.maxBehind
+			if rule.legacy {
+				limit = legacyMaxBehind(limit, v)
+			}
 			switch {
 			case v.Compare(oldest) > 0:
 				newer = append(newer, v.String())
-			case minorsBehind(newest, v) > rule.maxBehind:
+			case minorsBehind(newest, v) > limit:
 				behind = append(behind, v.String())
+				behindLegacy = behindLegacy || limit < rule.maxBehind
 			}
 		}
 		if len(newer) > 0 {
@@ -475,7 +604,7 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
 				Category: CatVersionSkew, Severity: SevWarning,
 				Key:       string(CatVersionSkew) + "/" + rule.component,
 				Title:     fmt.Sprintf("%s exceeds version skew vs kube-apiserver", rule.component),
-				Detail:    fmt.Sprintf("%s %s is more than %d minor version(s) behind the newest kube-apiserver (%s).", rule.component, strings.Join(behind, ", "), rule.maxBehind, newest),
+				Detail:    fmt.Sprintf("%s %s is more than %d minor version(s) behind the newest kube-apiserver (%s).", rule.component, strings.Join(behind, ", "), rule.maxBehind, newest) + legacyNote("kube-proxy versions", behindLegacy),
 				Citations: []string{skewPolicyURL},
 			})
 		}
@@ -504,6 +633,60 @@ func evalKBStale(inv inventory.Inventory, k kb.KB, target inventory.Version) []F
 	}}
 }
 
+// assessmentGaps lists what the evaluation could not assess, sorted by
+// capability: every unavailable inventory capability, a versions gap when
+// the server version is missing or unparseable (unless versions is already
+// unavailable), and a kb-coverage gap when the target is beyond the KB
+// horizon. Required is set per the verdict rules on CapabilityGap. A
+// capability absent from inv.Capabilities is not a gap: collectors always
+// report all of theirs, so absence only occurs in hand-built inventories.
+func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
+	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
+	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
+		required[inventory.CapVersions] = true
+	}
+	var gaps []CapabilityGap
+	for c, st := range inv.Capabilities {
+		if !st.Available {
+			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason})
+		}
+	}
+	if st, ok := inv.Capabilities[inventory.CapVersions]; !ok || st.Available {
+		const notEvaluated = "kubelet and control-plane skew were not evaluated"
+		if inv.ServerVersion == "" {
+			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Reason: "server version not reported; " + notEvaluated})
+		} else if _, err := inventory.ParseVersion(inv.ServerVersion); err != nil {
+			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions,
+				Reason: fmt.Sprintf("server version %q could not be parsed; %s", inv.ServerVersion, notEvaluated)})
+		}
+	}
+	if target.Compare(k.MaxKnownK8s) > 0 {
+		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage,
+			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed", k.MaxKnownK8s, target)})
+	}
+	for i := range gaps {
+		gaps[i].Required = required[gaps[i].Capability]
+	}
+	sort.Slice(gaps, func(i, j int) bool { return gaps[i].Capability < gaps[j].Capability })
+	return gaps
+}
+
+// verdictFor: blocked on any blocker; otherwise unknown on any required gap
+// (a blocker may have gone unseen); otherwise ready.
+func verdictFor(findings []Finding, gaps []CapabilityGap) Verdict {
+	for _, f := range findings {
+		if f.Severity == SevBlocker {
+			return VerdictBlocked
+		}
+	}
+	for _, g := range gaps {
+		if g.Required {
+			return VerdictUnknown
+		}
+	}
+	return VerdictReady
+}
+
 // Evaluate is the pure evaluation entrypoint: no I/O, no clock reads — now is
 // injected for EOL-window math. Output is fully deterministic for a given
 // (inventory, kb, target, now).
@@ -513,29 +696,20 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalDeprecatedCalls(inv, target)...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
 	findings = append(findings, evalSkew(inv, k, target)...)
-	findings = append(findings, evalControlPlaneSkew(inv, k)...)
+	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)
 	findings = append(findings, evalKBStale(inv, k, target)...)
 	sortFindings(findings)
-	score, ready := Score(findings)
-
-	caps := make([]inventory.Capability, 0, len(inv.Capabilities))
-	for c := range inv.Capabilities {
-		caps = append(caps, c)
-	}
-	sort.Slice(caps, func(i, j int) bool { return caps[i] < caps[j] })
-	var gaps []CapabilityGap
-	for _, c := range caps {
-		if st := inv.Capabilities[c]; !st.Available {
-			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason})
-		}
-	}
+	score, _ := Score(findings)
+	gaps := assessmentGaps(inv, k, target)
+	verdict := verdictFor(findings, gaps)
 
 	return Report{
 		ClusterID:   inv.ClusterID,
 		Target:      target,
 		KBVersion:   k.Version,
 		Score:       score,
-		Ready:       ready,
+		Ready:       verdict == VerdictReady,
+		Verdict:     verdict,
 		Findings:    findings,
 		NotAssessed: gaps,
 	}

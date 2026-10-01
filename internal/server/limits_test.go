@@ -106,7 +106,12 @@ func TestGateBodyCapIsConfigurable(t *testing.T) {
 }
 
 // Billion-laughs: a few hundred bytes that expand to millions of nodes.
-func TestGateRejectsAliasBomb(t *testing.T) {
+// The shared manifest parser (collect.parseManifestStream) walks the YAML node
+// tree and never expands aliases, so a billion-laughs document is just a small
+// document: it must come back fast with an ordinary status — never a 5xx, an
+// OOM, or a timeout. (Before the shared parser, /gate converted YAML to JSON,
+// which expanded aliases, so this used to require a 4xx.)
+func TestGateAliasBombDoesNotAmplify(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: bomb}\n")
 	b.WriteString(`a: &a ["lol","lol","lol","lol","lol","lol","lol","lol","lol"]` + "\n")
@@ -118,8 +123,8 @@ func TestGateRejectsAliasBomb(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
 	began := time.Now()
 	code, _, raw := gateStatus(t, s, b.String())
-	if code < 400 || code >= 500 {
-		t.Fatalf("status = %d (%s), want 4xx", code, raw)
+	if code >= 500 {
+		t.Fatalf("status = %d (%s), want 2xx or 4xx", code, raw)
 	}
 	if took := time.Since(began); took > 5*time.Second {
 		t.Fatalf("alias bomb took %s to reject", took)

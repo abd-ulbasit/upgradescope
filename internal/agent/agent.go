@@ -64,12 +64,13 @@ func (c *Config) applyDefaults() error {
 }
 
 // resolveTargets picks evaluation targets per tick: spec.Targets if any parse
-// (invalid entries are skipped with a note for status.notAssessed), else the
-// next minor above the observed server version. Resolved per-tick because the
-// spec can change at any time.
+// as targets (invalid entries are skipped with a note for
+// status.notAssessed), else the next minor above the observed server version
+// (vendor-suffixed GitVersions such as "v1.33.5-gke.1080000" included).
+// Resolved per-tick because the spec can change at any time.
 func resolveTargets(spec crd.Spec, inv inventory.Inventory) (targets []inventory.Version, notes []string, err error) {
 	for _, raw := range spec.Targets {
-		v, perr := inventory.ParseVersion(raw)
+		v, perr := inventory.ParseTarget(raw)
 		if perr != nil {
 			notes = append(notes, fmt.Sprintf("targets: skipped invalid spec target %q", raw))
 			continue

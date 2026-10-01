@@ -11,6 +11,7 @@ import (
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -74,6 +75,45 @@ func TestGateManifestsOnly(t *testing.T) {
 	}
 }
 
+// A kind: List body is expanded like --files does: removed APIs inside the
+// List must block, not pass as one harmless v1/List object.
+func TestGateExpandsList(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	// testKB knows only PodSecurityPolicy: one direct item, one in a
+	// nested List.
+	list := `apiVersion: v1
+kind: List
+items:
+- apiVersion: policy/v1beta1
+  kind: PodSecurityPolicy
+  metadata: {name: restricted}
+- apiVersion: v1
+  kind: List
+  items:
+  - apiVersion: policy/v1beta1
+    kind: PodSecurityPolicy
+    metadata: {name: privileged}
+`
+	resp, raw := postGate(t, ts, "?target=1.35", "", list, "application/x-yaml")
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, raw)
+	}
+	var rep engine.Report
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		t.Fatalf("response is not a report: %v\n%s", err, raw)
+	}
+	if rep.Ready || len(rep.Findings) != 1 {
+		t.Fatalf("ready=%v findings=%+v, want not ready with one finding", rep.Ready, rep.Findings)
+	}
+	f := rep.Findings[0]
+	if f.Severity != engine.SevBlocker || f.Key != "removed-api/policy/v1beta1/PodSecurityPolicy" || !strings.Contains(f.Title, "(2 objects)") {
+		t.Fatalf("finding = %+v, want the removed PSP blocker covering both List items", f)
+	}
+}
+
 func TestGateSARIF(t *testing.T) {
 	s := newTestServer(t, newFakeStore(), func(c *Config) { c.Version = "v-test" })
 	ts := httptest.NewServer(s.Handler())
@@ -95,10 +135,25 @@ func TestGateSARIF(t *testing.T) {
 					Version string `json:"version"`
 				} `json:"driver"`
 			} `json:"tool"`
+			Invocations []struct {
+				ExecutionSuccessful        bool `json:"executionSuccessful"`
+				ToolExecutionNotifications []struct {
+					Level   string `json:"level"`
+					Message struct {
+						Text string `json:"text"`
+					} `json:"message"`
+					Properties map[string]string `json:"properties"`
+				} `json:"toolExecutionNotifications"`
+			} `json:"invocations"`
 			Results []struct {
 				RuleID string `json:"ruleId"`
 				Level  string `json:"level"`
 			} `json:"results"`
+			Properties struct {
+				Ready           *bool `json:"ready"`
+				Score           int   `json:"score"`
+				OmittedFindings int   `json:"omittedFindings"`
+			} `json:"properties"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(raw, &log); err != nil {
@@ -110,8 +165,31 @@ func TestGateSARIF(t *testing.T) {
 	if log.Runs[0].Tool.Driver.Version != "v-test" {
 		t.Errorf("tool version = %q, want v-test", log.Runs[0].Tool.Driver.Version)
 	}
-	if len(log.Runs[0].Results) != 1 || log.Runs[0].Results[0].Level != "error" || log.Runs[0].Results[0].RuleID != "removed-api" {
-		t.Fatalf("results = %+v, want one removed-api error", log.Runs[0].Results)
+	sariftest.AssertGitHubAcceptable(t, raw)
+	// A posted stream has no file names, and GitHub rejects a SARIF result
+	// without a physical location, so the gate's findings carry no SARIF
+	// results...
+	run := log.Runs[0]
+	if raw := string(raw); len(run.Results) != 0 || !strings.Contains(raw, `"results": []`) {
+		t.Fatalf("results = %+v, want none (no file locations in a posted stream)\n%s", run.Results, raw)
+	}
+	// ...but the document must not read as a clean pass: the blocker is an
+	// error notification naming the object and its stream line, and the
+	// run records the failed verdict.
+	if p := run.Properties; p.Ready == nil || *p.Ready || p.Score != 75 || p.OmittedFindings != 1 {
+		t.Errorf("run.properties = %+v, want ready=false score=75 omittedFindings=1", p)
+	}
+	if len(run.Invocations) != 1 || !run.Invocations[0].ExecutionSuccessful || len(run.Invocations[0].ToolExecutionNotifications) != 1 {
+		t.Fatalf("invocations = %+v, want one notification for the omitted blocker\n%s", run.Invocations, raw)
+	}
+	n := run.Invocations[0].ToolExecutionNotifications[0]
+	if n.Level != "error" || n.Properties["findingKey"] != "removed-api/policy/v1beta1/PodSecurityPolicy" {
+		t.Errorf("notification = %+v, want an error for the removed PSP", n)
+	}
+	for _, part := range []string{"PodSecurityPolicy", "payments-prod/restricted (line 1)"} {
+		if !strings.Contains(n.Message.Text, part) {
+			t.Errorf("notification message %q lacks %q", n.Message.Text, part)
+		}
 	}
 }
 

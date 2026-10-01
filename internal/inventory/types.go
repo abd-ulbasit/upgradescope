@@ -17,11 +17,25 @@ type CapabilityStatus struct {
 	Reason    string `json:"reason,omitempty"` // e.g. `nodes list forbidden`
 }
 
+// Source records how an inventory was collected. It decides which
+// capabilities the engine requires before it can call a cluster ready.
+type Source string
+
+const (
+	// SourceCluster: collected from a live cluster (scan, agent). The empty
+	// Source means the same — v0.1 agents push inventories without it.
+	SourceCluster Source = "cluster"
+	// SourceFiles: built from rendered manifests (scan --files, the server's
+	// manifest gate). There is no cluster, so no versions to collect.
+	SourceFiles Source = "files"
+)
+
 type Inventory struct {
 	SchemaVersion      int                             `json:"schemaVersion"` // 1
 	ClusterID          string                          `json:"clusterId"`     // kube-system ns UID, or "files"
+	Source             Source                          `json:"source,omitempty"`
 	CollectedAt        time.Time                       `json:"collectedAt"`
-	ServerVersion      string                          `json:"serverVersion,omitempty"` // raw, e.g. "v1.34.2"
+	ServerVersion      string                          `json:"serverVersion,omitempty"` // raw GitVersion, e.g. "v1.34.2", "v1.34.2-gke.100"
 	Capabilities       map[Capability]CapabilityStatus `json:"capabilities"`
 	APIUsage           []APIUsage                      `json:"apiUsage,omitempty"`
 	DeprecatedCalls    []DeprecatedCall                `json:"deprecatedCalls,omitempty"`
@@ -39,6 +53,31 @@ type APIUsage struct {
 	Kind       string         `json:"kind"`
 	Count      int            `json:"count"`
 	Namespaces map[string]int `json:"namespaces,omitempty"` // ns → count; cluster-scoped key ""
+	// Objects identifies the objects behind Count, in collection order,
+	// capped at MaxObjectRefs; ObjectsOmitted counts the refs dropped by
+	// the cap. Collectors that cannot identify objects leave both empty.
+	Objects        []ObjectRef `json:"objects,omitempty"`
+	ObjectsOmitted int         `json:"objectsOmitted,omitempty"`
+}
+
+// MaxObjectRefs caps APIUsage.Objects so a render with thousands of objects
+// of one kind cannot bloat the inventory, the report or SARIF output.
+const MaxObjectRefs = 100
+
+// ObjectRef identifies one object using an API. Namespace/Name are the
+// object's identity (empty Namespace: metadata.namespace unset, or a
+// cluster-scoped object). File and Line are set only for objects read from
+// manifest text: File is slash-separated and relative to the scanned root
+// (empty for a single posted stream); Line is the 1-based line of the
+// object's apiVersion key. RenderedFrom is the Helm template the object was
+// rendered from, taken from helm template's "# Source: <chart>/templates/x.yaml"
+// comment.
+type ObjectRef struct {
+	Namespace    string `json:"namespace,omitempty"`
+	Name         string `json:"name,omitempty"`
+	File         string `json:"file,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	RenderedFrom string `json:"renderedFrom,omitempty"`
 }
 
 type DeprecatedCall struct { // one row of apiserver_requested_deprecated_apis
@@ -77,7 +116,7 @@ type ComponentVersion struct {
 
 type NodeInfo struct {
 	Name           string `json:"name"`
-	KubeletVersion string `json:"kubeletVersion"` // raw "v1.33.1"
+	KubeletVersion string `json:"kubeletVersion"` // raw, e.g. "v1.33.1", "v1.33.1-eks-aeac579"
 }
 
 type NamespaceInfo struct {

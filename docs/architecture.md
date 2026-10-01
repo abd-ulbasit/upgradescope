@@ -1,0 +1,452 @@
+# Architecture
+
+This guide is for contributors. It explains how upgradescope is put together,
+which contracts hold it together, and which design boundaries are
+deliberate. To *use* the tool, start with the [README](../README.md). To
+*change* it, read this first, then [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+Contents:
+
+1. [Overview](#overview)
+2. [Components](#components)
+3. [Data flow](#data-flow)
+4. [Collectors](#collectors)
+5. [The inventory contract](#the-inventory-contract)
+6. [Evaluation rules](#evaluation-rules)
+7. [The report contract](#the-report-contract)
+8. [Scoring](#scoring)
+9. [Failure handling](#failure-handling)
+10. [Knowledge base and registry pipeline](#knowledge-base-and-registry-pipeline)
+11. [The ClusterReadiness CRD](#the-clusterreadiness-crd)
+12. [Server](#server)
+13. [Design boundaries](#design-boundaries)
+14. [Testing strategy](#testing-strategy)
+
+## Overview
+
+upgradescope answers one question: *what breaks if this cluster moves to
+Kubernetes version X?* It answers it the same way everywhere:
+
+```
+inventory (what is running)  +  knowledge base (what upstream says)  +  target version
+                              │
+                              ▼
+               engine.Evaluate(inventory, kb, target, now)
+                              │
+                              ▼
+       report: findings + score + ready + "not assessed" gaps
+```
+
+One Go module produces one binary with three long-running modes and one
+admin command:
+
+| Command | Runs | Produces |
+|---|---|---|
+| `upgradescope scan` | once, from a laptop or CI | a table, JSON or SARIF report, and an exit code (0 gate passed, 2 gate failed, 1 error; the gate is `--fail-on`, default `blocker`, and `never` always passes) |
+| `upgradescope agent` | continuously, in the cluster | `ClusterReadiness` status, plus snapshot pushes to a server (optional) |
+| `upgradescope serve` | continuously, anywhere | stored history, fleet rollups, what-if, CI gate, exports, notifications, dashboard |
+| `upgradescope tokens` | on demand, next to `serve` | creates and revokes per-cluster ingest tokens |
+
+The core idea is a **smart edge**. The evaluation engine is a pure function
+with no Kubernetes or network dependencies, embedded in all three modes. The
+agent can therefore produce a complete verdict without a server, and the
+server can evaluate a stored inventory against a target nobody evaluated it
+for (a what-if) without going back to the cluster.
+
+## Components
+
+| Package | Responsibility | Depends on |
+|---|---|---|
+| `internal/inventory` | The `Inventory` contract (what was observed) and Kubernetes `Version` parsing | nothing |
+| `internal/collect` | Builds an `Inventory` from a live cluster (client-go) or from rendered manifests | `inventory`, `kb`, `registry` |
+| `registry` | The add-on EOL/compatibility dataset: schema, validator, embedded YAML loader | nothing internal (importable on its own) |
+| `internal/kb` | Loads the knowledge base: API lifecycle data, the registry, and the version-skew policy | `inventory`, `registry` |
+| `internal/engine` | `Evaluate` and `Score`: pure, deterministic, no I/O | `inventory`, `kb`, `registry` |
+| `internal/sarif` | Renders a report as SARIF 2.1.0 | `engine` |
+| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `engine`, client-go |
+| `internal/agent` | The in-cluster loop and the snapshot push client | `collect`, `engine`, `crd`, `kb` |
+| `internal/server` | Ingest, read API, what-if, gate, exports, team mapping, delta notifications, SPA serving | `engine`, `kb`, `collect` (manifests only), `sarif` |
+| `internal/server/store` | The `Store` interface and its SQLite and Postgres implementations, with embedded migrations | nothing internal |
+| `internal/server/notify` | Slack and generic-webhook delivery | nothing internal |
+| `internal/cli` | cobra commands, flag validation, output writers, exit codes | everything above |
+| `tools/gen-kb` | A separate Go module that regenerates the API lifecycle dataset from `k8s.io/api` | `k8s.io/api` |
+| `tools/eol-sync` | A separate Go module that syncs registry EOL fields with the endoflife.date API | stdlib only |
+| `web/` | React + TypeScript dashboard, built by Vite and embedded with `go:embed` | the REST API |
+| `deploy/chart` | Helm chart: agent, optional server, CRD, RBAC | — |
+
+`engine`, `inventory`, `kb` and `registry` have no client-go dependency.
+Everything that talks to a cluster sits in `collect`, `crd` and `agent`.
+
+## Data flow
+
+### `scan`
+
+```
+kb.Load()  ──►  collect.Collect(live clients)  or  collect.CollectFiles(dir)
+                                │
+                                ▼
+                 engine.Evaluate(inv, kb, --target, now)
+                                │
+                                ▼
+          table / json / sarif writer   ──►  exit code from --fail-on
+```
+
+`--target` is required. In `--files` mode only API usage can be assessed, so
+every other capability is reported as not assessed with the reason "files
+mode".
+
+### `agent`
+
+Each tick runs once at startup, then every `--interval` (default 10m, minimum
+1m) with ±10% jitter:
+
+```
+collect.Collect ──► ensure the ClusterReadiness object exists, read spec.targets
+      │
+      ▼
+targets = spec.targets, or (when empty) the next minor above the server version
+      │
+      ▼
+engine.Evaluate once per target ──► crd.WriteStatus        (always)
+      │
+      ▼
+sha256(canonical inventory) changed, or --force-sync-every elapsed?
+      └── yes ──► push snapshot to the server (when --server-url is set)
+```
+
+The CRD status is written on every tick, even when the server is
+unreachable. The agent's local value never depends on the server. Pushes
+buffer at most one payload (the latest replaces any pending one) and retry
+transient failures with exponential backoff. Permanent 4xx responses drop
+the payload. The canonical hash zeroes `collectedAt`, so an unchanged cluster
+does not produce a new snapshot every tick.
+
+### `serve`
+
+```
+POST /api/v1/snapshots ──► auth (shared or per-cluster token)
+        │
+        ▼
+canonicalize + hash ──► duplicate of latest? ──► 200 {duplicate: true}
+        │ no
+        ▼
+store snapshot ──► apply --team-map ──► engine.Evaluate for (next minor + --targets)
+        │
+        ▼
+store one evaluation per target ──► diff against the previous evaluation ──► notifiers
+        │
+        ▼
+read API, fleet rollups, exports and dashboard read the stored evaluations.
+What-if and the gate re-run engine.Evaluate on demand and store nothing.
+```
+
+The snapshot is durable before evaluation starts. A failed evaluation for
+one target is logged and skipped, and never fails the ingest.
+
+## Collectors
+
+`collect.Collect` runs five sub-collectors in a fixed order. Each one owns
+one **capability**:
+
+| Capability | What it reads | Notes |
+|---|---|---|
+| `versions` | `/version`, nodes (kubelet versions), namespaces (team label), kube-system control-plane pods (image tags) | The cluster ID is the `kube-system` namespace UID. Managed control planes expose no control-plane pods, so that list is empty there. |
+| `helm` | Secrets of type `helm.sh/release.v1` | Decodes base64, gunzip and JSON into a minimal struct, keeping the latest revision per release. No Helm SDK. |
+| `deprecated-calls` | apiserver `/metrics`, `apiserver_requested_deprecated_apis` | Finds *active callers*, which manifest scanners cannot see. The gauge resets when the apiserver restarts, HA apiservers report independently, and managed planes often deny access. |
+| `addons` | pod container images, plus the Helm releases from the `helm` step | Matches registry matchers: image repository prefix, or exact chart name. Chart evidence wins over image evidence. Unmatched images go to `unrecognizedImages` and never become findings. |
+| `api-usage` | discovery, then **metadata-only, paged** lists at each deprecated or removed group/version the knowledge base flags | Lists at the deprecated endpoint itself. A normal `get` converts objects to the preferred version and would hide that they are stored at the old one. |
+
+Every cluster-wide list is paged (`limit=500`). The collectors are
+read-only.
+
+## The inventory contract
+
+`inventory.Inventory` (`internal/inventory/types.go`) is the boundary between
+observation and judgement. The collectors write it. The engine, the server
+store and the push protocol read it. It is JSON on the wire and at rest.
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "clusterId": "…kube-system UID, or \"files\" / \"manifests\"",
+  "collectedAt": "RFC 3339",
+  "serverVersion": "v1.34.2",
+  "capabilities": { "api-usage": {"available": true}, "helm": {"available": false, "reason": "…"} },
+  "apiUsage":        [{ "group", "version", "kind", "count", "namespaces": {"ns": n} }],
+  "deprecatedCalls": [{ "group", "version", "resource", "subresource", "removedRelease" }],
+  "helmReleases":    [{ "name", "namespace", "chartName", "chartVersion", "appVersion", "status" }],
+  "addOns":          [{ "id", "version", "namespaces", "source": "image|chart" }],
+  "nodes":           [{ "name", "kubeletVersion" }],
+  "controlPlane":    [{ "component", "version" }],
+  "namespaces":      [{ "name", "team" }],
+  "unrecognizedImages": ["…deduped, sorted, capped at 200"]
+}
+```
+
+Rules for changing it:
+
+- It describes **observations, not verdicts**. Severity, EOL status and
+  scores never go in the inventory. They are derived from it, so a stored
+  snapshot can be re-judged by a newer knowledge base.
+- New fields are additive and `omitempty`. A breaking change bumps
+  `schemaVersion`. The push envelope that carries the inventory has its own
+  `schemaVersion` (currently 1), and the server rejects envelope versions it
+  does not know.
+- `capabilities` must contain an entry for every capability the collector
+  attempted. An absent slice with `available: true` means "looked, found
+  nothing". `available: false` means "could not look".
+
+## Evaluation rules
+
+`engine.Evaluate(inv, kb, target, now)` is the entire decision logic. It
+performs no I/O and reads no clock (`now` is injected), and the same inputs
+always give the same bytes out.
+
+| Category | Severity | Rule |
+|---|---|---|
+| `removed-api` | blocker | A stored object's group/version/kind is removed at or before the target. |
+| `removed-api` | warning | Removed in the minor after the target. |
+| `deprecated-api` | info | Deprecated, with no removal within that window. |
+| `deprecated-api-in-use` | blocker / warning / info | Active callers seen in the apiserver metric. Same window as above. Info when the removal release is missing. |
+| `eol-addon` | blocker | The registry status is `eol`, or the EOL date has passed. |
+| `eol-approaching` | warning | The EOL date falls within the next 90 days. |
+| `chart-incompat` | blocker | The detected add-on version matches a compat range whose `k8s_max` is below the target. |
+| `version-skew` | blocker / warning / info | Kubelets that would fall more than 3 minors behind after the upgrade (blocker), or are already behind (warning). Controller-manager or scheduler newer than the apiserver (blocker), or too far behind (warning). HA apiserver spread, and kube-proxy rules. Unparseable kubelet versions (info). |
+| `kb-stale` | warning | The cluster or the target is newer than the newest minor the knowledge base knows (`maxKnownK8s`). |
+
+Severity is always **relative to the target**. The same cluster can be ready
+for 1.34 and blocked for 1.35.
+
+kubectl client skew is in the skew policy but is deliberately not evaluated:
+client versions appear only in apiserver audit logs, which no collector
+reads.
+
+## The report contract
+
+`engine.Report` (`internal/engine/findings.go`) is what every output
+renders: the table, JSON, SARIF, CRD status, stored evaluations, exports and
+the dashboard.
+
+```jsonc
+{
+  "clusterId": "…",
+  "target": "1.35",
+  "kbVersion": "k8s-1.36+registry-2026-06-10",
+  "score": 70,
+  "ready": false,
+  "findings": [{
+    "category": "eol-addon",
+    "severity": "blocker",
+    "key": "eol-addon/ingress-nginx",
+    "title": "…one line…",
+    "detail": "…evidence…",
+    "teams": ["…"], "namespaces": ["…"],
+    "remediation": "…",
+    "citations": ["https://…"]
+  }],
+  "notAssessed": [{ "capability": "deprecated-calls", "reason": "…" }]
+}
+```
+
+- `findings` is sorted by severity (blocker, warning, info), then category,
+  then title.
+- `key` is the finding's **stable, count-free identity**, for example
+  `removed-api/extensions/v1beta1/Ingress`. Titles may contain counts that
+  change between snapshots ("3 objects" becomes "2 objects"). The key never
+  does. Notification deltas diff on the key, so changing a key format causes
+  alerts to fire again for existing findings.
+- `notAssessed` lists every unavailable capability with its reason. A report
+  with gaps is honest about what it could not see. It is never silently
+  green.
+
+## Scoring
+
+```
+score = max(0, 100 − min(75, 25 × blockers) − min(20, 5 × warnings))
+ready = (blockers == 0)
+```
+
+Info findings are listed but never scored. The caps keep a cluster with many
+warnings distinguishable from a cluster with one blocker. `ready` is the
+boolean that CI gates on. The score is for trends and comparison.
+
+Per-team scores (`engine.TeamScores`) apply the same formula to each team's
+subset of findings. Teams come from a namespace label (`--team-label`,
+default `team`), optionally overridden by the server's `--team-map`. A
+finding that spans N teams counts for each of them, and an unattributed
+finding is grouped under `""`.
+
+The formula is part of the public contract: users compare scores over time.
+Changing it is a breaking change that goes in the changelog.
+
+## Failure handling
+
+Several design rules apply throughout:
+
+- **Collectors degrade independently.** A sub-collector error marks its
+  capability `available: false` with the error as the reason, and collection
+  continues. A partial failure (one forbidden resource among many) keeps the
+  capability available and records the skipped parts in the reason.
+  `Collect` never returns an error. Reports surface these as "not assessed
+  (reason)".
+- **Unknown is not a finding.** Images that match no registry entry are
+  counted in `unrecognizedImages`, which makes registry gaps visible without
+  producing findings.
+- **A stale knowledge base is reported, not hidden.** See `kb-stale` above.
+- **The agent never dies on a tick error.** Errors are logged with a
+  consecutive-failure count, and the next tick retries.
+- **The server never partially writes a snapshot.** Malformed input is
+  rejected with a structured JSON error before anything is stored.
+  Evaluation failures after storage are logged and do not fail the request.
+- **Notifications are best-effort.** A notifier failure is logged and never
+  blocks ingest.
+
+## Knowledge base and registry pipeline
+
+The knowledge base (`internal/kb`) combines three datasets. Each one has its
+own maintenance strategy, and all three are **compiled into the binary**. A
+knowledge-base update reaches users only through a new release.
+
+```
+k8s.io/api (pinned in tools/gen-kb/go.mod)
+      │  tools/gen-kb: walks every registered type and calls the generated
+      │  APILifecycleIntroduced/Deprecated/Removed/Replacement methods
+      ▼
+internal/kb/data/apilifecycle.json   (generated, never hand-edited)
+internal/kb/data/supplement.json     (hand-curated: types upstream already deleted)
+registry/data/*.yaml                 (hand-curated + endoflife.date-synced, cited)
+skew policy                          (internal/kb/skew.go, from the upstream version-skew policy)
+      │
+      ▼
+kb.Load() ──► KB{Version: "k8s-<maxKnownK8s>+registry-<date>", …}
+```
+
+1. **API lifecycle (generated).** `tools/gen-kb` is a separate module so the
+   main module does not depend on a pinned `k8s.io/api`. It derives the
+   dataset from upstream source rather than from a hand-maintained table, so
+   it covers removals scheduled further ahead than the human-written
+   deprecation guide. CI regenerates the file and fails on any difference.
+   It also checks that the generator's import list covers every
+   `k8s.io/api` group/version package.
+2. **Supplement (hand-curated).** Some types, such as
+   `policy/v1beta1 PodSecurityPolicy`, are documented as removed but have
+   been deleted from current `k8s.io/api`, so the generator cannot see them.
+   They live in `supplement.json`. When the two datasets overlap, the
+   generated entries win, so a stale supplement can never mask fresh
+   upstream data.
+3. **Add-on registry.** One YAML file per add-on under `registry/data/`,
+   with schema version 1. `registry.Validate` enforces the schema, semver
+   ranges and **citations** (at least one upstream URL for any non-`unknown`
+   status and for every compat row). Entries with an `endoflife_product`
+   slug have `support.status` and `support.eol_date` owned by
+   `tools/eol-sync`, which reads `https://endoflife.date/api/<slug>.json`.
+   An add-on counts as EOL only when its *newest* release cycle is EOL. CI
+   runs `eol-sync -check` on pull requests that touch `registry/`. See
+   [`registry/CONTRIBUTING.md`](../registry/CONTRIBUTING.md) and
+   [`registry/DATA-LICENSE.md`](../registry/DATA-LICENSE.md).
+4. **Skew policy.** A small table of minor-version distances from the
+   upstream version-skew policy (`kb.DefaultSkewPolicy`).
+
+A weekly workflow (`kb-refresh.yml`) bumps `k8s.io/api` in `tools/gen-kb`,
+reruns both tools and opens a pull request. The datasets never change
+without review.
+
+`kb.Load` fails loudly on an empty or corrupt dataset. A silently empty
+knowledge base would produce silently green scans.
+
+## The ClusterReadiness CRD
+
+`ClusterReadiness` (`upgradescope.dev/v1alpha1`, cluster-scoped, short name
+`ucr`) is the per-cluster projection, for `kubectl get ucr`, GitOps health
+checks and policy engines that should not need to reach the server.
+
+- **`spec.targets`** is the only user input: the minors to evaluate against.
+  When it is empty, the agent uses the next minor above the observed server
+  version. Invalid entries are skipped and reported in `status.notAssessed`.
+- **`status`** holds, per target, the score, ready flag, counts by severity
+  and by category, and the **top 20** findings. It also records the observed
+  server version, knowledge-base version, agent version and evaluation time.
+  Status size is deliberately bounded. The full finding list lives in the
+  CLI and server output.
+
+The agent applies the CRD on startup. A failure there is non-fatal, because
+the chart also installs the CRD from `crds/`. The agent recreates its object
+if it is deleted, and writes status with conflict retry.
+
+## Server
+
+- **Ingest** (`POST /api/v1/snapshots`): bearer auth accepts the shared
+  `--ingest-token`, or a per-cluster token from `upgradescope tokens create`.
+  A per-cluster token may push only for its own cluster (otherwise 403).
+  Only sha256 hashes of tokens are stored. The body can be gzip or identity,
+  is capped at 20 MiB both on the wire and after decompression, and must use
+  `schemaVersion` 1. Deduplication uses the hash of the canonical inventory
+  JSON.
+- **Store** (`store.Store`): SQLite by default (`--db`, WAL mode,
+  pure-Go driver, so no cgo) or Postgres (`--db-url`). Tables are
+  `clusters`, `snapshots`, `evaluations` (report JSON plus score, per
+  target) and `tokens`. Both backends must pass one shared conformance suite
+  (`store/storetest`).
+- **Read API** (`GET /api/v1/...`): clusters, the latest report for a
+  target (`?target=`; the stored evaluation for that target when one exists,
+  otherwise a what-if that evaluates the latest stored inventory with the
+  server's knowledge base and stores nothing), findings filtered by severity
+  or category, score history, team scores, fleet
+  matrices, the registry, and CSV or HTML exports. Exports are built from
+  the *stored* evaluation, so an audit artifact reflects what was recorded.
+  The read token is optional. Without one, the read API is open.
+- **CI gate** (`POST /api/v1/gate`): the request body is a YAML manifest
+  stream. With `?cluster=`, the cluster's latest stored inventory supplies
+  the context (server version, nodes, add-ons, team labels), and only API
+  usage is replaced by the manifests. The question it answers is "would
+  these manifests block this cluster's upgrade?". The gate stores nothing
+  and can return SARIF.
+- **Notifications**: after each evaluation, the server diffs the new report
+  against the previous one for that cluster and target, using finding keys.
+  It emits `new-blocker` (capped at 5, plus an "N more" summary),
+  `became-ready` and `eol-approaching` events. Nothing is sent on a
+  cluster's first evaluation, and nothing is sent for unchanged snapshots.
+- **Dashboard**: the SPA under `web/` is built into
+  `internal/server/webdist/` and embedded. Static assets are served without
+  auth, and the SPA sends the read token on API calls. The build tag
+  `nodashboard` produces a binary with no embedded UI.
+
+## Design boundaries
+
+These limits are deliberate. A PR that crosses one needs a design discussion
+first.
+
+- **Read-only in user clusters.** The only writes are the `ClusterReadiness`
+  CRD and its own object. upgradescope detects, scores and recommends. It
+  never executes upgrades or remediations.
+- **Not an operator.** The agent is a timer loop, not a controller-runtime
+  reconciler. The verdict depends on the knowledge base and on the calendar
+  (EOL dates), and neither one produces a Kubernetes event. A watch-driven
+  reconciler would requeue on unrelated churn and still miss the day an EOL
+  date passes. A fixed interval with jitter instead re-collects, re-evaluates
+  and rewrites the status on every tick, so a passing EOL date shows up
+  within one interval, and the cost is predictable.
+- **No audit-log ingestion.** Active callers come from the apiserver metric.
+  Audit logs would add kubectl client skew and caller identity, but they are
+  operationally heavy and often unavailable on managed control planes.
+- **Single-tenant auth.** The server uses static bearer tokens. SSO and
+  multi-tenancy are out of scope for now.
+- **Clean-room data.** Every dataset comes from upstream source or public
+  pages, and every registry claim carries a citation. Other scanners'
+  datasets are never copied.
+- **One binary.** The dashboard, migrations, CRD manifest and knowledge base
+  are all embedded. Deploying never requires fetching data at runtime.
+
+## Testing strategy
+
+| Layer | How | Where |
+|---|---|---|
+| Engine | Golden files: an `inventory.json` and a shared `kb.json` produce `expected.json`, covering every category and the score formula | `internal/engine/testdata/`, updated with `go test ./internal/engine -run Golden -update`; a new case also needs a `goldenParams` entry (target and fixed `now`) in `evaluate_golden_test.go` |
+| Collectors | Fake clientsets, plus fixtures for Helm secret decoding, metrics parsing and manifests | `internal/collect/*_test.go`, `testdata/` |
+| Registry | Schema, citation, semver and duplicate checks over the real dataset | `registry/*_test.go` |
+| Store | One conformance suite run against SQLite (always) and Postgres (`UPGRADESCOPE_PG_TEST_DSN`) | `internal/server/store/storetest` |
+| Server | `httptest` against a fake store and a real SQLite store | `internal/server/*_test.go` |
+| Chart | `helm lint` and assertions on rendered templates | `hack/test-chart.sh` |
+| End to end | A kind cluster with an EOL ingress-nginx: scan, agent, chart install, CRD and API asserts (`UPGRADESCOPE_IT=1`) | `internal/cli/*_integration_test.go`, `hack/demo/` |
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md#running-tests) for the commands.

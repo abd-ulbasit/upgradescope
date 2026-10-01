@@ -34,7 +34,8 @@ type Spec struct {
 type TargetStatus struct {
 	Target      string         `json:"target"` // "1.36"
 	Score       int            `json:"score"`
-	Ready       bool           `json:"ready"`
+	Ready       bool           `json:"ready"`             // == (Verdict == "ready"); kept for v0.1 readers
+	Verdict     string         `json:"verdict,omitempty"` // "ready" | "blocked" | "unknown" (engine.Verdict)
 	Blockers    int            `json:"blockers"`
 	Warnings    int            `json:"warnings"`
 	Infos       int            `json:"infos"`
@@ -65,7 +66,7 @@ const maxTopFindings = 20
 // severity/category counts over all findings, plus the first maxTopFindings
 // findings (Report.Findings is already severity-sorted per engine contract).
 func TargetStatusFromReport(r engine.Report) TargetStatus {
-	ts := TargetStatus{Target: r.Target.String(), Score: r.Score, Ready: r.Ready}
+	ts := TargetStatus{Target: r.Target.String(), Score: r.Score, Ready: r.Ready, Verdict: string(r.Verdict)}
 	for _, f := range r.Findings {
 		switch f.Severity {
 		case engine.SevBlocker:
@@ -92,22 +93,28 @@ func TargetStatusFromReport(r engine.Report) TargetStatus {
 }
 
 // StatusFromReports builds the full CRD status from per-target reports.
-// All reports come from the same inventory, so KBVersion and NotAssessed are
-// taken from the first report. NotAssessed gaps render as "capability: reason".
+// All reports come from the same inventory, so KBVersion is taken from the
+// first report. NotAssessed is the deduped union over all reports, in first-
+// seen order — most gaps are per-inventory, but kb-coverage is per-target.
+// Gaps render as "capability: reason".
 func StatusFromReports(reports []engine.Report, observedServerVersion, agentVersion string, now time.Time) Status {
 	st := Status{
 		ObservedServerVersion: observedServerVersion,
 		LastEvaluated:         metav1.NewTime(now.UTC()),
 		AgentVersion:          agentVersion,
 	}
+	seen := map[string]bool{}
 	for _, r := range reports {
 		st.Targets = append(st.Targets, TargetStatusFromReport(r))
+		for _, g := range r.NotAssessed {
+			if s := fmt.Sprintf("%s: %s", g.Capability, g.Reason); !seen[s] {
+				seen[s] = true
+				st.NotAssessed = append(st.NotAssessed, s)
+			}
+		}
 	}
 	if len(reports) > 0 {
 		st.KBVersion = reports[0].KBVersion
-		for _, g := range reports[0].NotAssessed {
-			st.NotAssessed = append(st.NotAssessed, fmt.Sprintf("%s: %s", g.Capability, g.Reason))
-		}
 	}
 	return st
 }

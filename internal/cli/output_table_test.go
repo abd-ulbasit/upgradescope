@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -68,6 +70,84 @@ NOT ASSESSED
 `
 	if got := buf.String(); got != want {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// Files mode: each finding names the affected objects (file:line, first
+// few, then a count), the fix and the citations; an Ingress and a CronJob
+// without metadata.namespace read "namespace unset", never cluster-scoped.
+func TestWriteTableFilesModeGolden(t *testing.T) {
+	guide := "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+	var many []inventory.ObjectRef
+	for i := range 6 {
+		many = append(many, inventory.ObjectRef{Name: fmt.Sprintf("web-%d", i), File: "rendered/ingress.yaml", Line: 1 + 7*i})
+	}
+	many[0].Namespace = "shop"
+	r := engine.Report{
+		ClusterID: "files",
+		Target:    inventory.Version{Major: 1, Minor: 36},
+		KBVersion: "test-kb",
+		Score:     50,
+		Findings: []engine.Finding{
+			{
+				Category: engine.CatRemovedAPI, Severity: engine.SevBlocker,
+				Title:       "batch/v1beta1 CronJob removed in 1.25 (1 object)",
+				Detail:      "1 manifest object(s) use this API: namespace unset (1).",
+				Remediation: "migrate to batch/v1 CronJob",
+				Citations:   []string{guide},
+				Objects:     []inventory.ObjectRef{{Name: "nightly", File: "rendered/all.yaml", Line: 3, RenderedFrom: "demo/templates/cronjob.yaml"}},
+			},
+			{
+				Category: engine.CatRemovedAPI, Severity: engine.SevBlocker,
+				Title:          "networking.k8s.io/v1beta1 Ingress removed in 1.22 (8 objects)",
+				Detail:         "8 manifest object(s) use this API: namespace unset (7), shop (1).",
+				Remediation:    "migrate to networking.k8s.io/v1 Ingress",
+				Citations:      []string{guide, "https://example.com/ingress-migration"},
+				Objects:        many,
+				ObjectsOmitted: 2,
+			},
+		},
+		NotAssessed: []engine.CapabilityGap{{Capability: inventory.CapVersions, Reason: "files mode"}},
+	}
+
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+
+	want := `upgradescope upgrade readiness report
+
+Cluster:  files
+Target:   1.36
+KB:       test-kb
+
+SCORE  50/100
+READY  no
+
+BLOCKER (2)
+  [removed-api] batch/v1beta1 CronJob removed in 1.25 (1 object)
+      1 manifest object(s) use this API: namespace unset (1).
+      - nightly  rendered/all.yaml:3 (rendered from demo/templates/cronjob.yaml)
+      fix: migrate to batch/v1 CronJob
+      see: https://kubernetes.io/docs/reference/using-api/deprecation-guide/
+  [removed-api] networking.k8s.io/v1beta1 Ingress removed in 1.22 (8 objects)
+      8 manifest object(s) use this API: namespace unset (7), shop (1).
+      - shop/web-0  rendered/ingress.yaml:1
+      - web-1  rendered/ingress.yaml:8
+      - web-2  rendered/ingress.yaml:15
+      - web-3  rendered/ingress.yaml:22
+      - web-4  rendered/ingress.yaml:29
+      …and 3 more
+      fix: migrate to networking.k8s.io/v1 Ingress
+      see: https://kubernetes.io/docs/reference/using-api/deprecation-guide/
+      see: https://example.com/ingress-migration
+
+NOT ASSESSED
+  versions: files mode
+`
+	if got := buf.String(); got != want {
+		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if strings.Contains(buf.String(), "cluster-scoped") || strings.Contains(buf.String(), "stored/served") {
+		t.Error("files-mode table must not use cluster wording")
 	}
 }
 

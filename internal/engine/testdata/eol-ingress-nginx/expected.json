@@ -22,5 +22,6 @@
   "kbVersion": "test-kb-1",
   "ready": false,
   "score": 75,
-  "target": "1.30"
+  "target": "1.30",
+  "verdict": "blocked"
 }
