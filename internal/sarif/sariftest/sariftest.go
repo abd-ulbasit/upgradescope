@@ -153,7 +153,8 @@ func AssertGitHubAcceptable(t testing.TB, raw []byte) {
 			for _, loc := range res.Locations {
 				pl := loc.PhysicalLocation
 				if pl == nil {
-					t.Fatalf("results[%d]: location without physicalLocation", i)
+					t.Errorf("results[%d]: location without physicalLocation", i)
+					continue
 				}
 				u, err := url.Parse(pl.ArtifactLocation.URI)
 				if err != nil || pl.ArtifactLocation.URI == "" || u.IsAbs() || strings.HasPrefix(u.Path, "/") {
