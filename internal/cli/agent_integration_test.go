@@ -3,16 +3,17 @@ package cli
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/abd-ulbasit/upgradescope/internal/agent"
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
@@ -25,18 +26,12 @@ import (
 // server), waits for the first tick, and asserts the ClusterReadiness status
 // through the dynamic client: observed server version, KB version, a 0–100
 // score, ready=false, and an eol-addon top finding (the EOL ingress-nginx).
+// It runs only against a kind-* context (or UPGRADESCOPE_IT_CONTEXT) and
+// leaves the CRD as it found it.
 //
 // Run: ./hack/demo/kind-setup.sh && UPGRADESCOPE_IT=1 go test ./internal/cli/ -run Integration -v
 func TestAgentIntegration_CRDStatusOnKind(t *testing.T) {
-	if os.Getenv("UPGRADESCOPE_IT") != "1" {
-		t.Skip("integration test: set UPGRADESCOPE_IT=1 to run (needs the kind cluster from hack/demo/kind-setup.sh)")
-	}
-
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
-	if err != nil {
-		t.Fatalf("load kubeconfig: %v\nIs the demo cluster up? Run: ./hack/demo/kind-setup.sh", err)
-	}
+	cfg, _ := itRESTConfig(t)
 	clients, err := collect.NewClients(cfg)
 	if err != nil {
 		t.Fatalf("build collect clients: %v", err)
@@ -56,10 +51,49 @@ func TestAgentIntegration_CRDStatusOnKind(t *testing.T) {
 
 	const crName = "it-agent" // distinct from the chart-managed "cluster"
 	gvr := schema.GroupVersionResource{Group: crd.Group, Version: crd.Version, Resource: crd.Plural}
+
+	// agent.Run create-or-updates the cluster-scoped CRD. Leave the cluster
+	// as found: delete the CRD only if this test created it, and put back
+	// the spec/labels/annotations of a pre-existing one (e.g. Helm-managed)
+	// that EnsureCRD overwrote with the embedded manifest.
+	crdName := crd.Plural + "." + crd.Group
+	crds := apiext.ApiextensionsV1().CustomResourceDefinitions()
+	pctx, pcancel := context.WithTimeout(context.Background(), 30*time.Second)
+	before, err := crds.Get(pctx, crdName, metav1.GetOptions{})
+	pcancel()
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("get CRD %s: %v", crdName, err)
+	}
+	crdPreexisted := err == nil
 	t.Cleanup(func() {
 		cctx, ccancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer ccancel()
-		_ = dyn.Resource(gvr).Delete(cctx, crName, metav1.DeleteOptions{})
+		if derr := dyn.Resource(gvr).Delete(cctx, crName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			t.Errorf("cleanup: delete ClusterReadiness/%s: %v", crName, derr)
+		}
+		if !crdPreexisted {
+			if derr := crds.Delete(cctx, crdName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				t.Errorf("cleanup: delete CRD %s (created by this test): %v", crdName, derr)
+			}
+			return
+		}
+		rerr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			cur, gerr := crds.Get(cctx, crdName, metav1.GetOptions{})
+			if gerr != nil {
+				return gerr
+			}
+			if equality.Semantic.DeepEqual(cur.Spec, before.Spec) &&
+				equality.Semantic.DeepEqual(cur.Labels, before.Labels) &&
+				equality.Semantic.DeepEqual(cur.Annotations, before.Annotations) {
+				return nil
+			}
+			cur.Spec, cur.Labels, cur.Annotations = before.Spec, before.Labels, before.Annotations
+			_, uerr := crds.Update(cctx, cur, metav1.UpdateOptions{})
+			return uerr
+		})
+		if rerr != nil {
+			t.Errorf("cleanup: restore pre-existing CRD %s: %v", crdName, rerr)
+		}
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

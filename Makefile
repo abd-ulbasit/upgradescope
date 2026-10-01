@@ -15,6 +15,9 @@ web:
 	cp -R web/dist/. internal/server/webdist/
 test:
 	go test ./...
+# it writes to a cluster (the agent IT installs a CRD), so the tests refuse
+# any context that is not kind-*; set UPGRADESCOPE_IT_CONTEXT=<context> to
+# use a different disposable cluster.
 it:
 	UPGRADESCOPE_IT=1 go test ./... -run Integration -v
 # Same checks CI runs. golangci-lint-action lags Go releases (its binary must
