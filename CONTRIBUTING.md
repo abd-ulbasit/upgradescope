@@ -24,7 +24,7 @@ and never in a public issue.
 | Tool | Version | Needed for |
 |---|---|---|
 | Go | the `go` directive in `go.mod` | everything |
-| Node.js + npm | 22 or 24 (CI tests both; the `Dockerfile` builds with `node:24`) | only the web dashboard (`web/`, `make web`, `make web-test`) |
+| Node.js + npm | 22 or 24 (CI tests both; the `Dockerfile` builds with `node:24`) | the web dashboard (`web/`, `make web`, `make web-test`) and `make hack-test` |
 | helm | 3.x or 4.x (CI pins v4.3.0) | only `make chart-test`, `make helm-test` and `make e2e` |
 | jq | any | the `hack/` scripts behind `make vuln`, `make release-check`, `make e2e` |
 | kind, kubectl | `make e2e` installs pinned, checksum-verified copies into `bin/tools` | only integration and e2e tests |
@@ -177,7 +177,7 @@ kubectl and kubeconform are also checked against their upstream sha256
 
 | Job | Runs on | Reproduce with | What it checks |
 |---|---|---|---|
-| `test` | PR, push | `make test check-toolchain hack-test` | gofmt, `go vet`, `go test -race -count=1` for the main and `tools/` modules; the Dockerfile's golang tag equals `go.mod`'s `go` directive and GoReleaser is one pinned version; offline self-tests of the `hack/` scripts |
+| `test` | PR, push | `make test check-toolchain hack-test` | gofmt, `go vet`, `go test -race -count=1` for the main and `tools/` modules; the Dockerfile's golang tag equals `go.mod`'s `go` directive and GoReleaser is one pinned version; offline self-tests of the `hack/` scripts, and that no tag run can share a concurrency group with main or another tag |
 | `lint` | PR, push | `make lint` | `go vet` and pinned staticcheck |
 | `build` | PR, push | `make build` | the binary builds |
 | `vuln` | PR, push, weekly | `make vuln-test vuln` | govulncheck in binary mode on the linux/amd64 build; fails closed, and accepts a reachable advisory only through an expiring, per-ID entry in `hack/vuln-allowlist.txt` |

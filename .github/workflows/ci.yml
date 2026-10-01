@@ -20,11 +20,19 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR cancels that PR's superseded run. Everything else (main,
-# the schedule, a tag's release run) is keyed by commit and never cancelled:
-# a release must not lose its CI run to a later push.
+# A new push to a PR cancels that PR's superseded run (one group per PR).
+# Everything else gets a group of its own: groups are repository-wide, and a
+# PENDING run is cancelled whenever another run joins its group, even with
+# cancel-in-progress false. When release.yml calls this workflow, github.* is
+# the tag push (event push, the tagged sha), so without the ref a tag's CI
+# would share main's group for the same commit and be cancelled by a re-run
+# of main's kind e2e, or by tagging rc.1 and final on one commit, and the
+# release would publish nothing. Keyed by event, ref and (outside PRs)
+# commit, a tag run never shares a group with main or with another tag.
+# hack/ci-concurrency_test.sh (make hack-test) evaluates this for each kind
+# of run.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Third-party actions are pinned to commit SHAs (the comment names the
