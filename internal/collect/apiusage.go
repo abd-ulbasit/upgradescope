@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/metadata"
 
@@ -17,10 +19,49 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
-// collectAPIUsage counts objects resident at deprecated/removed
-// group/versions. It lists each flagged-and-served GV at that exact
-// endpoint with the metadata client (paged, metadata-only) — converting
-// reads would hide residency.
+const (
+	lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+	// lastAppliedManager is ObjectRef.Manager for an object flagged only by
+	// its last-applied annotation (no managedFields entry names the GV).
+	lastAppliedManager = "kubectl last-applied"
+	// apfAutoUpdateAnnotation marks APF objects the apiserver maintains
+	// itself; it rewrites them on every start, whoever touched them last.
+	apfAutoUpdateAnnotation = "apf.kubernetes.io/autoupdate-spec"
+)
+
+// internalManagers are field managers inside the control plane. Their
+// managedFields entries record the version that was current when that
+// control-plane release wrote the object (the apiserver's default
+// ServiceCIDR, IPAddresses and APF objects; controller-written objects),
+// and go stale across upgrades without anyone writing the old version
+// again. No user manifest is behind them.
+var internalManagers = map[string]bool{
+	"kube-apiserver":                               true,
+	"kube-controller-manager":                      true,
+	"api-priority-and-fairness-config-producer-v1": true,
+}
+
+// collectAPIUsage finds objects that someone still writes through a
+// deprecated or removed group/version.
+//
+// The apiserver serves every stored object at every served version of its
+// resource, converting on read, so listing a deprecated endpoint returns
+// all objects and says nothing about who uses that version; it would also
+// make the scanner itself a deprecated-API caller in
+// apiserver_requested_deprecated_apis. Instead, each resource with a
+// flagged version that the cluster still serves is listed once,
+// metadata-only and paged, at a version that is not deprecated (see
+// listVersion), and each object is attributed per flagged entry:
+//
+//   - the KB entry has no replacement and no non-deprecated version of the
+//     resource is served: the type itself goes away, so every object counts;
+//   - otherwise only objects authored via the flagged group/version count:
+//     a managedFields entry (not an internal manager, not the status
+//     subresource) or the last-applied annotation names it.
+//
+// Objects created by a raw client that leaves neither trace go undetected;
+// the deprecated-calls metric covers live callers. APF objects the
+// apiserver auto-updates are skipped.
 //
 // Failures are per-resource: a forbidden or broken endpoint is recorded
 // and the remaining resources still run. If at least one resource (or
@@ -28,16 +69,16 @@ import (
 // so the capability stays available with the failures as Reason; if every
 // flagged resource failed, the capability degrades fully.
 func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
-	flagged := map[string]bool{} // "group/version/kind"
+	flagged := map[kb.GVK]kb.APILifecycleEntry{}
 	for _, e := range lifecycle {
 		if e.Deprecated != nil || e.Removed != nil {
-			flagged[e.Group+"/"+e.Version+"/"+e.Kind] = true
+			flagged[kb.GVK{Group: e.Group, Version: e.Version, Kind: e.Kind}] = e
 		}
 	}
 
 	var failures []string
 
-	_, lists, err := disc.ServerGroupsAndResources()
+	groups, lists, err := disc.ServerGroupsAndResources()
 	if err != nil {
 		// Partial discovery failure (one broken aggregated API) must not
 		// kill the capability; total failure does. Skipped groups are
@@ -53,9 +94,16 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 		sort.Strings(skipped)
 		failures = append(failures, fmt.Sprintf("discovery: groups %s skipped", strings.Join(skipped, ",")))
 	}
+	preferred := map[string]string{} // group → preferred version
+	for _, g := range groups {
+		if g != nil {
+			preferred[g.Name] = g.PreferredVersion.Version
+		}
+	}
 
-	attempted, succeeded := 0, 0
-	var usages []inventory.APIUsage
+	// Every served version of each resource, in discovery order.
+	byResource := map[schema.GroupResource][]servedVersion{}
+	var order []schema.GroupResource
 	for _, l := range lists {
 		gv, err := schema.ParseGroupVersion(l.GroupVersion)
 		if err != nil {
@@ -65,21 +113,54 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 			if strings.Contains(r.Name, "/") { // subresource
 				continue
 			}
-			if !flagged[gv.Group+"/"+gv.Version+"/"+r.Kind] {
+			gr := schema.GroupResource{Group: gv.Group, Resource: r.Name}
+			if _, seen := byResource[gr]; !seen {
+				order = append(order, gr)
+			}
+			_, isFlagged := flagged[kb.GVK{Group: gv.Group, Version: gv.Version, Kind: r.Kind}]
+			byResource[gr] = append(byResource[gr], servedVersion{
+				version: gv.Version, kind: r.Kind, flagged: isFlagged,
+				list: slices.Contains(r.Verbs, "list"),
+			})
+		}
+	}
+
+	attempted, succeeded := 0, 0
+	var usages []inventory.APIUsage
+	for _, gr := range order {
+		served := byResource[gr]
+		listV, ok := listVersion(served, preferred[gr.Group])
+		if !ok {
+			continue
+		}
+		var targets []usageTarget
+		for _, s := range served {
+			if !s.flagged {
 				continue
 			}
-			if !slices.Contains(r.Verbs, "list") {
-				continue
-			}
-			attempted++
-			u, err := listGVUsage(ctx, meta, gv, r.Name, r.Kind)
-			if err != nil {
-				failures = append(failures, fmt.Sprintf("list %s %s: %v", l.GroupVersion, r.Name, err))
-				continue
-			}
-			succeeded++
-			if u.Count > 0 {
-				usages = append(usages, u)
+			e := flagged[kb.GVK{Group: gr.Group, Version: s.version, Kind: s.kind}]
+			targets = append(targets, usageTarget{
+				gv:   schema.GroupVersion{Group: gr.Group, Version: s.version}.String(),
+				kind: s.kind,
+				// listV is flagged only when every served version is.
+				allObjects: e.Replacement == nil && listV.flagged,
+				usage: inventory.APIUsage{Group: gr.Group, Version: s.version, Kind: s.kind,
+					Namespaces: map[string]int{}},
+			})
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		attempted++
+		gvr := schema.GroupVersionResource{Group: gr.Group, Version: listV.version, Resource: gr.Resource}
+		if err := listUsage(ctx, meta, gvr, targets); err != nil {
+			failures = append(failures, fmt.Sprintf("list %s %s: %v", gvr.GroupVersion(), gr.Resource, err))
+			continue
+		}
+		succeeded++
+		for _, t := range targets {
+			if t.usage.Count > 0 {
+				usages = append(usages, t.usage)
 			}
 		}
 	}
@@ -106,24 +187,115 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 	return partialError{msg: "partial: " + msg}
 }
 
-// listGVUsage pages through one resource at one exact group/version and
-// counts residency per namespace (cluster-scoped → key "").
-func listGVUsage(ctx context.Context, meta metadata.Interface, gv schema.GroupVersion, resource, kind string) (inventory.APIUsage, error) {
-	u := inventory.APIUsage{Group: gv.Group, Version: gv.Version, Kind: kind, Namespaces: map[string]int{}}
+// servedVersion is one version the cluster serves a resource at.
+type servedVersion struct {
+	version, kind string
+	flagged       bool // the KB marks this group/version/kind deprecated or removed
+	list          bool
+}
+
+// usageTarget accumulates the usage of one flagged group/version/kind
+// while its resource is listed.
+type usageTarget struct {
+	gv         string // "group/version", or "v1" for core
+	kind       string
+	allObjects bool // the type goes away: every object counts
+	usage      inventory.APIUsage
+}
+
+// listVersion picks the version to list a resource at, or false when none
+// is listable or none is flagged (nothing to look for). It prefers the
+// group's preferred version, then the newest served version, and never
+// picks a flagged version while an unflagged one is served. Only when
+// every served version is flagged does it list a deprecated endpoint —
+// unavoidable, and the scanner then shows up in
+// apiserver_requested_deprecated_apis for that resource.
+func listVersion(served []servedVersion, preferred string) (servedVersion, bool) {
+	if !slices.ContainsFunc(served, func(s servedVersion) bool { return s.flagged }) {
+		return servedVersion{}, false
+	}
+	var listable []servedVersion
+	for _, s := range served {
+		if s.list {
+			listable = append(listable, s)
+		}
+	}
+	if len(listable) == 0 {
+		return servedVersion{}, false
+	}
+	slices.SortStableFunc(listable, func(a, b servedVersion) int {
+		switch {
+		case a.flagged != b.flagged:
+			if a.flagged {
+				return 1
+			}
+			return -1
+		case (a.version == preferred) != (b.version == preferred):
+			if a.version == preferred {
+				return -1
+			}
+			return 1
+		}
+		return version.CompareKubeAwareVersionStrings(b.version, a.version) // newest first
+	})
+	return listable[0], true
+}
+
+// listUsage pages through one resource, metadata-only, and attributes each
+// object to the targets it uses.
+func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVersionResource, targets []usageTarget) error {
 	opts := metav1.ListOptions{Limit: listPageSize}
 	for {
-		page, err := meta.Resource(gv.WithResource(resource)).List(ctx, opts)
+		page, err := meta.Resource(gvr).List(ctx, opts)
 		if err != nil {
-			return inventory.APIUsage{}, err
+			return err
 		}
 		for i := range page.Items {
-			u.Namespaces[page.Items[i].Namespace]++
-			u.Count++
+			m := &page.Items[i]
+			if m.Annotations[apfAutoUpdateAnnotation] == "true" {
+				continue
+			}
+			for j := range targets {
+				t := &targets[j]
+				manager := "" // a type that goes away counts objects, not authors
+				if !t.allObjects {
+					if manager = authoringManager(m, t.gv); manager == "" {
+						continue
+					}
+				}
+				t.usage.Count++
+				t.usage.Namespaces[m.Namespace]++
+				if len(t.usage.Objects) < inventory.MaxObjectRefs {
+					t.usage.Objects = append(t.usage.Objects, inventory.ObjectRef{Namespace: m.Namespace, Name: m.Name, Manager: manager})
+				} else {
+					t.usage.ObjectsOmitted++
+				}
+			}
 		}
 		if page.Continue == "" {
-			break
+			return nil
 		}
 		opts.Continue = page.Continue
 	}
-	return u, nil
+}
+
+// authoringManager reports who wrote m through group/version gv: the first
+// managedFields manager whose entry names gv (internal managers and status
+// subresource entries skipped), else lastAppliedManager when the
+// last-applied annotation's apiVersion is gv, else "".
+func authoringManager(m *metav1.PartialObjectMetadata, gv string) string {
+	for _, f := range m.ManagedFields {
+		if f.APIVersion == gv && f.Subresource != "status" && !internalManagers[f.Manager] {
+			return f.Manager
+		}
+	}
+	if raw, ok := m.Annotations[lastAppliedAnnotation]; ok {
+		var applied struct {
+			APIVersion string `json:"apiVersion"`
+		}
+		if json.Unmarshal([]byte(raw), &applied) == nil && applied.APIVersion == gv {
+			return lastAppliedManager
+		}
+	}
+	return ""
 }

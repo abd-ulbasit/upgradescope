@@ -71,13 +71,17 @@ const MaxObjectRefs = 100
 // (empty for a single posted stream); Line is the 1-based line of the
 // object's apiVersion key. RenderedFrom is the Helm template the object was
 // rendered from, taken from helm template's "# Source: <chart>/templates/x.yaml"
-// comment.
+// comment. Manager is set only for live objects flagged because they were
+// written through the deprecated group/version: the metadata.managedFields
+// manager that wrote it, or "kubectl last-applied" when only the
+// kubectl.kubernetes.io/last-applied-configuration annotation names it.
 type ObjectRef struct {
 	Namespace    string `json:"namespace,omitempty"`
 	Name         string `json:"name,omitempty"`
 	File         string `json:"file,omitempty"`
 	Line         int    `json:"line,omitempty"`
 	RenderedFrom string `json:"renderedFrom,omitempty"`
+	Manager      string `json:"manager,omitempty"`
 }
 
 type DeprecatedCall struct { // one row of apiserver_requested_deprecated_apis
