@@ -293,11 +293,19 @@ func manifestInventory(clusterID, reason string, counts map[gvk]*inventory.APIUs
 			inventory.CapVersions:        {Available: false, Reason: reason},
 		},
 	}
+	inv.APIUsage = usageRows(counts)
+	return inv
+}
+
+// usageRows returns accumulated GVK counts as rows sorted by group,
+// version and kind; nil when there are none.
+func usageRows(counts map[gvk]*inventory.APIUsage) []inventory.APIUsage {
+	var rows []inventory.APIUsage
 	for _, u := range counts {
-		inv.APIUsage = append(inv.APIUsage, *u)
+		rows = append(rows, *u)
 	}
-	sort.Slice(inv.APIUsage, func(i, j int) bool {
-		a, b := inv.APIUsage[i], inv.APIUsage[j]
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
 		if a.Group != b.Group {
 			return a.Group < b.Group
 		}
@@ -306,7 +314,7 @@ func manifestInventory(clusterID, reason string, counts map[gvk]*inventory.APIUs
 		}
 		return a.Kind < b.Kind
 	})
-	return inv
+	return rows
 }
 
 // CollectManifests builds an Inventory from a single concatenated YAML/JSON

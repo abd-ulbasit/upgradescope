@@ -94,10 +94,10 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			return collectVersions(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv)
 		}},
 		{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
-			if c.Kube == nil {
-				return errors.New("kubernetes client not configured")
+			if c.Kube == nil || c.Metadata == nil {
+				return errors.New("kubernetes/metadata client not configured")
 			}
-			return collectHelm(ctx, c.Kube, inv)
+			return collectHelm(ctx, c.Kube, c.Metadata, k.APILifecycle, inv)
 		}},
 		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.RESTClient == nil {
