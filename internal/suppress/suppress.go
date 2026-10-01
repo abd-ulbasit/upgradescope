@@ -199,7 +199,7 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 			continue
 		}
 		if rule.expired(opts.Now) {
-			warnings = append(warnings, fmt.Sprintf("%s: ignore[%d] (%s) expired on %s and no longer suppresses it", opts.Source, i, rule, rule.Expires))
+			warnings = append(warnings, fmt.Sprintf("%s: ignore[%d] (%s) expired on %s and no longer applies", opts.Source, i, rule, rule.Expires))
 			continue
 		}
 		active = append(active, rule)
@@ -307,7 +307,7 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 		return nil, out, warnings
 	}
 	f.Objects = remaining
-	f.Detail = strings.TrimSpace(fmt.Sprintf("%s %d of the listed objects are suppressed (see suppressed).", f.Detail, listed))
+	f.Detail = strings.TrimSpace(fmt.Sprintf("%s %d listed object(s) suppressed (see suppressed).", f.Detail, listed))
 	return &f, out, warnings
 }
 
