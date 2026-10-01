@@ -2,12 +2,14 @@
 build:
 	go build -o bin/upgradescope ./cmd/upgradescope
 
-# web builds the dashboard and stages it for go:embed: `make web build`
-# yields a binary serving the SPA at /. Without `make web` the binary still
-# builds (webdist/ holds only .gitkeep) and / explains how to get the UI.
+# web rebuilds the dashboard and stages it for go:embed. The staged bundle
+# in internal/server/webdist is committed (the Vite build is byte-for-byte
+# reproducible from package-lock.json), so plain `go build`/`go install`
+# serve the SPA at /. Run this after any web/ change and commit the result:
+# CI's web job rebuilds and fails on a stale webdist.
 .PHONY: web
 web:
-	cd web && npm install --no-fund --no-audit && npm run build
+	cd web && npm ci --no-fund --no-audit && npm run build
 	find internal/server/webdist -type f ! -name .gitkeep -delete
 	find internal/server/webdist -type d -mindepth 1 -empty -delete
 	cp -R web/dist/. internal/server/webdist/
