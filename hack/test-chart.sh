@@ -157,8 +157,7 @@ assert_contains "$TMP/targets.yaml" '- "--targets=1.37,1.38"' "targets passed to
 echo "== upgrade path: setting targets after a default install changes only the agent"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set 'agent.targets={1.37}' > "$TMP/targets-upgrade.yaml"
-if diff <(grep -vF -e '--targets=' -e 'checksum/' "$TMP/targets-upgrade.yaml") \
-        <(grep -vF -e 'checksum/' "$TMP/default.yaml") >/dev/null; then
+if diff <(grep -vF -e '--targets=' "$TMP/targets-upgrade.yaml") "$TMP/default.yaml" >/dev/null; then
   pass "only the --targets arg differs from the default render"
 else
   fail "agent.targets changes more than the agent's --targets arg"
