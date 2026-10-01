@@ -193,6 +193,32 @@ func TestIngestPerClusterTokens(t *testing.T) {
 	}
 }
 
+// With no shared token configured only per-cluster tokens authenticate —
+// an empty bearer, or the string a shared token would have been, is 401.
+func TestIngestWithoutSharedToken(t *testing.T) {
+	body := pushReqBody(t, testInventory()) // clusterName: prod-eu-1
+	for _, tc := range []struct {
+		name       string
+		token      string
+		wantStatus int
+	}{
+		{"per-cluster token", "prod-tok", http.StatusAccepted},
+		{"no token", "", http.StatusUnauthorized},
+		{"former shared token", "ingest-tok", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.tokens["prod-tok"] = &fakeToken{cluster: "prod-eu-1"}
+			ts := httptest.NewServer(newTestServer(t, st, func(c *Config) { c.IngestToken = "" }).Handler())
+			defer ts.Close()
+			resp, out := postSnapshot(t, ts, tc.token, body, false)
+			if resp.StatusCode != tc.wantStatus {
+				t.Fatalf("status = %d (body %v), want %d", resp.StatusCode, out, tc.wantStatus)
+			}
+		})
+	}
+}
+
 // A mismatched per-cluster token must not even register the cluster: the
 // 403 fires before any store write.
 func TestIngestMismatchedTokenWritesNothing(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
@@ -29,6 +30,7 @@ type fakeStore struct {
 var _ store.Store = (*fakeStore)(nil)
 
 type fakeToken struct {
+	id      int64
 	cluster string
 	revoked bool
 }
@@ -177,17 +179,54 @@ func (f *fakeStore) ScoreHistory(_ context.Context, clusterID int64, target stri
 	return all, nil // oldest first — matches the store contract
 }
 
-func (f *fakeStore) CreateToken(_ context.Context, clusterName, token string) error {
+func (f *fakeStore) CreateToken(_ context.Context, clusterName, token string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.errs["CreateToken"]; err != nil {
-		return err
+		return 0, err
 	}
 	if _, exists := f.tokens[token]; exists {
-		return store.ErrNotFound // any error works; real stores fail on UNIQUE
+		return 0, store.ErrNotFound // any error works; real stores fail on UNIQUE
 	}
-	f.tokens[token] = &fakeToken{cluster: clusterName}
-	return nil
+	id := f.id()
+	f.tokens[token] = &fakeToken{id: id, cluster: clusterName}
+	return id, nil
+}
+
+func (f *fakeStore) ListTokens(_ context.Context, clusterName string) ([]store.Token, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["ListTokens"]; err != nil {
+		return nil, err
+	}
+	var out []store.Token
+	for _, tk := range f.tokens {
+		if clusterName != "" && tk.cluster != clusterName {
+			continue
+		}
+		row := store.Token{ID: tk.id, ClusterName: tk.cluster}
+		if tk.revoked {
+			row.RevokedAt = &time.Time{}
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (f *fakeStore) RevokeTokenID(_ context.Context, clusterName string, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["RevokeTokenID"]; err != nil {
+		return err
+	}
+	for _, tk := range f.tokens {
+		if tk.id == id && tk.cluster == clusterName && !tk.revoked {
+			tk.revoked = true
+			return nil
+		}
+	}
+	return store.ErrNotFound
 }
 
 func (f *fakeStore) ValidToken(_ context.Context, token string) (string, bool, error) {

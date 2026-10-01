@@ -242,9 +242,10 @@ func bearerOK(r *http.Request, token string) bool {
 }
 
 // authIngest authorizes a snapshot push. Two token kinds are accepted:
-// the shared Config.IngestToken (fleet-wide; single-cluster/dev setups)
-// and per-cluster tokens minted via `upgradescope tokens create` (P3,
-// spec §8) — those return the cluster name the token is bound to.
+// the optional shared Config.IngestToken (fleet-wide; single-cluster/dev
+// setups — when it is "" only per-cluster tokens work) and per-cluster
+// tokens minted via `upgradescope tokens create` (P3, spec §8) — those
+// return the cluster name the token is bound to.
 // boundCluster == "" means the push may target any cluster. The HTTP error
 // (401 / 500) is written here; the cluster-match check happens in
 // handleIngest once the body names its cluster (403 there).

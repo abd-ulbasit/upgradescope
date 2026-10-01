@@ -43,7 +43,7 @@ type Config struct {
 	KB           kb.KB           // evaluation knowledge base
 	ExtraTargets []string        // minors evaluated for every snapshot, e.g. ["1.37"]
 	Notifier     notify.Notifier // nil = notifications disabled
-	IngestToken  string          // required bearer for POST /api/v1/snapshots
+	IngestToken  string          // optional shared bearer for POST /api/v1/snapshots (any cluster); "" = per-cluster tokens only
 	ReadToken    string          // optional bearer for the read API; "" = open (document loudly)
 	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
 	Version      string          // build version stamped into SARIF tool metadata ("" = omitted)
@@ -95,9 +95,6 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("server: Config.Store is required")
-	}
-	if cfg.IngestToken == "" {
-		return nil, errors.New("server: Config.IngestToken is required")
 	}
 	s := &Server{
 		cfg:              cfg,
@@ -212,6 +209,27 @@ func (s *Server) logStartup() {
 	log.Printf("server: listening on http://%s", s.Addr())
 	if s.cfg.ReadToken == "" {
 		log.Printf("WARN server: no read token: the read API, dashboard data and /api/v1/gate are open to anyone who can reach %s", s.Addr())
+	}
+	if s.cfg.IngestToken == "" {
+		log.Printf("server: no shared ingest token: snapshot pushes need a per-cluster token ('upgradescope tokens create')")
+		return
+	}
+	// The shared token is not bound to a cluster: whoever holds it can push
+	// as any cluster, including ones that moved to per-cluster tokens.
+	// Checked once here: a token minted later with `tokens create` does not
+	// re-trigger the warning until the next start (the flag help says so).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	toks, err := s.cfg.Store.ListTokens(ctx, "")
+	if err != nil {
+		log.Printf("server: listing per-cluster tokens: %v", err)
+		return
+	}
+	for _, tk := range toks {
+		if tk.RevokedAt == nil {
+			log.Printf("WARN server: a shared ingest token is set alongside per-cluster tokens; it can push as any cluster — drop it once every agent has its own token")
+			return
+		}
 	}
 }
 

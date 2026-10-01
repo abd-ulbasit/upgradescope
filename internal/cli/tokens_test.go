@@ -92,8 +92,8 @@ func TestTokensRevoke(t *testing.T) {
 	}
 	token := strings.TrimSpace(stdout)
 
-	if _, _, err := execTokens(t, "revoke", "prod", "--db", db); err != nil {
-		t.Fatalf("tokens revoke: %v", err)
+	if _, _, err := execTokens(t, "revoke", "prod", "--all", "--db", db); err != nil {
+		t.Fatalf("tokens revoke --all: %v", err)
 	}
 	st, err := store.Open(db)
 	if err != nil {
@@ -105,9 +105,121 @@ func TestTokensRevoke(t *testing.T) {
 	_ = st.Close()
 
 	// Second revoke: nothing active — a clear error, not silent success.
-	if _, _, err := execTokens(t, "revoke", "prod", "--db", db); err == nil ||
+	if _, _, err := execTokens(t, "revoke", "prod", "--all", "--db", db); err == nil ||
 		!strings.Contains(err.Error(), "no active tokens") {
 		t.Fatalf("second revoke err = %v, want 'no active tokens'", err)
+	}
+}
+
+// revoke must say which tokens: exactly one of --id or --all. A bare
+// `revoke <cluster>` used to revoke everything; now it is an error.
+func TestTokensRevokeNeedsIDOrAll(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "tokens.db")
+	if _, _, err := execTokens(t, "create", "prod", "--db", db); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"revoke", "prod", "--db", db},
+		{"revoke", "prod", "--id", "1", "--all", "--db", db},
+	} {
+		if _, _, err := execTokens(t, args...); err == nil ||
+			!strings.Contains(err.Error(), "id") || !strings.Contains(err.Error(), "all") {
+			t.Errorf("%v: err = %v, want one naming --id and --all", args, err)
+		}
+	}
+}
+
+// createToken mints a token via the CLI and returns its plaintext and the
+// id reported on stderr.
+func createToken(t *testing.T, db, cluster string) (token, id string) {
+	t.Helper()
+	stdout, stderr, err := execTokens(t, "create", cluster, "--db", db)
+	if err != nil {
+		t.Fatalf("tokens create %s: %v", cluster, err)
+	}
+	m := regexp.MustCompile(`\bid (\d+)\b`).FindStringSubmatch(stderr)
+	if m == nil {
+		t.Fatalf("create stderr %q does not report the token id", stderr)
+	}
+	return strings.TrimSpace(stdout), m[1]
+}
+
+// Zero-downtime rotation: mint the new token, roll it out, revoke only the
+// old one by id — the new one keeps authenticating.
+func TestTokensRevokeByID(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "tokens.db")
+	oldTok, oldID := createToken(t, db, "prod")
+	newTok, _ := createToken(t, db, "prod")
+
+	stdout, _, err := execTokens(t, "revoke", "prod", "--id", oldID, "--db", db)
+	if err != nil {
+		t.Fatalf("tokens revoke --id: %v", err)
+	}
+	if !strings.Contains(stdout, "revoked ingest token "+oldID) {
+		t.Errorf("stdout = %q, want it to name the revoked id", stdout)
+	}
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, ok, _ := st.ValidToken(context.Background(), oldTok); ok {
+		t.Error("old token still valid after revoke --id")
+	}
+	if name, ok, _ := st.ValidToken(context.Background(), newTok); !ok || name != "prod" {
+		t.Error("new token must survive revoking the old one by id")
+	}
+
+	// Wrong cluster or already revoked: a clear error.
+	for _, args := range [][]string{
+		{"revoke", "dev", "--id", oldID, "--db", db},
+		{"revoke", "prod", "--id", oldID, "--db", db},
+	} {
+		if _, _, err := execTokens(t, args...); err == nil || !strings.Contains(err.Error(), "no active token") {
+			t.Errorf("%v: err = %v, want 'no active token'", args, err)
+		}
+	}
+}
+
+func TestTokensList(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "tokens.db")
+	prodTok, prodID := createToken(t, db, "prod")
+	_, _ = createToken(t, db, "prod")
+	devTok, _ := createToken(t, db, "dev")
+	if _, _, err := execTokens(t, "revoke", "prod", "--id", prodID, "--db", db); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, _, err := execTokens(t, "list", "--db", db)
+	if err != nil {
+		t.Fatalf("tokens list: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("list output = %q, want a header and 3 rows", stdout)
+	}
+	for _, col := range []string{"ID", "CLUSTER", "PREFIX", "CREATED", "REVOKED"} {
+		if !strings.Contains(lines[0], col) {
+			t.Errorf("header %q lacks %s", lines[0], col)
+		}
+	}
+	revokedRow := lines[1]
+	if f := strings.Fields(revokedRow); f[0] != prodID || f[1] != "prod" || f[2] != prodTok[:8] || f[len(f)-1] == "-" {
+		t.Errorf("revoked row = %q, want id %s, prod, prefix %s, a revoked time", revokedRow, prodID, prodTok[:8])
+	}
+	if f := strings.Fields(lines[3]); f[1] != "dev" || f[len(f)-1] != "-" {
+		t.Errorf("active dev row = %q, want REVOKED '-'", lines[3])
+	}
+	if strings.Contains(stdout, prodTok) || strings.Contains(stdout, devTok) {
+		t.Error("list leaked a plaintext token")
+	}
+
+	stdout, _, err = execTokens(t, "list", "--cluster", "dev", "--db", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(strings.Split(strings.TrimSpace(stdout), "\n")); n != 2 {
+		t.Fatalf("list --cluster dev = %q, want a header and 1 row", stdout)
 	}
 }
 

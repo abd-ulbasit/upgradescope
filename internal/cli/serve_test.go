@@ -33,10 +33,19 @@ func serveOK() func(context.Context, serveOptions) error {
 	return func(context.Context, serveOptions) error { return nil }
 }
 
-func TestServeRequiresIngestToken(t *testing.T) {
-	err := execServe(t, []string{}, serveOK())
-	if err == nil || !strings.Contains(err.Error(), "ingest-token") {
-		t.Fatalf("want missing --ingest-token error, got %v", err)
+// The shared --ingest-token is optional: without it only per-cluster
+// tokens authenticate pushes.
+func TestServeWithoutIngestToken(t *testing.T) {
+	var got serveOptions
+	err := execServe(t, []string{}, func(_ context.Context, opts serveOptions) error {
+		got = opts
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("serve without --ingest-token: %v", err)
+	}
+	if got.ingestToken != "" {
+		t.Fatalf("ingestToken = %q, want empty", got.ingestToken)
 	}
 }
 

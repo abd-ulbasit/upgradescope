@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -47,8 +48,9 @@ func TestNewValidation(t *testing.T) {
 	if _, err := New(Config{Store: nil, KB: testKB(), IngestToken: "tok"}); err == nil {
 		t.Fatal("New with nil Store: want error, got nil")
 	}
-	if _, err := New(Config{Store: st, KB: testKB(), IngestToken: ""}); err == nil {
-		t.Fatal("New with empty IngestToken: want error, got nil")
+	// The shared ingest token is optional: per-cluster tokens alone suffice.
+	if _, err := New(Config{Store: st, KB: testKB(), IngestToken: ""}); err != nil {
+		t.Fatalf("New without a shared IngestToken: %v", err)
 	}
 	if _, err := New(Config{Store: st, KB: testKB(), IngestToken: "tok", ExtraTargets: []string{"bogus"}}); err == nil {
 		t.Fatal("New with unparseable extra target: want error, got nil")
@@ -265,6 +267,38 @@ func TestStartNoOpenReadWarningWithReadToken(t *testing.T) {
 	startServer(t, s)
 	if got := out.String(); !strings.Contains(got, "listening on") || strings.Contains(got, "no read token") {
 		t.Errorf("log %q: want the listening line and no open-read WARN", got)
+	}
+}
+
+// A shared ingest token can push as ANY cluster, so running it next to
+// per-cluster tokens deserves a startup WARN.
+func TestStartWarnsSharedTokenAlongsidePerClusterTokens(t *testing.T) {
+	const warn = "WARN server: a shared ingest token is set alongside per-cluster tokens"
+	for _, tc := range []struct {
+		name     string
+		shared   string
+		tokens   map[string]*fakeToken
+		wantWarn bool
+	}{
+		{"shared only", "ingest-tok", nil, false},
+		{"per-cluster only", "", map[string]*fakeToken{"p": {id: 1, cluster: "prod"}}, false},
+		{"both", "ingest-tok", map[string]*fakeToken{"p": {id: 1, cluster: "prod"}}, true},
+		{"both, per-cluster revoked", "ingest-tok", map[string]*fakeToken{"p": {id: 1, cluster: "prod", revoked: true}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := captureLog(t)
+			st := newFakeStore()
+			maps.Copy(st.tokens, tc.tokens)
+			s := newTestServer(t, st, func(c *Config) {
+				c.Listen = "127.0.0.1:0"
+				c.IngestToken = tc.shared
+				c.ReadToken = "read-tok"
+			})
+			startServer(t, s)
+			if got := strings.Contains(out.String(), warn); got != tc.wantWarn {
+				t.Fatalf("WARN %q logged = %v, want %v; log:\n%s", warn, got, tc.wantWarn, out)
+			}
+		})
 	}
 }
 

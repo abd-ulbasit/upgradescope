@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -154,7 +153,7 @@ func newServeCmd() *cobra.Command {
 	db.register(cmd)
 	secrets = []*secretFlag{
 		addSecretFlag(cmd, &opts.ingestToken, "ingest-token", "UPGRADESCOPE_INGEST_TOKEN",
-			"shared bearer token agents present to push snapshots (required; per-cluster tokens via 'upgradescope tokens create' are also accepted on ingest)"),
+			"optional shared bearer token that may push snapshots as ANY cluster; omit it to accept only per-cluster tokens from 'upgradescope tokens create' (serve warns at startup, not later, when both are in use)"),
 		addSecretFlag(cmd, &opts.readToken, "read-token", "UPGRADESCOPE_READ_TOKEN",
 			"bearer token for the read API and /api/v1/gate (empty = OPEN read access; refused on non-loopback --listen without --allow-anonymous-read)"),
 		addSecretFlag(cmd, &opts.slackWebhook, "slack-webhook", "UPGRADESCOPE_SLACK_WEBHOOK",
@@ -189,9 +188,6 @@ func isLoopbackListen(listen string) bool {
 // opts.parsedTargets/parsedTeamMap (single parse site — runServe never sees
 // the raw values).
 func validateServeOptions(opts *serveOptions) error {
-	if opts.ingestToken == "" {
-		return errors.New("--ingest-token (or $UPGRADESCOPE_INGEST_TOKEN, or --ingest-token-file) is required")
-	}
 	if opts.maxSnapshotBytes <= 0 {
 		return fmt.Errorf("--max-snapshot-bytes must be positive, got %d", opts.maxSnapshotBytes)
 	}

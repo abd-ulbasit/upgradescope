@@ -253,16 +253,78 @@ func (s *SQLite) LatestEvaluation(ctx context.Context, clusterID int64, target s
 	return e, nil
 }
 
-// CreateToken stores a new active ingest token for clusterName; only the
-// sha256 of token is persisted. Fails if the token is already issued.
-func (s *SQLite) CreateToken(ctx context.Context, clusterName, token string) error {
+// CreateToken stores a new active ingest token for clusterName and returns
+// its id; only the sha256 of token (plus TokenPrefix) is persisted. Fails
+// if the token is already issued.
+func (s *SQLite) CreateToken(ctx context.Context, clusterName, token string) (int64, error) {
 	if clusterName == "" || token == "" {
-		return errors.New("create token: cluster name and token must be non-empty")
+		return 0, errors.New("create token: cluster name and token must be non-empty")
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO tokens (cluster_name, token_hash, created_at) VALUES (?, ?, ?)`,
-		clusterName, HashToken(token), formatTime(time.Now())); err != nil {
-		return fmt.Errorf("create token for %q: %w", clusterName, err)
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO tokens (cluster_name, token_hash, token_prefix, created_at) VALUES (?, ?, ?, ?)`,
+		clusterName, HashToken(token), TokenPrefix(token), formatTime(time.Now()))
+	if err != nil {
+		return 0, fmt.Errorf("create token for %q: %w", clusterName, err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("create token for %q: %w", clusterName, err)
+	}
+	return id, nil
+}
+
+// ListTokens returns token metadata, ascending by id, for clusterName or
+// for every cluster when clusterName is "".
+func (s *SQLite) ListTokens(ctx context.Context, clusterName string) ([]Token, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, cluster_name, token_prefix, created_at, revoked_at FROM tokens
+		WHERE ? = '' OR cluster_name = ? ORDER BY id`, clusterName, clusterName)
+	if err != nil {
+		return nil, fmt.Errorf("list tokens: %w", err)
+	}
+	defer rows.Close()
+	var out []Token
+	for rows.Next() {
+		var tk Token
+		var created string
+		var revoked sql.NullString
+		if err := rows.Scan(&tk.ID, &tk.ClusterName, &tk.Prefix, &created, &revoked); err != nil {
+			return nil, fmt.Errorf("list tokens: %w", err)
+		}
+		if tk.CreatedAt, err = parseStoredTime(created); err != nil {
+			return nil, fmt.Errorf("list tokens: %w", err)
+		}
+		if revoked.Valid {
+			at, err := parseStoredTime(revoked.String)
+			if err != nil {
+				return nil, fmt.Errorf("list tokens: %w", err)
+			}
+			tk.RevokedAt = &at
+		}
+		out = append(out, tk)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list tokens: %w", err)
+	}
+	return out, nil
+}
+
+// RevokeTokenID revokes the active token id of clusterName, or ErrNotFound
+// when there is none (unknown id, another cluster's token, or already
+// revoked). The cluster check guards against a mistyped id.
+func (s *SQLite) RevokeTokenID(ctx context.Context, clusterName string, id int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE tokens SET revoked_at = ? WHERE id = ? AND cluster_name = ? AND revoked_at IS NULL`,
+		formatTime(time.Now()), id, clusterName)
+	if err != nil {
+		return fmt.Errorf("revoke token %d of %q: %w", id, clusterName, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("revoke token %d of %q: %w", id, clusterName, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("no active token %d for cluster %q: %w", id, clusterName, ErrNotFound)
 	}
 	return nil
 }

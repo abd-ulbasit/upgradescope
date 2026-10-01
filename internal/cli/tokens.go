@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -128,9 +130,10 @@ func generateToken() (string, error) {
 func newTokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tokens",
-		Short: "Manage per-cluster ingest tokens (the shared --ingest-token suits single-cluster/dev setups)",
+		Short: "Manage per-cluster ingest tokens (each authenticates pushes for one cluster only)",
 	}
 	cmd.AddCommand(newTokensCreateCmd())
+	cmd.AddCommand(newTokensListCmd())
 	cmd.AddCommand(newTokensRevokeCmd())
 	return cmd
 }
@@ -157,14 +160,16 @@ func newTokensCreateCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			if err := st.CreateToken(cmd.Context(), cluster, token); err != nil {
+			id, err := st.CreateToken(cmd.Context(), cluster, token)
+			if err != nil {
 				return fmt.Errorf("create token: %w", err)
 			}
 			// Token alone on stdout (script-friendly); context on stderr so
 			// `tokens create prod > secret` captures only the secret.
 			fmt.Fprintln(cmd.OutOrStdout(), token)
 			fmt.Fprintf(cmd.ErrOrStderr(),
-				"ingest token for cluster %q created — shown once, only its hash is stored\n", cluster)
+				"ingest token id %d (prefix %s) for cluster %q created — shown once, only its hash is stored\n",
+				id, store.TokenPrefix(token), cluster)
 			return nil
 		},
 	}
@@ -172,11 +177,63 @@ func newTokensCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func newTokensRevokeCmd() *cobra.Command {
-	var flags dbFlags
+func newTokensListCmd() *cobra.Command {
+	var (
+		flags   dbFlags
+		cluster string
+	)
 	cmd := &cobra.Command{
-		Use:           "revoke <cluster>",
-		Short:         "Revoke ALL active ingest tokens of a cluster",
+		Use:           "list",
+		Short:         "List ingest tokens (id, cluster, prefix, created, revoked); never prints a token",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := flags.resolve(cmd); err != nil {
+				return err
+			}
+			st, err := flags.openStore()
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			toks, err := st.ListTokens(cmd.Context(), cluster)
+			if err != nil {
+				return fmt.Errorf("list tokens: %w", err)
+			}
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tCLUSTER\tPREFIX\tCREATED\tREVOKED")
+			for _, tk := range toks {
+				prefix, revoked := tk.Prefix, "-"
+				if prefix == "" {
+					prefix = "-" // minted before prefixes were stored
+				}
+				if tk.RevokedAt != nil {
+					revoked = tk.RevokedAt.Format(time.RFC3339)
+				}
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n",
+					tk.ID, tk.ClusterName, prefix, tk.CreatedAt.Format(time.RFC3339), revoked)
+			}
+			return tw.Flush()
+		},
+	}
+	cmd.Flags().StringVar(&cluster, "cluster", "", "only list this cluster's tokens")
+	flags.register(cmd)
+	return cmd
+}
+
+func newTokensRevokeCmd() *cobra.Command {
+	var (
+		flags dbFlags
+		id    int64
+		all   bool
+	)
+	cmd := &cobra.Command{
+		Use:   "revoke <cluster> (--id <id> | --all)",
+		Short: "Revoke one ingest token of a cluster by id, or all of them with --all",
+		Long: "Revoke one ingest token by id (see 'tokens list'), or every active token of the cluster with --all.\n" +
+			"Zero-downtime rotation: 'tokens create <cluster>', roll the new token out to the agent, then\n" +
+			"'tokens revoke <cluster> --id <old id>'.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -190,6 +247,16 @@ func newTokensRevokeCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			if !all {
+				if err := st.RevokeTokenID(cmd.Context(), cluster, id); err != nil {
+					if errors.Is(err, store.ErrNotFound) {
+						return fmt.Errorf("no active token %d for cluster %q", id, cluster)
+					}
+					return fmt.Errorf("revoke token: %w", err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "revoked ingest token %d of cluster %q\n", id, cluster)
+				return nil
+			}
 			if err := st.RevokeToken(cmd.Context(), cluster); err != nil {
 				if errors.Is(err, store.ErrNotFound) {
 					return fmt.Errorf("no active tokens for cluster %q", cluster)
@@ -200,6 +267,10 @@ func newTokensRevokeCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().Int64Var(&id, "id", 0, "revoke only the token with this id (from 'tokens list' or 'tokens create')")
+	cmd.Flags().BoolVar(&all, "all", false, "revoke every active token of the cluster")
+	cmd.MarkFlagsOneRequired("id", "all")
+	cmd.MarkFlagsMutuallyExclusive("id", "all")
 	flags.register(cmd)
 	return cmd
 }

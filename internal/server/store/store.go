@@ -38,9 +38,11 @@ type Store interface {
 	// Per-cluster ingest tokens (P3, spec §8). Tokens are keyed by cluster
 	// NAME (not id): a token may be minted before the cluster's first push
 	// registers it. Only the sha256 of the plaintext is ever stored.
-	CreateToken(ctx context.Context, clusterName, token string) error   // errors if the token is already issued (any cluster)
-	ValidToken(ctx context.Context, token string) (string, bool, error) // (clusterName, true) for active; ("", false, nil) for unknown/revoked
-	RevokeToken(ctx context.Context, clusterName string) error          // revokes ALL active tokens; ErrNotFound when none are active
+	CreateToken(ctx context.Context, clusterName, token string) (int64, error) // returns the token id; errors if the token is already issued (any cluster)
+	ValidToken(ctx context.Context, token string) (string, bool, error)        // (clusterName, true) for active; ("", false, nil) for unknown/revoked
+	ListTokens(ctx context.Context, clusterName string) ([]Token, error)       // active and revoked, ascending id; "" = every cluster
+	RevokeTokenID(ctx context.Context, clusterName string, id int64) error     // revokes one active token of clusterName; ErrNotFound otherwise
+	RevokeToken(ctx context.Context, clusterName string) error                 // revokes ALL active tokens; ErrNotFound when none are active
 
 	Close() error
 }
@@ -75,6 +77,28 @@ type Evaluation struct {
 	Warnings   int       `json:"warnings"`
 	Report     []byte    `json:"-"` // full engine.Report JSON
 	CreatedAt  time.Time `json:"createdAt"`
+}
+
+// Token is a per-cluster ingest token's metadata. The plaintext is never
+// stored; Prefix lets an operator match a listed token to the secret they
+// deployed (see TokenPrefix).
+type Token struct {
+	ID          int64      `json:"id"`
+	ClusterName string     `json:"clusterName"`
+	Prefix      string     `json:"prefix"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"` // nil = active
+}
+
+// TokenPrefix is the identifying prefix stored with a token: its first 8
+// characters, or "" when the token is shorter than 32 characters — a
+// prefix must stay a small fraction of the secret. `tokens create` mints
+// 64 hex characters, so the stored prefix carries 32 of its 256 bits.
+func TokenPrefix(token string) string {
+	if len(token) < 32 {
+		return ""
+	}
+	return token[:8]
 }
 
 type ScorePoint struct {
