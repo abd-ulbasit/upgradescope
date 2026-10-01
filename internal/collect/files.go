@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -129,6 +130,9 @@ func appendObjects(objs []manifestObject, n *yaml.Node, lineOffset int, rendered
 	if av == "" || k == "" {
 		return objs, nil
 	}
+	if d := duplicate(n, "apiVersion", "kind", "metadata", "items"); d != "" {
+		return objs, fmt.Errorf("%s %s: duplicate key %q", av, k, d)
+	}
 	_, items := field(n, "items")
 	if k == "List" || strings.HasSuffix(k, "List") && allTyped(items) {
 		if items == nil || items.Kind != yaml.SequenceNode {
@@ -148,6 +152,9 @@ func appendObjects(objs []manifestObject, n *yaml.Node, lineOffset int, rendered
 	}
 	ref := inventory.ObjectRef{Line: apiVersionKey.Line + lineOffset, RenderedFrom: renderedFrom}
 	if _, meta := field(n, "metadata"); meta != nil && deref(meta).Kind == yaml.MappingNode {
+		if d := duplicate(deref(meta), "name", "namespace"); d != "" {
+			return objs, fmt.Errorf("%s %s: duplicate key metadata.%s", av, k, d)
+		}
 		for _, f := range []struct {
 			key string
 			dst *string
@@ -192,6 +199,24 @@ func field(m *yaml.Node, name string) (key, value *yaml.Node) {
 		}
 	}
 	return nil, nil
+}
+
+// duplicate returns the first of names that is a key of mapping m more
+// than once, or "". yaml.v3 only rejects duplicate keys when decoding into
+// Go maps and structs, not into nodes; kubectl rejects them.
+func duplicate(m *yaml.Node, names ...string) string {
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k := m.Content[i]
+		if k.Kind != yaml.ScalarNode || !slices.Contains(names, k.Value) {
+			continue
+		}
+		if seen[k.Value] {
+			return k.Value
+		}
+		seen[k.Value] = true
+	}
+	return ""
 }
 
 // scalar returns a non-null scalar's value; anything else (absent, null, a

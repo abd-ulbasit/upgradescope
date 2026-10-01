@@ -185,6 +185,39 @@ func TestCollectFilesInvalidSeparatorKeepsPrecedingDoc(t *testing.T) {
 	}
 }
 
+// kubectl rejects an object with a duplicated identity key, and which copy
+// wins is decoder-specific, so such a document is a warning rather than an
+// object counted under a guessed API version.
+func TestCollectFilesDuplicateKeys(t *testing.T) {
+	dir := writeTree(t, map[string]string{"dup.yaml": `apiVersion: networking.k8s.io/v1
+kind: Ingress
+apiVersion: extensions/v1beta1
+metadata: {name: a}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: b
+  name: c
+---
+` + ingressV1beta1})
+	inv, sum, err := CollectFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := usageCounts(inv); !reflect.DeepEqual(got, map[string]int{"networking.k8s.io/v1beta1/Ingress": 1}) {
+		t.Errorf("usage = %v, want only the well-formed Ingress", got)
+	}
+	if len(sum.Warnings) != 2 || sum.Warnings[0].Line != 1 || sum.Warnings[1].Line != 6 {
+		t.Fatalf("warnings = %+v, want lines 1 and 6", sum.Warnings)
+	}
+	for _, w := range sum.Warnings {
+		if !strings.Contains(w.Err.Error(), "duplicate") {
+			t.Errorf("warning %v: want a duplicate-key error", w)
+		}
+	}
+}
+
 // A file named explicitly is parsed whatever its extension
 // (`kustomize build overlays/prod > rendered`).
 func TestCollectFilesSingleFileAnyExtension(t *testing.T) {
