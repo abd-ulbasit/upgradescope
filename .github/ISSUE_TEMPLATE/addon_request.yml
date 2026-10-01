@@ -1,0 +1,66 @@
+name: Add-on registry request
+description: Ask for an add-on to be added to the EOL/compatibility registry, or report a wrong entry.
+title: "registry: "
+labels: ["kind/data", "area/registry"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every registry claim needs an upstream citation, so the links you give here
+        matter most. To add the entry yourself, see
+        [registry/CONTRIBUTING.md](https://github.com/abd-ulbasit/upgradescope/blob/main/registry/CONTRIBUTING.md).
+        It needs only Go.
+  - type: dropdown
+    id: request
+    attributes:
+      label: Request type
+      options:
+        - New add-on
+        - Correct an existing entry (EOL date, status, compat range, matcher)
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: Add-on name
+      description: The project name, and the registry `id` if the entry already exists.
+      placeholder: "cert-manager"
+    validations:
+      required: true
+  - type: input
+    id: policy
+    attributes:
+      label: Upstream EOL / support policy URL
+      description: A primary source, such as the project's release or support-policy page. Say if the project has none.
+      placeholder: https://cert-manager.io/docs/releases/
+    validations:
+      required: true
+  - type: input
+    id: endoflife
+    attributes:
+      label: endoflife.date product (if tracked)
+      description: The slug from `https://endoflife.date/<slug>`. Leave empty if endoflife.date does not track it.
+      placeholder: istio
+  - type: textarea
+    id: detection
+    attributes:
+      label: Detection hints
+      description: |
+        How upgradescope can recognise it in a cluster: container image repositories
+        (list both `docker.io/org/app` and the short `org/app` form for Docker Hub images)
+        and Helm chart names.
+      placeholder: |
+        images: quay.io/jetstack/cert-manager-controller
+        charts: cert-manager
+    validations:
+      required: true
+  - type: textarea
+    id: compat
+    attributes:
+      label: Kubernetes compatibility (optional)
+      description: A link to an upstream compatibility matrix with **bounded** ranges (add-on version X supports Kubernetes A through B).
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: For a correction, say what the entry claims today and what upstream says.
