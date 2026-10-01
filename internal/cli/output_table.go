@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // WriteTable renders a human-readable plain-text report. No ANSI escape
@@ -36,6 +37,10 @@ func WriteTable(w io.Writer, r engine.Report) {
 	default:
 		fmt.Fprintf(w, "READY  no\n")
 	}
+	if n := len(r.Suppressed); n > 0 {
+		fmt.Fprintf(w, "       %d suppressed (not scored; see SUPPRESSED)\n", n)
+	}
+	writeBaselineSummary(w, r)
 
 	for _, sev := range []engine.Severity{engine.SevBlocker, engine.SevWarning, engine.SevInfo} {
 		var group []engine.Finding
@@ -49,7 +54,11 @@ func WriteTable(w io.Writer, r engine.Report) {
 		}
 		fmt.Fprintf(w, "\n%s (%d)\n", strings.ToUpper(string(sev)), len(group))
 		for _, f := range group {
-			fmt.Fprintf(w, "  [%s] %s\n", f.Category, f.Title)
+			mark := ""
+			if f.BaselineState == engine.BaselineUnchanged {
+				mark = " (in baseline)"
+			}
+			fmt.Fprintf(w, "  [%s] %s%s\n", f.Category, f.Title, mark)
 			if f.Detail != "" {
 				fmt.Fprintf(w, "      %s\n", f.Detail)
 			}
@@ -70,6 +79,7 @@ func WriteTable(w io.Writer, r engine.Report) {
 		fmt.Fprintf(w, "\nNo findings.\n")
 	}
 
+	writeSuppressed(w, r)
 	writeTeamsSection(w, r)
 
 	if len(r.NotAssessed) > 0 {
@@ -112,6 +122,47 @@ func writeObjects(w io.Writer, f engine.Finding) {
 	}
 	if more := len(f.Objects) - len(shown) + f.ObjectsOmitted; more > 0 {
 		fmt.Fprintf(w, "      …and %d more\n", more)
+	}
+}
+
+// writeBaselineSummary counts unchanged and new findings when the report
+// was compared with a baseline (any finding carries a state).
+func writeBaselineSummary(w io.Writer, r engine.Report) {
+	var unchanged, added int
+	for _, f := range r.Findings {
+		switch f.BaselineState {
+		case engine.BaselineUnchanged:
+			unchanged++
+		case engine.BaselineNew:
+			added++
+		}
+	}
+	if unchanged+added > 0 {
+		fmt.Fprintf(w, "BASELINE  %d unchanged, %d new\n", unchanged, added)
+	}
+}
+
+// writeSuppressed lists suppressed findings with the reason each was
+// accepted and what accepted it.
+func writeSuppressed(w io.Writer, r engine.Report) {
+	if len(r.Suppressed) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nSUPPRESSED (%d)\n", len(r.Suppressed))
+	for _, s := range r.Suppressed {
+		fmt.Fprintf(w, "  [%s] %s\n", s.Category, s.Title)
+		writeObjects(w, s.Finding)
+		reason := "      reason: " + s.Reason
+		switch {
+		case s.Source == suppress.AnnotationSource:
+			reason += " (annotation)"
+		case s.Expires != "":
+			reason += " (until " + s.Expires + ")"
+		}
+		fmt.Fprintln(w, reason)
+		if s.Source != "" && s.Source != suppress.AnnotationSource {
+			fmt.Fprintf(w, "      from: %s\n", s.Source)
+		}
 	}
 }
 

@@ -1,0 +1,27 @@
+# This comment moves the CronJob down from line 1 (its baseline line):
+# a line change alone must not make a finding new.
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: nightly
+  namespace: jobs
+---
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: web
+  namespace: shop
+---
+# Not in the baseline: a new object of a known key.
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: admin
+  namespace: shop
+---
+# Not in the baseline: a new key.
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: web
+  namespace: shop

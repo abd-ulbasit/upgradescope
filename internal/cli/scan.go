@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // ErrGateFailed signals findings at or above the --fail-on threshold.
@@ -54,6 +56,10 @@ type scanOptions struct {
 	failOn      string
 
 	allowIncomplete bool
+
+	configFile    string // --config; "" = discover (suppress.FindConfig)
+	baselineFile  string
+	writeBaseline string
 
 	// targetVersion is opts.target parsed once by validateScanOptions;
 	// runScan consumes it instead of re-parsing the raw string.
@@ -168,6 +174,7 @@ func newScanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "scan",
 		Short:         "Scan a cluster (or rendered manifests) for upgrade readiness",
+		Long:          scanLong,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -179,9 +186,35 @@ func newScanCmd() *cobra.Command {
 			if opts.filesDir != "" {
 				opts.fileBase = manifestBase(opts.filesDir)
 			}
+			// Config and baseline are read before scanning: a typo there
+			// fails in a second, not after a five-minute cluster scan.
+			ignore, err := loadIgnore(opts)
+			if err != nil {
+				return err
+			}
+			var baseline *suppress.Baseline
+			if opts.baselineFile != "" {
+				b, err := readBaseline(opts.baselineFile)
+				if err != nil {
+					return err
+				}
+				baseline = &b
+			}
 			report, err := runScan(opts)
 			if err != nil {
 				return err
+			}
+			report, warnings := suppress.Apply(report, ignore.rules, suppress.Options{Now: time.Now(), Source: ignore.source, FileBase: ignore.fileBase})
+			for _, w := range warnings {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+			}
+			if opts.writeBaseline != "" {
+				if err := writeBaselineFile(opts, report); err != nil {
+					return err
+				}
+			}
+			if baseline != nil {
+				report = baseline.Mark(report)
 			}
 			// JSON keeps object paths relative to the scanned root (the
 			// inventory contract) and records that root as filesBase;
@@ -215,6 +248,9 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never")
 	cmd.Flags().BoolVar(&opts.allowIncomplete, "allow-incomplete", false, "with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed)")
+	cmd.Flags().StringVar(&opts.configFile, "config", "", "config file with ignore rules (default: "+suppress.ConfigFile+" in the scan root, else at the git repository root)")
+	cmd.Flags().StringVar(&opts.baselineFile, "baseline", "", "JSON report of an earlier scan (--output json or --write-baseline): the gate fails only on findings that are new since")
+	cmd.Flags().StringVar(&opts.writeBaseline, "write-baseline", "", "also write this scan's JSON report to this path, for a later --baseline")
 	_ = cmd.MarkFlagRequired("target")
 	cmd.MarkFlagsMutuallyExclusive("files", "kubeconfig")
 	cmd.MarkFlagsMutuallyExclusive("files", "context")
@@ -250,14 +286,14 @@ func manifestBase(filesDir string) string {
 	return base
 }
 
-// withFileBase returns a copy of r whose finding object paths are prefixed
-// with base (see manifestBase); r itself is not modified.
+// withFileBase returns a copy of r whose finding (and suppressed finding)
+// object paths are prefixed with base (see manifestBase); r itself is not
+// modified.
 func withFileBase(r engine.Report, base string) engine.Report {
 	if base == "" {
 		return r
 	}
-	findings := make([]engine.Finding, len(r.Findings))
-	for i, f := range r.Findings {
+	prefix := func(f engine.Finding) engine.Finding {
 		if len(f.Objects) > 0 {
 			objs := make([]inventory.ObjectRef, len(f.Objects))
 			for j, o := range f.Objects {
@@ -268,10 +304,133 @@ func withFileBase(r engine.Report, base string) engine.Report {
 			}
 			f.Objects = objs
 		}
-		findings[i] = f
+		return f
+	}
+	findings := make([]engine.Finding, len(r.Findings))
+	for i, f := range r.Findings {
+		findings[i] = prefix(f)
 	}
 	r.Findings = findings
+	if len(r.Suppressed) > 0 {
+		suppressed := make([]engine.SuppressedFinding, len(r.Suppressed))
+		for i, s := range r.Suppressed {
+			s.Finding = prefix(s.Finding)
+			suppressed[i] = s
+		}
+		r.Suppressed = suppressed
+	}
 	return r
+}
+
+// scanLong is scan's --help text: the gate's exit codes and how
+// suppression and baselines change what it counts.
+const scanLong = `Scan a cluster (or rendered manifests) for upgrade readiness.
+
+Exit codes: 0 when the gate passes; 1 on an operational error, including an
+invalid config file or baseline; 2 when the gate fails.
+
+The gate (--fail-on) fails when a finding at or above the threshold remains,
+or (unless --allow-incomplete) when a required check was not assessed, so a
+blocker may have been missed.
+
+Suppression: ignore rules in ` + suppress.ConfigFile + ` (found in the scan root,
+i.e. the --files directory or else the working directory, then at the git
+repository root; or named with --config) accept findings by key or category,
+optionally only for objects matching namespace/name/file globs, with a
+required reason and an optional expires date. Objects can opt out with the
+upgradescope.dev/ignore and upgradescope.dev/ignore-reason annotations.
+Suppressed findings do not count toward score, verdict or gate, and every
+output lists them with their reason. An expired rule stops applying and
+prints a warning.
+
+Baseline: --baseline takes the JSON report of an earlier scan (--output json,
+or --write-baseline). Findings whose key and listed objects it already had
+are marked unchanged and do not fail the gate; anything else is new. Score
+and verdict still count unchanged findings, and an unassessed required check
+still fails the gate.`
+
+// ignoreConfig holds the ignore rules in effect: source labels their
+// suppressions and warnings (the config path), and fileBase is the
+// scanned root relative to the config file's directory, which file globs
+// are written against.
+type ignoreConfig struct {
+	rules    []suppress.Rule
+	source   string
+	fileBase string
+}
+
+// loadIgnore loads --config, or the discovered config file; no file means
+// no rules.
+func loadIgnore(opts scanOptions) (ignoreConfig, error) {
+	root := "."
+	if opts.filesDir != "" {
+		root = opts.filesDir
+		if fi, err := os.Stat(root); err == nil && !fi.IsDir() {
+			root = filepath.Dir(root)
+		}
+	}
+	file := opts.configFile
+	if file == "" {
+		found, err := suppress.FindConfig(root)
+		if err != nil || found == "" {
+			return ignoreConfig{}, err
+		}
+		file = workingPath(found)
+	}
+	cfg, err := suppress.LoadConfig(file)
+	if err != nil {
+		return ignoreConfig{}, err
+	}
+	ic := ignoreConfig{rules: cfg.Ignore, source: file}
+	absRoot, rerr := filepath.Abs(root)
+	absDir, derr := filepath.Abs(filepath.Dir(file))
+	if opts.filesDir != "" && rerr == nil && derr == nil {
+		if rel, err := filepath.Rel(absDir, absRoot); err == nil && rel != "." {
+			ic.fileBase = filepath.ToSlash(rel)
+		}
+	}
+	return ic, nil
+}
+
+// workingPath returns p relative to the working directory when it lies
+// inside it, else p unchanged.
+func workingPath(p string) string {
+	if wd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(wd, p); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return rel
+		}
+	}
+	return p
+}
+
+func readBaseline(file string) (suppress.Baseline, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return suppress.Baseline{}, fmt.Errorf("read --baseline: %w", err)
+	}
+	defer f.Close()
+	b, err := suppress.ReadBaseline(f, reportSchemaVersion)
+	if err != nil {
+		return suppress.Baseline{}, fmt.Errorf("--baseline %s: %w", file, err)
+	}
+	return b, nil
+}
+
+// writeBaselineFile writes r as --output json would (object paths relative
+// to the scanned root), for a later --baseline.
+func writeBaselineFile(opts scanOptions, r engine.Report) error {
+	var filesBase *string
+	if opts.filesDir != "" {
+		filesBase = &opts.fileBase
+	}
+	var buf bytes.Buffer
+	if err := writeJSON(&buf, r, filesBase); err != nil {
+		return err
+	}
+	if err := os.WriteFile(opts.writeBaseline, buf.Bytes(), 0o644); err != nil {
+		return fmt.Errorf("--write-baseline: %w", err)
+	}
+	return nil
 }
 
 // validateScanOptions checks flag values and stores the parsed --target into
@@ -309,9 +468,10 @@ func writeReport(w io.Writer, format string, r engine.Report, filesBase *string)
 	}
 }
 
-// gate applies --fail-on: ErrGateFailed when findings reach the threshold,
-// else ErrIncomplete when the verdict is unknown (unless allowIncomplete).
-// "never" never fails.
+// gate applies --fail-on: ErrGateFailed when findings that are not in the
+// baseline reach the threshold, else ErrIncomplete when the assessment is
+// incomplete (unless allowIncomplete). "never" never fails. Suppressed
+// findings are no longer in r.Findings.
 func gate(r engine.Report, failOn string, allowIncomplete bool) error {
 	if failOn == "never" {
 		return nil
@@ -319,15 +479,33 @@ func gate(r engine.Report, failOn string, allowIncomplete bool) error {
 	if findingsReach(r, failOn) {
 		return ErrGateFailed
 	}
-	if r.Verdict == engine.VerdictUnknown && !allowIncomplete {
+	if incomplete(r) && !allowIncomplete {
 		return ErrIncomplete
 	}
 	return nil
 }
 
+// incomplete reports an unknown verdict, or a required check not assessed
+// behind blockers that are all in the baseline: either way a new blocker
+// may have gone unseen.
+func incomplete(r engine.Report) bool {
+	if r.Verdict == engine.VerdictUnknown {
+		return true
+	}
+	for _, g := range r.NotAssessed {
+		if g.Required {
+			return true
+		}
+	}
+	return false
+}
+
 func findingsReach(r engine.Report, failOn string) bool {
 	var blockers, warnings int
 	for _, f := range r.Findings {
+		if f.BaselineState == engine.BaselineUnchanged {
+			continue
+		}
 		switch f.Severity {
 		case engine.SevBlocker:
 			blockers++
