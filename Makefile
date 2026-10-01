@@ -29,6 +29,20 @@ lint:
 	go vet ./...
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
+# The CI supply-chain gate, verbatim: govulncheck (pinned in the script) in
+# binary mode against the upgradescope binary built for linux/amd64, with the
+# per-advisory, expiring allowlist in hack/vuln-allowlist.txt. CI runs this
+# same script, so a local pass means a CI pass. Needs jq and network access
+# (it installs the pinned govulncheck and reads vuln.go.dev).
+.PHONY: vuln vuln-test
+vuln:
+	./hack/vulncheck.sh
+
+# Offline tests for the gate itself: a stub scanner drives hack/vulncheck.sh
+# through its pass, fail and fail-closed paths.
+vuln-test:
+	./hack/vulncheck_test.sh
+
 .PHONY: pg-test
 pg-test:
 	./hack/pg-test.sh

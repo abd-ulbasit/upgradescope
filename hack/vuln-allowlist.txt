@@ -1,0 +1,14 @@
+# Accepted govulncheck findings. Read by hack/vulncheck.sh (make vuln, and the
+# vuln CI job).
+#
+# One advisory per line:  <ID> <module> <expires YYYY-MM-DD> <reason...>
+#
+# Every entry names one advisory ID, so a NEW advisory fails the gate until
+# someone decides about it here; nothing is accepted by module alone. The gate
+# also fails when an entry expires, or when its advisory gains a fixed version
+# on the listed module, and warns when an entry no longer matches any finding.
+# An entry is a decision with a deadline, not a mute button: write down why
+# the vulnerable code cannot be reached in a way that matters, and pick the
+# expiry as the date that reasoning must be checked again.
+#
+# Empty: the shipped binary reaches no known advisory.
