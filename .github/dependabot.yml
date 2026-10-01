@@ -73,6 +73,10 @@ updates:
       day: monday
     ignore:
       - dependency-name: golang
+      # Node majors: the dashboard build tracks the Active LTS line. A new
+      # major ("Current") becomes LTS each October; bump by hand then.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
     groups:
       base-images:
         patterns: ['*']
