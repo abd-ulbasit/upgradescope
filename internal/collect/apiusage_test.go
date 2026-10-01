@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/discovery"
 	discoveryfake "k8s.io/client-go/discovery/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/metadata"
 	metadatafake "k8s.io/client-go/metadata/fake"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -342,6 +343,75 @@ func TestListVersionOrder(t *testing.T) {
 	}
 	if _, ok := listVersion([]servedVersion{v("v1", false)}, "v1"); ok {
 		t.Error("listVersion with nothing flagged = ok, want nothing to list")
+	}
+}
+
+// recordingMeta records the ListOptions of every LIST: the fake's list
+// action drops Limit and Continue.
+type recordingMeta struct {
+	metadata.Interface
+	opts *[]metav1.ListOptions
+}
+
+func (r recordingMeta) Resource(gvr schema.GroupVersionResource) metadata.Getter {
+	return recordingGetter{r.Interface.Resource(gvr), r.opts}
+}
+
+type recordingGetter struct {
+	metadata.Getter
+	opts *[]metav1.ListOptions
+}
+
+func (g recordingGetter) List(ctx context.Context, opts metav1.ListOptions) (*metav1.PartialObjectMetadataList, error) {
+	*g.opts = append(*g.opts, opts)
+	return g.Getter.List(ctx, opts)
+}
+
+func TestCollectAPIUsageFollowsListPagination(t *testing.T) {
+	ingress := func(name, manager, apiVersion string) runtime.RawExtension {
+		return runtime.RawExtension{Object: &metav1.PartialObjectMetadata{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: name, ManagedFields: []metav1.ManagedFieldsEntry{wrote(manager, apiVersion)}},
+		}}
+	}
+	meta := metaClient()
+	calls := 0
+	meta.PrependReactor("list", "ingresses", func(k8stesting.Action) (bool, runtime.Object, error) {
+		calls++
+		switch calls {
+		case 1:
+			return true, &metav1.List{
+				ListMeta: metav1.ListMeta{Continue: "page-2"},
+				Items: []runtime.RawExtension{
+					ingress("page-1-beta", "helm", "networking.k8s.io/v1beta1"),
+					ingress("page-1-v1", "argocd", "networking.k8s.io/v1"),
+				},
+			}, nil
+		default:
+			return true, &metav1.List{Items: []runtime.RawExtension{ingress("page-2-beta", "terraform", "networking.k8s.io/v1beta1")}}, nil
+		}
+	})
+	var opts []metav1.ListOptions
+	disc := fakeDiscovery(resources("networking.k8s.io/v1", ingresses), resources("networking.k8s.io/v1beta1", ingresses))
+
+	var inv inventory.Inventory
+	if err := collectAPIUsage(context.Background(), disc, recordingMeta{meta, &opts}, ingressLifecycle(), &inv); err != nil {
+		t.Fatal(err)
+	}
+	wantOpts := []metav1.ListOptions{{Limit: listPageSize}, {Limit: listPageSize, Continue: "page-2"}}
+	if !reflect.DeepEqual(opts, wantOpts) {
+		t.Errorf("list options = %+v, want %+v (paged, Continue token followed)", opts, wantOpts)
+	}
+	want := []inventory.APIUsage{{
+		Group: "networking.k8s.io", Version: "v1beta1", Kind: "Ingress", Count: 2,
+		Namespaces: map[string]int{"default": 2},
+		Objects: []inventory.ObjectRef{
+			{Namespace: "default", Name: "page-1-beta", Manager: "helm"},
+			{Namespace: "default", Name: "page-2-beta", Manager: "terraform"},
+		},
+	}}
+	if !reflect.DeepEqual(inv.APIUsage, want) {
+		t.Errorf("api usage = %#v\nwant       %#v (objects from every page must count)", inv.APIUsage, want)
 	}
 }
 
