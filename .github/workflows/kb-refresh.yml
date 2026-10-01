@@ -1,11 +1,16 @@
 name: kb-refresh
 
-# Weekly knowledge-base refresh:
-#  1. bump tools/gen-kb to the latest tagged k8s.io/api and regenerate the
-#     API lifecycle dataset (the bump happens on the PR branch only),
-#  2. sync registry entries against the live endoflife.date API,
-# then open a PR if anything changed. CI on that PR re-validates everything
-# (kb-freshness, registry tests, eol-sync -check).
+# Weekly knowledge-base refresh, as two independent jobs so one failing can
+# never hold back the other (a gen-kb build break used to skip the registry
+# sync for weeks):
+#  - api-lifecycle: bump tools/gen-kb to the latest tagged k8s.io/api (and the
+#    matching apiextensions-apiserver / kube-aggregator releases), then
+#    `make gen-kb` = `go generate ./...`, which regenerates the import list,
+#    tidies go.mod and rewrites internal/kb/data/apilifecycle.json;
+#  - registry: sync registry entries against the live endoflife.date API.
+# Each opens (or updates) its own PR; CI on the PR re-validates everything.
+# If either job fails, report-failure opens or comments on the
+# "kb-refresh is failing" issue, so a broken refresh is never silent.
 
 on:
   schedule:
@@ -17,7 +22,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  refresh:
+  api-lifecycle:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,12 +33,55 @@ jobs:
             go.sum
             tools/gen-kb/go.sum
 
-      - name: Bump gen-kb to latest k8s.io/api and regenerate dataset
+      - name: Bump gen-kb to the latest k8s.io/api release
+        working-directory: tools/gen-kb
         run: |
-          cd tools/gen-kb
-          go get k8s.io/api@latest k8s.io/apimachinery@latest
-          go mod tidy
-          go run . -out ../../internal/kb/data/apilifecycle.json
+          V="$(go list -m -f '{{.Version}}' k8s.io/api@latest)"
+          echo "latest k8s.io/api: $V"
+          # The extra API modules are released in lockstep with k8s.io/api.
+          go get "k8s.io/api@$V" "k8s.io/apimachinery@$V" \
+            "k8s.io/apiextensions-apiserver@$V" "k8s.io/kube-aggregator@$V"
+
+      - name: Regenerate import list, go.mod and dataset
+        run: make gen-kb
+
+      - name: Validate the regenerated KB
+        run: |
+          go test ./internal/kb/ ./internal/engine/
+          cd tools/gen-kb && go test ./...
+
+      - name: Open PR if anything changed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: bot/kb-refresh-api
+          add-paths: |
+            tools/gen-kb
+            internal/kb/data
+          commit-message: |
+            chore(kb): weekly API lifecycle refresh
+
+            Automated: tools/gen-kb bumped to the latest k8s.io/api and
+            regenerated with `go generate ./...`.
+          title: 'chore(kb): weekly API lifecycle refresh'
+          body: |
+            Automated weekly refresh:
+            - `tools/gen-kb` bumped to the latest tagged `k8s.io/api` (plus matching `apiextensions-apiserver` / `kube-aggregator`)
+            - `go generate ./...`: import list, `go.mod`, `internal/kb/data/apilifecycle.json`
+
+            Review checklist:
+            - [ ] CI green (kb-freshness, internal/kb dataset tests)
+            - [ ] Entries carried forward with `"removedInferred": true` really are gone upstream
+          labels: kb-refresh
+          delete-branch: true
+
+  registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum # tools/eol-sync has no dependencies
 
       - name: Sync registry with endoflife.date
         run: make eol-sync
@@ -41,20 +89,46 @@ jobs:
       - name: Open PR if anything changed
         uses: peter-evans/create-pull-request@v7
         with:
-          branch: bot/kb-refresh
+          branch: bot/kb-refresh-registry
+          add-paths: registry/data
           commit-message: |
-            chore(kb): weekly knowledge-base refresh
+            chore(registry): weekly endoflife.date sync
 
-            Automated: gen-kb against latest k8s.io/api + eol-sync against
-            the endoflife.date API.
-          title: 'chore(kb): weekly knowledge-base refresh'
+            Automated: tools/eol-sync against the endoflife.date API.
+          title: 'chore(registry): weekly endoflife.date sync'
           body: |
-            Automated weekly refresh:
-            - `tools/gen-kb` bumped to the latest tagged `k8s.io/api`; `internal/kb/data/apilifecycle.json` regenerated
-            - `tools/eol-sync` run against the live endoflife.date API
+            Automated weekly `tools/eol-sync` run against the live endoflife.date API.
 
             Review checklist:
-            - [ ] CI green (kb-freshness, registry job)
+            - [ ] CI green (registry job)
             - [ ] Any `status: eol` flips are real (check the cited endoflife.date page)
           labels: kb-refresh
           delete-branch: true
+
+  report-failure:
+    needs: [api-lifecycle, registry]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      API_RESULT: ${{ needs.api-lifecycle.result }}
+      REGISTRY_RESULT: ${{ needs.registry.result }}
+    steps:
+      - name: Open or update the tracking issue
+        run: |
+          title='kb-refresh is failing'
+          body="$(printf 'The weekly kb-refresh failed: %s\n\n- api-lifecycle: %s\n- registry: %s\n\nThe embedded KB stays stale until this is fixed.' \
+            "$RUN_URL" "$API_RESULT" "$REGISTRY_RESULT")"
+          gh label create kb-refresh --color 0e8a16 \
+            --description 'Automated knowledge-base refresh' --force
+          number="$(gh issue list --state open --label kb-refresh --search "\"$title\" in:title" \
+            --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --label kb-refresh --body "$body"
+          fi

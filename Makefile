@@ -34,8 +34,10 @@ pg-test:
 	./hack/pg-test.sh
 
 .PHONY: gen-kb
+# gen-kb regenerates the import list, tidies go.mod and rewrites the API
+# lifecycle dataset (see the go:generate lines in tools/gen-kb/main.go).
 gen-kb:
-	cd tools/gen-kb && go run . -out ../../internal/kb/data/apilifecycle.json
+	cd tools/gen-kb && go generate ./...
 
 .PHONY: eol-sync eol-check
 eol-sync:

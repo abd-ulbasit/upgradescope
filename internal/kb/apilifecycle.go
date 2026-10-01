@@ -20,6 +20,10 @@ type APILifecycleEntry struct {
 	Deprecated  *inventory.Version `json:"deprecated,omitempty"`
 	Removed     *inventory.Version `json:"removed,omitempty"`
 	Replacement *GVK               `json:"replacement,omitempty"`
+	// RemovedInferred marks a tombstone tools/gen-kb carried forward after
+	// upstream deleted the type's package without ever tagging a removal:
+	// Removed is then the k8s.io/api minor the package disappeared in.
+	RemovedInferred bool `json:"removedInferred,omitempty"`
 }
 
 type GVK struct {
@@ -67,4 +71,29 @@ func NewIndex(entries []APILifecycleEntry) Index {
 func (i Index) Lookup(group, version, kind string) (APILifecycleEntry, bool) {
 	e, ok := i.byGVK[GVK{Group: group, Version: version, Kind: kind}]
 	return e, ok
+}
+
+// ResolveReplacement returns the API to migrate e to for an upgrade to
+// target: it follows the replacement chain (flowcontrol v1beta1 → v1beta3 →
+// v1) past every hop that is itself removed at or before target, so advice
+// never points at an API the KB knows the target no longer serves. A hop
+// the KB has no entry for carries no removal evidence and is returned as
+// is (the dataset tests require every shipped replacement to be a known
+// GVK). It reports false when e has no replacement, or the chain dead-ends
+// at a removed API with no further replacement, or loops.
+func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version) (GVK, bool) {
+	seen := map[GVK]bool{{Group: e.Group, Version: e.Version, Kind: e.Kind}: true}
+	for next := e.Replacement; next != nil; {
+		g := *next
+		if seen[g] {
+			return GVK{}, false
+		}
+		seen[g] = true
+		r, ok := i.byGVK[g]
+		if !ok || r.Removed == nil || r.Removed.Compare(target) > 0 {
+			return g, true
+		}
+		next = r.Replacement
+	}
+	return GVK{}, false
 }

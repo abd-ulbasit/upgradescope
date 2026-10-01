@@ -104,9 +104,8 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 			Namespaces: nsNames,
 			Citations:  []string{deprecationGuideURL},
 		}
-		if e.Replacement != nil {
-			f.Remediation = fmt.Sprintf("migrate to %s %s",
-				gvString(e.Replacement.Group, e.Replacement.Version), e.Replacement.Kind)
+		if r, ok := idx.ResolveReplacement(e, target); ok {
+			f.Remediation = fmt.Sprintf("migrate to %s %s", gvString(r.Group, r.Version), r.Kind)
 		}
 		gv := gvString(u.Group, u.Version)
 		switch {

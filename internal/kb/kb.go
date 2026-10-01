@@ -1,7 +1,10 @@
 package kb
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -20,12 +23,11 @@ var apilifecycleJSON []byte
 //go:embed data/supplement.json
 var supplementJSON []byte
 
-// registryDate versions the embedded registry data; bump it whenever
-// registry/data changes. Part of KB.Version.
-const registryDate = "2026-06-10"
-
 type KB struct {
-	Version      string // dataset version, e.g. "k8s-1.36+registry-2026-06-10"
+	// Version labels the dataset in reports, the CRD status and auditor
+	// exports. It is derived from the embedded data (see datasetVersion),
+	// e.g. "k8s.io/api v0.37.1; lifecycle 1a2b3c4d; registry 5e6f7a8b".
+	Version      string
 	APILifecycle []APILifecycleEntry
 	AddOns       []registry.AddOn
 	Skew         SkewPolicy
@@ -52,13 +54,49 @@ func Load() (KB, error) {
 	if err != nil {
 		return KB{}, fmt.Errorf("kb: loading add-on registry: %w", err)
 	}
+	entries := mergeEntries(f.Entries, sup.Entries)
+	version, err := datasetVersion(f.GeneratedFrom, entries, addons)
+	if err != nil {
+		return KB{}, err
+	}
 	return KB{
-		Version:      fmt.Sprintf("k8s-%s+registry-%s", maxKnown.String(), registryDate),
-		APILifecycle: mergeEntries(f.Entries, sup.Entries),
+		Version:      version,
+		APILifecycle: entries,
 		AddOns:       addons,
 		Skew:         DefaultSkewPolicy(),
 		MaxKnownK8s:  maxKnown,
 	}, nil
+}
+
+// datasetVersion derives KB.Version from the data itself, so no constant
+// has to be bumped when the weekly refresh changes it:
+//
+//	"<generatedFrom>; lifecycle <digest>; registry <digest>"
+//
+// generatedFrom names the upstream release ("k8s.io/api v0.37.1"); each
+// digest is the first 8 hex digits of the SHA-256 of the canonical JSON of
+// the merged lifecycle entries or the parsed add-on registry. Any change to
+// either dataset (an eol-sync date flip, a regenerated or hand-curated
+// entry) changes the label; YAML comments and formatting do not.
+func datasetVersion(generatedFrom string, entries []APILifecycleEntry, addons []registry.AddOn) (string, error) {
+	lifecycle, err := digest(entries)
+	if err != nil {
+		return "", fmt.Errorf("kb: digest lifecycle data: %w", err)
+	}
+	reg, err := digest(addons)
+	if err != nil {
+		return "", fmt.Errorf("kb: digest registry: %w", err)
+	}
+	return fmt.Sprintf("%s; lifecycle %s; registry %s", generatedFrom, lifecycle, reg), nil
+}
+
+func digest(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:4]), nil
 }
 
 // mergeEntries appends supplement entries to the generated ones, skipping
