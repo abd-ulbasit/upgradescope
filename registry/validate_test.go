@@ -58,6 +58,18 @@ func TestValidate(t *testing.T) {
 			a.Matchers.Images = []string{"registry.k8s.io/ingress-nginx/controller"}
 		}, "without the registry host"},
 		{"image matcher with localhost host", func(a *AddOn) { a.Matchers.Images = []string{"localhost/app"} }, "without the registry host"},
+		// A provider's own build is named with its host, so only the
+		// provider entry claims it (#18).
+		{"provider-build image matcher is fine", func(a *AddOn) {
+			a.Matchers.Images = []string{"mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller"}
+		}, ""},
+		{"provider-build image matcher with a tag", func(a *AddOn) {
+			a.Matchers.Images = []string{"gke.gcr.io/calico/node:v3.26.3"}
+		}, "tag or digest"},
+		{"provider prefix without a repository", func(a *AddOn) { a.Matchers.Images = []string{"gke.gcr.io/"} }, "lowercase repository path"},
+		{"non-provider host is still rejected", func(a *AddOn) {
+			a.Matchers.Images = []string{"quay.io/calico/node"}
+		}, "without the registry host"},
 		{"image matcher with tag", func(a *AddOn) { a.Matchers.Images = []string{"ingress-nginx/controller:v1"} }, "tag or digest"},
 		{"image matcher with digest", func(a *AddOn) { a.Matchers.Images = []string{"ingress-nginx/controller@sha256:ab"} }, "tag or digest"},
 		{"image matcher with empty segment", func(a *AddOn) { a.Matchers.Images = []string{"ingress-nginx//controller"} }, "repository path"},

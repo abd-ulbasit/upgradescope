@@ -106,3 +106,36 @@ func TestImageOnlyIngressNginxVerdicts(t *testing.T) {
 		}
 	}
 }
+
+// Managed CNI and add-on builds carry the provider's support, so the
+// upstream release line's end of life must not block them (#18). Each of
+// these old lines has ended upstream; the upstream builds next to them
+// prove the lines still block when the build is upstream's.
+func TestProviderBuildsGetNoUpstreamEOL(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 99}}
+	now := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		image       string
+		wantBlocker bool
+	}{
+		{"gke.gcr.io/calico/node:v3.26.3-gke.13", false},
+		{"mcr.microsoft.com/oss/calico/node:v3.28.2", false},
+		{"mcr.microsoft.com/oss/cilium/cilium:1.16.6", false},
+		{"gke.gcr.io/cilium/cilium:v1.15.10-gke.9", false},
+		{"mcr.microsoft.com/oss/istio/pilot:1.24.3-distroless", false},
+		{"quay.io/calico/node:v3.26.3", true},
+		{"quay.io/cilium/cilium:v1.15.10", true},
+	}
+	for _, tc := range cases {
+		detected, _ := matchAddOns([]nsImage{{"kube-system", tc.image}}, nil, addons)
+		rep := engine.Evaluate(inventory.Inventory{AddOns: detected}, k, inventory.Version{Major: 1, Minor: 36}, now)
+		got := slices.ContainsFunc(rep.Findings, func(f engine.Finding) bool { return f.Severity == engine.SevBlocker })
+		if got != tc.wantBlocker {
+			t.Errorf("%s: blocker = %v, want %v (findings %+v)", tc.image, got, tc.wantBlocker, rep.Findings)
+		}
+	}
+}

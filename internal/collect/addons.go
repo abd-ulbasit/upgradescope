@@ -104,6 +104,19 @@ func pathMatches(path, matcher string) bool {
 	return path == matcher || strings.HasSuffix(path, "/"+matcher)
 }
 
+// imageMatches applies one registry image matcher. A provider build
+// (registry.ProviderBuildPrefixes: GKE's and AKS's own builds of Calico,
+// Cilium, Istio, …) follows the provider's support policy, so host-less
+// upstream matchers never claim it; only a matcher naming the provider
+// location does, on the full reference or a mirror path ending with it.
+func imageMatches(ref imageRef, matcher string) bool {
+	full := ref.host + "/" + ref.path
+	if registry.IsProviderBuild(matcher) {
+		return pathMatches(full, matcher)
+	}
+	return !registry.IsProviderBuild(full) && pathMatches(ref.path, matcher)
+}
+
 // versionRe finds a version anywhere in an image tag or chart appVersion:
 // "nginx-1.9.4-hardened1" → "1.9.4". A semver pre-release ("-rc.1") is kept;
 // distro and build suffixes ("-debian-12-r0", "-eksbuild.4") are not.
@@ -159,7 +172,7 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 		matched := false
 		for _, a := range addons {
 			for _, m := range a.Matchers.Images {
-				if pathMatches(ref.path, m) {
+				if imageMatches(ref, m) {
 					byID[a.ID] = append(byID[a.ID], evidence{
 						source:  "image",
 						version: versionFromTag(ref.tag),

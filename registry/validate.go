@@ -110,15 +110,24 @@ func Validate(a AddOn) []error {
 }
 
 // validateImageMatcher accepts a repository path without registry host, tag
-// or digest: the collector strips the host before matching, so a matcher
-// carrying one could never match.
+// or digest: the collector matches it on the path, so a host would stop it
+// matching mirrors and the legacy k8s.gcr.io. The one exception is a
+// provider build, named under its ProviderBuildPrefixes location.
 func validateImageMatcher(m string) error {
 	if strings.ContainsAny(m, ":@") {
 		return fmt.Errorf("must not carry a tag or digest")
 	}
-	segs := strings.Split(m, "/")
+	path := m
+	for _, p := range ProviderBuildPrefixes {
+		if strings.HasPrefix(m, p) {
+			path = strings.TrimPrefix(m, p)
+			break
+		}
+	}
+	segs := strings.Split(path, "/")
 	if len(segs) > 1 && (strings.ContainsAny(segs[0], ".:") || segs[0] == "localhost") {
-		return fmt.Errorf("must be a repository path without the registry host (e.g. \"ingress-nginx/controller\")")
+		return fmt.Errorf("must be a repository path without the registry host (e.g. \"ingress-nginx/controller\"); only provider builds name theirs (%s)",
+			strings.Join(ProviderBuildPrefixes, ", "))
 	}
 	for _, s := range segs {
 		if !pathSegmentPattern.MatchString(s) {

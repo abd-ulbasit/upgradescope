@@ -35,6 +35,8 @@ type Matchers struct {
 	// suffix on whole path segments: "ingress-nginx/controller" matches
 	// registry.k8s.io/ingress-nginx/controller, k8s.gcr.io/ingress-nginx/controller
 	// and mirror/ingress-nginx/controller. The version is read from the tag.
+	// They never match a provider build (ProviderBuildPrefixes); an entry
+	// for one names it with its host instead.
 	Images []string `json:"images,omitempty" yaml:"images,omitempty"`
 	Charts []string `json:"charts,omitempty" yaml:"charts,omitempty"` // exact chart name; version = the release's appVersion
 	// Runtimes are node container runtime names, the scheme of

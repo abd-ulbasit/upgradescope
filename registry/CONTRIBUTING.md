@@ -69,6 +69,14 @@ recommendation: Optional one-line remediation hint shown with findings.
   `istio/pilot`, …), and leave out images that version separately
   (`tigera/operator`, Flux's controllers). Vendor forks with their own
   support (AKS application routing, RKE2) get their own entries.
+- **Provider builds** — images under `gke.gcr.io/`, `gcr.io/gke-release/`
+  or `mcr.microsoft.com/` (`ProviderBuildPrefixes` in `providers.go`), such
+  as GKE's Calico and Dataplane V2 Cilium or AKS's Calico, Cilium, Istio and
+  KEDA — follow the provider's support policy, so host-less matchers never
+  match them: an upstream line's EOL is not theirs. An entry for a provider
+  build is the one place a matcher names its host
+  (`mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller`, see
+  `aks-app-routing-nginx.yaml`); it still matches through a mirror.
 - The version is read from anywhere in the tag: `v1.9.4`,
   `nginx-1.9.4-hardened1` and `1.9.4-debian-12-r0` all mean 1.9.4.
 - **charts** match the Helm chart name exactly. The release's `appVersion`
@@ -128,7 +136,8 @@ per-version lifecycle source.
 ## PR checklist
 
 - [ ] `id` is kebab-case and matches the file name
-- [ ] image matchers are host-less repository paths covering every image
+- [ ] image matchers are host-less repository paths (a provider-build
+      entry: host-qualified) covering every image
       that carries the add-on's version; no images that version separately
 - [ ] versions, ranges and cycles are app versions, not chart versions
 - [ ] every citation URL opens in a browser (CI does not fetch them; you do)

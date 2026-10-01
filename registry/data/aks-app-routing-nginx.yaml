@@ -10,7 +10,8 @@ id: aks-app-routing-nginx
 display_name: AKS application routing NGINX
 matchers:
   images:
-    - oss/kubernetes/ingress/nginx-ingress-controller # mcr.microsoft.com
+    # A provider build, so the matcher names its host (see CONTRIBUTING).
+    - mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller
 support:
   status: supported
   eol_date: "2026-11-30"

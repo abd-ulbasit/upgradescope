@@ -213,6 +213,19 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"bitnami/external-dns:0.14.2-debian-12-r4", "external-dns", "0.14.2"},
 		{"registry.k8s.io/metrics-server/metrics-server:v0.7.2", "metrics-server", "0.7.2"},
 		{"quay.io/prometheus-operator/prometheus-operator:v0.75.0", "prometheus-operator", "0.75.0"},
+		// Provider-managed builds follow the provider's support policy, not
+		// upstream's (#18): GKE network policy / Dataplane V2, AKS Calico,
+		// Azure CNI powered by Cilium, the AKS Istio and KEDA add-ons. No
+		// upstream entry claims them, also through a mirror.
+		{"gke.gcr.io/calico/node:v3.26.3-gke.13", "", ""},
+		{"mcr.microsoft.com/oss/calico/node:v3.28.2", "", ""},
+		{"mcr.microsoft.com/oss/cilium/cilium:1.16.6", "", ""},
+		{"gke.gcr.io/cilium/cilium:v1.15.10-gke.9", "", ""},
+		{"gcr.io/gke-release/calico/node:v3.26.3-gke.13", "", ""},
+		{"mcr.microsoft.com/oss/istio/pilot:1.24.3-distroless", "", ""},
+		{"mcr.microsoft.com/oss/kedacore/keda:2.14.1", "", ""},
+		{"harbor.corp.example/mcr.microsoft.com/oss/calico/node:v3.28.2", "", ""},
+		{"harbor.corp.example/mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller:v1.11.5", "aks-app-routing-nginx", "1.11.5"},
 		// Not add-ons the registry tracks.
 		{"nginx/nginx-ingress:3.6.0", "", ""}, // F5 NGINX Ingress Controller, a different product
 		{"docker.io/library/redis:7", "", ""},
