@@ -145,10 +145,10 @@ settings, so the read token still protects all data.
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.
   `runAsNonRoot` and the `RuntimeDefault` seccomp profile stay.
 - The server runs under its own ServiceAccount and mounts no API token.
-- `values.schema.json` rejects unknown keys, intervals under one minute (and
-  seconds-only or fractional forms such as `90s` or `1.5h`, which v0.1
-  accepted: write `1m30s`, `1h30m`) and malformed targets (`agent.targets`
-  must be `MAJOR.MINOR`) at render time.
+- `values.schema.json` rejects unknown keys, intervals under one minute
+  (`agent.interval` takes any Go duration of at least `1m`: `10m`, `90s`,
+  `1.5h`) and malformed targets (`agent.targets` must be `MAJOR.MINOR`) at
+  render time.
 
 ## Uninstall
 

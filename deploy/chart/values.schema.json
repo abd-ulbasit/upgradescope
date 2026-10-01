@@ -5,9 +5,9 @@
   "additionalProperties": false,
   "definitions": {
     "duration": {
-      "description": "Go duration of at least one minute, written with h/m/s units, e.g. 10m, 1h, 1m30s (90s is not accepted: write 1m30s).",
+      "description": "Go duration of at least one minute, e.g. 10m, 1h, 1m30s, 90s, 1.5h. One of its parts must be a minute or more on its own (1m, 60s, 0.017h and up), so a sum such as 30s30s is refused.",
       "type": "string",
-      "pattern": "^(0*[1-9][0-9]*h([0-9]+m)?|([0-9]+h)?0*[1-9][0-9]*m)([0-9]+(\\.[0-9]+)?s)?$"
+      "pattern": "^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(h|m|s|ms|us|µs|μs|ns))*((0*[1-9][0-9]*(\\.[0-9]*)?|0*\\.(0[2-9]|01[7-9]|[1-9])[0-9]*)h|0*[1-9][0-9]*(\\.[0-9]*)?m|0*([6-9][0-9]|[1-9][0-9]{2,})(\\.[0-9]*)?s)(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(h|m|s|ms|us|µs|μs|ns))*$"
     },
     "targets": {
       "description": "Kubernetes minor versions, e.g. [\"1.37\", \"1.38\"].",

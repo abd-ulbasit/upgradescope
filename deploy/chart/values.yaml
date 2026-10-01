@@ -36,9 +36,8 @@ rbac:
   helmSecrets: true
 
 agent:
-  # Evaluation interval (minimum 1m), written with h/m units such as 10m,
-  # 1h or 1m30s; the schema rejects seconds-only or fractional forms (90s,
-  # 300s, 1.5h) that v0.1 accepted.
+  # Evaluation interval: a Go duration of at least 1m, e.g. 10m, 1h, 1m30s,
+  # 300s or 1.5h.
   interval: 10m
   # Name of the ClusterReadiness object the agent manages.
   crName: cluster
