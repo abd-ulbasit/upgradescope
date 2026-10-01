@@ -25,7 +25,9 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 # Stage the freshly built dashboard where go:embed picks it up (same as
-# `make web`), replacing the committed copy.
+# `make web`), replacing the committed copy: COPY merges, so clear it first
+# or stale hashed assets would be embedded next to the new ones.
+RUN find internal/server/webdist -mindepth 1 ! -name .gitkeep -delete
 COPY --from=web /src/web/dist/ internal/server/webdist/
 ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
