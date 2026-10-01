@@ -39,6 +39,31 @@ type APIUsage struct {
 	Kind       string         `json:"kind"`
 	Count      int            `json:"count"`
 	Namespaces map[string]int `json:"namespaces,omitempty"` // ns → count; cluster-scoped key ""
+	// Objects identifies the objects behind Count, in collection order,
+	// capped at MaxObjectRefs; ObjectsOmitted counts the refs dropped by
+	// the cap. Collectors that cannot identify objects leave both empty.
+	Objects        []ObjectRef `json:"objects,omitempty"`
+	ObjectsOmitted int         `json:"objectsOmitted,omitempty"`
+}
+
+// MaxObjectRefs caps APIUsage.Objects so a render with thousands of objects
+// of one kind cannot bloat the inventory, the report or SARIF output.
+const MaxObjectRefs = 100
+
+// ObjectRef identifies one object using an API. Namespace/Name are the
+// object's identity (empty Namespace: metadata.namespace unset, or a
+// cluster-scoped object). File and Line are set only for objects read from
+// manifest text: File is slash-separated and relative to the scanned root
+// (empty for a single posted stream); Line is the 1-based line of the
+// object's apiVersion key. RenderedFrom is the Helm template the object was
+// rendered from, taken from helm template's "# Source: <chart>/templates/x.yaml"
+// comment.
+type ObjectRef struct {
+	Namespace    string `json:"namespace,omitempty"`
+	Name         string `json:"name,omitempty"`
+	File         string `json:"file,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	RenderedFrom string `json:"renderedFrom,omitempty"`
 }
 
 type DeprecatedCall struct { // one row of apiserver_requested_deprecated_apis

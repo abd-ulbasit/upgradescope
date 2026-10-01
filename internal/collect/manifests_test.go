@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -50,6 +51,23 @@ metadata:
 	psp := inv.APIUsage[1]
 	if psp.Group != "policy" || psp.Version != "v1beta1" || psp.Kind != "PodSecurityPolicy" || psp.Count != 2 || psp.Namespaces[""] != 2 {
 		t.Errorf("psp usage = %+v", psp)
+	}
+	// A posted stream has no file name; lines are stream lines.
+	wantRefs := []inventory.ObjectRef{{Name: "psp-a", Line: 1}, {Name: "psp-b", Line: 6}}
+	if !reflect.DeepEqual(psp.Objects, wantRefs) {
+		t.Errorf("psp objects = %+v, want %+v", psp.Objects, wantRefs)
+	}
+}
+
+// The gate skips non-manifest documents the same way --files does.
+func TestCollectManifestsSkipsNonManifestDocs(t *testing.T) {
+	stream := "- a\n- b\n---\njust a scalar\n---\nreplicaCount: 1\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n"
+	inv, err := CollectManifests(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("CollectManifests: %v", err)
+	}
+	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Kind != "Deployment" || inv.APIUsage[0].Objects[0].Line != 8 {
+		t.Fatalf("apiUsage = %+v, want only the Deployment at line 8", inv.APIUsage)
 	}
 }
 

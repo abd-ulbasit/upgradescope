@@ -5,6 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,6 +49,11 @@ type scanOptions struct {
 	// targetVersion is opts.target parsed once by validateScanOptions;
 	// runScan consumes it instead of re-parsing the raw string.
 	targetVersion inventory.Version
+	// fileBase is the directory files-mode object paths are relative to,
+	// as seen from the working directory (see manifestBase).
+	fileBase string
+	// stderr receives files-mode warnings; nil discards them.
+	stderr io.Writer
 }
 
 // runScan is the real I/O pipeline: kb.Load → collect (cluster or files) →
@@ -57,9 +66,17 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 
 	var inv inventory.Inventory
 	if opts.filesDir != "" {
-		inv, err = collect.CollectFiles(opts.filesDir)
+		var sum collect.FilesSummary
+		inv, sum, err = collect.CollectFiles(opts.filesDir)
 		if err != nil {
 			return engine.Report{}, fmt.Errorf("collect inventory: %w", err)
+		}
+		stderr := opts.stderr
+		if stderr == nil {
+			stderr = io.Discard
+		}
+		for _, w := range sum.Warnings {
+			fmt.Fprintf(stderr, "warning: skipped %s:%d: %v\n", path.Join(opts.fileBase, w.File), w.Line, w.Err)
 		}
 	} else {
 		clients, cerr := buildClients(opts.kubeconfig, opts.kubecontext)
@@ -102,6 +119,10 @@ func newScanCmd() *cobra.Command {
 			if err := validateScanOptions(&opts); err != nil {
 				return err
 			}
+			opts.stderr = cmd.ErrOrStderr()
+			if opts.filesDir != "" {
+				opts.fileBase = manifestBase(opts.filesDir)
+			}
 			report, err := runScan(opts)
 			if err != nil {
 				return err
@@ -119,7 +140,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "target Kubernetes minor version, e.g. 1.36 (required)")
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
-	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this directory instead of a live cluster")
+	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
 	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity: blocker|warning|never")
@@ -129,6 +150,29 @@ func newScanCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("files", "team-label")
 
 	return cmd
+}
+
+// manifestBase returns the directory that --files object paths
+// (collect.CollectFiles: relative to the scanned root; a single file's base
+// name) resolve against, slash-separated and relative to the working
+// directory when it lies inside it. CI runs from the repository root, and
+// SARIF URIs must be repository-relative for GitHub to place annotations.
+func manifestBase(filesDir string) string {
+	base := filesDir
+	if fi, err := os.Stat(filesDir); err == nil && !fi.IsDir() {
+		base = filepath.Dir(filesDir)
+	}
+	if filepath.IsAbs(base) {
+		if wd, err := os.Getwd(); err == nil {
+			if rel, err := filepath.Rel(wd, base); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				base = rel
+			}
+		}
+	}
+	if base = filepath.ToSlash(filepath.Clean(base)); base == "." {
+		return ""
+	}
+	return base
 }
 
 // validateScanOptions checks flag values and stores the parsed --target into

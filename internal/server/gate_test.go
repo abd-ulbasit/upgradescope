@@ -74,6 +74,45 @@ func TestGateManifestsOnly(t *testing.T) {
 	}
 }
 
+// A kind: List body is expanded like --files does: removed APIs inside the
+// List must block, not pass as one harmless v1/List object.
+func TestGateExpandsList(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	// testKB knows only PodSecurityPolicy: one direct item, one in a
+	// nested List.
+	list := `apiVersion: v1
+kind: List
+items:
+- apiVersion: policy/v1beta1
+  kind: PodSecurityPolicy
+  metadata: {name: restricted}
+- apiVersion: v1
+  kind: List
+  items:
+  - apiVersion: policy/v1beta1
+    kind: PodSecurityPolicy
+    metadata: {name: privileged}
+`
+	resp, raw := postGate(t, ts, "?target=1.35", "", list, "application/x-yaml")
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, raw)
+	}
+	var rep engine.Report
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		t.Fatalf("response is not a report: %v\n%s", err, raw)
+	}
+	if rep.Ready || len(rep.Findings) != 1 {
+		t.Fatalf("ready=%v findings=%+v, want not ready with one finding", rep.Ready, rep.Findings)
+	}
+	f := rep.Findings[0]
+	if f.Severity != engine.SevBlocker || f.Key != "removed-api/policy/v1beta1/PodSecurityPolicy" || !strings.Contains(f.Title, "(2 objects)") {
+		t.Fatalf("finding = %+v, want the removed PSP blocker covering both List items", f)
+	}
+}
+
 func TestGateSARIF(t *testing.T) {
 	s := newTestServer(t, newFakeStore(), func(c *Config) { c.Version = "v-test" })
 	ts := httptest.NewServer(s.Handler())
