@@ -18,6 +18,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/internal/sarif"
 )
 
 // ErrGateFailed signals findings at or above the --fail-on threshold.
@@ -132,8 +133,18 @@ func newScanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := writeReport(cmd.OutOrStdout(), opts.output, report); err != nil {
+			// JSON keeps object paths relative to the scanned root (the
+			// inventory contract); people and SARIF consumers resolve
+			// them from the working directory.
+			out := report
+			if opts.output != "json" {
+				out = withFileBase(report, opts.fileBase)
+			}
+			if err := writeReport(cmd.OutOrStdout(), opts.output, out); err != nil {
 				return err
+			}
+			if n := sarif.Unanchored(report); opts.output == "sarif" && n > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: %d finding(s) have no file location and are not in the SARIF output (GitHub rejects results without one); --output table or json lists them\n", n)
 			}
 			if gateFailed(report, opts.failOn) {
 				return ErrGateFailed
@@ -178,6 +189,30 @@ func manifestBase(filesDir string) string {
 		return ""
 	}
 	return base
+}
+
+// withFileBase returns a copy of r whose finding object paths are prefixed
+// with base (see manifestBase); r itself is not modified.
+func withFileBase(r engine.Report, base string) engine.Report {
+	if base == "" {
+		return r
+	}
+	findings := make([]engine.Finding, len(r.Findings))
+	for i, f := range r.Findings {
+		if len(f.Objects) > 0 {
+			objs := make([]inventory.ObjectRef, len(f.Objects))
+			for j, o := range f.Objects {
+				if o.File != "" {
+					o.File = path.Join(base, o.File)
+				}
+				objs[j] = o
+			}
+			f.Objects = objs
+		}
+		findings[i] = f
+	}
+	r.Findings = findings
+	return r
 }
 
 // validateScanOptions checks flag values and stores the parsed --target into

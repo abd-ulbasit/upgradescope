@@ -2,14 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-// execScanFiles runs the real scan pipeline (no stub) at --target 1.36 and
+// execScanFiles runs the real scan pipeline (no stub) at --target 1.36 (a
+// later --target wins) and
 // returns stdout, stderr and the error.
 func execScanFiles(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
@@ -111,6 +114,61 @@ func TestManifestBase(t *testing.T) {
 		if got := manifestBase(in); got != want {
 			t.Errorf("manifestBase(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The CI recipe: render next to the chart, scan the repo, upload SARIF.
+// Every result must point at a repository-relative file and line; findings
+// with no file (kb-stale at an uncovered target) are left out with a note.
+func TestScanFilesSARIFLocations(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"rendered/all.yaml":       "---\n# Source: demo/templates/cron.yaml\n" + removedAPIs,
+		"chart/templates/cm.yaml": "{{- if .Values.x }}\napiVersion: v1\n",
+		"chart/values.yaml":       "replicaCount: 1\n",
+	})
+	t.Chdir(dir)
+	out, stderr, err := execScanFiles(t, "--files", "rendered", "--output", "sarif", "--target", "1.37")
+	if ExitCode(err) != 2 {
+		t.Fatalf("ExitCode = %d (err %v), want 2", ExitCode(err), err)
+	}
+	var log struct {
+		Runs []struct {
+			Results []struct {
+				RuleID    string `json:"ruleId"`
+				Message   struct{ Text string }
+				Locations []struct {
+					PhysicalLocation struct {
+						ArtifactLocation struct{ URI string }
+						Region           struct{ StartLine int }
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &log); err != nil {
+		t.Fatalf("not SARIF: %v\n%s", err, out)
+	}
+	type loc struct {
+		rule, uri string
+		line      int
+	}
+	var got []loc
+	for _, r := range log.Runs[0].Results {
+		pl := r.Locations[0].PhysicalLocation
+		got = append(got, loc{r.RuleID, pl.ArtifactLocation.URI, pl.Region.StartLine})
+	}
+	want := []loc{
+		{"removed-api/batch/v1beta1/CronJob", "rendered/all.yaml", 3},
+		{"removed-api/networking.k8s.io/v1beta1/Ingress", "rendered/all.yaml", 8},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("results = %+v, want %+v", got, want)
+	}
+	if msg := log.Runs[0].Results[0].Message.Text; !strings.Contains(msg, "rendered from demo/templates/cron.yaml") {
+		t.Errorf("message %q lacks the helm source", msg)
+	}
+	if !strings.Contains(stderr, "note: 1 finding(s) have no file location and are not in the SARIF output") {
+		t.Errorf("stderr = %q, want the omitted-findings note", stderr)
 	}
 }
 

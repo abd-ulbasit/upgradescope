@@ -149,8 +149,11 @@ func TestGateSARIF(t *testing.T) {
 	if log.Runs[0].Tool.Driver.Version != "v-test" {
 		t.Errorf("tool version = %q, want v-test", log.Runs[0].Tool.Driver.Version)
 	}
-	if len(log.Runs[0].Results) != 1 || log.Runs[0].Results[0].Level != "error" || log.Runs[0].Results[0].RuleID != "removed-api" {
-		t.Fatalf("results = %+v, want one removed-api error", log.Runs[0].Results)
+	// A posted stream has no file names, and GitHub rejects a SARIF result
+	// without a physical location, so the gate's findings (still in the
+	// JSON response) carry no SARIF results.
+	if raw := string(raw); len(log.Runs[0].Results) != 0 || !strings.Contains(raw, `"results": []`) {
+		t.Fatalf("results = %+v, want none (no file locations in a posted stream)\n%s", log.Runs[0].Results, raw)
 	}
 }
 
