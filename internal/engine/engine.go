@@ -156,7 +156,13 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 			f.Detail = fmt.Sprintf(detail+": %s.", u.Count, nsDetail)
 		}
 		if len(managers) > 0 {
-			f.Detail += " Written by: " + strings.Join(managers, ", ") + "."
+			// Refs are capped (inventory.MaxObjectRefs): name the subset the
+			// managers come from when some were dropped.
+			by := " Written by: "
+			if u.ObjectsOmitted > 0 {
+				by = fmt.Sprintf(" Written by (first %d of %d objects): ", len(u.Objects), len(u.Objects)+u.ObjectsOmitted)
+			}
+			f.Detail += by + strings.Join(managers, ", ") + "."
 		}
 		out = append(out, f)
 	}

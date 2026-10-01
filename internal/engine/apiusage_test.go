@@ -237,6 +237,30 @@ func TestEvalAPIUsageAuthoredObjects(t *testing.T) {
 	}
 }
 
+// The collector keeps at most inventory.MaxObjectRefs refs, so when some
+// were dropped the managers come from a subset and the detail says so:
+// another writer may hide among the omitted objects.
+func TestEvalAPIUsageAuthoredObjectsOmittedRefs(t *testing.T) {
+	inv := inventory.Inventory{
+		APIUsage: []inventory.APIUsage{{
+			Group: "batch", Version: "v1beta1", Kind: "CronJob",
+			Count: 5, Namespaces: map[string]int{"default": 5},
+			Objects: []inventory.ObjectRef{
+				{Namespace: "default", Name: "a", Manager: "helm"},
+				{Namespace: "default", Name: "b", Manager: "helm"},
+			},
+			ObjectsOmitted: 3,
+		}},
+	}
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 25})
+	if len(fs) != 1 {
+		t.Fatalf("want 1 finding, got %d", len(fs))
+	}
+	if want := "5 object(s) written through this API version: default (5). Written by (first 2 of 5 objects): helm."; fs[0].Detail != want {
+		t.Errorf("detail = %q, want %q", fs[0].Detail, want)
+	}
+}
+
 func TestEvalAPIUsageUnknownGVKIgnored(t *testing.T) {
 	inv := inventory.Inventory{
 		APIUsage: []inventory.APIUsage{{Group: "apps", Version: "v1", Kind: "Deployment", Count: 5}},
