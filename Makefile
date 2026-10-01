@@ -142,6 +142,7 @@ hack-test:
 	./hack/kind-images_test.sh
 	./hack/e2e_test.sh
 	./hack/ci-concurrency_test.sh
+	./hack/ci-ok_test.sh
 
 .PHONY: demo-up demo-down
 demo-up:

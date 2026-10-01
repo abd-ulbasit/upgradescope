@@ -465,3 +465,26 @@ jobs:
           if [ "$pinned" != "$latest" ]; then
             echo "::warning::k8s.io/api $latest is available but gen-kb pins $pinned — check the kb-refresh PR or the 'kb-refresh is failing' issue"
           fi
+
+  # The one check to require in a branch ruleset (#58). The kube job names
+  # change with the matrix and most jobs skip on some events (docs-only PRs
+  # skip kube), so none of them is a stable required check. This job always
+  # runs and fails if anything it needs failed or was cancelled; skipped is
+  # fine, that is a job not meant for this event. A skipped required check
+  # counts as passing, hence if: always(). hack/ci-ok_test.sh (make
+  # hack-test) fails if a job is missing from needs.
+  ci-ok:
+    if: always()
+    needs: [changes, lint, test, build, vuln, web, helm, images, registry, pg-conformance, release-check, action, kube-matrix, kube, kb-freshness]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key) \(.value.result)"' <<<"$NEEDS" | sort | tee "$RUNNER_TEMP/results"
+          if bad=$(grep -Ev ' (success|skipped)$' "$RUNNER_TEMP/results"); then
+            echo "::error::not every job passed: $(tr '\n' ' ' <<<"$bad")"
+            exit 1
+          fi

@@ -190,6 +190,7 @@ kubectl and kubeconform are also checked against their upstream sha256
 | `action` | PRs touching release inputs, weekly | (needs a published release) | the composite Action installs the latest release archive and fails the gate with SARIF |
 | `registry` | PRs touching `registry/` | `go test ./registry/ && make eol-check` | registry entries are valid and in sync with endoflife.date |
 | `kb-freshness` | PR, push, weekly | `make gen-kb && git status` | the generated KB matches `tools/gen-kb`'s pinned `k8s.io/api` |
+| `ci-ok` | always | (aggregates the rest) | every other job passed or was skipped for this event; the one stable check to require on `main` |
 
 The `kube` job (`hack/e2e.sh`) runs per Kubernetes minor from
 `hack/kind-node-images.txt`, each pinned to a kind node image digest. It
