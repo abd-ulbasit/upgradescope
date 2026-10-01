@@ -21,11 +21,21 @@ func WriteTable(w io.Writer, r engine.Report) {
 	fmt.Fprintf(w, "KB:       %s\n", r.KBVersion)
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "SCORE  %d/100\n", r.Score)
-	ready := "no"
-	if r.Ready {
-		ready = "yes"
+	switch {
+	case r.Verdict == engine.VerdictUnknown:
+		// Name the required gaps right here: "unknown" is the answer only
+		// because of them. NOT ASSESSED below lists every gap.
+		fmt.Fprintf(w, "READY  unknown (required checks were not assessed)\n")
+		for _, g := range r.NotAssessed {
+			if g.Required {
+				fmt.Fprintf(w, "  %s: %s\n", g.Capability, g.Reason)
+			}
+		}
+	case r.Ready:
+		fmt.Fprintf(w, "READY  yes\n")
+	default:
+		fmt.Fprintf(w, "READY  no\n")
 	}
-	fmt.Fprintf(w, "READY  %s\n", ready)
 
 	for _, sev := range []engine.Severity{engine.SevBlocker, engine.SevWarning, engine.SevInfo} {
 		var group []engine.Finding
