@@ -64,7 +64,7 @@ runs:
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_VERSION: ${{ inputs.version }}
-      run: bash "$GITHUB_ACTION_PATH/run.sh" install
+      run: bash "$GITHUB_ACTION_PATH/action/run.sh" install
 
     - name: Scan manifests
       id: scan
@@ -74,7 +74,7 @@ runs:
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_VERSION: ${{ inputs.version }}
-      run: bash "$GITHUB_ACTION_PATH/run.sh" scan
+      run: bash "$GITHUB_ACTION_PATH/action/run.sh" scan
 
 branding:
   icon: arrow-up-circle
