@@ -108,6 +108,12 @@ func resolveTargets(spec crd.Spec, inv inventory.Inventory) (targets []inventory
 			notes = append(notes, fmt.Sprintf("targets: skipped invalid spec target %q", raw))
 			continue
 		}
+		// The CRD schema allows repeats; a second evaluation of the same
+		// target would duplicate its status row and its metric series.
+		if slices.Contains(targets, v) {
+			notes = append(notes, fmt.Sprintf("targets: ignored duplicate spec target %q", raw))
+			continue
+		}
 		targets = append(targets, v)
 	}
 	if len(targets) > 0 {

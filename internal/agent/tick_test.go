@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -248,6 +249,34 @@ func TestTickHonorsSpecTargets(t *testing.T) {
 	st := readCRStatus(t, dyn, crd.DefaultName)
 	if len(st.Targets) != 2 || st.Targets[0].Target != "1.36" || st.Targets[1].Target != "1.37" {
 		t.Fatalf("Targets = %+v, want spec targets [1.36 1.37]", st.Targets)
+	}
+}
+
+// A CR listing the same target twice gets one evaluation, one status row,
+// and a /metrics endpoint that still serves.
+func TestTickDuplicateSpecTargetsEvaluatedOnce(t *testing.T) {
+	cr := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": crd.Group + "/" + crd.Version,
+		"kind":       crd.Kind,
+		"metadata":   map[string]interface{}{"name": crd.DefaultName},
+		"spec":       map[string]interface{}{"targets": []interface{}{"1.36", "1.36"}},
+	}}
+	dyn := fakeDyn(cr)
+	r := testRunner(t, dyn, "") // CRD-only mode
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.last.reports) != 1 {
+		t.Errorf("reports = %d, want 1", len(r.last.reports))
+	}
+	if st := readCRStatus(t, dyn, crd.DefaultName); len(st.Targets) != 1 || st.Targets[0].Target != "1.36" {
+		t.Errorf("status targets = %+v, want one row for 1.36", st.Targets)
+	}
+
+	o := newObserver(slog.New(slog.NewTextHandler(io.Discard, nil)), mustKB(t), 10*time.Minute)
+	o.record(r.last)
+	if code, body := serve(t, o.handler(), "/metrics"); code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200\n%s", code, body)
 	}
 }
 

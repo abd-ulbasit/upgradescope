@@ -85,6 +85,26 @@ func TestResolveTargetsFromSpec(t *testing.T) {
 	}
 }
 
+// The CRD schema does not make spec.targets a set, so a hand-edited CR can
+// list a minor twice. It is evaluated once: a second report for the same
+// target would duplicate every per-target metric series and fail /metrics.
+func TestResolveTargetsDropsDuplicateSpecTargets(t *testing.T) {
+	targets, notes, err := resolveTargets(
+		crd.Spec{Targets: []string{"1.36", "1.37", "1.36"}},
+		inventory.Inventory{ServerVersion: "v1.35.2"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.Version{{Major: 1, Minor: 36}, {Major: 1, Minor: 37}}
+	if !slices.Equal(targets, want) {
+		t.Errorf("targets = %v, want %v", targets, want)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "duplicate") || !strings.Contains(notes[0], "1.36") {
+		t.Errorf("notes = %v, want one naming the duplicate 1.36", notes)
+	}
+}
+
 func TestResolveTargetsSkipsInvalidWithNote(t *testing.T) {
 	targets, notes, err := resolveTargets(
 		crd.Spec{Targets: []string{"latest", "1.37"}},

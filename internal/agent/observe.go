@@ -260,8 +260,15 @@ func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	for c, st := range good.caps {
 		ch <- prometheus.MustNewConstMetric(descCapability, prometheus.GaugeValue, boolValue(st.Available), string(c))
 	}
+	seen := map[string]bool{}
 	for _, r := range good.reports {
 		target := r.Target.String()
+		// A repeated target would fail the whole scrape with duplicate
+		// series; resolveTargets dedupes, this keeps /metrics up regardless.
+		if seen[target] {
+			continue
+		}
+		seen[target] = true
 		ch <- prometheus.MustNewConstMetric(descScore, prometheus.GaugeValue, float64(r.Score), target)
 		for _, v := range verdicts {
 			ch <- prometheus.MustNewConstMetric(descVerdict, prometheus.GaugeValue, boolValue(r.Verdict == v), target, string(v))

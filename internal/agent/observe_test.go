@@ -317,6 +317,27 @@ func TestObserverMetricsFromReports(t *testing.T) {
 	}
 }
 
+// Two reports for one target must not reach the registry as duplicate
+// series: that fails the whole scrape, tick metrics included. The first
+// report wins.
+func TestObserverMetricsSkipRepeatedTarget(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	o := newTestObserver(t, &now)
+	v := inventory.Version{Major: 1, Minor: 36}
+	o.record(tickReport{push: pushOff, reports: []engine.Report{
+		{Target: v, Score: 90, Verdict: engine.VerdictReady},
+		{Target: v, Score: 40, Verdict: engine.VerdictBlocked},
+	}})
+
+	code, body := serve(t, o.handler(), "/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200\n%s", code, body)
+	}
+	if want := `upgradescope_readiness_score{target="1.36"} 90`; !strings.Contains(body, want) {
+		t.Errorf("/metrics has no %s\n%s", want, body)
+	}
+}
+
 // A push failure is a WARN line on a completed tick; a tick failure is an
 // ERROR line carrying the failure streak.
 func TestObserverTickLogLevels(t *testing.T) {
