@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -129,7 +132,7 @@ func TestAgentCmdFlagsParsed(t *testing.T) {
 		interval: 5 * time.Minute, serverURL: "http://scope:8080", serverToken: "tok",
 		clusterName: "prod-eu-1", crName: "main", teamLabel: "squad",
 		forceSyncEvery: 30 * time.Minute, kubeconfig: "/tmp/kc", kubecontext: "ctx1",
-		manageCRD: true,
+		manageCRD: true, healthAddr: ":8081", logFormat: "text", logLevel: "info",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("opts = %+v, want %+v", got, want)
@@ -187,5 +190,61 @@ func TestBuildAgentRESTConfigFallsBackFromInCluster(t *testing.T) {
 	}
 	if cfg.Host != "https://127.0.0.1:6443" {
 		t.Errorf("Host = %q, want kubeconfig host (fallback path)", cfg.Host)
+	}
+}
+
+// Probes, metrics and log shape are flags; the defaults match the chart.
+func TestAgentObservabilityFlags(t *testing.T) {
+	got, err := execAgent(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.healthAddr != ":8081" || got.logFormat != "text" || got.logLevel != "info" {
+		t.Errorf("defaults: healthAddr/logFormat/logLevel = %q/%q/%q, want :8081/text/info",
+			got.healthAddr, got.logFormat, got.logLevel)
+	}
+	got, err = execAgent(t, "--health-addr=", "--log-format=json", "--log-level=debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.healthAddr != "" || got.logFormat != "json" || got.logLevel != "debug" {
+		t.Errorf("set: healthAddr/logFormat/logLevel = %q/%q/%q, want \"\"/json/debug",
+			got.healthAddr, got.logFormat, got.logLevel)
+	}
+}
+
+func TestAgentRejectsBadLogFlags(t *testing.T) {
+	for _, args := range [][]string{{"--log-format=xml"}, {"--log-level=loud"}} {
+		if _, err := execAgent(t, args...); err == nil {
+			t.Errorf("agent %v: want an error", args)
+		}
+	}
+}
+
+func TestNewAgentLogger(t *testing.T) {
+	var buf bytes.Buffer
+	log, err := newAgentLogger(&buf, "json", "warn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Info("dropped")
+	log.Warn("kept", "k", "v")
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("lines = %q, want only the WARN line", lines)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &m); err != nil || m["msg"] != "kept" || m["k"] != "v" {
+		t.Errorf("line %q (err %v), want JSON with msg=kept k=v", lines[0], err)
+	}
+
+	buf.Reset()
+	log, err = newAgentLogger(&buf, "text", "info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Info("hello", "k", "v")
+	if got := buf.String(); !strings.Contains(got, "msg=hello") || !strings.Contains(got, "k=v") {
+		t.Errorf("text line = %q, want logfmt msg=hello k=v", got)
 	}
 }

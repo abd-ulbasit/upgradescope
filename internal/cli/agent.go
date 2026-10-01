@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -31,11 +33,39 @@ type agentOptions struct {
 	kubecontext    string
 	targets        []string
 	manageCRD      bool
+	healthAddr     string
+	logFormat      string
+	logLevel       string
+}
+
+// newAgentLogger builds the agent's slog logger: format text (logfmt) or
+// json, level debug|info|warn|error.
+func newAgentLogger(w io.Writer, format, level string) (*slog.Logger, error) {
+	var lvl slog.Level
+	if err := lvl.UnmarshalText([]byte(level)); err != nil {
+		return nil, fmt.Errorf("--log-level %q: want debug, info, warn or error", level)
+	}
+	opts := &slog.HandlerOptions{Level: lvl}
+	switch format {
+	case "text":
+		return slog.New(slog.NewTextHandler(w, opts)), nil
+	case "json":
+		return slog.New(slog.NewJSONHandler(w, opts)), nil
+	default:
+		return nil, fmt.Errorf("--log-format %q: want text or json", format)
+	}
 }
 
 // runAgent is the real I/O pipeline behind `upgradescope agent`. A package
 // var so command tests can stub it (same pattern as runScan).
 var runAgent = func(ctx context.Context, opts agentOptions) error {
+	logger, err := newAgentLogger(os.Stderr, opts.logFormat, opts.logLevel)
+	if err != nil {
+		return err
+	}
+	// Code that logs through slog's package-level functions shares the
+	// format and level.
+	slog.SetDefault(logger)
 	kbData, err := kb.Load()
 	if err != nil {
 		return fmt.Errorf("load knowledge base: %w", err)
@@ -67,6 +97,8 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 		ForceSyncEvery:    opts.forceSyncEvery,
 		Targets:           opts.targets,
 		SkipCRDManagement: !opts.manageCRD,
+		HealthAddr:        opts.healthAddr,
+		Logger:            logger,
 	})
 }
 
@@ -107,6 +139,9 @@ func newAgentCmd() *cobra.Command {
 			if err := serverToken.resolve(cmd); err != nil {
 				return err
 			}
+			if _, err := newAgentLogger(io.Discard, opts.logFormat, opts.logLevel); err != nil {
+				return err // a typo fails before any cluster access
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return runAgent(ctx, opts)
@@ -124,6 +159,10 @@ func newAgentCmd() *cobra.Command {
 		"target minors, CSV, e.g. 1.37,1.38; when set, the ClusterReadiness spec.targets is reconciled to them every tick (overriding kubectl edits)")
 	cmd.Flags().BoolVar(&opts.manageCRD, "manage-crd", true,
 		"keep the ClusterReadiness CRD schema in step with this binary at startup (needs get/patch on that CRD); false = never touch the CRD")
+	cmd.Flags().StringVar(&opts.healthAddr, "health-addr", ":8081",
+		"listen address for /healthz, /readyz and /metrics (empty = disabled)")
+	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "log format: text (logfmt) or json")
+	cmd.Flags().StringVar(&opts.logLevel, "log-level", "info", "log level: debug, info, warn or error")
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: in-cluster config, then standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
 	return cmd

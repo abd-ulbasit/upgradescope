@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net"
+	"net/http"
 	"slices"
 	"time"
 
@@ -48,6 +50,12 @@ type Config struct {
 	// no read, no schema upgrade. The default keeps it in step with the
 	// embedded manifest at startup.
 	SkipCRDManagement bool
+	// HealthAddr is where /healthz, /readyz and /metrics listen, e.g.
+	// ":8081"; "" serves none of them.
+	HealthAddr string
+	// Logger receives the startup line and one line per tick; nil uses
+	// slog.Default().
+	Logger *slog.Logger
 }
 
 // applyDefaults fills zero values and rejects invalid combinations.
@@ -128,7 +136,8 @@ type runner struct {
 
 	lastHash string    // hash of the last successfully pushed inventory
 	lastPush time.Time // when it was pushed
-	tickErrs int       // failed ticks, for log context only
+
+	last tickReport // the latest tick's outcome, for the observer
 }
 
 func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Config) *runner {
@@ -149,11 +158,14 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 
 // tick is one loop iteration: collect → resolve targets → evaluate each →
 // WriteStatus (always, even when the server is unreachable) → push on hash
-// change or force interval. Partial failures are joined and returned for
-// logging; the caller never stops the loop on a tick error.
+// change or force interval. Partial failures are joined and returned; the
+// caller never stops the loop on a tick error. The outcome, with the push
+// result kept apart from the tick's own errors, is left in r.last.
 func (r *runner) tick(ctx context.Context) error {
 	var errs []error
+	r.last = tickReport{push: pushOff}
 	inv := r.collectFn(ctx)
+	r.last.caps = inv.Capabilities
 
 	// The CR may have been deleted between ticks; recreate, then read spec.
 	if err := crd.EnsureObject(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); err != nil {
@@ -189,18 +201,37 @@ func (r *runner) tick(ctx context.Context) error {
 		}
 		st = crd.StatusFromReports(reports, inv.ServerVersion, AgentVersion, r.now())
 		st.NotAssessed = append(st.NotAssessed, notes...)
+		r.last.reports = reports
 	}
 
 	if err := crd.WriteStatus(ctx, r.dyn, r.cfg.CRName, st); err != nil {
 		errs = append(errs, err)
 	}
+	r.last.err = errors.Join(errs...)
 
 	if r.pusher != nil {
-		if err := r.maybePush(ctx, inv); err != nil {
+		pushed, err := r.maybePush(ctx, inv)
+		switch {
+		case err != nil:
+			r.last.push, r.last.pushErr = pushFailed, err
 			errs = append(errs, err)
+		case pushed:
+			r.last.push = pushOK
+		default:
+			r.last.push = pushUnchanged
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// runTick runs one tick under the tick deadline and records its duration.
+func (r *runner) runTick(ctx context.Context) tickReport {
+	ctx, cancel := context.WithTimeout(ctx, tickTimeout(r.cfg.Interval))
+	defer cancel()
+	start := time.Now()
+	_ = r.tick(ctx) // the report in r.last carries the errors, split by kind
+	r.last.duration = time.Since(start)
+	return r.last
 }
 
 // maybePush sends the snapshot iff its content hash changed since the last
@@ -208,14 +239,15 @@ func (r *runner) tick(ctx context.Context) error {
 // the hash gate, not the pusher's buffer: lastHash/lastPush only advance on
 // success, so after a failed push the same content still differs from
 // lastHash next tick and a fresh payload is offered (replacing any payload
-// the pusher kept buffered) and flushed again.
-func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) error {
+// the pusher kept buffered) and flushed again. pushed reports whether a
+// snapshot was sent.
+func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) (pushed bool, err error) {
 	hash, raw, err := snapshotHash(inv)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if hash == r.lastHash && r.now().Sub(r.lastPush) < r.cfg.ForceSyncEvery {
-		return nil
+		return false, nil
 	}
 	name := r.cfg.ClusterName
 	if name == "" {
@@ -229,10 +261,10 @@ func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) error {
 		Inventory:     raw,
 	})
 	if err := r.pusher.flush(ctx); err != nil {
-		return err
+		return false, err
 	}
 	r.lastHash, r.lastPush = hash, r.now()
-	return nil
+	return true, nil
 }
 
 // snapshotHash returns (sha256 hex of canonical inventory JSON, wire JSON).
@@ -256,12 +288,48 @@ func snapshotHash(inv inventory.Inventory) (hash string, raw []byte, err error) 
 
 // Run executes the continuous loop until ctx is canceled (returns nil — a
 // cancel is a graceful stop, not an error). The first tick runs immediately;
-// later ticks fire every Interval ±10% jitter. Tick errors are logged and
-// counted, never fatal: the loop never dies on a tick error.
+// later ticks fire every Interval ±10% jitter, each under tickTimeout. Every
+// tick logs one line and updates the metrics; tick errors are never fatal:
+// the loop never dies on a tick error. With HealthAddr set, /healthz,
+// /readyz and /metrics are served until Run returns.
 func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, apiext apiextensionsclient.Interface, k kb.KB, cfg Config) error {
 	if err := cfg.applyDefaults(); err != nil {
 		return err
 	}
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	obs := newObserver(log, k, cfg.Interval)
+	healthAddr := ""
+	if cfg.HealthAddr != "" {
+		// Bound before anything else so the probes answer during startup;
+		// a taken port fails the start instead of leaving probes dark.
+		ln, err := net.Listen("tcp", cfg.HealthAddr)
+		if err != nil {
+			return fmt.Errorf("health listener: %w", err)
+		}
+		healthAddr = ln.Addr().String()
+		srv := &http.Server{Handler: obs.handler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+				log.Error("health listener stopped", "err", err)
+			}
+		}()
+		defer func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(sctx)
+		}()
+	}
+	server := cfg.ServerURL
+	if server == "" {
+		server = "off (CRD-only)"
+	}
+	log.Info(msgStarting, "version", AgentVersion, "kbVersion", k.Version, "maxKnownK8s", k.MaxKnownK8s.String(),
+		"interval", cfg.Interval.String(), "tickTimeout", tickTimeout(cfg.Interval).String(),
+		"crName", cfg.CRName, "server", server, "healthAddr", healthAddr)
+
 	if !cfg.SkipCRDManagement {
 		if err := crd.EnsureCRD(ctx, apiext); err != nil {
 			if errors.Is(err, crd.ErrCRDNotInstalled) {
@@ -269,17 +337,12 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 			}
 			// Non-fatal otherwise: the CRD exists, the schema upgrade did
 			// not land (e.g. a narrower custom role denies patch).
-			slog.Warn("could not bring the ClusterReadiness CRD up to date; continuing with the installed schema", "err", err)
+			log.Warn("could not bring the ClusterReadiness CRD up to date; continuing with the installed schema", "err", err)
 		}
 	}
 	r := newRunner(clients, dyn, k, cfg)
 	for {
-		if err := r.tick(ctx); err != nil {
-			r.tickErrs++
-			slog.Error("tick failed", "err", err, "consecutiveFailures", r.tickErrs)
-		} else {
-			r.tickErrs = 0
-		}
+		obs.record(r.runTick(ctx))
 		timer := time.NewTimer(jitter(cfg.Interval))
 		select {
 		case <-ctx.Done():
