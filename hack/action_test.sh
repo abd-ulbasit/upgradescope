@@ -47,7 +47,7 @@ fi
 # On PRs and pushes, CI's action job runs only when the changes job's
 # release filter matches; each file the job tests must be in it.
 filter=$(awk '/^ *release:$/ { on = 1; next } on && !/^ *(- |#)/ { on = 0 } on' .github/workflows/ci.yml)
-for f in action.yml 'action/**' hack/action_test.sh internal/cli/output_json.go internal/cli/output_markdown.go; do
+for f in action.yml 'action/**' hack/action_test.sh internal/cli/scan.go internal/cli/output_json.go internal/cli/output_markdown.go internal/cli/output_sarif.go 'internal/sarif/**'; do
   if grep -qxF "              - '$f'" <<<"$filter"; then
     ok "ci.yml's release filter runs the action job on $f"
   else

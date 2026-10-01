@@ -94,9 +94,13 @@ jobs:
               - 'action.yml'
               - 'action/**'
               - 'hack/action_test.sh'
-              # run.sh parses the JSON report and prints the Markdown one
+              # what run.sh relies on: scan's flags, --fail-on and exit
+              # codes, and the SARIF, JSON and Markdown reports
+              - 'internal/cli/scan.go'
               - 'internal/cli/output_json.go'
               - 'internal/cli/output_markdown.go'
+              - 'internal/cli/output_sarif.go'
+              - 'internal/sarif/**'
               - 'Makefile'
               - 'hack/release-check.sh'
               - 'go.mod'
