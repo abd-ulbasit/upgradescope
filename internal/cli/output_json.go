@@ -7,17 +7,28 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
+// reportSchemaVersion versions the shape of the JSON report. Stability
+// promise: within one schemaVersion, fields are only ever added — never
+// renamed, removed, retyped or given a new meaning — so consumers must
+// ignore fields they do not know. Any breaking change bumps it. toolVersion
+// is informational (the binary that produced the report) and carries no
+// compatibility meaning.
+const reportSchemaVersion = 1
+
 // WriteJSON renders the report as canonical two-space-indented JSON with a
 // trailing newline. This is the machine-readable contract; field names come
-// from the engine.Report struct tags and must stay stable. A `teams` field
-// (per-team scores, teamless bucket keyed "unattributed") is added at
-// presentation time when any finding exists — it is computed here, never
-// stored in the engine report.
+// from the engine.Report struct tags and must stay stable (see
+// reportSchemaVersion). schemaVersion and toolVersion lead the object. A
+// `teams` field (per-team scores, teamless bucket keyed "unattributed") is
+// added at presentation time when any finding exists — it is computed here,
+// never stored in the engine report.
 func WriteJSON(w io.Writer, r engine.Report) error {
 	out := struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		ToolVersion   string `json:"toolVersion"`
 		engine.Report
 		Teams map[string]engine.TeamScore `json:"teams,omitempty"`
-	}{Report: r, Teams: teamScoresForOutput(r)}
+	}{SchemaVersion: reportSchemaVersion, ToolVersion: version, Report: r, Teams: teamScoresForOutput(r)}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
