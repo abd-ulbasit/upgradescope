@@ -11,7 +11,9 @@
 // The group/version imports live in zz_generated_imports.go, written by
 // internal/genimports from `go list k8s.io/api/...`. After bumping
 // k8s.io/api, `go generate ./...` is the only step: it rewrites the import
-// list, tidies go.mod, and regenerates the dataset.
+// list, tidies go.mod, and regenerates the dataset. Entries of the
+// previously written dataset whose types upstream has since deleted are
+// carried forward as tombstones (see carryForward), never dropped.
 package main
 
 //go:generate go run ./internal/genimports -out zz_generated_imports.go
@@ -27,6 +29,7 @@ import (
 	"reflect"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -53,8 +56,21 @@ type replacementIface interface {
 // inventory.Version) and the CI kb-freshness job.
 type version struct{ Major, Minor int }
 
-func (v version) MarshalJSON() ([]byte, error) {
-	return json.Marshal(fmt.Sprintf("%d.%d", v.Major, v.Minor))
+func (v version) String() string { return fmt.Sprintf("%d.%d", v.Major, v.Minor) }
+
+func (v version) MarshalJSON() ([]byte, error) { return json.Marshal(v.String()) }
+
+// UnmarshalJSON reads the canonical "1.36" form back, so gen-kb can load
+// the previously committed dataset (see carryForward).
+func (v *version) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("version: want a \"major.minor\" string, got %s", b)
+	}
+	if _, err := fmt.Sscanf(s, "%d.%d", &v.Major, &v.Minor); err != nil || v.String() != s {
+		return fmt.Errorf("version: invalid %q", s)
+	}
+	return nil
 }
 
 type gvkOut struct {
@@ -71,7 +87,13 @@ type entry struct {
 	Deprecated  *version `json:"deprecated,omitempty"`
 	Removed     *version `json:"removed,omitempty"`
 	Replacement *gvkOut  `json:"replacement,omitempty"`
+	// RemovedInferred marks a tombstone: upstream deleted the type's
+	// package without ever tagging a removal, so Removed is the k8s.io/api
+	// minor in which it disappeared (see carryForward).
+	RemovedInferred bool `json:"removedInferred,omitempty"`
 }
+
+func (e entry) gvk() gvkOut { return gvkOut{Group: e.Group, Version: e.Version, Kind: e.Kind} }
 
 type output struct {
 	GeneratedFrom string  `json:"generatedFrom"`
@@ -94,13 +116,17 @@ func main() {
 	}
 
 	var entries []entry
+	upstream := map[gvkOut]bool{} // every GVK the pinned modules still register
+	var noLifecycle []string
 	for k, t := range scheme.AllKnownTypes() {
 		if skipKind(k) {
 			continue
 		}
+		upstream[gvkOut{Group: k.Group, Version: k.Version, Kind: k.Kind}] = true
 		obj := reflect.New(t).Interface()
 		in, ok := obj.(introducedIface)
 		if !ok {
+			noLifecycle = append(noLifecycle, k.GroupVersion().String()+" "+k.Kind)
 			continue // no generated lifecycle data for this type
 		}
 		maj, min := in.APILifecycleIntroduced()
@@ -132,6 +158,23 @@ func main() {
 	if len(entries) < 100 {
 		log.Fatalf("gen-kb: only %d entries extracted (want >= 100) — did upstream rename the APILifecycle* methods?", len(entries))
 	}
+	sort.Strings(noLifecycle)
+	for _, s := range noLifecycle {
+		log.Printf("gen-kb: skipped %s (no APILifecycle* methods)", s)
+	}
+
+	apiVer := k8sAPIModuleVersion()
+	maxKnown := maxKnownK8s(apiVer)
+
+	prev, err := readDataset(*out)
+	if err != nil {
+		log.Fatalf("gen-kb: reading previous dataset: %v", err)
+	}
+	entries, tombstoned := carryForward(prev, entries, upstream, maxKnown)
+	for _, e := range tombstoned {
+		log.Printf("gen-kb: carried forward %s/%s %s (gone upstream; removed %s, inferred=%v)",
+			e.Group, e.Version, e.Kind, e.Removed, e.RemovedInferred)
+	}
 
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
@@ -144,10 +187,9 @@ func main() {
 		return a.Kind < b.Kind
 	})
 
-	apiVer := k8sAPIModuleVersion()
 	doc := output{
 		GeneratedFrom: "k8s.io/api " + apiVer,
-		MaxKnownK8s:   maxKnownK8s(apiVer),
+		MaxKnownK8s:   maxKnown.String(),
 		Entries:       entries,
 	}
 	buf, err := json.MarshalIndent(doc, "", "  ")
@@ -191,16 +233,20 @@ func k8sAPIModuleVersion() string {
 }
 
 // maxKnownK8s maps a k8s.io/api module version to the Kubernetes minor it
-// tracks: "v0.36.1" → "1.36".
-func maxKnownK8s(apiVersion string) string {
+// tracks: "v0.36.1" → 1.36.
+func maxKnownK8s(apiVersion string) version {
 	parts := strings.Split(strings.TrimPrefix(apiVersion, "v"), ".")
 	if len(parts) < 2 || parts[0] != "0" {
 		log.Fatalf("gen-kb: unexpected k8s.io/api version %q", apiVersion)
 	}
-	if parts[1] == "0" {
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		log.Fatalf("gen-kb: unexpected k8s.io/api version %q", apiVersion)
+	}
+	if minor == 0 {
 		// A pseudo-version like v0.0.0-20260101000000-abcdef would silently
 		// map to "1.0"; require a real tagged release instead.
 		log.Fatalf("gen-kb: k8s.io/api version %q looks like a pseudo-version; pin a tagged release", apiVersion)
 	}
-	return "1." + parts[1]
+	return version{Major: 1, Minor: minor}
 }

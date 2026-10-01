@@ -91,6 +91,24 @@ func TestParseLifecycleFile(t *testing.T) {
 		t.Errorf("legacy Removed = %v, want 1.25", lf.Entries[0].Removed)
 	}
 
+	// Tombstones carried forward by gen-kb for a package upstream deleted
+	// without tagging a removal carry removedInferred.
+	tomb := []byte(`{
+		"generatedFrom": "k8s.io/api v0.37.1",
+		"maxKnownK8s": "1.37",
+		"entries": [
+			{"group":"scheduling.k8s.io","version":"v1alpha2","kind":"Workload",
+			 "introduced":"1.35","removed":"1.37","removedInferred":true}
+		]
+	}`)
+	tf, err := parseLifecycle(tomb)
+	if err != nil {
+		t.Fatalf("parseLifecycle(tombstone) error = %v", err)
+	}
+	if !tf.Entries[0].RemovedInferred || tf.Entries[0].Removed == nil || *tf.Entries[0].Removed != (inventory.Version{Major: 1, Minor: 37}) {
+		t.Errorf("tombstone entry = %+v, want removed 1.37 with RemovedInferred", tf.Entries[0])
+	}
+
 	if _, err := parseLifecycle([]byte(`{not json`)); err == nil {
 		t.Error("parseLifecycle(corrupt) = nil error, want error")
 	}

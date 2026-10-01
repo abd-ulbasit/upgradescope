@@ -20,6 +20,10 @@ type APILifecycleEntry struct {
 	Deprecated  *inventory.Version `json:"deprecated,omitempty"`
 	Removed     *inventory.Version `json:"removed,omitempty"`
 	Replacement *GVK               `json:"replacement,omitempty"`
+	// RemovedInferred marks a tombstone tools/gen-kb carried forward after
+	// upstream deleted the type's package without ever tagging a removal:
+	// Removed is then the k8s.io/api minor the package disappeared in.
+	RemovedInferred bool `json:"removedInferred,omitempty"`
 }
 
 type GVK struct {
