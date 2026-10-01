@@ -11,6 +11,7 @@ import (
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -134,10 +135,25 @@ func TestGateSARIF(t *testing.T) {
 					Version string `json:"version"`
 				} `json:"driver"`
 			} `json:"tool"`
+			Invocations []struct {
+				ExecutionSuccessful        bool `json:"executionSuccessful"`
+				ToolExecutionNotifications []struct {
+					Level   string `json:"level"`
+					Message struct {
+						Text string `json:"text"`
+					} `json:"message"`
+					Properties map[string]string `json:"properties"`
+				} `json:"toolExecutionNotifications"`
+			} `json:"invocations"`
 			Results []struct {
 				RuleID string `json:"ruleId"`
 				Level  string `json:"level"`
 			} `json:"results"`
+			Properties struct {
+				Ready           *bool `json:"ready"`
+				Score           int   `json:"score"`
+				OmittedFindings int   `json:"omittedFindings"`
+			} `json:"properties"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(raw, &log); err != nil {
@@ -149,11 +165,31 @@ func TestGateSARIF(t *testing.T) {
 	if log.Runs[0].Tool.Driver.Version != "v-test" {
 		t.Errorf("tool version = %q, want v-test", log.Runs[0].Tool.Driver.Version)
 	}
+	sariftest.AssertGitHubAcceptable(t, raw)
 	// A posted stream has no file names, and GitHub rejects a SARIF result
-	// without a physical location, so the gate's findings (still in the
-	// JSON response) carry no SARIF results.
-	if raw := string(raw); len(log.Runs[0].Results) != 0 || !strings.Contains(raw, `"results": []`) {
-		t.Fatalf("results = %+v, want none (no file locations in a posted stream)\n%s", log.Runs[0].Results, raw)
+	// without a physical location, so the gate's findings carry no SARIF
+	// results...
+	run := log.Runs[0]
+	if raw := string(raw); len(run.Results) != 0 || !strings.Contains(raw, `"results": []`) {
+		t.Fatalf("results = %+v, want none (no file locations in a posted stream)\n%s", run.Results, raw)
+	}
+	// ...but the document must not read as a clean pass: the blocker is an
+	// error notification naming the object and its stream line, and the
+	// run records the failed verdict.
+	if p := run.Properties; p.Ready == nil || *p.Ready || p.Score != 75 || p.OmittedFindings != 1 {
+		t.Errorf("run.properties = %+v, want ready=false score=75 omittedFindings=1", p)
+	}
+	if len(run.Invocations) != 1 || !run.Invocations[0].ExecutionSuccessful || len(run.Invocations[0].ToolExecutionNotifications) != 1 {
+		t.Fatalf("invocations = %+v, want one notification for the omitted blocker\n%s", run.Invocations, raw)
+	}
+	n := run.Invocations[0].ToolExecutionNotifications[0]
+	if n.Level != "error" || n.Properties["findingKey"] != "removed-api/policy/v1beta1/PodSecurityPolicy" {
+		t.Errorf("notification = %+v, want an error for the removed PSP", n)
+	}
+	for _, part := range []string{"PodSecurityPolicy", "payments-prod/restricted (line 1)"} {
+		if !strings.Contains(n.Message.Text, part) {
+			t.Errorf("notification message %q lacks %q", n.Message.Text, part)
+		}
 	}
 }
 

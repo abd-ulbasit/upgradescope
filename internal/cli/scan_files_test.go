@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 )
 
 // execScanFiles runs the real scan pipeline (no stub) at --target 1.36 (a
@@ -167,8 +169,13 @@ func TestScanFilesSARIFLocations(t *testing.T) {
 	if msg := log.Runs[0].Results[0].Message.Text; !strings.Contains(msg, "rendered from demo/templates/cron.yaml") {
 		t.Errorf("message %q lacks the helm source", msg)
 	}
-	if !strings.Contains(stderr, "note: 1 finding(s) have no file location and are not in the SARIF output") {
+	if !strings.Contains(stderr, "note: 1 finding(s) have no file location, so they are not SARIF results") ||
+		!strings.Contains(stderr, "tool execution notifications") {
 		t.Errorf("stderr = %q, want the omitted-findings note", stderr)
+	}
+	sariftest.AssertGitHubAcceptable(t, []byte(out))
+	if !strings.Contains(out, `"omittedFindings": 1`) || !strings.Contains(out, "knowledge base") {
+		t.Errorf("SARIF does not record the omitted kb-stale finding:\n%s", out)
 	}
 }
 

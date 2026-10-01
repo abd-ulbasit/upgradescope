@@ -144,7 +144,7 @@ func newScanCmd() *cobra.Command {
 				return err
 			}
 			if n := sarif.Unanchored(report); opts.output == "sarif" && n > 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: %d finding(s) have no file location and are not in the SARIF output (GitHub rejects results without one); --output table or json lists them\n", n)
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: %d finding(s) have no file location, so they are not SARIF results (GitHub rejects results without one); the SARIF lists them as tool execution notifications, and --output table or json shows them in full\n", n)
 			}
 			if gateFailed(report, opts.failOn) {
 				return ErrGateFailed

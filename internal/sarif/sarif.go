@@ -24,8 +24,33 @@ type sarifLog struct {
 }
 
 type sarifRun struct {
-	Tool    sarifTool     `json:"tool"`
-	Results []sarifResult `json:"results"`
+	Tool        sarifTool           `json:"tool"`
+	Invocations []sarifInvocation   `json:"invocations"`
+	Results     []sarifResult       `json:"results"`
+	Properties  *sarifRunProperties `json:"properties"`
+}
+
+// sarifInvocation reports what did not fit in results: one notification
+// per finding without a file location, and per finding whose affected
+// objects are not all listed.
+type sarifInvocation struct {
+	ExecutionSuccessful        bool                `json:"executionSuccessful"`
+	ToolExecutionNotifications []sarifNotification `json:"toolExecutionNotifications,omitempty"`
+}
+
+type sarifNotification struct {
+	Level      string            `json:"level"`
+	Message    sarifText         `json:"message"`
+	Properties map[string]string `json:"properties,omitempty"`
+}
+
+// sarifRunProperties carries the verdict, so a consumer that cannot see
+// the omitted findings as results can still gate on the document.
+type sarifRunProperties struct {
+	Ready           bool `json:"ready"`
+	Score           int  `json:"score"`
+	Findings        int  `json:"findings"`
+	OmittedFindings int  `json:"omittedFindings"`
 }
 
 type sarifTool struct {
@@ -148,20 +173,34 @@ func anchored(f engine.Finding) []inventory.ObjectRef {
 // accepts: GitHub rejects the whole file if any result lacks a physical
 // location, so every result carries one (artifactLocation.uri = the
 // object's file, region.startLine = its apiVersion line) and findings
-// without any file location are omitted (see Unanchored). One result per
-// (finding, located object), in report order; one rule per finding Key
+// without any file location are not results (see Unanchored). One result
+// per (finding, located object), in report order; one rule per finding Key
 // (falling back to the category), listed only when it has results, with
 // the finding's remediation as help and its first citation as helpUri.
 // toolVersion stamps tool.driver.version ("" omits it).
+//
+// Nothing is dropped silently: every unanchored finding is a tool
+// execution notification at its severity's level (a /gate stream has no
+// file names, so all of its findings land there), objects not listed as
+// results are counted in a note, and run.properties records ready, score
+// and the counts, so the document never reads as a clean pass that the
+// report is not.
 func Write(w io.Writer, r engine.Report, toolVersion string) error {
 	rules := []sarifRule{}
 	ruleIndex := map[string]int{}
 	results := []sarifResult{}
+	notes := []sarifNotification{}
+	omitted := 0
 
 	for _, f := range r.Findings {
 		objs := anchored(f)
 		if len(objs) == 0 {
+			omitted++
+			notes = append(notes, notification(f, level(f.Severity), unanchoredMessage(f)))
 			continue
+		}
+		if n := f.ObjectsOmitted + len(f.Objects) - len(objs); n > 0 {
+			notes = append(notes, notification(f, "note", unlistedMessage(f, n)))
 		}
 		id := f.Key
 		if id == "" {
@@ -198,7 +237,11 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 				Version:        toolVersion,
 				Rules:          rules,
 			}},
-			Results: results,
+			Invocations: []sarifInvocation{{ExecutionSuccessful: true, ToolExecutionNotifications: notes}},
+			Results:     results,
+			Properties: &sarifRunProperties{
+				Ready: r.Ready, Score: r.Score, Findings: len(r.Findings), OmittedFindings: omitted,
+			},
 		}},
 	}
 
@@ -251,14 +294,7 @@ func rule(id string, f engine.Finding) sarifRule {
 // message describes one located object: the finding, which object, where
 // it was rendered from, and the fix.
 func message(f engine.Finding, o inventory.ObjectRef) string {
-	name := o.Name
-	if name == "" {
-		name = "(unnamed)"
-	}
-	if o.Namespace != "" {
-		name = o.Namespace + "/" + name
-	}
-	msg := f.Title + ": " + name
+	msg := f.Title + ": " + objectName(o)
 	if o.RenderedFrom != "" {
 		msg += " (rendered from " + o.RenderedFrom + ")"
 	}
@@ -267,6 +303,101 @@ func message(f engine.Finding, o inventory.ObjectRef) string {
 		msg += " Fix: " + f.Remediation + "."
 	}
 	return msg
+}
+
+// maxListed bounds the objects a notification names.
+const maxListed = 5
+
+// notification wraps a message about finding f; its properties identify
+// the finding for consumers that match on keys.
+func notification(f engine.Finding, lvl, msg string) sarifNotification {
+	key := f.Key
+	if key == "" {
+		key = string(f.Category)
+	}
+	return sarifNotification{Level: lvl, Message: sarifText{Text: msg}, Properties: map[string]string{
+		"findingKey": key, "category": string(f.Category), "severity": string(f.Severity),
+	}}
+}
+
+// unanchoredMessage describes a finding that is not a result: what it is,
+// its evidence, the objects it names (a /gate stream's carry lines), and
+// the fix.
+func unanchoredMessage(f engine.Finding) string {
+	msg := "Not reported as a result (no file location): " + sentence(f.Title)
+	if f.Detail != "" {
+		msg += " " + sentence(f.Detail)
+	}
+	if len(f.Objects) > 0 {
+		msg += " Objects: " + objectList(f.Objects, f.ObjectsOmitted) + "."
+	}
+	if f.Remediation != "" {
+		msg += " Fix: " + sentence(f.Remediation)
+	}
+	return msg
+}
+
+// unlistedMessage counts the n affected objects of an anchored finding
+// that are not results: refs without a file, and refs beyond the
+// inventory.MaxObjectRefs that are recorded per finding.
+func unlistedMessage(f engine.Finding, n int) string {
+	var loose []inventory.ObjectRef
+	for _, o := range f.Objects {
+		if o.File == "" || o.Line < 1 {
+			loose = append(loose, o)
+		}
+	}
+	msg := fmt.Sprintf("%s: %d more affected object(s) are not listed as results", f.Title, n)
+	if len(loose) > 0 {
+		msg += ": " + objectList(loose, f.ObjectsOmitted)
+	} else {
+		msg += fmt.Sprintf(" (at most %d objects are recorded per finding)", inventory.MaxObjectRefs)
+	}
+	return msg + "."
+}
+
+// objectList names up to maxListed objects, then counts the rest plus
+// extra (objects never recorded).
+func objectList(objs []inventory.ObjectRef, extra int) string {
+	var names []string
+	for i, o := range objs {
+		if i == maxListed {
+			break
+		}
+		name := objectName(o)
+		switch {
+		case o.File != "" && o.Line > 0:
+			name += fmt.Sprintf(" (%s:%d)", o.File, o.Line)
+		case o.Line > 0:
+			name += fmt.Sprintf(" (line %d)", o.Line)
+		}
+		names = append(names, name)
+	}
+	if more := len(objs) - len(names) + extra; more > 0 {
+		names = append(names, fmt.Sprintf("and %d more", more))
+	}
+	return strings.Join(names, ", ")
+}
+
+// objectName is "namespace/name", "name" or "(unnamed)".
+func objectName(o inventory.ObjectRef) string {
+	name := o.Name
+	if name == "" {
+		name = "(unnamed)"
+	}
+	if o.Namespace != "" {
+		name = o.Namespace + "/" + name
+	}
+	return name
+}
+
+// sentence ends s with a full stop unless it already ends a sentence.
+func sentence(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasSuffix(s, ".") || strings.HasSuffix(s, "!") || strings.HasSuffix(s, "?") {
+		return s
+	}
+	return s + "."
 }
 
 // fileURI turns a slash-separated path into a SARIF URI reference:
