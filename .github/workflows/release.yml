@@ -7,8 +7,10 @@ name: release
 #     signed
 #   - the Helm chart at oci://ghcr.io/abd-ulbasit/charts/upgradescope,
 #     version X.Y.Z / appVersion vX.Y.Z, signed
-# then checks, anonymously and on a fresh kind cluster, that what it
-# published is installable.
+# Before publishing, it fails on a stale committed dashboard and on a
+# linux/amd64 build that does not serve it at /. After publishing, it checks,
+# anonymously and on a fresh kind cluster, that what it published is
+# installable.
 #
 # workflow_dispatch with snapshot=true runs the same build with nothing
 # published or signed (no tag needed) and uploads dist/ as an artifact.
@@ -110,6 +112,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The gate before anything is published (the release is not a draft,
+      # so a check after GoReleaser could only turn the run red). Build the
+      # linux/amd64 binary from the same .goreleaser.yml build — flags,
+      # ldflags, embedded webdist — and require it to serve the dashboard.
+      - name: GoReleaser (linux/amd64 binary for the pre-publish check)
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: >-
+            build --single-target --clean --output ${{ runner.temp }}/upgradescope
+            ${{ env.PUBLISH != 'true' && '--snapshot' || '' }}
+        env:
+          GOOS: linux
+          GOARCH: amd64
+
+      - name: Binary serves the dashboard at / (before publishing)
+        run: |
+          bin="$RUNNER_TEMP/upgradescope"
+          "$bin" --version
+          "$bin" serve --listen 127.0.0.1:18080 --ingest-token smoke --db "$RUNNER_TEMP/smoke.sqlite" &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT # also on failure: a live server would hold the step open
+          for _ in $(seq 1 50); do curl -fsS -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 0.2; done
+          got="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' http://127.0.0.1:18080/)"
+          case "$got" in
+            '200 text/html'*) echo "GET / -> $got" ;;
+            *) echo "::error::GET / returned '$got', want 200 text/html (dashboard missing from the binary)"; exit 1 ;;
+          esac
+
       - name: GoReleaser (publish)
         if: env.PUBLISH == 'true'
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
@@ -127,20 +159,6 @@ jobs:
           distribution: goreleaser
           version: '~> v2'
           args: release --snapshot --clean --skip=publish,sign,sbom
-
-      - name: Release binary serves the dashboard at /
-        run: |
-          bin="$(jq -r '.[] | select(.type=="Binary" and .goos=="linux" and .goarch=="amd64") | .path' dist/artifacts.json)"
-          "$bin" --version
-          "$bin" serve --listen 127.0.0.1:18080 --ingest-token smoke --db "$RUNNER_TEMP/smoke.sqlite" &
-          pid=$!
-          for _ in $(seq 1 50); do curl -fsS -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 0.2; done
-          ct="$(curl -fsS -o /dev/null -w '%{content_type}' http://127.0.0.1:18080/)"
-          kill "$pid"
-          case "$ct" in
-            text/html*) echo "GET / -> $ct" ;;
-            *) echo "::error::GET / returned '$ct', want text/html (dashboard missing from the binary)"; exit 1 ;;
-          esac
 
       - name: Package Helm chart (version/appVersion from the tag)
         if: env.PUBLISH == 'true'

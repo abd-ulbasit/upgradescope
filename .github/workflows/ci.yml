@@ -297,12 +297,12 @@ jobs:
           "$bin" --version
           "$bin" serve --listen 127.0.0.1:18080 --ingest-token smoke --db "$RUNNER_TEMP/smoke.sqlite" &
           pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT # also on failure: a live server would hold the step open
           for _ in $(seq 1 50); do curl -fsS -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 0.2; done
-          ct="$(curl -fsS -o /dev/null -w '%{content_type}' http://127.0.0.1:18080/)"
-          kill "$pid"
-          case "$ct" in
-            text/html*) echo "GET / -> $ct" ;;
-            *) echo "::error::GET / returned '$ct', want text/html (dashboard missing from the binary)"; exit 1 ;;
+          got="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' http://127.0.0.1:18080/)"
+          case "$got" in
+            '200 text/html'*) echo "GET / -> $got" ;;
+            *) echo "::error::GET / returned '$got', want 200 text/html (dashboard missing from the binary)"; exit 1 ;;
           esac
 
   # The composite Action as a consumer runs it: installs the latest release
