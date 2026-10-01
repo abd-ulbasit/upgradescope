@@ -164,6 +164,27 @@ items:
 	}
 }
 
+// An invalid separator ("----", "---foo") makes the rest of the stream
+// unsplittable, but the document before it is complete and still counted:
+// dropping it would let a removed API slip out of the gate while the
+// warning names only the separator line.
+func TestCollectFilesInvalidSeparatorKeepsPrecedingDoc(t *testing.T) {
+	dir := writeTree(t, map[string]string{"rendered.yaml": ingressV1beta1 + "----\napiVersion: v1\nkind: ConfigMap\n"})
+	inv, sum, err := CollectFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Kind != "Ingress" || sum.Objects != 1 {
+		t.Fatalf("api usage = %+v, summary %+v; want the Ingress before the separator", inv.APIUsage, sum)
+	}
+	if got := inv.APIUsage[0].Objects[0].Line; got != 1 {
+		t.Errorf("ingress line = %d, want 1", got)
+	}
+	if len(sum.Warnings) != 1 || sum.Warnings[0].Line != 6 || !strings.Contains(sum.Warnings[0].Err.Error(), "separator") {
+		t.Errorf("warnings = %+v, want one for the separator on line 6", sum.Warnings)
+	}
+}
+
 // A file named explicitly is parsed whatever its extension
 // (`kustomize build overlays/prod > rendered`).
 func TestCollectFilesSingleFileAnyExtension(t *testing.T) {

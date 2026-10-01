@@ -50,7 +50,8 @@ type gvk struct{ group, version, kind string }
 // whose items are all typed objects — is expanded into its items,
 // recursively; the wrapper itself is not counted. A document that fails to
 // parse is returned in bad; an invalid separator makes the rest of the
-// stream unsplittable, so it ends parsing with one bad entry. err is only
+// stream unsplittable, so it ends parsing with one bad entry (the document
+// before it is still parsed, as YAMLReader has returned it). err is only
 // ever a read error from r.
 func parseManifestStream(r io.Reader) (objs []manifestObject, bad []docError, err error) {
 	br := bufio.NewReader(r)
@@ -85,6 +86,7 @@ func parseManifestStream(r io.Reader) (objs []manifestObject, bad []docError, er
 			lineNo++
 			if rest, ok := bytes.CutPrefix(line, []byte("---")); ok {
 				if t := bytes.TrimSpace(rest); len(t) > 0 && t[0] != '#' {
+					flush() // the document before it is complete
 					bad = append(bad, docError{line: lineNo, err: fmt.Errorf("invalid YAML document separator: %s", t)})
 					return objs, bad, nil
 				}
