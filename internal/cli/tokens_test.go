@@ -3,10 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
@@ -129,4 +133,81 @@ func TestRootRegistersTokens(t *testing.T) {
 		}
 	}
 	t.Fatal("tokens command not registered on root")
+}
+
+// runSecretCmd registers one secret flag (env UPGRADESCOPE_TEST_SECRET) on
+// a throwaway command and returns the resolved value.
+func runSecretCmd(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	var value string
+	cmd := &cobra.Command{Use: "x", SilenceUsage: true, SilenceErrors: true}
+	secret := addSecretFlag(cmd, &value, "secret", "UPGRADESCOPE_TEST_SECRET", "a secret")
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error { return secret.resolve(cmd) }
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return value, err
+}
+
+// Precedence: an explicit flag wins, then --<name>-file, then the env var.
+func TestSecretFlagPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "secret")
+	if err := os.WriteFile(file, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		env     string
+		args    []string
+		want    string
+		wantErr string
+	}{
+		{"nothing set", "", nil, "", ""},
+		{"env only", "from-env", nil, "from-env", ""},
+		{"file only, trailing newline trimmed", "", []string{"--secret-file", file}, "from-file", ""},
+		{"flag beats env", "from-env", []string{"--secret", "from-flag"}, "from-flag", ""},
+		{"explicit empty flag beats env", "from-env", []string{"--secret", ""}, "", ""},
+		{"file beats env", "from-env", []string{"--secret-file", file}, "from-file", ""},
+		{"flag and file conflict", "", []string{"--secret", "x", "--secret-file", file}, "", "secret-file"},
+		{"empty file", "", []string{"--secret-file", empty}, "", "empty"},
+		{"missing file", "", []string{"--secret-file", filepath.Join(dir, "nope")}, "", "--secret-file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UPGRADESCOPE_TEST_SECRET", tc.env)
+			got, err := runSecretCmd(t, tc.args...)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("value = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// tokens commands read the Postgres URL from $UPGRADESCOPE_DB_URL too, but
+// an explicit --db (SQLite) must win over it.
+func TestTokensDBURLFromEnv(t *testing.T) {
+	t.Chdir(t.TempDir()) // a regression would create ./upgradescope.db
+	t.Setenv("UPGRADESCOPE_DB_URL", "postgres://127.0.0.1:1/nope?connect_timeout=1")
+	_, _, err := execTokens(t, "create", "prod")
+	if err == nil || !strings.Contains(err.Error(), "postgres") {
+		t.Fatalf("create with $UPGRADESCOPE_DB_URL: err = %v, want a postgres open error", err)
+	}
+	if _, _, err := execTokens(t, "create", "prod", "--db", filepath.Join(t.TempDir(), "t.db")); err != nil {
+		t.Fatalf("explicit --db must win over $UPGRADESCOPE_DB_URL: %v", err)
+	}
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -113,7 +114,11 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 }
 
 func newServeCmd() *cobra.Command {
-	var opts serveOptions
+	var (
+		opts    serveOptions
+		db      dbFlags
+		secrets []*secretFlag
+	)
 	cmd := &cobra.Command{
 		Use:           "serve",
 		Short:         "Run the upgradescope server: snapshot ingest, REST API, history, notifications",
@@ -121,6 +126,15 @@ func newServeCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			for _, s := range secrets {
+				if err := s.resolve(cmd); err != nil {
+					return err
+				}
+			}
+			if err := db.resolve(cmd); err != nil {
+				return err
+			}
+			opts.db, opts.dbURL = db.db, db.dbURL
 			if err := validateServeOptions(&opts); err != nil {
 				return err
 			}
@@ -137,20 +151,22 @@ func newServeCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.listen, "listen", "127.0.0.1:8080", "address to listen on (loopback by default; use :8080 for all interfaces)")
-	cmd.Flags().StringVar(&opts.db, "db", "upgradescope.db", "path to the SQLite database (parent directory is created)")
-	cmd.Flags().StringVar(&opts.dbURL, "db-url", "", "Postgres URL (postgres://user:pass@host:5432/db); mutually exclusive with --db")
-	cmd.MarkFlagsMutuallyExclusive("db", "db-url")
-	cmd.Flags().StringVar(&opts.ingestToken, "ingest-token", "", "shared bearer token agents present to push snapshots (required; per-cluster tokens via 'upgradescope tokens create' are also accepted on ingest)")
-	cmd.Flags().StringVar(&opts.readToken, "read-token", "", "bearer token for the read API and /api/v1/gate (empty = OPEN read access; refused on non-loopback --listen without --allow-anonymous-read)")
+	db.register(cmd)
+	secrets = []*secretFlag{
+		addSecretFlag(cmd, &opts.ingestToken, "ingest-token", "UPGRADESCOPE_INGEST_TOKEN",
+			"shared bearer token agents present to push snapshots (required; per-cluster tokens via 'upgradescope tokens create' are also accepted on ingest)"),
+		addSecretFlag(cmd, &opts.readToken, "read-token", "UPGRADESCOPE_READ_TOKEN",
+			"bearer token for the read API and /api/v1/gate (empty = OPEN read access; refused on non-loopback --listen without --allow-anonymous-read)"),
+		addSecretFlag(cmd, &opts.slackWebhook, "slack-webhook", "UPGRADESCOPE_SLACK_WEBHOOK",
+			"Slack incoming-webhook URL for delta notifications"),
+		addSecretFlag(cmd, &opts.webhook, "webhook", "UPGRADESCOPE_WEBHOOK_URL",
+			"generic webhook URL (POSTed the raw event JSON)"),
+	}
 	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
-	cmd.Flags().StringVar(&opts.slackWebhook, "slack-webhook", "", "Slack incoming-webhook URL for delta notifications")
-	cmd.Flags().StringVar(&opts.webhook, "webhook", "", "generic webhook URL (POSTed the raw event JSON)")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression)")
 	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes")
-	_ = cmd.MarkFlagRequired("ingest-token")
-
 	return cmd
 }
 
@@ -173,6 +189,9 @@ func isLoopbackListen(listen string) bool {
 // opts.parsedTargets/parsedTeamMap (single parse site — runServe never sees
 // the raw values).
 func validateServeOptions(opts *serveOptions) error {
+	if opts.ingestToken == "" {
+		return errors.New("--ingest-token (or $UPGRADESCOPE_INGEST_TOKEN, or --ingest-token-file) is required")
+	}
 	if opts.maxSnapshotBytes <= 0 {
 		return fmt.Errorf("--max-snapshot-bytes must be positive, got %d", opts.maxSnapshotBytes)
 	}

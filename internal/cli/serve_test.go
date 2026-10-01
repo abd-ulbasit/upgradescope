@@ -168,6 +168,60 @@ func TestServeAnonymousReadGuard(t *testing.T) {
 	}
 }
 
+// Every serve secret has an env var and a -file variant, so it can stay
+// out of argv (ps, /proc/<pid>/cmdline, shell history).
+func TestServeSecretsFromEnvAndFiles(t *testing.T) {
+	t.Setenv("UPGRADESCOPE_INGEST_TOKEN", "env-ingest")
+	t.Setenv("UPGRADESCOPE_READ_TOKEN", "env-read")
+	t.Setenv("UPGRADESCOPE_SLACK_WEBHOOK", "https://hooks.slack.test/env")
+	t.Setenv("UPGRADESCOPE_WEBHOOK_URL", "https://hook.test/env")
+	t.Setenv("UPGRADESCOPE_DB_URL", "postgres://env/db")
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error {
+		got = opts
+		return nil
+	}
+	if err := execServe(t, nil, capture); err != nil {
+		t.Fatal(err)
+	}
+	if got.ingestToken != "env-ingest" || got.readToken != "env-read" ||
+		got.slackWebhook != "https://hooks.slack.test/env" || got.webhook != "https://hook.test/env" ||
+		got.dbURL != "postgres://env/db" {
+		t.Fatalf("env secrets not applied: %+v", got)
+	}
+
+	// -file variants beat the environment; explicit flags beat both.
+	dir := t.TempDir()
+	files := map[string]string{}
+	for _, name := range []string{"ingest-token", "read-token", "slack-webhook", "webhook", "db-url"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("file-"+name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		files[name] = p
+	}
+	args := []string{"--ingest-token", "flag-ingest"}
+	for _, name := range []string{"read-token", "slack-webhook", "webhook", "db-url"} {
+		args = append(args, "--"+name+"-file", files[name])
+	}
+	if err := execServe(t, args, capture); err != nil {
+		t.Fatal(err)
+	}
+	if got.ingestToken != "flag-ingest" || got.readToken != "file-read-token" ||
+		got.slackWebhook != "file-slack-webhook" || got.webhook != "file-webhook" ||
+		got.dbURL != "file-db-url" {
+		t.Fatalf("file/flag precedence wrong: %+v", got)
+	}
+
+	// An explicit --db selects SQLite even when $UPGRADESCOPE_DB_URL is set.
+	if err := execServe(t, []string{"--db", "x.db"}, capture); err != nil {
+		t.Fatal(err)
+	}
+	if got.dbURL != "" || got.db != "x.db" {
+		t.Fatalf("--db must win over $UPGRADESCOPE_DB_URL, got db %q dbURL %q", got.db, got.dbURL)
+	}
+}
+
 func TestServeBodyLimitFlags(t *testing.T) {
 	var got serveOptions
 	err := execServe(t, []string{"--ingest-token", "t", "--max-snapshot-bytes", "1048576", "--max-gate-bytes", "4096"},
