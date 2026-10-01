@@ -140,16 +140,12 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 			}
 			e := flagged[kb.GVK{Group: gr.Group, Version: s.version, Kind: s.kind}]
 			targets = append(targets, usageTarget{
-				gv:   schema.GroupVersion{Group: gr.Group, Version: s.version}.String(),
-				kind: s.kind,
-				// listV is flagged only when every served version is.
+				gv: schema.GroupVersion{Group: gr.Group, Version: s.version}.String(),
+				// listV is flagged only when every listable served version is.
 				allObjects: e.Replacement == nil && listV.flagged,
 				usage: inventory.APIUsage{Group: gr.Group, Version: s.version, Kind: s.kind,
 					Namespaces: map[string]int{}},
 			})
-		}
-		if len(targets) == 0 {
-			continue
 		}
 		attempted++
 		gvr := schema.GroupVersionResource{Group: gr.Group, Version: listV.version, Resource: gr.Resource}
@@ -198,8 +194,7 @@ type servedVersion struct {
 // while its resource is listed.
 type usageTarget struct {
 	gv         string // "group/version", or "v1" for core
-	kind       string
-	allObjects bool // the type goes away: every object counts
+	allObjects bool   // the type goes away: every object counts
 	usage      inventory.APIUsage
 }
 
