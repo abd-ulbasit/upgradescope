@@ -2,8 +2,11 @@ apiVersion: v2
 name: upgradescope
 description: Continuous Kubernetes upgrade-readiness scanner — read-only agent publishing a ClusterReadiness CRD, with an optional in-cluster server for history, what-if, and notifications.
 type: application
-version: 0.1.0
-appVersion: "0.2.0"
+# Both follow the latest release tag. The release workflow stamps them from
+# the tag when it packages the chart (vX.Y.Z -> version X.Y.Z, appVersion
+# vX.Y.Z), and appVersion is the default image tag.
+version: 0.1.1
+appVersion: "v0.1.1"
 home: https://github.com/abd-ulbasit/upgradescope
 sources:
   - https://github.com/abd-ulbasit/upgradescope
