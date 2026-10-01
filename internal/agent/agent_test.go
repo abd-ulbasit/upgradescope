@@ -47,6 +47,16 @@ func TestConfigServerURLRequiresToken(t *testing.T) {
 	}
 }
 
+// A bad --targets value fails at startup, not as a per-tick note: the
+// agent would otherwise write it into spec.targets on every tick.
+func TestConfigRejectsInvalidTargets(t *testing.T) {
+	cfg := Config{Targets: []string{"1.37", "latest"}}
+	err := cfg.applyDefaults()
+	if err == nil || !strings.Contains(err.Error(), "latest") {
+		t.Fatalf("err = %v, want invalid-target error naming the value", err)
+	}
+}
+
 func TestResolveTargetsFromSpec(t *testing.T) {
 	targets, notes, err := resolveTargets(
 		crd.Spec{Targets: []string{"1.36", "1.37"}},

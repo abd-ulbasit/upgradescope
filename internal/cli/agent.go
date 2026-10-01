@@ -29,6 +29,8 @@ type agentOptions struct {
 	forceSyncEvery time.Duration
 	kubeconfig     string
 	kubecontext    string
+	targets        []string
+	manageCRD      bool
 }
 
 // runAgent is the real I/O pipeline behind `upgradescope agent`. A package
@@ -56,13 +58,15 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 	}
 	agent.AgentVersion = version
 	return agent.Run(ctx, clients, dyn, apiext, kbData, agent.Config{
-		Interval:       opts.interval,
-		ServerURL:      opts.serverURL,
-		ServerToken:    opts.serverToken,
-		ClusterName:    opts.clusterName,
-		CRName:         opts.crName,
-		TeamLabel:      opts.teamLabel,
-		ForceSyncEvery: opts.forceSyncEvery,
+		Interval:          opts.interval,
+		ServerURL:         opts.serverURL,
+		ServerToken:       opts.serverToken,
+		ClusterName:       opts.clusterName,
+		CRName:            opts.crName,
+		TeamLabel:         opts.teamLabel,
+		ForceSyncEvery:    opts.forceSyncEvery,
+		Targets:           opts.targets,
+		SkipCRDManagement: !opts.manageCRD,
 	})
 }
 
@@ -116,6 +120,10 @@ func newAgentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.crName, "cr-name", "cluster", "ClusterReadiness object name")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour, "push a snapshot even if unchanged after this long")
+	cmd.Flags().StringSliceVar(&opts.targets, "targets", nil,
+		"target minors, CSV, e.g. 1.37,1.38; when set, the ClusterReadiness spec.targets is reconciled to them every tick (overriding kubectl edits)")
+	cmd.Flags().BoolVar(&opts.manageCRD, "manage-crd", true,
+		"keep the ClusterReadiness CRD schema in step with this binary at startup (needs get/patch on that CRD); false = never touch the CRD")
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: in-cluster config, then standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
 	return cmd

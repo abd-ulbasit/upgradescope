@@ -6,6 +6,7 @@ package crd
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -157,20 +158,50 @@ func ReadSpec(ctx context.Context, dyn dynamic.Interface, name string) (Spec, bo
 	return s, true, nil
 }
 
-// EnsureObject creates the ClusterReadiness CR with an empty spec if absent.
-// It never overwrites an existing object (user-set spec.targets survive).
-func EnsureObject(ctx context.Context, dyn dynamic.Interface, name string) error {
+// EnsureObject creates the ClusterReadiness CR if absent, with spec.targets
+// set to targets (empty spec when there are none). It never overwrites an
+// existing object; SetTargets does that.
+func EnsureObject(ctx context.Context, dyn dynamic.Interface, name string, targets []string) error {
+	spec := map[string]interface{}{}
+	if len(targets) > 0 {
+		spec["targets"] = stringsToInterfaces(targets)
+	}
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": Group + "/" + Version,
 		"kind":       Kind,
 		"metadata":   map[string]interface{}{"name": name},
-		"spec":       map[string]interface{}{},
+		"spec":       spec,
 	}}
 	_, err := dyn.Resource(GVR()).Create(ctx, obj, metav1.CreateOptions{})
 	if err == nil || apierrors.IsAlreadyExists(err) {
 		return nil
 	}
 	return fmt.Errorf("create clusterreadiness %q: %w", name, err)
+}
+
+// SetTargets replaces spec.targets of an existing ClusterReadiness with a
+// merge patch, leaving the rest of the object alone.
+func SetTargets(ctx context.Context, dyn dynamic.Interface, name string, targets []string) error {
+	body, err := json.Marshal(map[string]interface{}{
+		"spec": map[string]interface{}{"targets": targets},
+	})
+	if err != nil {
+		return fmt.Errorf("encode targets patch: %w", err)
+	}
+	if _, err := dyn.Resource(GVR()).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("set clusterreadiness %q spec.targets: %w", name, err)
+	}
+	return nil
+}
+
+// stringsToInterfaces converts for unstructured content, which only holds
+// []interface{} lists.
+func stringsToInterfaces(ss []string) []interface{} {
+	out := make([]interface{}, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }
 
 // WriteStatus replaces the status subresource, retrying on conflict with a

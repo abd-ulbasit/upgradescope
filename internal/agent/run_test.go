@@ -2,14 +2,17 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
@@ -47,6 +50,59 @@ func TestRunInvalidConfig(t *testing.T) {
 		fakeAPIExt(), mustKB(t), Config{Interval: time.Second})
 	if err == nil {
 		t.Fatal("Run with sub-minimum interval: want error")
+	}
+}
+
+// runOneTick starts Run, waits for the first status write, cancels, and
+// requires a clean (nil) return.
+func runOneTick(t *testing.T, apiext *apiextfake.Clientset, cfg Config) {
+	t.Helper()
+	dyn := fakeDyn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, fakeClients(t, "v1.35.2"), dyn, apiext, mustKB(t), cfg) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		obj, err := dyn.Resource(crd.GVR()).Get(context.Background(), crd.DefaultName, metav1.GetOptions{})
+		if err == nil {
+			if _, found, _ := unstructured.NestedMap(obj.Object, "status"); found {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first tick never wrote CRD status")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+// --manage-crd=false (chart agent.manageCRD=false): the agent has no RBAC
+// on CRDs at all, so it must not even read the CRD.
+func TestRunSkipsCRDWhenNotManaged(t *testing.T) {
+	apiext := fakeAPIExt()
+	runOneTick(t, apiext, Config{SkipCRDManagement: true})
+	if a := apiext.Actions(); len(a) != 0 {
+		t.Errorf("apiextensions actions = %v, want none", a)
+	}
+}
+
+// A missing CRD the agent may not create is a clear startup error, not a
+// warning followed by a 404 on every tick.
+func TestRunFailsWhenCRDMissingAndNotCreatable(t *testing.T) {
+	apiext := apiextfake.NewClientset()
+	apiext.PrependReactor("create", "customresourcedefinitions",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, "x", errors.New("RBAC"))
+		})
+	err := Run(context.Background(), fakeClients(t, "v1.35.2"), fakeDyn(), apiext, mustKB(t), Config{})
+	if !errors.Is(err, crd.ErrCRDNotInstalled) {
+		t.Fatalf("Run err = %v, want crd.ErrCRDNotInstalled", err)
 	}
 }
 
