@@ -122,7 +122,7 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: '~> v2'
+          version: v2.17.1 # GORELEASER_VERSION in the Makefile; make check-toolchain compares them
           args: >-
             build --single-target --clean --output ${{ runner.temp }}/upgradescope
             ${{ env.PUBLISH != 'true' && '--snapshot' || '' }}
@@ -149,7 +149,7 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: '~> v2'
+          version: v2.17.1 # GORELEASER_VERSION in the Makefile; make check-toolchain compares them
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -159,7 +159,7 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: '~> v2'
+          version: v2.17.1 # GORELEASER_VERSION in the Makefile; make check-toolchain compares them
           args: release --snapshot --clean --skip=publish,sign,sbom
 
       - name: Package Helm chart (version/appVersion from the tag)
