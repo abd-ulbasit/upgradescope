@@ -571,3 +571,48 @@ func getExportFor(t *testing.T, ts *httptest.Server, clusterID int64, query stri
 	}
 	return resp, []byte(buf.String())
 }
+
+// baselineCountingStore counts notification-baseline reads, one per target
+// evaluated with a sink configured.
+type baselineCountingStore struct {
+	store.Store
+	mu    sync.Mutex
+	reads int
+}
+
+func (c *baselineCountingStore) LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (store.Evaluation, error) {
+	c.mu.Lock()
+	c.reads++
+	c.mu.Unlock()
+	return c.Store.LatestKnownEvaluation(ctx, clusterID, target)
+}
+
+// TestDuplicatePushSkipsFullEvaluation: the agent's hourly force-sync
+// re-sends an unchanged inventory. When nothing is stale the push must not
+// evaluate every target (and read every notification baseline) only for
+// the commit to discard it as a duplicate.
+func TestDuplicatePushSkipsFullEvaluation(t *testing.T) {
+	st := &baselineCountingStore{Store: newFakeStore()}
+	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", Notifier: &recordingNotifier{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return aug1 }
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	body := pushReqBody(t, testInventoryWithPSP())
+	if resp, out := postSnapshot(t, ts, "ingest-tok", body, false); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first push = %d %v", resp.StatusCode, out)
+	}
+	st.mu.Lock()
+	st.reads = 0
+	st.mu.Unlock()
+	if resp, out := postSnapshot(t, ts, "ingest-tok", body, false); resp.StatusCode != http.StatusOK {
+		t.Fatalf("duplicate push = %d %v", resp.StatusCode, out)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.reads != 0 {
+		t.Errorf("duplicate push read %d notification baselines, want 0 (nothing stale, nothing evaluated)", st.reads)
+	}
+}

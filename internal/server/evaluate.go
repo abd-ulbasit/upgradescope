@@ -193,6 +193,18 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	// Server-side team override (spec: labels + server override) — rewrite
 	// namespace→team attribution before evaluation; stored reports carry the
 	// mapped teams. The stored snapshot keeps the original labels.
+	// A duplicate (the agent's hourly force-sync) is the common push: go
+	// straight to re-evaluating what is stale, instead of evaluating every
+	// target for the commit to discard. The commit still checks the hash,
+	// for a push racing this one.
+	latest, err := s.cfg.Store.LatestSnapshot(ctx, cluster.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
+	}
+	if err == nil && latest.Hash == snap.Hash {
+		return latest.ID, true, s.reevaluate(ctx, cluster, latest.ID, inv)
+	}
+
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
