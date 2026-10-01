@@ -267,6 +267,46 @@ func TestCollectAPIUsageTypeRemovedKindCountsEveryObject(t *testing.T) {
 	}
 }
 
+// On 1.19–1.21, extensions/v1beta1 ingresses is its own group/resource
+// with only a deprecated version, yet it is the same storage that
+// networking.k8s.io serves at v1. Listing it there keeps the scanner off
+// the deprecated endpoint (no self-inflicted deprecated-calls row at
+// 1.22), and one LIST serves both groups' targets.
+func TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated(t *testing.T) {
+	lifecycle := append(ingressLifecycle(), kb.APILifecycleEntry{
+		Group: "extensions", Version: "v1beta1", Kind: "Ingress", Introduced: inventory.Version{Major: 1, Minor: 1}, Deprecated: ver(1, 14), Removed: ver(1, 22),
+		Replacement: &kb.GVK{Group: "networking.k8s.io", Version: "v1", Kind: "Ingress"},
+	})
+	meta := metaClient(servedAt("Ingress", []string{"extensions/v1beta1", "networking.k8s.io/v1", "networking.k8s.io/v1beta1"},
+		obj{namespace: "default", name: "via-extensions", managed: []metav1.ManagedFieldsEntry{wrote("helm", "extensions/v1beta1")}},
+		obj{namespace: "default", name: "via-networking-beta", managed: []metav1.ManagedFieldsEntry{wrote("argocd", "networking.k8s.io/v1beta1")}},
+		obj{namespace: "default", name: "via-v1", managed: []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", "networking.k8s.io/v1")}},
+	))
+	disc := fakeDiscovery(
+		resources("extensions/v1beta1", ingresses),
+		resources("networking.k8s.io/v1", ingresses),
+		resources("networking.k8s.io/v1beta1", ingresses),
+	)
+
+	var inv inventory.Inventory
+	if err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.APIUsage{
+		{Group: "extensions", Version: "v1beta1", Kind: "Ingress", Count: 1, Namespaces: map[string]int{"default": 1},
+			Objects: []inventory.ObjectRef{{Namespace: "default", Name: "via-extensions", Manager: "helm"}}},
+		{Group: "networking.k8s.io", Version: "v1beta1", Kind: "Ingress", Count: 1, Namespaces: map[string]int{"default": 1},
+			Objects: []inventory.ObjectRef{{Namespace: "default", Name: "via-networking-beta", Manager: "argocd"}}},
+	}
+	if !reflect.DeepEqual(inv.APIUsage, want) {
+		t.Errorf("api usage = %#v\nwant       %#v", inv.APIUsage, want)
+	}
+	wantLists := []schema.GroupVersionResource{{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}}
+	if got := listedGVRs(meta); !reflect.DeepEqual(got, wantLists) {
+		t.Errorf("listed %v, want exactly %v", got, wantLists)
+	}
+}
+
 func TestListVersionOrder(t *testing.T) {
 	v := func(version string, flagged bool) servedVersion {
 		return servedVersion{version: version, kind: "K", flagged: flagged, list: true}

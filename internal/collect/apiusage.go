@@ -51,7 +51,8 @@ var internalManagers = map[string]bool{
 // apiserver_requested_deprecated_apis. Instead, each resource with a
 // flagged version that the cluster still serves is listed once,
 // metadata-only and paged, at a version that is not deprecated (see
-// listVersion), and each object is attributed per flagged entry:
+// listVersion and replacementList; resources that share storage across
+// groups share the LIST), and each object is attributed per flagged entry:
 //
 //   - the KB entry has no replacement and no non-deprecated version of the
 //     resource is served: the type itself goes away, so every object counts;
@@ -126,21 +127,35 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 		}
 	}
 
-	attempted, succeeded := 0, 0
-	var usages []inventory.APIUsage
+	// The targets of each LIST, in first-seen order. Two group/resources
+	// share one LIST when one is listed at the other's group (below).
+	var toList []schema.GroupVersionResource
+	targetsOf := map[schema.GroupVersionResource][]usageTarget{}
 	for _, gr := range order {
 		served := byResource[gr]
 		listV, ok := listVersion(served, preferred[gr.Group])
 		if !ok {
 			continue
 		}
-		var targets []usageTarget
+		gvr := schema.GroupVersionResource{Group: gr.Group, Version: listV.version, Resource: gr.Resource}
+		if listV.flagged {
+			for _, s := range served {
+				e := flagged[kb.GVK{Group: gr.Group, Version: s.version, Kind: s.kind}]
+				if r, ok := replacementList(gr.Resource, e.Replacement, byResource, preferred); ok {
+					gvr = r
+					break
+				}
+			}
+		}
+		if _, seen := targetsOf[gvr]; !seen {
+			toList = append(toList, gvr)
+		}
 		for _, s := range served {
 			if !s.flagged {
 				continue
 			}
 			e := flagged[kb.GVK{Group: gr.Group, Version: s.version, Kind: s.kind}]
-			targets = append(targets, usageTarget{
+			targetsOf[gvr] = append(targetsOf[gvr], usageTarget{
 				gv: schema.GroupVersion{Group: gr.Group, Version: s.version}.String(),
 				// listV is flagged only when every listable served version is.
 				allObjects: e.Replacement == nil && listV.flagged,
@@ -148,10 +163,15 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 					Namespaces: map[string]int{}},
 			})
 		}
+	}
+
+	attempted, succeeded := 0, 0
+	var usages []inventory.APIUsage
+	for _, gvr := range toList {
+		targets := targetsOf[gvr]
 		attempted++
-		gvr := schema.GroupVersionResource{Group: gr.Group, Version: listV.version, Resource: gr.Resource}
 		if err := listUsage(ctx, meta, gvr, targets); err != nil {
-			failures = append(failures, fmt.Sprintf("list %s %s: %v", gvr.GroupVersion(), gr.Resource, err))
+			failures = append(failures, fmt.Sprintf("list %s %s: %v", gvr.GroupVersion(), gvr.Resource, err))
 			continue
 		}
 		succeeded++
@@ -200,16 +220,24 @@ type usageTarget struct {
 }
 
 // listVersion picks the version to list a resource at, or false when none
-// is listable or none is flagged (nothing to look for). It prefers the
-// group's preferred version, then the newest served version, and never
-// picks a flagged version while an unflagged one is served. Only when
-// every served version is flagged does it list a deprecated endpoint —
-// unavoidable, and the scanner then shows up in
-// apiserver_requested_deprecated_apis for that resource.
+// is listable or none is flagged (nothing to look for); see bestListable.
+// When every served version is flagged it returns a flagged one, and the
+// caller first looks for the same objects in the replacement's group
+// (replacementList).
 func listVersion(served []servedVersion, preferred string) (servedVersion, bool) {
 	if !slices.ContainsFunc(served, func(s servedVersion) bool { return s.flagged }) {
 		return servedVersion{}, false
 	}
+	return bestListable(served, preferred)
+}
+
+// bestListable picks among the listable served versions: unflagged before
+// flagged, then the group's preferred version, then the newest. A flagged
+// version comes back only when every listable version is flagged, and
+// listing it is unavoidable: the scanner then shows up in
+// apiserver_requested_deprecated_apis for that resource (on 1.33+, every
+// cluster does for core v1 endpoints and componentstatuses).
+func bestListable(served []servedVersion, preferred string) (servedVersion, bool) {
 	var listable []servedVersion
 	for _, s := range served {
 		if s.list {
@@ -235,6 +263,29 @@ func listVersion(served []servedVersion, preferred string) (servedVersion, bool)
 		return version.CompareKubeAwareVersionStrings(b.version, a.version) // newest first
 	})
 	return listable[0], true
+}
+
+// replacementList returns where else to list resource when every version
+// its own group serves is flagged: the KB replacement's group, if it serves
+// the same resource and kind at an unflagged version. extensions/v1beta1
+// ingresses on 1.19–1.21 are the same stored objects as networking.k8s.io/v1
+// ingresses; listing there keeps the scanner off the deprecated endpoint,
+// and managedFields still record the group/version each write went through.
+func replacementList(resource string, r *kb.GVK, byResource map[schema.GroupResource][]servedVersion, preferred map[string]string) (schema.GroupVersionResource, bool) {
+	if r == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	var same []servedVersion
+	for _, s := range byResource[schema.GroupResource{Group: r.Group, Resource: resource}] {
+		if s.kind == r.Kind {
+			same = append(same, s)
+		}
+	}
+	best, ok := bestListable(same, preferred[r.Group])
+	if !ok || best.flagged {
+		return schema.GroupVersionResource{}, false
+	}
+	return schema.GroupVersionResource{Group: r.Group, Version: best.version, Resource: resource}, true
 }
 
 // listUsage pages through one resource, metadata-only, and attributes each
