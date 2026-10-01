@@ -99,7 +99,13 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod # the toolchain ci gated (make check-toolchain)
+          # Exactly go.mod's toolchain, the one ci just vuln-gated and the
+          # Dockerfile builds with. This reverses a308496 ('1.26.x' with
+          # check-latest): a newer patch would be a toolchain no gate ran
+          # on, and the binary-mode vuln gate already fails the release on
+          # any reachable stdlib advisory that has a fix, so a stale
+          # go.mod patch blocks the tag instead of shipping. Bump go.mod.
+          go-version-file: go.mod
           # No caches in a release job: a tag build can restore caches
           # written by main-branch runs, and release inputs should come only
           # from the tagged commit and the module proxy.
@@ -234,6 +240,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write # move the tag
+    # GITHUB_TOKEN moves v0 through the refs API. A tag ruleset on
+    # refs/tags/v* (#58) must exclude v0, or grant this workflow a bypass,
+    # or this job fails after everything else has published.
     steps:
       - name: point the major tag at this release
         env:
