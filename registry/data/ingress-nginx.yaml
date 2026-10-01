@@ -7,6 +7,7 @@ matchers:
     - ingress-nginx/controller
     - ingress-nginx/controller-chroot
     - bitnami/nginx-ingress-controller # Bitnami rebuild of the upstream controller
+    - kubernetes-ingress-controller/nginx-ingress-controller # pre-1.0 (quay.io, 0.x)
   charts:
     - ingress-nginx
 support:

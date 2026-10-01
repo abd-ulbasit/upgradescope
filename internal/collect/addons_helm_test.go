@@ -93,6 +93,7 @@ func TestImageOnlyIngressNginxVerdicts(t *testing.T) {
 		wantBlocker bool
 	}{
 		{"harbor.corp.example/k8s/ingress-nginx/controller:v1.11.2", true},
+		{"quay.io/kubernetes-ingress-controller/nginx-ingress-controller:0.26.1", true},
 		{"123456789012.dkr.ecr.us-east-1.amazonaws.com/registry-k8s-io/ingress-nginx/controller-chroot:v1.11.3", true},
 		{"mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller:v1.11.5", false},
 		{"rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", false},

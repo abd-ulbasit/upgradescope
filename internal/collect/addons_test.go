@@ -181,6 +181,7 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"registry.k8s.io/ingress-nginx/controller:v1.11.3", "ingress-nginx", "1.11.3"},
 		{"k8s.gcr.io/ingress-nginx/controller:v1.1.1", "ingress-nginx", "1.1.1"},
 		{"registry.k8s.io/ingress-nginx/controller-chroot:v1.11.3", "ingress-nginx", "1.11.3"},
+		{"quay.io/kubernetes-ingress-controller/nginx-ingress-controller:0.34.1", "ingress-nginx", "0.34.1"}, // pre-1.0 image
 		{"123456789012.dkr.ecr.us-east-1.amazonaws.com/registry-k8s-io/ingress-nginx/controller:v1.11.2", "ingress-nginx", "1.11.2"},
 		{"harbor.corp.example/k8s/ingress-nginx/controller:v1.11.2", "ingress-nginx", "1.11.2"},
 		{"harbor.corp.example/registry.k8s.io/ingress-nginx/controller:v1.10.0", "ingress-nginx", "1.10.0"},
