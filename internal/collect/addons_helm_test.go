@@ -77,3 +77,32 @@ func TestHelmInstallsJudgedByAppVersion(t *testing.T) {
 		})
 	}
 }
+
+// Image-only installs (kubectl apply, kustomize, Argo CD's helm template:
+// no release secret) end to end: a mirrored upstream ingress-nginx gets the
+// EOL blocker, while the vendor-supported AKS and RKE2 builds do not.
+func TestImageOnlyIngressNginxVerdicts(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 99}}
+	now := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		image       string
+		wantBlocker bool
+	}{
+		{"harbor.corp.example/k8s/ingress-nginx/controller:v1.11.2", true},
+		{"123456789012.dkr.ecr.us-east-1.amazonaws.com/registry-k8s-io/ingress-nginx/controller-chroot:v1.11.3", true},
+		{"mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller:v1.11.5", false},
+		{"rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", false},
+	}
+	for _, tc := range cases {
+		detected, _ := matchAddOns([]nsImage{{"ingress", tc.image}}, nil, addons)
+		rep := engine.Evaluate(inventory.Inventory{AddOns: detected}, k, inventory.Version{Major: 1, Minor: 35}, now)
+		got := slices.ContainsFunc(rep.Findings, func(f engine.Finding) bool { return f.Key == "eol-addon/ingress-nginx" })
+		if got != tc.wantBlocker {
+			t.Errorf("%s: ingress-nginx EOL blocker = %v, want %v (findings %+v)", tc.image, got, tc.wantBlocker, rep.Findings)
+		}
+	}
+}
