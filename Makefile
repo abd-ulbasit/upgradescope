@@ -120,9 +120,27 @@ helm-test:
 	./hack/install-tool_test.sh
 	./hack/helm-test.sh
 
-.PHONY: agent-e2e
-agent-e2e:
-	./hack/demo/agent-e2e.sh
+# The kube CI job on one Kubernetes minor (hack/kind-node-images.txt): kind
+# cluster on the pinned node image, the #3 zero-false-blocker regression,
+# scan + agent ITs, image build + kind load, chart install, ClusterReadiness
+# verdict, server ingest, agent.targets upgrade, clean uninstall. Needs
+# Docker, helm, go, jq, curl; installs pinned kind and kubectl itself.
+# `make e2e E2E_MINOR=1.31`; `make demo-down` deletes the cluster.
+E2E_MINOR ?= 1.37
+.PHONY: e2e agent-e2e
+e2e:
+	E2E_MINOR=$(E2E_MINOR) ./hack/e2e.sh
+agent-e2e: e2e
+
+# Offline self-tests of the hack/ scripts CI is built from (stubs and
+# fixtures only: no network, cluster or Docker).
+.PHONY: hack-test
+hack-test:
+	./hack/vulncheck_test.sh
+	./hack/check-toolchain_test.sh
+	./hack/install-tool_test.sh
+	./hack/kind-images_test.sh
+	./hack/e2e_test.sh
 
 .PHONY: demo-up demo-down
 demo-up:
