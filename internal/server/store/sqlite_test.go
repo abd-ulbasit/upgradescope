@@ -130,7 +130,7 @@ func TestUpsertClusterInsertThenUpdate(t *testing.T) {
 		t.Fatalf("insert returned id %d, want > 0", id)
 	}
 
-	id2, err := s.UpsertCluster(ctx, Cluster{Name: "prod-eu-1", ClusterUID: "uid-1b", FirstSeen: tPlus(1), LastSeen: tPlus(1)})
+	id2, err := s.UpsertCluster(ctx, Cluster{Name: "prod-eu-1", ClusterUID: "uid-1", FirstSeen: tPlus(1), LastSeen: tPlus(1)})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -148,8 +148,8 @@ func TestUpsertClusterInsertThenUpdate(t *testing.T) {
 	if !got.LastSeen.Equal(tPlus(1)) {
 		t.Errorf("LastSeen = %v, want %v (must bump on update)", got.LastSeen, tPlus(1))
 	}
-	if got.ClusterUID != "uid-1b" {
-		t.Errorf("ClusterUID = %q, want uid-1b", got.ClusterUID)
+	if got.ClusterUID != "uid-1" {
+		t.Errorf("ClusterUID = %q, want uid-1", got.ClusterUID)
 	}
 
 	if _, err := s.UpsertCluster(ctx, Cluster{Name: "dev-1", FirstSeen: tBase, LastSeen: tBase}); err != nil {

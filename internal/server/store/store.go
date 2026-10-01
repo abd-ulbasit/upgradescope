@@ -23,10 +23,38 @@ func HashToken(token string) string {
 // Test with errors.Is.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrClusterUIDConflict is returned (as a *ClusterUIDConflictError) by
+// UpsertCluster when the name is already bound to a different cluster UID.
+// Test with errors.Is.
+var ErrClusterUIDConflict = errors.New("store: cluster name is bound to another cluster UID")
+
+// ClusterUIDConflictError carries both UIDs so callers can explain the
+// conflict. Is(ErrClusterUIDConflict) holds.
+type ClusterUIDConflictError struct {
+	Name      string
+	StoredUID string
+	PushedUID string
+}
+
+func (e *ClusterUIDConflictError) Error() string {
+	return fmt.Sprintf("cluster %q is registered with cluster UID %q, not %q", e.Name, e.StoredUID, e.PushedUID)
+}
+
+func (e *ClusterUIDConflictError) Is(target error) bool { return target == ErrClusterUIDConflict }
+
 // Store is the persistence contract. SQLite implements it in P2; P3 adds
 // Postgres. Behavioral semantics are pinned by storetest.RunStoreConformance.
 type Store interface {
-	UpsertCluster(ctx context.Context, c Cluster) (int64, error)         // by name; returns id
+	// UpsertCluster registers or touches a cluster by name and returns its
+	// id. A name is bound to the first non-empty ClusterUID pushed under
+	// it: a different non-empty UID fails with *ClusterUIDConflictError and
+	// writes nothing; an empty incoming UID keeps the stored one.
+	UpsertCluster(ctx context.Context, c Cluster) (int64, error)
+	// DeleteCluster removes the named cluster with its snapshots and
+	// evaluations (ErrNotFound when unknown). Tokens are keyed by name and
+	// are kept, so a rebuilt cluster can push again with its old token.
+	DeleteCluster(ctx context.Context, name string) error
+
 	InsertSnapshot(ctx context.Context, s Snapshot) (int64, bool, error) // (id, duplicate, err) — duplicate iff same cluster+hash as latest
 	LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error)
 	ListClusters(ctx context.Context) ([]Cluster, error)

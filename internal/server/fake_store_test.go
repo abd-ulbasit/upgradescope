@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -53,7 +54,12 @@ func (f *fakeStore) UpsertCluster(_ context.Context, c store.Cluster) (int64, er
 	}
 	for id, existing := range f.clusters {
 		if existing.Name == c.Name {
-			existing.ClusterUID = c.ClusterUID
+			if existing.ClusterUID != "" && c.ClusterUID != "" && existing.ClusterUID != c.ClusterUID {
+				return 0, &store.ClusterUIDConflictError{Name: c.Name, StoredUID: existing.ClusterUID, PushedUID: c.ClusterUID}
+			}
+			if c.ClusterUID != "" {
+				existing.ClusterUID = c.ClusterUID
+			}
 			existing.LastSeen = c.LastSeen
 			f.clusters[id] = existing
 			return id, nil
@@ -64,6 +70,24 @@ func (f *fakeStore) UpsertCluster(_ context.Context, c store.Cluster) (int64, er
 	c.FirstSeen = c.LastSeen
 	f.clusters[id] = c
 	return id, nil
+}
+
+func (f *fakeStore) DeleteCluster(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["DeleteCluster"]; err != nil {
+		return err
+	}
+	for id, c := range f.clusters {
+		if c.Name != name {
+			continue
+		}
+		delete(f.clusters, id)
+		f.snapshots = slices.DeleteFunc(f.snapshots, func(s store.Snapshot) bool { return s.ClusterID == id })
+		f.evals = slices.DeleteFunc(f.evals, func(e store.Evaluation) bool { return e.ClusterID == id })
+		return nil
+	}
+	return store.ErrNotFound
 }
 
 func (f *fakeStore) latestSnapshotLocked(clusterID int64) (store.Snapshot, bool) {

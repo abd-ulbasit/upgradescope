@@ -56,8 +56,11 @@ func OpenPostgres(dsn string) (*Postgres, error) {
 func (p *Postgres) Close() error { return p.db.Close() }
 
 // UpsertCluster inserts the cluster or, if a row with the same name exists,
-// updates cluster_uid and last_seen (first_seen never moves). Zero
-// FirstSeen/LastSeen default to time.Now().UTC().
+// bumps last_seen (first_seen never moves) and adopts c.ClusterUID when the
+// stored one is empty. A different non-empty UID is refused: the guarded
+// DO UPDATE matches no row, so RETURNING yields nothing and the stored UID
+// is read back for the *ClusterUIDConflictError. Zero FirstSeen/LastSeen
+// default to time.Now().UTC().
 func (p *Postgres) UpsertCluster(ctx context.Context, c Cluster) (int64, error) {
 	now := time.Now().UTC()
 	first, last := c.FirstSeen, c.LastSeen
@@ -72,14 +75,55 @@ func (p *Postgres) UpsertCluster(ctx context.Context, c Cluster) (int64, error) 
 		INSERT INTO clusters (name, cluster_uid, first_seen, last_seen)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (name) DO UPDATE SET
-			cluster_uid = excluded.cluster_uid,
+			cluster_uid = CASE WHEN excluded.cluster_uid = '' THEN clusters.cluster_uid ELSE excluded.cluster_uid END,
 			last_seen   = excluded.last_seen
+		WHERE clusters.cluster_uid = '' OR excluded.cluster_uid = '' OR clusters.cluster_uid = excluded.cluster_uid
 		RETURNING id`,
 		c.Name, c.ClusterUID, first, last).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		var stored string
+		if err := p.db.QueryRowContext(ctx, `SELECT cluster_uid FROM clusters WHERE name = $1`, c.Name).Scan(&stored); err != nil {
+			return 0, fmt.Errorf("upsert cluster %q: read stored uid: %w", c.Name, err)
+		}
+		return 0, &ClusterUIDConflictError{Name: c.Name, StoredUID: stored, PushedUID: c.ClusterUID}
+	}
 	if err != nil {
 		return 0, fmt.Errorf("upsert cluster %q: %w", c.Name, err)
 	}
 	return id, nil
+}
+
+// DeleteCluster removes the named cluster, its evaluations and snapshots in
+// one transaction, or returns ErrNotFound. Tokens are keyed by name and
+// are left alone. The clusters row is locked first so a concurrent ingest
+// of the same cluster cannot add a snapshot between the deletes.
+func (p *Postgres) DeleteCluster(ctx context.Context, name string) error {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("delete cluster %q: begin: %w", name, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	var id int64
+	err = tx.QueryRowContext(ctx, `SELECT id FROM clusters WHERE name = $1 FOR UPDATE`, name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("cluster %q: %w", name, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("delete cluster %q: %w", name, err)
+	}
+	for _, stmt := range []string{
+		`DELETE FROM evaluations WHERE cluster_id = $1`,
+		`DELETE FROM snapshots WHERE cluster_id = $1`,
+		`DELETE FROM clusters WHERE id = $1`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
+			return fmt.Errorf("delete cluster %q: %w", name, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete cluster %q: commit: %w", name, err)
+	}
+	return nil
 }
 
 // scanClusterPg mirrors scanCluster for TIMESTAMPTZ columns: the driver

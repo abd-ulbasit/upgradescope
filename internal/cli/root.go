@@ -66,5 +66,6 @@ func Root() *cobra.Command {
 	root.AddCommand(newAgentCmd())
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newTokensCmd())
+	root.AddCommand(newClustersCmd())
 	return root
 }

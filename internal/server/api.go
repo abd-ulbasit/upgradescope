@@ -386,6 +386,19 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		ClusterUID: inv.ClusterID,
 		LastSeen:   now,
 	})
+	var conflict *store.ClusterUIDConflictError
+	if errors.As(err, &conflict) {
+		// Two clusters reporting one name would interleave their snapshots
+		// in one history and flap every score and alert, so the second one
+		// is refused until an operator decides which cluster the name means.
+		errJSON(w, http.StatusConflict, fmt.Sprintf(
+			"cluster name %q is registered to clusterId %s, but this push comes from clusterId %s. "+
+				"If this is a different cluster, give its agent a distinct --cluster-name (chart value clusterName). "+
+				"If the cluster was rebuilt, remove the old record (and its history) with "+
+				"'upgradescope clusters delete %s' against the server's database, then push again",
+			conflict.Name, conflict.StoredUID, conflict.PushedUID, conflict.Name))
+		return
+	}
 	if err != nil {
 		internalErr(w, "storing cluster", err)
 		return
