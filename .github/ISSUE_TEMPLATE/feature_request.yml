@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a new capability or an improvement to an existing one.
+title: "feat: "
+labels: ["kind/feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        To add or correct an add-on in the EOL registry, use the **Add-on registry request**
+        form instead. For open-ended questions, use
+        [Discussions](https://github.com/abd-ulbasit/upgradescope/discussions).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today? Describe the problem before the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you would like upgradescope to do. Include example commands, output, or API shapes if you have them.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - scan / CLI
+        - agent / ClusterReadiness CRD
+        - serve / API / dashboard
+        - detection rules / scoring
+        - knowledge base / registry
+        - Helm chart
+        - GitHub Action / CI gate
+        - docs
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use today, or other tools that solve this.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to open a pull request for this.

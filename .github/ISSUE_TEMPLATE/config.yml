@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/abd-ulbasit/upgradescope/discussions
+    about: Ask usage questions or float an idea before filing a feature request.
+  - name: Report a security vulnerability
+    url: https://github.com/abd-ulbasit/upgradescope/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue. See SECURITY.md.

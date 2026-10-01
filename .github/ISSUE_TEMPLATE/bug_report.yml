@@ -1,0 +1,86 @@
+name: Bug report
+description: Something broke, or a finding is wrong (false positive or false negative).
+title: "bug: "
+labels: ["kind/bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security vulnerabilities do not belong here.** Use
+        [private vulnerability reporting](https://github.com/abd-ulbasit/upgradescope/security/advisories/new)
+        instead (see SECURITY.md).
+
+        Before you paste output, redact cluster names, namespaces or image registries
+        you do not want to make public.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem is it?
+      options:
+        - Crash, error, or wrong exit code
+        - False positive (a finding that should not be there)
+        - False negative (a finding that is missing)
+        - Wrong score, severity, or EOL date
+        - Install, chart, or deployment problem
+        - Dashboard or API problem
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: upgradescope version
+      description: Output of `upgradescope --version`, or the image tag or chart version you deployed.
+      placeholder: upgradescope version v0.1.1
+    validations:
+      required: true
+  - type: input
+    id: k8s
+    attributes:
+      label: Kubernetes distribution and version
+      description: The cluster you scanned, and the `--target` version you evaluated against.
+      placeholder: "EKS 1.33, target 1.34 / kind v1.35.0, target 1.36"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - scan (live cluster)
+        - scan --files (rendered manifests)
+        - agent (in-cluster, CRD)
+        - serve (server, API, dashboard)
+        - GitHub Action / CI gate
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or configuration
+      description: The exact command you ran, or the Helm values you changed.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: |
+        The relevant output. For a wrong or missing finding, `--output json` is the most
+        useful, because it includes the finding key, citations and the `notAssessed` list.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: For a false negative, tell us what is actually running (API version, add-on and version) and link the upstream source that says it is deprecated, removed or EOL.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: RBAC restrictions, a managed control plane that blocks `/metrics`, a proxy, and so on.
