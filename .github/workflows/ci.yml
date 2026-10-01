@@ -15,6 +15,15 @@ on:
   # release.yml calls this workflow for every v* tag, so a release is gated on
   # the whole suite, vuln gate and kind e2e included, at the tagged commit.
   workflow_call:
+    inputs:
+      # A called run carries the caller's event, so a release re-dispatched
+      # on its tag would look like a workflow_dispatch here and take the
+      # weekly sets: older kind images that may stop booting (see
+      # hack/kind-node-images.txt), and the Action check against a release
+      # that may be half-published. release: true keeps the PR sets.
+      release:
+        type: boolean
+        default: false
 
 # Least privilege: nothing here writes to the repository.
 permissions:
@@ -262,7 +271,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["14","15","16","17","18"]' || '["17"]') }}
+        pg: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release)) && '["14","15","16","17","18"]' || '["17"]') }}
     services:
       postgres:
         image: postgres:${{ matrix.pg }}
@@ -330,7 +339,8 @@ jobs:
     needs: changes
     if: >-
       !cancelled() &&
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && !inputs.release) ||
        needs.changes.outputs.release == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -379,9 +389,10 @@ jobs:
       - id: matrix
         env:
           EVENT: ${{ github.event_name }}
+          RELEASE: ${{ inputs.release == true }}
         run: |
           set=pr
-          case "$EVENT" in schedule | workflow_dispatch) set=all ;; esac
+          case "$EVENT/$RELEASE" in schedule/* | workflow_dispatch/false) set=all ;; esac
           minors="$(hack/kind-images.sh matrix "$set")"
           echo "Kubernetes minors ($set): $minors"
           echo "minors=$minors" >> "$GITHUB_OUTPUT"

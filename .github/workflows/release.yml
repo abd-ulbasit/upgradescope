@@ -77,6 +77,8 @@ jobs:
   ci:
     needs: preflight
     uses: ./.github/workflows/ci.yml
+    with:
+      release: true # the PR matrices even when this run was dispatched
     permissions:
       contents: read
       pull-requests: read # ci.yml's changes job declares it (skipped on tags)
