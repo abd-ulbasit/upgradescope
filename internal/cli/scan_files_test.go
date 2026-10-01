@@ -112,6 +112,10 @@ func TestManifestBase(t *testing.T) {
 		filepath.Join(dir, "one.yaml"):    "",
 		outside:                           filepath.ToSlash(outside),
 		filepath.Join(outside, "missing"): filepath.ToSlash(filepath.Join(outside, "missing")),
+		// relative but outside the working directory: absolute, so SARIF
+		// says file:// rather than a "../" path GitHub cannot place
+		"../sibling":                filepath.ToSlash(filepath.Join(filepath.Dir(dir), "sibling")),
+		"rendered/../../sibling/x/": filepath.ToSlash(filepath.Join(filepath.Dir(dir), "sibling", "x")),
 	} {
 		if got := manifestBase(in); got != want {
 			t.Errorf("manifestBase(%q) = %q, want %q", in, got, want)
@@ -176,6 +180,24 @@ func TestScanFilesSARIFLocations(t *testing.T) {
 	sariftest.AssertGitHubAcceptable(t, []byte(out))
 	if !strings.Contains(out, `"omittedFindings": 1`) || !strings.Contains(out, "knowledge base") {
 		t.Errorf("SARIF does not record the omitted kb-stale finding:\n%s", out)
+	}
+}
+
+// Manifests outside the working directory cannot be placed in the
+// repository: SARIF says where they are (file://) and stderr says why
+// GitHub will not annotate them.
+func TestScanFilesSARIFOutsideWorkingDir(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"rendered/all.yaml": removedAPIs, "repo/README": ""})
+	t.Chdir(filepath.Join(dir, "repo"))
+	out, stderr, err := execScanFiles(t, "--files", "../rendered", "--output", "sarif")
+	if ExitCode(err) != 2 {
+		t.Fatalf("ExitCode = %d (err %v), want 2", ExitCode(err), err)
+	}
+	if want := `"uri": "file://` + filepath.ToSlash(filepath.Join(dir, "rendered", "all.yaml")); !strings.Contains(out, want) {
+		t.Errorf("SARIF lacks %s:\n%s", want, out)
+	}
+	if !strings.Contains(stderr, "outside the working directory") {
+		t.Errorf("stderr = %q, want a note that GitHub cannot place the locations", stderr)
 	}
 }
 

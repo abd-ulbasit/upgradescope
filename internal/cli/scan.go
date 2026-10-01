@@ -143,6 +143,9 @@ func newScanCmd() *cobra.Command {
 			if err := writeReport(cmd.OutOrStdout(), opts.output, out); err != nil {
 				return err
 			}
+			if opts.output == "sarif" && filepath.IsAbs(filepath.FromSlash(opts.fileBase)) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: --files %s is outside the working directory, so SARIF locations are absolute file:// URIs that GitHub code scanning cannot place in the repository; run from the repository root\n", opts.filesDir)
+			}
 			if n := sarif.Unanchored(report); opts.output == "sarif" && n > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: %d finding(s) have no file location, so they are not SARIF results (GitHub rejects results without one); the SARIF lists them as tool execution notifications, and --output table or json shows them in full\n", n)
 			}
@@ -171,16 +174,20 @@ func newScanCmd() *cobra.Command {
 // manifestBase returns the directory that --files object paths
 // (collect.CollectFiles: relative to the scanned root; a single file's base
 // name) resolve against, slash-separated and relative to the working
-// directory when it lies inside it. CI runs from the repository root, and
-// SARIF URIs must be repository-relative for GitHub to place annotations.
+// directory when it lies inside it and absolute otherwise (also for a
+// relative "../x": SARIF then carries an unambiguous file:// URI instead of
+// a path that escapes the repository). CI runs from the repository root,
+// and SARIF URIs must be repository-relative for GitHub to place
+// annotations.
 func manifestBase(filesDir string) string {
 	base := filesDir
 	if fi, err := os.Stat(filesDir); err == nil && !fi.IsDir() {
 		base = filepath.Dir(filesDir)
 	}
-	if filepath.IsAbs(base) {
+	if abs, err := filepath.Abs(base); err == nil {
+		base = abs
 		if wd, err := os.Getwd(); err == nil {
-			if rel, err := filepath.Rel(wd, base); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if rel, err := filepath.Rel(wd, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				base = rel
 			}
 		}
