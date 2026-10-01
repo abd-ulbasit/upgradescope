@@ -187,19 +187,21 @@ Then, per flagged group/version:
 - **The kind continues** under another version: an object counts only when
   some writer still writes it through the flagged group/version. The
   `metadata.managedFields` entries are grouped by field manager (and
-  operation and subresource). A manager counts when its entry for the
-  flagged version is newer than all of its entries for other versions in
-  the same group. An Update entry's identity includes its apiVersion, so
-  after a manager moves to `v1`, its old entry stays for every field the
-  new write left unchanged. Only the newest entry shows what the manager
-  writes now. A server-side Apply entry is the manager's declared
-  configuration, a field set apart from its Update entries, so an Update
-  through `v1` does not clear an Apply through the flagged version. Equal
-  or missing timestamps clear. When no manager's entries are left to judge by, the
-  apiVersion in the `kubectl.kubernetes.io/last-applied-configuration`
-  annotation decides. Only kubectl client-side apply rewrites that
-  annotation, so it may be stale under any other writer. The finding names
-  the field manager, or `kubectl last-applied`.
+  subresource), and the two operations are judged differently. A manager
+  has at most one server-side Apply entry, which each apply replaces,
+  apiVersion included, so it is the manager's current configuration: an
+  Apply entry for the flagged version counts. Update entries are keyed by
+  apiVersion as well as manager, so after a manager moves to `v1`, by
+  Update or by switching to server-side apply under the same name, its
+  old entry stays for every field it still co-owns, and nothing clears
+  it. An Update entry for the flagged version counts only when it is
+  newer than every entry the manager has for another version, its Apply
+  entry included. Equal or missing timestamps clear. When no manager's
+  entries are left to judge by, the apiVersion in the
+  `kubectl.kubernetes.io/last-applied-configuration` annotation decides.
+  Only kubectl client-side apply rewrites that annotation, so it may be
+  stale under any other writer. The finding names the field manager, or
+  `kubectl last-applied`.
   Entries for the `status` subresource are ignored, and so are three
   control-plane managers whose entries only record what was current when
   that release wrote the object: `kube-apiserver`,

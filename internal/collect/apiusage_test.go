@@ -470,18 +470,32 @@ func TestAuthoringManagerIgnoresInternalManagersAndStatusEntries(t *testing.T) {
 			wroteAt("operator", gv, 1),
 			{Manager: "operator", APIVersion: "flowcontrol.apiserver.k8s.io/v1", Subresource: "status", Time: wroteAt("", "", 2).Time},
 		}, nil, "operator"},
-		// Server-side apply: the Apply entry is the manager's declared
-		// configuration, a field set of its own. An Update the same manager
-		// made through another version is a different field set and says
-		// nothing about what the next apply sends.
+		// Server-side apply: a manager has one Apply entry per subresource,
+		// replaced by each apply, so it names the version of the manager's
+		// current configuration whatever its Update entries say. An Update
+		// entry is keyed by its apiVersion and nothing clears it, so it says
+		// the manager writes through gv only while it is newer than every
+		// entry naming another version, the Apply entry included.
 		{"apply via the version", []metav1.ManagedFieldsEntry{appliedAt("argocd", gv, 1)}, nil, "argocd"},
 		{"apply via another version", []metav1.ManagedFieldsEntry{appliedAt("argocd", "flowcontrol.apiserver.k8s.io/v1", 1)}, nil, ""},
 		{"a newer update via another version does not clear the apply", []metav1.ManagedFieldsEntry{
 			appliedAt("helm", gv, 1), wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 2),
 		}, nil, "helm"},
+		{"an apply via the version newer than an update via another version", []metav1.ManagedFieldsEntry{
+			wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 1), appliedAt("helm", gv, 2),
+		}, nil, "helm"},
 		{"a newer update via the version under an apply via another version", []metav1.ManagedFieldsEntry{
 			appliedAt("helm", "flowcontrol.apiserver.k8s.io/v1", 1), wroteAt("helm", gv, 2),
 		}, nil, "helm"},
+		// Helm 3 wrote by Update; Helm 4 applies server-side under the same
+		// manager name. The old Update entry stays for every field the apply
+		// did not take over.
+		{"manager moved from update via the version to apply via another", []metav1.ManagedFieldsEntry{
+			wroteAt("helm", gv, 1), appliedAt("helm", "flowcontrol.apiserver.k8s.io/v1", 2),
+		}, nil, ""},
+		{"an update via the version ties with an apply via another version", []metav1.ManagedFieldsEntry{
+			wroteAt("helm", gv, 1), appliedAt("helm", "flowcontrol.apiserver.k8s.io/v1", 1),
+		}, nil, ""},
 		{"apply and update both via another version", []metav1.ManagedFieldsEntry{
 			appliedAt("helm", "flowcontrol.apiserver.k8s.io/v1", 1), wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 2),
 		}, nil, ""},
