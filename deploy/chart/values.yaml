@@ -31,8 +31,8 @@ rbac:
   # Cluster-wide get/list on Secrets, for Helm release detection (Secrets of
   # type helm.sh/release.v1). RBAC cannot filter Secrets by type, so true
   # means the agent can read EVERY Secret in the cluster. false removes the
-  # rule; the Helm collector then reports "not assessed (secrets list
-  # forbidden)" and Helm chart findings are missing from the report.
+  # rule; the Helm capability is then not assessed (the reason is the
+  # forbidden Secret list) and Helm chart findings are missing from the report.
   helmSecrets: true
 
 agent:

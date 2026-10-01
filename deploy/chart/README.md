@@ -53,9 +53,9 @@ watches.
 | `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.dev` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
 | `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
 
-`rbac.helmSecrets=false` removes the Secret rule. The Helm collector then
-reports "not assessed (secrets list forbidden)" and the report has no Helm
-chart findings; everything else works. `rbac.create=false` lets you bind a
+`rbac.helmSecrets=false` removes the Secret rule. The Helm capability is
+then not assessed, with the forbidden Secret list as the reason, and the
+report has no Helm chart findings; everything else works. `rbac.create=false` lets you bind a
 role of your own; collectors without access degrade the same way.
 
 The agent cannot create CRDs: `crds/` installs the `ClusterReadiness` CRD.
