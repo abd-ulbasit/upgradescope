@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
@@ -66,7 +67,7 @@ func TestAgentIntegration_CRDStatusOnKind(t *testing.T) {
 	}
 	crdPreexisted := err == nil
 	t.Cleanup(func() {
-		cctx, ccancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cctx, ccancel := context.WithTimeout(context.Background(), time.Minute)
 		defer ccancel()
 		if derr := dyn.Resource(gvr).Delete(cctx, crName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 			t.Errorf("cleanup: delete ClusterReadiness/%s: %v", crName, derr)
@@ -74,6 +75,16 @@ func TestAgentIntegration_CRDStatusOnKind(t *testing.T) {
 		if !crdPreexisted {
 			if derr := crds.Delete(cctx, crdName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 				t.Errorf("cleanup: delete CRD %s (created by this test): %v", crdName, derr)
+				return
+			}
+			// Wait until it is gone: a Helm install or agent run right
+			// after this test would otherwise race a terminating CRD.
+			werr := wait.PollUntilContextCancel(cctx, 500*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+				_, gerr := crds.Get(ctx, crdName, metav1.GetOptions{})
+				return apierrors.IsNotFound(gerr), nil
+			})
+			if werr != nil {
+				t.Errorf("cleanup: CRD %s (created by this test) still present after delete: %v", crdName, werr)
 			}
 			return
 		}
