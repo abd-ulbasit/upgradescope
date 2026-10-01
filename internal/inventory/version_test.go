@@ -28,8 +28,14 @@ func TestParseVersion(t *testing.T) {
 		{name: "negative minor", in: "1.-34", wantErr: true},
 		{name: "plus-signed minor", in: "1.+34", wantErr: true},
 		{name: "word garbage", in: "latest", wantErr: true},
-		{name: "vendor suffix rejected", in: "v1.34.2-gke.100", wantErr: true},
 		{name: "leading space", in: " 1.34", wantErr: true},
+		{name: "major only no dot", in: "136", wantErr: true},
+		{name: "letters", in: "a.b", wantErr: true},
+		{name: "empty suffix after dash", in: "v1.30.2-", wantErr: true},
+		{name: "empty suffix after plus", in: "v1.30.2+", wantErr: true},
+		{name: "suffix without patch", in: "v1.30-gke.1", wantErr: true},
+		{name: "empty pre-release identifier", in: "v1.30.2-gke..1", wantErr: true},
+		{name: "suffix with space", in: "v1.30.2-gke 1", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -43,6 +49,43 @@ func TestParseVersion(t *testing.T) {
 				}
 				return
 			}
+			if err != nil {
+				t.Fatalf("ParseVersion(%q) unexpected error: %v", tt.in, err)
+			}
+			if got != tt.want {
+				t.Errorf("ParseVersion(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseVersionObservedGitVersions pins the GitVersion strings real
+// clusters report (apiserver /version and node.status.nodeInfo.kubeletVersion):
+// vendors append a semver pre-release ("-eks-…", "-gke.N") or build ("+k3s1",
+// "+rke2r1", OpenShift "+<commit>") suffix, which must parse to the minor.
+func TestParseVersionObservedGitVersions(t *testing.T) {
+	tests := []struct {
+		source string
+		in     string
+		want   Version
+	}{
+		{"EKS", "v1.30.2-eks-1234abc", Version{1, 30}},
+		{"EKS", "v1.33.5-eks-aeac579", Version{1, 33}},
+		{"GKE", "v1.29.4-gke.1043002", Version{1, 29}},
+		{"GKE", "v1.33.5-gke.1080000", Version{1, 33}},
+		{"AKS", "v1.30.3", Version{1, 30}},
+		{"k3s", "v1.28.5+k3s1", Version{1, 28}},
+		{"RKE2", "v1.27.3+rke2r1", Version{1, 27}},
+		{"OpenShift", "v1.29.5+29a0aa9", Version{1, 29}},
+		{"pre-release and build", "v1.31.0-0+abc", Version{1, 31}},
+		{"kind", "v1.34.0", Version{1, 34}},
+		{"plain minor", "1.30", Version{1, 30}},
+		{"v minor", "v1.30", Version{1, 30}},
+		{"plain patch", "1.30.0", Version{1, 30}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.source+" "+tt.in, func(t *testing.T) {
+			got, err := ParseVersion(tt.in)
 			if err != nil {
 				t.Fatalf("ParseVersion(%q) unexpected error: %v", tt.in, err)
 			}
@@ -189,5 +232,33 @@ func TestVersionJSONRoundTrip(t *testing.T) {
 		if got != v {
 			t.Errorf("round-trip %v -> %s -> %v", v, raw, got)
 		}
+	}
+}
+
+func TestParseTarget(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    Version
+		wantErr string
+	}{
+		{in: "1.36", want: Version{1, 36}},
+		{in: "v1.36.2", want: Version{1, 36}},
+		{in: "2.0", wantErr: "major version must be 1"},
+		{in: "0.36", wantErr: "major version must be 1"},
+		{in: "latest", wantErr: "invalid kubernetes version"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := ParseTarget(tt.in)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ParseTarget(%q) = %v, %v; want error containing %q", tt.in, got, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("ParseTarget(%q) = %v, %v; want %v", tt.in, got, err, tt.want)
+			}
+		})
 	}
 }

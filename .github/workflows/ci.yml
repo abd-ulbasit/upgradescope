@@ -4,13 +4,72 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly: govulncheck against the latest advisories and the published
+  # Action's release-install path, which no PR may have touched.
+  schedule:
+    - cron: '41 5 * * 1' # Mondays 05:41 UTC
+  workflow_dispatch:
+
+# Least privilege by default; no job here writes anything.
+permissions:
+  contents: read
+
+# A new push to a PR cancels that PR's superseded run; pushes to main and
+# scheduled runs are keyed by commit and event, so they never cancel each
+# other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+# Actions are pinned by full commit SHA (the comment names the release);
+# Dependabot (github-actions ecosystem) proposes the bumps.
 
 jobs:
+  # Which areas a change touches, for the jobs that are too expensive to run
+  # on everything. Docs-only changes skip kind e2e.
+  changes:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists PR files through the API
+    outputs:
+      e2e: ${{ steps.code.outputs.e2e }}
+      release: ${{ steps.release.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: code
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          # 'every': a file counts only if it matches all patterns, i.e. it
+          # is anything other than docs.
+          predicate-quantifier: every
+          filters: |
+            e2e:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+      - id: release
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            release:
+              - '.goreleaser.yml'
+              - 'Dockerfile*'
+              - '.github/workflows/release.yml'
+              - '.github/workflows/ci.yml'
+              - 'action/**'
+              - 'Makefile'
+              - 'go.mod'
+              - 'deploy/chart/Chart.yaml'
+
   lint:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
       # golangci-lint-action lags Go releases (its binary must be built with a
@@ -21,34 +80,55 @@ jobs:
       - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 && staticcheck ./...
 
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
-      - name: gofmt
-        run: gofmt -l cmd internal registry tools && test -z "$(gofmt -l cmd internal registry tools)"
-      - run: go test ./...
+          cache-dependency-path: |
+            go.sum
+            tools/*/go.sum
+      - name: gofmt (every tracked Go file, all modules)
+        run: |
+          unformatted="$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
+          [ -z "$unformatted" ] || { echo "::error::gofmt needed:"; echo "$unformatted"; exit 1; }
+      - run: go test -race ./...
       - name: eol-sync unit tests (separate module)
         run: cd tools/eol-sync && go test ./...
 
   build:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
       - run: make build
+
+  # Reachable vulnerabilities in our code paths, under the latest 1.26
+  # toolchain (stdlib) and go.sum. Runs weekly too, because new advisories
+  # land without any commit here.
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   registry:
     name: registry dataset valid + in sync with endoflife.date
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
       - name: Did this PR touch registry/?
@@ -69,6 +149,7 @@ jobs:
 
   pg-conformance:
     name: postgres store conformance (real postgres:17)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -85,8 +166,8 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
       - name: wait for postgres (entrypoint restarts once after initdb)
@@ -103,46 +184,178 @@ jobs:
         env:
           UPGRADESCOPE_PG_TEST_DSN: postgres://postgres:ci-test@127.0.0.1:5432/upgradescope?sslmode=disable
 
-  # kind-e2e is the only expensive job — let '[skip-e2e]' in the head
-  # commit message bypass it. For PRs the checked-out ref is a merge
-  # commit, so read the message from HEAD^2 (the PR head).
-  e2e-gate:
-    name: e2e gate ([skip-e2e]?)
+  # Chart contract: strict lint, every documented values combination renders,
+  # and hack/test-chart.sh's assertions (image tag, RBAC, required tokens…).
+  chart:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      skip: ${{ steps.check.outputs.skip }}
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          fetch-depth: 2  # merge commit + both parents
-      - id: check
+          version: v4.3.0 # keep in step with release.yml HELM_VERSION
+      - run: helm lint --strict deploy/chart
+      - name: helm template (values matrix)
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            MSG="$(git log -1 --format=%B HEAD^2 2>/dev/null || git log -1 --format=%B)"
-          else
-            MSG="$(git log -1 --format=%B)"
+          set -euo pipefail
+          while IFS='|' read -r name args; do
+            [ -n "$name" ] || continue
+            echo "::group::$name"
+            # shellcheck disable=SC2086 # args is a deliberate word list
+            helm template upgradescope deploy/chart --namespace upgradescope $args > /dev/null
+            echo "rendered: $name ($args)"
+            echo "::endgroup::"
+          done <<'EOF'
+          default|
+          server|--set server.enabled=true --set server.ingestToken=t
+          server-readtoken|--set server.enabled=true --set server.ingestToken=t --set server.readToken=r
+          server-existing-secret|--set server.enabled=true --set server.existingSecret=s --set agent.existingSecret=s
+          server-no-persistence|--set server.enabled=true --set server.ingestToken=t --set server.persistence.enabled=false
+          external-server|--set agent.serverUrl=https://uscope.example.com --set agent.existingSecret=s
+          targets|--set agent.targets={1.37,1.38}
+          byo-serviceaccount|--set serviceAccount.create=false --set serviceAccount.name=sa --set rbac.create=false
+          image-override|--set image.tag=dev
+          EOF
+      - run: ./hack/test-chart.sh
+
+  # Dashboard: typecheck + build (make web), unit tests, prod-dependency
+  # advisories, and the committed go:embed copy must equal a fresh build.
+  web:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: npm ci, typecheck (tsc --noEmit), vite build, stage into webdist
+        run: make web
+      - name: unit tests (vitest)
+        working-directory: web
+        run: npm test
+      - name: production dependency advisories
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
+      - name: committed internal/server/webdist matches the fresh build
+        run: |
+          if [ -n "$(git status --porcelain -- internal/server/webdist)" ]; then
+            git status --short -- internal/server/webdist
+            echo "::error::internal/server/webdist is stale — run 'make web' and commit the result"
+            exit 1
           fi
-          if printf '%s' "$MSG" | grep -qF '[skip-e2e]'; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "kind-e2e skipped by [skip-e2e] in commit message"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+
+  # Prove the release pipeline before a tag does: config valid, every
+  # archive and image builds, names still match what the Action downloads,
+  # and the binary serves the dashboard. Publishes and signs nothing.
+  release-snapshot:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # goreleaser derives the snapshot version from tags
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: check
+      # In snapshot mode dockers_v2 still builds (and --loads, never pushes)
+      # the linux/amd64 and linux/arm64 images from Dockerfile.release.
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --snapshot --clean --skip=publish,sign,sbom
+      - name: archive names match what action/action.yml downloads
+        run: |
+          template="$(sed -n 's/^ *asset="\(.*\)"$/\1/p' action/action.yml)"
+          [ -n "$template" ] || { echo "::error::no asset=\"...\" line in action/action.yml"; exit 1; }
+          for os in linux darwin; do
+            for arch in amd64 arm64; do
+              name="${template//\$\{os\}/$os}"
+              name="${name//\$\{arch\}/$arch}"
+              [ -f "dist/$name" ] || { echo "::error::action.yml expects dist/$name, goreleaser did not produce it"; ls dist; exit 1; }
+              echo "ok: $name"
+            done
+          done
+          for arch in amd64 arm64; do
+            [ -f "dist/upgradescope_windows_${arch}.zip" ] || { echo "::error::no windows $arch zip"; exit 1; }
+          done
+      - name: release binary serves the dashboard at /
+        run: |
+          bin="$(jq -r '.[] | select(.type=="Binary" and .goos=="linux" and .goarch=="amd64") | .path' dist/artifacts.json)"
+          "$bin" --version
+          "$bin" serve --listen 127.0.0.1:18080 --ingest-token smoke --db "$RUNNER_TEMP/smoke.sqlite" &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT # also on failure: a live server would hold the step open
+          for _ in $(seq 1 50); do curl -fsS -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 0.2; done
+          got="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' http://127.0.0.1:18080/)"
+          case "$got" in
+            '200 text/html'*) echo "GET / -> $got" ;;
+            *) echo "::error::GET / returned '$got', want 200 text/html (dashboard missing from the binary)"; exit 1 ;;
+          esac
+
+  # The composite Action as a consumer runs it: installs the latest release
+  # archive (not the go install fallback) and fails the gate with SARIF on
+  # a fixture holding a removed API.
+  action:
+    needs: changes
+    if: >-
+      !cancelled() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+       needs.changes.outputs.release == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: gate
+        uses: ./action
+        continue-on-error: true # the gate is expected to fail
+        with:
+          path: internal/collect/testdata/files # networking.k8s.io/v1beta1 Ingress, removed in 1.22
+          target: '1.36'
+          version: latest
+      - name: release asset installed, gate failed with exit 2, SARIF has the finding
+        env:
+          OUTCOME: ${{ steps.gate.outcome }}
+          SARIF: ${{ steps.gate.outputs.sarif-file }}
+        run: |
+          set -uo pipefail
+          [ "$OUTCOME" = failure ] || { echo "::error::gate step outcome=$OUTCOME, want failure"; exit 1; }
+          got="$(command -v upgradescope)"
+          [ "$got" = "$RUNNER_TEMP/upgradescope-bin/upgradescope" ] \
+            || { echo "::error::upgradescope resolved to '$got', not the release archive (go install fallback?)"; exit 1; }
+          upgradescope --version
+          code=0
+          upgradescope scan --files internal/collect/testdata/files --target 1.36 --output sarif > /dev/null || code=$?
+          [ "$code" -eq 2 ] || { echo "::error::scan exit code $code, want 2 (gate failed)"; exit 1; }
+          sarif="${SARIF:-$RUNNER_TEMP/upgradescope-results.sarif}"
+          jq -e '[.runs[0].results[] | select(.level == "error")] | length > 0' "$sarif" \
+            || { echo "::error::SARIF at $sarif has no error-level result"; exit 1; }
 
   kind-e2e:
     name: kind e2e (scan IT + agent + chart)
-    needs: e2e-gate
-    if: needs.e2e-gate.outputs.skip != 'true'
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
       - name: create kind cluster
-        uses: helm/kind-action@v1.14.0
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: upgradescope-demo
       # kind-setup.sh reuses an existing 'upgradescope-demo' cluster and
@@ -155,6 +368,8 @@ jobs:
         run: go test ./internal/cli/ -run Integration -v
         env:
           UPGRADESCOPE_IT: '1'
+          # Explicit: a missing context fails the job instead of skipping.
+          UPGRADESCOPE_IT_CONTEXT: kind-upgradescope-demo
       - name: agent e2e (docker build, kind load, helm install, CRD + server asserts)
         run: ./hack/demo/agent-e2e.sh
 
@@ -162,18 +377,31 @@ jobs:
     name: kb dataset is not stale
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
           cache-dependency-path: |
             go.sum
             tools/gen-kb/go.sum
+      - name: gen-kb unit tests (separate module)
+        run: cd tools/gen-kb && go test ./...
+      # make gen-kb = go generate: import list, go mod tidy, dataset. Any
+      # diff means a generated file was hand-edited or not regenerated.
       - run: make gen-kb
-      - run: git diff --exit-code internal/kb/data/apilifecycle.json
-      - name: gen-kb import list covers all k8s.io/api group/versions
+      - name: generated files are up to date
         run: |
-          diff \
-            <(cd tools/gen-kb && go list k8s.io/api/... | grep -E '/v[0-9][a-z0-9]*$' | sort) \
-            <(grep -oE '"k8s\.io/api/[a-z]+/v[0-9][a-z0-9]*"' tools/gen-kb/main.go | tr -d '"' | sort) \
-            || { echo "::error::gen-kb import list is out of sync with k8s.io/api packages (left: module, right: main.go) — reconcile the imports in tools/gen-kb/main.go"; exit 1; }
+          git status --porcelain tools/gen-kb internal/kb/data
+          git diff tools/gen-kb internal/kb/data
+          test -z "$(git status --porcelain tools/gen-kb internal/kb/data)" \
+            || { echo "::error::generated KB files are stale — run 'make gen-kb' and commit the result"; exit 1; }
+      # The checks above only compare against the pinned k8s.io/api; this
+      # one notices upstream moving on (a warning, not a failure).
+      - name: newer k8s.io/api release?
+        working-directory: tools/gen-kb
+        run: |
+          pinned="$(go list -m -f '{{.Version}}' k8s.io/api)"
+          latest="$(go list -m -f '{{.Version}}' k8s.io/api@latest)"
+          if [ "$pinned" != "$latest" ]; then
+            echo "::warning::k8s.io/api $latest is available but gen-kb pins $pinned — check the kb-refresh PR or the 'kb-refresh is failing' issue"
+          fi

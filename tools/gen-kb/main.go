@@ -8,12 +8,17 @@
 // (this module cannot import internal/kb; the sanity test in internal/kb
 // and the CI freshness check keep the shapes in sync).
 //
-// IMPORTANT — when bumping k8s.io/api: reconcile the import list below
-// against `go list k8s.io/api/...`. A new group/version package that is
-// missing from the imports still compiles and the CI freshness check still
-// passes (the dataset just silently lacks that group); only the
-// import-list drift check in CI (and this note) guard against it.
+// The group/version imports live in zz_generated_imports.go, written by
+// internal/genimports from `go list k8s.io/api/...`. After bumping
+// k8s.io/api, `go generate ./...` is the only step: it rewrites the import
+// list, tidies go.mod, and regenerates the dataset. Entries of the
+// previously written dataset whose types upstream has since deleted are
+// carried forward as tombstones (see carryForward), never dropped.
 package main
+
+//go:generate go run ./internal/genimports -out zz_generated_imports.go
+//go:generate go mod tidy
+//go:generate go run . -out ../../internal/kb/data/apilifecycle.json
 
 import (
 	"encoding/json"
@@ -24,100 +29,12 @@ import (
 	"reflect"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
-
-	admissionv1 "k8s.io/api/admission/v1"
-	admissionv1beta1 "k8s.io/api/admission/v1beta1"
-	admregv1 "k8s.io/api/admissionregistration/v1"
-	admregv1alpha1 "k8s.io/api/admissionregistration/v1alpha1"
-	admregv1beta1 "k8s.io/api/admissionregistration/v1beta1"
-	apidiscoveryv2 "k8s.io/api/apidiscovery/v2"
-	apidiscoveryv2beta1 "k8s.io/api/apidiscovery/v2beta1"
-	apiserverinternalv1alpha1 "k8s.io/api/apiserverinternal/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
-	appsv1beta1 "k8s.io/api/apps/v1beta1"
-	appsv1beta2 "k8s.io/api/apps/v1beta2"
-	authnv1 "k8s.io/api/authentication/v1"
-	authnv1alpha1 "k8s.io/api/authentication/v1alpha1"
-	authnv1beta1 "k8s.io/api/authentication/v1beta1"
-	authzv1 "k8s.io/api/authorization/v1"
-	authzv1beta1 "k8s.io/api/authorization/v1beta1"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
-	certsv1 "k8s.io/api/certificates/v1"
-	certsv1alpha1 "k8s.io/api/certificates/v1alpha1"
-	certsv1beta1 "k8s.io/api/certificates/v1beta1"
-	coordv1 "k8s.io/api/coordination/v1"
-	coordv1alpha2 "k8s.io/api/coordination/v1alpha2"
-	coordv1beta1 "k8s.io/api/coordination/v1beta1"
-	corev1 "k8s.io/api/core/v1"
-	discoveryv1 "k8s.io/api/discovery/v1"
-	discoveryv1beta1 "k8s.io/api/discovery/v1beta1"
-	eventsv1 "k8s.io/api/events/v1"
-	eventsv1beta1 "k8s.io/api/events/v1beta1"
-	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
-	flowcontrolv1 "k8s.io/api/flowcontrol/v1"
-	flowcontrolv1beta1 "k8s.io/api/flowcontrol/v1beta1"
-	flowcontrolv1beta2 "k8s.io/api/flowcontrol/v1beta2"
-	flowcontrolv1beta3 "k8s.io/api/flowcontrol/v1beta3"
-	imagepolicyv1alpha1 "k8s.io/api/imagepolicy/v1alpha1"
-	networkingv1 "k8s.io/api/networking/v1"
-	networkingv1beta1 "k8s.io/api/networking/v1beta1"
-	nodev1 "k8s.io/api/node/v1"
-	nodev1alpha1 "k8s.io/api/node/v1alpha1"
-	nodev1beta1 "k8s.io/api/node/v1beta1"
-	policyv1 "k8s.io/api/policy/v1"
-	policyv1beta1 "k8s.io/api/policy/v1beta1"
-	rbacv1 "k8s.io/api/rbac/v1"
-	rbacv1alpha1 "k8s.io/api/rbac/v1alpha1"
-	rbacv1beta1 "k8s.io/api/rbac/v1beta1"
-	resourcev1 "k8s.io/api/resource/v1"
-	resourcev1alpha3 "k8s.io/api/resource/v1alpha3"
-	resourcev1beta1 "k8s.io/api/resource/v1beta1"
-	resourcev1beta2 "k8s.io/api/resource/v1beta2"
-	schedulingv1 "k8s.io/api/scheduling/v1"
-	schedulingv1alpha2 "k8s.io/api/scheduling/v1alpha2"
-	schedulingv1beta1 "k8s.io/api/scheduling/v1beta1"
-	storagev1 "k8s.io/api/storage/v1"
-	storagev1alpha1 "k8s.io/api/storage/v1alpha1"
-	storagev1beta1 "k8s.io/api/storage/v1beta1"
-	storagemigrationv1beta1 "k8s.io/api/storagemigration/v1beta1"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
-
-var addToSchemes = []func(*runtime.Scheme) error{
-	admissionv1.AddToScheme, admissionv1beta1.AddToScheme,
-	admregv1.AddToScheme, admregv1alpha1.AddToScheme, admregv1beta1.AddToScheme,
-	apidiscoveryv2.AddToScheme, apidiscoveryv2beta1.AddToScheme,
-	apiserverinternalv1alpha1.AddToScheme,
-	appsv1.AddToScheme, appsv1beta1.AddToScheme, appsv1beta2.AddToScheme,
-	authnv1.AddToScheme, authnv1alpha1.AddToScheme, authnv1beta1.AddToScheme,
-	authzv1.AddToScheme, authzv1beta1.AddToScheme,
-	autoscalingv1.AddToScheme, autoscalingv2.AddToScheme,
-	batchv1.AddToScheme, batchv1beta1.AddToScheme,
-	certsv1.AddToScheme, certsv1alpha1.AddToScheme, certsv1beta1.AddToScheme,
-	coordv1.AddToScheme, coordv1alpha2.AddToScheme, coordv1beta1.AddToScheme,
-	corev1.AddToScheme,
-	discoveryv1.AddToScheme, discoveryv1beta1.AddToScheme,
-	eventsv1.AddToScheme, eventsv1beta1.AddToScheme,
-	extensionsv1beta1.AddToScheme,
-	flowcontrolv1.AddToScheme, flowcontrolv1beta1.AddToScheme,
-	flowcontrolv1beta2.AddToScheme, flowcontrolv1beta3.AddToScheme,
-	imagepolicyv1alpha1.AddToScheme,
-	networkingv1.AddToScheme, networkingv1beta1.AddToScheme,
-	nodev1.AddToScheme, nodev1alpha1.AddToScheme, nodev1beta1.AddToScheme,
-	policyv1.AddToScheme, policyv1beta1.AddToScheme,
-	rbacv1.AddToScheme, rbacv1alpha1.AddToScheme, rbacv1beta1.AddToScheme,
-	resourcev1.AddToScheme, resourcev1alpha3.AddToScheme,
-	resourcev1beta1.AddToScheme, resourcev1beta2.AddToScheme,
-	schedulingv1.AddToScheme, schedulingv1alpha2.AddToScheme, schedulingv1beta1.AddToScheme,
-	storagev1.AddToScheme, storagev1alpha1.AddToScheme, storagev1beta1.AddToScheme,
-	storagemigrationv1beta1.AddToScheme,
-}
 
 // Private lifecycle interfaces — the generated zz_generated.prerelease-lifecycle.go
 // methods on each type satisfy these (Deprecated/Removed/Replacement only
@@ -139,8 +56,21 @@ type replacementIface interface {
 // inventory.Version) and the CI kb-freshness job.
 type version struct{ Major, Minor int }
 
-func (v version) MarshalJSON() ([]byte, error) {
-	return json.Marshal(fmt.Sprintf("%d.%d", v.Major, v.Minor))
+func (v version) String() string { return fmt.Sprintf("%d.%d", v.Major, v.Minor) }
+
+func (v version) MarshalJSON() ([]byte, error) { return json.Marshal(v.String()) }
+
+// UnmarshalJSON reads the canonical "1.36" form back, so gen-kb can load
+// the previously committed dataset (see carryForward).
+func (v *version) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("version: want a \"major.minor\" string, got %s", b)
+	}
+	if _, err := fmt.Sscanf(s, "%d.%d", &v.Major, &v.Minor); err != nil || v.String() != s {
+		return fmt.Errorf("version: invalid %q", s)
+	}
+	return nil
 }
 
 type gvkOut struct {
@@ -157,7 +87,13 @@ type entry struct {
 	Deprecated  *version `json:"deprecated,omitempty"`
 	Removed     *version `json:"removed,omitempty"`
 	Replacement *gvkOut  `json:"replacement,omitempty"`
+	// RemovedInferred marks a tombstone: upstream deleted the type's
+	// package without ever tagging a removal, so Removed is the k8s.io/api
+	// minor in which it disappeared (see carryForward).
+	RemovedInferred bool `json:"removedInferred,omitempty"`
 }
+
+func (e entry) gvk() gvkOut { return gvkOut{Group: e.Group, Version: e.Version, Kind: e.Kind} }
 
 type output struct {
 	GeneratedFrom string  `json:"generatedFrom"`
@@ -180,13 +116,17 @@ func main() {
 	}
 
 	var entries []entry
+	upstream := map[gvkOut]bool{} // every GVK the pinned modules still register
+	var noLifecycle []string
 	for k, t := range scheme.AllKnownTypes() {
 		if skipKind(k) {
 			continue
 		}
+		upstream[gvkOut{Group: k.Group, Version: k.Version, Kind: k.Kind}] = true
 		obj := reflect.New(t).Interface()
 		in, ok := obj.(introducedIface)
 		if !ok {
+			noLifecycle = append(noLifecycle, k.GroupVersion().String()+" "+k.Kind)
 			continue // no generated lifecycle data for this type
 		}
 		maj, min := in.APILifecycleIntroduced()
@@ -209,6 +149,7 @@ func main() {
 				e.Replacement = &gvkOut{Group: g.Group, Version: g.Version, Kind: g.Kind}
 			}
 		}
+		fixReplacement(&e)
 		entries = append(entries, e)
 	}
 
@@ -217,6 +158,23 @@ func main() {
 	// write a dataset that would make every scan silently green.
 	if len(entries) < 100 {
 		log.Fatalf("gen-kb: only %d entries extracted (want >= 100) — did upstream rename the APILifecycle* methods?", len(entries))
+	}
+	sort.Strings(noLifecycle)
+	for _, s := range noLifecycle {
+		log.Printf("gen-kb: skipped %s (no APILifecycle* methods)", s)
+	}
+
+	apiVer := k8sAPIModuleVersion()
+	maxKnown := maxKnownK8s(apiVer)
+
+	prev, err := readDataset(*out)
+	if err != nil {
+		log.Fatalf("gen-kb: reading previous dataset: %v", err)
+	}
+	entries, tombstoned := carryForward(prev, entries, upstream, maxKnown)
+	for _, e := range tombstoned {
+		log.Printf("gen-kb: carried forward %s/%s %s (gone upstream; removed %s, inferred=%v)",
+			e.Group, e.Version, e.Kind, e.Removed, e.RemovedInferred)
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -230,10 +188,9 @@ func main() {
 		return a.Kind < b.Kind
 	})
 
-	apiVer := k8sAPIModuleVersion()
 	doc := output{
 		GeneratedFrom: "k8s.io/api " + apiVer,
-		MaxKnownK8s:   maxKnownK8s(apiVer),
+		MaxKnownK8s:   maxKnown.String(),
 		Entries:       entries,
 	}
 	buf, err := json.MarshalIndent(doc, "", "  ")
@@ -277,16 +234,20 @@ func k8sAPIModuleVersion() string {
 }
 
 // maxKnownK8s maps a k8s.io/api module version to the Kubernetes minor it
-// tracks: "v0.36.1" → "1.36".
-func maxKnownK8s(apiVersion string) string {
+// tracks: "v0.36.1" → 1.36.
+func maxKnownK8s(apiVersion string) version {
 	parts := strings.Split(strings.TrimPrefix(apiVersion, "v"), ".")
 	if len(parts) < 2 || parts[0] != "0" {
 		log.Fatalf("gen-kb: unexpected k8s.io/api version %q", apiVersion)
 	}
-	if parts[1] == "0" {
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		log.Fatalf("gen-kb: unexpected k8s.io/api version %q", apiVersion)
+	}
+	if minor == 0 {
 		// A pseudo-version like v0.0.0-20260101000000-abcdef would silently
 		// map to "1.0"; require a real tagged release instead.
 		log.Fatalf("gen-kb: k8s.io/api version %q looks like a pseudo-version; pin a tagged release", apiVersion)
 	}
-	return "1." + parts[1]
+	return version{Major: 1, Minor: minor}
 }

@@ -104,6 +104,35 @@ func TestStatusFromReports(t *testing.T) {
 	}
 }
 
+func TestTargetStatusFromReportVerdict(t *testing.T) {
+	for _, v := range []engine.Verdict{engine.VerdictReady, engine.VerdictBlocked, engine.VerdictUnknown} {
+		ts := TargetStatusFromReport(engine.Report{
+			Target: inventory.Version{Major: 1, Minor: 36}, Verdict: v, Ready: v == engine.VerdictReady,
+		})
+		if ts.Verdict != string(v) || ts.Ready != (v == engine.VerdictReady) {
+			t.Errorf("verdict %q: TargetStatus verdict/ready = %q/%v", v, ts.Verdict, ts.Ready)
+		}
+	}
+}
+
+// Gaps can be target-specific (kb-coverage only for targets beyond the KB),
+// so status.notAssessed is the union over all targets, not the first one's.
+func TestStatusFromReportsUnionsNotAssessed(t *testing.T) {
+	helm := engine.CapabilityGap{Capability: inventory.CapHelm, Reason: "secrets list forbidden"}
+	kbGap := engine.CapabilityGap{Capability: engine.GapKBCoverage, Reason: "knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed", Required: true}
+	st := StatusFromReports([]engine.Report{
+		{Target: inventory.Version{Major: 1, Minor: 37}, NotAssessed: []engine.CapabilityGap{helm}},
+		{Target: inventory.Version{Major: 1, Minor: 38}, NotAssessed: []engine.CapabilityGap{helm, kbGap}},
+	}, "v1.36.0", "v0.2.0", time.Now())
+	want := []string{
+		"helm: secrets list forbidden",
+		"kb-coverage: knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed",
+	}
+	if len(st.NotAssessed) != len(want) || st.NotAssessed[0] != want[0] || st.NotAssessed[1] != want[1] {
+		t.Errorf("NotAssessed = %q, want %q", st.NotAssessed, want)
+	}
+}
+
 func TestStatusFromReportsEmpty(t *testing.T) {
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	st := StatusFromReports(nil, "v1.35.2", "v0.2.0", now)

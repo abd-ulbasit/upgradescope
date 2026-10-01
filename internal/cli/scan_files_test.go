@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 )
 
@@ -170,7 +171,7 @@ func TestScanFilesSARIFLocations(t *testing.T) {
 		"chart/values.yaml":       "replicaCount: 1\n",
 	})
 	t.Chdir(dir)
-	out, stderr, err := execScanFiles(t, "--files", "rendered", "--output", "sarif", "--target", "1.37")
+	out, stderr, err := execScanFiles(t, "--files", "rendered", "--output", "sarif", "--target", targetAboveKBHorizon(t))
 	if ExitCode(err) != 2 {
 		t.Fatalf("ExitCode = %d (err %v), want 2", ExitCode(err), err)
 	}
@@ -245,4 +246,16 @@ func TestScanFilesExtensionlessFile(t *testing.T) {
 	if ExitCode(err) != 2 {
 		t.Fatalf("ExitCode = %d (err %v), want 2", ExitCode(err), err)
 	}
+}
+
+// targetAboveKBHorizon is one minor past the embedded knowledge base, so the
+// scan always yields a kb-stale finding (which has no file location) no
+// matter how far the weekly KB refresh has moved the horizon.
+func targetAboveKBHorizon(t *testing.T) string {
+	t.Helper()
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k.MaxKnownK8s.Next().String()
 }

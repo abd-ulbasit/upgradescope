@@ -283,6 +283,7 @@ func manifestInventory(clusterID, reason string, counts map[gvk]*inventory.APIUs
 	inv := inventory.Inventory{
 		SchemaVersion: 1,
 		ClusterID:     clusterID,
+		Source:        inventory.SourceFiles,
 		CollectedAt:   time.Now().UTC(),
 		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{
 			inventory.CapAPIUsage:        {Available: true},

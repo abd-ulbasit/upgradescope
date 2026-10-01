@@ -28,8 +28,9 @@ spec:
           type: integer
           jsonPath: .status.targets[0].score
         - name: Ready
-          type: boolean
-          jsonPath: .status.targets[0].ready
+          type: string
+          description: Verdict for the first target — ready, blocked, or unknown (required checks not assessed).
+          jsonPath: .status.targets[0].verdict
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -73,7 +74,12 @@ spec:
                       score:
                         type: integer
                       ready:
+                        description: True only when verdict is "ready". Kept for v0.1 readers; prefer verdict.
                         type: boolean
+                      verdict:
+                        description: ready (no blockers, all required checks assessed), blocked (at least one blocker), or unknown (no blockers found, but a required check was not assessed; see notAssessed).
+                        type: string
+                        enum: [ready, blocked, unknown]
                       blockers:
                         type: integer
                       warnings:

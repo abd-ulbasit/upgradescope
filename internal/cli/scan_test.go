@@ -44,6 +44,13 @@ func TestScanRejectsBadTarget(t *testing.T) {
 	}
 }
 
+func TestScanRejectsNonMajorOneTarget(t *testing.T) {
+	_, err := execScan(t, []string{"--target", "2.0"}, okStub(engine.Report{}))
+	if err == nil || !strings.Contains(err.Error(), "major version must be 1") {
+		t.Fatalf("want major-version --target error, got %v", err)
+	}
+}
+
 func TestScanRejectsBadOutput(t *testing.T) {
 	_, err := execScan(t, []string{"--target", "1.36", "--output", "xml"}, okStub(engine.Report{}))
 	if err == nil || !strings.Contains(err.Error(), "--output") {
