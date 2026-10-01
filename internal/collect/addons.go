@@ -1,8 +1,10 @@
 package collect
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -67,12 +69,65 @@ func splitImage(image string) (repo, tag string) {
 	return image, ""
 }
 
-// normalizeVersion is the single normalization point for every value
-// that lands in AddOnInstance.Version: the leading "v" is stripped from
-// image tags AND chart versions so registry Compat ranges and findings
-// compare against one uniform form.
-func normalizeVersion(v string) string {
-	return strings.TrimPrefix(v, "v")
+// imageRef is a container image reference normalised for matching: the
+// registry host (Docker Hub spelled "docker.io"), the repository path below
+// it ("library/" added for Docker Hub official images) and the tag.
+type imageRef struct {
+	host, path, tag string
+}
+
+// parseImage normalises an image reference the way the container runtime
+// resolves it: the first segment is a registry host only when it contains
+// "." or ":" or is "localhost"; otherwise the image lives on Docker Hub.
+// The digest is dropped.
+func parseImage(image string) imageRef {
+	repo, tag := splitImage(image)
+	host, path, ok := strings.Cut(repo, "/")
+	if !ok || (!strings.ContainsAny(host, ".:") && host != "localhost") {
+		host, path = "docker.io", repo
+	}
+	switch host {
+	case "index.docker.io", "registry-1.docker.io":
+		host = "docker.io"
+	}
+	if host == "docker.io" && !strings.Contains(path, "/") {
+		path = "library/" + path
+	}
+	return imageRef{host: host, path: path, tag: tag}
+}
+
+// pathMatches reports whether the repository path ends with the matcher on
+// whole segments, so "ingress-nginx/controller" matches the canonical path
+// and every mirror or pull-through-cache path that keeps it as a suffix
+// ("registry-k8s-io/ingress-nginx/controller").
+func pathMatches(path, matcher string) bool {
+	return path == matcher || strings.HasSuffix(path, "/"+matcher)
+}
+
+// imageMatches applies one registry image matcher. A provider build
+// (registry.ProviderBuildPrefixes: GKE's and AKS's own builds of Calico,
+// Cilium, Istio, …) follows the provider's support policy, so host-less
+// upstream matchers never claim it; only a matcher naming the provider
+// location does, on the full reference or a mirror path ending with it.
+func imageMatches(ref imageRef, matcher string) bool {
+	full := ref.host + "/" + ref.path
+	if registry.IsProviderBuild(matcher) {
+		return pathMatches(full, matcher)
+	}
+	return !registry.IsProviderBuild(full) && pathMatches(ref.path, matcher)
+}
+
+// versionRe finds a version anywhere in an image tag or chart appVersion:
+// "nginx-1.9.4-hardened1" → "1.9.4". A semver pre-release ("-rc.1") is kept;
+// distro and build suffixes ("-debian-12-r0", "-eksbuild.4") are not.
+var versionRe = regexp.MustCompile(`\d+\.\d+(\.\d+)?(-(alpha|beta|rc)(\.?\d+)*)?`)
+
+// versionFromTag is the single normalization point for every value that
+// lands in AddOnInstance.Version, so registry cycles, compat ranges and
+// findings compare against one uniform form; "" when the tag carries no
+// version ("latest", a digest-only reference).
+func versionFromTag(tag string) string {
+	return versionRe.FindString(tag)
 }
 
 // versionLess orders detected versions for the conservative-oldest merge:
@@ -88,34 +143,39 @@ func versionLess(a, b string) bool {
 	return a < b
 }
 
-// repoMatches reports whether repo equals the matcher or sits beneath it,
-// e.g. "registry.k8s.io/ingress-nginx" matches ".../ingress-nginx/controller".
-func repoMatches(repo, matcher string) bool {
-	return repo == matcher || strings.HasPrefix(repo, matcher+"/")
+// olderVersion returns the older of two versions, ignoring "": the
+// conservative pick when several installs of one add-on disagree.
+func olderVersion(cur, v string) string {
+	if v != "" && (cur == "" || versionLess(v, cur)) {
+		return v
+	}
+	return cur
 }
 
 // matchAddOns is pure: images + helm releases + registry → detected
-// add-on instances (deduped by ID; chart evidence preferred) and the
-// deduped, sorted, capped list of unmatched image repos (registry gap
-// visibility — never findings, spec §9).
+// add-on instances (deduped by ID; the oldest app version wins, a Helm
+// release's appVersion over image tags) and the deduped, sorted, capped
+// list of unmatched image repos (registry gap visibility — never findings,
+// spec §9).
 func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []registry.AddOn) ([]inventory.AddOnInstance, []string) {
 	type evidence struct {
 		source  string // "image" | "chart"
-		version string
+		version string // app version
+		chart   string // chart version, chart evidence only
 		ns      string
 	}
 	byID := map[string][]evidence{}
 	unmatched := map[string]bool{}
 
 	for _, img := range images {
-		repo, tag := splitImage(img.Image)
+		ref := parseImage(img.Image)
 		matched := false
 		for _, a := range addons {
 			for _, m := range a.Matchers.Images {
-				if repoMatches(repo, m) {
+				if imageMatches(ref, m) {
 					byID[a.ID] = append(byID[a.ID], evidence{
 						source:  "image",
-						version: normalizeVersion(tag),
+						version: versionFromTag(ref.tag),
 						ns:      img.Namespace,
 					})
 					matched = true
@@ -124,7 +184,7 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 			}
 		}
 		if !matched {
-			unmatched[repo] = true
+			unmatched[ref.host+"/"+ref.path] = true
 		}
 	}
 
@@ -132,7 +192,12 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 		for _, a := range addons {
 			for _, chart := range a.Matchers.Charts {
 				if rel.ChartName == chart {
-					byID[a.ID] = append(byID[a.ID], evidence{source: "chart", version: normalizeVersion(rel.ChartVersion), ns: rel.Namespace})
+					byID[a.ID] = append(byID[a.ID], evidence{
+						source:  "chart",
+						version: versionFromTag(rel.AppVersion),
+						chart:   strings.TrimPrefix(rel.ChartVersion, "v"),
+						ns:      rel.Namespace,
+					})
 				}
 			}
 		}
@@ -142,15 +207,20 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 	for id, evs := range byID {
 		inst := inventory.AddOnInstance{ID: id, Source: "image"}
 		nsSet := map[string]bool{}
+		var imageVersion, appVersion string
 		for _, e := range evs {
 			nsSet[e.ns] = true
-			switch {
-			case e.source == "chart" && inst.Source != "chart":
-				inst.Source, inst.Version = "chart", e.version
-			case e.source == inst.Source && e.version != "" && (inst.Version == "" || versionLess(e.version, inst.Version)):
-				inst.Version = e.version
+			if e.source == "chart" {
+				inst.Source = "chart"
+				appVersion = olderVersion(appVersion, e.version)
+				inst.ChartVersion = olderVersion(inst.ChartVersion, e.chart)
+			} else {
+				imageVersion = olderVersion(imageVersion, e.version)
 			}
 		}
+		// A release's appVersion is authoritative; a chart without one
+		// falls back to the image tag, never to the chart version.
+		inst.Version = cmp.Or(appVersion, imageVersion)
 		for ns := range nsSet {
 			inst.Namespaces = append(inst.Namespaces, ns)
 		}

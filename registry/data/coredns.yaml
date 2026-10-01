@@ -1,10 +1,11 @@
 # registry/data/coredns.yaml
-schema_version: 1
+schema_version: 2
 id: coredns
 display_name: CoreDNS
 matchers:
   images:
-    - registry.k8s.io/coredns/coredns
+    - coredns/coredns
+    - eks/coredns # EKS add-on image, tagged v<coredns>-eksbuild.N
   charts:
     - coredns
 support:

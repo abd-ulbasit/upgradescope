@@ -17,6 +17,9 @@ const (
 	CatVersionSkew        Category = "version-skew"
 	CatChartIncompat      Category = "chart-incompat"
 	CatKBStale            Category = "kb-stale"
+	// CatAddOnNoData (info): a detected add-on whose version has no
+	// lifecycle data, so its EOL and compatibility were not assessed.
+	CatAddOnNoData Category = "addon-no-data"
 )
 
 type Severity string

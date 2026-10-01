@@ -1,9 +1,14 @@
-# Weekly dependency updates. Minor and patch bumps are grouped into one PR
-# per ecosystem/directory to keep the noise down; majors arrive one per PR
-# because they are the ones that need reading. CI (govulncheck, race tests,
-# the web freshness check, release-snapshot) gates every one of them.
 version: 2
+
+# Weekly, grouped: a quiet week is one PR per ecosystem, not a dozen. CI
+# (make test with -race, the vuln gate, web-test, images, the kind e2e,
+# release-check) gates every one of them.
 updates:
+  # Go modules: the main module and the two tools/ modules. The `vuln` job is
+  # the gate that must not go red; this is what keeps it from having to.
+  # A k8s.io/api bump in tools/gen-kb changes the generated KB, so its PR
+  # fails kb-freshness until `make gen-kb` is committed on it (the weekly
+  # kb-refresh workflow does that bump end to end).
   - package-ecosystem: gomod
     directories:
       - /
@@ -12,45 +17,68 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
     groups:
-      go-minor-patch:
-        update-types: [minor, patch]
+      go-deps:
+        patterns: ['*']
     commit-message:
-      prefix: 'chore(deps)'
+      prefix: 'deps'
 
-  # A bump here changes the built dashboard: rerun `make web` on the PR and
-  # commit internal/server/webdist, or CI's web job fails.
+  # The dashboard has real dependencies (React, Vite, vitest, TypeScript). A
+  # bump changes the built bundle: run `make web` on the PR and commit
+  # internal/server/webdist, or web-test fails on the stale copy.
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
     groups:
-      npm-minor-patch:
-        update-types: [minor, patch]
+      npm-deps:
+        patterns: ['*']
     commit-message:
-      prefix: 'chore(deps)'
+      prefix: 'deps'
 
+  # Workflow actions, batched the same way. The workflows pin every action to
+  # a commit SHA with the version in a trailing comment; Dependabot bumps both.
+  # Tool versions the workflows pass as inputs (helm) or the hack/ scripts pin
+  # (GoReleaser, govulncheck, staticcheck, kind, kubectl, kubeconform and
+  # their sha256s, the kind node images) are not visible to it and are bumped
+  # by hand. A GoReleaser bump goes in the Makefile and release.yml together,
+  # and only to a version whose go.mod needs no newer Go than ours
+  # (make check-toolchain).
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
       day: monday
     groups:
-      actions-minor-patch:
-        update-types: [minor, patch]
+      actions:
+        patterns: ['*']
     commit-message:
       prefix: 'ci'
 
-  # Dockerfile and Dockerfile.release pin bases by digest; this keeps the
-  # digests (and tags) current.
+  # Base images in Dockerfile and Dockerfile.release, all digest-pinned.
+  #
+  # golang is excluded on purpose: its version is not a free choice, it must
+  # equal go.mod's `go` directive or the build dies at `go mod download` (the
+  # image sets GOTOOLCHAIN=local — see hack/check-toolchain.sh). Dependabot
+  # cannot bump the `go` directive, so a golang PR here would always fail
+  # check-toolchain until a human bumped go.mod first. The toolchain moves the
+  # other way round: bump go.mod, then the Dockerfile follows.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      - dependency-name: golang
+      # Node majors: the dashboard build tracks the Active LTS line. A new
+      # major ("Current") becomes LTS each October; bump by hand then.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
     groups:
-      docker-minor-patch:
-        update-types: [minor, patch]
+      base-images:
+        patterns: ['*']
     commit-message:
-      prefix: 'chore(deps)'
+      prefix: 'build'

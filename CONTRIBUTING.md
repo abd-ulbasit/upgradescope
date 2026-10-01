@@ -23,11 +23,12 @@ and never in a public issue.
 
 | Tool | Version | Needed for |
 |---|---|---|
-| Go | 1.26 (see `go.mod`) | everything |
-| Node.js + npm | 20 or newer (the `Dockerfile` builds with `node:20`; 22 LTS works) | only the web dashboard (`web/`, `make web`) |
-| helm | 3.x | only `make chart-test` (lint and render, no cluster) |
-| kind, kubectl | recent | only integration and e2e tests |
-| Docker | any | only `make pg-test`, `make docker-build` and `make agent-e2e` |
+| Go | the `go` directive in `go.mod` | everything |
+| Node.js + npm | 22 or 24 (CI tests both; the `Dockerfile` builds with `node:24`) | the web dashboard (`web/`, `make web`, `make web-test`) and `make hack-test` |
+| helm | 3.x or 4.x (CI pins v4.3.0) | only `make chart-test`, `make helm-test` and `make e2e` |
+| jq | any | the `hack/` scripts behind `make vuln`, `make release-check`, `make e2e` |
+| kind, kubectl | `make e2e` installs pinned, checksum-verified copies into `bin/tools` | only integration and e2e tests |
+| Docker | any, with buildx | only `make pg-test`, `make images`, `make docker-build` and `make e2e` |
 
 Unit tests, golden tests, lint and the build need **only Go**. No Docker, no
 cluster and no network beyond the Go module proxy.
@@ -36,7 +37,7 @@ cluster and no network beyond the Go module proxy.
 git clone https://github.com/abd-ulbasit/upgradescope
 cd upgradescope
 make build        # bin/upgradescope (no dashboard, see below)
-make test         # go test ./...
+make test         # gofmt, go vet, go test -race, tools/ modules too: the CI gate
 make lint         # go vet + pinned staticcheck, the same gate CI runs
 ```
 
@@ -69,7 +70,7 @@ tools/
 deploy/chart/          Helm chart (agent, optional server, CRD, RBAC)
 web/                   React + TypeScript dashboard (Vite), embedded via go:embed
 action/                composite GitHub Action wrapping `upgradescope scan`
-hack/                  test and demo scripts (kind setup, chart tests, Postgres tests)
+hack/                  the scripts behind every CI job (see "What CI runs"), plus the kind demo
 ```
 
 ## Running tests
@@ -77,18 +78,13 @@ hack/                  test and demo scripts (kind setup, chart tests, Postgres 
 ### Unit tests
 
 ```sh
-make test                              # go test ./...
-go test -race ./internal/agent/...     # run -race on the packages you touched
-(cd tools/eol-sync && go test ./...)   # tools/ are separate modules: test them separately
-(cd tools/gen-kb && go vet ./...)
+make test                              # what CI's test job runs: gofmt, go vet and
+                                       # go test -race -count=1, tools/ modules included
+go test -race ./internal/agent/...     # while iterating: just the packages you touched
 ```
 
-CI also runs these checks, and you should run them before pushing:
-
-```sh
-gofmt -l cmd internal registry tools   # must print nothing
-make lint
-```
+Before pushing, also run `make lint`. The full list of CI jobs and the
+command that reproduces each one is in [What CI runs](#what-ci-runs-and-how-to-reproduce-each-job-locally).
 
 ### Golden files
 
@@ -142,16 +138,18 @@ These tests are skipped unless you set an environment variable, so
 | What | How | Needs |
 |---|---|---|
 | scan + agent against a real cluster | `make demo-up` then `make it` (`UPGRADESCOPE_IT=1`) | kind, helm, kubectl |
-| agent e2e: image build, `helm install`, CRD and server asserts | `make agent-e2e` | Docker, kind, helm, kubectl |
-| Postgres store conformance | `make pg-test`, or set `UPGRADESCOPE_PG_TEST_DSN=postgres://…` and run `go test ./internal/server/store/ -run TestPostgresConformance` | Docker, or any Postgres you own |
-| Helm chart contract | `make chart-test` | helm only |
-| dashboard unit tests | `cd web && npm ci && npm test` | Node |
+| full kind e2e on one Kubernetes minor (CI's kube job) | `make e2e E2E_MINOR=1.31` (`make agent-e2e` is an alias) | Docker, helm, jq; kind and kubectl are installed for you |
+| Postgres store conformance | `make pg-test` (`PG_VERSION=14` for another major), or set `UPGRADESCOPE_PG_TEST_DSN=postgres://…` to use a database you run | Docker, or any Postgres you own |
+| Helm chart contract | `make chart-test`; with kubeconform validation, `make helm-test` | helm (plus network for `helm-test`) |
+| dashboard | `make web-test` | Node |
 
 `make demo-up` creates a kind cluster named `upgradescope-demo` and installs an
-EOL ingress-nginx chart into it, so the scan has a real blocker to find.
-`make demo-down` deletes it. CI runs the same kind job on every pull request
-and on every push to `main`. To skip it on a docs-only change, put
-`[skip-e2e]` in the head commit message.
+EOL ingress-nginx chart into it, so the scan has a real blocker to find
+(`KIND_NODE_IMAGE=$(hack/kind-images.sh image 1.31) make demo-up` pins the
+Kubernetes version). `make e2e` creates the same cluster on a pinned node
+image and leaves it running; `make demo-down` deletes it. CI runs the kind
+e2e on every pull request and push to `main` that changes anything other than
+docs.
 
 ### Knowledge-base tooling
 
@@ -165,6 +163,60 @@ and on every push to `main`. To skip it on a docs-only change, put
   `endoflife_product` with the endoflife.date API. Both need network access.
 - A weekly workflow (`kb-refresh.yml`) runs both and opens a pull request. You
   rarely need to bump `k8s.io/api` yourself.
+
+## What CI runs and how to reproduce each job locally
+
+The core of every job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+is one `make` target, and almost every target is a script in `hack/`, so a
+red job is reproduced by running the same target on your machine. Only the
+`registry`, `action` and `kb-freshness` jobs keep a few short checks inline in
+the YAML (which files changed, the Action's outputs, a `git status`). Tools the scripts download
+are pinned in the scripts (govulncheck, GoReleaser, staticcheck), and kind,
+kubectl and kubeconform are also checked against their upstream sha256
+(`hack/install-tool.sh`, installed into `bin/tools`).
+
+| Job | Runs on | Reproduce with | What it checks |
+|---|---|---|---|
+| `test` | PR, push | `make test check-toolchain hack-test` | gofmt, `go vet`, `go test -race -count=1` for the main and `tools/` modules; the Dockerfile's golang tag equals `go.mod`'s `go` directive and GoReleaser is one pinned version; offline self-tests of the `hack/` scripts, and that no tag run can share a concurrency group with main or another tag |
+| `lint` | PR, push | `make lint` | `go vet` and pinned staticcheck |
+| `build` | PR, push | `make build` | the binary builds |
+| `vuln` | PR, push, weekly | `make vuln-test vuln` | govulncheck in binary mode on the linux/amd64 build; fails closed, and accepts a reachable advisory only through an expiring, per-ID entry in `hack/vuln-allowlist.txt` |
+| `web` | PR, push (Node 22, 24) | `make web-test` | `npm ci`, vitest, typecheck + build, production advisories, committed `internal/server/webdist` equals the fresh build |
+| `helm` | PR, push | `make helm-test` | `helm lint --strict`, the values render matrix, kubeconform (strict) on every render against Kubernetes 1.29 and 1.37, `hack/test-chart.sh` contract |
+| `images` | PR, push | `make images` | `Dockerfile` and `Dockerfile.release` build for linux/amd64 and linux/arm64 (nothing pushed) |
+| `pg-conformance` | PR, push (Postgres 17); weekly (14–18) | `make pg-test` (`PG_VERSION=14`, …) | the store conformance suite against a real Postgres |
+| `release-check` | PRs touching release inputs, dispatch, release | `make release-check` (no Docker: `GORELEASER_SKIP=publish,sign,sbom,docker`) | `goreleaser check` and a snapshot with the pinned GoReleaser, archive names match `action/action.yml`, the binary serves the dashboard |
+| `kube` | PR, push (Kubernetes 1.31, 1.37); weekly (1.29–1.37) | `make e2e E2E_MINOR=1.31` | see below |
+| `action` | PRs touching release inputs, weekly | (needs a published release) | the composite Action installs the latest release archive and fails the gate with SARIF |
+| `registry` | PRs touching `registry/` | `go test ./registry/ && make eol-check` | registry entries are valid and in sync with endoflife.date |
+| `kb-freshness` | PR, push, weekly | `make gen-kb && git status` | the generated KB matches `tools/gen-kb`'s pinned `k8s.io/api` |
+| `ci-ok` | always | (aggregates the rest) | every other job passed or was skipped for this event; the one stable check to require on `main` |
+
+The `kube` job (`hack/e2e.sh`) runs per Kubernetes minor from
+`hack/kind-node-images.txt`, each pinned to a kind node image digest. It
+creates a kind cluster, scans the vanilla cluster at its next minor and
+expects zero removed-API blockers, installs the EOL ingress-nginx demo
+add-on, runs the scan and agent integration tests (`UPGRADESCOPE_IT=1`; this
+is the only CI job that runs them, there is no separate `it` job), builds the image from your
+tree and loads it into kind, installs `deploy/chart` with the server enabled,
+then checks the `ClusterReadiness` score and verdict, server ingest, a
+`helm upgrade` that sets `agent.targets`, and that `helm uninstall` leaves no
+ClusterRole, ClusterRoleBinding or release object behind (the CRD stays, as
+the chart README documents). Checks that guard a bug whose fix has not landed
+yet are best-effort: they report PASS or FAIL in the job summary and as a
+warning, and a TODO in `hack/e2e.sh` names the issue that makes them gating.
+`make e2e` reuses an existing `upgradescope-demo` cluster; that cluster is no
+longer vanilla, so the zero-blocker check is reported as SKIP. Run
+`make demo-down` first for a full local run.
+
+The schedule (weekly) runs the vuln gate, the full Kubernetes and Postgres
+matrices, the Action check and KB freshness, because advisories, images and
+releases change without a commit here. `release.yml` calls `ci.yml` at the
+tagged commit and publishes nothing unless it passes.
+
+To add a Kubernetes minor, add its node image (with the digest from the kind
+release notes) to `hack/kind-node-images.txt`; `make hack-test` validates the
+table.
 
 ## Commit conventions
 

@@ -1,12 +1,13 @@
 # registry/data/external-dns.yaml
 # Hand-curated: endoflife.date has no external-dns product; status and the
-# compat row come from the upstream Kubernetes-version-compatibility matrix.
-schema_version: 1
+# compat rows come from the upstream Kubernetes-version-compatibility matrix.
+schema_version: 2
 id: external-dns
 display_name: ExternalDNS
 matchers:
   images:
-    - registry.k8s.io/external-dns/external-dns
+    - external-dns/external-dns
+    - bitnami/external-dns
   charts:
     - external-dns
 support:
@@ -15,9 +16,13 @@ support:
     - https://github.com/kubernetes-sigs/external-dns#kubernetes-version-compatibility
     - https://github.com/kubernetes-sigs/external-dns/releases
 compat:
-  # Upstream matrix: ExternalDNS >=0.10.x and <=0.17.x works on K8s 1.19–1.32
-  # (x at >=1.33). The >=0.18.x row is open-ended upstream, so it carries no
-  # bounded compat row here.
+  # Upstream matrix: ExternalDNS <=0.9.x works on K8s <=1.21 (x at >=1.22);
+  # >=0.10.x and <=0.17.x works on K8s 1.19–1.32 (x at >=1.33). The >=0.18.x
+  # column (1.21 and newer) has no upper bound, so it has no row.
+  - range: "<0.10.0"
+    k8s_max: "1.21"
+    citations:
+      - https://github.com/kubernetes-sigs/external-dns#kubernetes-version-compatibility
   - range: ">=0.10.0 <0.18.0"
     k8s_min: "1.19"
     k8s_max: "1.32"

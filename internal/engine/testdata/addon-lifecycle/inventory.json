@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "77777777-7777-7777-7777-777777777777",
+  "collectedAt": "2026-10-02T00:00:00Z",
+  "serverVersion": "v1.33.5",
+  "capabilities": {
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "addOns": [
+    {"id": "istio", "version": "1.27.3", "namespaces": ["istio-system"], "source": "image"},
+    {"id": "external-dns", "version": "0.14.2", "chartVersion": "1.14.5", "namespaces": ["dns"], "source": "chart"}
+  ],
+  "helmReleases": [
+    {"name": "external-dns", "namespace": "dns", "chartName": "external-dns", "chartVersion": "1.14.5", "appVersion": "0.14.2", "status": "deployed"}
+  ],
+  "nodes": [
+    {"name": "node-a", "kubeletVersion": "v1.33.5", "containerRuntime": "containerd://1.7.27"},
+    {"name": "node-b", "kubeletVersion": "v1.33.5", "containerRuntime": "containerd://2.0.5"}
+  ],
+  "namespaces": [{"name": "dns", "team": "platform"}, {"name": "istio-system", "team": "mesh"}]
+}

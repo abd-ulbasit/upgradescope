@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ type fakeStore struct {
 	clusters  map[int64]store.Cluster
 	snapshots []store.Snapshot
 	evals     []store.Evaluation
+	outbox    []store.OutboxMessage
 	tokens    map[string]*fakeToken // keyed by plaintext token
 
 	// errs injects failures by method name, e.g. errs["InsertSnapshot"].
@@ -53,7 +55,12 @@ func (f *fakeStore) UpsertCluster(_ context.Context, c store.Cluster) (int64, er
 	}
 	for id, existing := range f.clusters {
 		if existing.Name == c.Name {
-			existing.ClusterUID = c.ClusterUID
+			if existing.ClusterUID != "" && c.ClusterUID != "" && existing.ClusterUID != c.ClusterUID {
+				return 0, &store.ClusterUIDConflictError{Name: c.Name, StoredUID: existing.ClusterUID, PushedUID: c.ClusterUID}
+			}
+			if c.ClusterUID != "" {
+				existing.ClusterUID = c.ClusterUID
+			}
 			existing.LastSeen = c.LastSeen
 			f.clusters[id] = existing
 			return id, nil
@@ -64,6 +71,24 @@ func (f *fakeStore) UpsertCluster(_ context.Context, c store.Cluster) (int64, er
 	c.FirstSeen = c.LastSeen
 	f.clusters[id] = c
 	return id, nil
+}
+
+func (f *fakeStore) DeleteCluster(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["DeleteCluster"]; err != nil {
+		return err
+	}
+	for id, c := range f.clusters {
+		if c.Name != name {
+			continue
+		}
+		delete(f.clusters, id)
+		f.snapshots = slices.DeleteFunc(f.snapshots, func(s store.Snapshot) bool { return s.ClusterID == id })
+		f.evals = slices.DeleteFunc(f.evals, func(e store.Evaluation) bool { return e.ClusterID == id })
+		return nil
+	}
+	return store.ErrNotFound
 }
 
 func (f *fakeStore) latestSnapshotLocked(clusterID int64) (store.Snapshot, bool) {
@@ -139,9 +164,168 @@ func (f *fakeStore) InsertEvaluation(ctx context.Context, e store.Evaluation) (i
 	if err := f.errs["InsertEvaluation"]; err != nil {
 		return 0, err
 	}
+	return f.insertEvalLocked(e), nil
+}
+
+func (f *fakeStore) insertEvalLocked(e store.Evaluation) int64 {
+	if e.EvaluatedAt.IsZero() {
+		e.EvaluatedAt = e.CreatedAt
+	}
 	e.ID = f.id()
 	f.evals = append(f.evals, e)
-	return e.ID, nil
+	return e.ID
+}
+
+// currentEvalLocked is the newest evaluation of snapshotID for target
+// (evals are appended in insert order, which is also created order here).
+func (f *fakeStore) currentEvalLocked(snapshotID int64, target string) (store.Evaluation, bool) {
+	for i := len(f.evals) - 1; i >= 0; i-- {
+		if f.evals[i].SnapshotID == snapshotID && f.evals[i].Target == target {
+			return f.evals[i], true
+		}
+	}
+	return store.Evaluation{}, false
+}
+
+func (f *fakeStore) CurrentEvaluation(ctx context.Context, clusterID int64, target string) (store.Evaluation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return store.Evaluation{}, err
+	}
+	if err := f.errs["CurrentEvaluation"]; err != nil {
+		return store.Evaluation{}, err
+	}
+	snap, ok := f.latestSnapshotLocked(clusterID)
+	if !ok {
+		return store.Evaluation{}, store.ErrNotFound
+	}
+	if e, ok := f.currentEvalLocked(snap.ID, target); ok {
+		return e, nil
+	}
+	return store.Evaluation{}, store.ErrNotFound
+}
+
+func (f *fakeStore) LatestKnownEvaluation(_ context.Context, clusterID int64, target string) (store.Evaluation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["LatestKnownEvaluation"]; err != nil {
+		return store.Evaluation{}, err
+	}
+	for i := len(f.evals) - 1; i >= 0; i-- {
+		e := f.evals[i]
+		if e.ClusterID == clusterID && e.Target == target && (e.Ready || e.Blockers > 0) {
+			return e, nil
+		}
+	}
+	return store.Evaluation{}, store.ErrNotFound
+}
+
+// CommitEvaluations mirrors the real stores: all-or-nothing, duplicate
+// snapshots write nothing, stale SnapshotID/Current is ErrConflict.
+func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBatch) (int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	if err := f.errs["CommitEvaluations"]; err != nil {
+		return 0, false, err
+	}
+	latest, hasLatest := f.latestSnapshotLocked(b.ClusterID)
+	snapID := b.SnapshotID
+	if b.Snapshot != nil {
+		if hasLatest && latest.Hash == b.Snapshot.Hash {
+			return latest.ID, true, nil
+		}
+	} else {
+		if !hasLatest || latest.ID != snapID {
+			return 0, false, store.ErrConflict
+		}
+		for target, want := range b.Current {
+			var got int64
+			if e, ok := f.currentEvalLocked(snapID, target); ok {
+				got = e.ID
+			}
+			if got != want {
+				return 0, false, store.ErrConflict
+			}
+		}
+	}
+	refreshAt := make([]int, len(b.Refresh))
+	for i, r := range b.Refresh {
+		refreshAt[i] = slices.IndexFunc(f.evals, func(e store.Evaluation) bool { return e.ID == r.ID })
+		if refreshAt[i] < 0 {
+			return 0, false, store.ErrNotFound
+		}
+	}
+	if b.Snapshot != nil {
+		sn := *b.Snapshot
+		sn.ID = f.id()
+		snapID = sn.ID
+		f.snapshots = append(f.snapshots, sn)
+	}
+	for _, e := range b.Insert {
+		e.SnapshotID = snapID
+		f.insertEvalLocked(e)
+	}
+	for i, r := range b.Refresh {
+		e := &f.evals[refreshAt[i]]
+		e.Report, e.KBVersion, e.TeamMapHash = r.Report, r.KBVersion, r.TeamMapHash
+		e.Blockers, e.Warnings, e.EvaluatedAt = r.Blockers, r.Warnings, r.EvaluatedAt
+	}
+	for _, m := range b.Outbox {
+		m.ID = f.id()
+		if m.NextAttemptAt.IsZero() {
+			m.NextAttemptAt = m.CreatedAt
+		}
+		f.outbox = append(f.outbox, m)
+	}
+	return snapID, false, nil
+}
+
+func (f *fakeStore) ClaimOutbox(_ context.Context, now time.Time, lease time.Duration, limit int) ([]store.OutboxMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["ClaimOutbox"]; err != nil {
+		return nil, err
+	}
+	var out []store.OutboxMessage
+	for i := range f.outbox {
+		if len(out) == limit {
+			break
+		}
+		m := &f.outbox[i]
+		if m.NextAttemptAt.After(now) {
+			continue
+		}
+		m.Attempts++
+		m.NextAttemptAt = now.Add(lease)
+		out = append(out, *m)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) DeleteOutbox(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.outbox, func(m store.OutboxMessage) bool { return m.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	f.outbox = slices.Delete(f.outbox, i, i+1)
+	return nil
+}
+
+func (f *fakeStore) RescheduleOutbox(_ context.Context, id int64, next time.Time, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.outbox, func(m store.OutboxMessage) bool { return m.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	f.outbox[i].NextAttemptAt = next
+	return nil
 }
 
 func (f *fakeStore) LatestEvaluation(ctx context.Context, clusterID int64, target string) (store.Evaluation, error) {

@@ -53,6 +53,23 @@ func TestMultiEmptyIsHarmless(t *testing.T) {
 	}
 }
 
+func TestMembersFlattensMulti(t *testing.T) {
+	a, b, c := &fakeNotifier{}, &fakeNotifier{}, &fakeNotifier{}
+	got := Members(Multi(a, Multi(b, c)))
+	if len(got) != 3 || got[0] != a || got[1] != b || got[2] != c {
+		t.Fatalf("Members(Multi(a, Multi(b, c))) = %v, want [a b c] in order", got)
+	}
+	if got := Members(a); len(got) != 1 || got[0] != a {
+		t.Fatalf("Members(a) = %v, want [a]", got)
+	}
+	if got := Members(nil); len(got) != 0 {
+		t.Fatalf("Members(nil) = %v, want none", got)
+	}
+	if got := Members(Multi()); len(got) != 0 {
+		t.Fatalf("Members(Multi()) = %v, want none", got)
+	}
+}
+
 func TestNopNotifier(t *testing.T) {
 	if err := (NopNotifier{}).Notify(context.Background(), Event{Kind: KindNewBlocker}); err != nil {
 		t.Fatalf("NopNotifier: %v", err)

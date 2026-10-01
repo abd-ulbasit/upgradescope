@@ -18,7 +18,22 @@ func rep(t *testing.T, score int, findings ...engine.Finding) engine.Report {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return engine.Report{ClusterID: "uid-1", Target: target, Score: score, Findings: findings}
+	verdict := engine.VerdictReady
+	for _, f := range findings {
+		if f.Severity == engine.SevBlocker {
+			verdict = engine.VerdictBlocked
+		}
+	}
+	return engine.Report{ClusterID: "uid-1", Target: target, Score: score, Verdict: verdict,
+		Ready: verdict == engine.VerdictReady, Findings: findings}
+}
+
+// unknownRep is a report with no blockers whose verdict is unknown: a
+// required check (api-usage) could not run.
+func unknownRep(t *testing.T, score int) engine.Report {
+	r := rep(t, score)
+	r.Verdict, r.Ready = engine.VerdictUnknown, false
+	return r
 }
 
 // blocker has no Key on purpose: it exercises the Title fallback for
@@ -95,6 +110,12 @@ func TestComputeDelta(t *testing.T) {
 				Cluster: "uid-1", Target: "1.36", Kind: notify.KindBecameReady,
 				Title: "ready for 1.36: all blockers resolved", Detail: "score 92",
 			}},
+		},
+		{
+			name: "blockers gone but verdict unknown: not became-ready",
+			prev: &prevOneBlocker,
+			curr: unknownRep(t, 100),
+			want: nil,
 		},
 		{
 			name: "new eol-approaching warning emits eol-approaching",

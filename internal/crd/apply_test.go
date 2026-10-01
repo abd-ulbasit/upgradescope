@@ -2,14 +2,17 @@ package crd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
 )
@@ -99,7 +102,7 @@ func TestManifestShape(t *testing.T) {
 
 func TestEnsureCRDCreates(t *testing.T) {
 	ctx := context.Background()
-	fc := apiextfake.NewSimpleClientset()
+	fc := apiextfake.NewClientset()
 	establishOnCreate(fc)
 	if err := EnsureCRD(ctx, fc); err != nil {
 		t.Fatalf("EnsureCRD: %v", err)
@@ -115,7 +118,7 @@ func TestEnsureCRDCreates(t *testing.T) {
 
 func TestEnsureCRDUpdatesExisting(t *testing.T) {
 	ctx := context.Background()
-	fc := apiextfake.NewSimpleClientset()
+	fc := apiextfake.NewClientset()
 	establishOnCreate(fc)
 	if err := EnsureCRD(ctx, fc); err != nil {
 		t.Fatalf("first EnsureCRD: %v", err)
@@ -165,7 +168,7 @@ func TestEnsureCRDCreateTimesOutWhenNeverEstablished(t *testing.T) {
 	establishTimeout, establishPollInterval = 150*time.Millisecond, 20*time.Millisecond
 	defer func() { establishTimeout, establishPollInterval = oldTimeout, oldInterval }()
 
-	fc := apiextfake.NewSimpleClientset() // fake never sets conditions
+	fc := apiextfake.NewClientset() // fake never sets conditions
 	err := EnsureCRD(context.Background(), fc)
 	if err == nil || !strings.Contains(err.Error(), "Established") {
 		t.Fatalf("err = %v, want not-Established timeout error", err)
@@ -174,5 +177,100 @@ func TestEnsureCRDCreateTimesOutWhenNeverEstablished(t *testing.T) {
 	if _, gerr := fc.ApiextensionsV1().CustomResourceDefinitions().Get(
 		context.Background(), crdName, metav1.GetOptions{}); gerr != nil {
 		t.Errorf("CRD not created despite establishment timeout: %v", gerr)
+	}
+}
+
+// existingCRD returns the embedded manifest as the apiserver would store it
+// (defaulted, Established), so a test can pre-create the CRD out of band.
+func existingCRD(t *testing.T) *apiextensionsv1.CustomResourceDefinition {
+	t.Helper()
+	c := parseManifest(t)
+	apiextensionsv1.SetObjectDefaults_CustomResourceDefinition(&c)
+	c.Status.Conditions = []apiextensionsv1.CustomResourceDefinitionCondition{
+		{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue},
+	}
+	return &c
+}
+
+// writeVerbs lists the mutating actions a fake recorded, as "verb[/patchType]".
+func writeVerbs(fc *apiextfake.Clientset) []string {
+	var out []string
+	for _, a := range fc.Actions() {
+		switch act := a.(type) {
+		case k8stesting.PatchAction:
+			out = append(out, "patch/"+string(act.GetPatchType()))
+		case k8stesting.CreateAction, k8stesting.UpdateAction, k8stesting.DeleteAction:
+			out = append(out, a.GetVerb())
+		}
+	}
+	return out
+}
+
+// TestEnsureCRDPreservesForeignMetadata: a CRD installed by Argo CD or
+// kubectl apply carries labels and annotations the agent does not own.
+// Reconciling a drifted schema must keep them (a full Update dropped them
+// on every agent start, so GitOps tools saw permanent drift).
+func TestEnsureCRDPreservesForeignMetadata(t *testing.T) {
+	ctx := context.Background()
+	pre := existingCRD(t)
+	pre.Labels = map[string]string{"app.kubernetes.io/instance": "upgradescope"}
+	pre.Annotations = map[string]string{
+		"argocd.argoproj.io/tracking-id":                   "upgradescope:apiextensions.k8s.io/CustomResourceDefinition:/" + crdName,
+		"kubectl.kubernetes.io/last-applied-configuration": "{}",
+	}
+	pre.Spec.Versions[0].AdditionalPrinterColumns = nil // schema drift to repair
+	fc := apiextfake.NewClientset(pre)
+
+	if err := EnsureCRD(ctx, fc); err != nil {
+		t.Fatalf("EnsureCRD: %v", err)
+	}
+	got, err := fc.ApiextensionsV1().CustomResourceDefinitions().Get(ctx, crdName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Labels["app.kubernetes.io/instance"] != "upgradescope" {
+		t.Errorf("labels = %v, want the GitOps instance label kept", got.Labels)
+	}
+	for k := range pre.Annotations {
+		if _, ok := got.Annotations[k]; !ok {
+			t.Errorf("annotation %q dropped (annotations = %v)", k, got.Annotations)
+		}
+	}
+	if len(got.Spec.Versions[0].AdditionalPrinterColumns) == 0 {
+		t.Error("schema drift not repaired: printer columns still missing")
+	}
+	if w := writeVerbs(fc); len(w) != 1 || w[0] != "patch/application/apply-patch+yaml" {
+		t.Errorf("writes = %v, want exactly one server-side apply patch", w)
+	}
+}
+
+// TestEnsureCRDNoWriteWhenInSync: an agent restart against a CRD that
+// already matches the embedded manifest must not write at all.
+func TestEnsureCRDNoWriteWhenInSync(t *testing.T) {
+	fc := apiextfake.NewClientset(existingCRD(t))
+	if err := EnsureCRD(context.Background(), fc); err != nil {
+		t.Fatalf("EnsureCRD: %v", err)
+	}
+	if w := writeVerbs(fc); len(w) != 0 {
+		t.Errorf("writes = %v, want none for an in-sync CRD", w)
+	}
+}
+
+// TestEnsureCRDMissingAndCreateForbidden: the chart grants no CRD create
+// (crds/ installs it). A missing CRD must surface as ErrCRDNotInstalled
+// with a message that says how to install it, not a bare Forbidden.
+func TestEnsureCRDMissingAndCreateForbidden(t *testing.T) {
+	fc := apiextfake.NewClientset()
+	fc.PrependReactor("create", "customresourcedefinitions",
+		func(k8stesting.Action) (bool, k8sruntime.Object, error) {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, crdName, errors.New("RBAC"))
+		})
+	err := EnsureCRD(context.Background(), fc)
+	if !errors.Is(err, ErrCRDNotInstalled) {
+		t.Fatalf("err = %v, want ErrCRDNotInstalled", err)
+	}
+	if !strings.Contains(err.Error(), "crds/") {
+		t.Errorf("err = %q, want it to point at the chart's crds/", err)
 	}
 }

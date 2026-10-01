@@ -1,13 +1,33 @@
 # registry/data/cert-manager.yaml
-schema_version: 1
+# cycles are generated from the endoflife.date API by tools/eol-sync; do not
+# edit them by hand. support is hand-curated: status eol is only for a
+# product upstream retired as a whole.
+schema_version: 2
 id: cert-manager
 display_name: cert-manager
+endoflife_product: cert-manager
 matchers:
   images:
-    - quay.io/jetstack/cert-manager-controller
+    - jetstack/cert-manager-controller
+    - jetstack/cert-manager-webhook
+    - jetstack/cert-manager-cainjector
   charts:
     - cert-manager
 support:
   status: supported
   citations:
+    - https://endoflife.date/cert-manager
     - https://cert-manager.io/docs/releases/
+cycles:
+  - {cycle: "1.21", eol: false, citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.20", eol: false, citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.19", eol: "2026-07-08", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.18", eol: "2026-03-10", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.17", eol: "2025-10-07", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.16", eol: "2025-06-10", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.15", eol: "2025-02-03", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.14", eol: "2024-10-03", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.13", eol: "2024-06-05", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.12", eol: "2025-05-19", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.11", eol: "2023-09-12", citations: ["https://endoflife.date/cert-manager"]}
+  - {cycle: "1.10", eol: "2023-05-19", citations: ["https://endoflife.date/cert-manager"]}

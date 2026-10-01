@@ -106,10 +106,10 @@ func TestOpenIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if n != 3 {
-		t.Errorf("schema_migrations rows = %d, want 3 (0001-0003, each applied once)", n)
+	if n != 4 {
+		t.Errorf("schema_migrations rows = %d, want 4 (0001-0004, each applied once)", n)
 	}
-	for _, table := range []string{"clusters", "snapshots", "evaluations", "tokens"} {
+	for _, table := range []string{"clusters", "snapshots", "evaluations", "tokens", "outbox"} {
 		var name string
 		if err := s2.db.QueryRow(
 			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
@@ -130,7 +130,7 @@ func TestUpsertClusterInsertThenUpdate(t *testing.T) {
 		t.Fatalf("insert returned id %d, want > 0", id)
 	}
 
-	id2, err := s.UpsertCluster(ctx, Cluster{Name: "prod-eu-1", ClusterUID: "uid-1b", FirstSeen: tPlus(1), LastSeen: tPlus(1)})
+	id2, err := s.UpsertCluster(ctx, Cluster{Name: "prod-eu-1", ClusterUID: "uid-1", FirstSeen: tPlus(1), LastSeen: tPlus(1)})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -148,8 +148,8 @@ func TestUpsertClusterInsertThenUpdate(t *testing.T) {
 	if !got.LastSeen.Equal(tPlus(1)) {
 		t.Errorf("LastSeen = %v, want %v (must bump on update)", got.LastSeen, tPlus(1))
 	}
-	if got.ClusterUID != "uid-1b" {
-		t.Errorf("ClusterUID = %q, want uid-1b", got.ClusterUID)
+	if got.ClusterUID != "uid-1" {
+		t.Errorf("ClusterUID = %q, want uid-1", got.ClusterUID)
 	}
 
 	if _, err := s.UpsertCluster(ctx, Cluster{Name: "dev-1", FirstSeen: tBase, LastSeen: tBase}); err != nil {
@@ -566,5 +566,55 @@ func TestCloseThenOperationsFail(t *testing.T) {
 	}
 	if _, err := s.GetCluster(context.Background(), 1); err == nil {
 		t.Error("GetCluster after Close succeeded, want error")
+	}
+}
+
+// TestEvaluationWrittenWithoutEvaluatedAtStaysReadable: a binary that
+// predates migration 0004 (a rollback after it ran) inserts evaluations
+// without evaluated_at, so the column's empty-string default lands. Reads must treat
+// that as "last evaluated when created" rather than fail — CurrentEvaluation
+// feeds /fleet and duplicate-push handling — and a refresh must then stamp
+// a real time.
+func TestEvaluationWrittenWithoutEvaluatedAtStaysReadable(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	cid := mustCluster(t, s, "prod")
+	sid := mustSnapshot(t, s, cid, "aaa", tBase)
+	// The pre-0004 INSERT column list.
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at)
+		VALUES (?, ?, '1.36', 'kb-old', 70, 0, 1, 0, ?, ?)`, cid, sid, []byte(`{}`), formatTime(tPlus(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+
+	reads := map[string]func(context.Context, int64, string) (Evaluation, error){
+		"CurrentEvaluation":     s.CurrentEvaluation,
+		"LatestEvaluation":      s.LatestEvaluation,
+		"LatestKnownEvaluation": s.LatestKnownEvaluation,
+	}
+	for name, read := range reads {
+		got, err := read(ctx, cid, "1.36")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.ID != id || !got.EvaluatedAt.Equal(tPlus(1)) || !got.CreatedAt.Equal(tPlus(1)) {
+			t.Errorf("%s = id %d created %v evaluated %v, want id %d, both %v", name, got.ID, got.CreatedAt, got.EvaluatedAt, id, tPlus(1))
+		}
+	}
+
+	if _, _, err := s.CommitEvaluations(ctx, EvaluationBatch{
+		ClusterID: cid, SnapshotID: sid, Current: map[string]int64{"1.36": id},
+		Refresh: []Evaluation{{ID: id, KBVersion: "kb-new", Blockers: 1, Report: []byte(`{}`), EvaluatedAt: tPlus(30)}},
+	}); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	got, err := s.CurrentEvaluation(ctx, cid, "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.EvaluatedAt.Equal(tPlus(30)) || got.KBVersion != "kb-new" {
+		t.Errorf("after refresh: evaluated %v kb %q, want %v kb-new", got.EvaluatedAt, got.KBVersion, tPlus(30))
 	}
 }

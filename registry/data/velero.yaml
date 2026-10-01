@@ -3,12 +3,11 @@
 # upstream "Velero compatibility matrix" (every maintained Velero release
 # >= 1.14 is expected to work on Kubernetes 1.18-latest — open-ended, so no
 # bounded compat row is recorded).
-schema_version: 1
+schema_version: 2
 id: velero
 display_name: Velero
 matchers:
   images:
-    - docker.io/velero/velero
     - velero/velero
   charts:
     - velero

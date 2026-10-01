@@ -165,6 +165,63 @@ func TestFleetTeams(t *testing.T) {
 	}
 }
 
+// TestFleetTeamsUnstoredTargetMatchesPerCluster: for a target nothing has
+// stored (1.36 is neither a default nor in --targets), the rollup must give
+// the same answer /clusters/{id}/teams gives — a what-if — and say so, never
+// an empty teams map that reads as an all-clear.
+func TestFleetTeamsUnstoredTargetMatchesPerCluster(t *testing.T) {
+	ts, done := fleetFixture(t)
+	defer done()
+
+	type teamScore struct {
+		Score    int `json:"score"`
+		Blockers int `json:"blockers"`
+	}
+	var fleet struct {
+		Teams map[string]struct {
+			WorstScore int      `json:"worstScore"`
+			Blockers   int      `json:"blockers"`
+			Clusters   []string `json:"clusters"`
+		} `json:"teams"`
+		Evaluated []struct {
+			Name   string `json:"name"`
+			Source string `json:"source"`
+		} `json:"evaluated"`
+		Missing       []string `json:"missing"`
+		NotApplicable []string `json:"notApplicable"`
+	}
+	if resp := getJSON(t, ts, "/api/v1/fleet/teams?target=1.36", "", &fleet); resp.StatusCode != 200 {
+		t.Fatalf("GET /fleet/teams?target=1.36 status = %d", resp.StatusCode)
+	}
+	var perCluster struct {
+		Teams  map[string]teamScore `json:"teams"`
+		Source string               `json:"source"`
+	}
+	getJSON(t, ts, "/api/v1/clusters/4/teams?target=1.36", "", &perCluster) // bravo (fakeStore shares one id sequence)
+	want, ok := perCluster.Teams["payments"]
+	if !ok || want.Blockers != 1 || perCluster.Source != "what-if" {
+		t.Fatalf("per-cluster teams = %+v (source %q), want a what-if payments blocker", perCluster.Teams, perCluster.Source)
+	}
+	pay, ok := fleet.Teams["payments"]
+	if !ok || pay.WorstScore != want.Score || pay.Blockers != want.Blockers || !reflect.DeepEqual(pay.Clusters, []string{"bravo"}) {
+		t.Fatalf("fleet payments = %+v (teams %+v), want the per-cluster answer %+v from bravo", pay, fleet.Teams, want)
+	}
+	if len(fleet.Evaluated) != 2 || fleet.Evaluated[0].Source != "what-if" || fleet.Evaluated[1].Source != "what-if" {
+		t.Errorf("evaluated = %+v, want both clusters as what-if", fleet.Evaluated)
+	}
+	if len(fleet.Missing) != 0 || len(fleet.NotApplicable) != 0 {
+		t.Errorf("missing %v / n/a %v, want none", fleet.Missing, fleet.NotApplicable)
+	}
+
+	// The stored target reports its source as stored.
+	getJSON(t, ts, "/api/v1/fleet/teams?target=1.35", "", &fleet)
+	for _, e := range fleet.Evaluated {
+		if e.Source != "stored" {
+			t.Errorf("1.35 %s source = %q, want stored", e.Name, e.Source)
+		}
+	}
+}
+
 func TestFleetReadAuth(t *testing.T) {
 	st := newFakeStore()
 	s := newTestServer(t, st, func(c *Config) { c.ReadToken = "read-tok" })

@@ -4,31 +4,61 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Weekly: govulncheck against the latest advisories and the published
-  # Action's release-install path, which no PR may have touched.
+  # Weekly, with no commit needed: new advisories reach the vuln DB, new
+  # Kubernetes and Postgres patch images ship, and the published Action's
+  # release-install path can break, whether or not anyone pushes. The
+  # scheduled run is the vuln gate, the full Kubernetes (1.29-1.37) and
+  # Postgres (14-18) matrices, the Action check and KB freshness.
   schedule:
     - cron: '41 5 * * 1' # Mondays 05:41 UTC
   workflow_dispatch:
+  # release.yml calls this workflow for every v* tag, so a release is gated on
+  # the whole suite, vuln gate and kind e2e included, at the tagged commit.
+  workflow_call:
+    inputs:
+      # A called run carries the caller's event, so a release re-dispatched
+      # on its tag would look like a workflow_dispatch here and take the
+      # weekly sets: older kind images that may stop booting (see
+      # hack/kind-node-images.txt), and the Action check against a release
+      # that may be half-published. release: true keeps the PR sets.
+      release:
+        type: boolean
+        default: false
 
-# Least privilege by default; no job here writes anything.
+# Least privilege: nothing here writes to the repository.
 permissions:
   contents: read
 
-# A new push to a PR cancels that PR's superseded run; pushes to main and
-# scheduled runs are keyed by commit and event, so they never cancel each
-# other.
+# A new push to a PR cancels that PR's superseded run (one group per PR).
+# Everything else gets a group of its own: groups are repository-wide, and a
+# PENDING run is cancelled whenever another run joins its group, even with
+# cancel-in-progress false. When release.yml calls this workflow, github.* is
+# the tag push (event push, the tagged sha), so without the ref a tag's CI
+# would share main's group for the same commit and be cancelled by a re-run
+# of main's kind e2e, or by tagging rc.1 and final on one commit, and the
+# release would publish nothing. Keyed by event, ref and (outside PRs)
+# commit, a tag run never shares a group with main or with another tag.
+# hack/ci-concurrency_test.sh (make hack-test) evaluates this for each kind
+# of run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Actions are pinned by full commit SHA (the comment names the release);
-# Dependabot (github-actions ecosystem) proposes the bumps.
-
+# Third-party actions are pinned to commit SHAs (the comment names the
+# release; Dependabot keeps both current). Every checkout drops its token
+# (persist-credentials: false), and Go comes from go.mod, the same toolchain
+# the Dockerfile builds with (make check-toolchain).
+#
+# Each job's core is one `make` target backed by a hack/ script, so a laptop
+# reproduces a job byte for byte (CONTRIBUTING.md, "What CI runs"). Tools the
+# scripts download (kind, kubectl, kubeconform, govulncheck, GoReleaser) are
+# pinned in the scripts; kind/kubectl/kubeconform are also sha256-verified.
 jobs:
-  # Which areas a change touches, for the jobs that are too expensive to run
-  # on everything. Docs-only changes skip kind e2e.
+  # Which areas a PR or main push touches, for the jobs too expensive to run
+  # on everything: docs-only changes skip the kind e2e. Skipped on the
+  # schedule, workflow_dispatch and release (tag) runs, which run everything.
   changes:
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -39,6 +69,8 @@ jobs:
       release: ${{ steps.release.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: code
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
@@ -61,76 +93,159 @@ jobs:
               - '.github/workflows/ci.yml'
               - 'action/**'
               - 'Makefile'
+              - 'hack/release-check.sh'
               - 'go.mod'
               - 'deploy/chart/Chart.yaml'
 
   lint:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
-      # golangci-lint-action lags Go releases (its binary must be built with a
-      # Go >= our toolchain); vet + staticcheck track the toolchain directly.
-      - run: go vet ./...
-      # Pinned, not @latest: an unpinned linter turns an upstream release into
-      # a red build on an unrelated PR. Keep in sync with Makefile's lint target.
-      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 && staticcheck ./...
+          go-version-file: go.mod
+      # go vet + staticcheck, pinned in the Makefile: golangci-lint-action
+      # lags Go releases, and an unpinned linter turns an upstream release
+      # into a red build on an unrelated PR.
+      - run: make lint
 
   test:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
           cache-dependency-path: |
             go.sum
             tools/*/go.sum
-      - name: gofmt (every tracked Go file, all modules)
-        run: |
-          unformatted="$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
-          [ -z "$unformatted" ] || { echo "::error::gofmt needed:"; echo "$unformatted"; exit 1; }
-      - run: go test -race ./...
-      - name: eol-sync unit tests (separate module)
-        run: cd tools/eol-sync && go test ./...
+      # gofmt, go vet and go test -race -count=1, main module and every
+      # tools/ module. The ITs stay env-gated, so this is the unit set.
+      - run: make test
+      # The golang base image pins GOTOOLCHAIN=local, so a Dockerfile behind
+      # go.mod's `go` directive fails at `go mod download` (the images and
+      # kube jobs); GoReleaser must be one pinned version that go.mod's Go
+      # can build (make release-check).
+      - run: make check-toolchain
+      # The hack/ scripts every other job runs, driven offline through their
+      # pass, fail and fail-closed paths with stubs and fixtures.
+      - run: make hack-test
 
   build:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
       - run: make build
 
-  # Reachable vulnerabilities in our code paths, under the latest 1.26
-  # toolchain (stdlib) and go.sum. Runs weekly too, because new advisories
-  # land without any commit here.
-  govulncheck:
+  # Reachable vulnerabilities in the shipped binary. Weekly too, because new
+  # advisories land without any commit here.
+  vuln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The gate lives in hack/vulncheck.sh so `make vuln` reproduces it byte
+      # for byte on a laptop. It pins govulncheck, scans the linux/amd64
+      # binary, and fails closed; accepted advisories are in
+      # hack/vuln-allowlist.txt, one ID each, with an expiry.
+      - name: vuln gate self-test (stub scanner, offline)
+        run: make vuln-test
+      - name: govulncheck (binary mode, per-advisory allowlist)
+        run: make vuln
+
+  # Dashboard: npm ci, vitest, typecheck + vite build, production advisories,
+  # and the committed go:embed copy equals the fresh build.
+  web:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The maintained LTS lines; the Dockerfile builds on 24.
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: make web-test
+
+  # Chart: lint --strict, the values render matrix, kubeconform on every
+  # render at 1.29 and 1.37, and hack/test-chart.sh's contract assertions.
+  helm:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0 # keep in step with the kube job and release.yml HELM_VERSION
+      - run: make helm-test
+
+  # Every Dockerfile for both architectures the release publishes, pushing
+  # nothing. The from-source build cross-compiles from the runner's platform
+  # and Dockerfile.release only COPYs a binary, so no emulation is needed.
+  images:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile: [Dockerfile, Dockerfile.release]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
-          check-latest: true
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+          go-version-file: go.mod # Dockerfile.release's binaries are built on the runner
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build ${{ matrix.dockerfile }} (linux/amd64, linux/arm64)
+        env:
+          IMAGES_DOCKERFILES: ${{ matrix.dockerfile }}
+        run: make images
 
   registry:
     name: registry dataset valid + in sync with endoflife.date
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
       - name: Did this PR touch registry/?
         id: changed
         run: |
@@ -147,14 +262,19 @@ jobs:
         if: steps.changed.outputs.registry == 'true'
         run: make eol-check
 
+  # Store conformance against a real Postgres: 17 on every PR and push, the
+  # supported range 14-18 on the schedule (and on demand).
   pg-conformance:
-    name: postgres store conformance (real postgres:17)
-    if: github.event_name != 'schedule'
+    name: postgres store conformance (postgres:${{ matrix.pg }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release)) && '["14","15","16","17","18"]' || '["17"]') }}
     services:
       postgres:
-        image: postgres:17
+        image: postgres:${{ matrix.pg }}
         env:
           POSTGRES_PASSWORD: ci-test
           POSTGRES_DB: upgradescope
@@ -167,9 +287,11 @@ jobs:
           --health-retries 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
       - name: wait for postgres (entrypoint restarts once after initdb)
         run: |
           for _ in $(seq 1 60); do
@@ -180,130 +302,35 @@ jobs:
           done
           echo "::error::postgres not ready after 60s"
           exit 1
-      - run: go test ./internal/server/store/ -run TestPostgresConformance -v -race
+      # With a DSN, hack/pg-test.sh uses this service instead of starting a
+      # container, and fails if the conformance suite skipped.
+      - run: make pg-test
         env:
           UPGRADESCOPE_PG_TEST_DSN: postgres://postgres:ci-test@127.0.0.1:5432/upgradescope?sslmode=disable
 
-  # Chart contract: strict lint, every documented values combination renders,
-  # and hack/test-chart.sh's assertions (image tag, RBAC, required tokens…).
-  chart:
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          version: v4.3.0 # keep in step with release.yml HELM_VERSION
-      - run: helm lint --strict deploy/chart
-      - name: helm template (values matrix)
-        run: |
-          set -euo pipefail
-          while IFS='|' read -r name args; do
-            [ -n "$name" ] || continue
-            echo "::group::$name"
-            # shellcheck disable=SC2086 # args is a deliberate word list
-            helm template upgradescope deploy/chart --namespace upgradescope $args > /dev/null
-            echo "rendered: $name ($args)"
-            echo "::endgroup::"
-          done <<'EOF'
-          default|
-          server|--set server.enabled=true --set server.ingestToken=t
-          server-readtoken|--set server.enabled=true --set server.ingestToken=t --set server.readToken=r
-          server-existing-secret|--set server.enabled=true --set server.existingSecret=s --set agent.existingSecret=s
-          server-no-persistence|--set server.enabled=true --set server.ingestToken=t --set server.persistence.enabled=false
-          external-server|--set agent.serverUrl=https://uscope.example.com --set agent.existingSecret=s
-          targets|--set agent.targets={1.37,1.38}
-          byo-serviceaccount|--set serviceAccount.create=false --set serviceAccount.name=sa --set rbac.create=false
-          image-override|--set image.tag=dev
-          EOF
-      - run: ./hack/test-chart.sh
-
-  # Dashboard: typecheck + build (make web), unit tests, prod-dependency
-  # advisories, and the committed go:embed copy must equal a fresh build.
-  web:
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: npm ci, typecheck (tsc --noEmit), vite build, stage into webdist
-        run: make web
-      - name: unit tests (vitest)
-        working-directory: web
-        run: npm test
-      - name: production dependency advisories
-        working-directory: web
-        run: npm audit --omit=dev --audit-level=high
-      - name: committed internal/server/webdist matches the fresh build
-        run: |
-          if [ -n "$(git status --porcelain -- internal/server/webdist)" ]; then
-            git status --short -- internal/server/webdist
-            echo "::error::internal/server/webdist is stale — run 'make web' and commit the result"
-            exit 1
-          fi
-
-  # Prove the release pipeline before a tag does: config valid, every
-  # archive and image builds, names still match what the Action downloads,
-  # and the binary serves the dashboard. Publishes and signs nothing.
-  release-snapshot:
+  # Prove the release pipeline before a tag does: config valid for the
+  # pinned GoReleaser, every archive and per-arch image builds, archive names
+  # still match what the Action downloads, and the binary serves the
+  # dashboard. Publishes and signs nothing.
+  release-check:
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.release == 'true'
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.changes.outputs.release == 'true' || needs.changes.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # goreleaser derives the snapshot version from tags
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: check
+          go-version-file: go.mod
       # In snapshot mode dockers_v2 still builds (and --loads, never pushes)
       # the linux/amd64 and linux/arm64 images from Dockerfile.release.
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: release --snapshot --clean --skip=publish,sign,sbom
-      - name: archive names match what action/action.yml downloads
-        run: |
-          template="$(sed -n 's/^ *asset="\(.*\)"$/\1/p' action/action.yml)"
-          [ -n "$template" ] || { echo "::error::no asset=\"...\" line in action/action.yml"; exit 1; }
-          for os in linux darwin; do
-            for arch in amd64 arm64; do
-              name="${template//\$\{os\}/$os}"
-              name="${name//\$\{arch\}/$arch}"
-              [ -f "dist/$name" ] || { echo "::error::action.yml expects dist/$name, goreleaser did not produce it"; ls dist; exit 1; }
-              echo "ok: $name"
-            done
-          done
-          for arch in amd64 arm64; do
-            [ -f "dist/upgradescope_windows_${arch}.zip" ] || { echo "::error::no windows $arch zip"; exit 1; }
-          done
-      - name: release binary serves the dashboard at /
-        run: |
-          bin="$(jq -r '.[] | select(.type=="Binary" and .goos=="linux" and .goarch=="amd64") | .path' dist/artifacts.json)"
-          "$bin" --version
-          "$bin" serve --listen 127.0.0.1:18080 --ingest-token smoke --db "$RUNNER_TEMP/smoke.sqlite" &
-          pid=$!
-          trap 'kill "$pid" 2>/dev/null || true' EXIT # also on failure: a live server would hold the step open
-          for _ in $(seq 1 50); do curl -fsS -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 0.2; done
-          got="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' http://127.0.0.1:18080/)"
-          case "$got" in
-            '200 text/html'*) echo "GET / -> $got" ;;
-            *) echo "::error::GET / returned '$got', want 200 text/html (dashboard missing from the binary)"; exit 1 ;;
-          esac
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: make release-check
 
   # The composite Action as a consumer runs it: installs the latest release
   # archive (not the go install fallback) and fails the gate with SARIF on
@@ -312,12 +339,15 @@ jobs:
     needs: changes
     if: >-
       !cancelled() &&
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && !inputs.release) ||
        needs.changes.outputs.release == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: gate
         uses: ./action
         continue-on-error: true # the gate is expected to fail
@@ -343,44 +373,74 @@ jobs:
           jq -e '[.runs[0].results[] | select(.level == "error")] | length > 0' "$sarif" \
             || { echo "::error::SARIF at $sarif has no error-level result"; exit 1; }
 
-  kind-e2e:
-    name: kind e2e (scan IT + agent + chart)
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.e2e == 'true'
+  # The Kubernetes minors the kube job runs on, from
+  # hack/kind-node-images.txt: the `pr` rows (1.31, the oldest with the
+  # flowcontrol v1beta3 window, and 1.37, the newest) on PRs, pushes and
+  # releases; every minor 1.29-1.37 on the schedule and on demand.
+  kube-matrix:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      minors: ${{ steps.matrix.outputs.minors }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE: ${{ inputs.release == true }}
+        run: |
+          set=pr
+          case "$EVENT/$RELEASE" in schedule/* | workflow_dispatch/false) set=all ;; esac
+          minors="$(hack/kind-images.sh matrix "$set")"
+          echo "Kubernetes minors ($set): $minors"
+          echo "minors=$minors" >> "$GITHUB_OUTPUT"
+
+  # kind e2e per minor (make e2e, hack/e2e.sh): pinned node image, kind and
+  # kubectl pinned and sha256-verified, the zero-false-blocker regression,
+  # scan + agent ITs, the chart from this tree's image, ClusterReadiness
+  # verdict, server ingest, agent.targets upgrade, clean uninstall. Checks
+  # that guard a fix not on main yet are best-effort and reported PASS/FAIL
+  # in the job summary rather than silently ignored.
+  kube:
+    name: kube (kind e2e, Kubernetes ${{ matrix.minor }})
+    needs: [changes, kube-matrix]
+    if: >-
+      !cancelled() && needs.kube-matrix.result == 'success' &&
+      (needs.changes.outputs.e2e == 'true' || needs.changes.result == 'skipped')
+    runs-on: ubuntu-latest # Docker preinstalled
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        minor: ${{ fromJSON(needs.kube-matrix.outputs.minors) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
-      - name: create kind cluster
-        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          cluster_name: upgradescope-demo
-      # kind-setup.sh reuses an existing 'upgradescope-demo' cluster and
-      # only needs kind/helm/kubectl (all present on the runner); it
-      # installs the EOL ingress-nginx chart the tests assert on.
-      - name: install EOL ingress-nginx demo blocker
-        run: ./hack/demo/kind-setup.sh
-      - run: make build
-      - name: scan + agent integration tests against kind
-        run: go test ./internal/cli/ -run Integration -v
+          version: v4.3.0 # keep in step with the helm job and release.yml HELM_VERSION
+      - name: kind e2e on Kubernetes ${{ matrix.minor }}
         env:
-          UPGRADESCOPE_IT: '1'
-          # Explicit: a missing context fails the job instead of skipping.
-          UPGRADESCOPE_IT_CONTEXT: kind-upgradescope-demo
-      - name: agent e2e (docker build, kind load, helm install, CRD + server asserts)
-        run: ./hack/demo/agent-e2e.sh
+          E2E_MINOR: ${{ matrix.minor }}
+        run: make e2e E2E_MINOR="$E2E_MINOR"
 
   kb-freshness:
     name: kb dataset is not stale
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
           cache-dependency-path: |
             go.sum
             tools/gen-kb/go.sum
@@ -404,4 +464,27 @@ jobs:
           latest="$(go list -m -f '{{.Version}}' k8s.io/api@latest)"
           if [ "$pinned" != "$latest" ]; then
             echo "::warning::k8s.io/api $latest is available but gen-kb pins $pinned — check the kb-refresh PR or the 'kb-refresh is failing' issue"
+          fi
+
+  # The one check to require in a branch ruleset (#58). The kube job names
+  # change with the matrix and most jobs skip on some events (docs-only PRs
+  # skip kube), so none of them is a stable required check. This job always
+  # runs and fails if anything it needs failed or was cancelled; skipped is
+  # fine, that is a job not meant for this event. A skipped required check
+  # counts as passing, hence if: always(). hack/ci-ok_test.sh (make
+  # hack-test) fails if a job is missing from needs.
+  ci-ok:
+    if: always()
+    needs: [changes, lint, test, build, vuln, web, helm, images, registry, pg-conformance, release-check, action, kube-matrix, kube, kb-freshness]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key) \(.value.result)"' <<<"$NEEDS" | sort | tee "$RUNNER_TEMP/results"
+          if bad=$(grep -Ev ' (success|skipped)$' "$RUNNER_TEMP/results"); then
+            echo "::error::not every job passed: $(tr '\n' ' ' <<<"$bad")"
+            exit 1
           fi

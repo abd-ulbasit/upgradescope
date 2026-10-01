@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -22,6 +24,10 @@ import (
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/kube-openapi/pkg/validation/spec"
+	"k8s.io/kube-openapi/pkg/validation/strfmt"
+	"k8s.io/kube-openapi/pkg/validation/validate"
+	"sigs.k8s.io/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
@@ -245,6 +251,88 @@ func TestTickHonorsSpecTargets(t *testing.T) {
 	}
 }
 
+// readCRSpecTargets returns spec.targets of the named CR.
+func readCRSpecTargets(t *testing.T, dyn dynamic.Interface, name string) []string {
+	t.Helper()
+	spec, found, err := crd.ReadSpec(context.Background(), dyn, name)
+	if err != nil || !found {
+		t.Fatalf("read spec of %q: found=%v err=%v", name, found, err)
+	}
+	return spec.Targets
+}
+
+func targetsRunner(t *testing.T, dyn dynamic.Interface, targets ...string) *runner {
+	t.Helper()
+	cfg := Config{Targets: targets}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	return newRunner(fakeClients(t, "v1.35.2"), dyn, mustKB(t), cfg)
+}
+
+// The chart passes agent.targets as --targets instead of rendering the CR,
+// so Helm never owns an object the agent also creates. A missing CR is
+// created with the flag's targets.
+func TestTickCreatesCRWithFlagTargets(t *testing.T) {
+	dyn := fakeDyn()
+	r := targetsRunner(t, dyn, "1.37", "1.38")
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := readCRSpecTargets(t, dyn, crd.DefaultName); !slices.Equal(got, []string{"1.37", "1.38"}) {
+		t.Errorf("spec.targets = %v, want [1.37 1.38]", got)
+	}
+	requireCRValidAgainstCRD(t, dyn, crd.DefaultName)
+	st := readCRStatus(t, dyn, crd.DefaultName)
+	if len(st.Targets) != 2 || st.Targets[0].Target != "1.37" {
+		t.Errorf("status targets = %+v, want 1.37 and 1.38", st.Targets)
+	}
+}
+
+// helm upgrade --set agent.targets={1.37} after a default install: the CR
+// already exists (agent-created, empty spec or kubectl-edited targets) and
+// the flag value wins.
+func TestTickReconcilesExistingSpecToFlagTargets(t *testing.T) {
+	dyn := fakeDyn(&unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": crd.Group + "/" + crd.Version,
+		"kind":       crd.Kind,
+		"metadata":   map[string]interface{}{"name": crd.DefaultName},
+		"spec":       map[string]interface{}{"targets": []interface{}{"1.36"}},
+	}})
+	r := targetsRunner(t, dyn, "1.37")
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := readCRSpecTargets(t, dyn, crd.DefaultName); !slices.Equal(got, []string{"1.37"}) {
+		t.Errorf("spec.targets = %v, want flag value [1.37]", got)
+	}
+	requireCRValidAgainstCRD(t, dyn, crd.DefaultName)
+	st := readCRStatus(t, dyn, crd.DefaultName)
+	if len(st.Targets) != 1 || st.Targets[0].Target != "1.37" {
+		t.Errorf("status targets = %+v, want only 1.37", st.Targets)
+	}
+}
+
+// Once spec.targets matches the flag, ticks do not rewrite the spec.
+func TestTickNoSpecWriteWhenFlagTargetsMatch(t *testing.T) {
+	dyn := fakeDyn()
+	r := targetsRunner(t, dyn, "1.37")
+	ctx := context.Background()
+	if err := r.tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fake := dyn.(*dynamicfake.FakeDynamicClient)
+	fake.ClearActions()
+	if err := r.tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range fake.Actions() {
+		if a.GetVerb() == "patch" || (a.GetVerb() == "update" && a.GetSubresource() == "") {
+			t.Errorf("unexpected spec write %s on an in-sync CR", a.GetVerb())
+		}
+	}
+}
+
 func TestTickCRDOnlyModeNoPusher(t *testing.T) {
 	r := testRunner(t, fakeDyn(), "")
 	if r.pusher != nil {
@@ -280,5 +368,62 @@ func TestSnapshotHashIgnoresCollectedAt(t *testing.T) {
 	h3, _, _ := snapshotHash(inv)
 	if h3 == h1 {
 		t.Error("hash did not change when content changed")
+	}
+}
+
+// requireCRValidAgainstCRD validates the stored CR against the embedded
+// CRD's openAPIV3Schema, as the apiserver would on create/patch. The dynamic
+// fake stores anything, so without this a value the real apiserver rejects
+// with 422 Invalid (e.g. spec.targets "v1.38") passes every other test.
+func requireCRValidAgainstCRD(t *testing.T, dyn dynamic.Interface, name string) {
+	t.Helper()
+	var def apiextensionsv1.CustomResourceDefinition
+	if err := yaml.UnmarshalStrict(crd.Manifest, &def); err != nil {
+		t.Fatalf("parse embedded CRD: %v", err)
+	}
+	// The schema is plain OpenAPI v3 (no CEL, no int-or-string), so a JSON
+	// round-trip gives the spec.Schema kube-openapi validates with.
+	raw, err := json.Marshal(def.Spec.Versions[0].Schema.OpenAPIV3Schema)
+	if err != nil {
+		t.Fatalf("encode CRD schema: %v", err)
+	}
+	var crSchema spec.Schema
+	if err := json.Unmarshal(raw, &crSchema); err != nil {
+		t.Fatalf("decode CRD schema: %v", err)
+	}
+	obj, err := dyn.Resource(crd.GVR()).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get CR %q: %v", name, err)
+	}
+	if err := validate.AgainstSchema(&crSchema, obj.Object, strfmt.Default); err != nil {
+		t.Errorf("CR %q would be rejected by the apiserver: %v", name, err)
+	}
+}
+
+// --targets accepts anything inventory.ParseTarget does ("v1.38", "1.37.2"),
+// but the CRD pins spec.targets items to MAJOR.MINOR. The agent writes the
+// normalized minor, on both the create and the patch path, so the apiserver
+// accepts the CR.
+func TestTickWritesFlagTargetsTheCRDAccepts(t *testing.T) {
+	existing := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": crd.Group + "/" + crd.Version,
+		"kind":       crd.Kind,
+		"metadata":   map[string]interface{}{"name": crd.DefaultName},
+		"spec":       map[string]interface{}{"targets": []interface{}{"1.36"}},
+	}}
+	for name, dyn := range map[string]dynamic.Interface{
+		"create": fakeDyn(),
+		"patch":  fakeDyn(existing),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := targetsRunner(t, dyn, "v1.38", "1.37.2")
+			if err := r.tick(context.Background()); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			if got := readCRSpecTargets(t, dyn, crd.DefaultName); !slices.Equal(got, []string{"1.38", "1.37"}) {
+				t.Errorf("spec.targets = %v, want [1.38 1.37]", got)
+			}
+			requireCRValidAgainstCRD(t, dyn, crd.DefaultName)
+		})
 	}
 }

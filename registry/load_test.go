@@ -2,14 +2,18 @@
 package registry
 
 import (
+	"io/fs"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"sigs.k8s.io/yaml"
 )
 
 func validYAML(id string) string {
-	return `schema_version: 1
+	return `schema_version: 2
 id: ` + id + `
 display_name: Test Add-on
 matchers:
@@ -31,29 +35,34 @@ func TestLoadFS(t *testing.T) {
 	}{
 		{
 			name:    "single valid entry",
-			files:   map[string]string{"a.yaml": validYAML("addon-a")},
+			files:   map[string]string{"addon-a.yaml": validYAML("addon-a")},
 			wantIDs: []string{"addon-a"},
 		},
 		{
-			name:    "entries sorted by id regardless of file name",
-			files:   map[string]string{"z.yaml": validYAML("addon-a"), "a.yaml": validYAML("addon-b")},
+			name:    "entries sorted by id",
+			files:   map[string]string{"addon-b.yaml": validYAML("addon-b"), "addon-a.yaml": validYAML("addon-a")},
 			wantIDs: []string{"addon-a", "addon-b"},
 		},
 		{
 			name:    "non-yaml files ignored",
-			files:   map[string]string{"a.yaml": validYAML("addon-a"), "README.md": "# docs"},
+			files:   map[string]string{"addon-a.yaml": validYAML("addon-a"), "README.md": "# docs"},
 			wantIDs: []string{"addon-a"},
 		},
 		{
 			// The registry convention is .yaml-only; a .yml file would be
 			// silently skipped by the embed glob, so loadFS rejects it loudly.
 			name:    "yml extension rejected with rename hint",
-			files:   map[string]string{"a.yaml": validYAML("addon-a"), "b.yml": validYAML("addon-b")},
-			wantErr: `data/b.yml: registry entries must use the .yaml extension (rename to .yaml)`,
+			files:   map[string]string{"addon-a.yaml": validYAML("addon-a"), "addon-b.yml": validYAML("addon-b")},
+			wantErr: `data/addon-b.yml: registry entries must use the .yaml extension (rename to .yaml)`,
+		},
+		{
+			name:    "id must equal the file name",
+			files:   map[string]string{"addon-a.yaml": validYAML("addon-b")},
+			wantErr: `data/addon-a.yaml: id "addon-b" must equal the file name (addon-a)`,
 		},
 		{
 			name:    "duplicate id across files",
-			files:   map[string]string{"a.yaml": validYAML("addon-a"), "b.yaml": validYAML("addon-a")},
+			files:   map[string]string{"addon-a.yaml": validYAML("addon-a"), "b.yaml": validYAML("addon-a")},
 			wantErr: `duplicate id "addon-a"`,
 		},
 		{
@@ -63,15 +72,52 @@ func TestLoadFS(t *testing.T) {
 		},
 		{
 			name:    "unknown field rejected (strict mode)",
-			files:   map[string]string{"a.yaml": validYAML("addon-a") + "bogus_field: x\n"},
+			files:   map[string]string{"addon-a.yaml": validYAML("addon-a") + "bogus_field: x\n"},
 			wantErr: "unknown field",
 		},
 		{
 			name: "validation failure names the file",
 			files: map[string]string{
-				"a.yaml": strings.Replace(validYAML("addon-a"), "schema_version: 1", "schema_version: 2", 1),
+				"addon-a.yaml": strings.Replace(validYAML("addon-a"), "schema_version: 2", "schema_version: 1", 1),
 			},
-			wantErr: "data/a.yaml",
+			wantErr: "data/addon-a.yaml",
+		},
+		{
+			name: "cycle eol must be a date or boolean",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: [1], citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: "eol must be a YYYY-MM-DD date, true or false",
+		},
+		{
+			// An empty string would otherwise read as "no end announced".
+			name: "cycle eol empty string rejected",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: \"\", citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: "eol must be a YYYY-MM-DD date, true or false",
+		},
+		{
+			// Unquoted, YAML reads 1.10 as the number 1.1: the wrong cycle.
+			name: "unquoted cycle rejected",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: 1.10, eol: false, citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: `quote versions`,
+		},
+		{
+			name: "unquoted cycle k8s_max rejected",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: false, k8s_max: 1.30, citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: `quote versions`,
+		},
+		{
+			name: "unknown cycle field rejected (strict mode)",
+			files: map[string]string{
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: false, lts: true, citations: [\"https://example.com/\"]}\n",
+			},
+			wantErr: "unknown field",
 		},
 	}
 	for _, tt := range tests {
@@ -101,117 +147,109 @@ func TestLoadFS(t *testing.T) {
 	}
 }
 
-func TestLoadEmbedded(t *testing.T) {
-	addons, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error: %v", err)
+// Cycle eol values round-trip through YAML and JSON in all three forms
+// endoflife.date publishes: a date, true and false.
+func TestCycleEOLRoundTrip(t *testing.T) {
+	in := `- {cycle: "1.31", eol: "2027-02-28", citations: ["https://endoflife.date/istio"]}
+- {cycle: "1.5", eol: true, citations: ["https://endoflife.date/keda"]}
+- {cycle: "2.21", eol: false, citations: ["https://endoflife.date/keda"]}
+`
+	var cycles []Cycle
+	if err := yaml.UnmarshalStrict([]byte(in), &cycles); err != nil {
+		t.Fatal(err)
 	}
-	for _, a := range addons {
-		if a.ID == "ingress-nginx" {
-			if a.Support.Status != "eol" {
-				t.Errorf("ingress-nginx status = %q, want eol", a.Support.Status)
-			}
-			if a.Support.EOLDate != "2026-03-24" {
-				t.Errorf("ingress-nginx eol_date = %q, want 2026-03-24", a.Support.EOLDate)
-			}
-			return
+	want := []*CycleEOL{{Date: "2027-02-28"}, {Ended: true}, {}}
+	for i, c := range cycles {
+		if !reflect.DeepEqual(c.EOL, want[i]) {
+			t.Errorf("cycles[%d].eol = %+v, want %+v", i, c.EOL, want[i])
 		}
 	}
-	t.Fatalf("ingress-nginx not found in embedded registry (%d entries)", len(addons))
+	out, err := yaml.Marshal(cycles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var again []Cycle
+	if err := yaml.UnmarshalStrict(out, &again); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(again, cycles) {
+		t.Fatalf("round trip changed cycles:\n%s", out)
+	}
 }
 
-func TestLoadCuratedEntries(t *testing.T) {
+// The embedded data files are checked by properties, not by a per-entry
+// table: adding a YAML entry needs no Go change, and an eol-sync run that
+// moves a date or ends a cycle cannot turn the weekly refresh PR red.
+func TestEmbeddedEntriesProperties(t *testing.T) {
 	addons, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	got := map[string]AddOn{}
+	files, err := fs.Glob(dataFS, "data/*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(addons) != len(files) {
+		t.Fatalf("Load() returned %d entries for %d data files", len(addons), len(files))
+	}
 	for _, a := range addons {
-		got[a.ID] = a
-	}
-	tests := []struct {
-		id         string
-		status     string
-		image      string
-		chart      string
-		citation   string
-		eolProduct string // endoflife_product slug; "" = hand-curated
-	}{
-		{"ingress-nginx", "eol", "registry.k8s.io/ingress-nginx/controller", "ingress-nginx",
-			"https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/", ""},
-		{"cert-manager", "supported", "quay.io/jetstack/cert-manager-controller", "cert-manager",
-			"https://cert-manager.io/docs/releases/", ""},
-		{"coredns", "supported", "registry.k8s.io/coredns/coredns", "coredns",
-			"https://github.com/coredns/deployment/blob/master/kubernetes/CoreDNS-k8s_version.md", ""},
-		{"metrics-server", "supported", "registry.k8s.io/metrics-server/metrics-server", "metrics-server",
-			"https://github.com/kubernetes-sigs/metrics-server#compatibility-matrix", ""},
-		{"kube-state-metrics", "supported", "registry.k8s.io/kube-state-metrics/kube-state-metrics", "kube-state-metrics",
-			"https://github.com/kubernetes/kube-state-metrics#compatibility-matrix", ""},
-		// API-synced entries (status/eol_date maintained by tools/eol-sync).
-		{"istio", "supported", "docker.io/istio", "istiod",
-			"https://endoflife.date/istio", "istio"},
-		{"cilium", "supported", "quay.io/cilium/cilium", "cilium",
-			"https://endoflife.date/cilium", "cilium"},
-		{"calico", "supported", "docker.io/calico", "tigera-operator",
-			"https://endoflife.date/calico", "calico"},
-		{"argo-cd", "supported", "quay.io/argoproj/argocd", "argo-cd",
-			"https://endoflife.date/argo-cd", "argo-cd"},
-		{"flux", "supported", "ghcr.io/fluxcd", "flux2",
-			"https://endoflife.date/flux", "flux"},
-		{"keda", "supported", "ghcr.io/kedacore", "keda",
-			"https://endoflife.date/keda", "keda"},
-		{"kyverno", "supported", "ghcr.io/kyverno/kyverno", "kyverno",
-			"https://endoflife.date/kyverno", "kyverno"},
-		{"traefik", "supported", "docker.io/traefik", "traefik",
-			"https://endoflife.date/traefik", "traefik"},
-		{"etcd", "supported", "registry.k8s.io/etcd", "",
-			"https://endoflife.date/etcd", "etcd"},
-		{"containerd", "supported", "containerd", "",
-			"https://endoflife.date/containerd", "containerd"},
-		// Hand-curated entries with upstream compatibility-matrix citations.
-		{"external-dns", "supported", "registry.k8s.io/external-dns/external-dns", "external-dns",
-			"https://github.com/kubernetes-sigs/external-dns#kubernetes-version-compatibility", ""},
-		{"prometheus-operator", "supported", "quay.io/prometheus-operator/prometheus-operator", "kube-prometheus-stack",
-			"https://github.com/prometheus-operator/prometheus-operator/blob/main/Documentation/getting-started/compatibility.md", ""},
-		{"velero", "supported", "docker.io/velero/velero", "velero",
-			"https://github.com/vmware-tanzu/velero#velero-compatibility-matrix", ""},
-	}
-	if len(addons) != len(tests) {
-		t.Errorf("embedded registry has %d entries, want %d", len(addons), len(tests))
-	}
-	for _, tt := range tests {
-		t.Run(tt.id, func(t *testing.T) {
-			a, ok := got[tt.id]
-			if !ok {
-				t.Fatalf("%s not found in embedded registry", tt.id)
+		t.Run(a.ID, func(t *testing.T) {
+			if a.DisplayName == "" {
+				t.Error("display_name is empty")
 			}
-			if a.Support.Status != tt.status {
-				t.Errorf("status = %q, want %q", a.Support.Status, tt.status)
+			if len(a.Support.Citations) == 0 {
+				t.Error("support has no citation")
 			}
-			if !slices.Contains(a.Matchers.Images, tt.image) {
-				t.Errorf("images %v missing %q", a.Matchers.Images, tt.image)
+			if a.EndoflifeProduct == "" {
+				return
 			}
-			if tt.chart != "" && !slices.Contains(a.Matchers.Charts, tt.chart) {
-				t.Errorf("charts %v missing %q", a.Matchers.Charts, tt.chart)
+			// Synced entries: lifecycle comes from endoflife.date cycles.
+			page := "https://endoflife.date/" + a.EndoflifeProduct
+			if !slices.Contains(a.Support.Citations, page) {
+				t.Errorf("synced entry must cite %s in support.citations, got %v", page, a.Support.Citations)
 			}
-			if !slices.Contains(a.Support.Citations, tt.citation) {
-				t.Errorf("citations %v missing %q", a.Support.Citations, tt.citation)
+			if len(a.Cycles) == 0 {
+				t.Error("synced entry has no cycles — run `make eol-sync`")
 			}
-			if a.EndoflifeProduct != tt.eolProduct {
-				t.Errorf("endoflife_product = %q, want %q", a.EndoflifeProduct, tt.eolProduct)
+			for _, c := range a.Cycles {
+				if !slices.Contains(c.Citations, page) {
+					t.Errorf("cycle %s must cite %s, got %v", c.Cycle, page, c.Citations)
+				}
+			}
+			// A product-level date on a synced entry is the newest-cycle
+			// time bomb of v0.1: per-version dates belong in cycles.
+			if a.Support.EOLDate != "" {
+				t.Errorf("synced entry carries a product-level eol_date %q; per-version dates belong in cycles", a.Support.EOLDate)
 			}
 		})
 	}
-	// ingress-nginx specifics: the demo centerpiece must carry both citations,
-	// the EOL date, and a remediation hint.
-	in := got["ingress-nginx"]
-	if in.Support.EOLDate != "2026-03-24" {
-		t.Errorf("ingress-nginx eol_date = %q, want 2026-03-24", in.Support.EOLDate)
+}
+
+// ingress-nginx is the README's headline EOL add-on and is hand-curated
+// (endoflife.date does not track it), so pinning it cannot conflict with
+// eol-sync.
+func TestIngressNginxRetirement(t *testing.T) {
+	addons, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
 	}
-	if !slices.Contains(in.Support.Citations, "https://kubernetes.io/blog/2026/01/29/ingress-nginx-statement/") {
-		t.Errorf("ingress-nginx missing 2026-01-29 statement citation, got %v", in.Support.Citations)
+	i := slices.IndexFunc(addons, func(a AddOn) bool { return a.ID == "ingress-nginx" })
+	if i < 0 {
+		t.Fatal("ingress-nginx not found in embedded registry")
+	}
+	in := addons[i]
+	if in.Support.Status != "eol" || in.Support.EOLDate != "2026-03-24" {
+		t.Errorf("support = %s/%s, want eol/2026-03-24", in.Support.Status, in.Support.EOLDate)
+	}
+	for _, want := range []string{
+		"https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/",
+		"https://github.com/kubernetes/ingress-nginx", // archive banner carries the day
+	} {
+		if !slices.Contains(in.Support.Citations, want) {
+			t.Errorf("citations %v missing %q", in.Support.Citations, want)
+		}
 	}
 	if !strings.Contains(in.Recommendation, "Gateway API") {
-		t.Errorf("ingress-nginx recommendation = %q, want Gateway API migration hint", in.Recommendation)
+		t.Errorf("recommendation = %q, want Gateway API migration hint", in.Recommendation)
 	}
 }

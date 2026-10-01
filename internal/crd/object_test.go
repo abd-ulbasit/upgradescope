@@ -69,7 +69,7 @@ func TestReadSpecTargets(t *testing.T) {
 func TestEnsureObjectCreatesAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	dyn := newDynFake()
-	if err := EnsureObject(ctx, dyn, DefaultName); err != nil {
+	if err := EnsureObject(ctx, dyn, DefaultName, nil); err != nil {
 		t.Fatalf("EnsureObject: %v", err)
 	}
 	obj, err := dyn.Resource(GVR()).Get(ctx, DefaultName, metav1.GetOptions{})
@@ -83,7 +83,7 @@ func TestEnsureObjectCreatesAndIsIdempotent(t *testing.T) {
 	if _, err := dyn.Resource(GVR()).Update(ctx, newCRObject(DefaultName, "1.37"), metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnsureObject(ctx, dyn, DefaultName); err != nil {
+	if err := EnsureObject(ctx, dyn, DefaultName, nil); err != nil {
 		t.Fatalf("second EnsureObject: %v", err)
 	}
 	spec, _, err := ReadSpec(ctx, dyn, DefaultName)
@@ -92,6 +92,45 @@ func TestEnsureObjectCreatesAndIsIdempotent(t *testing.T) {
 	}
 	if want := []string{"1.37"}; !reflect.DeepEqual(spec.Targets, want) {
 		t.Errorf("EnsureObject clobbered spec: %v, want %v", spec.Targets, want)
+	}
+}
+
+func TestEnsureObjectCreatesWithTargets(t *testing.T) {
+	ctx := context.Background()
+	dyn := newDynFake()
+	if err := EnsureObject(ctx, dyn, DefaultName, []string{"1.37", "1.38"}); err != nil {
+		t.Fatalf("EnsureObject: %v", err)
+	}
+	spec, _, err := ReadSpec(ctx, dyn, DefaultName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"1.37", "1.38"}; !reflect.DeepEqual(spec.Targets, want) {
+		t.Errorf("spec.targets = %v, want %v", spec.Targets, want)
+	}
+}
+
+func TestSetTargetsReplacesOnlyTargets(t *testing.T) {
+	ctx := context.Background()
+	cr := newCRObject(DefaultName, "1.36")
+	cr.SetLabels(map[string]string{"owner": "platform"})
+	dyn := newDynFake(cr)
+	if err := SetTargets(ctx, dyn, DefaultName, []string{"1.37"}); err != nil {
+		t.Fatalf("SetTargets: %v", err)
+	}
+	obj, err := dyn.Resource(GVR()).Get(ctx, DefaultName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.GetLabels()["owner"] != "platform" {
+		t.Errorf("labels = %v, want them kept", obj.GetLabels())
+	}
+	spec, _, err := ReadSpec(ctx, dyn, DefaultName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"1.37"}; !reflect.DeepEqual(spec.Targets, want) {
+		t.Errorf("spec.targets = %v, want %v", spec.Targets, want)
 	}
 }
 
@@ -146,6 +185,20 @@ func TestWriteStatusRetriesOnConflict(t *testing.T) {
 	}
 	if conflicts != 1 {
 		t.Errorf("conflict reactor fired %d times, want 1", conflicts)
+	}
+}
+
+// With --manage-crd=false the agent never checks the CRD at startup, so an
+// absent CRD first shows up as a 404 on the CR create. That must name the
+// cause instead of "the server could not find the requested resource".
+func TestEnsureObjectCRDNotInstalled(t *testing.T) {
+	dyn := newDynFake()
+	dyn.PrependReactor("create", Plural, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(schema.GroupResource{Group: Group, Resource: Plural}, "")
+	})
+	err := EnsureObject(context.Background(), dyn, DefaultName, nil)
+	if !errors.Is(err, ErrCRDNotInstalled) {
+		t.Fatalf("err = %v, want ErrCRDNotInstalled", err)
 	}
 }
 

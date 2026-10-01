@@ -40,6 +40,24 @@ func Multi(notifiers ...Notifier) Notifier { return multi(notifiers) }
 
 type multi []Notifier
 
+// Members flattens n into the individual notifiers it fans out to: a
+// Multi's members (recursively), nothing for nil, otherwise n itself. The
+// server queues one delivery per member so each is retried on its own.
+func Members(n Notifier) []Notifier {
+	switch m := n.(type) {
+	case nil:
+		return nil
+	case multi:
+		var out []Notifier
+		for _, x := range m {
+			out = append(out, Members(x)...)
+		}
+		return out
+	default:
+		return []Notifier{n}
+	}
+}
+
 func (m multi) Notify(ctx context.Context, ev Event) error {
 	for _, n := range m {
 		if err := n.Notify(ctx, ev); err != nil {

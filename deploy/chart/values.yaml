@@ -1,4 +1,6 @@
-# Default values for upgradescope.
+# Default values for upgradescope. values.schema.json validates them: an
+# unknown key (a typo such as server.enable) or a bad interval or target
+# fails the render instead of being ignored.
 
 image:
   repository: ghcr.io/abd-ulbasit/upgradescope
@@ -7,33 +9,35 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# Pull secrets for a private registry or mirror, set on both pods,
+# e.g. [{name: regcred}].
+imagePullSecrets: []
+
 serviceAccount:
   # Create the agent ServiceAccount. Set false to bring your own (set name).
   create: true
   name: ""
 
 rbac:
-  # Create the agent ClusterRole/ClusterRoleBinding.
-  #
-  # HONEST TRADE-OFF — read before installing:
-  # The agent ClusterRole grants get/list/watch on ALL resources in ALL API
-  # groups (cluster-wide, strictly read-only). Two collectors force this:
-  #   1. Helm release detection reads Secrets of type helm.sh/release.v1.
-  #      RBAC cannot filter Secrets by type and release names are dynamic,
-  #      so Helm detection requires cluster-wide secret get+list. If that is
-  #      unacceptable in your environment, set rbac.create=false and bind a
-  #      narrower role of your own — the Helm collector then degrades to
-  #      "not assessed (secrets list forbidden)" instead of failing.
-  #   2. Deprecated-API detection lists objects (metadata-only) at whatever
-  #      deprecated group/versions the embedded KB flags. The group set is
-  #      data-driven and grows with every KB update, so enumerating groups
-  #      in RBAC would silently rot.
-  # Write access is limited to exactly one resource: the ClusterReadiness
-  # CR and its CRD. Nothing else in the cluster is ever mutated (spec §12).
+  # Create the agent ClusterRole/ClusterRoleBinding. Every rule is listed
+  # and explained in templates/rbac.yaml and the chart README: get/list on
+  # namespaces, nodes, pods and the API group/resources the embedded KB
+  # flags as deprecated; get on /version and /metrics; writes only to the
+  # ClusterReadiness CR named agent.crName (and, with agent.manageCRD, to the
+  # clusterreadinesses.upgradescope.dev CRD; get/list on CRDs comes from the
+  # KB rules either way). No wildcards, no watch, no
+  # subresources such as nodes/proxy or pods/log.
   create: true
+  # Cluster-wide get/list on Secrets, for Helm release detection (Secrets of
+  # type helm.sh/release.v1). RBAC cannot filter Secrets by type, so true
+  # means the agent can read EVERY Secret in the cluster. false removes the
+  # rule; the Helm capability is then not assessed (the reason is the
+  # forbidden Secret list) and Helm chart findings are missing from the report.
+  helmSecrets: true
 
 agent:
-  # Evaluation interval (minimum 1m).
+  # Evaluation interval: a Go duration of at least 1m, e.g. 10m, 1h, 1m30s,
+  # 300s or 1.5h.
   interval: 10m
   # Name of the ClusterReadiness object the agent manages.
   crName: cluster
@@ -41,20 +45,72 @@ agent:
   teamLabel: team
   # Human-readable cluster name sent to the server (default: cluster UID).
   clusterName: ""
-  # Target Kubernetes minors written into the ClusterReadiness spec at
-  # install time, e.g. ["1.37", "1.38"]. Empty = agent creates the CR with
-  # an empty spec and defaults to the next minor above the server version.
+  # Keep the ClusterReadiness CRD schema in step with the agent binary at
+  # startup (agent --manage-crd). Grants get/update/patch on that one CRD
+  # only. The CRD itself is installed by the chart's crds/ directory; set
+  # false when the CRD is managed elsewhere (e.g. GitOps) to drop the CRD
+  # write permissions (get/update/patch on clusterreadinesses.upgradescope.dev).
+  # The KB-derived read rule still allows get/list on all CRDs (the KB flags
+  # apiextensions.k8s.io/v1beta1), whatever this is set to.
+  manageCRD: true
+  # Target Kubernetes minors to evaluate, MAJOR.MINOR only (the CRD's
+  # format), e.g. ["1.37", "1.38"], passed to the agent as --targets. The
+  # chart never renders the ClusterReadiness object: the agent creates it
+  # and, when targets is non-empty, resets spec.targets to this list on
+  # every tick, so this value wins over `kubectl edit`. Empty = the agent
+  # leaves spec.targets alone; set them with
+  # `kubectl patch ucr cluster --type merge -p '{"spec":{"targets":["1.37"]}}'`
+  # or let it default to the next minor above the server version.
+  # Emptying this after it was set does NOT clear spec.targets (the CR keeps
+  # the last list); to go back to the default next minor, run
+  # `kubectl patch ucr cluster --type merge -p '{"spec":{"targets":[]}}'`.
   targets: []
   # URL of an upgradescope server to push snapshots to. Empty = CRD-only
   # mode. If server.enabled=true and this is empty, it defaults to the
   # in-chart server Service.
   serverUrl: ""
-  # Bearer token for snapshot pushes. Ignored when existingSecret is set.
-  # When empty and server.enabled=true, defaults to server.ingestToken.
+  # Bearer token for snapshot pushes, stored in a chart Secret. Ignored when
+  # existingSecret is set. When both are empty and server.enabled=true, the
+  # agent uses the in-chart server's ingest token (key ingestToken of its
+  # Secret, generated or server.existingSecret).
   serverToken: ""
   # Name of an existing Secret with key "serverToken" (preferred over an
-  # inline token for anything beyond dev).
+  # inline token for anything beyond dev). The token reaches the agent as
+  # $UPGRADESCOPE_SERVER_TOKEN from a secretKeyRef, never as an argument.
   existingSecret: ""
+  # Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"].
+  extraArgs: []
+  # Extra container env, volumes and mounts. Private CA for pushes to a
+  # server behind a corporate CA: mount the PEM bundle and point
+  # SSL_CERT_DIR at it (Go adds those certificates to the image's roots):
+  #   extraVolumes: [{name: ca, configMap: {name: corp-ca}}]
+  #   extraVolumeMounts: [{name: ca, mountPath: /etc/upgradescope/ca, readOnly: true}]
+  #   extraEnv: [{name: SSL_CERT_DIR, value: /etc/upgradescope/ca}]
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  # app.kubernetes.io/name, instance and component are reserved for the
+  # selector and ignored here.
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  # Pod and container security contexts, merged over these defaults. For
+  # OpenShift's restricted-v2 SCC, which assigns the UID itself, unset the
+  # IDs: podSecurityContext: {runAsUser: null, runAsGroup: null}.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   resources:
     requests:
       cpu: 50m
@@ -68,22 +124,43 @@ server:
   # install). The agent will push to it automatically.
   enabled: false
   # Shared bearer token agents must present on POST /api/v1/snapshots.
-  # Required when enabled (unless existingSecret is set).
+  # Empty = the chart generates a random 40-character token into its Secret
+  # on first install and keeps it on upgrades (Helm lookup). NOTES.txt
+  # prints the command to read it back for agents in other clusters
+  # (Secret <fullname>-server-tokens, e.g. upgradescope-server-tokens).
+  # Renderers without cluster access (helm template, Argo CD) cannot look
+  # the old token up and generate a new one on every render: under GitOps
+  # set this or existingSecret. Ignored when existingSecret is set.
   ingestToken: ""
   # Optional bearer token for the read API. EMPTY = READ API IS OPEN —
   # acceptable behind a ClusterIP Service on a private cluster, but set one
-  # before exposing the Service in any way.
+  # before exposing the Service in any way. With existingSecret the value
+  # itself is not used; a non-empty one acts like readTokenFromSecret=true.
   readToken: ""
-  # Name of an existing Secret with key "ingestToken" (and optionally
-  # "readToken" — only read when server.readToken is also set; P2 keeps
-  # secret wiring simple).
+  # Name of an existing Secret to use instead of the chart's. Keys:
+  #   ingestToken   required; the in-chart agent pushes with it too
+  #   readToken     read when readTokenFromSecret=true
+  #   slackWebhook  optional; Slack notifications when present
+  #   webhook       optional; generic webhook when present
   existingSecret: ""
+  # With existingSecret: protect the read API with its readToken key.
+  readTokenFromSecret: false
   # Optional Slack incoming-webhook URL for finding-delta notifications.
+  # Stored in the chart Secret and passed as $UPGRADESCOPE_SLACK_WEBHOOK; it
+  # never appears in the Deployment. Ignored when existingSecret is set.
   slackWebhook: ""
-  # Optional generic webhook URL (POSTs the Event JSON).
+  # Optional generic webhook URL (POSTs the Event JSON). Stored like
+  # slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL.
   webhook: ""
   # Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"].
   targets: []
+  serviceAccount:
+    # The server never calls the Kubernetes API: it gets its own
+    # ServiceAccount and its pod mounts no API token. create=false with an
+    # empty name runs it as the namespace's default ServiceAccount (still
+    # without a mounted token).
+    create: true
+    name: ""
   service:
     type: ClusterIP
     port: 8080
@@ -93,6 +170,34 @@ server:
     enabled: true
     size: 1Gi
     storageClass: ""
+  # Extra `upgradescope serve` flags, e.g. ["--team-map=/etc/upgradescope/teams.yaml"]
+  # (mount the file with extraVolumes/extraVolumeMounts).
+  extraArgs: []
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  # app.kubernetes.io/name, instance and component are reserved for the
+  # selector and ignored here.
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  # As agent.podSecurityContext; fsGroup makes the data volume writable.
+  # OpenShift restricted-v2: {runAsUser: null, runAsGroup: null, fsGroup: null}.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   resources:
     requests:
       cpu: 100m
@@ -100,3 +205,13 @@ server:
     limits:
       cpu: 500m
       memory: 512Mi
+
+networkPolicy:
+  # Render a NetworkPolicy that admits traffic to the server only from this
+  # release's agent pods and the peers below (no effect without
+  # server.enabled, or on a CNI that does not enforce NetworkPolicy).
+  enabled: false
+  # Extra NetworkPolicyPeer entries allowed to reach the server, e.g. the
+  # ingress controller or the CI runners that call /api/v1/gate:
+  #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+  serverIngressFrom: []

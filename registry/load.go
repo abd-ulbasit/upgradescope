@@ -59,6 +59,9 @@ func loadFS(fsys fs.FS, dir string) ([]AddOn, error) {
 			errs = append(errs, fmt.Errorf("registry: parse %s: %w", name, err))
 			continue
 		}
+		if stem := strings.TrimSuffix(e.Name(), ".yaml"); a.ID != stem {
+			errs = append(errs, fmt.Errorf("registry: %s: id %q must equal the file name (%s)", name, a.ID, stem))
+		}
 		if prev, dup := seen[a.ID]; dup {
 			errs = append(errs, fmt.Errorf("registry: duplicate id %q in %s (already defined in %s)", a.ID, name, prev))
 			continue

@@ -102,10 +102,15 @@ type HelmRelease struct {
 }
 
 type AddOnInstance struct {
-	ID         string   `json:"id"`      // registry id, e.g. "ingress-nginx"
-	Version    string   `json:"version"` // semver as detected, may be ""
-	Namespaces []string `json:"namespaces"`
-	Source     string   `json:"source"` // "image" | "chart"
+	ID string `json:"id"` // registry id, e.g. "ingress-nginx"
+	// Version is the app version (a Helm release's appVersion, else the
+	// image tag's version), normalised; may be "".
+	Version string `json:"version"`
+	// ChartVersion is the Helm chart version, kept as evidence when the
+	// add-on was found through a release; registry data never uses it.
+	ChartVersion string   `json:"chartVersion,omitempty"`
+	Namespaces   []string `json:"namespaces"`
+	Source       string   `json:"source"` // "image" | "chart"
 }
 
 // ComponentVersion is one observed control-plane component version,
@@ -121,6 +126,9 @@ type ComponentVersion struct {
 type NodeInfo struct {
 	Name           string `json:"name"`
 	KubeletVersion string `json:"kubeletVersion"` // raw, e.g. "v1.33.1", "v1.33.1-eks-aeac579"
+	// ContainerRuntime is status.nodeInfo.containerRuntimeVersion, raw:
+	// "<runtime>://<version>", e.g. "containerd://1.7.27".
+	ContainerRuntime string `json:"containerRuntime,omitempty"`
 }
 
 type NamespaceInfo struct {

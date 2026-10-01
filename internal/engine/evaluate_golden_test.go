@@ -33,6 +33,12 @@ var goldenParams = map[string]struct{ target, now string }{
 	// one blocker carrying both; the PDB caller row has no objects and
 	// stays a standalone deprecated-api-in-use blocker.
 	"removed-api-with-callers": {"1.25", "2026-06-10T00:00:00Z"},
+	// Release-line lifecycle: Istio 1.27 (ended) blocks; the containerd 1.7
+	// node is EOL but only warns (the node image carries it, and the
+	// kubelet keeps 1.x support through 1.37); a containerd 2.0 node is
+	// fine; ExternalDNS from Helm is judged by appVersion 0.14.2 (compat
+	// row, no lifecycle data → info).
+	"addon-lifecycle": {"1.36", "2026-10-02T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte

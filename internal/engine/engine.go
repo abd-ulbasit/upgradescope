@@ -3,8 +3,10 @@ package engine
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -311,13 +313,8 @@ func kindMatchesResource(kind, resource string) bool {
 	return resource == k+"s"
 }
 
-// evalAddOns: registry lookup by instance ID.
-//   - support.status == "eol" OR eol_date ≤ now            → blocker, eol-addon
-//   - eol_date in (now, now+90d]                           → warning, eol-approaching
-//   - version matches a Compat range with K8sMax < target  → blocker, chart-incompat
-//
-// An instance with no detected version produces no compat finding; an ID
-// absent from the registry produces nothing.
+// evalAddOns looks every detected add-on up in the registry by ID and
+// judges it with evalAddOn; an ID absent from the registry produces nothing.
 func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) []Finding {
 	byID := make(map[string]registry.AddOn, len(k.AddOns))
 	for _, a := range k.AddOns {
@@ -331,84 +328,340 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 		}
 		ns := append([]string(nil), inst.Namespaces...)
 		sort.Strings(ns)
-		teams := teamsFor(ns, inv.Namespaces)
 		ver := inst.Version
 		if ver == "" {
 			ver = "(unknown)"
 		}
-		located := fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
-			a.DisplayName, ver, inst.Source, strings.Join(ns, ", "))
+		via := inst.Source
+		if inst.ChartVersion != "" {
+			via += " " + inst.ChartVersion // chart version: evidence only
+		}
+		out = append(out, evalAddOn(a, addOnSubject{
+			version: inst.Version,
+			located: fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
+				a.DisplayName, ver, via, strings.Join(ns, ", ")),
+			namespaces: ns,
+			teams:      teamsFor(ns, inv.Namespaces),
+		}, target, now)...)
+	}
+	return append(out, evalNodeRuntimes(inv, k.AddOns, target, now)...)
+}
 
-		var eolDate time.Time
-		hasDate := false
-		if a.Support.EOLDate != "" {
-			if d, err := time.Parse("2006-01-02", a.Support.EOLDate); err == nil {
-				eolDate, hasDate = d, true
-			}
+// evalNodeRuntimes judges node container runtimes
+// (status.nodeInfo.containerRuntimeVersion, "containerd://1.7.27") against
+// registry entries with a runtimes matcher, with evalAddOn. Nodes are
+// grouped by release line so each finding names exactly the nodes on that
+// line; a group is judged at its oldest version, and nodes whose version
+// maps to no cycle (or is unknown) form one group that names each node's
+// version.
+func evalNodeRuntimes(inv inventory.Inventory, addons []registry.AddOn, target inventory.Version, now time.Time) []Finding {
+	type group struct {
+		version string
+		nodes   []string
+	}
+	var out []Finding
+	for _, a := range addons {
+		if len(a.Matchers.Runtimes) == 0 {
+			continue
 		}
-		switch {
-		case a.Support.Status == "eol" || (hasDate && !eolDate.After(now)):
-			// Tense follows the date: status "eol" can carry a future
-			// effective date (upstream already declared EOL).
-			title := fmt.Sprintf("%s is end-of-life", a.DisplayName)
-			detail := located + " Upstream support has ended."
-			switch {
-			case hasDate && eolDate.After(now):
-				title = fmt.Sprintf("%s is end-of-life on %s", a.DisplayName, a.Support.EOLDate)
-				detail = located + fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate)
-			case a.Support.EOLDate != "":
-				title = fmt.Sprintf("%s is end-of-life since %s", a.DisplayName, a.Support.EOLDate)
-			}
-			out = append(out, Finding{
-				Category: CatEOLAddon, Severity: SevBlocker,
-				Key:         string(CatEOLAddon) + "/" + a.ID,
-				Title:       title,
-				Detail:      detail,
-				Teams:       teams,
-				Namespaces:  ns,
-				Remediation: a.Recommendation,
-				Citations:   append([]string(nil), a.Support.Citations...),
-			})
-		case hasDate && eolDate.After(now) && !eolDate.After(now.Add(90*24*time.Hour)):
-			out = append(out, Finding{
-				Category: CatEOLApproaching, Severity: SevWarning,
-				Key:         string(CatEOLApproaching) + "/" + a.ID,
-				Title:       fmt.Sprintf("%s reaches end-of-life on %s", a.DisplayName, a.Support.EOLDate),
-				Detail:      located + fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate),
-				Teams:       teams,
-				Namespaces:  ns,
-				Remediation: a.Recommendation,
-				Citations:   append([]string(nil), a.Support.Citations...),
-			})
-		}
-
-		if inst.Version == "" {
-			continue // cannot match a compat range without a detected version
-		}
-		for _, c := range a.Compat {
-			if !matchesRange(inst.Version, c.Range) {
+		groups := map[string]*group{} // by cycle; "" = no cycle
+		for _, n := range inv.Nodes {
+			runtime, ver, ok := strings.Cut(n.ContainerRuntime, "://")
+			if !ok || !slices.Contains(a.Matchers.Runtimes, runtime) {
 				continue
 			}
-			// Registry validation (registry.Validate) guarantees K8sMax is
-			// MAJOR.MINOR (^[0-9]+\.[0-9]+$), so this parse cannot fail for
-			// data that passed validation; the err check is defensive only.
-			kmax, err := inventory.ParseVersion(c.K8sMax)
-			if err == nil && kmax.Compare(target) < 0 {
-				out = append(out, Finding{
-					Category: CatChartIncompat, Severity: SevBlocker,
-					Key:         string(CatChartIncompat) + "/" + a.ID,
-					Title:       fmt.Sprintf("%s %s supports Kubernetes up to %s (target %s)", a.DisplayName, inst.Version, c.K8sMax, target),
-					Detail:      fmt.Sprintf("Installed version %s matches compatibility range %q, which supports Kubernetes %s through %s.", inst.Version, c.Range, c.K8sMin, c.K8sMax),
-					Teams:       teams,
-					Namespaces:  ns,
-					Remediation: a.Recommendation,
-					Citations:   append([]string(nil), c.Citations...),
-				})
+			ver = strings.TrimPrefix(ver, "v")
+			c, _ := cycleFor(ver, a.Cycles)
+			g := groups[c.Cycle]
+			if g == nil {
+				g = &group{}
+				groups[c.Cycle] = g
+			}
+			name := n.Name
+			if c.Cycle == "" { // versions differ within this group: name each
+				name += " (" + cmp.Or(ver, "version unknown") + ")"
+			}
+			g.nodes = append(g.nodes, name)
+			if ver != "" && (g.version == "" || versionBefore(ver, g.version)) {
+				g.version = ver
+			}
+		}
+		for _, key := range slices.Sorted(maps.Keys(groups)) {
+			g := groups[key]
+			sort.Strings(g.nodes)
+			located := fmt.Sprintf("Detected %s on node(s): %s.", a.DisplayName, strings.Join(g.nodes, ", "))
+			if key != "" {
+				located = fmt.Sprintf("Detected %s version %s on node(s): %s.", a.DisplayName, g.version, strings.Join(g.nodes, ", "))
+			}
+			out = append(out, evalAddOn(a, addOnSubject{
+				version: g.version,
+				located: located,
+				node:    true,
+			}, target, now)...)
+		}
+	}
+	return out
+}
+
+// versionBefore orders versions numerically ("1.7.9" < "1.7.20"), falling
+// back to string order when either does not parse.
+func versionBefore(a, b string) bool {
+	pa, okA := versionParts(a)
+	pb, okB := versionParts(b)
+	if okA && okB {
+		return slices.Compare(pa, pb) < 0
+	}
+	return a < b
+}
+
+// addOnSubject is one detected installation of a registry add-on.
+type addOnSubject struct {
+	version    string   // normalised app version; "" when unknown
+	located    string   // evidence sentence that opens every finding's detail
+	namespaces []string // sorted
+	teams      []string
+	// node marks a node container runtime. It ships with the node image or
+	// OS, which a node upgrade or node-pool image bump replaces, so an
+	// ended release line is a warning; only a compat row (the kubelet
+	// dropping support) blocks.
+	node bool
+}
+
+// evalAddOn judges one detected add-on:
+//
+//   - product level (support), for whole-product retirements such as
+//     ingress-nginx: status "eol" or eol_date ≤ now → blocker, eol-addon;
+//     eol_date in (now, now+90d] → warning, eol-approaching.
+//   - release line (cycles), unless the product carries a date or EOL
+//     status: the installed version's cycle has ended → blocker, eol-addon
+//     (warning for a node runtime); it ends in (now, now+90d] → warning,
+//     eol-approaching.
+//   - target outside the cycle's [k8s_min, k8s_max], or else outside the
+//     bounds of the first compat row whose range matches the version
+//     → blocker, chart-incompat.
+//   - no product date and no cycle for the version, or no version at all
+//     → info, addon-no-data: missing data must neither block nor read as
+//     "checked, fine".
+//
+// Findings about a release line are keyed category/id/cycle, others
+// category/id. Without a detected version no compat row is matched.
+func evalAddOn(a registry.AddOn, s addOnSubject, target inventory.Version, now time.Time) []Finding {
+	finding := func(cat Category, sev Severity, key, title, detail string, citations []string) Finding {
+		return Finding{
+			Category: cat, Severity: sev, Key: key, Title: title, Detail: detail,
+			Teams: s.teams, Namespaces: s.namespaces, Remediation: a.Recommendation,
+			Citations: append([]string(nil), citations...),
+		}
+	}
+	window := now.Add(90 * 24 * time.Hour)
+	var out []Finding
+
+	var eolDate time.Time
+	hasDate := false
+	if a.Support.EOLDate != "" {
+		if d, err := time.Parse("2006-01-02", a.Support.EOLDate); err == nil {
+			eolDate, hasDate = d, true
+		}
+	}
+	switch {
+	case a.Support.Status == "eol" || (hasDate && !eolDate.After(now)):
+		// Tense follows the date: status "eol" can carry a future
+		// effective date (upstream already declared EOL).
+		title := fmt.Sprintf("%s is end-of-life", a.DisplayName)
+		detail := s.located + " Upstream support has ended."
+		switch {
+		case hasDate && eolDate.After(now):
+			title = fmt.Sprintf("%s is end-of-life on %s", a.DisplayName, a.Support.EOLDate)
+			detail = s.located + fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate)
+		case a.Support.EOLDate != "":
+			title = fmt.Sprintf("%s is end-of-life since %s", a.DisplayName, a.Support.EOLDate)
+		}
+		out = append(out, finding(CatEOLAddon, SevBlocker, string(CatEOLAddon)+"/"+a.ID, title, detail, a.Support.Citations))
+	case hasDate && !eolDate.After(window):
+		out = append(out, finding(CatEOLApproaching, SevWarning, string(CatEOLApproaching)+"/"+a.ID,
+			fmt.Sprintf("%s reaches end-of-life on %s", a.DisplayName, a.Support.EOLDate),
+			s.located+fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate),
+			a.Support.Citations))
+	}
+	productDated := a.Support.Status == "eol" || hasDate
+
+	cycle, inCycle := cycleFor(s.version, a.Cycles)
+	key := func(cat Category) string {
+		if inCycle {
+			return string(cat) + "/" + a.ID + "/" + cycle.Cycle
+		}
+		return string(cat) + "/" + a.ID
+	}
+	if inCycle && !productDated {
+		if f, ok := cycleEOL(a, cycle, s, now, window); ok {
+			f.Key = key(f.Category)
+			f.Teams, f.Namespaces = s.teams, s.namespaces
+			if s.node && f.Severity == SevBlocker {
+				f.Severity = SevWarning
+				f.Detail += " The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself."
+			}
+			out = append(out, f)
+		}
+	}
+
+	if s.version != "" {
+		compat := false
+		if inCycle {
+			if title, bad := k8sOutOfRange(a.DisplayName, s.version, cycle.K8sMin, cycle.K8sMax, target); bad {
+				out = append(out, finding(CatChartIncompat, SevBlocker, key(CatChartIncompat), title,
+					fmt.Sprintf("Installed version %s is in the %s release line, which supports Kubernetes %s.",
+						s.version, cycle.Cycle, k8sRangeText(cycle.K8sMin, cycle.K8sMax)),
+					cycle.Citations))
+				compat = true
+			}
+		}
+		for _, c := range a.Compat {
+			if compat || !matchesRange(s.version, c.Range) {
+				continue
+			}
+			if title, bad := k8sOutOfRange(a.DisplayName, s.version, c.K8sMin, c.K8sMax, target); bad {
+				out = append(out, finding(CatChartIncompat, SevBlocker, key(CatChartIncompat), title,
+					fmt.Sprintf("Installed version %s matches compatibility range %q, which supports Kubernetes %s.",
+						s.version, c.Range, k8sRangeText(c.K8sMin, c.K8sMax)),
+					c.Citations))
 			}
 			break // first matching range wins
 		}
 	}
+
+	if !productDated && !inCycle {
+		ver, reason := s.version, " The registry has no release-line data for this version, so its end of life was not assessed."
+		if ver == "" {
+			ver, reason = "(version unknown)", " No version could be read from the image tag or chart, so its end of life and Kubernetes compatibility were not assessed."
+		}
+		f := finding(CatAddOnNoData, SevInfo, string(CatAddOnNoData)+"/"+a.ID,
+			fmt.Sprintf("no lifecycle data for %s %s", a.DisplayName, ver), s.located+reason, a.Support.Citations)
+		f.Remediation = ""
+		out = append(out, f)
+	}
 	return out
+}
+
+// cycleEOL judges the end of life of the release line a version is in:
+// ended → blocker, ending by window → warning; ok is false otherwise. Key,
+// Teams and Namespaces are left to the caller.
+func cycleEOL(a registry.AddOn, c registry.Cycle, s addOnSubject, now, window time.Time) (Finding, bool) {
+	if c.EOL == nil {
+		return Finding{}, false // registry validation requires eol; defensive
+	}
+	f := Finding{Remediation: a.Recommendation}
+	for _, u := range append(slices.Clone(c.Citations), a.Support.Citations...) {
+		if !slices.Contains(f.Citations, u) {
+			f.Citations = append(f.Citations, u)
+		}
+	}
+	d, err := time.Parse("2006-01-02", c.EOL.Date)
+	switch {
+	case c.EOL.Date == "" && c.EOL.Ended:
+		f.Category, f.Severity = CatEOLAddon, SevBlocker
+		f.Title = fmt.Sprintf("%s %s is end-of-life", a.DisplayName, c.Cycle)
+		f.Detail = s.located + fmt.Sprintf(" Upstream support for the %s release line has ended.", c.Cycle)
+	case err != nil:
+		return Finding{}, false // no end announced (eol: false)
+	case !d.After(now):
+		f.Category, f.Severity = CatEOLAddon, SevBlocker
+		f.Title = fmt.Sprintf("%s %s is end-of-life since %s", a.DisplayName, c.Cycle, c.EOL.Date)
+		f.Detail = s.located + fmt.Sprintf(" Upstream support for the %s release line ended on %s.", c.Cycle, c.EOL.Date)
+	case !d.After(window):
+		f.Category, f.Severity = CatEOLApproaching, SevWarning
+		f.Title = fmt.Sprintf("%s %s reaches end-of-life on %s", a.DisplayName, c.Cycle, c.EOL.Date)
+		f.Detail = s.located + fmt.Sprintf(" Upstream support for the %s release line ends on %s.", c.Cycle, c.EOL.Date)
+	default:
+		return Finding{}, false
+	}
+	if newest := newestSupportedCycle(a.Cycles, now); f.Remediation == "" && newest != "" {
+		f.Remediation = fmt.Sprintf("Upgrade %s to a supported release line (newest: %s).", a.DisplayName, newest)
+	}
+	return f, true
+}
+
+// cycleFor maps a version to the most specific cycle whose dotted
+// components are the version's leading components: "1.31.1" → "1.31" (or
+// "1" in a major-only scheme). Pre-release and build suffixes are ignored;
+// an empty or unparseable version has no cycle.
+func cycleFor(version string, cycles []registry.Cycle) (registry.Cycle, bool) {
+	v, ok := versionParts(version)
+	if !ok {
+		return registry.Cycle{}, false
+	}
+	best, bestLen := -1, 0
+	for i, c := range cycles {
+		p, ok := versionParts(c.Cycle)
+		if !ok || len(p) > len(v) || len(p) <= bestLen || !slices.Equal(v[:len(p)], p) {
+			continue
+		}
+		best, bestLen = i, len(p)
+	}
+	if best < 0 {
+		return registry.Cycle{}, false
+	}
+	return cycles[best], true
+}
+
+// versionParts splits "1.31.0-rc.0" into [1 31 0].
+func versionParts(s string) ([]int, bool) {
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		s = s[:i]
+	}
+	if s == "" {
+		return nil, false
+	}
+	var parts []int
+	for _, f := range strings.Split(s, ".") {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, n)
+	}
+	return parts, true
+}
+
+// newestSupportedCycle is the highest cycle not ended by now, "" if none.
+func newestSupportedCycle(cycles []registry.Cycle, now time.Time) string {
+	var best []int
+	name := ""
+	for _, c := range cycles {
+		if c.EOL == nil || c.EOL.Ended {
+			continue
+		}
+		if d, err := time.Parse("2006-01-02", c.EOL.Date); c.EOL.Date != "" && (err != nil || !d.After(now)) {
+			continue
+		}
+		if p, ok := versionParts(c.Cycle); ok && slices.Compare(p, best) > 0 {
+			best, name = p, c.Cycle
+		}
+	}
+	return name
+}
+
+// k8sOutOfRange reports whether target is outside [k8sMin, k8sMax] (an
+// empty bound is open) and titles the finding. Registry validation
+// guarantees the bounds parse; an unparseable one is treated as open.
+func k8sOutOfRange(name, version, k8sMin, k8sMax string, target inventory.Version) (string, bool) {
+	if kmax, err := inventory.ParseVersion(k8sMax); k8sMax != "" && err == nil && kmax.Compare(target) < 0 {
+		return fmt.Sprintf("%s %s supports Kubernetes up to %s (target %s)", name, version, k8sMax, target), true
+	}
+	if kmin, err := inventory.ParseVersion(k8sMin); k8sMin != "" && err == nil && target.Compare(kmin) < 0 {
+		return fmt.Sprintf("%s %s requires Kubernetes %s or newer (target %s)", name, version, k8sMin, target), true
+	}
+	return "", false
+}
+
+// k8sRangeText renders a supported Kubernetes range with open bounds.
+func k8sRangeText(k8sMin, k8sMax string) string {
+	switch {
+	case k8sMin == "":
+		return "up to " + k8sMax
+	case k8sMax == "":
+		return k8sMin + " and newer"
+	}
+	return k8sMin + " through " + k8sMax
 }
 
 // matchesRange reports whether the detected add-on version satisfies a
