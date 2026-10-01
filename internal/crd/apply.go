@@ -176,6 +176,11 @@ func EnsureObject(ctx context.Context, dyn dynamic.Interface, name string, targe
 	if err == nil || apierrors.IsAlreadyExists(err) {
 		return nil
 	}
+	if apierrors.IsNotFound(err) {
+		// A create only 404s when the resource is not served at all.
+		return fmt.Errorf("create clusterreadiness %q: %w; install it with the chart's crds/ "+
+			"(helm install, or kubectl apply -f deploy/chart/crds/): %w", name, ErrCRDNotInstalled, err)
+	}
 	return fmt.Errorf("create clusterreadiness %q: %w", name, err)
 }
 

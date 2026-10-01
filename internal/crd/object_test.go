@@ -188,6 +188,20 @@ func TestWriteStatusRetriesOnConflict(t *testing.T) {
 	}
 }
 
+// With --manage-crd=false the agent never checks the CRD at startup, so an
+// absent CRD first shows up as a 404 on the CR create. That must name the
+// cause instead of "the server could not find the requested resource".
+func TestEnsureObjectCRDNotInstalled(t *testing.T) {
+	dyn := newDynFake()
+	dyn.PrependReactor("create", Plural, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(schema.GroupResource{Group: Group, Resource: Plural}, "")
+	})
+	err := EnsureObject(context.Background(), dyn, DefaultName, nil)
+	if !errors.Is(err, ErrCRDNotInstalled) {
+		t.Fatalf("err = %v, want ErrCRDNotInstalled", err)
+	}
+}
+
 func TestWriteStatusMissingObject(t *testing.T) {
 	dyn := newDynFake()
 	if err := WriteStatus(context.Background(), dyn, DefaultName, Status{}); err == nil {
