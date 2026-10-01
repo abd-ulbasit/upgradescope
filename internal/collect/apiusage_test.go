@@ -267,6 +267,35 @@ func TestCollectAPIUsageTypeRemovedKindCountsEveryObject(t *testing.T) {
 	}
 }
 
+func TestListVersionOrder(t *testing.T) {
+	v := func(version string, flagged bool) servedVersion {
+		return servedVersion{version: version, kind: "K", flagged: flagged, list: true}
+	}
+	cases := []struct {
+		name      string
+		served    []servedVersion
+		preferred string
+		want      string
+	}{
+		{"preferred unflagged beats a newer one", []servedVersion{v("v1beta1", true), v("v2", false), v("v1", false)}, "v1", "v1"},
+		{"newest unflagged when preferred is absent", []servedVersion{v("v1beta1", true), v("v1", false), v("v2beta1", false), v("v2", false)}, "v3", "v2"},
+		{"unflagged beats a flagged preferred", []servedVersion{v("v1beta1", true), v("v1", false)}, "v1beta1", "v1"},
+		{"newest flagged when all are flagged", []servedVersion{v("v1alpha1", true), v("v1beta2", true), v("v1beta1", true)}, "", "v1beta2"},
+		{"unlistable versions are skipped", []servedVersion{v("v1beta1", true), {version: "v1", kind: "K"}}, "v1", "v1beta1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := listVersion(tc.served, tc.preferred)
+			if !ok || got.version != tc.want {
+				t.Errorf("listVersion = %q, %v; want %q", got.version, ok, tc.want)
+			}
+		})
+	}
+	if _, ok := listVersion([]servedVersion{v("v1", false)}, "v1"); ok {
+		t.Error("listVersion with nothing flagged = ok, want nothing to list")
+	}
+}
+
 func TestCollectAPIUsageCapsObjectRefs(t *testing.T) {
 	var objs []obj
 	for i := range inventory.MaxObjectRefs + 2 {
