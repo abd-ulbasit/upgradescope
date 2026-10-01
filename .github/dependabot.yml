@@ -1,0 +1,56 @@
+# Weekly dependency updates. Minor and patch bumps are grouped into one PR
+# per ecosystem/directory to keep the noise down; majors arrive one per PR
+# because they are the ones that need reading. CI (govulncheck, race tests,
+# the web freshness check, release-snapshot) gates every one of them.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /tools/gen-kb
+      - /tools/eol-sync
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: 'chore(deps)'
+
+  # A bump here changes the built dashboard: rerun `make web` on the PR and
+  # commit internal/server/webdist, or CI's web job fails.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: 'chore(deps)'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: 'ci'
+
+  # Dockerfile and Dockerfile.release pin bases by digest; this keeps the
+  # digests (and tags) current.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker-minor-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: 'chore(deps)'

@@ -18,13 +18,25 @@ assert_line()    { grep -qxF -- "$2" "$1" && pass "$3" || fail "$3 (missing line
 assert_no_line() { grep -qxF -- "$2" "$1" && fail "$3 (unexpected line: $2)" || pass "$3"; }
 
 echo "== helm lint"
-helm lint "$CHART"
+helm lint --strict "$CHART"
 
 echo "== crds/ copy in sync with internal/crd/manifest.yaml"
 if diff -u "$ROOT/internal/crd/manifest.yaml" "$CHART/crds/clusterreadinesses.upgradescope.dev.yaml"; then
   pass "CRD copy in sync"
 else
   fail "CRD copy out of sync — run: cp internal/crd/manifest.yaml deploy/chart/crds/clusterreadinesses.upgradescope.dev.yaml"
+fi
+
+echo "== Chart.yaml version and appVersion agree"
+# release.yml stamps both from the git tag (vX.Y.Z -> version X.Y.Z,
+# appVersion vX.Y.Z); the committed values must follow the same rule so the
+# in-repo chart never names a release that does not exist.
+CHART_VERSION="$(sed -n 's/^version: *//p' "$CHART/Chart.yaml" | tr -d '"')"
+APP_VERSION="$(sed -n 's/^appVersion: *//p' "$CHART/Chart.yaml" | tr -d '"')"
+if [ "v$CHART_VERSION" = "$APP_VERSION" ]; then
+  pass "appVersion $APP_VERSION = v + version $CHART_VERSION"
+else
+  fail "appVersion '$APP_VERSION' must be 'v' + version '$CHART_VERSION'"
 fi
 
 TMP="$(mktemp -d)"
@@ -58,7 +70,8 @@ assert_contains "$TMP/default.yaml" 'clusterreadinesses/status'              "st
 assert_not_contains "$TMP/default.yaml" '"delete"'           "no delete verb anywhere"
 assert_not_contains "$TMP/default.yaml" '"deletecollection"' "no deletecollection verb"
 assert_not_contains "$TMP/default.yaml" '"escalate"'         "no escalate verb"
-assert_contains "$TMP/default.yaml" 'image: "ghcr.io/abd-ulbasit/upgradescope:dev"' "default image ref"
+assert_contains "$TMP/default.yaml" "image: \"ghcr.io/abd-ulbasit/upgradescope:$APP_VERSION\"" "default image tag is the chart appVersion"
+assert_not_contains "$TMP/default.yaml" 'upgradescope:dev"' "default image is not the unpublished :dev"
 assert_contains "$TMP/default.yaml" 'imagePullPolicy: IfNotPresent'   "pullPolicy IfNotPresent"
 assert_contains "$TMP/default.yaml" 'runAsNonRoot: true'              "runAsNonRoot"
 assert_contains "$TMP/default.yaml" 'readOnlyRootFilesystem: true'    "readOnlyRootFilesystem"
@@ -70,6 +83,13 @@ assert_contains "$TMP/default.yaml" '--team-label=team' "default team-label flag
 assert_not_contains "$TMP/default.yaml" '--server-url' "CRD-only mode: no server-url flag"
 assert_no_line "$TMP/default.yaml" 'kind: Secret'           "no token Secret in CRD-only mode"
 assert_no_line "$TMP/default.yaml" 'kind: ClusterReadiness' "no CR without agent.targets"
+
+echo "== image.tag override (side-loaded dev image, as in agent-e2e)"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set image.tag=dev > "$TMP/devtag.yaml"
+assert_contains "$TMP/devtag.yaml" 'image: "ghcr.io/abd-ulbasit/upgradescope:dev"' "image.tag overrides appVersion"
+assert_not_contains "$TMP/devtag.yaml" "upgradescope:$APP_VERSION\"" "no appVersion image left when image.tag is set (agent + server)"
 
 echo "== agent assertions: external-server render"
 assert_contains "$TMP/external.yaml" '--server-url=https://uscope.example.com' "explicit serverUrl wins"

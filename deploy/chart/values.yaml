@@ -2,7 +2,9 @@
 
 image:
   repository: ghcr.io/abd-ulbasit/upgradescope
-  tag: dev
+  # Empty = the chart's appVersion, i.e. the release this chart was
+  # published with. Release tags are immutable, so IfNotPresent is safe.
+  tag: ""
   pullPolicy: IfNotPresent
 
 serviceAccount:
