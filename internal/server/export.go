@@ -16,10 +16,10 @@ import (
 )
 
 // handleExport: GET /api/v1/clusters/{id}/export?target=&format=csv|html —
-// auditor-facing report export from the latest STORED evaluation (no
-// recompute: an audit artifact must reflect what the system actually
-// recorded, evaluatedAt included). 404 when no evaluation exists for the
-// target.
+// auditor-facing report export from the current STORED evaluation (of the
+// latest snapshot; no recompute: an audit artifact must reflect what the
+// system actually recorded, evaluatedAt included). 404 when no such
+// evaluation exists for the target, or when the cluster already runs it.
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.requireCluster(w, r)
 	if !ok {
@@ -38,9 +38,23 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	eval, err := s.cfg.Store.LatestEvaluation(ctx, c.ID, target.String())
+	_, inv, err := s.latestInventory(ctx, c.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		errJSON(w, http.StatusNotFound, "no evaluation for target "+target.String())
+		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
+		return
+	}
+	if err != nil {
+		internalErr(w, "loading latest snapshot", err)
+		return
+	}
+	if notApplicable(inv, target) {
+		errJSON(w, http.StatusNotFound, fmt.Sprintf("cluster %s already runs %s: target %s is not applicable", c.Name, inv.ServerVersion, target))
+		return
+	}
+	eval, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String())
+	if errors.Is(err, store.ErrNotFound) {
+		errJSON(w, http.StatusNotFound, "no stored evaluation of the latest snapshot for target "+target.String()+
+			" (exports cover the default target and --targets; a newly added target is evaluated on the next push or hourly pass)")
 		return
 	}
 	if err != nil {
@@ -112,7 +126,7 @@ func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engi
 		if err := cw.Write([]string{
 			csvSafe(cluster),
 			rep.Target.String(),
-			eval.CreatedAt.UTC().Format(time.RFC3339),
+			eval.EvaluatedAt.UTC().Format(time.RFC3339),
 			string(f.Severity),
 			string(f.Category),
 			csvSafe(f.Key),
@@ -247,7 +261,7 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
   <span>Cluster: <strong>{{.Cluster}}</strong></span>
   <span>Target: <strong>{{.Target}}</strong></span>
   <span>KB: {{.Report.KBVersion}}</span>
-  <span>Evaluated: {{.Eval.CreatedAt.UTC.Format "2006-01-02 15:04 UTC"}}</span>
+  <span>Evaluated: {{.Eval.EvaluatedAt.UTC.Format "2006-01-02 15:04 UTC"}}</span>
   <span>Generated: {{.GeneratedAt.UTC.Format "2006-01-02 15:04 UTC"}}</span>
 </p>
 <p>

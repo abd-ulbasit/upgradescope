@@ -23,17 +23,73 @@ func HashToken(token string) string {
 // Test with errors.Is.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrClusterUIDConflict is returned (as a *ClusterUIDConflictError) by
+// UpsertCluster when the name is already bound to a different cluster UID.
+// Test with errors.Is.
+var ErrClusterUIDConflict = errors.New("store: cluster name is bound to another cluster UID")
+
+// ClusterUIDConflictError carries both UIDs so callers can explain the
+// conflict. Is(ErrClusterUIDConflict) holds.
+type ClusterUIDConflictError struct {
+	Name      string
+	StoredUID string
+	PushedUID string
+}
+
+func (e *ClusterUIDConflictError) Error() string {
+	return fmt.Sprintf("cluster %q is registered with cluster UID %q, not %q", e.Name, e.StoredUID, e.PushedUID)
+}
+
+func (e *ClusterUIDConflictError) Is(target error) bool { return target == ErrClusterUIDConflict }
+
 // Store is the persistence contract. SQLite implements it in P2; P3 adds
 // Postgres. Behavioral semantics are pinned by storetest.RunStoreConformance.
 type Store interface {
-	UpsertCluster(ctx context.Context, c Cluster) (int64, error)         // by name; returns id
+	// UpsertCluster registers or touches a cluster by name and returns its
+	// id. A name is bound to the first non-empty ClusterUID pushed under
+	// it: a different non-empty UID fails with *ClusterUIDConflictError and
+	// writes nothing; an empty incoming UID keeps the stored one.
+	UpsertCluster(ctx context.Context, c Cluster) (int64, error)
+	// DeleteCluster removes the named cluster with its snapshots and
+	// evaluations (ErrNotFound when unknown). Tokens are keyed by name and
+	// are kept, so a rebuilt cluster can push again with its old token.
+	DeleteCluster(ctx context.Context, name string) error
+
 	InsertSnapshot(ctx context.Context, s Snapshot) (int64, bool, error) // (id, duplicate, err) — duplicate iff same cluster+hash as latest
 	LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error)
 	ListClusters(ctx context.Context) ([]Cluster, error)
 	GetCluster(ctx context.Context, id int64) (Cluster, error)
 	InsertEvaluation(ctx context.Context, e Evaluation) (int64, error)
+	// LatestEvaluation is the newest evaluation for (cluster, target) from
+	// any snapshot — history, not the cluster's current state.
 	LatestEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error)
+	// CurrentEvaluation is the newest evaluation for target of the
+	// cluster's LATEST snapshot, or ErrNotFound — an evaluation of an
+	// older snapshot describes an inventory the cluster no longer has.
+	CurrentEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error)
+	// LatestKnownEvaluation is the newest evaluation for (cluster, target)
+	// whose verdict was decided — ready, or at least one blocker — skipping
+	// "unknown" ones (no blockers but required checks not assessed).
+	LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error)
 	ScoreHistory(ctx context.Context, clusterID int64, target string, limit int) ([]ScorePoint, error)
+
+	// CommitEvaluations writes one evaluation pass atomically: the snapshot
+	// (when b.Snapshot is set), every insert and refresh, and the outbox
+	// messages, or nothing. It returns the evaluated snapshot's id.
+	// duplicate is true when b.Snapshot has the same hash as the cluster's
+	// latest snapshot: then nothing is written and the latest id is
+	// returned. ErrConflict means another writer moved the cluster on
+	// (b.SnapshotID is no longer latest, or b.Current no longer matches).
+	CommitEvaluations(ctx context.Context, b EvaluationBatch) (snapshotID int64, duplicate bool, err error)
+
+	// Notification outbox: messages committed with their evaluations,
+	// delivered by a worker after commit. ClaimOutbox returns up to limit
+	// messages due at now, oldest first, and leases them (attempts+1,
+	// next attempt at now+lease) so a crashed delivery is retried and
+	// concurrent workers do not deliver one message twice.
+	ClaimOutbox(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]OutboxMessage, error)
+	DeleteOutbox(ctx context.Context, id int64) error                                     // delivered or given up; ErrNotFound when gone
+	RescheduleOutbox(ctx context.Context, id int64, next time.Time, lastErr string) error // failed attempt; ErrNotFound when gone
 
 	// Per-cluster ingest tokens (P3, spec §8). Tokens are keyed by cluster
 	// NAME (not id): a token may be minted before the cluster's first push
@@ -77,6 +133,52 @@ type Evaluation struct {
 	Warnings   int       `json:"warnings"`
 	Report     []byte    `json:"-"` // full engine.Report JSON
 	CreatedAt  time.Time `json:"createdAt"`
+	// EvaluatedAt is when this result was last confirmed: a re-evaluation
+	// with the same verdict, score and finding keys refreshes the row
+	// instead of adding a history point. Zero on insert defaults to
+	// CreatedAt.
+	EvaluatedAt time.Time `json:"evaluatedAt"`
+	// TeamMapHash identifies the server --team-map the report was computed
+	// with ("" = none), so a changed map triggers a re-evaluation.
+	TeamMapHash string `json:"teamMapHash,omitempty"`
+}
+
+// ErrConflict is returned by CommitEvaluations when the batch was computed
+// against state another writer has since changed. Nothing was written; the
+// caller may drop the pass (the other writer covered it) or recompute.
+var ErrConflict = errors.New("store: evaluation state changed concurrently")
+
+// EvaluationBatch is one evaluation pass over one cluster snapshot.
+type EvaluationBatch struct {
+	ClusterID int64
+	// Snapshot, when non-nil, is a newly pushed snapshot stored first
+	// (InsertSnapshot dedup rules); every Insert gets its id.
+	Snapshot *Snapshot
+	// SnapshotID is the already-stored snapshot the pass evaluated when
+	// Snapshot is nil. It must still be the cluster's latest snapshot.
+	SnapshotID int64
+	// Current records, per target, the id of the snapshot's current
+	// evaluation the pass compared against (0 = it had none). The commit
+	// fails with ErrConflict when any of them changed meanwhile.
+	Current map[string]int64
+	// Insert adds history rows; their SnapshotID is overwritten with the
+	// evaluated snapshot's id.
+	Insert []Evaluation
+	// Refresh updates existing rows by ID with an unchanged result:
+	// Report, KBVersion, TeamMapHash, Blockers, Warnings and EvaluatedAt.
+	// Score, Ready and CreatedAt (the history point) stay.
+	Refresh []Evaluation
+	Outbox  []OutboxMessage
+}
+
+// OutboxMessage is one notification awaiting delivery to one sink.
+type OutboxMessage struct {
+	ID            int64
+	Sink          string // which configured notifier delivers it
+	Payload       []byte // the event, JSON
+	Attempts      int    // delivery attempts started so far (claims)
+	CreatedAt     time.Time
+	NextAttemptAt time.Time
 }
 
 // Token is a per-cluster ingest token's metadata. The plaintext is never

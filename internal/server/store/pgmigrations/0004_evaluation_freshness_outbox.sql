@@ -1,0 +1,38 @@
+-- 0004_evaluation_freshness_outbox.sql (Postgres) — evaluation freshness
+-- and the notification outbox.
+-- evaluated_at: when the row's result was last confirmed. A re-evaluation
+-- with the same verdict, score and finding keys refreshes it instead of
+-- adding a history row (created_at stays the history point). Existing rows
+-- were last evaluated when created.
+-- team_map_hash: the server --team-map the report was computed with, so an
+-- edited map triggers a re-evaluation ('' = none, or a pre-0004 row).
+-- outbox: notifications committed with their evaluations and delivered
+-- after commit, one row per (event, sink), with bounded retries.
+-- Divergence from migrations/0004: TIMESTAMPTZ↔TEXT times,
+-- BIGSERIAL↔AUTOINCREMENT, BYTEA↔BLOB, evaluated_at DEFAULT now()↔''.
+
+ALTER TABLE evaluations ADD COLUMN evaluated_at TIMESTAMPTZ;
+UPDATE evaluations SET evaluated_at = created_at;
+ALTER TABLE evaluations ALTER COLUMN evaluated_at SET NOT NULL;
+-- A pre-0004 binary (an old replica mid-rollout, or after a rollback)
+-- inserts without evaluated_at; it stamps created_at with its own clock at
+-- insert time, so now() matches it closely, and the insert succeeds instead
+-- of failing NOT NULL.
+ALTER TABLE evaluations ALTER COLUMN evaluated_at SET DEFAULT now();
+ALTER TABLE evaluations ADD COLUMN team_map_hash TEXT NOT NULL DEFAULT '';
+
+-- Read paths look up evaluations of one snapshot.
+CREATE INDEX idx_evaluations_snapshot_target
+    ON evaluations (snapshot_id, target, created_at);
+
+CREATE TABLE outbox (
+    id              BIGSERIAL PRIMARY KEY,
+    sink            TEXT    NOT NULL,
+    payload         BYTEA   NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL,
+    next_attempt_at TIMESTAMPTZ NOT NULL,
+    last_error      TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX idx_outbox_next_attempt ON outbox (next_attempt_at);

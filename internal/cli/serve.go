@@ -101,12 +101,12 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 	case err := <-errCh:
 		return err // listen/serve failed before any signal
 	case <-ctx.Done():
-		// In-flight ingests finish their synchronous notification fan-out
-		// during this drain. That delivery is bounded — 2s client timeout
-		// per notifier — and runs on the request's WithoutCancel evaluation
-		// context, so it neither holds the drain past shutdownTimeout nor
-		// gets cut off mid-delivery. Acceptable at current scale; an async
-		// delivery queue is the upgrade path if notifier counts grow.
+		// In-flight ingests finish during this drain; each commits its
+		// snapshot, evaluations and notifications in one transaction and
+		// never waits on a notifier. Notifications are delivered after
+		// commit by the server's outbox worker, which Shutdown stops once
+		// the drain ends: an undelivered or mid-delivery notification stays
+		// in the outbox and is delivered after the next start.
 		shCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shCtx); err != nil {
