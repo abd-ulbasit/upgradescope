@@ -86,6 +86,12 @@ IMAGE ?= ghcr.io/abd-ulbasit/upgradescope
 TAG ?= dev
 VERSION ?= dev
 
+# Every Dockerfile for linux/amd64 and linux/arm64, nothing pushed (CI's
+# images job). Needs Docker with a multi-platform buildx builder.
+.PHONY: images
+images:
+	./hack/images.sh
+
 .PHONY: docker-build kind-load
 docker-build:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(TAG) .
