@@ -93,7 +93,7 @@ func newObserver(log *slog.Logger, k kb.KB, interval time.Duration) *observer {
 		}),
 		pushErrors: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "upgradescope_agent_push_errors_total",
-			Help: "Snapshot pushes to the upgradescope server that failed after retries.",
+			Help: "Snapshot pushes to the upgradescope server that failed (transient errors are retried first).",
 		}),
 	}
 	o.reg.MustRegister(o.tickDuration, o.tickErrors, o.pushErrors, o,
