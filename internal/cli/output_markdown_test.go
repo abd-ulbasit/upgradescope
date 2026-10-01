@@ -141,3 +141,11 @@ func TestWriteMarkdownEscapes(t *testing.T) {
 		t.Errorf("row\n got: %s\nwant: %s", row, want)
 	}
 }
+
+// A backslash before a pipe in a path keeps the pipe escaped and is not
+// doubled: GitHub renders "`a\\|b`" in a cell as the code span a\|b.
+func TestMdCodeBackslashBeforePipe(t *testing.T) {
+	if got, want := mdCode(`a\|b.yaml:1`), "`a\\\\|b.yaml:1`"; got != want {
+		t.Errorf("mdCode = %s, want %s", got, want)
+	}
+}

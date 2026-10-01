@@ -104,7 +104,11 @@ func mdText(s string) string {
 
 // mdCode renders s as a code span in a table cell: the fence is one
 // backtick longer than the longest backtick run in s, and | is escaped
-// (GFM splits cells before parsing code spans).
+// (GFM splits cells before parsing code spans). A backslash is left alone:
+// GFM's cell splitter only treats \| as an escape and code spans take
+// backslashes literally, so a\|b, written as a\\|b, stays in its cell and
+// shows as a\|b (checked against GitHub's /markdown API). Escaping it as
+// mdText does would show the extra backslash.
 func mdCode(s string) string {
 	s = strings.ReplaceAll(oneLine(s), "|", `\|`)
 	longest, run := 0, 0
