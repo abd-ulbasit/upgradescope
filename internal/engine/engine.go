@@ -136,19 +136,46 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 		default:
 			continue // KB entry exists but is neither deprecated nor removed
 		}
-		f.Key = fmt.Sprintf("%s/%s/%s/%s", f.Category, keyGroup(u.Group), u.Version, u.Kind)
+		f.Key = string(f.Category) + "/" + apiKey(u.Group, u.Version, u.Kind)
+		// Live objects carry a Manager when they were flagged for being
+		// written through this version; without one, the kind itself goes
+		// away and every stored object counts.
+		managers := objectManagers(u.Objects)
 		detail := "%d object(s) still stored/served at this version"
-		if manifests {
+		switch {
+		case manifests:
 			detail = "%d manifest object(s) use this API"
+		case len(managers) > 0:
+			detail = "%d object(s) written through this API version"
 		}
 		if nsDetail == "" {
 			f.Detail = fmt.Sprintf(detail+".", u.Count)
 		} else {
 			f.Detail = fmt.Sprintf(detail+": %s.", u.Count, nsDetail)
 		}
+		if len(managers) > 0 {
+			f.Detail += " Written by: " + strings.Join(managers, ", ") + "."
+		}
 		out = append(out, f)
 	}
 	return out
+}
+
+// apiKey renders the group/version/kind tail of an API finding's Key.
+func apiKey(group, version, kind string) string {
+	return keyGroup(group) + "/" + version + "/" + kind
+}
+
+// objectManagers returns the distinct ObjectRef managers, sorted.
+func objectManagers(refs []inventory.ObjectRef) []string {
+	var ms []string
+	for _, r := range refs {
+		if r.Manager != "" && !slices.Contains(ms, r.Manager) {
+			ms = append(ms, r.Manager)
+		}
+	}
+	sort.Strings(ms)
+	return ms
 }
 
 // sortedObjects returns a sorted copy of refs (file, line, namespace, name)
@@ -171,8 +198,10 @@ func sortedObjects(refs []inventory.ObjectRef) []inventory.ObjectRef {
 }
 
 // evalDeprecatedCalls turns apiserver_requested_deprecated_apis rows into
-// findings: removal ≤ target → blocker; removal == target+1 → warning;
-// otherwise (incl. missing/unparseable removedRelease) → info.
+// findings, one per row in row order: removal ≤ target → blocker; removal
+// == target+1 → warning; otherwise (incl. missing/unparseable
+// removedRelease) → info. The metric is the runtime-caller signal: it
+// says a deprecated API was requested, not by whom.
 func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Finding {
 	var out []Finding
 	for _, c := range inv.DeprecatedCalls {
@@ -186,20 +215,22 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 			Key:       fmt.Sprintf("%s/%s/%s/%s", CatDeprecatedAPIInUse, keyGroup(c.Group), c.Version, res),
 			Citations: []string{deprecationGuideURL},
 		}
+		const metric = "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; "
+		const anonymous = " The metric does not identify the client; apiserver audit logs do."
 		removed, perr := inventory.ParseVersion(c.RemovedRelease)
 		if c.RemovedRelease == "" || perr != nil {
 			f.Severity = SevInfo
 			f.Title = fmt.Sprintf("clients still requesting %s %s (deprecated)", gv, res)
 			if c.RemovedRelease == "" {
-				f.Detail = "apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; no removal release is recorded."
+				f.Detail = metric + "no removal release is recorded." + anonymous
 			} else {
-				f.Detail = fmt.Sprintf("apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; removal release %q could not be parsed.", c.RemovedRelease)
+				f.Detail = metric + fmt.Sprintf("removal release %q could not be parsed.", c.RemovedRelease) + anonymous
 			}
 			out = append(out, f)
 			continue
 		}
 		f.Title = fmt.Sprintf("clients still requesting %s %s (removed in %s)", gv, res, removed)
-		f.Detail = fmt.Sprintf("apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; it is removed in %s.", removed)
+		f.Detail = metric + fmt.Sprintf("it is removed in %s.", removed) + anonymous
 		switch {
 		case removed.Compare(target) <= 0:
 			f.Severity = SevBlocker
@@ -211,6 +242,65 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 		out = append(out, f)
 	}
 	return out
+}
+
+// foldDeprecatedCalls scores each API once. usage is evalAPIUsage's
+// output and calls is evalDeprecatedCalls' (calls[i] judges
+// inv.DeprecatedCalls[i]). A caller row for the group/version/kind of a
+// usage finding becomes evidence on that finding instead of a second
+// finding, so the finding keeps its key. Rows for APIs without flagged
+// objects stay standalone, as do rows more severe than the matching usage
+// finding (the apiserver records a removal the KB does not know).
+func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding) []Finding {
+	byAPI := make(map[string]int, len(usage)) // apiKey → index in usage
+	for i, f := range usage {
+		_, api, _ := strings.Cut(f.Key, "/")
+		byAPI[api] = i
+	}
+	evidence := map[int][]string{} // usage index → requested resources, in row order
+	var standalone []Finding
+	for i, c := range inv.DeprecatedCalls {
+		j, ok := -1, false
+		for _, u := range inv.APIUsage {
+			if u.Group == c.Group && u.Version == c.Version && kindMatchesResource(u.Kind, c.Resource) {
+				j, ok = byAPI[apiKey(u.Group, u.Version, u.Kind)]
+				break
+			}
+		}
+		if !ok || severityRank[calls[i].Severity] < severityRank[usage[j].Severity] {
+			standalone = append(standalone, calls[i])
+			continue
+		}
+		res := c.Resource
+		if c.Subresource != "" {
+			res += "/" + c.Subresource
+		}
+		if len(evidence[j]) == 0 {
+			res = gvString(c.Group, c.Version) + " " + res
+		}
+		evidence[j] = append(evidence[j], res)
+	}
+	for j, rs := range evidence {
+		usage[j].Detail += fmt.Sprintf(" apiserver_requested_deprecated_apis also records requests to %s since the last apiserver restart; the metric does not identify the client.", strings.Join(rs, ", "))
+	}
+	return append(usage, standalone...)
+}
+
+// kindMatchesResource reports whether resource is kind's REST resource
+// name under the apiserver's default pluralization (lowercase; "s" →
+// "ses", consonant+"y" → "ies", otherwise +"s"), or kind lowercased for
+// kinds that are already plural (Endpoints).
+func kindMatchesResource(kind, resource string) bool {
+	k := strings.ToLower(kind)
+	switch {
+	case k == "" || resource == k:
+		return k != ""
+	case strings.HasSuffix(k, "s"):
+		return resource == k+"es"
+	case strings.HasSuffix(k, "y") && len(k) > 1 && !strings.ContainsRune("aeiou", rune(k[len(k)-2])):
+		return resource == k[:len(k)-1]+"ies"
+	}
+	return resource == k+"s"
 }
 
 // evalAddOns: registry lookup by instance ID.
@@ -692,8 +782,7 @@ func verdictFor(findings []Finding, gaps []CapabilityGap) Verdict {
 // (inventory, kb, target, now).
 func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) Report {
 	findings := []Finding{} // non-nil so JSON renders "findings": []
-	findings = append(findings, evalAPIUsage(inv, k, target)...)
-	findings = append(findings, evalDeprecatedCalls(inv, target)...)
+	findings = append(findings, foldDeprecatedCalls(inv, evalAPIUsage(inv, k, target), evalDeprecatedCalls(inv, target))...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
 	findings = append(findings, evalSkew(inv, k, target)...)
 	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)

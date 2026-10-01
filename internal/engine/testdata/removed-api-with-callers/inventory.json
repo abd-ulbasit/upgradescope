@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "99999999-9999-9999-9999-999999999999",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "serverVersion": "v1.24.9",
+  "capabilities": {
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "apiUsage": [
+    {"group": "batch", "version": "v1beta1", "kind": "CronJob", "count": 2, "namespaces": {"default": 1, "shop": 1},
+     "objects": [
+       {"namespace": "shop", "name": "reports", "manager": "kubectl last-applied"},
+       {"namespace": "default", "name": "nightly", "manager": "helm"}
+     ]}
+  ],
+  "deprecatedCalls": [
+    {"group": "batch", "version": "v1beta1", "resource": "cronjobs", "removedRelease": "1.25"},
+    {"group": "batch", "version": "v1beta1", "resource": "cronjobs", "subresource": "status", "removedRelease": "1.25"},
+    {"group": "policy", "version": "v1beta1", "resource": "poddisruptionbudgets", "removedRelease": "1.25"}
+  ],
+  "nodes": [{"name": "node-a", "kubeletVersion": "v1.24.9"}],
+  "namespaces": [
+    {"name": "default", "team": "core"},
+    {"name": "shop", "team": "storefront"}
+  ]
+}
