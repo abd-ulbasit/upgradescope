@@ -6,7 +6,8 @@
 #      kubectl from hack/install-tool.sh (pinned, sha256-verified);
 #   2. regression (#3): the vanilla cluster, scanned at its next minor, has
 #      zero removed-api blockers — a fresh cluster cannot be blocked by APIs
-#      nobody uses;
+#      nobody uses (skipped, with a warning, when an existing cluster is
+#      reused: it is no longer vanilla);
 #   3. the EOL ingress-nginx demo add-on (hack/demo/kind-setup.sh) and the
 #      scan + agent integration tests (UPGRADESCOPE_IT=1);
 #   4. the image built from this tree, kind-loaded, and the chart installed
@@ -113,9 +114,17 @@ best_effort() {
   fi
 }
 
+# skip <name> <why>: a check that cannot mean anything on this run.
+skip() {
+  results+=("- SKIP — $1 ($2)")
+  echo "::warning title=kind e2e $MINOR: check skipped::$1 — $2"
+}
+
+reused=""
 create_cluster() {
   if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
     echo "kind cluster '$CLUSTER' already exists, reusing it"
+    reused=1
   else
     kind create cluster --name "$CLUSTER" --image "$NODE_IMAGE" --wait 120s || return 1
   fi
@@ -236,7 +245,14 @@ uninstall_leaves_nothing() {
 
 gate "kind cluster on Kubernetes $MINOR" create_cluster
 gate "build bin/upgradescope" make build
-best_effort "#3" "vanilla $MINOR cluster scanned at $NEXT has zero removed-api blockers" no_removed_api_blockers
+# A reused cluster (a local re-run) already has the demo add-on, the CRD and
+# whatever the last run left, so it is not the vanilla cluster this guards.
+vanilla="vanilla $MINOR cluster scanned at $NEXT has zero removed-api blockers"
+if [ -n "$reused" ]; then
+  skip "$vanilla" "cluster reused, not vanilla; make demo-down first"
+else
+  best_effort "#3" "$vanilla" no_removed_api_blockers
+fi
 gate "EOL ingress-nginx demo add-on" env KIND_NODE_IMAGE="$NODE_IMAGE" hack/demo/kind-setup.sh
 gate "scan + agent integration tests" integration_tests
 gate "image built from this tree, kind-loaded" load_image

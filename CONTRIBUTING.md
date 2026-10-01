@@ -196,7 +196,8 @@ The `kube` job (`hack/e2e.sh`) runs per Kubernetes minor from
 `hack/kind-node-images.txt`, each pinned to a kind node image digest. It
 creates a kind cluster, scans the vanilla cluster at its next minor and
 expects zero removed-API blockers, installs the EOL ingress-nginx demo
-add-on, runs the scan and agent integration tests, builds the image from your
+add-on, runs the scan and agent integration tests (`UPGRADESCOPE_IT=1`; this
+is the only CI job that runs them, there is no separate `it` job), builds the image from your
 tree and loads it into kind, installs `deploy/chart` with the server enabled,
 then checks the `ClusterReadiness` score and verdict, server ingest, a
 `helm upgrade` that sets `agent.targets`, and that `helm uninstall` leaves no
@@ -204,6 +205,9 @@ ClusterRole, ClusterRoleBinding or release object behind (the CRD stays, as
 the chart README documents). Checks that guard a bug whose fix has not landed
 yet are best-effort: they report PASS or FAIL in the job summary and as a
 warning, and a TODO in `hack/e2e.sh` names the issue that makes them gating.
+`make e2e` reuses an existing `upgradescope-demo` cluster; that cluster is no
+longer vanilla, so the zero-blocker check is reported as SKIP. Run
+`make demo-down` first for a full local run.
 
 The schedule (weekly) runs the vuln gate, the full Kubernetes and Postgres
 matrices, the Action check and KB freshness, because advisories, images and

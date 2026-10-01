@@ -19,7 +19,7 @@ stub() {
   chmod +x "$stubs/$1"
 }
 
-stub kind 'case "$1" in get) exit 0 ;; esac; exit 0'
+stub kind 'case "$1" in get) [ -z "${STUB_KIND_EXISTS:-}" ] || echo upgradescope-demo; exit 0 ;; esac; exit 0'
 stub kubectl '
 case "$*" in
   *"get --raw /version"*) echo "{\"major\":\"1\",\"minor\":\"${STUB_SERVER_MINOR:-31}+\"}" ;;
@@ -109,6 +109,19 @@ fi
 run "a removed-api blocker on a vanilla cluster is reported, not fatal (#3)" 0 STUB_REMOVED=1
 has "the #3 regression is a FAIL in the summary" "$work/summary" "- **FAIL** — vanilla 1.31 cluster scanned at 1.32 has zero removed-api blockers (best-effort until #3"
 has "the #3 regression is a warning" "$work/out" "::warning title=kind e2e 1.31: best-effort check failed::"
+
+# A local re-run reuses the cluster, which already has the demo add-on, the
+# CRD and the chart's leftovers: not the vanilla cluster #3's check is for.
+run "a reused cluster still runs the gates" 0 STUB_KIND_EXISTS=1 STUB_REMOVED=1
+has "the reused cluster is not recreated" "$work/out" "kind cluster 'upgradescope-demo' already exists, reusing it"
+has "the #3 check is a SKIP in the summary, not a PASS" "$work/summary" "- SKIP — vanilla 1.31 cluster scanned at 1.32 has zero removed-api blockers (cluster reused, not vanilla; make demo-down first)"
+has "the skip is a warning" "$work/out" "::warning title=kind e2e 1.31: check skipped::"
+if grep -q '^upgradescope scan' "$work/log"; then
+  echo "FAIL a reused cluster was still scanned as vanilla" >&2
+  echo "FAIL reused cluster scanned" >>"$work/results"
+else
+  echo "ok   a reused cluster is not scanned as vanilla" | tee -a "$work/results"
+fi
 
 run "a failing agent.targets upgrade is reported, not fatal (#41)" 0 STUB_TARGETS_FAIL=1
 has "the #41 upgrade is a FAIL in the summary" "$work/summary" "- **FAIL** — helm upgrade --set agent.targets={1.32} (best-effort until #41"
