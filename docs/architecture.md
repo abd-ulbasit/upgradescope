@@ -42,7 +42,7 @@ admin command:
 
 | Command | Runs | Produces |
 |---|---|---|
-| `upgradescope scan` | once, from a laptop or CI | a table, JSON or SARIF report, and an exit code (0 ready, 2 gate failed, 1 error) |
+| `upgradescope scan` | once, from a laptop or CI | a table, JSON or SARIF report, and an exit code (0 gate passed, 2 gate failed, 1 error; the gate is `--fail-on`, default `blocker`, and `never` always passes) |
 | `upgradescope agent` | continuously, in the cluster | `ClusterReadiness` status, plus snapshot pushes to a server (optional) |
 | `upgradescope serve` | continuously, anywhere | stored history, fleet rollups, what-if, CI gate, exports, notifications, dashboard |
 | `upgradescope tokens` | on demand, next to `serve` | creates and revokes per-cluster ingest tokens |
@@ -50,8 +50,8 @@ admin command:
 The core idea is a **smart edge**. The evaluation engine is a pure function
 with no Kubernetes or network dependencies, embedded in all three modes. The
 agent can therefore produce a complete verdict without a server, and the
-server can re-evaluate stored inventories (against a new target, or with a
-newer knowledge base) without going back to the cluster.
+server can evaluate a stored inventory against a target nobody evaluated it
+for (a what-if) without going back to the cluster.
 
 ## Components
 
@@ -387,9 +387,11 @@ if it is deleted, and writes status with conflict retry.
   `clusters`, `snapshots`, `evaluations` (report JSON plus score, per
   target) and `tokens`. Both backends must pass one shared conformance suite
   (`store/storetest`).
-- **Read API** (`GET /api/v1/...`): clusters, the latest report (or a
-  what-if with `?target=`, which re-evaluates the latest stored inventory
-  and stores nothing), findings filtered by severity or category, score history, team scores, fleet
+- **Read API** (`GET /api/v1/...`): clusters, the latest report for a
+  target (`?target=`; the stored evaluation for that target when one exists,
+  otherwise a what-if that evaluates the latest stored inventory with the
+  server's knowledge base and stores nothing), findings filtered by severity
+  or category, score history, team scores, fleet
   matrices, the registry, and CSV or HTML exports. Exports are built from
   the *stored* evaluation, so an audit artifact reflects what was recorded.
   The read token is optional. Without one, the read API is open.
@@ -421,8 +423,9 @@ first.
   reconciler. The verdict depends on the knowledge base and on the calendar
   (EOL dates), and neither one produces a Kubernetes event. A watch-driven
   reconciler would requeue on unrelated churn and still miss the day an EOL
-  date passes. The README's "Design boundaries" section gives the full
-  argument.
+  date passes. A fixed interval with jitter instead re-collects, re-evaluates
+  and rewrites the status on every tick, so a passing EOL date shows up
+  within one interval, and the cost is predictable.
 - **No audit-log ingestion.** Active callers come from the apiserver metric.
   Audit logs would add kubectl client skew and caller identity, but they are
   operationally heavy and often unavailable on managed control planes.
@@ -438,7 +441,7 @@ first.
 
 | Layer | How | Where |
 |---|---|---|
-| Engine | Golden files: an `inventory.json` and a shared `kb.json` produce `expected.json`, covering every category and the score formula | `internal/engine/testdata/`, updated with `go test ./internal/engine -run Golden -update` |
+| Engine | Golden files: an `inventory.json` and a shared `kb.json` produce `expected.json`, covering every category and the score formula | `internal/engine/testdata/`, updated with `go test ./internal/engine -run Golden -update`; a new case also needs a `goldenParams` entry (target and fixed `now`) in `evaluate_golden_test.go` |
 | Collectors | Fake clientsets, plus fixtures for Helm secret decoding, metrics parsing and manifests | `internal/collect/*_test.go`, `testdata/` |
 | Registry | Schema, citation, semver and duplicate checks over the real dataset | `registry/*_test.go` |
 | Store | One conformance suite run against SQLite (always) and Postgres (`UPGRADESCOPE_PG_TEST_DSN`) | `internal/server/store/storetest` |
