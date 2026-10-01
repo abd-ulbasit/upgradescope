@@ -112,7 +112,10 @@ release assets anonymously.
 
 The action checks every input before it downloads anything. A bad
 `version`, `target` or `fail-on` value, or a `path` that does not exist,
-fails the step with an error that names the input.
+fails the step with an error that names the input. Earlier versions of
+the action passed any other `version` to `go install`, so a branch name or
+commit worked there; now it must be a release tag, `latest` or
+`preinstalled`.
 
 ## Outputs
 
@@ -130,6 +133,11 @@ The action takes `verdict`, `ready`, `score`, `blockers`, `warnings` and
 `report-json` from the JSON report with `jq`. GitHub-hosted runners have
 `jq`. On a self-hosted runner without it, the gate and `sarif-file` still
 work, and a warning says that the other outputs are not set.
+
+With `version` set to a v0.1.x release, whose JSON report has no verdict,
+the action derives `verdict` as later releases compute it: `blocked` if there is a blocker,
+otherwise `ready` or `unknown` from the report's `ready`. Those releases
+cannot write the step summary, so a warning replaces it.
 
 ## Exit status
 
