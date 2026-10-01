@@ -142,7 +142,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	if format == "sarif" {
 		w.Header().Set("Content-Type", "application/sarif+json")
 		w.WriteHeader(status)
-		_ = sarif.Write(w, rep, s.cfg.Version)
+		_ = sarif.Write(w, sarifReport(rep, resp), s.cfg.Version)
 		return
 	}
 	writeJSON(w, status, resp)
@@ -205,6 +205,22 @@ func gateResult(rep engine.Report, baseline *engine.Report) gateResponse {
 		resp.ClusterVerdict = rep.Verdict
 	}
 	return resp
+}
+
+// sarifReport is what the SARIF answer carries. SARIF becomes code-scanning
+// alerts on the PR, so it holds only the findings the manifests introduce,
+// with the gate's verdict; findings the cluster already has stay in the
+// JSON answer, tagged source cluster. Score stays the proposed state's.
+func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
+	out := rep
+	out.Findings = []engine.Finding{}
+	for _, f := range resp.Findings {
+		if f.Source == sourceManifest {
+			out.Findings = append(out.Findings, f.Finding)
+		}
+	}
+	out.Verdict, out.Ready = resp.Verdict, resp.Ready
+	return out
 }
 
 // gateFails applies ?fail-on: "" never fails (the v0.1 always-200

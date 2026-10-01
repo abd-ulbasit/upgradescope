@@ -118,4 +118,51 @@ func TestGateClusterBaseline(t *testing.T) {
 	if b.Ready || b.Verdict != "blocked" {
 		t.Errorf("PR verdict = %q ready %v, want blocked", b.Verdict, b.Ready)
 	}
+
+	// SARIF becomes code-scanning alerts on the PR, so it carries only what
+	// the PR introduces: the cluster's Istio blocker must not show up there.
+	for _, tc := range []struct {
+		name, manifest string
+		wantReady      bool
+		wantRules      []string
+	}{
+		{"clean PR", deploymentManifest, true, nil},
+		{"PR adding a removed API", pspManifest, false, []string{"removed-api/policy/v1beta1/PodSecurityPolicy"}},
+	} {
+		_, raw = postGate(t, ts, "?target=1.35&cluster=prod-eu-1&format=sarif", "", tc.manifest, "application/x-yaml")
+		var doc struct {
+			Runs []struct {
+				Invocations []struct {
+					Notifications []struct {
+						Properties struct {
+							FindingKey string `json:"findingKey"`
+						} `json:"properties"`
+					} `json:"toolExecutionNotifications"`
+				} `json:"invocations"`
+				Results []struct {
+					RuleID string `json:"ruleId"`
+				} `json:"results"`
+				Properties struct {
+					Ready    bool `json:"ready"`
+					Findings int  `json:"findings"`
+				} `json:"properties"`
+			} `json:"runs"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil || len(doc.Runs) != 1 || len(doc.Runs[0].Invocations) != 1 {
+			t.Fatalf("%s: SARIF = %v %s", tc.name, err, raw)
+		}
+		run := doc.Runs[0]
+		var rules []string // finding keys, as results or notifications
+		for _, n := range run.Invocations[0].Notifications {
+			rules = append(rules, n.Properties.FindingKey)
+		}
+		for _, r := range run.Results {
+			rules = append(rules, r.RuleID)
+		}
+		if run.Properties.Ready != tc.wantReady || run.Properties.Findings != len(tc.wantRules) || len(rules) != len(tc.wantRules) ||
+			(len(rules) > 0 && rules[0] != tc.wantRules[0]) {
+			t.Errorf("%s: SARIF ready %v findings %d keys %v, want ready %v and only %v",
+				tc.name, run.Properties.Ready, run.Properties.Findings, rules, tc.wantReady, tc.wantRules)
+		}
+	}
 }
