@@ -172,12 +172,36 @@ func (s *Server) routes() {
 // unauthenticated — the SPA itself sends the read token with every API call.
 func (s *Server) handler() http.Handler {
 	spa := spaHandler(distFS())
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/api/") {
 			s.mux.ServeHTTP(w, r)
 			return
 		}
 		spa.ServeHTTP(w, r)
+	}))
+}
+
+// contentSecurityPolicy fits the built dashboard: one module script and one
+// stylesheet from /assets, fetch() to the same origin, a data: favicon. No
+// inline or eval'd script is allowed — the SPA keeps the read token in
+// localStorage, so script injection is what this guards. Styles allow
+// 'unsafe-inline' for index.html's pre-paint <style> block and the HTML
+// export's inline stylesheet; injected CSS cannot read localStorage.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
+	"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
+	"object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+// securityHeaders sets defense-in-depth headers on every response:
+// dashboard, assets, API and exports alike. X-Frame-Options backs up
+// frame-ancestors for browsers without CSP level 2.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(w, r)
 	})
 }
 
