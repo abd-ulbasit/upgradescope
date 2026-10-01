@@ -21,7 +21,7 @@ type Inventory struct {
 	SchemaVersion      int                             `json:"schemaVersion"` // 1
 	ClusterID          string                          `json:"clusterId"`     // kube-system ns UID, or "files"
 	CollectedAt        time.Time                       `json:"collectedAt"`
-	ServerVersion      string                          `json:"serverVersion,omitempty"` // raw, e.g. "v1.34.2"
+	ServerVersion      string                          `json:"serverVersion,omitempty"` // raw GitVersion, e.g. "v1.34.2", "v1.34.2-gke.100"
 	Capabilities       map[Capability]CapabilityStatus `json:"capabilities"`
 	APIUsage           []APIUsage                      `json:"apiUsage,omitempty"`
 	DeprecatedCalls    []DeprecatedCall                `json:"deprecatedCalls,omitempty"`
@@ -77,7 +77,7 @@ type ComponentVersion struct {
 
 type NodeInfo struct {
 	Name           string `json:"name"`
-	KubeletVersion string `json:"kubeletVersion"` // raw "v1.33.1"
+	KubeletVersion string `json:"kubeletVersion"` // raw, e.g. "v1.33.1", "v1.33.1-eks-aeac579"
 }
 
 type NamespaceInfo struct {

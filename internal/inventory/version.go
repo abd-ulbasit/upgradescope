@@ -13,14 +13,25 @@ import (
 type Version struct{ Major, Minor int }
 
 // ParseVersion parses a Kubernetes version string. Accepted forms:
-// "1.34", "v1.34", "v1.34.2", "1.34.2". The patch component is validated
-// but discarded — evaluation only cares about minors.
+// "1.34", "v1.34", "v1.34.2", "1.34.2", and — for versions observed on real
+// clusters — MAJOR.MINOR.PATCH followed by a semver pre-release and/or build
+// suffix, as vendors report in GitVersion: "v1.30.2-eks-1234abc" (EKS),
+// "v1.29.4-gke.1043002" (GKE), "v1.28.5+k3s1" (k3s), "v1.27.3+rke2r1" (RKE2),
+// "v1.29.5+29a0aa9" (OpenShift). The patch and suffix are validated but
+// discarded — evaluation only cares about minors.
+//
+// The major version is not range-checked here: callers validating user
+// input (a --target flag, a CRD spec target) additionally require major 1.
 func ParseVersion(s string) (Version, error) {
 	trimmed := strings.TrimPrefix(s, "v")
 	if trimmed == "" {
 		return Version{}, fmt.Errorf("invalid kubernetes version %q: empty", s)
 	}
-	parts := strings.Split(trimmed, ".")
+	core, suffix := trimmed, ""
+	if i := strings.IndexAny(trimmed, "-+"); i >= 0 {
+		core, suffix = trimmed[:i], trimmed[i:]
+	}
+	parts := strings.Split(core, ".")
 	if len(parts) != 2 && len(parts) != 3 {
 		return Version{}, fmt.Errorf("invalid kubernetes version %q: want MAJOR.MINOR or MAJOR.MINOR.PATCH", s)
 	}
@@ -32,7 +43,57 @@ func ParseVersion(s string) (Version, error) {
 		}
 		nums[i] = n
 	}
+	if suffix != "" {
+		if len(parts) != 3 {
+			return Version{}, fmt.Errorf("invalid kubernetes version %q: a pre-release or build suffix needs MAJOR.MINOR.PATCH", s)
+		}
+		if !validSuffix(suffix) {
+			return Version{}, fmt.Errorf("invalid kubernetes version %q: malformed pre-release or build suffix %q", s, suffix)
+		}
+	}
 	return Version{Major: nums[0], Minor: nums[1]}, nil
+}
+
+// ParseTarget parses a user-supplied upgrade target (a --target flag, a
+// ClusterReadiness spec target): ParseVersion plus major == 1, since
+// Kubernetes has only ever shipped major 1 and "2.0" is a typo, not a target.
+func ParseTarget(s string) (Version, error) {
+	v, err := ParseVersion(s)
+	if err != nil {
+		return Version{}, err
+	}
+	if v.Major != 1 {
+		return Version{}, fmt.Errorf("invalid kubernetes version %q: major version must be 1", s)
+	}
+	return v, nil
+}
+
+// validSuffix reports whether s (starting with "-" or "+") is a semver
+// suffix: an optional "-" pre-release, then an optional "+" build, each a
+// non-empty dot-separated list of non-empty [0-9A-Za-z-] identifiers.
+func validSuffix(s string) bool {
+	if rest, ok := strings.CutPrefix(s, "-"); ok {
+		pre, build, hasBuild := strings.Cut(rest, "+")
+		return validIdentifiers(pre) && (!hasBuild || validIdentifiers(build))
+	}
+	return validIdentifiers(strings.TrimPrefix(s, "+"))
+}
+
+func validIdentifiers(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, id := range strings.Split(s, ".") {
+		if id == "" {
+			return false
+		}
+		for _, r := range id {
+			if (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && r != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // parseComponent parses one dot-separated component as a non-negative

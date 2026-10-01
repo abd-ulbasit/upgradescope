@@ -134,7 +134,7 @@ func newScanCmd() *cobra.Command {
 // validateScanOptions checks flag values and stores the parsed --target into
 // opts.targetVersion (the single parse site — runScan does not re-parse).
 func validateScanOptions(opts *scanOptions) error {
-	target, err := inventory.ParseVersion(opts.target)
+	target, err := inventory.ParseTarget(opts.target)
 	if err != nil {
 		return fmt.Errorf("invalid --target %q: %w", opts.target, err)
 	}
