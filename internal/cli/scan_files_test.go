@@ -2,7 +2,7 @@ package cli
 
 import (
 	"bytes"
-
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +50,28 @@ kind: Ingress
 metadata:
   name: web
 `
+
+// Zero Kubernetes objects is an operational error (exit 1), never a
+// 100/100 pass: an empty render or a wrong path must not go green.
+func TestScanFilesNoManifestsIsExitOne(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"empty dir":         {},
+		"no manifest files": {"notes.txt": "hi", "rendered": removedAPIs},
+		"only non-manifest": {"values.yaml": "replicaCount: 1\n", "chart/templates/cm.yaml": "{{- if .Values.x }}\napiVersion: v1\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeFiles(t, files)
+			_, _, err := execScanFiles(t, "--files", dir)
+			want := fmt.Sprintf("no Kubernetes manifests found under %s (%d files skipped)", dir, len(files))
+			if err == nil || err.Error() != want {
+				t.Fatalf("err = %v, want %q", err, want)
+			}
+			if ExitCode(err) != 1 {
+				t.Fatalf("ExitCode = %d, want 1", ExitCode(err))
+			}
+		})
+	}
+}
 
 // A file that does not parse (an unrendered chart template next to the
 // render) is a warning on stderr, not a failed scan; the rendered

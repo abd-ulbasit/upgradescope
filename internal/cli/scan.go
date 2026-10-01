@@ -78,6 +78,11 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 		for _, w := range sum.Warnings {
 			fmt.Fprintf(stderr, "warning: skipped %s:%d: %v\n", path.Join(opts.fileBase, w.File), w.Line, w.Err)
 		}
+		// Nothing scanned is not "nothing to fix": an empty render, a wrong
+		// path or an unexpected extension must not report 100/100.
+		if sum.Objects == 0 {
+			return engine.Report{}, fmt.Errorf("no Kubernetes manifests found under %s (%d files skipped)", opts.filesDir, sum.Skipped)
+		}
 	} else {
 		clients, cerr := buildClients(opts.kubeconfig, opts.kubecontext)
 		if cerr != nil {
