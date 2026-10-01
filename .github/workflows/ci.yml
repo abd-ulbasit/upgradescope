@@ -91,6 +91,7 @@ jobs:
               - 'Dockerfile*'
               - '.github/workflows/release.yml'
               - '.github/workflows/ci.yml'
+              - 'action.yml'
               - 'action/**'
               - 'Makefile'
               - 'hack/release-check.sh'
@@ -332,9 +333,16 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - run: make release-check
 
-  # The composite Action as a consumer runs it: installs the latest release
-  # archive (not the go install fallback) and fails the gate with SARIF on
-  # a fixture holding a removed API.
+  # The Action as a consumer runs it, on Linux and macOS runners. make
+  # action-test drives action/run.sh offline (input validation, the
+  # checksum-verified install, outputs, annotations, step summary, an
+  # injection payload). Then, for real:
+  #   - action/action.yml (the original path) installs the latest release
+  #     archive, sha256-checked against its checksums.txt (not the go
+  #     install fallback), and fails the gate on a removed API;
+  #   - action.yml (the root, Marketplace path) runs this tree's binary
+  #     (version: preinstalled) on a removed API and on a clean set.
+  # On main, the SARIF goes to code scanning, proving GitHub accepts it.
   action:
     needs: changes
     if: >-
@@ -342,23 +350,37 @@ jobs:
       (github.event_name == 'schedule' ||
        (github.event_name == 'workflow_dispatch' && !inputs.release) ||
        needs.changes.outputs.release == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # upload-sarif below, on pushes to main only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - id: gate
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make action-test
+
+      - id: release
         uses: ./action
         continue-on-error: true # the gate is expected to fail
         with:
-          path: internal/collect/testdata/files # networking.k8s.io/v1beta1 Ingress, removed in 1.22
+          path: action/testdata/removed # networking.k8s.io/v1beta1 Ingress, batch/v1beta1 CronJob
           target: '1.36'
           version: latest
-      - name: release asset installed, gate failed with exit 2, SARIF has the finding
+      - name: release archive verified and installed, gate failed with exit 2, outputs set
         env:
-          OUTCOME: ${{ steps.gate.outcome }}
-          SARIF: ${{ steps.gate.outputs.sarif-file }}
+          OUTCOME: ${{ steps.release.outcome }}
+          SARIF: ${{ steps.release.outputs.sarif-file }}
+          VERDICT: ${{ steps.release.outputs.verdict }}
+          BLOCKERS: ${{ steps.release.outputs.blockers }}
         run: |
           set -uo pipefail
           [ "$OUTCOME" = failure ] || { echo "::error::gate step outcome=$OUTCOME, want failure"; exit 1; }
@@ -367,11 +389,61 @@ jobs:
             || { echo "::error::upgradescope resolved to '$got', not the release archive (go install fallback?)"; exit 1; }
           upgradescope --version
           code=0
-          upgradescope scan --files internal/collect/testdata/files --target 1.36 --output sarif > /dev/null || code=$?
+          upgradescope scan --files action/testdata/removed --target 1.36 --output sarif > /dev/null || code=$?
           [ "$code" -eq 2 ] || { echo "::error::scan exit code $code, want 2 (gate failed)"; exit 1; }
-          sarif="${SARIF:-$RUNNER_TEMP/upgradescope-results.sarif}"
-          jq -e '[.runs[0].results[] | select(.level == "error")] | length > 0' "$sarif" \
-            || { echo "::error::SARIF at $sarif has no error-level result"; exit 1; }
+          jq -e '[.runs[0].results[] | select(.level == "error")] | length > 0' "$SARIF" \
+            || { echo "::error::SARIF at $SARIF has no error-level result"; exit 1; }
+          [ "$VERDICT" = blocked ] && [ "$BLOCKERS" -gt 0 ] \
+            || { echo "::error::outputs verdict='$VERDICT' blockers='$BLOCKERS', want blocked and > 0"; exit 1; }
+
+      # This tree's binary first on PATH, for version: preinstalled.
+      - run: make build && echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+      - id: removed
+        uses: ./
+        continue-on-error: true # the gate is expected to fail
+        with:
+          path: action/testdata/removed
+          target: '1.36'
+          version: preinstalled
+      - id: clean
+        uses: ./
+        continue-on-error: true # asserted below, with a reason on failure
+        with:
+          path: action/testdata/clean
+          target: '1.36'
+          version: preinstalled
+      - name: root action fails on removed APIs, passes a clean set, outputs set
+        env:
+          REMOVED_OUTCOME: ${{ steps.removed.outcome }}
+          REMOVED_OUTPUTS: ${{ toJSON(steps.removed.outputs) }}
+          CLEAN_OUTCOME: ${{ steps.clean.outcome }}
+          CLEAN_OUTPUTS: ${{ toJSON(steps.clean.outputs) }}
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          got="$(command -v upgradescope)"
+          [ "$got" = "$GITHUB_WORKSPACE/bin/upgradescope" ] || fail "upgradescope resolved to '$got', not this tree's build"
+          echo "removed: $REMOVED_OUTCOME $REMOVED_OUTPUTS"
+          echo "clean: $CLEAN_OUTCOME $CLEAN_OUTPUTS"
+          [ "$REMOVED_OUTCOME" = failure ] || fail "removed-API gate outcome=$REMOVED_OUTCOME, want failure"
+          jq -e '.verdict == "blocked" and .ready == "false" and .blockers == "2" and .warnings == "0"
+                 and (.score | tonumber) < 100' <<<"$REMOVED_OUTPUTS" \
+            || fail "removed-API outputs are not blocked with 2 blockers"
+          sarif="$(jq -r '."sarif-file"' <<<"$REMOVED_OUTPUTS")"
+          jq -e '.runs[0].results | length == 2 and all(.[]; .locations[0].physicalLocation.artifactLocation.uri == "action/testdata/removed/all.yaml")' "$sarif" \
+            || fail "SARIF at $sarif does not place both results in action/testdata/removed/all.yaml"
+          jq -e '.findings | length == 2' "$(jq -r '."report-json"' <<<"$REMOVED_OUTPUTS")" \
+            || fail "report-json does not hold the 2 findings"
+          [ "$CLEAN_OUTCOME" = success ] || fail "clean gate outcome=$CLEAN_OUTCOME, want success"
+          jq -e '.verdict == "ready" and .ready == "true" and .score == "100" and .blockers == "0" and .warnings == "0"' <<<"$CLEAN_OUTPUTS" \
+            || fail "clean outputs are not ready, 100, 0 blockers, 0 warnings"
+
+      - name: GitHub code scanning accepts the SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest'
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ steps.removed.outputs.sarif-file }}
+          category: upgradescope-action-ci
 
   # The Kubernetes minors the kube job runs on, from
   # hack/kind-node-images.txt: the `pr` rows (1.31, the oldest with the
