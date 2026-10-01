@@ -165,6 +165,13 @@ func appendObjects(objs []manifestObject, n *yaml.Node, lineOffset int, rendered
 			}
 			*f.dst = scalar(v)
 		}
+		// Annotation values that are not strings are left to the
+		// apiserver to reject; they suppress nothing.
+		if _, ann := field(deref(meta), "annotations"); ann != nil && deref(ann).Kind == yaml.MappingNode {
+			_, ignore := field(deref(ann), IgnoreAnnotation)
+			_, reason := field(deref(ann), IgnoreReasonAnnotation)
+			ref.Ignore, ref.IgnoreReason = scalar(ignore), scalar(reason)
+		}
 	}
 	return append(objs, manifestObject{group: group, version: version, kind: k, ref: ref}), nil
 }

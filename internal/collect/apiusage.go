@@ -29,6 +29,14 @@ const (
 	apfAutoUpdateAnnotation = "apf.kubernetes.io/autoupdate-spec"
 )
 
+// The annotations that accept findings for one object, recorded on its
+// ObjectRef by both the live and the files collector: a comma-separated
+// list of finding categories or keys, and why (see internal/suppress).
+const (
+	IgnoreAnnotation       = "upgradescope.dev/ignore"
+	IgnoreReasonAnnotation = "upgradescope.dev/ignore-reason"
+)
+
 // internalManagers are field managers inside the control plane. Their
 // managedFields entries record the version that was current when that
 // control-plane release wrote the object (the apiserver's default
@@ -324,7 +332,10 @@ func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVer
 				t.usage.Count++
 				t.usage.Namespaces[m.Namespace]++
 				if len(t.usage.Objects) < inventory.MaxObjectRefs {
-					t.usage.Objects = append(t.usage.Objects, inventory.ObjectRef{Namespace: m.Namespace, Name: m.Name, Manager: manager})
+					t.usage.Objects = append(t.usage.Objects, inventory.ObjectRef{
+						Namespace: m.Namespace, Name: m.Name, Manager: manager,
+						Ignore: m.Annotations[IgnoreAnnotation], IgnoreReason: m.Annotations[IgnoreReasonAnnotation],
+					})
 				} else {
 					t.usage.ObjectsOmitted++
 				}
