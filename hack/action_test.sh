@@ -4,6 +4,7 @@
 # binary built from this tree. Covers:
 #   - both action.yml files: no ${{ }} expression inside a run: script, and
 #     the same action apart from where run.sh lives;
+#   - ci.yml: a change to any file the action job tests triggers that job;
 #   - action/run.sh install: input validation, sha256 verification against
 #     the release's checksums.txt (fail closed), the go install fallback
 #     only with a Go toolchain, and version: preinstalled;
@@ -43,6 +44,17 @@ if diff <(sed 's#\$GITHUB_ACTION_PATH/action/run\.sh#$GITHUB_ACTION_PATH/run.sh#
 else
   fail "action.yml and action/action.yml differ beyond the run.sh path" "$work/out"
 fi
+# On PRs and pushes, CI's action job runs only when the changes job's
+# release filter matches; each file the job tests must be in it.
+filter=$(awk '/^ *release:$/ { on = 1; next } on && !/^ *(- |#)/ { on = 0 } on' .github/workflows/ci.yml)
+for f in action.yml 'action/**' hack/action_test.sh internal/cli/output_json.go internal/cli/output_markdown.go; do
+  if grep -qxF "              - '$f'" <<<"$filter"; then
+    ok "ci.yml's release filter runs the action job on $f"
+  else
+    echo "add '$f' to the changes job's release filter in .github/workflows/ci.yml" >"$work/out"
+    fail "ci.yml's release filter runs the action job on $f" "$work/out"
+  fi
+done
 
 # --- stubs ----------------------------------------------------------------
 

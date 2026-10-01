@@ -93,6 +93,10 @@ jobs:
               - '.github/workflows/ci.yml'
               - 'action.yml'
               - 'action/**'
+              - 'hack/action_test.sh'
+              # run.sh parses the JSON report and prints the Markdown one
+              - 'internal/cli/output_json.go'
+              - 'internal/cli/output_markdown.go'
               - 'Makefile'
               - 'hack/release-check.sh'
               - 'go.mod'
