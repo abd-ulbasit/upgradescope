@@ -87,7 +87,9 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 	return teams
 }
 
-// evalAPIUsage: for each observed deprecated/removed GVK residency,
+// evalAPIUsage: for each deprecated/removed GVK in use (live objects
+// written through it, or any stored object of a kind that goes away;
+// manifest objects in files mode),
 //   - removed at ≤ target          → blocker, removed-api
 //   - removed exactly at target+1  → warning, removed-api
 //   - deprecated, removal beyond the window or unset → info, deprecated-api
