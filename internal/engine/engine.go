@@ -254,7 +254,8 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 // registry entries with a runtimes matcher, with evalAddOn. Nodes are
 // grouped by release line so each finding names exactly the nodes on that
 // line; a group is judged at its oldest version, and nodes whose version
-// maps to no cycle form one group.
+// maps to no cycle (or is unknown) form one group that names each node's
+// version.
 func evalNodeRuntimes(inv inventory.Inventory, addons []registry.AddOn, target inventory.Version, now time.Time) []Finding {
 	type group struct {
 		version string
@@ -278,7 +279,11 @@ func evalNodeRuntimes(inv inventory.Inventory, addons []registry.AddOn, target i
 				g = &group{}
 				groups[c.Cycle] = g
 			}
-			g.nodes = append(g.nodes, n.Name)
+			name := n.Name
+			if c.Cycle == "" { // versions differ within this group: name each
+				name += " (" + cmp.Or(ver, "version unknown") + ")"
+			}
+			g.nodes = append(g.nodes, name)
 			if ver != "" && (g.version == "" || versionBefore(ver, g.version)) {
 				g.version = ver
 			}
@@ -286,13 +291,13 @@ func evalNodeRuntimes(inv inventory.Inventory, addons []registry.AddOn, target i
 		for _, key := range slices.Sorted(maps.Keys(groups)) {
 			g := groups[key]
 			sort.Strings(g.nodes)
-			ver := g.version
-			if ver == "" {
-				ver = "(unknown)"
+			located := fmt.Sprintf("Detected %s on node(s): %s.", a.DisplayName, strings.Join(g.nodes, ", "))
+			if key != "" {
+				located = fmt.Sprintf("Detected %s version %s on node(s): %s.", a.DisplayName, g.version, strings.Join(g.nodes, ", "))
 			}
 			out = append(out, evalAddOn(a, addOnSubject{
 				version: g.version,
-				located: fmt.Sprintf("Detected %s version %s on node(s): %s.", a.DisplayName, ver, strings.Join(g.nodes, ", ")),
+				located: located,
 				node:    true,
 			}, target, now)...)
 		}

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -110,6 +111,18 @@ func TestEvalAddOnsNodeRuntimeDetail(t *testing.T) {
 	}
 	if fs[0].Remediation != "Upgrade containerd to a supported release line (newest: 2.3)." {
 		t.Errorf("remediation = %q", fs[0].Remediation)
+	}
+}
+
+// Nodes without release-line data share one finding, so it names each
+// node's own version rather than claiming one for all of them.
+func TestEvalAddOnsNodeRuntimeNoDataDetail(t *testing.T) {
+	fs := evalAddOns(nodes("containerd://1.4.0", "containerd://"), runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 36}, day("2026-10-02"))
+	if len(fs) != 1 || fs[0].Category != CatAddOnNoData {
+		t.Fatalf("want one addon-no-data finding, got %+v", fs)
+	}
+	if want := "Detected containerd on node(s): worker-1 (1.4.0), worker-2 (version unknown)."; !strings.HasPrefix(fs[0].Detail, want) {
+		t.Errorf("detail = %q, want prefix %q", fs[0].Detail, want)
 	}
 }
 
