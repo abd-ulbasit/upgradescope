@@ -361,6 +361,13 @@ kind: List
 items:
 - just: data
 `, map[string]int{}},
+		{"List with null items is an empty wrapper", "apiVersion: v1\nkind: List\nitems:\n", map[string]int{}},
+		{"List without items is an empty wrapper", "apiVersion: v1\nkind: List\nmetadata: {}\n", map[string]int{}},
+		{"CRD-like *List with empty items is an object", `apiVersion: example.com/v1
+kind: AllowList
+metadata: {name: none}
+items: []
+`, map[string]int{"example.com/v1/AllowList": 1}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

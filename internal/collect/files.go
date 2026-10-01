@@ -47,8 +47,9 @@ type gvk struct{ group, version, kind string }
 // A document that is not a mapping with apiVersion and kind is not a
 // Kubernetes object (values.yaml, Chart.yaml, workflows, kustomize patches,
 // Ansible lists, scalars) and is skipped. kind: List — and a typed *List
-// whose items are all typed objects — is expanded into its items,
-// recursively; the wrapper itself is not counted. A document that fails to
+// with at least one item, all of them typed objects — is expanded into
+// its items, recursively; the wrapper itself is not counted (an empty
+// kind: List counts nothing). A document that fails to
 // parse is returned in bad; an invalid separator makes the rest of the
 // stream unsplittable, so it ends parsing with one bad entry (the document
 // before it is still parsed, as YAMLReader has returned it). err is only
@@ -128,16 +129,18 @@ func appendObjects(objs []manifestObject, n *yaml.Node, lineOffset int, rendered
 	if av == "" || k == "" {
 		return objs, nil
 	}
-	if _, items := field(n, "items"); items != nil {
-		if items.Kind == yaml.SequenceNode && (k == "List" || strings.HasSuffix(k, "List") && allTyped(items)) {
-			for _, item := range items.Content {
-				var err error
-				if objs, err = appendObjects(objs, item, lineOffset, renderedFrom); err != nil {
-					return objs, err
-				}
-			}
-			return objs, nil
+	_, items := field(n, "items")
+	if k == "List" || strings.HasSuffix(k, "List") && allTyped(items) {
+		if items == nil || items.Kind != yaml.SequenceNode {
+			return objs, nil // kind: List with no (or null) items
 		}
+		for _, item := range items.Content {
+			var err error
+			if objs, err = appendObjects(objs, item, lineOffset, renderedFrom); err != nil {
+				return objs, err
+			}
+		}
+		return objs, nil
 	}
 	group, version := "", av
 	if g, v, ok := strings.Cut(av, "/"); ok {
@@ -159,10 +162,15 @@ func appendObjects(objs []manifestObject, n *yaml.Node, lineOffset int, rendered
 	return append(objs, manifestObject{group: group, version: version, kind: k, ref: ref}), nil
 }
 
-// allTyped reports whether every item of a sequence is a mapping with its
-// own apiVersion and kind — what distinguishes a typed list (IngressList)
-// from a custom resource whose kind merely ends in "List".
+// allTyped reports whether items is a non-empty sequence whose every item
+// is a mapping with its own apiVersion and kind — what distinguishes a
+// typed list (IngressList) from a custom resource whose kind merely ends
+// in "List" (which an empty sequence cannot tell apart, so it counts as
+// the resource).
 func allTyped(items *yaml.Node) bool {
+	if items == nil || items.Kind != yaml.SequenceNode || len(items.Content) == 0 {
+		return false
+	}
 	for _, item := range items.Content {
 		if item.Kind != yaml.MappingNode {
 			return false
