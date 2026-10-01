@@ -4,7 +4,9 @@
 # by the workflow itself). ci.yml proves this file on PRs that touch it.
 #
 # Local dry run (no publish, no signing, no SBOMs, no images):
-#   goreleaser release --snapshot --clean --skip=publish,sign,sbom
+#   goreleaser release --snapshot --clean --skip=publish,sign,sbom,docker
+# Without `docker` in --skip, a snapshot still builds the per-arch images
+# locally (never pushed) — that is what CI's release-snapshot job does.
 version: 2
 
 project_name: upgradescope

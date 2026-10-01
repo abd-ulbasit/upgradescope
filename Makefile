@@ -11,7 +11,7 @@ build:
 web:
 	cd web && npm ci --no-fund --no-audit && npm run build
 	find internal/server/webdist -type f ! -name .gitkeep -delete
-	find internal/server/webdist -type d -mindepth 1 -empty -delete
+	find internal/server/webdist -mindepth 1 -type d -empty -delete
 	cp -R web/dist/. internal/server/webdist/
 test:
 	go test ./...
