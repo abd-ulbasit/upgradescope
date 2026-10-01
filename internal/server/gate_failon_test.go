@@ -15,7 +15,7 @@ metadata:
   namespace: payments-prod
 `
 
-type gateBody struct {
+type failOnGateResponse struct {
 	Ready          bool   `json:"ready"`
 	Verdict        string `json:"verdict"`
 	ClusterVerdict string `json:"clusterVerdict"`
@@ -27,9 +27,9 @@ type gateBody struct {
 	} `json:"findings"`
 }
 
-func decodeGate(t *testing.T, raw []byte) gateBody {
+func decodeGate(t *testing.T, raw []byte) failOnGateResponse {
 	t.Helper()
-	var b gateBody
+	var b failOnGateResponse
 	if err := json.Unmarshal(raw, &b); err != nil {
 		t.Fatalf("gate body is not JSON: %v\n%s", err, raw)
 	}
