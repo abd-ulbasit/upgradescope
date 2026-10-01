@@ -82,8 +82,9 @@ First release.
 - `upgradescope tokens create|revoke`: per-cluster ingest tokens, stored
   hashed.
 - A Helm chart (`deploy/chart`) for the agent and an optional server.
-- A composite GitHub Action (`action/`) that wraps the manifest gate and
-  produces SARIF.
+- A composite GitHub Action (`action/`) that runs
+  `upgradescope scan --files` over a directory of rendered manifests and
+  emits SARIF for code-scanning annotations.
 - A knowledge base with an API-lifecycle dataset generated from upstream
   `k8s.io/api` source (`tools/gen-kb`) and an 18-entry add-on registry. Every
   claim in the registry requires an upstream citation, and 10 entries are
