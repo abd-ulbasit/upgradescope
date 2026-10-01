@@ -32,7 +32,9 @@ rules:
   {{- if .Values.agent.manageCRD }}
   # --manage-crd: keep the ClusterReadiness CRD schema in step with the
   # binary (server-side apply). Only that one CRD; no create, since crds/
-  # installs it.
+  # installs it. manageCRD=false drops only this write rule: the KB rules
+  # above still grant get/list on all CRDs (apiextensions v1beta1 is in the
+  # KB).
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
     resourceNames: ["clusterreadinesses.upgradescope.dev"]

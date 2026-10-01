@@ -24,7 +24,8 @@ rbac:
   # namespaces, nodes, pods and the API group/resources the embedded KB
   # flags as deprecated; get on /version and /metrics; writes only to the
   # ClusterReadiness CR named agent.crName (and, with agent.manageCRD, to the
-  # clusterreadinesses.upgradescope.dev CRD). No wildcards, no watch, no
+  # clusterreadinesses.upgradescope.dev CRD; get/list on CRDs comes from the
+  # KB rules either way). No wildcards, no watch, no
   # subresources such as nodes/proxy or pods/log.
   create: true
   # Cluster-wide get/list on Secrets, for Helm release detection (Secrets of
@@ -35,7 +36,9 @@ rbac:
   helmSecrets: true
 
 agent:
-  # Evaluation interval (minimum 1m).
+  # Evaluation interval (minimum 1m), written with h/m units such as 10m,
+  # 1h or 1m30s; the schema rejects seconds-only or fractional forms (90s,
+  # 300s, 1.5h) that v0.1 accepted.
   interval: 10m
   # Name of the ClusterReadiness object the agent manages.
   crName: cluster
@@ -46,16 +49,22 @@ agent:
   # Keep the ClusterReadiness CRD schema in step with the agent binary at
   # startup (agent --manage-crd). Grants get/update/patch on that one CRD
   # only. The CRD itself is installed by the chart's crds/ directory; set
-  # false when the CRD is managed elsewhere (e.g. GitOps) to drop all CRD
-  # permissions.
+  # false when the CRD is managed elsewhere (e.g. GitOps) to drop the CRD
+  # write permissions (get/update/patch on clusterreadinesses.upgradescope.dev).
+  # The KB-derived read rule still allows get/list on all CRDs (the KB flags
+  # apiextensions.k8s.io/v1beta1), whatever this is set to.
   manageCRD: true
-  # Target Kubernetes minors to evaluate, e.g. ["1.37", "1.38"], passed to
-  # the agent as --targets. The chart never renders the ClusterReadiness
-  # object: the agent creates it and, when targets is non-empty, resets
-  # spec.targets to this list on every tick, so this value wins over
-  # `kubectl edit`. Empty = the agent leaves spec.targets alone; set them
-  # with `kubectl patch ucr cluster --type merge -p '{"spec":{"targets":["1.37"]}}'`
+  # Target Kubernetes minors to evaluate, MAJOR.MINOR only (the CRD's
+  # format), e.g. ["1.37", "1.38"], passed to the agent as --targets. The
+  # chart never renders the ClusterReadiness object: the agent creates it
+  # and, when targets is non-empty, resets spec.targets to this list on
+  # every tick, so this value wins over `kubectl edit`. Empty = the agent
+  # leaves spec.targets alone; set them with
+  # `kubectl patch ucr cluster --type merge -p '{"spec":{"targets":["1.37"]}}'`
   # or let it default to the next minor above the server version.
+  # Emptying this after it was set does NOT clear spec.targets (the CR keeps
+  # the last list); to go back to the default next minor, run
+  # `kubectl patch ucr cluster --type merge -p '{"spec":{"targets":[]}}'`.
   targets: []
   # URL of an upgradescope server to push snapshots to. Empty = CRD-only
   # mode. If server.enabled=true and this is empty, it defaults to the
@@ -82,6 +91,8 @@ agent:
   extraVolumes: []
   extraVolumeMounts: []
   podAnnotations: {}
+  # app.kubernetes.io/name, instance and component are reserved for the
+  # selector and ignored here.
   podLabels: {}
   nodeSelector: {}
   tolerations: []
@@ -167,6 +178,8 @@ server:
   extraVolumes: []
   extraVolumeMounts: []
   podAnnotations: {}
+  # app.kubernetes.io/name, instance and component are reserved for the
+  # selector and ignored here.
   podLabels: {}
   nodeSelector: {}
   tolerations: []

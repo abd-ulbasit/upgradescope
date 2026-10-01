@@ -81,8 +81,8 @@ func runOneTick(t *testing.T, apiext *apiextfake.Clientset, cfg Config) {
 	}
 }
 
-// --manage-crd=false (chart agent.manageCRD=false): the agent has no RBAC
-// on CRDs at all, so it must not even read the CRD.
+// --manage-crd=false (chart agent.manageCRD=false): the agent has no write
+// RBAC on its CRD and must not touch the CRD at all, not even a read.
 func TestRunSkipsCRDWhenNotManaged(t *testing.T) {
 	apiext := fakeAPIExt()
 	runOneTick(t, apiext, Config{SkipCRDManagement: true})

@@ -59,11 +59,19 @@ chart findings; everything else works. `rbac.create=false` lets you bind a
 role of your own; collectors without access degrade the same way.
 
 The agent cannot create CRDs: `crds/` installs the `ClusterReadiness` CRD.
-If it is missing, the agent exits with an error that says so.
-`agent.manageCRD=false` removes all CRD permissions (the agent then never
-reads or writes the CRD, e.g. when GitOps manages it). With it on, the
-agent applies only the fields it owns, so labels and annotations that Argo
-CD, Flux or `kubectl apply` set on the CRD survive restarts.
+With `agent.manageCRD=true` (the default), a missing CRD makes the agent
+exit at startup with an error that says so. With `agent.manageCRD=false`
+the agent never reads or writes the CRD itself, so a missing CRD shows up
+as a "CRD not installed" error on every tick instead.
+
+`agent.manageCRD=false` drops the CRD write permissions (`get`/`update`/
+`patch` on `clusterreadinesses.upgradescope.dev`), e.g. when GitOps manages
+the CRD. It does not remove all CRD access: the KB-derived read rule still
+grants `get`/`list` on every CRD, because the KB flags
+`apiextensions.k8s.io/v1beta1` and the api-usage collector counts CRDs.
+With `agent.manageCRD=true`, the agent applies only the fields it owns, so
+labels and annotations that Argo CD, Flux or `kubectl apply` set on the
+CRD survive restarts.
 
 `deploy/chart/rbac_test.go` renders this role and checks it with the
 upstream RBAC rule matcher: every call the collectors make is allowed, and
@@ -75,15 +83,22 @@ objects, `watch`, and Secrets with the toggle off are denied.
 The chart never renders the `ClusterReadiness` object; the agent creates
 it. `agent.targets` is passed to the agent as `--targets`, and while it is
 non-empty the agent resets `spec.targets` to it every tick, so the Helm
-value wins over `kubectl edit`. Changing it with `helm upgrade` touches
-only the agent Deployment. With `agent.targets` empty, set targets on the
-object directly:
+value wins over `kubectl edit`. Values are `MAJOR.MINOR` (`1.37`), the
+format the CRD accepts; the schema rejects `v1.37` and `1.37.2`. Changing
+it with `helm upgrade` touches only the agent Deployment. With
+`agent.targets` empty, set targets on the object directly:
 
     kubectl patch ucr cluster --type merge -p '{"spec":{"targets":["1.37"]}}'
 
+Emptying `agent.targets` after it was set leaves `spec.targets` at the last
+list (an empty flag means "leave the object alone"). To return to the
+default next minor, clear it with the same command and `"targets":[]`.
+
 Upgrading from a chart version that rendered the object (agent.targets
 was set): Helm deletes it as no longer part of the release, and the agent
-recreates it with the same targets on its next tick.
+recreates it with the same targets on a later tick. That can take up to
+`agent.interval` (10m by default) when the new agent pod ticks before Helm
+deletes the old object.
 
 ## Secrets
 
@@ -130,8 +145,10 @@ settings, so the read token still protects all data.
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.
   `runAsNonRoot` and the `RuntimeDefault` seccomp profile stay.
 - The server runs under its own ServiceAccount and mounts no API token.
-- `values.schema.json` rejects unknown keys, intervals under one minute and
-  malformed targets at render time.
+- `values.schema.json` rejects unknown keys, intervals under one minute (and
+  seconds-only or fractional forms such as `90s` or `1.5h`, which v0.1
+  accepted: write `1m30s`, `1h30m`) and malformed targets (`agent.targets`
+  must be `MAJOR.MINOR`) at render time.
 
 ## Uninstall
 
