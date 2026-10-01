@@ -17,6 +17,19 @@ support:
   citations:
     - https://endoflife.date/containerd
     - https://containerd.io/releases/
+compat:
+  # containerd 1.x lacks the CRI RuntimeConfig RPC (KEP-4033). The kubelet
+  # falls back to its own cgroup driver setting and reports, through its
+  # cri_losing_support metric, that such runtimes lose support in 1.38.0
+  # (v1.37.0 cmd/kubelet/app/server.go). Upstream already moved that
+  # release twice (1.36 → 1.37 in #136846, 1.37 → 1.38 in #139121): update
+  # k8s_max here when it moves again.
+  - range: "<2.0.0"
+    k8s_max: "1.37"
+    citations:
+      - https://github.com/kubernetes/kubernetes/blob/v1.37.0/cmd/kubelet/app/server.go#L1478
+      - https://github.com/kubernetes/kubernetes/pull/139121
+      - https://github.com/kubernetes/enhancements/issues/4033
 cycles:
   - {cycle: "2.4", eol: "2027-05-16", citations: ["https://endoflife.date/containerd"]}
   - {cycle: "2.3", eol: "2028-04-30", citations: ["https://endoflife.date/containerd"]}

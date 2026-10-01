@@ -64,6 +64,44 @@
         "eol_date": "2026-08-15",
         "citations": ["https://endoflife.date/legacy-mesh"]
       }
+    },
+    {
+      "schema_version": 2,
+      "id": "istio",
+      "display_name": "Istio",
+      "endoflife_product": "istio",
+      "matchers": {"images": ["istio/proxyv2"]},
+      "support": {"status": "supported", "citations": ["https://endoflife.date/istio"]},
+      "cycles": [
+        {"cycle": "1.31", "eol": "2027-02-28", "k8s_min": "1.32", "k8s_max": "1.36", "citations": ["https://endoflife.date/istio"]},
+        {"cycle": "1.27", "eol": "2026-04-07", "k8s_min": "1.29", "k8s_max": "1.33", "citations": ["https://endoflife.date/istio"]}
+      ]
+    },
+    {
+      "schema_version": 2,
+      "id": "containerd",
+      "display_name": "containerd",
+      "endoflife_product": "containerd",
+      "matchers": {"runtimes": ["containerd"]},
+      "support": {"status": "supported", "citations": ["https://endoflife.date/containerd"]},
+      "cycles": [
+        {"cycle": "2.0", "eol": "2027-03-01", "citations": ["https://endoflife.date/containerd"]},
+        {"cycle": "1.7", "eol": "2026-09-01", "citations": ["https://endoflife.date/containerd"]}
+      ],
+      "compat": [
+        {"range": "<2.0.0", "k8s_max": "1.37", "citations": ["https://github.com/kubernetes/kubernetes/pull/139121"]}
+      ]
+    },
+    {
+      "schema_version": 2,
+      "id": "external-dns",
+      "display_name": "ExternalDNS",
+      "matchers": {"images": ["external-dns/external-dns"], "charts": ["external-dns"]},
+      "support": {"status": "supported", "citations": ["https://github.com/kubernetes-sigs/external-dns/releases"]},
+      "compat": [
+        {"range": ">=0.10.0 <0.18.0", "k8s_min": "1.19", "k8s_max": "1.32",
+         "citations": ["https://github.com/kubernetes-sigs/external-dns#kubernetes-version-compatibility"]}
+      ]
     }
   ]
 }

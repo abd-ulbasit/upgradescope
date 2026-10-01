@@ -15,9 +15,10 @@ import (
 )
 
 // collectVersions fills server version, cluster ID (kube-system namespace
-// UID), node kubelet versions, namespaces with team labels, and observed
-// control-plane component versions. Writes are best-effort: fields
-// populated before an error persist even though the capability degrades.
+// UID), node kubelet and container runtime versions, namespaces with team
+// labels, and observed control-plane component versions. Writes are
+// best-effort: fields populated before an error persist even though the
+// capability degrades.
 func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kube kubernetes.Interface, teamLabel string, inv *inventory.Inventory) error {
 	sv, err := disc.ServerVersion()
 	if err != nil {
@@ -39,7 +40,11 @@ func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kub
 		}
 		for i := range nodes.Items {
 			n := &nodes.Items[i]
-			inv.Nodes = append(inv.Nodes, inventory.NodeInfo{Name: n.Name, KubeletVersion: n.Status.NodeInfo.KubeletVersion})
+			inv.Nodes = append(inv.Nodes, inventory.NodeInfo{
+				Name:             n.Name,
+				KubeletVersion:   n.Status.NodeInfo.KubeletVersion,
+				ContainerRuntime: n.Status.NodeInfo.ContainerRuntimeVersion,
+			})
 		}
 		if nodes.Continue == "" {
 			break

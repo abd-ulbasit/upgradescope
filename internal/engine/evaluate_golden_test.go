@@ -29,6 +29,10 @@ var goldenParams = map[string]struct{ target, now string }{
 	// 1.33) but not after the control plane reaches 1.34 → blocker.
 	"gke-vendor-versions": {"1.34", "2026-06-10T00:00:00Z"},
 	"files-mode":          {"1.36", "2026-06-10T00:00:00Z"},
+	// Release-line lifecycle: Istio 1.27 (ended) and a containerd 1.7 node
+	// are EOL, a containerd 2.0 node is fine, and ExternalDNS from Helm is
+	// judged by appVersion 0.14.2 (compat row, no lifecycle data → info).
+	"addon-lifecycle": {"1.34", "2026-10-02T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte

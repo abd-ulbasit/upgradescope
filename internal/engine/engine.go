@@ -3,6 +3,7 @@ package engine
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -245,7 +246,68 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 			teams:      teamsFor(ns, inv.Namespaces),
 		}, target, now)...)
 	}
+	return append(out, evalNodeRuntimes(inv, k.AddOns, target, now)...)
+}
+
+// evalNodeRuntimes judges node container runtimes
+// (status.nodeInfo.containerRuntimeVersion, "containerd://1.7.27") against
+// registry entries with a runtimes matcher, with evalAddOn. Nodes are
+// grouped by release line so each finding names exactly the nodes on that
+// line; a group is judged at its oldest version, and nodes whose version
+// maps to no cycle form one group.
+func evalNodeRuntimes(inv inventory.Inventory, addons []registry.AddOn, target inventory.Version, now time.Time) []Finding {
+	type group struct {
+		version string
+		nodes   []string
+	}
+	var out []Finding
+	for _, a := range addons {
+		if len(a.Matchers.Runtimes) == 0 {
+			continue
+		}
+		groups := map[string]*group{} // by cycle; "" = no cycle
+		for _, n := range inv.Nodes {
+			runtime, ver, ok := strings.Cut(n.ContainerRuntime, "://")
+			if !ok || !slices.Contains(a.Matchers.Runtimes, runtime) {
+				continue
+			}
+			ver = strings.TrimPrefix(ver, "v")
+			c, _ := cycleFor(ver, a.Cycles)
+			g := groups[c.Cycle]
+			if g == nil {
+				g = &group{}
+				groups[c.Cycle] = g
+			}
+			g.nodes = append(g.nodes, n.Name)
+			if ver != "" && (g.version == "" || versionBefore(ver, g.version)) {
+				g.version = ver
+			}
+		}
+		for _, key := range slices.Sorted(maps.Keys(groups)) {
+			g := groups[key]
+			sort.Strings(g.nodes)
+			ver := g.version
+			if ver == "" {
+				ver = "(unknown)"
+			}
+			out = append(out, evalAddOn(a, addOnSubject{
+				version: g.version,
+				located: fmt.Sprintf("Detected %s version %s on node(s): %s.", a.DisplayName, ver, strings.Join(g.nodes, ", ")),
+			}, target, now)...)
+		}
+	}
 	return out
+}
+
+// versionBefore orders versions numerically ("1.7.9" < "1.7.20"), falling
+// back to string order when either does not parse.
+func versionBefore(a, b string) bool {
+	pa, okA := versionParts(a)
+	pb, okB := versionParts(b)
+	if okA && okB {
+		return slices.Compare(pa, pb) < 0
+	}
+	return a < b
 }
 
 // addOnSubject is one detected installation of a registry add-on.

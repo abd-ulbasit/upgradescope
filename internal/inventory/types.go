@@ -122,6 +122,9 @@ type ComponentVersion struct {
 type NodeInfo struct {
 	Name           string `json:"name"`
 	KubeletVersion string `json:"kubeletVersion"` // raw, e.g. "v1.33.1", "v1.33.1-eks-aeac579"
+	// ContainerRuntime is status.nodeInfo.containerRuntimeVersion, raw:
+	// "<runtime>://<version>", e.g. "containerd://1.7.27".
+	ContainerRuntime string `json:"containerRuntime,omitempty"`
 }
 
 type NamespaceInfo struct {
