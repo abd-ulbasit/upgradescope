@@ -1,13 +1,15 @@
 # registry/data/flux.yaml
-# support.status / support.eol_date are synced from the endoflife.date API
-# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
-schema_version: 1
+# cycles are generated from the endoflife.date API by tools/eol-sync; do not
+# edit them by hand. support is hand-curated: status eol is only for a
+# product upstream retired as a whole.
+schema_version: 2
 id: flux
 display_name: Flux
 endoflife_product: flux
 matchers:
-  images:
-    - ghcr.io/fluxcd
+  # Chart only: the fluxcd/* controller images carry their own version
+  # lines (source-controller v1.x), not the Flux release, so an image match
+  # would map to the wrong release cycle.
   charts:
     - flux2
 support:
@@ -15,3 +17,15 @@ support:
   citations:
     - https://endoflife.date/flux
     - https://fluxcd.io/flux/releases/
+cycles:
+  - {cycle: "2.9", eol: false, citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.8", eol: false, citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.7", eol: false, citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.6", eol: "2026-06-30", citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.5", eol: "2026-02-24", citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.4", eol: "2025-09-30", citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.3", eol: "2025-05-29", citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.2", eol: "2025-02-20", citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.1", eol: "2024-09-30", citations: ["https://endoflife.date/flux"]}
+  - {cycle: "2.0", eol: "2024-05-13", citations: ["https://endoflife.date/flux"]}
+  - {cycle: "1.25", eol: "2022-11-02", citations: ["https://endoflife.date/flux"]}

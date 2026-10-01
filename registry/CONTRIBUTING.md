@@ -7,96 +7,143 @@ traceable to an upstream or public source — that is the whole point.
 ## How an entry is used
 
 - `internal/collect` matches running pod images and Helm releases against
-  `matchers`, producing detected add-on instances.
-- `internal/engine` turns `support.status: eol` into a **blocker**, an
-  `eol_date` within 90 days into a **warning**, and a target Kubernetes
-  version above a `compat` row's `k8s_max` into a compat finding.
+  `matchers`, producing detected add-on instances with an **app version**.
+  Node container runtimes (`containerd://1.7.27`) are matched by
+  `matchers.runtimes`.
+- `internal/engine` judges each detected add-on at its installed version:
+  - `support.status: eol` (or a past `support.eol_date`) → **blocker**, a
+    `support.eol_date` within 90 days → **warning**. These product-level
+    fields are for products retired as a whole (ingress-nginx).
+  - otherwise the version is mapped to its release line in `cycles`: a line
+    that has ended → **blocker**, one ending within 90 days → **warning**.
+    A node runtime's ended line is only a **warning** naming the nodes: the
+    runtime comes with the node image, not the Kubernetes version. Put the
+    Kubernetes release that drops it in a `compat` row (see `containerd.yaml`);
+  - a target Kubernetes version outside the line's `k8s_min`/`k8s_max`, or
+    outside the bounds of the first `compat` row whose range matches the
+    version → **blocker** (`chart-incompat`);
+  - no product date and no cycle for the version, or no version at all →
+    an **info** finding ("no lifecycle data for …"), never a blocker.
 
-## Schema (`schema_version: 1`)
+## Schema (`schema_version: 2`)
 
 ```yaml
-schema_version: 1                  # required, must be 1
+schema_version: 2                  # required, must be 2
 id: my-addon                       # required, kebab-case, unique, = file name
 display_name: My Add-on            # required
 endoflife_product: my-addon        # optional: endoflife.date slug (see below)
-matchers:                          # at least one image OR chart required
+matchers:                          # at least one image, chart or runtime
   images:
-    - registry.example.com/org/app # repo prefix match; tag becomes the version
+    - org/app                      # repository path, no host/tag (see below)
   charts:
     - my-addon                     # exact Helm chart name
+  runtimes:
+    - containerd                   # node container runtime name
 support:
   status: supported                # supported | eol | unknown
-  eol_date: "2027-01-31"           # optional, YYYY-MM-DD
+  eol_date: "2027-01-31"           # optional, YYYY-MM-DD: whole-product EOL only
   citations:                       # ≥1 http(s) URL unless status is unknown
     - https://example.com/lifecycle
+cycles:                            # release lines of the APP version
+  - {cycle: "2.1", eol: "2027-06-30", k8s_min: "1.30", k8s_max: "1.34", citations: ["https://example.com/lifecycle"]}
+  - {cycle: "2.0", eol: true, citations: ["https://example.com/lifecycle"]}
 compat:                            # optional rows; each needs ≥1 citation
-  - range: ">=2.0.0 <3.0.0"        # semver constraint on the add-on version
-    k8s_min: "1.25"                # MAJOR.MINOR, inclusive
-    k8s_max: "1.32"                # MAJOR.MINOR, inclusive
-    citations:
+  - range: ">=2.0.0 <3.0.0"        # semver constraint on the app version
+    k8s_min: "1.25"                # MAJOR.MINOR, inclusive; optional
+    k8s_max: "1.32"                # MAJOR.MINOR, inclusive; optional
+    citations:                     # (at least one of k8s_min/k8s_max)
       - https://example.com/compat-matrix
 recommendation: Optional one-line remediation hint shown with findings.
 ```
 
 ### How matchers work
 
-- **images** match by *repository prefix*: `docker.io/istio` matches
-  `docker.io/istio/pilot` and `docker.io/istio/proxyv2`; the image tag
-  (leading `v` stripped) is recorded as the detected version. Remember that
-  pod specs contain the literal string users wrote — Docker Hub images often
-  appear *without* the `docker.io/` prefix, so list both forms
-  (`velero/velero` **and** `docker.io/velero/velero`).
-- **charts** match the Helm chart name exactly; the chart version (not the
-  app version) is the detected version, and chart evidence wins over image
-  evidence when both match.
+- **images** are repository paths *without* the registry host, tag or
+  digest, matched as a suffix on whole path segments. `ingress-nginx/controller`
+  matches `registry.k8s.io/ingress-nginx/controller`, the legacy
+  `k8s.gcr.io/ingress-nginx/controller`, a mirror such as
+  `harbor.example/k8s/ingress-nginx/controller` and an ECR pull-through cache
+  path. References are normalised first: `traefik:v3.1` is
+  `docker.io/library/traefik`, so the matcher is `library/traefik`. List
+  every image whose tag carries the add-on's own version (`istio/proxyv2`,
+  `istio/pilot`, …), and leave out images that version separately
+  (`tigera/operator`, Flux's controllers). Vendor forks with their own
+  support (AKS application routing, RKE2) get their own entries.
+- **Provider builds** — images under `gke.gcr.io/`, `gcr.io/gke-release/`
+  or `mcr.microsoft.com/` (`ProviderBuildPrefixes` in `providers.go`), such
+  as GKE's Calico and Dataplane V2 Cilium or AKS's Calico, Cilium, Istio and
+  KEDA — follow the provider's support policy, so host-less matchers never
+  match them: an upstream line's EOL is not theirs. An entry for a provider
+  build is the one place a matcher names its host
+  (`mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller`, see
+  `aks-app-routing-nginx.yaml`); it still matches through a mirror.
+- The version is read from anywhere in the tag: `v1.9.4`,
+  `nginx-1.9.4-hardened1` and `1.9.4-debian-12-r0` all mean 1.9.4.
+- **charts** match the Helm chart name exactly. The release's `appVersion`
+  is the detected version (falling back to the image tag when a chart has
+  none); the chart version is shown as evidence only. Write every range and
+  cycle in **app** versions.
+- **runtimes** match the scheme of a node's `containerRuntimeVersion`.
 
-### `endoflife_product` — API-synced vs hand-curated entries
+### `cycles` and `endoflife_product` — API-synced vs hand-curated entries
+
+`cycles` are the add-on's release lines, keyed on the app version: `cycle`
+holds the leading components ("1.31" covers 1.31.x), `eol` is a date, `true`
+(ended, no date published) or `false` (no end announced), and the optional
+`k8s_min`/`k8s_max` give the Kubernetes versions that line supports. Quote
+every version (`cycle: "1.10"`): unquoted, YAML reads 1.10 as the number
+1.1, so the loader rejects it.
 
 If the add-on is tracked by [endoflife.date](https://endoflife.date), set
 `endoflife_product` to its slug (the path segment in
-`https://endoflife.date/<slug>`). `tools/eol-sync` (run weekly by the
-`kb-refresh` workflow, or via `make eol-sync`) then owns `support.status`
-and `support.eol_date`:
-
-- the add-on is `eol` only when its **newest release cycle** is EOL;
-- a dated newest cycle records the date and flips status once it passes.
-
-Do not hand-edit those two fields on synced entries — CI runs
-`eol-sync -check` and fails on drift. Everything else (matchers, citations,
-compat rows) stays hand-maintained.
+`https://endoflife.date/<slug>`) and cite that page in `support.citations`.
+`tools/eol-sync` (run weekly by the `kb-refresh` workflow, or via
+`make eol-sync`) then owns the `cycles:` block: it writes every cycle the API
+publishes, with the Kubernetes range where the product publishes one. Do not
+hand-edit synced cycles — `make eol-check` reports drift. eol-sync never
+touches `support`: setting `status: eol` for a retired product stays a
+human decision (eol-sync prints a note when every cycle has ended).
+Everything else (matchers, citations, compat rows) stays hand-maintained.
 
 If endoflife.date does not track the product, leave `endoflife_product`
-out and maintain `support` by hand, citing the upstream lifecycle or
-compatibility page.
+out, maintain `support` by hand, and add `cycles` only when you can cite a
+per-version lifecycle source.
 
 ### Citation rules
 
-- Every `support` (unless `status: unknown`) and every `compat` row needs at
-  least one resolving `http(s)` URL.
+- Every `support` (unless `status: unknown`), every cycle and every `compat`
+  row needs at least one resolving `http(s)` URL.
 - Prefer primary sources: upstream release/support-policy docs, compatibility
   matrices, official blog announcements. endoflife.date product pages are
   fine *in addition* for synced entries.
-- Only record **bounded** compat rows. If upstream says "1.18 to latest",
-  there is no honest `k8s_max` — skip the row and put the matrix URL in
-  `support.citations` instead (see `velero.yaml`).
+- A compat bound needs a source that states it. If upstream says "1.18 to
+  latest", there is no honest `k8s_max`; record only the bound upstream
+  publishes, or skip the row and put the matrix URL in `support.citations`
+  (see `velero.yaml`).
+- When a source gives a month but findings print a day, say in a YAML
+  comment where the day comes from (see `ingress-nginx.yaml`,
+  `aks-app-routing-nginx.yaml`).
 
 ## Adding an add-on, step by step
 
 1. Create `registry/data/<id>.yaml` (file name = `id`, `.yaml` extension —
    `.yml` is rejected).
 2. Fill in the template above; check whether endoflife.date tracks it.
-3. If synced: run `make eol-sync` to let the tool write `status`/`eol_date`.
-4. Validate: `go test ./registry/` (schema, citations, semver ranges,
-   duplicate IDs) and add the entry to the curated-entries table in
-   `registry/load_test.go`.
+3. If synced: run `make eol-sync` to let the tool write `cycles`.
+4. Validate: `go test ./registry/...`. The tests check every data file
+   (schema, matchers, citations, semver ranges, id = file name, cycles on
+   synced entries); no Go change is needed for a new entry.
 5. Run `make eol-check` — must report `in sync` / drift 0.
 
 ## PR checklist
 
 - [ ] `id` is kebab-case and matches the file name
-- [ ] at least one image or chart matcher, with Docker Hub short forms listed
+- [ ] image matchers are host-less repository paths (a provider-build
+      entry: host-qualified) covering every image
+      that carries the add-on's version; no images that version separately
+- [ ] versions, ranges and cycles are app versions, not chart versions
 - [ ] every citation URL opens in a browser (CI does not fetch them; you do)
-- [ ] compat rows only where upstream publishes bounded ranges
+- [ ] compat bounds only where upstream publishes them
 - [ ] `endoflife_product` set when endoflife.date tracks the product, and
       `make eol-check` passes
-- [ ] `go test ./registry/` passes, including your `load_test.go` row
+- [ ] `go test ./registry/...` passes

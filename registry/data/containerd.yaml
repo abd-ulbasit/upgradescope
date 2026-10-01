@@ -1,21 +1,46 @@
 # registry/data/containerd.yaml
-# support.status / support.eol_date are synced from the endoflife.date API
-# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
+# cycles are generated from the endoflife.date API by tools/eol-sync; do not
+# edit them by hand. support is hand-curated: status eol is only for a
+# product upstream retired as a whole.
 #
-# containerd is a node-level daemon, not a pod, so the image matchers below
-# are best-effort (they only catch containerd-in-a-container setups). The
-# entry primarily carries the upstream support-horizon data.
-schema_version: 1
+# containerd is a node-level daemon, not a pod: it is matched against each
+# node's status.nodeInfo.containerRuntimeVersion ("containerd://1.7.27").
+schema_version: 2
 id: containerd
 display_name: containerd
 endoflife_product: containerd
 matchers:
-  images:
+  runtimes:
     - containerd
-    - docker.io/library/containerd
 support:
   status: supported
-  eol_date: "2028-04-30"
   citations:
     - https://endoflife.date/containerd
     - https://containerd.io/releases/
+compat:
+  # containerd 1.x lacks the CRI RuntimeConfig RPC (KEP-4033). The kubelet
+  # falls back to its own cgroup driver setting and reports, through its
+  # cri_losing_support metric, that such runtimes lose support in 1.38.0
+  # (v1.37.0 cmd/kubelet/app/server.go). Upstream already moved that
+  # release twice (1.36 → 1.37 in #136846, 1.37 → 1.38 in #139121): update
+  # k8s_max here when it moves again.
+  - range: "<2.0.0"
+    k8s_max: "1.37"
+    citations:
+      - https://github.com/kubernetes/kubernetes/blob/v1.37.0/cmd/kubelet/app/server.go#L1478
+      - https://github.com/kubernetes/kubernetes/pull/139121
+      - https://github.com/kubernetes/enhancements/issues/4033
+cycles:
+  - {cycle: "2.4", eol: "2027-05-16", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "2.3", eol: "2028-04-30", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "2.2", eol: "2026-11-06", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "2.1", eol: "2026-07-03", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "2.0", eol: "2027-03-01", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.7", eol: "2026-09-01", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.6", eol: "2025-08-23", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.5", eol: "2023-02-28", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.4", eol: "2022-03-03", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.3", eol: "2021-03-04", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.2", eol: "2020-10-15", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.1", eol: "2019-10-23", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.0", eol: "2018-12-05", citations: ["https://endoflife.date/containerd"]}

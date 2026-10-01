@@ -25,8 +25,8 @@ func TestCollectVersions(t *testing.T) {
 	cs := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "payments", Labels: map[string]string{"team": "fintech"}}},
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.33.1"}}},
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.34.2"}}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.33.1", ContainerRuntimeVersion: "containerd://1.7.27"}}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.34.2", ContainerRuntimeVersion: "containerd://2.0.5"}}},
 	)
 	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
 	disc.FakedServerVersion = &version.Info{GitVersion: "v1.34.2"}
@@ -34,6 +34,12 @@ func TestCollectVersions(t *testing.T) {
 	var inv inventory.Inventory
 	if err := collectVersions(context.Background(), disc, cs, "team", &inv); err != nil {
 		t.Fatal(err)
+	}
+	if want := []inventory.NodeInfo{
+		{Name: "node-a", KubeletVersion: "v1.34.2", ContainerRuntime: "containerd://2.0.5"},
+		{Name: "node-b", KubeletVersion: "v1.33.1", ContainerRuntime: "containerd://1.7.27"},
+	}; !reflect.DeepEqual(inv.Nodes, want) {
+		t.Errorf("Nodes = %+v, want %+v (container runtime collected)", inv.Nodes, want)
 	}
 	if inv.ServerVersion != "v1.34.2" {
 		t.Errorf("ServerVersion = %q, want v1.34.2", inv.ServerVersion)

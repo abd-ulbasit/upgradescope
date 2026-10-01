@@ -1,15 +1,14 @@
 # registry/data/traefik.yaml
-# support.status / support.eol_date are synced from the endoflife.date API
-# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
-schema_version: 1
+# cycles are generated from the endoflife.date API by tools/eol-sync; do not
+# edit them by hand. support is hand-curated: status eol is only for a
+# product upstream retired as a whole.
+schema_version: 2
 id: traefik
 display_name: Traefik Proxy
 endoflife_product: traefik
 matchers:
   images:
-    - docker.io/traefik
-    - docker.io/library/traefik
-    - traefik
+    - library/traefik # the official image: "traefik:v3.1"
   charts:
     - traefik
 support:
@@ -17,3 +16,25 @@ support:
   citations:
     - https://endoflife.date/traefik
     - https://doc.traefik.io/traefik/deprecation/releases/
+cycles:
+  - {cycle: "3.7", eol: false, citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "3.6", eol: "2026-08-16", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "3.5", eol: "2025-11-07", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "3.4", eol: "2025-07-23", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "3.3", eol: "2025-05-05", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "3.2", eol: "2025-01-06", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "3.1", eol: "2024-10-28", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "3.0", eol: "2024-07-15", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.11", eol: "2026-09-07", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.10", eol: "2024-02-12", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.9", eol: "2023-04-24", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.8", eol: "2022-10-03", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.7", eol: "2022-06-29", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.6", eol: "2022-05-24", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.5", eol: "2022-01-24", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.4", eol: "2021-08-17", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.3", eol: "2021-01-19", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.2", eol: "2020-09-23", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.1", eol: "2020-03-25", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "2.0", eol: "2019-12-11", citations: ["https://endoflife.date/traefik"]}
+  - {cycle: "1.7", eol: "2021-12-31", citations: ["https://endoflife.date/traefik"]}

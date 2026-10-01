@@ -1,17 +1,27 @@
 # registry/data/etcd.yaml
-# support.status / support.eol_date are synced from the endoflife.date API
-# by tools/eol-sync (newest-cycle rule); do not edit them by hand.
-schema_version: 1
+# cycles are generated from the endoflife.date API by tools/eol-sync; do not
+# edit them by hand. support is hand-curated: status eol is only for a
+# product upstream retired as a whole.
+schema_version: 2
 id: etcd
 display_name: etcd
 endoflife_product: etcd
 matchers:
   images:
-    - registry.k8s.io/etcd
-    - gcr.io/etcd-development/etcd
-    - quay.io/coreos/etcd
+    # Any repository named etcd: registry.k8s.io/etcd,
+    # gcr.io/etcd-development/etcd, quay.io/coreos/etcd, bitnami/etcd.
+    - etcd
 support:
   status: supported
   citations:
     - https://endoflife.date/etcd
     - https://etcd.io/docs/latest/op-guide/versioning/
+cycles:
+  - {cycle: "3.7", eol: false, citations: ["https://endoflife.date/etcd"]}
+  - {cycle: "3.6", eol: false, citations: ["https://endoflife.date/etcd"]}
+  - {cycle: "3.5", eol: "2027-07-08", citations: ["https://endoflife.date/etcd"]}
+  - {cycle: "3.4", eol: "2026-06-01", citations: ["https://endoflife.date/etcd"]}
+  - {cycle: "3.3", eol: "2021-10-15", citations: ["https://endoflife.date/etcd"]}
+  - {cycle: "3.2", eol: "2021-03-28", citations: ["https://endoflife.date/etcd"]}
+  - {cycle: "3.1", eol: "2018-10-10", citations: ["https://endoflife.date/etcd"]}
+  - {cycle: "3.0", eol: "2017-01-20", citations: ["https://endoflife.date/etcd"]}
