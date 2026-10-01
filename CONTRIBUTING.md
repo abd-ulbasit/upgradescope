@@ -105,9 +105,28 @@ go test ./internal/engine -run Golden -update
 git diff internal/engine/testdata
 ```
 
-To add a scenario, create a new directory with an `inventory.json`, run with
-`-update`, and check that the generated `expected.json` says what you expect.
+To add a scenario:
+
+1. Create `internal/engine/testdata/<case>/inventory.json`.
+2. Add a `"<case>": {target, now}` entry to the `goldenParams` map in
+   `internal/engine/evaluate_golden_test.go`. The entry sets the case's target
+   version and its evaluation clock. Use a fixed RFC 3339 `now`, such as
+   `"2026-06-10T00:00:00Z"`, so the golden stays deterministic. The test
+   fails, even with `-update`, for a testdata directory without an entry and
+   for an entry without a directory.
+3. Run `go test ./internal/engine -run Golden -update`, and check that the
+   generated `expected.json` says what you expect.
+
 Never run `-update` just to make a failing test pass.
+
+The CSV and HTML exports in `internal/server` have their own goldens,
+`internal/server/testdata/export_golden.csv` and `export_golden.html`. After an
+intentional change to an export, regenerate and review them the same way:
+
+```sh
+go test ./internal/server -run Export -update
+git diff internal/server/testdata
+```
 
 ### Integration and end-to-end tests (opt-in)
 
@@ -130,9 +149,9 @@ These tests are skipped unless you set an environment variable, so
 
 `make demo-up` creates a kind cluster named `upgradescope-demo` and installs an
 EOL ingress-nginx chart into it, so the scan has a real blocker to find.
-`make demo-down` deletes it. CI runs the same kind job on every push and pull
-request. To skip it on a docs-only change, put `[skip-e2e]` in the head commit
-message.
+`make demo-down` deletes it. CI runs the same kind job on every pull request
+and on every push to `main`. To skip it on a docs-only change, put
+`[skip-e2e]` in the head commit message.
 
 ### Knowledge-base tooling
 
