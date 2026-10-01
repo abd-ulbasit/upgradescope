@@ -312,21 +312,31 @@ func matchesRange(version, constraint string) bool {
 	return c.Check(v)
 }
 
-// evalSkew evaluates the kubelet rule: kubelets more than
-// policy.KubeletMaxBehind minors behind the CURRENT control plane → warning
-// (skew is about today); kubelets that WOULD exceed the limit after the
-// control plane reaches target → blocker. Control-plane component rules
-// (HA apiserver spread, controller-manager/scheduler, kube-proxy) live in
-// evalControlPlaneSkew. KubectlMaxSkew is NOT evaluated by design: client
-// kubectl versions are only visible in apiserver audit logs (User-Agent),
-// which no collector reads — there is no cluster-state signal for them.
+// evalSkew evaluates the kubelet rules of the upstream version-skew policy
+// against every observed kube-apiserver version (apiserverVersions):
+//
+//   - a kubelet more than KubeletMaxBehind minors behind the NEWEST
+//     apiserver → warning (skew is about today);
+//   - a kubelet that WOULD exceed that limit once the control plane reaches
+//     target → blocker;
+//   - a kubelet newer than the OLDEST apiserver → warning ("kubelet must not
+//     be newer than kube-apiserver"; with HA skew the oldest replica narrows
+//     the allowed versions).
+//
+// Kubelets older than 1.25 may only be 2 minors behind (legacyMaxBehind).
+// Control-plane component rules live in evalControlPlaneSkew.
+// KubectlMaxSkew is NOT evaluated by design: client kubectl versions are only
+// visible in apiserver audit logs (User-Agent), which no collector reads —
+// there is no cluster-state signal for them.
 func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
-	server, err := inventory.ParseVersion(inv.ServerVersion)
-	if err != nil {
-		return nil // a required versions gap; recorded by assessmentGaps
+	apis := apiserverVersions(inv)
+	if len(apis) == 0 {
+		return nil // no reference version: a required versions gap, recorded by assessmentGaps
 	}
+	oldest, newest := apis[0], apis[len(apis)-1]
 	maxBehind := k.Skew.KubeletMaxBehind
-	var nowBad, postBad, unparseable []string
+	var nowBad, postBad, newer, unparseable []string
+	var postLegacy, nowLegacy bool
 	for _, n := range inv.Nodes {
 		kv, err := inventory.ParseVersion(n.KubeletVersion)
 		if err != nil {
@@ -334,22 +344,29 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 			continue
 		}
 		entry := fmt.Sprintf("%s (%s)", n.Name, n.KubeletVersion)
-		if minorsBehind(server, kv) > maxBehind {
+		limit := legacyMaxBehind(maxBehind, kv)
+		if minorsBehind(newest, kv) > limit {
 			nowBad = append(nowBad, entry)
+			nowLegacy = nowLegacy || limit < maxBehind
 		}
-		if minorsBehind(target, kv) > maxBehind {
+		if minorsBehind(target, kv) > limit {
 			postBad = append(postBad, entry)
+			postLegacy = postLegacy || limit < maxBehind
+		}
+		if kv.Compare(oldest) > 0 {
+			newer = append(newer, entry)
 		}
 	}
 	sort.Strings(nowBad)
 	sort.Strings(postBad)
+	sort.Strings(newer)
 	var out []Finding
 	if len(postBad) > 0 {
 		out = append(out, Finding{
 			Category: CatVersionSkew, Severity: SevBlocker,
 			Key:       string(CatVersionSkew) + "/kubelet-post-upgrade",
 			Title:     fmt.Sprintf("%d node(s) would exceed kubelet version skew after upgrading to %s", len(postBad), target),
-			Detail:    fmt.Sprintf("After upgrading the control plane to %s these nodes would be more than %d minor versions behind: %s.", target, maxBehind, strings.Join(postBad, ", ")),
+			Detail:    fmt.Sprintf("After upgrading the control plane to %s these nodes would be more than %d minor versions behind: %s.", target, maxBehind, strings.Join(postBad, ", ")) + legacyNote("Kubelets", postLegacy),
 			Citations: []string{skewPolicyURL},
 		})
 	}
@@ -357,8 +374,17 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 		out = append(out, Finding{
 			Category: CatVersionSkew, Severity: SevWarning,
 			Key:       string(CatVersionSkew) + "/kubelet-current",
-			Title:     fmt.Sprintf("%d node(s) exceed kubelet version skew vs control plane %s", len(nowBad), server),
-			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, strings.Join(nowBad, ", ")),
+			Title:     fmt.Sprintf("%d node(s) exceed kubelet version skew vs control plane %s", len(nowBad), newest),
+			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, strings.Join(nowBad, ", ")) + legacyNote("Kubelets", nowLegacy),
+			Citations: []string{skewPolicyURL},
+		})
+	}
+	if len(newer) > 0 {
+		out = append(out, Finding{
+			Category: CatVersionSkew, Severity: SevWarning,
+			Key:       string(CatVersionSkew) + "/kubelet-newer-than-apiserver",
+			Title:     fmt.Sprintf("%d node(s) run a kubelet newer than kube-apiserver %s", len(newer), oldest),
+			Detail:    fmt.Sprintf("kubelet must not be newer than kube-apiserver; when kube-apiserver versions differ, the oldest one (%s) bounds the allowed kubelet versions. Newer nodes: %s.", oldest, strings.Join(newer, ", ")),
 			Citations: []string{skewPolicyURL},
 		})
 	}
@@ -373,6 +399,45 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 		})
 	}
 	return out
+}
+
+// apiserverVersions returns the distinct kube-apiserver minors observed,
+// ascending: the server version the collector was answered with, plus any
+// kube-apiserver pods (self-hosted HA control planes). Empty when neither
+// is available or parseable.
+func apiserverVersions(inv inventory.Inventory) []inventory.Version {
+	var vs []inventory.Version
+	add := func(raw string) {
+		if v, err := inventory.ParseVersion(raw); err == nil && !slices.Contains(vs, v) {
+			vs = append(vs, v)
+		}
+	}
+	add(inv.ServerVersion)
+	for _, cv := range inv.ControlPlane {
+		if cv.Component == "kube-apiserver" {
+			add(cv.Version)
+		}
+	}
+	slices.SortFunc(vs, inventory.Version.Compare)
+	return vs
+}
+
+// legacyMaxBehind narrows a kubelet / kube-proxy skew limit for components
+// older than 1.25, which the policy allows only 2 minors behind.
+func legacyMaxBehind(limit int, v inventory.Version) int {
+	if v.Major == 1 && v.Minor < 25 {
+		return min(limit, 2)
+	}
+	return limit
+}
+
+// legacyNote is appended to a skew detail when a pre-1.25 component's
+// narrower limit applied.
+func legacyNote(components string, applied bool) string {
+	if !applied {
+		return ""
+	}
+	return fmt.Sprintf(" %s older than 1.25 may be at most 2 minor versions behind.", components)
 }
 
 // minorsBehind flattens (major, minor) so cross-major comparisons stay sane.
@@ -390,13 +455,16 @@ func minorsBehind(ctrl, kubelet inventory.Version) int {
 //     apiserver → blocker (must never be newer than an apiserver they talk
 //     to); more than policy.CtrlMgrMaxBehind behind the NEWEST → warning.
 //   - kube-proxy: newer than the oldest apiserver, or more than
-//     policy.KubeProxyMaxBehind behind the newest → warning.
+//     policy.KubeProxyMaxBehind behind the newest → warning; more than
+//     KubeProxyMaxBehind behind target → blocker, since the control-plane
+//     upgrade would put it out of policy (mirrors the kubelet rule). A
+//     kube-proxy older than 1.25 may only be 2 minors behind.
 //
 // An empty ControlPlane (managed control planes — EKS/GKE/AKS run these
 // components outside the cluster) yields no findings. When apiserver pods
 // are not observed but other components are, inv.ServerVersion stands in
 // as the apiserver version.
-func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
+func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
 	if len(inv.ControlPlane) == 0 {
 		return nil
 	}
@@ -415,6 +483,26 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
 	}
 
 	var out []Finding
+	// Post-upgrade kube-proxy needs only the target, not today's apiservers.
+	var proxyPost []string
+	proxyLegacy := false
+	for _, v := range byComp["kube-proxy"] {
+		limit := legacyMaxBehind(k.Skew.KubeProxyMaxBehind, v)
+		if minorsBehind(target, v) > limit {
+			proxyPost = append(proxyPost, v.String())
+			proxyLegacy = proxyLegacy || limit < k.Skew.KubeProxyMaxBehind
+		}
+	}
+	if len(proxyPost) > 0 {
+		out = append(out, Finding{
+			Category: CatVersionSkew, Severity: SevBlocker,
+			Key:       string(CatVersionSkew) + "/kube-proxy-post-upgrade",
+			Title:     fmt.Sprintf("kube-proxy would exceed version skew after upgrading to %s", target),
+			Detail:    fmt.Sprintf("After upgrading the control plane to %s, kube-proxy %s would be more than %d minor versions behind kube-apiserver; upgrade kube-proxy first.", target, strings.Join(proxyPost, ", "), k.Skew.KubeProxyMaxBehind) + legacyNote("kube-proxy versions", proxyLegacy),
+			Citations: []string{skewPolicyURL},
+		})
+	}
+
 	api := byComp["kube-apiserver"]
 	if len(api) > 1 {
 		oldest, newest := api[0], api[len(api)-1]
@@ -444,20 +532,27 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
 	for _, rule := range []struct {
 		component   string
 		maxBehind   int
+		legacy      bool // pre-1.25 versions may only be 2 minors behind
 		newerSev    Severity
 		newerDetail string
 	}{
-		{"kube-controller-manager", k.Skew.CtrlMgrMaxBehind, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
-		{"kube-scheduler", k.Skew.CtrlMgrMaxBehind, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
-		{"kube-proxy", k.Skew.KubeProxyMaxBehind, SevWarning, "kube-proxy must not be newer than kube-apiserver"},
+		{"kube-controller-manager", k.Skew.CtrlMgrMaxBehind, false, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
+		{"kube-scheduler", k.Skew.CtrlMgrMaxBehind, false, SevBlocker, "control-plane components must not be newer than the apiservers they talk to"},
+		{"kube-proxy", k.Skew.KubeProxyMaxBehind, true, SevWarning, "kube-proxy must not be newer than kube-apiserver"},
 	} {
 		var newer, behind []string
+		behindLegacy := false
 		for _, v := range byComp[rule.component] {
+			limit := rule.maxBehind
+			if rule.legacy {
+				limit = legacyMaxBehind(limit, v)
+			}
 			switch {
 			case v.Compare(oldest) > 0:
 				newer = append(newer, v.String())
-			case minorsBehind(newest, v) > rule.maxBehind:
+			case minorsBehind(newest, v) > limit:
 				behind = append(behind, v.String())
+				behindLegacy = behindLegacy || limit < rule.maxBehind
 			}
 		}
 		if len(newer) > 0 {
@@ -474,7 +569,7 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB) []Finding {
 				Category: CatVersionSkew, Severity: SevWarning,
 				Key:       string(CatVersionSkew) + "/" + rule.component,
 				Title:     fmt.Sprintf("%s exceeds version skew vs kube-apiserver", rule.component),
-				Detail:    fmt.Sprintf("%s %s is more than %d minor version(s) behind the newest kube-apiserver (%s).", rule.component, strings.Join(behind, ", "), rule.maxBehind, newest),
+				Detail:    fmt.Sprintf("%s %s is more than %d minor version(s) behind the newest kube-apiserver (%s).", rule.component, strings.Join(behind, ", "), rule.maxBehind, newest) + legacyNote("kube-proxy versions", behindLegacy),
 				Citations: []string{skewPolicyURL},
 			})
 		}
@@ -566,7 +661,7 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalDeprecatedCalls(inv, target)...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
 	findings = append(findings, evalSkew(inv, k, target)...)
-	findings = append(findings, evalControlPlaneSkew(inv, k)...)
+	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)
 	findings = append(findings, evalKBStale(inv, k, target)...)
 	sortFindings(findings)
 	score, _ := Score(findings)
