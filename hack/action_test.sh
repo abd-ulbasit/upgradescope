@@ -267,6 +267,22 @@ has "a v0.1.x clean scan sets verdict=ready" "$rt/output" "verdict=ready"
 run scan "$work/old:" INPUT_PATH=action/testdata/clean STUB_REPORT='del(.verdict) | .ready = false'
 has "a v0.1.x not-ready report without blockers sets verdict=unknown" "$rt/output" "verdict=unknown"
 
+# A failing JSON or Markdown pass: its stderr goes into one ::warning, so a
+# later stderr line cannot be read as a workflow command.
+mkdir -p "$work/noisy"
+cat >"$work/noisy/upgradescope" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"--output sarif"*) "$work/real/upgradescope" "\$@" ;;
+  *) printf 'it broke\n::error::forged by stderr\n100%% sure\n' >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$work/noisy/upgradescope"
+run scan "$work/noisy:"
+expect "a failing JSON pass still gates" 2 "::warning::upgradescope --output json failed, so the outputs and annotations are not set: it broke%0A::error::forged by stderr%0A100%25 sure"
+expect "a failing Markdown pass warns" 2 "cannot write the step summary (it predates --output markdown, added after v0.1.1): it broke%0A"
+if grep -q '^::error::forged' "$work/out"; then fail "stderr cannot start a workflow command" "$work/out"; else ok "stderr cannot start a workflow command"; fi
+
 mkdir -p "$work/broken"
 printf '#!/bin/sh\necho "load knowledge base: boom" >&2\nexit 1\n' >"$work/broken/upgradescope"
 chmod +x "$work/broken/upgradescope"

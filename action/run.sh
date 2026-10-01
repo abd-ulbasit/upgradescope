@@ -135,6 +135,12 @@ annotations() {
   ' "$1"
 }
 
+# escaped <file>: the file as one workflow-command value (% and line breaks
+# escaped), so none of its lines can start a command of its own.
+escaped() {
+  awk '{ gsub(/%/, "%25"); gsub(/\r/, "%0D"); printf "%s%s", (NR > 1 ? "%0A" : ""), $0 }' "$1"
+}
+
 scan() {
   local sarif="$RUNNER_TEMP/upgradescope-results.sarif"
   local json="$RUNNER_TEMP/upgradescope-report.json"
@@ -169,13 +175,13 @@ scan() {
     ' "$json" >>"$GITHUB_OUTPUT"
     annotations "$json"
   else
-    echo "::warning::upgradescope --output json failed, so the outputs and annotations are not set: $(cat "$RUNNER_TEMP/upgradescope-json.err")"
+    echo "::warning::upgradescope --output json failed, so the outputs and annotations are not set: $(escaped "$RUNNER_TEMP/upgradescope-json.err")"
   fi
   if upgradescope scan "${args[@]}" --output markdown --fail-on never >"$md" 2>"$RUNNER_TEMP/upgradescope-md.err"; then
     cat "$md"
     cat "$md" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
   else
-    echo "::warning::this upgradescope cannot write the step summary (it predates --output markdown, added after v0.1.1): $(cat "$RUNNER_TEMP/upgradescope-md.err")"
+    echo "::warning::this upgradescope cannot write the step summary (it predates --output markdown, added after v0.1.1): $(escaped "$RUNNER_TEMP/upgradescope-md.err")"
   fi
   exit "$status"
 }
