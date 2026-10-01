@@ -17,7 +17,9 @@ const maxBlockerEvents = 5
 //   - Blocker findings added since prev (diff by stable finding key) → one
 //     new-blocker event each, capped at maxBlockerEvents, then a single
 //     "and N more".
-//   - Blocker count went >0 → 0 → one became-ready event.
+//   - Blocker count went >0 → 0 AND curr.Verdict is ready → one became-ready
+//     event. Zero blockers with verdict unknown (a required check was not
+//     assessed, e.g. a transient collector failure) is not readiness.
 //   - eol-approaching warnings added since prev (by key) → one event each.
 //
 // Identity is Finding.Key — deliberately count-free, so a title-only change
@@ -26,7 +28,7 @@ const maxBlockerEvents = 5
 // Duplicate keys within one report emit one event (first occurrence wins).
 //
 // Event.Cluster is filled with curr.ClusterID (the inventory UID); the
-// caller (notifyDelta) overwrites it with the human cluster name from the
+// caller (outboxFor) overwrites it with the human cluster name from the
 // push envelope before delivery. Order is deterministic: new-blockers in
 // report order, summary, became-ready, eol-approaching in report order.
 func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Event {
@@ -71,7 +73,7 @@ func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Event {
 		})
 	}
 
-	if len(prevBlockers) > 0 && currBlockerCount == 0 {
+	if len(prevBlockers) > 0 && currBlockerCount == 0 && curr.Verdict == engine.VerdictReady {
 		events = append(events, notify.Event{
 			Cluster: cluster, Target: target, Kind: notify.KindBecameReady,
 			Title:  fmt.Sprintf("ready for %s: all blockers resolved", target),
