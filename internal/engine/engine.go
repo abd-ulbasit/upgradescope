@@ -233,10 +233,14 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 		if ver == "" {
 			ver = "(unknown)"
 		}
+		via := inst.Source
+		if inst.ChartVersion != "" {
+			via += " " + inst.ChartVersion // chart version: evidence only
+		}
 		out = append(out, evalAddOn(a, addOnSubject{
 			version: inst.Version,
 			located: fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
-				a.DisplayName, ver, inst.Source, strings.Join(ns, ", ")),
+				a.DisplayName, ver, via, strings.Join(ns, ", ")),
 			namespaces: ns,
 			teams:      teamsFor(ns, inv.Namespaces),
 		}, target, now)...)

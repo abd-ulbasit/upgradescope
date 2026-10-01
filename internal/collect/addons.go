@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"regexp"
@@ -129,14 +130,25 @@ func versionLess(a, b string) bool {
 	return a < b
 }
 
+// olderVersion returns the older of two versions, ignoring "": the
+// conservative pick when several installs of one add-on disagree.
+func olderVersion(cur, v string) string {
+	if v != "" && (cur == "" || versionLess(v, cur)) {
+		return v
+	}
+	return cur
+}
+
 // matchAddOns is pure: images + helm releases + registry → detected
-// add-on instances (deduped by ID; chart evidence preferred) and the
-// deduped, sorted, capped list of unmatched image repos (registry gap
-// visibility — never findings, spec §9).
+// add-on instances (deduped by ID; the oldest app version wins, a Helm
+// release's appVersion over image tags) and the deduped, sorted, capped
+// list of unmatched image repos (registry gap visibility — never findings,
+// spec §9).
 func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []registry.AddOn) ([]inventory.AddOnInstance, []string) {
 	type evidence struct {
 		source  string // "image" | "chart"
-		version string
+		version string // app version
+		chart   string // chart version, chart evidence only
 		ns      string
 	}
 	byID := map[string][]evidence{}
@@ -167,7 +179,12 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 		for _, a := range addons {
 			for _, chart := range a.Matchers.Charts {
 				if rel.ChartName == chart {
-					byID[a.ID] = append(byID[a.ID], evidence{source: "chart", version: strings.TrimPrefix(rel.ChartVersion, "v"), ns: rel.Namespace})
+					byID[a.ID] = append(byID[a.ID], evidence{
+						source:  "chart",
+						version: versionFromTag(rel.AppVersion),
+						chart:   strings.TrimPrefix(rel.ChartVersion, "v"),
+						ns:      rel.Namespace,
+					})
 				}
 			}
 		}
@@ -177,15 +194,20 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 	for id, evs := range byID {
 		inst := inventory.AddOnInstance{ID: id, Source: "image"}
 		nsSet := map[string]bool{}
+		var imageVersion, appVersion string
 		for _, e := range evs {
 			nsSet[e.ns] = true
-			switch {
-			case e.source == "chart" && inst.Source != "chart":
-				inst.Source, inst.Version = "chart", e.version
-			case e.source == inst.Source && e.version != "" && (inst.Version == "" || versionLess(e.version, inst.Version)):
-				inst.Version = e.version
+			if e.source == "chart" {
+				inst.Source = "chart"
+				appVersion = olderVersion(appVersion, e.version)
+				inst.ChartVersion = olderVersion(inst.ChartVersion, e.chart)
+			} else {
+				imageVersion = olderVersion(imageVersion, e.version)
 			}
 		}
+		// A release's appVersion is authoritative; a chart without one
+		// falls back to the image tag, never to the chart version.
+		inst.Version = cmp.Or(appVersion, imageVersion)
 		for ns := range nsSet {
 			inst.Namespaces = append(inst.Namespaces, ns)
 		}

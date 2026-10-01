@@ -57,10 +57,30 @@ func TestMatchAddOns(t *testing.T) {
 			want:   []inventory.AddOnInstance{{ID: "cilium", Version: "", Namespaces: []string{"kube-system"}, Source: "image"}},
 		},
 		{
-			name:     "chart evidence wins over image for source and version, v-prefix stripped",
+			// The registry speaks app versions; the chart version is evidence only.
+			name:     "chart evidence: version is the release's appVersion, chart version kept, v-prefixes stripped",
 			images:   []nsImage{{"ingress-nginx", "registry.k8s.io/ingress-nginx/controller:v1.9.4"}},
-			releases: []inventory.HelmRelease{{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "v4.7.1", Status: "deployed"}},
-			want:     []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "4.7.1", Namespaces: []string{"ingress-nginx"}, Source: "chart"}},
+			releases: []inventory.HelmRelease{{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "v4.7.1", AppVersion: "v1.8.1", Status: "deployed"}},
+			want:     []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.8.1", ChartVersion: "4.7.1", Namespaces: []string{"ingress-nginx"}, Source: "chart"}},
+		},
+		{
+			name:     "chart without appVersion falls back to the image version, never the chart version",
+			images:   []nsImage{{"ingress-nginx", "registry.k8s.io/ingress-nginx/controller:v1.9.4"}},
+			releases: []inventory.HelmRelease{{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.8.3", Status: "deployed"}},
+			want:     []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.9.4", ChartVersion: "4.8.3", Namespaces: []string{"ingress-nginx"}, Source: "chart"}},
+		},
+		{
+			name:     "chart without appVersion and no image: version unknown",
+			releases: []inventory.HelmRelease{{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.8.3", Status: "deployed"}},
+			want:     []inventory.AddOnInstance{{ID: "ingress-nginx", ChartVersion: "4.8.3", Namespaces: []string{"ingress-nginx"}, Source: "chart"}},
+		},
+		{
+			name: "two releases: oldest app version and oldest chart version",
+			releases: []inventory.HelmRelease{
+				{Name: "a", Namespace: "a", ChartName: "ingress-nginx", ChartVersion: "4.10.0", AppVersion: "1.10.0"},
+				{Name: "b", Namespace: "b", ChartName: "ingress-nginx", ChartVersion: "4.9.1", AppVersion: "1.9.6"},
+			},
+			want: []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.9.6", ChartVersion: "4.9.1", Namespaces: []string{"a", "b"}, Source: "chart"}},
 		},
 		{
 			name: "oldest version wins semver-aware, not lexicographically",
@@ -235,12 +255,12 @@ func TestCollectAddOnsUsesPodImagesAndHelmReleases(t *testing.T) {
 		},
 	})
 	inv := inventory.Inventory{HelmReleases: []inventory.HelmRelease{
-		{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", Status: "deployed"},
+		{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", AppVersion: "1.8.1", Status: "deployed"},
 	}}
 	if err := collectAddOns(context.Background(), cs, testRegistry(), &inv); err != nil {
 		t.Fatal(err)
 	}
-	want := []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "4.7.1", Namespaces: []string{"ingress-nginx"}, Source: "chart"}}
+	want := []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.8.1", ChartVersion: "4.7.1", Namespaces: []string{"ingress-nginx"}, Source: "chart"}}
 	if !reflect.DeepEqual(inv.AddOns, want) {
 		t.Errorf("addons = %#v\nwant   %#v", inv.AddOns, want)
 	}

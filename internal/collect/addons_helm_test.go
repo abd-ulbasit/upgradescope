@@ -1,0 +1,79 @@
+package collect
+
+import (
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/registry"
+)
+
+// Helm installs are judged by the release's appVersion, end to end against
+// the embedded registry. The chart/app pairs are real entries of the
+// upstream chart indexes: kubernetes-sigs.github.io/external-dns (1.14.5 →
+// 0.14.2, 1.15.0 → 0.15.0) and argoproj.github.io/argo-helm (5.46.0 →
+// v2.8.3). Before, the chart version (1.x) was compared against compat
+// ranges written in app versions (0.10–0.17) and never matched.
+func TestHelmInstallsJudgedByAppVersion(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 99}}
+	now := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		images     []nsImage
+		release    inventory.HelmRelease
+		target     inventory.Version
+		wantID     string
+		wantVer    string
+		wantFinder string // a finding key the report must contain
+	}{
+		{
+			name:       "external-dns chart 1.14.5 / app 0.14.2 matches the 0.10–0.17 compat row",
+			release:    inventory.HelmRelease{Name: "external-dns", Namespace: "dns", ChartName: "external-dns", ChartVersion: "1.14.5", AppVersion: "0.14.2"},
+			target:     inventory.Version{Major: 1, Minor: 34},
+			wantID:     "external-dns",
+			wantVer:    "0.14.2",
+			wantFinder: "chart-incompat/external-dns",
+		},
+		{
+			name:       "external-dns chart 1.15.0 / app 0.15.0 plus image v0.15.0",
+			images:     []nsImage{{"dns", "registry.k8s.io/external-dns/external-dns:v0.15.0"}},
+			release:    inventory.HelmRelease{Name: "external-dns", Namespace: "dns", ChartName: "external-dns", ChartVersion: "1.15.0", AppVersion: "0.15.0"},
+			target:     inventory.Version{Major: 1, Minor: 34},
+			wantID:     "external-dns",
+			wantVer:    "0.15.0",
+			wantFinder: "chart-incompat/external-dns",
+		},
+		{
+			name:       "argo-cd chart 5.46.0 / app v2.8.3 maps to the 2.8 cycle, EOL since 2024-05-07",
+			release:    inventory.HelmRelease{Name: "argocd", Namespace: "argocd", ChartName: "argo-cd", ChartVersion: "5.46.0", AppVersion: "v2.8.3"},
+			target:     inventory.Version{Major: 1, Minor: 34},
+			wantID:     "argo-cd",
+			wantVer:    "2.8.3",
+			wantFinder: "eol-addon/argo-cd/2.8",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			detected, _ := matchAddOns(tc.images, []inventory.HelmRelease{tc.release}, addons)
+			if len(detected) != 1 || detected[0].ID != tc.wantID || detected[0].Version != tc.wantVer ||
+				detected[0].ChartVersion != tc.release.ChartVersion || detected[0].Source != "chart" {
+				t.Fatalf("detected %+v, want %s app %s chart %s", detected, tc.wantID, tc.wantVer, tc.release.ChartVersion)
+			}
+			rep := engine.Evaluate(inventory.Inventory{AddOns: detected}, k, tc.target, now)
+			var keys []string
+			for _, f := range rep.Findings {
+				keys = append(keys, f.Key)
+			}
+			if !slices.Contains(keys, tc.wantFinder) {
+				t.Fatalf("findings %v missing %s", keys, tc.wantFinder)
+			}
+		})
+	}
+}

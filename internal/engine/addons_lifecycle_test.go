@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,6 +157,21 @@ func TestEvalAddOnsNoDataDetail(t *testing.T) {
 	want = "Detected Istio version 1.4.2 via image in namespace(s): istio-system. The registry has no release-line data for this version, so its end of life was not assessed."
 	if len(fs) != 1 || fs[0].Detail != want {
 		t.Fatalf("got %+v, want detail %q", fs, want)
+	}
+}
+
+// A Helm install is judged by its app version; the chart version is shown
+// as evidence.
+func TestEvalAddOnsHelmEvidence(t *testing.T) {
+	inv := inventory.Inventory{AddOns: []inventory.AddOnInstance{{
+		ID: "external-dns", Version: "0.14.2", ChartVersion: "1.14.5", Namespaces: []string{"dns"}, Source: "chart",
+	}}}
+	fs := evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+	if len(fs) == 0 || fs[0].Category != CatChartIncompat {
+		t.Fatalf("want chart-incompat first, got %+v", fs)
+	}
+	if want := "Detected ExternalDNS version 0.14.2 via chart 1.14.5 in namespace(s): dns."; !strings.HasPrefix(fs[1].Detail, want) {
+		t.Errorf("detail = %q, want prefix %q", fs[1].Detail, want)
 	}
 }
 
