@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
@@ -208,5 +210,20 @@ func TestOutboxFansOutPerSink(t *testing.T) {
 	s.deliverOutbox(context.Background())
 	if len(ok.all()) != 1 || len(flaky.all()) != 1 {
 		t.Fatalf("deliveries: healthy sink %d, flaky sink %d — want 1 each", len(ok.all()), len(flaky.all()))
+	}
+}
+
+// TestOutboxErrorIsStorable: a notifier error is stored as the message's
+// last_error, and Postgres TEXT rejects NUL bytes and invalid UTF-8; a
+// rejected reschedule would leave the retry to the lease. The stored text
+// is valid UTF-8, NUL-free and bounded.
+func TestOutboxErrorIsStorable(t *testing.T) {
+	got := outboxError(errors.New("webhook said: a\x00b\xffc " + strings.Repeat("é", 2000)))
+	if strings.ContainsRune(got, 0) || !utf8.ValidString(got) || len(got) > outboxMaxErrorLen {
+		t.Errorf("outboxError = %d bytes, NUL %v, valid UTF-8 %v; want ≤ %d, no NUL, valid",
+			len(got), strings.ContainsRune(got, 0), utf8.ValidString(got), outboxMaxErrorLen)
+	}
+	if !strings.HasPrefix(got, "webhook said: ab") {
+		t.Errorf("outboxError = %.40q…, want the message kept", got)
 	}
 }

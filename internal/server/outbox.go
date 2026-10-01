@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
@@ -25,7 +26,19 @@ const (
 	outboxMaxBackoff  = time.Hour
 	outboxPoll        = 30 * time.Second // retry pickup when nothing kicks the worker
 	notifyTimeout     = 30 * time.Second // per delivery, over the notifier's own timeout
+	outboxMaxErrorLen = 1024             // bytes of the last delivery error kept
 )
+
+// outboxError is err as stored in last_error: NUL bytes and invalid UTF-8
+// (which Postgres TEXT rejects, failing the reschedule) dropped, and
+// bounded, since a notifier error may quote a response body.
+func outboxError(err error) string {
+	s := strings.ToValidUTF8(strings.ReplaceAll(err.Error(), "\x00", ""), "")
+	if len(s) > outboxMaxErrorLen {
+		s = strings.ToValidUTF8(s[:outboxMaxErrorLen], "") // drops a cut rune
+	}
+	return s
+}
 
 // outboxBackoff is the delay after the attempts-th failed attempt:
 // 30s, 1m, 2m, … capped at an hour.
@@ -136,7 +149,7 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 	next := s.now().Add(outboxBackoff(m.Attempts))
 	log.Printf("server: notification failed (cluster %s, target %s, kind %s, sink %s, attempt %d), retrying at %s: %v",
 		ev.Cluster, ev.Target, ev.Kind, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), err)
-	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, err.Error()))
+	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, outboxError(err)))
 }
 
 // runOutbox is the delivery worker: it drains the outbox when kicked after
