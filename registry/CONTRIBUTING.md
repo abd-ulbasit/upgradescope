@@ -15,7 +15,10 @@ traceable to an upstream or public source — that is the whole point.
     `support.eol_date` within 90 days → **warning**. These product-level
     fields are for products retired as a whole (ingress-nginx).
   - otherwise the version is mapped to its release line in `cycles`: a line
-    that has ended → **blocker**, one ending within 90 days → **warning**;
+    that has ended → **blocker**, one ending within 90 days → **warning**.
+    A node runtime's ended line is only a **warning** naming the nodes: the
+    runtime comes with the node image, not the Kubernetes version. Put the
+    Kubernetes release that drops it in a `compat` row (see `containerd.yaml`);
   - a target Kubernetes version outside the line's `k8s_min`/`k8s_max`, or
     outside the bounds of the first `compat` row whose range matches the
     version → **blocker** (`chart-incompat`);

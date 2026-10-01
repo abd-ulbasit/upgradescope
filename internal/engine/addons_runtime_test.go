@@ -41,26 +41,30 @@ func nodes(runtimes ...string) inventory.Inventory {
 	return inv
 }
 
+// The runtime ships with the node image or OS, which a node upgrade or a
+// node-pool image bump replaces, so an ended containerd release line is a
+// warning that names the nodes. Only the kubelet's own end of 1.x support
+// (the compat row, k8s_max 1.37) blocks, at target 1.38.
 func TestEvalAddOnsNodeRuntimes(t *testing.T) {
 	now := day("2026-10-02")
-	v136, v138 := inventory.Version{Major: 1, Minor: 36}, inventory.Version{Major: 1, Minor: 38}
+	v136, v137, v138 := inventory.Version{Major: 1, Minor: 36}, inventory.Version{Major: 1, Minor: 37}, inventory.Version{Major: 1, Minor: 38}
+	ended := "warning eol-addon eol-addon/containerd/1.7 containerd 1.7 is end-of-life since 2026-09-01"
 	cases := []struct {
 		name   string
 		inv    inventory.Inventory
 		target inventory.Version
 		want   []string
 	}{
-		{"containerd 1.7 ended on 2026-09-01", nodes("containerd://1.7.27"), v136,
-			[]string{"blocker eol-addon eol-addon/containerd/1.7 containerd 1.7 is end-of-life since 2026-09-01"}},
+		{"containerd 1.7 ended on 2026-09-01, target 1.36", nodes("containerd://1.7.27"), v136, []string{ended}},
+		{"containerd 1.7 ended on 2026-09-01, target 1.37", nodes("containerd://1.7.27"), v137, []string{ended}},
 		{"containerd 1.x at the kubelet's removal release", nodes("containerd://1.7.27"), v138, []string{
-			"blocker eol-addon eol-addon/containerd/1.7 containerd 1.7 is end-of-life since 2026-09-01",
+			ended,
 			"blocker chart-incompat chart-incompat/containerd/1.7 containerd 1.7.27 supports Kubernetes up to 1.37 (target 1.38)",
 		}},
 		{"containerd 2.0 is fine", nodes("containerd://2.0.5"), v138, nil},
 		{"one finding per release line, oldest version, every node named", nodes("containerd://1.7.27", "containerd://2.3.1", "containerd://1.7.20"), v136,
-			[]string{"blocker eol-addon eol-addon/containerd/1.7 containerd 1.7 is end-of-life since 2026-09-01"}},
-		{"distro suffix and v prefix", nodes("containerd://v1.7.23-k3s2"), v136,
-			[]string{"blocker eol-addon eol-addon/containerd/1.7 containerd 1.7 is end-of-life since 2026-09-01"}},
+			[]string{ended}},
+		{"distro suffix and v prefix", nodes("containerd://v1.7.23-k3s2"), v136, []string{ended}},
 		{"version without a cycle", nodes("containerd://1.4.0"), v136,
 			[]string{"info addon-no-data addon-no-data/containerd no lifecycle data for containerd 1.4.0"}},
 		{"other runtimes and unset fields are not containerd", nodes("cri-o://1.30.4", "docker://24.0.7", "", "containerd"), v136, nil},
@@ -74,13 +78,33 @@ func TestEvalAddOnsNodeRuntimes(t *testing.T) {
 	}
 }
 
+// End to end: a cluster whose only problem is containerd 1.7 nodes is ready
+// for 1.36 and 1.37 and blocked for 1.38.
+func TestEvaluateNodeRuntimeVerdict(t *testing.T) {
+	inv := nodes("containerd://1.7.27")
+	inv.ServerVersion = "v1.35.2"
+	inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
+		inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true},
+	}
+	for target, want := range map[string]Verdict{"1.36": VerdictReady, "1.37": VerdictReady, "1.38": VerdictBlocked} {
+		v, err := inventory.ParseVersion(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := Evaluate(inv, runtimeKB("1.37"), v, day("2026-10-02")); r.Verdict != want {
+			t.Errorf("target %s: verdict %s, want %s; findings %q", target, r.Verdict, want, summarize(r.Findings))
+		}
+	}
+}
+
 func TestEvalAddOnsNodeRuntimeDetail(t *testing.T) {
 	inv := nodes("containerd://1.7.27", "containerd://2.3.1", "containerd://1.7.20")
 	fs := evalAddOns(inv, runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 36}, day("2026-10-02"))
 	if len(fs) != 1 {
 		t.Fatalf("want one finding, got %+v", fs)
 	}
-	want := "Detected containerd version 1.7.20 on node(s): worker-1, worker-3. Upstream support for the 1.7 release line ended on 2026-09-01."
+	want := "Detected containerd version 1.7.20 on node(s): worker-1, worker-3. Upstream support for the 1.7 release line ended on 2026-09-01." +
+		" The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself."
 	if fs[0].Detail != want {
 		t.Errorf("detail = %q, want %q", fs[0].Detail, want)
 	}

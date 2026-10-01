@@ -293,6 +293,7 @@ func evalNodeRuntimes(inv inventory.Inventory, addons []registry.AddOn, target i
 			out = append(out, evalAddOn(a, addOnSubject{
 				version: g.version,
 				located: fmt.Sprintf("Detected %s version %s on node(s): %s.", a.DisplayName, ver, strings.Join(g.nodes, ", ")),
+				node:    true,
 			}, target, now)...)
 		}
 	}
@@ -316,6 +317,11 @@ type addOnSubject struct {
 	located    string   // evidence sentence that opens every finding's detail
 	namespaces []string // sorted
 	teams      []string
+	// node marks a node container runtime. It ships with the node image or
+	// OS, which a node upgrade or node-pool image bump replaces, so an
+	// ended release line is a warning; only a compat row (the kubelet
+	// dropping support) blocks.
+	node bool
 }
 
 // evalAddOn judges one detected add-on:
@@ -324,8 +330,9 @@ type addOnSubject struct {
 //     ingress-nginx: status "eol" or eol_date ≤ now → blocker, eol-addon;
 //     eol_date in (now, now+90d] → warning, eol-approaching.
 //   - release line (cycles), unless the product carries a date or EOL
-//     status: the installed version's cycle has ended → blocker, eol-addon;
-//     it ends in (now, now+90d] → warning, eol-approaching.
+//     status: the installed version's cycle has ended → blocker, eol-addon
+//     (warning for a node runtime); it ends in (now, now+90d] → warning,
+//     eol-approaching.
 //   - target outside the cycle's [k8s_min, k8s_max], or else outside the
 //     bounds of the first compat row whose range matches the version
 //     → blocker, chart-incompat.
@@ -386,6 +393,10 @@ func evalAddOn(a registry.AddOn, s addOnSubject, target inventory.Version, now t
 		if f, ok := cycleEOL(a, cycle, s, now, window); ok {
 			f.Key = key(f.Category)
 			f.Teams, f.Namespaces = s.teams, s.namespaces
+			if s.node && f.Severity == SevBlocker {
+				f.Severity = SevWarning
+				f.Detail += " The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself."
+			}
 			out = append(out, f)
 		}
 	}
