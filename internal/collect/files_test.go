@@ -133,6 +133,37 @@ func TestCollectFilesSkipsNonManifests(t *testing.T) {
 	}
 }
 
+// An unrendered chart template can be valid YAML (`name: {{ include ... }}`
+// parses as a flow mapping), but an object whose name or namespace is not a
+// string is not a Kubernetes object: it is warned about like any other
+// unparseable document, not counted next to its rendered copy.
+func TestCollectFilesUnrenderedTemplateDoc(t *testing.T) {
+	dir := writeTree(t, map[string]string{"chart/templates/pdb.yaml": `apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "chart.fullname" . }}
+---
+apiVersion: v1
+kind: List
+items:
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: ok
+    namespace: {{ .Release.Namespace }}
+`})
+	inv, sum, err := CollectFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.APIUsage) != 0 || sum.Objects != 0 || sum.Skipped != 1 {
+		t.Errorf("api usage = %+v, summary %+v; want nothing counted", inv.APIUsage, sum)
+	}
+	if len(sum.Warnings) != 2 || sum.Warnings[0].Line != 1 || sum.Warnings[1].Line != 6 {
+		t.Errorf("warnings = %+v, want one per document (lines 1 and 6)", sum.Warnings)
+	}
+}
+
 // A file named explicitly is parsed whatever its extension
 // (`kustomize build overlays/prod > rendered`).
 func TestCollectFilesSingleFileAnyExtension(t *testing.T) {

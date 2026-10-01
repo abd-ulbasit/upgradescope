@@ -69,7 +69,12 @@ func parseManifestStream(r io.Reader) (objs []manifestObject, bad []docError, er
 		if n.Kind != yaml.DocumentNode || len(n.Content) == 0 {
 			return // comment-only document
 		}
-		objs = appendObjects(objs, n.Content[0], docStart-1, helmSource(doc.Bytes()))
+		docObjs, oerr := appendObjects(nil, n.Content[0], docStart-1, helmSource(doc.Bytes()))
+		if oerr != nil {
+			bad = append(bad, docError{line: docStart, err: oerr})
+			return
+		}
+		objs = append(objs, docObjs...)
 	}
 	for {
 		line, rerr := br.ReadBytes('\n')
@@ -106,22 +111,30 @@ func parseManifestStream(r io.Reader) (objs []manifestObject, bad []docError, er
 // aliased items would let a few lines of nested anchors (`items: [*a, *a]`
 // per level) describe billions of objects, and an aliased item has no line
 // of its own anyway. Scalar fields may still be aliases.
-func appendObjects(objs []manifestObject, n *yaml.Node, lineOffset int, renderedFrom string) []manifestObject {
+//
+// An object whose metadata.name or metadata.namespace is not a string is
+// an error: it is not a valid Kubernetes object, and in practice it is an
+// unrendered chart template (`name: {{ include ... }}` parses as a flow
+// mapping) that must not be counted next to its rendered copy.
+func appendObjects(objs []manifestObject, n *yaml.Node, lineOffset int, renderedFrom string) ([]manifestObject, error) {
 	if n.Kind != yaml.MappingNode {
-		return objs
+		return objs, nil
 	}
 	apiVersionKey, apiVersion := field(n, "apiVersion")
 	_, kind := field(n, "kind")
 	av, k := scalar(apiVersion), scalar(kind)
 	if av == "" || k == "" {
-		return objs
+		return objs, nil
 	}
 	if _, items := field(n, "items"); items != nil {
 		if items.Kind == yaml.SequenceNode && (k == "List" || strings.HasSuffix(k, "List") && allTyped(items)) {
 			for _, item := range items.Content {
-				objs = appendObjects(objs, item, lineOffset, renderedFrom)
+				var err error
+				if objs, err = appendObjects(objs, item, lineOffset, renderedFrom); err != nil {
+					return objs, err
+				}
 			}
-			return objs
+			return objs, nil
 		}
 	}
 	group, version := "", av
@@ -130,11 +143,18 @@ func appendObjects(objs []manifestObject, n *yaml.Node, lineOffset int, rendered
 	}
 	ref := inventory.ObjectRef{Line: apiVersionKey.Line + lineOffset, RenderedFrom: renderedFrom}
 	if _, meta := field(n, "metadata"); meta != nil && deref(meta).Kind == yaml.MappingNode {
-		_, name := field(deref(meta), "name")
-		_, ns := field(deref(meta), "namespace")
-		ref.Name, ref.Namespace = scalar(name), scalar(ns)
+		for _, f := range []struct {
+			key string
+			dst *string
+		}{{"name", &ref.Name}, {"namespace", &ref.Namespace}} {
+			_, v := field(deref(meta), f.key)
+			if v != nil && deref(v).Kind != yaml.ScalarNode {
+				return objs, fmt.Errorf("%s %s: metadata.%s is not a string (unrendered template?)", av, k, f.key)
+			}
+			*f.dst = scalar(v)
+		}
 	}
-	return append(objs, manifestObject{group: group, version: version, kind: k, ref: ref})
+	return append(objs, manifestObject{group: group, version: version, kind: k, ref: ref}), nil
 }
 
 // allTyped reports whether every item of a sequence is a mapping with its
