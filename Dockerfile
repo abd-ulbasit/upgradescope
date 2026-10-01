@@ -19,7 +19,7 @@ RUN npm run build
 
 # go.mod requires go1.26.8 and the official image sets GOTOOLCHAIN=local, so
 # the builder must be at least that patch.
-FROM golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS build
+FROM golang:1.27.0@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
