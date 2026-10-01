@@ -17,7 +17,6 @@
 // whole product was retired (ingress-nginx), which a human records. When
 // every cycle has ended, eol-sync says so in its output for that review.
 //
-
 // Usage:
 //
 //	go run . -dir ../../registry/data          # rewrite files in place

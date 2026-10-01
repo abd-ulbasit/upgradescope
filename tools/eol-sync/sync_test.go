@@ -139,6 +139,34 @@ func TestRewriteCycles(t *testing.T) {
 			in:   sampleEntry + "cycles:\n  - {cycle: \"1.0\", eol: true, citations: [\"https://e.x/\"]}\ncompat:\n  - range: \"<1.0.0\"\n",
 			want: sampleEntry + sampleBlock + "compat:\n  - range: \"<1.0.0\"\n",
 		},
+		{
+			name: "empty flow block is replaced",
+			in:   sampleEntry + "cycles: []\n",
+			want: sampleEntry + sampleBlock,
+		},
+		{
+			name: "block key with a trailing comment is replaced",
+			in:   sampleEntry + "cycles:  # synced\n  - {cycle: \"1.0\", eol: true, citations: [\"https://e.x/\"]}\n",
+			want: sampleEntry + sampleBlock,
+		},
+		{
+			name: "CRLF block is replaced",
+			in:   sampleEntry + "cycles:\r\n  - {cycle: \"1.0\", eol: true, citations: [\"https://e.x/\"]}\r\ncompat:\r\n",
+			want: sampleEntry + sampleBlock + "compat:\r\n",
+		},
+		{
+			// Blank lines and column-0 comments belong to the block when
+			// more cycles follow them, and to the next key otherwise.
+			name: "blank lines and comments around the block",
+			in: sampleEntry + "cycles:\n  - {cycle: \"1.1\", eol: true, citations: [\"https://e.x/\"]}\n\n# old\n" +
+				"  - {cycle: \"1.0\", eol: true, citations: [\"https://e.x/\"]}\n\n# hand-curated\ncompat:\n",
+			want: sampleEntry + sampleBlock + "\n# hand-curated\ncompat:\n",
+		},
+		{
+			name: "a key that only starts with cycles is not the block",
+			in:   sampleEntry + "cycles_note: x\n",
+			want: sampleEntry + "cycles_note: x\n" + sampleBlock,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

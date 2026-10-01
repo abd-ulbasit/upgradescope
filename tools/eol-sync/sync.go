@@ -121,25 +121,36 @@ func renderCycles(rows []cycleRow, citation string) []byte {
 
 // rewriteCycles returns raw with its top-level cycles block replaced by
 // block, or block appended when there is none. The block runs from the
-// "cycles:" line to the next top-level line; every other byte is preserved.
+// "cycles:" key (whatever follows it on the line: "[]", a comment) to the
+// next top-level key; blank lines and column-0 comments just before that key
+// stay with it. Every other byte is preserved, CRLF line endings included.
 func rewriteCycles(raw, block []byte) []byte {
 	lines := bytes.SplitAfter(raw, []byte("\n"))
-	var out [][]byte
+	var out, held [][]byte // held: blank/comment lines whose owner is not yet known
 	inBlock, replaced := false, false
 	for _, line := range lines {
-		trimmed := bytes.TrimRight(line, "\n")
-		switch {
-		case bytes.Equal(trimmed, []byte("cycles:")):
+		trimmed := bytes.TrimRight(line, "\r\n")
+		if rest, ok := bytes.CutPrefix(trimmed, []byte("cycles:")); ok && (len(rest) == 0 || rest[0] == ' ' || rest[0] == '\t') {
 			inBlock, replaced = true, true
 			out = append(out, block)
 			continue
-		case inBlock && len(trimmed) > 0 && trimmed[0] != ' ' && trimmed[0] != '\t':
+		}
+		if inBlock {
+			switch {
+			case len(bytes.TrimSpace(trimmed)) == 0 || trimmed[0] == '#':
+				held = append(held, line)
+				continue
+			case trimmed[0] == ' ' || trimmed[0] == '\t':
+				held = nil // more of the block: what was held belonged to it
+				continue
+			}
 			inBlock = false // next top-level key
+			out = append(out, held...)
+			held = nil
 		}
-		if !inBlock {
-			out = append(out, line)
-		}
+		out = append(out, line)
 	}
+	out = append(out, held...)
 	if !replaced {
 		if len(raw) > 0 && raw[len(raw)-1] != '\n' {
 			out = append(out, []byte("\n"))
