@@ -148,6 +148,11 @@ release:
   # verifies the published image and chart afterwards.
   draft: false
   prerelease: auto
+  # Re-running a release that failed half-way (same tag, same commit)
+  # overwrites the assets it already uploaded instead of failing on them.
+  # checksums.txt and its signature are replaced in the same run, so they
+  # always match the archives on the release.
+  replace_existing_artifacts: true
   footer: |
     ## Install
 

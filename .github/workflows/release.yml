@@ -36,7 +36,9 @@ env:
   IMAGE: ghcr.io/abd-ulbasit/upgradescope
   CHART_REPO: oci://ghcr.io/abd-ulbasit/charts
   # Publish only from a v* tag: on tag push, or a dispatch on a tag with
-  # snapshot=false (re-running a failed release). Anything else is a dry run.
+  # snapshot=false (re-running a failed release: assets already on the
+  # release are replaced, see .goreleaser.yml, and image/chart tags are
+  # re-pushed from the same commit). Anything else is a dry run.
   PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || !inputs.snapshot) }}
   HELM_VERSION: v4.3.0
 
