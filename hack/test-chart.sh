@@ -285,7 +285,8 @@ agent:
   affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: agent-aff, operator: Exists}]}]}}}
   priorityClassName: agent-priority
   podAnnotations: {agent-ann: "1"}
-  podLabels: {agent-label: "1"}
+  # A reserved selector key is dropped, not rendered as a duplicate key.
+  podLabels: {agent-label: "1", app.kubernetes.io/component: hijack}
   extraArgs: ["--force-sync-every=2h"]
   # Private CA for pushes: Go adds every PEM file in SSL_CERT_DIR to the
   # system roots it already loads from the image's CA bundle file.
@@ -302,6 +303,7 @@ for c in srv agent; do
   assert_contains "$TMP/knobs.yaml" "$c-ann: \"1\""         "$c podAnnotations"
   assert_contains "$TMP/knobs.yaml" "$c-label: \"1\""       "$c podLabels"
 done
+assert_not_contains "$TMP/knobs.yaml" 'hijack' "podLabels cannot override the selector labels"
 assert_contains "$TMP/knobs.yaml" 'key: dedicated'    "server tolerations"
 assert_contains "$TMP/knobs.yaml" 'key: agent-taint'  "agent tolerations"
 assert_contains "$TMP/knobs.yaml" '- "--team-map=/etc/upgradescope/teams.yaml"' "server extraArgs"

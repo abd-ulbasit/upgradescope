@@ -15,7 +15,8 @@ spec:
   template:
     metadata:
       labels:
-        {{- with .Values.agent.podLabels }}
+        {{- /* the selector labels below win: a duplicate key would be invalid YAML */}}
+        {{- with omit .Values.agent.podLabels "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component" }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
