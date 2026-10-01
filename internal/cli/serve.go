@@ -35,6 +35,8 @@ type serveOptions struct {
 	maxSnapshotBytes   int64
 	maxGateBytes       int64
 	allowAnonymousRead bool
+	tlsCertFile        string
+	tlsKeyFile         string
 
 	// parsedTargets is opts.targets parsed once by validateServeOptions;
 	// runServe consumes it instead of re-parsing the raw CSV.
@@ -85,6 +87,8 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 
 		MaxSnapshotBytes: opts.maxSnapshotBytes,
 		MaxGateBytes:     opts.maxGateBytes,
+		TLSCertFile:      opts.tlsCertFile,
+		TLSKeyFile:       opts.tlsKeyFile,
 	})
 	if err != nil {
 		return err
@@ -166,6 +170,9 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression)")
 	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes")
+	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert-file", "", "PEM certificate (chain) to serve HTTPS directly; requires --tls-key-file (read at startup)")
+	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key-file", "", "PEM private key for --tls-cert-file")
+	cmd.MarkFlagsRequiredTogether("tls-cert-file", "tls-key-file")
 	return cmd
 }
 

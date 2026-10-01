@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -50,6 +51,11 @@ type Config struct {
 
 	MaxSnapshotBytes int64 // POST /api/v1/snapshots body cap; 0 = DefaultMaxSnapshotBytes
 	MaxGateBytes     int64 // POST /api/v1/gate body cap; 0 = DefaultMaxGateBytes
+
+	// TLSCertFile/TLSKeyFile (PEM) make Start serve HTTPS; both or neither.
+	// Loaded once in New, so a rotated certificate needs a restart.
+	TLSCertFile string
+	TLSKeyFile  string
 }
 
 // /gate concurrency. Each evaluation decodes its manifests in memory: the
@@ -121,6 +127,20 @@ func New(cfg Config) (*Server, error) {
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
+	}
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return nil, errors.New("server: Config.TLSCertFile and Config.TLSKeyFile must be set together")
+	}
+	if cfg.TLSCertFile != "" {
+		// Load now so a bad pair fails New, not the first handshake.
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("server: load TLS key pair: %w", err)
+		}
+		s.httpSrv.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
 	}
 	return s, nil
 }
@@ -196,7 +216,12 @@ func (s *Server) Start() error {
 	s.mu.Unlock()
 	s.logStartup()
 	close(s.ready)
-	if err := s.httpSrv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+	if s.httpSrv.TLSConfig != nil {
+		err = s.httpSrv.ServeTLS(ln, "", "") // certificate already in TLSConfig
+	} else {
+		err = s.httpSrv.Serve(ln)
+	}
+	if !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
@@ -206,7 +231,11 @@ func (s *Server) Start() error {
 // operator should know they are running: a silent start used to hide that
 // every read endpoint was open.
 func (s *Server) logStartup() {
-	log.Printf("server: listening on http://%s", s.Addr())
+	scheme := "http"
+	if s.httpSrv.TLSConfig != nil {
+		scheme = "https"
+	}
+	log.Printf("server: listening on %s://%s", scheme, s.Addr())
 	if s.cfg.ReadToken == "" {
 		log.Printf("WARN server: no read token: the read API, dashboard data and /api/v1/gate are open to anyone who can reach %s", s.Addr())
 	}

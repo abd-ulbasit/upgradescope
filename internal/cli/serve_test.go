@@ -231,6 +231,27 @@ func TestServeSecretsFromEnvAndFiles(t *testing.T) {
 	}
 }
 
+func TestServeTLSFlags(t *testing.T) {
+	var got serveOptions
+	err := execServe(t, []string{"--tls-cert-file", "tls.crt", "--tls-key-file", "tls.key"},
+		func(_ context.Context, opts serveOptions) error {
+			got = opts
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.tlsCertFile != "tls.crt" || got.tlsKeyFile != "tls.key" {
+		t.Fatalf("tls files = %q/%q, want tls.crt/tls.key", got.tlsCertFile, got.tlsKeyFile)
+	}
+	for _, flag := range []string{"--tls-cert-file", "--tls-key-file"} {
+		err := execServe(t, []string{flag, "x"}, serveOK())
+		if err == nil || !strings.Contains(err.Error(), "tls-cert-file") || !strings.Contains(err.Error(), "tls-key-file") {
+			t.Errorf("%s alone: want an error naming both TLS flags, got %v", flag, err)
+		}
+	}
+}
+
 func TestServeBodyLimitFlags(t *testing.T) {
 	var got serveOptions
 	err := execServe(t, []string{"--ingest-token", "t", "--max-snapshot-bytes", "1048576", "--max-gate-bytes", "4096"},

@@ -4,15 +4,24 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"maps"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -299,6 +308,99 @@ func TestStartWarnsSharedTokenAlongsidePerClusterTokens(t *testing.T) {
 				t.Fatalf("WARN %q logged = %v, want %v; log:\n%s", warn, got, tc.wantWarn, out)
 			}
 		})
+	}
+}
+
+// writeSelfSignedCert writes a throwaway ECDSA certificate for 127.0.0.1
+// and its key as PEM files, returning their paths and the certificate.
+func writeSelfSignedCert(t *testing.T) (certFile, keyFile string, cert *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "upgradescope-test"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert, err = x509.ParseCertificate(der); err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certFile, keyFile = filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certFile, keyFile, cert
+}
+
+// With a certificate and key the server speaks HTTPS directly — agents in
+// other clusters need no TLS-terminating proxy to keep tokens off the wire.
+func TestServeTLS(t *testing.T) {
+	certFile, keyFile, cert := writeSelfSignedCert(t)
+	out := captureLog(t)
+	s := newTestServer(t, newFakeStore(), func(c *Config) {
+		c.Listen = "127.0.0.1:0"
+		c.TLSCertFile = certFile
+		c.TLSKeyFile = keyFile
+	})
+	startServer(t, s)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+	resp, err := client.Get("https://" + s.Addr() + "/healthz")
+	if err != nil {
+		t.Fatalf("GET https /healthz: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.TLS == nil {
+		t.Fatalf("status = %d, TLS = %v; want 200 over TLS", resp.StatusCode, resp.TLS != nil)
+	}
+	if !strings.Contains(out.String(), "listening on https://"+s.Addr()) {
+		t.Errorf("log %q lacks the https listening line", out)
+	}
+
+	// Plain HTTP to the TLS port is refused, not served.
+	if resp, err := http.Get("http://" + s.Addr() + "/healthz"); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Fatal("plain HTTP request to the TLS listener got 200")
+		}
+	}
+}
+
+func TestNewTLSValidation(t *testing.T) {
+	certFile, keyFile, _ := writeSelfSignedCert(t)
+	for name, mod := range map[string]func(*Config){
+		"cert without key": func(c *Config) { c.TLSCertFile = certFile },
+		"key without cert": func(c *Config) { c.TLSKeyFile = keyFile },
+		"missing files": func(c *Config) {
+			c.TLSCertFile, c.TLSKeyFile = filepath.Join(t.TempDir(), "nope.crt"), keyFile
+		},
+		"key does not match": func(c *Config) { c.TLSCertFile, c.TLSKeyFile = certFile, certFile },
+	} {
+		cfg := Config{Store: newFakeStore(), KB: testKB()}
+		mod(&cfg)
+		if _, err := New(cfg); err == nil {
+			t.Errorf("%s: New succeeded, want error", name)
+		}
 	}
 }
 
