@@ -54,7 +54,7 @@ helm template upgradescope "$CHART" --namespace upgradescope \
   --set agent.serverUrl=https://uscope.example.com \
   --set agent.existingSecret=my-secret > "$TMP/external.yaml"
 
-echo "== targets render (ClusterReadiness CR created by chart)"
+echo "== targets render (passed to the agent; the chart never renders the CR)"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set 'agent.targets={1.37,1.38}' > "$TMP/targets.yaml"
 
@@ -113,7 +113,8 @@ assert_contains "$TMP/default.yaml" '--cr-name=cluster' "default cr-name flag"
 assert_contains "$TMP/default.yaml" '--team-label=team' "default team-label flag"
 assert_not_contains "$TMP/default.yaml" '--server-url' "CRD-only mode: no server-url flag"
 assert_no_line "$TMP/default.yaml" 'kind: Secret'           "no token Secret in CRD-only mode"
-assert_no_line "$TMP/default.yaml" 'kind: ClusterReadiness' "no CR without agent.targets"
+assert_no_line "$TMP/default.yaml" 'kind: ClusterReadiness' "chart never renders the CR (agent owns it)"
+assert_not_contains "$TMP/default.yaml" '--targets' "no --targets flag by default (spec.targets left to the CR)"
 
 echo "== image.tag override (side-loaded dev image, as in agent-e2e)"
 helm template upgradescope "$CHART" --namespace upgradescope \
@@ -128,8 +129,21 @@ assert_contains "$TMP/external.yaml" 'name: my-secret' "existingSecret reference
 assert_no_line "$TMP/external.yaml" 'kind: Secret' "no generated Secret when existingSecret set"
 
 echo "== agent assertions: targets render"
-assert_line "$TMP/targets.yaml" 'kind: ClusterReadiness' "CR rendered when agent.targets set"
-assert_contains "$TMP/targets.yaml" '- "1.37"' "target 1.37 in CR spec"
+# The agent creates ClusterReadiness/<crName> on its first tick. Were the
+# chart to render it too, 'helm upgrade --set agent.targets=...' after a
+# default install would fail: Helm will not adopt the agent-created object.
+assert_no_line "$TMP/targets.yaml" 'kind: ClusterReadiness' "no CR rendered even with agent.targets"
+assert_contains "$TMP/targets.yaml" '- "--targets=1.37,1.38"' "targets passed to the agent"
+
+echo "== upgrade path: setting targets after a default install changes only the agent"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set 'agent.targets={1.37}' > "$TMP/targets-upgrade.yaml"
+if diff <(grep -vF -e '--targets=' -e 'checksum/' "$TMP/targets-upgrade.yaml") \
+        <(grep -vF -e 'checksum/' "$TMP/default.yaml") >/dev/null; then
+  pass "only the --targets arg differs from the default render"
+else
+  fail "agent.targets changes more than the agent's --targets arg"
+fi
 
 echo "== render must fail when pushing without any token"
 if helm template upgradescope "$CHART" --set agent.serverUrl=https://x.example >/dev/null 2>&1; then

@@ -36,6 +36,9 @@ spec:
             - --cr-name={{ .Values.agent.crName }}
             - --team-label={{ .Values.agent.teamLabel }}
             - --manage-crd={{ .Values.agent.manageCRD }}
+            {{- with .Values.agent.targets }}
+            - {{ printf "--targets=%s" (join "," .) | quote }}
+            {{- end }}
             {{- if .Values.agent.clusterName }}
             - --cluster-name={{ .Values.agent.clusterName }}
             {{- end }}

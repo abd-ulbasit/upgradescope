@@ -43,9 +43,13 @@ agent:
   # false when the CRD is managed elsewhere (e.g. GitOps) to drop all CRD
   # permissions.
   manageCRD: true
-  # Target Kubernetes minors written into the ClusterReadiness spec at
-  # install time, e.g. ["1.37", "1.38"]. Empty = agent creates the CR with
-  # an empty spec and defaults to the next minor above the server version.
+  # Target Kubernetes minors to evaluate, e.g. ["1.37", "1.38"], passed to
+  # the agent as --targets. The chart never renders the ClusterReadiness
+  # object: the agent creates it and, when targets is non-empty, resets
+  # spec.targets to this list on every tick, so this value wins over
+  # `kubectl edit`. Empty = the agent leaves spec.targets alone; set them
+  # with `kubectl patch ucr cluster --type merge -p '{"spec":{"targets":["1.37"]}}'`
+  # or let it default to the next minor above the server version.
   targets: []
   # URL of an upgradescope server to push snapshots to. Empty = CRD-only
   # mode. If server.enabled=true and this is empty, it defaults to the
