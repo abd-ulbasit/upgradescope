@@ -187,12 +187,15 @@ Then, per flagged group/version:
 - **The kind continues** under another version: an object counts only when
   some writer still writes it through the flagged group/version. The
   `metadata.managedFields` entries are grouped by field manager (and
-  subresource). A manager counts when its entry for the flagged version is
-  newer than all of its entries for other versions. An Update entry's
-  identity includes its apiVersion, so after a manager moves to `v1`, its
-  old entry stays for every field the new write left unchanged. Only the
-  newest entry shows what the manager writes now. Equal or missing
-  timestamps clear. When no manager's entries are left to judge by, the
+  operation and subresource). A manager counts when its entry for the
+  flagged version is newer than all of its entries for other versions in
+  the same group. An Update entry's identity includes its apiVersion, so
+  after a manager moves to `v1`, its old entry stays for every field the
+  new write left unchanged. Only the newest entry shows what the manager
+  writes now. A server-side Apply entry is the manager's declared
+  configuration, a field set apart from its Update entries, so an Update
+  through `v1` does not clear an Apply through the flagged version. Equal
+  or missing timestamps clear. When no manager's entries are left to judge by, the
   apiVersion in the `kubectl.kubernetes.io/last-applied-configuration`
   annotation decides. Only kubectl client-side apply rewrites that
   annotation, so it may be stale under any other writer. The finding names

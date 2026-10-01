@@ -50,6 +50,15 @@ func wroteAt(manager, apiVersion string, m int) metav1.ManagedFieldsEntry {
 	return e
 }
 
+// appliedAt is a server-side apply entry at minute m. A manager has at
+// most one Apply entry per subresource: each apply replaces its field set
+// and apiVersion.
+func appliedAt(manager, apiVersion string, m int) metav1.ManagedFieldsEntry {
+	e := wroteAt(manager, apiVersion, m)
+	e.Operation = metav1.ManagedFieldsOperationApply
+	return e
+}
+
 func lastApplied(apiVersion, kind string) map[string]string {
 	return map[string]string{
 		"kubectl.kubernetes.io/last-applied-configuration": fmt.Sprintf(`{"apiVersion":%q,"kind":%q,"metadata":{"name":"x"},"spec":{}}`, apiVersion, kind),
@@ -391,6 +400,21 @@ func TestAuthoringManagerIgnoresInternalManagersAndStatusEntries(t *testing.T) {
 			wroteAt("operator", gv, 1),
 			{Manager: "operator", APIVersion: "flowcontrol.apiserver.k8s.io/v1", Subresource: "status", Time: wroteAt("", "", 2).Time},
 		}, nil, "operator"},
+		// Server-side apply: the Apply entry is the manager's declared
+		// configuration, a field set of its own. An Update the same manager
+		// made through another version is a different field set and says
+		// nothing about what the next apply sends.
+		{"apply via the version", []metav1.ManagedFieldsEntry{appliedAt("argocd", gv, 1)}, nil, "argocd"},
+		{"apply via another version", []metav1.ManagedFieldsEntry{appliedAt("argocd", "flowcontrol.apiserver.k8s.io/v1", 1)}, nil, ""},
+		{"a newer update via another version does not clear the apply", []metav1.ManagedFieldsEntry{
+			appliedAt("helm", gv, 1), wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 2),
+		}, nil, "helm"},
+		{"a newer update via the version under an apply via another version", []metav1.ManagedFieldsEntry{
+			appliedAt("helm", "flowcontrol.apiserver.k8s.io/v1", 1), wroteAt("helm", gv, 2),
+		}, nil, "helm"},
+		{"apply and update both via another version", []metav1.ManagedFieldsEntry{
+			appliedAt("helm", "flowcontrol.apiserver.k8s.io/v1", 1), wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 2),
+		}, nil, ""},
 		// managedFields from a non-internal writer are newer evidence than
 		// the annotation, which only kubectl client-side apply rewrites.
 		{"stale last-applied under a v1 manager", []metav1.ManagedFieldsEntry{wrote("helm", "flowcontrol.apiserver.k8s.io/v1")}, lastApplied(gv, "FlowSchema"), ""},

@@ -344,24 +344,31 @@ func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVer
 // apiVersion, so a manager that moved to another version keeps its old
 // entry for every field its newer writes left alone; only each manager's
 // newest entry says what it writes now. Entries are grouped by (manager,
-// subresource), skipping internal managers and the status subresource, and
-// a manager counts when it has an entry naming gv that is strictly newer
-// than all of its entries naming another version (a missing timestamp
-// cannot be ordered, so it counts as a tie, and ties clear). The first
-// such manager, in managedFields order, is returned.
+// operation, subresource), skipping internal managers and the status
+// subresource: a manager's Apply entry is its declared configuration, a
+// field set apart from anything it wrote by Update, so a newer Update
+// through another version does not clear it. A group counts when it has
+// an entry naming gv that is strictly newer than all of its entries naming
+// another version (a missing timestamp cannot be ordered, so it counts as
+// a tie, and ties clear). The manager of the first such group, in
+// managedFields order, is returned.
 //
 // The last-applied annotation is the fallback only when no entry is left
 // to judge by: kubectl client-side apply rewrites it, nothing else does,
 // so under any other writer's entries it may be long stale.
 func authoringManager(m *metav1.PartialObjectMetadata, gv string) string {
-	type key struct{ manager, subresource string }
+	type key struct {
+		manager     string
+		operation   metav1.ManagedFieldsOperationType
+		subresource string
+	}
 	var order []key
 	byKey := map[key][]metav1.ManagedFieldsEntry{}
 	for _, f := range m.ManagedFields {
 		if f.Subresource == "status" || internalManagers[f.Manager] {
 			continue
 		}
-		k := key{f.Manager, f.Subresource}
+		k := key{f.Manager, f.Operation, f.Subresource}
 		if _, seen := byKey[k]; !seen {
 			order = append(order, k)
 		}
@@ -386,8 +393,9 @@ func authoringManager(m *metav1.PartialObjectMetadata, gv string) string {
 	return ""
 }
 
-// writesNow reports whether one manager's entries have an entry naming gv
-// that is strictly newer than each of its entries naming another version.
+// writesNow reports whether one (manager, operation, subresource) group of
+// entries has an entry naming gv that is strictly newer than each of its
+// entries naming another version.
 func writesNow(entries []metav1.ManagedFieldsEntry, gv string) bool {
 	for _, e := range entries {
 		if e.APIVersion != gv {
