@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 )
 
@@ -93,6 +95,41 @@ func TestScanFilesWarnsOnInvalidFiles(t *testing.T) {
 	wantPrefix := "warning: skipped " + filepath.ToSlash(filepath.Join(dir, "chart/templates/cm.yaml")) + ":1: "
 	if !strings.HasPrefix(stderr, wantPrefix) {
 		t.Errorf("stderr = %q, want prefix %q", stderr, wantPrefix)
+	}
+}
+
+// JSON keeps object paths relative to the scanned root and records that
+// root (relative to the working directory) as filesBase, so a consumer can
+// resolve them without knowing the --files argument.
+func TestScanFilesJSONRecordsBase(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"rendered/all.yaml": removedAPIs})
+	t.Chdir(dir)
+	for args, wantBase := range map[string]string{"./rendered/": "rendered", "rendered/all.yaml": "rendered", ".": ""} {
+		out, _, err := execScanFiles(t, "--files", args, "--output", "json")
+		if ExitCode(err) != 2 {
+			t.Fatalf("--files %s: ExitCode = %d (err %v), want 2", args, ExitCode(err), err)
+		}
+		var rep struct {
+			FilesBase *string `json:"filesBase"`
+			Findings  []struct {
+				Objects []struct{ File string }
+			}
+		}
+		if err := json.Unmarshal([]byte(out), &rep); err != nil {
+			t.Fatal(err)
+		}
+		if rep.FilesBase == nil || *rep.FilesBase != wantBase {
+			t.Errorf("--files %s: filesBase = %v, want %q", args, rep.FilesBase, wantBase)
+		}
+		file := rep.Findings[0].Objects[0].File
+		if got := path.Join(wantBase, file); got != "rendered/all.yaml" {
+			t.Errorf("--files %s: filesBase + file = %q, want rendered/all.yaml", args, got)
+		}
+	}
+	// A live scan has no filesBase.
+	var buf bytes.Buffer
+	if err := WriteJSON(&buf, engine.Report{}); err != nil || strings.Contains(buf.String(), "filesBase") {
+		t.Errorf("WriteJSON = %s (err %v), want no filesBase outside files mode", buf.String(), err)
 	}
 }
 

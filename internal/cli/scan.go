@@ -134,13 +134,17 @@ func newScanCmd() *cobra.Command {
 				return err
 			}
 			// JSON keeps object paths relative to the scanned root (the
-			// inventory contract); people and SARIF consumers resolve
-			// them from the working directory.
+			// inventory contract) and records that root as filesBase;
+			// people and SARIF consumers resolve them from the working
+			// directory.
 			out := report
+			var filesBase *string
 			if opts.output != "json" {
 				out = withFileBase(report, opts.fileBase)
+			} else if opts.filesDir != "" {
+				filesBase = &opts.fileBase
 			}
-			if err := writeReport(cmd.OutOrStdout(), opts.output, out); err != nil {
+			if err := writeReport(cmd.OutOrStdout(), opts.output, out, filesBase); err != nil {
 				return err
 			}
 			if opts.output == "sarif" && filepath.IsAbs(filepath.FromSlash(opts.fileBase)) {
@@ -243,10 +247,12 @@ func validateScanOptions(opts *scanOptions) error {
 	return nil
 }
 
-func writeReport(w io.Writer, format string, r engine.Report) error {
+// writeReport renders r; filesBase is the JSON filesBase (nil outside
+// --files mode).
+func writeReport(w io.Writer, format string, r engine.Report, filesBase *string) error {
 	switch format {
 	case "json":
-		return WriteJSON(w, r)
+		return writeJSON(w, r, filesBase)
 	case "sarif":
 		return WriteSARIF(w, r)
 	default: // "table", already validated
