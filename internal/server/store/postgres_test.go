@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
@@ -29,6 +30,18 @@ func pgDSN(t *testing.T) string {
 // than a database per subtest), opened through store.OpenPostgres with
 // search_path pinned, and drops it on cleanup.
 func freshPostgres(t *testing.T) store.Store {
+	t.Helper()
+	s, err := store.OpenPostgres(freshSchemaDSN(t))
+	if err != nil {
+		t.Fatalf("OpenPostgres: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+// freshSchemaDSN creates an empty schema, drops it on cleanup, and returns
+// the test DSN with search_path pinned to it.
+func freshSchemaDSN(t *testing.T) string {
 	t.Helper()
 	dsn := pgDSN(t)
 
@@ -58,17 +71,74 @@ func freshPostgres(t *testing.T) store.Store {
 			break
 		}
 	}
-	s, err := store.OpenPostgres(fmt.Sprintf("%s%ssearch_path=%s", dsn, sep, schema))
-	if err != nil {
-		t.Fatalf("OpenPostgres: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	return fmt.Sprintf("%s%ssearch_path=%s", dsn, sep, schema)
 }
 
+// TestPostgresConformance also carries the Postgres-only migration checks:
+// CI runs exactly this test name against a real server.
 func TestPostgresConformance(t *testing.T) {
 	pgDSN(t)
 	storetest.RunStoreConformance(t, func(t *testing.T) store.Store { return freshPostgres(t) })
+	t.Run("ConcurrentMigrations", testConcurrentMigrations)
+}
+
+// testConcurrentMigrations starts several stores against one empty schema at
+// once, as replicas of a Deployment do on first rollout. The advisory lock
+// must serialize them: every open succeeds and each migration is recorded
+// exactly once.
+func testConcurrentMigrations(t *testing.T) {
+	dsn := freshSchemaDSN(t)
+	const replicas = 6
+	errs := make(chan error, replicas)
+	var wg sync.WaitGroup
+	for range replicas {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := store.OpenPostgres(dsn)
+			if err == nil {
+				err = s.Close()
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent OpenPostgres: %v", err)
+		}
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(context.Background(),
+		`SELECT version, COUNT(*) FROM schema_migrations GROUP BY version ORDER BY version`)
+	if err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	defer rows.Close()
+	var versions []string
+	for rows.Next() {
+		var v string
+		var n int
+		if err := rows.Scan(&v, &n); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("migration %s recorded %d times, want 1", v, n)
+		}
+		versions = append(versions, v)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(versions) == 0 || versions[0] != "0001_init.sql" {
+		t.Errorf("recorded migrations = %v, want 0001_init.sql first", versions)
+	}
 }
 
 // TestPostgresOpenBadDSN pins that OpenPostgres fails fast (ping at open)

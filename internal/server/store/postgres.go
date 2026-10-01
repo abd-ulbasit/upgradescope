@@ -45,7 +45,7 @@ func OpenPostgres(dsn string) (*Postgres, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("embedded pgmigrations: %w", err)
 	}
-	if _, err := migrate(ctx, db, sub, postgresMigrations); err != nil {
+	if _, err := migratePostgres(ctx, db, sub); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate postgres: %w", err)
 	}
