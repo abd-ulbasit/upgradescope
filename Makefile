@@ -112,6 +112,14 @@ kind-load: docker-build
 chart-test:
 	./hack/test-chart.sh
 
+# The CI chart gate: lint --strict, the values render matrix, kubeconform
+# (pinned, checksum-verified) on every render at the oldest and newest tested
+# Kubernetes minor, then chart-test. Needs helm and network (schemas).
+.PHONY: helm-test
+helm-test:
+	./hack/install-tool_test.sh
+	./hack/helm-test.sh
+
 .PHONY: agent-e2e
 agent-e2e:
 	./hack/demo/agent-e2e.sh
