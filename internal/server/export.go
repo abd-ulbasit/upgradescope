@@ -126,7 +126,7 @@ func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engi
 		if err := cw.Write([]string{
 			csvSafe(cluster),
 			rep.Target.String(),
-			eval.CreatedAt.UTC().Format(time.RFC3339),
+			eval.EvaluatedAt.UTC().Format(time.RFC3339),
 			string(f.Severity),
 			string(f.Category),
 			csvSafe(f.Key),
@@ -261,7 +261,7 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
   <span>Cluster: <strong>{{.Cluster}}</strong></span>
   <span>Target: <strong>{{.Target}}</strong></span>
   <span>KB: {{.Report.KBVersion}}</span>
-  <span>Evaluated: {{.Eval.CreatedAt.UTC.Format "2006-01-02 15:04 UTC"}}</span>
+  <span>Evaluated: {{.Eval.EvaluatedAt.UTC.Format "2006-01-02 15:04 UTC"}}</span>
   <span>Generated: {{.GeneratedAt.UTC.Format "2006-01-02 15:04 UTC"}}</span>
 </p>
 <p>

@@ -247,6 +247,16 @@ func TestUnchangedReevaluationRefreshesInsteadOfAddingHistory(t *testing.T) {
 	if !cur.EvaluatedAt.Equal(next) || !cur.CreatedAt.Equal(aug1) {
 		t.Errorf("row created %v evaluated %v, want %v / %v", cur.CreatedAt, cur.EvaluatedAt, aug1, next)
 	}
+	// The audit export dates the refreshed report by its refresh, as
+	// /report and /fleet do — not by when the row was first recorded.
+	_, csvBody := getExportFor(t, h.ts, cid, "?target=1.35&format=csv")
+	if want := "," + next.Format(time.RFC3339) + ","; !strings.Contains(string(csvBody), want) || strings.Contains(string(csvBody), aug1.Format(time.RFC3339)) {
+		t.Errorf("CSV export evaluatedAt is not the refresh time %s:\n%s", next.Format(time.RFC3339), csvBody)
+	}
+	_, htmlBody := getExportFor(t, h.ts, cid, "?target=1.35&format=html")
+	if want := "Evaluated: " + next.Format("2006-01-02 15:04 UTC"); !strings.Contains(string(htmlBody), want) {
+		t.Errorf("HTML export lacks %q", want)
+	}
 	if evs := h.drain(); len(evs) != 0 {
 		t.Errorf("unchanged re-evaluation notified: %+v", evs)
 	}
