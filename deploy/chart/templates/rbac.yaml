@@ -5,33 +5,53 @@ metadata:
   name: {{ include "upgradescope.fullname" . }}-agent
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
 rules:
-  # Cluster-wide READ-ONLY. Why a wildcard instead of an enumerated list
-  # (nodes, namespaces, pods, secrets, ...):
-  #   - versions collector: nodes (kubelet versions), /version
-  #   - team attribution: namespaces (labels)
-  #   - add-on detection: pods (container images)
-  #   - Helm releases: secrets of type helm.sh/release.v1 — RBAC cannot
-  #     filter secrets by type, so this is cluster-wide secret read; the
-  #     trade-off is documented in values.yaml (rbac.create) and README
-  #   - deprecated-API usage: metadata-only lists at KB-flagged deprecated
-  #     group/versions — the group set is data-driven, enumerating it here
-  #     would rot on every KB update
-  - apiGroups: ["*"]
-    resources: ["*"]
-    verbs: ["get", "list", "watch"]
-  # apiserver /metrics (apiserver_requested_deprecated_apis) and /version
-  - nonResourceURLs: ["/metrics", "/version"]
+  # Every rule names its resources: no wildcard groups, resources or verbs,
+  # so no subresource (nodes/proxy, pods/log, pods/exec) is ever covered.
+  # Reads are get/list only; the agent polls, it never watches.
+  #
+  # versions: kube-system UID (cluster ID), namespace labels (teams),
+  # kubelet versions, control-plane pods; add-ons: container images.
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes", "pods"]
+    verbs: ["get", "list"]
+  # /version (server version) and /metrics (apiserver_requested_deprecated_apis:
+  # who still calls deprecated APIs).
+  - nonResourceURLs: ["/version", "/metrics"]
     verbs: ["get"]
-  # EnsureCRD: server-side apply (= PATCH) of the ClusterReadiness CRD
+  {{- if .Values.rbac.helmSecrets }}
+  # Helm release detection reads Secrets of type helm.sh/release.v1. RBAC
+  # cannot filter Secrets by type, so this is get/list on EVERY Secret in
+  # the cluster. rbac.helmSecrets=false drops it; Helm releases are then
+  # reported as not assessed.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  {{- end }}
+  # --- files/kb-rbac-rules.yaml ---
+  {{- .Files.Get "files/kb-rbac-rules.yaml" | nindent 2 }}
+  {{- if .Values.agent.manageCRD }}
+  # --manage-crd: keep the ClusterReadiness CRD schema in step with the
+  # binary (server-side apply). Only that one CRD; no create, since crds/
+  # installs it. manageCRD=false drops only this write rule: the KB rules
+  # above still grant get/list on all CRDs (apiextensions v1beta1 is in the
+  # KB).
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
-    verbs: ["create", "get", "update", "patch"]
-  # The ONLY thing the agent ever writes: its own CR + status
+    resourceNames: ["clusterreadinesses.upgradescope.dev"]
+    verbs: ["get", "update", "patch"]
+  {{- end }}
+  # The ClusterReadiness CR: the agent creates it if missing (create cannot
+  # be scoped by name), and writes only the one named agent.crName.
   - apiGroups: ["upgradescope.dev"]
     resources: ["clusterreadinesses"]
-    verbs: ["get", "list", "watch", "create", "update"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: ["upgradescope.dev"]
+    resources: ["clusterreadinesses"]
+    resourceNames: [{{ .Values.agent.crName | quote }}]
+    verbs: ["update", "patch"]
   - apiGroups: ["upgradescope.dev"]
     resources: ["clusterreadinesses/status"]
+    resourceNames: [{{ .Values.agent.crName | quote }}]
     verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

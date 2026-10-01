@@ -123,8 +123,8 @@ else
   echo "ok   a reused cluster is not scanned as vanilla" | tee -a "$work/results"
 fi
 
-run "a failing agent.targets upgrade is reported, not fatal (#41)" 0 STUB_TARGETS_FAIL=1
-has "the #41 upgrade is a FAIL in the summary" "$work/summary" "- **FAIL** — helm upgrade --set agent.targets={1.32} (best-effort until #41"
+run "a failing agent.targets upgrade fails the run (#41 is fixed; the check gates)" 1 STUB_TARGETS_FAIL=1
+has "the upgrade gate is a FAIL in the summary" "$work/summary" "- **FAIL** — helm upgrade --set agent.targets={1.32}"
 
 run "a ClusterRole left after uninstall fails the run" 1 STUB_LEFTOVER=1
 has "the leftover is named" "$work/out" "clusterrole/upgradescope-agent"

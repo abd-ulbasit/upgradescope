@@ -213,14 +213,19 @@ server_ingested() {
   pf_pid=""
 }
 
-# TODO(#41): make this gating once the chart owns the ClusterReadiness it
-# renders for agent.targets (today the agent-created CR blocks the upgrade).
+# #41: the chart never renders the ClusterReadiness; agent.targets reaches the
+# agent as --targets, and the restarted agent reconciles spec.targets, so poll.
 upgrade_with_targets() {
   # --set-string: `--set agent.targets={1.30}` would render the float 1.3.
   h upgrade "$RELEASE" deploy/chart --namespace "$NS" --reuse-values \
     --set-string "agent.targets={$NEXT}" --wait --timeout 5m || return 1
-  k get clusterreadiness "$CR" -o json | jq -e --arg t "$NEXT" '.spec.targets | index($t) != null' >/dev/null ||
-    { echo "clusterreadiness/$CR spec.targets does not contain $NEXT after the upgrade" >&2; return 1; }
+  local i
+  for i in $(seq 1 60); do
+    k get clusterreadiness "$CR" -o json | jq -e --arg t "$NEXT" '.spec.targets | index($t) != null' >/dev/null && return 0
+    nap 2
+  done
+  echo "clusterreadiness/$CR spec.targets does not contain $NEXT 120s after the upgrade" >&2
+  return 1
 }
 
 uninstall_leaves_nothing() {
@@ -259,6 +264,6 @@ gate "image built from this tree, kind-loaded" load_image
 gate "helm install deploy/chart (server enabled) --wait" install_chart
 gate "ClusterReadiness has a score and a blocked verdict for $NEXT" cr_has_verdict
 gate "server ingested the agent's snapshot" server_ingested
-best_effort "#41" "helm upgrade --set agent.targets={$NEXT}" upgrade_with_targets
+gate "helm upgrade --set agent.targets={$NEXT}" upgrade_with_targets
 gate "helm uninstall leaves no ClusterRole/ClusterRoleBinding or release object; CRD kept" uninstall_leaves_nothing
 echo "e2e $MINOR: OK"

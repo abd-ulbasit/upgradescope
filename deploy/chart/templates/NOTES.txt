@@ -1,23 +1,42 @@
 upgradescope {{ .Chart.AppVersion }} installed.
 
-Watch readiness:
+Watch readiness (the agent creates the object on its first tick):
   kubectl get clusterreadiness {{ .Values.agent.crName }}
   kubectl get clusterreadiness {{ .Values.agent.crName }} -o jsonpath='{.status.targets[0].score}'
+{{- if .Values.agent.targets }}
+
+Targets come from agent.targets ({{ join ", " .Values.agent.targets }}): the agent resets
+spec.targets to them every tick, so change them with helm upgrade, not kubectl.
+{{- else }}
+
+Pin target versions without Helm:
+  kubectl patch clusterreadiness {{ .Values.agent.crName }} --type merge -p '{"spec":{"targets":["1.37"]}}'
+{{- end }}
 {{- if .Values.server.enabled }}
 
 Server API (port-forward):
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "upgradescope.serverFullname" . }} 8080:{{ .Values.server.service.port }}
-  curl http://127.0.0.1:8080/api/v1/clusters
-{{- if not .Values.server.readToken }}
+  SERVER=http://127.0.0.1:8080
+  curl $SERVER/api/v1/clusters
+{{- if and (not .Values.server.existingSecret) (not .Values.server.ingestToken) }}
+
+The ingest token was generated and is kept across upgrades. Agents in other
+clusters push with it:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "upgradescope.serverSecretName" . }} -o jsonpath='{.data.ingestToken}' | base64 -d
+{{- end }}
+{{- if not (include "upgradescope.readTokenEnabled" .) }}
 
 NOTE: the read API has no token (server.readToken is empty). Fine behind a
 ClusterIP Service; set one before exposing it.
 {{- end }}
 {{- end }}
 
-The agent is READ-ONLY except for the ClusterReadiness resource. For the
-RBAC trade-offs (cluster-wide secret read for Helm detection), see the
-rbac.create comment in values.yaml.
+The agent reads namespaces, nodes, pods, the deprecated API resources the
+KB tracks{{ if .Values.rbac.helmSecrets }}, and every Secret (Helm release detection;
+rbac.helmSecrets=false turns that off){{ end }}. It may create ClusterReadiness
+objects (RBAC cannot scope create by name), and updates only
+ClusterReadiness/{{ .Values.agent.crName }}{{ if .Values.agent.manageCRD }} and the clusterreadinesses.upgradescope.dev CRD{{ end }}.
+The full rule list and its reasons are in the chart README.
 
 Uninstall: helm uninstall keeps the CRD (Helm crds/ semantics). Full removal:
   kubectl delete crd clusterreadinesses.upgradescope.dev

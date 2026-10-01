@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -128,9 +129,29 @@ func TestAgentCmdFlagsParsed(t *testing.T) {
 		interval: 5 * time.Minute, serverURL: "http://scope:8080", serverToken: "tok",
 		clusterName: "prod-eu-1", crName: "main", teamLabel: "squad",
 		forceSyncEvery: 30 * time.Minute, kubeconfig: "/tmp/kc", kubecontext: "ctx1",
+		manageCRD: true,
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("opts = %+v, want %+v", got, want)
+	}
+}
+
+// The chart passes agent.targets as --targets and agent.manageCRD as
+// --manage-crd; both default to "leave it to the CR / manage the CRD".
+func TestAgentTargetsAndManageCRDFlags(t *testing.T) {
+	got, err := execAgent(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.targets) != 0 || !got.manageCRD {
+		t.Errorf("defaults: targets = %v manageCRD = %v, want [] true", got.targets, got.manageCRD)
+	}
+	got, err = execAgent(t, "--targets=1.37,1.38", "--manage-crd=false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.targets, []string{"1.37", "1.38"}) || got.manageCRD {
+		t.Errorf("set: targets = %v manageCRD = %v, want [1.37 1.38] false", got.targets, got.manageCRD)
 	}
 }
 

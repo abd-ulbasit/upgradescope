@@ -1,0 +1,147 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "upgradescope chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "duration": {
+      "description": "Go duration of at least one minute, e.g. 10m, 1h, 1m30s, 90s, 1.5h. One of its parts must be a minute or more on its own (1m, 60s, 0.017h and up), so a sum such as 30s30s is refused.",
+      "type": "string",
+      "pattern": "^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(h|m|s|ms|us|µs|μs|ns))*((0*[1-9][0-9]*(\\.[0-9]*)?|0*\\.(0[2-9]|01[7-9]|[1-9])[0-9]*)h|0*[1-9][0-9]*(\\.[0-9]*)?m|0*([6-9][0-9]|[1-9][0-9]{2,})(\\.[0-9]*)?s)(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(h|m|s|ms|us|µs|μs|ns))*$"
+    },
+    "targets": {
+      "description": "Kubernetes minor versions, e.g. [\"1.37\", \"1.38\"].",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^v?1\\.[0-9]+(\\.[0-9]+)?$" }
+    },
+    "crTargets": {
+      "description": "Kubernetes minor versions written to the ClusterReadiness spec.targets, e.g. [\"1.37\", \"1.38\"]. MAJOR.MINOR only, as the CRD requires.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^1\\.[0-9]+$" }
+    },
+    "stringMap": { "type": "object", "additionalProperties": { "type": "string" } },
+    "list": { "type": "array" },
+    "object": { "type": "object" },
+    "secretName": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$", "maxLength": 253 }
+  },
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "helmSecrets": { "type": "boolean" }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "interval": { "$ref": "#/definitions/duration" },
+        "crName": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253 },
+        "teamLabel": { "type": "string", "minLength": 1 },
+        "clusterName": { "type": "string" },
+        "manageCRD": { "type": "boolean" },
+        "targets": { "$ref": "#/definitions/crTargets" },
+        "serverUrl": { "type": "string", "pattern": "^(https?://.+)?$" },
+        "serverToken": { "type": "string" },
+        "existingSecret": { "$ref": "#/definitions/secretName" },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "extraEnv": { "$ref": "#/definitions/list" },
+        "extraVolumes": { "$ref": "#/definitions/list" },
+        "extraVolumeMounts": { "$ref": "#/definitions/list" },
+        "podAnnotations": { "$ref": "#/definitions/stringMap" },
+        "podLabels": { "$ref": "#/definitions/stringMap" },
+        "nodeSelector": { "$ref": "#/definitions/stringMap" },
+        "tolerations": { "$ref": "#/definitions/list" },
+        "affinity": { "$ref": "#/definitions/object" },
+        "priorityClassName": { "type": "string" },
+        "podSecurityContext": { "$ref": "#/definitions/object" },
+        "securityContext": { "$ref": "#/definitions/object" },
+        "resources": { "$ref": "#/definitions/object" }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingestToken": { "type": "string" },
+        "readToken": { "type": "string" },
+        "existingSecret": { "$ref": "#/definitions/secretName" },
+        "readTokenFromSecret": { "type": "boolean" },
+        "slackWebhook": { "type": "string", "pattern": "^(https?://.+)?$" },
+        "webhook": { "type": "string", "pattern": "^(https?://.+)?$" },
+        "targets": { "$ref": "#/definitions/targets" },
+        "serviceAccount": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "boolean" },
+            "name": { "type": "string" }
+          }
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        "persistence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "size": { "type": "string", "minLength": 1 },
+            "storageClass": { "type": "string" }
+          }
+        },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "extraEnv": { "$ref": "#/definitions/list" },
+        "extraVolumes": { "$ref": "#/definitions/list" },
+        "extraVolumeMounts": { "$ref": "#/definitions/list" },
+        "podAnnotations": { "$ref": "#/definitions/stringMap" },
+        "podLabels": { "$ref": "#/definitions/stringMap" },
+        "nodeSelector": { "$ref": "#/definitions/stringMap" },
+        "tolerations": { "$ref": "#/definitions/list" },
+        "affinity": { "$ref": "#/definitions/object" },
+        "priorityClassName": { "type": "string" },
+        "podSecurityContext": { "$ref": "#/definitions/object" },
+        "securityContext": { "$ref": "#/definitions/object" },
+        "resources": { "$ref": "#/definitions/object" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "serverIngressFrom": { "$ref": "#/definitions/list" }
+      }
+    },
+    "global": { "type": "object" }
+  }
+}

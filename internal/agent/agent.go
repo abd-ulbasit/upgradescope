@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"slices"
 	"time"
 
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -38,6 +39,15 @@ type Config struct {
 	CRName         string        // default crd.DefaultName
 	TeamLabel      string        // default "team"
 	ForceSyncEvery time.Duration // default 1h: push even if hash unchanged
+	// Targets, when non-empty, are the source of truth for spec.targets:
+	// every tick reconciles the CR to them, overriding kubectl edits. Empty
+	// leaves spec.targets to whoever edits the CR. applyDefaults normalizes
+	// each to MAJOR.MINOR ("v1.38" → "1.38", "1.37.2" → "1.37").
+	Targets []string
+	// SkipCRDManagement leaves the CRD alone entirely (--manage-crd=false):
+	// no read, no schema upgrade. The default keeps it in step with the
+	// embedded manifest at startup.
+	SkipCRDManagement bool
 }
 
 // applyDefaults fills zero values and rejects invalid combinations.
@@ -60,6 +70,21 @@ func (c *Config) applyDefaults() error {
 	if c.ServerURL != "" && c.ServerToken == "" {
 		return fmt.Errorf("server-url set but server-token empty (the ingest endpoint requires a bearer token)")
 	}
+	// Normalize to MAJOR.MINOR: the CRD pins spec.targets items to that
+	// form, so writing "v1.38" or "1.37.2" verbatim would be rejected with
+	// 422 on every create and patch. It also keeps the per-tick comparison
+	// with the stored spec stable.
+	var targets []string
+	for _, raw := range c.Targets {
+		v, err := inventory.ParseTarget(raw)
+		if err != nil {
+			return fmt.Errorf("targets: %w", err)
+		}
+		if minor := fmt.Sprintf("%d.%d", v.Major, v.Minor); !slices.Contains(targets, minor) {
+			targets = append(targets, minor)
+		}
+	}
+	c.Targets = targets
 	return nil
 }
 
@@ -131,12 +156,20 @@ func (r *runner) tick(ctx context.Context) error {
 	inv := r.collectFn(ctx)
 
 	// The CR may have been deleted between ticks; recreate, then read spec.
-	if err := crd.EnsureObject(ctx, r.dyn, r.cfg.CRName); err != nil {
+	if err := crd.EnsureObject(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); err != nil {
 		errs = append(errs, err)
 	}
 	spec, _, err := crd.ReadSpec(ctx, r.dyn, r.cfg.CRName)
 	if err != nil {
 		errs = append(errs, err)
+	}
+	if len(r.cfg.Targets) > 0 {
+		if err == nil && !slices.Equal(spec.Targets, r.cfg.Targets) {
+			if serr := crd.SetTargets(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); serr != nil {
+				errs = append(errs, serr)
+			}
+		}
+		spec.Targets = r.cfg.Targets // evaluate what was configured either way
 	}
 
 	targets, notes, terr := resolveTargets(spec, inv)
@@ -229,11 +262,15 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	if err := cfg.applyDefaults(); err != nil {
 		return err
 	}
-	if err := crd.EnsureCRD(ctx, apiext); err != nil {
-		// Non-fatal: the Helm chart installs the CRD via crds/, and RBAC may
-		// deny apiextensions writes. WriteStatus failures will surface loudly
-		// per tick if the CRD is truly absent.
-		slog.Warn("ensure ClusterReadiness CRD failed; assuming it is pre-installed", "err", err)
+	if !cfg.SkipCRDManagement {
+		if err := crd.EnsureCRD(ctx, apiext); err != nil {
+			if errors.Is(err, crd.ErrCRDNotInstalled) {
+				return err // every tick would 404; say why once, clearly
+			}
+			// Non-fatal otherwise: the CRD exists, the schema upgrade did
+			// not land (e.g. a narrower custom role denies patch).
+			slog.Warn("could not bring the ClusterReadiness CRD up to date; continuing with the installed schema", "err", err)
+		}
 	}
 	r := newRunner(clients, dyn, k, cfg)
 	for {

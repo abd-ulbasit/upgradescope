@@ -30,6 +30,40 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end -}}
 {{- end -}}
 
+{{/*
+Pod-level settings shared by both Deployments. Call with
+(dict "root" $ "c" .Values.<component>).
+*/}}
+{{- define "upgradescope.podOptions" -}}
+{{- with .c.podSecurityContext }}
+securityContext: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .root.Values.imagePullSecrets }}
+imagePullSecrets: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .c.priorityClassName }}
+priorityClassName: {{ . | quote }}
+{{- end }}
+{{- with .c.nodeSelector }}
+nodeSelector: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .c.tolerations }}
+tolerations: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .c.affinity }}
+affinity: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/* Server ServiceAccount name ("" = namespace default) */}}
+{{- define "upgradescope.serverServiceAccountName" -}}
+{{- if .Values.server.serviceAccount.create -}}
+{{- default (include "upgradescope.serverFullname" .) .Values.server.serviceAccount.name -}}
+{{- else -}}
+{{- .Values.server.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Server resource name */}}
 {{- define "upgradescope.serverFullname" -}}
 {{- printf "%s-server" (include "upgradescope.fullname" .) -}}
@@ -49,13 +83,38 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end -}}
 {{- end -}}
 
-{{/* Secret holding the agent's push token */}}
+{{/* Chart-managed Secret for an inline agent.serverToken */}}
 {{- define "upgradescope.agentTokenSecretName" -}}
-{{- if .Values.agent.existingSecret -}}
-{{- .Values.agent.existingSecret -}}
-{{- else -}}
 {{- printf "%s-agent-token" (include "upgradescope.fullname" .) -}}
 {{- end -}}
+
+{{/*
+secretKeyRef (name + key) for the agent's push token, first match wins:
+agent.existingSecret (key serverToken), an inline agent.serverToken (chart
+Secret, key serverToken), then the in-chart server's own ingest token (key
+ingestToken of the server Secret, generated or existing).
+*/}}
+{{- define "upgradescope.agentTokenRef" -}}
+{{- if .Values.agent.existingSecret -}}
+name: {{ .Values.agent.existingSecret }}
+key: serverToken
+{{- else if .Values.agent.serverToken -}}
+name: {{ include "upgradescope.agentTokenSecretName" . }}
+key: serverToken
+{{- else if .Values.server.enabled -}}
+name: {{ include "upgradescope.serverSecretName" . }}
+key: ingestToken
+{{- else -}}
+{{- fail "a push token is required with agent.serverUrl: set agent.existingSecret (key serverToken) or agent.serverToken" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Does the server get a read token? Non-empty string = yes. */}}
+{{- define "upgradescope.readTokenEnabled" -}}
+{{- if and .Values.server.readTokenFromSecret (not .Values.server.existingSecret) -}}
+{{- fail "server.readTokenFromSecret reads key readToken from server.existingSecret; set server.existingSecret, or set server.readToken instead" -}}
+{{- end -}}
+{{- if or .Values.server.readToken .Values.server.readTokenFromSecret -}}true{{- end -}}
 {{- end -}}
 
 {{/* Secret holding the server's tokens */}}
