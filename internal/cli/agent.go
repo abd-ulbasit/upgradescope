@@ -88,7 +88,10 @@ var buildAgentRESTConfig = func(kubeconfig, kubecontext string) (*rest.Config, e
 }
 
 func newAgentCmd() *cobra.Command {
-	var opts agentOptions
+	var (
+		opts        agentOptions
+		serverToken *secretFlag
+	)
 	cmd := &cobra.Command{
 		Use:           "agent",
 		Short:         "Run the in-cluster continuous upgrade-readiness agent",
@@ -97,6 +100,9 @@ func newAgentCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := serverToken.resolve(cmd); err != nil {
+				return err
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return runAgent(ctx, opts)
@@ -104,7 +110,8 @@ func newAgentCmd() *cobra.Command {
 	}
 	cmd.Flags().DurationVar(&opts.interval, "interval", 10*time.Minute, "evaluation interval (minimum 1m)")
 	cmd.Flags().StringVar(&opts.serverURL, "server-url", "", "upgradescope server base URL (empty = CRD-only mode)")
-	cmd.Flags().StringVar(&opts.serverToken, "server-token", "", "bearer token for snapshot pushes (required with --server-url)")
+	serverToken = addSecretFlag(cmd, &opts.serverToken, "server-token", "UPGRADESCOPE_SERVER_TOKEN",
+		"bearer token for snapshot pushes (required with --server-url)")
 	cmd.Flags().StringVar(&opts.clusterName, "cluster-name", "", "cluster label sent to the server (default: cluster UID)")
 	cmd.Flags().StringVar(&opts.crName, "cr-name", "cluster", "ClusterReadiness object name")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")

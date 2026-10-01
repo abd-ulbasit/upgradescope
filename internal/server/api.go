@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -13,16 +15,211 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
-// maxSnapshotBody caps the snapshot push body — enforced on the wire bytes
-// AND on the decompressed stream (gzip-bomb guard).
-const maxSnapshotBody = 20 << 20 // 20 MiB
+// DefaultMaxSnapshotBytes caps the snapshot push body when
+// Config.MaxSnapshotBytes is unset — enforced on the wire bytes AND on the
+// decompressed stream (gzip-bomb guard).
+const DefaultMaxSnapshotBytes = 20 << 20 // 20 MiB
+
+// DefaultMaxGateBytes caps the /gate manifest stream when
+// Config.MaxGateBytes is unset. Lower than the snapshot cap: the gate body
+// is buffered whole and is reachable with only the read token (or none).
+const DefaultMaxGateBytes = 10 << 20 // 10 MiB
+
+// Manifest stream shape limits for /gate, checked on the raw bytes before
+// any YAML is decoded. Decoding a document builds a generic tree and then
+// JSON — measured at 25-50x the document's size in heap — so the
+// per-document cap, not the body cap, is what bounds one request's memory.
+// 4 MiB fits any single Kubernetes object (etcd stores at most ~1.5 MiB)
+// and a multi-MiB `kubectl get -o yaml` List. The document count bounds
+// CPU on streams of many tiny documents.
+const (
+	maxManifestDocBytes = 4 << 20
+	maxManifestDocs     = 20000
+)
+
+// sizeString renders a byte limit for error messages: "20MiB" when it is
+// a whole number of MiB, otherwise "1024 bytes".
+func sizeString(n int64) string {
+	if n >= 1<<20 && n%(1<<20) == 0 {
+		return fmt.Sprintf("%dMiB", n>>20)
+	}
+	return fmt.Sprintf("%d bytes", n)
+}
+
+func (s *Server) maxSnapshotBytes() int64 {
+	if s.cfg.MaxSnapshotBytes > 0 {
+		return s.cfg.MaxSnapshotBytes
+	}
+	return DefaultMaxSnapshotBytes
+}
+
+func (s *Server) maxGateBytes() int64 {
+	if s.cfg.MaxGateBytes > 0 {
+		return s.cfg.MaxGateBytes
+	}
+	return DefaultMaxGateBytes
+}
+
+// byteBudget caps the /gate body bytes held in memory across all requests.
+// It never blocks: a charge either fits now or is refused.
+type byteBudget struct {
+	mu   sync.Mutex
+	used int64
+	max  int64
+}
+
+func newByteBudget(limit int64) *byteBudget {
+	return &byteBudget{max: limit}
+}
+
+// charge adds n bytes to a request that already holds held. If they do
+// not fit, it gives back held in the same step and reports false, so a
+// refused request's bytes never count against another request's charge.
+func (b *byteBudget) charge(held, n int64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used+n > b.max {
+		b.used -= held
+		return false
+	}
+	b.used += n
+	return true
+}
+
+func (b *byteBudget) give(n int64) {
+	b.mu.Lock()
+	b.used -= n
+	b.mu.Unlock()
+}
+
+func (b *byteBudget) inUse() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used
+}
+
+// /gate bodies are read into chunks: the first is minGateChunk bytes and
+// each next one is as large as everything received so far, up to
+// maxGateChunk. A client that declares a large Content-Length and then
+// sends little has little allocated, and a large body costs no copying.
+const (
+	minGateChunk = 512
+	maxGateChunk = 64 << 10
+)
+
+// gateBody is a buffered /gate request body, in the chunks it was read in.
+type gateBody [][]byte
+
+// reader returns a fresh reader over the whole body.
+func (b gateBody) reader() io.Reader {
+	rs := make([]io.Reader, len(b))
+	for i, c := range b {
+		rs[i] = bytes.NewReader(c)
+	}
+	return io.MultiReader(rs...)
+}
+
+// readManifestBody reads a /gate manifest stream under the body cap and the
+// shared buffered-body budget, then splits it (the same kubectl-compatible
+// splitter collect uses) to check the document count and each document's
+// size before anything decodes it. It writes the 413/422/503 itself.
+//
+// Each read is charged to the budget for exactly the bytes it returned,
+// as they arrive. A declared Content-Length reserves nothing (it only
+// bounds the reads, and one over the cap is refused before any are made),
+// so a client that stalls mid-upload holds only what it has sent, until
+// ReadTimeout ends its request. When a charge does not fit, the request
+// gives back everything it holds, in the same step, and gets 503 +
+// Retry-After immediately. Nothing waits for budget, let alone while
+// holding some, so concurrent uploads cannot deadlock or queue behind a
+// stalled one. On success the caller must call release once it no longer
+// needs the body; release is idempotent. On failure everything has
+// already been given back.
+func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body gateBody, release func(), ok bool) {
+	limit := s.maxGateBytes()
+	tooLarge := "manifest stream exceeds the " + sizeString(limit) + " limit"
+	if r.ContentLength > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+		return nil, nil, false
+	}
+
+	var held int64 // bytes received and charged so far
+	release = sync.OnceFunc(func() { s.gateBuffered.give(held) })
+	src := http.MaxBytesReader(w, r.Body, limit)
+	for {
+		if len(body) == 0 || len(body[len(body)-1]) == cap(body[len(body)-1]) {
+			size := min(max(held, minGateChunk), maxGateChunk)
+			if r.ContentLength >= 0 {
+				size = min(size, r.ContentLength-held)
+			}
+			if size == 0 {
+				break // the whole declared Content-Length is in
+			}
+			body = append(body, make([]byte, 0, size))
+		}
+		chunk := body[len(body)-1]
+		n, err := src.Read(chunk[len(chunk):cap(chunk)])
+		if n > 0 {
+			if !s.gateBuffered.charge(held, int64(n)) { // gives back held too
+				w.Header().Set("Retry-After", "10")
+				errJSON(w, http.StatusServiceUnavailable, "too many concurrent gate requests; retry shortly")
+				return nil, nil, false
+			}
+			held += int64(n)
+			body[len(body)-1] = chunk[:len(chunk)+n]
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			release()
+			var mbe *http.MaxBytesError
+			if errors.As(err, &mbe) {
+				errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+				return nil, nil, false
+			}
+			errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
+			return nil, nil, false
+		}
+	}
+
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(body.reader()))
+	for n := 1; ; n++ {
+		doc, err := docs.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			release()
+			errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
+			return nil, nil, false
+		}
+		if n > maxManifestDocs {
+			release()
+			errJSON(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("manifest stream has more than %d documents", maxManifestDocs))
+			return nil, nil, false
+		}
+		if len(doc) > maxManifestDocBytes {
+			release()
+			errJSON(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("manifest document %d is %d bytes, over the %s per-document limit (split large Lists into separate documents)",
+					n, len(doc), sizeString(maxManifestDocBytes)))
+			return nil, nil, false
+		}
+	}
+	return body, release, true
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -63,9 +260,10 @@ func bearerOK(r *http.Request, token string) bool {
 }
 
 // authIngest authorizes a snapshot push. Two token kinds are accepted:
-// the shared Config.IngestToken (fleet-wide; single-cluster/dev setups)
-// and per-cluster tokens minted via `upgradescope tokens create` (P3,
-// spec §8) — those return the cluster name the token is bound to.
+// the optional shared Config.IngestToken (fleet-wide; single-cluster/dev
+// setups — when it is "" only per-cluster tokens work) and per-cluster
+// tokens minted via `upgradescope tokens create` (P3, spec §8) — those
+// return the cluster name the token is bound to.
 // boundCluster == "" means the push may target any cluster. The HTTP error
 // (401 / 500) is written here; the cluster-match check happens in
 // handleIngest once the body names its cluster (403 there).
@@ -108,7 +306,8 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body := http.MaxBytesReader(w, r.Body, maxSnapshotBody)
+	limit := s.maxSnapshotBytes()
+	body := http.MaxBytesReader(w, r.Body, limit)
 	var reader io.Reader = body
 	switch enc := r.Header.Get("Content-Encoding"); enc {
 	case "", "identity":
@@ -122,7 +321,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		// Cap the decompressed stream too: a tiny gzip bomb must not bypass
 		// the wire-byte limit. Read one byte past the cap so overflow is
 		// detectable below.
-		reader = io.LimitReader(gz, maxSnapshotBody+1)
+		reader = io.LimitReader(gz, limit+1)
 	default:
 		errJSON(w, http.StatusUnsupportedMediaType, fmt.Sprintf("unsupported Content-Encoding %q (use gzip or identity)", enc))
 		return
@@ -131,14 +330,14 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the 20MiB limit")
+			errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the "+sizeString(limit)+" limit")
 			return
 		}
 		errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
 		return
 	}
-	if len(raw) > maxSnapshotBody {
-		errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the 20MiB limit after decompression")
+	if int64(len(raw)) > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the "+sizeString(limit)+" limit after decompression")
 		return
 	}
 	var req pushRequest

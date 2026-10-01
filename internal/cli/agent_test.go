@@ -35,6 +35,43 @@ func writeKubeconfig(t *testing.T) string {
 	return path
 }
 
+func execAgent(t *testing.T, args ...string) (agentOptions, error) {
+	t.Helper()
+	orig := runAgent
+	t.Cleanup(func() { runAgent = orig })
+	var got agentOptions
+	runAgent = func(_ context.Context, opts agentOptions) error {
+		got = opts
+		return nil
+	}
+	root := Root()
+	root.SetArgs(append([]string{"agent"}, args...))
+	err := root.Execute()
+	return got, err
+}
+
+// The agent's push token can come from $UPGRADESCOPE_SERVER_TOKEN or
+// --server-token-file instead of argv; an explicit flag still wins.
+func TestAgentServerTokenSources(t *testing.T) {
+	t.Setenv("UPGRADESCOPE_SERVER_TOKEN", "env-tok")
+	got, err := execAgent(t)
+	if err != nil || got.serverToken != "env-tok" {
+		t.Fatalf("env: serverToken = %q, err %v; want env-tok", got.serverToken, err)
+	}
+	file := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(file, []byte("file-tok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = execAgent(t, "--server-token-file", file)
+	if err != nil || got.serverToken != "file-tok" {
+		t.Fatalf("file: serverToken = %q, err %v; want file-tok", got.serverToken, err)
+	}
+	got, err = execAgent(t, "--server-token", "flag-tok")
+	if err != nil || got.serverToken != "flag-tok" {
+		t.Fatalf("flag: serverToken = %q, err %v; want flag-tok", got.serverToken, err)
+	}
+}
+
 func TestAgentCmdFlagDefaults(t *testing.T) {
 	orig := runAgent
 	defer func() { runAgent = orig }()

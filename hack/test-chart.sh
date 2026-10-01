@@ -125,6 +125,16 @@ assert_contains "$TMP/server.yaml" 'serverToken: "test-token"' "agent token defa
 assert_contains "$TMP/server.yaml" '--server-url=http://upgradescope-server.upgradescope.svc:8080' "agent points at in-chart server"
 assert_contains "$TMP/server.yaml" 'path: /healthz' "healthz probes"
 assert_not_contains "$TMP/server.yaml" '--read-token' "no read-token flag unless set"
+# serve refuses an open read API on a non-loopback --listen; the chart's
+# empty readToken default opts in explicitly (NOTES.txt warns about it).
+assert_contains "$TMP/server.yaml" '--allow-anonymous-read' "empty readToken opts in to anonymous reads"
+
+echo "== server assertions: read token set"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set server.readToken=r > "$TMP/readtoken.yaml"
+assert_contains "$TMP/readtoken.yaml" '--read-token=$(UPGRADESCOPE_READ_TOKEN)' "read token via env expansion"
+assert_not_contains "$TMP/readtoken.yaml" '--allow-anonymous-read' "no anonymous reads with a read token"
 
 echo "== server assertions: render fails without ingest token"
 if helm template upgradescope "$CHART" --set server.enabled=true >/dev/null 2>&1; then

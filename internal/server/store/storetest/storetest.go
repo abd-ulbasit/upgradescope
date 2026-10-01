@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,6 +44,8 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("TokensCreateValidateRevoke", func(t *testing.T) { testTokens(t, newStore(t)) })
 	t.Run("TokensMultiplePerCluster", func(t *testing.T) { testTokensMultiplePerCluster(t, newStore(t)) })
 	t.Run("TokensDuplicateRejected", func(t *testing.T) { testTokensDuplicate(t, newStore(t)) })
+	t.Run("TokensRevokeByID", func(t *testing.T) { testTokensRevokeByID(t, newStore(t)) })
+	t.Run("TokensList", func(t *testing.T) { testTokensList(t, newStore(t)) })
 	t.Run("Close", func(t *testing.T) { testClose(t, newStore(t)) })
 }
 
@@ -498,10 +501,10 @@ func testNotFound(t *testing.T, s store.Store) {
 func testTokens(t *testing.T, s store.Store) {
 	ctx := context.Background()
 
-	if err := s.CreateToken(ctx, "prod", "tok-prod"); err != nil {
+	if _, err := s.CreateToken(ctx, "prod", "tok-prod"); err != nil {
 		t.Fatalf("CreateToken(prod): %v", err)
 	}
-	if err := s.CreateToken(ctx, "dev", "tok-dev"); err != nil {
+	if _, err := s.CreateToken(ctx, "dev", "tok-dev"); err != nil {
 		t.Fatalf("CreateToken(dev): %v", err)
 	}
 
@@ -539,7 +542,7 @@ func testTokens(t *testing.T, s store.Store) {
 	}
 
 	// A fresh token after revocation is independent of the revoked one.
-	if err := s.CreateToken(ctx, "prod", "tok-prod-2"); err != nil {
+	if _, err := s.CreateToken(ctx, "prod", "tok-prod-2"); err != nil {
 		t.Fatalf("CreateToken(prod, second): %v", err)
 	}
 	if name, ok, _ := s.ValidToken(ctx, "tok-prod-2"); !ok || name != "prod" {
@@ -552,7 +555,7 @@ func testTokens(t *testing.T, s store.Store) {
 func testTokensMultiplePerCluster(t *testing.T, s store.Store) {
 	ctx := context.Background()
 	for _, tok := range []string{"rot-a", "rot-b"} {
-		if err := s.CreateToken(ctx, "prod", tok); err != nil {
+		if _, err := s.CreateToken(ctx, "prod", tok); err != nil {
 			t.Fatalf("CreateToken(%s): %v", tok, err)
 		}
 	}
@@ -575,15 +578,113 @@ func testTokensMultiplePerCluster(t *testing.T, s store.Store) {
 // — even for different clusters, since ValidToken could not disambiguate.
 func testTokensDuplicate(t *testing.T, s store.Store) {
 	ctx := context.Background()
-	if err := s.CreateToken(ctx, "prod", "dup-tok"); err != nil {
+	if _, err := s.CreateToken(ctx, "prod", "dup-tok"); err != nil {
 		t.Fatalf("CreateToken: %v", err)
 	}
-	if err := s.CreateToken(ctx, "dev", "dup-tok"); err == nil {
+	if _, err := s.CreateToken(ctx, "dev", "dup-tok"); err == nil {
 		t.Error("CreateToken with an already-issued token succeeded, want error")
 	}
 	// The original binding must be untouched.
 	if name, ok, _ := s.ValidToken(ctx, "dup-tok"); !ok || name != "prod" {
 		t.Errorf("ValidToken(dup-tok) = (%q, %v), want (prod, true)", name, ok)
+	}
+}
+
+// testTokensRevokeByID pins zero-downtime rotation: with two active tokens
+// for one cluster, revoking one by id leaves the other authenticating.
+func testTokensRevokeByID(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	oldID, err := s.CreateToken(ctx, "prod", "rot-old")
+	if err != nil {
+		t.Fatalf("CreateToken(rot-old): %v", err)
+	}
+	newID, err := s.CreateToken(ctx, "prod", "rot-new")
+	if err != nil {
+		t.Fatalf("CreateToken(rot-new): %v", err)
+	}
+	if oldID <= 0 || newID <= 0 || oldID == newID {
+		t.Fatalf("CreateToken ids = %d, %d; want distinct positive ids", oldID, newID)
+	}
+
+	if err := s.RevokeTokenID(ctx, "prod", oldID); err != nil {
+		t.Fatalf("RevokeTokenID(prod, %d): %v", oldID, err)
+	}
+	if _, ok, err := s.ValidToken(ctx, "rot-old"); err != nil || ok {
+		t.Errorf("revoked token: ValidToken = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+	if name, ok, err := s.ValidToken(ctx, "rot-new"); err != nil || !ok || name != "prod" {
+		t.Errorf("other token after revoke-by-id = (%q, %v, %v), want (prod, true, nil)", name, ok, err)
+	}
+
+	// Already revoked, wrong cluster, or unknown id: ErrNotFound, and the
+	// surviving token is untouched.
+	for _, tc := range []struct {
+		cluster string
+		id      int64
+	}{{"prod", oldID}, {"dev", newID}, {"prod", newID + 1000}} {
+		if err := s.RevokeTokenID(ctx, tc.cluster, tc.id); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("RevokeTokenID(%s, %d) err = %v, want ErrNotFound", tc.cluster, tc.id, err)
+		}
+	}
+	if _, ok, _ := s.ValidToken(ctx, "rot-new"); !ok {
+		t.Error("a failed RevokeTokenID must not revoke anything")
+	}
+}
+
+// testTokensList pins ListTokens: every token (active and revoked) in
+// creation order, optionally filtered by cluster, with metadata only.
+func testTokensList(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	if toks, err := s.ListTokens(ctx, ""); err != nil || len(toks) != 0 {
+		t.Fatalf("ListTokens on empty store = (%v, %v), want none", toks, err)
+	}
+	long := "0123abcd" + strings.Repeat("f", 56) // 64 chars, like `tokens create`
+	prodA, err := s.CreateToken(ctx, "prod", long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, err := s.CreateToken(ctx, "dev", "short-dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prodB, err := s.CreateToken(ctx, "prod", "short-prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RevokeTokenID(ctx, "prod", prodA); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := s.ListTokens(ctx, "")
+	if err != nil {
+		t.Fatalf("ListTokens: %v", err)
+	}
+	if len(all) != 3 || all[0].ID != prodA || all[1].ID != dev || all[2].ID != prodB {
+		t.Fatalf("ListTokens = %+v, want ids %d, %d, %d in creation order", all, prodA, dev, prodB)
+	}
+	a := all[0]
+	if a.ClusterName != "prod" || a.CreatedAt.IsZero() || a.RevokedAt == nil {
+		t.Errorf("revoked token row = %+v, want prod, created, revoked", a)
+	}
+	if a.Prefix != "0123abcd" {
+		t.Errorf("prefix = %q, want the first 8 chars of a long token", a.Prefix)
+	}
+	if all[1].RevokedAt != nil || all[1].ClusterName != "dev" {
+		t.Errorf("active dev row = %+v, want unrevoked dev", all[1])
+	}
+	if all[1].Prefix != "" {
+		t.Errorf("short token prefix = %q, want \"\" (a prefix would give away most of it)", all[1].Prefix)
+	}
+
+	prod, err := s.ListTokens(ctx, "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prod) != 2 || prod[0].ID != prodA || prod[1].ID != prodB {
+		t.Fatalf("ListTokens(prod) = %+v, want ids %d, %d", prod, prodA, prodB)
+	}
+	if none, err := s.ListTokens(ctx, "never-existed"); err != nil || len(none) != 0 {
+		t.Fatalf("ListTokens(unknown) = (%v, %v), want none", none, err)
 	}
 }
 
