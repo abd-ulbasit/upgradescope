@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "88888888-8888-8888-8888-888888888888",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "serverVersion": "v1.24.6",
+  "capabilities": {
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true, "reason": "helm releases: 4 via secrets, 1 via configmaps"},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "apiUsage": [
+    {
+      "group": "batch", "version": "v1beta1", "kind": "CronJob", "count": 1,
+      "namespaces": {"batch": 1},
+      "objects": [{"namespace": "batch", "name": "nightly", "manager": "helm"}]
+    }
+  ],
+  "helmReleases": [
+    {
+      "name": "jobs", "namespace": "batch", "chartName": "jobs", "chartVersion": "1.4.0", "status": "deployed", "revision": 7,
+      "manifestApis": [
+        {
+          "group": "batch", "version": "v1beta1", "kind": "CronJob", "count": 2,
+          "namespaces": {"": 2},
+          "objects": [
+            {"name": "nightly", "line": 4, "renderedFrom": "jobs/templates/nightly.yaml"},
+            {"name": "weekly", "line": 31, "renderedFrom": "jobs/templates/weekly.yaml"}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "status-page", "namespace": "ops", "chartName": "status-page", "chartVersion": "0.9.1", "status": "pending-upgrade", "revision": 3,
+      "manifestApis": [
+        {
+          "group": "", "version": "v1", "kind": "ComponentStatus", "count": 1,
+          "namespaces": {"": 1},
+          "objects": [{"name": "etcd-0", "line": 12, "renderedFrom": "status-page/templates/cs.yaml"}]
+        }
+      ]
+    },
+    {
+      "name": "web", "namespace": "shop", "chartName": "web", "chartVersion": "2.0.0", "kubeVersion": ">=1.19.0-0 <1.25.0-0", "status": "deployed", "revision": 12
+    },
+    {
+      "name": "legacy-web", "namespace": "shop", "chartName": "legacy-web", "chartVersion": "0.1.0", "kubeVersion": ">=1.21.0-0 <<1.30", "status": "superseded", "revision": 2
+    },
+    {
+      "name": "gone", "namespace": "legacy", "chartName": "gone", "chartVersion": "1.0.0", "kubeVersion": "<1.20.0-0", "status": "uninstalled",
+      "manifestApis": [
+        {
+          "group": "batch", "version": "v1beta1", "kind": "CronJob", "count": 1,
+          "namespaces": {"": 1},
+          "objects": [{"name": "cleanup", "line": 4}]
+        }
+      ]
+    }
+  ],
+  "nodes": [{"name": "node-a", "kubeletVersion": "v1.24.6"}],
+  "namespaces": [{"name": "shop", "team": "storefront"}, {"name": "batch", "team": "data"}]
+}

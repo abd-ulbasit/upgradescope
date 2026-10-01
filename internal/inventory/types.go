@@ -98,7 +98,23 @@ type HelmRelease struct {
 	ChartName    string `json:"chartName"`
 	ChartVersion string `json:"chartVersion"`
 	AppVersion   string `json:"appVersion,omitempty"`
-	Status       string `json:"status"` // deployed, superseded, failed…
+	// KubeVersion is the chart's Chart.yaml kubeVersion constraint, verbatim
+	// (e.g. ">=1.21.0-0 <1.33.0-0"); "" when the chart declares none.
+	KubeVersion string `json:"kubeVersion,omitempty"`
+	// Status and Revision identify the revision everything else was read
+	// from: the installed one, which is the newest revision unless that one
+	// failed (then the newest deployed or superseded revision before it).
+	// A release with nothing installed (uninstalled with --keep-history, or
+	// only failed revisions) is not listed. Revision is 0 in inventories
+	// from agents that predate it, whose Status is the newest revision's.
+	Status   string `json:"status"` // deployed, superseded, pending-upgrade…
+	Revision int    `json:"revision,omitempty"`
+	// ManifestAPIs are the objects in that revision's stored manifest at a
+	// group/version/kind the collector's KB flags as deprecated or removed,
+	// per GVK as in Inventory.APIUsage. Refs carry the object's line in the
+	// manifest (no File) and its template (RenderedFrom); Namespace is
+	// empty where the chart leaves metadata.namespace unset.
+	ManifestAPIs []APIUsage `json:"manifestApis,omitempty"`
 }
 
 type AddOnInstance struct {

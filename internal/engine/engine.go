@@ -20,6 +20,11 @@ import (
 const (
 	deprecationGuideURL = "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
 	skewPolicyURL       = "https://kubernetes.io/releases/version-skew-policy/"
+	// helmChartYAMLURL documents Chart.yaml's kubeVersion constraint.
+	helmChartYAMLURL = "https://helm.sh/docs/topics/charts/#the-chartyaml-file"
+	// helmKubernetesAPIsURL documents why helm upgrade fails on a stored
+	// manifest with removed APIs, and the mapkubeapis fix.
+	helmKubernetesAPIsURL = "https://helm.sh/docs/topics/kubernetes_apis/"
 )
 
 // pluralObjects renders an object count with grammatical number:
@@ -1038,6 +1043,184 @@ func verdictFor(findings []Finding, gaps []CapabilityGap) Verdict {
 	return VerdictReady
 }
 
+// helmInstalled reports whether a release has anything running. Collectors
+// leave out releases with nothing installed; inventories from agents that
+// predate that may still list ones removed with helm uninstall
+// --keep-history.
+func helmInstalled(rel inventory.HelmRelease) bool {
+	return rel.Status != "uninstalled" && rel.Status != "uninstalling"
+}
+
+// helmReleaseRef names a release, with the revision the collector read
+// when it recorded one: "revision 3 of Helm release shop/web".
+func helmReleaseRef(rel inventory.HelmRelease) string {
+	if rel.Revision > 0 {
+		return fmt.Sprintf("revision %d of Helm release %s/%s", rel.Revision, rel.Namespace, rel.Name)
+	}
+	return fmt.Sprintf("Helm release %s/%s", rel.Namespace, rel.Name)
+}
+
+// evalHelmReleases judges each installed Helm release's chart and stored
+// manifest against the target, with no registry data:
+//
+//   - chart kubeVersion: Helm refuses to install or upgrade a chart whose
+//     Chart.yaml kubeVersion constraint the cluster version does not
+//     satisfy (Masterminds semver, as Helm checks it: "-0" admits
+//     pre-release builds). target.0 failing it → blocker, chart-incompat;
+//     a constraint that does not parse → info, chart-incompat.
+//   - manifest APIs: objects in the release's stored manifest at an API
+//     removed at or before target → blocker, removed-api (helm upgrade
+//     fails on a stored manifest the cluster cannot map); at an API that is
+//     deprecated or removed later → warning, deprecated-api. One finding
+//     per release and severity, keyed "<category>/helm-release/<ns>/<name>"
+//     — "helm-release" is no API group, so these keys never collide with
+//     the per-API keys of live findings. Objects the live scan already
+//     flags (same API, name and namespace, an unset manifest namespace
+//     standing for the release's) are left to the live finding, so no
+//     object is counted twice; a release whose objects are all flagged
+//     live gets no manifest finding.
+func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
+	idx := kb.NewIndex(k.APILifecycle)
+	live := map[string][]inventory.ObjectRef{} // apiKey → live objects
+	for _, u := range inv.APIUsage {
+		key := apiKey(u.Group, u.Version, u.Kind)
+		live[key] = append(live[key], u.Objects...)
+	}
+	var out []Finding
+	for _, rel := range inv.HelmReleases {
+		if !helmInstalled(rel) {
+			continue
+		}
+		ns := []string{rel.Namespace}
+		teams := teamsFor(ns, inv.Namespaces)
+		if f, ok := evalChartKubeVersion(rel, target); ok {
+			f.Namespaces, f.Teams = ns, teams
+			out = append(out, f)
+		}
+		for _, f := range evalHelmManifest(rel, idx, live, target) {
+			f.Namespaces, f.Teams = ns, teams
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// evalChartKubeVersion judges a release's chart kubeVersion constraint
+// against target (see evalHelmReleases); ok is false when it has none or
+// target satisfies it.
+func evalChartKubeVersion(rel inventory.HelmRelease, target inventory.Version) (Finding, bool) {
+	if strings.TrimSpace(rel.KubeVersion) == "" {
+		return Finding{}, false
+	}
+	f := Finding{
+		Category:  CatChartIncompat,
+		Key:       fmt.Sprintf("%s/helm-release/%s/%s", CatChartIncompat, rel.Namespace, rel.Name),
+		Citations: []string{helmChartYAMLURL},
+	}
+	declares := fmt.Sprintf("Chart %s %s (%s) declares kubeVersion %q in Chart.yaml", rel.ChartName, rel.ChartVersion, helmReleaseRef(rel), rel.KubeVersion)
+	c, err := semver.NewConstraint(rel.KubeVersion)
+	if err != nil {
+		f.Severity = SevInfo
+		f.Title = fmt.Sprintf("Helm release %s/%s: chart kubeVersion %q could not be parsed", rel.Namespace, rel.Name, rel.KubeVersion)
+		f.Detail = declares + ", which is not a valid semver constraint, so the chart's Kubernetes compatibility was not assessed."
+		return f, true
+	}
+	if c.Check(semver.New(uint64(target.Major), uint64(target.Minor), 0, "", "")) {
+		return Finding{}, false
+	}
+	f.Severity = SevBlocker
+	f.Title = fmt.Sprintf("Helm release %s/%s: chart %s %s requires Kubernetes %q (target %s)", rel.Namespace, rel.Name, rel.ChartName, rel.ChartVersion, rel.KubeVersion, target)
+	f.Detail = declares + fmt.Sprintf(", which Kubernetes %s does not satisfy. Helm refuses to install or upgrade a chart whose kubeVersion excludes the cluster version, so once the cluster runs %s every helm upgrade of this release fails until it moves to a chart version that supports %s.", target, target, target)
+	f.Remediation = fmt.Sprintf("upgrade the release to a chart version whose kubeVersion includes %s before upgrading the cluster", target)
+	return f, true
+}
+
+// evalHelmManifest judges a release's flagged manifest objects (see
+// evalHelmReleases): at most a removed-api blocker and a deprecated-api
+// warning, in that order.
+func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][]inventory.ObjectRef, target inventory.Version) []Finding {
+	type bucket struct {
+		apis, entries, replacements []string
+		objects                     []inventory.ObjectRef
+		count, omitted              int
+	}
+	var removed, deprecated bucket
+	rows := slices.Clone(rel.ManifestAPIs)
+	slices.SortFunc(rows, func(a, b inventory.APIUsage) int {
+		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Version, b.Version), cmp.Compare(a.Kind, b.Kind))
+	})
+	for _, u := range rows {
+		e, ok := idx.Lookup(u.Group, u.Version, u.Kind)
+		if !ok || e.Deprecated == nil && e.Removed == nil {
+			continue
+		}
+		flagged := live[apiKey(u.Group, u.Version, u.Kind)]
+		objs := slices.DeleteFunc(slices.Clone(u.Objects), func(o inventory.ObjectRef) bool {
+			return slices.ContainsFunc(flagged, func(l inventory.ObjectRef) bool {
+				return l.Name == o.Name && (l.Namespace == o.Namespace || o.Namespace == "" && l.Namespace == rel.Namespace)
+			})
+		})
+		count := u.Count - (len(u.Objects) - len(objs))
+		if count <= 0 {
+			continue
+		}
+		b, when := &deprecated, []string{}
+		if e.Removed != nil && e.Removed.Compare(target) <= 0 {
+			b = &removed
+		} else if e.Deprecated != nil {
+			when = append(when, "deprecated in "+e.Deprecated.String())
+		}
+		if e.Removed != nil {
+			when = append(when, "removed in "+e.Removed.String())
+		}
+		api := gvString(u.Group, u.Version) + " " + u.Kind
+		b.apis = append(b.apis, api)
+		b.entries = append(b.entries, fmt.Sprintf("%s (%s; %s)", api, strings.Join(when, ", "), pluralObjects(count)))
+		if r, ok := idx.ResolveReplacement(e, target); ok {
+			b.replacements = append(b.replacements, gvString(r.Group, r.Version)+" "+r.Kind)
+		}
+		b.objects = append(b.objects, objs...)
+		b.count += count
+		b.omitted += u.ObjectsOmitted
+	}
+
+	ref := helmReleaseRef(rel)
+	stores := fmt.Sprintf("%s%s (chart %s %s) stores a manifest with", strings.ToUpper(ref[:1]), ref[1:], rel.ChartName, rel.ChartVersion)
+	fix := "upgrade the release to a chart version that renders supported APIs"
+	var out []Finding
+	for _, b := range []struct {
+		bucket
+		cat Category
+		sev Severity
+	}{{removed, CatRemovedAPI, SevBlocker}, {deprecated, CatDeprecatedAPI, SevWarning}} {
+		if len(b.apis) == 0 {
+			continue
+		}
+		f := Finding{
+			Category: b.cat, Severity: b.sev,
+			Key:            fmt.Sprintf("%s/helm-release/%s/%s", b.cat, rel.Namespace, rel.Name),
+			Citations:      []string{helmKubernetesAPIsURL, deprecationGuideURL},
+			Objects:        sortedObjects(b.objects),
+			ObjectsOmitted: b.omitted,
+			Remediation:    fix,
+		}
+		if len(b.replacements) > 0 {
+			f.Remediation += " (" + strings.Join(b.replacements, ", ") + ")"
+		}
+		apis, entries := strings.Join(b.apis, ", "), strings.Join(b.entries, ", ")
+		if b.sev == SevBlocker {
+			f.Title = fmt.Sprintf("helm upgrade of release %s/%s will fail: its manifest uses %s", rel.Namespace, rel.Name, apis)
+			f.Detail = fmt.Sprintf("%s %s at APIs Kubernetes %s does not serve: %s. Helm refuses to upgrade a release whose stored manifest uses APIs the cluster no longer serves.", stores, pluralObjects(b.count), target, entries)
+			f.Remediation += " before upgrading the cluster; if the cluster already stopped serving them, rewrite the stored manifest with the helm-mapkubeapis plugin first"
+		} else {
+			f.Title = fmt.Sprintf("Helm release %s/%s manifest uses deprecated %s", rel.Namespace, rel.Name, apis)
+			f.Detail = fmt.Sprintf("%s %s at deprecated APIs: %s.", stores, pluralObjects(b.count), entries)
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 // Evaluate is the pure evaluation entrypoint: no I/O, no clock reads — now is
 // injected for EOL-window math. Output is fully deterministic for a given
 // (inventory, kb, target, now).
@@ -1045,6 +1228,7 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings := []Finding{} // non-nil so JSON renders "findings": []
 	findings = append(findings, foldDeprecatedCalls(inv, evalAPIUsage(inv, k, target), evalDeprecatedCalls(inv, target))...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
+	findings = append(findings, evalHelmReleases(inv, k, target)...)
 	findings = append(findings, evalSkew(inv, k, target)...)
 	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)
 	findings = append(findings, evalKBStale(inv, k, target)...)

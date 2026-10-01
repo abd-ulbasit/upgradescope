@@ -39,6 +39,17 @@ var goldenParams = map[string]struct{ target, now string }{
 	// fine; ExternalDNS from Helm is judged by appVersion 0.14.2 (compat
 	// row, no lifecycle data → info).
 	"addon-lifecycle": {"1.36", "2026-10-02T00:00:00Z"},
+	// CronJobs written via batch/v1beta1 plus caller rows for the same API:
+	// one blocker carrying both; the PDB caller row has no objects and
+	// stays a standalone deprecated-api-in-use blocker.
+	"removed-api-with-callers": {"1.25", "2026-06-10T00:00:00Z"},
+	// Helm releases, no registry data needed: shop/web's chart kubeVersion
+	// excludes 1.25 (blocker); shop/legacy-web's does not parse (info);
+	// batch/jobs renders two batch/v1beta1 CronJobs, one of which the live
+	// scan flags, so the release blocker names only the other; ops/
+	// status-page's manifest uses a deprecated API (warning); legacy/gone
+	// was uninstalled with --keep-history and is ignored.
+	"helm-releases": {"1.25", "2026-06-10T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte
