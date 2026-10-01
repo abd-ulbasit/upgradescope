@@ -10,11 +10,11 @@ import (
 	"testing"
 )
 
-// TestIngestEvaluationSurvivesAgentDisconnect: the evaluation fan-out must
-// run on a context detached from the request — an agent that disconnects
-// right after the snapshot is durably stored must not hole the score
-// history. fakeStore's InsertEvaluation/LatestEvaluation honor ctx
-// cancellation, so this fails if evaluateSnapshot runs on r.Context().
+// TestIngestEvaluationSurvivesAgentDisconnect: the snapshot+evaluations
+// commit must run on a context detached from the request — an agent that
+// disconnects right after sending its snapshot must not abort the write
+// (its retry would then be a duplicate). fakeStore's CommitEvaluations
+// honors ctx cancellation, so this fails if ingest commits on r.Context().
 func TestIngestEvaluationSurvivesAgentDisconnect(t *testing.T) {
 	st := newFakeStore()
 	s := newTestServer(t, st)
@@ -40,7 +40,7 @@ func TestIngestEvaluationSurvivesAgentDisconnect(t *testing.T) {
 	}
 }
 
-// TestReportStoreFailureIsNot200WhatIf: a real LatestEvaluation failure
+// TestReportStoreFailureIsNot200WhatIf: a real CurrentEvaluation failure
 // (anything but ErrNotFound) must surface as a 500, not silently fall
 // through to a what-if recompute that masks the store being broken.
 func TestReportStoreFailureIsNot200WhatIf(t *testing.T) {
@@ -50,7 +50,7 @@ func TestReportStoreFailureIsNot200WhatIf(t *testing.T) {
 	defer ts.Close()
 	id := seedViaPush(t, ts)
 
-	st.errs["LatestEvaluation"] = errors.New("disk wedge: /var/lib/upgradescope")
+	st.errs["CurrentEvaluation"] = errors.New("disk wedge: /var/lib/upgradescope")
 
 	var body map[string]string
 	resp := getJSON(t, ts, "/api/v1/clusters/1/report", "", &body)

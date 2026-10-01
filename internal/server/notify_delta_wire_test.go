@@ -76,8 +76,8 @@ func pushInventory(t *testing.T, baseURL, token string, inv inventory.Inventory)
 	}
 }
 
-// TestIngestSurvivesCorruptStoredReport covers the corrupt-prev path in
-// notifyDelta: when the latest stored evaluation's Report blob is not
+// TestIngestSurvivesCorruptStoredReport covers the corrupt-baseline path in
+// outboxFor: when the notification baseline's Report blob is not
 // valid JSON, the delta is skipped (logged server-side) but ingestion
 // still succeeds — the push returns 202 and zero events are delivered.
 // Without the corrupt row this exact sequence emits one became-ready
@@ -113,9 +113,10 @@ func TestIngestSurvivesCorruptStoredReport(t *testing.T) {
 		{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Count: 1},
 	}
 	pushInventory(t, ts.URL, "tok", withPSP)
+	srv.deliverOutbox(context.Background())
 
 	// Plant a corrupt evaluation as the LATEST row for (cluster, 1.36):
-	// the next push's prev-fetch will load it and fail to decode.
+	// the next push's notification baseline will load it and fail to decode.
 	ctx := context.Background()
 	clusters, err := st.ListClusters(ctx)
 	if err != nil {
@@ -133,6 +134,7 @@ func TestIngestSurvivesCorruptStoredReport(t *testing.T) {
 		SnapshotID: snap.ID,
 		Target:     "1.36",
 		Report:     []byte("{not json"),
+		Blockers:   1, // a decided verdict, so it is the notification baseline
 		CreatedAt:  time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)
@@ -140,6 +142,7 @@ func TestIngestSurvivesCorruptStoredReport(t *testing.T) {
 
 	clean := base                          // PSP gone: would emit became-ready if prev were readable
 	pushInventory(t, ts.URL, "tok", clean) // asserts the 202 itself
+	srv.deliverOutbox(ctx)
 
 	if evs := rec.all(); len(evs) != 0 {
 		t.Fatalf("corrupt previous report must suppress delta events, got %+v", evs)
@@ -151,7 +154,7 @@ func TestIngestSurvivesCorruptStoredReport(t *testing.T) {
 // target 1.36) and must NOT notify (first-ever evaluation); snapshot 2 has
 // the usage gone (blockers 1→0) and must emit exactly one became-ready
 // event carrying the envelope cluster name. The real SQLite store makes
-// this fail if prev is loaded after InsertEvaluation.
+// this fail if the baseline is loaded after the new evaluation is written.
 func TestIngestEmitsDeltaNotifications(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
 	if err != nil {
@@ -183,12 +186,17 @@ func TestIngestEmitsDeltaNotifications(t *testing.T) {
 		{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Count: 1},
 	}
 	pushInventory(t, ts.URL, "tok", withPSP)
+	srv.deliverOutbox(context.Background())
 	if evs := rec.all(); len(evs) != 0 {
 		t.Fatalf("first evaluation must not notify, got %+v", evs)
 	}
 
 	clean := base // content differs from withPSP (no PSP usage) => new hash
 	pushInventory(t, ts.URL, "tok", clean)
+	if evs := rec.all(); len(evs) != 0 {
+		t.Fatalf("ingest delivered inline, want delivery after commit by the worker: %+v", evs)
+	}
+	srv.deliverOutbox(context.Background())
 
 	evs := rec.all()
 	if len(evs) != 1 {

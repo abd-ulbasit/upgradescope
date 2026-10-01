@@ -28,7 +28,8 @@ import (
 // of body before it even writes a 401. ReadTimeout covers the whole
 // request: 60s carries the default 20 MiB snapshot cap at ~350 KiB/s.
 // WriteTimeout runs from the end of the headers, so it also bounds the
-// handler (ingest evaluates and notifies synchronously).
+// handler (ingest evaluates synchronously; notifications are delivered
+// after commit by a background worker).
 const (
 	readHeaderTimeout = 10 * time.Second
 	readTimeout       = 60 * time.Second
@@ -99,6 +100,14 @@ type Server struct {
 	gateQueueTimeout time.Duration // how long a /gate request waits for a slot
 	gateBuffered     *byteBudget   // /gate body bytes held across requests
 
+	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
+	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
+	outboxKick         chan struct{} // wakes the delivery worker after a commit
+	notifyTimeout      time.Duration // bounds one delivery attempt
+	reevaluateInterval time.Duration // background re-evaluation period
+	stopBackground     context.CancelFunc
+	backgroundDone     sync.WaitGroup
+
 	ready chan struct{} // closed once the listener is bound
 	mu    sync.Mutex
 	addr  string
@@ -118,6 +127,11 @@ func New(cfg Config) (*Server, error) {
 		ready:            make(chan struct{}),
 	}
 	s.gateBuffered = newByteBudget(maxBufferedGateBodies * s.maxGateBytes())
+	s.teamMapHash = hashTeamMap(cfg.TeamMap)
+	s.sinks = sinksOf(cfg.Notifier)
+	s.outboxKick = make(chan struct{}, 1)
+	s.notifyTimeout = notifyTimeout
+	s.reevaluateInterval = reevaluateInterval
 	for _, t := range cfg.ExtraTargets {
 		v, err := inventory.ParseVersion(t)
 		if err != nil {
@@ -242,9 +256,16 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.cfg.Listen, err)
 	}
+	// Background work: the notification worker and the re-evaluation
+	// ticker (whose first pass runs now). Stopped by Shutdown.
+	bg, stop := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.addr = ln.Addr().String()
+	s.stopBackground = stop
 	s.mu.Unlock()
+	s.backgroundDone.Add(2)
+	go func() { defer s.backgroundDone.Done(); s.runOutbox(bg) }()
+	go func() { defer s.backgroundDone.Done(); s.runReevaluation(bg) }()
 	s.logStartup()
 	close(s.ready)
 	if s.httpSrv.TLSConfig != nil {
@@ -311,11 +332,22 @@ func (s *Server) Addr() string {
 // active at the deadline is a stalled or abusive client (ReadTimeout and
 // WriteTimeout bound every legitimate request), so cutting it off is the
 // expected end of the drain, not a shutdown failure.
+//
+// Background work stops after the drain: a notification mid-delivery is
+// cancelled and stays in the outbox (its lease expires and the next start
+// delivers it); a re-evaluation mid-commit rolls back.
 func (s *Server) Shutdown(ctx context.Context) error {
 	err := s.httpSrv.Shutdown(ctx)
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		log.Printf("server: drain window ended with connections still open; closing them")
-		return s.httpSrv.Close()
+		err = s.httpSrv.Close()
+	}
+	s.mu.Lock()
+	stop := s.stopBackground
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+		s.backgroundDone.Wait()
 	}
 	return err
 }

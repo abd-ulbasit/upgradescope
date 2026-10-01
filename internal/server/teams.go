@@ -42,15 +42,17 @@ func withTeams(rep engine.Report) reportWithTeams {
 }
 
 // handleTeams: GET /api/v1/clusters/{id}/teams?target= — per-team readiness
-// scores computed from the same report the report endpoint serves (stored
-// evaluation, else what-if).
+// scores computed from the same report the report endpoint serves (current
+// stored evaluation, else what-if), with the same evaluatedAt/snapshotId/
+// source metadata.
 func (s *Server) handleTeams(w http.ResponseWriter, r *http.Request) {
-	rep, ok := s.reportForRequest(w, r)
+	rep, meta, ok := s.reportForRequest(w, r)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"target": rep.Target.String(),
-		"teams":  renderTeamScores(engine.TeamScores(rep)),
-	})
+	writeJSON(w, http.StatusOK, struct {
+		Target string                      `json:"target"`
+		Teams  map[string]engine.TeamScore `json:"teams"`
+		reportMeta
+	}{rep.Target.String(), renderTeamScores(engine.TeamScores(rep)), meta})
 }

@@ -299,8 +299,10 @@ type pushRequest struct {
 }
 
 // handleIngest implements POST /api/v1/snapshots: bearer auth, gzip or
-// identity body, schema validation, canonical-JSON content-hash dedup,
-// upsert+insert, then synchronous evaluation fan-out for accepted snapshots.
+// identity body, schema validation, cluster upsert (409 on a cluster UID
+// conflict), then ingestSnapshot: every target evaluated and committed
+// with the snapshot in one transaction (202), or — for a duplicate of the
+// latest snapshot — stale evaluations refreshed (200 duplicate).
 func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	boundCluster, ok := s.authIngest(w, r)
 	if !ok {
@@ -403,132 +405,27 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, "storing cluster", err)
 		return
 	}
-	snapID, duplicate, err := s.cfg.Store.InsertSnapshot(ctx, store.Snapshot{
+	cluster := store.Cluster{ID: clusterID, Name: req.ClusterName, ClusterUID: inv.ClusterID}
+	// Detached from the request context: once the agent has sent the body,
+	// its disconnecting must not abort the commit (it would retry and get a
+	// duplicate); the transaction keeps the write all-or-nothing either way.
+	snapID, duplicate, err := s.ingestSnapshot(context.WithoutCancel(ctx), cluster, store.Snapshot{
 		ClusterID:    clusterID,
 		Hash:         hash,
 		KBVersion:    req.KBVersion,
 		AgentVersion: req.AgentVersion,
 		ReceivedAt:   now,
 		Inventory:    canonical,
-	})
+	}, inv)
 	if err != nil {
-		internalErr(w, "storing snapshot", err)
+		internalErr(w, "storing snapshot and evaluations", err)
 		return
 	}
 	if duplicate {
 		writeJSON(w, http.StatusOK, map[string]any{"snapshotId": snapID, "duplicate": true})
 		return
 	}
-	cluster := store.Cluster{ID: clusterID, Name: req.ClusterName, ClusterUID: inv.ClusterID}
-	// Detach the fan-out from the request context: the snapshot is already
-	// durable here, so an agent that disconnects mid-evaluation must not
-	// cancel the evaluation writes and hole the score history.
-	s.evaluateSnapshot(context.WithoutCancel(ctx), cluster, snapID, inv)
 	writeJSON(w, http.StatusAccepted, map[string]any{"snapshotId": snapID})
-}
-
-// evaluateSnapshot evaluates an accepted snapshot against the default target
-// (next minor above the inventory's server version; skipped when
-// unparseable) plus every configured extra target (deduped), stores one
-// Evaluation per target, and fires the notifier delta. Per-target failures
-// are logged and skipped — the snapshot is already stored, and ingest must
-// not fail because one target could not be evaluated.
-func (s *Server) evaluateSnapshot(ctx context.Context, cluster store.Cluster, snapshotID int64, inv inventory.Inventory) {
-	// Server-side team override (spec: labels + server override) — rewrite
-	// namespace→team attribution before evaluation; stored reports carry the
-	// mapped teams. The stored snapshot keeps the original labels.
-	inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
-	targets := make([]inventory.Version, 0, len(s.extraTargets)+1)
-	if server, err := inventory.ParseVersion(inv.ServerVersion); err == nil {
-		targets = append(targets, server.Next())
-	}
-	targets = append(targets, s.extraTargets...)
-
-	seen := map[inventory.Version]bool{}
-	now := s.now()
-	for _, target := range targets {
-		if seen[target] {
-			continue
-		}
-		seen[target] = true
-		rep := engine.Evaluate(inv, s.cfg.KB, target, now)
-		repJSON, err := json.Marshal(rep)
-		if err != nil {
-			log.Printf("server: marshaling report (cluster %d, target %s): %v", cluster.ID, target, err)
-			continue
-		}
-		var blockers, warnings int
-		for _, f := range rep.Findings {
-			switch f.Severity {
-			case engine.SevBlocker:
-				blockers++
-			case engine.SevWarning:
-				warnings++
-			}
-		}
-		// Note: this prev-fetch → InsertEvaluation pair is not linearized
-		// across concurrent pushes of the same cluster+target — two racing
-		// pushes could both read the same prev and emit overlapping deltas.
-		// Benign today: one agent per cluster pushes serially. Revisit if a
-		// multi-writer ingest path ever exists.
-		var prev *store.Evaluation
-		if p, err := s.cfg.Store.LatestEvaluation(ctx, cluster.ID, target.String()); err == nil {
-			prev = &p
-		} else if !errors.Is(err, store.ErrNotFound) {
-			log.Printf("server: loading previous evaluation (cluster %d, target %s): %v", cluster.ID, target, err)
-		}
-		cur := store.Evaluation{
-			ClusterID:  cluster.ID,
-			SnapshotID: snapshotID,
-			Target:     target.String(),
-			KBVersion:  s.cfg.KB.Version,
-			Score:      rep.Score,
-			Ready:      rep.Ready,
-			Blockers:   blockers,
-			Warnings:   warnings,
-			Report:     repJSON,
-			CreatedAt:  now,
-		}
-		id, err := s.cfg.Store.InsertEvaluation(ctx, cur)
-		if err != nil {
-			log.Printf("server: storing evaluation (cluster %d, target %s): %v", cluster.ID, target, err)
-			continue
-		}
-		cur.ID = id
-		s.notifyDelta(ctx, cluster, target.String(), prev, cur)
-	}
-}
-
-// notifyDelta compares prev (nil ⇔ the cluster's first-ever evaluation for
-// this target) against cur and emits Config.Notifier events per the delta
-// rule (new-blocker, became-ready, eol-approaching).
-//
-// The caller (evaluateSnapshot) loads prev via LatestEvaluation BEFORE
-// InsertEvaluation stores cur — loading after would return the row just
-// written and every delta would be empty. Event.Cluster is stamped with
-// the human name from the push envelope (ComputeDelta only has the
-// inventory UID). Failures are logged and never fail ingestion — this
-// method deliberately returns nothing.
-func (s *Server) notifyDelta(ctx context.Context, cluster store.Cluster, target string, prev *store.Evaluation, cur store.Evaluation) {
-	if s.cfg.Notifier == nil || prev == nil {
-		return // notifications disabled, or first-ever evaluation: no delta
-	}
-	var prevRep engine.Report
-	if err := json.Unmarshal(prev.Report, &prevRep); err != nil {
-		log.Printf("server: decoding previous report (cluster %d, target %s): %v", cluster.ID, target, err)
-		return
-	}
-	var curRep engine.Report
-	if err := json.Unmarshal(cur.Report, &curRep); err != nil {
-		log.Printf("server: decoding current report (cluster %d, target %s): %v", cluster.ID, target, err)
-		return
-	}
-	for _, ev := range ComputeDelta(&prevRep, curRep) {
-		ev.Cluster = cluster.Name
-		if err := s.cfg.Notifier.Notify(ctx, ev); err != nil {
-			log.Printf("server: notification failed (cluster %s, target %s, kind %s): %v", cluster.Name, ev.Target, ev.Kind, err)
-		}
-	}
 }
 
 // ----- read API -----
@@ -584,13 +481,9 @@ func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.C
 // inventory alongside so callers don't unmarshal twice. Errors:
 // store.ErrNotFound (no snapshots) or a corrupt/unparseable-version error.
 func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.Version, inventory.Inventory, error) {
-	snap, err := s.cfg.Store.LatestSnapshot(ctx, clusterID)
+	_, inv, err := s.latestInventory(ctx, clusterID)
 	if err != nil {
 		return inventory.Version{}, inventory.Inventory{}, err
-	}
-	var inv inventory.Inventory
-	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
-		return inventory.Version{}, inventory.Inventory{}, fmt.Errorf("stored inventory for cluster %d is corrupt: %w", clusterID, err)
 	}
 	server, err := inventory.ParseVersion(inv.ServerVersion)
 	if err != nil {
@@ -623,15 +516,36 @@ func (s *Server) resolveTarget(w http.ResponseWriter, r *http.Request, clusterID
 	return target, true
 }
 
-// evalSummary is the read API's compact evaluation view.
+// errCorruptInventory marks a stored snapshot whose inventory JSON does not
+// decode.
+var errCorruptInventory = errors.New("stored inventory is corrupt")
+
+// latestInventory loads and decodes the cluster's latest snapshot.
+// store.ErrNotFound means the cluster has no snapshots.
+func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Snapshot, inventory.Inventory, error) {
+	snap, err := s.cfg.Store.LatestSnapshot(ctx, clusterID)
+	if err != nil {
+		return store.Snapshot{}, inventory.Inventory{}, err
+	}
+	var inv inventory.Inventory
+	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
+		return store.Snapshot{}, inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", clusterID, snap.ID, errCorruptInventory, err)
+	}
+	return snap, inv, nil
+}
+
+// evalSummary is the read API's compact evaluation view. Evaluations are
+// always the cluster's current ones (of its latest snapshot).
 type evalSummary struct {
-	Target      string    `json:"target"`
-	Score       int       `json:"score"`
-	Ready       bool      `json:"ready"`
-	Blockers    int       `json:"blockers"`
-	Warnings    int       `json:"warnings"`
-	KBVersion   string    `json:"kbVersion"`
-	EvaluatedAt time.Time `json:"evaluatedAt"`
+	Target      string         `json:"target"`
+	Score       int            `json:"score"`
+	Ready       bool           `json:"ready"`
+	Verdict     engine.Verdict `json:"verdict"`
+	Blockers    int            `json:"blockers"`
+	Warnings    int            `json:"warnings"`
+	KBVersion   string         `json:"kbVersion"`
+	EvaluatedAt time.Time      `json:"evaluatedAt"` // last confirmed; a re-evaluation with an unchanged result moves it
+	SnapshotID  int64          `json:"snapshotId"`
 }
 
 func summarize(e store.Evaluation) evalSummary {
@@ -639,10 +553,12 @@ func summarize(e store.Evaluation) evalSummary {
 		Target:      e.Target,
 		Score:       e.Score,
 		Ready:       e.Ready,
+		Verdict:     verdictOf(e),
 		Blockers:    e.Blockers,
 		Warnings:    e.Warnings,
 		KBVersion:   e.KBVersion,
-		EvaluatedAt: e.CreatedAt,
+		EvaluatedAt: e.EvaluatedAt,
+		SnapshotID:  e.SnapshotID,
 	}
 }
 
@@ -651,14 +567,14 @@ type clusterSummary struct {
 	Latest *evalSummary `json:"latest,omitempty"` // default-target evaluation, if any
 }
 
-// handleListClusters: GET /api/v1/clusters — every cluster plus its latest
+// handleListClusters: GET /api/v1/clusters — every cluster plus its current
 // default-target score summary (omitted when no snapshot/evaluation exists).
 //
 // Known cost (P3/P4 optimization point, fine at current fleet sizes): this
-// is N+1 store round-trips — LatestSnapshot + LatestEvaluation per cluster —
-// and defaultTarget unmarshals each cluster's full inventory blob just to
-// read ServerVersion. A latest-evals join or a denormalized server-version
-// column would fix both; no behavior change now.
+// is N+1 store round-trips — LatestSnapshot + CurrentEvaluation per
+// cluster — and defaultTarget unmarshals each cluster's full inventory blob
+// just to read ServerVersion. A latest-evals join or a denormalized
+// server-version column would fix both; no behavior change now.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	clusters, err := s.cfg.Store.ListClusters(ctx)
@@ -670,7 +586,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	for _, c := range clusters {
 		cs := clusterSummary{Cluster: c}
 		if target, _, err := s.defaultTarget(ctx, c.ID); err == nil {
-			if e, err := s.cfg.Store.LatestEvaluation(ctx, c.ID, target.String()); err == nil {
+			if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String()); err == nil {
 				sum := summarize(e)
 				cs.Latest = &sum
 			}
@@ -682,13 +598,14 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 
 type clusterDetail struct {
 	store.Cluster
-	Capabilities map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities,omitempty"`
-	Evaluations  []evalSummary                                       `json:"evaluations"`
+	ServerVersion string                                              `json:"serverVersion,omitempty"`
+	Capabilities  map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities,omitempty"`
+	Evaluations   []evalSummary                                       `json:"evaluations"`
 }
 
 // handleGetCluster: GET /api/v1/clusters/{id} — cluster row, the latest
-// snapshot's capability map, and latest evaluation summaries for the default
-// target plus every configured extra target.
+// snapshot's server version and capability map, and the current evaluation
+// summaries for the default target plus every applicable extra target.
 func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.requireCluster(w, r)
 	if !ok {
@@ -696,92 +613,116 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	detail := clusterDetail{Cluster: c, Evaluations: []evalSummary{}}
-	targets := make([]string, 0, len(s.extraTargets)+1)
-	if snap, err := s.cfg.Store.LatestSnapshot(ctx, c.ID); err == nil {
-		var inv inventory.Inventory
-		if json.Unmarshal(snap.Inventory, &inv) == nil {
-			detail.Capabilities = inv.Capabilities
-			if server, err := inventory.ParseVersion(inv.ServerVersion); err == nil {
-				targets = append(targets, server.Next().String())
-			}
-		}
+	var targets []inventory.Version
+	if _, inv, err := s.latestInventory(ctx, c.ID); err == nil {
+		detail.ServerVersion = inv.ServerVersion
+		detail.Capabilities = inv.Capabilities
+		targets = s.evalTargets(inv)
+	} else {
+		targets = s.extraTargets
 	}
-	for _, t := range s.extraTargets {
-		targets = append(targets, t.String())
-	}
-	seen := map[string]bool{}
 	for _, t := range targets {
-		if seen[t] {
-			continue
-		}
-		seen[t] = true
-		if e, err := s.cfg.Store.LatestEvaluation(ctx, c.ID, t); err == nil {
+		if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, t.String()); err == nil {
 			detail.Evaluations = append(detail.Evaluations, summarize(e))
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)
 }
 
-// loadOrComputeReport returns the stored evaluation's report for (cluster,
-// target) when one exists, else computes a what-if from the latest snapshot.
-// Only a missing evaluation (store.ErrNotFound) falls through to the
-// what-if path — any other store failure is returned, never masked by a
-// recompute that would hide a broken store behind a 200.
+// Report sources: a stored evaluation of the latest snapshot, or a what-if
+// computed on request from the latest snapshot.
+const (
+	sourceStored = "stored"
+	sourceWhatIf = "what-if"
+)
+
+// reportMeta says what a served report is: which snapshot, when it was
+// evaluated, whether it was stored or computed, and whether the target is
+// one the cluster already runs.
+type reportMeta struct {
+	EvaluatedAt   time.Time `json:"evaluatedAt"`
+	SnapshotID    int64     `json:"snapshotId"`
+	Source        string    `json:"source"`                  // sourceStored | sourceWhatIf
+	ServerVersion string    `json:"serverVersion,omitempty"` // of the latest snapshot
+	NotApplicable bool      `json:"notApplicable,omitempty"` // target at or below ServerVersion
+}
+
+// loadOrComputeReport returns the current stored evaluation's report for
+// (cluster, target) when one exists, else a what-if computed from the
+// latest snapshot. Only a missing evaluation (store.ErrNotFound) falls
+// through to the what-if path — any other store failure is returned, never
+// masked by a recompute that would hide a broken store behind a 200.
 // A store.ErrNotFound result means the cluster has no snapshots at all.
-func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version) (engine.Report, error) {
-	e, err := s.cfg.Store.LatestEvaluation(ctx, clusterID, target.String())
+func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version) (engine.Report, reportMeta, error) {
+	snap, inv, err := s.latestInventory(ctx, clusterID)
+	if err != nil {
+		return engine.Report{}, reportMeta{}, err
+	}
+	meta := reportMeta{ServerVersion: inv.ServerVersion, NotApplicable: notApplicable(inv, target)}
+	e, err := s.cfg.Store.CurrentEvaluation(ctx, clusterID, target.String())
 	switch {
 	case err == nil:
 		var rep engine.Report
 		if err := json.Unmarshal(e.Report, &rep); err != nil {
-			return engine.Report{}, fmt.Errorf("stored report for evaluation %d is corrupt: %w", e.ID, err)
+			return engine.Report{}, reportMeta{}, fmt.Errorf("stored report for evaluation %d is corrupt: %w", e.ID, err)
 		}
-		return rep, nil
+		meta.EvaluatedAt, meta.SnapshotID, meta.Source = e.EvaluatedAt, e.SnapshotID, sourceStored
+		return rep, meta, nil
 	case errors.Is(err, store.ErrNotFound):
-		return WhatIf(ctx, s.cfg.Store, s.cfg.KB, s.cfg.TeamMap, clusterID, target, s.now())
+		now := s.now()
+		meta.EvaluatedAt, meta.SnapshotID, meta.Source = now, snap.ID, sourceWhatIf
+		return evaluateWhatIf(inv, s.cfg.KB, s.cfg.TeamMap, target, now), meta, nil
 	default:
-		return engine.Report{}, fmt.Errorf("loading latest evaluation: %w", err)
+		return engine.Report{}, reportMeta{}, fmt.Errorf("loading current evaluation: %w", err)
 	}
 }
 
 // reportForRequest is the shared resolve-cluster → resolve-target → load/
-// compute pipeline behind the report and findings endpoints.
-func (s *Server) reportForRequest(w http.ResponseWriter, r *http.Request) (engine.Report, bool) {
+// compute pipeline behind the report, findings and teams endpoints.
+func (s *Server) reportForRequest(w http.ResponseWriter, r *http.Request) (engine.Report, reportMeta, bool) {
 	c, ok := s.requireCluster(w, r)
 	if !ok {
-		return engine.Report{}, false
+		return engine.Report{}, reportMeta{}, false
 	}
 	target, ok := s.resolveTarget(w, r, c.ID)
 	if !ok {
-		return engine.Report{}, false
+		return engine.Report{}, reportMeta{}, false
 	}
-	rep, err := s.loadOrComputeReport(r.Context(), c.ID, target)
+	rep, meta, err := s.loadOrComputeReport(r.Context(), c.ID, target)
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
-		return engine.Report{}, false
+		return engine.Report{}, reportMeta{}, false
 	}
 	if err != nil {
 		internalErr(w, "loading or computing report", err)
-		return engine.Report{}, false
+		return engine.Report{}, reportMeta{}, false
 	}
-	return rep, true
+	return rep, meta, true
+}
+
+// reportResponse is the report endpoint's body: the engine report, per-team
+// scores, and what the report is (reportMeta).
+type reportResponse struct {
+	reportWithTeams
+	reportMeta
 }
 
 // handleReport: GET /api/v1/clusters/{id}/report?target= — full engine.Report
-// plus presentation-time per-team scores (`teams`, omitted when empty).
+// plus presentation-time per-team scores (`teams`, omitted when empty) and
+// evaluatedAt/snapshotId/source.
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
-	rep, ok := s.reportForRequest(w, r)
+	rep, meta, ok := s.reportForRequest(w, r)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, withTeams(rep))
+	writeJSON(w, http.StatusOK, reportResponse{withTeams(rep), meta})
 }
 
 // handleFindings: GET /api/v1/clusters/{id}/findings?target=&severity=&category=
 // — the report's findings, exact-match filtered. Unknown filter values simply
 // match nothing.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
-	rep, ok := s.reportForRequest(w, r)
+	rep, meta, ok := s.reportForRequest(w, r)
 	if !ok {
 		return
 	}
@@ -797,10 +738,11 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		}
 		findings = append(findings, f)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"target":   rep.Target.String(),
-		"findings": findings,
-	})
+	writeJSON(w, http.StatusOK, struct {
+		Target   string           `json:"target"`
+		Findings []engine.Finding `json:"findings"`
+		reportMeta
+	}{rep.Target.String(), findings, meta})
 }
 
 // handleHistory: GET /api/v1/clusters/{id}/history?target=&limit= —

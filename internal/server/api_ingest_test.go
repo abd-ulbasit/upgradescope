@@ -297,7 +297,10 @@ func TestIngestAcceptedGzipAndIdentity(t *testing.T) {
 
 func TestIngestDuplicateCanonicalHash(t *testing.T) {
 	st := newFakeStore()
-	ts := httptest.NewServer(newTestServer(t, st).Handler())
+	s := newTestServer(t, st)
+	clock := &fakeClock{t: s.now()}
+	s.now = clock.now
+	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
 	resp1, out1 := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, testInventory()), true)
@@ -334,8 +337,24 @@ func TestIngestDuplicateCanonicalHash(t *testing.T) {
 	if len(st.snapshots) != 1 {
 		t.Fatalf("snapshots after duplicate = %d, want 1", len(st.snapshots))
 	}
-	if len(st.evals) != evalsAfterFirst {
-		t.Fatalf("duplicate triggered re-evaluation: evals %d -> %d", evalsAfterFirst, len(st.evals))
+	// Same day, same KB, same config: the stored evaluation is fresh, so
+	// the duplicate writes nothing.
+	if len(st.evals) != evalsAfterFirst || !st.evals[0].EvaluatedAt.Equal(st.evals[0].CreatedAt) {
+		t.Fatalf("same-day duplicate re-evaluated: evals %d -> %d, %+v", evalsAfterFirst, len(st.evals), st.evals[0])
+	}
+
+	// A day later the stored evaluation is stale (EOL math is day-granular):
+	// the duplicate re-evaluates, and an unchanged result refreshes the row
+	// instead of adding history.
+	nextDay := clock.now().Add(24 * time.Hour)
+	clock.set(nextDay)
+	resp3, out3 := postSnapshot(t, ts, "ingest-tok", reordered, false)
+	if resp3.StatusCode != http.StatusOK || out3["duplicate"] != true {
+		t.Fatalf("next-day duplicate = %d %v, want 200 duplicate", resp3.StatusCode, out3)
+	}
+	if len(st.evals) != evalsAfterFirst || !st.evals[0].EvaluatedAt.Equal(nextDay) {
+		t.Fatalf("next-day duplicate: evals %d -> %d, evaluatedAt %v, want a refresh to %v",
+			evalsAfterFirst, len(st.evals), st.evals[0].EvaluatedAt, nextDay)
 	}
 }
 
