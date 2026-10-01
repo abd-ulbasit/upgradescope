@@ -213,6 +213,7 @@ func TestIngressNginxRetirement(t *testing.T) {
 	}
 	for _, want := range []string{
 		"https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/",
+		"https://github.com/kubernetes/ingress-nginx", // archive banner carries the day
 	} {
 		if !slices.Contains(in.Support.Citations, want) {
 			t.Errorf("citations %v missing %q", in.Support.Citations, want)

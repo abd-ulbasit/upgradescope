@@ -11,8 +11,11 @@ matchers:
     - ingress-nginx
 support:
   status: eol
+  # The blog posts give "March 2026"; the day is when the project archived
+  # its repository ("archived by the owner on Mar 24, 2026" on the repo page).
   eol_date: "2026-03-24"
   citations:
     - https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/
     - https://kubernetes.io/blog/2026/01/29/ingress-nginx-statement/
+    - https://github.com/kubernetes/ingress-nginx
 recommendation: Migrate to Gateway API (see ingress2gateway) or a maintained ingress controller.

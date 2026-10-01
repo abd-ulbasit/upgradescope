@@ -248,3 +248,34 @@ func TestEvalAddOnsSyncedEntriesHaveNoProductWideEOL(t *testing.T) {
 		t.Fatal("no synced entries in the embedded registry")
 	}
 }
+
+// The embedded ExternalDNS matrix rows, both ends: ≤0.9.x stops at 1.21,
+// 0.10–0.17 at 1.32, 0.18+ is open-ended.
+func TestEmbeddedExternalDNSCompatRows(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons}
+	cases := []struct {
+		version string
+		target  inventory.Version
+		want    string // chart-incompat title, "" for none
+	}{
+		{"0.9.0", inventory.Version{Major: 1, Minor: 21}, ""},
+		{"0.9.0", inventory.Version{Major: 1, Minor: 22}, "ExternalDNS 0.9.0 supports Kubernetes up to 1.21 (target 1.22)"},
+		{"0.17.0", inventory.Version{Major: 1, Minor: 33}, "ExternalDNS 0.17.0 supports Kubernetes up to 1.32 (target 1.33)"},
+		{"0.18.0", inventory.Version{Major: 1, Minor: 36}, ""},
+	}
+	for _, tc := range cases {
+		got := ""
+		for _, f := range evalAddOns(addOnAt("external-dns", tc.version), k, tc.target, day("2026-10-02")) {
+			if f.Category == CatChartIncompat {
+				got = f.Title
+			}
+		}
+		if got != tc.want {
+			t.Errorf("%s at %s: chart-incompat %q, want %q", tc.version, tc.target, got, tc.want)
+		}
+	}
+}
