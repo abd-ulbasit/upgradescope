@@ -348,14 +348,17 @@ assert_line "$TMP/netpol.yaml" 'kind: NetworkPolicy' "NetworkPolicy rendered whe
 assert_contains "$TMP/netpol.yaml" 'app.kubernetes.io/component: agent' "agent pods may reach the server"
 
 echo "== values.schema.json rejects bad values"
-for bad in 'server.enable=true' 'agent.interval=30s' 'agent.interval=10' 'agent.targets={latest}' 'rbac.helmSecret=false'; do
+# agent.targets end up in the CR's spec.targets, which the CRD pins to
+# MAJOR.MINOR: v1.38 or 1.37.2 would make every create/patch 422.
+for bad in 'server.enable=true' 'agent.interval=30s' 'agent.interval=10' 'agent.targets={latest}' \
+  'agent.targets={v1.38}' 'agent.targets={1.37.2}' 'rbac.helmSecret=false'; do
   if helm template upgradescope "$CHART" --set "$bad" >/dev/null 2>&1; then
     fail "schema accepted --set $bad"
   else
     pass "schema rejects --set $bad"
   fi
 done
-for good in 'agent.interval=1m' 'agent.interval=1h30m' 'agent.targets={1.37,v1.38}'; do
+for good in 'agent.interval=1m' 'agent.interval=1h30m' 'agent.targets={1.37,1.38}'; do
   if helm template upgradescope "$CHART" --set "$good" >/dev/null 2>&1; then
     pass "schema accepts --set $good"
   else

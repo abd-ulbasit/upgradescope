@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,19 @@ func TestConfigRejectsInvalidTargets(t *testing.T) {
 	err := cfg.applyDefaults()
 	if err == nil || !strings.Contains(err.Error(), "latest") {
 		t.Fatalf("err = %v, want invalid-target error naming the value", err)
+	}
+}
+
+// Targets are normalized to the MAJOR.MINOR form the CRD's spec.targets
+// pattern requires (and that resolveTargets compares against), dropping
+// duplicates the normalization creates.
+func TestConfigNormalizesTargets(t *testing.T) {
+	cfg := Config{Targets: []string{"v1.38", "1.37.2", "1.37", "1.36.0-rc.1"}}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"1.38", "1.37", "1.36"}; !slices.Equal(cfg.Targets, want) {
+		t.Errorf("Targets = %v, want %v", cfg.Targets, want)
 	}
 }
 

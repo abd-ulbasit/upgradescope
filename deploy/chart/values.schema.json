@@ -14,6 +14,11 @@
       "type": "array",
       "items": { "type": "string", "pattern": "^v?1\\.[0-9]+(\\.[0-9]+)?$" }
     },
+    "crTargets": {
+      "description": "Kubernetes minor versions written to the ClusterReadiness spec.targets, e.g. [\"1.37\", \"1.38\"]. MAJOR.MINOR only, as the CRD requires.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^1\\.[0-9]+$" }
+    },
     "stringMap": { "type": "object", "additionalProperties": { "type": "string" } },
     "list": { "type": "array" },
     "object": { "type": "object" },
@@ -58,7 +63,7 @@
         "teamLabel": { "type": "string", "minLength": 1 },
         "clusterName": { "type": "string" },
         "manageCRD": { "type": "boolean" },
-        "targets": { "$ref": "#/definitions/targets" },
+        "targets": { "$ref": "#/definitions/crTargets" },
         "serverUrl": { "type": "string", "pattern": "^(https?://.+)?$" },
         "serverToken": { "type": "string" },
         "existingSecret": { "$ref": "#/definitions/secretName" },

@@ -41,7 +41,8 @@ type Config struct {
 	ForceSyncEvery time.Duration // default 1h: push even if hash unchanged
 	// Targets, when non-empty, are the source of truth for spec.targets:
 	// every tick reconciles the CR to them, overriding kubectl edits. Empty
-	// leaves spec.targets to whoever edits the CR.
+	// leaves spec.targets to whoever edits the CR. applyDefaults normalizes
+	// each to MAJOR.MINOR ("v1.38" → "1.38", "1.37.2" → "1.37").
 	Targets []string
 	// SkipCRDManagement leaves the CRD alone entirely (--manage-crd=false):
 	// no read, no schema upgrade. The default keeps it in step with the
@@ -69,11 +70,21 @@ func (c *Config) applyDefaults() error {
 	if c.ServerURL != "" && c.ServerToken == "" {
 		return fmt.Errorf("server-url set but server-token empty (the ingest endpoint requires a bearer token)")
 	}
+	// Normalize to MAJOR.MINOR: the CRD pins spec.targets items to that
+	// form, so writing "v1.38" or "1.37.2" verbatim would be rejected with
+	// 422 on every create and patch. It also keeps the per-tick comparison
+	// with the stored spec stable.
+	var targets []string
 	for _, raw := range c.Targets {
-		if _, err := inventory.ParseTarget(raw); err != nil {
+		v, err := inventory.ParseTarget(raw)
+		if err != nil {
 			return fmt.Errorf("targets: %w", err)
 		}
+		if minor := fmt.Sprintf("%d.%d", v.Major, v.Minor); !slices.Contains(targets, minor) {
+			targets = append(targets, minor)
+		}
 	}
+	c.Targets = targets
 	return nil
 }
 
