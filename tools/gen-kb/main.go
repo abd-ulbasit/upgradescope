@@ -149,6 +149,7 @@ func main() {
 				e.Replacement = &gvkOut{Group: g.Group, Version: g.Version, Kind: g.Kind}
 			}
 		}
+		fixReplacement(&e)
 		entries = append(entries, e)
 	}
 

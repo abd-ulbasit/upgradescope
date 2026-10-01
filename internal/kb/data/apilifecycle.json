@@ -417,12 +417,7 @@
       "kind": "DeploymentRollback",
       "introduced": "1.6",
       "deprecated": "1.8",
-      "removed": "1.16",
-      "replacement": {
-        "group": "apps",
-        "version": "v1",
-        "kind": "DeploymentRollback"
-      }
+      "removed": "1.16"
     },
     {
       "group": "apps",
@@ -803,7 +798,12 @@
       "kind": "Event",
       "introduced": "1.8",
       "deprecated": "1.22",
-      "removed": "1.25"
+      "removed": "1.25",
+      "replacement": {
+        "group": "events.k8s.io",
+        "version": "v1",
+        "kind": "Event"
+      }
     },
     {
       "group": "extensions",
@@ -1037,7 +1037,7 @@
       "replacement": {
         "group": "networking.k8s.io",
         "version": "v1",
-        "kind": "IngressClassList"
+        "kind": "IngressClass"
       }
     },
     {
@@ -1060,7 +1060,12 @@
       "kind": "RuntimeClass",
       "introduced": "1.13",
       "deprecated": "1.22",
-      "removed": "1.25"
+      "removed": "1.25",
+      "replacement": {
+        "group": "node.k8s.io",
+        "version": "v1",
+        "kind": "RuntimeClass"
+      }
     },
     {
       "group": "policy",
