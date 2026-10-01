@@ -31,6 +31,10 @@ spec:
           type: string
           description: Verdict for the first target — ready, blocked, or unknown (required checks not assessed).
           jsonPath: .status.targets[0].verdict
+        - name: LastEvaluated
+          type: date
+          description: When the agent last wrote this status. Older than about two intervals means the agent is not ticking.
+          jsonPath: .status.lastEvaluated
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -59,6 +63,41 @@ spec:
                   format: date-time
                 agentVersion:
                   type: string
+                observedGeneration:
+                  description: The metadata.generation (spec version) the status was evaluated for.
+                  type: integer
+                  format: int64
+                  minimum: 0
+                conditions:
+                  description: 'Standard conditions. Ready summarizes the first target''s verdict: True (ready), False (reason Blocked), or Unknown (reason NotAssessed: a required check was not assessed, or no target was evaluated).'
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime, reason, message]
+                    properties:
+                      type:
+                        type: string
+                        maxLength: 316
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      message:
+                        type: string
+                        maxLength: 32768
                 notAssessed:
                   type: array
                   items:

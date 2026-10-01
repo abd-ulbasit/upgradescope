@@ -2,6 +2,7 @@ package crd
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,6 +58,50 @@ type Status struct {
 	Targets               []TargetStatus `json:"targets,omitempty"`
 	NotAssessed           []string       `json:"notAssessed,omitempty"` // "helm: secrets list forbidden"
 	AgentVersion          string         `json:"agentVersion,omitempty"`
+	// ObservedGeneration and Conditions are stamped by WriteStatus: the
+	// object's metadata.generation and the Ready condition (ReadyCondition),
+	// the standard shape Argo CD, kstatus and `kubectl wait` read.
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// ConditionReady is the condition type summarizing the first target's
+// verdict; its reasons map the three verdicts.
+const (
+	ConditionReady    = "Ready"
+	ReasonReady       = "Ready"       // True: verdict ready
+	ReasonBlocked     = "Blocked"     // False: at least one blocker
+	ReasonNotAssessed = "NotAssessed" // Unknown: verdict unknown, or no target evaluated
+)
+
+// ReadyCondition derives the Ready condition from the first target's
+// verdict (the one the Ready printer column shows). LastTransitionTime is
+// the evaluation time; WriteStatus keeps the stored one while the
+// condition's status does not change.
+func ReadyCondition(st Status) metav1.Condition {
+	c := metav1.Condition{Type: ConditionReady, LastTransitionTime: st.LastEvaluated}
+	if len(st.Targets) == 0 {
+		c.Status, c.Reason = metav1.ConditionUnknown, ReasonNotAssessed
+		c.Message = "no target evaluated"
+		if len(st.NotAssessed) > 0 {
+			c.Message += ": " + strings.Join(st.NotAssessed, "; ")
+		}
+		return c
+	}
+	t := st.Targets[0]
+	switch {
+	case t.Verdict == string(engine.VerdictReady) || (t.Verdict == "" && t.Ready):
+		c.Status, c.Reason = metav1.ConditionTrue, ReasonReady
+		c.Message = fmt.Sprintf("%s: ready (score %d)", t.Target, t.Score)
+	case t.Verdict == string(engine.VerdictBlocked) || t.Blockers > 0:
+		c.Status, c.Reason = metav1.ConditionFalse, ReasonBlocked
+		c.Message = fmt.Sprintf("%s: %d blocker(s) (score %d)", t.Target, t.Blockers, t.Score)
+	default:
+		c.Status, c.Reason = metav1.ConditionUnknown, ReasonNotAssessed
+		c.Message = fmt.Sprintf("%s: no blockers found, but a required check was not assessed; see status.notAssessed (score %d)",
+			t.Target, t.Score)
+	}
+	return c
 }
 
 // maxTopFindings bounds CRD status size; the full list lives in server/CLI.
