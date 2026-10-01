@@ -56,8 +56,9 @@ var internalManagers = map[string]bool{
 //   - the KB entry has no replacement and no non-deprecated version of the
 //     resource is served: the type itself goes away, so every object counts;
 //   - otherwise only objects authored via the flagged group/version count:
-//     a managedFields entry (not an internal manager, not the status
-//     subresource) or the last-applied annotation names it.
+//     some manager's newest managedFields entry (not an internal manager,
+//     not the status subresource) names it, or, for an object with no such
+//     entries, the last-applied annotation does (see authoringManager).
 //
 // Objects created by a raw client that leaves neither trace go undetected;
 // the deprecated-calls metric covers live callers. APF objects the
@@ -274,15 +275,43 @@ func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVer
 	}
 }
 
-// authoringManager reports who wrote m through group/version gv: the first
-// managedFields manager whose entry names gv (internal managers and status
-// subresource entries skipped), else lastAppliedManager when the
-// last-applied annotation's apiVersion is gv, else "".
+// authoringManager reports who still writes m through group/version gv,
+// or "".
+//
+// managedFields come first. An Update entry's identity includes its
+// apiVersion, so a manager that moved to another version keeps its old
+// entry for every field its newer writes left alone; only each manager's
+// newest entry says what it writes now. Entries are grouped by (manager,
+// subresource), skipping internal managers and the status subresource, and
+// a manager counts when it has an entry naming gv that is strictly newer
+// than all of its entries naming another version (a missing timestamp
+// cannot be ordered, so it counts as a tie, and ties clear). The first
+// such manager, in managedFields order, is returned.
+//
+// The last-applied annotation is the fallback only when no entry is left
+// to judge by: kubectl client-side apply rewrites it, nothing else does,
+// so under any other writer's entries it may be long stale.
 func authoringManager(m *metav1.PartialObjectMetadata, gv string) string {
+	type key struct{ manager, subresource string }
+	var order []key
+	byKey := map[key][]metav1.ManagedFieldsEntry{}
 	for _, f := range m.ManagedFields {
-		if f.APIVersion == gv && f.Subresource != "status" && !internalManagers[f.Manager] {
-			return f.Manager
+		if f.Subresource == "status" || internalManagers[f.Manager] {
+			continue
 		}
+		k := key{f.Manager, f.Subresource}
+		if _, seen := byKey[k]; !seen {
+			order = append(order, k)
+		}
+		byKey[k] = append(byKey[k], f)
+	}
+	for _, k := range order {
+		if writesNow(byKey[k], gv) {
+			return k.manager
+		}
+	}
+	if len(order) > 0 {
+		return ""
 	}
 	if raw, ok := m.Annotations[lastAppliedAnnotation]; ok {
 		var applied struct {
@@ -293,4 +322,25 @@ func authoringManager(m *metav1.PartialObjectMetadata, gv string) string {
 		}
 	}
 	return ""
+}
+
+// writesNow reports whether one manager's entries have an entry naming gv
+// that is strictly newer than each of its entries naming another version.
+func writesNow(entries []metav1.ManagedFieldsEntry, gv string) bool {
+	for _, e := range entries {
+		if e.APIVersion != gv {
+			continue
+		}
+		newest := true
+		for _, o := range entries {
+			if o.APIVersion != gv && (e.Time == nil || o.Time == nil || !o.Time.Before(e.Time)) {
+				newest = false
+				break
+			}
+		}
+		if newest {
+			return true
+		}
+	}
+	return false
 }

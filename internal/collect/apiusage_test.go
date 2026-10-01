@@ -43,6 +43,13 @@ func wrote(manager, apiVersion string) metav1.ManagedFieldsEntry {
 	return metav1.ManagedFieldsEntry{Manager: manager, Operation: metav1.ManagedFieldsOperationUpdate, APIVersion: apiVersion}
 }
 
+// wroteAt is wrote with the entry's timestamp, minute m of a fixed day.
+func wroteAt(manager, apiVersion string, m int) metav1.ManagedFieldsEntry {
+	e := wrote(manager, apiVersion)
+	e.Time = &metav1.Time{Time: time.Date(2026, 9, 1, 0, m, 0, 0, time.UTC)}
+	return e
+}
+
 func lastApplied(apiVersion, kind string) map[string]string {
 	return map[string]string{
 		"kubectl.kubernetes.io/last-applied-configuration": fmt.Sprintf(`{"apiVersion":%q,"kind":%q,"metadata":{"name":"x"},"spec":{}}`, apiVersion, kind),
@@ -174,6 +181,29 @@ func TestCollectAPIUsageObjectWrittenViaGAVersionIsNotAFinding(t *testing.T) {
 	}
 }
 
+// The remediation path: the chart moved to v1 and `helm upgrade` ran. The
+// apiserver adds a second helm entry at v1 and keeps the v1beta1 one for
+// every field the upgrade did not change, so the blocker must clear on the
+// newer entry, not wait for the old one to disappear.
+func TestCollectAPIUsageClearsAfterManagerMigrates(t *testing.T) {
+	served := []string{"networking.k8s.io/v1", "networking.k8s.io/v1beta1"}
+	meta := metaClient(servedAt("Ingress", served,
+		obj{namespace: "default", name: "web", managed: []metav1.ManagedFieldsEntry{
+			wroteAt("helm", "networking.k8s.io/v1beta1", 1),
+			wroteAt("helm", "networking.k8s.io/v1", 2),
+		}},
+	))
+	disc := fakeDiscovery(resources("networking.k8s.io/v1", ingresses), resources("networking.k8s.io/v1beta1", ingresses))
+
+	var inv inventory.Inventory
+	if err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.APIUsage) != 0 {
+		t.Errorf("api usage = %#v, want none: helm's newest write is v1", inv.APIUsage)
+	}
+}
+
 // The preferred version is a per-group choice; when it is the deprecated
 // version of this resource, a served non-deprecated version still wins.
 func TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed(t *testing.T) {
@@ -269,6 +299,28 @@ func TestAuthoringManagerIgnoresInternalManagersAndStatusEntries(t *testing.T) {
 		{"last-applied", nil, lastApplied(gv, "FlowSchema"), "kubectl last-applied"},
 		{"managed fields win over last-applied", []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", gv)}, lastApplied(gv, "FlowSchema"), "kubectl-client-side-apply"},
 		{"unparseable last-applied", nil, map[string]string{"kubectl.kubernetes.io/last-applied-configuration": "{"}, ""},
+
+		// An Update entry's identity includes its apiVersion, so a manager
+		// that migrated keeps its old entry for every field the new write
+		// left alone. Only each manager's newest entry says what it writes.
+		{"manager migrated off the version", []metav1.ManagedFieldsEntry{wroteAt("helm", gv, 1), wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 2)}, nil, ""},
+		{"manager migrated, entries out of order", []metav1.ManagedFieldsEntry{wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 2), wroteAt("helm", gv, 1)}, nil, ""},
+		{"manager went back to the version", []metav1.ManagedFieldsEntry{wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 1), wroteAt("helm", gv, 2)}, nil, "helm"},
+		{"equal times prefer the other version", []metav1.ManagedFieldsEntry{wroteAt("helm", gv, 1), wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 1)}, nil, ""},
+		{"no times prefer the other version", []metav1.ManagedFieldsEntry{wrote("helm", gv), wrote("helm", "flowcontrol.apiserver.k8s.io/v1")}, nil, ""},
+		{"an untimed entry ties with a timed one", []metav1.ManagedFieldsEntry{wrote("helm", "flowcontrol.apiserver.k8s.io/v1"), wroteAt("helm", gv, 1)}, nil, ""},
+		// Each manager is judged on its own: one tool moving to v1 says
+		// nothing about another that still writes the beta.
+		{"another manager migrated", []metav1.ManagedFieldsEntry{wroteAt("terraform", gv, 1), wroteAt("helm", "flowcontrol.apiserver.k8s.io/v1", 2)}, nil, "terraform"},
+		{"a newer status entry does not clear the main one", []metav1.ManagedFieldsEntry{
+			wroteAt("operator", gv, 1),
+			{Manager: "operator", APIVersion: "flowcontrol.apiserver.k8s.io/v1", Subresource: "status", Time: wroteAt("", "", 2).Time},
+		}, nil, "operator"},
+		// managedFields from a non-internal writer are newer evidence than
+		// the annotation, which only kubectl client-side apply rewrites.
+		{"stale last-applied under a v1 manager", []metav1.ManagedFieldsEntry{wrote("helm", "flowcontrol.apiserver.k8s.io/v1")}, lastApplied(gv, "FlowSchema"), ""},
+		{"last-applied with only internal managers", []metav1.ManagedFieldsEntry{wrote("kube-controller-manager", "flowcontrol.apiserver.k8s.io/v1")}, lastApplied(gv, "FlowSchema"), "kubectl last-applied"},
+		{"last-applied with only status entries", []metav1.ManagedFieldsEntry{{Manager: "operator", APIVersion: "flowcontrol.apiserver.k8s.io/v1", Subresource: "status"}}, lastApplied(gv, "FlowSchema"), "kubectl last-applied"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
