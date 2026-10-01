@@ -43,6 +43,13 @@ type Finding struct {
 	Namespaces  []string `json:"namespaces,omitempty"`
 	Remediation string   `json:"remediation,omitempty"`
 	Citations   []string `json:"citations,omitempty"`
+	// Objects identifies the affected objects for API-usage findings
+	// (copied from inventory.APIUsage, so at most inventory.MaxObjectRefs),
+	// sorted by file, line, namespace, name; ObjectsOmitted counts the
+	// affected objects not listed. Empty when the collector could not
+	// identify objects.
+	Objects        []inventory.ObjectRef `json:"objects,omitempty"`
+	ObjectsOmitted int                   `json:"objectsOmitted,omitempty"`
 }
 
 type CapabilityGap struct {

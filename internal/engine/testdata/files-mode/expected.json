@@ -1,0 +1,75 @@
+{
+  "clusterId": "files",
+  "findings": [
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: namespace unset (1).",
+      "key": "removed-api/batch/v1beta1/CronJob",
+      "objects": [
+        {
+          "file": "rendered/all.yaml",
+          "line": 14,
+          "name": "nightly",
+          "renderedFrom": "shop/templates/cronjob.yaml"
+        }
+      ],
+      "remediation": "migrate to batch/v1 CronJob",
+      "severity": "blocker",
+      "title": "batch/v1beta1 CronJob removed in 1.25 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "3 manifest object(s) use this API: namespace unset (1), shop (2).",
+      "key": "removed-api/extensions/v1beta1/Ingress",
+      "namespaces": [
+        "shop"
+      ],
+      "objects": [
+        {
+          "file": "legacy/ingress.yaml",
+          "line": 1,
+          "name": "admin"
+        },
+        {
+          "file": "rendered/all.yaml",
+          "line": 3,
+          "name": "web",
+          "namespace": "shop",
+          "renderedFrom": "shop/templates/ingress.yaml"
+        }
+      ],
+      "objectsOmitted": 1,
+      "remediation": "migrate to networking.k8s.io/v1 Ingress",
+      "severity": "blocker",
+      "title": "extensions/v1beta1 Ingress removed in 1.22 (3 objects)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "addons",
+      "reason": "files mode"
+    },
+    {
+      "capability": "deprecated-calls",
+      "reason": "files mode"
+    },
+    {
+      "capability": "helm",
+      "reason": "files mode"
+    },
+    {
+      "capability": "versions",
+      "reason": "files mode"
+    }
+  ],
+  "ready": false,
+  "score": 50,
+  "target": "1.36"
+}

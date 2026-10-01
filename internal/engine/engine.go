@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"sort"
@@ -46,9 +47,9 @@ func keyGroup(group string) string {
 }
 
 // namespaceBreakdown renders "ns (count)" parts sorted by namespace name and
-// returns the sorted namespace names. The cluster-scoped key "" renders as
-// "cluster-scoped" in the detail and is excluded from the returned names.
-func namespaceBreakdown(counts map[string]int) (detail string, names []string) {
+// returns the sorted namespace names. The empty key "" renders as
+// emptyLabel in the detail and is excluded from the returned names.
+func namespaceBreakdown(counts map[string]int, emptyLabel string) (detail string, names []string) {
 	keys := make([]string, 0, len(counts))
 	for ns := range counts {
 		keys = append(keys, ns)
@@ -58,7 +59,7 @@ func namespaceBreakdown(counts map[string]int) (detail string, names []string) {
 	for _, ns := range keys {
 		label := ns
 		if ns == "" {
-			label = "cluster-scoped"
+			label = emptyLabel
 		} else {
 			names = append(names, ns)
 		}
@@ -98,11 +99,22 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 		if !ok {
 			continue
 		}
-		nsDetail, nsNames := namespaceBreakdown(u.Namespaces)
+		// Manifest objects (refs read from text carry a line) are proposed
+		// state, not stored objects, and an empty namespace there means
+		// metadata.namespace is unset — helm template output usually omits
+		// it — not that the object is cluster-scoped.
+		manifests := len(u.Objects) > 0 && u.Objects[0].Line > 0
+		emptyNS := "cluster-scoped"
+		if manifests {
+			emptyNS = "namespace unset"
+		}
+		nsDetail, nsNames := namespaceBreakdown(u.Namespaces, emptyNS)
 		f := Finding{
-			Teams:      teamsFor(nsNames, inv.Namespaces),
-			Namespaces: nsNames,
-			Citations:  []string{deprecationGuideURL},
+			Teams:          teamsFor(nsNames, inv.Namespaces),
+			Namespaces:     nsNames,
+			Citations:      []string{deprecationGuideURL},
+			Objects:        sortedObjects(u.Objects),
+			ObjectsOmitted: u.ObjectsOmitted,
 		}
 		if e.Replacement != nil {
 			f.Remediation = fmt.Sprintf("migrate to %s %s",
@@ -126,13 +138,36 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 			continue // KB entry exists but is neither deprecated nor removed
 		}
 		f.Key = fmt.Sprintf("%s/%s/%s/%s", f.Category, keyGroup(u.Group), u.Version, u.Kind)
+		detail := "%d object(s) still stored/served at this version"
+		if manifests {
+			detail = "%d manifest object(s) use this API"
+		}
 		if nsDetail == "" {
-			f.Detail = fmt.Sprintf("%d object(s) still stored/served at this version.", u.Count)
+			f.Detail = fmt.Sprintf(detail+".", u.Count)
 		} else {
-			f.Detail = fmt.Sprintf("%d object(s) still stored/served at this version: %s.", u.Count, nsDetail)
+			f.Detail = fmt.Sprintf(detail+": %s.", u.Count, nsDetail)
 		}
 		out = append(out, f)
 	}
+	return out
+}
+
+// sortedObjects returns a sorted copy of refs (file, line, namespace, name)
+// so findings are deterministic whatever order a collector produced; nil
+// stays nil.
+func sortedObjects(refs []inventory.ObjectRef) []inventory.ObjectRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := slices.Clone(refs)
+	slices.SortStableFunc(out, func(a, b inventory.ObjectRef) int {
+		return cmp.Or(
+			cmp.Compare(a.File, b.File),
+			cmp.Compare(a.Line, b.Line),
+			cmp.Compare(a.Namespace, b.Namespace),
+			cmp.Compare(a.Name, b.Name),
+		)
+	})
 	return out
 }
 

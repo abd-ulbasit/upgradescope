@@ -21,6 +21,7 @@ var goldenParams = map[string]struct{ target, now string }{
 	"eol-ingress-nginx":     {"1.30", "2026-06-10T00:00:00Z"},
 	"mixed-everything":      {"1.38", "2026-06-10T00:00:00Z"},
 	"degraded-capabilities": {"1.34", "2026-06-10T00:00:00Z"},
+	"files-mode":            {"1.36", "2026-06-10T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte
