@@ -163,6 +163,8 @@ type gateFinding struct {
 // gateResponse is the proposed state's report (cluster + manifests) whose
 // verdict judges only what the manifests introduce: Verdict and Ready
 // shadow the report's, and ClusterVerdict keeps the whole proposed state's.
+// Score stays the whole proposed state's, cluster findings included: gate
+// on verdict (or fail-on), not on score.
 type gateResponse struct {
 	reportWithTeams
 	Findings       []gateFinding  `json:"findings"`

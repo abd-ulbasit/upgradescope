@@ -41,7 +41,8 @@ func outboxError(err error) string {
 }
 
 // outboxBackoff is the delay after the attempts-th failed attempt:
-// 30s, 1m, 2m, … capped at an hour.
+// 30s, 1m, 2m, … capped at an hour. With outboxMaxAttempts = 8 the
+// largest delay used is 32m (attempt 7), about 63m in all before giving up.
 func outboxBackoff(attempts int) time.Duration {
 	d := outboxBaseBackoff
 	for i := 1; i < attempts && d < outboxMaxBackoff; i++ {
