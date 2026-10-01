@@ -18,9 +18,12 @@ const deprecatedAPIsMetric = "apiserver_requested_deprecated_apis"
 
 // collectDeprecatedCalls scrapes the apiserver /metrics endpoint
 // (RBAC: nonResourceURLs ["/metrics"], verb get) and extracts
-// apiserver_requested_deprecated_apis rows — active callers of deprecated
-// APIs, the blind spot of manifest-only scanners. Known limits (spec §4):
-// gauge resets on apiserver restart; HA apiservers report independently.
+// apiserver_requested_deprecated_apis rows — deprecated APIs some client
+// requested, the blind spot of manifest-only scanners. The metric does not
+// say which client. Known limits (spec §4): gauge resets on apiserver
+// restart; HA apiservers report independently. The api-usage collector
+// lists deprecated endpoints only when nothing else serves the resource,
+// so the scanner does not otherwise feed this metric.
 func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, inv *inventory.Inventory) error {
 	raw, err := rc.Get().AbsPath("/metrics").DoRaw(ctx)
 	if err != nil {
