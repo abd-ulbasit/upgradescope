@@ -214,6 +214,13 @@ so do writes by the excluded control-plane managers. Each manager is judged
 on its own, so when an object moves from one tool to another (from
 `kubectl apply` to Helm, say), the old tool's entry keeps the finding open
 until that entry is gone, for example once the new tool owns those fields.
+A Helm upgrade that changes nothing but the apiVersion can leave Helm's
+old-version entry in place: Helm computes a patch against the live object,
+finds no change and skips the write, so no newer entry is recorded. The
+finding then stays until the object is next changed through the new
+version. The finding names at most `inventory.MaxObjectRefs` (100) objects,
+and its "written by" list comes from those. When objects were left out, the
+detail says so: "Written by (first 100 of 250 objects)".
 The `deprecated-calls` metric covers live callers. When both signals point at
 the same group/version/kind, the engine emits one finding that carries
 both pieces of evidence.
