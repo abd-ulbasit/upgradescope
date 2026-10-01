@@ -77,6 +77,18 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("printer column %q missing (have %v)", want, cols)
 		}
 	}
+	// READY shows the verdict (ready/blocked/unknown), never a bare
+	// ready bool that would read True for an unassessed cluster.
+	for _, pc := range v.AdditionalPrinterColumns {
+		if pc.Name == "Ready" && (pc.JSONPath != ".status.targets[0].verdict" || pc.Type != "string") {
+			t.Errorf("Ready column = %s (%s), want .status.targets[0].verdict (string)", pc.JSONPath, pc.Type)
+		}
+	}
+	targets := v.Schema.OpenAPIV3Schema.Properties["status"].Properties["targets"].Items.Schema
+	verdict, ok := targets.Properties["verdict"]
+	if !ok || verdict.Type != "string" || len(verdict.Enum) != 3 {
+		t.Errorf("status.targets[].verdict schema = %+v, want string enum of 3", verdict)
+	}
 	if v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
 		t.Fatal("openAPIV3Schema missing")
 	}
