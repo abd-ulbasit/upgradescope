@@ -106,9 +106,8 @@ else
   echo "ok   every helm call on the release names the kind context" | tee -a "$work/results"
 fi
 
-run "a removed-api blocker on a vanilla cluster is reported, not fatal (#3)" 0 STUB_REMOVED=1
-has "the #3 regression is a FAIL in the summary" "$work/summary" "- **FAIL** — vanilla 1.31 cluster scanned at 1.32 has zero removed-api blockers (best-effort until #3"
-has "the #3 regression is a warning" "$work/out" "::warning title=kind e2e 1.31: best-effort check failed::"
+run "a removed-api blocker on a vanilla cluster fails the run (#3 is fixed; the check gates)" 1 STUB_REMOVED=1
+has "the #3 regression is a FAIL in the summary" "$work/summary" "- **FAIL** — vanilla 1.31 cluster scanned at 1.32 has zero removed-api blockers"
 
 # A local re-run reuses the cluster, which already has the demo add-on, the
 # CRD and the chart's leftovers: not the vanilla cluster #3's check is for.
