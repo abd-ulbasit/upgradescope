@@ -93,6 +93,7 @@ categories, capabilities, route patterns, and on the server cluster names
 | `upgradescope_readiness_verdict` | gauge | `target`, `verdict` | 1 for the current verdict (`ready`, `blocked`, `unknown`), 0 for the other two |
 | `upgradescope_findings` | gauge | `target`, `severity`, `category` | finding count; combinations with no findings are absent |
 | `upgradescope_capability_available` | gauge | `capability` | 1 when the collector capability was available |
+| `upgradescope_capability_partial` | gauge | `capability` | 1 when the capability was available but could not read everything it covers (`status.notAssessed` marks it partial) |
 | `upgradescope_kb_info` | gauge | `kb_version`, `max_known_k8s` | always 1; the embedded knowledge base |
 
 Score, verdict, findings and capability gauges describe the last
