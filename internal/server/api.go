@@ -636,24 +636,21 @@ type clusterSummary struct {
 
 // handleListClusters: GET /api/v1/clusters — every cluster plus its current
 // default-target score summary (omitted when no snapshot/evaluation exists).
-//
-// Known cost (P3/P4 optimization point, fine at current fleet sizes): this
-// is N+1 store round-trips — LatestSnapshot + CurrentEvaluation per
-// cluster — and defaultTarget unmarshals each cluster's full inventory blob
-// just to read ServerVersion. A latest-evals join or a denormalized
-// server-version column would fix both; no behavior change now.
+// Snapshot heads come from one store call (clusterStates), so no inventory
+// is decoded; the summaries are still one CurrentEvaluation per cluster.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	clusters, err := s.cfg.Store.ListClusters(ctx)
+	states, err := s.clusterStates(ctx)
 	if err != nil {
 		internalErr(w, "listing clusters", err)
 		return
 	}
-	out := make([]clusterSummary, 0, len(clusters))
+	out := make([]clusterSummary, 0, len(states))
 	now := s.now()
-	for _, c := range clusters {
-		cs := clusterSummary{Cluster: c, Stale: s.clusterStale(c, now)}
-		if target, _, err := s.defaultTarget(ctx, c.ID); err == nil {
+	for _, c := range states {
+		cs := clusterSummary{Cluster: c.Cluster, Stale: s.clusterStale(c.Cluster, now)}
+		if server, err := inventory.ParseVersion(c.version); c.hasSnapshot && err == nil {
+			target := server.Next()
 			if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String()); err == nil {
 				sum := s.summarize(e, now)
 				cs.Latest = &sum

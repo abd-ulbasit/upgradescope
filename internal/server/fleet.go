@@ -44,36 +44,41 @@ type fleetResponse struct {
 	Clusters []fleetRow `json:"clusters"`
 }
 
-// clusterState is a cluster with its decoded latest snapshot (hasSnapshot
-// false when it has none, or it cannot be decoded).
+// clusterState is a cluster with its latest snapshot's head — no
+// inventory — and the version that snapshot is judged at (hasSnapshot
+// false when it has none).
 type clusterState struct {
 	store.Cluster
-	snap        store.Snapshot
-	inv         inventory.Inventory
-	version     string // judgedAt(snap, inv)
+	snap        store.Snapshot // Inventory is nil
+	version     string         // judgedVersion
 	hasSnapshot bool
 }
 
-// clusterStates loads every cluster's latest snapshot once. A corrupt
-// stored inventory is logged and treated as no snapshot so one bad row
-// cannot take the fleet views down; any other store error is returned.
+// clusterStates loads every cluster's latest snapshot head in one store
+// call. Fleet views never decode inventories up front: at 500 clusters
+// that held hundreds of MiB per request (#125 SV-14); only a row stored
+// before snapshots.server_version is read whole, for its version.
 func (s *Server) clusterStates(ctx context.Context) ([]clusterState, error) {
 	clusters, err := s.cfg.Store.ListClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	heads, err := s.cfg.Store.LatestSnapshotHeads(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]clusterState, 0, len(clusters))
 	for _, c := range clusters {
 		cs := clusterState{Cluster: c}
-		snap, inv, err := s.latestInventory(ctx, c.ID)
-		switch {
-		case err == nil:
-			cs.snap, cs.inv, cs.version, cs.hasSnapshot = snap, inv, judgedAt(snap, inv), true
-		case errors.Is(err, store.ErrNotFound):
-		case errors.Is(err, errCorruptInventory):
-			log.Printf("server: fleet: %v", err)
-		default:
-			return nil, err
+		if head, ok := heads[c.ID]; ok {
+			cs.snap, cs.version, cs.hasSnapshot = head, head.ServerVersion, true
+			if cs.version == "" {
+				full, err := s.cfg.Store.LatestSnapshot(ctx, c.ID)
+				if err != nil && !errors.Is(err, store.ErrNotFound) {
+					return nil, err
+				}
+				cs.version = judgedVersion(full)
+			}
 		}
 		out = append(out, cs)
 	}
@@ -247,6 +252,13 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		rep, src, err := s.fleetTeamsReport(ctx, c, target)
+		if errors.Is(err, errCorruptInventory) || errors.Is(err, store.ErrNotFound) {
+			// One bad row (or a cluster deleted meanwhile) must not take
+			// the rollup down: it has nothing to contribute.
+			log.Printf("server: fleet teams: %v", err)
+			missing = append(missing, c.Name)
+			continue
+		}
 		if err != nil {
 			internalErr(w, "loading evaluation", err)
 			return
@@ -295,7 +307,11 @@ func (s *Server) fleetTeamsReport(ctx context.Context, c clusterState, target in
 	case !errors.Is(err, store.ErrNotFound):
 		return engine.Report{}, src, err
 	}
+	snap, inv, err := s.latestInventory(ctx, c.ID)
+	if err != nil {
+		return engine.Report{}, src, err
+	}
 	now := s.now()
-	src.Source, src.EvaluatedAt, src.SnapshotID = sourceWhatIf, now, c.snap.ID
-	return evaluateWhatIf(c.inv, s.cfg.KB, s.cfg.TeamMap, target, now), src, nil
+	src.Source, src.EvaluatedAt, src.SnapshotID = sourceWhatIf, now, snap.ID
+	return evaluateWhatIf(inv, s.cfg.KB, s.cfg.TeamMap, target, now), src, nil
 }
