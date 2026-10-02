@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
@@ -101,23 +103,69 @@ func gateHeapShapes() map[string]func(size int) string {
 		"List of null items":        repeat("apiVersion: v1\nkind: ConfigMapList\nitems:\n", "- \n", ""),
 		"List of {} items":          repeat("apiVersion: v1\nkind: ConfigMapList\nitems: [{}", ",{}", "]\n"),
 		"List of removed-API items": repeat("apiVersion: policy/v1beta1\nkind: PodSecurityPolicyList\nitems:\n", "- {}\n", ""),
-		"nested aliases":            func(int) string { return nestedAliases(20, 5) },
+		"alias bomb":                func(int) string { return nestedAliases(20, 5) },
 		"wide aliases": func(size int) string {
 			return head + "a: &a [" + strings.Repeat("1,", size/4) + "1]\n" +
 				"b: [" + strings.Repeat("*a,", min(size/8, 1000)) + "*a]\n"
 		},
+		// kubectl's decoder copies what an alias names at every alias. Fewer
+		// than 100 aliases never meet go-yaml v2's excessive-aliasing check,
+		// and that check counts nodes, not the bytes a scalar holds.
+		"scalar aliases": func(size int) string {
+			return aliasedScalar(head, max(size-len(head)-1100, 1), 99)
+		},
+		// Aliases of aliases: three levels of nine multiply a scalar 729
+		// times with only 27 aliases.
+		"nested aliases": func(size int) string {
+			var b strings.Builder
+			b.WriteString(head + "l0: &l0 " + strings.Repeat("x", max(size-len(head)-200, 1)) + "\n")
+			for i := 1; i <= 3; i++ {
+				fmt.Fprintf(&b, "l%d: &l%d [%s]\n", i, i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), 9), ","))
+			}
+			return b.String()
+		},
+		// Merge keys: each `<<: *m` copies every pair of the mapping m.
+		"merge keys": func(size int) string {
+			var b strings.Builder
+			b.WriteString(head + "m: &m\n")
+			for i := 0; b.Len() < size-1500; i++ {
+				fmt.Fprintf(&b, "  k%x: v\n", i)
+			}
+			for i := range 90 {
+				fmt.Fprintf(&b, "c%d: {<<: *m}\n", i)
+			}
+			return b.String()
+		},
 	}
 }
 
+// aliasedScalar is head followed by an anchored plain scalar of size bytes
+// and n aliases of it.
+func aliasedScalar(head string, size, n int) string {
+	var b strings.Builder
+	b.WriteString(head + "a: &a " + strings.Repeat("x", size) + "\n")
+	for i := range n {
+		fmt.Fprintf(&b, "k%d: *a\n", i)
+	}
+	return b.String()
+}
+
+// withinBudget reports whether checkManifestStream lets doc be decoded.
+func withinBudget(doc string) bool {
+	status, _ := checkManifestStream(bufferedBody{[]byte(doc)})
+	return status == 0
+}
+
 // atNodeBudget returns the largest document shape builds (up to the
-// per-document size cap) that is still within the node budget.
+// per-document size cap) that checkManifestStream still lets be decoded:
+// within the node budget, and its aliases within the per-document limit.
 func atNodeBudget(shape func(size int) string) string {
 	lo, hi := 0, maxManifestDocBytes-64
-	if doc := shape(hi); measureYAML([]byte(doc)).units() <= maxManifestUnits {
+	if doc := shape(hi); withinBudget(doc) {
 		return doc
 	}
 	for hi-lo > 1024 {
-		if mid := (lo + hi) / 2; measureYAML([]byte(shape(mid))).units() <= maxManifestUnits {
+		if mid := (lo + hi) / 2; withinBudget(shape(mid)) {
 			lo = mid
 		} else {
 			hi = mid
@@ -184,11 +232,11 @@ func TestGateBodyCapIsConfigurable(t *testing.T) {
 }
 
 // Billion-laughs: a few hundred bytes that expand to millions of nodes.
-// The shared manifest parser (collect.parseManifestStream) walks the YAML node
-// tree and never expands aliases, so a billion-laughs document is just a small
-// document: it must come back fast with an ordinary status — never a 5xx, an
-// OOM, or a timeout. (Before the shared parser, /gate converted YAML to JSON,
-// which expanded aliases, so this used to require a 4xx.)
+// The shared manifest parser walks the yaml.v3 node tree, which does not
+// expand aliases, but it checks every object against kubectl's own
+// decoder, which does (up to go-yaml v2's excessive-aliasing check). So
+// what the aliases expand to is measured before anything decodes them,
+// and the bomb is refused with 413 at once.
 func TestGateAliasBombDoesNotAmplify(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: bomb}\n")
@@ -201,11 +249,29 @@ func TestGateAliasBombDoesNotAmplify(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
 	began := time.Now()
 	code, _, raw := gateStatus(t, s, b.String())
-	if code >= 500 {
-		t.Fatalf("status = %d (%s), want 2xx or 4xx", code, raw)
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "alias") {
+		t.Fatalf("status = %d (%s), want 413 about the aliases", code, raw)
 	}
 	if took := time.Since(began); took > 5*time.Second {
 		t.Fatalf("alias bomb took %s to reject", took)
+	}
+}
+
+// The #121 review's repro: one 3.5 MiB anchored scalar and 99 aliases of
+// it, 3.7 MB on the wire and a few hundred nodes, decoded by kubectl's
+// decoder into 99 copies — ~1.5 GiB of heap from one anonymous request.
+// What aliases expand to is charged against the per-document limit, so it
+// is refused before anything decodes it; the same document with a small
+// scalar is decoded.
+func TestGateChargesAliasesAtTheirExpandedSize(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	head := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+	code, _, raw := gateStatus(t, s, aliasedScalar(head, 3500<<10, 99))
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "alias") {
+		t.Fatalf("status = %d (%.300s), want 413 about the aliases", code, raw)
+	}
+	if code, _, raw := gateStatus(t, s, aliasedScalar(head, 1<<10, 99)); code != http.StatusOK {
+		t.Fatalf("small scalar: status = %d (%.300s), want 200", code, raw)
 	}
 }
 
@@ -289,7 +355,7 @@ func TestGateDecodeHeapIsBounded(t *testing.T) {
 				bodies = append(bodies, fits)
 			}
 			for _, body := range bodies {
-				checkGateHeap(t, body, len(body) < len(full) || measureYAML([]byte(full)).units() <= maxManifestUnits)
+				checkGateHeap(t, body, len(body) < len(full) || withinBudget(full))
 			}
 		})
 	}
@@ -367,6 +433,41 @@ func TestGateRejectsInvalidSeparator(t *testing.T) {
 	if code, _, raw := gateStatus(t, s, pspManifest+"--- # next\r\n"+pspManifest+"---\r\n"); code != http.StatusOK && code != http.StatusUnprocessableEntity ||
 		strings.Contains(string(raw), "separator") {
 		t.Fatalf("status = %d (%s), want the stream evaluated", code, raw)
+	}
+}
+
+// yaml.v3 and kubectl's decoder read a document that starts with a UTF-16
+// byte order mark as UTF-16, which the meter, reading UTF-8, would see as
+// one node: a 4 MiB UTF-16 flow sequence would decode to a million. Such
+// a stream is refused, wherever the mark is (anywhere else it is not
+// UTF-8 either), and wherever a chunk boundary splits it.
+func TestGateRefusesUTF16(t *testing.T) {
+	utf16Doc := func(order binary.AppendByteOrder, bom []byte, s string) string {
+		b := bom
+		for _, c := range utf16.Encode([]rune(s)) {
+			b = order.AppendUint16(b, c)
+		}
+		return string(b)
+	}
+	flow := gateHeapShapes()["flow sequence"](1 << 20)
+	s := newTestServer(t, newFakeStore())
+	for name, body := range map[string]string{
+		"LE":                utf16Doc(binary.LittleEndian, []byte{0xFF, 0xFE}, flow),
+		"BE":                utf16Doc(binary.BigEndian, []byte{0xFE, 0xFF}, flow),
+		"after a UTF-8 doc": pspManifest + "---\n" + utf16Doc(binary.LittleEndian, []byte{0xFF, 0xFE}, flow),
+	} {
+		code, _, raw := gateStatus(t, s, body)
+		if code != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "UTF-16") {
+			t.Fatalf("%s: status = %d (%.300s), want 422 about UTF-16", name, code, raw)
+		}
+	}
+	split := bufferedBody{[]byte(pspManifest + "---\n\xff"), []byte("\xfe" + utf16Doc(binary.LittleEndian, nil, flow))}
+	if status, msg := checkManifestStream(split); status != http.StatusUnprocessableEntity || !strings.Contains(msg, "UTF-16") {
+		t.Fatalf("a mark across chunks: %d %q, want 422 about UTF-16", status, msg)
+	}
+	// A UTF-8 byte order mark is UTF-8.
+	if code, _, raw := gateStatus(t, s, "\xef\xbb\xbf"+pspManifest); code == http.StatusUnprocessableEntity && strings.Contains(string(raw), "UTF-16") {
+		t.Fatalf("UTF-8 BOM: status = %d (%.300s)", code, raw)
 	}
 }
 

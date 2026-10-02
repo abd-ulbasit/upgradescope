@@ -22,8 +22,8 @@ is measured before it is decoded:
 | | `POST /api/v1/gate` | `POST /api/v1/snapshots` |
 |---|---|---|
 | body cap (wire, and decompressed) | `--max-gate-bytes`, 10 MiB | `--max-snapshot-bytes`, 20 MiB |
-| per document | 4 MiB, 20,000 documents | — |
-| node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4 | 1M units: a JSON value 1, an object 8 |
+| per document | 4 MiB with its aliases expanded, 20,000 documents | — |
+| node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4, an alias what it names | 1M units: a JSON value 1, an object 8 |
 | worst live heap within the budget (measured) | ~155 MB | ~80 MB |
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
 | decoded at once | 1, others wait up to 30s | 1, others wait up to 10s |
@@ -33,10 +33,21 @@ says to split the stream or List. A body that does not fit the shared
 buffer budget, or a request that waits too long for its turn, gets `503`
 with `Retry-After` (the agent retries it). A body must arrive within the
 60s read timeout (about 350 KiB/s at 20 MiB), or it gets `408`, which the
-agent retries too. The node counts are an exact emulation of the YAML
-scanner and the JSON tokenizer, fuzzed against yaml.v3, kubectl's decoder
-and `encoding/json`, so they cannot be talked down. A realistic ~4 MiB
-`kubectl get -o yaml` List of Deployments is ~360k units and fits.
+agent retries too. The node counts come from an emulation of the YAML
+scanner and the JSON tokenizer, fuzzed never to count fewer nodes than
+yaml.v3, kubectl's decoder and `encoding/json` build. YAML aliases are
+charged what they name: kubectl's decoder copies the aliased node at
+every alias (merge keys included), and go-yaml v2's excessive-aliasing
+check neither starts before 100 aliases nor counts a scalar's bytes, so
+one 3.5 MiB anchored string and 99 aliases of it decoded to ~2 GB. A
+document that may hold aliases is read into yaml.v3 nodes first (no
+dearer than the node count already checked), and what its aliases expand
+to is added to the node count and to the document's size. A stream with
+a UTF-16 byte order mark is `422`: the decoders read it as UTF-16, the
+meter as UTF-8. A realistic ~4 MiB `kubectl get -o yaml` List of
+Deployments is ~360k units and fits; typical kubectl YAML is ~90k units
+per MiB, so the node budget, not the 10 MiB body cap, is what limits a
+realistic stream, at about 4.4 MiB.
 
 Worst case for the chart's 512Mi server: one gate decode (~155 MB) plus
 one ingest (~80 MB) plus both body budgets (70 MiB), about 310 MB, inside
@@ -59,6 +70,10 @@ SQLite, October 2026), `before` being v0.1.x without these limits:
 | short keys at the node budget (2.3 MB), ×6 at once | 331 MB, 200 | 335 MB, 200 (298 MB with `GOMEMLIMIT=460MiB`) |
 | realistic 4 MiB List of 1,400 Deployments, ×6 at once | 253 MB, 200 | 279 MB, 200 (249 MB with `GOMEMLIMIT`) |
 | one 4 MiB string | 97 MB, 200 | 94 MB, 200 |
+| 3.5 MiB string anchored, 99 aliases of it (3.6 MB) | 2024 MB, 200 | 65 MB, 413 |
+| 4 MiB string aliased 729 times through three levels of 9 aliases | 3982 MB, 200 | 69 MB, 413 |
+| 4 MiB UTF-16 flow sequence | 420 MB, 200 | 45 MB, 422 |
+| aliases at the budget (42 KB string ×100; 5 KB ×729; 90 merges of a 22 KB mapping), ×6 at once | — | 84 / 84 / 119 MB, 200 |
 | 20 MiB push of `{}` object refs | 3578 MB, 202 | 41 MB, 413 |
 | 4.9 MB push of unique map keys (at the budget) | 184 MB, 202 | 190 MB, 202 |
 | 30 concurrent 20 MiB pushes | 1681 MB, all accepted | 236 MB, 2 accepted, the rest 503 |

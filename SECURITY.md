@@ -87,7 +87,8 @@ In scope:
 
   The server's memory is bounded by the request budgets in
   [docs/operations.md](docs/operations.md#memory-and-request-limits): body
-  caps, node budgets counted before anything is decoded, a shared budget for
+  caps, node budgets counted before anything is decoded (YAML aliases at
+  what they expand to), a shared budget for
   buffered bodies, and one decode at a time per endpoint. Any request that
   makes the server use memory beyond them is in scope, with or without
   credentials. What the budgets leave is known: a client that really sends

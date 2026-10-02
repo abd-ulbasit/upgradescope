@@ -1,6 +1,14 @@
 package server
 
-import "sort"
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+
+	yaml "go.yaml.in/yaml/v3"
+)
 
 // yamlCost is an upper bound, read from the raw bytes, on what decoding a
 // YAML (or JSON) document builds. Decoding is what costs memory: each
@@ -54,6 +62,58 @@ func (s *byteSource) at(i int) byte {
 	return s.chunks[s.cur][i-s.starts[s.cur]]
 }
 
+// contains reports whether src[start:end] holds the byte c.
+func (s *byteSource) contains(start, end int, c byte) bool {
+	for i, chunk := range s.chunks {
+		lo, hi := max(start-s.starts[i], 0), min(end-s.starts[i], len(chunk))
+		if lo < hi && bytes.IndexByte(chunk[lo:hi], c) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// utf16BOM returns the offset of the first UTF-16 byte order mark (FF FE
+// or FE FF) in src, or -1. Neither byte is ever part of UTF-8.
+func (s *byteSource) utf16BOM() int {
+	first := -1
+	for _, b := range []byte{0xFE, 0xFF} {
+		for i, chunk := range s.chunks {
+			for off := 0; ; {
+				k := bytes.IndexByte(chunk[off:], b)
+				if k < 0 {
+					break
+				}
+				if pos := s.starts[i] + off + k; s.at(pos+1) == b^1 {
+					if first < 0 || pos < first {
+						first = pos
+					}
+					break
+				}
+				off += k + 1
+			}
+		}
+	}
+	return first
+}
+
+// slice returns src[start:end] in one slice, copying it only when it
+// spans chunks.
+func (s *byteSource) slice(start, end int) []byte {
+	out := make([]byte, 0, end-start)
+	for i, chunk := range s.chunks {
+		lo, hi := max(start-s.starts[i], 0), min(end-s.starts[i], len(chunk))
+		if lo >= hi {
+			continue
+		}
+		if lo == start-s.starts[i] && hi == end-s.starts[i] {
+			return chunk[lo:hi] // all in this chunk
+		}
+		out = append(out, chunk[lo:hi]...)
+	}
+	return out
+}
+
 // measureYAML measures one whole document.
 func measureYAML(doc []byte) yamlCost {
 	return measureYAMLRange(newByteSource([][]byte{doc}), 0, len(doc))
@@ -65,8 +125,8 @@ func measureYAML(doc []byte) yamlCost {
 // keys, and plain, quoted and block scalar rules — and counting the nodes
 // its parser builds from those tokens: every scalar, alias and collection,
 // and every empty (null) node an indicator implies (`a:`, `- `, `{a, b}`).
-// Aliases count once: yaml.v3 does not expand them, and go-yaml v2 refuses
-// excessive aliasing. Where the scanner would stop with an error, this
+// Aliases count once, as yaml.v3 builds them; what kubectl's decoder
+// builds by expanding them is measured apart (aliasExpansion). Where the scanner would stop with an error, this
 // goes on and counts the rest too, so the count is an upper bound for
 // valid and invalid documents alike; the remaining over-counting is small
 // (a property such as an anchor or tag counts inside a flow collection,
@@ -611,4 +671,122 @@ func (s *yamlScanner) blockBreaks(indent *int) {
 	if *indent == 0 {
 		*indent = max(maxIndent, s.indent+1, 1)
 	}
+}
+
+// aliasCost is a node's cost with every alias in it expanded, as kubectl's
+// decoder builds it: scalars counts the bytes its scalars hold.
+type aliasCost struct {
+	yamlCost
+	scalars int
+}
+
+// maxAliasCost caps each figure aliasExpansion adds up, so that a document
+// of aliases of aliases, whose expansion grows exponentially, cannot
+// overflow it; it is far above any budget it is checked against.
+const maxAliasCost = 1 << 40
+
+func (c aliasCost) add(o aliasCost) aliasCost {
+	return aliasCost{
+		yamlCost: yamlCost{nodes: min(c.nodes+o.nodes, maxAliasCost), entries: min(c.entries+o.entries, maxAliasCost)},
+		scalars:  min(c.scalars+o.scalars, maxAliasCost),
+	}
+}
+
+// aliasExpansion is what a document's aliases add when kubectl's decoder
+// reads it. measureYAML counts an alias as one node, which is what yaml.v3
+// builds, but kubectl's decoder (go-yaml v2's YAML-to-JSON conversion)
+// copies the node an alias names in full at every alias, a merge key's
+// included, and its excessive-aliasing check neither starts before 100
+// aliases nor counts the bytes a scalar holds: one 3.5 MiB scalar and 99
+// aliases of it decode to ~1.5 GiB. So a document that may hold aliases
+// is read into yaml.v3 nodes — no dearer than the measured count, which
+// is checked first — and every alias is charged what it names, with the
+// aliases inside that expanded too. extra is the nodes and entries this
+// adds to measureYAML's count and scalars the bytes it adds to the
+// document's. A document yaml.v3 cannot read, or an alias that names a
+// node containing it, is an error.
+func aliasExpansion(doc []byte) (extra yamlCost, scalars int, err error) {
+	dec := yaml.NewDecoder(bytes.NewReader(doc))
+	expanded := map[*yaml.Node]aliasCost{}
+	for {
+		var n yaml.Node
+		if err := dec.Decode(&n); errors.Is(err, io.EOF) {
+			return extra, scalars, nil
+		} else if err != nil {
+			return yamlCost{}, 0, err
+		}
+		full, err := expandedCost(&n, expanded, map[*yaml.Node]bool{})
+		if err != nil {
+			return yamlCost{}, 0, err
+		}
+		flat := flatCost(&n)
+		extra = extra.add(yamlCost{nodes: full.nodes - flat.nodes, entries: full.entries - flat.entries})
+		scalars = min(scalars+full.scalars-flat.scalars, maxAliasCost)
+	}
+}
+
+// expandedCost is n's cost with its aliases expanded, memoized per node.
+func expandedCost(n *yaml.Node, memo map[*yaml.Node]aliasCost, open map[*yaml.Node]bool) (aliasCost, error) {
+	if c, ok := memo[n]; ok {
+		return c, nil
+	}
+	if open[n] {
+		return aliasCost{}, fmt.Errorf("line %d: anchor %q names a node that contains this alias of it", n.Line, n.Anchor)
+	}
+	open[n] = true
+	defer delete(open, n)
+	var c aliasCost
+	switch n.Kind {
+	case yaml.AliasNode:
+		if n.Alias == nil {
+			return aliasCost{}, fmt.Errorf("line %d: unknown anchor %q", n.Line, n.Value)
+		}
+		target, err := expandedCost(n.Alias, memo, open)
+		if err != nil {
+			return aliasCost{}, err
+		}
+		c = target
+	case yaml.ScalarNode:
+		c = aliasCost{yamlCost: yamlCost{nodes: 1}, scalars: len(n.Value)}
+	default:
+		if n.Kind != yaml.DocumentNode {
+			c.nodes = 1
+		}
+		if n.Kind == yaml.SequenceNode {
+			c.entries = len(n.Content)
+		}
+		for _, child := range n.Content {
+			cc, err := expandedCost(child, memo, open)
+			if err != nil {
+				return aliasCost{}, err
+			}
+			c = c.add(cc)
+		}
+	}
+	memo[n] = c
+	return c, nil
+}
+
+// flatCost is n's cost with each alias one node, as measureYAML counts it.
+func flatCost(n *yaml.Node) aliasCost {
+	var c aliasCost
+	for stack := []*yaml.Node{n}; len(stack) > 0; {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch n.Kind {
+		case yaml.DocumentNode:
+		case yaml.ScalarNode:
+			c.nodes++
+			c.scalars += len(n.Value)
+		default:
+			c.nodes++
+		}
+		if n.Kind == yaml.SequenceNode {
+			c.entries += len(n.Content)
+		}
+		if n.Kind != yaml.AliasNode {
+			stack = append(stack, n.Content...)
+		}
+	}
+	return c
 }

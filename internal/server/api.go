@@ -298,10 +298,18 @@ func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body 
 // kubectl does (a line starting with "---" ends one; only spaces or a
 // comment may follow it) and checks it against the shape limits before
 // anything decodes it: the document count, each document's size, and the
-// YAML nodes the whole stream holds. It reads the body in place, copying
-// nothing. It returns the status and message to refuse it with, or 0.
+// YAML nodes the whole stream holds, each alias counted as what it names
+// (and its bytes against the document's size). It reads the body in
+// place, copying only a document that may hold aliases and spans chunks.
+// It returns the status and message to refuse it with, or 0.
 func checkManifestStream(body bufferedBody) (status int, msg string) {
 	src := newByteSource(body)
+	if off := src.utf16BOM(); off >= 0 {
+		// yaml.v3 and kubectl's decoder read a document that starts with
+		// one as UTF-16, which the meter, reading UTF-8, cannot measure.
+		return http.StatusUnprocessableEntity, fmt.Sprintf(
+			"invalid manifest stream: a UTF-16 byte order mark at byte %d; /gate reads UTF-8 only", off)
+	}
 	var total yamlCost
 	n := 0
 	check := func(start, end int) (int, string) {
@@ -317,6 +325,22 @@ func checkManifestStream(body bufferedBody) (status int, msg string) {
 					n, end-start, sizeString(maxManifestDocBytes))
 		}
 		cost := measureYAMLRange(src, start, end)
+		if total.add(cost).units() <= maxManifestUnits && src.contains(start, end, '*') {
+			// It may hold aliases, which kubectl's decoder expands
+			// (aliasExpansion): charge them what they name.
+			extra, scalars, err := aliasExpansion(src.slice(start, end))
+			if err != nil {
+				return http.StatusUnprocessableEntity, fmt.Sprintf(
+					"invalid manifest document %d: %v (a document that may hold YAML aliases must parse, so that what they expand to can be measured)", n, err)
+			}
+			if size := end - start + scalars; size > maxManifestDocBytes {
+				return http.StatusRequestEntityTooLarge, fmt.Sprintf(
+					"manifest document %d is too large to evaluate in one request: its YAML aliases expand it to %d bytes, "+
+						"and every alias is decoded as a full copy of what it names; the per-document limit is %s "+
+						"(write the values out, or split it into smaller documents)", n, size, sizeString(maxManifestDocBytes))
+			}
+			cost = cost.add(extra)
+		}
 		if total = total.add(cost); total.units() > maxManifestUnits {
 			what := "the manifest stream"
 			if cost.units() > maxManifestUnits {
@@ -324,7 +348,7 @@ func checkManifestStream(body bufferedBody) (status int, msg string) {
 			}
 			return http.StatusRequestEntityTooLarge, fmt.Sprintf(
 				"%s is too large to evaluate in one request: decoding YAML costs memory per node, and the stream holds "+
-					"over %d node units (each node 1, each sequence entry 4); split it into several requests "+
+					"over %d node units (each node 1, each sequence entry 4, each alias what it names); split it into several requests "+
 					"(a large List into separate, smaller ones)", what, maxManifestUnits)
 		}
 		return 0, ""

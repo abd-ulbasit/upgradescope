@@ -211,7 +211,8 @@ It listens on loopback by default. On any other address, the read API needs
 	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression); "+
 		"the body must arrive within the 60s read timeout (~350 KiB/s at the 20 MiB default) or the push gets 408, and a push that decodes to too many JSON values gets 413 whatever its size")
 	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes; "+
-		"the body must arrive within the 60s read timeout or the request gets 408, and a stream of too many YAML nodes gets 413 whatever its size")
+		"the body must arrive within the 60s read timeout or the request gets 408, and a stream of too many YAML nodes gets 413 whatever its size "+
+		"(the 400k-node budget is about 4.4 MiB of typical kubectl YAML, so it, not this cap, limits a realistic stream)")
 	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert-file", "", "PEM certificate (chain) to serve HTTPS directly; requires --tls-key-file (read at startup)")
 	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key-file", "", "PEM private key for --tls-cert-file")
 	cmd.Flags().DurationVar(&opts.staleAfter, "stale-after", server.DefaultStaleAfter, "mark a cluster stale (API, dashboard data, /metrics) when its agent has not pushed for this long; agents push at least about every 70m by default")
