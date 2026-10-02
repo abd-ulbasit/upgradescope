@@ -113,10 +113,13 @@ func TestCollectVersionsControlPlane(t *testing.T) {
 
 // A control-plane or kube-proxy pod whose version cannot be read — a
 // digest-only or non-version tag on the component's image, or a pod
-// labelled as the component that runs no image of that name (a wrapper
-// image) — leaves the versions capability partial, naming the components
-// and the first such pod, rather than being dropped silently (#169). The
-// versions that were read are still recorded.
+// labelled as the component that runs a vendor image of another name (a
+// wrapper image) — leaves the versions capability partial, naming the
+// components and the first such pod, rather than being dropped silently
+// (#169). Skipped names only the components whose skew upstream would have
+// told (the scheduler's latest and digest-only images), not kube-proxy's
+// vendor image, so only that part is a required gap. The versions that were
+// read are still recorded.
 func TestCollectVersionsUnreadableControlPlaneVersionIsPartial(t *testing.T) {
 	cs := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
@@ -137,9 +140,9 @@ func TestCollectVersionsUnreadableControlPlaneVersionIsPartial(t *testing.T) {
 		t.Fatalf("err = %v, want a partialError", err)
 	}
 	const wantMsg = "version not read from 3 control-plane pod(s) (kube-proxy, kube-scheduler), first kube-system/kube-proxy-abc12: " +
-		"labelled kube-proxy but runs no kube-proxy image (registry.example.com/platform/proxy-wrapper:2.1); their skew was not evaluated"
-	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"kube-proxy", "kube-scheduler"}) || pe.msg != wantMsg {
-		t.Errorf("partial = %v, skipped = %q, reason =\n%q\nwant incomplete, [kube-proxy kube-scheduler],\n%q", pe.incomplete, pe.skipped, pe.msg, wantMsg)
+		"labelled kube-proxy but runs a vendor image whose version is not read (registry.example.com/platform/proxy-wrapper:2.1); their skew was not evaluated"
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"kube-scheduler"}) || pe.msg != wantMsg {
+		t.Errorf("partial = %v, skipped = %q, reason =\n%q\nwant incomplete, [kube-scheduler],\n%q", pe.incomplete, pe.skipped, pe.msg, wantMsg)
 	}
 	if want := []inventory.ComponentVersion{{Component: "kube-apiserver", Version: "v1.34.2"}}; !reflect.DeepEqual(inv.ControlPlane, want) {
 		t.Errorf("ControlPlane = %+v, want %+v", inv.ControlPlane, want)
@@ -197,6 +200,11 @@ func TestComponentImageTagUnreadableReasons(t *testing.T) {
 		{"registry.k8s.io/kube-scheduler", "", "kube-scheduler image registry.k8s.io/kube-scheduler has no version tag"},
 		{"example.com/kube-scheduler-extender:v1.0.0", "", ""},
 		{"example.com/kube-scheduler-mips:v1.0.0", "", ""},
+		{"k8s.gcr.io/hyperkube:v1.18.20", "v1.18.20", ""}, // pre-1.19: one image ran every component
+		{"gcr.io/google-containers/hyperkube-amd64:v1.15.12", "v1.15.12", ""},
+		// scheduler-plugins' kube-scheduler carries its own version, not Kubernetes'.
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v0.29.7", "", ""},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler@sha256:abc", "", ""},
 	} {
 		tag, why := componentImageTag([]corev1.Container{{Image: tc.image}}, "kube-scheduler")
 		if tag != tc.tag || why != tc.why {

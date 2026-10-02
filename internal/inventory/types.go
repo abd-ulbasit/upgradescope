@@ -41,7 +41,12 @@ type CapabilityStatus struct {
 	//     read, not decodable or whose manifest was not fully parsed
 	//     ("namespace/name");
 	//   - versions: the control-plane components with a kube-system pod
-	//     whose version could not be read ("kube-proxy", "kube-scheduler");
+	//     whose version could not be read where upstream would have told
+	//     it ("kube-proxy", "kube-scheduler"): an upstream-named image
+	//     with no version tag, or any unread kube-apiserver,
+	//     kube-controller-manager or kube-scheduler pod. A kube-proxy pod
+	//     on a vendor image of another name (OKE's oke-public-kube-proxy)
+	//     is named in Reason only, so Skipped may be empty;
 	//   - addons: resources not read for add-on evidence,
 	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses");
 	//   - crds: the custom resources not checked for use of a deprecated

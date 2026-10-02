@@ -118,11 +118,15 @@ type SuppressedFinding struct {
 //     not empty: the EOL add-on check is a headline check, and files mode
 //     has no running add-ons to detect;
 //   - a partial api-usage, when Skipped names an API the KB removes at or
-//     before the target (an unchecked object of it would be a blocker).
+//     before the target (an unchecked object of it would be a blocker);
+//   - a partial versions, for cluster inventories, when Skipped names a
+//     component whose version upstream would have told but was not read
+//     (it may be the one past the skew policy).
 //
 // Other gaps only narrow what the report covers: a partial api-usage that
 // skipped only APIs removed later or never (their findings are warnings
-// or info) or none the KB flags, deprecated-calls (managed control planes
+// or info) or none the KB flags, a partial versions naming no component (a
+// vendor kube-proxy image, OKE's), deprecated-calls (managed control planes
 // commonly deny /metrics), helm (Secrets are commonly denied; live objects
 // are still checked by api-usage, and add-ons by their images).
 type CapabilityGap struct {

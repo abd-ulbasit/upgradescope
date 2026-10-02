@@ -94,9 +94,21 @@ var controlPlaneComponents = []string{
 // first one by name, and the versions that were read are still recorded.
 // That is a pod running the component's image under a tag that is not a
 // version (digest-only, "latest"), or a pod labelled as the component
-// (component=, k8s-app=kube-proxy) that runs no image of its name or of
-// every component (a wrapper image). A pod only named like a component
-// that runs another image (kube-scheduler-extender) is not that component.
+// (component=, k8s-app=kube-proxy) that runs a vendor image: none of the
+// component's name or of every component (a wrapper image, OKE's
+// oke-public-kube-proxy). A pod only named like a component that runs
+// another image (kube-scheduler-extender) is not that component.
+//
+// Skipped names only the components whose skew upstream would have told,
+// which the engine requires: one whose upstream-named image carries no
+// version tag, and a kube-apiserver, kube-controller-manager or
+// kube-scheduler pod whose version is not read for any reason (a
+// self-hosted control plane runs upstream images; a vendor one there is a
+// deliberate replacement whose skew still matters). A kube-proxy pod on a
+// vendor image is named in the reason only: platforms ship it that way
+// (OKE pins oke-public-kube-proxy by digest), and the kubelet skew still
+// judges the nodes it follows. Partial with an empty Skipped is then an
+// optional, disclosed gap.
 //
 // Managed control planes (EKS, GKE, AKS, ...) run the apiserver, controller
 // manager, and scheduler outside the cluster: no matching pods exist, which
@@ -106,6 +118,7 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 	seen := map[inventory.ComponentVersion]bool{}
 	unread := map[string]string{} // pod name → why its version was not read
 	unreadComps := map[string]bool{}
+	requiredComps := map[string]bool{} // the Skipped ones, see above
 	podOpts := metav1.ListOptions{Limit: listPageSize}
 	for {
 		pods, err := kube.CoreV1().Pods("kube-system").List(ctx, podOpts)
@@ -119,8 +132,10 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 				continue
 			}
 			tag, why := componentImageTag(p.Spec.Containers, comp)
+			required := why != "" // an upstream-named image with no version tag
 			if why == "" && tag == "" && labelled {
-				why = fmt.Sprintf("labelled %s but runs no %s image (%s)", comp, comp, podImages(p.Spec.Containers))
+				why = fmt.Sprintf("labelled %s but runs a vendor image whose version is not read (%s)", comp, podImages(p.Spec.Containers))
+				required = comp != "kube-proxy"
 			}
 			switch {
 			case tag != "":
@@ -128,6 +143,9 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 			case why != "":
 				unread[p.Name] = why
 				unreadComps[comp] = true
+				if required {
+					requiredComps[comp] = true
+				}
 			}
 		}
 		if pods.Continue == "" {
@@ -150,11 +168,15 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 	}
 	first := slices.Min(slices.Collect(maps.Keys(unread)))
 	comps := slices.Sorted(maps.Keys(unreadComps))
+	var skipped []string
+	if len(requiredComps) > 0 {
+		skipped = slices.Sorted(maps.Keys(requiredComps))
+	}
 	return partialError{
 		msg: fmt.Sprintf("version not read from %d control-plane pod(s) (%s), first kube-system/%s: %s; their skew was not evaluated",
 			len(unread), strings.Join(comps, ", "), first, unread[first]),
 		incomplete: true,
-		skipped:    comps,
+		skipped:    skipped,
 	}
 }
 
@@ -186,14 +208,31 @@ var componentArches = []string{"amd64", "arm64", "arm", "ppc64le", "s390x"}
 
 // allComponentsImages are images that run every control-plane component
 // and kube-proxy, tagged with the Kubernetes version: RKE2's static pods
-// all run "docker.io/rancher/hardened-kubernetes:v1.34.2-rke2r1-build...".
-var allComponentsImages = []string{"hardened-kubernetes"}
+// all run "docker.io/rancher/hardened-kubernetes:v1.34.2-rke2r1-build...",
+// and clusters before 1.19 could run "k8s.gcr.io/hyperkube:v1.18.20"
+// (per-architecture too, "hyperkube-amd64").
+var allComponentsImages = []string{"hardened-kubernetes", "hyperkube"}
+
+// vendorComponentPaths are registry path elements under which an image
+// named like a component is another project's build of it, tagged with
+// that project's version: scheduler-plugins' kube-scheduler
+// ("registry.k8s.io/scheduler-plugins/kube-scheduler:v0.29.7") is not
+// Kubernetes v0.29.7, so its version is not read.
+var vendorComponentPaths = []string{"scheduler-plugins"}
+
+// imageOf reports whether an image repo basename is name or a
+// per-architecture build of it (name-<arch>).
+func imageOf(base, name string) bool {
+	arch, ok := strings.CutPrefix(base, name+"-")
+	return base == name || ok && slices.Contains(componentArches, arch)
+}
 
 // componentImageTag extracts the version tag for comp from the container
 // whose image repo basename is comp, comp-<arch> or an image of every
 // component (e.g. ".../eks/kube-proxy:v1.33.0",
 // "gke.gcr.io/kube-proxy-amd64:v1.32.0-gke.1000", RKE2's
-// "rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101").
+// "rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101"), unless it
+// sits under a vendorComponentPaths element.
 // Build suffixes ("v1.33.0-eksbuild.1", "+fips", and VMware TKG's
 // "v1.28.7_vmware.1", where "_" stands for the "+" a tag cannot hold) are
 // stripped; the tag is returned only if inventory.ParseVersion accepts the
@@ -203,9 +242,11 @@ var allComponentsImages = []string{"hardened-kubernetes"}
 func componentImageTag(containers []corev1.Container, comp string) (tag, why string) {
 	for _, c := range containers {
 		repo, t := splitImage(c.Image)
-		base := repo[strings.LastIndex(repo, "/")+1:]
-		arch, ok := strings.CutPrefix(base, comp+"-")
-		if base != comp && !(ok && slices.Contains(componentArches, arch)) && !slices.Contains(allComponentsImages, base) {
+		path := strings.Split(repo, "/")
+		base := path[len(path)-1]
+		ofAll := slices.ContainsFunc(allComponentsImages, func(all string) bool { return imageOf(base, all) })
+		vendor := slices.ContainsFunc(path[:len(path)-1], func(el string) bool { return slices.Contains(vendorComponentPaths, el) })
+		if !imageOf(base, comp) && !ofAll || vendor {
 			continue
 		}
 		v := t

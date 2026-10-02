@@ -267,6 +267,7 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 	on123.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.23.17"}}
 	const helmReason = "helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip"
 	const unreadProxy = "version not read from 1 control-plane pod(s) (kube-proxy), first kube-system/kube-proxy-x: tag latest; their skew was not evaluated"
+	const vendorProxy = "version not read from 1 control-plane pod(s) (kube-proxy), first kube-system/kube-proxy-x: labelled kube-proxy but runs a vendor image whose version is not read (iad.ocir.io/ns/oke-public-kube-proxy@sha256:1755); their skew was not evaluated"
 
 	cases := []struct {
 		name    string
@@ -298,6 +299,9 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 			partially(on124, inventory.CapVersions, unreadProxy, "kube-proxy"), k, t125, VerdictUnknown,
 			[]CapabilityGap{{Capability: inventory.CapVersions, Reason: unreadProxy, Partial: true,
 				Skipped: []string{"kube-proxy"}, Required: true}}},
+		{"partial versions naming no component is optional: a vendor kube-proxy image (OKE) upstream would not have told", // #169
+			partially(on124, inventory.CapVersions, vendorProxy), k, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapVersions, Reason: vendorProxy, Partial: true}}},
 		{"partial helm is an optional gap", partially(on124, inventory.CapHelm, helmReason, "a/b"), withRegistry, t125, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapHelm, Reason: helmReason, Partial: true, Skipped: []string{"a/b"}}}},
 		{"an informational reason is no gap", func() inventory.Inventory {
