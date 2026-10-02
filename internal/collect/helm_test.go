@@ -200,6 +200,50 @@ func TestCollectHelmFetchesOnlyTheChosenRevision(t *testing.T) {
 	}
 }
 
+// Both drivers' metadata lists are paged, following the Continue token, so
+// a cluster with thousands of release revisions never returns one unbounded
+// list (PF-02 in docs/claims.md).
+func TestCollectHelmFollowsListPagination(t *testing.T) {
+	a := helmRev{ns: "apps", release: "a", rev: 1, status: "deployed", chart: "a", chartVersion: "1.0.0"}
+	b := helmRev{ns: "apps", release: "b", rev: 1, status: "deployed", chart: "b", chartVersion: "2.0.0"}
+	kube, meta := helmClients(t, helmSecret(t, a), helmSecret(t, b))
+	item := func(r helmRev) runtime.RawExtension {
+		return runtime.RawExtension{Object: &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}, ObjectMeta: r.objectMeta()}}
+	}
+	for _, resource := range []string{"secrets", "configmaps"} {
+		calls := 0
+		meta.PrependReactor("list", resource, func(clienttesting.Action) (bool, runtime.Object, error) {
+			calls++
+			if calls > 2 {
+				t.Fatalf("%s listed %d times, want 2 pages", resource, calls)
+			}
+			l := &metav1.List{}
+			if calls == 1 {
+				l.Continue = "page-2"
+			}
+			if resource == "secrets" {
+				l.Items = []runtime.RawExtension{item([]helmRev{a, b}[calls-1])}
+			}
+			return true, l, nil
+		})
+	}
+
+	var opts []metav1.ListOptions
+	var inv inventory.Inventory
+	if err := collectHelm(context.Background(), kube, recordingMeta{meta, &opts}, nil, &inv); err != nil && !errors.As(err, new(partialError)) {
+		t.Fatal(err)
+	}
+	page := func(cont string) metav1.ListOptions {
+		return metav1.ListOptions{LabelSelector: "owner=helm", Limit: listPageSize, Continue: cont}
+	}
+	if want := []metav1.ListOptions{page(""), page("page-2"), page(""), page("page-2")}; !reflect.DeepEqual(opts, want) {
+		t.Errorf("list options = %+v\nwant %+v (both drivers paged, Continue token followed)", opts, want)
+	}
+	if len(inv.HelmReleases) != 2 {
+		t.Errorf("releases = %+v, want a and b (releases from every page count)", inv.HelmReleases)
+	}
+}
+
 // #25: which revision, if any, is installed. helm uninstall --keep-history
 // marks the newest revision uninstalled and keeps the Secrets; a failed
 // upgrade leaves the previous successful revision's resources running.

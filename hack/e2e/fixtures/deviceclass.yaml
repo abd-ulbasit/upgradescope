@@ -1,0 +1,12 @@
+# hack/e2e/deprecated-api.txt, 1.37. Selects devices of a DRA driver that
+# does not exist; no claim uses it.
+apiVersion: __API_VERSION__
+kind: DeviceClass
+metadata:
+  name: upgradescope-e2e-deprecated
+  labels:
+    e2e.upgradescope.dev/applied-via: __APPLIED_VIA__
+spec:
+  selectors:
+    - cel:
+        expression: 'device.driver == "e2e.upgradescope.dev"'

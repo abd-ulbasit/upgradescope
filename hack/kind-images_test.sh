@@ -37,6 +37,17 @@ expect "unknown minor fails" 1 "no kind node image for 1.30" image 1.30
 expect "unknown matrix fails" 2 "usage" matrix nightly
 expect "next minor" 0 "1.32" next 1.31
 
+# Which set a ci.yml run takes (the kube-matrix job passes its event, the
+# workflow_call release input and the workflow_dispatch full-matrix input).
+expect "pull requests take the pr set" 0 pr set pull_request false ''
+expect "pushes to main take the pr set" 0 pr set push false ''
+expect "the schedule takes every minor" 0 all set schedule false ''
+expect "a dispatch takes every minor by default" 0 all set workflow_dispatch false true
+expect "a dispatch with full-matrix=false takes the pr set" 0 pr set workflow_dispatch false false
+expect "a release run takes the pr set even when dispatched" 0 pr set workflow_dispatch true ''
+expect "a release run takes the pr set on a tag push" 0 pr set push true ''
+expect "an unknown full-matrix value is refused" 2 "full-matrix" set workflow_dispatch false maybe
+
 printf '1.30 kindest/node:v1.30.13 pr v0.29.0\n' >"$work/bad.txt"
 TABLE="$work/bad.txt" expect "image without a digest is rejected" 2 "not pinned by digest" matrix all
 printf '1.30 kindest/node:v1.30.13@sha256:397209b3d947d154f6641f2d0ce8d473732bd91c87d9575ade99049aa33cd648 sometimes v0.29.0\n' >"$work/bad.txt"

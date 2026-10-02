@@ -367,6 +367,21 @@ func (g recordingGetter) List(ctx context.Context, opts metav1.ListOptions) (*me
 	return g.Getter.List(ctx, opts)
 }
 
+// Namespace records namespaced (and all-namespace) LISTs too.
+func (g recordingGetter) Namespace(ns string) metadata.ResourceInterface {
+	return recordingResource{g.Getter.Namespace(ns), g.opts}
+}
+
+type recordingResource struct {
+	metadata.ResourceInterface
+	opts *[]metav1.ListOptions
+}
+
+func (r recordingResource) List(ctx context.Context, opts metav1.ListOptions) (*metav1.PartialObjectMetadataList, error) {
+	*r.opts = append(*r.opts, opts)
+	return r.ResourceInterface.List(ctx, opts)
+}
+
 func TestCollectAPIUsageFollowsListPagination(t *testing.T) {
 	ingress := func(name, manager, apiVersion string) runtime.RawExtension {
 		return runtime.RawExtension{Object: &metav1.PartialObjectMetadata{

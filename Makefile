@@ -2,6 +2,21 @@
 build:
 	go build -o bin/upgradescope ./cmd/upgradescope
 
+# go build + go vet of every package for every platform the release ships
+# (linux, darwin, windows x amd64, arm64): CI's build job, so a change that
+# breaks only one OS fails its PR instead of the tag's CI. Needs only Go.
+.PHONY: cross-build
+cross-build:
+	./hack/cross-build.sh
+
+# bin/upgradescope serves the embedded dashboard: index.html at / and every
+# /assets/ file it references, 200 with a JS/CSS content type, from a serve
+# on a free port (CI's build job; release-check runs it on the release
+# binary). Needs Go and curl.
+.PHONY: dashboard-smoke
+dashboard-smoke: build
+	./hack/dashboard-smoke.sh bin/upgradescope
+
 # web rebuilds the dashboard and stages it for go:embed. The staged bundle
 # in internal/server/webdist is committed (the Vite build is byte-for-byte
 # reproducible from package-lock.json), so plain `go build`/`go install`
@@ -26,8 +41,8 @@ web-test:
 test:
 	./hack/test.sh
 # it writes to a cluster (the agent IT installs a CRD), so the tests refuse
-# any context that is not kind-*; set UPGRADESCOPE_IT_CONTEXT=<context> to
-# use a different disposable cluster.
+# any context that is not a kind-* context on a loopback API server; set
+# UPGRADESCOPE_IT_CONTEXT=<context> to use a different disposable cluster.
 it:
 	UPGRADESCOPE_IT=1 go test ./... -run Integration -v
 # CI's lint job runs exactly this. golangci-lint-action lags Go releases (its
@@ -131,8 +146,13 @@ helm-test:
 
 # The kube CI job on one Kubernetes minor (hack/kind-node-images.txt): kind
 # cluster on the pinned node image, the #3 zero-false-blocker regression,
-# scan + agent ITs, image build + kind load, chart install, ClusterReadiness
-# verdict, server ingest, agent.targets upgrade, clean uninstall. Needs
+# scan's behaviour (unreachable server exits 1, an object written through a
+# deprecated API is reported with its manager and not after a GA re-apply,
+# the EOL ingress-nginx blocks, a --keep-history uninstalled release does
+# not), scan + agent ITs, image build + kind load, chart install, ClusterReadiness
+# verdict, server ingest, agent.targets upgrade, clean uninstall, and the
+# API-server audit log checks (no deprecated-API requests, the agent writes
+# only its ClusterReadiness and CRD, Secrets only via Helm's selector). Needs
 # Docker, helm, go, jq, curl; installs pinned kind and kubectl itself.
 # `make e2e E2E_MINOR=1.31`; `make demo-down` deletes the cluster.
 E2E_MINOR ?= 1.37
@@ -141,10 +161,19 @@ e2e:
 	E2E_MINOR=$(E2E_MINOR) ./hack/e2e.sh
 agent-e2e: e2e
 
+# Every test, e2e gate, CI job, make target and file docs/claims.md names
+# exists, so a public claim cannot lose its proof silently (CI's test job).
+.PHONY: claims-check
+claims-check:
+	./hack/claims-check.sh
+
 # Offline self-tests of the hack/ scripts CI is built from (stubs and
 # fixtures only: no network, cluster or Docker).
 .PHONY: hack-test
 hack-test:
+	./hack/claims-check_test.sh
+	./hack/cross-build_test.sh
+	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh
 	./hack/check-toolchain_test.sh
 	./hack/install-tool_test.sh

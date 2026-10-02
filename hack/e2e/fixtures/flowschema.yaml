@@ -1,0 +1,24 @@
+# hack/e2e/deprecated-api.txt, 1.29-1.31. Matches no real request: a user
+# nobody is, reading ConfigMaps in a namespace that does not exist.
+apiVersion: __API_VERSION__
+kind: FlowSchema
+metadata:
+  name: upgradescope-e2e-deprecated
+  labels:
+    e2e.upgradescope.dev/applied-via: __APPLIED_VIA__
+spec:
+  priorityLevelConfiguration:
+    name: global-default
+  matchingPrecedence: 9900
+  distinguisherMethod:
+    type: ByUser
+  rules:
+    - subjects:
+        - kind: User
+          user:
+            name: upgradescope-e2e-nobody
+      resourceRules:
+        - verbs: ["get"]
+          apiGroups: [""]
+          resources: ["configmaps"]
+          namespaces: ["upgradescope-e2e-nowhere"]

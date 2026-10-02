@@ -4,6 +4,11 @@
 #   hack/kind-images.sh matrix pr|all   JSON array of minors, e.g. ["1.31","1.37"]
 #   hack/kind-images.sh image <minor>   the digest-pinned kind node image
 #   hack/kind-images.sh next <minor>    the next minor (the default upgrade target)
+#   hack/kind-images.sh set <event> <release> <full-matrix>
+#                                       the matrix a ci.yml run takes: all on the
+#                                       schedule and on workflow_dispatch (unless
+#                                       full-matrix=false), pr otherwise and on
+#                                       every release run
 #
 # The table is validated on every call, so a hand edit that drops a digest
 # or mislabels a row fails the job that reads it.
@@ -12,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 TABLE=${KIND_IMAGES_TABLE:-hack/kind-node-images.txt}
 
-usage() { echo "usage: $0 matrix pr|all | image <minor> | next <minor>" >&2; exit 2; }
+usage() { echo "usage: $0 matrix pr|all | image <minor> | next <minor> | set <event> <release> <full-matrix>" >&2; exit 2; }
 bad() { echo "kind-images: $TABLE: $*" >&2; exit 2; }
 
 rows=()
@@ -40,6 +45,20 @@ case "${1:-} ${2:-}" in
     done
     echo "kind-images: no kind node image for $2 in $TABLE" >&2
     exit 1
+    ;;
+  set\ *)
+    # A release (release.yml's workflow_call, release: true) carries the
+    # caller's event, so a re-dispatched release looks like a dispatch here;
+    # it keeps the PR set, since older kind images may stop booting.
+    [ $# -eq 4 ] || usage
+    case "$4" in true | false | '') ;; *) echo "kind-images: full-matrix must be true or false, not '$4'" >&2; exit 2 ;; esac
+    case "$3/$2/$4" in
+      true/*) echo pr ;;
+      */schedule/*) echo all ;;
+      */workflow_dispatch/false) echo pr ;;
+      */workflow_dispatch/*) echo all ;;
+      *) echo pr ;;
+    esac
     ;;
   next\ 1.*)
     [[ "$2" =~ ^1\.([0-9]+)$ ]] || usage
