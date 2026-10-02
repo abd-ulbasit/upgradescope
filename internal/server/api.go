@@ -368,13 +368,18 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
-	// Canonical form: re-marshal the parsed inventory so wire key order and
-	// whitespace never change the dedup hash. Struct fields marshal in
-	// declared order; map keys marshal sorted. CollectedAt is zeroed to match
-	// the agent's snapshotHash canonical form (it changes every tick; hashing
-	// it would make force-sync pushes never dedup to 200 duplicate).
-	inv.CollectedAt = time.Time{}
-	canonical, err := json.Marshal(inv)
+	// The dedup hash is over a canonical form: the parsed inventory
+	// re-marshaled, so wire key order and whitespace never change it.
+	// Struct fields marshal in declared order; map keys marshal sorted.
+	// CollectedAt is zeroed to match the agent's snapshotHash canonical
+	// form (it changes every tick; hashing it would make force-sync pushes
+	// never dedup to 200 duplicate). The snapshot itself stores the
+	// inventory as pushed, so collectedAt and fields this server does not
+	// know (a newer agent's) are kept for a server that does; a push that
+	// differs only in those is a duplicate, since nothing judged changed.
+	hashed := inv
+	hashed.CollectedAt = time.Time{}
+	canonical, err := json.Marshal(hashed)
 	if err != nil {
 		internalErr(w, "canonicalizing inventory", err)
 		return
@@ -411,7 +416,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		AgentVersion:  req.AgentVersion,
 		ReceivedAt:    now,
 		ServerVersion: inv.ServerVersion, // "" (degraded): ingestSnapshot inherits the last one
-		Inventory:     canonical,
+		Inventory:     req.Inventory,
 	}, inv)
 	var conflict *store.ClusterUIDConflictError
 	if errors.As(err, &conflict) { // another push bound the name meanwhile
