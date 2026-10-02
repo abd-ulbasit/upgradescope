@@ -135,6 +135,11 @@ release; `upgradescope version` prints the newest Kubernetes minor it
 covers. A target past that is `unknown`, by design.
 [Knowledge base](https://abd-ulbasit.github.io/upgradescope/concepts/knowledge-base/).
 
+Tested against Kubernetes 1.24 to the newest minor: 1.29 and up as whole
+kind clusters, 1.24 to 1.28 as real kube-apiservers through envtest (the
+collector and engine only).
+[Tested Kubernetes range](https://abd-ulbasit.github.io/upgradescope/compatibility-policy/#tested-kubernetes-range).
+
 ### Managed clusters
 
 EKS, GKE, AKS, k3s, RKE2 and OpenShift need no configuration. On managed

@@ -1,0 +1,16 @@
+# The envtest matrix (hack/envtest.sh, CI's envtest job): the Kubernetes
+# minors kind's node images do not cover (hack/kind-node-images.txt starts at
+# 1.29), each tested against a real kube-apiserver and etcd (#135, #69).
+#
+#   minor  version of the kube-apiserver + etcd bundle setup-envtest downloads
+#
+# The bundle is pinned to one exact patch release, not "1.24.x": a patch
+# release that lands upstream must not change what a PR is tested against.
+# Every minor must be a key of envtestBetas in
+# internal/collect/envtest_matrix_test.go and a row of ci.yml's envtest
+# matrix; hack/envtest_test.sh checks both.
+1.24 1.24.2
+1.25 1.25.0
+1.26 1.26.1
+1.27 1.27.1
+1.28 1.28.3
