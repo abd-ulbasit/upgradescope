@@ -73,7 +73,7 @@ func TestInventoryOmitEmpty(t *testing.T) {
 
 	absent := []string{
 		`"serverVersion"`, `"apiUsage"`, `"deprecatedCalls"`, `"helmReleases"`,
-		`"addOns"`, `"nodes"`, `"controlPlane"`, `"namespaces"`, `"unrecognizedImages"`,
+		`"addOns"`, `"nodes"`, `"controlPlane"`, `"namespaces"`, `"unrecognizedImages"`, `"crds"`,
 	}
 	for _, key := range absent {
 		if bytes.Contains(data, []byte(key)) {
@@ -127,6 +127,19 @@ func TestInventoryWireFormat(t *testing.T) {
 		},
 		Namespaces:         []NamespaceInfo{{Name: "payments", Team: "payments-team"}},
 		UnrecognizedImages: []string{"registry.example.com/internal/app"},
+		CRDs: []CRD{{
+			Group: "cert-manager.io", Kind: "Certificate", Plural: "certificates",
+			Versions: []CRDVersion{
+				{Name: "v1alpha2", Served: true, Deprecated: true, DeprecationWarning: "cert-manager.io/v1alpha2 Certificate is deprecated"},
+				{Name: "v1", Served: true, Storage: true},
+			},
+			StoredVersions: []string{"v1alpha2", "v1"},
+			Usage: []APIUsage{{
+				Group: "cert-manager.io", Version: "v1alpha2", Kind: "Certificate",
+				Count: 1, Namespaces: map[string]int{"web": 1},
+				Objects: []ObjectRef{{Namespace: "web", Name: "tls", Manager: "argocd-controller"}},
+			}},
+		}},
 	}
 
 	want := `{
@@ -213,6 +226,49 @@ func TestInventoryWireFormat(t *testing.T) {
   ],
   "unrecognizedImages": [
     "registry.example.com/internal/app"
+  ],
+  "crds": [
+    {
+      "group": "cert-manager.io",
+      "kind": "Certificate",
+      "plural": "certificates",
+      "versions": [
+        {
+          "name": "v1alpha2",
+          "served": true,
+          "storage": false,
+          "deprecated": true,
+          "deprecationWarning": "cert-manager.io/v1alpha2 Certificate is deprecated"
+        },
+        {
+          "name": "v1",
+          "served": true,
+          "storage": true
+        }
+      ],
+      "storedVersions": [
+        "v1alpha2",
+        "v1"
+      ],
+      "usage": [
+        {
+          "group": "cert-manager.io",
+          "version": "v1alpha2",
+          "kind": "Certificate",
+          "count": 1,
+          "namespaces": {
+            "web": 1
+          },
+          "objects": [
+            {
+              "namespace": "web",
+              "name": "tls",
+              "manager": "argocd-controller"
+            }
+          ]
+        }
+      ]
+    }
   ]
 }`
 
