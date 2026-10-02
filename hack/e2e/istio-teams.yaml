@@ -1,0 +1,64 @@
+# Istio on three release lines, one pod each, in namespaces labelled for
+# three teams (#129): hack/e2e.sh's istio_lines_judged_per_install, whose
+# ISTIO_LINES must match. Add-on detection reads the image from the pod
+# spec, so the pods never pull or run anything (imagePullPolicy: Never
+# leaves them in ErrImageNeverPull); they only have to exist.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-istio-old
+  labels:
+    team: e2e-team-old
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-istio-mid
+  labels:
+    team: e2e-team-mid
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-istio-new
+  labels:
+    team: e2e-team-new
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: istio-proxy
+  namespace: e2e-istio-old
+spec:
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: istio-proxy
+      image: istio/proxyv2:1.28.10
+      imagePullPolicy: Never
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: istio-proxy
+  namespace: e2e-istio-mid
+spec:
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: istio-proxy
+      image: gcr.io/istio-release/proxyv2:1.30.5 # the gcr.io mirror
+      imagePullPolicy: Never
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: istio-proxy
+  namespace: e2e-istio-new
+spec:
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: istio-proxy
+      image: istio/proxyv2:1.31.1
+      imagePullPolicy: Never
