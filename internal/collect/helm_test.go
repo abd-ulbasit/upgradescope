@@ -435,6 +435,45 @@ func TestCollectHelmDegradesPerDriver(t *testing.T) {
 		t.Errorf("err = %v, want a full failure naming both drivers", err)
 	}
 
+	// Secrets (Helm's default driver) forbidden, ConfigMaps readable but
+	// empty — the built-in view ClusterRole. Zero releases here says nothing
+	// about the cluster, so the capability must be unavailable (a gap in the
+	// report), not available with an unrendered reason.
+	kube, meta = helmClients(t)
+	forbid(meta, "secrets")
+	inv = inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+	runSteps(context.Background(), &inv, []step{{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
+		return collectHelm(ctx, kube, meta, nil, inv)
+	}}})
+	if st := inv.Capabilities[inventory.CapHelm]; st.Available || !strings.Contains(st.Reason, "0 via configmaps") || !strings.Contains(st.Reason, "secrets not read: ") {
+		t.Errorf("helm capability = %+v, want unavailable, naming both drivers", st)
+	}
+
+	// Secrets forbidden, a ConfigMap release readable: the release is kept
+	// (reads degrade per driver), but the default driver went unread, so
+	// the capability is still a gap.
+	cmRelease := helmConfigMap(t, helmRev{ns: "b", release: "c", rev: 1, status: "deployed", chart: "y", chartVersion: "2.0.0"})
+	kube, meta = helmClients(t, cmRelease)
+	forbid(meta, "secrets")
+	inv = inventory.Inventory{}
+	err = collectHelm(context.Background(), kube, meta, nil, &inv)
+	if err == nil || errors.As(err, &pe) || !strings.Contains(err.Error(), "1 via configmaps") || !strings.Contains(err.Error(), "secrets not read: ") {
+		t.Errorf("err = %v, want a full failure naming both drivers", err)
+	}
+	if len(inv.HelmReleases) != 1 || inv.HelmReleases[0].Name != "c" {
+		t.Errorf("releases = %+v, want the ConfigMap release kept", inv.HelmReleases)
+	}
+
+	// ConfigMaps forbidden and no Secret releases: nothing read while a
+	// driver failed is not "no releases".
+	kube, meta = helmClients(t)
+	forbid(meta, "configmaps")
+	inv = inventory.Inventory{}
+	err = collectHelm(context.Background(), kube, meta, nil, &inv)
+	if err == nil || errors.As(err, &pe) || !strings.Contains(err.Error(), "0 via secrets") || !strings.Contains(err.Error(), "configmaps not read: ") {
+		t.Errorf("err = %v, want a full failure naming both drivers", err)
+	}
+
 	// A role with list but not get: releases are seen but none can be read.
 	kube, meta = helmClients(t, secret)
 	kube.PrependReactor("get", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {

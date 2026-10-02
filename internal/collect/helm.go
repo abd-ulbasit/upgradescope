@@ -114,13 +114,20 @@ type helmRevision struct {
 // gzipped JSON document that holds the whole chart, so decoding every
 // revision OOM-killed the agent on clusters with long histories (#24).
 //
-// Drivers degrade independently: a driver whose list fails is skipped and
-// named in the reason, and the capability is unavailable only when every
-// driver failed. The reason of an available capability counts the
-// releases per driver ("helm releases: 3 via secrets, 0 via configmaps")
-// so a report shows where release data came from (runSteps only carries a
-// reason for an available capability on a partialError, so one is always
-// returned). A release whose object cannot be fetched is skipped and
+// Drivers degrade independently for reads: a driver whose list fails is
+// skipped and named in the reason, and the releases the others hold are
+// still recorded. The capability is unavailable — a gap the report shows —
+// when the secrets driver (Helm's default, so where releases almost always
+// are) failed, or when a driver failed and nothing was read: a role such as
+// the built-in view ClusterRole reads ConfigMaps but not Secrets, and "0
+// via configmaps" from it says nothing about the cluster. Only a failed
+// configmaps driver beside readable Secret releases leaves the capability
+// available (an install from a chart that predates the configmaps rule).
+// The reason counts the releases per driver ("helm releases: 3 via
+// secrets, 0 via configmaps") so the inventory shows where release data
+// came from (runSteps only carries a reason for an available capability
+// on a partialError, so one is returned whenever the capability is
+// available). A release whose object cannot be fetched is skipped and
 // counted in the reason, and when none can be (list but no get), the
 // capability is unavailable; a corrupt payload is skipped silently — one
 // corrupt release must not fail the capability.
@@ -212,7 +219,11 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 			counts = append(counts, fmt.Sprintf("%d via %s", perDriver[d], drv.name))
 		}
 	}
-	return partialError{msg: strings.Join(append([]string{"helm releases: " + strings.Join(counts, ", ")}, failed...), "; ")}
+	msg := strings.Join(append([]string{"helm releases: " + strings.Join(counts, ", ")}, failed...), "; ")
+	if listErrs[0] != nil || (len(rels) == 0 && len(failed) > 0) {
+		return errors.New(msg) // secrets unread, or nothing read and a driver failed: not assessed
+	}
+	return partialError{msg: msg}
 }
 
 // listMetadata lists one resource cluster-wide, metadata-only and paged,
