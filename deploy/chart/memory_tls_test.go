@@ -61,10 +61,10 @@ func TestGoMemLimitFollowsTheContainerLimit(t *testing.T) {
 		agent string // "" = unset
 		srv   string
 	}{
-		{"defaults", nil, "241591910", "603979776"},
+		{"defaults", nil, "241591910", "724775731"},
 		{"binary units", []string{"agent.resources.limits.memory=1Gi", "server.resources.limits.memory=1536Mi"}, "966367641", "1449551462"},
 		{"decimal units and plain bytes", []string{"agent.resources.limits.memory=500M", "server.resources.limits.memory=1000000000"}, "450000000", "900000000"},
-		{"a fraction", []string{"agent.resources.limits.memory=0.5Gi"}, "483183820", "603979776"},
+		{"a fraction", []string{"agent.resources.limits.memory=0.5Gi"}, "483183820", "724775731"},
 		{"plain bytes from a values file", []string{"-f=" + valuesFile}, "483183820", "966367641"},
 		{"an exponent and P units", []string{"agent.resources.limits.memory=5e8", "server.resources.limits.memory=1Pi"}, "450000000", "1013309916158361"},
 		{"no limit", []string{"agent.resources.limits=null", "server.resources.limits=null"}, "", ""},

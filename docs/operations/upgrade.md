@@ -73,7 +73,7 @@ again. On its first start,
 files to 0600, and its migration copies what each stored evaluation could
 not assess out of the report into a column of its own, reading every
 stored report once, so that first start takes longer on a large
-database. The chart's server memory limit is 640Mi, up from 512Mi, which
+database. The chart's server memory limit is 768Mi, up from 512Mi, which
 the worst case measured on SQLite no longer fit; if you set
 `server.resources` yourself, see
 [Memory and request limits](../operations.md#memory-and-request-limits).

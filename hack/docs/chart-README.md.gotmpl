@@ -260,14 +260,14 @@ settings, so the read token still protects all data.
 - Memory: both containers get `GOMEMLIMIT` at 90% of their memory limit
   (the Go runtime does not read the limit itself), from a byte count or a
   quantity up to `E`/`Ei`; `extraEnv` can set it
-  instead. The server's 640Mi holds its worst case, measured on SQLite:
-  one `/gate` decode, one snapshot ingest, one cluster read and the
+  instead. The server's 768Mi holds its worst case, measured on SQLite:
+  one `/gate` request, one snapshot ingest, one cluster read and the
   re-evaluation pass at their node budgets, two reads of a 500-cluster
   fleet, plus their buffered bodies and the responses held for their
   clients. Open connections, kernel socket buffers and larger fleets are
   not in that figure
   ([memory and request limits](https://abd-ulbasit.github.io/upgradescope/operations/#memory-and-request-limits)).
-  Below about 630Mi, that worst case no longer fits under `GOMEMLIMIT`.
+  Below about 665Mi, that worst case no longer fits under `GOMEMLIMIT`.
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
   them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.

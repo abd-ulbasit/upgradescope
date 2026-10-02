@@ -75,9 +75,9 @@ type Config struct {
 
 // /gate concurrency and memory. Each evaluation decodes its manifests in
 // memory, at a cost bounded by the node budget (maxManifestUnits): at most
-// ~160 MB of live heap for the worst stream that passes it, measured
+// ~165 MiB of heap for the worst stream that passes it, measured
 // (TestGateDecodeHeapIsBounded). Two at once would not fit the chart's
-// 640Mi limit, so evaluations run one at a time (a normal one takes
+// 768Mi limit, so evaluations run one at a time (a normal one takes
 // milliseconds), and the chart sets GOMEMLIMIT so the garbage one leaves
 // is collected before the next one's decode piles on top. A request asks
 // for the slot only once its whole body is in, so a slow uploader cannot
