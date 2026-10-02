@@ -101,10 +101,12 @@ func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
 	}
 }
 
-// steps lists the live sub-collectors in execution order (helm must run
-// before addons: the add-on matcher consumes inv.HelmReleases).
-// Tasks C2–C6 append one entry each as the sub-collectors land.
+// steps lists the live sub-collectors in execution order: helm before
+// addons (the add-on matcher consumes inv.HelmReleases), api-usage before
+// deprecated-calls (which needs the deprecated endpoints api-usage listed
+// itself, and must see their metric rows on every scan alike).
 func steps(c Clients, k kb.KB, opts Options) []step {
+	var selfListed []string // api-usage's own deprecated LISTs
 	return []step{
 		{cap: inventory.CapVersions, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Kube == nil || c.Discovery == nil {
@@ -118,12 +120,6 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			}
 			return collectHelm(ctx, c.Kube, c.Metadata, k.APILifecycle, inv)
 		}},
-		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error {
-			if c.RESTClient == nil {
-				return errors.New("rest client not configured")
-			}
-			return collectDeprecatedCalls(ctx, c.RESTClient, inv)
-		}},
 		{cap: inventory.CapAddOns, run: func(ctx context.Context, inv *inventory.Inventory) error { // after helm: consumes inv.HelmReleases
 			if c.Kube == nil {
 				return errors.New("kubernetes client not configured")
@@ -134,7 +130,15 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Discovery == nil || c.Metadata == nil {
 				return errors.New("discovery/metadata client not configured")
 			}
-			return collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
+			var err error
+			selfListed, err = collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
+			return err
+		}},
+		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error { // after api-usage: consumes selfListed
+			if c.RESTClient == nil {
+				return errors.New("rest client not configured")
+			}
+			return collectDeprecatedCalls(ctx, c.RESTClient, selfListed, inv)
 		}},
 	}
 }

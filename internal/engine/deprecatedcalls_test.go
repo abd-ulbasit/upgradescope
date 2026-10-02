@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -176,5 +177,57 @@ func TestEvaluateFoldsCoreAndIrregularPlurals(t *testing.T) {
 		if f.Category != CatDeprecatedAPI || !strings.Contains(f.Detail, "apiserver_requested_deprecated_apis") {
 			t.Errorf("finding %s: detail %q lacks caller evidence", f.Key, f.Detail)
 		}
+	}
+}
+
+// Issue #123: a caller row for a resource the scanner lists itself at a
+// deprecated version (the deprecated-calls capability's Skipped) is the
+// scanner's own request: no finding, whether or not the row is there, so
+// repeated scans agree. The same row for a resource it did not list is a
+// real caller and still blocks.
+func TestEvaluateSelfRequestedDeprecatedCall(t *testing.T) {
+	psp := inventory.DeprecatedCall{Group: "policy", Version: "v1beta1", Resource: "podsecuritypolicies", RemovedRelease: "1.25"}
+	pspStatus := psp
+	pspStatus.Subresource = "status"
+	cronjobs := inventory.DeprecatedCall{Group: "batch", Version: "v1beta1", Resource: "cronjobs", RemovedRelease: "1.25"}
+	const reason = "upgradescope lists policy/v1beta1 podsecuritypolicies itself"
+	self := inventory.CapabilityStatus{Available: true, Partial: true, Reason: reason, Skipped: []string{"policy/v1beta1 podsecuritypolicies"}}
+	target := inventory.Version{Major: 1, Minor: 25}
+
+	inv := clusterInv()
+	inv.ServerVersion = "v1.24.17"
+	inv.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.24.17"}}
+	inv.Capabilities[inventory.CapDeprecatedCalls] = self
+
+	var reports []Report
+	for _, rows := range [][]inventory.DeprecatedCall{nil, {psp}} { // before and after the scanner's first LIST
+		inv.DeprecatedCalls = rows
+		reports = append(reports, Evaluate(inv, testKB(), target, testNow))
+	}
+	if !reflect.DeepEqual(reports[0], reports[1]) {
+		t.Errorf("the scanner's own row changed the report:\n%+v\n%+v", reports[0], reports[1])
+	}
+	rep := reports[1]
+	if rep.Verdict != VerdictReady || rep.Score != 100 || len(rep.Findings) != 0 {
+		t.Errorf("verdict %s, score %d, findings %+v; want ready/100, none", rep.Verdict, rep.Score, rep.Findings)
+	}
+	wantGap := []CapabilityGap{{Capability: inventory.CapDeprecatedCalls, Reason: reason, Partial: true,
+		Skipped: []string{"policy/v1beta1 podsecuritypolicies"}}}
+	if !reflect.DeepEqual(rep.NotAssessed, wantGap) {
+		t.Errorf("NotAssessed = %+v\nwant %+v", rep.NotAssessed, wantGap)
+	}
+
+	// Rows the scanner did not cause are judged as ever.
+	inv.DeprecatedCalls = []inventory.DeprecatedCall{cronjobs, psp, pspStatus}
+	rep = Evaluate(inv, testKB(), target, testNow)
+	var keys []string
+	for _, f := range rep.Findings {
+		if f.Severity == SevBlocker {
+			keys = append(keys, f.Key)
+		}
+	}
+	want := []string{"deprecated-api-in-use/batch/v1beta1/cronjobs", "deprecated-api-in-use/policy/v1beta1/podsecuritypolicies/status"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("blockers %q, want %q", keys, want)
 	}
 }

@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -26,13 +27,19 @@ apiserver_requested_deprecated_apis{group="",removed_release="",resource="compon
 
 func metricsRESTClient(t *testing.T, body string) rest.Interface {
 	t.Helper()
+	return metricsRESTClientFunc(t, func() string { return body })
+}
+
+// metricsRESTClientFunc serves body() as /metrics on every scrape.
+func metricsRESTClientFunc(t *testing.T, body func() string) rest.Interface {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/metrics" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte(body))
+		_, _ = w.Write([]byte(body()))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -54,7 +61,7 @@ func TestCollectDeprecatedCalls(t *testing.T) {
 	rc := metricsRESTClient(t, metricsBody)
 
 	var inv inventory.Inventory
-	if err := collectDeprecatedCalls(context.Background(), rc, &inv); err != nil {
+	if err := collectDeprecatedCalls(context.Background(), rc, nil, &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.DeprecatedCall{
@@ -63,6 +70,28 @@ func TestCollectDeprecatedCalls(t *testing.T) {
 	}
 	if !reflect.DeepEqual(inv.DeprecatedCalls, want) {
 		t.Errorf("calls = %#v\nwant  %#v", inv.DeprecatedCalls, want)
+	}
+}
+
+// The scanner's own deprecated LISTs (selfListed, from api-usage) are
+// rows the metric cannot tell apart from other clients': the capability is
+// partial, naming them, and the rows stay in the inventory for the engine
+// to discount.
+func TestCollectDeprecatedCallsMarksSelfListedResources(t *testing.T) {
+	rc := metricsRESTClient(t, metricsBody)
+	self := []string{"v1 componentstatuses"}
+
+	var inv inventory.Inventory
+	err := collectDeprecatedCalls(context.Background(), rc, self, &inv)
+	var pe partialError
+	if !errors.As(err, &pe) || !pe.incomplete || !reflect.DeepEqual(pe.skipped, self) {
+		t.Fatalf("err = %#v, want an incomplete partialError skipping %q", err, self)
+	}
+	if !strings.Contains(pe.msg, "upgradescope lists v1 componentstatuses itself") {
+		t.Errorf("reason = %q, must say the scanner lists it itself", pe.msg)
+	}
+	if len(inv.DeprecatedCalls) != 2 {
+		t.Errorf("calls = %#v, want both rows kept", inv.DeprecatedCalls)
 	}
 }
 
@@ -99,7 +128,7 @@ func TestCollectDeprecatedCallsForbidden(t *testing.T) {
 			rc := metricsDenyRESTClient(t, status)
 
 			var inv inventory.Inventory
-			err := collectDeprecatedCalls(context.Background(), rc, &inv)
+			err := collectDeprecatedCalls(context.Background(), rc, nil, &inv)
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
@@ -120,7 +149,7 @@ func TestCollectDeprecatedCallsOtherErrorNotRewritten(t *testing.T) {
 	rc := metricsDenyRESTClient(t, http.StatusInternalServerError)
 
 	var inv inventory.Inventory
-	err := collectDeprecatedCalls(context.Background(), rc, &inv)
+	err := collectDeprecatedCalls(context.Background(), rc, nil, &inv)
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
@@ -133,7 +162,7 @@ func TestCollectDeprecatedCallsFamilyAbsent(t *testing.T) {
 	rc := metricsRESTClient(t, "# TYPE apiserver_request_total counter\napiserver_request_total{code=\"200\"} 7\n")
 
 	var inv inventory.Inventory
-	if err := collectDeprecatedCalls(context.Background(), rc, &inv); err != nil {
+	if err := collectDeprecatedCalls(context.Background(), rc, nil, &inv); err != nil {
 		t.Fatal(err)
 	}
 	if inv.DeprecatedCalls != nil {

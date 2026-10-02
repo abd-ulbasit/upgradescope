@@ -259,6 +259,29 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 	return out
 }
 
+// otherCallers returns inv.DeprecatedCalls without the scanner's own
+// requests: rows for a resource the deprecated-calls capability names in
+// Skipped ("group/version resource"), which the collector listed itself
+// at a deprecated version. The metric cannot tell another client of such
+// a resource from the scanner, so neither its presence nor its absence is
+// evidence; the capability's partial gap says so instead, the same way on
+// every scan. Rows for a subresource are someone else's: the scanner only
+// lists.
+func otherCallers(inv inventory.Inventory) []inventory.DeprecatedCall {
+	self := inv.Capabilities[inventory.CapDeprecatedCalls].Skipped
+	if len(self) == 0 {
+		return inv.DeprecatedCalls
+	}
+	var out []inventory.DeprecatedCall
+	for _, c := range inv.DeprecatedCalls {
+		if c.Subresource == "" && slices.Contains(self, gvString(c.Group, c.Version)+" "+c.Resource) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // foldDeprecatedCalls scores each API once. usage is evalAPIUsage's
 // output and calls is evalDeprecatedCalls' (calls[i] judges
 // inv.DeprecatedCalls[i]). A caller row for the group/version/kind of a
@@ -1256,6 +1279,7 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 // injected for EOL-window math. Output is fully deterministic for a given
 // (inventory, kb, target, now).
 func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) Report {
+	inv.DeprecatedCalls = otherCallers(inv)
 	findings := []Finding{} // non-nil so JSON renders "findings": []
 	findings = append(findings, foldDeprecatedCalls(inv, evalAPIUsage(inv, k, target), evalDeprecatedCalls(inv, target))...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
