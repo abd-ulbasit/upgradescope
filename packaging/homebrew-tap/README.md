@@ -47,10 +47,14 @@ brew style Formula/upgradescope.rb
 Edit `formula.rb.tmpl`, never `Formula/upgradescope.rb`. The next run
 overwrites the formula.
 
-### The first formula
+### Before the first signed release
 
-The initial `Formula/upgradescope.rb` was rendered from the `checksums.txt`
-of v0.1.1. That release was published before upgradescope's release workflow
-signed anything, so `update.sh` cannot verify it and refuses it. The first
-signed release (v0.2.0) replaces that formula on the next scheduled run.
-Until then, scheduled runs fail with "has no checksums.txt.sigstore.json".
+The tap starts with no formula: `Formula/upgradescope.rb` does not exist
+until the first run that verifies a release creates it. Releases up to
+v0.1.1 were published before upgradescope's release workflow signed
+anything, so `update.sh` cannot verify them and refuses them. Until the
+first signed release (v0.2.0) is out, scheduled runs fail with "has no
+checksums.txt.sigstore.json" and `brew install abd-ulbasit/tap/upgradescope`
+finds no formula. Push this repository only after v0.2.0 is published, so
+its first run creates the formula. The v0.1.1 `checksums.txt` in
+`script/testdata/` is only a fixture for `script/render-formula_test.sh`.

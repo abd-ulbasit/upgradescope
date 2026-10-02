@@ -42,6 +42,10 @@ account action that a workflow cannot do.
 
 ### Homebrew tap
 
+Only after v0.2.0 is published: it is the first signed release, and the tap
+ships nothing it cannot verify. The tap's files include no formula; its
+first run creates `Formula/upgradescope.rb`.
+
 1. Create the public repository `abd-ulbasit/homebrew-tap`.
 2. Push the contents of [`homebrew-tap/`](homebrew-tap/) to its default
    branch.

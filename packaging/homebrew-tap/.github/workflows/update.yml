@@ -47,15 +47,17 @@ jobs:
       - name: commit when the formula changed
         env:
           GH_TOKEN: ${{ github.token }}
+        # Staged first: the first render is a new file, which a plain git
+        # diff does not see (script/render-formula_test.sh runs this step).
         run: |
-          if git diff --quiet -- Formula/upgradescope.rb; then
+          git add Formula/upgradescope.rb
+          if git diff --cached --quiet -- Formula/upgradescope.rb; then
             echo "Formula/upgradescope.rb is current" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           version="$(sed -n 's#.*/releases/download/v\([^/]*\)/.*#\1#p' Formula/upgradescope.rb | head -1)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/upgradescope.rb
           git commit -m "upgradescope $version"
           # The checkout keeps no token; push with this run's token only here.
           git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
