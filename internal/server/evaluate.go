@@ -186,29 +186,41 @@ func (s *Server) outboxFor(ctx context.Context, cluster store.Cluster, cur engin
 }
 
 // ingestSnapshot evaluates a pushed snapshot against every target, then
-// commits the snapshot, its evaluations and their notifications in one
-// transaction. A duplicate (same hash as the latest snapshot) writes
-// nothing there and instead re-evaluates the stored snapshot where stale.
+// commits the cluster (registered or touched: cluster.ID is 0 for a new
+// name), the snapshot, its evaluations and their notifications in one
+// transaction. A duplicate (same hash as the latest snapshot) commits only
+// the touch and the push's envelope, then re-evaluates the stored
+// snapshot where stale.
 func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory) (int64, bool, error) {
-	// Server-side team override (spec: labels + server override) — rewrite
-	// namespace→team attribution before evaluation; stored reports carry the
-	// mapped teams. The stored snapshot keeps the original labels.
 	// A duplicate (the agent's hourly force-sync) is the common push: go
 	// straight to re-evaluating what is stale, instead of evaluating every
 	// target for the commit to discard. The commit still checks the hash,
 	// for a push racing this one.
-	latest, err := s.cfg.Store.LatestSnapshot(ctx, cluster.ID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
+	if cluster.ID != 0 {
+		latest, err := s.cfg.Store.LatestSnapshot(ctx, cluster.ID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
+		}
+		if err == nil && latest.Hash == snap.Hash {
+			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap})
+			if err != nil {
+				return 0, false, err
+			}
+			// Not a duplicate after all (another push moved the cluster on
+			// meanwhile): the snapshot is stored without evaluations, and
+			// reevaluate fills in every target.
+			return snapID, dup, s.reevaluate(ctx, cluster, snapID, inv)
+		}
 	}
-	if err == nil && latest.Hash == snap.Hash {
-		return latest.ID, true, s.reevaluate(ctx, cluster, latest.ID, inv)
-	}
+
+	// Server-side team override (spec: labels + server override) — rewrite
+	// namespace→team attribution before evaluation; stored reports carry the
+	// mapped teams. The stored snapshot keeps the original labels.
 
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
-	batch := store.EvaluationBatch{ClusterID: cluster.ID, Snapshot: &snap}
+	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap}
 	for _, target := range s.evalTargets(inv) {
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
 		if err != nil {
@@ -222,6 +234,13 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		return 0, false, err
 	}
 	if duplicate {
+		if cluster.ID == 0 { // registered by a push racing this one
+			c, err := s.cfg.Store.ClusterByName(ctx, cluster.Name)
+			if err != nil {
+				return 0, false, fmt.Errorf("loading cluster %q: %w", cluster.Name, err)
+			}
+			cluster.ID = c.ID
+		}
 		return snapID, true, s.reevaluate(ctx, cluster, snapID, inv)
 	}
 	if len(batch.Outbox) > 0 {

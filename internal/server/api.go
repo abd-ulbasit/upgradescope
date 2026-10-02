@@ -363,9 +363,9 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("token is not valid for cluster %q", req.ClusterName))
 		return
 	}
-	var inv inventory.Inventory
-	if err := json.Unmarshal(req.Inventory, &inv); err != nil {
-		errJSON(w, http.StatusUnprocessableEntity, "invalid inventory: "+err.Error())
+	inv, msg := decodePushedInventory(req.Inventory)
+	if msg != "" {
+		errJSON(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
 	// Canonical form: re-marshal the parsed inventory so wire key order and
@@ -383,51 +383,40 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	now := s.now()
-	clusterID, err := s.cfg.Store.UpsertCluster(ctx, store.Cluster{
-		Name:       req.ClusterName,
-		ClusterUID: inv.ClusterID,
-		LastSeen:   now,
-	})
-	var conflict *store.ClusterUIDConflictError
-	if errors.As(err, &conflict) {
-		// Two clusters reporting one name would interleave their snapshots
-		// in one history and flap every score and alert, so the second one
-		// is refused until an operator decides which cluster the name means.
-		// A push without a clusterId is refused the same way: it cannot
-		// show that it is the cluster the name is bound to.
-		if conflict.PushedUID == "" {
-			errJSON(w, http.StatusConflict, fmt.Sprintf(
-				"cluster name %q is registered to clusterId %s, but this push carries no clusterId "+
-					"(the agent could not read the kube-system namespace, which needs get on namespaces). "+
-					"Fix the agent's access, or give it a distinct --cluster-name if it is another cluster",
-				conflict.Name, conflict.StoredUID))
+	// The cluster is registered (or touched) in the same transaction as the
+	// snapshot, so a push that fails to commit leaves no cluster row and no
+	// last-seen bump. The lookup here only decides early: a UID conflict
+	// needs no evaluation, and a known cluster's latest snapshot decides
+	// whether this push is a duplicate.
+	cluster := store.Cluster{Name: req.ClusterName, ClusterUID: inv.ClusterID, LastSeen: now}
+	existing, err := s.cfg.Store.ClusterByName(ctx, req.ClusterName)
+	switch {
+	case err == nil:
+		if existing.ClusterUID != "" && existing.ClusterUID != inv.ClusterID {
+			writeUIDConflict(w, &store.ClusterUIDConflictError{Name: req.ClusterName, StoredUID: existing.ClusterUID, PushedUID: inv.ClusterID})
 			return
 		}
-		errJSON(w, http.StatusConflict, fmt.Sprintf(
-			"cluster name %q is registered to clusterId %s, but this push comes from clusterId %s. "+
-				"If this is a different cluster, give its agent a distinct --cluster-name (chart value clusterName). "+
-				"If the cluster was rebuilt, remove the old record (and its history) with "+
-				"'upgradescope clusters delete %s', then push again; the delete also removes the name's "+
-				"per-cluster ingest tokens, so mint a new one with 'upgradescope tokens create %s' if the agent used one",
-			conflict.Name, conflict.StoredUID, conflict.PushedUID, conflict.Name, conflict.Name))
+		cluster.ID = existing.ID
+	case !errors.Is(err, store.ErrNotFound):
+		internalErr(w, "loading cluster", err)
 		return
 	}
-	if err != nil {
-		internalErr(w, "storing cluster", err)
-		return
-	}
-	cluster := store.Cluster{ID: clusterID, Name: req.ClusterName, ClusterUID: inv.ClusterID}
 	// Detached from the request context: once the agent has sent the body,
 	// its disconnecting must not abort the commit (it would retry and get a
 	// duplicate); the transaction keeps the write all-or-nothing either way.
 	snapID, duplicate, err := s.ingestSnapshot(context.WithoutCancel(ctx), cluster, store.Snapshot{
-		ClusterID:    clusterID,
+		ClusterID:    cluster.ID,
 		Hash:         hash,
 		KBVersion:    req.KBVersion,
 		AgentVersion: req.AgentVersion,
 		ReceivedAt:   now,
 		Inventory:    canonical,
 	}, inv)
+	var conflict *store.ClusterUIDConflictError
+	if errors.As(err, &conflict) { // another push bound the name meanwhile
+		writeUIDConflict(w, conflict)
+		return
+	}
 	if err != nil {
 		internalErr(w, "storing snapshot and evaluations", err)
 		return
@@ -437,6 +426,59 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"snapshotId": snapID})
+}
+
+// supportedInventorySchema is the inventory.schemaVersion this server
+// judges. Another version means fields this server would misread.
+const supportedInventorySchema = 1
+
+// decodePushedInventory parses and checks a pushed inventory, returning a
+// 422 message for one the server cannot judge: absent or null, another
+// schemaVersion (which includes {} and a missing one), or a serverVersion
+// that is not a Kubernetes 1.x version. A degraded inventory with no
+// serverVersion at all (the versions collector failed) is accepted.
+func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
+	var inv inventory.Inventory
+	if t := bytes.TrimSpace(raw); len(t) == 0 || bytes.Equal(t, []byte("null")) {
+		return inv, "inventory is required"
+	}
+	if err := json.Unmarshal(raw, &inv); err != nil {
+		return inv, "invalid inventory: " + err.Error()
+	}
+	if inv.SchemaVersion != supportedInventorySchema {
+		return inv, fmt.Sprintf("unsupported inventory schemaVersion %d (want %d)", inv.SchemaVersion, supportedInventorySchema)
+	}
+	if inv.ServerVersion != "" {
+		if _, err := inventory.ParseTarget(inv.ServerVersion); err != nil {
+			return inv, "invalid inventory serverVersion: " + err.Error()
+		}
+	}
+	return inv, ""
+}
+
+// writeUIDConflict answers a push whose clusterId does not match the one
+// its cluster name is bound to.
+func writeUIDConflict(w http.ResponseWriter, conflict *store.ClusterUIDConflictError) {
+	// Two clusters reporting one name would interleave their snapshots in
+	// one history and flap every score and alert, so the second one is
+	// refused until an operator decides which cluster the name means. A
+	// push without a clusterId is refused the same way: it cannot show
+	// that it is the cluster the name is bound to.
+	if conflict.PushedUID == "" {
+		errJSON(w, http.StatusConflict, fmt.Sprintf(
+			"cluster name %q is registered to clusterId %s, but this push carries no clusterId "+
+				"(the agent could not read the kube-system namespace, which needs get on namespaces). "+
+				"Fix the agent's access, or give it a distinct --cluster-name if it is another cluster",
+			conflict.Name, conflict.StoredUID))
+		return
+	}
+	errJSON(w, http.StatusConflict, fmt.Sprintf(
+		"cluster name %q is registered to clusterId %s, but this push comes from clusterId %s. "+
+			"If this is a different cluster, give its agent a distinct --cluster-name (chart value clusterName). "+
+			"If the cluster was rebuilt, remove the old record (and its history) with "+
+			"'upgradescope clusters delete %s', then push again; the delete also removes the name's "+
+			"per-cluster ingest tokens, so mint a new one with 'upgradescope tokens create %s' if the agent used one",
+		conflict.Name, conflict.StoredUID, conflict.PushedUID, conflict.Name, conflict.Name))
 }
 
 // ----- read API -----
