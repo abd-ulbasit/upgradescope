@@ -162,6 +162,7 @@ with sources, what each does that upgradescope does not.
 ## Project
 
 [Contributing](CONTRIBUTING.md) · [Architecture](docs/architecture.md) ·
+[REST API](https://abd-ulbasit.github.io/upgradescope/reference/api/) ([OpenAPI](api/openapi.yaml)) ·
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) ·
 [Compatibility policy](https://abd-ulbasit.github.io/upgradescope/compatibility-policy/)
 
