@@ -299,9 +299,9 @@ func (p *Postgres) InsertSnapshot(ctx context.Context, snap Snapshot) (int64, bo
 func (p *Postgres) LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error) {
 	var snap Snapshot
 	err := p.db.QueryRowContext(ctx, `
-		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, inventory
+		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, server_version, inventory
 		FROM snapshots WHERE cluster_id = $1 ORDER BY id DESC LIMIT 1`, clusterID).
-		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &snap.ReceivedAt, &snap.Inventory)
+		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &snap.ReceivedAt, &snap.ServerVersion, &snap.Inventory)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Snapshot{}, fmt.Errorf("latest snapshot for cluster %d: %w", clusterID, ErrNotFound)
 	}
@@ -458,9 +458,9 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			inv = []byte{}
 		}
 		if err := tx.QueryRowContext(ctx, `
-			INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, inventory)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			b.ClusterID, b.Snapshot.Hash, b.Snapshot.KBVersion, b.Snapshot.AgentVersion, received, inv).Scan(&snapID); err != nil {
+			INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, server_version, inventory)
+			VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+			b.ClusterID, b.Snapshot.Hash, b.Snapshot.KBVersion, b.Snapshot.AgentVersion, received, b.Snapshot.ServerVersion, inv).Scan(&snapID); err != nil {
 			return 0, false, fmt.Errorf("commit evaluations: insert snapshot: %w", err)
 		}
 	} else {

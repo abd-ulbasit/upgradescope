@@ -139,7 +139,14 @@ type Snapshot struct {
 	KBVersion    string    `json:"kbVersion"`
 	AgentVersion string    `json:"agentVersion"`
 	ReceivedAt   time.Time `json:"receivedAt"`
-	Inventory    []byte    `json:"-"` // raw canonical JSON
+	// ServerVersion is the Kubernetes version the snapshot is judged at:
+	// its inventory's own serverVersion, or — for a degraded push that
+	// reported none — the version of the snapshot before it, so the
+	// cluster keeps its default target. "" on rows stored before the
+	// column existed (read the inventory's) and when no version was ever
+	// known.
+	ServerVersion string `json:"serverVersion,omitempty"`
+	Inventory     []byte `json:"-"` // the inventory JSON exactly as pushed
 }
 
 type Evaluation struct {

@@ -311,9 +311,9 @@ func (s *SQLite) LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot,
 	var snap Snapshot
 	var received string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, inventory
+		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, server_version, inventory
 		FROM snapshots WHERE cluster_id = ? ORDER BY id DESC LIMIT 1`, clusterID).
-		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &received, &snap.Inventory)
+		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &received, &snap.ServerVersion, &snap.Inventory)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Snapshot{}, fmt.Errorf("latest snapshot for cluster %d: %w", clusterID, ErrNotFound)
 	}
@@ -481,9 +481,9 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 			inv = []byte{}
 		}
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, inventory)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			b.ClusterID, b.Snapshot.Hash, b.Snapshot.KBVersion, b.Snapshot.AgentVersion, formatTime(received), inv)
+			INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, server_version, inventory)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			b.ClusterID, b.Snapshot.Hash, b.Snapshot.KBVersion, b.Snapshot.AgentVersion, formatTime(received), b.Snapshot.ServerVersion, inv)
 		if err != nil {
 			return 0, false, fmt.Errorf("commit evaluations: insert snapshot: %w", err)
 		}

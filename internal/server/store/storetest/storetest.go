@@ -47,6 +47,7 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("SnapshotDedupClusterScoped", func(t *testing.T) { testSnapshotDedupClusterScoped(t, newStore(t)) })
 	t.Run("ConcurrentIngestSerializes", func(t *testing.T) { testConcurrentIngest(t, newStore(t)) })
 	t.Run("LatestSnapshotRoundTrip", func(t *testing.T) { testLatestSnapshot(t, newStore(t)) })
+	t.Run("SnapshotServerVersionAndBytesRoundTrip", func(t *testing.T) { testSnapshotServerVersion(t, newStore(t)) })
 	t.Run("EvaluationsLatestPerTarget", func(t *testing.T) { testEvaluations(t, newStore(t)) })
 	t.Run("LatestEvaluationTieBreakHigherID", func(t *testing.T) { testLatestEvaluationTieBreak(t, newStore(t)) })
 	t.Run("ScoreHistoryOldestFirstLimitNewest", func(t *testing.T) { testScoreHistory(t, newStore(t)) })
@@ -558,6 +559,39 @@ func testLatestSnapshot(t *testing.T, s store.Store) {
 	}
 	if !bytes.Equal(got.Inventory, []byte(`{"hash":"bbb"}`)) {
 		t.Errorf("Inventory = %s, want raw bytes back", got.Inventory)
+	}
+}
+
+// testSnapshotServerVersion: a snapshot's ServerVersion (the version it is
+// judged at) and its inventory bytes come back exactly as stored —
+// whitespace, key order and fields the server does not know included —
+// whether written by InsertSnapshot or by CommitEvaluations.
+func testSnapshotServerVersion(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	cid := mustCluster(t, s, "prod")
+	raw := []byte(`{ "serverVersion":"v1.34.2", "futureField": {"b":1,"a":[2]}, "schemaVersion":1 }`)
+	if _, _, err := s.InsertSnapshot(ctx, store.Snapshot{ClusterID: cid, Hash: "aaa", ServerVersion: "v1.34.2", ReceivedAt: base, Inventory: raw}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LatestSnapshot(ctx, cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ServerVersion != "v1.34.2" || !bytes.Equal(got.Inventory, raw) {
+		t.Errorf("snapshot = version %q inventory %s, want v1.34.2 and %s", got.ServerVersion, got.Inventory, raw)
+	}
+	if _, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{ClusterID: cid,
+		Snapshot: &store.Snapshot{Hash: "bbb", ServerVersion: "v1.33.0", ReceivedAt: at(1), Inventory: []byte(`{}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.LatestSnapshot(ctx, cid); err != nil || got.ServerVersion != "v1.33.0" {
+		t.Errorf("committed snapshot = (%+v, %v), want server version v1.33.0", got, err)
+	}
+	if _, _, err := s.InsertSnapshot(ctx, store.Snapshot{ClusterID: cid, Hash: "ccc", ReceivedAt: at(2), Inventory: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.LatestSnapshot(ctx, cid); err != nil || got.ServerVersion != "" {
+		t.Errorf("snapshot without a version = (%+v, %v), want none", got, err)
 	}
 }
 
