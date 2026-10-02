@@ -106,7 +106,8 @@ func (f dbFlags) openStore() (store.Store, error) {
 		return st, nil
 	}
 	if dir := filepath.Dir(f.db); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		// The owner's only, like the database (store.Open makes it 0600).
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create db directory: %w", err)
 		}
 	}
@@ -118,7 +119,9 @@ func (f dbFlags) openStore() (store.Store, error) {
 }
 
 // generateToken returns 32 bytes of crypto/rand as 64 hex chars — the
-// plaintext shown exactly once; only its sha256 is persisted.
+// plaintext shown exactly once. The store keeps its sha256 and its first 8
+// characters (store.TokenPrefix), which `tokens list` prints so tokens can
+// be told apart; 8 of 64 hex characters leave 224 bits unknown.
 func generateToken() (string, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -176,7 +179,7 @@ once, to stdout; only its hash is stored. Give it to that cluster's agent
 			// `tokens create prod > secret` captures only the secret.
 			fmt.Fprintln(cmd.OutOrStdout(), token)
 			fmt.Fprintf(cmd.ErrOrStderr(),
-				"ingest token id %d (prefix %s) for cluster %q created — shown once, only its hash is stored\n",
+				"ingest token id %d (prefix %s) for cluster %q created — shown once: the server stores its sha256 hash and its first 8 characters, never the token\n",
 				id, store.TokenPrefix(token), cluster)
 			return nil
 		},
@@ -246,7 +249,8 @@ func newTokensRevokeCmd() *cobra.Command {
   upgradescope tokens revoke prod-eu --all`,
 		Long: "Revoke one ingest token by id (see 'tokens list'), or every active token of the cluster with --all.\n" +
 			"Zero-downtime rotation: 'tokens create <cluster>', roll the new token out to the agent, then\n" +
-			"'tokens revoke <cluster> --id <old id>'.",
+			"'tokens revoke <cluster> --id <old id>'. The agent reads its token at startup, so rolling it out\n" +
+			"means restarting the agent after updating its Secret (kubectl rollout restart deploy/<release>-agent).",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,

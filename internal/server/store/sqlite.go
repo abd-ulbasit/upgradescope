@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -45,6 +46,9 @@ func Open(path string) (*SQLite, error) {
 	// DeleteCluster, applyMigration) is a write path; a read-only
 	// transaction here would needlessly take the write lock, so keep it
 	// that way.
+	if err := restrictDBFiles(path); err != nil {
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+	}
 	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -60,6 +64,33 @@ func Open(path string) (*SQLite, error) {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
 	return &SQLite{db: db}, nil
+}
+
+// restrictDBFiles makes the database at path readable by its owner only:
+// it holds every inventory, evaluation and queued notification. SQLite
+// creates a database 0644 whatever the umask, and its -wal and -shm with
+// the database's mode, so the database is created 0600 here first, and an
+// existing one (an older version's, 0644) is tightened along with its
+// -wal and -shm. Setting the umask instead would be process-wide and
+// racy. A tightening the owner may not do (a file someone else owns) is
+// left as it is.
+func restrictDBFiles(path string) error {
+	if path == ":memory:" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&0o077 != 0 {
+			_ = os.Chmod(p, fi.Mode().Perm()&0o700)
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database.

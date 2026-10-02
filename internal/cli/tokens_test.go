@@ -323,3 +323,38 @@ func TestTokensDBURLFromEnv(t *testing.T) {
 		t.Fatalf("explicit --db must win over $UPGRADESCOPE_DB_URL: %v", err)
 	}
 }
+
+// tokens create says what it stores: the sha256 hash and the token's first
+// 8 characters, which `tokens list` prints to tell tokens apart (#126
+// SE-03; it used to claim only the hash is stored).
+func TestTokensCreateMessage(t *testing.T) {
+	stdout, stderr, err := execTokens(t, "create", "prod", "--db", filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSpace(stdout)[:8]
+	if !strings.Contains(stderr, prefix) || !strings.Contains(stderr, "sha256") || !strings.Contains(stderr, "first 8 characters") ||
+		strings.Contains(stderr, "only its hash") {
+		t.Errorf("stderr = %q: want it to say a sha256 hash and the first 8 characters (%s) are stored", stderr, prefix)
+	}
+}
+
+// The database directory openStore creates is the owner's only, like the
+// database in it.
+func TestOpenStoreCreatesPrivateDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "new", "dir")
+	st, err := dbFlags{db: filepath.Join(dir, "u.db")}.openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, d := range []string{dir, filepath.Dir(dir)} {
+		fi, err := os.Stat(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := fi.Mode().Perm(); mode&0o077 != 0 {
+			t.Errorf("%s mode = %o, want no group or other access", d, mode)
+		}
+	}
+}
