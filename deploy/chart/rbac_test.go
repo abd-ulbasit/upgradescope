@@ -411,6 +411,8 @@ var (
 	negation  = regexp.MustCompile(`(?i)\b(never|no|not|nor|without)\b`)
 	// "..., `watch`, and Secrets ... are denied": the clause denies a list.
 	deniedEnd = regexp.MustCompile(`(?i)\b(are|is) denied\s*$`)
+	// kubectl's --watch flag: what the reader runs, not what the role grants.
+	watchFlag = regexp.MustCompile(`--watch\b`)
 )
 
 // rbacDocProblems returns what a page describing the agent's role gets
@@ -418,10 +420,11 @@ var (
 // mention must be negated by one of the two words before it, or be in a
 // clause ending "are denied"), a CRD grant "not restricted by
 // resourceNames" (both CRD write rules are), or no mention of the
-// cluster-wide ConfigMaps read that rbac.helmSecrets adds.
+// cluster-wide ConfigMaps read that rbac.helmSecrets adds. A --watch flag
+// (`kubectl get ... --watch`) is not a grant.
 func rbacDocProblems(doc string) []string {
 	var out []string
-	for _, clause := range clauseEnd.Split(doc, -1) {
+	for _, clause := range clauseEnd.Split(watchFlag.ReplaceAllString(doc, ""), -1) {
 		if deniedEnd.MatchString(clause) {
 			continue
 		}
@@ -461,6 +464,9 @@ func TestRBACDocProblems(t *testing.T) {
 		{"not restricted", "CRD create/update/patch, not restricted by `resourceNames`." + cm, true},
 		{"not restricted across lines", "CRD writes, not\n    restricted by `resourceNames`." + cm, true},
 		{"no configmaps", "It reads with `get` and `list`, never `watch`, and Secrets.", true},
+		// kubectl's --watch flag is the reader's, not a grant to the agent.
+		{"kubectl --watch", "Follow it with `kubectl get clusterreadiness cluster --watch`." + cm, false},
+		{"--watch beside a grant", "Run it with --watch; the agent can watch pods." + cm, true},
 	} {
 		if got := rbacDocProblems(tc.doc); (len(got) > 0) != tc.bad {
 			t.Errorf("%s: problems = %q, want bad=%v", tc.name, got, tc.bad)
