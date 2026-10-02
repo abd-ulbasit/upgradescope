@@ -53,7 +53,7 @@ ignore:
 | Field | Required | Meaning |
 |---|---|---|
 | `key` | one of `key`, `category` | Exact [finding key](#finding-keys). |
-| `category` | one of `key`, `category` | Every finding of this category: `removed-api`, `deprecated-api`, `deprecated-api-in-use`, `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`, `kb-stale`, `addon-no-data`. |
+| `category` | one of `key`, `category` | Every finding of this category: `removed-api`, `deprecated-api`, `deprecated-api-in-use`, `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`, `kb-stale`, `addon-no-data`, `unknown-api`. |
 | `namespace` | no | Glob (`*`, `?`, `[...]`) on the object's namespace. |
 | `name` | no | Glob on the object's name. |
 | `file` | no | Glob on the manifest path, relative to the directory that holds the config file; `**` spans directories. Never matches live objects. |
@@ -195,6 +195,7 @@ becomes "2 objects"). Examples:
 | Deprecated API still requested | `deprecated-api-in-use/<group>/<version>/<resource>` |
 | EOL add-on | `eol-addon/ingress-nginx`, or `eol-addon/<id>/<cycle>` for a release line |
 | Version skew | `version-skew/kubelet-post-upgrade`, `version-skew/<component>-newer` or `-behind`, `version-skew/upgrade-path` |
+| Unknown built-in API | `unknown-api/<group>/<version>/<kind>` |
 | Knowledge base behind the target | `kb-stale` |
 
 `--output json` shows the key of every finding, and the SARIF output uses

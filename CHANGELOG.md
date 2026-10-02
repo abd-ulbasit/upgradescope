@@ -19,6 +19,16 @@ a CI gate.
 
 ### Added
 
+- Deleted built-in APIs are in the knowledge base. `tools/gen-kb` reads
+  every `k8s.io/api` release since v0.17 and records each type a later
+  release dropped, removed at the release that stopped serving it. These
+  include the DRA v1alpha1 to v1alpha3 kinds, ClusterCIDR, ServiceCIDR and
+  IPAddress v1alpha1, LeaseCandidate v1alpha1, and older deletions such as
+  `batch/v2alpha1` CronJob and `settings` PodPreset. Manifests and callers
+  that use them now block instead of passing silently (#124).
+- An `unknown-api` info finding: an object or API call at a version of a
+  built-in group that the knowledge base does not know. CRD groups are
+  not affected.
 - A readiness verdict: `ready`, `blocked` or `unknown`. The verdict is
   shown in every output format, in the `ClusterReadiness` status and as
   its `READY` column. `unknown` means that no blocker was found but a
@@ -81,6 +91,9 @@ a CI gate.
 
 ### Changed
 
+- Chart: the agent can read the resources of the newly known deleted APIs
+  (for example `auditsinks`, `clustercidrs`, `podpresets` and the DRA
+  alpha kinds), so a cluster that still serves them is checked.
 - **The gate fails closed.** Under `--fail-on blocker|warning` (the
   default), a scan with verdict `unknown` exits 2. A required check that
   could not run gives `unknown`: for example, RBAC denied, the cluster was

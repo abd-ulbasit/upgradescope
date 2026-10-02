@@ -40,6 +40,7 @@ audited") and names the issue that tracks it.
 | API-01b | A freshly created cluster, scanned at its next minor, has no removed-API blocker (#3). | `e2e:no_removed_api_blockers` |
 | API-01c | When the kind itself goes away (no surviving version), every stored object counts. | `TestCollectAPIUsageTypeRemovedKindCountsEveryObject` `TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject` |
 | API-02 | `removed-api` is a blocker when the API is removed at or before the target and a warning when it is removed in the next minor. | `TestEvalAPIUsageRemovedAtTarget` `TestEvalAPIUsageRemovedAtTargetPlusOne` `TestEvaluateGolden` |
+| API-02b | A deprecation that takes effect after the target is titled as a future deprecation, and "(projected)" past the knowledge base's horizon, not as current. | `TestEvalAPIUsageFutureDeprecationTitle` |
 | API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one. On the e2e kind cluster, which serves one deprecated group/version on purpose, neither `scan` nor the agent calls a deprecated API (the e2e's own request through that version shows the audit log records them), apart from the self-LISTs in `hack/e2e/deprecated-request-allowlist.txt` (#123 removes them); a cluster that serves a kind only at deprecated versions still gets a LIST there (API-04c). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
 | API-05 | A caller with no stored objects is a standalone `deprecated-api-in-use` finding; caller evidence otherwise merges onto the object finding. | `TestEvaluateCallerWithoutObjectsStaysStandalone` `TestEvaluateMergesCallersIntoAPIUsageFinding` `TestEvaluateMergesSubresourceCallers` `TestEvaluateMoreSevereCallerIsNotFolded` `TestEvaluateGolden` |
 | PF-02 | Every cluster-wide list is paged (500 objects a page); the api-usage and Helm lists are metadata-only, and object references are capped. | `TestCollectAPIUsageFollowsListPagination` `TestCollectAddOnsFollowsListPagination` `TestCollectVersionsFollowsListPagination` `TestCollectHelmFollowsListPagination` `TestCollectHelmFetchesOnlyTheChosenRevision` `TestCollectAPIUsageCapsObjectRefs` |
@@ -197,6 +198,8 @@ audited") and names the issue that tracks it.
 | ID | Claim | Proven by |
 |---|---|---|
 | KB-01 | The API-lifecycle dataset is generated from `k8s.io/api`, and CI fails when the committed copy is stale. | `ci:kb-freshness` `TestDatasetSanity` `TestDeprecationGuideCoverage` |
+| KB-01b | Built-in APIs deleted from `k8s.io/api` (DRA v1alpha1 to v1alpha3, ClusterCIDR, ServiceCIDR and IPAddress v1alpha1, LeaseCandidate v1alpha1 and others since v0.17) are tombstones in the knowledge base, removed at the release that stopped serving them, so `--files` blocks them. | `TestKBCoversDeletedAlphaGVKs` `TestScanFilesDeletedAlphaAPI` `TestDeletedTypes` |
+| KB-01c | An object or API call at a version of a built-in group that the knowledge base does not know is an `unknown-api` info finding; CRD groups stay silent. | `TestEvalAPIUsageUnknownGVK` |
 | KB-02 | Generated entries win over the hand-written supplement; every supplement entry is cited. | `TestMergeEntries` `TestSupplement` |
 | KB-05 | Every add-on EOL claim carries an upstream citation, enforced by `registry.Validate`. | `TestValidate` `TestEmbeddedEntriesProperties` |
 | KB-06 | `tools/eol-sync` reconciles registry entries with endoflife.date, and a PR touching `registry/` fails when they drift. | `TestRun` `TestComputeCycles` `ci:registry` |
@@ -229,12 +232,10 @@ lands with a test.
 | ID | What did not hold | Proven by |
 |---|---|---|
 | API-01d | An object created with no fields records no managedFields and goes undetected. | not true yet: #122 |
-| API-02b | `deprecated-api` info also fires for deprecations after the target ("deprecated since 1.40" at 1.37). | not true yet: #124 |
 | API-03 | Deprecated CRD versions and stale `status.storedVersions` are not reported. | not true yet: #48 |
 | API-04b | Repeat scans count the scanner's own deprecated-endpoint LISTs as callers. | not true yet: #123 |
 | API-04c | A cluster that serves `coordination.k8s.io/v1beta1` gets a LIST of `leasecandidates` there on every scan, which the engine then scores as a caller. | not true yet: #123 |
 | DC-02b | A `/metrics` that hangs spends the whole scan budget and starves the other collectors. | not true yet: #48 |
-| KB-01b | Alpha kinds deleted from `k8s.io/api` (DRA v1alpha1 to v1alpha3, ClusterCIDR, ServiceCIDR and IPAddress v1alpha1, LeaseCandidate v1alpha1) are missing from the knowledge base, so `--files` passes them. | not true yet: #124 |
 | PF-02b | Add-on and version collection reads whole Pod, Node and Namespace objects, not metadata only. | not true yet: #121 |
 | VS-03 | README's `ready = (blockers == 0)`: ready now means verdict ready. | not true yet: #130 |
 | VS-04 | Severity tiers by target do not cover EOL add-ons, runtimes, kb-stale or current skew. | not true yet: #130 |
