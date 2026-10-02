@@ -57,6 +57,76 @@ var removalFixes = map[gvkOut]version{
 	{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClass"}: {Major: 1, Minor: 23},
 }
 
+// untaggedLifecycle is the lifecycle of a type k8s.io/api registers without
+// APILifecycle* markers, from the Kubernetes release notes.
+type untaggedLifecycle struct {
+	introduced  version
+	removed     *version // first release whose kube-apiserver does not serve it
+	replacement *gvkOut
+	citations   []string // release notes or source that state introduced and removed
+}
+
+// entry returns u as a dataset entry for k. Removed is no upstream tag, so
+// it is marked inferred, as removalFixes' are.
+func (u untaggedLifecycle) entry(k gvkOut) entry {
+	e := entry{Group: k.Group, Version: k.Version, Kind: k.Kind, Introduced: u.introduced}
+	if u.removed != nil {
+		r := *u.removed
+		e.Removed, e.RemovedInferred = &r, true
+	}
+	if u.replacement != nil {
+		r := *u.replacement
+		e.Replacement = &r
+	}
+	return e
+}
+
+var (
+	rbacV1alpha1Cites = []string{
+		"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.3.md",  // "Alpha RBAC authorization API group"
+		"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.23.md", // "The rbac.authorization.k8s.io/v1alpha1 API version is removed" (#104248)
+	}
+	rbacV1alpha1Removed = version{Major: 1, Minor: 23}
+)
+
+// untaggedLifecycles gives a lifecycle to types k8s.io/api registers but
+// never tagged with APILifecycle* markers, which extract would otherwise
+// skip: a manifest using one that kube-apiserver no longer serves scored as
+// an unknown-api info, not a blocker (#166). Only add a type whose removal
+// is stated in the Kubernetes changelog, and cite it; the test fails once
+// upstream tags the type, when the entry must go. Registered, untagged
+// types with no entry here (scheduling.k8s.io/v1alpha3 Workload, PodGroup
+// and CompositePodGroup, still served; imagepolicy.k8s.io/v1alpha1
+// ImageReview, a webhook payload; internal.apiserver.k8s.io/v1alpha1
+// StorageVersion) stay unknown-api infos: nothing says when they leave.
+var untaggedLifecycles = map[gvkOut]untaggedLifecycle{
+	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "ClusterRole"}: {
+		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,
+		replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"},
+	},
+	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "ClusterRoleBinding"}: {
+		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,
+		replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"},
+	},
+	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "Role"}: {
+		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,
+		replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "Role"},
+	},
+	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "RoleBinding"}: {
+		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,
+		replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "RoleBinding"},
+	},
+	{Group: "node.k8s.io", Version: "v1alpha1", Kind: "RuntimeClass"}: {
+		introduced:  version{Major: 1, Minor: 12},
+		removed:     &version{Major: 1, Minor: 24},
+		replacement: &gvkOut{Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass"},
+		citations: []string{
+			"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.12.md", // "The RuntimeClass API has been added. This feature is in alpha"
+			"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.24.md", // "The node.k8s.io/v1alpha1 RuntimeClass API is no longer served" (#103061)
+		},
+	},
+}
+
 // nonPersisted are kinds k8s.io/api registers (or registered) that are
 // wrappers or subresource bodies, not resources: kube-apiserver never
 // stored or served them, so no manifest or live object can be one and a

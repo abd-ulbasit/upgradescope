@@ -201,10 +201,15 @@ func extract(scheme *runtime.Scheme) (entries []entry, upstream map[gvkOut]bool,
 		if skipKind(k) {
 			continue
 		}
-		upstream[gvkOut{Group: k.Group, Version: k.Version, Kind: k.Kind}] = true
+		g := gvkOut{Group: k.Group, Version: k.Version, Kind: k.Kind}
+		upstream[g] = true
 		obj := reflect.New(t).Interface()
 		in, ok := obj.(introducedIface)
 		if !ok {
+			if u, fixed := untaggedLifecycles[g]; fixed {
+				entries = append(entries, u.entry(g))
+				continue
+			}
 			noLifecycle = append(noLifecycle, k.GroupVersion().String()+" "+k.Kind)
 			continue // no generated lifecycle data for this type
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -95,6 +96,82 @@ func TestRemovalFixesAreDeletedTypes(t *testing.T) {
 	for k := range removalFixes {
 		if upstream[k] {
 			t.Errorf("removalFixes has %s/%s %s, which k8s.io/api still registers", k.Group, k.Version, k.Kind)
+		}
+	}
+}
+
+// A type k8s.io/api registers without lifecycle markers gets its lifecycle
+// from untaggedLifecycles, so an API kube-apiserver stopped serving is not
+// just an unknown-api info (rbac.authorization.k8s.io/v1alpha1, #166).
+func TestExtractUntaggedLifecycles(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range addToSchemes {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, _, noLifecycle := extract(scheme)
+	got := map[gvkOut]entry{}
+	for _, e := range entries {
+		got[e.gvk()] = e
+	}
+	rbac := func(kind string) gvkOut {
+		return gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: kind}
+	}
+	for _, kind := range []string{"ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding"} {
+		want := entry{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: kind,
+			Introduced: *v(1, 3), Removed: v(1, 23), RemovedInferred: true,
+			Replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: kind}}
+		if !reflect.DeepEqual(got[rbac(kind)], want) {
+			t.Errorf("rbac v1alpha1 %s = %+v, want %+v", kind, got[rbac(kind)], want)
+		}
+	}
+	// Types without a table entry stay out of the dataset and are reported.
+	if e, ok := got[gvkOut{Group: "scheduling.k8s.io", Version: "v1alpha3", Kind: "Workload"}]; ok {
+		t.Errorf("scheduling v1alpha3 Workload has no lifecycle source but is in the dataset: %+v", e)
+	}
+	for _, s := range noLifecycle {
+		if strings.HasPrefix(s, "rbac.authorization.k8s.io/v1alpha1 ") {
+			t.Errorf("noLifecycle still lists %q", s)
+		}
+	}
+}
+
+// Every untaggedLifecycles entry is cited and sane, and it is a stop-gap
+// for types upstream does not tag: once k8s.io/api tags one, the table must
+// go (the tag would win, and the table would claim a source it no longer is).
+func TestUntaggedLifecyclesAreCitedAndUntagged(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range addToSchemes {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, upstream, _ := extract(scheme)
+	if len(untaggedLifecycles) == 0 {
+		t.Fatal("untaggedLifecycles is empty")
+	}
+	for k, u := range untaggedLifecycles {
+		name := k.Group + "/" + k.Version + " " + k.Kind
+		if !upstream[k] {
+			t.Errorf("%s: k8s.io/api no longer registers it; delete the entry (deletedTypes records it)", name)
+		}
+		typ, err := scheme.New(schema.GroupVersionKind{Group: k.Group, Version: k.Version, Kind: k.Kind})
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+		} else if _, tagged := typ.(introducedIface); tagged {
+			t.Errorf("%s: k8s.io/api tags it now; delete the entry", name)
+		}
+		if len(u.citations) == 0 {
+			t.Errorf("%s: no citation", name)
+		}
+		for _, c := range u.citations {
+			if !strings.HasPrefix(c, "https://") {
+				t.Errorf("%s: citation %q is not an https URL", name, c)
+			}
+		}
+		if u.removed != nil && !u.introduced.before(*u.removed) {
+			t.Errorf("%s: removed %s is not after introduced %s", name, u.removed, u.introduced)
 		}
 	}
 }

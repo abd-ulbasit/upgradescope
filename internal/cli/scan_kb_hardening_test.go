@@ -1,0 +1,60 @@
+package cli
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+)
+
+// #166 KB-01, end to end with the embedded KB. A kind no cluster serves
+// (PodStatusResult, a kubelet wrapper) was a removed-api blocker at 1.37; it
+// is an unknown-api info now. rbac.authorization.k8s.io/v1alpha1, gone in
+// 1.23, scanned as ready at 1.23 with an unknown-api info; it blocks now and
+// warns one release before.
+func TestScanFilesNonPersistedAndUntaggedAPIs(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"m.yaml": `apiVersion: v1
+kind: PodStatusResult
+metadata:
+  name: x
+---
+apiVersion: rbac.authorization.k8s.io/v1alpha1
+kind: ClusterRole
+metadata:
+  name: reader
+`})
+	type finding struct{ Severity, Key string }
+	cases := []struct {
+		target, verdict string
+		exit            int
+		want            []finding
+	}{
+		{"1.23", "blocked", 2, []finding{
+			{"blocker", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/core/v1/PodStatusResult"},
+		}},
+		{"1.22", "ready", 0, []finding{
+			{"warning", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/core/v1/PodStatusResult"},
+		}},
+		{"1.37", "blocked", 2, []finding{
+			{"blocker", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/core/v1/PodStatusResult"},
+		}},
+	}
+	for _, c := range cases {
+		out, _, err := execScanFiles(t, "--files", dir, "--target", c.target, "--output", "json")
+		if ExitCode(err) != c.exit {
+			t.Fatalf("--target %s: ExitCode = %d (err %v), want %d", c.target, ExitCode(err), err, c.exit)
+		}
+		var rep struct {
+			Verdict  string
+			Findings []finding
+		}
+		if err := json.Unmarshal([]byte(out), &rep); err != nil {
+			t.Fatal(err)
+		}
+		if rep.Verdict != c.verdict || !reflect.DeepEqual(rep.Findings, c.want) {
+			t.Errorf("--target %s: verdict %s, findings %+v; want %s, %+v", c.target, rep.Verdict, rep.Findings, c.verdict, c.want)
+		}
+	}
+}
