@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="4" failures="1" errors="0" time="0">
+  <testsuite name="eol-addon" tests="2" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="eol-addon/istio/below-1.27" classname="upgradescope.eol-addon" time="0">
+      <failure message="Istio 1.5.2 is end-of-life (older than the 1.27 release line)" type="blocker">Istio 1.5.2 is end-of-life (older than the 1.27 release line).&#xA;Detected Istio version 1.5.2 via image in namespace(s): mesh-ancient. Versions older than the 1.27 release line, the oldest one upstream still documents, are past end of life: support for 1.27 ended on 2026-04-07.&#xA;Teams: legacy&#xA;Fix: Upgrade Istio to a supported release line (newest: 1.31).&#xA;References:&#xA;- https://endoflife.date/istio</failure>
+    </testcase>
+    <testcase name="eol-addon/containerd/below-1.7" classname="upgradescope.eol-addon" time="0">
+      <system-out>warning: containerd 1.6.20 is end-of-life (older than the 1.7 release line).&#xA;Detected containerd on node(s): node-a (1.6.20). Versions older than the 1.7 release line, the oldest one upstream still documents, are past end of life: support for 1.7 ended on 2026-09-01. The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself.&#xA;Fix: Upgrade containerd to a supported release line (newest: 2.0).&#xA;References:&#xA;- https://endoflife.date/containerd</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="addon-no-data" tests="2" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="addon-no-data/external-dns" classname="upgradescope.addon-no-data" time="0">
+      <system-out>info: no lifecycle data for ExternalDNS 0.18.0.&#xA;Detected ExternalDNS version 0.18.0 via image in namespace(s): dns. The registry has no release-line data for this version, so its end of life was not assessed.&#xA;Teams: platform&#xA;References:&#xA;- https://github.com/kubernetes-sigs/external-dns/releases</system-out>
+    </testcase>
+    <testcase name="addon-no-data/istio" classname="upgradescope.addon-no-data" time="0">
+      <system-out>info: no lifecycle data for Istio 1.29.4.&#xA;Detected Istio in namespace(s): mesh-gap (1.29.4 via image), mesh-next (1.33.0 via image). The registry has no release-line data for this version, so its end of life was not assessed.&#xA;Teams: beta, canary&#xA;References:&#xA;- https://endoflife.date/istio</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

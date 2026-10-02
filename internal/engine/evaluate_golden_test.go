@@ -60,6 +60,12 @@ var goldenParams = map[string]struct{ target, now string }{
 	// an older image-only install (1.27.3) the release must not mask: its
 	// EOL and compat blockers name only istio-legacy and team legacy.
 	"addon-mixed-versions": {"1.34", "2026-12-15T00:00:00Z"},
+	// #165: versions older than the oldest tracked line, which has ended,
+	// are past end of life: Istio 1.5.2 (oldest line 1.27) blocks, a
+	// containerd 1.6 node (oldest line 1.7) warns. Istio between tracked
+	// lines (1.29) or newer than all of them (1.33), and ExternalDNS (no
+	// lines), stay addon-no-data.
+	"addon-predates-lines": {"1.34", "2026-10-02T00:00:00Z"},
 	// Helm releases, no registry data needed: shop/web's chart kubeVersion
 	// excludes 1.25 (blocker); shop/legacy-web's does not parse (info);
 	// batch/jobs renders two batch/v1beta1 CronJobs, one of which the live

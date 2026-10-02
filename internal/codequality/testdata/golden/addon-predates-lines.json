@@ -1,0 +1,50 @@
+[
+  {
+    "description": "Istio 1.5.2 is end-of-life (older than the 1.27 release line). Detected Istio version 1.5.2 via image in namespace(s): mesh-ancient. Versions older than the 1.27 release line, the oldest one upstream still documents, are past end of life: support for 1.27 ended on 2026-04-07. Fix: Upgrade Istio to a supported release line (newest: 1.31).",
+    "check_name": "eol-addon/istio/below-1.27",
+    "fingerprint": "47f0f3d950067bec2caadf5a432b29551ba7815ce223d7e9ee32f2480791115d",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/eol-addon/istio/below-1.27",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "containerd 1.6.20 is end-of-life (older than the 1.7 release line). Detected containerd on node(s): node-a (1.6.20). Versions older than the 1.7 release line, the oldest one upstream still documents, are past end of life: support for 1.7 ended on 2026-09-01. The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself. Fix: Upgrade containerd to a supported release line (newest: 2.0).",
+    "check_name": "eol-addon/containerd/below-1.7",
+    "fingerprint": "f24bf6099780b010a0515818f0256969a0a0dad855f90e1c8a00d723d41d04d9",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/eol-addon/containerd/below-1.7",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "no lifecycle data for ExternalDNS 0.18.0. Detected ExternalDNS version 0.18.0 via image in namespace(s): dns. The registry has no release-line data for this version, so its end of life was not assessed.",
+    "check_name": "addon-no-data/external-dns",
+    "fingerprint": "d37d89d36a564fa0a0c3b269bab08aa59945172e2c1383b65f1be3aca318a988",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/addon-no-data/external-dns",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "no lifecycle data for Istio 1.29.4. Detected Istio in namespace(s): mesh-gap (1.29.4 via image), mesh-next (1.33.0 via image). The registry has no release-line data for this version, so its end of life was not assessed.",
+    "check_name": "addon-no-data/istio",
+    "fingerprint": "980b5c5cba71f1954f9b48126f8924b150b0fce6bd39ac273bba83c981643389",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/addon-no-data/istio",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

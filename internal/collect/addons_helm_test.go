@@ -130,6 +130,12 @@ func TestProviderBuildsGetNoUpstreamEOL(t *testing.T) {
 		{"mcr.microsoft.com/oss/istio/pilot:1.24.3-distroless", false},
 		{"quay.io/calico/node:v3.26.3", true},
 		{"quay.io/cilium/cilium:v1.15.10", true},
+		// Older than the oldest line the registry tracks (#165): past end
+		// of life upstream, still the provider's to support.
+		{"gke.gcr.io/calico/node:v3.24.5-gke.1", false},
+		{"mcr.microsoft.com/oss/cilium/cilium:1.12.10", false},
+		{"quay.io/calico/node:v3.24.5", true},
+		{"quay.io/cilium/cilium:v1.12.0", true},
 	}
 	for _, tc := range cases {
 		detected, _ := matchAddOns(addOnEvidence{images: []nsImage{{"kube-system", tc.image}}}, addons)

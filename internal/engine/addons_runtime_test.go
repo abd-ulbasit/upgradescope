@@ -66,8 +66,12 @@ func TestEvalAddOnsNodeRuntimes(t *testing.T) {
 		{"one finding per release line, oldest version, every node named", nodes("containerd://1.7.27", "containerd://2.3.1", "containerd://1.7.20"), v136,
 			[]string{ended}},
 		{"distro suffix and v prefix", nodes("containerd://v1.7.23-k3s2"), v136, []string{ended}},
-		{"version without a cycle", nodes("containerd://1.4.0"), v136,
-			[]string{"info addon-no-data addon-no-data/containerd no lifecycle data for containerd 1.4.0"}},
+		{"version inside the tracked lines without a cycle", nodes("containerd://1.9.0"), v136,
+			[]string{"info addon-no-data addon-no-data/containerd no lifecycle data for containerd 1.9.0"}},
+		// Older than the oldest tracked line, which has ended: past end of
+		// life, a warning like any ended runtime line (#165).
+		{"version older than the oldest tracked line", nodes("containerd://1.4.0", "containerd://1.6.20"), v136,
+			[]string{"warning eol-addon eol-addon/containerd/below-1.7 containerd 1.4.0 is end-of-life (older than the 1.7 release line)"}},
 		{"other runtimes and unset fields are not containerd", nodes("cri-o://1.30.4", "docker://24.0.7", "", "containerd"), v136, nil},
 	}
 	for _, tc := range cases {
@@ -117,11 +121,11 @@ func TestEvalAddOnsNodeRuntimeDetail(t *testing.T) {
 // Nodes without release-line data share one finding, so it names each
 // node's own version rather than claiming one for all of them.
 func TestEvalAddOnsNodeRuntimeNoDataDetail(t *testing.T) {
-	fs := evalAddOns(nodes("containerd://1.4.0", "containerd://"), runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 36}, day("2026-10-02"))
+	fs := evalAddOns(nodes("containerd://1.9.0", "containerd://"), runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 36}, day("2026-10-02"))
 	if len(fs) != 1 || fs[0].Category != CatAddOnNoData {
 		t.Fatalf("want one addon-no-data finding, got %+v", fs)
 	}
-	if want := "Detected containerd on node(s): worker-1 (1.4.0), worker-2 (version unknown)."; !strings.HasPrefix(fs[0].Detail, want) {
+	if want := "Detected containerd on node(s): worker-1 (1.9.0), worker-2 (version unknown)."; !strings.HasPrefix(fs[0].Detail, want) {
 		t.Errorf("detail = %q, want prefix %q", fs[0].Detail, want)
 	}
 }

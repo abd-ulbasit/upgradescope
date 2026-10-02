@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -120,8 +121,16 @@ func TestEvalAddOnsCycleLifecycle(t *testing.T) {
 		{"target below the cycle's k8s_min", "1.31.1", inventory.Version{Major: 1, Minor: 31},
 			[]string{"blocker chart-incompat chart-incompat/istio/1.31 Istio 1.31.1 requires Kubernetes 1.32 or newer (target 1.31)"}},
 		{"pre-release maps to its cycle", "1.31.0-rc.0", inventory.Version{Major: 1, Minor: 35}, nil},
-		{"version without a cycle", "1.4.2", inventory.Version{Major: 1, Minor: 34},
-			[]string{"info addon-no-data addon-no-data/istio no lifecycle data for Istio 1.4.2"}},
+		// #165: older than the oldest tracked line (1.5, ended) is past end
+		// of life; between tracked lines or newer than all of them, no data.
+		{"version older than the oldest tracked line", "1.4.2", inventory.Version{Major: 1, Minor: 34},
+			[]string{"blocker eol-addon eol-addon/istio/below-1.5 Istio 1.4.2 is end-of-life (older than the 1.5 release line)"}},
+		{"version between tracked lines", "1.10.0", inventory.Version{Major: 1, Minor: 34},
+			[]string{"info addon-no-data addon-no-data/istio no lifecycle data for Istio 1.10.0"}},
+		{"version newer than the newest tracked line", "1.32.0", inventory.Version{Major: 1, Minor: 34},
+			[]string{"info addon-no-data addon-no-data/istio no lifecycle data for Istio 1.32.0"}},
+		{"major-only version is not judged against a minor line", "1", inventory.Version{Major: 1, Minor: 34},
+			[]string{"info addon-no-data addon-no-data/istio no lifecycle data for Istio 1"}},
 		{"unknown version", "", inventory.Version{Major: 1, Minor: 34},
 			[]string{"info addon-no-data addon-no-data/istio no lifecycle data for Istio (version unknown)"}},
 	}
@@ -154,11 +163,124 @@ func TestEvalAddOnsNoDataDetail(t *testing.T) {
 	if len(fs) != 1 || fs[0].Detail != want || fs[0].Severity != SevInfo {
 		t.Fatalf("got %+v, want one info with detail %q", fs, want)
 	}
-	fs = evalAddOns(addOnAt("istio", "1.4.2"), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
-	want = "Detected Istio version 1.4.2 via image in namespace(s): istio-system. The registry has no release-line data for this version, so its end of life was not assessed."
+	fs = evalAddOns(addOnAt("istio", "1.10.0"), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+	want = "Detected Istio version 1.10.0 via image in namespace(s): istio-system. The registry has no release-line data for this version, so its end of life was not assessed."
 	if len(fs) != 1 || fs[0].Detail != want {
 		t.Fatalf("got %+v, want detail %q", fs, want)
 	}
+}
+
+// #165: a version older than the oldest tracked release line was an
+// addon-no-data info, so Istio 1.4 read READY 100/100. It is end of life,
+// citing the oldest line and the product's lifecycle pages.
+func TestEvalAddOnsPredatesTrackedLinesDetail(t *testing.T) {
+	inv := installs("istio", "image", "mesh-a=1.4.2", "mesh-b=1.3.0")
+	fs := evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+	want := []Finding{{
+		Category: CatEOLAddon,
+		Severity: SevBlocker,
+		Key:      "eol-addon/istio/below-1.5",
+		Title:    "Istio 1.3.0 is end-of-life (older than the 1.5 release line)",
+		Detail: "Detected Istio in namespace(s): mesh-a (1.4.2 via image), mesh-b (1.3.0 via image). " +
+			"Versions older than the 1.5 release line, the oldest one upstream still documents, are past end of life: support for 1.5 has ended.",
+		Teams:       []string{"ateam", "bteam"},
+		Namespaces:  []string{"mesh-a", "mesh-b"},
+		Remediation: "Upgrade Istio to a supported release line (newest: 1.31).",
+		Citations:   []string{"https://endoflife.date/istio", "https://istio.io/latest/docs/releases/supported-releases/"},
+	}}
+	if !reflect.DeepEqual(fs, want) {
+		t.Fatalf("got  %+v\nwant %+v", fs, want)
+	}
+
+	// A dated oldest line names its end.
+	k := lifecycleKB()
+	k.AddOns[0].Cycles = k.AddOns[0].Cycles[:len(k.AddOns[0].Cycles)-1] // drop 1.5: oldest is 1.27
+	fs = evalAddOns(addOnAt("istio", "1.26.4"), k, inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+	if len(fs) != 1 || fs[0].Key != "eol-addon/istio/below-1.27" ||
+		!strings.HasSuffix(fs[0].Detail, "support for 1.27 ended on 2026-04-07.") {
+		t.Fatalf("got %+v, want one eol-addon/istio/below-1.27 naming 1.27's end", fs)
+	}
+}
+
+// Below the oldest tracked line counts as ended only when that line has
+// itself ended; while it is supported, the older version is no data.
+func TestEvalAddOnsPredatesSupportedOldestLine(t *testing.T) {
+	k := lifecycleKB()
+	k.AddOns[0].Cycles = []registry.Cycle{{Cycle: "1.31", EOL: &registry.CycleEOL{Date: "2027-02-28"}, Citations: []string{"https://endoflife.date/istio"}}}
+	got := summarize(evalAddOns(addOnAt("istio", "1.30.2"), k, inventory.Version{Major: 1, Minor: 34}, day("2026-10-02")))
+	if want := []string{"info addon-no-data addon-no-data/istio no lifecycle data for Istio 1.30.2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
+// The red-team installs (#165) against the embedded registry: each is
+// older than its product's oldest tracked line and must block, never read
+// as no data; versions between or above the tracked lines, and products
+// without lines, stay no data.
+func TestEvalAddOnsPredatesTrackedLinesRealKB(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 99}}
+	now := day("2026-10-03")
+	target := inventory.Version{Major: 1, Minor: 34}
+	for _, tc := range []struct{ id, version string }{
+		{"cert-manager", "1.5.0"},
+		{"istio", "1.5.2"},
+		{"calico", "3.24.5"},
+		{"cilium", "1.12.0"},
+		{"kyverno", "1.7.5"},
+		{"argo-cd", "0.12.0"},
+		{"flux", "1.24.0"},
+		{"flux", "1.13.3"},
+	} {
+		var keys []string
+		for _, f := range evalAddOns(addOnAt(tc.id, tc.version), k, target, now) {
+			if f.Category == CatAddOnNoData {
+				t.Errorf("%s %s: %s", tc.id, tc.version, f.Title)
+			}
+			if f.Category == CatEOLAddon && f.Severity == SevBlocker {
+				keys = append(keys, f.Key)
+				if !slices.Contains(f.Citations, addOnByID(t, addons, tc.id).Support.Citations[0]) {
+					t.Errorf("%s %s: citations %v miss the product's lifecycle page", tc.id, tc.version, f.Citations)
+				}
+			}
+		}
+		if len(keys) != 1 || !strings.HasPrefix(keys[0], "eol-addon/"+tc.id+"/below-") {
+			t.Errorf("%s %s: eol-addon blockers %q, want one eol-addon/%s/below-<oldest line>", tc.id, tc.version, keys, tc.id)
+		}
+	}
+	for _, tc := range []struct{ id, version string }{
+		{"flux", "1.30.0"},     // between 1.25 and 2.0
+		{"argo-cd", "1.9.0"},   // between 1.8 and 2.0
+		{"istio", "99.0.0"},    // newer than every line: the registry is stale
+		{"velero", "0.1.0"},    // no lines
+		{"coredns", "0.0.1"},   // no lines
+		{"external-dns", "0"},  // no lines
+		{"cert-manager", "1"},  // fewer components than any line
+		{"calico", "latest"},   // no version
+		{"cilium", ""},         // no version
+		{"kyverno", "1.10.0"},  // a tracked line: judged by its own date
+		{"cert-manager", "v0"}, // unparseable
+	} {
+		for _, f := range evalAddOns(addOnAt(tc.id, tc.version), k, target, now) {
+			if strings.Contains(f.Key, "/below-") {
+				t.Errorf("%s %s: %s %s", tc.id, tc.version, f.Key, f.Title)
+			}
+		}
+	}
+}
+
+func addOnByID(t *testing.T, addons []registry.AddOn, id string) registry.AddOn {
+	t.Helper()
+	for _, a := range addons {
+		if a.ID == id {
+			return a
+		}
+	}
+	t.Fatalf("no registry entry %q", id)
+	return registry.AddOn{}
 }
 
 // A Helm install is judged by its app version; the chart version is shown

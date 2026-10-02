@@ -313,6 +313,14 @@ a CI gate.
   `/version` and discovery honour the scan's deadline, and each collector
   step has its own share of the 5-minute budget, so one stalled step
   degrades only its own capability (#94).
+- An add-on older than the oldest release line the registry tracks is end
+  of life when that line has ended: cert-manager 1.5, Istio 1.5, Calico
+  3.24, Cilium 1.12, Kyverno 1.7, Argo CD 0.12 and Flux 1.24 were only an
+  `addon-no-data` info and read READY 100/100. They are now an `eol-addon`
+  blocker keyed `eol-addon/<id>/below-<oldest line>` (a warning for a node
+  runtime), citing that line and the product's lifecycle pages. Versions
+  between tracked lines or newer than the newest, and products without
+  release lines, stay `addon-no-data` (#165).
 - The same inventory gives the same report whatever the order of its rows:
   deprecated-API caller rows are sorted before they are judged and folded
   into usage findings, whose evidence sentence listed subresources in the
