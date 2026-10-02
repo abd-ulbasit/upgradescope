@@ -91,6 +91,42 @@ func TestExportCSVGolden(t *testing.T) {
 	checkGolden(t, "export_golden.csv", raw)
 }
 
+// exportCSVOf pushes inv for cluster prod-eu-1 and returns the target 1.35
+// CSV export.
+func exportCSVOf(t *testing.T, inv inventory.Inventory) []byte {
+	t.Helper()
+	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
+	defer ts.Close()
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, inv), false); resp.StatusCode != 202 {
+		t.Fatalf("push = %d %v", resp.StatusCode, out)
+	}
+	resp, raw := getExport(t, ts, "?target=1.35&format=csv")
+	if resp.StatusCode != 200 {
+		t.Fatalf("export = %d %s", resp.StatusCode, raw)
+	}
+	return raw
+}
+
+// TestExportCSVZeroFindingsHasVerdict: a clean cluster's CSV used to be the
+// header alone, indistinguishable from a broken export. The summary row
+// carries the verdict, score, KB version and evaluation time.
+func TestExportCSVZeroFindingsHasVerdict(t *testing.T) {
+	checkGolden(t, "export_clean.csv", exportCSVOf(t, testInventory()))
+}
+
+// TestExportCSVNotAssessedRows: a capability the agent could not collect
+// is a not-assessed row, so a partly assessed cluster does not look like a
+// clean one.
+func TestExportCSVNotAssessedRows(t *testing.T) {
+	inv := testInventory()
+	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: false, Reason: "customresourcedefinitions list forbidden"}
+	raw := exportCSVOf(t, inv)
+	checkGolden(t, "export_not_assessed.csv", raw)
+	if !strings.Contains(string(raw), ",unknown,") || !strings.Contains(string(raw), "not-assessed,") {
+		t.Errorf("CSV lacks the unknown verdict or a not-assessed row:\n%s", raw)
+	}
+}
+
 func TestExportHTMLGolden(t *testing.T) {
 	ts, done := exportFixture(t)
 	defer done()

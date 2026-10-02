@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,31 +112,72 @@ func csvSafe(s string) string {
 	return s
 }
 
-// writeExportCSV emits one row per finding. Multi-valued columns (teams,
-// namespaces, citations) are ";"-joined inside a single CSV field. All
-// non-numeric fields pass through csvSafe.
+// CSV row types beyond the finding severities (blocker, warning, info), in
+// the severity column so consumers filter on one column.
+const (
+	csvSummary     = "summary"      // first row: the verdict, always present
+	csvNotAssessed = "not-assessed" // one per capability the evaluation could not assess
+)
+
+// writeExportCSV emits a summary row (verdict and score in the title; the
+// KB version and evaluation time are columns of every row), one row per
+// finding, then one not-assessed row per capability gap — so a clean
+// cluster's export is not a bare header, and a partly assessed one does
+// not look clean. Multi-valued columns (teams, namespaces, citations) are
+// ";"-joined inside a single CSV field. All non-numeric fields pass
+// through csvSafe.
 func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engine.Report) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write([]string{
-		"cluster", "target", "evaluatedAt", "severity", "category", "key",
-		"title", "detail", "teams", "namespaces", "citations",
+		"cluster", "target", "evaluatedAt", "kbVersion", "verdict", "score", "severity", "category", "key",
+		"title", "detail", "remediation", "teams", "namespaces", "citations",
 	}); err != nil {
 		return err
 	}
-	for _, f := range rep.Findings {
-		if err := cw.Write([]string{
+	row := func(severity, category, key, title, detail, remediation string, teams, namespaces, citations []string) error {
+		return cw.Write([]string{
 			csvSafe(cluster),
 			rep.Target.String(),
 			eval.EvaluatedAt.UTC().Format(time.RFC3339),
-			string(f.Severity),
-			string(f.Category),
-			csvSafe(f.Key),
-			csvSafe(f.Title),
-			csvSafe(f.Detail),
-			csvSafe(strings.Join(f.Teams, ";")),
-			csvSafe(strings.Join(f.Namespaces, ";")),
-			csvSafe(strings.Join(f.Citations, ";")),
-		}); err != nil {
+			csvSafe(rep.KBVersion),
+			string(rep.Verdict),
+			strconv.Itoa(rep.Score),
+			severity,
+			category,
+			csvSafe(key),
+			csvSafe(title),
+			csvSafe(detail),
+			csvSafe(remediation),
+			csvSafe(strings.Join(teams, ";")),
+			csvSafe(strings.Join(namespaces, ";")),
+			csvSafe(strings.Join(citations, ";")),
+		})
+	}
+	var blockers, warnings int
+	for _, f := range rep.Findings {
+		switch f.Severity {
+		case engine.SevBlocker:
+			blockers++
+		case engine.SevWarning:
+			warnings++
+		}
+	}
+	summary := fmt.Sprintf("%s for %s: score %d/100", rep.Verdict, rep.Target, rep.Score)
+	detail := fmt.Sprintf("%d blockers, %d warnings, %d capabilities not assessed", blockers, warnings, len(rep.NotAssessed))
+	if err := row(csvSummary, "", "", summary, detail, "", nil, nil, nil); err != nil {
+		return err
+	}
+	for _, f := range rep.Findings {
+		if err := row(string(f.Severity), string(f.Category), f.Key, f.Title, f.Detail, f.Remediation, f.Teams, f.Namespaces, f.Citations); err != nil {
+			return err
+		}
+	}
+	for _, g := range rep.NotAssessed {
+		title := string(g.Capability) + " not assessed"
+		if g.Required {
+			title += " (required: the verdict cannot be ready)"
+		}
+		if err := row(csvNotAssessed, "capability", string(g.Capability), title, g.Reason, "", nil, nil, nil); err != nil {
 			return err
 		}
 	}
