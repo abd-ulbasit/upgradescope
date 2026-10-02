@@ -36,7 +36,7 @@ cycles:
   - {cycle: "2.2", eol: "2026-11-06", citations: ["https://endoflife.date/containerd"]}
   - {cycle: "2.1", eol: "2026-07-03", citations: ["https://endoflife.date/containerd"]}
   - {cycle: "2.0", eol: "2027-03-01", citations: ["https://endoflife.date/containerd"]}
-  - {cycle: "1.7", eol: "2026-09-01", citations: ["https://endoflife.date/containerd"]}
+  - {cycle: "1.7", eol: "2026-09-30", citations: ["https://endoflife.date/containerd"]}
   - {cycle: "1.6", eol: "2025-08-23", citations: ["https://endoflife.date/containerd"]}
   - {cycle: "1.5", eol: "2023-02-28", citations: ["https://endoflife.date/containerd"]}
   - {cycle: "1.4", eol: "2022-03-03", citations: ["https://endoflife.date/containerd"]}
