@@ -71,8 +71,29 @@ a CI gate.
   container and init-container images and labels of workload pod templates
   (Pod, Deployment, DaemonSet, StatefulSet, ReplicaSet, Job, CronJob), so a
   CI gate catches an end-of-life add-on in a pull request (#47). Images
-  injected at admission time are not in the manifests; with `?cluster=`,
-  `/gate` does not judge the manifests' add-ons yet (#150).
+  injected at admission time are not in the manifests.
+- `/api/v1/gate?cluster=` merges the add-ons and CRDs in the posted
+  manifests into the cluster's stored inventory, as it merged their API
+  usage. An add-on install replaces the cluster's install in its
+  namespace; a posted CRD replaces the cluster's (keeping its
+  `status.storedVersions`), and posted custom resources are judged against
+  the merged CRDs. An end-of-life add-on the manifests deploy, and a custom
+  resource they write at a version the CRDs do not serve, are the
+  manifests' findings (`source: manifest`), also when the cluster already
+  has the same (#150).
+- `/api/v1/gate` applies suppression as `scan` does, with the same code:
+  the `upgradescope.dev/ignore` annotations of the posted (and, with
+  `?cluster=`, the stored) objects, and the ignore rules of a
+  `.upgradescope.yaml` sent URL-encoded in the new `config` query
+  parameter (at most 32 KiB; an invalid config is a 422). Suppressed
+  findings count toward neither the verdict nor `fail-on`; the JSON
+  answer lists them in `suppressed` with `suppressedCount` and names
+  expired rules in `warnings`; SARIF marks them suppressed, JUnit skips
+  them and Code Quality leaves them out. The gate has no baseline input:
+  with `?cluster=` the cluster is its baseline (#44).
+- The server's report-shaped responses, a cluster's report and the gate's
+  JSON answer, lead with `schemaVersion` and `toolVersion` like
+  `scan --output json` (#60).
 - The report lists the image repositories no add-on matcher recognised
   (`unrecognizedImages`, at most 200, and `unrecognizedImagesOmitted`) in
   JSON, the table, Markdown and the dashboard's cluster view (not in
