@@ -177,15 +177,19 @@ func (r *runner) tick(ctx context.Context) error {
 	if err := crd.EnsureObject(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); err != nil {
 		errs = append(errs, err)
 	}
-	spec, _, err := crd.ReadSpec(ctx, r.dyn, r.cfg.CRName)
+	// gen is the generation whose spec this tick evaluates; 0 (unknown)
+	// lets WriteStatus stamp the current one.
+	spec, gen, _, err := crd.ReadSpec(ctx, r.dyn, r.cfg.CRName)
 	if err != nil {
 		errs = append(errs, err)
 	}
 	if len(r.cfg.Targets) > 0 {
 		if err == nil && !slices.Equal(spec.Targets, r.cfg.Targets) {
-			if serr := crd.SetTargets(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); serr != nil {
+			g, serr := crd.SetTargets(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets)
+			if serr != nil {
 				errs = append(errs, serr)
 			}
+			gen = g
 		}
 		spec.Targets = r.cfg.Targets // evaluate what was configured either way
 	}
@@ -213,6 +217,7 @@ func (r *runner) tick(ctx context.Context) error {
 		r.last.reports = reports
 	}
 
+	st.ObservedGeneration = gen
 	if err := crd.WriteStatus(ctx, r.dyn, r.cfg.CRName, st); err != nil {
 		errs = append(errs, err)
 	}

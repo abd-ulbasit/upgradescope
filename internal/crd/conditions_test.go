@@ -144,6 +144,23 @@ func TestWriteStatusReadyConditionTransitions(t *testing.T) {
 	}
 }
 
+// A spec edited after the agent read it bumps the generation before the
+// status write. The status must claim the generation that was evaluated,
+// not the newer one, or Argo CD takes it as current.
+func TestWriteStatusStampsTheEvaluatedGeneration(t *testing.T) {
+	cr := newCRObject(DefaultName, "1.37")
+	cr.SetGeneration(4) // edited since the agent read generation 3
+	dyn := newDynFake(cr)
+	if err := WriteStatus(context.Background(), dyn, DefaultName, Status{ObservedGeneration: 3}); err != nil {
+		t.Fatal(err)
+	}
+	st := readStatus(t, dyn, DefaultName)
+	c := meta.FindStatusCondition(st.Conditions, ConditionReady)
+	if st.ObservedGeneration != 3 || c == nil || c.ObservedGeneration != 3 {
+		t.Errorf("observedGeneration = %d, condition %+v, want both 3", st.ObservedGeneration, c)
+	}
+}
+
 func TestManifestStatusHasConditionsAndLastEvaluatedColumn(t *testing.T) {
 	v := parseManifest(t).Spec.Versions[0]
 	status := v.Schema.OpenAPIV3Schema.Properties["status"]

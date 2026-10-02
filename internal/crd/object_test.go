@@ -43,7 +43,7 @@ func newCRObject(name string, targets ...string) *unstructured.Unstructured {
 
 func TestReadSpecNotFound(t *testing.T) {
 	dyn := newDynFake()
-	spec, found, err := ReadSpec(context.Background(), dyn, DefaultName)
+	spec, _, found, err := ReadSpec(context.Background(), dyn, DefaultName)
 	if err != nil {
 		t.Fatalf("ReadSpec on absent object: %v", err)
 	}
@@ -56,10 +56,15 @@ func TestReadSpecNotFound(t *testing.T) {
 }
 
 func TestReadSpecTargets(t *testing.T) {
-	dyn := newDynFake(newCRObject(DefaultName, "1.36", "1.37"))
-	spec, found, err := ReadSpec(context.Background(), dyn, DefaultName)
+	cr := newCRObject(DefaultName, "1.36", "1.37")
+	cr.SetGeneration(7)
+	dyn := newDynFake(cr)
+	spec, gen, found, err := ReadSpec(context.Background(), dyn, DefaultName)
 	if err != nil || !found {
 		t.Fatalf("ReadSpec: found=%v err=%v", found, err)
+	}
+	if gen != 7 {
+		t.Errorf("generation = %d, want 7 (that of the spec read)", gen)
 	}
 	if want := []string{"1.36", "1.37"}; !reflect.DeepEqual(spec.Targets, want) {
 		t.Errorf("Targets = %v, want %v", spec.Targets, want)
@@ -86,7 +91,7 @@ func TestEnsureObjectCreatesAndIsIdempotent(t *testing.T) {
 	if err := EnsureObject(ctx, dyn, DefaultName, nil); err != nil {
 		t.Fatalf("second EnsureObject: %v", err)
 	}
-	spec, _, err := ReadSpec(ctx, dyn, DefaultName)
+	spec, _, _, err := ReadSpec(ctx, dyn, DefaultName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +106,7 @@ func TestEnsureObjectCreatesWithTargets(t *testing.T) {
 	if err := EnsureObject(ctx, dyn, DefaultName, []string{"1.37", "1.38"}); err != nil {
 		t.Fatalf("EnsureObject: %v", err)
 	}
-	spec, _, err := ReadSpec(ctx, dyn, DefaultName)
+	spec, _, _, err := ReadSpec(ctx, dyn, DefaultName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,9 +119,14 @@ func TestSetTargetsReplacesOnlyTargets(t *testing.T) {
 	ctx := context.Background()
 	cr := newCRObject(DefaultName, "1.36")
 	cr.SetLabels(map[string]string{"owner": "platform"})
+	cr.SetGeneration(2) // the fake never bumps it; a real apiserver would
 	dyn := newDynFake(cr)
-	if err := SetTargets(ctx, dyn, DefaultName, []string{"1.37"}); err != nil {
+	gen, err := SetTargets(ctx, dyn, DefaultName, []string{"1.37"})
+	if err != nil {
 		t.Fatalf("SetTargets: %v", err)
+	}
+	if gen != 2 {
+		t.Errorf("generation = %d, want the patched object's (2)", gen)
 	}
 	obj, err := dyn.Resource(GVR()).Get(ctx, DefaultName, metav1.GetOptions{})
 	if err != nil {
@@ -125,7 +135,7 @@ func TestSetTargetsReplacesOnlyTargets(t *testing.T) {
 	if obj.GetLabels()["owner"] != "platform" {
 		t.Errorf("labels = %v, want them kept", obj.GetLabels())
 	}
-	spec, _, err := ReadSpec(ctx, dyn, DefaultName)
+	spec, _, _, err := ReadSpec(ctx, dyn, DefaultName)
 	if err != nil {
 		t.Fatal(err)
 	}

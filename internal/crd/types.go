@@ -58,9 +58,10 @@ type Status struct {
 	Targets               []TargetStatus `json:"targets,omitempty"`
 	NotAssessed           []string       `json:"notAssessed,omitempty"` // "helm: secrets list forbidden"
 	AgentVersion          string         `json:"agentVersion,omitempty"`
-	// ObservedGeneration and Conditions are stamped by WriteStatus: the
-	// object's metadata.generation and the Ready condition (ReadyCondition),
-	// the standard shape Argo CD, kstatus and `kubectl wait` read.
+	// ObservedGeneration is the metadata.generation whose spec was
+	// evaluated (WriteStatus stamps the current one when it is zero), and
+	// Conditions carry the Ready condition (ReadyCondition): the standard
+	// shape Argo CD, kstatus and `kubectl wait` read.
 	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
 	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 }

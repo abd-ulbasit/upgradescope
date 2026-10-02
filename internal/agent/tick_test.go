@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 	"k8s.io/kube-openapi/pkg/validation/strfmt"
 	"k8s.io/kube-openapi/pkg/validation/validate"
@@ -304,10 +305,44 @@ func TestTickWithoutTargetsFails(t *testing.T) {
 	}
 }
 
+// A spec edit that lands after the tick read the spec must not be claimed
+// as observed: the status says the generation that was evaluated, so Argo
+// CD keeps waiting for the next tick.
+func TestTickStampsTheGenerationItEvaluated(t *testing.T) {
+	cr := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": crd.Group + "/" + crd.Version,
+		"kind":       crd.Kind,
+		"metadata":   map[string]interface{}{"name": crd.DefaultName, "generation": int64(4)},
+		"spec":       map[string]interface{}{"targets": []interface{}{"1.36"}},
+	}}
+	dyn := fakeDyn(cr).(*dynamicfake.FakeDynamicClient)
+	gets := 0
+	dyn.PrependReactor("get", crd.Plural, func(k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 2 { // the status write's read: someone edited the spec since
+			edited := cr.DeepCopy()
+			edited.SetGeneration(5)
+			_ = unstructured.SetNestedStringSlice(edited.Object, []string{"1.37"}, "spec", "targets")
+			if err := dyn.Tracker().Update(crd.GVR(), edited, ""); err != nil {
+				t.Errorf("simulate the edit: %v", err)
+			}
+		}
+		return false, nil, nil
+	})
+	r := testRunner(t, dyn, "")
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st := readCRStatus(t, dyn, crd.DefaultName)
+	if st.ObservedGeneration != 4 || len(st.Targets) != 1 || st.Targets[0].Target != "1.36" {
+		t.Errorf("status observedGeneration=%d targets=%+v, want 4 and the evaluated 1.36", st.ObservedGeneration, st.Targets)
+	}
+}
+
 // readCRSpecTargets returns spec.targets of the named CR.
 func readCRSpecTargets(t *testing.T, dyn dynamic.Interface, name string) []string {
 	t.Helper()
-	spec, found, err := crd.ReadSpec(context.Background(), dyn, name)
+	spec, _, found, err := crd.ReadSpec(context.Background(), dyn, name)
 	if err != nil || !found {
 		t.Fatalf("read spec of %q: found=%v err=%v", name, found, err)
 	}
