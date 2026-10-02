@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "toolVersion": "v0.2.0",
+  "filesBase": "testdata/baseline/manifests",
+  "clusterId": "files",
+  "target": "1.36",
+  "kbVersion": "k8s-1.37+registry-2026-09-01",
+  "score": 50,
+  "ready": false,
+  "verdict": "blocked",
+  "findings": [
+    {
+      "category": "removed-api",
+      "severity": "blocker",
+      "key": "removed-api/batch/v1beta1/CronJob",
+      "title": "batch/v1beta1 CronJob removed in 1.25 (1 object)",
+      "detail": "1 manifest object(s) use this API: jobs (1).",
+      "objects": [
+        {
+          "namespace": "jobs",
+          "name": "nightly",
+          "file": "app.yaml",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "category": "removed-api",
+      "severity": "blocker",
+      "key": "removed-api/networking.k8s.io/v1beta1/Ingress",
+      "title": "networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object)",
+      "detail": "1 manifest object(s) use this API: shop (1).",
+      "objects": [
+        {
+          "namespace": "shop",
+          "name": "web",
+          "file": "app.yaml",
+          "line": 7
+        }
+      ]
+    }
+  ]
+}

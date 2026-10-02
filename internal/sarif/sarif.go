@@ -52,6 +52,7 @@ type sarifRunProperties struct {
 	Score           int  `json:"score"`
 	Findings        int  `json:"findings"`
 	OmittedFindings int  `json:"omittedFindings"`
+	Suppressed      int  `json:"suppressed,omitempty"` // len(Report.Suppressed)
 }
 
 type sarifTool struct {
@@ -99,6 +100,18 @@ type sarifResult struct {
 	Message             sarifText         `json:"message"`
 	Locations           []sarifLocation   `json:"locations"`
 	PartialFingerprints map[string]string `json:"partialFingerprints"`
+	// BaselineState is "new" or "unchanged" when the report was compared
+	// with a baseline (engine.Finding.BaselineState), else omitted.
+	BaselineState string             `json:"baselineState,omitempty"`
+	Suppressions  []sarifSuppression `json:"suppressions,omitempty"`
+}
+
+// sarifSuppression marks a result accepted by an ignore rule or object
+// annotation; kind is always "external" (the reason lives outside the
+// scanned file, or in an annotation SARIF cannot point at).
+type sarifSuppression struct {
+	Kind          string `json:"kind"`
+	Justification string `json:"justification,omitempty"`
 }
 
 type sarifLocation struct {
@@ -186,6 +199,11 @@ func anchored(f engine.Finding) []inventory.ObjectRef {
 // results are counted in a note, and run.properties records ready, score
 // and the counts, so the document never reads as a clean pass that the
 // report is not.
+//
+// Suppressed findings (Report.Suppressed) follow: their located objects
+// are results carrying an external suppression whose justification is the
+// reason, the others are notes. A report compared with a baseline sets
+// each result's baselineState.
 func Write(w io.Writer, r engine.Report, toolVersion string) error {
 	rules := []sarifRule{}
 	ruleIndex := map[string]int{}
@@ -194,16 +212,8 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 	occurrences := map[string]int{} // results per identity fingerprint
 	omitted := 0
 
-	for _, f := range r.Findings {
-		objs := anchored(f)
-		if len(objs) == 0 {
-			omitted++
-			notes = append(notes, notification(f, level(f.Severity), unanchoredMessage(f)))
-			continue
-		}
-		if n := f.ObjectsOmitted + len(f.Objects) - len(objs); n > 0 {
-			notes = append(notes, notification(f, "note", unlistedMessage(f, n)))
-		}
+	// addResults adds one result per located object of f, with f's rule.
+	addResults := func(f engine.Finding, objs []inventory.ObjectRef, suppressions []sarifSuppression) {
 		id := f.Key
 		if id == "" {
 			id = string(f.Category)
@@ -231,7 +241,32 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 					Region:           &sarifRegion{StartLine: o.Line},
 				}}},
 				PartialFingerprints: map[string]string{fingerprintKey: fp},
+				BaselineState:       string(f.BaselineState),
+				Suppressions:        suppressions,
 			})
+		}
+	}
+
+	for _, f := range r.Findings {
+		objs := anchored(f)
+		if len(objs) == 0 {
+			omitted++
+			notes = append(notes, notification(f, level(f.Severity), unanchoredMessage(f)))
+			continue
+		}
+		if n := f.ObjectsOmitted + len(f.Objects) - len(objs); n > 0 {
+			notes = append(notes, notification(f, "note", unlistedMessage(f, n)))
+		}
+		addResults(f, objs, nil)
+	}
+	// Suppressed findings stay visible: located objects are results with
+	// an external suppression (code scanning shows them as dismissed),
+	// the rest are notes.
+	for _, s := range r.Suppressed {
+		if objs := anchored(s.Finding); len(objs) > 0 {
+			addResults(s.Finding, objs, []sarifSuppression{{Kind: "external", Justification: s.Reason}})
+		} else {
+			notes = append(notes, notification(s.Finding, "note", suppressedMessage(s)))
 		}
 	}
 
@@ -248,7 +283,7 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 			Invocations: []sarifInvocation{{ExecutionSuccessful: true, ToolExecutionNotifications: notes}},
 			Results:     results,
 			Properties: &sarifRunProperties{
-				Ready: r.Ready, Score: r.Score, Findings: len(r.Findings), OmittedFindings: omitted,
+				Ready: r.Ready, Score: r.Score, Findings: len(r.Findings), OmittedFindings: omitted, Suppressed: len(r.Suppressed),
 			},
 		}},
 	}
@@ -341,6 +376,20 @@ func unanchoredMessage(f engine.Finding) string {
 	}
 	if f.Remediation != "" {
 		msg += " Fix: " + sentence(f.Remediation)
+	}
+	return msg
+}
+
+// suppressedMessage describes a suppressed finding without a file
+// location: why it was accepted, then what it is.
+func suppressedMessage(s engine.SuppressedFinding) string {
+	why := s.Reason
+	if s.Expires != "" {
+		why += "; until " + s.Expires
+	}
+	msg := "Suppressed (" + why + "): " + sentence(s.Title)
+	if len(s.Objects) > 0 {
+		msg += " Objects: " + objectList(s.Objects, s.ObjectsOmitted) + "."
 	}
 	return msg
 }

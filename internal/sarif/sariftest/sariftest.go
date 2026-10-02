@@ -65,6 +65,10 @@ type log struct {
 				} `json:"physicalLocation"`
 			} `json:"locations"`
 			PartialFingerprints map[string]string `json:"partialFingerprints"`
+			BaselineState       *string           `json:"baselineState"`
+			Suppressions        []struct {
+				Kind string `json:"kind"`
+			} `json:"suppressions"`
 		} `json:"results"`
 	} `json:"runs"`
 }
@@ -146,6 +150,14 @@ func AssertGitHubAcceptable(t testing.TB, raw []byte) {
 			}
 			if len(res.PartialFingerprints) == 0 {
 				t.Errorf("results[%d] partialFingerprints empty", i)
+			}
+			if s := res.BaselineState; s != nil && *s != "new" && *s != "unchanged" && *s != "updated" && *s != "absent" {
+				t.Errorf("results[%d] baselineState %q: want new, unchanged, updated or absent", i, *s)
+			}
+			for _, sup := range res.Suppressions {
+				if sup.Kind != "inSource" && sup.Kind != "external" {
+					t.Errorf("results[%d] suppression kind %q: want inSource or external", i, sup.Kind)
+				}
 			}
 			if n := len(res.Locations); n < 1 || n > 1000 {
 				t.Fatalf("results[%d] has %d locations, GitHub requires 1..1000", i, n)

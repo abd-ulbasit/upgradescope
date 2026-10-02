@@ -51,6 +51,36 @@ spec:
                   items:
                     type: string
                     pattern: '^[0-9]+\.[0-9]+$'
+                ignore:
+                  description: Accepted findings, applied by the agent every tick with the same rules as the CLI's .upgradescope.yaml. Suppressed findings do not count toward score and verdict; status counts them per target.
+                  type: array
+                  items:
+                    type: object
+                    required: [reason]
+                    properties:
+                      key:
+                        description: Finding key, e.g. eol-addon/ingress-nginx. Set key or category, not both.
+                        type: string
+                      category:
+                        description: Finding category, e.g. removed-api.
+                        type: string
+                      namespace:
+                        description: Glob. Only objects in a matching namespace; a finding without objects (an add-on) matches when all its namespaces match.
+                        type: string
+                      name:
+                        description: Glob. Only objects with a matching name.
+                        type: string
+                      file:
+                        description: Glob on manifest paths. Never matches live objects; kept for the CLI's rule schema.
+                        type: string
+                      reason:
+                        description: Why the finding is accepted. Required.
+                        type: string
+                        minLength: 1
+                      expires:
+                        description: Last day (UTC) the rule applies, YYYY-MM-DD. After it the rule is ignored and status.notAssessed says so.
+                        type: string
+                        pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
             status:
               type: object
               properties:
@@ -124,6 +154,9 @@ spec:
                       warnings:
                         type: integer
                       infos:
+                        type: integer
+                      suppressed:
+                        description: Findings accepted by spec.ignore or upgradescope.dev/ignore annotations; not in blockers, warnings or infos.
                         type: integer
                       byCategory:
                         type: object

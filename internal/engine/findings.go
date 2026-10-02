@@ -53,6 +53,31 @@ type Finding struct {
 	// identify objects.
 	Objects        []inventory.ObjectRef `json:"objects,omitempty"`
 	ObjectsOmitted int                   `json:"objectsOmitted,omitempty"`
+	// BaselineState is set only when the report was compared with a
+	// baseline (scan --baseline): BaselineUnchanged when the baseline
+	// already had this Key and every object listed here, else BaselineNew.
+	// The CLI gate fails only on new findings; score and verdict count both.
+	BaselineState BaselineState `json:"baselineState,omitempty"`
+}
+
+// BaselineState mirrors SARIF's result.baselineState values.
+type BaselineState string
+
+const (
+	BaselineNew       BaselineState = "new"
+	BaselineUnchanged BaselineState = "unchanged"
+)
+
+// SuppressedFinding is a finding, or some of its objects (Objects then
+// lists only those), that an ignore rule or object annotation accepted.
+// It is excluded from score and verdict but still reported, with why.
+type SuppressedFinding struct {
+	Finding
+	Reason string `json:"reason"`
+	// Source names what suppressed it: the config file, "annotation", or
+	// "spec.ignore" (the agent).
+	Source  string `json:"source"`
+	Expires string `json:"expires,omitempty"` // YYYY-MM-DD, as the rule gave it
 }
 
 // CapabilityGap is one thing the evaluation could not assess. Capability is
@@ -102,6 +127,17 @@ type Report struct {
 	Verdict     Verdict         `json:"verdict"`
 	Findings    []Finding       `json:"findings"`              // sorted: severity desc, category, title
 	NotAssessed []CapabilityGap `json:"notAssessed,omitempty"` // sorted by capability
+	// Suppressed lists what ignore rules took out of Findings (see
+	// internal/suppress); Evaluate never sets it.
+	Suppressed []SuppressedFinding `json:"suppressed,omitempty"`
+}
+
+// Rescore recomputes Score, Verdict and Ready from Findings and
+// NotAssessed, for callers that remove findings after Evaluate.
+func (r *Report) Rescore() {
+	r.Score, _ = Score(r.Findings)
+	r.Verdict = verdictFor(r.Findings, r.NotAssessed)
+	r.Ready = r.Verdict == VerdictReady
 }
 
 var severityRank = map[Severity]int{SevBlocker: 0, SevWarning: 1, SevInfo: 2}

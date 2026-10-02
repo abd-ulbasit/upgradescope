@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 const (
@@ -30,6 +31,9 @@ type Spec struct {
 	// Targets are Kubernetes minor versions to evaluate against, e.g. ["1.36","1.37"].
 	// Empty → agent defaults to next minor above the observed server version.
 	Targets []string `json:"targets,omitempty"`
+	// Ignore accepts findings, as .upgradescope.yaml's ignore list does;
+	// the agent applies it every tick. File globs never match live objects.
+	Ignore []suppress.Rule `json:"ignore,omitempty"`
 }
 
 type TargetStatus struct {
@@ -40,6 +44,7 @@ type TargetStatus struct {
 	Blockers    int            `json:"blockers"`
 	Warnings    int            `json:"warnings"`
 	Infos       int            `json:"infos"`
+	Suppressed  int            `json:"suppressed,omitempty"`  // accepted by spec.ignore or annotations; not in the counts above
 	ByCategory  map[string]int `json:"byCategory,omitempty"`  // category → count
 	TopFindings []TopFinding   `json:"topFindings,omitempty"` // ≤20, severity-sorted
 }
@@ -112,7 +117,7 @@ const maxTopFindings = 20
 // severity/category counts over all findings, plus the first maxTopFindings
 // findings (Report.Findings is already severity-sorted per engine contract).
 func TargetStatusFromReport(r engine.Report) TargetStatus {
-	ts := TargetStatus{Target: r.Target.String(), Score: r.Score, Ready: r.Ready, Verdict: string(r.Verdict)}
+	ts := TargetStatus{Target: r.Target.String(), Score: r.Score, Ready: r.Ready, Verdict: string(r.Verdict), Suppressed: len(r.Suppressed)}
 	for _, f := range r.Findings {
 		switch f.Severity {
 		case engine.SevBlocker:
