@@ -28,7 +28,8 @@ func newClustersCmd() *cobra.Command {
 		Long: "List, delete and rename the clusters an upgradescope server knows.\n" +
 			"With --server, the commands call the server's API: list needs the read token (or the\n" +
 			"admin token), delete and rename the admin token (serve --admin-token). Without --server\n" +
-			"they open the server's database directly (--db or --db-url), e.g. while it is stopped.",
+			"they open the server's database directly (--db or --db-url), e.g. while it is stopped;\n" +
+			"one of the two is required.",
 	}
 	cmd.AddCommand(newClustersListCmd())
 	cmd.AddCommand(newClustersDeleteCmd())
@@ -80,11 +81,17 @@ func (c *clusterTarget) register(cmd *cobra.Command, tokenName, tokenEnv, tokenU
 	}
 }
 
-// open returns the server or database client the flags select.
+// open returns the server or database client the flags select. There is
+// no default: --db's default path would open (and create) an empty
+// ./upgradescope.db, and list would print an empty fleet as if it were the
+// real one.
 func (c *clusterTarget) open(cmd *cobra.Command) (clusterAdmin, error) {
 	if c.server == "" {
 		if err := c.db.resolve(cmd); err != nil {
 			return nil, err
+		}
+		if !cmd.Flags().Changed("db") && c.db.dbURL == "" {
+			return nil, errors.New("name the fleet: --server URL for a running server, or its database with --db PATH, --db-url, --db-url-file or $UPGRADESCOPE_DB_URL")
 		}
 		st, err := c.db.openStore()
 		if err != nil {
