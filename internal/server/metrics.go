@@ -167,13 +167,16 @@ func (c clusterCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), scrapeTimeout)
 	defer cancel()
 	s := c.s
-	clusters, err := s.cfg.Store.ListClusters(ctx)
+	// Only the server version decides the targets, and clusterStates reads
+	// it from the snapshot heads, so a scrape loads no inventory.
+	states, err := s.clusterStates(ctx)
 	if err != nil {
 		ch <- prometheus.NewInvalidMetric(descClusterScore, err)
 		return
 	}
 	now := s.now()
-	for _, cl := range clusters {
+	for _, state := range states {
+		cl := state.Cluster
 		ch <- prometheus.MustNewConstMetric(descClusterPushAge, prometheus.GaugeValue,
 			max(0, now.Sub(cl.LastSeen).Seconds()), cl.Name)
 		stale := 0.0
@@ -181,17 +184,12 @@ func (c clusterCollector) Collect(ch chan<- prometheus.Metric) {
 			stale = 1
 		}
 		ch <- prometheus.MustNewConstMetric(descClusterStale, prometheus.GaugeValue, stale, cl.Name)
-		snap, err := s.cfg.Store.LatestSnapshot(ctx, cl.ID)
-		if errors.Is(err, store.ErrNotFound) {
+		if !state.hasSnapshot {
 			continue
 		}
-		if err != nil {
-			ch <- prometheus.NewInvalidMetric(descClusterScore, err)
-			return
-		}
-		// Only the server version decides the targets; skip decoding the
-		// rest of the inventory. A corrupt one leaves the extra targets.
-		for _, t := range s.evalTargets(judgedVersion(snap)) {
+		// A corrupt inventory without the server-version column leaves
+		// the extra targets.
+		for _, t := range s.evalTargets(state.version) {
 			e, err := s.cfg.Store.CurrentEvaluation(ctx, cl.ID, t.String())
 			if errors.Is(err, store.ErrNotFound) {
 				continue

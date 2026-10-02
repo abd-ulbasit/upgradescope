@@ -171,6 +171,7 @@ Auth: `readToken` (bearer).
 | 400 | `application/json` | [Error](#error) | An error. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn; retry after `Retry-After`. |
 
 ### `GET /api/v1/clusters/{id}/report`
 
@@ -193,6 +194,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn; retry after `Retry-After`. |
 
 ### `GET /api/v1/clusters/{id}/findings`
 
@@ -214,6 +216,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn; retry after `Retry-After`. |
 
 ### `GET /api/v1/clusters/{id}/history`
 
@@ -234,6 +237,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn; retry after `Retry-After`. |
 
 ### `GET /api/v1/clusters/{id}/teams`
 
@@ -255,6 +259,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn; retry after `Retry-After`. |
 
 ## fleet
 
@@ -300,6 +305,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
 | 500 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn; retry after `Retry-After`. |
 
 ## gate
 
@@ -414,6 +420,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn; retry after `Retry-After`. |
 
 ## registry
 

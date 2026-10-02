@@ -321,9 +321,11 @@ server:
     readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
-  # -- Sets GOMEMLIMIT as agent.resources does. 512Mi holds one /gate decode
-  # and one snapshot ingest at their worst (~155 MB and ~80 MB of heap) plus
-  # their buffered bodies (30 and 40 MiB): see docs/operations.md.
+  # -- Sets GOMEMLIMIT as agent.resources does. 512Mi holds one /gate decode,
+  # one snapshot ingest, one cluster read and the re-evaluation pass at their
+  # worst (~155 MB, ~80 MB, ~50 MiB and ~60 MiB of heap) plus the buffered
+  # /gate and snapshot bodies (30 and 40 MiB), ~425 MB; snapshots a v0.1
+  # server stored are outside it: see docs/operations.md.
   resources:
     requests:
       cpu: 100m

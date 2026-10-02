@@ -488,6 +488,9 @@ if it is deleted, and writes status with conflict retry.
   or category, score history, team scores, fleet
   matrices, the registry, and CSV or HTML exports. Exports are built from
   the *stored* evaluation, so an audit artifact reflects what was recorded.
+  Reads that load a cluster's stored snapshot run one at a time, and only
+  a what-if decodes the whole inventory
+  ([Memory and request limits](operations.md#memory-and-request-limits)).
   The read token is optional. Without one, the read API is open.
 - **CI gate** (`POST /api/v1/gate`): the request body is a YAML manifest
   stream. With `?cluster=`, the cluster's latest stored inventory supplies

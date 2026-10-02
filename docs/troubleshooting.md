@@ -115,6 +115,12 @@ To accept a finding for now, with a reason and an expiry, use an
   within the server's read timeout (60s); 503 with `Retry-After`: other
   requests hold the shared body budget or the decode slot. The agent
   retries both; a CI caller should retry too.
+- **A cluster's page, report, findings, teams, history or export, or the
+  fleet teams rollup, gets 503.** Reads that load a stored snapshot run
+  one at a time, and this one waited more than 30s for its turn: other
+  reads, usually what-if reports of a large cluster, held it. Retry after
+  `Retry-After` seconds
+  ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **`/gate` gets 422 `a UTF-16 byte order mark`.** Re-encode the manifests
   as UTF-8 (`iconv -f UTF-16 -t UTF-8`).
 - **The agent warns `pushing snapshots to ... over plain http`.** Its

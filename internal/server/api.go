@@ -825,21 +825,20 @@ func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.C
 	return c, true
 }
 
-// defaultTarget computes a cluster's default evaluation target (next minor
-// above the version its latest snapshot is judged at — judgedVersion) and
-// returns the parsed latest inventory alongside so callers don't
-// unmarshal twice. Errors: store.ErrNotFound (no snapshots) or a
-// corrupt/unparseable-version error.
-func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.Version, inventory.Inventory, error) {
-	snap, inv, err := s.latestInventory(ctx, clusterID)
+// defaultTarget computes a cluster's default evaluation target: the next
+// minor above the version its latest snapshot is judged at (judgedAt).
+// Only the snapshot's head is decoded. Errors: store.ErrNotFound (no
+// snapshots) or a corrupt/unparseable-version error.
+func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.Version, error) {
+	snap, head, err := s.latestHead(ctx, clusterID)
 	if err != nil {
-		return inventory.Version{}, inventory.Inventory{}, err
+		return inventory.Version{}, err
 	}
-	server, err := inventory.ParseVersion(judgedAt(snap, inv))
+	server, err := inventory.ParseVersion(judgedAt(snap, head))
 	if err != nil {
-		return inventory.Version{}, inv, fmt.Errorf("latest snapshot has no parseable server version: %w", err)
+		return inventory.Version{}, fmt.Errorf("latest snapshot has no parseable server version: %w", err)
 	}
-	return server.Next(), inv, nil
+	return server.Next(), nil
 }
 
 // resolveTarget picks the evaluation target: explicit ?target= (422 when
@@ -854,7 +853,7 @@ func (s *Server) resolveTarget(w http.ResponseWriter, r *http.Request, clusterID
 		}
 		return v, true
 	}
-	target, _, err := s.defaultTarget(r.Context(), clusterID)
+	target, err := s.defaultTarget(r.Context(), clusterID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			errJSON(w, http.StatusNotFound, "no snapshots for cluster")
@@ -878,10 +877,46 @@ func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Sn
 	if err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, err
 	}
+	inv, err := decodeInventory(snap)
+	if err != nil {
+		return store.Snapshot{}, inventory.Inventory{}, err
+	}
+	return snap, inv, nil
+}
+
+// decodeInventory decodes a stored snapshot's whole inventory, as this
+// server judges it (legacyView). Its cost follows the inventory's
+// structure (~45 MB of heap for a snapshot at its node budget), so a
+// request handler calls it only in the read slot (inReadSlot).
+func decodeInventory(snap store.Snapshot) (inventory.Inventory, error) {
 	var inv inventory.Inventory
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
+		return inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", snap.ClusterID, snap.ID, errCorruptInventory, err)
+	}
+	return legacyView(inv, snap.AgentVersion), nil
+}
+
+// latestHead loads the cluster's latest snapshot and decodes only its
+// head, the server version and capabilities, as this server judges them
+// (legacyView). encoding/json still checks that the whole document is
+// valid JSON, so a truncated one is corrupt here too, but it builds
+// nothing for what it skips: a 370 KB snapshot that decodes whole to
+// ~45 MB of heap costs about its own bytes here. The snapshot, inventory
+// bytes included, is returned for a caller that turns out to need the
+// rest (decodeInventory).
+func (s *Server) latestHead(ctx context.Context, clusterID int64) (store.Snapshot, inventory.Inventory, error) {
+	snap, err := s.cfg.Store.LatestSnapshot(ctx, clusterID)
+	if err != nil {
+		return store.Snapshot{}, inventory.Inventory{}, err
+	}
+	var head struct {
+		ServerVersion string                                              `json:"serverVersion"`
+		Capabilities  map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities"`
+	}
+	if err := json.Unmarshal(snap.Inventory, &head); err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", clusterID, snap.ID, errCorruptInventory, err)
 	}
+	inv := inventory.Inventory{ServerVersion: head.ServerVersion, Capabilities: head.Capabilities}
 	return snap, legacyView(inv, snap.AgentVersion), nil
 }
 
@@ -984,9 +1019,9 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	detail := clusterDetail{Cluster: c, Stale: s.clusterStale(c, now), Evaluations: []evalSummary{}}
 	var targets []inventory.Version
-	if snap, inv, err := s.latestInventory(ctx, c.ID); err == nil {
-		detail.ServerVersion = judgedAt(snap, inv)
-		detail.Capabilities = inv.Capabilities
+	if snap, head, err := s.latestHead(ctx, c.ID); err == nil {
+		detail.ServerVersion = judgedAt(snap, head)
+		detail.Capabilities = head.Capabilities
 		targets = s.evalTargets(detail.ServerVersion)
 	} else {
 		targets = s.extraTargets
@@ -1024,12 +1059,13 @@ type reportMeta struct {
 // through to the what-if path — any other store failure is returned, never
 // masked by a recompute that would hide a broken store behind a 200.
 // A store.ErrNotFound result means the cluster has no snapshots at all.
+// Only a what-if decodes the whole inventory.
 func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version) (engine.Report, reportMeta, error) {
-	snap, inv, err := s.latestInventory(ctx, clusterID)
+	snap, head, err := s.latestHead(ctx, clusterID)
 	if err != nil {
 		return engine.Report{}, reportMeta{}, err
 	}
-	version := judgedAt(snap, inv)
+	version := judgedAt(snap, head)
 	meta := reportMeta{ServerVersion: version, NotApplicable: notApplicable(version, target)}
 	e, err := s.cfg.Store.CurrentEvaluation(ctx, clusterID, target.String())
 	switch {
@@ -1042,6 +1078,10 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 		meta.Outdated = s.outdated(e, s.now())
 		return rep, meta, nil
 	case errors.Is(err, store.ErrNotFound):
+		inv, err := decodeInventory(snap)
+		if err != nil {
+			return engine.Report{}, reportMeta{}, err
+		}
 		now := s.now()
 		meta.EvaluatedAt, meta.SnapshotID, meta.Source = now, snap.ID, sourceWhatIf
 		return evaluateWhatIf(inv, s.cfg.KB, s.cfg.TeamMap, target, now), meta, nil

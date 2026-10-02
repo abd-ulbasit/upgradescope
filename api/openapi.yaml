@@ -251,6 +251,7 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
     delete:
       tags: [admin]
       operationId: deleteCluster
@@ -325,6 +326,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/clusters/{id}/findings:
     parameters:
@@ -353,6 +355,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/clusters/{id}/history:
     parameters:
@@ -379,6 +382,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/clusters/{id}/teams:
     parameters:
@@ -402,6 +406,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/clusters/{id}/export:
     parameters:
@@ -433,6 +438,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/fleet:
     get:
@@ -486,6 +492,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/gate:
     post:
@@ -700,6 +707,15 @@ components:
   responses:
     Error:
       description: An error.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    ReadBusy:
+      description: |
+        Reads that load a cluster's snapshot run one at a time, and this
+        one waited more than 30s for its turn; retry after `Retry-After`.
+      headers:
+        Retry-After: {$ref: "#/components/headers/RetryAfter"}
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}

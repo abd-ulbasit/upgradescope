@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"sigs.k8s.io/yaml"
@@ -355,6 +356,35 @@ func TestOpenAPIResponsesMatchSpec(t *testing.T) {
 		if !covered[r] {
 			t.Errorf("no call exercises %q; add one so its responses are checked", r)
 		}
+	}
+}
+
+// TestOpenAPIReadBusyMatchesSpec: every read that waits for the read slot
+// answers 503 + Retry-After as the document says when it waits too long.
+func TestOpenAPIReadBusyMatchesSpec(t *testing.T) {
+	v := newSpecValidator(t)
+	s := newTestServer(t, newFakeStore())
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	seedViaPush(t, ts)
+	s.readQueueTimeout = time.Millisecond
+	for range cap(s.readSlots) {
+		s.readSlots <- struct{}{}
+	}
+	for route, url := range map[string]string{
+		"/api/v1/clusters/{id}":          "/api/v1/clusters/1",
+		"/api/v1/clusters/{id}/report":   "/api/v1/clusters/1/report",
+		"/api/v1/clusters/{id}/findings": "/api/v1/clusters/1/findings",
+		"/api/v1/clusters/{id}/history":  "/api/v1/clusters/1/history",
+		"/api/v1/clusters/{id}/teams":    "/api/v1/clusters/1/teams",
+		"/api/v1/clusters/{id}/export":   "/api/v1/clusters/1/export?format=csv",
+		"/api/v1/fleet/teams":            "/api/v1/fleet/teams?target=1.35",
+	} {
+		resp, body := getRaw(t, ts, url, "")
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("GET %s with the read slot busy = %d, want 503: %s", url, resp.StatusCode, body)
+		}
+		v.check(route+" busy", route, "get", resp, []byte(body))
 	}
 }
 

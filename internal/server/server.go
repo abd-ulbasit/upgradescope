@@ -5,6 +5,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -125,6 +126,25 @@ const (
 	maxBufferedSnapshotBodies = 2
 )
 
+// Read concurrency and memory. A read of one cluster (its detail, report,
+// findings, teams, history or export) loads the cluster's latest snapshot,
+// up to --max-snapshot-bytes as stored, which the SQLite driver holds
+// twice; one that computes a report on request (a what-if: a target with
+// no stored evaluation, here or in the fleet teams rollup) also decodes
+// and evaluates the whole inventory, which a snapshot at its node budget
+// takes ~45 MB of heap for. Unbounded, 10 such reads at once grew the heap
+// ~400 MiB, so these reads run one at a time, on the /gate model (a
+// normal one takes milliseconds): a read waits up to readQueueTimeout for
+// the slot, then gets 503 + Retry-After. The handler writes its response
+// to memory in the slot, and it is sent after the slot is released, so a
+// slow client holds its response's bytes, never the slot. Reads of the
+// whole fleet (/clusters, /fleet, /metrics) take no slot: they read each
+// cluster's snapshot head from one store query and load no inventory.
+const (
+	maxConcurrentReads = 1
+	readQueueTimeout   = 30 * time.Second
+)
+
 // Server serves the ingest + read API. Construct with New; a Server is
 // single-use (one Start/Shutdown cycle).
 type Server struct {
@@ -142,6 +162,9 @@ type Server struct {
 	ingestSlots        chan struct{} // semaphore: one token per snapshot push being ingested
 	ingestQueueTimeout time.Duration // how long a push waits for a slot
 	ingestBuffered     *byteBudget   // snapshot body bytes (decompressed) held across pushes
+
+	readSlots        chan struct{} // semaphore: one token per read that loads a snapshot
+	readQueueTimeout time.Duration // how long such a read waits for a slot
 
 	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
 	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
@@ -179,6 +202,8 @@ func New(cfg Config) (*Server, error) {
 	s.ingestSlots = make(chan struct{}, maxConcurrentIngests)
 	s.ingestQueueTimeout = ingestQueueTimeout
 	s.ingestBuffered = newByteBudget(maxBufferedSnapshotBodies * s.maxSnapshotBytes())
+	s.readSlots = make(chan struct{}, maxConcurrentReads)
+	s.readQueueTimeout = readQueueTimeout
 	s.teamMapHash = hashTeamMap(cfg.TeamMap)
 	s.sinks = sinksOf(cfg.Notifier)
 	s.outboxKick = make(chan struct{}, 1)
@@ -231,17 +256,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /metrics", s.readAuth(s.metrics.handler().ServeHTTP))
 	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
 	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.handleListClusters))
-	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.handleGetCluster))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.inReadSlot(s.handleGetCluster)))
 	s.mux.HandleFunc("DELETE /api/v1/clusters/{id}", s.adminAuth(s.handleDeleteCluster))
 	s.mux.HandleFunc("PATCH /api/v1/clusters/{id}", s.adminAuth(s.handleRenameCluster))
-	s.mux.HandleFunc("GET /api/v1/clusters/{id}/report", s.readAuth(s.handleReport))
-	s.mux.HandleFunc("GET /api/v1/clusters/{id}/findings", s.readAuth(s.handleFindings))
-	s.mux.HandleFunc("GET /api/v1/clusters/{id}/history", s.readAuth(s.handleHistory))
-	s.mux.HandleFunc("GET /api/v1/clusters/{id}/teams", s.readAuth(s.handleTeams))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/report", s.readAuth(s.inReadSlot(s.handleReport)))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/findings", s.readAuth(s.inReadSlot(s.handleFindings)))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/history", s.readAuth(s.inReadSlot(s.handleHistory)))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/teams", s.readAuth(s.inReadSlot(s.handleTeams)))
 	s.mux.HandleFunc("GET /api/v1/fleet", s.readAuth(s.handleFleet))
-	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.handleFleetTeams))
+	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.inReadSlot(s.handleFleetTeams)))
 	s.mux.HandleFunc("POST /api/v1/gate", s.readAuth(s.handleGate))
-	s.mux.HandleFunc("GET /api/v1/clusters/{id}/export", s.readAuth(s.handleExport))
+	s.mux.HandleFunc("GET /api/v1/clusters/{id}/export", s.readAuth(s.inReadSlot(s.handleExport)))
 	s.mux.HandleFunc("GET /api/v1/registry", s.readAuth(s.handleRegistry))
 }
 
@@ -384,6 +409,49 @@ func acquireSlot(w http.ResponseWriter, gone <-chan struct{}, slots chan struct{
 		errJSON(w, http.StatusServiceUnavailable, busy)
 		return nil, false
 	}
+}
+
+// inReadSlot runs h in the read slot (maxConcurrentReads) with its
+// response written to memory, and sends that response once the slot is
+// released, so the slot is held for loading, decoding and evaluating, not
+// for a client's reading.
+func (s *Server) inReadSlot(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		release, ok := acquireSlot(w, r.Context().Done(), s.readSlots, s.readQueueTimeout, "too many concurrent reads; retry shortly")
+		if !ok {
+			return
+		}
+		resp := &heldResponse{header: w.Header(), status: http.StatusOK}
+		func() {
+			defer release()
+			h(resp, r)
+		}()
+		w.WriteHeader(resp.status)
+		_, _ = w.Write(resp.body.Bytes())
+	}
+}
+
+// heldResponse is an http.ResponseWriter that keeps the response in
+// memory (inReadSlot). Headers go straight to the real writer's map,
+// which is not sent before its WriteHeader.
+type heldResponse struct {
+	header  http.Header
+	status  int
+	written bool
+	body    bytes.Buffer
+}
+
+func (h *heldResponse) Header() http.Header { return h.header }
+
+func (h *heldResponse) WriteHeader(code int) {
+	if !h.written {
+		h.status, h.written = code, true
+	}
+}
+
+func (h *heldResponse) Write(p []byte) (int, error) {
+	h.written = true
+	return h.body.Write(p)
 }
 
 // Start binds Config.Listen and serves until Shutdown. It returns nil after

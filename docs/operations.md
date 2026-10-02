@@ -14,10 +14,11 @@ Elsewhere:
 ## Memory and request limits
 
 The server's memory is bounded by construction, not by hoping requests
-are small. Decoding is what costs memory, and it costs per node, not per
-byte: a 4 MiB YAML flow sequence `[1,1,…]` decoded to ~900 MB of heap,
-and 20 MiB of `{}` object refs in a snapshot to ~2.6 GB. So each request
-is measured before it is decoded:
+are small; the two things outside the bounds are listed after the worst
+case below. Decoding is what costs memory, and it costs per node, not
+per byte: a 4 MiB YAML flow sequence `[1,1,…]` decoded to ~900 MB of
+heap, and 20 MiB of `{}` object refs in a snapshot to ~2.6 GB. So each
+request is measured before it is decoded:
 
 | | `POST /api/v1/gate` | `POST /api/v1/snapshots` |
 |---|---|---|
@@ -53,17 +54,51 @@ Deployments is ~360k units and fits; typical kubectl YAML is ~90k units
 per MiB, so the node budget, not the 10 MiB body cap, is what limits a
 realistic stream, at about 4.4 MiB.
 
+Reads cost what was stored, so they are bounded too. A read of one
+cluster (its detail, report, findings, teams, history or export) and the
+fleet teams rollup load the cluster's latest snapshot, up to
+`--max-snapshot-bytes` as pushed, which the SQLite driver holds twice;
+a report for a target with no stored evaluation (a what-if) also decodes
+and evaluates the whole inventory, at a cost per node like ingest's. One
+370 KB push of `{}` object refs, accepted from any ingest token, took
+~45 MB of heap for each such read, and 10 concurrent reads of it grew
+the heap ~400 MiB. These reads run one at a time in a read slot of their
+own, so they never wait on pushes or `/gate`; others wait up to 30s, then
+get `503` with `Retry-After`. Only a what-if decodes the whole inventory;
+the other reads decode its server version and capabilities and skip the
+rest. A response is written to memory in the slot and sent after it, so
+a client that is slow to read holds its response, not the slot. With 10
+concurrent requests to each of these endpoints, against the snapshot
+dearest to decode and against one whose stored report is as large as its
+inventory, the heap grew at most 50 MiB. `/clusters`, `/fleet` and
+`/metrics` take no slot: they read each cluster's server version from
+one query over the snapshot heads and load no inventory.
+
 Worst case for the chart's 512Mi server: one `/gate` request in the
 evaluation slot (~155 MB; with `?cluster=` as well, against a snapshot at
 its node budget, since the cluster's inventory is decoded once the
 manifests' node trees are garbage) plus one ingest (~80 MB, its copy of
-the body included) plus both body budgets (70 MiB; an ingest gives its
-share back once it holds that copy, so another push can wait in it),
-about 310 MB, inside the 460 MiB `GOMEMLIMIT` the chart derives from the
-limit. One input is outside these budgets: a snapshot a v0.1 server
-stored before they existed (up to 20 MiB of any shape) is decoded without
-a node count when `/gate?cluster=` or the re-evaluation pass reads it,
-until that cluster's agent pushes again. The Go runtime
+the body included) plus one read in the read slot (~50 MiB: a what-if at
+the snapshot node budget, or a 20 MiB snapshot loaded from SQLite) plus
+the background re-evaluation pass, which takes clusters one at a time
+(~60 MiB for a snapshot at its node budget and three targets), plus both
+body budgets (70 MiB; an ingest gives its share back once it holds that
+copy, so another push can wait in it): about 425 MB, inside the 460 MiB
+(482 MB) `GOMEMLIMIT` the chart derives from the limit.
+
+Two things are outside these bounds. A response is held until its client
+has read it, for at most the 120s write timeout. A realistic report is a
+few KB, but one can be about as large as the snapshot it came from (4 MB
+for a 4 MB snapshot in which every API-usage entry is a finding), and
+each client reading such a report slowly holds that much. And a snapshot a v0.1 server stored
+before the budgets existed (up to 20 MiB of any shape) is decoded
+without a node count when `/gate?cluster=`, the re-evaluation pass or a
+what-if read reads it (a report, its findings or teams for a target with
+no stored evaluation, or the fleet teams rollup), until that cluster's
+agent pushes again. Those decodes take their slots, but one 20 MiB
+snapshot of `{}` object refs decodes to ~2.6 GB. Such a row also has no
+stored server version, so `/clusters`, `/fleet` and `/metrics` load it,
+up to 20 MiB, outside the read slot, to read its version. The Go runtime
 does not read the container's limit, and without a memory limit the
 collector lets garbage grow to as much as the live heap again before it
 runs, so a process whose live heap fits is OOM-killed anyway. Outside the
@@ -94,8 +129,11 @@ SQLite, October 2026), `before` being v0.1.x without these limits:
 What is left is availability: a client that really sends 3 × the gate
 cap and then stalls makes other `/gate` requests `503` until the read
 timeout cuts it off (about 0.5 MiB/s of its bandwidth for 60s), and with
-an open read API that needs no credentials. A read token limits it to
-token holders; the same holds for pushes and the ingest tokens.
+an open read API that needs no credentials. Likewise, a client that keeps
+asking for what-if reports of a cluster at its node budget keeps other
+per-cluster reads waiting, and some of them get `503`. A read token
+limits both to token holders; the same holds for pushes and the ingest
+tokens.
 
 ## What a push is judged as
 

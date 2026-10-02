@@ -85,8 +85,9 @@ cannot read is reported as not assessed.
   memory is bounded by structure, not only bytes: JSON values and YAML
   nodes (aliases at what they expand to) are counted against a budget
   before anything is decoded, buffered bodies share a budget, and one
-  request per endpoint decodes at a time. Over a budget is `413`, a body
-  too slow for the read timeout `408`, a full queue `503`
+  request per endpoint decodes at a time, as does one read of a stored
+  snapshot. Over a budget is `413`, a body too slow for the read timeout
+  `408`, a full queue `503`
   ([Memory and request limits](../operations.md#memory-and-request-limits)).
   Connections have read, write and idle timeouts.
 - **Data at rest.** The SQLite database and its `-wal` and `-shm` files
