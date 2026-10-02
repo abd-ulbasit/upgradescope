@@ -76,6 +76,10 @@ var yamlContentTypes = map[string]bool{
 // format=gitlab-codequality (GitLab Code Quality; findings without a file
 // are on the virtual upgradescope/ path) answer like sarif: the introduced
 // findings only, with the gate's status and verdict.
+//
+// An answer whose bound in its format (gateAnswerBound) is over
+// --max-gate-bytes is 413 before it is encoded, and ?path= is at most
+// maxArtifactPathBytes: both multiply what the answer lists.
 func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mt, _, err := mime.ParseMediaType(ct)
