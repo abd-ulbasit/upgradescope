@@ -375,9 +375,11 @@ a CI gate.
   ClusterRoleBinding, Role, RoleBinding; removed in 1.23) and
   `node.k8s.io/v1alpha1` RuntimeClass (removed in 1.24) now block at the
   release that stopped serving them; they scanned as ready with only an
-  `unknown-api` info. Kinds kube-apiserver never served
-  (`PodStatusResult`, `EphemeralContainers`, `ReplicationControllerDummy`)
-  are no longer removed-API blockers. `scheduling.k8s.io/v1alpha3` types
+  `unknown-api` info. Kinds kube-apiserver never stored or served
+  (`PodStatusResult`, `EphemeralContainers`, `ReplicationControllerDummy`,
+  `JobTemplate`, the removed `Scale` and `DeploymentRollback` bodies and the
+  v1beta1 `AdmissionReview` and `ConversionReview`) are no longer
+  removed-API blockers. `scheduling.k8s.io/v1alpha3` types
   stay `unknown-api` infos (#166).
 - `kb.Load` refuses a lifecycle dataset with fewer than 150 entries or 100
   removals, with an error that says the embedded data is corrupt, instead of

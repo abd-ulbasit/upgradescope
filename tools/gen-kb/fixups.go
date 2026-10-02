@@ -13,10 +13,6 @@ var replacementFixes = map[gvkOut]*gvkOut{
 	// Deprecation guide, v1.25 "RuntimeClass": migrate to node.k8s.io/v1.
 	// Upstream tags no replacement.
 	{Group: "node.k8s.io", Version: "v1beta1", Kind: "RuntimeClass"}: {Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass"},
-	// Upstream tags apps/v1 DeploymentRollback, but apps/v1 never had that
-	// type: the rollback subresource was dropped (use `kubectl rollout
-	// undo`), so there is no API to migrate to.
-	{Group: "apps", Version: "v1beta1", Kind: "DeploymentRollback"}: nil,
 }
 
 // fixReplacement corrects e's replacement tag in place: explicit overrides
@@ -121,7 +117,7 @@ var untaggedLifecycles = map[gvkOut]untaggedLifecycle{
 		removed:     &version{Major: 1, Minor: 24},
 		replacement: &gvkOut{Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass"},
 		citations: []string{
-			"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.12.md", // "The RuntimeClass API has been added. This feature is in alpha"
+			"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.12.md", // "The RuntimeClass API has been added. This feature is in alpha" (a CRD until it became built-in in 1.14)
 			"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.24.md", // "The node.k8s.io/v1alpha1 RuntimeClass API is no longer served" (#103061)
 		},
 	},
@@ -144,6 +140,31 @@ var nonPersisted = map[gvkOut]string{
 	// extensions/v1beta1 types.go (v0.17): "Dummy definition", kept for
 	// the API documentation only.
 	{Group: "extensions", Version: "v1beta1", Kind: "ReplicationControllerDummy"}: "documentation placeholder",
+	// Upstream tags a removal on the types below, but they are the same
+	// kind of thing: none has storage in kube-apiserver's pkg/registry, so a
+	// manifest of one cannot exist and "removed" is a false blocker. Their
+	// current-version siblings (autoscaling/v1 Scale, admission.k8s.io/v1
+	// AdmissionReview, apiextensions.k8s.io/v1 ConversionReview) are not
+	// removed and stay.
+	//
+	// batch JobTemplate: the template embedded in a CronJob.
+	// pkg/registry/batch/rest/storage_batch.go (release-1.20) maps only
+	// jobs and cronjobs; v2alpha1 maps cronjobs only.
+	{Group: "batch", Version: "v1beta1", Kind: "JobTemplate"}:  "template embedded in a CronJob",
+	{Group: "batch", Version: "v2alpha1", Kind: "JobTemplate"}: "template embedded in a CronJob",
+	// Scale: the body of the /scale subresource of deployments, replica
+	// sets, stateful sets and replication controllers.
+	{Group: "apps", Version: "v1beta1", Kind: "Scale"}:       "body of a /scale subresource",
+	{Group: "apps", Version: "v1beta2", Kind: "Scale"}:       "body of a /scale subresource",
+	{Group: "extensions", Version: "v1beta1", Kind: "Scale"}: "body of a /scale subresource",
+	// DeploymentRollback: the body of the deployments/rollback subresource,
+	// dropped in apps/v1 (use `kubectl rollout undo`).
+	{Group: "apps", Version: "v1beta1", Kind: "DeploymentRollback"}:       "body of the deployments/rollback subresource",
+	{Group: "extensions", Version: "v1beta1", Kind: "DeploymentRollback"}: "body of the deployments/rollback subresource",
+	// Review payloads: what kube-apiserver sends to and reads from a
+	// webhook, never an object a manifest or a cluster holds.
+	{Group: "admission.k8s.io", Version: "v1beta1", Kind: "AdmissionReview"}:      "admission webhook payload",
+	{Group: "apiextensions.k8s.io", Version: "v1beta1", Kind: "ConversionReview"}: "conversion webhook payload",
 }
 
 func isNonPersisted(g gvkOut) bool {

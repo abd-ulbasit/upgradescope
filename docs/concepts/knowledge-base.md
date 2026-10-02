@@ -40,7 +40,7 @@ differs, and checks that the generator imports every `k8s.io/api`
 group/version package.
 
 Three things the generator adds to what the source says, each in
-`tools/gen-kb/fixups.go` and tested:
+`tools/gen-kb` (`history.go`, `merge.go` and `fixups.go`) and tested:
 
 - **Tombstones.** A type `k8s.io/api` deleted stays in the data, removed in
   the release that stopped serving it, so a manifest still using it blocks.
@@ -51,9 +51,17 @@ Three things the generator adds to what the source says, each in
   lifecycle from the Kubernetes release notes, cited in the generator. A
   test fails once upstream tags the type, so the entry cannot go stale
   quietly.
-- **Non-resources.** Wrapper and subresource types such as `PodStatusResult`
-  were never stored or served by kube-apiserver, so they are left out
-  instead of reading as a removal.
+- **Non-resources.** An explicit list in the generator, each kind cited,
+  leaves out wrapper, subresource-body and webhook-payload types that
+  kube-apiserver never stored or served: `PodStatusResult`,
+  `EphemeralContainers`, `ReplicationControllerDummy`, `JobTemplate`
+  (`batch/v1beta1`, `batch/v2alpha1`), the `Scale` and `DeploymentRollback`
+  bodies of the removed `apps` and `extensions` versions, and the v1beta1
+  `AdmissionReview` and `ConversionReview`. A manifest of one is an
+  `unknown-api` info, not a removal. The list is explicit rather than
+  derived, because `k8s.io/api` registers these like any resource. A test
+  checks every inferred removal left in the data against a list of types
+  kube-apiserver served, so a new one cannot slip in unaudited.
 
 Every other fact is `k8s.io/api`'s own. There is no separate hand-written
 dataset; a test fails if one is added.

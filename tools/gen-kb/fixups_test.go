@@ -25,9 +25,6 @@ func TestFixReplacement(t *testing.T) {
 		{"missing upstream tag: RuntimeClass",
 			entry{Group: "node.k8s.io", Version: "v1beta1", Kind: "RuntimeClass"},
 			g("node.k8s.io", "v1", "RuntimeClass")},
-		{"tag names a type that never existed",
-			entry{Group: "apps", Version: "v1beta1", Kind: "DeploymentRollback", Replacement: g("apps", "v1", "DeploymentRollback")},
-			nil},
 		{"correct tag untouched",
 			entry{Group: "batch", Version: "v1beta1", Kind: "CronJob", Replacement: g("batch", "v1", "CronJob")},
 			g("batch", "v1", "CronJob")},
@@ -154,7 +151,7 @@ func TestUntaggedLifecyclesAreCitedAndUntagged(t *testing.T) {
 	for k, u := range untaggedLifecycles {
 		name := k.Group + "/" + k.Version + " " + k.Kind
 		if !upstream[k] {
-			t.Errorf("%s: k8s.io/api no longer registers it; delete the entry (deletedTypes records it)", name)
+			t.Errorf("%s: k8s.io/api no longer registers it; move the removal into removalFixes (deletedTypes would infer it from the deletion release, not the one that stopped serving it) and delete the entry", name)
 		}
 		typ, err := scheme.New(schema.GroupVersionKind{Group: k.Group, Version: k.Version, Kind: k.Kind})
 		if err != nil {
@@ -187,6 +184,17 @@ func TestNonPersistedKindsAreNotRecorded(t *testing.T) {
 		gvk("", "v1", "PodStatusResult"),
 		gvk("", "v1", "EphemeralContainers"),
 		gvk("extensions", "v1beta1", "ReplicationControllerDummy"),
+		// Removed in the upstream tags, but wrappers all the same: a removed-api
+		// blocker for these is as false as for PodStatusResult.
+		gvk("batch", "v1beta1", "JobTemplate"),
+		gvk("batch", "v2alpha1", "JobTemplate"),
+		gvk("apps", "v1beta1", "Scale"),
+		gvk("apps", "v1beta2", "Scale"),
+		gvk("extensions", "v1beta1", "Scale"),
+		gvk("apps", "v1beta1", "DeploymentRollback"),
+		gvk("extensions", "v1beta1", "DeploymentRollback"),
+		gvk("admission.k8s.io", "v1beta1", "AdmissionReview"),
+		gvk("apiextensions.k8s.io", "v1beta1", "ConversionReview"),
 	} {
 		if !skipKind(k) {
 			t.Errorf("skipKind(%s) = false, want true: not a persisted resource", k)
@@ -196,7 +204,7 @@ func TestNonPersistedKindsAreNotRecorded(t *testing.T) {
 	if skipKind(gvk("example.k8s.io", "v1", "PodStatusResult")) {
 		t.Error("skipKind(example.k8s.io/v1 PodStatusResult) = true, want false")
 	}
-	if len(nonPersisted) != 3 {
+	if len(nonPersisted) != 12 {
 		t.Errorf("nonPersisted has %d entries; extend this test with the new kind", len(nonPersisted))
 	}
 	for k, why := range nonPersisted {

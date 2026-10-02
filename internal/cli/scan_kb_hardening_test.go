@@ -7,8 +7,9 @@ import (
 )
 
 // #166 KB-01, end to end with the embedded KB. A kind no cluster serves
-// (PodStatusResult, a kubelet wrapper) was a removed-api blocker at 1.37; it
-// is an unknown-api info now. rbac.authorization.k8s.io/v1alpha1, gone in
+// (PodStatusResult, a kubelet wrapper; batch/v2alpha1 JobTemplate, which was
+// never stored) was a removed-api blocker at 1.37 and 1.22; it is an
+// unknown-api info now. rbac.authorization.k8s.io/v1alpha1, gone in
 // 1.23, scanned as ready at 1.23 with an unknown-api info; it blocks now and
 // warns one release before.
 func TestScanFilesNonPersistedAndUntaggedAPIs(t *testing.T) {
@@ -16,6 +17,11 @@ func TestScanFilesNonPersistedAndUntaggedAPIs(t *testing.T) {
 kind: PodStatusResult
 metadata:
   name: x
+---
+apiVersion: batch/v2alpha1
+kind: JobTemplate
+metadata:
+  name: t
 ---
 apiVersion: rbac.authorization.k8s.io/v1alpha1
 kind: ClusterRole
@@ -30,14 +36,17 @@ metadata:
 	}{
 		{"1.23", "blocked", 2, []finding{
 			{"blocker", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/batch/v2alpha1/JobTemplate"},
 			{"info", "unknown-api/core/v1/PodStatusResult"},
 		}},
 		{"1.22", "ready", 0, []finding{
 			{"warning", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/batch/v2alpha1/JobTemplate"},
 			{"info", "unknown-api/core/v1/PodStatusResult"},
 		}},
 		{"1.37", "blocked", 2, []finding{
 			{"blocker", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/batch/v2alpha1/JobTemplate"},
 			{"info", "unknown-api/core/v1/PodStatusResult"},
 		}},
 	}

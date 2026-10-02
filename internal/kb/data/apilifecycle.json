@@ -130,19 +130,6 @@
       "introduced": "1.19"
     },
     {
-      "group": "admission.k8s.io",
-      "version": "v1beta1",
-      "kind": "AdmissionReview",
-      "introduced": "1.9",
-      "deprecated": "1.19",
-      "removed": "1.22",
-      "replacement": {
-        "group": "admission.k8s.io",
-        "version": "v1",
-        "kind": "AdmissionReview"
-      }
-    },
-    {
       "group": "admissionregistration.k8s.io",
       "version": "v1",
       "kind": "MutatingAdmissionPolicy",
@@ -307,19 +294,6 @@
     {
       "group": "apiextensions.k8s.io",
       "version": "v1beta1",
-      "kind": "ConversionReview",
-      "introduced": "1.13",
-      "deprecated": "1.19",
-      "removed": "1.22",
-      "replacement": {
-        "group": "apiextensions.k8s.io",
-        "version": "v1",
-        "kind": "ConversionReview"
-      }
-    },
-    {
-      "group": "apiextensions.k8s.io",
-      "version": "v1beta1",
       "kind": "CustomResourceDefinition",
       "introduced": "1.7",
       "deprecated": "1.16",
@@ -408,27 +382,6 @@
     {
       "group": "apps",
       "version": "v1beta1",
-      "kind": "DeploymentRollback",
-      "introduced": "1.6",
-      "deprecated": "1.8",
-      "removed": "1.16"
-    },
-    {
-      "group": "apps",
-      "version": "v1beta1",
-      "kind": "Scale",
-      "introduced": "1.6",
-      "deprecated": "1.8",
-      "removed": "1.16",
-      "replacement": {
-        "group": "autoscaling",
-        "version": "v1",
-        "kind": "Scale"
-      }
-    },
-    {
-      "group": "apps",
-      "version": "v1beta1",
       "kind": "StatefulSet",
       "introduced": "1.5",
       "deprecated": "1.8",
@@ -489,19 +442,6 @@
         "group": "apps",
         "version": "v1",
         "kind": "ReplicaSet"
-      }
-    },
-    {
-      "group": "apps",
-      "version": "v1beta2",
-      "kind": "Scale",
-      "introduced": "1.8",
-      "deprecated": "1.9",
-      "removed": "1.16",
-      "replacement": {
-        "group": "autoscaling",
-        "version": "v1",
-        "kind": "Scale"
       }
     },
     {
@@ -719,24 +659,8 @@
     },
     {
       "group": "batch",
-      "version": "v1beta1",
-      "kind": "JobTemplate",
-      "introduced": "1.8",
-      "deprecated": "1.22",
-      "removed": "1.25"
-    },
-    {
-      "group": "batch",
       "version": "v2alpha1",
       "kind": "CronJob",
-      "introduced": "1.17",
-      "removed": "1.21",
-      "removedInferred": true
-    },
-    {
-      "group": "batch",
-      "version": "v2alpha1",
-      "kind": "JobTemplate",
       "introduced": "1.17",
       "removed": "1.21",
       "removedInferred": true
@@ -934,14 +858,6 @@
     {
       "group": "extensions",
       "version": "v1beta1",
-      "kind": "DeploymentRollback",
-      "introduced": "1.2",
-      "deprecated": "1.8",
-      "removed": "1.16"
-    },
-    {
-      "group": "extensions",
-      "version": "v1beta1",
       "kind": "Ingress",
       "introduced": "1.1",
       "deprecated": "1.14",
@@ -990,14 +906,6 @@
         "version": "v1",
         "kind": "ReplicaSet"
       }
-    },
-    {
-      "group": "extensions",
-      "version": "v1beta1",
-      "kind": "Scale",
-      "introduced": "1.1",
-      "deprecated": "1.2",
-      "removed": "1.16"
     },
     {
       "group": "flowcontrol.apiserver.k8s.io",

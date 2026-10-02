@@ -20,6 +20,15 @@ func TestNonResourceKindsAreNotInTheKB(t *testing.T) {
 		{"", "v1", "PodStatusResult"},
 		{"", "v1", "EphemeralContainers"},
 		{"extensions", "v1beta1", "ReplicationControllerDummy"},
+		{"batch", "v1beta1", "JobTemplate"},
+		{"batch", "v2alpha1", "JobTemplate"},
+		{"apps", "v1beta1", "Scale"},
+		{"apps", "v1beta2", "Scale"},
+		{"extensions", "v1beta1", "Scale"},
+		{"apps", "v1beta1", "DeploymentRollback"},
+		{"extensions", "v1beta1", "DeploymentRollback"},
+		{"admission.k8s.io", "v1beta1", "AdmissionReview"},
+		{"apiextensions.k8s.io", "v1beta1", "ConversionReview"},
 	} {
 		if e, ok := idx.Lookup(c.group, c.version, c.kind); ok {
 			t.Errorf("dataset has %s/%s %s (%+v), want none: it is not a persisted resource", c.group, c.version, c.kind, e)
