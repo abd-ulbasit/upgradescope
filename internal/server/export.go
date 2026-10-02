@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
@@ -108,8 +109,11 @@ func exportFilename(cluster, target, ext string) string {
 // import with ; as the separator (Excel's default in many locales) turned
 // the manager `x;=1+1;` in a finding's detail into the cell `=1+1`. So
 // every such place — the start, and after each , ; tab CR or newline, past
-// any spaces — gets a ' in front of a trigger, which makes the spreadsheet
-// read text.
+// any white space (a no-break or ideographic space too) — gets a ' in
+// front of a trigger, which makes the spreadsheet read text. The boundary:
+// an import told to split on spaces as well (LibreOffice offers it) sees a
+// cell after every space, which is not guarded, since that would mark
+// every ` -` in prose.
 func csvSafe(s string) string {
 	if !strings.ContainsAny(s, "=+-@\t\r＝＋－＠") {
 		return s
@@ -117,7 +121,7 @@ func csvSafe(s string) string {
 	var b strings.Builder
 	cellStart := true
 	for _, r := range s {
-		if cellStart && r != ' ' {
+		if cellStart && (r == '\t' || r == '\r' || !unicode.IsSpace(r)) {
 			switch r {
 			case '=', '+', '-', '@', '\t', '\r', '＝', '＋', '－', '＠':
 				b.WriteByte('\'')

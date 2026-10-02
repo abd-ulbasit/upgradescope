@@ -305,5 +305,8 @@ verdict and score. The `severity` column types the rows:
 Teams, namespaces and citations are `;`-joined. A spreadsheet may split
 a field again on `,`, `;`, tab or a line break (Excel imports with `;` in
 many locales), so wherever a cell could start, at a field's start or
-after any of those, a formula trigger (`=`, `+`, `-`, `@`, tab, CR, or
+after any of those, past any white space (no-break and ideographic
+spaces included), a formula trigger (`=`, `+`, `-`, `@`, tab, CR, or
 their full-width forms) gets a `'` in front of it and is read as text.
+An import told to split on spaces as well (LibreOffice offers it) is not
+guarded: every ` -` in prose would be marked.

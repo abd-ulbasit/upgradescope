@@ -228,6 +228,8 @@ func TestCSVSafeBlocksFormulaInjection(t *testing.T) {
 		"＝1+1":                  "'＝1+1",
 		"x;=1+1;":               "x;'=1+1;",
 		"a, -b":                 "a, '-b",
+		"\u00a0=1":              "\u00a0'=1",
+		"x;\u3000\u2003@x":      "x;\u3000\u2003'@x",
 		"kubectl get x -o yaml": "kubectl get x -o yaml",
 		"":                      "",
 		"payments":              "payments",
