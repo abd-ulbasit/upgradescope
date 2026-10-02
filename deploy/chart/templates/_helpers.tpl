@@ -23,14 +23,17 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 
 {{/*
 The container image of both Deployments: repository:tag (tag defaults to the
-chart's appVersion), plus @digest when image.digest is set. The release
-workflow sets image.digest when it packages the chart, so the published
-chart runs exactly the image released with it.
+chart's appVersion), plus @digest when image.digest is set and image.tag is
+not. The release workflow sets image.digest when it packages the chart, so
+the published chart runs exactly the image released with it. The digest is
+that appVersion image's: applied to an overridden tag it would run the old
+bytes under the new tag's name, so a set image.tag runs as written (pin it
+with tag@digest in image.tag).
 */}}
 {{- define "upgradescope.image" -}}
 {{- $ref := printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
-{{- with .Values.image.digest -}}
-{{- $ref = printf "%s@%s" $ref . -}}
+{{- if and .Values.image.digest (not .Values.image.tag) -}}
+{{- $ref = printf "%s@%s" $ref .Values.image.digest -}}
 {{- end -}}
 {{- $ref -}}
 {{- end -}}

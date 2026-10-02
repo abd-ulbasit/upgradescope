@@ -145,6 +145,20 @@ helm template upgradescope "$CHART" --namespace upgradescope \
 [ "$(grep -cF "image: \"ghcr.io/abd-ulbasit/upgradescope:$APP_VERSION@$DIGEST\"" "$TMP/digest.yaml")" = 2 ] \
   && pass "image.digest pins agent and server to repository:tag@digest" \
   || fail "image.digest does not pin both pods to ghcr.io/abd-ulbasit/upgradescope:$APP_VERSION@$DIGEST"
+# The published chart carries a digest; overriding only the tag must run
+# that tag, not repo:newtag@olddigest (the old bytes under a new name).
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set image.digest="$DIGEST" --set image.tag=v9.9.9 > "$TMP/digest-tag.yaml"
+[ "$(grep -cF 'image: "ghcr.io/abd-ulbasit/upgradescope:v9.9.9"' "$TMP/digest-tag.yaml")" = 2 ] \
+  && pass "image.tag set: the chart's image.digest is not applied to another tag" \
+  || fail "image.tag=v9.9.9 with image.digest set does not render ghcr.io/abd-ulbasit/upgradescope:v9.9.9 on both pods"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set image.digest="$DIGEST" --set image.tag="v9.9.9@sha256:$(printf '%064d' 9)" > "$TMP/tag-digest.yaml"
+[ "$(grep -cF "image: \"ghcr.io/abd-ulbasit/upgradescope:v9.9.9@sha256:$(printf '%064d' 9)\"" "$TMP/tag-digest.yaml")" = 2 ] \
+  && pass "image.tag tag@digest pins another tag by its own digest" \
+  || fail "image.tag=v9.9.9@sha256:... does not render as written on both pods"
 for bad in 'image.digest=latest' 'image.digest=sha256:abc' "image.digest=$APP_VERSION"; do
   if helm template upgradescope "$CHART" --set "$bad" >/dev/null 2>&1; then
     fail "schema accepted --set $bad (want sha256:<64 hex>)"
