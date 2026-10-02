@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -116,19 +117,43 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 			return engine.Report{}, fmt.Errorf("no Kubernetes manifests found under %s (%d files skipped)", opts.filesDir, sum.Skipped)
 		}
 	} else {
-		clients, where, cerr := buildClients(opts.kubeconfig, opts.kubecontext, opts.requestTimeout)
+		clients, cluster, cerr := buildClients(opts.kubeconfig, opts.kubecontext, opts.requestTimeout)
 		if cerr != nil {
 			return engine.Report{}, cerr
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		inv = collect.Collect(ctx, clients, kbData, collect.Options{TeamLabel: opts.teamLabel})
-		if err := unreadableCluster(inv, where); err != nil {
+		if err := unreadableCluster(inv, cluster.String()); err != nil {
 			return engine.Report{}, err
 		}
+		r := engine.Evaluate(inv, kbData, opts.targetVersion, time.Now())
+		r.KubeContext, r.APIServer = cluster.context, cluster.server
+		return r, nil
 	}
 
 	return engine.Evaluate(inv, kbData, opts.targetVersion, time.Now()), nil
+}
+
+// liveCluster names the cluster a live scan reads: the kubeconfig context
+// and the API server (see apiServerURL).
+type liveCluster struct{ context, server string }
+
+// String is where the scan pointed, for error messages.
+func (c liveCluster) String() string {
+	return fmt.Sprintf("context %q (server %s)", c.context, c.server)
+}
+
+// apiServerURL is the API server cfg points at, as client-go dials it
+// (a host without a scheme gets the one client-go picks), reduced to
+// scheme, host and port: kubeconfig servers can carry credentials, a
+// proxy path or a token query, which a report must not repeat.
+func apiServerURL(cfg *rest.Config) string {
+	u, _, err := rest.DefaultServerUrlFor(cfg)
+	if err != nil {
+		return ""
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
 }
 
 // scanRESTConfig loads the rest.Config of a live scan by clientcmd's
@@ -159,16 +184,15 @@ func scanRESTConfig(kubeconfig, kubecontext string, requestTimeout time.Duration
 }
 
 // buildClients builds the live-scan clients from scanRESTConfig. It also
-// returns where the clients point (`context "x" (server https://...)`)
-// for error messages.
+// returns the cluster they point at, for the report and error messages.
 // collect.NewClients(cfg) comes from the COLLECT section; this is its only call site.
-func buildClients(kubeconfig, kubecontext string, requestTimeout time.Duration) (collect.Clients, string, error) {
+func buildClients(kubeconfig, kubecontext string, requestTimeout time.Duration) (collect.Clients, liveCluster, error) {
 	cfg, ctxName, err := scanRESTConfig(kubeconfig, kubecontext, requestTimeout)
 	if err != nil {
-		return collect.Clients{}, "", err
+		return collect.Clients{}, liveCluster{}, err
 	}
 	clients, err := collect.NewClients(cfg)
-	return clients, fmt.Sprintf("context %q (server %s)", ctxName, cfg.Host), err
+	return clients, liveCluster{context: ctxName, server: apiServerURL(cfg)}, err
 }
 
 // unreadableCluster fails a live scan in which every capability failed:

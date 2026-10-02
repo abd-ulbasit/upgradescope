@@ -256,3 +256,27 @@ func TestWriteTableReadyNamesGaps(t *testing.T) {
 		t.Errorf("table lacks %q:\n%s", want, buf.String())
 	}
 }
+
+// #94: a live scan's header says which cluster it read, by kubeconfig
+// context and API server; a files scan has neither.
+func TestWriteTableNamesTheCluster(t *testing.T) {
+	r := engine.Report{ClusterID: "uid-1", ServerVersion: "v1.34.2", Target: inventory.Version{Major: 1, Minor: 35}, KBVersion: "kb",
+		KubeContext: "prod-eu", APIServer: "https://10.0.0.1:6443"}
+	var buf bytes.Buffer
+	if err := WriteTable(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	const want = "Cluster:  uid-1\nContext:  prod-eu (API server https://10.0.0.1:6443)\nServer:   v1.34.2\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("table lacks %q:\n%s", want, buf.String())
+	}
+
+	r.KubeContext, r.APIServer = "", ""
+	buf.Reset()
+	if err := WriteTable(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "Context:") {
+		t.Errorf("no context or API server: table has a Context line:\n%s", buf.String())
+	}
+}
