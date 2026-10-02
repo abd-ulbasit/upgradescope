@@ -18,7 +18,7 @@
           "namespace": "shop"
         }
       ],
-      "remediation": "move these objects to cert-manager.io/v1; the apiserver rejects writes at v1alpha3",
+      "remediation": "move these objects to cert-manager.io/v1; the apiserver rejects writes at v1alpha3. A named manager that no longer writes them keeps them listed through its managedFields entry until another manager takes over its fields or the entry is removed",
       "severity": "blocker",
       "teams": [
         "storefront"

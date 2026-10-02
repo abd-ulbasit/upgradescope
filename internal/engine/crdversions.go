@@ -131,6 +131,12 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version) []Findin
 			} else {
 				f.Remediation = fmt.Sprintf("move these objects to a version the CRD serves; the apiserver rejects writes at %s", u.Version)
 			}
+			if len(objectManagers(u.Objects)) > 0 {
+				// Live objects count by managedFields authorship: an
+				// entry a manager left before it stopped writing at the
+				// version stays until something replaces it.
+				f.Remediation += ". A named manager that no longer writes them keeps them listed through its managedFields entry until another manager takes over its fields or the entry is removed"
+			}
 			out = append(out, f)
 		}
 

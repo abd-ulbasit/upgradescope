@@ -124,7 +124,11 @@ func TestEvalCRDVersionsUnservedInUse(t *testing.T) {
 			t.Errorf("Detail lacks %q:\n%s", want, f.Detail)
 		}
 	}
-	if want := "move these objects to cert-manager.io/v1; the apiserver rejects writes at v1alpha3"; f.Remediation != want {
+	// Live objects are judged by managedFields, so a manager that stopped
+	// writing (or is gone) leaves an entry that keeps them listed.
+	if want := "move these objects to cert-manager.io/v1; the apiserver rejects writes at v1alpha3. " +
+		"A named manager that no longer writes them keeps them listed through its managedFields entry " +
+		"until another manager takes over its fields or the entry is removed"; f.Remediation != want {
 		t.Errorf("Remediation = %q, want %q", f.Remediation, want)
 	}
 
@@ -136,6 +140,9 @@ func TestEvalCRDVersionsUnservedInUse(t *testing.T) {
 		if !strings.Contains(f.Detail, want) {
 			t.Errorf("Detail lacks %q:\n%s", want, f.Detail)
 		}
+	}
+	if want := "move these objects to cert-manager.io/v1; the apiserver rejects writes at v1beta1"; f.Remediation != want {
+		t.Errorf("manifest Remediation = %q, want %q (no manager note)", f.Remediation, want)
 	}
 }
 

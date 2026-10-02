@@ -125,7 +125,10 @@ deprecated or unserved version has its custom resources listed once,
 metadata only, at a served version that is not deprecated (listing the
 deprecated one would make the scanner a caller), and an object counts when
 a field manager still writes it through that version, by the same
-managedFields rules as above. The finding names the managers. The remedy
+managedFields rules as above. The finding names the managers. A manager
+that has stopped writing (or was removed) leaves its entry behind, so its
+objects stay listed until another manager takes over its fields or the
+entry is removed; the remediation says so. The remedy
 for a stale stored version is a storage version migration: rewrite every
 object at the storage version (the
 [kube-storage-version-migrator](https://github.com/kubernetes-sigs/kube-storage-version-migrator),
