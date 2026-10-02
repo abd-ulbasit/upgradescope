@@ -231,7 +231,8 @@ func TestNonPersistedKindsAreNotRecorded(t *testing.T) {
 }
 
 // A registered type with no lifecycle source is reported by extract and
-// left out of the dataset, so a manifest of one is an unknown-api info. The
+// left out of the dataset, so a manifest of one is at most an unknown-api
+// info (no finding when the KB has no other entry in its group). The
 // set must match what docs/concepts/knowledge-base.md ("What it does not
 // cover") tells users, or a new untagged type is only a log line and the
 // docs drift.

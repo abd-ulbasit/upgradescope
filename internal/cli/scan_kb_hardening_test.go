@@ -9,8 +9,10 @@ import (
 // #166 KB-01, end to end with the embedded KB. A kind no cluster serves
 // (PodStatusResult, a kubelet wrapper; policy/v1beta1 Eviction, a
 // subresource body; apidiscovery v2beta1 APIGroupDiscovery, a discovery
-// payload; batch/v2alpha1 JobTemplate, which was never stored) was a removed-api blocker at 1.37 and 1.22; it is an
-// unknown-api info now. rbac.authorization.k8s.io/v1alpha1, gone in
+// payload; batch/v2alpha1 JobTemplate, which was never stored) was a
+// removed-api blocker at its inferred removal (PodStatusResult 1.37,
+// APIGroupDiscovery v2beta1 1.35, Eviction v1beta1 1.25, JobTemplate
+// v2alpha1 1.21); it is an unknown-api info now. rbac.authorization.k8s.io/v1alpha1, gone in
 // 1.23, scanned as ready at 1.23 with an unknown-api info; it blocks now and
 // warns one release before.
 func TestScanFilesNonPersistedAndUntaggedAPIs(t *testing.T) {

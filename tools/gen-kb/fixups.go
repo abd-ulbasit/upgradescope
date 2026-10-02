@@ -94,7 +94,9 @@ var (
 // types with no entry here (scheduling.k8s.io/v1alpha3 Workload, PodGroup
 // and CompositePodGroup, still served; imagepolicy.k8s.io/v1alpha1
 // ImageReview, a webhook payload; internal.apiserver.k8s.io/v1alpha1
-// StorageVersion) stay unknown-api infos: nothing says when they leave.
+// StorageVersion) are not judged, since nothing says when they leave: the
+// scheduling ones are unknown-api infos (the KB knows that group), the
+// other two produce no finding, as the KB has no entry in their groups.
 var untaggedLifecycles = map[gvkOut]untaggedLifecycle{
 	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "ClusterRole"}: {
 		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,

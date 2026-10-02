@@ -57,9 +57,10 @@ func parseLifecycle(data []byte) (lifecycleFile, error) {
 	return f, nil
 }
 
-// The smallest dataset Load accepts. The shipped one has well over 200
-// entries, over 120 of them with a removal, and a refresh only adds (gen-kb
-// carries deleted types forward as tombstones), so a file under these
+// The smallest dataset Load accepts. The shipped one has about 200
+// entries, over 120 of them with a removal; a refresh only adds (gen-kb
+// carries deleted types forward as tombstones) except for the explicit
+// nonPersisted list, so a file under these
 // floors is not an old dataset but a damaged or gutted one: valid JSON that
 // would let every removed API scan as ready. (TestDatasetSanity checks the
 // content; this check runs in every binary.)

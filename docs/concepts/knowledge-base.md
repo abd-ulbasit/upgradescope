@@ -51,7 +51,7 @@ Three things the generator adds to what the source says, each in
   lifecycle from the Kubernetes release notes, cited in the generator. A
   test fails once upstream tags the type, so the entry cannot go stale
   quietly.
-- **Non-resources.** An explicit list in the generator, each kind cited,
+- **Non-resources.** An explicit list in the generator, each with its evidence,
   leaves out wrapper, subresource-body and payload types that
   kube-apiserver never stored as resources and that no manifest can create:
   `PodStatusResult`, `EphemeralContainers`, `ReplicationControllerDummy`,
@@ -98,12 +98,16 @@ the horizon minor, until you upgrade to a release with a newer KB.
 ## What it does not cover
 
 - Registered types with no lifecycle markers and no release-note source are
-  not judged: an object of one is an `unknown-api` info, never a blocker.
-  Today these are the `scheduling.k8s.io/v1alpha3` Workload, PodGroup and
-  CompositePodGroup (still served at 1.37), `imagepolicy.k8s.io/v1alpha1`
-  ImageReview and `internal.apiserver.k8s.io/v1alpha1` StorageVersion.
+  not judged, so they never block. A `scheduling.k8s.io/v1alpha3` Workload,
+  PodGroup or CompositePodGroup (still served at 1.37) is an `unknown-api`
+  info, because the KB knows that group. `imagepolicy.k8s.io/v1alpha1`
+  ImageReview and `internal.apiserver.k8s.io/v1alpha1` StorageVersion are in
+  groups the KB has no entries for, so, like CRD groups, they produce no
+  finding at all.
 - CRD versions served by your own or third-party CRDs (deprecated CRD
-  versions and stale `status.storedVersions`) are not in the KB ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
+  versions and stale `status.storedVersions`) are not in the KB: they are
+  judged from the CRDs themselves, live or in `--files`
+  ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
 - Add-ons outside the registry are not judged: their images are listed as
   `unrecognizedImages` in the inventory and the report, and never become
   findings.
