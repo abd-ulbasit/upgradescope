@@ -14,7 +14,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Plain node by default; component tests opt into a DOM with a
+    // `// @vitest-environment happy-dom` docblock.
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });
