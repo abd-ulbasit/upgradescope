@@ -161,10 +161,17 @@ e2e:
 	E2E_MINOR=$(E2E_MINOR) ./hack/e2e.sh
 agent-e2e: e2e
 
+# Every test, e2e gate, CI job, make target and file docs/claims.md names
+# exists, so a public claim cannot lose its proof silently (CI's test job).
+.PHONY: claims-check
+claims-check:
+	./hack/claims-check.sh
+
 # Offline self-tests of the hack/ scripts CI is built from (stubs and
 # fixtures only: no network, cluster or Docker).
 .PHONY: hack-test
 hack-test:
+	./hack/claims-check_test.sh
 	./hack/cross-build_test.sh
 	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh

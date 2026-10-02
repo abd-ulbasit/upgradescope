@@ -170,6 +170,10 @@ jobs:
       # The hack/ scripts every other job runs, driven offline through their
       # pass, fail and fail-closed paths with stubs and fixtures.
       - run: make hack-test
+      # docs/claims.md maps each public claim to its tests; a renamed or
+      # deleted test, e2e gate or job it names fails here.
+      - name: every test the claims ledger names exists
+        run: make claims-check
 
   # The binary and the dashboard it embeds, then every package (tests
   # included) compiled and vetted for each platform the release ships: lint
