@@ -63,6 +63,10 @@ finding leaves the scored list. Otherwise it stays, with the remaining
 objects and a note saying how many were suppressed. A finding that lists no
 objects (add-ons, version skew) matches a `namespace` selector only when
 every namespace it names matches, and never matches `name` or `file`.
+Such a finding names at most 100 namespaces and counts the rest, which
+cannot be shown to match, so past 100 a `namespace` rule no longer takes
+it, even with a glob such as `*` that would match them all; use a rule
+without selectors (by `key`) for it.
 Rules apply in order, and the first one that matches an object takes it.
 
 **Expiry.** On the day after `expires`, the rule stops applying. The finding
@@ -92,7 +96,9 @@ findings that list objects, which today are the API-usage findings. The
 reason is required: an `ignore` annotation without `ignore-reason` is not
 applied, and the scan prints a warning. Annotations have no expiry.
 Annotations only work on the objects that a finding lists, at most 100 per
-API.
+API. On a live cluster the collector keeps at most 16 KiB of each
+annotation (of `ignore`, the categories and keys that fit whole), as the
+server takes it.
 
 ## Baselines
 
