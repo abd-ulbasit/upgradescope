@@ -162,10 +162,14 @@ jobs:
       # pass, fail and fail-closed paths with stubs and fixtures.
       - run: make hack-test
 
+  # The binary, then every package (tests included) compiled and vetted for
+  # each platform the release ships: lint and test run on linux only, and a
+  # windows- or darwin-only break would otherwise first fail in a tag's CI
+  # (#128), long after its PR merged.
   build:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -174,6 +178,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make build
+      - name: compile for linux, darwin and windows (amd64, arm64)
+        run: make cross-build
 
   # Reachable vulnerabilities in the shipped binary. Weekly too, because new
   # advisories land without any commit here.

@@ -2,6 +2,13 @@
 build:
 	go build -o bin/upgradescope ./cmd/upgradescope
 
+# go build + go vet of every package for every platform the release ships
+# (linux, darwin, windows x amd64, arm64): CI's build job, so a change that
+# breaks only one OS fails its PR instead of the tag's CI. Needs only Go.
+.PHONY: cross-build
+cross-build:
+	./hack/cross-build.sh
+
 # web rebuilds the dashboard and stages it for go:embed. The staged bundle
 # in internal/server/webdist is committed (the Vite build is byte-for-byte
 # reproducible from package-lock.json), so plain `go build`/`go install`
@@ -145,6 +152,7 @@ agent-e2e: e2e
 # fixtures only: no network, cluster or Docker).
 .PHONY: hack-test
 hack-test:
+	./hack/cross-build_test.sh
 	./hack/vulncheck_test.sh
 	./hack/check-toolchain_test.sh
 	./hack/install-tool_test.sh
