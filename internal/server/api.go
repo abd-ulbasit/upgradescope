@@ -733,6 +733,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		writeUIDConflict(w, conflict)
 		return
 	}
+	var tooLarge *reportTooLargeError
+	if errors.As(err, &tooLarge) {
+		// Nothing was stored: every target is evaluated before the commit.
+		errJSON(w, http.StatusRequestEntityTooLarge, err.Error()+
+			"; no cluster's inventory names that much, and nothing was stored")
+		return
+	}
 	if err != nil {
 		internalErr(w, "storing snapshot and evaluations", err)
 		return
@@ -1135,7 +1142,8 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 		}
 		now := s.now()
 		meta.EvaluatedAt, meta.SnapshotID, meta.Source = now, snap.ID, sourceWhatIf
-		return evaluateWhatIf(inv, s.cfg.KB, s.cfg.TeamMap, target, now), meta, nil
+		rep, err := s.evaluateWhatIf(inv, target, now)
+		return rep, meta, err
 	default:
 		return engine.Report{}, reportMeta{}, fmt.Errorf("loading current evaluation: %w", err)
 	}
@@ -1155,6 +1163,11 @@ func (s *Server) reportForRequest(w http.ResponseWriter, r *http.Request) (engin
 	rep, meta, err := s.loadOrComputeReport(r.Context(), c.ID, target)
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
+		return engine.Report{}, reportMeta{}, false
+	}
+	var tooLarge *reportTooLargeError
+	if errors.As(err, &tooLarge) {
+		errJSON(w, http.StatusRequestEntityTooLarge, "what-if: "+err.Error())
 		return engine.Report{}, reportMeta{}, false
 	}
 	if err != nil {

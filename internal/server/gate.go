@@ -202,7 +202,11 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 		clusterInv.Namespaces = s.cfg.TeamMap.Apply(clusterInv.Namespaces)
 		// Baseline: the cluster as it is, so findings it already has are
 		// not blamed on the PR.
-		base := engine.Evaluate(clusterInv, s.cfg.KB, target, s.now())
+		base, err := s.evaluateWithin(clusterInv, target, s.now())
+		if err != nil {
+			errJSON(w, http.StatusRequestEntityTooLarge, "?cluster="+ref+": "+err.Error())
+			return
+		}
 		baseline = &base
 		// Merge: cluster context + manifest API usage. The manifest objects
 		// are upserted into the cluster's API usage (see upsertUsage), and
@@ -219,12 +223,22 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 		// and the findings the manifests' own content produces, once
 		// suppressed, are introduced by the PR (suppressSide).
 		side := mergeManifests(&inv, manifests)
-		introduced = s.suppressSide(engine.Evaluate(side, s.cfg.KB, target, s.now()), g.rules)
+		sideRep, err := s.evaluateWithin(side, target, s.now())
+		if err != nil {
+			errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
+		introduced = s.suppressSide(sideRep, g.rules)
 	} else {
 		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	}
 
-	rep, warnings := s.suppressGate(engine.Evaluate(inv, s.cfg.KB, target, s.now()), g.rules)
+	full, err := s.evaluateWithin(inv, target, s.now())
+	if err != nil {
+		errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
+	rep, warnings := s.suppressGate(full, g.rules)
 	resp := gateResult(rep, baseline, introduced)
 	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings

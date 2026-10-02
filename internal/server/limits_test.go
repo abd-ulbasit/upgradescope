@@ -508,7 +508,7 @@ func TestGateClusterContextHeapIsBounded(t *testing.T) {
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	s := newTestServer(t, newFakeStore())
 	rec := httptest.NewRecorder()
-	serveIngest(s, rec, []byte(atSnapshotBudget(ingestHeapShapes()["ObjectRefs {}"])), false)
+	serveIngest(s, rec, []byte(storedBody("ObjectRefs {}, 100 per usage", objectRefUsages)), false)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("push: status = %d (%.300s)", rec.Code, rec.Body)
 	}

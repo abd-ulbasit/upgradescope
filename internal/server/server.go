@@ -567,6 +567,12 @@ func (h *heldResponse) Write(p []byte) (int, error) {
 	return h.body.Write(p)
 }
 
+// reset drops what was written, headers and status included, so the
+// handler can answer afresh; the body's memory goes with it.
+func (h *heldResponse) reset() {
+	*h = *newHeldResponse()
+}
+
 // Start binds Config.Listen and serves until Shutdown. It returns nil after
 // a clean Shutdown, otherwise the listen/serve error. Once Ready() is
 // closed, Addr() reports the bound address (Listen ":0" works in tests).

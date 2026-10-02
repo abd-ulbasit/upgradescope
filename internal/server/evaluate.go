@@ -108,12 +108,50 @@ func verdictOf(e store.Evaluation) engine.Verdict {
 	}
 }
 
-// evaluation runs the engine for one target and builds the row to store.
+// maxReportBytes caps a report the server evaluates, stores or serves:
+// --max-snapshot-bytes, the most a push may take. No genuine inventory's
+// report comes near it (reports name only what is flagged); the engine
+// repeats what an inventory names, so without it a 5 MB push could build
+// 41 MB reports.
+func (s *Server) maxReportBytes() int64 { return s.maxSnapshotBytes() }
+
+// reportTooLargeError is an evaluation whose report would be over
+// maxReportBytes.
+type reportTooLargeError struct {
+	target inventory.Version
+	limit  int64
+}
+
+func (e *reportTooLargeError) Error() string {
+	return fmt.Sprintf("the report for target %s would be over the %s limit for a report (--max-snapshot-bytes)", e.target, sizeString(e.limit))
+}
+
+// evaluateWithin runs the engine for one target within maxReportBytes, or
+// returns a *reportTooLargeError.
+func (s *Server) evaluateWithin(inv inventory.Inventory, target inventory.Version, now time.Time) (engine.Report, error) {
+	limit := s.maxReportBytes()
+	rep, err := engine.EvaluateWithin(inv, s.cfg.KB, target, now, int(limit))
+	if errors.Is(err, engine.ErrReportTooLarge) {
+		return engine.Report{}, &reportTooLargeError{target: target, limit: limit}
+	}
+	return rep, err
+}
+
+// evaluation runs the engine for one target and builds the row to store:
+// a report of at most maxReportBytes, encoded, or a *reportTooLargeError.
 func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, target inventory.Version, now time.Time) (store.Evaluation, engine.Report, error) {
-	rep := engine.Evaluate(inv, s.cfg.KB, target, now)
+	rep, err := s.evaluateWithin(inv, target, now)
+	if err != nil {
+		return store.Evaluation{}, engine.Report{}, err
+	}
 	repJSON, err := marshalJSON(rep)
 	if err != nil {
 		return store.Evaluation{}, engine.Report{}, fmt.Errorf("marshaling report (cluster %d, target %s): %w", cluster.ID, target, err)
+	}
+	// EvaluateWithin charges about what each finding takes; the stored
+	// bytes are what is capped.
+	if limit := s.maxReportBytes(); int64(len(repJSON)) > limit {
+		return store.Evaluation{}, engine.Report{}, &reportTooLargeError{target: target, limit: limit}
 	}
 	var blockers, warnings int
 	for _, f := range rep.Findings {
@@ -327,11 +365,19 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		if found && !s.stale(cur, now) {
 			continue
 		}
-		batch.Current[target.String()] = cur.ID // 0 when not found
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
+		var tooLarge *reportTooLargeError
+		if errors.As(err, &tooLarge) {
+			// A snapshot stored before the limit, or a newer knowledge base
+			// that flags more of it: what is stored stays, and the next
+			// pass tries again.
+			log.Printf("server: re-evaluation of cluster %d skipped for target %s: %v", cluster.ID, target, err)
+			continue
+		}
 		if err != nil {
 			return err
 		}
+		batch.Current[target.String()] = cur.ID // 0 when not found
 		if found && sameResult(cur, rep) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)

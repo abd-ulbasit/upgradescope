@@ -71,11 +71,15 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The export is at most maxReportBytes, as the report it renders is:
+	// HTML writes ' " & as five bytes and < > as four, and CSV doubles
+	// quotes, so an export can be several times its report.
+	out := &cappedWriter{w: w, left: s.maxReportBytes()}
 	if format == "csv" {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", exportFilename(c.Name, target.String(), "csv")))
 		w.WriteHeader(http.StatusOK)
-		_ = writeExportCSV(w, c.Name, eval, rep)
+		s.exportWritten(w, writeExportCSV(out, c.Name, eval, rep))
 		return
 	}
 
@@ -86,14 +90,49 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_ = writeExportHTML(w, exportData{
+	s.exportWritten(w, writeExportHTML(out, exportData{
 		Cluster:     c.Name,
 		Target:      target.String(),
 		Eval:        eval,
 		Report:      rep,
 		History:     history,
 		GeneratedAt: s.now(),
-	})
+	}))
+}
+
+// errExportTooLarge is a cappedWriter's error once it is over its limit.
+var errExportTooLarge = errors.New("export over its size limit")
+
+// cappedWriter writes to w until left bytes are written, then fails every
+// write with errExportTooLarge, writing nothing more.
+type cappedWriter struct {
+	w    io.Writer
+	left int64
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > c.left {
+		c.left = -1
+		return 0, errExportTooLarge
+	}
+	c.left -= int64(len(p))
+	return c.w.Write(p)
+}
+
+// exportWritten answers an export over its limit (err errExportTooLarge)
+// with 413 in place of what was written of it. w is the read slot's held
+// response (inReadSlot), which nothing has sent yet. Any other error is
+// the client's connection: nothing is left to answer.
+func (s *Server) exportWritten(w http.ResponseWriter, err error) {
+	if !errors.Is(err, errExportTooLarge) {
+		return
+	}
+	if h, ok := w.(*heldResponse); ok {
+		h.reset()
+	}
+	errJSON(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+		"the export would be over the %s limit for a report (--max-snapshot-bytes); "+
+			"read the JSON report, GET /api/v1/clusters/{id}/report, instead", sizeString(s.maxReportBytes())))
 }
 
 func exportFilename(cluster, target, ext string) string {

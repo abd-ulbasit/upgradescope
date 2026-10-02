@@ -33,7 +33,8 @@ func newSQLiteTestServer(t *testing.T) *Server {
 }
 
 // concurrentGets sends n GETs of path at once and returns how much the heap
-// grew, failing the test unless every one answered 200.
+// grew, failing the test unless every one answered 200, or, for an
+// export, 413 for one over the report limit (maxReportBytes).
 func concurrentGets(t *testing.T, s *Server, path string, n int) (grew uint64, size int) {
 	t.Helper()
 	codes, msgs, sizes := make([]int, n), make([]string, n), make([]int, n)
@@ -50,7 +51,8 @@ func concurrentGets(t *testing.T, s *Server, path string, n int) (grew uint64, s
 		wg.Wait()
 	})
 	for i, code := range codes {
-		if code != http.StatusOK {
+		overLimit := code == http.StatusRequestEntityTooLarge && strings.Contains(path, "/export") && strings.Contains(msgs[i], "the export would be over")
+		if code != http.StatusOK && !overLimit {
 			t.Fatalf("%s x%d: status = %d (%.300s), want 200", path, n, code, msgs[i])
 		}
 	}
@@ -60,25 +62,39 @@ func concurrentGets(t *testing.T, s *Server, path string, n int) (grew uint64, s
 // maxReevaluationHeap is what the background re-evaluation pass may add to
 // the heap: it takes clusters one at a time, and for each target loads the
 // current evaluation's report, evaluates, and holds the new report until
-// the cluster's commit.
-const maxReevaluationHeap = 100 << 20
+// the cluster's commit. Measured up to ~108 MiB, for a 20 MB snapshot whose
+// reports are each about the report limit.
+const maxReevaluationHeap = 128 << 20
 
-// storedHeapShapes are the snapshots that cost the most once stored: the
-// dearest to decode at the node budget, and those whose every API-usage
-// entry is a finding, so each stored report is as large as the snapshot
-// (~4 MB, and 17 MB with long object names), the long names also of
-// characters encoding/json escapes as six bytes (<, and U+2028, of three).
+// storedHeapShapes are the snapshots that cost the most once stored, each
+// pushed as storedBody stores it: the dearest to decode at the node
+// budget; those whose every API-usage entry is a finding, so each stored
+// report is as large as the snapshot (~4 MB, and 17 MB with long object
+// names), the long names also of characters encoding/json escapes as six
+// bytes (<, and U+2028, of three); and those whose reports the engine
+// builds larger than their push, which reach the report limit
+// (maxReportBytes) first: namespaces listed twice in each finding, teams
+// repeated in each, and Helm releases, field managers, deprecated-API
+// callers and capability gaps of characters the exports lengthen
+// (escapes), in every string an export renders that a push can carry.
+// Namespaces and team labels cannot carry them (ingest refuses those).
 func storedHeapShapes() map[string]func(int) string {
 	return map[string]func(int) string{
-		"ObjectRefs {}":          ingestHeapShapes()["ObjectRefs {}"],
-		"PSP usages":             pspUsages,
-		"PSP usages, long names": longPSPUsages,
+		"ObjectRefs {}, 100 per usage": objectRefUsages,
+		"PSP usages":                   pspUsages,
+		"PSP usages, long names":       longPSPUsages,
 		"PSP usages, long names of <": func(size int) string {
 			return pspUsagesNamed(size, strings.Repeat("<", 190))
 		},
 		"PSP usages, long names of U+2028": func(size int) string {
 			return pspUsagesNamed(size, strings.Repeat("\u2028", 63))
 		},
+		"namespace map, 100 per usage": namespaceUsages(100),
+		"teams":                        teamUsages,
+		"Helm releases of escapes":     helmReleases,
+		"managers of escapes":          managerUsages,
+		"deprecated calls of escapes":  deprecatedCalls,
+		"capability gaps of escapes":   capabilityGaps,
 	}
 }
 
@@ -98,7 +114,7 @@ func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 	for name, shape := range storedHeapShapes() {
 		t.Run(name, func(t *testing.T) {
 			s := newSQLiteTestServer(t)
-			body := []byte(atSnapshotBudget(shape))
+			body := []byte(storedBody(name, shape))
 			rec := httptest.NewRecorder()
 			grew := heapPeak(func() { serveIngest(s, rec, body, false) })
 			if rec.Code != http.StatusAccepted || grew > maxIngestDecodeHeap {
@@ -155,7 +171,7 @@ func TestFleetReadsLoadNoReport(t *testing.T) {
 	for name, shape := range storedHeapShapes() {
 		t.Run(name, func(t *testing.T) {
 			s := newSQLiteTestServer(t)
-			body := atSnapshotBudget(shape)
+			body := storedBody(name, shape)
 			rec := httptest.NewRecorder()
 			serveIngest(s, rec, []byte(body), false)
 			if rec.Code != http.StatusAccepted {

@@ -273,7 +273,8 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		rep, src, err := s.fleetTeamsReport(ctx, c, target)
-		if errors.Is(err, errCorruptInventory) || errors.Is(err, store.ErrNotFound) {
+		var tooLarge *reportTooLargeError
+		if errors.Is(err, errCorruptInventory) || errors.Is(err, store.ErrNotFound) || errors.As(err, &tooLarge) {
 			// One bad row (or a cluster deleted meanwhile) must not take
 			// the rollup down: it has nothing to contribute.
 			log.Printf("server: fleet teams: %v", err)
@@ -334,5 +335,6 @@ func (s *Server) fleetTeamsReport(ctx context.Context, c clusterState, target in
 	}
 	now := s.now()
 	src.Source, src.EvaluatedAt, src.SnapshotID = sourceWhatIf, now, snap.ID
-	return evaluateWhatIf(inv, s.cfg.KB, s.cfg.TeamMap, target, now), src, nil
+	rep, err := s.evaluateWhatIf(inv, target, now)
+	return rep, src, err
 }

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"net"
 	"net/http"
@@ -38,11 +39,21 @@ func ingestHeapShapes() map[string]func(size int) string {
 		"one string": func(size int) string {
 			return pushHead + `"x":"` + strings.Repeat("y", max(size-len(pushHead)-9, 0)) + `"}}`
 		},
-		"ObjectRefs {}":   repeat(`"apiUsage":[{"version":"v1","kind":"Pod","count":1,"objects":[`, `{}`, `]}]}}`),
-		"APIUsages {}":    repeat(`"apiUsage":[`, `{}`, `]}}`),
-		"strings":         repeat(`"unrecognizedImages":[`, `""`, `]}}`),
-		"unique map keys": uniqueNamespaces,
-		"realistic":       realisticInventory,
+		"ObjectRefs {}":                ingestObjectRefs,
+		"ObjectRefs {}, 100 per usage": objectRefUsages,
+		"APIUsages {}":                 repeat(`"apiUsage":[`, `{}`, `]}}`),
+		"strings":                      repeat(`"unrecognizedImages":[`, `""`, `]}}`),
+		"skipped strings":              repeat(`"capabilities":{"api-usage":{"available":true,"partial":true,"skipped":[`, `""`, `]}}}}`),
+		"unique map keys":              uniqueNamespaces,
+		"realistic":                    realisticInventory,
+		// The reviewer's push (#121): namespace keys of 190 apostrophes,
+		// 1,000 per entry, refused once decoded; valid names, capped at
+		// 100 listed per finding (stored); and 100 per entry, which the
+		// engine lists twice in each finding, past the report limit.
+		"namespace map of apostrophes":  namespaceApostrophes,
+		"namespace map, 1000 per usage": namespaceUsages(1000),
+		"namespace map, 100 per usage":  namespaceUsages(100),
+		"Helm releases of escapes":      helmReleases,
 		// Every object a finding, named with characters encoding/json
 		// escapes as six bytes: its three stored reports were each six
 		// times the push (+323 MiB at the node budget).
@@ -50,6 +61,41 @@ func ingestHeapShapes() map[string]func(size int) string {
 			return pspUsagesNamed(size, strings.Repeat("<", 190))
 		},
 	}
+}
+
+// ingestObjectRefs is one API usage entry of `{}` object refs to about
+// size bytes: the dearest push to decode per byte, refused once decoded
+// (a collector records at most 100 per entry).
+func ingestObjectRefs(size int) string {
+	const head, unit, end = `"apiUsage":[{"version":"v1","kind":"Pod","count":1,"objects":[`, `{}`, `]}]}}`
+	var b strings.Builder
+	b.WriteString(pushHead + head + unit)
+	for b.Len() < size-len(unit)-len(end)-1 {
+		b.WriteString("," + unit)
+	}
+	b.WriteString(end)
+	return b.String()
+}
+
+// objectRefUsages is ingestObjectRefs as a collector writes it: entries
+// of 100 `{}` object refs each, one per kind.
+func objectRefUsages(size int) string {
+	return fill(size, `"apiUsage":[`, func(i int) string {
+		return fmt.Sprintf(`{"version":"v1","kind":"Kind%d","count":100,"objects":[{}%s]}`, i, strings.Repeat(",{}", 99))
+	}, "]}}")
+}
+
+// afterDecode is the status of a push of an ingestHeapShapes shape
+// within the snapshot budget, when it is not 202: 422 for one no
+// collector writes, 413 for one whose report would be over its limit.
+var afterDecode = map[string]int{
+	"ObjectRefs {}":                http.StatusUnprocessableEntity,
+	"APIUsages {}":                 http.StatusUnprocessableEntity,
+	"strings":                      http.StatusUnprocessableEntity,
+	"namespace map of apostrophes": http.StatusUnprocessableEntity,
+	"namespace map, 100 per usage": http.StatusRequestEntityTooLarge,
+	"Helm releases of escapes":     http.StatusRequestEntityTooLarge,
+	"PSP usages, long names of <":  http.StatusRequestEntityTooLarge,
 }
 
 func uniqueNamespaces(size int) string {
@@ -107,8 +153,9 @@ func atSnapshotBudget(shape func(size int) string) string {
 }
 
 // maxIngestDecodeHeap is what decoding, evaluating and storing one
-// snapshot push may add to the heap (#121).
-const maxIngestDecodeHeap = 120 << 20
+// snapshot push may add to the heap (#121): measured up to ~119 MiB, for
+// 1,000 namespace keys per API usage entry, which decode to many maps.
+const maxIngestDecodeHeap = 128 << 20
 
 // serveIngest runs one snapshot push straight through the handler.
 func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {
@@ -124,8 +171,10 @@ func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {
 // of `{}` ObjectRefs decoded to ~2.6 GB of heap, from any per-cluster
 // agent token (#121). Each shape at the size cap and at the largest size
 // within the node budget, plain and gzipped, is refused with 413 before
-// it is decoded, or decoded within maxIngestDecodeHeap; within the budget
-// everything is accepted, and the body budget is given back either way.
+// it is decoded, or decoded, checked and evaluated within
+// maxIngestDecodeHeap; within the budget it is accepted unless no
+// collector writes it (422) or its report would be over the report
+// limit (413, afterDecode), and the body budget is given back either way.
 func TestIngestDecodeHeapIsBounded(t *testing.T) {
 	if testing.Short() || raceEnabled {
 		t.Skip("decodes several 20 MiB snapshots; heap figures under the race detector mean nothing")
@@ -148,8 +197,12 @@ func TestIngestDecodeHeapIsBounded(t *testing.T) {
 					s := newTestServer(t, newFakeStore())
 					rec := httptest.NewRecorder()
 					grew := heapPeak(func() { serveIngest(s, rec, payload, gz) })
-					if refused := rec.Code == http.StatusRequestEntityTooLarge; decode == refused || !refused && rec.Code != http.StatusAccepted {
-						t.Fatalf("%d bytes, gzip %v: status = %d (%.300s)", len(body), gz, rec.Code, rec.Body)
+					want := http.StatusRequestEntityTooLarge
+					if decode {
+						want = cmp.Or(afterDecode[name], http.StatusAccepted)
+					}
+					if rec.Code != want {
+						t.Fatalf("%d bytes, gzip %v: status = %d (%.300s), want %d", len(body), gz, rec.Code, rec.Body, want)
 					}
 					if grew > maxIngestDecodeHeap {
 						t.Fatalf("%d bytes, gzip %v: status %d; the heap grew %d MiB, want at most %d MiB",

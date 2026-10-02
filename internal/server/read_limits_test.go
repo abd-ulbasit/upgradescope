@@ -11,9 +11,10 @@ import (
 )
 
 // pspUsages is a push of ~size bytes whose every API-usage entry is a
-// PodSecurityPolicy (removed in testKB's 1.35) in its own namespace, with
-// the most objects a usage lists: one finding per entry, so the stored
-// report is about as large as the inventory.
+// finding (usageKind: a PodSecurityPolicy, removed in testKB's 1.35, then
+// unknown kinds of its group) in its own namespace, with the most objects
+// a usage lists: one finding per entry, so the stored report is about as
+// large as the inventory.
 func pspUsages(size int) string { return pspUsagesNamed(size, "") }
 
 // longPSPUsages is pspUsages with 200-character object names: the same
@@ -28,7 +29,7 @@ func pspUsagesNamed(size int, suffix string) string {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		fmt.Fprintf(&b, `{"group":"policy","version":"v1beta1","kind":"PodSecurityPolicy","count":100,"namespaces":{"team-%d":100},"objects":[`, i)
+		fmt.Fprintf(&b, `{"group":"policy","version":"v1beta1","kind":%q,"count":100,"namespaces":{"team-%d":100},"objects":[`, usageKind(i), i)
 		for j := range 100 {
 			if j > 0 {
 				b.WriteString(",")
@@ -43,13 +44,13 @@ func pspUsagesNamed(size int, suffix string) string {
 
 // maxReadHeap is what concurrent reads of one cluster may add to the
 // heap while their clients take what they are sent, as the recorders here
-// do at once: one read in the slot (up to ~90 MiB on SQLite at the
-// snapshot node budget: a stored report as large as a 17 MB snapshot,
-// read through a driver that copies both) and what the one before it
-// left (measured up to 90 MiB in all, 10 at once). Clients that do not
-// read add at most the held-response budget, over real sockets
-// (TestUnreadResponsesAreBounded).
-const maxReadHeap = 128 << 20
+// do at once: one read in the slot (on SQLite, which copies what it
+// reads, a stored report of up to the report limit, ~20.9 MB, and the
+// snapshot it came from; the dearest is the HTML export of a report of
+// 547,000 team names, which decodes to many small strings) and what the
+// one before it left. Clients that do not read add at most the
+// held-response budget, over real sockets (TestUnreadResponsesAreBounded).
+const maxReadHeap = 160 << 20
 
 // The read API decoded a cluster's stored inventory on every request, with
 // no limit on how many at once: after one push of 370 KB of `{}` object
@@ -57,9 +58,10 @@ const maxReadHeap = 128 << 20
 // cluster grew the heap ~400 MiB, so ~13 exceeded the chart's 512Mi.
 // Every read that loads a snapshot now runs in the read slot, and only a
 // what-if decodes the whole inventory: 10 at once of each, on the SQLite
-// store, against the dearest snapshot to decode and against two whose
-// stored reports are as large as their inventories, stay within
-// maxReadHeap and all succeed.
+// store, against every storedHeapShapes snapshot (the dearest to decode,
+// and those whose reports are as large as their inventories or about the
+// report limit, with strings an export lengthens), stay within
+// maxReadHeap and all succeed, an export over the report limit with 413.
 func TestReadHeapIsBounded(t *testing.T) {
 	if testing.Short() || raceEnabled {
 		t.Skip("decodes snapshots at the node budget; heap figures under the race detector mean nothing")
@@ -79,7 +81,7 @@ func TestReadHeapIsBounded(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := newSQLiteTestServer(t)
 			s.readQueueTimeout = 5 * time.Minute // the reads run one at a time
-			body := atSnapshotBudget(shape)
+			body := storedBody(name, shape)
 			rec := httptest.NewRecorder()
 			serveIngest(s, rec, []byte(body), false)
 			if rec.Code != http.StatusAccepted {

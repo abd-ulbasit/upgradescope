@@ -62,14 +62,15 @@ func liveHeap() uint64 {
 // window holds ~100 of them. Responses held past the slot now share a
 // budget; one that does not fit is sent in the slot, which a client that
 // does not read gives up after a short write deadline. Over real sockets
-// whose clients never read, the live heap grows by no more than that
-// budget, and it is given back once the clients are gone.
+// whose clients never read the largest report a push stores (~20.9 MB,
+// pushedLargestReport), the live heap grows by no more than that budget,
+// and it is given back once the clients are gone.
 func TestUnreadResponsesAreBounded(t *testing.T) {
 	if testing.Short() || raceEnabled {
 		t.Skip("stores a snapshot at the node budget; heap figures under the race detector mean nothing")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
-	s := pushedLongPSPUsages(t)
+	s := pushedLargestReport(t)
 	s.readQueueTimeout = 5 * time.Minute // every request is served, none is turned away
 	for _, n := range []int{8, 20} {
 		checkUnreadBounded(t, s, s.readSlots, "GET /api/v1/clusters/1/report HTTP/1.1\r\nHost: upgradescope\r\n\r\n", n, maxReadHeap)
@@ -131,14 +132,15 @@ func TestUnreadGateResponsesAreBounded(t *testing.T) {
 	checkUnreadBounded(t, s, s.gateSlots, raw, 10, maxGateDecodeHeap)
 }
 
-// pushedLongPSPUsages is a SQLite server that holds one push of
-// longPSPUsages at the snapshot node budget: its report is 17.5 MB.
-func pushedLongPSPUsages(t *testing.T) *Server {
+// pushedLargestReport is a SQLite server that holds one push of
+// namespaceUsages(100) as storedBody stores it: its report is about the
+// report limit (maxReportBytes), ~20.9 MB.
+func pushedLargestReport(t *testing.T) *Server {
 	t.Helper()
 	s := newSQLiteTestServer(t)
 	s.slotWriteTimeout = time.Second
 	rec := httptest.NewRecorder()
-	serveIngest(s, rec, []byte(atSnapshotBudget(longPSPUsages)), false)
+	serveIngest(s, rec, []byte(storedBody("namespace map, 100 per usage", namespaceUsages(100))), false)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("push: status = %d (%.300s)", rec.Code, rec.Body)
 	}
