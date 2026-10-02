@@ -137,8 +137,22 @@ func newServeCmd() *cobra.Command {
 		secrets []*secretFlag
 	)
 	cmd := &cobra.Command{
-		Use:           "serve",
-		Short:         "Run the upgradescope server: snapshot ingest, REST API, history, notifications",
+		Use:   "serve",
+		Short: "Run the upgradescope server: snapshot ingest, REST API, history, notifications",
+		Long: `Run the upgradescope server. It accepts snapshots that agents push,
+evaluates them against every target, keeps the history, serves the REST API
+and the dashboard at /, and sends Slack or webhook notifications when a
+cluster's readiness changes.
+
+It listens on loopback by default. On any other address, the read API needs
+--read-token, or an explicit --allow-anonymous-read.`,
+		Example: `  # Local dashboard at http://127.0.0.1:8080/, SQLite in ./upgradescope.db
+  upgradescope serve
+
+  # Fleet server: all interfaces, Postgres, tokens from mounted Secrets
+  upgradescope serve --listen :8080 \
+    --db-url-file /secrets/db-url --read-token-file /secrets/read-token \
+    --targets 1.37,1.38`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

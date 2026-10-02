@@ -157,7 +157,8 @@ chmod +x "$work/stub-curl/curl" "$work/stub-go/go"
 release() {
   local d="$work/rel/$1"
   mkdir -p "$d" "$work/pkg"
-  printf '#!/bin/sh\necho "upgradescope version %s"\n' "$1" >"$work/pkg/upgradescope"
+  # --version prints a block since v0.2.0; the log keeps its first line.
+  printf '#!/bin/sh\nprintf "upgradescope %s\\n  commit:        0000000\\n"\n' "$1" >"$work/pkg/upgradescope"
   chmod +x "$work/pkg/upgradescope"
   [ "${3:-}" = no-archive ] || tar -czf "$d/$asset" -C "$work/pkg" upgradescope
   case $2 in
@@ -237,6 +238,8 @@ expect "a directory as write-baseline is rejected" 1 "write-baseline 'action/tes
 
 run install "$work/stub-curl:"
 expect "release install verifies the checksum" 0 "sha256 OK: $asset"
+has "release install logs the version on one line" "$work/out" "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+hasnt "release install logs only the first --version line" "$work/out" "commit:"
 has "release install puts the binary on GITHUB_PATH" "$rt/path" "$tmp/upgradescope-bin"
 [ -x "$tmp/upgradescope-bin/upgradescope" ] && ok "release install extracts the binary" ||
   fail "release install extracts the binary" "$work/out"
@@ -267,7 +270,8 @@ expect "unresolvable latest falls back to go install" 0 "falling back to go inst
 has "go install builds @latest" "$work/calls" "cmd/upgradescope@latest"
 
 run install "$work/real:$work/stub-curl:" INPUT_VERSION=preinstalled
-expect "preinstalled uses the binary on PATH" 0 "using $work/real/upgradescope"
+expect "preinstalled uses the binary on PATH" 0 "using $work/real/upgradescope: upgradescope "
+hasnt "preinstalled logs only the first --version line" "$work/out" "registry date:"
 hasnt "preinstalled downloads nothing" "$work/calls" curl
 run install "$work/stub-curl:" INPUT_VERSION=preinstalled
 expect "preinstalled without a binary fails" 1 "no upgradescope on PATH"

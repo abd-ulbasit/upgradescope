@@ -1,12 +1,21 @@
-# syntax=docker/dockerfile:1
 # Release image, built by GoReleaser (dockers_v2 in .goreleaser.yml) for
 # linux/amd64 and linux/arm64. GoReleaser has already built and stamped the
 # binaries (dashboard embedded) and lays them out in the build context as
 # $TARGETPLATFORM/upgradescope, so this image only copies one in — the
 # shipped image runs exactly the binary in the release archive.
-# OCI labels (source, revision, version, licenses) are set by GoReleaser.
+# OCI labels (title, description, url, documentation, source, vendor,
+# revision, version, created, licenses) are set by GoReleaser, which also
+# passes SOURCE_DATE_EPOCH so a rebuild of the same commit has the same
+# per-platform digest.
+#
+# No `# syntax=` line: the builder's own Dockerfile frontend parses this
+# file, so nothing is pulled unpinned (check-toolchain rejects an undigested
+# one).
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG TARGETPLATFORM
+# The license and notices the binary's dependencies require to travel with
+# it (GoReleaser's extra_files), at the documented path.
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES /licenses/
 COPY $TARGETPLATFORM/upgradescope /upgradescope
 USER 65532:65532
 ENTRYPOINT ["/upgradescope"]

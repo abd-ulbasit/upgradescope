@@ -66,7 +66,7 @@ go_install() {
 install() {
   if [ "$INPUT_VERSION" = preinstalled ]; then
     command -v upgradescope >/dev/null || die "version is preinstalled, but there is no upgradescope on PATH"
-    echo "using $(command -v upgradescope): $(upgradescope --version)"
+    echo "using $(command -v upgradescope): $(upgradescope --version | sed -n 1p)"
     return
   fi
   case "$(uname -s)" in
@@ -123,7 +123,7 @@ install() {
   rm -rf "$dl"
   chmod +x "$bin_dir/upgradescope"
   echo "$bin_dir" >>"$GITHUB_PATH"
-  echo "installed $("$bin_dir/upgradescope" --version) from $releases/download/$tag/$asset"
+  echo "installed $("$bin_dir/upgradescope" --version | sed -n 1p) from $releases/download/$tag/$asset"
 }
 
 # annotations: one annotation per blocker or warning finding, at its first

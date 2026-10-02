@@ -70,10 +70,44 @@ lint:
 vuln:
 	./hack/vulncheck.sh
 
+# The same gate on the binary users download: the latest release's
+# linux/amd64 archive, sha256- (and, with cosign, signature-) verified
+# (.github/workflows/vuln-latest-release.yml runs it daily). Needs gh.
+.PHONY: vuln-latest
+vuln-latest:
+	./hack/vuln-latest-release.sh
+
 # Offline tests for the gate itself: a stub scanner drives hack/vulncheck.sh
 # through its pass, fail and fail-closed paths.
 vuln-test:
 	./hack/vulncheck_test.sh
+
+# THIRD_PARTY_NOTICES: the license text of every Go module the binary links
+# (go-licenses, pinned in the script) and every npm package in the dashboard
+# bundle. `make notices` rewrites it (commit the result after a dependency
+# change); `make notices-check` (CI's notices job) runs the script's offline
+# tests, then fails on a stale file or on a dependency whose license is
+# missing or not on the allowlist (GPL, AGPL, SSPL and unknown never are).
+# Needs Go, jq, network, and Node when web/node_modules is incomplete.
+.PHONY: notices notices-check
+notices:
+	./hack/notices.sh
+notices-check:
+	./hack/notices_test.sh
+	./hack/notices.sh --check
+
+# The README's `go install` path, from this checkout (CI's build job): the
+# binary reports the module version and commit (the tag on a tagged commit)
+# and serves the dashboard with every asset. Needs Go, git, jq, curl.
+.PHONY: go-install-check
+go-install-check:
+	./hack/go-install-check.sh
+
+# Shell completions and man pages, rendered from the command tree into
+# packaging/generated (gitignored); GoReleaser runs the same before packaging.
+.PHONY: docs
+docs:
+	go run ./tools/gen-docs -out packaging/generated
 
 # Asserts the Dockerfile's golang base image matches go.mod's `go` directive,
 # that GoReleaser is pinned to one version here and in release.yml, and that
@@ -86,9 +120,10 @@ check-toolchain:
 	./hack/check-toolchain.sh
 
 # Validates .goreleaser.yml with the GoReleaser release.yml pins, builds every
-# release archive (and per-arch image) into dist/ without publishing, checks
-# the archive names against action/run.sh, and that the binary serves the
-# dashboard. No Docker engine? `make release-check GORELEASER_SKIP=publish,sign,sbom,docker`.
+# release archive, deb/rpm/apk package (and per-arch image) into dist/
+# without publishing, checks the archive names against action/run.sh, that
+# archives, packages and images carry the licenses, completions and man
+# pages, and that the binary is stamped and serves the dashboard. No Docker engine? `make release-check GORELEASER_SKIP=publish,sign,sbom,docker`.
 #
 # `go run` builds GoReleaser with the repository's toolchain, so the pin must
 # not need a newer Go than go.mod: v2.17.1 needs Go 1.26.5; v2.18.0 and later
@@ -97,6 +132,13 @@ GORELEASER_VERSION ?= v2.17.1
 .PHONY: release-check
 release-check:
 	GORELEASER_VERSION=$(GORELEASER_VERSION) ./hack/release-check.sh
+
+# Builds the snapshot of HEAD twice from fresh clones and fails unless the
+# checksums (archives, packages) match; with GORELEASER_SKIP=publish,sign,sbom
+# (Docker needed) the per-platform image IDs must match too.
+.PHONY: release-repro
+release-repro:
+	GORELEASER_VERSION=$(GORELEASER_VERSION) ./hack/test-release-repro.sh
 
 # The Action's offline self-test (CI's action job): both action.yml files
 # keep inputs out of run: scripts and stay the same action; action/run.sh
@@ -188,6 +230,13 @@ hack-test:
 	./hack/e2e_test.sh
 	./hack/ci-concurrency_test.sh
 	./hack/ci-ok_test.sh
+	./hack/notices_test.sh
+	./hack/check-changelog_test.sh
+	./hack/chart-release-annotations_test.sh
+	./hack/vuln-latest-release_test.sh
+	./hack/vuln-latest-release-workflow_test.sh
+	./hack/release-artifacthub-workflow_test.sh
+	./packaging/homebrew-tap/script/render-formula_test.sh
 
 .PHONY: demo-up demo-down
 demo-up:

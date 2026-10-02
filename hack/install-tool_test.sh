@@ -39,6 +39,32 @@ expect "failed download fails" 1 "could not download kubectl" kubectl \
   UPGRADESCOPE_TOOL_URL="file://$work/does-not-exist"
 expect "tarball checksum mismatch fails" 1 "sha256 mismatch for kubeconform" kubeconform \
   UPGRADESCOPE_TOOL_URL="file://$work/junk"
+expect "oras tarball checksum mismatch fails" 1 "sha256 mismatch for oras" oras \
+  UPGRADESCOPE_TOOL_URL="file://$work/junk"
+
+
+# The printed path must work from any directory: release.yml cds into
+# packaging/artifacthub before running the oras it installed. A relative
+# TOOLS_BIN (the default is bin/tools) is relative to the repository root,
+# so the reused install below is printed as an absolute path under it.
+rel="bin/install-tool-test.$$"
+trap 'rm -rf "$work" "$rel"' EXIT
+mkdir -p "$rel"
+printf '#!/bin/sh\necho stub-oras\n' >"$rel/oras"
+chmod +x "$rel/oras"
+version=$(sed -n 's/^ORAS_VERSION=\([^ ]*\).*/\1/p' hack/install-tool.sh)
+sha=$(sed -n 's|^ *"oras linux/amd64") echo \([0-9a-f]*\) ;;|\1|p' hack/install-tool.sh)
+echo "$version $sha" >"$rel/.oras.pin"
+printed=$(cd "$work" && TOOLS_BIN="$rel" UPGRADESCOPE_TOOL_PLATFORM=linux/amd64 "$OLDPWD/hack/install-tool.sh" oras 2>/dev/null || true)
+case "$printed" in
+  "$PWD/$rel/oras") echo "ok   prints an absolute path, usable from any directory" | tee -a "$work/results" ;;
+  *) echo "FAIL prints '$printed' (want $PWD/$rel/oras)" | tee -a "$work/results" >&2 ;;
+esac
+if [ -n "$printed" ] && [ "$(cd "$work" && "$printed" 2>/dev/null)" = stub-oras ]; then
+  echo "ok   the printed path runs from another directory" | tee -a "$work/results"
+else
+  echo "FAIL the printed path '$printed' does not run from another directory" | tee -a "$work/results" >&2
+fi
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)

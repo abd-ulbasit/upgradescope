@@ -1,0 +1,18 @@
+# Artifact Hub repository metadata for the OCI Helm chart
+# oci://ghcr.io/abd-ulbasit/charts/upgradescope
+# (https://artifacthub.io/docs/topics/repositories/helm-charts/#oci-support).
+#
+# release.yml's chart job pushes this file with oras to
+# ghcr.io/abd-ulbasit/charts/upgradescope:artifacthub.io, the tag Artifact
+# Hub reads repository metadata from. It is not part of the chart package.
+# Registering the repository on artifacthub.io is a one-time manual step:
+# see packaging/README.md.
+
+# Set after registration: Artifact Hub shows the repository ID on the
+# repository's settings page. With it, Artifact Hub marks the repository a
+# Verified Publisher.
+# repositoryID: 00000000-0000-0000-0000-000000000000
+
+owners:
+  - name: Abdul Basit
+    email: basit@basit.engineer

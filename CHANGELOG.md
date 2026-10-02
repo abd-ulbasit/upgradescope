@@ -13,6 +13,137 @@ only through a new release.
 
 ## [Unreleased]
 
+The first release built, signed and published by CI. It changes a lot
+of scanning behaviour and gating, so read **Changed** before you upgrade
+a CI gate.
+
+### Added
+
+- A readiness verdict: `ready`, `blocked` or `unknown`. The verdict is
+  shown in every output format, in the `ClusterReadiness` status and as
+  its `READY` column. `unknown` means that no blocker was found but a
+  required check could not run, so a blocker may have been missed.
+- Suppression with an auditable reason. Ignore rules in
+  `.upgradescope.yaml` (`scan --config`), the `upgradescope.dev/ignore`
+  and `upgradescope.dev/ignore-reason` object annotations, and
+  `ClusterReadiness` `spec.ignore` accept findings. Rules can match by key
+  or category and by namespace, name or file globs, and can expire.
+- Baselines: `scan --baseline` fails the gate only on findings that are new
+  since an earlier JSON report, and `--write-baseline` writes one.
+- `scan --output markdown`, for CI step summaries.
+- The table output lists the affected objects, the fix and its citations.
+  The JSON report carries `schemaVersion`, `toolVersion` and, for
+  `--files` scans, `filesBase`.
+- Helm charts are judged by their `kubeVersion` constraint and by the APIs
+  in the stored release manifests. Releases stored by Helm's configmaps
+  driver are read too.
+- Node container runtimes (containerd) are judged against the registry.
+- Add-on end of life is judged per release line (Istio 1.24, not "Istio"),
+  keyed on the installed app version. Registry schema v2 adds
+  `tools/eol-sync`-generated cycles, path-suffix image matchers and Helm
+  `appVersion` matching.
+- The knowledge base covers Kubernetes 1.37 (`k8s.io/api` v0.37.1), and the
+  weekly refresh regenerates it without hand edits.
+- Agent: `--targets` reconciles `spec.targets`; `--manage-crd` controls
+  whether the agent touches the CRD; `/healthz`, `/readyz` and Prometheus
+  `/metrics`; a `Ready` condition, `observedGeneration` and a
+  `LastEvaluated` column on `ClusterReadiness`.
+- Server: Prometheus `/metrics` and `/readyz`; HTTPS with `--tls-cert-file`
+  and `--tls-key-file`; `/api/v1/gate` takes `fail-on`, returns a verdict
+  header and accepts a cluster baseline; every secret flag has an
+  environment-variable and a `-file` form; `tokens list`,
+  `tokens revoke --id`, and `clusters delete`.
+- Chart: a values schema, production settings (resources, probes, security
+  contexts that work on OpenShift, pull secrets, scheduling), a
+  ServiceMonitor, a PrometheusRule and a Grafana dashboard. The ingest
+  token is generated, and every secret reaches the pods through
+  `secretKeyRef`.
+- GitHub Action: a root `action.yml` for the Marketplace. Inputs are passed
+  through the environment, the install is checksum-verified, and the
+  Action writes outputs (verdict, score, counts, report paths) and a step
+  summary. It takes `config`, `baseline` and `write-baseline` inputs.
+- `upgradescope version` (and `--version`) prints the commit, the build
+  date, the Go version, the knowledge base version and horizon, and the
+  registry date. `--output json` prints the same as JSON.
+- Every command's `--help` has examples. A mistyped flag points to
+  `--help`.
+- Packaging: deb, rpm and apk packages. Bash, zsh, fish and PowerShell
+  completions and man pages in every archive and package. A Homebrew tap
+  (`brew install abd-ulbasit/tap/upgradescope`), a krew plugin manifest,
+  and Artifact Hub metadata for the chart.
+- `LICENSE`, `NOTICE` and a generated `THIRD_PARTY_NOTICES` file (Go
+  modules and the dashboard's npm packages) ship in every archive and
+  package, and in the image under `/licenses/`. A CI license check fails
+  on a dependency with an unknown or disallowed license.
+- `NOTICE` and `registry/DATA-LICENSE.md` give endoflife.date and the
+  Kubernetes sources their attribution. The repository adds CONTRIBUTING,
+  SECURITY, an architecture guide and an observability guide.
+
+### Changed
+
+- **The gate fails closed.** Under `--fail-on blocker|warning` (the
+  default), a scan with verdict `unknown` exits 2. A required check that
+  could not run gives `unknown`: for example, RBAC denied, the cluster was
+  unreadable, or the target is beyond the knowledge base. v0.1.1 reported
+  such scans as `ready: true` and exited 0. Pass `--allow-incomplete` to
+  gate on findings alone.
+- A scan of a cluster that could not be read at all exits 1, and so does a
+  `--files` scan that found no Kubernetes objects. Neither reports
+  100/100 any more.
+- Deprecated-API detection asks who writes the deprecated API
+  (`managedFields`), not whether the apiserver still serves it. This
+  removes the false removed-API blockers on clean clusters (#3). One
+  removed API is scored once, with its caller evidence attached.
+- SARIF results carry file and line locations, so GitHub code scanning
+  accepts them. Findings without a file are reported as notifications.
+- Kubernetes versions with a vendor suffix (EKS, GKE, k3s, RKE2,
+  OpenShift) are parsed. The skew policy now enforces the kube-proxy and
+  the kubelet upper bound after the upgrade.
+- The knowledge base version label is derived from the embedded data:
+  `k8s.io/api vX; lifecycle <digest>; registry <digest>`.
+- Server: open read access on a non-loopback `--listen` address is refused
+  unless you pass `--allow-anonymous-read`. Connections have read, write
+  and idle timeouts. Snapshot and gate bodies are capped
+  (`--max-snapshot-bytes`, `--max-gate-bytes`). Responses carry CSP and
+  other security headers. A push whose cluster ID differs from the ID
+  that first registered the cluster name is refused with 409. Stored
+  verdicts are re-evaluated, and reads come from the latest snapshot.
+  Ingest and notifications are written atomically through an outbox.
+- Chart: the agent's ClusterRole names every rule; it has no wildcards.
+  The chart no longer renders the `ClusterReadiness` object, because the
+  agent owns it. The image defaults to the chart's `appVersion`, and the
+  published chart pins it by digest (`image.digest`).
+- `go install …@vX.Y.Z` binaries report their real version and serve the
+  dashboard, because the built dashboard is committed.
+- `go.mod` requires Go 1.26.8.
+- Release notes keep breaking changes in housekeeping commits
+  (`chore!:`, `docs!:`).
+
+### Fixed
+
+- Istio's end-of-life date. Pre-1.0 ingress-nginx images, and the
+  ingress-nginx builds of AKS and RKE2, are now detected. GKE and AKS
+  builds of an add-on are no longer judged by upstream's lifecycle.
+- Remediation follows the replacement chain to an API that is still
+  served.
+- `--files` skips non-manifest YAML and unrendered chart templates,
+  expands `List` objects, and records object locations.
+- The agent evaluates a repeated target once, and a stop in the middle of
+  a tick is no longer counted as a failure.
+
+### Security
+
+- Built with Go 1.26.8 and current dependencies. govulncheck finds 22
+  reachable vulnerabilities in the v0.1.1 binary and none in this build.
+  A daily workflow now scans the latest published release, not only
+  `main`.
+- Releases come from CI only. Archives, packages and images are
+  reproducible from the tag. `checksums.txt` and every image (the index
+  and each platform) carry keyless cosign signatures, and there are SBOMs,
+  SLSA provenance and build attestations. A ruleset makes release tags
+  immutable.
+- An OpenSSF Scorecard workflow publishes its results.
+
 ## [0.1.1] - 2026-07-27
 
 A packaging release. Scanning, scoring, the agent, the server and the

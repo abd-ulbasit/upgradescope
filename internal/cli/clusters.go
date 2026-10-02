@@ -112,8 +112,12 @@ func (c *clusterTarget) open(cmd *cobra.Command) (clusterAdmin, error) {
 func newClustersListCmd() *cobra.Command {
 	var target clusterTarget
 	cmd := &cobra.Command{
-		Use:           "list",
-		Short:         "List clusters: id, name, cluster UID, last push, and (from a server) whether it is stale",
+		Use:   "list",
+		Short: "List clusters: id, name, UID, last push and staleness",
+		Long: "List the clusters a server (or its database) knows: id, name, cluster UID, the last push\n" +
+			"and, when asked through a server, whether the cluster is stale (no push within --stale-after).",
+		Example: "  upgradescope clusters list --server https://upgradescope.example.com\n" +
+			"  upgradescope clusters list --db upgradescope.db",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -159,6 +163,8 @@ func newClustersDeleteCmd() *cobra.Command {
 			"Delete the old record and the next push registers the new one; an agent that used a\n" +
 			"per-cluster token needs a new one ('upgradescope tokens create').\n" +
 			"An agent that keeps pushing under the name registers it again.",
+		Example: "  upgradescope clusters delete prod-eu --server https://upgradescope.example.com\n" +
+			"  upgradescope clusters delete prod-eu --db upgradescope.db",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -193,6 +199,7 @@ func newClustersRenameCmd() *cobra.Command {
 			"The agent sends its own --cluster-name with every push, so change that too (chart value\n" +
 			"agent.clusterName). Until then its pushes are refused when it uses a per-cluster token\n" +
 			"(now bound to the new name), or register the old name again when it uses the shared one.",
+		Example:       "  upgradescope clusters rename prod-eu prod-eu-1 --server https://upgradescope.example.com",
 		Args:          cobra.ExactArgs(2),
 		SilenceUsage:  true,
 		SilenceErrors: true,

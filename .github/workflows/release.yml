@@ -3,27 +3,44 @@ name: release
 # A release is a pushed semver tag (v0.2.0, or v0.2.0-rc.1 for a
 # pre-release), cut from CI and never from a laptop. In order:
 #
-#   preflight  the tag is vX.Y.Z[-pre] and deploy/chart/Chart.yaml's
+#   preflight  the tag is vX.Y.Z[-pre], deploy/chart/Chart.yaml's
 #              appVersion is that tag (it is the image tag the chart pulls by
-#              default, so a chart that names another release is refused);
+#              default, so a chart that names another release is refused),
+#              and CHANGELOG.md has entries for it (hack/check-changelog.sh);
 #   ci         the whole ci.yml suite (workflow_call) at the tagged commit:
 #              unit/race, vuln gate, web, chart, images, Postgres, kind e2e,
 #              release-check. Nothing below runs unless it passed;
 #   goreleaser linux/darwin/windows amd64+arm64 archives (dashboard
-#              embedded), checksums.txt, one SPDX SBOM per archive, a keyless
-#              cosign bundle, and a GitHub build-provenance attestation over
-#              every archive; the multi-arch image
-#              ghcr.io/abd-ulbasit/upgradescope:{X.Y.Z,vX.Y.Z,latest} from
-#              Dockerfile.release, with an SBOM and max-mode provenance
-#              attached and a cosign signature;
+#              embedded, with completions, man pages and license notices),
+#              deb/rpm/apk packages, checksums.txt, one SPDX SBOM per
+#              archive, a keyless cosign bundle, and a GitHub
+#              build-provenance attestation over every archive; the
+#              multi-arch image ghcr.io/abd-ulbasit/upgradescope:{X.Y.Z,
+#              vX.Y.Z,latest} from Dockerfile.release, with an SBOM and
+#              max-mode provenance attached and a cosign signature on the
+#              index and on every platform image. All of it reproducible
+#              from the tag (make release-repro);
 #   chart      oci://ghcr.io/abd-ulbasit/charts/upgradescope, version X.Y.Z /
-#              appVersion vX.Y.Z, signed;
+#              appVersion vX.Y.Z, its image pinned by the digest goreleaser
+#              just pushed and Artifact Hub annotations stamped
+#              (hack/chart-release-annotations.sh), signed; plus the
+#              Artifact Hub repository metadata (artifacthub.io tag);
 #   verify     anonymously, on a fresh kind cluster: the image pulls for both
-#              arches and verifies, the published chart installs and runs it;
+#              arches, every platform image verifies and carries /licenses,
+#              the published chart installs and runs the pinned image;
 #   major-tag  for a stable tag only, moves the floating major tag (v0) that
 #              `uses: abd-ulbasit/upgradescope@v0` (and .../action@v0)
 #              resolves to; action/README.md tells users to pin @vX.Y.Z or
-#              a SHA instead when they need a reproducible gate.
+#              a SHA instead when they need a reproducible gate;
+#   krew       for a stable tag only, once the plugin is in krew-index
+#              (repository variable KREW_PLUGIN_IN_INDEX=true): the version
+#              bump PR to kubernetes-sigs/krew-index, rendered from .krew.yaml.
+#
+# The Homebrew tap (abd-ulbasit/homebrew-tap) is not pushed from here: it
+# pulls each stable release on a schedule and verifies checksums.txt against
+# this workflow's signature (packaging/homebrew-tap). Tags v* are protected
+# by .github/rulesets/release-tags.json; only this workflow's major-tag job
+# may move v0.
 #
 # Dry run: ci.yml's release-check job (make release-check) builds the same
 # snapshot on any PR that touches the release inputs, or on workflow_dispatch.
@@ -75,6 +92,8 @@ jobs:
             exit 1
           fi
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: CHANGELOG.md says what this release changes
+        run: hack/check-changelog.sh "$GITHUB_REF_NAME"
 
   ci:
     needs: preflight
@@ -156,9 +175,25 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - name: Package the chart (version/appVersion = the tag) and check it
+      # The image package is private until made public after the first
+      # release; reading its digest needs the token.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package the chart (version/appVersion = the tag, image pinned by digest) and check it
         run: |
-          helm package deploy/chart --version "$VERSION" --app-version "$GITHUB_REF_NAME" -d dist/chart
+          # The multi-arch index goreleaser pushed for this tag.
+          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
+          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$GITHUB_REF_NAME"; exit 1 ;; esac
+          echo "$IMAGE:$GITHUB_REF_NAME@$digest" >> "$GITHUB_STEP_SUMMARY"
+          # Stamp a copy: image.digest, the Artifact Hub image, prerelease
+          # and changes (from CHANGELOG.md).
+          cp -R deploy/chart "$RUNNER_TEMP/upgradescope"
+          hack/chart-release-annotations.sh "$RUNNER_TEMP/upgradescope" "$GITHUB_REF_NAME" "$digest"
+          helm lint --strict "$RUNNER_TEMP/upgradescope"
+          helm package "$RUNNER_TEMP/upgradescope" --version "$VERSION" --app-version "$GITHUB_REF_NAME" -d dist/chart
           pkg="dist/chart/upgradescope-$VERSION.tgz"
           got_version="$(helm show chart "$pkg" | sed -n 's/^version: *//p')"
           got_app="$(helm show chart "$pkg" | sed -n 's/^appVersion: *//p' | tr -d '"')"
@@ -166,8 +201,8 @@ jobs:
             echo "::error::packaged chart has version=$got_version appVersion=$got_app, want $VERSION / $GITHUB_REF_NAME"
             exit 1
           fi
-          helm template upgradescope "$pkg" | grep -F "image: \"$IMAGE:$GITHUB_REF_NAME\"" >/dev/null \
-            || { echo "::error::packaged chart does not default to $IMAGE:$GITHUB_REF_NAME"; exit 1; }
+          helm template upgradescope "$pkg" | grep -F "image: \"$IMAGE:$GITHUB_REF_NAME@$digest\"" >/dev/null \
+            || { echo "::error::packaged chart does not default to $IMAGE:$GITHUB_REF_NAME@$digest"; exit 1; }
       - name: Push and sign the chart
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -177,6 +212,21 @@ jobs:
           digest="$(sed -n 's/^Digest: *//p' "$RUNNER_TEMP/push.log")"
           [ -n "$digest" ] || { echo "::error::no digest in helm push output"; exit 1; }
           cosign sign --yes "${CHART_REPO#oci://}/upgradescope@$digest"
+      # Artifact Hub reads repository metadata (owners, repository ID) from
+      # the artifacthub.io tag of the chart's OCI repository. Registering the
+      # repository on artifacthub.io is a one-time manual step
+      # (packaging/README.md). hack/release-artifacthub-workflow_test.sh
+      # (make hack-test) runs this step offline against a stub oras.
+      - name: Push the Artifact Hub repository metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          oras="$(hack/install-tool.sh oras)" # pinned, sha256-verified
+          printf '%s' "$GH_TOKEN" | "$oras" login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cd packaging/artifacthub
+          "$oras" push "${CHART_REPO#oci://}/upgradescope:artifacthub.io" \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
 
   # What a user does after reading the release notes, with no credentials.
   # GHCR packages are private on first push: if this fails on the first
@@ -210,9 +260,25 @@ jobs:
             case "$got" in '' | null | '{}') echo "::error::$IMAGE:$VERSION carries no $field attestation"; exit 1 ;; esac
             echo "$field attestation present"
           done
-          cosign verify "$IMAGE:$VERSION" \
-            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          cosign verify "$IMAGE:$VERSION" --certificate-identity "$identity" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+          # What a node pulls is a platform image, not the index: each one
+          # is signed (docker_signs --recursive) and verifies on its own.
+          for d in $(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' \
+              | jq -r '.manifests[] | select(.platform.os=="linux") | .digest'); do
+            cosign verify "$IMAGE@$d" --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+            echo "platform image $d signed"
+          done
+      - name: The image carries LICENSE, NOTICE and THIRD_PARTY_NOTICES in /licenses
+        run: |
+          cid="$(docker create --platform linux/amd64 "$IMAGE:$VERSION")"
+          docker cp "$cid:/licenses" "$RUNNER_TEMP/licenses"
+          docker rm "$cid" >/dev/null
+          for f in LICENSE NOTICE THIRD_PARTY_NOTICES; do
+            cmp "$RUNNER_TEMP/licenses/$f" "$f" || { echo "::error::/licenses/$f in $IMAGE:$VERSION is missing or differs"; exit 1; }
+          done
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: ${{ env.HELM_VERSION }}
@@ -223,8 +289,9 @@ jobs:
           hack/install-tool.sh kubectl >/dev/null # same directory as kind
           dirname "$kind" >> "$GITHUB_PATH"
           "$kind" create cluster --name release-verify --image "$(hack/kind-images.sh image 1.37)" --wait 120s
-      - name: Published chart installs and reaches Ready (no side-loading)
+      - name: Published chart installs and reaches Ready, on the pinned image (no side-loading)
         run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
           helm --kube-context kind-release-verify install upgradescope "$CHART_REPO/upgradescope" --version "$VERSION" \
             --namespace upgradescope --create-namespace \
             --set server.enabled=true --set server.ingestToken=verify \
@@ -232,7 +299,7 @@ jobs:
           kubectl --context kind-release-verify -n upgradescope get pods -o wide
           kubectl --context kind-release-verify -n upgradescope get deploy \
             -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].image}{"\n"}{end}' \
-            | grep -qxF "$IMAGE:$GITHUB_REF_NAME"
+            | grep -qxF "$IMAGE:$GITHUB_REF_NAME@$digest"
 
   # Actions convention: v0 names the newest stable v0.x.y. Only a stable tag
   # moves it, and only once the release is published and verified. Through
@@ -259,3 +326,25 @@ jobs:
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$major" -f sha="$GITHUB_SHA" >/dev/null
           fi
           echo "$major -> $GITHUB_REF_NAME ($GITHUB_SHA)" >> "$GITHUB_STEP_SUMMARY"
+
+  # krew-index update PR for a stable tag, rendered from .krew.yaml by
+  # krew-release-bot. The bot only bumps a plugin krew-index already lists;
+  # the first submission is a manual PR (packaging/README.md), after which
+  # set the repository variable KREW_PLUGIN_IN_INDEX=true. It reads the
+  # published archives anonymously and needs no token from this repository.
+  krew:
+    needs: [verify]
+    if: ${{ !contains(github.ref_name, '-') && vars.KREW_PLUGIN_IN_INDEX == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The SHA pins the action definition only: its action.yml runs
+      # docker://ghcr.io/rajatjindal/krew-release-bot:v0.0.50 by tag, so the
+      # code it runs is that image tag's, not frozen by this pin; the job's
+      # token is read-only, which bounds what a changed image could do here.
+      - uses: rajatjindal/krew-release-bot@c970b8a8f6dbc2f2285a26e3ae160903b87002c3 # v0.0.51

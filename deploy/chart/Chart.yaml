@@ -10,3 +10,41 @@ appVersion: "v0.1.1"
 home: https://github.com/abd-ulbasit/upgradescope
 sources:
   - https://github.com/abd-ulbasit/upgradescope
+keywords:
+  - kubernetes
+  - upgrade
+  - deprecation
+  - eol
+  - readiness
+# Artifact Hub (https://artifacthub.io/docs/topics/annotations/helm/). The
+# release workflow (hack/chart-release-annotations.sh) rewrites the image to
+# the released tag@digest, sets prerelease from the tag, and adds
+# artifacthub.io/changes from that version's CHANGELOG.md section; keep
+# annotations the last block of this file.
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/operator: "false"
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/crds: |
+    - kind: ClusterReadiness
+      version: v1alpha1
+      name: clusterreadinesses.upgradescope.dev
+      displayName: ClusterReadiness
+      description: Upgrade-readiness verdict, score and findings for one cluster, written by the agent.
+  artifacthub.io/links: |
+    - name: Source
+      url: https://github.com/abd-ulbasit/upgradescope
+    - name: Chart documentation
+      url: https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/chart/README.md
+    - name: Changelog
+      url: https://github.com/abd-ulbasit/upgradescope/blob/main/CHANGELOG.md
+    - name: Releases (cosign verify steps)
+      url: https://github.com/abd-ulbasit/upgradescope/releases
+  artifacthub.io/images: |
+    - name: upgradescope
+      image: ghcr.io/abd-ulbasit/upgradescope:v0.1.1
+      platforms:
+        - linux/amd64
+        - linux/arm64

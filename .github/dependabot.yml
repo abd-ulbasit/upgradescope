@@ -8,7 +8,9 @@ updates:
   # the gate that must not go red; this is what keeps it from having to.
   # A k8s.io/api bump in tools/gen-kb changes the generated KB, so its PR
   # fails kb-freshness until `make gen-kb` is committed on it (the weekly
-  # kb-refresh workflow does that bump end to end).
+  # kb-refresh workflow does that bump end to end). A bump of a module the
+  # binary links changes THIRD_PARTY_NOTICES: run `make notices` on the PR and commit it,
+  # or the notices job fails.
   - package-ecosystem: gomod
     directories:
       - /
@@ -26,7 +28,8 @@ updates:
 
   # The dashboard has real dependencies (React, Vite, vitest, TypeScript). A
   # bump changes the built bundle: run `make web` on the PR and commit
-  # internal/server/webdist, or web-test fails on the stale copy.
+  # internal/server/webdist, or web-test fails on the stale copy; a
+  # production dependency bump also needs `make notices` committed.
   - package-ecosystem: npm
     directory: /web
     schedule:

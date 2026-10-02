@@ -177,9 +177,21 @@ func unreadableCluster(inv inventory.Inventory, where string) error {
 func newScanCmd() *cobra.Command {
 	var opts scanOptions
 	cmd := &cobra.Command{
-		Use:           "scan",
-		Short:         "Scan a cluster (or rendered manifests) for upgrade readiness",
-		Long:          scanLong,
+		Use:   "scan",
+		Short: "Scan a cluster (or rendered manifests) for upgrade readiness",
+		Long:  scanLong,
+		Example: `  # The current kubeconfig context's cluster against Kubernetes 1.37
+  upgradescope scan --target 1.37
+
+  # Another context, as JSON
+  upgradescope scan --context prod --target 1.37 --output json
+
+  # Rendered manifests in CI: SARIF for code scanning, exit 2 on a blocker
+  upgradescope scan --files rendered/ --target 1.37 --output sarif > upgradescope.sarif
+
+  # Fail only on findings that are new since an accepted scan
+  upgradescope scan --files rendered/ --target 1.37 --write-baseline baseline.json
+  upgradescope scan --files rendered/ --target 1.37 --baseline baseline.json`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

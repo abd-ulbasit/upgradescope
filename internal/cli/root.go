@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"fmt"
 	"runtime/debug"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 )
@@ -54,18 +56,50 @@ func resolveVersion(stamped string, readBuildInfo func() (*debug.BuildInfo, bool
 	return "dev+" + rev
 }
 
+// registerVersionTemplate makes --version print what `upgradescope version`
+// does. The text is computed when --version is used, not when the command
+// tree is built, so other commands never pay for loading the KB.
+var registerVersionTemplate = sync.OnceFunc(func() {
+	cobra.AddTemplateFunc("upgradescopeVersion", func() string {
+		var b strings.Builder
+		writeVersionText(&b, currentVersionInfo())
+		return b.String()
+	})
+})
+
 func Root() *cobra.Command {
+	registerVersionTemplate()
 	root := &cobra.Command{
-		Use:           "upgradescope",
-		Short:         "Continuous Kubernetes upgrade-readiness scanner",
+		Use:   "upgradescope",
+		Short: "Continuous Kubernetes upgrade-readiness scanner",
+		Long: `upgradescope finds what blocks a Kubernetes upgrade before you start it:
+deprecated and removed APIs (stored objects and live callers), end-of-life
+add-ons, version skew and chart compatibility, rolled up into a readiness
+score and verdict.
+
+Run it once with 'scan', continuously in the cluster with 'agent', and across
+a fleet with 'serve'.`,
+		Example: `  # Is the current kubeconfig context's cluster ready for Kubernetes 1.37?
+  upgradescope scan --target 1.37
+
+  # Gate a pull request on rendered manifests
+  helm template ./chart --output-dir rendered
+  upgradescope scan --files rendered --target 1.37 --output sarif > upgradescope.sarif`,
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.SetVersionTemplate(`{{ upgradescopeVersion }}`)
+	// Usage is silenced (an error prints one line, not the whole usage), so
+	// a mistyped flag says where the usage is. Subcommands inherit it.
+	root.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return fmt.Errorf("%w (run '%s --help' for usage)", err, c.CommandPath())
+	})
 	root.AddCommand(newScanCmd())
 	root.AddCommand(newAgentCmd())
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newTokensCmd())
 	root.AddCommand(newClustersCmd())
+	root.AddCommand(newVersionCmd())
 	return root
 }

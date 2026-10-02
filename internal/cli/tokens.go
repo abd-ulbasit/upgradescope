@@ -130,7 +130,10 @@ func generateToken() (string, error) {
 func newTokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tokens",
-		Short: "Manage per-cluster ingest tokens (each authenticates pushes for one cluster only)",
+		Short: "Manage per-cluster ingest tokens for agent snapshot pushes",
+		Long: `Manage per-cluster ingest tokens. Each token authenticates snapshot
+pushes for one cluster name only, so a leaked token cannot write another
+cluster's history. Tokens are stored hashed in the server database.`,
 	}
 	cmd.AddCommand(newTokensCreateCmd())
 	cmd.AddCommand(newTokensListCmd())
@@ -141,8 +144,13 @@ func newTokensCmd() *cobra.Command {
 func newTokensCreateCmd() *cobra.Command {
 	var flags dbFlags
 	cmd := &cobra.Command{
-		Use:           "create <cluster>",
-		Short:         "Mint an ingest token bound to one cluster; the plaintext is printed once to stdout",
+		Use:   "create <cluster>",
+		Short: "Mint an ingest token bound to one cluster",
+		Long: `Mint an ingest token bound to one cluster. The plaintext token is printed
+once, to stdout; only its hash is stored. Give it to that cluster's agent
+(--server-token-file, or the chart's agent.existingSecret).`,
+		Example: `  upgradescope tokens create prod-eu --db upgradescope.db
+  upgradescope tokens create prod-eu --db-url-file /secrets/db-url > prod-eu.token`,
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -183,8 +191,11 @@ func newTokensListCmd() *cobra.Command {
 		cluster string
 	)
 	cmd := &cobra.Command{
-		Use:           "list",
-		Short:         "List ingest tokens (id, cluster, prefix, created, revoked); never prints a token",
+		Use:   "list",
+		Short: "List ingest tokens; never prints a token",
+		Long:  "List ingest tokens: id, cluster, prefix, created and revoked times. A token itself is never shown.",
+		Example: `  upgradescope tokens list --db upgradescope.db
+  upgradescope tokens list --cluster prod-eu`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -231,6 +242,8 @@ func newTokensRevokeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "revoke <cluster> (--id <id> | --all)",
 		Short: "Revoke one ingest token of a cluster by id, or all of them with --all",
+		Example: `  upgradescope tokens revoke prod-eu --id 3
+  upgradescope tokens revoke prod-eu --all`,
 		Long: "Revoke one ingest token by id (see 'tokens list'), or every active token of the cluster with --all.\n" +
 			"Zero-downtime rotation: 'tokens create <cluster>', roll the new token out to the agent, then\n" +
 			"'tokens revoke <cluster> --id <old id>'.",

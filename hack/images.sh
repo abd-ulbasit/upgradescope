@@ -38,6 +38,8 @@ for df in "${dockerfiles[@]}"; do
         CGO_ENABLED=0 GOOS="${p%/*}" GOARCH="${p#*/}" \
           go build -trimpath -ldflags "-s -w" -o "$work/ctx/$p/upgradescope" ./cmd/upgradescope
       done
+      # GoReleaser's extra_files, copied to /licenses.
+      cp LICENSE NOTICE THIRD_PARTY_NOTICES "$work/ctx/"
       docker buildx build --platform "$PLATFORMS" -f "$df" "$work/ctx"
       ;;
     *)

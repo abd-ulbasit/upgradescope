@@ -101,6 +101,14 @@ d=$(case_dir gr-missing)
 printf 'build:\n\tgo build ./...\n' >"$d/Makefile"
 expect "missing Makefile pin fails" 1 "goreleaser pin not found" "$d"
 
+d=$(case_dir syntax-floating)
+{ printf '# syntax=docker/dockerfile:1\n'; cat "$d/Dockerfile.release"; } >"$d/x" && mv "$d/x" "$d/Dockerfile.release"
+expect "a floating # syntax= frontend fails" 1 "Dockerfile.release pulls its Dockerfile frontend unpinned (# syntax=docker/dockerfile:1)" "$d"
+
+d=$(case_dir syntax-pinned)
+{ printf '# syntax=docker/dockerfile:1@sha256:%064d\n' 0; cat "$d/Dockerfile"; } >"$d/x" && mv "$d/x" "$d/Dockerfile"
+expect "a digest-pinned # syntax= frontend passes" 0 "ok: Dockerfile golang:1.26.8" "$d"
+
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)
 echo "check-toolchain_test: $pass passed, $fail failed"

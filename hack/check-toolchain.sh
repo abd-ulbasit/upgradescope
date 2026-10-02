@@ -11,7 +11,9 @@
 #
 #    which breaks `make docker-build`, the images job and the kube job's
 #    kind e2e. The from-source Dockerfile must have a golang stage;
-#    Dockerfile.release packages prebuilt binaries and has none.
+#    Dockerfile.release packages prebuilt binaries and has none. No
+#    Dockerfile may name an unpinned `# syntax=` frontend (#127): it is an
+#    image pulled at build time, like the digest-pinned bases.
 #
 # 2. GoReleaser is pinned to one version: GORELEASER_VERSION in the Makefile
 #    (make release-check, CI's release-check job) and every
@@ -35,6 +37,14 @@ want=$(awk '/^go [0-9]/ {print $2; exit}' go.mod)
 rc=0
 for df in Dockerfile*; do
   [ -f "$df" ] || continue
+  # A `# syntax=` directive makes BuildKit pull that Dockerfile frontend
+  # image before parsing; every base is digest-pinned, so it must be too.
+  syntax=$(sed -nE '1,/^[^#]/ s/^#[[:space:]]*syntax[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$df" | head -1)
+  if [ -n "$syntax" ] && [[ "$syntax" != *@sha256:* ]]; then
+    echo "FAIL: $df pulls its Dockerfile frontend unpinned (# syntax=$syntax);" >&2
+    echo "      drop the line (the builder's frontend is used) or pin it by digest" >&2
+    rc=1
+  fi
   # The optional --platform flag is how the build stage cross-compiles from
   # the builder's platform for multi-arch images.
   got=$(sed -nE 's/^FROM[[:space:]]+(--platform=[^[:space:]]+[[:space:]]+)?golang:([0-9][^-@ ]*).*/\2/p' "$df" | head -1)

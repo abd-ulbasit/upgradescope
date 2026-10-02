@@ -1,7 +1,8 @@
 # GoReleaser config. Releases are cut by CI only: pushing a vX.Y.Z tag runs
-# .github/workflows/release.yml, which publishes archives, checksums, SBOMs,
-# cosign signatures and the multi-arch GHCR image (the Helm chart is pushed
-# by the workflow itself). ci.yml proves this file on PRs that touch it.
+# .github/workflows/release.yml, which publishes archives, deb/rpm/apk
+# packages, checksums, SBOMs, cosign signatures and the multi-arch GHCR
+# image (the Helm chart is pushed by the workflow itself). ci.yml proves this
+# file on PRs that touch it.
 #
 # Local dry run with the pinned GoReleaser (no publish, no signing, no SBOMs),
 # the same command CI's release-check job runs:
@@ -9,6 +10,11 @@
 # It builds the per-arch images locally too (never pushed); on a machine
 # without a Docker engine add docker to the skip list:
 #   make release-check GORELEASER_SKIP=publish,sign,sbom,docker
+#
+# Reproducible: the same commit builds byte-identical binaries, archives,
+# packages and per-platform images. Every timestamp is the commit's
+# (mod_timestamp, archive and package mtimes, man page dates, the image's
+# SOURCE_DATE_EPOCH with rewrite-timestamp), never the build clock.
 version: 2
 
 project_name: upgradescope
@@ -18,6 +24,17 @@ before:
     # The dashboard is committed (internal/server/webdist, kept fresh by
     # CI's web job); never ship a binary that would 404 at /.
     - test -f internal/server/webdist/index.html
+    # Committed and proven current by CI's notices job (make notices-check),
+    # which release.yml runs on the tagged commit.
+    - test -s THIRD_PARTY_NOTICES
+    # Shell completions and man pages for the archives, packages and the
+    # Homebrew formula, rendered from the command tree (packaging/generated
+    # is gitignored).
+    - go run ./tools/gen-docs -out packaging/generated -date {{ .CommitDate }}
+    # How fresh the embedded add-on EOL data is: the date of the last commit
+    # to registry/data, stamped into `upgradescope version`. Needs full
+    # history (release.yml and release-check fetch it).
+    - sh -c 'git log -1 --format=%cs -- registry/data > packaging/generated/registry-date && test -s packaging/generated/registry-date'
 
 builds:
   - main: ./cmd/upgradescope
@@ -38,6 +55,11 @@ builds:
     ldflags:
       - -s -w
       - -X github.com/abd-ulbasit/upgradescope/internal/cli.version={{ .Version }}
+      - -X github.com/abd-ulbasit/upgradescope/internal/cli.commit={{ .FullCommit }}
+      # The commit date, not the build clock: `built` in `upgradescope
+      # version` is when the source was committed.
+      - -X github.com/abd-ulbasit/upgradescope/internal/cli.date={{ .CommitDate }}
+      - -X github.com/abd-ulbasit/upgradescope/internal/cli.registryDate={{ mustReadFile "packaging/generated/registry-date" | trim }}
 
 archives:
   - formats: [tar.gz]
@@ -49,12 +71,89 @@ archives:
     # which only resolves when the asset filename is version-independent.
     # The version still lives in the tag, the release title, and the binary's
     # -X ...cli.version stamp. ci.yml's release-check job fails if these
-    # names drift from what action/run.sh downloads.
+    # names drift from what action/run.sh downloads. packaging/homebrew-tap
+    # and .krew.yaml name these archives too.
     name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
+    # Owner and mtime fixed, so an archive's checksum depends only on its
+    # contents (a fresh checkout gives every file a new mtime).
+    builds_info: &info
+      owner: root
+      group: root
+      mtime: '{{ .CommitDate }}'
+    # hack/release-check.sh asserts every archive carries all of these.
     files:
-      - LICENSE
-      - README.md
-      - NOTICE*
+      - src: LICENSE
+        info: *info
+      - src: NOTICE
+        info: *info
+      - src: THIRD_PARTY_NOTICES
+        info: *info
+      - src: README.md
+        info: *info
+      - src: packaging/generated/completions/*
+        dst: completions
+        strip_parent: true
+        info: *info
+      - src: packaging/generated/manpages/*
+        dst: manpages
+        strip_parent: true
+        info: *info
+
+# deb, rpm and apk packages for linux amd64/arm64, attached to the release
+# (and covered by checksums.txt and its signature). Named by nfpm's
+# per-format convention (upgradescope_X.Y.Z_amd64.deb, ...): unlike the
+# archives, nothing downloads them from releases/latest by a fixed name.
+nfpms:
+  - id: packages
+    package_name: upgradescope
+    file_name_template: '{{ .ConventionalFileName }}'
+    vendor: upgradescope
+    homepage: https://github.com/abd-ulbasit/upgradescope
+    maintainer: Abdul Basit <basit@basit.engineer>
+    description: |-
+      Continuous Kubernetes upgrade-readiness scanner.
+      Finds deprecated and removed API usage, end-of-life add-ons, version
+      skew and chart incompatibilities before a Kubernetes upgrade, with a
+      readiness score, a CI gate and an in-cluster agent.
+    license: Apache-2.0
+    section: utils
+    priority: optional
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    mtime: '{{ .CommitDate }}'
+    contents:
+      - src: packaging/generated/completions/upgradescope.bash
+        dst: /usr/share/bash-completion/completions/upgradescope
+        file_info: { mode: 0644 }
+      # Debian's zsh searches vendor-completions; Fedora's and Alpine's
+      # search site-functions.
+      - src: packaging/generated/completions/upgradescope.zsh
+        dst: /usr/share/zsh/vendor-completions/_upgradescope
+        packager: deb
+        file_info: { mode: 0644 }
+      - src: packaging/generated/completions/upgradescope.zsh
+        dst: /usr/share/zsh/site-functions/_upgradescope
+        packager: rpm
+        file_info: { mode: 0644 }
+      - src: packaging/generated/completions/upgradescope.zsh
+        dst: /usr/share/zsh/site-functions/_upgradescope
+        packager: apk
+        file_info: { mode: 0644 }
+      - src: packaging/generated/completions/upgradescope.fish
+        dst: /usr/share/fish/vendor_completions.d/upgradescope.fish
+        file_info: { mode: 0644 }
+      - src: packaging/generated/manpages/*.1.gz
+        dst: /usr/share/man/man1/
+        file_info: { mode: 0644 }
+      - src: LICENSE
+        dst: /usr/share/doc/upgradescope/LICENSE
+        file_info: { mode: 0644 }
+      - src: NOTICE
+        dst: /usr/share/doc/upgradescope/NOTICE
+        file_info: { mode: 0644 }
+      - src: THIRD_PARTY_NOTICES
+        dst: /usr/share/doc/upgradescope/THIRD_PARTY_NOTICES
+        file_info: { mode: 0644 }
 
 checksum:
   name_template: checksums.txt
@@ -64,7 +163,8 @@ sboms:
   - artifacts: archive
 
 # Keyless (Sigstore OIDC from the GitHub Actions run): no key to manage.
-# checksums.txt covers every archive, so signing it signs them all.
+# checksums.txt covers every archive and package, so signing it signs them
+# all.
 signs:
   - cmd: cosign
     signature: '${artifact}.sigstore.json'
@@ -96,12 +196,29 @@ dockers_v2:
     # carry attestations, so the provenance flag is publish-only;
     # release.yml's verify job checks both are on the published image.
     sbom: true
+    # Reproducible per-platform images: BuildKit takes the image config's
+    # created time from SOURCE_DATE_EPOCH (the commit time) and, with
+    # rewrite-timestamp, clamps every layer file's mtime to it, so the
+    # license files' checkout mtimes do not leak into the layer digest.
+    # --push (publish) and --load (snapshot) each need their own exporter
+    # type to carry the option.
+    build_args:
+      SOURCE_DATE_EPOCH: '{{ .CommitTimestamp }}'
     flags:
       - '{{ if not .IsSnapshot }}--provenance=mode=max{{ end }}'
+      - '--output=type={{ if .IsSnapshot }}docker{{ else }}image{{ end }},rewrite-timestamp=true'
+    # Dockerfile.release copies them to /licenses.
+    extra_files:
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES
     labels:
       org.opencontainers.image.title: upgradescope
       org.opencontainers.image.description: Continuous Kubernetes upgrade-readiness scanner
+      org.opencontainers.image.url: https://github.com/abd-ulbasit/upgradescope
+      org.opencontainers.image.documentation: https://github.com/abd-ulbasit/upgradescope#readme
       org.opencontainers.image.source: https://github.com/abd-ulbasit/upgradescope
+      org.opencontainers.image.vendor: upgradescope
       org.opencontainers.image.revision: '{{ .FullCommit }}'
       org.opencontainers.image.version: '{{ .Version }}'
       org.opencontainers.image.created: '{{ .CommitDate }}'
@@ -121,16 +238,23 @@ dockers_v2:
 
 docker_signs:
   # Default artifacts: the dockers_v2 images. Keyless, like signs above.
+  # --recursive signs the multi-arch index and every platform manifest in
+  # it, so `cosign verify image@<platform digest>` (what a node actually
+  # pulls) verifies too; release.yml's verify job checks each one.
   - cmd: cosign
     args:
       - sign
+      - --recursive
       - '${artifact}@${digest}'
       - --yes
 
 changelog:
   use: git
   sort: asc
-  # Grouped by conventional-commit prefix.
+  # Grouped by conventional-commit prefix. Only the subject is read, so a
+  # breaking change must say so with `!` (feat!:, chore(x)!:); a
+  # BREAKING CHANGE footer alone is not seen here. CHANGELOG.md, written
+  # in the release PR (hack/check-changelog.sh), is the reviewed record.
   groups:
     - title: Breaking changes
       regexp: '^[a-z]+(\([^)]+\))?!:'
@@ -147,11 +271,9 @@ changelog:
     - title: Other changes
       order: 999
   filters:
+    # Housekeeping types are left out, unless marked breaking (chore!:).
     exclude:
-      - '^docs'
-      - '^chore'
-      - '^test'
-      - '^ci'
+      - '^(docs|chore|test|ci|build|style)(\([^)]+\))?:'
       - '^Merge '
 
 release:
@@ -167,7 +289,10 @@ release:
   footer: |
     ## Install
 
-    - Binary: download the archive for your platform below.
+    - Homebrew: `brew install abd-ulbasit/tap/upgradescope`
+    - krew: `kubectl krew install upgradescope` (once the plugin is in krew-index)
+    - Debian/Ubuntu, Fedora/RHEL, Alpine: the `.deb`, `.rpm` and `.apk` packages below. The packages themselves are unsigned (verify them with `checksums.txt`), so Alpine needs `apk add --allow-untrusted ./upgradescope_*.apk`.
+    - Binary: download the archive for your platform below; it includes shell completions and man pages.
     - Image: `ghcr.io/abd-ulbasit/upgradescope:{{ .Version }}` (linux/amd64, linux/arm64)
     - Helm: `helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version {{ .Version }}`
 
@@ -186,4 +311,4 @@ release:
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     ```
 
-    Each archive has an SPDX SBOM (`<archive>.sbom.json`).
+    Each platform image is signed too and verifies on its own: `cosign verify ghcr.io/abd-ulbasit/upgradescope@<platform digest>` with the same flags. Each archive has an SPDX SBOM (`<archive>.sbom.json`); archives, packages and the image carry LICENSE, NOTICE and THIRD_PARTY_NOTICES (in the image under `/licenses/`).
