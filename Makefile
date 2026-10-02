@@ -43,7 +43,8 @@ test:
 
 # The heap-bound tests (the proofs of the server's and the Helm collector's
 # memory bounds), without the race detector, under which they skip or
-# shrink; CI's test job runs this after `make test`. Needs only Go.
+# shrink; CI's test-heap job runs this, apart from the test job. Needs
+# only Go.
 .PHONY: test-heap
 test-heap:
 	./hack/test-heap.sh

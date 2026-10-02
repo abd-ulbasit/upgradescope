@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The heap-bound tests, without the race detector (make test-heap; CI's
-# test job). The race detector instruments every allocation, so a test
+# test-heap job). The race detector instruments every allocation, so a test
 # whose proof is a heap figure skips itself, or shrinks, when raceEnabled
 # is set, and `make test` (go test -race) never runs it in full. These
 # tests are the proofs docs/claims.md and docs/operations.md cite for the

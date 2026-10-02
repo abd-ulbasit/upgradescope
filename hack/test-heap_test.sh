@@ -12,6 +12,7 @@ for want in \
   "internal/server TestIngestDecodeHeapIsBounded" \
   "internal/server TestGateDecodeHeapIsBounded" \
   "internal/server TestGateClusterContextHeapIsBounded" \
+  "internal/server TestGateAnswerHeapIsBounded" \
   "internal/server TestReadHeapIsBounded" \
   "internal/server TestStoredSnapshotHeapIsBounded" \
   "internal/server TestFleetReadsLoadNoReport" \
