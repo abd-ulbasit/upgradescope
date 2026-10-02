@@ -257,15 +257,22 @@ server:
   # bearer token over plain HTTP inside the cluster (the agent logs a
   # warning). The certificate must name the Service
   # (<fullname>-server.<namespace>.svc); the in-chart agent then pushes to
-  # https:// and trusts the Secret's ca.crt, when it has one, on top of its
-  # image's roots. Probes and the ServiceMonitor switch to HTTPS; an Ingress
-  # in front needs its controller's backend-protocol annotation (e.g.
-  # nginx.ingress.kubernetes.io/backend-protocol: HTTPS). serve reads the
-  # certificate at startup, so a renewal takes a pod restart.
+  # https:// and trusts the Secret's caKey, when it has one, on top of its
+  # image's roots. Probes and the ServiceMonitor switch to HTTPS. The
+  # Service port gets appProtocol https, and server.ingress gets
+  # nginx.ingress.kubernetes.io/backend-protocol: HTTPS unless its
+  # annotations set it; another controller may need its own annotation.
+  # serve reads the certificate at startup, so a renewal takes a pod
+  # restart.
   tls:
     # -- An existing kubernetes.io/tls Secret (tls.crt, tls.key, optional
     # ca.crt) for HTTPS on the server's own port; see the comment above.
     secretName: ""
+    # The key of the CA certificate in that Secret, which the ServiceMonitor
+    # and the in-chart agent trust (cert-manager CA and self-signed issuers
+    # write ca.crt). Empty for a publicly trusted certificate whose Secret
+    # has no CA: they then use their system roots.
+    caKey: ca.crt
     certManager:
       # -- Or have cert-manager issue one for the Service names into
       # <fullname>-server-https (not the Ingress's <fullname>-server-tls),

@@ -242,10 +242,13 @@ settings, so the read token still protects all data.
   `kubernetes.io/tls` Secret) or `server.tls.certManager.issuerRef` (the
   chart renders a cert-manager `Certificate` for the Service names into
   `<fullname>-server-https`, apart from the Ingress's `-server-tls`). The
-  in-chart agent then pushes to `https://` and trusts the Secret's
-  `ca.crt`; probes and the ServiceMonitor use HTTPS. Without it the agent
-  sends its bearer token over plain HTTP inside the cluster and logs a
-  warning saying so.
+  in-chart agent then pushes to `https://` and, like the ServiceMonitor,
+  trusts the Secret's `ca.crt` (`server.tls.caKey`; empty for a publicly
+  trusted certificate whose Secret has no CA); probes and the
+  ServiceMonitor use HTTPS, the Service port gets `appProtocol: https`,
+  and `server.ingress` gets ingress-nginx's `backend-protocol: HTTPS`
+  annotation unless you set it. Without it the agent sends its bearer
+  token over plain HTTP inside the cluster and logs a warning saying so.
 - `server.sharedIngestToken=false` drops the shared, any-cluster ingest
   token: only per-cluster tokens push, and the in-chart agent needs its own
   (`agent.existingSecret` or `agent.serverToken`).

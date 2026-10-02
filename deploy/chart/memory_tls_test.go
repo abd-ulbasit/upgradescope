@@ -215,6 +215,60 @@ func TestSharedIngestTokenOptional(t *testing.T) {
 	}
 }
 
+// Behind an Ingress, a server that serves HTTPS needs the controller told
+// so: the Ingress gets ingress-nginx's backend-protocol annotation (the
+// operator's own value wins) and the Service port appProtocol https,
+// which other controllers read. The ServiceMonitor and the agent trust
+// server.tls.caKey of the Secret; with it empty (a publicly trusted
+// certificate, whose Secret has no CA) they use their system roots, and
+// the scrape does not break on a missing key.
+func TestServerTLSBehindIngressAndPublicCA(t *testing.T) {
+	base := []string{"server.enabled=true", "server.ingestToken=t", "server.readToken=r", "server.tls.secretName=srv-tls",
+		"server.ingress.enabled=true", "server.ingress.host=upgradescope.example.com", "metrics.serviceMonitor.enabled=true"}
+	const backendProtocol = "nginx.ingress.kubernetes.io/backend-protocol"
+	objs := render(t, base...)
+	if v, _, _ := unstructured.NestedString(find(objs, "Ingress", "upgradescope-server").Object, "metadata", "annotations", backendProtocol); v != "HTTPS" {
+		t.Errorf("Ingress %s = %q, want HTTPS", backendProtocol, v)
+	}
+	ports, _, _ := unstructured.NestedSlice(find(objs, "Service", "upgradescope-server").Object, "spec", "ports")
+	if p, _ := ports[0].(map[string]any)["appProtocol"].(string); p != "https" {
+		t.Errorf("Service port appProtocol = %q, want https", p)
+	}
+	ep, _, _ := unstructured.NestedSlice(find(objs, "ServiceMonitor", "upgradescope-server").Object, "spec", "endpoints")
+	if key, _, _ := unstructured.NestedString(ep[0].(map[string]any), "tlsConfig", "ca", "secret", "key"); key != "ca.crt" {
+		t.Errorf("server ServiceMonitor trusts CA key %q, want ca.crt by default", key)
+	}
+
+	objs = render(t, append(base, `server.ingress.annotations.nginx\.ingress\.kubernetes\.io/backend-protocol=GRPCS`)...)
+	if v, _, _ := unstructured.NestedString(find(objs, "Ingress", "upgradescope-server").Object, "metadata", "annotations", backendProtocol); v != "GRPCS" {
+		t.Errorf("Ingress %s = %q, want the operator's GRPCS", backendProtocol, v)
+	}
+
+	objs = render(t, append(base, "server.tls.caKey=")...)
+	ep, _, _ = unstructured.NestedSlice(find(objs, "ServiceMonitor", "upgradescope-server").Object, "spec", "endpoints")
+	if _, has, _ := unstructured.NestedMap(ep[0].(map[string]any), "tlsConfig", "ca"); has {
+		t.Error("server ServiceMonitor names a CA key with server.tls.caKey empty")
+	}
+	if scheme, _ := ep[0].(map[string]any)["scheme"].(string); scheme != "https" {
+		t.Errorf("server ServiceMonitor scheme = %q, want https", scheme)
+	}
+	agent := container(t, objs, "upgradescope-agent")
+	avols, _, _ := unstructured.NestedSlice(find(objs, "Deployment", "upgradescope-agent").Object, "spec", "template", "spec", "volumes")
+	if _, set := envVar(agent, "SSL_CERT_DIR"); set || hasSecretVolume(avols, "srv-tls") {
+		t.Error("agent mounts the server Secret's CA with server.tls.caKey empty; it should use its image's roots")
+	}
+	if !slices.Contains(args(agent), "--server-url=https://upgradescope-server.upgradescope.svc:8080") {
+		t.Errorf("agent args %v: want the https:// server URL", args(agent))
+	}
+
+	// Without server TLS, the Ingress speaks HTTP to the Service.
+	objs = render(t, "server.enabled=true", "server.ingestToken=t", "server.readToken=r",
+		"server.ingress.enabled=true", "server.ingress.host=upgradescope.example.com")
+	if _, has, _ := unstructured.NestedString(find(objs, "Ingress", "upgradescope-server").Object, "metadata", "annotations", backendProtocol); has {
+		t.Errorf("Ingress has %s without server TLS", backendProtocol)
+	}
+}
+
 func hasSecretVolume(vols []any, secret string) bool {
 	for _, v := range vols {
 		if name, _, _ := unstructured.NestedString(v.(map[string]any), "secret", "secretName"); name == secret {

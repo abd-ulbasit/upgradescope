@@ -64,7 +64,7 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- if and $serverCA (not (include "upgradescope.setsEnv" (dict "env" .Values.agent.extraEnv "name" "SSL_CERT_DIR"))) }}
-            # Trust the in-chart server's CA (its TLS Secret's ca.crt, when it
+            # Trust the in-chart server's CA (its TLS Secret's caKey, when it
             # has one) on top of the image's roots.
             - name: SSL_CERT_DIR
               value: /etc/upgradescope/server-ca
@@ -118,13 +118,13 @@ spec:
       {{- if or $serverCA .Values.agent.extraVolumes }}
       volumes:
         {{- if $serverCA }}
-        # Only ca.crt: the agent never sees the server's private key.
+        # Only the CA: the agent never sees the server's private key.
         - name: server-ca
           secret:
             secretName: {{ include "upgradescope.serverTLSSecret" . }}
             optional: true
             items:
-              - {key: ca.crt, path: ca.crt}
+              - {key: {{ .Values.server.tls.caKey | quote }}, path: ca.crt}
         {{- end }}
         {{- with .Values.agent.extraVolumes }}
         {{- toYaml . | nindent 8 }}

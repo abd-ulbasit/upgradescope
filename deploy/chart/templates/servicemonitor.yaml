@@ -67,13 +67,15 @@ spec:
       scheme: https
       tlsConfig:
         serverName: {{ printf "%s.%s.svc" (include "upgradescope.serverFullname" $) $.Release.Namespace }}
-        # The CA of the server.tls Secret (cert-manager CA and self-signed
-        # issuers write it); for a publicly trusted certificate, override
-        # this ServiceMonitor or drop ca.
+        {{- with $.Values.server.tls.caKey }}
+        # The CA in the server.tls Secret (cert-manager CA and self-signed
+        # issuers write ca.crt); with server.tls.caKey empty, Prometheus's
+        # system roots.
         ca:
           secret:
-            name: {{ . }}
-            key: ca.crt
+            name: {{ include "upgradescope.serverTLSSecret" $ }}
+            key: {{ . | quote }}
+        {{- end }}
       {{- end }}
       {{- if include "upgradescope.readTokenEnabled" . }}
       # The read token guards /metrics too (per-cluster scores).

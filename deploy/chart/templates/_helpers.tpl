@@ -114,9 +114,9 @@ Ingress's default, which holds the public host's certificate. */}}
 {{- end -}}
 
 {{/* Does the in-chart agent push to the in-chart server over HTTPS, and
-so trust its Secret's ca.crt? Non-empty string = yes. */}}
+so trust its Secret's CA (server.tls.caKey)? Non-empty string = yes. */}}
 {{- define "upgradescope.agentTrustsServerCA" -}}
-{{- if and .Values.server.enabled (not .Values.agent.serverUrl) (include "upgradescope.serverTLSSecret" .) -}}true{{- end -}}
+{{- if and .Values.server.enabled (not .Values.agent.serverUrl) (include "upgradescope.serverTLSSecret" .) .Values.server.tls.caKey -}}true{{- end -}}
 {{- end -}}
 
 {{/* Does env (a container env list) set name? Non-empty string = yes.

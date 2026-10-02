@@ -158,6 +158,7 @@
           "additionalProperties": false,
           "properties": {
             "secretName": { "$ref": "#/definitions/secretName" },
+            "caKey": { "type": "string" },
             "certManager": {
               "type": "object",
               "additionalProperties": false,
