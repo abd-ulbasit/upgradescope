@@ -82,7 +82,7 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 	var inv inventory.Inventory
 	if opts.filesDir != "" {
 		var sum collect.FilesSummary
-		inv, sum, err = collect.CollectFiles(opts.filesDir)
+		inv, sum, err = collect.CollectFiles(opts.filesDir, kbData.APILifecycle)
 		if err != nil {
 			return engine.Report{}, fmt.Errorf("collect inventory: %w", err)
 		}
@@ -327,8 +327,8 @@ func withFileBase(r engine.Report, base string) engine.Report {
 	return r
 }
 
-// scanLong is scan's --help text: the gate's exit codes and how
-// suppression and baselines change what it counts.
+// scanLong is scan's --help text: the gate's exit codes, how --files reads
+// manifests, and how suppression and baselines change what it counts.
 const scanLong = `Scan a cluster (or rendered manifests) for upgrade readiness.
 
 Exit codes: 0 when the gate passes; 1 on an operational error, including an
@@ -337,6 +337,15 @@ invalid config file or baseline; 2 when the gate fails.
 The gate (--fail-on) fails when a finding at or above the threshold remains,
 or (unless --allow-incomplete) when a required check was not assessed, so a
 blocker may have been missed.
+
+Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
+or the one file named, is decoded as kubectl apply -f decodes it: each
+document of a YAML stream and each object of a JSON stream (NDJSON,
+pretty-printed or adjacent), List items expanded, a duplicate key taking its
+last value. Documents that are not Kubernetes objects are skipped. A document
+that cannot be decoded is skipped with a warning; when its text names an API
+the knowledge base lists as removed, api-usage is not assessed, so the verdict
+is at least unknown and the gate fails unless --allow-incomplete.
 
 Suppression: ignore rules in ` + suppress.ConfigFile + ` (found in the scan root,
 i.e. the --files directory or else the working directory, then at the git

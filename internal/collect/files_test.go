@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 func TestCollectFiles(t *testing.T) {
-	inv, sum, err := CollectFiles("testdata/files")
+	inv, sum, err := CollectFiles("testdata/files", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestCollectFiles(t *testing.T) {
 }
 
 func TestCollectFilesMissingDir(t *testing.T) {
-	if _, _, err := CollectFiles("testdata/does-not-exist"); err == nil {
+	if _, _, err := CollectFiles("testdata/does-not-exist", nil); err == nil {
 		t.Fatal("want error for missing directory")
 	}
 }
@@ -109,7 +110,7 @@ func TestCollectFilesSkipsNonManifests(t *testing.T) {
 		"tsconfig.json":                  "/* compiler options */\n{\"compilerOptions\": {}}\n",
 	})
 
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatalf("CollectFiles must not fail on non-manifest input: %v", err)
 	}
@@ -153,7 +154,7 @@ items:
     name: ok
     namespace: {{ .Release.Namespace }}
 `})
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,13 +166,59 @@ items:
 	}
 }
 
+// A document that could not be decoded but names an API the knowledge base
+// lists as removed may hide a blocker: api-usage is then not assessed (a
+// required gap, so the verdict is at least unknown), naming each such
+// document. Other undecodable documents (JSONC, a template that names no
+// removed API) stay warnings.
+func TestCollectFilesUnassessedRemovedAPI(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := map[string]string{
+		"app.yaml":                  "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: web}\n",
+		"tsconfig.json":             "/* compiler options */\n{\"compilerOptions\": {}}\n",
+		"chart/templates/svc.yaml":  "apiVersion: v1\nkind: Service\nmetadata:\n  name: {{ .Release.Name }}\n",
+		"chart/templates/hpa.yaml":  "apiVersion: {{ include \"hpa.apiVersion\" . }}\nkind: HorizontalPodAutoscaler\n",
+		"rendered/configmaps.json":  `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n{",
+		"chart/templates/notes.txt": "apiVersion: policy/v1beta1\nkind: PodDisruptionBudget\n",
+	}
+	inv, sum, err := CollectFiles(writeTree(t, clean), k.APILifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := inv.Capabilities[inventory.CapAPIUsage]; !st.Available || len(sum.Warnings) != 3 {
+		t.Fatalf("api-usage = %+v with warnings %v; want available: no undecodable document names a removed API", st, sum.Warnings)
+	}
+
+	clean["chart/templates/pdb.yaml"] = "apiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: {{ include \"chart.fullname\" . }}\n"
+	clean["rendered/all.json"] = `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n" + `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n" + `{"apiVersion": "batch/v1beta1", "kind": "CronJob",`
+	inv, _, err = CollectFiles(writeTree(t, clean), k.APILifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := inv.Capabilities[inventory.CapAPIUsage]
+	if st.Available {
+		t.Fatalf("api-usage = %+v, want not assessed", st)
+	}
+	for _, want := range []string{"2 document(s)", "chart/templates/pdb.yaml:1 (policy/v1beta1 PodDisruptionBudget)", "rendered/all.json:3 (batch/v1beta1 CronJob)"} {
+		if !strings.Contains(st.Reason, want) {
+			t.Errorf("reason %q lacks %q", st.Reason, want)
+		}
+	}
+	if len(inv.APIUsage) == 0 {
+		t.Error("the objects that were decoded must still be counted")
+	}
+}
+
 // An invalid separator ("----", "---foo") makes the rest of the stream
 // unsplittable, but the document before it is complete and still counted:
 // dropping it would let a removed API slip out of the gate while the
 // warning names only the separator line.
 func TestCollectFilesInvalidSeparatorKeepsPrecedingDoc(t *testing.T) {
 	dir := writeTree(t, map[string]string{"rendered.yaml": ingressV1beta1 + "----\napiVersion: v1\nkind: ConfigMap\n"})
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +249,7 @@ metadata:
   name: c
 ---
 ` + ingressV1beta1})
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +288,7 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 		"vendor/k8s.io/api/testdata/ing.yaml": ingressV1beta1,
 		"deploy/vendor/upstream/ing.yml":      ingressV1beta1,
 	})
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +301,7 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 	if want := []string{"deploy/vendor/upstream/ing.yml", "rendered.yaml"}; !reflect.DeepEqual(files, want) || sum.Files != 2 || sum.Skipped != 0 {
 		t.Errorf("objects in %v, summary %+v; want %v walked", files, sum, want)
 	}
-	inv, _, err = CollectFiles(filepath.Join(dir, "vendor"))
+	inv, _, err = CollectFiles(filepath.Join(dir, "vendor"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +314,7 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 // (`kustomize build overlays/prod > rendered`).
 func TestCollectFilesSingleFileAnyExtension(t *testing.T) {
 	dir := writeTree(t, map[string]string{"rendered": ingressV1beta1})
-	inv, sum, err := CollectFiles(filepath.Join(dir, "rendered"))
+	inv, sum, err := CollectFiles(filepath.Join(dir, "rendered"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +342,7 @@ kind: CronJob
 metadata:
   name: nightly
 `})
-	inv, _, err := CollectFiles(dir)
+	inv, _, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +368,7 @@ func TestCollectFilesCapsObjectRefs(t *testing.T) {
 		fmt.Fprintf(&b, "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm-%d\n", i)
 	}
 	dir := writeTree(t, map[string]string{"many.yaml": b.String()})
-	inv, _, err := CollectFiles(dir)
+	inv, _, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,11 +419,11 @@ items:
     name: restricted
 `
 	dir := writeTree(t, map[string]string{"stream/s.yaml": stream, "list/l.yaml": list})
-	want, _, err := CollectFiles(filepath.Join(dir, "stream"))
+	want, _, err := CollectFiles(filepath.Join(dir, "stream"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := CollectFiles(filepath.Join(dir, "list"))
+	got, _, err := CollectFiles(filepath.Join(dir, "list"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

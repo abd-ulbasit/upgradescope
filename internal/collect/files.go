@@ -21,6 +21,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 // manifestObject is one Kubernetes object found in a manifest stream.
@@ -714,12 +715,24 @@ func skipDir(path, name string) bool {
 //
 // A repository holds YAML that is not Kubernetes manifests (values files,
 // workflows, unrendered chart templates), so non-manifest documents are
-// skipped and documents that fail to parse become warnings in the summary,
+// skipped and documents that fail to decode become warnings in the summary,
 // never an error; the caller decides what to do when no object was found.
+// But a document that could not be decoded and whose text names an API
+// that lifecycle (the knowledge base) lists as removed may hide a blocker:
+// then api-usage is not available, its reason naming those documents, so
+// the engine's verdict is at least unknown.
+//
 // Object refs carry paths relative to root (the base name for a single
 // file). VCS metadata and dependency trees below root are not walked (see
 // skipDir). Only I/O errors fail the walk.
-func CollectFiles(root string) (inventory.Inventory, FilesSummary, error) {
+func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inventory, FilesSummary, error) {
+	removed := map[gvk]bool{}
+	for _, e := range lifecycle {
+		if e.Removed != nil {
+			removed[gvk{e.Group, e.Version, e.Kind}] = true
+		}
+	}
+	var hiding []string // "file:line (group/version Kind)" per unassessed part naming a removed API
 	counts := map[gvk]*inventory.APIUsage{}
 	var sum FilesSummary
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -756,6 +769,15 @@ func CollectFiles(root string) (inventory.Inventory, FilesSummary, error) {
 		}
 		for _, b := range bad {
 			sum.Warnings = append(sum.Warnings, FileWarning{File: rel, Line: b.line, Err: b.err, Unassessed: b.unassessed != nil})
+			named := namedAPIs(b.unassessed)
+			if i := slices.IndexFunc(named, func(g gvk) bool { return removed[g] }); i >= 0 {
+				g := named[i]
+				gv := g.version
+				if g.group != "" {
+					gv = g.group + "/" + gv
+				}
+				hiding = append(hiding, fmt.Sprintf("%s:%d (%s %s)", rel, b.line, gv, g.kind))
+			}
 		}
 		if len(objs) == 0 {
 			sum.Skipped++
@@ -771,5 +793,16 @@ func CollectFiles(root string) (inventory.Inventory, FilesSummary, error) {
 	if err != nil {
 		return manifestInventory("files", "files mode", nil), sum, err
 	}
-	return manifestInventory("files", "files mode", counts), sum, nil
+	inv := manifestInventory("files", "files mode", counts)
+	if len(hiding) > 0 {
+		listed := hiding[:min(len(hiding), 5)]
+		more := ""
+		if n := len(hiding) - len(listed); n > 0 {
+			more = fmt.Sprintf(" and %d more", n)
+		}
+		inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Reason: fmt.Sprintf(
+			"%d document(s) that name a removed API could not be decoded, so their objects were not assessed: %s%s",
+			len(hiding), strings.Join(listed, ", "), more)}
+	}
+	return inv, sum, nil
 }
