@@ -86,12 +86,13 @@ findings with a reason and an expiry date:
 With an `upgradescope serve` that agents push to, CI can ask a narrower
 question: *would these manifests block this cluster's upgrade?* The
 manifests are judged inside the cluster's latest stored inventory: its
-version, nodes, add-ons and team labels. Only what the manifests introduce
+version, nodes, add-ons, CRDs and team labels. Only what the manifests introduce
 counts toward the verdict, so a cluster's existing EOL add-on does not fail
-every pull request. With `cluster`, only the manifests' API usage is judged
-so far: an add-on the manifests introduce is not
-([#150](https://github.com/abd-ulbasit/upgradescope/issues/150)); gate it
-without `cluster`, or with `scan --files`.
+every pull request. The manifests' API usage, add-ons and CRDs are merged
+into the cluster's: an EOL add-on the manifests deploy, or a custom
+resource at a version the cluster's CRD (or a CRD in the manifests) does not
+serve, is the manifests' finding, also when the cluster already has the
+same.
 
 ```sh
 curl -sS --fail-with-body -X POST \
@@ -107,7 +108,8 @@ curl -sS --fail-with-body -X POST \
 - `path` names the file the stream was rendered to, so code scanning places
   the findings on it.
 - Without `cluster`, the manifests are judged on their own, like
-  `scan --files`, add-ons included. `format=json` (the default) returns
+  `scan --files`: API usage, add-ons, and custom resources against the
+  CRDs in the stream. `format=json` (the default) returns
   the full report.
 - `upgradescope.dev/ignore` annotations are applied, and so are the ignore
   rules of a `.upgradescope.yaml` sent in `config`

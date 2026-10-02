@@ -465,10 +465,14 @@ paths:
         Evaluates a YAML (or JSON) manifest stream against a target and
         stores nothing. Without `cluster`, the manifests are judged alone,
         like `scan --files`. With `cluster`, they are judged inside that
-        cluster's latest stored inventory (its version, nodes, add-ons and
-        team labels), and the verdict counts only what the manifests
-        introduce (findings tagged `source: manifest`); findings the
-        cluster already has are tagged `source: cluster`.
+        cluster's latest stored inventory (its version, nodes, add-ons,
+        CRDs and team labels), with the manifests' objects, add-ons and
+        CRDs merged into it, and the verdict counts only what the
+        manifests introduce (findings tagged `source: manifest`); findings
+        the cluster already has are tagged `source: cluster`. A removed or
+        deprecated API a posted object uses, an add-on the manifests
+        deploy, and a custom resource they write at a version the CRDs do
+        not serve are always the manifests'.
 
         `fail-on` works like `scan --fail-on` (default `blocker`): when an
         introduced finding reaches it, or the verdict is `unknown`, the

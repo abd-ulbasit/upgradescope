@@ -954,7 +954,10 @@ func usageRows(counts map[gvk]*inventory.APIUsage) []inventory.APIUsage {
 // pass. Warnings about documents decoded anyway (duplicate keys, objects
 // located by kubectl's decoder) are dropped. Object refs carry stream lines
 // and no file. Add-ons and CRDs are assessed as CollectFiles assesses them,
-// so the two gates judge a render alike.
+// so the server gate without ?cluster= judges a render as scan --files
+// does. With ?cluster=, the gate merges this inventory's API usage, add-ons
+// and CRDs into the cluster's and judges its custom resources again
+// against the merged CRDs (AssessCRDs).
 func CollectManifests(r io.Reader, addons []registry.AddOn) (inventory.Inventory, error) {
 	objs, ev, bad, err := parseManifestStream(r)
 	if err != nil {

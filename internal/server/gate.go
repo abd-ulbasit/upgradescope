@@ -43,15 +43,18 @@ var yamlContentTypes = map[string]bool{
 // With ?cluster=<name|id>, the cluster's latest inventory provides the
 // evaluation context (server version, nodes, add-ons, deprecated calls,
 // namespace team labels) and the manifest objects are upserted into its
-// API usage — "would THESE manifests block THIS cluster's upgrade". The
-// cluster as it is is evaluated too (the baseline): findings it already has
-// are tagged source "cluster" and kept for context, and the verdict judges
-// only the findings the manifests introduce (source "manifest"), so a
-// cluster's existing EOL add-on does not fail every PR. A removed or
-// deprecated API that a manifest object uses is always introduced, even
-// when the cluster already has objects at that API (see gateResult).
-// Without it, the manifests are evaluated standalone (api-usage only, like
-// scan --files).
+// API usage, the add-ons they deploy into its add-ons, and their CRDs and
+// custom resources into its CRDs (mergeManifests) — "would THESE
+// manifests block THIS cluster's upgrade". The cluster as it is is
+// evaluated too (the baseline): findings it already has are tagged source
+// "cluster" and kept for context, and the verdict judges only the findings
+// the manifests introduce (source "manifest"), so a cluster's existing EOL
+// add-on does not fail every PR. A removed or deprecated API that a
+// manifest object uses, an add-on the manifests deploy and a custom
+// resource they write at a version the CRDs do not serve are always
+// introduced, even when the cluster already has the same (see
+// introducedKeys and gateResult). Without it, the manifests are evaluated
+// standalone, like scan --files (API usage, add-ons and CRDs).
 //
 // ?fail-on=blocker|warning|never makes the gate fail like `scan --fail-on`,
 // whose default it shares (blocker): an introduced finding at or above the
@@ -156,14 +159,10 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		// not blamed on the PR.
 		base := engine.Evaluate(clusterInv, s.cfg.KB, target, s.now())
 		baseline = &base
-		// The findings the manifests' own objects produce: a removed or
-		// deprecated API a manifest object uses is introduced by the PR,
-		// even when the cluster already has objects at that API.
-		introduced = usageKeys(engine.Evaluate(manifests, s.cfg.KB, target, s.now()))
 		// Merge: cluster context + manifest API usage. The manifest objects
 		// are upserted into the cluster's API usage (see upsertUsage), and
-		// every other signal (server version, nodes, add-ons, deprecated
-		// calls, namespaces) stays.
+		// every other signal (server version, nodes, deprecated calls,
+		// namespaces) stays.
 		inv = clusterInv
 		inv.APIUsage = upsertUsage(clusterInv.APIUsage, manifests.APIUsage)
 		inv.Capabilities = maps.Clone(clusterInv.Capabilities)
@@ -171,6 +170,14 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 			inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{}
 		}
 		inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true}
+		// The manifests' add-ons and CRDs are merged too (mergeManifests),
+		// and the findings the manifests' own content produces are
+		// introduced by the PR (introducedKeys): a removed or deprecated
+		// API a manifest object uses, even when the cluster already has
+		// objects at that API, an add-on it deploys, a custom resource at
+		// a version the proposed CRDs do not serve.
+		side := mergeManifests(&inv, manifests)
+		introduced = introducedKeys(engine.Evaluate(side, s.cfg.KB, target, s.now()))
 	} else {
 		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	}
