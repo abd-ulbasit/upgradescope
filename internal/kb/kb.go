@@ -42,9 +42,17 @@ type UpgradeStep struct {
 // Load builds the KB from the embedded API lifecycle dataset, the embedded
 // add-on registry, and the default skew policy. It fails loudly on a
 // corrupt or empty dataset — a silent empty KB would mean silent green scans.
-func Load() (KB, error) {
-	f, err := parseLifecycle(apilifecycleJSON)
+func Load() (KB, error) { return load(apilifecycleJSON) }
+
+// load builds the KB from the given lifecycle dataset; Load passes the
+// embedded one. Beyond parsing, it refuses a dataset too small or with too
+// few removals to be the generated one (checkLifecycleFloors).
+func load(lifecycle []byte) (KB, error) {
+	f, err := parseLifecycle(lifecycle)
 	if err != nil {
+		return KB{}, err
+	}
+	if err := checkLifecycleFloors(f); err != nil {
 		return KB{}, err
 	}
 	maxKnown, err := inventory.ParseVersion(f.MaxKnownK8s)

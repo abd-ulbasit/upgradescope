@@ -56,6 +56,34 @@ func parseLifecycle(data []byte) (lifecycleFile, error) {
 	return f, nil
 }
 
+// The smallest dataset Load accepts. The shipped one has well over 200
+// entries, over 130 of them with a removal, and a refresh only adds (gen-kb
+// carries deleted types forward as tombstones), so a file under these
+// floors is not an old dataset but a damaged or gutted one: valid JSON that
+// would let every removed API scan as ready. (TestDatasetSanity checks the
+// content; this check runs in every binary.)
+const (
+	minLifecycleEntries  = 150
+	minLifecycleRemovals = 100
+)
+
+// checkLifecycleFloors reports a lifecycle dataset too small, or with too
+// few removals, to be the one gen-kb wrote.
+func checkLifecycleFloors(f lifecycleFile) error {
+	removals := 0
+	for _, e := range f.Entries {
+		if e.Removed != nil {
+			removals++
+		}
+	}
+	if len(f.Entries) < minLifecycleEntries || removals < minLifecycleRemovals {
+		return fmt.Errorf("kb: embedded apilifecycle.json is corrupt: %d entries (want >= %d), %d with a removal (want >= %d); "+
+			"it would judge removed APIs as served, so rebuild from a clean source tree (make gen-kb)",
+			len(f.Entries), minLifecycleEntries, removals, minLifecycleRemovals)
+	}
+	return nil
+}
+
 // Index is an O(1) lookup over lifecycle entries by group/version/kind.
 type Index struct {
 	byGVK map[GVK]APILifecycleEntry

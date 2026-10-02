@@ -352,7 +352,7 @@ into a table above, or under repair, when its mission reports.
 | KB-03 | CI reruns the API-lifecycle generator on every push and fails when the committed copy drifts; upstream drift is a warning. | `ci:kb-freshness` `TestDatasetSanity`; not audited: #99 |
 | KB-07 | CI validates the registry and runs `eol-sync -check` on pull requests that touch `registry/`. | `ci:registry` `TestValidate`; not audited: #99 (a pre-audit read of PR #82 found both steps skipped: "no merge base") |
 | KB-08 | The weekly `kb-refresh` opens a reviewable PR, CI re-validates it, and a broken refresh is never silent. | not audited: #99 (a pre-audit read found five failed Mondays and no issue) |
-| KB-11 | `kb.Load` fails loudly on an empty or corrupt dataset, never yielding a silently empty knowledge base. | `TestParseLifecycleFile` `TestLoadFS` `TestLoad`; an empty registry: not audited, #99 |
+| KB-11 | `kb.Load` fails loudly on an empty or corrupt dataset, never yielding a silently empty knowledge base. A lifecycle file that parses but has fewer than 150 entries or fewer than 100 with a removal is refused as corrupt. | `TestParseLifecycleFile` `TestLoadRefusesHollowLifecycleData` `TestCheckLifecycleFloors` `TestLoadFS` `TestLoad`; an empty registry: not audited, #99 |
 | KB-12 | Clean-room: no proprietary code, data, schemas or documents, and no other scanner's dataset copied. | not audited: #99 (KB-05's citations are the automated part) |
 | PF-05 | The agent's default requests and limits (50m/64Mi, 200m/256Mi) are enough. | not audited: #99 |
 | PF-07 | Each tick issues bounded, paged lists, so the agent's cost is predictable, unlike an informer cache. | `TestCollectAPIUsageFollowsListPagination` `TestCollectHelmPeakHeapIsBoundedByOneRelease`; not audited: #99 |
