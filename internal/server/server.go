@@ -208,6 +208,9 @@ type Server struct {
 	heldResponses    *byteBudget   // read, fleet read and /gate response bytes held for clients after their slot
 	slotWriteTimeout time.Duration // how long a response sent in its slot may take
 
+	observeGateBound func(bound int64) // test hook: each /gate answer's gateAnswerBound
+	maxGateAnswer    int64             // test override of gateAnswerLimit; 0 = --max-gate-bytes
+
 	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
 	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
 	outboxKick         chan struct{} // wakes the delivery worker after a commit

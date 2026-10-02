@@ -8,9 +8,13 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 // unreadClients sends request (a raw HTTP/1.1 request) on n TCP
@@ -75,20 +79,53 @@ func TestUnreadResponsesAreBounded(t *testing.T) {
 // /gate had the same hole: its response was built and written after the
 // evaluation slot was released, so a client that did not read it pinned
 // the report, the response and its encoding, ~32 MiB each with ?cluster=
-// against the same 17 MB push, for up to the 120s write timeout; 10 such
-// clients grew the live heap 320 MiB with the slot free. Its responses
-// are now encoded in the slot and held under the same budget as the
-// reads'.
+// against a 17 MB push, for up to the 120s write timeout; 10 such clients
+// grew the live heap 320 MiB with the slot free. Its responses are now
+// encoded in the slot and held under the same budget as the reads'. The
+// largest answers within the answer limit (--max-gate-bytes): ?cluster=
+// against a cluster with 100 objects of each of the KB's deprecated or
+// removed GVKs, with long names.
 func TestUnreadGateResponsesAreBounded(t *testing.T) {
 	if testing.Short() || raceEnabled {
-		t.Skip("stores a snapshot at the node budget; heap figures under the race detector mean nothing")
+		t.Skip("stores a snapshot with 13,600 object refs; heap figures under the race detector mean nothing")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
-	s := pushedLongPSPUsages(t)
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newSQLiteTestServer(t)
+	s.cfg.KB = k
+	s.slotWriteTimeout = time.Second
 	s.gateQueueTimeout = 5 * time.Minute // every request is served, none is turned away
-	req := fmt.Sprintf("POST /api/v1/gate?target=1.35&fail-on=never&cluster=prod-eu-1 HTTP/1.1\r\n"+
-		"Host: upgradescope\r\nContent-Type: application/x-yaml\r\nContent-Length: %d\r\n\r\n%s", len(deploymentManifest), deploymentManifest)
-	checkUnreadBounded(t, s, s.gateSlots, req, 10, maxGateDecodeHeap)
+	inv := testInventory()
+	for _, e := range k.APILifecycle {
+		if e.Deprecated == nil && e.Removed == nil {
+			continue
+		}
+		u := inventory.APIUsage{Group: e.Group, Version: e.Version, Kind: e.Kind, Count: 100, Namespaces: map[string]int{"team-a": 100}}
+		for i := range 100 {
+			u.Objects = append(u.Objects, inventory.ObjectRef{Namespace: "team-a", Name: fmt.Sprintf("o-%d-%s", i, strings.Repeat("x", 300))})
+		}
+		inv.APIUsage = append(inv.APIUsage, u)
+	}
+	rec := httptest.NewRecorder()
+	serveIngest(s, rec, pushReqBody(t, inv), false)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("push: status = %d (%.300s)", rec.Code, rec.Body)
+	}
+	const query = "/api/v1/gate?target=1.35&fail-on=never&cluster=prod-eu-1"
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, query, strings.NewReader(deploymentManifest))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.Len() < 4<<20 {
+		t.Fatalf("one gate: status %d, %d bytes (%.300s); want 200 with an answer of at least 4 MiB", rec.Code, rec.Body.Len(), rec.Body)
+	}
+	t.Logf("each answer is %d bytes", rec.Body.Len())
+	raw := fmt.Sprintf("POST %s HTTP/1.1\r\nHost: upgradescope\r\nContent-Type: application/x-yaml\r\nContent-Length: %d\r\n\r\n%s",
+		query, len(deploymentManifest), deploymentManifest)
+	checkUnreadBounded(t, s, s.gateSlots, raw, 10, maxGateDecodeHeap)
 }
 
 // pushedLongPSPUsages is a SQLite server that holds one push of

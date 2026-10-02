@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/abd-ulbasit/upgradescope/internal/codequality"
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
@@ -223,6 +224,17 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	resp := gateResult(rep, baseline, introduced)
 	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings
+	bound := gateAnswerBound(resp, g.format)
+	if s.observeGateBound != nil {
+		s.observeGateBound(bound)
+	}
+	if limit := s.gateAnswerLimit(); bound > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"the answer to this stream could take up to %d bytes, over the %s limit for a /gate answer "+
+				"(it lists every object the findings name, with its name, namespace and path); split the stream into several requests"+
+				" (with ?cluster=, the cluster's own findings count too)", bound, sizeString(limit)))
+		return
+	}
 	w.Header().Set("X-Upgradescope-Verdict", string(resp.Verdict))
 	status := http.StatusOK
 	if gateFails(resp, g.failOn) {
@@ -358,11 +370,11 @@ func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
 const maxArtifactPathBytes = 512
 
 // repoPath reports whether p can name a file in the repository: relative,
-// slash-separated, clean, inside the repository, without control
-// characters.
+// slash-separated, clean, inside the repository, valid UTF-8 without
+// control characters.
 func repoPath(p string) bool {
 	return !strings.HasPrefix(p, "/") && !strings.Contains(p, `\`) && path.Clean(p) == p &&
-		p != "." && p != ".." && !strings.HasPrefix(p, "../") && !strings.ContainsFunc(p, unicode.IsControl)
+		p != "." && p != ".." && !strings.HasPrefix(p, "../") && !strings.ContainsFunc(p, unicode.IsControl) && utf8.ValidString(p)
 }
 
 // usageKeys returns the keys of the API-usage findings (removed or

@@ -69,7 +69,7 @@ func TestGateSARIFPath(t *testing.T) {
 	}
 
 	// Only a clean, relative path inside the repository names a file.
-	for _, bad := range []string{"/etc/rendered.yaml", "../rendered.yaml", "a/../b.yaml", "./a.yaml", "a//b.yaml", `a\b.yaml`, ".", "a\nb"} {
+	for _, bad := range []string{"/etc/rendered.yaml", "../rendered.yaml", "a/../b.yaml", "./a.yaml", "a//b.yaml", `a\b.yaml`, ".", "a\nb", "a\xffb.yaml"} {
 		resp, raw := postGate(t, ts, "?target=1.35&path="+url.QueryEscape(bad), "", pspManifest, "application/x-yaml")
 		if resp.StatusCode != http.StatusUnprocessableEntity || !json.Valid(raw) || resp.Header.Get("X-Upgradescope-Verdict") != "" {
 			t.Errorf("path=%q: status %d (%s), want a 422 JSON error", bad, resp.StatusCode, raw)

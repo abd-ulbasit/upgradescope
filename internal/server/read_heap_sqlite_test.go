@@ -79,7 +79,8 @@ func storedHeapShapes() map[string]func(int) string {
 // copies every snapshot and report it reads: one push and its evaluation
 // within maxIngestDecodeHeap, the re-evaluation pass with every
 // evaluation outdated within maxReevaluationHeap, and the dearest /gate
-// stream with ?cluster= against the snapshot within maxGateDecodeHeap.
+// stream with ?cluster= against the snapshot within maxGateDecodeHeap
+// (answered, or 413 when the answer would be over the answer limit).
 // docs/operations.md adds these up for the chart's memory limit.
 func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 	if testing.Short() || raceEnabled {
@@ -116,10 +117,13 @@ func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 				req.Header.Set("Content-Type", "application/x-yaml")
 				s.Handler().ServeHTTP(rec, req)
 			})
-			if rec.Code != http.StatusOK || grew > maxGateDecodeHeap {
-				t.Errorf("gate ?cluster=: status %d (%.300s), the heap grew %d MiB; want 200 within %d MiB", rec.Code, rec.Body, grew>>20, maxGateDecodeHeap>>20)
+			// Against a cluster whose report is this large, the answer
+			// would be over the answer limit: 413, after the evaluation
+			// that costs the heap measured here.
+			if answered := rec.Code == http.StatusOK || rec.Code == http.StatusRequestEntityTooLarge; !answered || grew > maxGateDecodeHeap {
+				t.Errorf("gate ?cluster=: status %d (%.300s), the heap grew %d MiB; want 200 or 413 within %d MiB", rec.Code, rec.Body, grew>>20, maxGateDecodeHeap>>20)
 			}
-			t.Logf("gate ?cluster= grew the heap %d MiB", grew>>20)
+			t.Logf("gate ?cluster=: status %d, grew the heap %d MiB", rec.Code, grew>>20)
 		})
 	}
 }
