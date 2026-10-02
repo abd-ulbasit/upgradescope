@@ -160,6 +160,8 @@ var categoryText = map[engine.Category][2]string{
 	engine.CatVersionSkew:    {"Kubernetes version skew", "Component versions violate the Kubernetes version-skew policy."},
 	engine.CatChartIncompat:  {"Incompatible add-on version", "The add-on version does not support the target Kubernetes version."},
 	engine.CatKBStale:        {"Knowledge base out of date", "The knowledge base does not cover the Kubernetes version being assessed."},
+	engine.CatUnknownAPI: {"Unknown Kubernetes API",
+		"The object uses a built-in API group at a version or kind the knowledge base has no lifecycle data for; the target Kubernetes version may not serve it."},
 }
 
 // Unanchored counts the findings Write leaves out because none of their

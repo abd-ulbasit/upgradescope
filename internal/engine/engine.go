@@ -102,12 +102,21 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 //   - deprecated, removal beyond the window or unset → info, deprecated-api;
 //     a deprecation after the target is titled as such, and "projected"
 //     past the KB horizon
+//   - not in the KB, in a built-in group (core or one the KB has entries
+//     for) → info, unknown-api: the KB cannot say whether the target
+//     serves it (upstream may have deleted it), and dropping it would read
+//     as ready. Other groups (CRDs, aggregated APIs) are never in the KB
+//     and produce nothing.
 func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
 	idx := kb.NewIndex(k.APILifecycle)
+	builtin := map[string]bool{"": true}
+	for _, e := range k.APILifecycle {
+		builtin[e.Group] = true
+	}
 	var out []Finding
 	for _, u := range inv.APIUsage {
-		e, ok := idx.Lookup(u.Group, u.Version, u.Kind)
-		if !ok {
+		e, known := idx.Lookup(u.Group, u.Version, u.Kind)
+		if !known && !builtin[u.Group] {
 			continue
 		}
 		// Manifest objects (refs read from text carry a line) are proposed
@@ -132,6 +141,10 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 		}
 		gv := gvString(u.Group, u.Version)
 		switch {
+		case !known:
+			f.Category = CatUnknownAPI
+			f.Severity = SevInfo
+			f.Title = fmt.Sprintf("%s %s is not in the knowledge base (%s)", gv, u.Kind, pluralObjects(u.Count))
 		case e.Removed != nil && e.Removed.Compare(target) <= 0:
 			f.Category = CatRemovedAPI
 			f.Severity = SevBlocker
@@ -179,6 +192,9 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 				by = fmt.Sprintf(" Written by (first %d of %d objects): ", len(u.Objects), len(u.Objects)+u.ObjectsOmitted)
 			}
 			f.Detail += by + strings.Join(managers, ", ") + "."
+		}
+		if !known {
+			f.Detail += fmt.Sprintf(" The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes %s serves it.", target)
 		}
 		out = append(out, f)
 	}

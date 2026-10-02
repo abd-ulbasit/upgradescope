@@ -302,11 +302,96 @@ func TestEvalAPIUsageAuthoredObjectsOmittedRefs(t *testing.T) {
 	}
 }
 
-func TestEvalAPIUsageUnknownGVKIgnored(t *testing.T) {
-	inv := inventory.Inventory{
-		APIUsage: []inventory.APIUsage{{Group: "apps", Version: "v1", Kind: "Deployment", Count: 5}},
+// A tombstone (a type upstream deleted, RemovedInferred) is judged like
+// any removal: blocker from the release that removed it, warning one
+// release before (#124: a v1alpha3 DeviceClass at 1.34 read as ready).
+func TestEvalAPIUsageTombstoneBoundary(t *testing.T) {
+	k := testKB()
+	k.APILifecycle = append(k.APILifecycle, kb.APILifecycleEntry{
+		Group: "resource.k8s.io", Version: "v1alpha3", Kind: "DeviceClass",
+		Introduced: inventory.Version{Major: 1, Minor: 31}, Deprecated: vp(1, 34),
+		Removed: vp(1, 34), RemovedInferred: true,
+	})
+	inv := inventory.Inventory{APIUsage: []inventory.APIUsage{{
+		Group: "resource.k8s.io", Version: "v1alpha3", Kind: "DeviceClass", Count: 1,
+		Objects: []inventory.ObjectRef{{Name: "gpu", File: "dra.yaml", Line: 1}},
+	}}}
+	cases := []struct {
+		target int
+		want   []string
+	}{
+		{35, []string{"blocker removed-api/resource.k8s.io/v1alpha3/DeviceClass resource.k8s.io/v1alpha3 DeviceClass removed in 1.34 (1 object)"}},
+		{34, []string{"blocker removed-api/resource.k8s.io/v1alpha3/DeviceClass resource.k8s.io/v1alpha3 DeviceClass removed in 1.34 (1 object)"}},
+		{33, []string{"warning removed-api/resource.k8s.io/v1alpha3/DeviceClass resource.k8s.io/v1alpha3 DeviceClass removed in 1.34 (1 object)"}},
 	}
-	if fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 34}); len(fs) != 0 {
-		t.Fatalf("GVKs absent from the KB must produce no findings, got %+v", fs)
+	for _, c := range cases {
+		var got []string
+		for _, f := range evalAPIUsage(inv, k, inventory.Version{Major: 1, Minor: c.target}) {
+			got = append(got, string(f.Severity)+" "+f.Key+" "+f.Title)
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("target 1.%d: findings %q, want %q", c.target, got, c.want)
+		}
+	}
+}
+
+// A GVK the KB does not know is judged by its group. In a group the KB
+// knows (or core), it is a built-in API the KB has no lifecycle data for:
+// one upstream deleted, a typo, or a type never tagged. Dropping it read
+// as ready, so it is an unscored info finding (#124 KB-01). A CRD or
+// aggregated API group stays silent: the KB never covers those.
+func TestEvalAPIUsageUnknownGVK(t *testing.T) {
+	inv := inventory.Inventory{
+		APIUsage: []inventory.APIUsage{
+			// CRD and aggregated-API groups the KB has no entries in.
+			{Group: "cert-manager.io", Version: "v1", Kind: "Certificate", Count: 5},
+			{Group: "metrics.k8s.io", Version: "v1beta1", Kind: "PodMetrics", Count: 1},
+			// Known group, unknown version.
+			{Group: "batch", Version: "v2alpha1", Kind: "CronJob", Count: 2,
+				Namespaces: map[string]int{"default": 1, "": 1},
+				Objects: []inventory.ObjectRef{
+					{Namespace: "default", Name: "b", File: "jobs.yaml", Line: 9},
+					{Name: "a", File: "jobs.yaml", Line: 1},
+				}},
+			// Core group, unknown kind.
+			{Group: "", Version: "v1", Kind: "PodPreset", Count: 1, Namespaces: map[string]int{"shop": 1}},
+		},
+		Namespaces: testNamespaces(),
+	}
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 34})
+	want := []Finding{
+		{
+			Category: CatUnknownAPI, Severity: SevInfo,
+			Key:        "unknown-api/batch/v2alpha1/CronJob",
+			Title:      "batch/v2alpha1 CronJob is not in the knowledge base (2 objects)",
+			Detail:     "2 manifest object(s) use this API: namespace unset (1), default (1). The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes 1.34 serves it.",
+			Teams:      []string{"core"},
+			Namespaces: []string{"default"},
+			Citations:  []string{deprecationGuideURL},
+			Objects: []inventory.ObjectRef{
+				{Name: "a", File: "jobs.yaml", Line: 1},
+				{Namespace: "default", Name: "b", File: "jobs.yaml", Line: 9},
+			},
+		},
+		{
+			Category: CatUnknownAPI, Severity: SevInfo,
+			Key:        "unknown-api/core/v1/PodPreset",
+			Title:      "v1 PodPreset is not in the knowledge base (1 object)",
+			Detail:     "1 object(s) still stored/served at this version: shop (1). The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes 1.34 serves it.",
+			Teams:      []string{"storefront"},
+			Namespaces: []string{"shop"},
+			Citations:  []string{deprecationGuideURL},
+		},
+	}
+	if !reflect.DeepEqual(fs, want) {
+		t.Fatalf("findings =\n%+v\nwant\n%+v", fs, want)
+	}
+	// Known GVKs that are neither deprecated nor removed stay silent too.
+	k := testKB()
+	k.APILifecycle = append(k.APILifecycle, kb.APILifecycleEntry{Group: "batch", Version: "v1", Kind: "CronJob",
+		Introduced: inventory.Version{Major: 1, Minor: 21}})
+	inv.APIUsage = []inventory.APIUsage{{Group: "batch", Version: "v1", Kind: "CronJob", Count: 3}}
+	if fs := evalAPIUsage(inv, k, inventory.Version{Major: 1, Minor: 34}); len(fs) != 0 {
+		t.Errorf("a known, current API must produce no findings, got %+v", fs)
 	}
 }

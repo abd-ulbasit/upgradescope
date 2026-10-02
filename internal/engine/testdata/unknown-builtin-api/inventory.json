@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "files",
+  "source": "files",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "capabilities": {
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": false, "reason": "files mode"},
+    "helm": {"available": false, "reason": "files mode"},
+    "addons": {"available": false, "reason": "files mode"},
+    "versions": {"available": false, "reason": "files mode"}
+  },
+  "apiUsage": [
+    {"group": "batch", "version": "v2alpha1", "kind": "CronJob", "count": 1, "namespaces": {"jobs": 1},
+     "objects": [{"namespace": "jobs", "name": "nightly", "file": "jobs/cronjob.yaml", "line": 1}]},
+    {"group": "cert-manager.io", "version": "v1", "kind": "Certificate", "count": 2, "namespaces": {"shop": 2},
+     "objects": [
+       {"namespace": "shop", "name": "web", "file": "shop/certs.yaml", "line": 1},
+       {"namespace": "shop", "name": "api", "file": "shop/certs.yaml", "line": 12}
+     ]}
+  ]
+}

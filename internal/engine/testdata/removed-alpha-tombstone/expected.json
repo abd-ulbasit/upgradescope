@@ -1,0 +1,46 @@
+{
+  "clusterId": "files",
+  "findings": [
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: namespace unset (1).",
+      "key": "removed-api/resource.k8s.io/v1alpha3/DeviceClass",
+      "objects": [
+        {
+          "file": "dra/deviceclass.yaml",
+          "line": 1,
+          "name": "gpu.example.com"
+        }
+      ],
+      "remediation": "migrate to resource.k8s.io/v1 DeviceClass",
+      "severity": "blocker",
+      "title": "resource.k8s.io/v1alpha3 DeviceClass removed in 1.34 (1 object)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "addons",
+      "reason": "files mode"
+    },
+    {
+      "capability": "deprecated-calls",
+      "reason": "files mode"
+    },
+    {
+      "capability": "helm",
+      "reason": "files mode"
+    },
+    {
+      "capability": "versions",
+      "reason": "files mode"
+    }
+  ],
+  "ready": false,
+  "score": 75,
+  "target": "1.34",
+  "verdict": "blocked"
+}
