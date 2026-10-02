@@ -88,7 +88,7 @@ func TestSnapshotStringsAreNotAmplified(t *testing.T) {
 		}
 		return len(e.Report), rec.Body.Len()
 	}
-	const n = 300
+	const n = 80 // object names are at most 253 bytes
 	wantStored, wantRead := sizes(strings.Repeat("x", 3*n))
 	for _, name := range []string{strings.Repeat("<", 3*n), strings.Repeat("&", 3*n), strings.Repeat("\u2028", n)} {
 		stored, read := sizes(name)

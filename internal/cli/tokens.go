@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -159,6 +160,11 @@ once, to stdout; only its hash is stored. Give it to that cluster's agent
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cluster := args[0]
+			// The server refuses pushes under any other name, so a token
+			// bound to one could never be used.
+			if err := inventory.ValidateClusterName(cluster); err != nil {
+				return fmt.Errorf("cluster name: %w", err)
+			}
 			token, err := generateToken()
 			if err != nil {
 				return err

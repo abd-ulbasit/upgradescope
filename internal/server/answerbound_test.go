@@ -124,7 +124,10 @@ func TestGateAnswerBoundHolds(t *testing.T) {
 		var bound int64
 		s.observeGateBound = func(b int64) { bound = b }
 		inv := testInventoryWithPSP()
-		inv.APIUsage[0].Objects = []inventory.ObjectRef{{Namespace: name, Name: name, Manager: name}, {Name: "x" + name}}
+		// A cluster's namespaces are RFC 1123 labels (ingest refuses others);
+		// its object names may hold anything but / and %.
+		objName := strings.NewReplacer("/", "", "%", "").Replace(name)
+		inv.APIUsage[0].Objects = []inventory.ObjectRef{{Namespace: "team-a", Name: objName, Manager: name}, {Name: "x" + objName}}
 		rec := httptest.NewRecorder()
 		serveIngest(s, rec, pushReqBody(t, inv), false)
 		if rec.Code != http.StatusAccepted {

@@ -660,6 +660,12 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, "clusterName is required")
 		return
 	}
+	// A cluster name is an RFC 1123 subdomain, checked before anything is
+	// stored: "../<script>x" registered a cluster of that name (#37).
+	if err := inventory.ValidateClusterName(req.ClusterName); err != nil {
+		errJSON(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	// Per-cluster tokens authenticate exactly one cluster. 403 (not 401):
 	// the token is genuine, the target cluster is what's wrong. Checked
 	// before any store write so a mismatched push registers nothing.
@@ -745,7 +751,9 @@ const supportedInventorySchema = 1
 // decodePushedInventory parses and checks a pushed inventory, returning a
 // 422 message for one the server cannot judge: absent or null, another
 // schemaVersion (which includes {} and a missing one), or a serverVersion
-// that is not a Kubernetes 1.x version. A degraded inventory with no
+// that is not a Kubernetes 1.x version, or an identifier (a namespace,
+// object, node or Helm release name, a team label value) that is not
+// valid for what it names. A degraded inventory with no
 // serverVersion at all (the versions collector failed) is accepted and
 // judged at the cluster's last reported version (ingestSnapshot).
 func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
@@ -763,6 +771,13 @@ func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
 		if _, err := inventory.ParseTarget(inv.ServerVersion); err != nil {
 			return inv, "invalid inventory serverVersion: " + err.Error()
 		}
+	}
+	// Collectors read identifiers from objects the apiserver validated, so
+	// one that is not a valid Kubernetes identifier is not from a genuine
+	// inventory; reports repeat them, so they are refused before anything
+	// is stored or evaluated.
+	if err := inv.ValidateIdentifiers(); err != nil {
+		return inv, "invalid inventory: inventory." + err.Error()
 	}
 	return inv, ""
 }

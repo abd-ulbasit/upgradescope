@@ -7,17 +7,20 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/abd-ulbasit/upgradescope/internal/agent"
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
@@ -109,6 +112,22 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 	})
 }
 
+// validAgentNames checks, before any cluster access, the names an agent
+// sends: --cluster-name, which the server refuses pushes under unless it
+// is an RFC 1123 subdomain (empty: the cluster UID, which is one), and
+// --team-label, which must be a label key to name any label.
+func validAgentNames(opts agentOptions) error {
+	if opts.clusterName != "" {
+		if err := inventory.ValidateClusterName(opts.clusterName); err != nil {
+			return fmt.Errorf("invalid --cluster-name: %w", err)
+		}
+	}
+	if p := content.IsLabelKey(opts.teamLabel); len(p) > 0 {
+		return fmt.Errorf("invalid --team-label %q: not a label key (%s)", opts.teamLabel, strings.Join(p, "; "))
+	}
+	return nil
+}
+
 // buildAgentRESTConfig prefers in-cluster config (the agent's normal home)
 // and falls back to kubeconfig loading rules — the same rules as scan. An
 // explicit --kubeconfig or --context skips the in-cluster attempt entirely.
@@ -167,6 +186,9 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			}
 			if _, err := newAgentLogger(io.Discard, opts.logFormat, opts.logLevel); err != nil {
 				return err // a typo fails before any cluster access
+			}
+			if err := validAgentNames(opts); err != nil {
+				return err
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
