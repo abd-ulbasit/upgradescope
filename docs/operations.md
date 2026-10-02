@@ -11,6 +11,47 @@ Elsewhere:
 - metrics, probes and logs: [Metrics, logs and probes](observability.md);
 - every endpoint: the [REST API reference](reference/api.md).
 
+## Memory and request limits
+
+The server's memory is bounded by construction, not by hoping requests
+are small. Decoding is what costs memory, and it costs per node, not per
+byte: a 4 MiB YAML flow sequence `[1,1,…]` decoded to ~900 MB of heap,
+and 20 MiB of `{}` object refs in a snapshot to ~2.6 GB. So each request
+is measured before it is decoded:
+
+| | `POST /api/v1/gate` | `POST /api/v1/snapshots` |
+|---|---|---|
+| body cap (wire, and decompressed) | `--max-gate-bytes`, 10 MiB | `--max-snapshot-bytes`, 20 MiB |
+| per document | 4 MiB, 20,000 documents | — |
+| node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4 | 1M units: a JSON value 1, an object 8 |
+| worst live heap within the budget (measured) | ~155 MB | ~80 MB |
+| bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
+| decoded at once | 1, others wait up to 30s | 1, others wait up to 10s |
+
+Over a cap or a budget is `413`, before anything is decoded; the message
+says to split the stream or List. A body that does not fit the shared
+buffer budget, or a request that waits too long for its turn, gets `503`
+with `Retry-After` (the agent retries it). A body must arrive within the
+60s read timeout (about 350 KiB/s at 20 MiB), or it gets `408`, which the
+agent retries too. The node counts are an exact emulation of the YAML
+scanner and the JSON tokenizer, fuzzed against yaml.v3, kubectl's decoder
+and `encoding/json`, so they cannot be talked down. A realistic ~4 MiB
+`kubectl get -o yaml` List of Deployments is ~360k units and fits.
+
+Worst case for the chart's 512Mi server: one gate decode (~155 MB) plus
+one ingest (~80 MB) plus both body budgets (70 MiB), about 310 MB, inside
+the 460 MiB `GOMEMLIMIT` the chart derives from the limit. Set
+`GOMEMLIMIT` (about 90% of the container limit) when you run `serve` or
+`agent` outside the chart: the Go runtime does not read the container
+limit, and without it the collector lets garbage grow to as much as the
+live heap again before it runs.
+
+What is left is availability: a client that really sends 3 × the gate
+cap and then stalls makes other `/gate` requests `503` until the read
+timeout cuts it off (about 0.5 MiB/s of its bandwidth for 60s), and with
+an open read API that needs no credentials. A read token limits it to
+token holders; the same holds for pushes and the ingest tokens.
+
 ## What a push is judged as
 
 - **Stored as sent.** A snapshot keeps the inventory bytes the agent pushed,

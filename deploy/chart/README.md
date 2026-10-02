@@ -97,8 +97,8 @@ replica). With `agent.enabled=false` and `existingSecret`, the shared
 `ingestToken` key is optional: agents can use per-cluster tokens only, and
 each one can push only as its own cluster.
 
-Mint one token per cluster in the hub (printed once; only its hash is
-stored), then install each agent with it:
+Mint one token per cluster in the hub (printed once; the hub stores its
+sha256 hash and first 8 characters), then install each agent with it:
 
     kubectl -n upgradescope exec deploy/upgradescope-server -- \
       /upgradescope tokens create prod-eu-1                       # Postgres
@@ -199,7 +199,7 @@ from `secretKeyRef`, never as arguments, and never appear in a Deployment.
 
 | Env var | Secret key | Source |
 |---|---|---|
-| `UPGRADESCOPE_INGEST_TOKEN` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` (optional key without the agent) |
+| `UPGRADESCOPE_INGEST_TOKEN` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` (optional key without the agent); none with `server.sharedIngestToken=false` |
 | `UPGRADESCOPE_READ_TOKEN` (server) | `readToken` | `server.readToken`, or `server.existingSecret` with `server.readTokenFromSecret=true` |
 | `UPGRADESCOPE_ADMIN_TOKEN` (server) | `adminToken` | `server.adminToken`, or `server.existingSecret` with `server.adminTokenFromSecret=true` |
 | `UPGRADESCOPE_DB_URL` (server) | `server.database.key` | `server.database.existingSecret` (Postgres) |
@@ -238,6 +238,21 @@ settings, so the read token still protects all data.
 - Server behind a private CA: mount the CA bundle into the agent and set
   `SSL_CERT_DIR` to its directory; Go adds those certificates to the
   image's system roots (example in `values.yaml`).
+- HTTPS for the in-chart server: `server.tls.secretName` (an existing
+  `kubernetes.io/tls` Secret) or `server.tls.certManager.issuerRef` (the
+  chart renders a cert-manager `Certificate` for the Service names). The
+  in-chart agent then pushes to `https://` and trusts the Secret's
+  `ca.crt`; probes and the ServiceMonitor use HTTPS. Without it the agent
+  sends its bearer token over plain HTTP inside the cluster and logs a
+  warning saying so.
+- `server.sharedIngestToken=false` drops the shared, any-cluster ingest
+  token: only per-cluster tokens push, and the in-chart agent needs its own
+  (`agent.existingSecret` or `agent.serverToken`).
+- Memory: both containers get `GOMEMLIMIT` at 90% of their memory limit
+  (the Go runtime does not read the limit itself); `extraEnv` can set it
+  instead. The server's 512Mi holds its worst case: one `/gate` decode and
+  one snapshot ingest at their node budgets plus their buffered bodies
+  (see `docs/operations.md`).
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
   them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.

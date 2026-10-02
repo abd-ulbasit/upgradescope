@@ -93,6 +93,7 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "ingestToken": { "type": "string" },
+        "sharedIngestToken": { "type": "boolean" },
         "readToken": { "type": "string" },
         "existingSecret": { "$ref": "#/definitions/secretName" },
         "readTokenFromSecret": { "type": "boolean" },
@@ -148,6 +149,28 @@
               "properties": {
                 "enabled": { "type": "boolean" },
                 "secretName": { "$ref": "#/definitions/secretName" }
+              }
+            }
+          }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretName": { "$ref": "#/definitions/secretName" },
+            "certManager": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "issuerRef": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "group": { "type": "string" }
+                  }
+                }
               }
             }
           }

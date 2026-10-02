@@ -1,5 +1,7 @@
 {{- if .Values.server.enabled }}
 {{- $postgres := include "upgradescope.postgres" . }}
+{{- $tls := include "upgradescope.serverTLSSecret" . }}
+{{- $memLimit := include "upgradescope.goMemLimit" (dict "resources" .Values.server.resources "extraEnv" .Values.server.extraEnv) }}
 {{- if and (gt (int .Values.server.replicas) 1) (not $postgres) }}
 {{- fail "server.replicas > 1 needs server.database.existingSecret (Postgres): SQLite on a ReadWriteOnce volume has a single writer" }}
 {{- end }}
@@ -76,6 +78,12 @@ spec:
             {{- if .Values.server.teamMap }}
             - "--team-map=/etc/upgradescope/team-map/team-map.yaml"
             {{- end }}
+            {{- if $tls }}
+            # HTTPS with the server.tls Secret, read at startup: a renewed
+            # certificate takes a pod restart.
+            - --tls-cert-file=/etc/upgradescope/tls/tls.crt
+            - --tls-key-file=/etc/upgradescope/tls/tls.key
+            {{- end }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}
@@ -84,6 +92,12 @@ spec:
           # unset), never argv, and never appear in the Deployment: only the
           # Secrets hold them.
           env:
+            {{- with $memLimit }}
+            # 90% of the memory limit: the Go runtime does not read it.
+            - name: GOMEMLIMIT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.server.sharedIngestToken }}
             - name: UPGRADESCOPE_INGEST_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -93,6 +107,7 @@ spec:
                   # No in-chart agent: a hub may accept per-cluster tokens only.
                   optional: true
                   {{- end }}
+            {{- end }}
             {{- if include "upgradescope.readTokenEnabled" . }}
             - name: UPGRADESCOPE_READ_TOKEN
               valueFrom:
@@ -154,6 +169,9 @@ spec:
             httpGet:
               path: /healthz
               port: http
+              {{- if $tls }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: 5
             periodSeconds: 15
           # /readyz pings the database, so the pod leaves the Service while
@@ -162,13 +180,16 @@ spec:
             httpGet:
               path: /readyz
               port: http
+              {{- if $tls }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: 2
             periodSeconds: 5
           {{- with .Values.server.securityContext }}
           securityContext: {{- toYaml . | nindent 12 }}
           {{- end }}
           resources: {{- toYaml .Values.server.resources | nindent 12 }}
-          {{- if or (not $postgres) .Values.server.teamMap .Values.server.extraVolumeMounts }}
+          {{- if or (not $postgres) .Values.server.teamMap $tls .Values.server.extraVolumeMounts }}
           volumeMounts:
             {{- if not $postgres }}
             - name: data
@@ -179,12 +200,25 @@ spec:
               mountPath: /etc/upgradescope/team-map
               readOnly: true
             {{- end }}
+            {{- if $tls }}
+            - name: tls
+              mountPath: /etc/upgradescope/tls
+              readOnly: true
+            {{- end }}
             {{- with .Values.server.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or (not $postgres) .Values.server.teamMap .Values.server.extraVolumes }}
+      {{- if or (not $postgres) .Values.server.teamMap $tls .Values.server.extraVolumes }}
       volumes:
+        {{- if $tls }}
+        - name: tls
+          secret:
+            secretName: {{ $tls }}
+            items:
+              - {key: tls.crt, path: tls.crt}
+              - {key: tls.key, path: tls.key}
+        {{- end }}
         {{- if not $postgres }}
         - name: data
           {{- if .Values.server.persistence.enabled }}

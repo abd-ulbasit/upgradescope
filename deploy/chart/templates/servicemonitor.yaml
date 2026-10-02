@@ -63,6 +63,18 @@ spec:
     - port: http
       path: /metrics
       interval: {{ .Values.metrics.serviceMonitor.interval }}
+      {{- with include "upgradescope.serverTLSSecret" . }}
+      scheme: https
+      tlsConfig:
+        serverName: {{ printf "%s.%s.svc" (include "upgradescope.serverFullname" $) $.Release.Namespace }}
+        # The CA of the server.tls Secret (cert-manager CA and self-signed
+        # issuers write it); for a publicly trusted certificate, override
+        # this ServiceMonitor or drop ca.
+        ca:
+          secret:
+            name: {{ . }}
+            key: ca.crt
+      {{- end }}
       {{- if include "upgradescope.readTokenEnabled" . }}
       # The read token guards /metrics too (per-cluster scores).
       authorization:

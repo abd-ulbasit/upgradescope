@@ -139,6 +139,9 @@ agent:
     readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
+  # The memory limit also sets GOMEMLIMIT to 90% of it (the Go runtime does
+  # not read the container limit itself); set GOMEMLIMIT in extraEnv to
+  # override. Without a memory limit GOMEMLIMIT is not set.
   resources:
     requests:
       cpu: 50m
@@ -160,6 +163,12 @@ server:
   # the old token up and generate a new one on every render: under GitOps
   # set this or existingSecret. Ignored when existingSecret is set.
   ingestToken: ""
+  # -- Serve the shared ingest token at all. It may push as ANY cluster; false
+  # leaves only per-cluster tokens (`upgradescope tokens create <cluster>`,
+  # each bound to one cluster name): the chart Secret holds no ingestToken,
+  # serve gets none, and the in-chart agent needs its own token
+  # (agent.existingSecret or agent.serverToken).
+  sharedIngestToken: true
   # -- Optional bearer token for the read API. EMPTY = READ API IS OPEN —
   # acceptable behind a ClusterIP Service on a private cluster, but set one
   # before exposing the Service in any way. With existingSecret the value
@@ -242,6 +251,24 @@ server:
       # issues via annotations). Default name: <fullname>-server-tls.
       enabled: true
       secretName: ""
+  # HTTPS on the server's own port. Without it the in-chart agent pushes its
+  # bearer token over plain HTTP inside the cluster (the agent logs a
+  # warning). The certificate must name the Service
+  # (<fullname>-server.<namespace>.svc); the in-chart agent then pushes to
+  # https:// and trusts the Secret's ca.crt, when it has one, on top of its
+  # image's roots. Probes and the ServiceMonitor switch to HTTPS; an Ingress
+  # in front needs its controller's backend-protocol annotation (e.g.
+  # nginx.ingress.kubernetes.io/backend-protocol: HTTPS). serve reads the
+  # certificate at startup, so a renewal takes a pod restart.
+  tls:
+    # -- An existing kubernetes.io/tls Secret (tls.crt, tls.key, optional
+    # ca.crt) for HTTPS on the server's own port; see the comment above.
+    secretName: ""
+    certManager:
+      # -- Or have cert-manager issue one for the Service names (and
+      # ingress.host) into <fullname>-server-tls, e.g.
+      # {name: cluster-ca, kind: ClusterIssuer}. Needs the cert-manager CRDs.
+      issuerRef: {}
   serviceAccount:
     # -- The server never calls the Kubernetes API: it gets its own
     # ServiceAccount and its pod mounts no API token. create=false with an
@@ -285,6 +312,9 @@ server:
     readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
+  # Sets GOMEMLIMIT as agent.resources does. 512Mi holds one /gate decode
+  # and one snapshot ingest at their worst (~155 MB and ~80 MB of heap) plus
+  # their buffered bodies (30 and 40 MiB): see docs/operations.md.
   resources:
     requests:
       cpu: 100m
