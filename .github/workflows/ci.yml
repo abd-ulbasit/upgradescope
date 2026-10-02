@@ -119,6 +119,7 @@ jobs:
               - 'hack/dashboard-smoke.sh'
               # the sizes release-check compares with the build
               - 'hack/check-doc-sizes.sh'
+              - 'hack/flags-diff.sh'
               - 'README.md'
               - 'docs/operations/install.md'
               - 'go.mod'
@@ -434,6 +435,14 @@ jobs:
       # the linux/amd64 and linux/arm64 images from Dockerfile.release.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - run: make release-check
+      # The CLI as the last release shipped it against this tree, through
+      # `--help`: a removed flag, a changed default or usage line must be
+      # named under CHANGELOG.md's Changed (#167). Needs the tags, hence the
+      # full checkout above. It runs where the changelog is judged, with the
+      # release; hack/flags-diff.sh is a release input, and `make flags-diff`
+      # runs it before a release PR.
+      - name: every CLI break since the last release is in the changelog
+        run: make flags-diff
 
   # The Action as a consumer runs it, on Linux and macOS runners. make
   # action-test drives action/run.sh offline (input validation, the
