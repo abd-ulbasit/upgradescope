@@ -39,7 +39,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	_, inv, err := s.latestInventory(ctx, c.ID)
+	snap, inv, err := s.latestInventory(ctx, c.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
 		return
@@ -48,8 +48,8 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, "loading latest snapshot", err)
 		return
 	}
-	if notApplicable(inv, target) {
-		errJSON(w, http.StatusNotFound, fmt.Sprintf("cluster %s already runs %s: target %s is not applicable", c.Name, inv.ServerVersion, target))
+	if version := judgedAt(snap, inv); notApplicable(version, target) {
+		errJSON(w, http.StatusNotFound, fmt.Sprintf("cluster %s already runs %s: target %s is not applicable", c.Name, version, target))
 		return
 	}
 	eval, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String())

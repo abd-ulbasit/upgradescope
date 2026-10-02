@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -13,7 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
-	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -193,11 +191,7 @@ func (c clusterCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		// Only the server version decides the targets; skip decoding the
 		// rest of the inventory. A corrupt one leaves the extra targets.
-		var head struct {
-			ServerVersion string `json:"serverVersion"`
-		}
-		_ = json.Unmarshal(snap.Inventory, &head)
-		for _, t := range s.evalTargets(inventory.Inventory{ServerVersion: head.ServerVersion}) {
+		for _, t := range s.evalTargets(judgedVersion(snap)) {
 			e, err := s.cfg.Store.CurrentEvaluation(ctx, cl.ID, t.String())
 			if errors.Is(err, store.ErrNotFound) {
 				continue

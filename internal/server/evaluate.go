@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -36,11 +37,12 @@ import (
 const reevaluateInterval = time.Hour
 
 // evalTargets lists the targets a snapshot is evaluated against: the
-// default (next minor above the inventory's server version; skipped when
-// unparseable) plus every configured extra target, deduped. Targets at or
-// below the cluster's current minor are not applicable and are skipped.
-func (s *Server) evalTargets(inv inventory.Inventory) []inventory.Version {
-	server, err := inventory.ParseVersion(inv.ServerVersion)
+// default (next minor above serverVersion, the version the snapshot is
+// judged at; skipped when unparseable) plus every configured extra
+// target, deduped. Targets at or below the cluster's current minor are
+// not applicable and are skipped.
+func (s *Server) evalTargets(serverVersion string) []inventory.Version {
+	server, err := inventory.ParseVersion(serverVersion)
 	known := err == nil
 	targets := make([]inventory.Version, 0, len(s.extraTargets)+1)
 	if known {
@@ -57,11 +59,30 @@ func (s *Server) evalTargets(inv inventory.Inventory) []inventory.Version {
 	return targets
 }
 
-// notApplicable reports whether target is at or below the inventory's
-// server version: the cluster already runs it.
-func notApplicable(inv inventory.Inventory, target inventory.Version) bool {
-	server, err := inventory.ParseVersion(inv.ServerVersion)
+// notApplicable reports whether target is at or below serverVersion: the
+// cluster already runs it.
+func notApplicable(serverVersion string, target inventory.Version) bool {
+	server, err := inventory.ParseVersion(serverVersion)
 	return err == nil && target.Compare(server) <= 0
+}
+
+// judgedVersion is the server version a stored snapshot is judged at
+// (store.Snapshot.ServerVersion): the column, or for a row stored before
+// it existed, the inventory's own serverVersion — decoding only that.
+func judgedVersion(snap store.Snapshot) string {
+	if snap.ServerVersion != "" {
+		return snap.ServerVersion
+	}
+	var head struct {
+		ServerVersion string `json:"serverVersion"`
+	}
+	_ = json.Unmarshal(snap.Inventory, &head) // corrupt: no version, as for a degraded push
+	return head.ServerVersion
+}
+
+// judgedAt is judgedVersion for a snapshot whose inventory is decoded.
+func judgedAt(snap store.Snapshot, inv inventory.Inventory) string {
+	return cmp.Or(snap.ServerVersion, inv.ServerVersion)
 }
 
 // hashTeamMap fingerprints the team map for staleness checks ("" = none).
@@ -207,6 +228,12 @@ func (s *Server) outboxFor(cluster store.Cluster, deltas []targetDelta, now time
 // transaction. A duplicate (same hash as the latest snapshot) commits only
 // the touch and the push's envelope, then re-evaluates the stored
 // snapshot where stale.
+//
+// snap.ServerVersion arrives as the inventory's own version. A degraded
+// push that reported none (its versions collector failed) is judged at
+// the previous snapshot's instead, so the cluster keeps its default
+// target and its cells: they carry the engine's verdict on what the push
+// did report — unknown at best, since versions is a required capability.
 func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory) (int64, bool, error) {
 	// A duplicate (the agent's hourly force-sync) is the common push: go
 	// straight to re-evaluating what is stale, instead of evaluating every
@@ -217,6 +244,9 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
 		}
+		if err == nil && snap.ServerVersion == "" {
+			snap.ServerVersion = judgedVersion(latest)
+		}
 		if err == nil && latest.Hash == snap.Hash {
 			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap})
 			if err != nil {
@@ -225,7 +255,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			// Not a duplicate after all (another push moved the cluster on
 			// meanwhile): the snapshot is stored without evaluations, and
 			// reevaluate fills in every target.
-			return snapID, dup, s.reevaluate(ctx, cluster, snapID, inv)
+			return snapID, dup, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv)
 		}
 	}
 
@@ -237,7 +267,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	now := s.now()
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap}
 	var deltas []targetDelta
-	for _, target := range s.evalTargets(inv) {
+	for _, target := range s.evalTargets(snap.ServerVersion) {
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
 		if err != nil {
 			return 0, false, err
@@ -258,7 +288,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			}
 			cluster.ID = c.ID
 		}
-		return snapID, true, s.reevaluate(ctx, cluster, snapID, inv)
+		return snapID, true, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv)
 	}
 	if len(batch.Outbox) > 0 {
 		s.kickOutbox()
@@ -271,13 +301,13 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 // are refreshed in place, changed ones inserted with their notifications.
 // A concurrent writer that got there first (store.ErrConflict) has done
 // the same work, so the pass is dropped.
-func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, inv inventory.Inventory) error {
+func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory) error {
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
 	batch := store.EvaluationBatch{ClusterID: cluster.ID, SnapshotID: snapID, Current: map[string]int64{}}
 	var deltas []targetDelta
-	for _, target := range s.evalTargets(inv) {
+	for _, target := range s.evalTargets(serverVersion) {
 		cur, err := s.cfg.Store.CurrentEvaluation(ctx, cluster.ID, target.String())
 		found := err == nil
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -334,7 +364,7 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		snap, err := s.cfg.Store.LatestSnapshot(ctx, c.ID)
+		snap, inv, err := s.latestInventory(ctx, c.ID)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
@@ -342,12 +372,7 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 			log.Printf("server: re-evaluation: latest snapshot of cluster %d: %v", c.ID, err)
 			continue
 		}
-		var inv inventory.Inventory
-		if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
-			log.Printf("server: re-evaluation: stored inventory of cluster %d (snapshot %d) is corrupt: %v", c.ID, snap.ID, err)
-			continue
-		}
-		if err := s.reevaluate(ctx, c, snap.ID, inv); err != nil {
+		if err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv); err != nil {
 			log.Printf("server: re-evaluation of cluster %d: %v", c.ID, err)
 		}
 	}

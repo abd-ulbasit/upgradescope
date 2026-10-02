@@ -405,12 +405,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// its disconnecting must not abort the commit (it would retry and get a
 	// duplicate); the transaction keeps the write all-or-nothing either way.
 	snapID, duplicate, err := s.ingestSnapshot(context.WithoutCancel(ctx), cluster, store.Snapshot{
-		ClusterID:    cluster.ID,
-		Hash:         hash,
-		KBVersion:    req.KBVersion,
-		AgentVersion: req.AgentVersion,
-		ReceivedAt:   now,
-		Inventory:    canonical,
+		ClusterID:     cluster.ID,
+		Hash:          hash,
+		KBVersion:     req.KBVersion,
+		AgentVersion:  req.AgentVersion,
+		ReceivedAt:    now,
+		ServerVersion: inv.ServerVersion, // "" (degraded): ingestSnapshot inherits the last one
+		Inventory:     canonical,
 	}, inv)
 	var conflict *store.ClusterUIDConflictError
 	if errors.As(err, &conflict) { // another push bound the name meanwhile
@@ -436,7 +437,8 @@ const supportedInventorySchema = 1
 // 422 message for one the server cannot judge: absent or null, another
 // schemaVersion (which includes {} and a missing one), or a serverVersion
 // that is not a Kubernetes 1.x version. A degraded inventory with no
-// serverVersion at all (the versions collector failed) is accepted.
+// serverVersion at all (the versions collector failed) is accepted and
+// judged at the cluster's last reported version (ingestSnapshot).
 func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
 	var inv inventory.Inventory
 	if t := bytes.TrimSpace(raw); len(t) == 0 || bytes.Equal(t, []byte("null")) {
@@ -532,15 +534,16 @@ func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.C
 }
 
 // defaultTarget computes a cluster's default evaluation target (next minor
-// above the latest snapshot's server version) and returns the parsed latest
-// inventory alongside so callers don't unmarshal twice. Errors:
-// store.ErrNotFound (no snapshots) or a corrupt/unparseable-version error.
+// above the version its latest snapshot is judged at — judgedVersion) and
+// returns the parsed latest inventory alongside so callers don't
+// unmarshal twice. Errors: store.ErrNotFound (no snapshots) or a
+// corrupt/unparseable-version error.
 func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.Version, inventory.Inventory, error) {
-	_, inv, err := s.latestInventory(ctx, clusterID)
+	snap, inv, err := s.latestInventory(ctx, clusterID)
 	if err != nil {
 		return inventory.Version{}, inventory.Inventory{}, err
 	}
-	server, err := inventory.ParseVersion(inv.ServerVersion)
+	server, err := inventory.ParseVersion(judgedAt(snap, inv))
 	if err != nil {
 		return inventory.Version{}, inv, fmt.Errorf("latest snapshot has no parseable server version: %w", err)
 	}
@@ -672,10 +675,10 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	detail := clusterDetail{Cluster: c, Stale: s.clusterStale(c, s.now()), Evaluations: []evalSummary{}}
 	var targets []inventory.Version
-	if _, inv, err := s.latestInventory(ctx, c.ID); err == nil {
-		detail.ServerVersion = inv.ServerVersion
+	if snap, inv, err := s.latestInventory(ctx, c.ID); err == nil {
+		detail.ServerVersion = judgedAt(snap, inv)
 		detail.Capabilities = inv.Capabilities
-		targets = s.evalTargets(inv)
+		targets = s.evalTargets(detail.ServerVersion)
 	} else {
 		targets = s.extraTargets
 	}
@@ -701,7 +704,7 @@ type reportMeta struct {
 	EvaluatedAt   time.Time `json:"evaluatedAt"`
 	SnapshotID    int64     `json:"snapshotId"`
 	Source        string    `json:"source"`                  // sourceStored | sourceWhatIf
-	ServerVersion string    `json:"serverVersion,omitempty"` // of the latest snapshot
+	ServerVersion string    `json:"serverVersion,omitempty"` // the version the latest snapshot is judged at (judgedVersion)
 	NotApplicable bool      `json:"notApplicable,omitempty"` // target at or below ServerVersion
 }
 
@@ -716,7 +719,8 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 	if err != nil {
 		return engine.Report{}, reportMeta{}, err
 	}
-	meta := reportMeta{ServerVersion: inv.ServerVersion, NotApplicable: notApplicable(inv, target)}
+	version := judgedAt(snap, inv)
+	meta := reportMeta{ServerVersion: version, NotApplicable: notApplicable(version, target)}
 	e, err := s.cfg.Store.CurrentEvaluation(ctx, clusterID, target.String())
 	switch {
 	case err == nil:

@@ -33,7 +33,7 @@ type fleetRow struct {
 	Name          string                `json:"name"`
 	LastSeen      time.Time             `json:"lastSeen"`                // the agent's last push, duplicates included
 	Stale         bool                  `json:"stale"`                   // no push within --stale-after: the cells are that old
-	ServerVersion string                `json:"serverVersion,omitempty"` // of the latest snapshot
+	ServerVersion string                `json:"serverVersion,omitempty"` // the version the latest snapshot is judged at (judgedVersion)
 	Cells         map[string]*fleetCell `json:"cells"`                   // target → cell; nil = no current evaluation (or not applicable)
 	NotApplicable []string              `json:"notApplicable,omitempty"` // requested targets at or below ServerVersion
 }
@@ -49,6 +49,7 @@ type clusterState struct {
 	store.Cluster
 	snap        store.Snapshot
 	inv         inventory.Inventory
+	version     string // judgedAt(snap, inv)
 	hasSnapshot bool
 }
 
@@ -66,7 +67,7 @@ func (s *Server) clusterStates(ctx context.Context) ([]clusterState, error) {
 		snap, inv, err := s.latestInventory(ctx, c.ID)
 		switch {
 		case err == nil:
-			cs.snap, cs.inv, cs.hasSnapshot = snap, inv, true
+			cs.snap, cs.inv, cs.version, cs.hasSnapshot = snap, inv, judgedAt(snap, inv), true
 		case errors.Is(err, store.ErrNotFound):
 		case errors.Is(err, errCorruptInventory):
 			log.Printf("server: fleet: %v", err)
@@ -114,11 +115,11 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	for _, c := range states {
 		row := fleetRow{ClusterID: c.ID, Name: c.Name, LastSeen: c.LastSeen, Stale: s.clusterStale(c.Cluster, now), Cells: map[string]*fleetCell{}}
 		if c.hasSnapshot {
-			row.ServerVersion = c.inv.ServerVersion
+			row.ServerVersion = c.version
 		}
 		for _, t := range targets {
 			row.Cells[t.String()] = nil // explicit null unless a current evaluation exists
-			if c.hasSnapshot && notApplicable(c.inv, t) {
+			if c.hasSnapshot && notApplicable(c.version, t) {
 				row.NotApplicable = append(row.NotApplicable, t.String())
 				continue
 			}
@@ -168,14 +169,14 @@ func (s *Server) fleetDefaultTargets(states []clusterState) []inventory.Version 
 		if !c.hasSnapshot {
 			continue
 		}
-		if server, err := inventory.ParseVersion(c.inv.ServerVersion); err == nil {
+		if server, err := inventory.ParseVersion(c.version); err == nil {
 			add(server.Next())
 		}
 	}
 	for _, v := range s.extraTargets {
 		applicable := false
 		for _, c := range states {
-			if !c.hasSnapshot || !notApplicable(c.inv, v) {
+			if !c.hasSnapshot || !notApplicable(c.version, v) {
 				applicable = true
 				break
 			}
@@ -240,7 +241,7 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 			missing = append(missing, c.Name)
 			continue
 		}
-		if notApplicable(c.inv, target) {
+		if notApplicable(c.version, target) {
 			notApp = append(notApp, c.Name)
 			continue
 		}
