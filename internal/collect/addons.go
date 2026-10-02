@@ -400,9 +400,6 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 	var out []inventory.AddOnInstance
 	for in, evs := range byInstall {
 		inst := inventory.AddOnInstance{ID: in.id}
-		if in.ns != "" {
-			inst.Namespaces = []string{in.ns}
-		}
 		var podVersion, appVersion string
 		for _, e := range evs {
 			if strength[e.source] > strength[inst.Source] {
@@ -414,6 +411,10 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 			} else {
 				podVersion = olderVersion(podVersion, e.version)
 			}
+		}
+		// "" is a namespace too: a manifest object's left unset.
+		if inst.Source != "ingressclass" {
+			inst.Namespaces = []string{in.ns}
 		}
 		// A release's appVersion is authoritative; a chart without one
 		// falls back to the image tag or labels, never to the chart version.

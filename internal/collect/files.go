@@ -24,10 +24,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/registry"
 )
 
 // manifestObject is one Kubernetes object found in a manifest stream.
@@ -35,6 +37,18 @@ import (
 type manifestObject struct {
 	group, version, kind string
 	ref                  inventory.ObjectRef
+	// Add-on evidence, set only on the objects kubectl's decoder found
+	// (kubectlDecode): a workload's pod template, an IngressClass's
+	// controller.
+	template          *podTemplate
+	ingressController string
+}
+
+// podTemplate is what add-on detection reads of a pod template: its
+// labels, and its init-container and container images.
+type podTemplate struct {
+	labels map[string]string
+	images []string
 }
 
 // docError is a problem with part of a manifest stream. unassessed is the
@@ -62,7 +76,8 @@ const jsonPeek = 4096
 // parseManifestStream decodes one YAML/JSON stream as kubectl apply -f
 // does (apimachinery's YAMLOrJSONDecoder, then the unstructured JSON
 // scheme) and returns the Kubernetes objects in it, in stream order, with
-// their lines.
+// their lines, and the add-on evidence of the objects counted (see
+// kubectlDecode).
 //
 // A stream whose first non-space byte (in the first 4 KiB) is "{" is JSON,
 // and every value in it is decoded: NDJSON, pretty-printed (`jq
@@ -87,10 +102,10 @@ const jsonPeek = 4096
 // so it ends parsing with one entry holding the rest (the document before
 // it is still counted, although kubectl drops it with the rest). err is
 // only ever a read error from r.
-func parseManifestStream(r io.Reader) (objs []manifestObject, bad []docError, err error) {
+func parseManifestStream(r io.Reader) (objs []manifestObject, ev addOnEvidence, bad []docError, err error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return nil, nil, err
+		return nil, addOnEvidence{}, nil, err
 	}
 	p := &streamParser{data: data}
 	for i, c := range data {
@@ -105,7 +120,7 @@ func parseManifestStream(r io.Reader) (objs []manifestObject, bad []docError, er
 	if yamlFrom >= 0 {
 		p.yamlStream(yamlFrom)
 	}
-	return p.objs, p.bad, nil
+	return p.objs, p.ev, p.bad, nil
 }
 
 // streamParser holds one stream being decoded and what was found in it.
@@ -113,7 +128,21 @@ type streamParser struct {
 	data     []byte
 	newlines []int // offsets of '\n' in data
 	objs     []manifestObject
+	ev       addOnEvidence
 	bad      []docError
+}
+
+// addEvidence adds the add-on evidence of objects kubectl's decoder
+// found in a document that is counted.
+func (p *streamParser) addEvidence(kubectl []manifestObject) {
+	for _, o := range kubectl {
+		if o.template != nil {
+			p.ev.addPod(o.ref.Namespace, o.template.labels, o.template.images)
+		}
+		if o.ingressController != "" {
+			p.ev.ingressControllers = append(p.ev.ingressControllers, o.ingressController)
+		}
+	}
 }
 
 // line returns the 1-based line of byte offset off.
@@ -312,6 +341,7 @@ func (p *streamParser) decoded(root *yaml.Node, yerr error, text []byte, first i
 	}
 	p.bad = append(p.bad, warnings...)
 	p.objs = append(p.objs, objs...)
+	p.addEvidence(kubectl)
 }
 
 // useKubectl counts objects kubectl's decoder found, at line first.
@@ -320,6 +350,7 @@ func (p *streamParser) useKubectl(objs []manifestObject, first int, renderedFrom
 		o.ref.Line, o.ref.RenderedFrom = first, renderedFrom
 		p.objs = append(p.objs, o)
 	}
+	p.addEvidence(objs)
 }
 
 // kubectlDecode returns every object kubectl apply -f sends for one YAML
@@ -328,7 +359,11 @@ func (p *streamParser) useKubectl(objs []manifestObject, first int, renderedFrom
 // node) and the unstructured JSON scheme, lists flattened as
 // FlattenListVisitor does. A value that is not an object, or an object
 // without kind or version, yields nothing, as kubectl sends nothing for
-// it; err is set only when the YAML could not be decoded at all.
+// it; err is set only when the YAML could not be decoded at all. Objects
+// carry their add-on evidence (podTemplateOf, an IngressClass's
+// spec.controller): read from what kubectl sends, a document's evidence
+// counts only when the document does, and never from text the YAML walk
+// alone reads.
 func kubectlDecode(text []byte, isJSON bool) ([]manifestObject, error) {
 	raw := text
 	if !isJSON {
@@ -366,9 +401,65 @@ func kubectlDecode(text []byte, isJSON bool) ([]manifestObject, error) {
 			mo.ref.Name, mo.ref.Namespace = m.GetName(), m.GetNamespace()
 			mo.ref.Ignore, mo.ref.IgnoreReason = m.GetAnnotations()[IgnoreAnnotation], m.GetAnnotations()[IgnoreReasonAnnotation]
 		}
+		if u, ok := o.(*unstructured.Unstructured); ok {
+			mo.template = podTemplateOf(k.GroupKind(), u.Object)
+			if k.GroupKind() == (schema.GroupKind{Group: "networking.k8s.io", Kind: "IngressClass"}) {
+				mo.ingressController, _, _ = unstructured.NestedString(u.Object, "spec", "controller")
+			}
+		}
 		out = append(out, mo)
 	}
 	return out, nil
+}
+
+// podTemplatePaths are where the workload kinds keep their pod template;
+// a Pod is its own.
+var podTemplatePaths = map[schema.GroupKind][]string{
+	{Kind: "Pod"}:                             nil,
+	{Group: "apps", Kind: "Deployment"}:       {"spec", "template"},
+	{Group: "apps", Kind: "DaemonSet"}:        {"spec", "template"},
+	{Group: "apps", Kind: "StatefulSet"}:      {"spec", "template"},
+	{Group: "apps", Kind: "ReplicaSet"}:       {"spec", "template"},
+	{Group: "extensions", Kind: "Deployment"}: {"spec", "template"},
+	{Group: "extensions", Kind: "DaemonSet"}:  {"spec", "template"},
+	{Group: "extensions", Kind: "ReplicaSet"}: {"spec", "template"},
+	{Group: "batch", Kind: "Job"}:             {"spec", "template"},
+	{Group: "batch", Kind: "CronJob"}:         {"spec", "jobTemplate", "spec", "template"},
+}
+
+// podTemplateOf returns the labels and images (init containers first) of
+// the pod template of obj, an object of kind gk; nil when gk keeps none.
+// Values that are not strings (an unrendered template) and empty images
+// are skipped. Images injected at admission (a mesh sidecar) are not in
+// a manifest, so files mode cannot see them.
+func podTemplateOf(gk schema.GroupKind, obj map[string]any) *podTemplate {
+	path, ok := podTemplatePaths[gk]
+	if !ok {
+		return nil
+	}
+	tmpl, _, _ := unstructured.NestedFieldNoCopy(obj, path...)
+	pod, _ := tmpl.(map[string]any)
+	t := &podTemplate{}
+	labels, _, _ := unstructured.NestedFieldNoCopy(pod, "metadata", "labels")
+	if m, ok := labels.(map[string]any); ok {
+		t.labels = map[string]string{}
+		for k, v := range m {
+			if s, ok := v.(string); ok {
+				t.labels[k] = s
+			}
+		}
+	}
+	for _, field := range []string{"initContainers", "containers"} {
+		cs, _, _ := unstructured.NestedFieldNoCopy(pod, "spec", field)
+		list, _ := cs.([]any)
+		for _, c := range list {
+			c, _ := c.(map[string]any)
+			if img, ok := c["image"].(string); ok && img != "" {
+				t.images = append(t.images, img)
+			}
+		}
+	}
+	return t
 }
 
 // gvkDiff compares, as multisets, what kubectl's decoder found with what
@@ -807,7 +898,7 @@ func accumulate(counts map[gvk]*inventory.APIUsage, objs []manifestObject) {
 
 // manifestInventory wraps accumulated GVK counts in the offline-inventory
 // envelope: only api-usage is assessable; every other capability degrades
-// with reason.
+// with reason (the callers then assess add-ons, see assessAddOns).
 func manifestInventory(clusterID, reason string, counts map[gvk]*inventory.APIUsage) inventory.Inventory {
 	inv := inventory.Inventory{
 		SchemaVersion: 1,
@@ -853,9 +944,10 @@ func usageRows(counts map[gvk]*inventory.APIUsage) []inventory.APIUsage {
 // has nowhere to put a warning, so silently dropping it would be a false
 // pass. Warnings about documents decoded anyway (duplicate keys, objects
 // located by kubectl's decoder) are dropped. Object refs carry stream lines
-// and no file.
-func CollectManifests(r io.Reader) (inventory.Inventory, error) {
-	objs, bad, err := parseManifestStream(r)
+// and no file. Add-ons are assessed as CollectFiles assesses them, so the
+// two gates judge a render alike.
+func CollectManifests(r io.Reader, addons []registry.AddOn) (inventory.Inventory, error) {
+	objs, ev, bad, err := parseManifestStream(r)
 	if err != nil {
 		return manifestInventory("manifests", "manifests mode", nil), err
 	}
@@ -866,7 +958,18 @@ func CollectManifests(r io.Reader) (inventory.Inventory, error) {
 	}
 	counts := map[gvk]*inventory.APIUsage{}
 	accumulate(counts, objs)
-	return manifestInventory("manifests", "manifests mode", counts), nil
+	inv := manifestInventory("manifests", "manifests mode", counts)
+	assessAddOns(&inv, ev, addons)
+	return inv, nil
+}
+
+// assessAddOns runs the add-on matcher over the evidence found in
+// manifests and marks add-ons assessed.
+func assessAddOns(inv *inventory.Inventory, ev addOnEvidence, addons []registry.AddOn) {
+	var unrec []string
+	inv.AddOns, unrec = matchAddOns(ev, addons)
+	setUnrecognized(inv, unrec)
+	inv.Capabilities[inventory.CapAddOns] = inventory.CapabilityStatus{Available: true}
 }
 
 // FilesSummary describes what a CollectFiles walk saw.
@@ -922,17 +1025,21 @@ func skipDir(path, name string) (skip bool, why string) {
 // CollectFiles builds an Inventory from rendered manifests on disk
 // (--files mode, CI gating). root is a directory, walked recursively in
 // lexical order for *.yaml/*.yml/*.json, or a single file, parsed whatever
-// its extension. Only api-usage is assessable offline; every other
-// capability degrades with reason "files mode".
+// its extension. API usage and add-ons are assessed offline: add-ons from
+// the pod templates of workload manifests (images and labels, see
+// podTemplateOf) and IngressClass controllers, with the matchers a live
+// scan uses (matchAddOns). Every other capability degrades with reason
+// "files mode": a manifest carries no cluster version and no Helm release.
 //
 // A repository holds YAML that is not Kubernetes manifests (values files,
 // workflows, unrendered chart templates), so non-manifest documents are
 // skipped and documents that fail to decode become warnings in the summary,
 // never an error; the caller decides what to do when no object was found.
 // But a document that could not be decoded and whose text (or what
-// kubectl's decoder finds in it) names an API that lifecycle (the knowledge base) lists as removed may hide a blocker:
-// then api-usage is not available, its reason naming those documents, so
-// the engine's verdict is at least unknown.
+// kubectl's decoder finds in it) names an API the knowledge base lists as
+// removed may hide a blocker: then api-usage is not available, its reason
+// naming those documents, so the engine's verdict is at least unknown.
+// Images in a document not decoded are not read either.
 //
 // Object refs carry paths relative to root (the base name for a single
 // file). A symlink named as root is resolved. VCS metadata and dependency
@@ -941,9 +1048,9 @@ func skipDir(path, name string) (skip bool, why string) {
 // could also leave the repository, or loop); each skipped directory but VCS
 // metadata is a warning. Symlinked files are read, as kubectl reads them.
 // Only I/O errors fail the walk.
-func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inventory, FilesSummary, error) {
+func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, error) {
 	var removed []gvk
-	for _, e := range lifecycle {
+	for _, e := range k.APILifecycle {
 		if e.Removed != nil {
 			removed = append(removed, gvk{e.Group, e.Version, e.Kind})
 		}
@@ -951,6 +1058,7 @@ func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inve
 	slices.SortFunc(removed, compareGVK)
 	var hiding []string // "file:line (group/version Kind)" per unassessed part naming a removed API
 	counts := map[gvk]*inventory.APIUsage{}
+	var ev addOnEvidence
 	var sum FilesSummary
 	if fi, err := os.Lstat(root); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		if st, err := os.Stat(root); err == nil && st.IsDir() { // WalkDir would read it as a file
@@ -1001,7 +1109,7 @@ func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inve
 		if err != nil {
 			return err
 		}
-		objs, bad, err := parseManifestStream(f)
+		objs, fileEv, bad, err := parseManifestStream(f)
 		f.Close()
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
@@ -1021,12 +1129,16 @@ func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inve
 		}
 		sum.Objects += len(objs)
 		accumulate(counts, objs)
+		ev.images = append(ev.images, fileEv.images...)
+		ev.labelled = append(ev.labelled, fileEv.labelled...)
+		ev.ingressControllers = append(ev.ingressControllers, fileEv.ingressControllers...)
 		return nil
 	})
 	if err != nil {
 		return manifestInventory("files", "files mode", nil), sum, err
 	}
 	inv := manifestInventory("files", "files mode", counts)
+	assessAddOns(&inv, ev, k.AddOns)
 	if len(hiding) > 0 {
 		listed := hiding[:min(len(hiding), 5)]
 		more := ""

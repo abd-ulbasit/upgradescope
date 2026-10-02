@@ -28,7 +28,7 @@ type streamResult struct {
 
 func parseResult(t *testing.T, s string) streamResult {
 	t.Helper()
-	objs, bad, err := parseManifestStream(strings.NewReader(s))
+	objs, _, bad, err := parseManifestStream(strings.NewReader(s))
 	if err != nil {
 		t.Fatalf("parseManifestStream: %v", err)
 	}
@@ -128,6 +128,8 @@ func TestAdversarialCorpus(t *testing.T) {
 		// kubectl's decoder cannot convert a mapping key to JSON, so
 		// kubectl would fail; the object is counted, with a warning.
 		"unrendered-labels.yaml": {counts: map[string]int{ingOld: 1}, lines: []int{1}, warnings: 1},
+		// An EOL add-on's image (#47): both gates must judge it alike.
+		"workload-images.yaml": {counts: map[string]int{deploy: 1}, lines: []int{1}},
 	}
 	files, err := filepath.Glob("testdata/adversarial/*")
 	if err != nil {
