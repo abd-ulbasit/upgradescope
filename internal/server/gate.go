@@ -13,9 +13,11 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/abd-ulbasit/upgradescope/internal/codequality"
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/junit"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
@@ -64,6 +66,11 @@ var yamlContentTypes = map[string]bool{
 // so format=sarif places introduced findings there and code scanning shows
 // them on the PR. Without it a posted stream has no file, and SARIF lists
 // its findings as tool execution notifications only.
+//
+// format=junit (JUnit XML whose outcomes follow fail-on) and
+// format=gitlab-codequality (GitLab Code Quality; findings without a file
+// are on the virtual upgradescope/ path) answer like sarif: the introduced
+// findings only, with the gate's status and verdict.
 func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mt, _, err := mime.ParseMediaType(ct)
@@ -85,9 +92,9 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	}
 	format := r.URL.Query().Get("format")
 	switch format {
-	case "", "json", "sarif":
+	case "", "json", "sarif", "junit", "gitlab-codequality":
 	default:
-		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid format %q (want json or sarif)", format))
+		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid format %q (want json, sarif, junit or gitlab-codequality)", format))
 		return
 	}
 	failOn := r.URL.Query().Get("fail-on")
@@ -178,6 +185,18 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		_ = sarif.Write(w, sarifReport(rep, resp), s.cfg.Version)
 		return
 	}
+	if format == "junit" {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(status)
+		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: failOn})
+		return
+	}
+	if format == "gitlab-codequality" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = codequality.Write(w, sarifReport(rep, resp))
+		return
+	}
 	writeJSON(w, status, resp)
 }
 
@@ -250,6 +269,7 @@ func gateResult(rep engine.Report, baseline *engine.Report, introduced map[strin
 // alerts on the PR, so it holds only the findings the manifests introduce,
 // with the gate's verdict; findings the cluster already has stay in the
 // JSON answer, tagged source cluster. Score stays the proposed state's.
+// The JUnit and Code Quality answers, which land on the PR too, carry it.
 func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
 	out := rep
 	out.Findings = []engine.Finding{}

@@ -476,6 +476,12 @@ paths:
         a CI step and keeps the report. `X-Upgradescope-Verdict` always
         carries the verdict.
 
+        `format` picks the body: the JSON gate response (default), SARIF,
+        JUnit XML whose test outcomes follow `fail-on`, or a GitLab Code
+        Quality report. SARIF, JUnit and Code Quality hold only the
+        findings the manifests introduce; the status and verdict header
+        are the same in every format.
+
         Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
         document, 20,000 documents. Evaluations run one at a time; a
         request that waits more than 30s for its turn, or finds the shared
@@ -491,7 +497,7 @@ paths:
           schema: {type: string}
         - name: format
           in: query
-          schema: {type: string, enum: [json, sarif], default: json}
+          schema: {type: string, enum: [json, sarif, junit, gitlab-codequality], default: json}
         - name: fail-on
           in: query
           schema: {type: string, enum: [blocker, warning, never], default: blocker}
@@ -500,7 +506,8 @@ paths:
           description: |
             The repository-relative file the stream was rendered to
             (`deploy/rendered.yaml`). Introduced findings are then located
-            in it in SARIF, so code scanning shows them on the pull request.
+            in it in SARIF and Code Quality, so code scanning or the merge
+            request widget shows them on the change.
           schema: {type: string}
       requestBody:
         required: true
@@ -516,9 +523,14 @@ paths:
             X-Upgradescope-Verdict: {$ref: "#/components/headers/Verdict"}
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/GateResponse"}
+              schema:
+                oneOf:
+                  - {$ref: "#/components/schemas/GateResponse"}
+                  - {$ref: "#/components/schemas/CodeQuality"}
             application/sarif+json:
               schema: {$ref: "#/components/schemas/SARIF"}
+            application/xml:
+              schema: {$ref: "#/components/schemas/JUnit"}
         "422":
           description: |
             The gate failed (same body as 200), or the request is invalid
@@ -531,9 +543,12 @@ paths:
               schema:
                 oneOf:
                   - {$ref: "#/components/schemas/GateResponse"}
+                  - {$ref: "#/components/schemas/CodeQuality"}
                   - {$ref: "#/components/schemas/Error"}
             application/sarif+json:
               schema: {$ref: "#/components/schemas/SARIF"}
+            application/xml:
+              schema: {$ref: "#/components/schemas/JUnit"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "413": {$ref: "#/components/responses/Error"}
@@ -910,6 +925,39 @@ components:
     SARIF:
       type: object
       description: "A SARIF 2.1.0 log (https://json.schemastore.org/sarif-2.1.0.json) with one run, the report's findings as results."
+    JUnit:
+      type: string
+      description: |
+        JUnit XML (the Jenkins JUnit schema): one testsuite per finding
+        category with one testcase per finding, failing when the finding
+        reaches `fail-on`; a not-assessed suite with an error per required
+        gap the gate fails on. See `scan --output junit`.
+    CodeQuality:
+      type: array
+      description: |
+        A GitLab Code Quality report
+        (https://docs.gitlab.com/ci/testing/code_quality/#code-quality-report-format):
+        one entry per finding and located object. Findings without a file
+        are on the virtual path `upgradescope/<finding key>`. See
+        `scan --output gitlab-codequality`.
+      items:
+        type: object
+        required: [description, check_name, fingerprint, severity, location]
+        properties:
+          description: {type: string}
+          check_name: {type: string, description: The finding key, or `not-assessed/<capability>`.}
+          fingerprint: {type: string, description: "Stable across runs: the key and the object's file, namespace and name, not its line."}
+          severity: {type: string, enum: [info, minor, critical]}
+          location:
+            type: object
+            required: [path, lines]
+            properties:
+              path: {type: string}
+              lines:
+                type: object
+                required: [begin]
+                properties:
+                  begin: {type: integer, minimum: 1}
 
     PushRequest:
       type: object
