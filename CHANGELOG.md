@@ -27,7 +27,9 @@ a CI gate.
   route, tested against the real handlers), `api/report.schema.json` (the
   JSON report) and `api/webhook.schema.json` (webhook payloads), plus a
   compatibility policy (`docs/compatibility-policy.md`) that says which
-  changes a version may make.
+  changes a version may make. Each release attaches the three as assets
+  (`report.schema.json`, `webhook.schema.json`, `openapi.yaml`), listed in
+  its signed `checksums.txt` (#60).
 - Deleted built-in APIs are in the knowledge base. `tools/gen-kb` reads
   every `k8s.io/api` release since v0.17 and records each type a later
   release dropped, removed at the release that stopped serving it. These

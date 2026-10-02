@@ -12,7 +12,9 @@ name: release
 #              release-check. Nothing below runs unless it passed;
 #   goreleaser linux/darwin/windows amd64+arm64 archives (dashboard
 #              embedded, with completions, man pages and license notices),
-#              deb/rpm/apk packages, checksums.txt, one SPDX SBOM per
+#              deb/rpm/apk packages, the published contracts (api/:
+#              report and webhook schemas, OpenAPI), checksums.txt over
+#              all of them, one SPDX SBOM per
 #              archive, a keyless cosign bundle, and a GitHub
 #              build-provenance attestation over every archive; the
 #              multi-arch image ghcr.io/abd-ulbasit/upgradescope:{X.Y.Z,
@@ -152,7 +154,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # checksums.txt names every archive, so one attestation covers them all:
+      # checksums.txt names every archive (and package and contract), so one
+      # attestation covers them all:
       # `gh attestation verify <archive> -R abd-ulbasit/upgradescope`.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

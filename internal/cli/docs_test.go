@@ -608,3 +608,48 @@ func TestDocsHelmCapabilities(t *testing.T) {
 		}
 	}
 }
+
+// TestDocsContractsAreReleaseAssets: every published contract in api/ (the
+// JSON report and webhook schemas, the OpenAPI document) is attached to
+// each release and listed in its checksums.txt, which cosign signs (#60),
+// and the compatibility policy says where to download it.
+// hack/release-check.sh proves the checksums on a real snapshot.
+func TestDocsContractsAreReleaseAssets(t *testing.T) {
+	type extraFile struct {
+		Glob string `json:"glob"`
+	}
+	var cfg struct {
+		Checksum struct {
+			ExtraFiles []extraFile `json:"extra_files"`
+		} `json:"checksum"`
+		Release struct {
+			ExtraFiles []extraFile `json:"extra_files"`
+		} `json:"release"`
+	}
+	if err := yaml.Unmarshal([]byte(readDoc(t, ".goreleaser.yml")), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	contracts, err := filepath.Glob(filepath.Join(repoRoot, "api", "*"))
+	if err != nil || len(contracts) == 0 {
+		t.Fatalf("no published contracts under api/ (%v)", err)
+	}
+	policy := readDoc(t, "docs/compatibility-policy.md")
+	for _, c := range contracts {
+		rel, _ := filepath.Rel(repoRoot, c)
+		rel = filepath.ToSlash(rel)
+		for section, files := range map[string][]extraFile{
+			"checksum.extra_files (checksums.txt, signed)": cfg.Checksum.ExtraFiles,
+			"release.extra_files (uploaded)":               cfg.Release.ExtraFiles,
+		} {
+			if !slices.ContainsFunc(files, func(f extraFile) bool {
+				ok, err := filepath.Match(strings.TrimPrefix(f.Glob, "./"), rel)
+				return err == nil && ok
+			}) {
+				t.Errorf(".goreleaser.yml %s does not include %s", section, rel)
+			}
+		}
+		if want := "releases/latest/download/" + filepath.Base(c); !strings.Contains(policy, want) {
+			t.Errorf("docs/compatibility-policy.md does not say where to download %s (want %q)", rel, want)
+		}
+	}
+}

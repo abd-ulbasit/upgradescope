@@ -11,9 +11,12 @@
 #      apk packages install the binary, completions, man pages and license
 #      files at their standard paths; every image has /licenses/ and the
 #      full OCI labels;
-#   5. the binary and archive sizes README.md and docs/operations/install.md
+#   5. checksums.txt lists every published contract in api/ (the JSON report
+#      and webhook schemas, the OpenAPI document) with its sha256, so the
+#      release attaches them (release.extra_files) under the signature (#60);
+#   6. the binary and archive sizes README.md and docs/operations/install.md
 #      state are within 2% of the ones just built (hack/check-doc-sizes.sh);
-#   6. the binary for this machine is stamped (version, commit, commit date,
+#   7. the binary for this machine is stamped (version, commit, commit date,
 #      registry date) and serves the embedded dashboard at / with every
 #      asset it references (hack/dashboard-smoke.sh).
 #
@@ -118,6 +121,17 @@ case ",$SKIP," in
     done <"$tmp/images"
     ;;
 esac
+
+echo "== checksums.txt covers the published contracts in api/ (#60)"
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'; }
+[ -f dist/checksums.txt ] || die "no dist/checksums.txt"
+for f in api/*; do
+  name=${f##*/}
+  got=$(awk -v f="$name" '$2 == f { print $1 }' dist/checksums.txt)
+  [ -n "$got" ] || { cat dist/checksums.txt >&2; die "dist/checksums.txt has no $name: add $f to checksum.extra_files in .goreleaser.yml"; }
+  [ "$got" = "$(sha256 "$f")" ] || die "dist/checksums.txt lists $name as $got, which is not the sha256 of $f"
+  echo "ok: $name"
+done
 
 echo "== the sizes the docs state are the build's (within 2%)"
 DIST=dist hack/check-doc-sizes.sh

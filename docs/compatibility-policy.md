@@ -27,6 +27,23 @@ lines other than the fixed messages documented in
 base itself, which changes every release by design. A new knowledge base
 changing a verdict is not a breaking change.
 
+### Download the schemas
+
+Each release (from v0.2.0) attaches the three published documents as
+assets, listed in that release's `checksums.txt`, which is signed
+([Verify a download](operations/install.md#verify-a-download)):
+
+| Asset | Contract | Latest release |
+|---|---|---|
+| `report.schema.json` | JSON Schema of the JSON report | `https://github.com/abd-ulbasit/upgradescope/releases/latest/download/report.schema.json` |
+| `webhook.schema.json` | JSON Schema of the webhook payload | `https://github.com/abd-ulbasit/upgradescope/releases/latest/download/webhook.schema.json` |
+| `openapi.yaml` | OpenAPI 3.1 document of the REST API | `https://github.com/abd-ulbasit/upgradescope/releases/latest/download/openapi.yaml` |
+
+Validate against the release you run: replace `latest/download` with
+`download/vX.Y.Z`. The same files are in the repository under
+[`api/`](https://github.com/abd-ulbasit/upgradescope/tree/main/api), where
+`main` may be ahead of every release.
+
 ## Enumerated values
 
 Finding **categories** grow as checks are added (`unknown-api` arrived
