@@ -407,8 +407,9 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			"cluster name %q is registered to clusterId %s, but this push comes from clusterId %s. "+
 				"If this is a different cluster, give its agent a distinct --cluster-name (chart value clusterName). "+
 				"If the cluster was rebuilt, remove the old record (and its history) with "+
-				"'upgradescope clusters delete %s' against the server's database, then push again",
-			conflict.Name, conflict.StoredUID, conflict.PushedUID, conflict.Name))
+				"'upgradescope clusters delete %s', then push again; the delete also removes the name's "+
+				"per-cluster ingest tokens, so mint a new one with 'upgradescope tokens create %s' if the agent used one",
+			conflict.Name, conflict.StoredUID, conflict.PushedUID, conflict.Name, conflict.Name))
 		return
 	}
 	if err != nil {

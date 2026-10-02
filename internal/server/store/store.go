@@ -51,10 +51,24 @@ type Store interface {
 	// writes nothing, and so does an empty UID once one is bound (a push that
 	// cannot say which cluster it is must not join a bound history).
 	UpsertCluster(ctx context.Context, c Cluster) (int64, error)
-	// DeleteCluster removes the named cluster with its snapshots and
-	// evaluations (ErrNotFound when unknown). Tokens are keyed by name and
-	// are kept, so a rebuilt cluster can push again with its old token.
+	// ClusterByName returns the cluster registered under name, or
+	// ErrNotFound. It never creates one.
+	ClusterByName(ctx context.Context, name string) (Cluster, error)
+	// DeleteCluster removes the named cluster with everything that is its
+	// own: snapshots, evaluations, queued notifications and the ingest
+	// tokens minted for its name (ErrNotFound when unknown). A rebuilt
+	// cluster that re-registers the name needs a new token.
 	DeleteCluster(ctx context.Context, name string) error
+	// RenameCluster renames a cluster; its history and its ingest tokens
+	// move with it. ErrNotFound when name is unknown, ErrClusterNameTaken
+	// when newName is registered already.
+	RenameCluster(ctx context.Context, name, newName string) error
+	// Prune is retention: it deletes evaluations created before cutoff and
+	// then snapshots received before it that no evaluation refers to any
+	// more, except each cluster's latest snapshot and its evaluations (the
+	// cluster's current state, however old). Tokens, clusters and the
+	// outbox are not touched.
+	Prune(ctx context.Context, cutoff time.Time) (PruneResult, error)
 
 	InsertSnapshot(ctx context.Context, s Snapshot) (int64, bool, error) // (id, duplicate, err) — duplicate iff same cluster+hash as latest
 	LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error)
@@ -78,9 +92,14 @@ type Store interface {
 	// (when b.Snapshot is set), every insert and refresh, and the outbox
 	// messages, or nothing. It returns the evaluated snapshot's id.
 	// duplicate is true when b.Snapshot has the same hash as the cluster's
-	// latest snapshot: then nothing is written and the latest id is
-	// returned. ErrConflict means another writer moved the cluster on
-	// (b.SnapshotID is no longer latest, or b.Current no longer matches).
+	// latest snapshot: then no snapshot, evaluation or outbox row is
+	// written, the push's envelope (KBVersion, AgentVersion) is recorded
+	// on the latest snapshot, and the latest id is returned. With
+	// b.Cluster set, the cluster is registered or touched in the same
+	// transaction, so a failed commit leaves no cluster row and no
+	// last-seen bump behind. ErrConflict means another writer moved the
+	// cluster on (b.SnapshotID is no longer latest, or b.Current no longer
+	// matches); *ClusterUIDConflictError that b.Cluster's UID is refused.
 	CommitEvaluations(ctx context.Context, b EvaluationBatch) (snapshotID int64, duplicate bool, err error)
 
 	// Notification outbox: messages committed with their evaluations,
@@ -149,8 +168,22 @@ type Evaluation struct {
 // caller may drop the pass (the other writer covered it) or recompute.
 var ErrConflict = errors.New("store: evaluation state changed concurrently")
 
+// ErrClusterNameTaken is returned by RenameCluster when the new name is
+// registered to another cluster. Test with errors.Is.
+var ErrClusterNameTaken = errors.New("store: cluster name is taken")
+
+// PruneResult counts the rows one Prune deleted.
+type PruneResult struct {
+	Snapshots   int64
+	Evaluations int64
+}
+
 // EvaluationBatch is one evaluation pass over one cluster snapshot.
 type EvaluationBatch struct {
+	// Cluster, when non-nil, is upserted first in the commit's transaction
+	// (UpsertCluster rules) and its id replaces ClusterID: ingest registers
+	// a new cluster only together with its first snapshot.
+	Cluster   *Cluster
 	ClusterID int64
 	// Snapshot, when non-nil, is a newly pushed snapshot stored first
 	// (InsertSnapshot dedup rules); every Insert gets its id.
@@ -175,6 +208,7 @@ type EvaluationBatch struct {
 // OutboxMessage is one notification awaiting delivery to one sink.
 type OutboxMessage struct {
 	ID            int64
+	ClusterID     int64  // set by CommitEvaluations; DeleteCluster drops the cluster's messages
 	Sink          string // which configured notifier delivers it
 	Payload       []byte // the event, JSON
 	Attempts      int    // delivery attempts started so far (claims)

@@ -37,6 +37,12 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("ClusterUIDAlternatingPushesNeverInterleave", func(t *testing.T) { testClusterUIDAlternating(t, newStore(t)) })
 	t.Run("EmptyUIDPushNeverInterleaves", func(t *testing.T) { testEmptyUIDNeverInterleaves(t, newStore(t)) })
 	t.Run("DeleteCluster", func(t *testing.T) { testDeleteCluster(t, newStore(t)) })
+	t.Run("ClusterByName", func(t *testing.T) { testClusterByName(t, newStore(t)) })
+	t.Run("RenameCluster", func(t *testing.T) { testRenameCluster(t, newStore(t)) })
+	t.Run("CommitEvaluationsRegistersCluster", func(t *testing.T) { testCommitRegistersCluster(t, newStore(t)) })
+	t.Run("CommitFailureLeavesNoCluster", func(t *testing.T) { testCommitFailureLeavesNoCluster(t, newStore(t)) })
+	t.Run("DuplicateRecordsEnvelope", func(t *testing.T) { testDuplicateRecordsEnvelope(t, newStore(t)) })
+	t.Run("PruneKeepsLatestSnapshot", func(t *testing.T) { testPrune(t, newStore(t)) })
 	t.Run("SnapshotDedup", func(t *testing.T) { testSnapshotDedup(t, newStore(t)) })
 	t.Run("SnapshotDedupClusterScoped", func(t *testing.T) { testSnapshotDedupClusterScoped(t, newStore(t)) })
 	t.Run("ConcurrentIngestSerializes", func(t *testing.T) { testConcurrentIngest(t, newStore(t)) })
@@ -287,13 +293,21 @@ func testClusterUIDAlternating(t *testing.T, s store.Store) {
 	}
 }
 
-// testDeleteCluster pins the operator escape hatch for a rebuilt cluster:
-// DeleteCluster drops the cluster with its snapshots and evaluations, and
-// the name is then free for a new UID. Tokens are keyed by name and stay.
+// testDeleteCluster pins decommissioning, also the escape hatch for a
+// rebuilt cluster: DeleteCluster drops the cluster with its snapshots,
+// evaluations, ingest tokens and queued notifications, and the name is
+// then free for a new UID. Another cluster's rows are untouched.
 func testDeleteCluster(t *testing.T, s store.Store) {
 	ctx := context.Background()
 	cid := mustCluster(t, s, "prod")
-	sid := mustSnapshot(t, s, cid, "aaa", base)
+	sid, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{
+		ClusterID: cid,
+		Snapshot:  &store.Snapshot{ClusterID: cid, Hash: "aaa", ReceivedAt: base, Inventory: []byte(`{}`)},
+		Outbox:    []store.OutboxMessage{outboxMsg("slack", `{"c":"prod"}`, base)},
+	})
+	if err != nil {
+		t.Fatalf("CommitEvaluations(prod): %v", err)
+	}
 	if _, err := s.InsertEvaluation(ctx, store.Evaluation{ClusterID: cid, SnapshotID: sid, Target: "1.36", Score: 90, CreatedAt: base}); err != nil {
 		t.Fatalf("InsertEvaluation: %v", err)
 	}
@@ -301,7 +315,16 @@ func testDeleteCluster(t *testing.T, s store.Store) {
 		t.Fatalf("CreateToken: %v", err)
 	}
 	other := mustCluster(t, s, "dev")
-	mustSnapshot(t, s, other, "ddd", base)
+	if _, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{
+		ClusterID: other,
+		Snapshot:  &store.Snapshot{ClusterID: other, Hash: "ddd", ReceivedAt: base, Inventory: []byte(`{}`)},
+		Outbox:    []store.OutboxMessage{outboxMsg("slack", `{"c":"dev"}`, base)},
+	}); err != nil {
+		t.Fatalf("CommitEvaluations(dev): %v", err)
+	}
+	if _, err := s.CreateToken(ctx, "dev", "tok-dev-keep"); err != nil {
+		t.Fatalf("CreateToken(dev): %v", err)
+	}
 
 	if err := s.DeleteCluster(ctx, "prod"); err != nil {
 		t.Fatalf("DeleteCluster: %v", err)
@@ -318,8 +341,18 @@ func testDeleteCluster(t *testing.T, s store.Store) {
 	if _, err := s.LatestSnapshot(ctx, other); err != nil {
 		t.Errorf("other cluster's snapshot: %v (must survive)", err)
 	}
-	if name, ok, err := s.ValidToken(ctx, "tok-prod-delete"); err != nil || !ok || name != "prod" {
-		t.Errorf("ValidToken after delete = (%q, %v, %v), want the token kept", name, ok, err)
+	if name, ok, err := s.ValidToken(ctx, "tok-prod-delete"); err != nil || ok {
+		t.Errorf("ValidToken after delete = (%q, %v, %v), want the token gone", name, ok, err)
+	}
+	if toks, err := s.ListTokens(ctx, "prod"); err != nil || len(toks) != 0 {
+		t.Errorf("ListTokens(prod) after delete = (%+v, %v), want none", toks, err)
+	}
+	if name, ok, err := s.ValidToken(ctx, "tok-dev-keep"); err != nil || !ok || name != "dev" {
+		t.Errorf("dev token after deleting prod = (%q, %v, %v), want it kept", name, ok, err)
+	}
+	msgs, err := s.ClaimOutbox(ctx, at(1), time.Minute, 10)
+	if err != nil || len(msgs) != 1 || string(msgs[0].Payload) != `{"c":"dev"}` || msgs[0].ClusterID != other {
+		t.Errorf("outbox after delete = (%+v, %v), want only dev's message", msgs, err)
 	}
 	newID, err := s.UpsertCluster(ctx, store.Cluster{Name: "prod", ClusterUID: "uid-rebuilt"})
 	if err != nil {
