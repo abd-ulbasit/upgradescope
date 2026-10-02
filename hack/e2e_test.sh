@@ -32,16 +32,34 @@ stub kubectl '
 case "$*" in
   *"get --raw /version"*) echo "{\"major\":\"1\",\"minor\":\"${STUB_SERVER_MINOR:-31}+\"}" ;;
   *"jsonpath={.status.targets[0].score}"*) echo 40 ;;
+  *"jsonpath={.metadata.generation}"*) [ -f "$STUB_STATE/ignore.json" ] && echo 3 || echo 2 ;;
   *"get clusterreadiness cluster -o json"*)
     [ -z "${STUB_FINALIZER:-}" ] || meta="\"metadata\":{\"name\":\"cluster\",\"finalizers\":[\"upgradescope.dev/hold\"]},"
     # Past the horizon (STUB_HORIZON, default 1.37), the agent records the
-    # kb-coverage gap, unless STUB_CR_NO_KB_GAP.
+    # kb-coverage gap, unless STUB_CR_NO_KB_GAP. Once spec.ignore holds
+    # rules (a merge patch), the agent has evaluated generation 3 (unless
+    # STUB_CR_STALE) and accepted the blockers (unless STUB_CR_STILL_BLOCKED):
+    # the gap alone leaves the verdict unknown.
     next=${STUB_NEXT:-1.32} horizon=${STUB_HORIZON:-1.37} gaps="" note=""
     if [ "${next#1.}" -gt "${horizon#1.}" ] && [ -z "${STUB_CR_NO_KB_GAP:-}" ]; then
       gaps=",\"notAssessed\":[\"kb-coverage: target $next is newer than the knowledge base (Kubernetes $horizon)\"]"
       note="; not fully assessed: kb-coverage (required); see status.notAssessed"
     fi
-    echo "{${meta:-}\"spec\":{\"targets\":[\"$next\"]},\"status\":{\"targets\":[{\"target\":\"$next\",\"score\":40,\"verdict\":\"blocked\",\"ready\":false,\"topFindings\":[{\"category\":\"eol-addon\"}]}]$gaps,\"conditions\":[{\"type\":\"Ready\",\"status\":\"False\",\"reason\":\"Blocked\",\"message\":\"$next: 1 blocker(s) (score 40)$note\"}]}}" ;;
+    gen=2 target="{\"target\":\"$next\",\"score\":40,\"verdict\":\"blocked\",\"ready\":false,\"blockers\":2,\"topFindings\":[{\"category\":\"eol-addon\",\"severity\":\"blocker\"},{\"category\":\"chart-incompat\",\"severity\":\"blocker\"},{\"category\":\"eol-addon\",\"severity\":\"warning\"}]}"
+    ready="{\"type\":\"Ready\",\"status\":\"False\",\"reason\":\"Blocked\",\"message\":\"$next: 2 blocker(s) (score 40)$note\"}"
+    if [ -f "$STUB_STATE/ignore.json" ]; then
+      [ -n "${STUB_CR_STALE:-}" ] || gen=3
+      if [ -z "${STUB_CR_STILL_BLOCKED:-}" ]; then
+        target="{\"target\":\"$next\",\"score\":90,\"verdict\":\"unknown\",\"ready\":false,\"blockers\":0,\"suppressed\":2}"
+        ready="{\"type\":\"Ready\",\"status\":\"Unknown\",\"reason\":\"NotAssessed\",\"message\":\"$next: no blockers found, but a required check was not assessed: kb-coverage (required); see status.notAssessed (score 90)\"}"
+      fi
+    fi
+    echo "{${meta:-}\"spec\":{\"targets\":[\"$next\"]},\"status\":{\"observedGeneration\":$gen,\"targets\":[$target]$gaps,\"conditions\":[$ready]}}" ;;
+  *"patch clusterreadiness cluster --type merge -p "*)
+    for a; do [ "$p" != -p ] || printf "%s\n" "$a" >"$STUB_STATE/ignore.json"; p=$a; done ;;
+  *"patch clusterreadiness cluster --type json -p "*)
+    [ -z "${STUB_UNPATCH_FAIL:-}" ] || exit 1
+    rm -f "$STUB_STATE/ignore.json" ;;
   *"port-forward"*) exec sleep 30 ;;
   *"get validatingwebhookconfigurations,mutatingwebhookconfigurations -o name"*)
     echo validatingwebhookconfiguration.admissionregistration.k8s.io/ingress-nginx-admission
@@ -436,13 +454,28 @@ has "1.37 applies the DeviceClass fixture" "$work/state/applied.yaml" "kind: Dev
 # VS-11 (#130): on the newest minor the next one is past the knowledge
 # base's horizon. The vanilla cluster scanned there is unknown (exit 2),
 # --allow-incomplete exits 0, and the agent's default ClusterReadiness
-# names the kb-coverage gap.
+# names the kb-coverage gap and, its blockers accepted, is unknown.
 horizon_gate="a vanilla cluster scanned past the KB horizon is unknown with a required kb-coverage gap (exit 2), and --allow-incomplete exits 0"
 cr_gap_gate="ClusterReadiness for the default target past the KB horizon names the required kb-coverage gap"
+cr_unknown_gate="ClusterReadiness for the default target past the KB horizon, its blockers accepted, is unknown with Ready Unknown/NotAssessed"
 has "the horizon is read from the binary under test" "$work/log" "upgradescope version --output json"
 has "1.37 at 1.38: the past-horizon scan gates and passes" "$work/summary" "- PASS — $horizon_gate"
 has "1.37 at 1.38: --allow-incomplete is scanned" "$work/log" "upgradescope scan --context kind-upgradescope-demo --target 1.38 --allow-incomplete --output json"
 has "1.37 at 1.38: the CR kb-coverage gate gates and passes" "$work/summary" "- PASS — $cr_gap_gate"
+has "1.37 at 1.38: the CR unknown gate gates and passes" "$work/summary" "- PASS — $cr_unknown_gate"
+has "the CR's blocker categories are accepted in ingress-nginx only" "$work/log" \
+  'kubectl --context kind-upgradescope-demo patch clusterreadiness cluster --type merge -p {"spec":{"ignore":[{"category":"chart-incompat","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"category":"eol-addon","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"}]}}'
+# The rules are removed again, before the later gates read the CR.
+accept_at=$(grep -n -- '--type merge' "$work/log" | head -1 | cut -d: -f1 || true)
+unaccept_at=$(grep -n -- 'patch clusterreadiness cluster --type json -p \[{"op":"remove","path":"/spec/ignore"}\]' "$work/log" | head -1 | cut -d: -f1 || true)
+server_at=$(grep -n -- 'port-forward' "$work/log" | head -1 | cut -d: -f1 || true)
+if [ -n "$accept_at" ] && [ -n "$unaccept_at" ] && [ -n "$server_at" ] && [ "$accept_at" -lt "$unaccept_at" ] &&
+  [ "$unaccept_at" -lt "$server_at" ] && [ ! -e "$work/state/ignore.json" ]; then
+  echo "ok   the spec.ignore rules are removed before the later gates" | tee -a "$work/results"
+else
+  echo "FAIL the spec.ignore rules outlive their gate (accepted at log line ${accept_at:-none}, removed ${unaccept_at:-none}, next gate ${server_at:-none})" >&2
+  echo "FAIL spec.ignore outlives its gate" >>"$work/results"
+fi
 # The past-horizon scan is of the vanilla cluster: before the deprecated
 # apply and the EOL add-on, either of which is a blocker at 1.38.
 allow_at=$(grep -n -- '--allow-incomplete' "$work/log" | head -1 | cut -d: -f1 || true)
@@ -464,6 +497,22 @@ has "the --allow-incomplete exit code is named" "$work/out" "scan --target 1.38 
 run "a ClusterReadiness past the KB horizon without the kb-coverage gap fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_CR_NO_KB_GAP=1
 has "the CR gap gate is a FAIL in the summary" "$work/summary" "- **FAIL** — $cr_gap_gate"
 
+run "a ClusterReadiness still blocked once its blockers are accepted fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_CR_STILL_BLOCKED=1
+has "the CR unknown gate is a FAIL in the summary" "$work/summary" "- **FAIL** — $cr_unknown_gate"
+has "what the CR reported is shown" "$work/out" '"verdict":"blocked"'
+if [ -e "$work/state/ignore.json" ]; then
+  echo "FAIL a failing CR unknown gate left its spec.ignore rules behind" >&2; echo "FAIL rules left behind" >>"$work/results"
+else
+  echo "ok   a failing CR unknown gate still removes its spec.ignore rules" | tee -a "$work/results"
+fi
+
+run "a ClusterReadiness whose agent never evaluates the accepted generation fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_CR_STALE=1
+has "the stale generation is shown" "$work/out" '"observedGeneration":2'
+has "the stale CR gate is a FAIL in the summary" "$work/summary" "- **FAIL** — $cr_unknown_gate"
+
+run "spec.ignore rules that cannot be removed fail the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_UNPATCH_FAIL=1
+has "the failed removal is explained" "$work/out" "could not remove the spec.ignore rules from clusterreadiness/cluster"
+
 run "a reused 1.37 cluster skips the vanilla past-horizon scan" 0 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_KIND_EXISTS=1
 has "the past-horizon scan is a SKIP on a reused cluster" "$work/summary" "- SKIP — $horizon_gate (cluster reused, not vanilla"
 
@@ -472,6 +521,12 @@ has "the past-horizon scan is a SKIP on a reused cluster" "$work/summary" "- SKI
 run "1.31 at 1.32 is within the KB horizon" 0
 has "the past-horizon scan is N/A within the horizon" "$work/summary" "- N/A — $horizon_gate (1.32 is within the KB horizon 1.37)"
 has "the CR gap check is N/A within the horizon" "$work/summary" "- N/A — $cr_gap_gate (1.32 is within the KB horizon 1.37)"
+has "the CR unknown check is N/A within the horizon" "$work/summary" "- N/A — $cr_unknown_gate (1.32 is within the KB horizon 1.37)"
+if grep -q -- 'patch clusterreadiness' "$work/log"; then
+  echo "FAIL 1.31 still patched the ClusterReadiness" >&2; echo "FAIL 1.31 CR patched" >>"$work/results"
+else
+  echo "ok   1.31 does not patch the ClusterReadiness" | tee -a "$work/results"
+fi
 if grep -q -- '--allow-incomplete' "$work/log"; then
   echo "FAIL 1.31 still scanned past the horizon" >&2; echo "FAIL 1.31 past-horizon scan" >>"$work/results"
 else

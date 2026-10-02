@@ -30,7 +30,9 @@
 #      from deploy/chart with the server enabled, --wait;
 #   5. the agent's ClusterReadiness gets a score and a verdict for the next
 #      minor (blocked, with the ingress-nginx eol-addon finding), and on the
-#      newest minor names the required kb-coverage gap of that target;
+#      newest minor names the required kb-coverage gap of that target and,
+#      once spec.ignore accepts the demo add-on's blockers, is unknown with
+#      Ready Unknown/NotAssessed (the rules are removed again);
 #      the install added no admission webhook, and the CR carries no
 #      finalizer or owner reference;
 #   6. the server ingested the agent's snapshot (GET /api/v1/clusters);
@@ -485,7 +487,7 @@ cr_has_verdict() {
 # a kb-coverage entry in status.notAssessed, named required in the Ready
 # condition. Its verdict is blocked, not unknown (cr_has_verdict): the EOL
 # ingress-nginx is a blocker here, and a blocker outranks a gap;
-# past_horizon_is_unknown shows unknown on the cluster without one.
+# cr_unknown_once_blockers_accepted shows the same CR unknown without one.
 cr_reports_kb_coverage_gap() {
   k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
   jq -e --arg t "$NEXT" '.status.targets[0].target == $t
@@ -494,6 +496,49 @@ cr_reports_kb_coverage_gap() {
     "$work/cr.json" >/dev/null || {
     echo "clusterreadiness/$CR for $NEXT (past the KB horizon $HORIZON) does not name a required kb-coverage gap:" >&2
     jq -c '.status | {target: .targets[0].target, notAssessed, conditions}' "$work/cr.json" >&2
+    return 1
+  }
+}
+
+# VS-11 (#130): with nothing blocking, the default ClusterReadiness past the
+# horizon is unknown. Its blockers here are the demo add-on's, in
+# $ACCEPTED_NS (EOL, and a chart judged at a minor past the horizon), so
+# spec.ignore accepts each blocker category it lists, narrowed to that
+# namespace; the agent applies the rules on its next tick, leaving the
+# kb-coverage gap alone: verdict unknown, no blocker, Ready
+# Unknown/NotAssessed naming it. A blocker elsewhere is not accepted and
+# fails the gate. The rules are removed again before the gate judges, so
+# the later gates see the CR as the install left it.
+ACCEPTED_NS=ingress-nginx
+cr_unknown_once_blockers_accepted() {
+  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  local cats patch gen i
+  cats=$(jq -c '[.status.targets[0].topFindings[]? | select(.severity == "blocker") | .category] | unique' "$work/cr.json") ||
+    return 1
+  [ "$cats" != "[]" ] || { echo "clusterreadiness/$CR lists no blocker to accept (cr_has_verdict saw it blocked)" >&2; return 1; }
+  patch=$(jq -c --arg ns "$ACCEPTED_NS" '{spec: {ignore: [.[] | {category: ., namespace: $ns,
+      reason: "e2e: accepted to observe the kb-coverage gap alone"}]}}' <<<"$cats") || return 1
+  echo "accepting blocker categories $cats in namespace $ACCEPTED_NS"
+  k patch clusterreadiness "$CR" --type merge -p "$patch" || return 1
+  gen=$(k get clusterreadiness "$CR" -o jsonpath='{.metadata.generation}') || return 1
+  [[ $gen =~ ^[0-9]+$ ]] || { echo "clusterreadiness/$CR metadata.generation is '$gen'" >&2; return 1; }
+  # agent.interval=1m: the next tick evaluates the new generation.
+  for i in $(seq 1 36); do
+    k get clusterreadiness "$CR" -o json >"$work/cr-accepted.json" || return 1
+    jq -e --argjson g "$gen" '(.status.observedGeneration // 0) >= $g' "$work/cr-accepted.json" >/dev/null && break
+    nap 5
+  done
+  k patch clusterreadiness "$CR" --type json -p '[{"op":"remove","path":"/spec/ignore"}]' ||
+    { echo "could not remove the spec.ignore rules from clusterreadiness/$CR" >&2; return 1; }
+  jq -e --argjson g "$gen" --arg t "$NEXT" '.status as $s | $s.targets[0] as $t0
+      | ($s.observedGeneration // 0) >= $g
+      and $t0.target == $t and $t0.verdict == "unknown" and $t0.ready == false
+      and $t0.blockers == 0 and ($t0.suppressed // 0) > 0
+      and any(($s.notAssessed // [])[]; startswith("kb-coverage: "))
+      and any(($s.conditions // [])[]; .type == "Ready" and .status == "Unknown" and .reason == "NotAssessed"
+        and (.message | contains("kb-coverage (required)")))' "$work/cr-accepted.json" >/dev/null || {
+    echo "clusterreadiness/$CR for $NEXT, its blockers in $ACCEPTED_NS accepted (generation $gen): want verdict unknown, no blocker and Ready Unknown/NotAssessed naming kb-coverage (required); got:" >&2
+    jq -c '.status | {observedGeneration, target: .targets[0], notAssessed, conditions}' "$work/cr-accepted.json" >&2
     return 1
   }
 }
@@ -712,10 +757,13 @@ gate "image built from this tree, kind-loaded" load_image
 gate "helm install deploy/chart (server enabled) --wait" install_chart
 gate "ClusterReadiness has a score and a blocked verdict for $NEXT" cr_has_verdict
 cr_gap_gate="ClusterReadiness for the default target past the KB horizon names the required kb-coverage gap"
+cr_unknown_gate="ClusterReadiness for the default target past the KB horizon, its blockers accepted, is unknown with Ready Unknown/NotAssessed"
 if past_horizon; then
   gate "$cr_gap_gate" cr_reports_kb_coverage_gap
+  gate "$cr_unknown_gate" cr_unknown_once_blockers_accepted
 else
   not_applicable "$cr_gap_gate" "$NEXT is within the KB horizon $HORIZON"
+  not_applicable "$cr_unknown_gate" "$NEXT is within the KB horizon $HORIZON"
 fi
 gate "the install added no webhook configuration; ClusterReadiness/$CR has no finalizer or owner reference" no_webhooks_or_finalizers
 gate "server ingested the agent's snapshot" server_ingested
