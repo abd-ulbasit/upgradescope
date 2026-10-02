@@ -270,3 +270,34 @@ func TestRunStepsSharesTheDeadline(t *testing.T) {
 		t.Errorf("no scan deadline: step saw %v, want no deadline", left)
 	}
 }
+
+// A stalled /metrics degrades deprecated-calls only, which is not a
+// required capability (managed control planes forbid /metrics), so an
+// otherwise clean cluster is still ready: the gap is reported, not
+// required, and the verdict rests on the stored objects.
+func TestCollectStalledMetricsVerdictCanBeReady(t *testing.T) {
+	srv := stallingAPIServer(t, stallPaths("/metrics"), fakeAPIServer())
+	c, err := NewClients(&rest.Config{Host: srv.URL, Timeout: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := loadKB(t)
+	var inv inventory.Inventory
+	within(t, 10*time.Second, func() { inv = Collect(context.Background(), c, k, Options{}) })
+	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 35}, time.Now())
+	if rep.Verdict != engine.VerdictReady {
+		t.Errorf("verdict = %s (findings %+v, gaps %+v), want ready", rep.Verdict, rep.Findings, rep.NotAssessed)
+	}
+	var gap bool
+	for _, g := range rep.NotAssessed {
+		if g.Capability == inventory.CapDeprecatedCalls {
+			gap = true
+			if g.Required {
+				t.Errorf("deprecated-calls gap = %+v, want not required", g)
+			}
+		}
+	}
+	if !gap {
+		t.Errorf("notAssessed = %+v, want the deprecated-calls gap reported", rep.NotAssessed)
+	}
+}
