@@ -214,6 +214,39 @@ a CI gate.
   is signed (`X-Upgradescope-Signature`, HMAC-SHA256). Delivery is at least
   once: deduplicate on `deliveryId`. Update receivers; see
   `docs/reference/webhook.md` and `api/webhook.schema.json`.
+- **Breaking for `serve` outside the chart:** `serve --listen` defaults to
+  `127.0.0.1:8080` (v0.1.1: `:8080`). A binary or `docker run … serve`
+  that other hosts, a Service or a port-forward must reach now binds
+  loopback and is unreachable: pass `--listen :8080`. Open read access off
+  loopback is refused, so also pass `--read-token` (or
+  `--read-token-file`), or `--allow-anonymous-read` to accept open reads.
+  The Helm chart already passes `--listen`, so chart users are unaffected.
+- **Breaking:** `tokens revoke <cluster>` no longer revokes every active
+  token of the cluster. It exits 1 unless you pass `--id <id>` (one token,
+  from `tokens list` or `tokens create`) or `--all`. Scripts that revoked
+  a cluster's tokens by name alone must add `--all`; rotation can now use
+  `tokens create <cluster>` then `tokens revoke <cluster> --id <old id>`.
+- **Breaking for SARIF consumers:** each result's `ruleId`, and each rule in
+  `tool.driver.rules`, is the finding key (for example
+  `removed-api/extensions/v1beta1/Ingress`) instead of the category
+  (`removed-api`), and there is one rule per key. GitHub code scanning
+  accepts the new output. Update any other SARIF filter,
+  dashboard or suppression list that matches a category `ruleId`, such as
+  `removed-api` or `eol-addon`.
+- The JSON report (`scan --output json`, `--write-baseline`) is a versioned
+  contract: `schemaVersion` 1 starts after v0.1.1, with `toolVersion`
+  and `verdict` (`ready`, `blocked`, `unknown`). `ready` stays and is now
+  true only for the verdict `ready`, where v0.1.1 meant "no blocker" (see
+  the fail-closed gate below). `kbVersion` has a new format. Readers should
+  ignore unknown fields; see `api/report.schema.json`.
+- `serve --retention` defaults to `90d`: the server now prunes evaluations
+  and snapshots older than that at startup and then daily, keeping each
+  cluster's latest snapshot and its evaluations. v0.1.1 kept everything.
+  Pass `--retention 0` to keep all history.
+- `serve --ingest-token` is optional (v0.1.1 required it). Without it the
+  server accepts pushes only with per-cluster tokens from
+  `tokens create`. A shared token may push as any cluster, so prefer
+  per-cluster tokens.
 - A Slack or webhook sink that answers 429 or 503 with `Retry-After` is left
   alone for that delay (capped at an hour): the sink is not called for that
   message or any other queued for it, and the held messages keep their
