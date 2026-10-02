@@ -20,7 +20,7 @@ func TestReadSpecIgnore(t *testing.T) {
 		map[string]interface{}{"key": "eol-addon/ingress-nginx", "reason": "migrating in Q1", "expires": "2026-12-31"},
 		map[string]interface{}{"category": "removed-api", "namespace": "legacy-*", "reason": "retired"},
 	}}
-	got, _, err := ReadSpec(context.Background(), newDynFake(cr), DefaultName)
+	got, _, _, err := ReadSpec(context.Background(), newDynFake(cr), DefaultName)
 	if err != nil {
 		t.Fatal(err)
 	}
