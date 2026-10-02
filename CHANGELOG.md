@@ -72,9 +72,10 @@ a CI gate.
   injected at admission time are not in the manifests; with `?cluster=`,
   `/gate` does not judge the manifests' add-ons yet (#150).
 - The report lists the image repositories no add-on matcher recognised
-  (`unrecognizedImages`, at most 200, and `unrecognizedImagesOmitted`), in
-  every output format and in the dashboard's cluster view. They are a gap
-  in add-on detection, not findings, and change neither score nor verdict.
+  (`unrecognizedImages`, at most 200, and `unrecognizedImagesOmitted`) in
+  JSON, the table, Markdown and the dashboard's cluster view (not in
+  SARIF). They are a gap in add-on detection, not findings, and change
+  neither score nor verdict.
 - The knowledge base covers Kubernetes 1.37 (`k8s.io/api` v0.37.1), and the
   weekly refresh regenerates it without hand edits.
 - Agent: `--targets` reconciles `spec.targets`; `--manage-crd` controls

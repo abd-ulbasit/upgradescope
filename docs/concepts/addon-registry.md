@@ -37,10 +37,11 @@ DaemonSet, StatefulSet, ReplicaSet, Job and CronJob pod templates and from
 IngressClasses. Images injected at admission time are not in them.
 
 Image repositories that match no entry are listed as `unrecognizedImages`
-(at most 200) in the inventory and the report, in every output format and
-in the dashboard's cluster view, and never become findings: an add-on the
-registry does not know is not judged. An add-on running one of them may
-still have been found by its labels or Helm release.
+(at most 200) in the inventory and the report, in JSON, the table, Markdown
+and the dashboard's cluster view (not in SARIF), and never become
+findings: an add-on the registry does not know is not judged. An add-on
+running one of them may still have been found by its labels or Helm
+release.
 
 ## How it is judged
 
