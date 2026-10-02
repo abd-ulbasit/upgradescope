@@ -18,4 +18,18 @@ rules:
       - /healthz*
       - /livez*
       - /readyz*
+  # Kubelets (node status, leases, pod status) and the control plane's
+  # leader-election leases: most of the log, and none of it upgradescope.
+  # Leases written by anyone else, the agent included, are still logged.
+  - level: None
+    userGroups:
+      - system:nodes
+  - level: None
+    users:
+      - system:kube-controller-manager
+      - system:kube-scheduler
+    resources:
+      - group: coordination.k8s.io
+        resources:
+          - leases
   - level: Metadata
