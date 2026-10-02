@@ -64,9 +64,7 @@ func TestFlagErrorPointsToHelp(t *testing.T) {
 	if err == nil {
 		t.Fatal("unknown flag accepted")
 	}
-	for _, want := range []string{"unknown flag: --taget", "Run 'upgradescope scan --help' for usage."} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q lacks %q", err, want)
-		}
+	if want := "unknown flag: --taget (run 'upgradescope scan --help' for usage)"; err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
 	}
 }
