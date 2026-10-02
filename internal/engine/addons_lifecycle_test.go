@@ -351,6 +351,57 @@ func TestEvalAddOnsReleaseLineNamesEachVersion(t *testing.T) {
 	}
 }
 
+// A mesh with sidecars in many namespaces stays one bounded finding: the
+// detail lists the first addOnLocatedLimit installs and counts the rest,
+// whether their versions match, differ, or are per node; Namespaces and
+// Teams still name every install.
+func TestEvalAddOnsDetailBounded(t *testing.T) {
+	var mixed, same []string
+	for i := 1; i <= 25; i++ {
+		mixed = append(mixed, fmt.Sprintf("mesh-%02d=1.29.%d", i, i))
+		same = append(same, fmt.Sprintf("mesh-%02d=1.29.2", i))
+	}
+	target, now := inventory.Version{Major: 1, Minor: 34}, day("2026-10-02")
+	for name, tc := range map[string]struct {
+		inv  inventory.Inventory
+		want string
+	}{
+		"versions differ": {installs("istio", "image", mixed...),
+			"Detected Istio in namespace(s): mesh-01 (1.29.1 via image), mesh-02 (1.29.2 via image), mesh-03 (1.29.3 via image), mesh-04 (1.29.4 via image), mesh-05 (1.29.5 via image), mesh-06 (1.29.6 via image), mesh-07 (1.29.7 via image), mesh-08 (1.29.8 via image), mesh-09 (1.29.9 via image), mesh-10 (1.29.10 via image), and 15 more. "},
+		"versions match": {installs("istio", "image", same...),
+			"Detected Istio version 1.29.2 via image in namespace(s): mesh-01, mesh-02, mesh-03, mesh-04, mesh-05, mesh-06, mesh-07, mesh-08, mesh-09, mesh-10, and 15 more. "},
+	} {
+		fs := evalAddOns(tc.inv, lifecycleKB(), target, now)
+		if len(fs) != 1 {
+			t.Fatalf("%s: want one finding, got %q", name, whereSummary(fs))
+		}
+		if !strings.HasPrefix(fs[0].Detail, tc.want) {
+			t.Errorf("%s: detail = %q, want prefix %q", name, fs[0].Detail, tc.want)
+		}
+		if len(fs[0].Namespaces) != 25 || len(fs[0].Teams) != 25 {
+			t.Errorf("%s: %d namespaces, %d teams, want 25 each", name, len(fs[0].Namespaces), len(fs[0].Teams))
+		}
+	}
+
+	var inv inventory.Inventory
+	for i := 1; i <= 12; i++ {
+		inv.Nodes = append(inv.Nodes, inventory.NodeInfo{Name: fmt.Sprintf("worker-%02d", i), KubeletVersion: "v1.35.2", ContainerRuntime: "containerd://1.7.20"})
+	}
+	fs := evalAddOns(inv, runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 36}, now)
+	want := "Detected containerd version 1.7.20 on node(s): worker-01, worker-02, worker-03, worker-04, worker-05, worker-06, worker-07, worker-08, worker-09, worker-10, and 2 more. "
+	if len(fs) != 1 || !strings.HasPrefix(fs[0].Detail, want) {
+		t.Errorf("nodes: got %+v, want one finding with detail prefix %q", fs, want)
+	}
+
+	ten := strings.Split("a b c d e f g h i j", " ")
+	if got := located(ten); got != "a, b, c, d, e, f, g, h, i, j" {
+		t.Errorf("located(10) = %q, want all ten", got)
+	}
+	if got := located(append(ten, "k")); got != "a, b, c, d, e, f, g, h, i, j, and 1 more" {
+		t.Errorf("located(11) = %q, want ten and 1 more", got)
+	}
+}
+
 // A product-level end of life (ingress-nginx retired as a whole) is one
 // finding per add-on, naming every install, not one per release line.
 func TestEvalAddOnsProductEOLOncePerAddOn(t *testing.T) {

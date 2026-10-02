@@ -445,7 +445,9 @@ func groupInstalls(a registry.AddOn, ins []addOnInstall, node bool) (all addOnSu
 // newAddOnSubject describes a set of installs: judged at the oldest known
 // version, located by an evidence sentence that names each install's
 // version where they differ. Node runtimes on one release line (line) are
-// named by the line's oldest version alone.
+// named by the line's oldest version alone. The sentence lists at most
+// addOnLocatedLimit installs, so a mesh with sidecars in hundreds of
+// namespaces stays one bounded finding; Namespaces and Teams name them all.
 func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addOnSubject {
 	s := addOnSubject{installs: ins, node: node}
 	for _, in := range ins {
@@ -463,9 +465,9 @@ func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addO
 			names = append(names, n)
 		}
 		sort.Strings(names)
-		s.located = fmt.Sprintf("Detected %s on node(s): %s.", name, strings.Join(names, ", "))
+		s.located = fmt.Sprintf("Detected %s on node(s): %s.", name, located(names))
 		if line {
-			s.located = fmt.Sprintf("Detected %s version %s on node(s): %s.", name, s.version, strings.Join(names, ", "))
+			s.located = fmt.Sprintf("Detected %s version %s on node(s): %s.", name, s.version, located(names))
 		}
 		return s
 	}
@@ -482,12 +484,25 @@ func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addO
 	s.namespaces, s.teams = sortedSet(s.namespaces), sortedSet(s.teams)
 	if same {
 		s.located = fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
-			name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via, strings.Join(s.namespaces, ", "))
+			name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via, located(s.namespaces))
 	} else {
 		sort.Strings(parts)
-		s.located = fmt.Sprintf("Detected %s in namespace(s): %s.", name, strings.Join(parts, ", "))
+		s.located = fmt.Sprintf("Detected %s in namespace(s): %s.", name, located(parts))
 	}
 	return s
+}
+
+// addOnLocatedLimit caps the installs an add-on finding's evidence
+// sentence lists.
+const addOnLocatedLimit = 10
+
+// located joins sorted install names, listing the first
+// addOnLocatedLimit and counting the rest.
+func located(names []string) string {
+	if len(names) <= addOnLocatedLimit {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(names[:addOnLocatedLimit], ", "), len(names)-addOnLocatedLimit)
 }
 
 // versionBefore orders versions numerically ("1.7.9" < "1.7.20"), falling
