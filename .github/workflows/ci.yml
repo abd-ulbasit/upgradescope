@@ -196,11 +196,12 @@ jobs:
   # `make test` above never runs them in full; they are the proofs the
   # claims ledger and docs/operations.md cite for the server's memory
   # bounds. hack/test-heap.sh finds every test that reads raceEnabled and
-  # runs it without -race, failing on a skip.
+  # runs it without -race, failing on a skip. They take ~11.5 minutes on
+  # an Apple silicon laptop; a hosted runner is slower.
   test-heap:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
