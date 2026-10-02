@@ -139,6 +139,7 @@ These tests are skipped unless you set an environment variable, so
 |---|---|---|
 | scan + agent against a real cluster | `make demo-up` then `make it` (`UPGRADESCOPE_IT=1`) | kind, helm, kubectl |
 | full kind e2e on one Kubernetes minor (CI's kube job) | `make e2e E2E_MINOR=1.31` (`make agent-e2e` is an alias) | Docker, helm, jq; kind and kubectl are installed for you |
+| live collector and engine on Kubernetes 1.24–1.28, against a real kube-apiserver and etcd (CI's envtest job) | `make envtest`, or `make envtest ENVTEST_MINOR=1.24` (`UPGRADESCOPE_ENVTEST=1`; it never reads your kubeconfig) | Go and network on the first run; no Docker |
 | Postgres store conformance | `make pg-test` (`PG_VERSION=14` for another major), or set `UPGRADESCOPE_PG_TEST_DSN=postgres://…` to use a database you run | Docker, or any Postgres you own |
 | Helm chart contract | `make chart-test`; with kubeconform validation, `make helm-test` | helm (plus network for `helm-test`) |
 | dashboard | `make web-test` | Node |
@@ -198,6 +199,7 @@ kubectl and kubeconform are also checked against their upstream sha256
 | `pg-conformance` | PR, push (Postgres 17); weekly (14–18) | `make pg-test` (`PG_VERSION=14`, …) | the store conformance suite against a real Postgres |
 | `release-check` | PRs touching release inputs, dispatch, release | `make release-check` (no Docker: `GORELEASER_SKIP=publish,sign,sbom,docker`) | `goreleaser check` and a snapshot with the pinned GoReleaser, archive names match what `action/run.sh` downloads, `checksums.txt` covers the `api/` contracts, the sizes the README and Install page state are within 2% of the build, the binary serves the dashboard, and every flag, default or usage line the CLI lost or changed since the last release tag is named under CHANGELOG.md's Changed (`make flags-diff`) |
 | `kube` | PR, push (Kubernetes 1.31, 1.37); weekly (1.29–1.37) | `make e2e E2E_MINOR=1.31` | see below |
+| `envtest` | PRs touching more than docs, push, weekly, dispatch, release (Kubernetes 1.24–1.28) | `make envtest` (`ENVTEST_MINOR=1.24` for one minor) | the live collector and engine against a real kube-apiserver and etcd, for the minors kind has no node images for: GA-only objects give no removed-API finding or blocker, a second scan of an unchanged cluster is identical, an object written through a still-served beta API blocks at its removal minor, and unavailable or partial capabilities are reported as not assessed; see below |
 | `action` | PRs touching the action or anything the binary is built from (`cmd/`, `internal/`, `registry/`, `go.mod`/`go.sum`); weekly (Linux, macOS) | `make action-test` (offline); the rest needs a published release | `action/run.sh` offline (input validation, checksum-verified install, outputs, annotations, step summary, an injection payload); then both `action.yml` paths for real: the latest release archive, this tree's binary on removed and clean fixtures, with an ignore rule (`config`) and against a baseline (`baseline`, `write-baseline`) |
 | `registry` | PRs touching `registry/` | `go test ./registry/ && make eol-check` | registry entries are valid and in sync with endoflife.date |
 | `kb-freshness` | PR, push, weekly | `make gen-kb && git status` | the generated KB matches `tools/gen-kb`'s pinned `k8s.io/api` |
@@ -220,9 +222,24 @@ warning, and a TODO in `hack/e2e.sh` names the issue that makes them gating.
 longer vanilla, so the zero-blocker check is reported as SKIP. Run
 `make demo-down` first for a full local run.
 
+The `envtest` job (`hack/envtest.sh`, `TestEnvtestMatrix` in
+`internal/collect`) covers the Kubernetes minors below the kind matrix, 1.24
+to 1.28, with no Docker: for each minor it downloads that minor's
+kube-apiserver and etcd with `setup-envtest`, starts them on a loopback
+port, and scans them with the same collector and engine as `scan`. It reads
+no kubeconfig and touches no cluster you have a context for. The tool and
+the bundle index are pinned in `hack/envtest.sh`, each minor's bundle to an
+exact patch release in `hack/envtest-versions.txt`, and downloads are
+sha512-verified; the first run needs network, and CI caches `bin/envtest`.
+There are no nodes, pods or controllers, so only what the apiserver alone
+serves is tested. To add a minor, add its row to `hack/envtest-versions.txt`
+(an exact release `setup-envtest list` shows), its deprecated beta API to
+`envtestBetas` in the test, and the minor to the job's matrix;
+`hack/envtest_test.sh` (`make hack-test`) fails if the three differ.
+
 The schedule (weekly) runs the vuln gate, the full Kubernetes and Postgres
-matrices, the Action check and KB freshness, because advisories, images and
-releases change without a commit here. `release.yml` calls `ci.yml` at the
+matrices, the envtest matrix, the Action check and KB freshness, because
+advisories, images and releases change without a commit here. `release.yml` calls `ci.yml` at the
 tagged commit and publishes nothing unless it passes.
 
 Breaking CLI changes are caught only at that point, because `release-check`

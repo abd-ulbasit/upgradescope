@@ -203,6 +203,13 @@ a CI gate.
   error. Hops come
   from the knowledge base's upgrade steps, one minor each by default; a
   step that skips minors needs a citation, and none ship (#78).
+- Kubernetes 1.24 to 1.28, which kind has no node images for, are tested
+  against a real kube-apiserver and etcd (envtest) in CI: GA-only objects
+  give no removed-API finding or blocker, a second scan of an unchanged
+  cluster is identical, and an object written through a beta API the
+  minor still serves blocks at its removal minor. Only the live collector
+  and engine are tested there (no nodes, agent or chart); the tested range
+  is on the compatibility page. `make envtest` runs it locally (#135, #69).
 
 ### Changed
 
