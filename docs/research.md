@@ -13,7 +13,9 @@ tool-by-tool comparison, see [Comparison](comparison.md).
 Open-source deprecation scanners are **point-in-time CLIs**. pluto checks
 manifests and Helm charts in repositories, Helm releases in a cluster, and
 in-cluster resources through their last-applied annotations
-([pluto quickstart](https://pluto.docs.fairwinds.com/quickstart/)); kubent
+([pluto quickstart](https://pluto.docs.fairwinds.com/quickstart/), and the
+[FAQ](https://pluto.docs.fairwinds.com/faq/) on why that annotation is
+unreliable); kubent
 checks a live cluster once through file, last-applied-annotation and Helm v3
 collectors ([kube-no-trouble](https://github.com/doitintl/kube-no-trouble));
 kubepug checks a live cluster or manifests against a target release's data
@@ -26,7 +28,9 @@ providers' own upgrade insights for their managed clusters
 [AKS](https://learn.microsoft.com/en-us/azure/aks/stop-cluster-upgrade-api-breaking-changes)).
 *Opinion:* the open-source gap is a self-hosted tool that runs continuously
 on any cluster, covers add-on end of life with cited data, and rolls a fleet
-up for an auditor.
+up for an auditor. Radar's upgrade-impact view (an interactive UI, with a
+hosted multi-cluster product) covers part of the API and skew ground; see
+[Comparison](comparison.md).
 
 ## Evidence
 
@@ -45,7 +49,18 @@ up for an auditor.
 
 - pluto's `detect-files` and `detect-helm` read manifests and Helm releases;
   `detect-api-resources` reads in-cluster resources
-  ([quickstart](https://pluto.docs.fairwinds.com/quickstart/)).
+  ([quickstart](https://pluto.docs.fairwinds.com/quickstart/)). Its FAQ says
+  the last-applied annotation it relies on there is not a reliable way to
+  detect deprecated APIs on a live cluster: a `kubectl patch` removes it
+  ([pluto FAQ](https://pluto.docs.fairwinds.com/faq/)).
+- Radar (Skyhook, Apache-2.0) has an *Upgrade impact* check that reads the
+  apiserver's `apiserver_requested_deprecated_apis` series, among other
+  evidence
+  ([Radar README](https://github.com/skyhook-io/radar#kubernetes-upgrade-impact),
+  [guide](https://radarhq.io/docs/features/upgrade-impact)). Its code's first commit is dated 2026-08-03
+  ([history](https://github.com/skyhook-io/radar/commits/main/pkg/upgradereadiness)),
+  after this note's June snapshot, so the gap opinion above is narrower than
+  it first read.
 - kubent's live-cluster collectors read the
   `kubectl.kubernetes.io/last-applied-configuration` annotation and Helm v3
   release objects ([kube-no-trouble](https://github.com/doitintl/kube-no-trouble)).
