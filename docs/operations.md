@@ -32,8 +32,9 @@ request is measured before it is decoded:
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
 | measured for aliases, decoded and evaluated at once | 1, others wait up to 30s holding only their bodies | 1, others wait up to 10s |
 
-Over a cap or a budget is `413`, before the body is decoded; the message
-says to split the stream or List. A body that does not fit the shared
+Over a cap or a budget on the input is `413`, before the body is
+decoded (an answer over its bound, below, after the evaluation); the
+message says to split the stream or List. A body that does not fit the shared
 buffer budget, or a request that waits too long for its turn, gets `503`
 with `Retry-After` (the agent retries it). A body must arrive within the
 60s read timeout (about 350 KiB/s at 20 MiB), or it gets `408`, which the
