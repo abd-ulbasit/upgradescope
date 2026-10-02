@@ -6,49 +6,48 @@ import (
 	"testing"
 )
 
-// fakeNotifier records every event it receives and optionally fails.
+// fakeNotifier records every notification it receives and optionally fails.
 type fakeNotifier struct {
-	events []Event
-	err    error
+	got []Notification
+	err error
 }
 
-func (f *fakeNotifier) Notify(_ context.Context, ev Event) error {
-	f.events = append(f.events, ev)
+func (f *fakeNotifier) Notify(_ context.Context, n Notification) error {
+	f.got = append(f.got, n)
 	return f.err
 }
 
 func TestMultiFansOutToAll(t *testing.T) {
 	a, b := &fakeNotifier{}, &fakeNotifier{}
-	ev := Event{Cluster: "prod-eu-1", Target: "1.37", Kind: KindNewBlocker, Title: "x removed"}
+	n := testNotification()
 
-	if err := Multi(a, b).Notify(context.Background(), ev); err != nil {
+	if err := Multi(a, b).Notify(context.Background(), n); err != nil {
 		t.Fatalf("Multi.Notify: %v", err)
 	}
-	if len(a.events) != 1 || len(b.events) != 1 {
-		t.Fatalf("want 1 event each, got a=%d b=%d", len(a.events), len(b.events))
+	if len(a.got) != 1 || len(b.got) != 1 {
+		t.Fatalf("want 1 notification each, got a=%d b=%d", len(a.got), len(b.got))
 	}
-	if a.events[0] != ev || b.events[0] != ev {
-		t.Fatalf("event mutated in fan-out: a=%+v b=%+v", a.events[0], b.events[0])
+	if a.got[0].DeliveryID != n.DeliveryID || b.got[0].DeliveryID != n.DeliveryID {
+		t.Fatalf("notification mutated in fan-out: a=%+v b=%+v", a.got[0], b.got[0])
 	}
 }
 
 func TestMultiContinuesPastFailures(t *testing.T) {
 	failing := &fakeNotifier{err: errors.New("boom")}
 	ok := &fakeNotifier{}
-	ev := Event{Cluster: "c", Target: "1.36", Kind: KindBecameReady, Title: "ready"}
 
 	// A failing notifier must be logged-and-skipped: the healthy one still
-	// fires and Multi never propagates the error (ingestion must not block).
-	if err := Multi(failing, ok).Notify(context.Background(), ev); err != nil {
+	// fires and Multi never propagates the error.
+	if err := Multi(failing, ok).Notify(context.Background(), testNotification()); err != nil {
 		t.Fatalf("Multi must swallow individual failures, got %v", err)
 	}
-	if len(ok.events) != 1 {
-		t.Fatalf("healthy notifier skipped after earlier failure: got %d events", len(ok.events))
+	if len(ok.got) != 1 {
+		t.Fatalf("healthy notifier skipped after earlier failure: got %d notifications", len(ok.got))
 	}
 }
 
 func TestMultiEmptyIsHarmless(t *testing.T) {
-	if err := Multi().Notify(context.Background(), Event{}); err != nil {
+	if err := Multi().Notify(context.Background(), Notification{}); err != nil {
 		t.Fatalf("empty Multi: %v", err)
 	}
 }
@@ -71,7 +70,7 @@ func TestMembersFlattensMulti(t *testing.T) {
 }
 
 func TestNopNotifier(t *testing.T) {
-	if err := (NopNotifier{}).Notify(context.Background(), Event{Kind: KindNewBlocker}); err != nil {
+	if err := (NopNotifier{}).Notify(context.Background(), testNotification()); err != nil {
 		t.Fatalf("NopNotifier: %v", err)
 	}
 }

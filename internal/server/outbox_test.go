@@ -19,7 +19,7 @@ import (
 // blockingNotifier never returns until its context ends.
 type blockingNotifier struct{ calls chan struct{} }
 
-func (b *blockingNotifier) Notify(ctx context.Context, _ notify.Event) error {
+func (b *blockingNotifier) Notify(ctx context.Context, _ notify.Notification) error {
 	b.calls <- struct{}{}
 	<-ctx.Done()
 	return ctx.Err()
@@ -32,7 +32,7 @@ type flakyNotifier struct {
 	fails int
 }
 
-func (f *flakyNotifier) Notify(ctx context.Context, ev notify.Event) error {
+func (f *flakyNotifier) Notify(ctx context.Context, n notify.Notification) error {
 	f.mu.Lock()
 	if f.fails > 0 {
 		f.fails--
@@ -40,7 +40,7 @@ func (f *flakyNotifier) Notify(ctx context.Context, ev notify.Event) error {
 		return errors.New("unexpected status 503")
 	}
 	f.mu.Unlock()
-	return f.recordingNotifier.Notify(ctx, ev)
+	return f.recordingNotifier.Notify(ctx, n)
 }
 
 // blockedThenClean pushes a PSP inventory, then a clean one: the second

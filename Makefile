@@ -45,6 +45,13 @@ test:
 # UPGRADESCOPE_IT_CONTEXT=<context> to use a different disposable cluster.
 it:
 	UPGRADESCOPE_IT=1 go test ./... -run Integration -v
+
+# The fleet-scale gate (#125): 500 clusters with ~35 KiB inventories on
+# SQLite, 10 concurrent /fleet readers; fails when p95 is over 1s or the
+# live heap peaks over 512MiB (the chart's memory limit). Needs only Go.
+.PHONY: bench-server
+bench-server:
+	UPGRADESCOPE_BENCH=1 go test ./internal/server -run TestBenchServerFleet -count=1 -v
 # CI's lint job runs exactly this. golangci-lint-action lags Go releases (its
 # binary must be built with a Go >= our toolchain), so vet + staticcheck are
 # the gate. STATICCHECK_VERSION is pinned, so a clean `make lint` means a

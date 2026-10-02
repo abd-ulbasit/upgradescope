@@ -35,16 +35,26 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("UpsertClusterZeroTimesDefault", func(t *testing.T) { testZeroTimes(t, newStore(t)) })
 	t.Run("UpsertClusterRejectsUIDChange", func(t *testing.T) { testClusterUIDConflict(t, newStore(t)) })
 	t.Run("ClusterUIDAlternatingPushesNeverInterleave", func(t *testing.T) { testClusterUIDAlternating(t, newStore(t)) })
+	t.Run("EmptyUIDPushNeverInterleaves", func(t *testing.T) { testEmptyUIDNeverInterleaves(t, newStore(t)) })
 	t.Run("DeleteCluster", func(t *testing.T) { testDeleteCluster(t, newStore(t)) })
+	t.Run("ClusterByName", func(t *testing.T) { testClusterByName(t, newStore(t)) })
+	t.Run("RenameCluster", func(t *testing.T) { testRenameCluster(t, newStore(t)) })
+	t.Run("CommitEvaluationsRegistersCluster", func(t *testing.T) { testCommitRegistersCluster(t, newStore(t)) })
+	t.Run("CommitFailureLeavesNoCluster", func(t *testing.T) { testCommitFailureLeavesNoCluster(t, newStore(t)) })
+	t.Run("DuplicateRecordsEnvelope", func(t *testing.T) { testDuplicateRecordsEnvelope(t, newStore(t)) })
+	t.Run("PruneKeepsLatestSnapshot", func(t *testing.T) { testPrune(t, newStore(t)) })
 	t.Run("SnapshotDedup", func(t *testing.T) { testSnapshotDedup(t, newStore(t)) })
 	t.Run("SnapshotDedupClusterScoped", func(t *testing.T) { testSnapshotDedupClusterScoped(t, newStore(t)) })
 	t.Run("ConcurrentIngestSerializes", func(t *testing.T) { testConcurrentIngest(t, newStore(t)) })
 	t.Run("LatestSnapshotRoundTrip", func(t *testing.T) { testLatestSnapshot(t, newStore(t)) })
+	t.Run("SnapshotServerVersionAndBytesRoundTrip", func(t *testing.T) { testSnapshotServerVersion(t, newStore(t)) })
+	t.Run("LatestSnapshotHeads", func(t *testing.T) { testLatestSnapshotHeads(t, newStore(t)) })
 	t.Run("EvaluationsLatestPerTarget", func(t *testing.T) { testEvaluations(t, newStore(t)) })
 	t.Run("LatestEvaluationTieBreakHigherID", func(t *testing.T) { testLatestEvaluationTieBreak(t, newStore(t)) })
 	t.Run("ScoreHistoryOldestFirstLimitNewest", func(t *testing.T) { testScoreHistory(t, newStore(t)) })
 	t.Run("EvaluationFreshnessFields", func(t *testing.T) { testEvaluationFreshnessFields(t, newStore(t)) })
 	t.Run("CurrentEvaluationIsLatestSnapshotOnly", func(t *testing.T) { testCurrentEvaluation(t, newStore(t)) })
+	t.Run("CurrentEvaluationIgnoresCreatedAt", func(t *testing.T) { testCurrentEvaluationIgnoresCreatedAt(t, newStore(t)) })
 	t.Run("LatestKnownEvaluationSkipsUnknown", func(t *testing.T) { testLatestKnownEvaluation(t, newStore(t)) })
 	t.Run("CommitEvaluationsNewSnapshot", func(t *testing.T) { testCommitNewSnapshot(t, newStore(t)) })
 	t.Run("CommitEvaluationsIsAtomic", func(t *testing.T) { testCommitIsAtomic(t, newStore(t)) })
@@ -173,13 +183,15 @@ func testClusterUIDConflict(t *testing.T, s store.Store) {
 		t.Errorf("after refused upsert: uid %q last seen %v, want uid-a / %v (unchanged)", got.ClusterUID, got.LastSeen, base)
 	}
 
-	// An empty incoming UID (the agent could not read kube-system) keeps
-	// the stored identity.
-	if _, err := s.UpsertCluster(ctx, store.Cluster{Name: "prod", LastSeen: at(2)}); err != nil {
-		t.Fatalf("upsert with empty UID: %v", err)
+	// An empty incoming UID is no wildcard: a push that cannot say which
+	// cluster it is may come from another cluster entirely, so it is
+	// refused too (and changes nothing).
+	_, err = s.UpsertCluster(ctx, store.Cluster{Name: "prod", LastSeen: at(2)})
+	if !errors.As(err, &conflict) || conflict.StoredUID != "uid-a" || conflict.PushedUID != "" {
+		t.Fatalf("upsert with empty UID: err = %v, want a conflict naming uid-a and an empty pushed UID", err)
 	}
-	if got, _ := s.GetCluster(ctx, id); got.ClusterUID != "uid-a" || !got.LastSeen.Equal(at(2)) {
-		t.Errorf("after empty-UID upsert: uid %q last seen %v, want uid-a / %v", got.ClusterUID, got.LastSeen, at(2))
+	if got, _ := s.GetCluster(ctx, id); got.ClusterUID != "uid-a" || !got.LastSeen.Equal(base) {
+		t.Errorf("after empty-UID upsert: uid %q last seen %v, want uid-a / %v (unchanged)", got.ClusterUID, got.LastSeen, base)
 	}
 
 	// A cluster first registered without a UID adopts the first one pushed.
@@ -192,6 +204,50 @@ func testClusterUIDConflict(t *testing.T, s store.Store) {
 	}
 	if got, _ := s.GetCluster(ctx, anon); got.ClusterUID != "uid-c" {
 		t.Errorf("anon uid = %q, want uid-c (adopted)", got.ClusterUID)
+	}
+	// Until a UID is bound, UID-less pushes of one name are one cluster:
+	// nothing tells them apart.
+	if _, err := s.UpsertCluster(ctx, store.Cluster{Name: "nouid", LastSeen: base}); err != nil {
+		t.Fatalf("insert nouid: %v", err)
+	}
+	if _, err := s.UpsertCluster(ctx, store.Cluster{Name: "nouid", LastSeen: at(1)}); err != nil {
+		t.Errorf("second UID-less upsert of an unbound name: %v", err)
+	}
+}
+
+// testEmptyUIDNeverInterleaves replays a cluster that registered its name
+// with a UID and a second, UID-less pusher of the same name (an agent that
+// cannot read kube-system, or a misconfigured one). The UID-less pushes
+// are refused, so they never land in the bound cluster's history.
+func testEmptyUIDNeverInterleaves(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	var accepted, refused int
+	for i := range 6 {
+		uid, hash := "uid-x", fmt.Sprintf("x-%d", i)
+		if i%2 == 1 {
+			uid, hash = "", fmt.Sprintf("anon-%d", i)
+		}
+		cid, err := s.UpsertCluster(ctx, store.Cluster{Name: "prod", ClusterUID: uid, LastSeen: at(i)})
+		if errors.Is(err, store.ErrClusterUIDConflict) {
+			refused++
+			continue
+		}
+		if err != nil {
+			t.Fatalf("push %d: %v", i, err)
+		}
+		mustSnapshot(t, s, cid, hash, at(i))
+		accepted++
+	}
+	if accepted != 3 || refused != 3 {
+		t.Fatalf("accepted %d / refused %d pushes, want 3 / 3 (every UID-less push refused)", accepted, refused)
+	}
+	clusters, err := s.ListClusters(ctx)
+	if err != nil || len(clusters) != 1 {
+		t.Fatalf("ListClusters = (%+v, %v), want one cluster", clusters, err)
+	}
+	latest, err := s.LatestSnapshot(ctx, clusters[0].ID)
+	if err != nil || latest.Hash != "x-4" {
+		t.Errorf("latest snapshot = (%q, %v), want x-4 (UID-less pushes never write)", latest.Hash, err)
 	}
 }
 
@@ -239,13 +295,21 @@ func testClusterUIDAlternating(t *testing.T, s store.Store) {
 	}
 }
 
-// testDeleteCluster pins the operator escape hatch for a rebuilt cluster:
-// DeleteCluster drops the cluster with its snapshots and evaluations, and
-// the name is then free for a new UID. Tokens are keyed by name and stay.
+// testDeleteCluster pins decommissioning, also the escape hatch for a
+// rebuilt cluster: DeleteCluster drops the cluster with its snapshots,
+// evaluations, ingest tokens and queued notifications, and the name is
+// then free for a new UID. Another cluster's rows are untouched.
 func testDeleteCluster(t *testing.T, s store.Store) {
 	ctx := context.Background()
 	cid := mustCluster(t, s, "prod")
-	sid := mustSnapshot(t, s, cid, "aaa", base)
+	sid, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{
+		ClusterID: cid,
+		Snapshot:  &store.Snapshot{ClusterID: cid, Hash: "aaa", ReceivedAt: base, Inventory: []byte(`{}`)},
+		Outbox:    []store.OutboxMessage{outboxMsg("slack", `{"c":"prod"}`, base)},
+	})
+	if err != nil {
+		t.Fatalf("CommitEvaluations(prod): %v", err)
+	}
 	if _, err := s.InsertEvaluation(ctx, store.Evaluation{ClusterID: cid, SnapshotID: sid, Target: "1.36", Score: 90, CreatedAt: base}); err != nil {
 		t.Fatalf("InsertEvaluation: %v", err)
 	}
@@ -253,7 +317,16 @@ func testDeleteCluster(t *testing.T, s store.Store) {
 		t.Fatalf("CreateToken: %v", err)
 	}
 	other := mustCluster(t, s, "dev")
-	mustSnapshot(t, s, other, "ddd", base)
+	if _, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{
+		ClusterID: other,
+		Snapshot:  &store.Snapshot{ClusterID: other, Hash: "ddd", ReceivedAt: base, Inventory: []byte(`{}`)},
+		Outbox:    []store.OutboxMessage{outboxMsg("slack", `{"c":"dev"}`, base)},
+	}); err != nil {
+		t.Fatalf("CommitEvaluations(dev): %v", err)
+	}
+	if _, err := s.CreateToken(ctx, "dev", "tok-dev-keep"); err != nil {
+		t.Fatalf("CreateToken(dev): %v", err)
+	}
 
 	if err := s.DeleteCluster(ctx, "prod"); err != nil {
 		t.Fatalf("DeleteCluster: %v", err)
@@ -270,8 +343,18 @@ func testDeleteCluster(t *testing.T, s store.Store) {
 	if _, err := s.LatestSnapshot(ctx, other); err != nil {
 		t.Errorf("other cluster's snapshot: %v (must survive)", err)
 	}
-	if name, ok, err := s.ValidToken(ctx, "tok-prod-delete"); err != nil || !ok || name != "prod" {
-		t.Errorf("ValidToken after delete = (%q, %v, %v), want the token kept", name, ok, err)
+	if name, ok, err := s.ValidToken(ctx, "tok-prod-delete"); err != nil || ok {
+		t.Errorf("ValidToken after delete = (%q, %v, %v), want the token gone", name, ok, err)
+	}
+	if toks, err := s.ListTokens(ctx, "prod"); err != nil || len(toks) != 0 {
+		t.Errorf("ListTokens(prod) after delete = (%+v, %v), want none", toks, err)
+	}
+	if name, ok, err := s.ValidToken(ctx, "tok-dev-keep"); err != nil || !ok || name != "dev" {
+		t.Errorf("dev token after deleting prod = (%q, %v, %v), want it kept", name, ok, err)
+	}
+	msgs, err := s.ClaimOutbox(ctx, at(1), time.Minute, 10)
+	if err != nil || len(msgs) != 1 || string(msgs[0].Payload) != `{"c":"dev"}` || msgs[0].ClusterID != other {
+		t.Errorf("outbox after delete = (%+v, %v), want only dev's message", msgs, err)
 	}
 	newID, err := s.UpsertCluster(ctx, store.Cluster{Name: "prod", ClusterUID: "uid-rebuilt"})
 	if err != nil {
@@ -477,6 +560,79 @@ func testLatestSnapshot(t *testing.T, s store.Store) {
 	}
 	if !bytes.Equal(got.Inventory, []byte(`{"hash":"bbb"}`)) {
 		t.Errorf("Inventory = %s, want raw bytes back", got.Inventory)
+	}
+}
+
+// testLatestSnapshotHeads: one call returns every cluster's latest
+// snapshot — the same row LatestSnapshot returns — without the inventory
+// bytes, and nothing for a cluster with no snapshot.
+func testLatestSnapshotHeads(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	if heads, err := s.LatestSnapshotHeads(ctx); err != nil || len(heads) != 0 {
+		t.Fatalf("empty store heads = (%v, %v), want none", heads, err)
+	}
+	prod, dev := mustCluster(t, s, "prod"), mustCluster(t, s, "dev")
+	mustCluster(t, s, "empty")
+	mustSnapshot(t, s, prod, "aaa", base)
+	if _, _, err := s.InsertSnapshot(ctx, store.Snapshot{ClusterID: dev, Hash: "ddd", ServerVersion: "v1.33.1", ReceivedAt: at(1), Inventory: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	mustSnapshot(t, s, prod, "bbb", at(2))
+
+	heads, err := s.LatestSnapshotHeads(ctx)
+	if err != nil {
+		t.Fatalf("LatestSnapshotHeads: %v", err)
+	}
+	if len(heads) != 2 {
+		t.Fatalf("heads = %+v, want prod and dev only", heads)
+	}
+	for _, cid := range []int64{prod, dev} {
+		want, err := s.LatestSnapshot(ctx, cid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want.Inventory = nil
+		got := heads[cid]
+		if got.ID != want.ID || got.ClusterID != want.ClusterID || got.Hash != want.Hash || got.KBVersion != want.KBVersion ||
+			got.AgentVersion != want.AgentVersion || got.ServerVersion != want.ServerVersion || !got.ReceivedAt.Equal(want.ReceivedAt) || got.Inventory != nil {
+			t.Errorf("head of cluster %d = %+v, want %+v without inventory", cid, got, want)
+		}
+	}
+	if heads[prod].Hash != "bbb" || heads[dev].ServerVersion != "v1.33.1" {
+		t.Errorf("heads = %+v, want prod at bbb and dev judged at v1.33.1", heads)
+	}
+}
+
+// testSnapshotServerVersion: a snapshot's ServerVersion (the version it is
+// judged at) and its inventory bytes come back exactly as stored —
+// whitespace, key order and fields the server does not know included —
+// whether written by InsertSnapshot or by CommitEvaluations.
+func testSnapshotServerVersion(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	cid := mustCluster(t, s, "prod")
+	raw := []byte(`{ "serverVersion":"v1.34.2", "futureField": {"b":1,"a":[2]}, "schemaVersion":1 }`)
+	if _, _, err := s.InsertSnapshot(ctx, store.Snapshot{ClusterID: cid, Hash: "aaa", ServerVersion: "v1.34.2", ReceivedAt: base, Inventory: raw}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LatestSnapshot(ctx, cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ServerVersion != "v1.34.2" || !bytes.Equal(got.Inventory, raw) {
+		t.Errorf("snapshot = version %q inventory %s, want v1.34.2 and %s", got.ServerVersion, got.Inventory, raw)
+	}
+	if _, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{ClusterID: cid,
+		Snapshot: &store.Snapshot{Hash: "bbb", ServerVersion: "v1.33.0", ReceivedAt: at(1), Inventory: []byte(`{}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.LatestSnapshot(ctx, cid); err != nil || got.ServerVersion != "v1.33.0" {
+		t.Errorf("committed snapshot = (%+v, %v), want server version v1.33.0", got, err)
+	}
+	if _, _, err := s.InsertSnapshot(ctx, store.Snapshot{ClusterID: cid, Hash: "ccc", ReceivedAt: at(2), Inventory: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.LatestSnapshot(ctx, cid); err != nil || got.ServerVersion != "" {
+		t.Errorf("snapshot without a version = (%+v, %v), want none", got, err)
 	}
 }
 

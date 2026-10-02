@@ -26,6 +26,7 @@ type fleetCell struct {
 	EvaluatedAt time.Time      `json:"evaluatedAt"`
 	SnapshotID  int64          `json:"snapshotId"`
 	Source      string         `json:"source"`
+	Outdated    bool           `json:"outdated,omitempty"` // evalSummary.Outdated
 	// NotAssessed is the stored report's: why a cell is unknown, or what a
 	// ready one did not cover.
 	NotAssessed []engine.CapabilityGap `json:"notAssessed,omitempty"`
@@ -34,7 +35,9 @@ type fleetCell struct {
 type fleetRow struct {
 	ClusterID     int64                 `json:"clusterId"`
 	Name          string                `json:"name"`
-	ServerVersion string                `json:"serverVersion,omitempty"` // of the latest snapshot
+	LastSeen      time.Time             `json:"lastSeen"`                // the agent's last push, duplicates included
+	Stale         bool                  `json:"stale"`                   // no push within --stale-after: the cells are that old
+	ServerVersion string                `json:"serverVersion,omitempty"` // the version the latest snapshot is judged at (judgedVersion)
 	Cells         map[string]*fleetCell `json:"cells"`                   // target → cell; nil = no current evaluation (or not applicable)
 	NotApplicable []string              `json:"notApplicable,omitempty"` // requested targets at or below ServerVersion
 }
@@ -44,35 +47,41 @@ type fleetResponse struct {
 	Clusters []fleetRow `json:"clusters"`
 }
 
-// clusterState is a cluster with its decoded latest snapshot (hasSnapshot
-// false when it has none, or it cannot be decoded).
+// clusterState is a cluster with its latest snapshot's head — no
+// inventory — and the version that snapshot is judged at (hasSnapshot
+// false when it has none).
 type clusterState struct {
 	store.Cluster
-	snap        store.Snapshot
-	inv         inventory.Inventory
+	snap        store.Snapshot // Inventory is nil
+	version     string         // judgedVersion
 	hasSnapshot bool
 }
 
-// clusterStates loads every cluster's latest snapshot once. A corrupt
-// stored inventory is logged and treated as no snapshot so one bad row
-// cannot take the fleet views down; any other store error is returned.
+// clusterStates loads every cluster's latest snapshot head in one store
+// call. Fleet views never decode inventories up front: at 500 clusters
+// that held hundreds of MiB per request (#125 SV-14); only a row stored
+// before snapshots.server_version is read whole, for its version.
 func (s *Server) clusterStates(ctx context.Context) ([]clusterState, error) {
 	clusters, err := s.cfg.Store.ListClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	heads, err := s.cfg.Store.LatestSnapshotHeads(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]clusterState, 0, len(clusters))
 	for _, c := range clusters {
 		cs := clusterState{Cluster: c}
-		snap, inv, err := s.latestInventory(ctx, c.ID)
-		switch {
-		case err == nil:
-			cs.snap, cs.inv, cs.hasSnapshot = snap, inv, true
-		case errors.Is(err, store.ErrNotFound):
-		case errors.Is(err, errCorruptInventory):
-			log.Printf("server: fleet: %v", err)
-		default:
-			return nil, err
+		if head, ok := heads[c.ID]; ok {
+			cs.snap, cs.version, cs.hasSnapshot = head, head.ServerVersion, true
+			if cs.version == "" {
+				full, err := s.cfg.Store.LatestSnapshot(ctx, c.ID)
+				if err != nil && !errors.Is(err, store.ErrNotFound) {
+					return nil, err
+				}
+				cs.version = judgedVersion(full)
+			}
 		}
 		out = append(out, cs)
 	}
@@ -97,7 +106,7 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	var targets []inventory.Version
 	if q := r.URL.Query().Get("targets"); q != "" {
 		for _, raw := range strings.Split(q, ",") {
-			v, err := inventory.ParseVersion(strings.TrimSpace(raw))
+			v, err := inventory.ParseTarget(strings.TrimSpace(raw))
 			if err != nil {
 				errJSON(w, http.StatusUnprocessableEntity, "invalid targets entry "+raw+": "+err.Error())
 				return
@@ -111,14 +120,15 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows := make([]fleetRow, 0, len(states))
+	now := s.now()
 	for _, c := range states {
-		row := fleetRow{ClusterID: c.ID, Name: c.Name, Cells: map[string]*fleetCell{}}
+		row := fleetRow{ClusterID: c.ID, Name: c.Name, LastSeen: c.LastSeen, Stale: s.clusterStale(c.Cluster, now), Cells: map[string]*fleetCell{}}
 		if c.hasSnapshot {
-			row.ServerVersion = c.inv.ServerVersion
+			row.ServerVersion = c.version
 		}
 		for _, t := range targets {
 			row.Cells[t.String()] = nil // explicit null unless a current evaluation exists
-			if c.hasSnapshot && notApplicable(c.inv, t) {
+			if c.hasSnapshot && notApplicable(c.version, t) {
 				row.NotApplicable = append(row.NotApplicable, t.String())
 				continue
 			}
@@ -127,7 +137,7 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 			case err == nil:
 				row.Cells[t.String()] = &fleetCell{
 					Score: e.Score, Ready: e.Ready, Verdict: verdictOf(e), Blockers: e.Blockers,
-					EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID, Source: sourceStored,
+					EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID, Source: sourceStored, Outdated: s.outdated(e, now),
 					NotAssessed: gapsOf(e),
 				}
 			case errors.Is(err, store.ErrNotFound):
@@ -169,14 +179,14 @@ func (s *Server) fleetDefaultTargets(states []clusterState) []inventory.Version 
 		if !c.hasSnapshot {
 			continue
 		}
-		if server, err := inventory.ParseVersion(c.inv.ServerVersion); err == nil {
+		if server, err := inventory.ParseVersion(c.version); err == nil {
 			add(server.Next())
 		}
 	}
 	for _, v := range s.extraTargets {
 		applicable := false
 		for _, c := range states {
-			if !c.hasSnapshot || !notApplicable(c.inv, v) {
+			if !c.hasSnapshot || !notApplicable(c.version, v) {
 				applicable = true
 				break
 			}
@@ -220,7 +230,7 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, "target query parameter is required")
 		return
 	}
-	target, err := inventory.ParseVersion(q)
+	target, err := inventory.ParseTarget(q)
 	if err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid target: "+err.Error())
 		return
@@ -241,11 +251,18 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 			missing = append(missing, c.Name)
 			continue
 		}
-		if notApplicable(c.inv, target) {
+		if notApplicable(c.version, target) {
 			notApp = append(notApp, c.Name)
 			continue
 		}
 		rep, src, err := s.fleetTeamsReport(ctx, c, target)
+		if errors.Is(err, errCorruptInventory) || errors.Is(err, store.ErrNotFound) {
+			// One bad row (or a cluster deleted meanwhile) must not take
+			// the rollup down: it has nothing to contribute.
+			log.Printf("server: fleet teams: %v", err)
+			missing = append(missing, c.Name)
+			continue
+		}
 		if err != nil {
 			internalErr(w, "loading evaluation", err)
 			return
@@ -294,7 +311,11 @@ func (s *Server) fleetTeamsReport(ctx context.Context, c clusterState, target in
 	case !errors.Is(err, store.ErrNotFound):
 		return engine.Report{}, src, err
 	}
+	snap, inv, err := s.latestInventory(ctx, c.ID)
+	if err != nil {
+		return engine.Report{}, src, err
+	}
 	now := s.now()
-	src.Source, src.EvaluatedAt, src.SnapshotID = sourceWhatIf, now, c.snap.ID
-	return evaluateWhatIf(c.inv, s.cfg.KB, s.cfg.TeamMap, target, now), src, nil
+	src.Source, src.EvaluatedAt, src.SnapshotID = sourceWhatIf, now, snap.ID
+	return evaluateWhatIf(inv, s.cfg.KB, s.cfg.TeamMap, target, now), src, nil
 }

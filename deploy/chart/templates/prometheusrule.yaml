@@ -1,4 +1,4 @@
-{{- if .Values.metrics.prometheusRule.enabled }}
+{{- if and .Values.metrics.prometheusRule.enabled (or .Values.agent.enabled .Values.server.enabled) }}
 {{- $agentJob := printf "%s-agent-metrics" (include "upgradescope.fullname" .) }}
 {{- $serverJob := include "upgradescope.serverFullname" . }}
 apiVersion: monitoring.coreos.com/v1
@@ -12,6 +12,7 @@ metadata:
     {{- end }}
 spec:
   groups:
+    {{- if .Values.agent.enabled }}
     - name: upgradescope-agent
       rules:
         - alert: UpgradescopeUpgradeBlocked
@@ -45,6 +46,7 @@ spec:
           annotations:
             summary: The upgradescope agent has not completed a tick recently
             description: {{ printf "The ClusterReadiness status is going stale. kubectl -n %s logs deploy/%s-agent shows each tick's error." .Release.Namespace (include "upgradescope.fullname" .) | quote }}
+    {{- end }}
     {{- if .Values.server.enabled }}
     - name: upgradescope-server
       rules:
