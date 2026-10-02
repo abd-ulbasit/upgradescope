@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { setToken } from "../api";
@@ -245,6 +245,21 @@ describe("Cluster view", () => {
       }),
     });
     expect(screen.getByText(/2 suppressed/)).toBeTruthy();
+  });
+
+  it("shows the images no add-on registry entry recognizes, only when there are any", async () => {
+    await openCluster("#/cluster/1", {
+      "api/v1/clusters/1/report": report("1.35", {
+        unrecognizedImages: ["corp.example/edge/nginx-controller"],
+        unrecognizedImagesOmitted: 1,
+      }),
+    });
+    const section = screen.getByRole("region", { name: "Unrecognized images (2)" });
+    expect(within(section).getByText("corp.example/edge/nginx-controller")).toBeTruthy();
+    cleanup();
+
+    await openCluster("#/cluster/1?target=1.37");
+    expect(screen.queryByRole("region", { name: /Unrecognized images/ })).toBeNull();
   });
 
   it("flags a stale cluster and shows when it was last seen", async () => {
