@@ -94,6 +94,17 @@ audited") and names the issue that tracks it.
 | SK-04 | Managed-cluster version strings (EKS, GKE, k3s, RKE2, OpenShift suffixes) parse. | `TestParseVersion` `TestParseVersionObservedGitVersions` `TestCollectVersionsManagedClusterEmptyControlPlane` |
 | SK-05 | The policy follows upstream: n-3 kubelets from 1.28, n-2 before. | `TestDefaultSkewPolicy` `TestSkewLegacyComponentsAllowTwoMinors` |
 
+## Upgrade plans
+
+`scan --plan` (#78) came after the audit; its rows are `UP-`.
+
+| ID | Claim | Proven by |
+|---|---|---|
+| UP-01 | `scan --plan` judges the cluster at every minor from the one it runs (a live scan's oldest kube-apiserver, or `--from` with `--files`) to `--target`, and lists each finding in full at the first upgrade it affects, with the upgrade where its severity changes (a warning at one upgrade and a blocker at a later one shows both); a 1.31 to 1.36 plan is five upgrades. | `TestPlanGolden` `TestPlanSeverityTransitions` `TestScanPlanTable` `TestScanPlanMarkdown` `TestScanPlanJSON` `TestScanPlanFiles` |
+| UP-02 | Hops are one minor each unless the knowledge base has a cited upgrade step that skips minors; it ships none. | `TestHopTargetsDefault` `TestHopTargetsCustomPath` |
+| UP-03 | `--plan` never changes the verdict, score or exit code: the plan's last upgrade has the blockers, score and verdict of the report at `--target`, over hundreds of random inventories; ignore rules apply to every upgrade. | `TestPlanFinalHopMatchesEvaluate` `TestScanPlanTable` `TestScanPlanFiles` |
+| UP-04 | The upgrade-plan guide's table and JSON examples are real `scan --plan` output. | `TestDocsUpgradePlanExample` |
+
 ## Verdict, score and exit codes
 
 | ID | Claim | Proven by |
@@ -277,7 +288,7 @@ compare them with the code; the compatibility policy
 |---|---|---|
 | DS-01 | `api/openapi.yaml` documents every route the server registers, and the responses real handlers give for every documented operation validate against it, carrying no field it does not list. Unknown paths answer with its JSON error. | `TestOpenAPICoversEveryRoute` `TestOpenAPIResponsesMatchSpec` `TestOpenAPIUnknownPathIsJSONError` `TestUnlistedFields` |
 | DS-02 | The published response schemas stay open (no `additionalProperties: false`), so a field added within a version, as the compatibility policy allows, does not fail a client that validates. | `TestOpenAPIResponseSchemasAreOpen` |
-| DS-03 | Real `scan --output json` reports (findings, suppressions, a baseline, gaps, unrecognized images, a live cluster's `serverVersion`, `kubeContext` and `apiServer`) validate against `api/report.schema.json` and carry no field it does not list. | `TestJSONReportMatchesSchema` |
+| DS-03 | Real `scan --output json` reports (findings, suppressions, a baseline, gaps, unrecognized images, a live cluster's `serverVersion`, `kubeContext` and `apiServer`, a `--plan` report's `hops`) validate against `api/report.schema.json` and carry no field it does not list. | `TestJSONReportMatchesSchema` `TestScanPlanJSON` |
 | DS-04 | Real webhook deliveries validate against `api/webhook.schema.json`, formats included. | `TestWebhookPayloadMatchesSchema` |
 | DS-05 | Every finding category the engine defines is described in both schemas, which do not close the list (a report with a category added later still validates), has a row on the verdict page and in the architecture, and is listed in, and accepted by, the config reference's ignore rules. | `TestDocsListEveryCategory` `TestDocsConfigReference` |
 | DS-06 | The generated references are fresh: the CLI, CRD and REST API pages match what `tools/gen-docs` renders from the code and `api/openapi.yaml`, and the Helm values tables match `helm-docs`; CI fails on drift. | `TestReferenceIsFresh` `TestGenAPIMarkdown` `TestGenCRDMarkdown` `make docs-check` `hack/helm-docs.sh` |

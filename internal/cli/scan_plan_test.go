@@ -183,6 +183,38 @@ func TestScanPlanFlagErrors(t *testing.T) {
 	}
 }
 
+// The upgrade-plan guide's examples are real output for planInventory:
+// the table excerpt, and the JSON hop.
+func TestDocsUpgradePlanExample(t *testing.T) {
+	page := readDoc(t, "docs/guides/upgrade-plan.md")
+	_, table, _ := strings.Cut(page, "```text\n")
+	table, _, _ = strings.Cut(table, "```")
+	out, _ := execScan(t, []string{"--target", "1.36", "--plan"}, planStub(t, planInventory()))
+	if table == "" || !strings.Contains(out, table) {
+		t.Errorf("docs/guides/upgrade-plan.md: the table example is not in the output:\n%s", out)
+	}
+
+	_, hop, _ := strings.Cut(page, "```json\n")
+	hop, _, _ = strings.Cut(hop, "```")
+	out, _ = execScan(t, []string{"--target", "1.36", "--plan", "--output", "json"}, planStub(t, planInventory()))
+	var report struct{ Hops []json.RawMessage }
+	if err := json.Unmarshal([]byte(out), &report); err != nil || len(report.Hops) < 3 {
+		t.Fatalf("json output: %v\n%s", err, out)
+	}
+	var want, got any
+	if err := json.Unmarshal([]byte(hop), &want); err != nil {
+		t.Fatalf("docs/guides/upgrade-plan.md: the JSON example is not JSON: %v", err)
+	}
+	if err := json.Unmarshal(report.Hops[2], &got); err != nil {
+		t.Fatal(err)
+	}
+	wantJSON, _ := json.Marshal(want)
+	gotJSON, _ := json.Marshal(got)
+	if string(wantJSON) != string(gotJSON) {
+		t.Errorf("docs/guides/upgrade-plan.md: the JSON example is not the 1.33 → 1.34 hop:\n got %s\nwant %s", gotJSON, wantJSON)
+	}
+}
+
 // A live cluster whose kube-apiserver version is unknown has no plan: the
 // scan says so and reports the target alone.
 func TestScanPlanUnknownServerVersion(t *testing.T) {
