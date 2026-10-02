@@ -874,6 +874,10 @@ func minorsBehind(ctrl, kubelet inventory.Version) int {
 //     upgrade would put it out of policy (mirrors the kubelet rule). A
 //     kube-proxy older than 1.25 may only be 2 minors behind.
 //
+// The newer and behind findings are keyed <component>-newer and
+// <component>-behind: one component can be both at once (HA replicas
+// mid-upgrade), at different severities.
+//
 // An empty ControlPlane (managed control planes — EKS/GKE/AKS run these
 // components outside the cluster) yields no findings. When apiserver pods
 // are not observed but other components are, inv.ServerVersion stands in
@@ -972,7 +976,7 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB, target inventory.Ver
 		if len(newer) > 0 {
 			out = append(out, Finding{
 				Category: CatVersionSkew, Severity: rule.newerSev,
-				Key:       string(CatVersionSkew) + "/" + rule.component,
+				Key:       string(CatVersionSkew) + "/" + rule.component + "-newer",
 				Title:     fmt.Sprintf("%s is newer than kube-apiserver", rule.component),
 				Detail:    fmt.Sprintf("%s %s is newer than the oldest kube-apiserver (%s); %s.", rule.component, strings.Join(newer, ", "), oldest, rule.newerDetail),
 				Citations: []string{skewPolicyURL},
@@ -981,7 +985,7 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB, target inventory.Ver
 		if len(behind) > 0 {
 			out = append(out, Finding{
 				Category: CatVersionSkew, Severity: SevWarning,
-				Key:       string(CatVersionSkew) + "/" + rule.component,
+				Key:       string(CatVersionSkew) + "/" + rule.component + "-behind",
 				Title:     fmt.Sprintf("%s exceeds version skew vs kube-apiserver", rule.component),
 				Detail:    fmt.Sprintf("%s %s is more than %d minor version(s) behind the newest kube-apiserver (%s).", rule.component, strings.Join(behind, ", "), rule.maxBehind, newest) + legacyNote("kube-proxy versions", behindLegacy),
 				Citations: []string{skewPolicyURL},

@@ -107,6 +107,15 @@ func TestEvaluateGolden(t *testing.T) {
 			}
 
 			got := Evaluate(inv, k, target, now)
+			// A key identifies one finding: baselines, ignore rules,
+			// notification deltas and SARIF rule ids all match on it.
+			seen := map[string]bool{}
+			for _, f := range got.Findings {
+				if f.Key == "" || seen[f.Key] {
+					t.Errorf("finding key %q is empty or not unique (%s)", f.Key, f.Title)
+				}
+				seen[f.Key] = true
+			}
 			gotRaw, err := json.Marshal(got)
 			if err != nil {
 				t.Fatal(err)

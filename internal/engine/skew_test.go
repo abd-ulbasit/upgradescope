@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -169,7 +170,7 @@ func TestEvalControlPlaneSkewCtrlMgrNewerIsBlocker(t *testing.T) {
 	if len(fs) != 1 || fs[0].Severity != SevBlocker || fs[0].Category != CatVersionSkew {
 		t.Fatalf("want one blocker, got %+v", fs)
 	}
-	if fs[0].Key != "version-skew/kube-controller-manager" {
+	if fs[0].Key != "version-skew/kube-controller-manager-newer" {
 		t.Fatalf("key = %q", fs[0].Key)
 	}
 	if fs[0].Title != "kube-controller-manager is newer than kube-apiserver" {
@@ -189,7 +190,7 @@ func TestEvalControlPlaneSkewSchedulerBehind(t *testing.T) {
 	if len(fs) != 1 || fs[0].Severity != SevWarning || fs[0].Category != CatVersionSkew {
 		t.Fatalf("want one warning, got %+v", fs)
 	}
-	if fs[0].Key != "version-skew/kube-scheduler" {
+	if fs[0].Key != "version-skew/kube-scheduler-behind" {
 		t.Fatalf("key = %q", fs[0].Key)
 	}
 	if fs[0].Title != "kube-scheduler exceeds version skew vs kube-apiserver" {
@@ -212,11 +213,12 @@ func TestEvalControlPlaneSkewKubeProxy(t *testing.T) {
 		name      string
 		proxy     string
 		wantTitle string // "" means no finding
+		wantKey   string
 	}{
-		{"4 behind violates", "v1.30.0", "kube-proxy exceeds version skew vs kube-apiserver"},
-		{"3 behind ok", "v1.31.0", ""},
-		{"newer violates", "v1.35.0", "kube-proxy is newer than kube-apiserver"},
-		{"matching ok", "v1.34.2", ""},
+		{"4 behind violates", "v1.30.0", "kube-proxy exceeds version skew vs kube-apiserver", "version-skew/kube-proxy-behind"},
+		{"3 behind ok", "v1.31.0", "", ""},
+		{"newer violates", "v1.35.0", "kube-proxy is newer than kube-apiserver", "version-skew/kube-proxy-newer"},
+		{"matching ok", "v1.34.2", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,13 +234,44 @@ func TestEvalControlPlaneSkewKubeProxy(t *testing.T) {
 			if len(fs) != 1 || fs[0].Severity != SevWarning || fs[0].Category != CatVersionSkew {
 				t.Fatalf("want one kube-proxy warning, got %+v", fs)
 			}
-			if fs[0].Key != "version-skew/kube-proxy" {
-				t.Fatalf("key = %q", fs[0].Key)
+			if fs[0].Key != tc.wantKey {
+				t.Fatalf("key = %q, want %q", fs[0].Key, tc.wantKey)
 			}
 			if fs[0].Title != tc.wantTitle {
 				t.Fatalf("title = %q, want %q", fs[0].Title, tc.wantTitle)
 			}
 		})
+	}
+}
+
+// A component can be both newer than the oldest apiserver and too far
+// behind the newest one (HA replicas mid-upgrade). Those are two findings
+// of different severity, so they need two keys: a shared key let a
+// --baseline holding the warning mark a new blocker unchanged.
+func TestControlPlaneSkewKeysUnique(t *testing.T) {
+	inv := inventory.Inventory{ControlPlane: []inventory.ComponentVersion{
+		{Component: "kube-apiserver", Version: "v1.33.1"},
+		{Component: "kube-apiserver", Version: "v1.35.0"},
+		{Component: "kube-controller-manager", Version: "v1.33.1"},
+		{Component: "kube-controller-manager", Version: "v1.34.0"},
+		{Component: "kube-scheduler", Version: "v1.33.1"},
+		{Component: "kube-scheduler", Version: "v1.34.0"},
+		{Component: "kube-proxy", Version: "v1.31.0"},
+		{Component: "kube-proxy", Version: "v1.34.0"},
+	}}
+	fs := evalControlPlaneSkew(inv, testKB(), inventory.Version{Major: 1, Minor: 36})
+	want := []string{
+		"blocker version-skew/kube-proxy-post-upgrade",
+		"warning version-skew/apiserver-ha-spread",
+		"blocker version-skew/kube-controller-manager-newer",
+		"warning version-skew/kube-controller-manager-behind",
+		"blocker version-skew/kube-scheduler-newer",
+		"warning version-skew/kube-scheduler-behind",
+		"warning version-skew/kube-proxy-newer",
+		"warning version-skew/kube-proxy-behind",
+	}
+	if got := keys(fs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("keys:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -251,7 +284,7 @@ func TestEvalControlPlaneSkewFallsBackToServerVersion(t *testing.T) {
 		ControlPlane:  []inventory.ComponentVersion{{Component: "kube-proxy", Version: "v1.30.0"}},
 	}
 	fs := withoutKey(evalControlPlaneSkew(inv, testKB(), v134), "version-skew/kube-proxy-post-upgrade")
-	if len(fs) != 1 || fs[0].Key != "version-skew/kube-proxy" || fs[0].Severity != SevWarning {
+	if len(fs) != 1 || fs[0].Key != "version-skew/kube-proxy-behind" || fs[0].Severity != SevWarning {
 		t.Fatalf("want one kube-proxy warning via ServerVersion fallback, got %+v", fs)
 	}
 
@@ -398,7 +431,7 @@ func TestSkewLegacyComponentsAllowTwoMinors(t *testing.T) {
 		t.Errorf("detail = %q", fs[0].Detail)
 	}
 	cp := evalControlPlaneSkew(inv, testKB(), target)
-	if got := keys(cp); len(got) != 2 || got[0] != "blocker version-skew/kube-proxy-post-upgrade" || got[1] != "warning version-skew/kube-proxy" {
+	if got := keys(cp); len(got) != 2 || got[0] != "blocker version-skew/kube-proxy-post-upgrade" || got[1] != "warning version-skew/kube-proxy-behind" {
 		t.Fatalf("kube-proxy 1.22 is 3 behind 1.25: want post-upgrade blocker + current warning, got %v", got)
 	}
 }

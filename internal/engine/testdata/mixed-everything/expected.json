@@ -88,7 +88,7 @@
         "https://kubernetes.io/releases/version-skew-policy/"
       ],
       "detail": "kube-scheduler 1.37 is newer than the oldest kube-apiserver (1.35); control-plane components must not be newer than the apiservers they talk to.",
-      "key": "version-skew/kube-scheduler",
+      "key": "version-skew/kube-scheduler-newer",
       "severity": "blocker",
       "title": "kube-scheduler is newer than kube-apiserver"
     },
@@ -151,7 +151,7 @@
         "https://kubernetes.io/releases/version-skew-policy/"
       ],
       "detail": "kube-controller-manager 1.35 is more than 1 minor version(s) behind the newest kube-apiserver (1.37).",
-      "key": "version-skew/kube-controller-manager",
+      "key": "version-skew/kube-controller-manager-behind",
       "severity": "warning",
       "title": "kube-controller-manager exceeds version skew vs kube-apiserver"
     },
@@ -161,7 +161,7 @@
         "https://kubernetes.io/releases/version-skew-policy/"
       ],
       "detail": "kube-proxy 1.33 is more than 3 minor version(s) behind the newest kube-apiserver (1.37).",
-      "key": "version-skew/kube-proxy",
+      "key": "version-skew/kube-proxy-behind",
       "severity": "warning",
       "title": "kube-proxy exceeds version skew vs kube-apiserver"
     },

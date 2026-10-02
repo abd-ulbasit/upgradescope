@@ -3,11 +3,14 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 // execScan runs the scan command with args, swapping the I/O pipeline for stub.
@@ -176,5 +179,52 @@ func TestScanWritesSelectedFormat(t *testing.T) {
 	}
 	if !strings.Contains(out, "SCORE  100/100") {
 		t.Errorf("table output:\n%s", out)
+	}
+}
+
+// evalStub evaluates inv against the embedded KB at the scan's parsed
+// --target, the way runScan does after collecting.
+func evalStub(t *testing.T, inv inventory.Inventory) func(scanOptions) (engine.Report, error) {
+	t.Helper()
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(opts scanOptions) (engine.Report, error) {
+		return engine.Evaluate(inv, k, opts.targetVersion, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)), nil
+	}
+}
+
+// liveInventory is a fully assessed live inventory of a cluster at server.
+func liveInventory(server string, cp ...inventory.ComponentVersion) inventory.Inventory {
+	return inventory.Inventory{
+		ClusterID: "c", Source: inventory.SourceCluster, ServerVersion: server,
+		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{
+			inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true},
+			inventory.CapAddOns: {Available: true}, inventory.CapHelm: {Available: true},
+			inventory.CapDeprecatedCalls: {Available: true},
+		},
+		ControlPlane: cp,
+	}
+}
+
+// A kube-scheduler that was too far behind (warning, in the baseline) and
+// is now newer than kube-apiserver (blocker) is a new problem: the gate
+// must fail on it, not match it to the baselined warning.
+func TestBaselineSkewEscalationIsNew(t *testing.T) {
+	apiserver := inventory.ComponentVersion{Component: "kube-apiserver", Version: "v1.35.2"}
+	behind := liveInventory("v1.35.2", apiserver, inventory.ComponentVersion{Component: "kube-scheduler", Version: "v1.33.0"})
+	newer := liveInventory("v1.35.2", apiserver, inventory.ComponentVersion{Component: "kube-scheduler", Version: "v1.36.0"})
+
+	baseline := filepath.Join(t.TempDir(), "baseline.json")
+	if _, _, err := execScanStderr(t, []string{"--target", "1.36", "--write-baseline", baseline}, evalStub(t, behind)); err != nil {
+		t.Fatalf("baseline run: err = %v, want a passing gate (warning only)", err)
+	}
+	out, _, err := execScanStderr(t, []string{"--target", "1.36", "--baseline", baseline}, evalStub(t, newer))
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("err = %v, want ErrGateFailed for the new blocker\n%s", err, out)
+	}
+	if !strings.Contains(out, "BASELINE  0 unchanged, 1 new") {
+		t.Errorf("table does not count the blocker as new:\n%s", out)
 	}
 }
