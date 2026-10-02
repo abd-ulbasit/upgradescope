@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -226,6 +227,36 @@ func TestBaselineSkewEscalationIsNew(t *testing.T) {
 	}
 	if !strings.Contains(out, "BASELINE  0 unchanged, 1 new") {
 		t.Errorf("table does not count the blocker as new:\n%s", out)
+	}
+}
+
+// A batch/v1beta1 CronJob is a removed-api warning at target 1.24 (removed
+// in the next minor) and a blocker at 1.25, under the same key. The
+// blocker is new against a baseline written at 1.24: the gate must fail.
+func TestBaselineSeverityIncreaseIsNew(t *testing.T) {
+	inv := liveInventory("v1.23.4")
+	inv.APIUsage = []inventory.APIUsage{{
+		Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 1, Namespaces: map[string]int{"jobs": 1},
+		Objects: []inventory.ObjectRef{{Namespace: "jobs", Name: "nightly"}},
+	}}
+
+	baseline := filepath.Join(t.TempDir(), "baseline.json")
+	if _, _, err := execScanStderr(t, []string{"--target", "1.24", "--write-baseline", baseline}, evalStub(t, inv)); err != nil {
+		t.Fatalf("baseline run: err = %v, want a passing gate (warning only)", err)
+	}
+	b, err := os.ReadFile(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"key": "removed-api/batch/v1beta1/CronJob"`) || !strings.Contains(string(b), `"severity": "warning"`) {
+		t.Fatalf("baseline lacks the removed-api warning:\n%s", b)
+	}
+	out, _, err := execScanStderr(t, []string{"--target", "1.25", "--baseline", baseline, "--fail-on", "blocker"}, evalStub(t, inv))
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("err = %v, want ErrGateFailed for the escalated blocker\n%s", err, out)
+	}
+	if strings.Contains(out, "(in baseline)") || !strings.Contains(out, "BASELINE  0 unchanged") {
+		t.Errorf("table matches the blocker to the baselined warning:\n%s", out)
 	}
 }
 
