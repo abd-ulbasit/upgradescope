@@ -134,6 +134,19 @@ key: ingestToken
 {{- if or .Values.server.readToken .Values.server.readTokenFromSecret -}}true{{- end -}}
 {{- end -}}
 
+{{/* Does the server get an admin token? Non-empty string = yes. */}}
+{{- define "upgradescope.adminTokenEnabled" -}}
+{{- if and .Values.server.adminTokenFromSecret (not .Values.server.existingSecret) -}}
+{{- fail "server.adminTokenFromSecret reads key adminToken from server.existingSecret; set server.existingSecret, or set server.adminToken instead" -}}
+{{- end -}}
+{{- if or (and .Values.server.adminToken (not .Values.server.existingSecret)) .Values.server.adminTokenFromSecret -}}true{{- end -}}
+{{- end -}}
+
+{{/* Does the server use Postgres (server.database.existingSecret)? Non-empty string = yes. */}}
+{{- define "upgradescope.postgres" -}}
+{{- if .Values.server.database.existingSecret -}}true{{- end -}}
+{{- end -}}
+
 {{/* Secret holding the server's tokens */}}
 {{- define "upgradescope.serverSecretName" -}}
 {{- if .Values.server.existingSecret -}}

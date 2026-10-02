@@ -29,11 +29,19 @@ func WriteTable(w io.Writer, r engine.Report) {
 		fmt.Fprintf(w, "READY  unknown (required checks were not assessed)\n")
 		for _, g := range r.NotAssessed {
 			if g.Required {
-				fmt.Fprintf(w, "  %s: %s\n", g.Capability, g.Reason)
+				fmt.Fprintf(w, "  %s: %s\n", g.Label(), g.Reason)
 			}
 		}
 	case r.Ready:
 		fmt.Fprintf(w, "READY  yes\n")
+		// Ready covers what was assessed; say right here what was not.
+		if len(r.NotAssessed) > 0 {
+			labels := make([]string, 0, len(r.NotAssessed))
+			for _, g := range r.NotAssessed {
+				labels = append(labels, g.Label())
+			}
+			fmt.Fprintf(w, "       not fully assessed: %s (see NOT ASSESSED)\n", strings.Join(labels, ", "))
+		}
 	default:
 		fmt.Fprintf(w, "READY  no\n")
 	}
@@ -85,7 +93,10 @@ func WriteTable(w io.Writer, r engine.Report) {
 	if len(r.NotAssessed) > 0 {
 		fmt.Fprintf(w, "\nNOT ASSESSED\n")
 		for _, g := range r.NotAssessed {
-			fmt.Fprintf(w, "  %s: %s\n", g.Capability, g.Reason)
+			fmt.Fprintf(w, "  %s: %s\n", g.Label(), g.Reason)
+			if len(g.Skipped) > 0 {
+				fmt.Fprintf(w, "      skipped: %s\n", strings.Join(g.Skipped, ", "))
+			}
 		}
 	}
 }

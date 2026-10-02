@@ -1,0 +1,3 @@
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "w"}}
+{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "c"}}
+{"apiVersion": "extensions/v1beta1", "kind": "Ingress", "metadata": {"name": "old"},

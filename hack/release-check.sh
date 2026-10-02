@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proves the release pipeline before a tag does (make release-check; CI's
+# Proves the packaging before a tag does (make release-check; CI's
 # release-check job). Publishes and signs nothing:
 #   1. `goreleaser check`: .goreleaser.yml is valid for the pinned GoReleaser;
 #   2. `goreleaser release --snapshot`: every archive, deb/rpm/apk package
@@ -13,7 +13,7 @@
 #      full OCI labels;
 #   5. the binary for this machine is stamped (version, commit, commit date,
 #      registry date) and serves the embedded dashboard at / with every
-#      asset it references (hack/serve-smoke.sh).
+#      asset it references (hack/dashboard-smoke.sh).
 #
 # GoReleaser runs through `go run` at GORELEASER_VERSION (the Makefile pins
 # it; make check-toolchain keeps release.yml on the same version).
@@ -131,5 +131,5 @@ info="$("$bin" version --output json)"
 [ "$(jq -r .registryDate <<<"$info")" = "$(git log -1 --format=%cs -- registry/data)" ] \
   || die "binary registry date is not the last registry/data commit's: $info"
 echo "ok: version, commit, commit date and registry date stamped"
-hack/serve-smoke.sh "$bin" 18431
+DASHBOARD_SMOKE_PORT=18431 hack/dashboard-smoke.sh "$bin"
 echo "release-check: OK"

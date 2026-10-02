@@ -74,3 +74,55 @@ func TestIngestRejectsClusterUIDChange(t *testing.T) {
 		t.Fatalf("latest snapshot = %s %s, want uid-123's last push (v1.34.2)", inv.ClusterID, inv.ServerVersion)
 	}
 }
+
+// TestIngestRejectsUIDLessPushToBoundName: an empty clusterId is not a
+// wildcard. A push that cannot say which cluster it is (the agent could
+// not read kube-system, or a second agent under the same name) gets 409
+// once the name is bound, and never joins that cluster's history.
+func TestIngestRejectsUIDLessPushToBoundName(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	for i := range 4 {
+		inv := testInventory()
+		inv.ServerVersion = fmt.Sprintf("v1.34.%d", i)
+		want := http.StatusAccepted
+		if i%2 == 1 {
+			inv.ClusterID = ""
+			want = http.StatusConflict
+		}
+		resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, inv), true)
+		if resp.StatusCode != want {
+			t.Fatalf("push %d (clusterId %q): status = %d (body %v), want %d", i, inv.ClusterID, resp.StatusCode, out, want)
+		}
+		if want == http.StatusConflict {
+			if msg, _ := out["error"].(string); !strings.Contains(msg, "carries no clusterId") {
+				t.Errorf("409 message %q does not explain the missing clusterId", msg)
+			}
+		}
+	}
+	clusters, err := st.ListClusters(context.Background())
+	if err != nil || len(clusters) != 1 {
+		t.Fatalf("clusters = (%+v, %v), want one", clusters, err)
+	}
+	snap, err := st.LatestSnapshot(context.Background(), clusters[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inv inventory.Inventory
+	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
+		t.Fatal(err)
+	}
+	if inv.ClusterID != "uid-123" || inv.ServerVersion != "v1.34.2" {
+		t.Fatalf("latest snapshot = %q %s, want uid-123's last push (v1.34.2)", inv.ClusterID, inv.ServerVersion)
+	}
+}

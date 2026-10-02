@@ -64,7 +64,7 @@ func gateStatus(t *testing.T, s *Server, body string) (int, http.Header, []byte)
 	t.Helper()
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
-	resp, raw := postGate(t, ts, "?target=1.35", "", body, "application/x-yaml")
+	resp, raw := postGate(t, ts, "?target=1.35&fail-on=never", "", body, "application/x-yaml")
 	return resp.StatusCode, resp.Header, raw
 }
 
@@ -387,7 +387,7 @@ func TestGateStalledUploadsDoNotBlockGate(t *testing.T) {
 	}
 
 	began := time.Now()
-	resp, raw := postGate(t, ts, "?target=1.35", "", pspManifest, "application/x-yaml")
+	resp, raw := postGate(t, ts, "?target=1.35&fail-on=never", "", pspManifest, "application/x-yaml")
 	if took := time.Since(began); resp.StatusCode != http.StatusOK || took >= s.gateQueueTimeout {
 		t.Fatalf("with %d stalled uploads: status = %d (%s) after %s; want 200 well inside the %s queue timeout",
 			maxBufferedGateBodies, resp.StatusCode, raw, took.Round(time.Millisecond), s.gateQueueTimeout)

@@ -259,6 +259,29 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 	return out
 }
 
+// otherCallers returns inv.DeprecatedCalls without the scanner's own
+// requests: rows for a resource the deprecated-calls capability names in
+// Skipped ("group/version resource"), which the collector listed itself
+// at a deprecated version. The metric cannot tell another client of such
+// a resource from the scanner, so neither its presence nor its absence is
+// evidence; the capability's partial gap says so instead, the same way on
+// every scan. Rows for a subresource are someone else's: the scanner only
+// lists.
+func otherCallers(inv inventory.Inventory) []inventory.DeprecatedCall {
+	self := inv.Capabilities[inventory.CapDeprecatedCalls].Skipped
+	if len(self) == 0 {
+		return inv.DeprecatedCalls
+	}
+	var out []inventory.DeprecatedCall
+	for _, c := range inv.DeprecatedCalls {
+		if c.Subresource == "" && slices.Contains(self, gvString(c.Group, c.Version)+" "+c.Resource) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // foldDeprecatedCalls scores each API once. usage is evalAPIUsage's
 // output and calls is evalDeprecatedCalls' (calls[i] judges
 // inv.DeprecatedCalls[i]). A caller row for the group/version/kind of a
@@ -990,41 +1013,68 @@ func evalKBStale(inv inventory.Inventory, k kb.KB, target inventory.Version) []F
 }
 
 // assessmentGaps lists what the evaluation could not assess, sorted by
-// capability: every unavailable inventory capability, a versions gap when
-// the server version is missing or unparseable (unless versions is already
-// unavailable), and a kb-coverage gap when the target is beyond the KB
-// horizon. Required is set per the verdict rules on CapabilityGap. A
-// capability absent from inv.Capabilities is not a gap: collectors always
-// report all of theirs, so absence only occurs in hand-built inventories.
+// capability: every unavailable or partial inventory capability, a
+// versions gap when the server version is missing or unparseable (unless
+// versions is already unavailable), and a kb-coverage gap when the target
+// is beyond the KB horizon. Required is set per the verdict rules on
+// CapabilityGap. A capability absent from inv.Capabilities is not a gap:
+// collectors always report all of theirs, so absence only occurs in
+// hand-built inventories.
 func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
 	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
 	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
 		required[inventory.CapVersions] = true
+		if len(k.AddOns) > 0 {
+			required[inventory.CapAddOns] = true
+		}
 	}
+	idx := kb.NewIndex(k.APILifecycle)
 	var gaps []CapabilityGap
 	for c, st := range inv.Capabilities {
-		if !st.Available {
-			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason})
+		switch {
+		case !st.Available:
+			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason, Required: required[c]})
+		case st.Partial:
+			g := CapabilityGap{Capability: c, Reason: st.Reason, Partial: true, Skipped: st.Skipped}
+			if c == inventory.CapAPIUsage {
+				g.Required = slices.ContainsFunc(st.Skipped, func(api string) bool { return removedBy(idx, api, target) })
+			}
+			gaps = append(gaps, g)
 		}
 	}
 	if st, ok := inv.Capabilities[inventory.CapVersions]; !ok || st.Available {
 		const notEvaluated = "kubelet and control-plane skew were not evaluated"
 		if inv.ServerVersion == "" {
-			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Reason: "server version not reported; " + notEvaluated})
+			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Reason: "server version not reported; " + notEvaluated,
+				Required: required[inventory.CapVersions]})
 		} else if _, err := inventory.ParseVersion(inv.ServerVersion); err != nil {
-			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions,
+			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Required: required[inventory.CapVersions],
 				Reason: fmt.Sprintf("server version %q could not be parsed; %s", inv.ServerVersion, notEvaluated)})
 		}
 	}
 	if target.Compare(k.MaxKnownK8s) > 0 {
-		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage,
+		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage, Required: true,
 			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed", k.MaxKnownK8s, target)})
-	}
-	for i := range gaps {
-		gaps[i].Required = required[gaps[i].Capability]
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i].Capability < gaps[j].Capability })
 	return gaps
+}
+
+// removedBy reports whether api, a flagged API as a partial api-usage
+// capability names it in Skipped ("group/version Kind", core "v1 Kind"),
+// is one the KB removes at or before target. An API the KB does not know
+// could not have produced a finding either way.
+func removedBy(idx kb.Index, api string, target inventory.Version) bool {
+	gv, kind, ok := strings.Cut(api, " ")
+	if !ok {
+		return false
+	}
+	group, version := "", gv
+	if i := strings.LastIndex(gv, "/"); i >= 0 {
+		group, version = gv[:i], gv[i+1:]
+	}
+	e, ok := idx.Lookup(group, version, kind)
+	return ok && e.Removed != nil && e.Removed.Compare(target) <= 0
 }
 
 // verdictFor: blocked on any blocker; otherwise unknown on any required gap
@@ -1229,6 +1279,7 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 // injected for EOL-window math. Output is fully deterministic for a given
 // (inventory, kb, target, now).
 func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) Report {
+	inv.DeprecatedCalls = otherCallers(inv)
 	findings := []Finding{} // non-nil so JSON renders "findings": []
 	findings = append(findings, foldDeprecatedCalls(inv, evalAPIUsage(inv, k, target), evalDeprecatedCalls(inv, target))...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)

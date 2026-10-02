@@ -47,8 +47,17 @@ type Config struct {
 	Notifier     notify.Notifier // nil = notifications disabled
 	IngestToken  string          // optional shared bearer for POST /api/v1/snapshots (any cluster); "" = per-cluster tokens only
 	ReadToken    string          // optional bearer for the read API; "" = open (document loudly)
+	AdminToken   string          // bearer for cluster delete/rename (also accepted for reads); "" = both refused
 	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
 	Version      string          // build version stamped into SARIF tool metadata ("" = omitted)
+
+	// StaleAfter marks a cluster stale when its agent has not pushed
+	// (duplicates included) for longer; 0 = DefaultStaleAfter.
+	StaleAfter time.Duration
+	// Retention prunes snapshots and evaluations older than this, except
+	// each cluster's latest snapshot and its evaluations, at startup and
+	// daily; 0 = keep everything.
+	Retention time.Duration
 
 	MaxSnapshotBytes int64 // POST /api/v1/snapshots body cap; 0 = DefaultMaxSnapshotBytes
 	MaxGateBytes     int64 // POST /api/v1/gate body cap; 0 = DefaultMaxGateBytes
@@ -105,6 +114,8 @@ type Server struct {
 	outboxKick         chan struct{} // wakes the delivery worker after a commit
 	notifyTimeout      time.Duration // bounds one delivery attempt
 	reevaluateInterval time.Duration // background re-evaluation period
+	reevaluateKick     chan struct{} // starts the next re-evaluation pass early
+	retentionInterval  time.Duration // pruning period after the startup pass
 	stopBackground     context.CancelFunc
 	backgroundDone     sync.WaitGroup
 
@@ -132,10 +143,12 @@ func New(cfg Config) (*Server, error) {
 	s.teamMapHash = hashTeamMap(cfg.TeamMap)
 	s.sinks = sinksOf(cfg.Notifier)
 	s.outboxKick = make(chan struct{}, 1)
+	s.reevaluateKick = make(chan struct{}, 1)
 	s.notifyTimeout = notifyTimeout
 	s.reevaluateInterval = reevaluateInterval
+	s.retentionInterval = retentionInterval
 	for _, t := range cfg.ExtraTargets {
-		v, err := inventory.ParseVersion(t)
+		v, err := inventory.ParseTarget(t)
 		if err != nil {
 			return nil, fmt.Errorf("server: bad extra target %q: %w", t, err)
 		}
@@ -180,6 +193,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
 	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.handleListClusters))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.handleGetCluster))
+	s.mux.HandleFunc("DELETE /api/v1/clusters/{id}", s.adminAuth(s.handleDeleteCluster))
+	s.mux.HandleFunc("PATCH /api/v1/clusters/{id}", s.adminAuth(s.handleRenameCluster))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/report", s.readAuth(s.handleReport))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/findings", s.readAuth(s.handleFindings))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/history", s.readAuth(s.handleHistory))
@@ -199,7 +214,7 @@ var reservedPaths = []string{"/healthz", "/readyz", "/livez", "/metrics"}
 
 // isServerPath reports whether p is routed to the mux.
 func isServerPath(p string) bool {
-	if strings.HasPrefix(p, "/api/") {
+	if p == "/api" || strings.HasPrefix(p, "/api/") {
 		return true
 	}
 	for _, rp := range reservedPaths {
@@ -335,8 +350,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.cfg.Listen, err)
 	}
-	// Background work: the notification worker and the re-evaluation
-	// ticker (whose first pass runs now). Stopped by Shutdown.
+	// Background work: the notification worker, the re-evaluation ticker
+	// and, with a retention window, the pruner (the first passes of both
+	// run now). Stopped by Shutdown.
 	bg, stop := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.addr = ln.Addr().String()
@@ -345,6 +361,10 @@ func (s *Server) Start() error {
 	s.backgroundDone.Add(2)
 	go func() { defer s.backgroundDone.Done(); s.runOutbox(bg) }()
 	go func() { defer s.backgroundDone.Done(); s.runReevaluation(bg) }()
+	if s.cfg.Retention > 0 {
+		s.backgroundDone.Add(1)
+		go func() { defer s.backgroundDone.Done(); s.runRetention(bg) }()
+	}
 	s.logStartup()
 	close(s.ready)
 	if s.httpSrv.TLSConfig != nil {
@@ -369,6 +389,9 @@ func (s *Server) logStartup() {
 	log.Printf("server: listening on %s://%s", scheme, s.Addr())
 	if s.cfg.ReadToken == "" {
 		log.Printf("WARN server: no read token: the read API, dashboard data and /api/v1/gate are open to anyone who can reach %s", s.Addr())
+	}
+	if s.cfg.AdminToken == "" {
+		log.Printf("server: no admin token: cluster delete and rename (DELETE/PATCH /api/v1/clusters/{id}) are refused")
 	}
 	if s.cfg.IngestToken == "" {
 		log.Printf("server: no shared ingest token: snapshot pushes need a per-cluster token ('upgradescope tokens create')")

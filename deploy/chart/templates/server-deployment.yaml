@@ -1,4 +1,8 @@
 {{- if .Values.server.enabled }}
+{{- $postgres := include "upgradescope.postgres" . }}
+{{- if and (gt (int .Values.server.replicas) 1) (not $postgres) }}
+{{- fail "server.replicas > 1 needs server.database.existingSecret (Postgres): SQLite on a ReadWriteOnce volume has a single writer" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,9 +11,16 @@ metadata:
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: server
 spec:
-  replicas: 1
+  replicas: {{ .Values.server.replicas }}
   strategy:
+    {{- if $postgres }}
+    # Postgres serializes writers across replicas (and migrations take an
+    # advisory lock), so pods can overlap during a rollout.
+    type: RollingUpdate
+    {{- else }}
+    # One SQLite writer on a ReadWriteOnce volume: stop the old pod first.
     type: Recreate
+    {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "upgradescope.name" . }}
@@ -25,8 +36,15 @@ spec:
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: server
-      {{- with .Values.server.podAnnotations }}
-      annotations: {{- toYaml . | nindent 8 }}
+      {{- if or .Values.server.podAnnotations .Values.server.teamMap }}
+      annotations:
+        {{- with .Values.server.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.server.teamMap }}
+        # serve reads --team-map at startup: roll the pods when it changes.
+        checksum/team-map: {{ toYaml . | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       {{- with include "upgradescope.serverServiceAccountName" . }}
@@ -42,7 +60,9 @@ spec:
           args:
             - serve
             - {{ printf "--listen=:%d" (int .Values.server.service.port) | quote }}
+            {{- if not $postgres }}
             - --db=/data/upgradescope.sqlite
+            {{- end }}
             {{- if not (include "upgradescope.readTokenEnabled" .) }}
             # serve refuses an open read API on a non-loopback address
             # unless told otherwise; see server.readToken in values.yaml.
@@ -51,24 +71,48 @@ spec:
             {{- with .Values.server.targets }}
             - {{ printf "--targets=%s" (join "," .) | quote }}
             {{- end }}
+            - {{ printf "--retention=%v" .Values.server.retention | quote }}
+            - {{ printf "--stale-after=%s" .Values.server.staleAfter | quote }}
+            {{- if .Values.server.teamMap }}
+            - "--team-map=/etc/upgradescope/team-map/team-map.yaml"
+            {{- end }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          # Tokens and webhook URLs reach serve only through the environment
-          # (it reads UPGRADESCOPE_* when the flag is unset), never argv, and
-          # never appear in the Deployment: only the Secret holds them.
+          # Tokens, webhook URLs and the database URL reach serve only
+          # through the environment (it reads UPGRADESCOPE_* when the flag is
+          # unset), never argv, and never appear in the Deployment: only the
+          # Secrets hold them.
           env:
             - name: UPGRADESCOPE_INGEST_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "upgradescope.serverSecretName" . }}
                   key: ingestToken
+                  {{- if and .Values.server.existingSecret (not .Values.agent.enabled) }}
+                  # No in-chart agent: a hub may accept per-cluster tokens only.
+                  optional: true
+                  {{- end }}
             {{- if include "upgradescope.readTokenEnabled" . }}
             - name: UPGRADESCOPE_READ_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "upgradescope.serverSecretName" . }}
                   key: readToken
+            {{- end }}
+            {{- if include "upgradescope.adminTokenEnabled" . }}
+            - name: UPGRADESCOPE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "upgradescope.serverSecretName" . }}
+                  key: adminToken
+            {{- end }}
+            {{- if $postgres }}
+            - name: UPGRADESCOPE_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.server.database.existingSecret }}
+                  key: {{ .Values.server.database.key }}
             {{- end }}
             {{- if or .Values.server.existingSecret .Values.server.slackWebhook }}
             - name: UPGRADESCOPE_SLACK_WEBHOOK
@@ -86,6 +130,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "upgradescope.serverSecretName" . }}
                   key: webhook
+                  {{- if .Values.server.existingSecret }}
+                  optional: true
+                  {{- end }}
+            {{- end }}
+            {{- if or .Values.server.existingSecret .Values.server.webhookSecret }}
+            - name: UPGRADESCOPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "upgradescope.serverSecretName" . }}
+                  key: webhookSecret
                   {{- if .Values.server.existingSecret }}
                   optional: true
                   {{- end }}
@@ -114,13 +168,24 @@ spec:
           securityContext: {{- toYaml . | nindent 12 }}
           {{- end }}
           resources: {{- toYaml .Values.server.resources | nindent 12 }}
+          {{- if or (not $postgres) .Values.server.teamMap .Values.server.extraVolumeMounts }}
           volumeMounts:
+            {{- if not $postgres }}
             - name: data
               mountPath: /data
+            {{- end }}
+            {{- if .Values.server.teamMap }}
+            - name: team-map
+              mountPath: /etc/upgradescope/team-map
+              readOnly: true
+            {{- end }}
             {{- with .Values.server.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- end }}
+      {{- if or (not $postgres) .Values.server.teamMap .Values.server.extraVolumes }}
       volumes:
+        {{- if not $postgres }}
         - name: data
           {{- if .Values.server.persistence.enabled }}
           persistentVolumeClaim:
@@ -128,7 +193,14 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
+        {{- if .Values.server.teamMap }}
+        - name: team-map
+          configMap:
+            name: {{ include "upgradescope.serverFullname" . }}-team-map
+        {{- end }}
         {{- with .Values.server.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+      {{- end }}
 {{- end }}

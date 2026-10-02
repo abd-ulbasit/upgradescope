@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -19,10 +20,11 @@ import (
 // Evaluation passes. A verdict depends on more than the inventory: on the
 // KB, on the server's --targets and --team-map, and on the date (EOL
 // windows). So a stored evaluation goes stale without any new snapshot,
-// and is re-evaluated — on a duplicate push and by the hourly ticker —
-// when its KB version or team-map hash differs from the server's, when it
-// was evaluated before the current UTC day (EOL math is day-granular), or
-// when a configured target has none.
+// and is re-evaluated — on a duplicate push and by the background pass
+// (hourly and at UTC midnight) — when its KB version or team-map hash
+// differs from the server's, when it was evaluated before the current UTC
+// day (EOL math is day-granular), or when a configured target has none.
+// Until then, reads serve the stored row marked outdated.
 //
 // A re-evaluation with an unchanged result (verdict, score, finding keys)
 // refreshes the stored row's evaluatedAt instead of adding history; a
@@ -36,11 +38,12 @@ import (
 const reevaluateInterval = time.Hour
 
 // evalTargets lists the targets a snapshot is evaluated against: the
-// default (next minor above the inventory's server version; skipped when
-// unparseable) plus every configured extra target, deduped. Targets at or
-// below the cluster's current minor are not applicable and are skipped.
-func (s *Server) evalTargets(inv inventory.Inventory) []inventory.Version {
-	server, err := inventory.ParseVersion(inv.ServerVersion)
+// default (next minor above serverVersion, the version the snapshot is
+// judged at; skipped when unparseable) plus every configured extra
+// target, deduped. Targets at or below the cluster's current minor are
+// not applicable and are skipped.
+func (s *Server) evalTargets(serverVersion string) []inventory.Version {
+	server, err := inventory.ParseVersion(serverVersion)
 	known := err == nil
 	targets := make([]inventory.Version, 0, len(s.extraTargets)+1)
 	if known {
@@ -57,11 +60,30 @@ func (s *Server) evalTargets(inv inventory.Inventory) []inventory.Version {
 	return targets
 }
 
-// notApplicable reports whether target is at or below the inventory's
-// server version: the cluster already runs it.
-func notApplicable(inv inventory.Inventory, target inventory.Version) bool {
-	server, err := inventory.ParseVersion(inv.ServerVersion)
+// notApplicable reports whether target is at or below serverVersion: the
+// cluster already runs it.
+func notApplicable(serverVersion string, target inventory.Version) bool {
+	server, err := inventory.ParseVersion(serverVersion)
 	return err == nil && target.Compare(server) <= 0
+}
+
+// judgedVersion is the server version a stored snapshot is judged at
+// (store.Snapshot.ServerVersion): the column, or for a row stored before
+// it existed, the inventory's own serverVersion — decoding only that.
+func judgedVersion(snap store.Snapshot) string {
+	if snap.ServerVersion != "" {
+		return snap.ServerVersion
+	}
+	var head struct {
+		ServerVersion string `json:"serverVersion"`
+	}
+	_ = json.Unmarshal(snap.Inventory, &head) // corrupt: no version, as for a degraded push
+	return head.ServerVersion
+}
+
+// judgedAt is judgedVersion for a snapshot whose inventory is decoded.
+func judgedAt(snap store.Snapshot, inv inventory.Inventory) string {
+	return cmp.Or(snap.ServerVersion, inv.ServerVersion)
 }
 
 // hashTeamMap fingerprints the team map for staleness checks ("" = none).
@@ -117,10 +139,18 @@ func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, targ
 	}, rep, nil
 }
 
-// stale reports whether a stored evaluation must be recomputed now.
+// futureTolerance is how far ahead of this server's clock a stored
+// evaluation may be dated before it counts as future-dated: replicas'
+// clocks differ by a little, a stepped-back clock by much more.
+const futureTolerance = 5 * time.Minute
+
+// stale reports whether a stored evaluation must be recomputed now. A row
+// evaluated "in the future" (the clock stepped backwards since) is stale
+// too: its EOL math used a date that has not come yet.
 func (s *Server) stale(e store.Evaluation, now time.Time) bool {
 	today := now.UTC().Truncate(24 * time.Hour)
-	return e.KBVersion != s.cfg.KB.Version || e.TeamMapHash != s.teamMapHash || e.EvaluatedAt.Before(today)
+	return e.KBVersion != s.cfg.KB.Version || e.TeamMapHash != s.teamMapHash ||
+		e.EvaluatedAt.Before(today) || e.EvaluatedAt.After(now.Add(futureTolerance))
 }
 
 // sameResult reports whether rep matches the stored row on everything a
@@ -146,83 +176,120 @@ func findingSignature(rep engine.Report) []string {
 	return sig
 }
 
-// outboxFor computes the notification delta of one new evaluation and
-// turns it into one outbox message per sink. The baseline is the last
-// evaluation with a decided verdict, so an "unknown" pass (a collector
-// failure) is neither a transition nor a reset; a pass whose own verdict
-// is unknown notifies nothing — what it could not see is not news.
-// Failures are logged and never fail the pass.
-func (s *Server) outboxFor(ctx context.Context, cluster store.Cluster, cur engine.Report, now time.Time) []store.OutboxMessage {
-	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown {
-		return nil
+// deltaFor computes the notification delta of one new evaluation. The
+// baseline is the last evaluation with a decided verdict, so an "unknown"
+// pass (a collector failure) is neither a transition nor a reset; a pass
+// whose own verdict is unknown notifies nothing — what it could not see is
+// not news. Failures are logged and never fail the pass.
+func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report) targetDelta {
+	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
+	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
+		return d // a cluster's first push has no baseline either
 	}
 	target := cur.Target.String()
 	prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, cluster.ID, target)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil // first decided evaluation of this target: no delta
+		return d // first decided evaluation of this target: no delta
 	}
 	if err != nil {
 		log.Printf("server: loading notification baseline (cluster %d, target %s): %v", cluster.ID, target, err)
-		return nil
+		return d
 	}
 	var prevRep engine.Report
 	if err := json.Unmarshal(prev.Report, &prevRep); err != nil {
 		log.Printf("server: decoding previous report (cluster %d, target %s): %v", cluster.ID, target, err)
+		return d
+	}
+	d.changes = ComputeDelta(&prevRep, cur)
+	return d
+}
+
+// outboxFor turns one pass's deltas into one notification for the
+// cluster, queued once per sink with the same delivery id.
+func (s *Server) outboxFor(cluster store.Cluster, deltas []targetDelta, now time.Time) []store.OutboxMessage {
+	n, ok := buildNotification(cluster, deltas, now, newDeliveryID())
+	if !ok {
 		return nil
 	}
-	var msgs []store.OutboxMessage
-	for _, ev := range ComputeDelta(&prevRep, cur) {
-		ev.Cluster = cluster.Name
-		payload, err := json.Marshal(ev)
-		if err != nil {
-			log.Printf("server: encoding notification (cluster %s, target %s): %v", cluster.Name, target, err)
-			continue
-		}
-		for _, sk := range s.sinks {
-			msgs = append(msgs, store.OutboxMessage{Sink: sk.name, Payload: payload, CreatedAt: now})
-		}
+	payload, err := json.Marshal(n)
+	if err != nil {
+		log.Printf("server: encoding notification (cluster %s): %v", cluster.Name, err)
+		return nil
+	}
+	msgs := make([]store.OutboxMessage, 0, len(s.sinks))
+	for _, sk := range s.sinks {
+		msgs = append(msgs, store.OutboxMessage{Sink: sk.name, Payload: payload, CreatedAt: now})
 	}
 	return msgs
 }
 
 // ingestSnapshot evaluates a pushed snapshot against every target, then
-// commits the snapshot, its evaluations and their notifications in one
-// transaction. A duplicate (same hash as the latest snapshot) writes
-// nothing there and instead re-evaluates the stored snapshot where stale.
+// commits the cluster (registered or touched: cluster.ID is 0 for a new
+// name), the snapshot, its evaluations and their notifications in one
+// transaction. A duplicate (same hash as the latest snapshot) commits only
+// the touch and the push's envelope, then re-evaluates the stored
+// snapshot where stale.
+//
+// snap.ServerVersion arrives as the inventory's own version. A degraded
+// push that reported none (its versions collector failed) is judged at
+// the previous snapshot's instead, so the cluster keeps its default
+// target and its cells: they carry the engine's verdict on what the push
+// did report — unknown at best, since versions is a required capability.
 func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory) (int64, bool, error) {
-	// Server-side team override (spec: labels + server override) — rewrite
-	// namespace→team attribution before evaluation; stored reports carry the
-	// mapped teams. The stored snapshot keeps the original labels.
 	// A duplicate (the agent's hourly force-sync) is the common push: go
 	// straight to re-evaluating what is stale, instead of evaluating every
 	// target for the commit to discard. The commit still checks the hash,
 	// for a push racing this one.
-	latest, err := s.cfg.Store.LatestSnapshot(ctx, cluster.ID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
-	}
-	if err == nil && latest.Hash == snap.Hash {
-		return latest.ID, true, s.reevaluate(ctx, cluster, latest.ID, inv)
+	if cluster.ID != 0 {
+		latest, err := s.cfg.Store.LatestSnapshot(ctx, cluster.ID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
+		}
+		if err == nil && snap.ServerVersion == "" {
+			snap.ServerVersion = judgedVersion(latest)
+		}
+		if err == nil && latest.Hash == snap.Hash {
+			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap})
+			if err != nil {
+				return 0, false, err
+			}
+			// Not a duplicate after all (another push moved the cluster on
+			// meanwhile): the snapshot is stored without evaluations, and
+			// reevaluate fills in every target.
+			return snapID, dup, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv)
+		}
 	}
 
+	// Server-side team override (spec: labels + server override) — rewrite
+	// namespace→team attribution before evaluation; stored reports carry the
+	// mapped teams. The stored snapshot keeps the original labels.
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
-	batch := store.EvaluationBatch{ClusterID: cluster.ID, Snapshot: &snap}
-	for _, target := range s.evalTargets(inv) {
+	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap}
+	var deltas []targetDelta
+	for _, target := range s.evalTargets(snap.ServerVersion) {
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
 		if err != nil {
 			return 0, false, err
 		}
 		batch.Insert = append(batch.Insert, e)
-		batch.Outbox = append(batch.Outbox, s.outboxFor(ctx, cluster, rep, now)...)
+		deltas = append(deltas, s.deltaFor(ctx, cluster, e, rep))
 	}
+	batch.Outbox = s.outboxFor(cluster, deltas, now)
 	snapID, duplicate, err := s.cfg.Store.CommitEvaluations(ctx, batch)
 	if err != nil {
 		return 0, false, err
 	}
 	if duplicate {
-		return snapID, true, s.reevaluate(ctx, cluster, snapID, inv)
+		if cluster.ID == 0 { // registered by a push racing this one
+			c, err := s.cfg.Store.ClusterByName(ctx, cluster.Name)
+			if err != nil {
+				return 0, false, fmt.Errorf("loading cluster %q: %w", cluster.Name, err)
+			}
+			cluster.ID = c.ID
+		}
+		return snapID, true, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv)
 	}
 	if len(batch.Outbox) > 0 {
 		s.kickOutbox()
@@ -235,12 +302,13 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 // are refreshed in place, changed ones inserted with their notifications.
 // A concurrent writer that got there first (store.ErrConflict) has done
 // the same work, so the pass is dropped.
-func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, inv inventory.Inventory) error {
+func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory) error {
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
 	batch := store.EvaluationBatch{ClusterID: cluster.ID, SnapshotID: snapID, Current: map[string]int64{}}
-	for _, target := range s.evalTargets(inv) {
+	var deltas []targetDelta
+	for _, target := range s.evalTargets(serverVersion) {
 		cur, err := s.cfg.Store.CurrentEvaluation(ctx, cluster.ID, target.String())
 		found := err == nil
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -265,11 +333,12 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			continue
 		}
 		batch.Insert = append(batch.Insert, e)
-		batch.Outbox = append(batch.Outbox, s.outboxFor(ctx, cluster, rep, now)...)
+		deltas = append(deltas, s.deltaFor(ctx, cluster, e, rep))
 	}
 	if len(batch.Current) == 0 {
 		return nil
 	}
+	batch.Outbox = s.outboxFor(cluster, deltas, now)
 	_, _, err := s.cfg.Store.CommitEvaluations(ctx, batch)
 	if errors.Is(err, store.ErrConflict) {
 		log.Printf("server: re-evaluation of cluster %d skipped: %v", cluster.ID, err)
@@ -296,7 +365,7 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		snap, err := s.cfg.Store.LatestSnapshot(ctx, c.ID)
+		snap, inv, err := s.latestInventory(ctx, c.ID)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
@@ -304,36 +373,92 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 			log.Printf("server: re-evaluation: latest snapshot of cluster %d: %v", c.ID, err)
 			continue
 		}
-		var inv inventory.Inventory
-		if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
-			log.Printf("server: re-evaluation: stored inventory of cluster %d (snapshot %d) is corrupt: %v", c.ID, snap.ID, err)
-			continue
-		}
-		if err := s.reevaluate(ctx, c, snap.ID, inv); err != nil {
+		if err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv); err != nil {
 			log.Printf("server: re-evaluation of cluster %d: %v", c.ID, err)
 		}
 	}
 }
 
-// runReevaluation is the background ticker: one pass at startup (a new KB
-// or config takes effect without waiting for pushes), then every
-// reevaluateInterval, until ctx ends.
+// runReevaluation is the background pass: one at startup (a new KB or
+// config takes effect without waiting for pushes), then every
+// reevaluateInterval and at each UTC midnight (nextPassIn), until ctx
+// ends. A read that served an outdated verdict (kickReevaluation) starts
+// the next pass early.
 func (s *Server) runReevaluation(ctx context.Context) {
-	tick := time.NewTicker(s.reevaluateInterval)
-	defer tick.Stop()
 	for {
 		s.reevaluateAll(ctx)
+		timer := time.NewTimer(nextPassIn(s.now(), s.reevaluateInterval))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-tick.C:
+		case <-timer.C:
+		case <-s.reevaluateKick:
+			timer.Stop()
 		}
 	}
 }
 
-// eventFromPayload decodes an outbox payload back into the event.
-func eventFromPayload(b []byte) (notify.Event, error) {
-	var ev notify.Event
-	err := json.Unmarshal(b, &ev)
-	return ev, err
+// nextPassIn is how long after now the next background pass runs: after
+// interval, or just past the next UTC midnight when that comes first. EOL
+// math is day-granular, so midnight is when stored verdicts go out of
+// date with no push.
+func nextPassIn(now time.Time, interval time.Duration) time.Duration {
+	midnight := now.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+	return min(interval, midnight.Sub(now)+time.Second)
+}
+
+// kickReevaluation starts the next background pass now, unless one is
+// already queued. Reads call it when they serve an outdated verdict.
+func (s *Server) kickReevaluation() {
+	select {
+	case s.reevaluateKick <- struct{}{}:
+	default:
+	}
+}
+
+// outdated reports whether a stored evaluation served by a read is out of
+// date (stale: evaluated before today UTC, in the future, or under another
+// KB or team map), and if so starts the next pass early. The read still
+// serves it — recomputing on a GET would let read traffic drive writes and
+// notifications — but says so.
+func (s *Server) outdated(e store.Evaluation, now time.Time) bool {
+	if !s.stale(e, now) {
+		return false
+	}
+	s.kickReevaluation()
+	return true
+}
+
+// notificationOf decodes an outbox message's payload. A message queued by
+// a server that predates the versioned payload holds one PascalCase event
+// ({"Cluster", "Target", "Kind", "Title", "Detail"}); it becomes a
+// one-change notification whose delivery id is derived from the message.
+func notificationOf(m store.OutboxMessage) (notify.Notification, error) {
+	var probe struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if err := json.Unmarshal(m.Payload, &probe); err != nil {
+		return notify.Notification{}, err
+	}
+	if probe.SchemaVersion != 0 {
+		var n notify.Notification
+		err := json.Unmarshal(m.Payload, &n)
+		return n, err
+	}
+	var ev struct{ Cluster, Target, Kind, Title, Detail string }
+	if err := json.Unmarshal(m.Payload, &ev); err != nil {
+		return notify.Notification{}, err
+	}
+	if ev.Kind == "" {
+		return notify.Notification{}, errors.New("payload is neither a notification nor a legacy event")
+	}
+	return notify.Notification{
+		SchemaVersion: notify.SchemaVersion,
+		DeliveryID:    fmt.Sprintf("outbox-%d", m.ID),
+		Type:          notify.TypeReadinessChanged,
+		Timestamp:     m.CreatedAt.UTC(),
+		Cluster:       notify.Cluster{ID: m.ClusterID, Name: ev.Cluster},
+		Changes:       []notify.Change{{Kind: ev.Kind, Title: ev.Title, Detail: ev.Detail, Targets: []string{ev.Target}}},
+	}, nil
 }

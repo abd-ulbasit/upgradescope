@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "deliveryId": "3f2b8c1e9a7d4e6f8b0c2d4e6f8a0b1c",
+  "type": "readiness.changed",
+  "timestamp": "2026-10-02T09:30:00Z",
+  "cluster": {
+    "id": 7,
+    "name": "prod-eu-1"
+  },
+  "targets": [
+    {
+      "target": "1.35",
+      "verdict": "blocked",
+      "score": 75,
+      "blockers": 1
+    },
+    {
+      "target": "1.36",
+      "verdict": "blocked",
+      "score": 50,
+      "blockers": 2
+    }
+  ],
+  "changes": [
+    {
+      "kind": "new-blocker",
+      "key": "eol-addon/ingress-nginx",
+      "severity": "blocker",
+      "title": "ingress-nginx is end-of-life",
+      "detail": "retired upstream in March 2026",
+      "targets": [
+        "1.35",
+        "1.36"
+      ]
+    },
+    {
+      "kind": "eol-approaching",
+      "key": "eol-approaching/istio",
+      "severity": "warning",
+      "title": "Istio 1.24 reaches end-of-life on 2026-11-30",
+      "targets": [
+        "1.36"
+      ]
+    }
+  ],
+  "omitted": {
+    "new-blocker": 3
+  }
+}

@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -13,7 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
-	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -145,6 +143,8 @@ var (
 		"Blocker findings in the cluster's current evaluation per target.", []string{"cluster", "target"}, nil)
 	descClusterPushAge = prometheus.NewDesc("upgradescope_cluster_last_push_age_seconds",
 		"Seconds since the cluster's agent last pushed a snapshot (duplicates included).", []string{"cluster"}, nil)
+	descClusterStale = prometheus.NewDesc("upgradescope_cluster_stale",
+		"1 when the cluster's agent has not pushed within the server's --stale-after, else 0.", []string{"cluster"}, nil)
 )
 
 var verdicts = []engine.Verdict{engine.VerdictReady, engine.VerdictBlocked, engine.VerdictUnknown}
@@ -158,7 +158,7 @@ var verdicts = []engine.Verdict{engine.VerdictReady, engine.VerdictBlocked, engi
 type clusterCollector struct{ s *Server }
 
 func (c clusterCollector) Describe(ch chan<- *prometheus.Desc) {
-	for _, d := range []*prometheus.Desc{descClusterScore, descClusterVerdict, descClusterBlockers, descClusterPushAge} {
+	for _, d := range []*prometheus.Desc{descClusterScore, descClusterVerdict, descClusterBlockers, descClusterPushAge, descClusterStale} {
 		ch <- d
 	}
 }
@@ -176,6 +176,11 @@ func (c clusterCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, cl := range clusters {
 		ch <- prometheus.MustNewConstMetric(descClusterPushAge, prometheus.GaugeValue,
 			max(0, now.Sub(cl.LastSeen).Seconds()), cl.Name)
+		stale := 0.0
+		if s.clusterStale(cl, now) {
+			stale = 1
+		}
+		ch <- prometheus.MustNewConstMetric(descClusterStale, prometheus.GaugeValue, stale, cl.Name)
 		snap, err := s.cfg.Store.LatestSnapshot(ctx, cl.ID)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
@@ -186,11 +191,7 @@ func (c clusterCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		// Only the server version decides the targets; skip decoding the
 		// rest of the inventory. A corrupt one leaves the extra targets.
-		var head struct {
-			ServerVersion string `json:"serverVersion"`
-		}
-		_ = json.Unmarshal(snap.Inventory, &head)
-		for _, t := range s.evalTargets(inventory.Inventory{ServerVersion: head.ServerVersion}) {
+		for _, t := range s.evalTargets(judgedVersion(snap)) {
 			e, err := s.cfg.Store.CurrentEvaluation(ctx, cl.ID, t.String())
 			if errors.Is(err, store.ErrNotFound) {
 				continue

@@ -66,8 +66,7 @@
     },
     {
       "capability": "versions",
-      "reason": "files mode",
-      "required": true
+      "reason": "files mode"
     }
   ],
   "ready": false,

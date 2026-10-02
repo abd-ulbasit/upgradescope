@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite export golden files")
@@ -91,6 +93,60 @@ func TestExportCSVGolden(t *testing.T) {
 	checkGolden(t, "export_golden.csv", raw)
 }
 
+// exportCSVOf pushes inv for cluster prod-eu-1 and returns the target 1.35
+// CSV export.
+func exportCSVOf(t *testing.T, inv inventory.Inventory) []byte {
+	t.Helper()
+	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
+	defer ts.Close()
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, inv), false); resp.StatusCode != 202 {
+		t.Fatalf("push = %d %v", resp.StatusCode, out)
+	}
+	resp, raw := getExport(t, ts, "?target=1.35&format=csv")
+	if resp.StatusCode != 200 {
+		t.Fatalf("export = %d %s", resp.StatusCode, raw)
+	}
+	return raw
+}
+
+// TestExportCSVZeroFindingsHasVerdict: a clean cluster's CSV used to be the
+// header alone, indistinguishable from a broken export. The summary row
+// carries the verdict, score, KB version and evaluation time.
+func TestExportCSVZeroFindingsHasVerdict(t *testing.T) {
+	checkGolden(t, "export_clean.csv", exportCSVOf(t, testInventory()))
+}
+
+// TestExportCSVNotAssessedRows: a capability the agent could not collect
+// is a not-assessed row, so a partly assessed cluster does not look like a
+// clean one.
+func TestExportCSVNotAssessedRows(t *testing.T) {
+	inv := testInventory()
+	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: false, Reason: "customresourcedefinitions list forbidden"}
+	raw := exportCSVOf(t, inv)
+	checkGolden(t, "export_not_assessed.csv", raw)
+	if !strings.Contains(string(raw), ",unknown,") || !strings.Contains(string(raw), "not-assessed,") {
+		t.Errorf("CSV lacks the unknown verdict or a not-assessed row:\n%s", raw)
+	}
+}
+
+// TestSparklineTimeProportional: points are placed by time, not index, so
+// a burst of changes and a quiet month do not look alike, and the SVG
+// labels the dates it spans.
+func TestSparklineTimeProportional(t *testing.T) {
+	t0 := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	d := exportData{History: []store.ScorePoint{
+		{At: t0, Score: 50}, {At: t0.Add(24 * time.Hour), Score: 60}, {At: t0.Add(240 * time.Hour), Score: 100},
+	}}
+	svg := string(d.Sparkline())
+	// width 260, pad 4: x = 4 + 252 * (t - t0) / 10d → 4.0, 29.2, 256.0
+	if !strings.Contains(svg, `points="4.0,`) || !strings.Contains(svg, " 29.2,") || !strings.Contains(svg, " 256.0,") {
+		t.Errorf("sparkline x positions are not time-proportional: %s", svg)
+	}
+	if !strings.Contains(svg, "2026-06-01 to 2026-06-11") {
+		t.Errorf("sparkline does not label its date range: %s", svg)
+	}
+}
+
 func TestExportHTMLGolden(t *testing.T) {
 	ts, done := exportFixture(t)
 	defer done()
@@ -109,12 +165,31 @@ func TestExportHTMLGolden(t *testing.T) {
 			t.Errorf("HTML must be self-contained; found %q", banned)
 		}
 	}
-	for _, want := range []string{"<svg", "payments", "score 75/100", "@media print"} {
+	// Per-team scores (#125 SV-09): payments owns the PSP blocker.
+	for _, want := range []string{"<svg", "payments", "score 75/100", "@media print", "<h2>team scores</h2>", "<td>payments</td><td>75/100</td><td>not ready</td><td>1</td><td>0</td>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("HTML missing %q", want)
 		}
 	}
 	checkGolden(t, "export_golden.html", raw)
+}
+
+// The auditor report marks a partial gap and what it skipped (issue #122).
+func TestExportHTMLPartialGap(t *testing.T) {
+	st := newFakeStore()
+	ts := httptest.NewServer(newTestServer(t, st).Handler())
+	defer ts.Close()
+	inv := testInventory()
+	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true, Partial: true,
+		Reason: "list policy/v1beta1 podsecuritypolicies: forbidden", Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, inv), false); resp.StatusCode != 202 {
+		t.Fatalf("push status = %d (%v)", resp.StatusCode, out)
+	}
+	_, raw := getExport(t, ts, "?target=1.35&format=html")
+	const want = "<li>api-usage (partial, required): list policy/v1beta1 podsecuritypolicies: forbidden (skipped: policy/v1beta1 PodSecurityPolicy)</li>"
+	if !strings.Contains(string(raw), want) {
+		t.Errorf("HTML lacks %q:\n%s", want, raw)
+	}
 }
 
 func TestExportErrors(t *testing.T) {

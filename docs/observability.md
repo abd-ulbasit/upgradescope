@@ -113,6 +113,7 @@ Go runtime and process metrics (`go_*`, `process_*`) are included.
 | `upgradescope_cluster_verdict` | gauge | `cluster`, `target`, `verdict` | 1 for the current verdict, 0 for the others |
 | `upgradescope_cluster_blockers` | gauge | `cluster`, `target` | blocker findings |
 | `upgradescope_cluster_last_push_age_seconds` | gauge | `cluster` | seconds since the cluster's agent last pushed (duplicates count) |
+| `upgradescope_cluster_stale` | gauge | `cluster` | 1 when the agent has not pushed within `serve --stale-after` (default 2h), else 0 |
 
 Per-cluster gauges are read from the database at scrape time, for each
 cluster's default target and every applicable `--targets` minor: the same

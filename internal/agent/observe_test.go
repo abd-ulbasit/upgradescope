@@ -287,7 +287,8 @@ func TestObserverMetricsFromReports(t *testing.T) {
 		push:     pushOK,
 		duration: 2 * time.Second,
 		caps: map[inventory.Capability]inventory.CapabilityStatus{
-			inventory.CapHelm: {Available: false, Reason: "forbidden"},
+			inventory.CapHelm:     {Available: false, Reason: "forbidden"},
+			inventory.CapAPIUsage: {Available: true, Partial: true, Reason: "list networking.k8s.io/v1 ingresses: forbidden"},
 		},
 		reports: []engine.Report{{
 			Target: inventory.Version{Major: 1, Minor: 37}, Score: 55, Verdict: engine.VerdictBlocked,
@@ -307,6 +308,10 @@ func TestObserverMetricsFromReports(t *testing.T) {
 		`upgradescope_findings{category="removed-api",severity="blocker",target="1.37"} 2`,
 		`upgradescope_findings{category="eol-addon",severity="warning",target="1.37"} 1`,
 		`upgradescope_capability_available{capability="helm"} 0`,
+		// Available but partial: some of what it covers went unread.
+		`upgradescope_capability_available{capability="api-usage"} 1`,
+		`upgradescope_capability_partial{capability="api-usage"} 1`,
+		`upgradescope_capability_partial{capability="helm"} 0`,
 		`upgradescope_agent_tick_errors_total 1`,
 		`upgradescope_agent_last_success_timestamp_seconds 1.790856e+09`,
 		`upgradescope_agent_tick_duration_seconds_count 2`,

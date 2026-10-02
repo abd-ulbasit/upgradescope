@@ -160,7 +160,7 @@ func TestCollectAPIUsageFlagsOnlyObjectsAuthoredViaDeprecatedVersion(t *testing.
 	)
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.APIUsage{{
@@ -189,7 +189,7 @@ func TestCollectAPIUsageObjectWrittenViaGAVersionIsNotAFinding(t *testing.T) {
 	disc := fakeDiscovery(resources("networking.k8s.io/v1", ingresses), resources("networking.k8s.io/v1beta1", ingresses))
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
 		t.Fatal(err)
 	}
 	if len(inv.APIUsage) != 0 {
@@ -212,7 +212,7 @@ func TestCollectAPIUsageClearsAfterManagerMigrates(t *testing.T) {
 	disc := fakeDiscovery(resources("networking.k8s.io/v1", ingresses), resources("networking.k8s.io/v1beta1", ingresses))
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
 		t.Fatal(err)
 	}
 	if len(inv.APIUsage) != 0 {
@@ -233,7 +233,7 @@ func TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed(t *testin
 	)
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
 		t.Fatal(err)
 	}
 	wantLists := []schema.GroupVersionResource{{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}}
@@ -242,6 +242,89 @@ func TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed(t *testin
 	}
 	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Count != 1 {
 		t.Errorf("api usage = %#v, want the v1beta1-authored object", inv.APIUsage)
+	}
+}
+
+// Issue #123: a LIST at a deprecated version lands in
+// apiserver_requested_deprecated_apis, and the next scan read the scanner
+// as a client still requesting it. Kinds the KB deprecates but never
+// removes (core v1 Endpoints, ComponentStatus) can only ever yield info
+// findings, so they are not listed at all: on a 1.37-like cluster the
+// scanner makes no request at a deprecated version.
+func TestCollectAPIUsageMakesNoDeprecatedRequestOn137(t *testing.T) {
+	list := metav1.Verbs{"get", "list", "watch"}
+	r := func(name, kind string) metav1.APIResource {
+		return metav1.APIResource{Name: name, Kind: kind, Verbs: list}
+	}
+	disc := fakeDiscovery( // the default 1.37 groups holding KB-tracked kinds
+		resources("v1", r("pods", "Pod"), r("endpoints", "Endpoints"), r("componentstatuses", "ComponentStatus"),
+			r("services", "Service"), r("configmaps", "ConfigMap")),
+		resources("discovery.k8s.io/v1", r("endpointslices", "EndpointSlice")),
+		resources("networking.k8s.io/v1", r("ingresses", "Ingress"), r("ingressclasses", "IngressClass"),
+			r("servicecidrs", "ServiceCIDR"), r("ipaddresses", "IPAddress")),
+		resources("policy/v1", r("poddisruptionbudgets", "PodDisruptionBudget")),
+		resources("batch/v1", r("cronjobs", "CronJob"), r("jobs", "Job")),
+		resources("coordination.k8s.io/v1", r("leases", "Lease")),
+		resources("flowcontrol.apiserver.k8s.io/v1", r("flowschemas", "FlowSchema"), r("prioritylevelconfigurations", "PriorityLevelConfiguration")),
+		resources("admissionregistration.k8s.io/v1", r("validatingadmissionpolicies", "ValidatingAdmissionPolicy"),
+			r("mutatingwebhookconfigurations", "MutatingWebhookConfiguration")),
+		resources("resource.k8s.io/v1", r("deviceclasses", "DeviceClass"), r("resourceclaims", "ResourceClaim")),
+		resources("storage.k8s.io/v1", r("csistoragecapacities", "CSIStorageCapacity"), r("volumeattributesclasses", "VolumeAttributesClass")),
+		resources("autoscaling/v2", r("horizontalpodautoscalers", "HorizontalPodAutoscaler")),
+		resources("autoscaling/v1", r("horizontalpodautoscalers", "HorizontalPodAutoscaler")),
+	)
+	meta := metaClient()
+	k := loadKB(t)
+
+	var inv inventory.Inventory
+	self, err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := kb.NewIndex(k.APILifecycle)
+	kinds := map[schema.GroupVersionResource]string{}
+	for _, l := range disc.Resources {
+		for _, r := range l.APIResources {
+			kinds[schema.FromAPIVersionAndKind(l.GroupVersion, "").GroupVersion().WithResource(r.Name)] = r.Kind
+		}
+	}
+	for _, gvr := range listedGVRs(meta) {
+		if e, ok := idx.Lookup(gvr.Group, gvr.Version, kinds[gvr]); ok && (e.Deprecated != nil || e.Removed != nil) {
+			t.Errorf("listed %v: a deprecated version", gvr)
+		}
+	}
+	if len(self) != 0 {
+		t.Errorf("self-listed = %q, want none", self)
+	}
+}
+
+// A kind going away with nothing else serving it (policy/v1beta1
+// PodSecurityPolicy on 1.24) must still be listed: its objects block the
+// upgrade. The LIST is the scanner's own deprecated request, so it is
+// returned for the deprecated-calls step to discount.
+func TestCollectAPIUsageReportsItsOwnDeprecatedLists(t *testing.T) {
+	cs := metav1.APIResource{Name: "componentstatuses", Kind: "ComponentStatus", Verbs: metav1.Verbs{"list"}}
+	disc := fakeDiscovery(
+		resources("v1", cs),
+		resources("policy/v1", pdbs),
+		resources("policy/v1beta1", pdbs, psps),
+	)
+	meta := metaClient()
+
+	var inv inventory.Inventory
+	self, err := collectAPIUsage(context.Background(), disc, meta, loadKB(t).APILifecycle, &inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLists := []schema.GroupVersionResource{ // not v1 componentstatuses
+		{Group: "policy", Version: "v1", Resource: "poddisruptionbudgets"},
+		{Group: "policy", Version: "v1beta1", Resource: "podsecuritypolicies"},
+	}
+	if got := listedGVRs(meta); !reflect.DeepEqual(got, wantLists) {
+		t.Errorf("listed %v, want exactly %v", got, wantLists)
+	}
+	if want := []string{"policy/v1beta1 podsecuritypolicies"}; !reflect.DeepEqual(self, want) {
+		t.Errorf("self-listed = %q, want %q", self, want)
 	}
 }
 
@@ -258,7 +341,7 @@ func TestCollectAPIUsageTypeRemovedKindCountsEveryObject(t *testing.T) {
 	)
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.APIUsage{{
@@ -299,7 +382,7 @@ func TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated(t *te
 	)
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.APIUsage{
@@ -367,6 +450,21 @@ func (g recordingGetter) List(ctx context.Context, opts metav1.ListOptions) (*me
 	return g.Getter.List(ctx, opts)
 }
 
+// Namespace records namespaced (and all-namespace) LISTs too.
+func (g recordingGetter) Namespace(ns string) metadata.ResourceInterface {
+	return recordingResource{g.Getter.Namespace(ns), g.opts}
+}
+
+type recordingResource struct {
+	metadata.ResourceInterface
+	opts *[]metav1.ListOptions
+}
+
+func (r recordingResource) List(ctx context.Context, opts metav1.ListOptions) (*metav1.PartialObjectMetadataList, error) {
+	*r.opts = append(*r.opts, opts)
+	return r.ResourceInterface.List(ctx, opts)
+}
+
 func TestCollectAPIUsageFollowsListPagination(t *testing.T) {
 	ingress := func(name, manager, apiVersion string) runtime.RawExtension {
 		return runtime.RawExtension{Object: &metav1.PartialObjectMetadata{
@@ -395,7 +493,7 @@ func TestCollectAPIUsageFollowsListPagination(t *testing.T) {
 	disc := fakeDiscovery(resources("networking.k8s.io/v1", ingresses), resources("networking.k8s.io/v1beta1", ingresses))
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, recordingMeta{meta, &opts}, ingressLifecycle(), &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, recordingMeta{meta, &opts}, ingressLifecycle(), &inv); err != nil {
 		t.Fatal(err)
 	}
 	wantOpts := []metav1.ListOptions{{Limit: listPageSize}, {Limit: listPageSize, Continue: "page-2"}}
@@ -424,7 +522,7 @@ func TestCollectAPIUsageCapsObjectRefs(t *testing.T) {
 	disc := fakeDiscovery(resources("policy/v1beta1", psps))
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, ingressLifecycle(), &inv); err != nil {
 		t.Fatal(err)
 	}
 	if len(inv.APIUsage) != 1 {
@@ -547,7 +645,7 @@ func TestCollectAPIUsageAPFBootstrapObjectsAreNotBlockers(t *testing.T) {
 		ServerVersion: "v1.31.4",
 		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{},
 	}
-	if err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	if len(inv.APIUsage) != 0 {
@@ -591,7 +689,7 @@ func TestCollectAPIUsageAPFAutoUpdateAnnotationExcludesObject(t *testing.T) {
 	}
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.APIUsage{{
@@ -620,7 +718,7 @@ func TestCollectAPIUsageNoReplacementButGAServedCountsOnlyAuthors(t *testing.T) 
 	disc := fakeDiscovery(resources("networking.k8s.io/v1", servicecidrs), resources(beta, servicecidrs))
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, loadKB(t).APILifecycle, &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, loadKB(t).APILifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.APIUsage{{
@@ -690,7 +788,7 @@ func TestCollectAPIUsageServiceCIDROnlyBetaServedApiserverObjectsAreNotBlockers(
 	k := loadKB(t)
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	if len(inv.APIUsage) != 0 {
@@ -730,7 +828,7 @@ func TestCollectAPIUsageVAPWrittenViaBetaIsNotAlphaUsage(t *testing.T) {
 	k := loadKB(t)
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.APIUsage{{
@@ -763,7 +861,7 @@ func TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject(t *testing.T) {
 	k := loadKB(t)
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Kind != "PodSecurityPolicy" || inv.APIUsage[0].Count != 3 {
@@ -801,7 +899,7 @@ func TestCollectAPIUsagePartialFailureKeepsSuccesses(t *testing.T) {
 	})
 
 	var inv inventory.Inventory
-	err := collectAPIUsage(context.Background(), flaggedDiscovery(), meta, flaggedLifecycle(), &inv)
+	_, err := collectAPIUsage(context.Background(), flaggedDiscovery(), meta, flaggedLifecycle(), &inv)
 
 	var pe partialError
 	if !errors.As(err, &pe) {
@@ -810,12 +908,43 @@ func TestCollectAPIUsagePartialFailureKeepsSuccesses(t *testing.T) {
 	if !strings.Contains(err.Error(), "podsecuritypolicies") {
 		t.Errorf("reason = %q, must name the failed resource", err.Error())
 	}
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"policy/v1beta1 PodSecurityPolicy"}) {
+		t.Errorf("partial = %v, skipped = %q; want incomplete, skipping the flagged API the failed list covered", pe.incomplete, pe.skipped)
+	}
 	want := []inventory.APIUsage{{
 		Group: "networking.k8s.io", Version: "v1beta1", Kind: "Ingress", Count: 1, Namespaces: map[string]int{"default": 1},
 		Objects: []inventory.ObjectRef{{Namespace: "default", Name: "web", Manager: "helm"}},
 	}}
 	if !reflect.DeepEqual(inv.APIUsage, want) {
 		t.Errorf("api usage = %#v\nwant     %#v (successes must be kept)", inv.APIUsage, want)
+	}
+}
+
+// M08/VS-07: a 403 on the ingresses LIST hid a v1beta1-authored Ingress
+// and the report read ready. The capability must come back partial, naming
+// every flagged API that LIST covered, so the engine can tell the gap
+// matters.
+func TestCollectAPIUsageForbiddenIngressesIsPartialNamingIngressAPIs(t *testing.T) {
+	meta := flaggedObjects()
+	meta.PrependReactor("list", "ingresses", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingresses"}, "", errors.New("RBAC denied"))
+	})
+
+	var inv inventory.Inventory
+	_, err := collectAPIUsage(context.Background(), flaggedDiscovery(), meta, flaggedLifecycle(), &inv)
+
+	var pe partialError
+	if !errors.As(err, &pe) || !pe.incomplete {
+		t.Fatalf("err = %#v, want an incomplete partialError", err)
+	}
+	if !strings.Contains(pe.msg, "list networking.k8s.io/v1 ingresses: ") {
+		t.Errorf("reason = %q, must name the failed list", pe.msg)
+	}
+	if want := []string{"networking.k8s.io/v1beta1 Ingress"}; !reflect.DeepEqual(pe.skipped, want) {
+		t.Errorf("skipped = %q, want %q", pe.skipped, want)
+	}
+	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Kind != "PodSecurityPolicy" {
+		t.Errorf("api usage = %#v, want the PodSecurityPolicy still counted", inv.APIUsage)
 	}
 }
 
@@ -828,7 +957,7 @@ func TestCollectAPIUsageAllResourcesFailedDegrades(t *testing.T) {
 	}
 
 	var inv inventory.Inventory
-	err := collectAPIUsage(context.Background(), flaggedDiscovery(), meta, flaggedLifecycle(), &inv)
+	_, err := collectAPIUsage(context.Background(), flaggedDiscovery(), meta, flaggedLifecycle(), &inv)
 	if err == nil {
 		t.Fatal("want error when every flagged resource fails")
 	}
@@ -853,7 +982,7 @@ func (p partialDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*met
 
 func TestCollectAPIUsagePartialDiscoverySurfacesSkippedGroups(t *testing.T) {
 	var inv inventory.Inventory
-	err := collectAPIUsage(context.Background(), partialDiscovery{flaggedDiscovery()}, flaggedObjects(), flaggedLifecycle(), &inv)
+	_, err := collectAPIUsage(context.Background(), partialDiscovery{flaggedDiscovery()}, flaggedObjects(), flaggedLifecycle(), &inv)
 
 	var pe partialError
 	if !errors.As(err, &pe) {
@@ -862,7 +991,71 @@ func TestCollectAPIUsagePartialDiscoverySurfacesSkippedGroups(t *testing.T) {
 	if !strings.Contains(err.Error(), "metrics.k8s.io/v1beta1") {
 		t.Errorf("reason = %q, must name the skipped group", err.Error())
 	}
+	// The group holds no flagged API: incomplete, but nothing it skipped
+	// is one the KB tracks.
+	if !pe.incomplete || len(pe.skipped) != 0 {
+		t.Errorf("partial = %v, skipped = %q; want incomplete, nothing flagged skipped", pe.incomplete, pe.skipped)
+	}
 	if len(inv.APIUsage) != 2 {
 		t.Errorf("api usage = %#v, want both served resources still counted", inv.APIUsage)
 	}
+}
+
+// M08/VS-08: a forbidden PodSecurityPolicy LIST on 1.24 turned blocked/75
+// into ready/100 with no gap. End to end, the partial capability is now a
+// required gap at 1.25 (PSP is removed there), and the verdict unknown.
+func TestForbiddenPodSecurityPolicyListIsARequiredGapAtRemoval(t *testing.T) {
+	meta := metaClient(servedAt("PodSecurityPolicy", []string{"policy/v1beta1"}, obj{name: "privileged"}))
+	meta.PrependReactor("list", "podsecuritypolicies", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "policy", Resource: "podsecuritypolicies"}, "", errors.New("RBAC denied"))
+	})
+	disc := fakeDiscovery(resources("policy/v1", pdbs), resources("policy/v1beta1", pdbs, psps))
+	k := loadKB(t)
+
+	inv := inventory.Inventory{Source: inventory.SourceCluster, ServerVersion: "v1.24.17",
+		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{inventory.CapVersions: {Available: true}}}
+	runSteps(context.Background(), &inv, []step{{cap: inventory.CapAPIUsage, run: func(ctx context.Context, inv *inventory.Inventory) error {
+		_, err := collectAPIUsage(ctx, disc, meta, k.APILifecycle, inv)
+		return err
+	}}})
+	k.AddOns = nil // only api-usage is under test
+
+	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 25}, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	want := []engine.CapabilityGap{{Capability: inventory.CapAPIUsage, Partial: true, Required: true,
+		Reason:  inv.Capabilities[inventory.CapAPIUsage].Reason,
+		Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}}
+	if rep.Verdict != engine.VerdictUnknown || !reflect.DeepEqual(rep.NotAssessed, want) {
+		t.Errorf("verdict %s, notAssessed %+v\nwant unknown, %+v", rep.Verdict, rep.NotAssessed, want)
+	}
+}
+
+// A group/version whose discovery failed may serve a flagged API: every
+// flagged API the KB records at that group/version went unchecked.
+func TestCollectAPIUsageDiscoveryFailureSkipsFlaggedAPIsOfThatGroupVersion(t *testing.T) {
+	disc := failingGroupDiscovery{fakeDiscovery(resources("networking.k8s.io/v1", ingresses)),
+		schema.GroupVersion{Group: "policy", Version: "v1beta1"}}
+
+	var inv inventory.Inventory
+	_, err := collectAPIUsage(context.Background(), disc, flaggedObjects(), flaggedLifecycle(), &inv)
+
+	var pe partialError
+	if !errors.As(err, &pe) || !pe.incomplete {
+		t.Fatalf("err = %#v, want an incomplete partialError", err)
+	}
+	if want := []string{"policy/v1beta1 PodSecurityPolicy"}; !reflect.DeepEqual(pe.skipped, want) {
+		t.Errorf("skipped = %q, want %q", pe.skipped, want)
+	}
+}
+
+// failingGroupDiscovery reports one group/version's discovery as failed.
+type failingGroupDiscovery struct {
+	*discoveryfake.FakeDiscovery
+	failed schema.GroupVersion
+}
+
+func (p failingGroupDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	groups, lists, _ := p.FakeDiscovery.ServerGroupsAndResources()
+	return groups, lists, &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
+		p.failed: errors.New("the server is currently unable to handle the request"),
+	}}
 }

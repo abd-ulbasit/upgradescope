@@ -1,0 +1,2 @@
+cluster,target,evaluatedAt,kbVersion,verdict,score,severity,category,key,title,detail,remediation,teams,namespaces,citations
+prod-eu-1,1.35,2026-06-10T12:00:00Z,test-kb,ready,100,summary,,,ready for 1.35: score 100/100,"0 blockers, 0 warnings, 0 capabilities not assessed",,,,

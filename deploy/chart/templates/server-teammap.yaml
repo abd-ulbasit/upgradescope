@@ -1,0 +1,14 @@
+{{- if and .Values.server.enabled .Values.server.teamMap }}
+# server.teamMap, read by serve --team-map at startup (the Deployment's
+# checksum/team-map annotation rolls the pods when it changes).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "upgradescope.serverFullname" . }}-team-map
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+data:
+  team-map.yaml: |
+    {{- toYaml .Values.server.teamMap | nindent 4 }}
+{{- end }}

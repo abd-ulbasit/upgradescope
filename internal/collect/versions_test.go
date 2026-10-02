@@ -174,3 +174,53 @@ func TestCollectWiresVersionsCapability(t *testing.T) {
 		t.Errorf("versions capability = %+v, want available", got)
 	}
 }
+
+// Nodes, namespaces and kube-system pods are listed in pages of
+// listPageSize, following the Continue token, so a large cluster never
+// returns one unbounded list (PF-02 in docs/claims.md).
+func TestCollectVersionsFollowsListPagination(t *testing.T) {
+	cs := kubefake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}})
+	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+	disc.FakedServerVersion = &version.Info{GitVersion: "v1.34.2"}
+	node := func(name string) corev1.Node { return corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}} }
+	ns := func(name string) corev1.Namespace { return corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}} }
+	pages := map[string][2]runtime.Object{
+		"nodes": {
+			&corev1.NodeList{ListMeta: metav1.ListMeta{Continue: "page-2"}, Items: []corev1.Node{node("node-a")}},
+			&corev1.NodeList{Items: []corev1.Node{node("node-b")}},
+		},
+		"namespaces": {
+			&corev1.NamespaceList{ListMeta: metav1.ListMeta{Continue: "page-2"}, Items: []corev1.Namespace{ns("apps")}},
+			&corev1.NamespaceList{Items: []corev1.Namespace{ns("kube-system")}},
+		},
+		"pods": {
+			&corev1.PodList{ListMeta: metav1.ListMeta{Continue: "page-2"}, Items: []corev1.Pod{*cpPod("kube-apiserver-cp", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2")}},
+			&corev1.PodList{Items: []corev1.Pod{*cpPod("kube-scheduler-cp", map[string]string{"component": "kube-scheduler"}, "registry.k8s.io/kube-scheduler:v1.34.2")}},
+		},
+	}
+	opts := map[string][]metav1.ListOptions{}
+	for resource, page := range pages {
+		cs.PrependReactor("list", resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+			o := a.(interface{ GetListOptions() metav1.ListOptions }).GetListOptions()
+			opts[resource] = append(opts[resource], o)
+			if o.Continue == "" {
+				return true, page[0], nil
+			}
+			return true, page[1], nil
+		})
+	}
+
+	var inv inventory.Inventory
+	if err := collectVersions(context.Background(), disc, cs, "team", &inv); err != nil {
+		t.Fatal(err)
+	}
+	want := []metav1.ListOptions{{Limit: listPageSize}, {Limit: listPageSize, Continue: "page-2"}}
+	for resource := range pages {
+		if !reflect.DeepEqual(opts[resource], want) {
+			t.Errorf("%s list options = %+v, want %+v (paged, Continue token followed)", resource, opts[resource], want)
+		}
+	}
+	if len(inv.Nodes) != 2 || len(inv.Namespaces) != 2 || len(inv.ControlPlane) != 2 {
+		t.Errorf("nodes %+v, namespaces %+v, control plane %+v: want 2 of each (items from every page count)", inv.Nodes, inv.Namespaces, inv.ControlPlane)
+	}
+}

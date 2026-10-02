@@ -69,6 +69,12 @@ type Status struct {
 	// shape Argo CD, kstatus and `kubectl wait` read.
 	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
 	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+
+	// ReadyGaps labels the first target's gaps (engine.CapabilityGap.Label,
+	// required ones marked) for the Ready condition message. Not stored:
+	// whether a gap is required depends on the target, and NotAssessed is
+	// the union over all targets.
+	ReadyGaps []string `json:"-"`
 }
 
 // ConditionReady is the condition type summarizing the first target's
@@ -95,17 +101,26 @@ func ReadyCondition(st Status) metav1.Condition {
 		return c
 	}
 	t := st.Targets[0]
+	// A ready or blocked verdict still names what it did not cover.
+	notCovered := ""
+	if len(st.ReadyGaps) > 0 {
+		notCovered = "; not fully assessed: " + strings.Join(st.ReadyGaps, ", ") + "; see status.notAssessed"
+	}
 	switch {
 	case t.Verdict == string(engine.VerdictReady) || (t.Verdict == "" && t.Ready):
 		c.Status, c.Reason = metav1.ConditionTrue, ReasonReady
-		c.Message = fmt.Sprintf("%s: ready (score %d)", t.Target, t.Score)
+		c.Message = fmt.Sprintf("%s: ready (score %d)%s", t.Target, t.Score, notCovered)
 	case t.Verdict == string(engine.VerdictBlocked) || t.Blockers > 0:
 		c.Status, c.Reason = metav1.ConditionFalse, ReasonBlocked
-		c.Message = fmt.Sprintf("%s: %d blocker(s) (score %d)", t.Target, t.Blockers, t.Score)
+		c.Message = fmt.Sprintf("%s: %d blocker(s) (score %d)%s", t.Target, t.Blockers, t.Score, notCovered)
 	default:
 		c.Status, c.Reason = metav1.ConditionUnknown, ReasonNotAssessed
-		c.Message = fmt.Sprintf("%s: no blockers found, but a required check was not assessed; see status.notAssessed (score %d)",
-			t.Target, t.Score)
+		which := ""
+		if len(st.ReadyGaps) > 0 {
+			which = ": " + strings.Join(st.ReadyGaps, ", ")
+		}
+		c.Message = fmt.Sprintf("%s: no blockers found, but a required check was not assessed%s; see status.notAssessed (score %d)",
+			t.Target, which, t.Score)
 	}
 	return c
 }
@@ -147,7 +162,10 @@ func TargetStatusFromReport(r engine.Report) TargetStatus {
 // All reports come from the same inventory, so KBVersion is taken from the
 // first report. NotAssessed is the deduped union over all reports, in first-
 // seen order — most gaps are per-inventory, but kb-coverage is per-target.
-// Gaps render as "capability: reason".
+// Gaps render as "capability: reason", a partial one as "capability
+// (partial): reason; skipped: a, b". Whether a gap is required depends on
+// the target, so only the Ready condition, which reads the first target,
+// says that.
 func StatusFromReports(reports []engine.Report, observedServerVersion, agentVersion string, now time.Time) Status {
 	st := Status{
 		ObservedServerVersion: observedServerVersion,
@@ -155,10 +173,20 @@ func StatusFromReports(reports []engine.Report, observedServerVersion, agentVers
 		AgentVersion:          agentVersion,
 	}
 	seen := map[string]bool{}
-	for _, r := range reports {
+	for i, r := range reports {
 		st.Targets = append(st.Targets, TargetStatusFromReport(r))
 		for _, g := range r.NotAssessed {
-			if s := fmt.Sprintf("%s: %s", g.Capability, g.Reason); !seen[s] {
+			if i == 0 {
+				st.ReadyGaps = append(st.ReadyGaps, g.Label())
+			}
+			s := fmt.Sprintf("%s: %s", g.Capability, g.Reason)
+			if g.Partial {
+				s = fmt.Sprintf("%s (partial): %s", g.Capability, g.Reason)
+			}
+			if len(g.Skipped) > 0 {
+				s += "; skipped: " + strings.Join(g.Skipped, ", ")
+			}
+			if !seen[s] {
 				seen[s] = true
 				st.NotAssessed = append(st.NotAssessed, s)
 			}

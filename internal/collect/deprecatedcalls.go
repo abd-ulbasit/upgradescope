@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -21,10 +22,18 @@ const deprecatedAPIsMetric = "apiserver_requested_deprecated_apis"
 // apiserver_requested_deprecated_apis rows — deprecated APIs some client
 // requested, the blind spot of manifest-only scanners. The metric does not
 // say which client. Known limits (spec §4): gauge resets on apiserver
-// restart; HA apiservers report independently. The api-usage collector
-// lists deprecated endpoints only when nothing else serves the resource,
-// so the scanner does not otherwise feed this metric.
-func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, inv *inventory.Inventory) error {
+// restart; HA apiservers report independently.
+//
+// The scanner feeds this metric itself only through selfListed: the
+// resources api-usage listed at a deprecated version, because nothing
+// else serves a kind that is being removed ("group/version resource",
+// e.g. "policy/v1beta1 podsecuritypolicies" on 1.24). It runs after
+// api-usage, so on every scan, the first after an apiserver restart
+// included, the rows are there. Their rows are kept, and the capability
+// comes back partial with selfListed as Skipped: for those resources the
+// metric cannot tell other clients from the scanner, and the engine does
+// not report them as callers.
+func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, selfListed []string, inv *inventory.Inventory) error {
 	raw, err := rc.Get().AbsPath("/metrics").DoRaw(ctx)
 	if err != nil {
 		// 401/403 is the expected state on managed control planes
@@ -45,7 +54,7 @@ func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, inv *invento
 	}
 	fam, ok := families[deprecatedAPIsMetric]
 	if !ok {
-		return nil // no deprecated API requested since apiserver start
+		return selfRequests(selfListed) // no deprecated API requested since apiserver start
 	}
 	var calls []inventory.DeprecatedCall
 	for _, m := range fam.GetMetric() {
@@ -80,5 +89,19 @@ func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, inv *invento
 		return a.Subresource < b.Subresource
 	})
 	inv.DeprecatedCalls = calls
-	return nil
+	return selfRequests(selfListed)
+}
+
+// selfRequests is the outcome of a successful scrape: nil, or, when the
+// scanner listed deprecated endpoints itself, a partialError naming them.
+func selfRequests(selfListed []string) error {
+	if len(selfListed) == 0 {
+		return nil
+	}
+	return partialError{
+		msg: fmt.Sprintf("upgradescope lists %s itself (nothing else serves a kind being removed), so the metric cannot show whether other clients request it; apiserver audit logs (annotation k8s.io/deprecated) can",
+			strings.Join(selfListed, ", ")),
+		incomplete: true,
+		skipped:    selfListed,
+	}
 }

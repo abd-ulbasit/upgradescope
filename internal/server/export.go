@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +41,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	_, inv, err := s.latestInventory(ctx, c.ID)
+	snap, inv, err := s.latestInventory(ctx, c.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
 		return
@@ -47,8 +50,8 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, "loading latest snapshot", err)
 		return
 	}
-	if notApplicable(inv, target) {
-		errJSON(w, http.StatusNotFound, fmt.Sprintf("cluster %s already runs %s: target %s is not applicable", c.Name, inv.ServerVersion, target))
+	if version := judgedAt(snap, inv); notApplicable(version, target) {
+		errJSON(w, http.StatusNotFound, fmt.Sprintf("cluster %s already runs %s: target %s is not applicable", c.Name, version, target))
 		return
 	}
 	eval, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String())
@@ -111,31 +114,72 @@ func csvSafe(s string) string {
 	return s
 }
 
-// writeExportCSV emits one row per finding. Multi-valued columns (teams,
-// namespaces, citations) are ";"-joined inside a single CSV field. All
-// non-numeric fields pass through csvSafe.
+// CSV row types beyond the finding severities (blocker, warning, info), in
+// the severity column so consumers filter on one column.
+const (
+	csvSummary     = "summary"      // first row: the verdict, always present
+	csvNotAssessed = "not-assessed" // one per capability the evaluation could not assess
+)
+
+// writeExportCSV emits a summary row (verdict and score in the title; the
+// KB version and evaluation time are columns of every row), one row per
+// finding, then one not-assessed row per capability gap — so a clean
+// cluster's export is not a bare header, and a partly assessed one does
+// not look clean. Multi-valued columns (teams, namespaces, citations) are
+// ";"-joined inside a single CSV field. All non-numeric fields pass
+// through csvSafe.
 func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engine.Report) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write([]string{
-		"cluster", "target", "evaluatedAt", "severity", "category", "key",
-		"title", "detail", "teams", "namespaces", "citations",
+		"cluster", "target", "evaluatedAt", "kbVersion", "verdict", "score", "severity", "category", "key",
+		"title", "detail", "remediation", "teams", "namespaces", "citations",
 	}); err != nil {
 		return err
 	}
-	for _, f := range rep.Findings {
-		if err := cw.Write([]string{
+	row := func(severity, category, key, title, detail, remediation string, teams, namespaces, citations []string) error {
+		return cw.Write([]string{
 			csvSafe(cluster),
 			rep.Target.String(),
 			eval.EvaluatedAt.UTC().Format(time.RFC3339),
-			string(f.Severity),
-			string(f.Category),
-			csvSafe(f.Key),
-			csvSafe(f.Title),
-			csvSafe(f.Detail),
-			csvSafe(strings.Join(f.Teams, ";")),
-			csvSafe(strings.Join(f.Namespaces, ";")),
-			csvSafe(strings.Join(f.Citations, ";")),
-		}); err != nil {
+			csvSafe(rep.KBVersion),
+			string(rep.Verdict),
+			strconv.Itoa(rep.Score),
+			severity,
+			category,
+			csvSafe(key),
+			csvSafe(title),
+			csvSafe(detail),
+			csvSafe(remediation),
+			csvSafe(strings.Join(teams, ";")),
+			csvSafe(strings.Join(namespaces, ";")),
+			csvSafe(strings.Join(citations, ";")),
+		})
+	}
+	var blockers, warnings int
+	for _, f := range rep.Findings {
+		switch f.Severity {
+		case engine.SevBlocker:
+			blockers++
+		case engine.SevWarning:
+			warnings++
+		}
+	}
+	summary := fmt.Sprintf("%s for %s: score %d/100", rep.Verdict, rep.Target, rep.Score)
+	detail := fmt.Sprintf("%d blockers, %d warnings, %d capabilities not assessed", blockers, warnings, len(rep.NotAssessed))
+	if err := row(csvSummary, "", "", summary, detail, "", nil, nil, nil); err != nil {
+		return err
+	}
+	for _, f := range rep.Findings {
+		if err := row(string(f.Severity), string(f.Category), f.Key, f.Title, f.Detail, f.Remediation, f.Teams, f.Namespaces, f.Citations); err != nil {
+			return err
+		}
+	}
+	for _, g := range rep.NotAssessed {
+		title := string(g.Capability) + " not assessed"
+		if g.Required {
+			title += " (required: the verdict cannot be ready)"
+		}
+		if err := row(csvNotAssessed, "capability", string(g.Capability), title, g.Reason, "", nil, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -176,6 +220,27 @@ func (d exportData) Groups() []severityGroup {
 	return out
 }
 
+// teamRow is one team's score in the HTML report.
+type teamRow struct {
+	Team string
+	engine.TeamScore
+}
+
+// Teams returns per-team scores (the report endpoint's `teams`), worst
+// score first, then by name; empty when no finding is attributed to a
+// team.
+func (d exportData) Teams() []teamRow {
+	scores := renderTeamScores(engine.TeamScores(d.Report))
+	out := make([]teamRow, 0, len(scores))
+	for team, ts := range scores {
+		out = append(out, teamRow{Team: team, TeamScore: ts})
+	}
+	slices.SortFunc(out, func(a, b teamRow) int {
+		return cmp.Or(cmp.Compare(a.Score, b.Score), cmp.Compare(a.Team, b.Team))
+	})
+	return out
+}
+
 // ScoreClass picks the badge color bucket: ok ≥90, warn ≥70, else bad.
 func (d exportData) ScoreClass() string {
 	switch {
@@ -189,25 +254,33 @@ func (d exportData) ScoreClass() string {
 }
 
 // Sparkline renders the score history as an inline SVG polyline (no JS, no
-// CDN — the export must be a single self-contained file). Y maps score
-// 0–100 onto the viewbox; a single point renders as just the dot.
+// CDN — the export must be a single self-contained file). X is time, from
+// the first point to the last (points spaced by index made a burst of
+// changes look like months), Y maps score 0–100 onto the viewbox, and the
+// label names the dates spanned; a single point renders as just the dot.
 func (d exportData) Sparkline() template.HTML {
 	const width, height, pad = 260.0, 48.0, 4.0
 	n := len(d.History)
 	if n == 0 {
 		return ""
 	}
+	first, last := d.History[0].At, d.History[n-1].At
+	span := last.Sub(first)
 	x := func(i int) float64 {
-		if n == 1 {
-			return width / 2
+		if n == 1 || span <= 0 {
+			if n == 1 {
+				return width / 2
+			}
+			return pad + (width-2*pad)*float64(i)/float64(n-1) // no time spread: fall back to index
 		}
-		return pad + (width-2*pad)*float64(i)/float64(n-1)
+		return pad + (width-2*pad)*float64(d.History[i].At.Sub(first))/float64(span)
 	}
 	y := func(score int) float64 {
 		return pad + (height-2*pad)*(1-float64(score)/100)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg class="spark" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f" role="img" aria-label="score history">`, width, height, width, height)
+	fmt.Fprintf(&b, `<svg class="spark" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f" role="img" aria-label="score history, %s to %s">`,
+		width, height, width, height, first.UTC().Format("2006-01-02"), last.UTC().Format("2006-01-02"))
 	if n > 1 {
 		b.WriteString(`<polyline fill="none" stroke="#2563eb" stroke-width="2" points="`)
 		for i, p := range d.History {
@@ -218,10 +291,9 @@ func (d exportData) Sparkline() template.HTML {
 		}
 		b.WriteString(`"/>`)
 	}
-	last := d.History[n-1]
-	fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3" fill="#2563eb"/>`, x(n-1), y(last.Score))
+	fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3" fill="#2563eb"/>`, x(n-1), y(d.History[n-1].Score))
 	b.WriteString(`</svg>`)
-	return template.HTML(b.String()) // #nosec G203 — built from numbers only
+	return template.HTML(b.String()) // #nosec G203 — built from numbers and formatted dates only
 }
 
 var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
@@ -269,6 +341,14 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
   {{if .Report.Ready}}<span class="badge ok">ready</span>{{else}}<span class="badge bad">not ready</span>{{end}}
   {{.Sparkline}}
 </p>
+{{with .Teams}}
+<h2>team scores</h2>
+<table>
+  <tr><th>team</th><th>score</th><th>verdict</th><th>blockers</th><th>warnings</th></tr>
+  {{range .}}<tr><td>{{.Team}}</td><td>{{.Score}}/100</td><td>{{if .Ready}}ready{{else}}not ready{{end}}</td><td>{{.Blockers}}</td><td>{{.Warnings}}</td></tr>
+  {{end}}
+</table>
+{{end}}
 {{range .Groups}}
 <h2>{{.Severity}} ({{len .Findings}})</h2>
 <table>
@@ -294,7 +374,7 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
 {{if .Report.NotAssessed}}
 <h2>not assessed</h2>
 <ul class="gaps">
-{{range .Report.NotAssessed}}<li>{{.Capability}}: {{.Reason}}</li>
+{{range .Report.NotAssessed}}<li>{{.Label}}: {{.Reason}}{{if .Skipped}} (skipped: {{range $i, $s := .Skipped}}{{if $i}}, {{end}}{{$s}}{{end}}){{end}}</li>
 {{end}}</ul>
 {{end}}
 </body>

@@ -36,5 +36,5 @@ if tag="$(git describe --tags --exact-match --match 'v[0-9]*' HEAD 2>/dev/null)"
 fi
 echo "ok: go install reports version $v at $head"
 
-hack/serve-smoke.sh "$bin" 18432
+DASHBOARD_SMOKE_PORT=18432 hack/dashboard-smoke.sh "$bin"
 echo "go-install-check: OK"

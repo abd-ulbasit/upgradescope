@@ -1,0 +1,19 @@
+# The deprecated-but-served API the kind e2e writes one object through, per
+# Kubernetes minor (hack/e2e.sh; hack/e2e_test.sh checks that every minor of
+# hack/kind-node-images.txt has exactly one row):
+#
+#   <first minor> <last minor> <deprecated apiVersion> <GA apiVersion> <manifest in hack/e2e/fixtures/>
+#
+# The cluster's runtimeConfig (hack/e2e/kind-config.yaml) enables the
+# deprecated group/version, so it must be servable on those minors: the KB
+# (internal/kb/data/apilifecycle.json) has it deprecated there and removed
+# only later. Its GA version serves the same kind, so the scanner lists at
+# GA and judges authorship from managedFields, and the e2e's re-apply
+# through GA must clear the finding.
+#
+# The manifest's apiVersion is __API_VERSION__ and its applied-via label
+# __APPLIED_VIA__; the e2e fills both in.
+1.29 1.31 flowcontrol.apiserver.k8s.io/v1beta3 flowcontrol.apiserver.k8s.io/v1 flowschema.yaml
+1.32 1.33 admissionregistration.k8s.io/v1beta1 admissionregistration.k8s.io/v1 validatingadmissionpolicy.yaml
+1.34 1.36 storage.k8s.io/v1beta1 storage.k8s.io/v1 volumeattributesclass.yaml
+1.37 1.37 resource.k8s.io/v1beta1 resource.k8s.io/v1 deviceclass.yaml

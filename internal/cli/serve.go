@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,8 +29,10 @@ type serveOptions struct {
 	dbURL        string
 	ingestToken  string
 	readToken    string
+	adminToken   string
 	slackWebhook string
 	webhook      string
+	webhookKey   string
 	targets      string
 	teamMap      string
 
@@ -37,6 +41,11 @@ type serveOptions struct {
 	allowAnonymousRead bool
 	tlsCertFile        string
 	tlsKeyFile         string
+	staleAfter         time.Duration
+	retention          string
+
+	// parsedRetention is --retention parsed by validateServeOptions.
+	parsedRetention time.Duration
 
 	// parsedTargets is opts.targets parsed once by validateServeOptions;
 	// runServe consumes it instead of re-parsing the raw CSV.
@@ -66,7 +75,9 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		notifiers = append(notifiers, notify.NewSlack(opts.slackWebhook))
 	}
 	if opts.webhook != "" {
-		notifiers = append(notifiers, notify.NewGenericWebhook(opts.webhook))
+		hook := notify.NewGenericWebhook(opts.webhook)
+		hook.Secret = opts.webhookKey
+		notifiers = append(notifiers, hook)
 	}
 
 	extraTargets := make([]string, 0, len(opts.parsedTargets))
@@ -81,6 +92,7 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		Notifier:     notify.Multi(notifiers...), // zero notifiers → harmless no-op
 		IngestToken:  opts.ingestToken,
 		ReadToken:    opts.readToken,
+		AdminToken:   opts.adminToken,
 		ExtraTargets: extraTargets,
 		TeamMap:      opts.parsedTeamMap,
 		Version:      version,
@@ -89,6 +101,8 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		MaxGateBytes:     opts.maxGateBytes,
 		TLSCertFile:      opts.tlsCertFile,
 		TLSKeyFile:       opts.tlsKeyFile,
+		StaleAfter:       opts.staleAfter,
+		Retention:        opts.parsedRetention,
 	})
 	if err != nil {
 		return err
@@ -174,10 +188,14 @@ It listens on loopback by default. On any other address, the read API needs
 			"optional shared bearer token that may push snapshots as ANY cluster; omit it to accept only per-cluster tokens from 'upgradescope tokens create' (serve warns at startup, not later, when both are in use)"),
 		addSecretFlag(cmd, &opts.readToken, "read-token", "UPGRADESCOPE_READ_TOKEN",
 			"bearer token for the read API and /api/v1/gate (empty = OPEN read access; refused on non-loopback --listen without --allow-anonymous-read)"),
+		addSecretFlag(cmd, &opts.adminToken, "admin-token", "UPGRADESCOPE_ADMIN_TOKEN",
+			"bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server'; it also reads (empty = administration refused)"),
 		addSecretFlag(cmd, &opts.slackWebhook, "slack-webhook", "UPGRADESCOPE_SLACK_WEBHOOK",
 			"Slack incoming-webhook URL for delta notifications"),
 		addSecretFlag(cmd, &opts.webhook, "webhook", "UPGRADESCOPE_WEBHOOK_URL",
-			"generic webhook URL (POSTed the raw event JSON)"),
+			"generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in docs/operations.md)"),
+		addSecretFlag(cmd, &opts.webhookKey, "webhook-secret", "UPGRADESCOPE_WEBHOOK_SECRET",
+			"sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key>"),
 	}
 	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
@@ -186,6 +204,8 @@ It listens on loopback by default. On any other address, the read API needs
 	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes")
 	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert-file", "", "PEM certificate (chain) to serve HTTPS directly; requires --tls-key-file (read at startup)")
 	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key-file", "", "PEM private key for --tls-cert-file")
+	cmd.Flags().DurationVar(&opts.staleAfter, "stale-after", server.DefaultStaleAfter, "mark a cluster stale (API, dashboard data, /metrics) when its agent has not pushed for this long; agents push at least about every 70m by default")
+	cmd.Flags().StringVar(&opts.retention, "retention", "90d", "prune snapshots and evaluations older than this, in days (90d) or a Go duration (2160h), at startup and daily; each cluster's latest snapshot and its evaluations are always kept; 0 keeps everything")
 	cmd.MarkFlagsRequiredTogether("tls-cert-file", "tls-key-file")
 	return cmd
 }
@@ -212,8 +232,23 @@ func validateServeOptions(opts *serveOptions) error {
 	if opts.maxSnapshotBytes <= 0 {
 		return fmt.Errorf("--max-snapshot-bytes must be positive, got %d", opts.maxSnapshotBytes)
 	}
+	r, err := parseRetention(opts.retention)
+	if err != nil {
+		return fmt.Errorf("invalid --retention %q: %w", opts.retention, err)
+	}
+	opts.parsedRetention = r
+	if opts.staleAfter <= 0 {
+		return fmt.Errorf("--stale-after must be positive, got %s", opts.staleAfter)
+	}
 	if opts.maxGateBytes <= 0 {
 		return fmt.Errorf("--max-gate-bytes must be positive, got %d", opts.maxGateBytes)
+	}
+	if opts.webhookKey != "" && opts.webhook == "" {
+		return fmt.Errorf("--webhook-secret signs the generic webhook: set --webhook too")
+	}
+	if opts.adminToken != "" && (opts.adminToken == opts.readToken || opts.adminToken == opts.ingestToken) {
+		return fmt.Errorf("--admin-token must differ from --read-token and --ingest-token: " +
+			"whoever holds those must not be able to delete or rename clusters")
 	}
 	if opts.readToken == "" && !opts.allowAnonymousRead && !isLoopbackListen(opts.listen) {
 		return fmt.Errorf("refusing to serve the read API and /api/v1/gate without a token on %q: "+
@@ -230,11 +265,50 @@ func validateServeOptions(opts *serveOptions) error {
 		return nil
 	}
 	for _, raw := range strings.Split(opts.targets, ",") {
-		v, err := inventory.ParseVersion(strings.TrimSpace(raw))
+		v, err := inventory.ParseTarget(strings.TrimSpace(raw))
 		if err != nil {
 			return fmt.Errorf("invalid --targets entry %q: %w", raw, err)
 		}
 		opts.parsedTargets = append(opts.parsedTargets, v)
 	}
 	return nil
+}
+
+// minRetention is the shortest non-zero --retention: a window under a day
+// would prune the score history the dashboard and exports exist to show.
+const minRetention = 24 * time.Hour
+
+// maxRetentionDays (100 years) bounds --retention well below
+// time.Duration's ~292 years, so a large "Nd" cannot wrap to a short or
+// negative window. The day count is clamped before it is multiplied; 0
+// keeps everything.
+const (
+	maxRetentionDays = 36500
+	maxRetention     = maxRetentionDays * 24 * time.Hour
+)
+
+// parseRetention parses --retention: whole days ("90d") or a Go duration
+// ("2160h"); "0" (or "0d") keeps everything.
+func parseRetention(s string) (time.Duration, error) {
+	const want = "want whole days such as 90d, a duration such as 2160h, or 0"
+	var d time.Duration
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n < 0 {
+			return 0, errors.New(want)
+		}
+		d = time.Duration(min(n, maxRetentionDays+1)) * 24 * time.Hour // over the cap: refused below
+	} else if s != "0" {
+		var err error
+		if d, err = time.ParseDuration(s); err != nil {
+			return 0, errors.New(want)
+		}
+	}
+	if d > maxRetention {
+		return 0, fmt.Errorf("must be at most %dd (use 0 to keep everything)", maxRetentionDays)
+	}
+	if d != 0 && d < minRetention {
+		return 0, fmt.Errorf("must be 0 (keep everything) or at least %s", minRetention)
+	}
+	return d, nil
 }

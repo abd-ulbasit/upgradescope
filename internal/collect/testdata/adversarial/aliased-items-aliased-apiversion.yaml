@@ -1,0 +1,8 @@
+v: &v extensions/v1beta1
+i: &i
+- apiVersion: *v
+  kind: Ingress
+  metadata: {name: a}
+apiVersion: v1
+kind: List
+items: *i

@@ -82,6 +82,11 @@ external-server|--set agent.serverUrl=https://uscope.example.com --set agent.exi
 targets|--set agent.targets={1.37,1.38}
 byo-serviceaccount|--set serviceAccount.create=false --set serviceAccount.name=sa --set rbac.create=false
 image-override|--set image.tag=dev
+hub|--set agent.enabled=false --set server.enabled=true --set server.ingestToken=t --set server.adminToken=a
+hub-postgres|--set agent.enabled=false --set server.enabled=true --set server.existingSecret=s --set server.readTokenFromSecret=true --set server.adminTokenFromSecret=true --set server.database.existingSecret=pg --set server.replicas=2
+hub-ingress|--set agent.enabled=false --set server.enabled=true --set server.ingestToken=t --set server.readToken=r --set server.ingress.enabled=true --set server.ingress.host=uscope.example.com --set server.ingress.className=nginx
+hub-teams|--set agent.enabled=false --set server.enabled=true --set server.ingestToken=t --set server.teamMap[0].pattern=payments-* --set server.teamMap[0].team=payments
+hub-netpol|--set agent.enabled=false --set server.enabled=true --set server.ingestToken=t --set networkPolicy.enabled=true --set networkPolicy.serverIngressFrom[0].namespaceSelector.matchLabels.team=ingress
 EOF
 
 echo "== chart contract (hack/test-chart.sh)"
