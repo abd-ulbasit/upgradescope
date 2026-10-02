@@ -85,12 +85,6 @@
       }
     ],
     "from": "1.31",
-    "notAssessed": [
-      {
-        "capability": "crds",
-        "reason": "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"
-      }
-    ],
     "score": 50,
     "to": "1.32",
     "verdict": "blocked"
@@ -157,12 +151,6 @@
       }
     ],
     "from": "1.32",
-    "notAssessed": [
-      {
-        "capability": "crds",
-        "reason": "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"
-      }
-    ],
     "score": 20,
     "to": "1.33",
     "verdict": "blocked"
@@ -229,12 +217,6 @@
       }
     ],
     "from": "1.33",
-    "notAssessed": [
-      {
-        "capability": "crds",
-        "reason": "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"
-      }
-    ],
     "score": 25,
     "to": "1.34",
     "verdict": "blocked"
@@ -297,12 +279,6 @@
       }
     ],
     "from": "1.34",
-    "notAssessed": [
-      {
-        "capability": "crds",
-        "reason": "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"
-      }
-    ],
     "score": 25,
     "to": "1.35",
     "verdict": "blocked"
@@ -360,12 +336,6 @@
     ],
     "findings": [],
     "from": "1.35",
-    "notAssessed": [
-      {
-        "capability": "crds",
-        "reason": "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"
-      }
-    ],
     "score": 25,
     "to": "1.36",
     "verdict": "blocked"

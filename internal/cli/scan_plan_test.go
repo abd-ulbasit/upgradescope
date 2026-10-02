@@ -39,6 +39,7 @@ func planInventory() inventory.Inventory {
 		Objects: []inventory.ObjectRef{{Name: "gpu.example.com"}},
 	}}
 	inv.Nodes = []inventory.NodeInfo{{Name: "node-a", KubeletVersion: "v1.31.4"}}
+	inv.Capabilities[inventory.CapCRDs] = inventory.CapabilityStatus{Available: true} // a collector that reports CRDs
 	return inv
 }
 

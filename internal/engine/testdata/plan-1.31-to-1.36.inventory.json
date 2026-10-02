@@ -9,7 +9,8 @@
     "deprecated-calls": {"available": true},
     "helm": {"available": true},
     "addons": {"available": true},
-    "versions": {"available": true}
+    "versions": {"available": true},
+    "crds": {"available": true}
   },
   "apiUsage": [
     {"group": "batch", "version": "v1beta1", "kind": "CronJob", "count": 1, "namespaces": {"jobs": 1},
