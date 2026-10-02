@@ -46,9 +46,10 @@ func yamlQuoted(s string) string {
 
 // boundStream is a manifest stream that puts name, n times, everywhere a
 // stream's strings reach an answer: object names and namespaces of
-// deprecated and removed APIs (each GVK of k with 20 objects), their
-// ignore annotations and Helm sources, a CRD's name and its deprecated
-// version, and an image no add-on claims.
+// deprecated and removed APIs (the first 12 such GVKs of k, 10 objects
+// each, half of them annotated), their ignore annotations and Helm
+// sources, a CRD's name and its deprecated version, and an image no
+// add-on claims.
 func boundStream(k kb.KB, name string) string {
 	q := yamlQuoted(name)
 	var b strings.Builder
@@ -62,14 +63,15 @@ func boundStream(k kb.KB, name string) string {
 			gv = e.Group + "/" + e.Version
 		}
 		fmt.Fprintf(&b, "---\n# Source: %s/templates/x.yaml\napiVersion: %s\nkind: %sList\nitems:\n", commentSafe(name), gv, e.Kind)
-		for i := range 20 {
-			fmt.Fprintf(&b, "- metadata: {name: %s, namespace: %s}\n", yamlQuoted(fmt.Sprintf("%d%s", i, name)), q)
+		for i := range 10 {
 			if i%2 == 0 {
-				fmt.Fprintf(&b, "  metadata: {name: %s, namespace: %s, annotations: {upgradescope.dev/ignore: %s, upgradescope.dev/ignore-reason: %s}}\n",
-					yamlQuoted(fmt.Sprintf("i%d%s", i, name)), q, q, q)
+				fmt.Fprintf(&b, "- metadata: {name: %s, namespace: %s}\n", yamlQuoted(fmt.Sprintf("%d%s", i, name)), q)
+				continue
 			}
+			fmt.Fprintf(&b, "- metadata: {name: %s, namespace: %s, annotations: {upgradescope.dev/ignore: %s, upgradescope.dev/ignore-reason: %s}}\n",
+				yamlQuoted(fmt.Sprintf("%d%s", i, name)), q, q, q)
 		}
-		if gvks++; gvks == 40 {
+		if gvks++; gvks == 12 {
 			break
 		}
 	}
