@@ -1,24 +1,39 @@
 import type { ScorePoint } from "./types";
 import { formatTime, scoreClass } from "./ui";
 
-// Sparkline: hand-rolled SVG score trend (0–100). Points are spaced evenly
-// by index — snapshots arrive on a fixed agent cadence, so index spacing
-// reads the same as time spacing without axis machinery.
-export function Sparkline({ points }: { points: ScorePoint[] }) {
+// Sparkline: hand-rolled SVG score trend (0–100). x is time: evaluations
+// arrive irregularly (ingest skips unchanged inventories), so points are
+// placed by their timestamp between the first one and now. The line is a
+// step — a score holds until the next evaluation replaces it — and runs on
+// to now, so a cluster that stopped reporting shows a long flat tail.
+export function Sparkline({
+  points,
+  now = Date.now(),
+}: {
+  points: ScorePoint[];
+  now?: number;
+}) {
   if (points.length === 0) return null;
 
   const w = 560;
   const h = 96;
   const pad = 8;
-  const x = (i: number) =>
-    points.length === 1
-      ? w / 2
-      : pad + (i * (w - 2 * pad)) / (points.length - 1);
+  const times = points.map((p) => Date.parse(p.at));
+  const start = times[0]!;
+  const end = Math.max(times[times.length - 1]!, now);
+  const span = end - start;
+  const x = (t: number) =>
+    span > 0 ? pad + ((t - start) * (w - 2 * pad)) / span : w / 2;
   const y = (score: number) => pad + ((100 - score) * (h - 2 * pad)) / 100;
 
-  const path = points
-    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.score).toFixed(1)}`)
-    .join(" ");
+  const path =
+    points
+      .map((p, i) => {
+        const px = x(times[i]!).toFixed(1);
+        const py = y(p.score).toFixed(1);
+        return i === 0 ? `M${px},${py}` : `H${px} V${py}`;
+      })
+      .join(" ") + ` H${x(end).toFixed(1)}`;
   const last = points[points.length - 1]!;
   const first = points[0]!;
 
@@ -43,14 +58,20 @@ export function Sparkline({ points }: { points: ScorePoint[] }) {
         ))}
         <path d={path} className="spark-line" fill="none" />
         {points.map((p, i) => (
-          <circle key={i} cx={x(i)} cy={y(p.score)} r={i === points.length - 1 ? 4 : 2.5} className={`spark-dot ${scoreClass(p.score)}`}>
+          <circle
+            key={i}
+            cx={x(times[i]!)}
+            cy={y(p.score)}
+            r={i === points.length - 1 ? 4 : 2.5}
+            className={`spark-dot ${scoreClass(p.score)}`}
+          >
             <title>{`${formatTime(p.at)} — score ${p.score}${p.ready ? ", ready" : ""}`}</title>
           </circle>
         ))}
       </svg>
       <figcaption className="muted">
-        {formatTime(first.at)} → {formatTime(last.at)} · {points.length}{" "}
-        evaluations · latest <strong>{last.score}</strong>
+        {formatTime(first.at)} → now · {points.length} evaluations · latest{" "}
+        <strong>{last.score}</strong> ({formatTime(last.at)})
       </figcaption>
     </figure>
   );
