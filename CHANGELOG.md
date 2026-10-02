@@ -217,7 +217,9 @@ a CI gate.
 - A Slack or webhook sink that answers 429 or 503 with `Retry-After` is left
   alone for that delay (capped at an hour): the sink is not called for that
   message or any other queued for it, and the held messages keep their
-  attempts. The hold is kept in memory, so a restart forgets it.
+  attempts. A queued notification is given up once it has been queued for
+  8 hours, so a receiver limited for good cannot hold a growing backlog.
+  The hold is kept in memory, so a restart forgets it.
 - Inventories from collectors that predate this release report `crds` as
   not assessed. This includes the reports the server re-evaluates for
   existing v0.1 agents, and saved `--files` inventories. The gap is not

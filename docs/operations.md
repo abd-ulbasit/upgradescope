@@ -131,9 +131,13 @@ The same comparison applies when a newer server or knowledge base first
 decides a default target that it could not judge before (a cluster on the
 newest minor, whose next minor was past the knowledge base's horizon and
 so `unknown`). Every cluster on that minor then gets its first decided
-evaluation in the same pass, each compared with its own lower target, so
-each is notified once of the blockers that are new to it (at most one
-notification per cluster, its changes capped as usual).
+evaluation in the same pass. Each one that has a stored decided
+evaluation of a lower target (within three minors below) is compared with
+it and notified once of the blockers that are new to it (at most one
+notification per cluster, its changes capped as usual). A cluster without
+one, because it was first seen on the newest minor or because its
+lower-target evaluations were pruned, has nothing to compare with, and
+its first decided evaluation is a silent baseline.
 
 This differs from a target added to `--targets`, which stays silent: adding
 a target asks a new question about a cluster that has not changed, and
@@ -160,9 +164,14 @@ left alone for that delay, capped at an hour: the sink is not called for
 that message or for any other message queued for it (which are put back
 without counting an attempt), so a burst after a fleet-wide pass does not
 hammer a rate-limited receiver or use up its messages' attempts. The wait
-replaces a shorter backoff, so 8 attempts may span several hours (up to
-about 7). The hold is kept in memory: a restart, or another replica,
-forgets it and finds out with the next call. Delivery is **at least once**:
+replaces a shorter backoff, so the attempts of one message may span several
+hours. Because a held sink is called only once per hold, the messages queued
+behind it would otherwise drain one per hold: so a message is **given up
+(logged, not sent) once it has been queued for 8 hours**, whatever its
+attempts, and that holds for every queued message. A receiver limited for
+good therefore loses notifications older than 8 hours, not the newest. The
+hold is kept in memory: a restart, or another replica, forgets it and finds
+out with the next call. Delivery is **at least once**:
 the same notification may arrive more than once, so deduplicate on
 `deliveryId`, which is the same on every retry and for every sink.
 
