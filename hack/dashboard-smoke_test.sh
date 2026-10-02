@@ -98,7 +98,13 @@ mv "$work/css.bak" "$work/dist/assets/index-def456.css"
 
 cp "$work/dist/index.html" "$work/index.bak"
 echo '<!doctype html><html><body>no bundle</body></html>' >"$work/dist/index.html"
-expect "an index.html that references no asset fails" 1 "references no /assets/ file"
+expect "an index.html that references no asset fails" 1 "references no assets/ file"
+mv "$work/index.bak" "$work/dist/index.html"
+
+# Path-prefix builds reference ./assets/x; from / that is /assets/x.
+cp "$work/dist/index.html" "$work/index.bak"
+sed 's#"/assets/#"./assets/#g' "$work/index.bak" >"$work/dist/index.html"
+expect "relative ./assets/ references are fetched" 0 "ok: GET /assets/index-abc123.js -> 200"
 mv "$work/index.bak" "$work/dist/index.html"
 
 expect "serve exiting early fails" 1 "serve exited" STUB_EXIT=1

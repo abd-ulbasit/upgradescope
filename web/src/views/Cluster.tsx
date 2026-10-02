@@ -1,59 +1,83 @@
 import { useMemo, useState } from "react";
-import { getCluster, getFindings, getHistory, getReport } from "../api";
+import { fetchExport, getCluster, getHistory, getReport, saveBlob } from "../api";
+import type { ExportFormat } from "../api";
 import { useAsync } from "../hooks";
 import { Sparkline } from "../Sparkline";
-import type { Finding, Severity } from "../types";
+import type {
+  CapabilityGap,
+  Finding,
+  Report,
+  Severity,
+  TeamScore,
+  Verdict,
+} from "../types";
 import {
+  Citations,
   Empty,
   ErrorState,
   formatTime,
   Loading,
+  nextMinors,
   ScoreBadge,
   SeverityPill,
+  StaleBadge,
+  TargetPicker,
+  uniqueSortedVersions,
+  VerdictPill,
+  verdictOf,
 } from "../ui";
 
 const SEVERITIES: Severity[] = ["blocker", "warning", "info"];
 const UNATTRIBUTED = "unattributed";
 
-// Cluster drill-down: score + trend + findings (category/team filters) +
-// per-team table for one (cluster, target). target === undefined lets the
-// server pick the cluster's default next-minor target.
-export function Cluster({ id, target }: { id: number; target?: string }) {
+// Cluster drill-down: verdict + score + trend + findings (category/team
+// filters) + per-team table for one (cluster, target). target === undefined
+// lets the server pick the cluster's default next-minor target; a target
+// with no stored evaluation comes back as a what-if. App keys this
+// component by route, so filters start fresh for every target.
+export function Cluster({
+  id,
+  target,
+  team: initialTeam,
+}: {
+  id: number;
+  target?: string;
+  team?: string;
+}) {
   const detail = useAsync(() => getCluster(id), [id]);
   const evaluation = useAsync(
-    () =>
-      Promise.all([
-        getReport(id, target),
-        getFindings(id, target),
-        getHistory(id, target),
-      ]),
+    () => Promise.all([getReport(id, target), getHistory(id, target)]),
     [id, target],
   );
 
   const [category, setCategory] = useState("");
-  const [team, setTeam] = useState("");
+  const [team, setTeam] = useState(initialTeam ?? "");
 
-  const findings = evaluation.data?.[1].findings;
+  const findings = evaluation.data?.[0].findings;
   const categories = useMemo(
     () => uniqueSorted((findings ?? []).map((f) => f.category)),
     [findings],
   );
+  // A team from the route stays selectable even when it has no findings
+  // at this target, so the select never silently shows "all".
   const teams = useMemo(
     () =>
-      uniqueSorted(
-        (findings ?? []).flatMap((f) =>
-          f.teams && f.teams.length > 0 ? f.teams : [UNATTRIBUTED],
-        ),
-      ),
-    [findings],
+      uniqueSorted([
+        ...(findings ?? []).flatMap(findingTeams),
+        ...(initialTeam ? [initialTeam] : []),
+      ]),
+    [findings, initialTeam],
   );
 
   if (detail.loading) return <Loading label="Loading cluster…" />;
   if (detail.error) return <ErrorState error={detail.error} onRetry={detail.reload} />;
   const c = detail.data!;
 
-  const targets = uniqueSorted(c.evaluations.map((e) => e.target));
-  const setTarget = (t: string) => {
+  const suggestions = uniqueSortedVersions([
+    ...c.evaluations.map((e) => e.target),
+    ...nextMinors(c.serverVersion, 3),
+  ]);
+  const setTarget = (t: string | undefined) => {
     window.location.hash = t ? `#/cluster/${id}?target=${t}` : `#/cluster/${id}`;
   };
 
@@ -64,24 +88,26 @@ export function Cluster({ id, target }: { id: number; target?: string }) {
           <a href="#/">Fleet</a> <span aria-hidden="true">/</span> {c.name}
         </nav>
         <div className="head-row">
-          <h1>{c.name}</h1>
-          <label className="target-pick">
-            Target
-            <select
-              value={target ?? ""}
-              onChange={(e) => setTarget(e.target.value)}
-            >
-              <option value="">default (next minor)</option>
-              {targets.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </label>
+          <h1>
+            {c.name}
+            {c.stale && (
+              <>
+                {" "}
+                <StaleBadge lastSeen={c.lastSeen} />
+              </>
+            )}
+          </h1>
+          <TargetPicker
+            value={target}
+            suggestions={suggestions}
+            onPick={setTarget}
+            placeholder="default (next minor)"
+            allowEmpty
+          />
         </div>
         <p className="muted">
-          last seen {formatTime(c.lastSeen)} · uid{" "}
+          last seen {formatTime(c.lastSeen)}
+          {c.serverVersion && <> · runs {c.serverVersion}</>} · uid{" "}
           <code>{c.clusterUid || "unknown"}</code>
         </p>
       </header>
@@ -92,49 +118,85 @@ export function Cluster({ id, target }: { id: number; target?: string }) {
       )}
       {evaluation.data &&
         (() => {
-          const [report, findingsRes, history] = evaluation.data;
-          const visible = findingsRes.findings.filter(
+          const [report, history] = evaluation.data;
+          const visible = report.findings.filter(
             (f) =>
               (category === "" || f.category === category) &&
               (team === "" || findingTeams(f).includes(team)),
           );
+          const verdict = verdictOf(report);
+          const whatIf = report.source === "what-if";
           return (
             <>
               <div className="card score-card">
                 <div className="score-big">
-                  <ScoreBadge score={report.score} ready={report.ready} />
+                  <ScoreBadge score={report.score} verdict={verdict} />
                   <div>
                     <p className="score-target">
-                      readiness for <strong>→ {report.target}</strong>
+                      readiness for <strong>→ {report.target}</strong>{" "}
+                      <VerdictPill verdict={verdict} />
+                      {whatIf && (
+                        <>
+                          {" "}
+                          <span className="badge badge-whatif">
+                            what-if (not stored, no history)
+                          </span>
+                        </>
+                      )}
                     </p>
                     <p className="muted">
-                      {count(findingsRes.findings, "blocker")} blockers ·{" "}
-                      {count(findingsRes.findings, "warning")} warnings ·{" "}
-                      {count(findingsRes.findings, "info")} info · KB{" "}
-                      {report.kbVersion}
+                      {count(report.findings, "blocker")} blockers ·{" "}
+                      {count(report.findings, "warning")} warnings ·{" "}
+                      {count(report.findings, "info")} info
+                      {report.suppressed && report.suppressed.length > 0 && (
+                        <> · {report.suppressed.length} suppressed</>
+                      )}{" "}
+                      · KB {report.kbVersion}
+                      {report.evaluatedAt && (
+                        <>
+                          {" "}
+                          · {whatIf ? "computed" : "evaluated"}{" "}
+                          {formatTime(report.evaluatedAt)}
+                        </>
+                      )}
                     </p>
+                    {report.notApplicable && (
+                      <p className="muted">
+                        This cluster already runs {report.serverVersion ?? "this version or newer"}:
+                        → {report.target} is not an upgrade.
+                      </p>
+                    )}
                   </div>
                 </div>
-                {history.length > 1 ? (
+                {/* History holds stored evaluations only; under a what-if
+                    label it would chart earlier snapshots as if they
+                    were this report's trend. */}
+                {!whatIf && history.length > 1 ? (
                   <Sparkline points={history} />
                 ) : (
                   <p className="muted">
-                    Trend appears after the second stored evaluation.
+                    {whatIf
+                      ? "What-ifs are computed on request and not stored, so they have no trend."
+                      : "Trend appears after the second stored evaluation."}
                   </p>
                 )}
+                <ExportButtons
+                  id={id}
+                  clusterName={c.name}
+                  report={report}
+                  disabledReason={
+                    whatIf
+                      ? "Exports cover stored evaluations only; a what-if is not stored."
+                      : report.notApplicable
+                        ? "Nothing to export: the cluster already runs this target."
+                        : undefined
+                  }
+                />
               </div>
 
+              {verdict === "unknown" && <UnknownVerdict gaps={report.notAssessed ?? []} />}
               {report.notAssessed && report.notAssessed.length > 0 && (
-                <div className="card not-assessed">
-                  <h2>Not assessed</h2>
-                  <ul>
-                    {report.notAssessed.map((g) => (
-                      <li key={g.capability}>
-                        <code>{g.capability}</code> — {g.reason}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <NotAssessed gaps={report.notAssessed} />
               )}
 
               <div className="card">
@@ -168,10 +230,14 @@ export function Cluster({ id, target }: { id: number; target?: string }) {
                     </label>
                   </div>
                 </div>
-                {findingsRes.findings.length === 0 ? (
+                {report.findings.length === 0 ? (
                   <Empty
                     title="No findings"
-                    hint="Nothing in this cluster blocks or degrades the target upgrade."
+                    hint={
+                      verdict === "unknown"
+                        ? "None found — but some required checks did not run fully (see above)."
+                        : "Nothing in this cluster blocks or degrades the target upgrade."
+                    }
                   />
                 ) : visible.length === 0 ? (
                   <Empty title="No findings match the current filters" />
@@ -196,10 +262,134 @@ export function Cluster({ id, target }: { id: number; target?: string }) {
                 )}
               </div>
 
-              <TeamsTable teams={report.teams} />
+              <TeamsTable
+                teams={report.teams}
+                clusterId={id}
+                target={report.target}
+                verdict={verdict}
+              />
             </>
           );
         })()}
+    </section>
+  );
+}
+
+// ExportButtons download the auditor export (CSV or HTML) of the stored
+// evaluation shown. They fetch with the read token and save the response,
+// so they work with serve --read-token where a plain link would get 401.
+function ExportButtons({
+  id,
+  clusterName,
+  report,
+  disabledReason,
+}: {
+  id: number;
+  clusterName: string;
+  report: Report;
+  disabledReason?: string;
+}) {
+  const [busy, setBusy] = useState<ExportFormat | "">("");
+  const [error, setError] = useState("");
+
+  const download = async (format: ExportFormat) => {
+    setBusy(format);
+    setError("");
+    try {
+      const { blob, filename } = await fetchExport(id, report.target, format, clusterName);
+      saveBlob(blob, filename);
+    } catch (err) {
+      setError(`Export failed: ${(err as Error).message}`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const noteId = `export-note-${id}`;
+  return (
+    <div className="exports">
+      <button
+        type="button"
+        className="btn btn-ghost"
+        disabled={!!disabledReason || busy !== ""}
+        aria-describedby={disabledReason ? noteId : undefined}
+        onClick={() => void download("csv")}
+      >
+        Download CSV
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        disabled={!!disabledReason || busy !== ""}
+        aria-describedby={disabledReason ? noteId : undefined}
+        onClick={() => void download("html")}
+      >
+        Download HTML report
+      </button>
+      {disabledReason && (
+        <span id={noteId} className="muted">
+          {disabledReason}
+        </span>
+      )}
+      {error && (
+        <span className="field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// UnknownVerdict explains an unknown verdict: nothing blocked, but these
+// required checks did not run (fully), so blockers may have been missed.
+function UnknownVerdict({ gaps }: { gaps: CapabilityGap[] }) {
+  const required = gaps.filter((g) => g.required);
+  return (
+    <section className="card verdict-unknown-card" aria-labelledby="verdict-unknown">
+      <h2 id="verdict-unknown">Verdict unknown</h2>
+      <p>
+        No blockers were found, but{" "}
+        {required.length > 0
+          ? "these required checks did not run fully, so blockers may have been missed:"
+          : "the evaluation could not assess everything it needs."}
+      </p>
+      {required.length > 0 && (
+        <ul>
+          {required.map((g) => (
+            <li key={g.capability}>
+              <code>{g.capability}</code>
+              {g.partial ? " (partial)" : ""} — {g.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function NotAssessed({ gaps }: { gaps: CapabilityGap[] }) {
+  return (
+    <section className="card not-assessed" aria-labelledby="not-assessed">
+      <h2 id="not-assessed">Not assessed</h2>
+      <ul>
+        {gaps.map((g) => (
+          <li key={g.capability}>
+            <code>{g.capability}</code>{" "}
+            {g.required && <span className="tag tag-required">required</span>}{" "}
+            {g.partial && <span className="tag">partial</span>} — {g.reason}
+            {g.skipped && g.skipped.length > 0 && (
+              <p className="chips">
+                <span className="visually-hidden">Skipped: </span>
+                {g.skipped.map((s) => (
+                  <span key={s} className="chip" title="skipped">
+                    {s}
+                  </span>
+                ))}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -226,23 +416,29 @@ function FindingItem({ f }: { f: Finding }) {
         </p>
       ) : null}
       {f.remediation && <p className="remediation">{f.remediation}</p>}
-      {f.citations && f.citations.length > 0 && (
-        <p className="citations">
-          {f.citations.map((url) => (
-            <a key={url} href={url} target="_blank" rel="noreferrer">
-              {citationLabel(url)}
-            </a>
-          ))}
-        </p>
-      )}
+      {f.citations && f.citations.length > 0 && <Citations urls={f.citations} />}
     </li>
   );
 }
 
+// teamVerdict: a team with blockers is blocked; otherwise it is only as
+// ready as the cluster's assessment — an unknown cluster verdict means the
+// team's blockers may have been missed too.
+function teamVerdict(ts: TeamScore, cluster: Verdict): Verdict {
+  if (!ts.ready) return "blocked";
+  return cluster === "unknown" ? "unknown" : "ready";
+}
+
 function TeamsTable({
   teams,
+  clusterId,
+  target,
+  verdict,
 }: {
-  teams?: Record<string, import("../types").TeamScore>;
+  teams?: Record<string, TeamScore>;
+  clusterId: number;
+  target: string;
+  verdict: Verdict;
 }) {
   const entries = Object.entries(teams ?? {}).sort(
     ([, a], [, b]) => a.score - b.score,
@@ -264,9 +460,15 @@ function TeamsTable({
           <tbody>
             {entries.map(([name, ts]) => (
               <tr key={name}>
-                <th scope="row">{name}</th>
+                <th scope="row">
+                  <a
+                    href={`#/cluster/${clusterId}?target=${target}&team=${encodeURIComponent(name)}`}
+                  >
+                    {name}
+                  </a>
+                </th>
                 <td>
-                  <ScoreBadge score={ts.score} ready={ts.ready} />
+                  <ScoreBadge score={ts.score} verdict={teamVerdict(ts, verdict)} />
                 </td>
                 <td>{ts.blockers}</td>
                 <td>{ts.warnings}</td>
@@ -289,13 +491,4 @@ function count(fs: Finding[], sev: Severity): number {
 
 function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort();
-}
-
-// citationLabel shortens a citation URL to its host for compact display.
-function citationLabel(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }

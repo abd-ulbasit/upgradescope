@@ -47,8 +47,11 @@ case "$got" in
   *) die "GET / -> '$got', want 200 text/html (dashboard missing from the binary)" ;;
 esac
 
-assets=$(grep -oE '(src|href)="/assets/[^"]+"' "$tmp/index.html" | sed -E 's/^(src|href)="//; s/"$//' | sort -u || true)
-[ -n "$assets" ] || die "index.html references no /assets/ file; the bundle is not the Vite build"
+# Vite emits absolute (/assets/x) or, for path-prefix hosting, relative
+# (./assets/x, assets/x) references; from the root page all resolve to /assets/x.
+assets=$(grep -oE '(src|href)="(\./|/)?assets/[^"]+"' "$tmp/index.html" |
+  sed -E 's/^(src|href)="//; s/"$//; s#^\./#/#; s#^assets/#/assets/#' | sort -u || true)
+[ -n "$assets" ] || die "index.html references no assets/ file; the bundle is not the Vite build"
 for a in $assets; do
   got=$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$base$a")
   # Go's mime table gives text/javascript, unless the host's mime.types
