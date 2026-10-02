@@ -13,7 +13,7 @@ VERSION=v0.2.0
 base=https://github.com/abd-ulbasit/upgradescope/releases/download/$VERSION
 curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz"
 curl -fsSLO "$base/checksums.txt"
-sha256sum --ignore-missing -c checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore-missing checksums.txt
 tar -xzf upgradescope_linux_amd64.tar.gz upgradescope
 ./upgradescope version
 ```
@@ -44,26 +44,47 @@ and mark it as an artifact that is kept on failure.
 
 ```yaml
 upgrade-readiness:
-  image: alpine/helm:3   # any image with helm; add curl and tar if it lacks them
+  image:
+    name: alpine/helm:3   # helm, curl, tar and bash; any image with those works
+    entrypoint: [""]      # its entrypoint is `helm`; GitLab needs a shell
   variables:
     UPGRADESCOPE_VERSION: v0.2.0
   script:
     - helm template my-release ./chart --output-dir rendered
     - base=https://github.com/abd-ulbasit/upgradescope/releases/download/$UPGRADESCOPE_VERSION
     - curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz" && curl -fsSLO "$base/checksums.txt"
-    - sha256sum -c checksums.txt 2>/dev/null | grep -q 'upgradescope_linux_amd64.tar.gz: OK'
+    - grep ' upgradescope_linux_amd64.tar.gz$' checksums.txt > upgradescope.sha256 && sha256sum -c upgradescope.sha256
     - tar -xzf upgradescope_linux_amd64.tar.gz upgradescope
-    - ./upgradescope scan --files rendered --target 1.37 --output markdown | tee upgradescope.md
+    - ./upgradescope scan --files rendered --target 1.37 --output markdown > upgradescope.md || true
     - ./upgradescope scan --files rendered --target 1.37 --output json > upgradescope.json
   artifacts:
     when: always
     paths: [upgradescope.md, upgradescope.json]
 ```
 
-`tee` hides the exit code of the first scan (the pipeline's status is
-`tee`'s), so the second, unpiped scan is the gate. `upgradescope.md` is the
-same Markdown table the GitHub Action posts, ready to paste into a merge
-request comment.
+Why it is written this way:
+
+- **`entrypoint: [""]`.** GitLab's Docker executor starts the job through
+  the image's entrypoint, and `alpine/helm`'s is `helm`, so without the
+  override the job fails before the script runs.
+- **The checksum line** checks only the archive you downloaded. The
+  image's `sha256sum` is busybox, which has no `--ignore-missing`, and
+  GitLab runs the script under `set -eo pipefail`, so a
+  `sha256sum -c checksums.txt | grep` would fail on the archives you did
+  not download.
+- **Two scans.** The first writes the Markdown summary and never fails the
+  job (`|| true`); the second, unpiped, is the gate, and its exit code is
+  the job's. `upgradescope.md` is the same Markdown table the GitHub Action
+  posts, ready to paste into a merge request comment.
+
+!!! note "How this was checked"
+    `TestDocsGitLabJob` (in `internal/cli`) keeps the job's shape: the
+    entrypoint override, no GNU-only flags, no piped gate. The script itself
+    was run under `bash -eo pipefail` on 2026-10-02: in `alpine/helm:3`
+    (entrypoint cleared) against the v0.1.1 release for the download,
+    checksum and JSON gate, and the two scan lines again with a build of
+    `main`, since `--output markdown` is new in v0.2.0. No GitLab runner is
+    part of CI.
 
 ## Jenkins
 

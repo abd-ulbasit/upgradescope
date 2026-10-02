@@ -485,3 +485,61 @@ func schemaParts(root, schema any) (props map[string]any, items, extra any) {
 	}
 	return props, items, extra
 }
+
+// TestDocsGitLabJob: the GitLab CI example in docs/guides/other-ci.md runs
+// as GitLab runs it. CI has no GitLab runner, so this checks the ways the
+// job broke before: the image's entrypoint is cleared (alpine/helm's is
+// `helm`, and the Docker executor runs the script through it), no line
+// depends on GNU-only flags (the image's sha256sum is busybox) or on a
+// pipeline's exit status (GitLab's bash runs `set -eo pipefail`), and the
+// last line, unpiped, is the gate.
+func TestDocsGitLabJob(t *testing.T) {
+	page := readDoc(t, "docs/guides/other-ci.md")
+	_, section, ok := strings.Cut(page, "## GitLab CI\n")
+	if !ok {
+		t.Fatal(`docs/guides/other-ci.md: no "## GitLab CI" section`)
+	}
+	_, block, ok := strings.Cut(section, "```yaml\n")
+	if !ok {
+		t.Fatal("docs/guides/other-ci.md: the GitLab section has no yaml block")
+	}
+	block, _, _ = strings.Cut(block, "```")
+	var jobs map[string]struct {
+		Image struct {
+			Name       string   `json:"name"`
+			Entrypoint []string `json:"entrypoint"`
+		} `json:"image"`
+		Script    []string `json:"script"`
+		Artifacts struct {
+			When string `json:"when"`
+		} `json:"artifacts"`
+	}
+	if err := yaml.Unmarshal([]byte(block), &jobs); err != nil {
+		t.Fatalf("docs/guides/other-ci.md: the GitLab job does not parse (image must be a {name, entrypoint} mapping): %v", err)
+	}
+	job, ok := jobs["upgrade-readiness"]
+	if !ok || len(job.Script) == 0 {
+		t.Fatalf("docs/guides/other-ci.md: no upgrade-readiness job with a script: %v", jobs)
+	}
+	if job.Image.Name == "" || !reflect.DeepEqual(job.Image.Entrypoint, []string{""}) {
+		t.Errorf("docs/guides/other-ci.md: the image is %q with entrypoint %q; clear the entrypoint ([\"\"]) so GitLab can start a shell", job.Image.Name, job.Image.Entrypoint)
+	}
+	if job.Artifacts.When != "always" {
+		t.Errorf("docs/guides/other-ci.md: artifacts.when is %q; the report is wanted when the gate fails", job.Artifacts.When)
+	}
+	for _, line := range job.Script {
+		if strings.Contains(line, "--ignore-missing") {
+			t.Errorf("docs/guides/other-ci.md: %q uses --ignore-missing, which busybox sha256sum lacks", line)
+		}
+		if strings.Contains(line, "sha256sum") && strings.Contains(line, "|") {
+			t.Errorf("docs/guides/other-ci.md: %q pipes sha256sum; under pipefail its failures on the other archives fail the job", line)
+		}
+		if strings.Contains(line, "upgradescope scan") && strings.Contains(line, "|") && !strings.HasSuffix(line, "|| true") {
+			t.Errorf("docs/guides/other-ci.md: %q pipes a scan; under pipefail a failed gate stops the job there", line)
+		}
+	}
+	last := job.Script[len(job.Script)-1]
+	if !strings.HasPrefix(last, "./upgradescope scan ") || strings.Contains(last, "|") {
+		t.Errorf("docs/guides/other-ci.md: the last script line %q should be the unpiped scan that gates the job", last)
+	}
+}
