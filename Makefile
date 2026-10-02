@@ -53,6 +53,33 @@ vuln:
 vuln-test:
 	./hack/vulncheck_test.sh
 
+# THIRD_PARTY_NOTICES: the license text of every Go module the binary links
+# (go-licenses, pinned in the script) and every npm package in the dashboard
+# bundle. `make notices` rewrites it (commit the result after a dependency
+# change); `make notices-check` (CI's notices job) runs the script's offline
+# tests, then fails on a stale file or on a dependency whose license is
+# missing or not on the allowlist (GPL, AGPL, SSPL and unknown never are).
+# Needs Go, jq, network, and Node when web/node_modules is incomplete.
+.PHONY: notices notices-check
+notices:
+	./hack/notices.sh
+notices-check:
+	./hack/notices_test.sh
+	./hack/notices.sh --check
+
+# The README's `go install` path, from this checkout (CI's build job): the
+# binary reports the module version and commit (the tag on a tagged commit)
+# and serves the dashboard with every asset. Needs Go, git, jq, curl.
+.PHONY: go-install-check
+go-install-check:
+	./hack/go-install-check.sh
+
+# Shell completions and man pages, rendered from the command tree into
+# packaging/generated (gitignored); GoReleaser runs the same before packaging.
+.PHONY: docs
+docs:
+	go run ./tools/gen-docs -out packaging/generated
+
 # Asserts the Dockerfile's golang base image matches go.mod's `go` directive,
 # that GoReleaser is pinned to one version here and in release.yml, and that
 # the pin needs no newer Go than go.mod (this part reads the module proxy).
@@ -152,6 +179,7 @@ hack-test:
 	./hack/e2e_test.sh
 	./hack/ci-concurrency_test.sh
 	./hack/ci-ok_test.sh
+	./hack/notices_test.sh
 
 .PHONY: demo-up demo-down
 demo-up:
