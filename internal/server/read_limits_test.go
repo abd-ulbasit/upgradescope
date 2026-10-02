@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"runtime/debug"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -43,8 +42,10 @@ func pspUsagesNamed(size int, suffix string) string {
 }
 
 // maxReadHeap is what any number of concurrent reads of one cluster may
-// add to the heap: one read in the slot (~45 MB at the snapshot node
-// budget) and the garbage the one before it left.
+// add to the heap: one read in the slot (up to ~90 MiB on SQLite at the
+// snapshot node budget: a stored report as large as a 17 MB snapshot, read
+// through a driver that copies both) and the garbage the one before it
+// left.
 const maxReadHeap = 100 << 20
 
 // The read API decoded a cluster's stored inventory on every request, with
@@ -52,9 +53,10 @@ const maxReadHeap = 100 << 20
 // refs (accepted from any ingest token), 10 concurrent GETs of the
 // cluster grew the heap ~400 MiB, so ~13 exceeded the chart's 512Mi.
 // Every read that loads a snapshot now runs in the read slot, and only a
-// what-if decodes the whole inventory: 10 at once of each, against the
-// dearest snapshot to decode and against one whose stored report is as
-// large as its inventory, stay within maxReadHeap and all succeed.
+// what-if decodes the whole inventory: 10 at once of each, on the SQLite
+// store, against the dearest snapshot to decode and against two whose
+// stored reports are as large as their inventories, stay within
+// maxReadHeap and all succeed.
 func TestReadHeapIsBounded(t *testing.T) {
 	if testing.Short() || raceEnabled {
 		t.Skip("decodes snapshots at the node budget; heap figures under the race detector mean nothing")
@@ -70,12 +72,9 @@ func TestReadHeapIsBounded(t *testing.T) {
 		"/api/v1/clusters/1/export?format=html",
 		"/api/v1/fleet/teams?target=1.40",
 	}
-	for name, shape := range map[string]func(int) string{
-		"ObjectRefs {}": ingestHeapShapes()["ObjectRefs {}"],
-		"PSP usages":    pspUsages,
-	} {
+	for name, shape := range storedHeapShapes() {
 		t.Run(name, func(t *testing.T) {
-			s := newTestServer(t, newFakeStore())
+			s := newSQLiteTestServer(t)
 			s.readQueueTimeout = 5 * time.Minute // the reads run one at a time
 			body := atSnapshotBudget(shape)
 			rec := httptest.NewRecorder()
@@ -84,31 +83,14 @@ func TestReadHeapIsBounded(t *testing.T) {
 				t.Fatalf("push: status = %d (%.300s)", rec.Code, rec.Body)
 			}
 			for _, path := range paths {
+				one, size := concurrentGets(t, s, path, 1)
 				const n = 10
-				codes := make([]int, n)
-				msgs, sizes := make([]string, n), make([]int, n)
-				grew := heapPeak(func() {
-					var wg sync.WaitGroup
-					for i := range n {
-						wg.Go(func() {
-							rec := httptest.NewRecorder()
-							s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-							codes[i], sizes[i] = rec.Code, rec.Body.Len()
-							msgs[i] = string(rec.Body.Bytes()[:min(rec.Body.Len(), 300)]) // not the whole body, which the heap would count
-						})
-					}
-					wg.Wait()
-				})
-				for i, code := range codes {
-					if code != http.StatusOK {
-						t.Fatalf("%s x%d: status = %d (%.300s), want 200", path, n, code, msgs[i])
-					}
-				}
+				grew, _ := concurrentGets(t, s, path, n)
 				if grew > maxReadHeap {
-					t.Fatalf("%s x%d: the heap grew %d MiB, want at most %d MiB", path, n, grew>>20, maxReadHeap>>20)
+					t.Errorf("%s x%d: the heap grew %d MiB, want at most %d MiB", path, n, grew>>20, maxReadHeap>>20)
 				}
-				t.Logf("%d bytes (%d units), %s x%d: heap grew %d MiB, response %d bytes",
-					len(body), snapshotUnits(body), path, n, grew>>20, sizes[0])
+				t.Logf("%d bytes (%d units), %s: heap grew %d MiB alone, %d MiB x%d; response %d bytes",
+					len(body), snapshotUnits(body), path, one>>20, grew>>20, n, size)
 			}
 		})
 	}

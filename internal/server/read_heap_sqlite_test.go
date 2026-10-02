@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +57,73 @@ func concurrentGets(t *testing.T, s *Server, path string, n int) (grew uint64, s
 	return grew, sizes[0]
 }
 
+// maxReevaluationHeap is what the background re-evaluation pass may add to
+// the heap: it takes clusters one at a time, and for each target loads the
+// current evaluation's report, evaluates, and holds the new report until
+// the cluster's commit.
+const maxReevaluationHeap = 100 << 20
+
+// storedHeapShapes are the snapshots that cost the most once stored: the
+// dearest to decode at the node budget, and two whose every API-usage
+// entry is a finding, so each stored report is as large as the snapshot
+// (~4 MB, and 17 MB with long object names).
+func storedHeapShapes() map[string]func(int) string {
+	return map[string]func(int) string{
+		"ObjectRefs {}":          ingestHeapShapes()["ObjectRefs {}"],
+		"PSP usages":             pspUsages,
+		"PSP usages, long names": longPSPUsages,
+	}
+}
+
+// The steps that load what was stored, measured on the SQLite store, which
+// copies every snapshot and report it reads: one push and its evaluation
+// within maxIngestDecodeHeap, the re-evaluation pass with every
+// evaluation outdated within maxReevaluationHeap, and the dearest /gate
+// stream with ?cluster= against the snapshot within maxGateDecodeHeap.
+// docs/operations.md adds these up for the chart's memory limit.
+func TestStoredSnapshotHeapIsBounded(t *testing.T) {
+	if testing.Short() || raceEnabled {
+		t.Skip("stores snapshots at the node budget; heap figures under the race detector mean nothing")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
+	gate := atNodeBudget(gateHeapShapes()["many keys and an alias"])
+	for name, shape := range storedHeapShapes() {
+		t.Run(name, func(t *testing.T) {
+			s := newSQLiteTestServer(t)
+			body := []byte(atSnapshotBudget(shape))
+			rec := httptest.NewRecorder()
+			grew := heapPeak(func() { serveIngest(s, rec, body, false) })
+			if rec.Code != http.StatusAccepted || grew > maxIngestDecodeHeap {
+				t.Errorf("push: status %d, the heap grew %d MiB; want 202 within %d MiB", rec.Code, grew>>20, maxIngestDecodeHeap>>20)
+			}
+			t.Logf("%d bytes: push grew the heap %d MiB", len(body), grew>>20)
+
+			next := s.now().Add(24 * time.Hour) // every evaluation is outdated
+			s.now = func() time.Time { return next }
+			grew = heapPeak(func() { s.reevaluateAll(context.Background()) })
+			if grew > maxReevaluationHeap {
+				t.Errorf("re-evaluation pass: the heap grew %d MiB, want at most %d MiB", grew>>20, maxReevaluationHeap>>20)
+			}
+			e, err := s.cfg.Store.CurrentEvaluationSummary(context.Background(), 1, "1.35")
+			if err != nil || !e.EvaluatedAt.Equal(next) {
+				t.Fatalf("after the pass, 1.35 = (evaluated %v, %v), want re-evaluated at %v", e.EvaluatedAt, err, next)
+			}
+			t.Logf("re-evaluation pass grew the heap %d MiB", grew>>20)
+
+			rec = httptest.NewRecorder()
+			grew = heapPeak(func() {
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/gate?target=1.35&fail-on=never&cluster=prod-eu-1", strings.NewReader(gate))
+				req.Header.Set("Content-Type", "application/x-yaml")
+				s.Handler().ServeHTTP(rec, req)
+			})
+			if rec.Code != http.StatusOK || grew > maxGateDecodeHeap {
+				t.Errorf("gate ?cluster=: status %d (%.300s), the heap grew %d MiB; want 200 within %d MiB", rec.Code, rec.Body, grew>>20, maxGateDecodeHeap>>20)
+			}
+			t.Logf("gate ?cluster= grew the heap %d MiB", grew>>20)
+		})
+	}
+}
+
 // maxFleetReadHeap is what any number of concurrent fleet-wide reads may
 // add to the heap: they take no slot, so each must cost what its response
 // costs, never what a stored report costs.
@@ -72,10 +141,7 @@ func TestFleetReadsLoadNoReport(t *testing.T) {
 		t.Skip("stores a snapshot at the node budget; heap figures under the race detector mean nothing")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
-	for name, shape := range map[string]func(int) string{
-		"PSP usages":             pspUsages,
-		"PSP usages, long names": longPSPUsages,
-	} {
+	for name, shape := range storedHeapShapes() {
 		t.Run(name, func(t *testing.T) {
 			s := newSQLiteTestServer(t)
 			body := atSnapshotBudget(shape)
