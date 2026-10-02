@@ -18,7 +18,9 @@
 #      uninstalled with --keep-history, yields no EOL finding; Istio pods on
 #      three release lines in three teams' namespaces
 #      (hack/e2e/istio-teams.yaml) get findings that each name only their
-#      own line's namespace and team, and EOL 1.28 blocks (#129); and the
+#      own line's namespace and team, and EOL 1.28 blocks (#129), after
+#      which they are deleted, so the later ingress-nginx checks see only
+#      ingress-nginx; and the
 #      scan + agent integration tests (UPGRADESCOPE_IT=1);
 #   4. the image built from this tree, kind-loaded, and the chart installed
 #      from deploy/chart with the server enabled, --wait;
@@ -342,7 +344,7 @@ istio_lines_judged_per_install() {
   local i
   for i in $(seq 1 15); do
     k apply -f hack/e2e/istio-teams.yaml && break
-    [ "$i" -lt 15 ] || return 1
+    [ "$i" -lt 15 ] || { echo "kubectl apply -f hack/e2e/istio-teams.yaml failed 15 times" >&2; return 1; }
     nap 2
   done
   "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --output json --fail-on never >"$work/istio.json" ||
@@ -364,6 +366,10 @@ istio_lines_judged_per_install() {
   jq -e --argjson want "$want" '[.findings[] | select(.key == "eol-addon/istio/1.28" and .severity == "blocker"
       and {namespaces, teams} == $want["1.28"])] | length == 1' "$work/istio.json" >/dev/null ||
     { echo "no eol-addon/istio/1.28 blocker naming only e2e-istio-old and e2e-team-old" >&2; return 1; }
+  # Later gates (the CR verdict, the agent IT) prove ingress-nginx is found
+  # on the agent's path by its eol-addon blocker; 1.28's would satisfy them.
+  k delete -f hack/e2e/istio-teams.yaml --ignore-not-found --wait --timeout 2m ||
+    { echo "could not delete hack/e2e/istio-teams.yaml; later gates would see its Istio blockers" >&2; return 1; }
 }
 
 integration_tests() {

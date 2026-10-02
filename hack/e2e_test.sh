@@ -44,7 +44,8 @@ case "$*" in
   *"get clusterrole upgradescope-agent"* | *"get clusterrolebinding upgradescope-agent"*) exit 1 ;;
   *"api-versions"*) [ -n "${STUB_NOT_SERVED:-}" ] || printf "v1\\nflowcontrol.apiserver.k8s.io/v1beta3\\nresource.k8s.io/v1beta1\\n" ;;
   *"apply --server-side"*) cat >"$STUB_STATE/applied.yaml" ;;
-  *"apply -f hack/e2e/istio-teams.yaml"*) : >"$STUB_STATE/istio" ;;
+  *"apply -f hack/e2e/istio-teams.yaml"*) [ -z "${STUB_ISTIO_APPLY_FAIL:-}" ] || exit 1; : >"$STUB_STATE/istio" ;;
+  *"delete -f hack/e2e/istio-teams.yaml"*) [ -z "${STUB_ISTIO_DELETE_FAIL:-}" ] || exit 1; rm -f "$STUB_STATE/istio" ;;
 esac
 exit 0'
 stub helm '
@@ -83,8 +84,9 @@ esac'
 # through a deprecated version (that apiVersion in the key, its manager),
 # plus, once hack/e2e/istio-teams.yaml is applied, Istio's findings per
 # release line (STUB_ISTIO=merged: each naming all three installs, as
-# before #129; no-eol: without the 1.28 blocker), and exit 2 on a blocker
-# unless --fail-on never.
+# before #129; no-team: right namespaces, no teams; no-eol: without the
+# 1.28 blocker) until it is deleted, and exit 2 on a blocker unless
+# --fail-on never.
 stub upgradescope - <<'EOF'
 never="" unreachable=""
 for a; do
@@ -107,6 +109,7 @@ jq -n --arg removed "${STUB_REMOVED:-}" --arg noeol "${STUB_NO_EOL:-}" --arg kep
   --arg applied "$applied" --arg manager "${STUB_MANAGER-upgradescope-e2e}" --arg istio "$istio" '
   def mesh($line): if $istio == "merged"
     then {namespaces: ["e2e-istio-mid", "e2e-istio-new", "e2e-istio-old"], teams: ["e2e-team-mid", "e2e-team-new", "e2e-team-old"]}
+    elif $istio == "no-team" then {namespaces: ["e2e-istio-" + $line]}
     else {namespaces: ["e2e-istio-" + $line], teams: ["e2e-team-" + $line]} end;
   {findings: (
     (if $removed == "" then [] else [{category: "removed-api", severity: "blocker", title: "flowschemas v1beta3"}] end)
@@ -221,6 +224,19 @@ has "the EOL add-on gate passes" "$work/summary" "- PASS — scan reports the EO
 has "the keep-history gate passes" "$work/summary" "- PASS — a Helm release uninstalled with --keep-history yields no EOL finding"
 has "the Istio release-line gate passes" "$work/summary" "- PASS — Istio on three release lines in three teams' namespaces: each finding names only its own line's; 1.28 blocks"
 has "the Istio pods are applied from hack/e2e/istio-teams.yaml" "$work/log" "kubectl --context kind-upgradescope-demo apply -f hack/e2e/istio-teams.yaml"
+has "the Istio pods are deleted once judged" "$work/log" "kubectl --context kind-upgradescope-demo delete -f hack/e2e/istio-teams.yaml --ignore-not-found --wait --timeout 2m"
+# Gone before the integration tests and the agent: their eol-addon checks
+# are about ingress-nginx, and Istio 1.28's blocker would satisfy them.
+istio_at=$(grep -n -- 'apply -f hack/e2e/istio-teams.yaml' "$work/log" | head -1 | cut -d: -f1 || true)
+istio_gone=$(grep -n -- 'delete -f hack/e2e/istio-teams.yaml' "$work/log" | head -1 | cut -d: -f1 || true)
+it_at=$(grep -n -- '^go test ./internal/cli/ -run Integration' "$work/log" | head -1 | cut -d: -f1 || true)
+if [ -n "$istio_at" ] && [ -n "$istio_gone" ] && [ -n "$it_at" ] && [ "$istio_at" -lt "$istio_gone" ] &&
+  [ "$istio_gone" -lt "$it_at" ] && [ ! -e "$work/state/istio" ]; then
+  echo "ok   the Istio pods are gone before the integration tests" | tee -a "$work/results"
+else
+  echo "FAIL the Istio pods outlive their gate (apply at log line ${istio_at:-none}, delete ${istio_gone:-none}, go test ${it_at:-none})" >&2
+  echo "FAIL Istio pods outlive their gate" >>"$work/results"
+fi
 has "1.31's kind config serves flowcontrol v1beta3" "$work/kind-config.yaml" '"flowcontrol.apiserver.k8s.io/v1beta3": "true"'
 has "the object is applied server-side under a named manager" "$work/log" "kubectl --context kind-upgradescope-demo apply --server-side --field-manager=upgradescope-e2e -f -"
 has "the last apply went through the GA version" "$work/state/applied.yaml" "apiVersion: flowcontrol.apiserver.k8s.io/v1"
@@ -371,6 +387,15 @@ has "the Istio gate is a FAIL in the summary" "$work/summary" "- **FAIL** — Is
 
 run "a missing Istio 1.28 EOL blocker fails the run" 1 STUB_ISTIO=no-eol
 has "the missing blocker is explained" "$work/out" "no eol-addon/istio/1.28 blocker naming only e2e-istio-old and e2e-team-old"
+
+run "Istio findings with the right namespaces but no team fail the run" 1 STUB_ISTIO=no-team
+has "the unattributed finding is named" "$work/out" 'eol-addon/istio/1.28 ns=["e2e-istio-old"] teams=[]'
+
+run "Istio pods that cannot be applied fail the run" 1 STUB_ISTIO_APPLY_FAIL=1
+has "the failed apply is explained" "$work/out" "kubectl apply -f hack/e2e/istio-teams.yaml failed 15 times"
+
+run "Istio pods that cannot be deleted fail the run" 1 STUB_ISTIO_DELETE_FAIL=1
+has "the failed delete is explained" "$work/out" "could not delete hack/e2e/istio-teams.yaml"
 
 # 1.37's row: the DRA DeviceClass through resource.k8s.io/v1beta1.
 run "1.37 writes a DeviceClass through resource.k8s.io/v1beta1" 0 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38
