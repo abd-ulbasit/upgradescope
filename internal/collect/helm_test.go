@@ -200,6 +200,50 @@ func TestCollectHelmFetchesOnlyTheChosenRevision(t *testing.T) {
 	}
 }
 
+// Both drivers' metadata lists are paged, following the Continue token, so
+// a cluster with thousands of release revisions never returns one unbounded
+// list (PF-02 in docs/claims.md).
+func TestCollectHelmFollowsListPagination(t *testing.T) {
+	a := helmRev{ns: "apps", release: "a", rev: 1, status: "deployed", chart: "a", chartVersion: "1.0.0"}
+	b := helmRev{ns: "apps", release: "b", rev: 1, status: "deployed", chart: "b", chartVersion: "2.0.0"}
+	kube, meta := helmClients(t, helmSecret(t, a), helmSecret(t, b))
+	item := func(r helmRev) runtime.RawExtension {
+		return runtime.RawExtension{Object: &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}, ObjectMeta: r.objectMeta()}}
+	}
+	for _, resource := range []string{"secrets", "configmaps"} {
+		calls := 0
+		meta.PrependReactor("list", resource, func(clienttesting.Action) (bool, runtime.Object, error) {
+			calls++
+			if calls > 2 {
+				t.Fatalf("%s listed %d times, want 2 pages", resource, calls)
+			}
+			l := &metav1.List{}
+			if calls == 1 {
+				l.Continue = "page-2"
+			}
+			if resource == "secrets" {
+				l.Items = []runtime.RawExtension{item([]helmRev{a, b}[calls-1])}
+			}
+			return true, l, nil
+		})
+	}
+
+	var opts []metav1.ListOptions
+	var inv inventory.Inventory
+	if err := collectHelm(context.Background(), kube, recordingMeta{meta, &opts}, nil, &inv); err != nil && !errors.As(err, new(partialError)) {
+		t.Fatal(err)
+	}
+	page := func(cont string) metav1.ListOptions {
+		return metav1.ListOptions{LabelSelector: "owner=helm", Limit: listPageSize, Continue: cont}
+	}
+	if want := []metav1.ListOptions{page(""), page("page-2"), page(""), page("page-2")}; !reflect.DeepEqual(opts, want) {
+		t.Errorf("list options = %+v\nwant %+v (both drivers paged, Continue token followed)", opts, want)
+	}
+	if len(inv.HelmReleases) != 2 {
+		t.Errorf("releases = %+v, want a and b (releases from every page count)", inv.HelmReleases)
+	}
+}
+
 // #25: which revision, if any, is installed. helm uninstall --keep-history
 // marks the newest revision uninstalled and keeps the Secrets; a failed
 // upgrade leaves the previous successful revision's resources running.
@@ -277,8 +321,14 @@ func TestCollectHelmSkipsCorruptSecretKeepsValid(t *testing.T) {
 		corrupt,
 		helmSecret(t, helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: 1, status: "deployed", chart: "ingress-nginx", chartVersion: "4.7.1", appVersion: "1.8.4"}),
 	)
-	if err != nil && !errors.As(err, new(partialError)) {
+	var pe partialError
+	if !errors.As(err, &pe) {
 		t.Fatalf("one corrupt secret must not fail the capability: %v", err)
+	}
+	// Skipped, but counted: an undecodable release may be the EOL add-on.
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"shop/broken"}) ||
+		!strings.Contains(pe.msg, "1 release(s) not decodable, first shop/broken: ") {
+		t.Errorf("partial = %v, skipped = %q, reason = %q; want incomplete, skipping and counting shop/broken", pe.incomplete, pe.skipped, pe.msg)
 	}
 	want := []inventory.HelmRelease{
 		{Name: "cert-manager", Namespace: "cert-manager", ChartName: "cert-manager", ChartVersion: "v1.13.0", AppVersion: "v1.13.0", Status: "deployed", Revision: 1},
@@ -391,8 +441,8 @@ func TestCollectHelmReadsConfigMapDriver(t *testing.T) {
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "kube-root-ca.crt", Namespace: "b"}, Data: map[string]string{"ca.crt": "x"}},
 	)
 	var pe partialError
-	if !errors.As(err, &pe) || pe.Error() != "helm releases: 1 via secrets, 1 via configmaps" {
-		t.Errorf("err = %v, want partialError %q", err, "helm releases: 1 via secrets, 1 via configmaps")
+	if !errors.As(err, &pe) || pe.Error() != "helm releases: 1 via secrets, 1 via configmaps" || pe.incomplete {
+		t.Errorf("err = %#v, want a complete (informational) partialError %q", err, "helm releases: 1 via secrets, 1 via configmaps")
 	}
 	want := []inventory.HelmRelease{
 		{Name: "from-secret", Namespace: "a", ChartName: "x", ChartVersion: "1.0.0", Status: "deployed", Revision: 1},
@@ -441,6 +491,9 @@ func TestCollectHelmDegradesPerDriver(t *testing.T) {
 	var pe partialError
 	if !errors.As(err, &pe) || !strings.HasPrefix(pe.Error(), "helm releases: 1 via secrets; configmaps not read: ") || !strings.Contains(pe.Error(), "forbidden") {
 		t.Errorf("err = %v, want a partialError counting the Secret release and naming the forbidden ConfigMap list", err)
+	}
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"configmaps"}) {
+		t.Errorf("partial = %v, skipped = %q; want incomplete, skipping the configmaps driver", pe.incomplete, pe.skipped)
 	}
 	if len(inv.HelmReleases) != 1 {
 		t.Errorf("releases = %+v, want the Secret release", inv.HelmReleases)

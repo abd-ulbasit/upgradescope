@@ -1,0 +1,9 @@
+# Deprecated-API requests `upgradescope scan` and the agent may still make,
+# read by hack/e2e.sh's audit gate: any audit event from either with the
+# apiserver's k8s.io/deprecated=true annotation must match a line here.
+# One per line, each with the issue that removes it and why it is here:
+#
+#   <apiVersion> <resource> #<issue> <reason>
+#
+# Delete a line when its issue lands; the gate then fails if the request
+# comes back.

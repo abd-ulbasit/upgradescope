@@ -77,6 +77,21 @@ func TestCollectManifestsMalformed(t *testing.T) {
 	}
 }
 
+// List items that are YAML aliases are not expanded (an alias bomb would
+// describe billions of objects), so the stream cannot be assessed: an
+// error, never a shorter list. A duplicate key is not an error: kubectl
+// decodes it last-wins, and so does the gate.
+func TestCollectManifestsAliasedItemsAndDuplicates(t *testing.T) {
+	aliased := "apiVersion: v1\nkind: List\nitems:\n- &cm {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}\n- *cm\n"
+	if _, err := CollectManifests(strings.NewReader(aliased)); err == nil || !strings.Contains(err.Error(), "alias") {
+		t.Errorf("aliased items: err = %v, want an error naming the alias", err)
+	}
+	inv, err := CollectManifests(strings.NewReader("apiVersion: networking.k8s.io/v1\nkind: Ingress\napiVersion: extensions/v1beta1\n"))
+	if err != nil || len(inv.APIUsage) != 1 || inv.APIUsage[0].Group != "extensions" {
+		t.Errorf("duplicate apiVersion: usage %+v, err %v; want the last value, extensions/v1beta1", inv.APIUsage, err)
+	}
+}
+
 func TestCollectManifestsEmpty(t *testing.T) {
 	inv, err := CollectManifests(strings.NewReader(""))
 	if err != nil {

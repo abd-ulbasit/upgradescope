@@ -117,6 +117,24 @@ func TestExportHTMLGolden(t *testing.T) {
 	checkGolden(t, "export_golden.html", raw)
 }
 
+// The auditor report marks a partial gap and what it skipped (issue #122).
+func TestExportHTMLPartialGap(t *testing.T) {
+	st := newFakeStore()
+	ts := httptest.NewServer(newTestServer(t, st).Handler())
+	defer ts.Close()
+	inv := testInventory()
+	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true, Partial: true,
+		Reason: "list policy/v1beta1 podsecuritypolicies: forbidden", Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, inv), false); resp.StatusCode != 202 {
+		t.Fatalf("push status = %d (%v)", resp.StatusCode, out)
+	}
+	_, raw := getExport(t, ts, "?target=1.35&format=html")
+	const want = "<li>api-usage (partial, required): list policy/v1beta1 podsecuritypolicies: forbidden (skipped: policy/v1beta1 PodSecurityPolicy)</li>"
+	if !strings.Contains(string(raw), want) {
+		t.Errorf("HTML lacks %q:\n%s", want, raw)
+	}
+}
+
 func TestExportErrors(t *testing.T) {
 	ts, done := exportFixture(t)
 	defer done()

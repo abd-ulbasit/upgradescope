@@ -337,6 +337,19 @@ func TestRenderedRBACDefault(t *testing.T) {
 	assertDenied(t, rules, res("", "secrets", "watch", "create", "update"))
 }
 
+// The non-resource URLs granted are exactly the two the collectors read
+// (RB-06 in docs/claims.md); discovery comes from system:discovery.
+func TestRenderedRBACNonResourceURLs(t *testing.T) {
+	var got []string
+	for _, r := range renderClusterRole(t) {
+		got = append(got, r.NonResourceURLs...)
+	}
+	sort.Strings(got)
+	if want := []string{"/metrics", "/version"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("non-resource URLs granted = %v, want exactly %v", got, want)
+	}
+}
+
 func TestRenderedRBACHelmSecretsOff(t *testing.T) {
 	rules := renderClusterRole(t, "rbac.helmSecrets=false")
 	assertNoWildcards(t, rules)

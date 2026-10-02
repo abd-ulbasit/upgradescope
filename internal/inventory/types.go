@@ -15,6 +15,25 @@ const (
 type CapabilityStatus struct {
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"` // e.g. `nodes list forbidden`
+	// Partial marks an available capability that could not read all it
+	// covers: one forbidden resource among many, an API group whose
+	// discovery failed, a Helm release that could not be read. Its data is
+	// incomplete; Reason says what failed. An available capability with a
+	// Reason but not Partial (helm's per-driver release counts) is complete.
+	Partial bool `json:"partial,omitempty"`
+	// Skipped names what a Partial capability did not read, sorted, in the
+	// capability's own terms:
+	//   - api-usage: the flagged APIs whose objects went unchecked,
+	//     "group/version Kind" ("policy/v1beta1 PodSecurityPolicy"; core
+	//     renders as "v1 Endpoints");
+	//   - deprecated-calls: the resources the scanner lists itself at a
+	//     deprecated version, "group/version resource", whose metric rows
+	//     cannot be told apart from its own requests;
+	//   - helm: storage drivers not read ("configmaps") and releases not
+	//     read or not decodable ("namespace/name").
+	// May be empty when nothing nameable was skipped (a discovery failure
+	// in a group without flagged APIs).
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // Source records how an inventory was collected. It decides which

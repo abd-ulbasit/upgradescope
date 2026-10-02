@@ -1,0 +1,11 @@
+# hack/e2e/deprecated-api.txt, 1.34-1.36. For a CSI driver that does not
+# exist; no PVC uses it.
+apiVersion: __API_VERSION__
+kind: VolumeAttributesClass
+metadata:
+  name: upgradescope-e2e-deprecated
+  labels:
+    e2e.upgradescope.dev/applied-via: __APPLIED_VIA__
+driverName: e2e.upgradescope.dev
+parameters:
+  tier: e2e

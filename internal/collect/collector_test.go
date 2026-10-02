@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -56,15 +57,22 @@ func TestRunStepsPartialErrorKeepsCapabilityAvailable(t *testing.T) {
 	inv := inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
 	runSteps(context.Background(), &inv, []step{
 		{cap: inventory.CapAPIUsage, run: func(context.Context, *inventory.Inventory) error {
-			return partialError{msg: "partial: list policy/v1beta1 podsecuritypolicies: forbidden"}
+			return partialError{msg: "list policy/v1beta1 podsecuritypolicies: forbidden", incomplete: true,
+				skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}
+		}},
+		{cap: inventory.CapHelm, run: func(context.Context, *inventory.Inventory) error {
+			return partialError{msg: "helm releases: 2 via secrets, 0 via configmaps"}
 		}},
 	})
-	got := inv.Capabilities[inventory.CapAPIUsage]
-	if !got.Available {
-		t.Errorf("capability = %+v, want available despite partial error", got)
+	want := map[inventory.Capability]inventory.CapabilityStatus{
+		// Some data was not read: available, but partial, naming what.
+		inventory.CapAPIUsage: {Available: true, Partial: true, Reason: "list policy/v1beta1 podsecuritypolicies: forbidden",
+			Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}},
+		// An informational reason: everything was read.
+		inventory.CapHelm: {Available: true, Reason: "helm releases: 2 via secrets, 0 via configmaps"},
 	}
-	if got.Reason == "" {
-		t.Error("partial error must surface as the capability Reason")
+	if !reflect.DeepEqual(inv.Capabilities, want) {
+		t.Errorf("capabilities = %+v\nwant           %+v", inv.Capabilities, want)
 	}
 }
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Proves the release pipeline before a tag does (make release-check; CI's
+# Proves the packaging before a tag does (make release-check; CI's
 # release-check job). Publishes and signs nothing:
 #   1. `goreleaser check`: .goreleaser.yml is valid for the pinned GoReleaser;
 #   2. `goreleaser release --snapshot`: every archive (and, with Docker, every
 #      per-arch image from Dockerfile.release) builds;
 #   3. the archive names are the ones the Action (action/run.sh) downloads from
 #      each release — a drift here 404s every Action consumer;
-#   4. the binary for this machine serves the embedded dashboard at /.
+#   4. the binary for this machine serves the embedded dashboard at / and
+#      every asset it references (hack/dashboard-smoke.sh).
 #
 # GoReleaser runs through `go run` at GORELEASER_VERSION (the Makefile pins
 # it; make check-toolchain keeps release.yml on the same version).
@@ -47,22 +48,12 @@ for arch in amd64 arm64; do
   echo "ok: upgradescope_windows_${arch}.zip"
 done
 
-echo "== the release binary for this machine serves the dashboard at /"
+echo "== the release binary for this machine serves the dashboard and its assets"
 goos=$(go env GOOS)
 goarch=$(go env GOARCH)
 bin=$(jq -r --arg os "$goos" --arg arch "$goarch" \
   '.[] | select(.type == "Binary" and .goos == $os and .goarch == $arch) | .path' dist/artifacts.json | head -1)
 [ -n "$bin" ] && [ -x "$bin" ] || die "no $goos/$goarch binary in dist/artifacts.json"
 "$bin" --version
-db=$(mktemp -d)
-"$bin" serve --listen 127.0.0.1:18080 --ingest-token smoke --db "$db/smoke.sqlite" &
-pid=$!
-# Also on failure: a live server would hold the job (or the terminal) open.
-trap 'kill "$pid" 2>/dev/null || true; rm -rf "$db"' EXIT
-for _ in $(seq 1 50); do curl -fsS -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 0.2; done
-got="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' http://127.0.0.1:18080/)"
-case "$got" in
-  '200 text/html'*) echo "ok: GET / -> $got" ;;
-  *) die "GET / returned '$got', want 200 text/html (dashboard missing from the binary)" ;;
-esac
+hack/dashboard-smoke.sh "$bin"
 echo "release-check: OK"
