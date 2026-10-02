@@ -57,8 +57,9 @@ upgradescope scan --target 1.37
 
 Exit code 0 means the gate passed, 2 that it failed (a blocker, or a verdict
 of `unknown`), 1 an error. `--fail-on warning|never` moves the threshold;
-`--allow-incomplete` gates on findings alone when a required check could not
-run, for example a target newer than the knowledge base knows.
+`--allow-incomplete` (the Action's `allow-incomplete: true`) gates on
+findings alone when a required check could not run, for example a target
+newer than the knowledge base knows.
 [CLI in two minutes](https://abd-ulbasit.github.io/upgradescope/getting-started/cli/).
 
 **Gate pull requests** with the GitHub Action (pin it to a release tag or

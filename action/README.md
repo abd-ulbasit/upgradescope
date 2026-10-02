@@ -153,6 +153,32 @@ uses the old baseline and the file is then replaced by this scan's report.
 These inputs need upgradescope v0.2.0 or later. With an older `version`,
 the scan does not know the flags and the step fails with exit 1.
 
+### Targets past the horizon
+
+The embedded knowledge base knows Kubernetes up to one minor, its horizon
+(`upgradescope version` prints it). A `target` newer than that cannot be
+fully judged: an API removed in a release the knowledge base does not know
+would be missed. The verdict is then `unknown` (a required `kb-coverage`
+check was not assessed), and `unknown` fails the gate like a blocker.
+
+Either target the horizon or lower, upgrade to a release with a newer
+knowledge base, or accept the gap knowingly and gate on findings alone:
+
+```yaml
+      - uses: abd-ulbasit/upgradescope@v0.2.0
+        with:
+          path: rendered
+          target: "1.38"           # newer than the pinned release's horizon
+          version: v0.2.0
+          allow-incomplete: true   # an unknown verdict no longer fails the step
+```
+
+With `allow-incomplete: true`, blockers (and warnings, with
+`fail-on: warning`) still fail the step, the `verdict` output and the step
+summary still say `unknown`, and the summary's not-assessed section names
+the gap. `allow-incomplete` needs upgradescope v0.2.0 or later, like the
+inputs above.
+
 ## Permissions
 
 | Permission | Why |
@@ -170,15 +196,16 @@ release assets anonymously.
 |---|---|---|---|
 | `path` | yes | | File or directory of rendered manifests (`*.yaml`, `*.yml`, `*.json`). It must exist. |
 | `target` | yes | | Target Kubernetes minor version, such as `1.36`. |
-| `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown`. `never` never fails. |
+| `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
+| `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
 | `version` | no | `latest` | A release tag such as `v0.2.0`, `latest`, or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. |
 | `config` | no | | Path to an `.upgradescope.yaml` with ignore rules (`scan --config`). Unset, the scan looks for `.upgradescope.yaml` in `path`, then at the repository root. |
 | `baseline` | no | | Path to the JSON report of an earlier scan: the `report-json` output, or a `write-baseline` file (`scan --baseline`). The gate then fails only on findings that are new since. |
 | `write-baseline` | no | | Also write this scan's JSON report, after suppression, to this path, for a later `baseline` (`scan --write-baseline`). |
 
 Relative paths resolve from the workspace. The action checks every input
-before it downloads anything. A bad `version`, `target` or `fail-on`
-value, a `path` that does not exist, a `config` or `baseline` that is not
+before it downloads anything. A bad `version`, `target`, `fail-on` or
+`allow-incomplete` value, a `path` that does not exist, a `config` or `baseline` that is not
 a file, or a `write-baseline` whose directory does not exist fails the
 step with an error that names the input. Earlier versions of
 the action passed any other `version` to `go install`, so a branch name or
@@ -222,7 +249,7 @@ cannot write the step summary, so a warning replaces it.
 | Exit | Meaning |
 |---|---|
 | 0 | The gate passed. |
-| 2 | The scan worked and the gate failed. The SARIF, outputs and summary are all written. |
+| 2 | The scan worked and the gate failed: findings at or above `fail-on`, or an `unknown` verdict without `allow-incomplete`. The SARIF, outputs and summary are all written. |
 | 1 | The scan itself failed, for example because no manifests were found under `path`, or the config file or baseline is invalid. The summary says so and the log has the error. |
 
 ## Install and integrity

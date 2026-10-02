@@ -95,7 +95,10 @@ a CI gate.
 - GitHub Action: a root `action.yml` for the Marketplace. Inputs are passed
   through the environment, the install is checksum-verified, and the
   Action writes outputs (verdict, score, counts, report paths) and a step
-  summary. It takes `config`, `baseline` and `write-baseline` inputs.
+  summary. It takes `config`, `baseline` and `write-baseline` inputs, and
+  `allow-incomplete` (`scan --allow-incomplete`), so a gate whose target
+  is past the knowledge base's horizon can fail on findings alone instead
+  of on the `unknown` verdict (#130).
 - `upgradescope version` (and `--version`) prints the commit, the build
   date, the Go version, the knowledge base version and horizon, and the
   registry date. `--output json` prints the same as JSON.

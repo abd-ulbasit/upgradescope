@@ -13,8 +13,8 @@ so one may have been missed. The report's `NOT ASSESSED` section (JSON
 | `versions (required)` | `/version` or nodes could not be read, or the server version did not parse. | Fix the access; a version string that does not parse is a bug, please report it. |
 | `addons (required)` | Pods could not be listed. | Grant `list` on pods. |
 
-`--allow-incomplete` (CLI) gates on findings alone. The GitHub Action has no
-such input yet; see [CI gate](getting-started/ci-gate.md).
+`--allow-incomplete` (CLI), or `allow-incomplete: true` in the GitHub
+Action, gates on findings alone; see [CI gate](getting-started/ci-gate.md).
 
 ## `deprecated-calls: apiserver /metrics forbidden`
 

@@ -7,8 +7,8 @@
 #                    step summary
 #
 # Inputs arrive as environment variables (INPUT_PATH, INPUT_TARGET,
-# INPUT_FAIL_ON, INPUT_VERSION, INPUT_CONFIG, INPUT_BASELINE,
-# INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
+# INPUT_FAIL_ON, INPUT_ALLOW_INCOMPLETE, INPUT_VERSION, INPUT_CONFIG,
+# INPUT_BASELINE, INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
 # the runner pastes an expression's value into the script text, so a value
 # holding `"; cmd` would run cmd (GitHub's script-injection guidance).
 # hack/action_test.sh (make action-test) covers every path here offline.
@@ -31,6 +31,11 @@ validate() {
   case $f in
     blocker | warning | never) ;;
     *) die "invalid fail-on '$f' (want blocker, warning or never)" ;;
+  esac
+  # Unset (an older action.yml, a direct run) is false.
+  case ${INPUT_ALLOW_INCOMPLETE:-false} in
+    true | false) ;;
+    *) die "invalid allow-incomplete '$INPUT_ALLOW_INCOMPLETE' (want true or false)" ;;
   esac
   [ -n "$p" ] || die "path is required"
   [ -e "$p" ] || die "path '$p' does not exist (render the manifests before this step)"
@@ -175,12 +180,16 @@ scan() {
   fi
   local gate=("${args[@]}")
   [ -z "${INPUT_WRITE_BASELINE-}" ] || gate+=(--write-baseline="$INPUT_WRITE_BASELINE")
+  # Only the gate pass: the JSON and Markdown passes run with --fail-on
+  # never, where an unknown verdict already passes.
+  local allow=()
+  [ "${INPUT_ALLOW_INCOMPLETE:-false}" != true ] || allow=(--allow-incomplete)
   echo "sarif-file=$sarif" >>"$GITHUB_OUTPUT"
 
   # The gate. exit 0: passed; 2: scan worked, gate failed (the SARIF is
   # still complete: upload it with `if: always()`); 1: the scan broke.
   local status=0
-  upgradescope scan "${gate[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" >"$sarif" || status=$?
+  upgradescope scan "${gate[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" ${allow[@]+"${allow[@]}"} >"$sarif" || status=$?
   if [ "$status" != 0 ] && [ "$status" != 2 ]; then
     printf '### upgradescope: scan failed (exit %s)\n\nThe job log has the error.\n' "$status" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
     echo "::error::upgradescope scan failed (exit $status)"

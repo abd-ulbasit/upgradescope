@@ -8,7 +8,8 @@ name: upgradescope gate
 description: >-
   Gate rendered Kubernetes manifests on upgrade readiness: removed and
   deprecated APIs for a target version, as SARIF, outputs and a step summary.
-  Exit code 2 (findings at/above fail-on) fails the step.
+  Exit code 2 (findings at/above fail-on, or an unknown verdict unless
+  allow-incomplete) fails the step.
 author: abd-ulbasit
 
 inputs:
@@ -22,6 +23,15 @@ inputs:
     description: "Fail the gate when findings at/above this severity exist: blocker | warning | never."
     required: false
     default: blocker
+  allow-incomplete:
+    description: >-
+      "true" passes scan --allow-incomplete: the gate then fails on findings
+      alone, not on an unknown verdict (a required check, such as
+      kb-coverage for a target past the knowledge base's horizon, was not
+      assessed). The verdict output still says unknown. "true" or "false";
+      needs upgradescope v0.2.0 or later.
+    required: false
+    default: "false"
   version:
     description: >-
       Which upgradescope to run: a release tag such as v0.2.0, "latest"
@@ -98,6 +108,7 @@ runs:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_ALLOW_INCOMPLETE: ${{ inputs.allow-incomplete }}
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_BASELINE: ${{ inputs.baseline }}
@@ -111,6 +122,7 @@ runs:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_ALLOW_INCOMPLETE: ${{ inputs.allow-incomplete }}
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_BASELINE: ${{ inputs.baseline }}
