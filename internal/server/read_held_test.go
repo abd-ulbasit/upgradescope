@@ -103,9 +103,12 @@ func TestUnreadGateResponsesAreBounded(t *testing.T) {
 		if e.Deprecated == nil && e.Removed == nil {
 			continue
 		}
-		u := inventory.APIUsage{Group: e.Group, Version: e.Version, Kind: e.Kind, Count: 100, Namespaces: map[string]int{"team-a": 100}}
+		// The longest names a cluster holds: 63-byte namespaces and
+		// 253-byte object names.
+		ns := "team-a-" + strings.Repeat("n", 56)
+		u := inventory.APIUsage{Group: e.Group, Version: e.Version, Kind: e.Kind, Count: 100, Namespaces: map[string]int{ns: 100}}
 		for i := range 100 {
-			u.Objects = append(u.Objects, inventory.ObjectRef{Namespace: "team-a", Name: fmt.Sprintf("o-%d-%s", i, strings.Repeat("x", 300))})
+			u.Objects = append(u.Objects, inventory.ObjectRef{Namespace: ns, Name: fmt.Sprintf("o-%03d-%s", i, strings.Repeat("x", 247))})
 		}
 		inv.APIUsage = append(inv.APIUsage, u)
 	}

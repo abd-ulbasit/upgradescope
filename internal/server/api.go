@@ -751,9 +751,10 @@ const supportedInventorySchema = 1
 // decodePushedInventory parses and checks a pushed inventory, returning a
 // 422 message for one the server cannot judge: absent or null, another
 // schemaVersion (which includes {} and a missing one), or a serverVersion
-// that is not a Kubernetes 1.x version, or an identifier (a namespace,
+// that is not a Kubernetes 1.x version, an identifier (a namespace,
 // object, node or Helm release name, a team label value) that is not
-// valid for what it names. A degraded inventory with no
+// valid for what it names, or a value beyond what any collector records
+// (inventory.ValidateLimits). A degraded inventory with no
 // serverVersion at all (the versions collector failed) is accepted and
 // judged at the cluster's last reported version (ingestSnapshot).
 func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
@@ -777,6 +778,12 @@ func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
 	// inventory; reports repeat them, so they are refused before anything
 	// is stored or evaluated.
 	if err := inv.ValidateIdentifiers(); err != nil {
+		return inv, "invalid inventory: inventory." + err.Error()
+	}
+	// So are values beyond what any collector records (a string over
+	// 16 KiB, an object list over 100, a group/version/kind counted
+	// twice): the engine repeats them in what it builds.
+	if err := inv.ValidateLimits(); err != nil {
 		return inv, "invalid inventory: inventory." + err.Error()
 	}
 	return inv, ""

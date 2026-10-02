@@ -97,9 +97,45 @@ func TestIngestRefusesInvalidIdentifiers(t *testing.T) {
 	}
 }
 
+// A value beyond what any collector records is refused the same way:
+// a kubeVersion of 20 MB of quotes made a push three 84 MB reports and a
+// 126 MB HTML export.
+func TestIngestRefusesValuesBeyondLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		edit  func(*inventory.Inventory)
+		field string
+	}{
+		{"kubeVersion of quotes", func(inv *inventory.Inventory) {
+			inv.HelmReleases = []inventory.HelmRelease{{Name: "web", Namespace: "web", KubeVersion: strings.Repeat(`"`, inventory.MaxStringBytes+1)}}
+		}, "inventory.helmReleases[0].kubeVersion"},
+		{"manager", func(inv *inventory.Inventory) {
+			inv.APIUsage[0].Objects = []inventory.ObjectRef{{Name: "x", Manager: strings.Repeat("'", 200)}}
+		}, "inventory.apiUsage[0].objects[0].manager"},
+		{"a group/version/kind twice", func(inv *inventory.Inventory) {
+			inv.APIUsage = append(inv.APIUsage, inv.APIUsage[0])
+		}, "inventory.apiUsage[1]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			s := newTestServer(t, st)
+			inv := testInventoryWithPSP()
+			tc.edit(&inv)
+			rec := httptest.NewRecorder()
+			serveIngest(s, rec, pushReqBody(t, inv), false)
+			if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), tc.field+": ") {
+				t.Fatalf("status %d (%.400s), want 422 naming %s", rec.Code, rec.Body, tc.field)
+			}
+			if clusters, err := st.ListClusters(context.Background()); err != nil || len(clusters) != 0 || len(st.snapshots) != 0 {
+				t.Fatalf("%d clusters, %d snapshots stored (%v), want none", len(clusters), len(st.snapshots), err)
+			}
+		})
+	}
+}
+
 // Every inventory the engine's golden tests judge, which the collectors'
-// own tests produce the shapes of, is accepted: the identifier rules
-// refuse nothing a cluster can hold.
+// own tests produce the shapes of, is accepted: the identifier rules and
+// the limits refuse nothing a cluster can hold.
 func TestIngestAcceptsTheGoldenInventories(t *testing.T) {
 	paths, err := filepath.Glob("../engine/testdata/*/inventory.json")
 	if err != nil || len(paths) < 10 {
@@ -115,6 +151,9 @@ func TestIngestAcceptsTheGoldenInventories(t *testing.T) {
 			t.Fatalf("%s: %v", p, err)
 		}
 		if err := inv.ValidateIdentifiers(); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+		if err := inv.ValidateLimits(); err != nil {
 			t.Errorf("%s: %v", p, err)
 		}
 	}

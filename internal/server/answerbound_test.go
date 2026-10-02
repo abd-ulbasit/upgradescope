@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
@@ -125,9 +126,16 @@ func TestGateAnswerBoundHolds(t *testing.T) {
 		s.observeGateBound = func(b int64) { bound = b }
 		inv := testInventoryWithPSP()
 		// A cluster's namespaces are RFC 1123 labels (ingest refuses others);
-		// its object names may hold anything but / and %.
+		// its object names may hold anything but / and %, its managers any
+		// printable character.
 		objName := strings.NewReplacer("/", "", "%", "").Replace(name)
-		inv.APIUsage[0].Objects = []inventory.ObjectRef{{Namespace: "team-a", Name: objName, Manager: name}, {Name: "x" + objName}}
+		manager := strings.Map(func(r rune) rune {
+			if unicode.IsPrint(r) {
+				return r
+			}
+			return -1
+		}, name)
+		inv.APIUsage[0].Objects = []inventory.ObjectRef{{Namespace: "team-a", Name: objName, Manager: manager}, {Name: "x" + objName}}
 		rec := httptest.NewRecorder()
 		serveIngest(s, rec, pushReqBody(t, inv), false)
 		if rec.Code != http.StatusAccepted {

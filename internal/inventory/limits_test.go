@@ -1,0 +1,87 @@
+package inventory
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+func TestValidateLimitsAcceptsValid(t *testing.T) {
+	inv := validInventory()
+	inv.Capabilities = map[Capability]CapabilityStatus{CapAPIUsage: {Available: true, Partial: true,
+		Reason: strings.Repeat("r", MaxReasonBytes), Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}}
+	inv.HelmReleases[0].KubeVersion = strings.Repeat("<", MaxStringBytes)
+	inv.APIUsage[0].Objects[1].Manager = strings.Repeat("m", MaxManagerBytes)
+	for i := range MaxObjectRefs - len(inv.APIUsage[0].Objects) {
+		inv.APIUsage[0].Objects = append(inv.APIUsage[0].Objects, ObjectRef{Name: fmt.Sprint("o", i)})
+	}
+	inv.APIUsage = append(inv.APIUsage, APIUsage{Group: "policy", Version: "v1", Kind: "PodSecurityPolicy"})
+	for i := range MaxUnrecognizedImages {
+		inv.UnrecognizedImages = append(inv.UnrecognizedImages, fmt.Sprint("registry.example.com/i", i))
+	}
+	if err := inv.ValidateLimits(); err != nil {
+		t.Fatalf("ValidateLimits() = %v, want nil", err)
+	}
+	if err := (Inventory{}).ValidateLimits(); err != nil {
+		t.Fatalf("empty inventory: %v", err)
+	}
+}
+
+func TestValidateLimitsRefusesBeyond(t *testing.T) {
+	long := strings.Repeat("x", MaxStringBytes+1)
+	for _, tc := range []struct {
+		name  string
+		edit  func(*Inventory)
+		field string
+	}{
+		{"objects over MaxObjectRefs", func(inv *Inventory) {
+			for range MaxObjectRefs {
+				inv.APIUsage[0].Objects = append(inv.APIUsage[0].Objects, ObjectRef{})
+			}
+		}, "apiUsage[0].objects"},
+		{"a group/version/kind twice", func(inv *Inventory) {
+			inv.APIUsage = append(inv.APIUsage, APIUsage{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy"})
+		}, "apiUsage[1]"},
+		{"a manifest group/version/kind twice", func(inv *Inventory) {
+			inv.HelmReleases[0].ManifestAPIs = append(inv.HelmReleases[0].ManifestAPIs, inv.HelmReleases[0].ManifestAPIs[0])
+		}, "helmReleases[0].manifestApis[1]"},
+		{"a CRD version twice", func(inv *Inventory) { inv.CRDs[0].Usage = append(inv.CRDs[0].Usage, inv.CRDs[0].Usage[0]) }, "crds[0].usage[1]"},
+		{"a manager over 128 bytes", func(inv *Inventory) { inv.APIUsage[0].Objects[1].Manager = strings.Repeat("'", 129) }, "apiUsage[0].objects[1].manager"},
+		{"a manager with a control character", func(inv *Inventory) { inv.CRDs[0].Usage[0].Objects[0].Manager = "m\x01" }, "crds[0].usage[0].objects[0].manager"},
+		{"unrecognized images over the cap", func(inv *Inventory) {
+			inv.UnrecognizedImages = make([]string, MaxUnrecognizedImages+1)
+		}, "unrecognizedImages"},
+		{"a kubeVersion over the string limit", func(inv *Inventory) { inv.HelmReleases[0].KubeVersion = long }, "helmReleases[0].kubeVersion"},
+		{"a capability reason over its limit", func(inv *Inventory) {
+			inv.Capabilities = map[Capability]CapabilityStatus{CapHelm: {Reason: strings.Repeat("r", MaxReasonBytes+1)}}
+		}, `capabilities["helm"].reason`},
+		{"a capability name over the string limit", func(inv *Inventory) {
+			inv.Capabilities = map[Capability]CapabilityStatus{Capability(long): {}}
+		}, "capabilities (a key)"},
+		{"a skipped API over the string limit", func(inv *Inventory) {
+			inv.Capabilities = map[Capability]CapabilityStatus{CapAPIUsage: {Skipped: []string{"a", long}}}
+		}, `capabilities["api-usage"].skipped[1]`},
+		{"a CRD deprecation warning", func(inv *Inventory) { inv.CRDs[0].Versions = []CRDVersion{{Name: "v1", DeprecationWarning: long}} }, "crds[0].versions[0].deprecationWarning"},
+		{"a node runtime", func(inv *Inventory) { inv.Nodes[0].ContainerRuntime = long }, "nodes[0].containerRuntime"},
+		{"capabilities over the cap", func(inv *Inventory) {
+			inv.Capabilities = map[Capability]CapabilityStatus{}
+			for i := range MaxCapabilities + 1 {
+				inv.Capabilities[Capability(fmt.Sprint("c", i))] = CapabilityStatus{}
+			}
+		}, "capabilities"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := validInventory()
+			tc.edit(&inv)
+			err := inv.ValidateLimits()
+			var le *LimitError
+			if !errors.As(err, &le) || le.Field != tc.field {
+				t.Fatalf("ValidateLimits() = %.300v, want a LimitError at %s", err, tc.field)
+			}
+			if len(err.Error()) > 1024 {
+				t.Fatalf("message is %d bytes, want a short one", len(err.Error()))
+			}
+		})
+	}
+}
