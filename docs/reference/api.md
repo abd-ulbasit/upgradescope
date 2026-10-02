@@ -871,10 +871,11 @@ Type: object.
 
 ### JUnit
 
-JUnit XML (the Jenkins JUnit schema): one testsuite per finding
-category with one testcase per finding, failing when the finding
-reaches `fail-on`; a not-assessed suite with an error per required
-gap the gate fails on. See `scan --output junit`.
+JUnit XML valid against the Jenkins JUnit schema (the xUnit
+plugin's junit-10.xsd): one testsuite per finding category with
+one testcase per finding, failing when the finding reaches
+`fail-on`; a not-assessed suite with an error per required gap the
+gate fails on. See `scan --output junit`.
 
 Type: string.
 

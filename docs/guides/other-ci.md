@@ -12,7 +12,12 @@ publishes a report its CI shows natively:
 | Jenkins | `ci/jenkins/Jenkinsfile` | JUnit, through the `junit` step |
 | Azure Pipelines | `ci/azure/azure-pipelines.yml` | JUnit, through `PublishTestResults@2` |
 
-`--output junit` and `--output gitlab-codequality` are new in v0.2.0.
+`--output junit` and `--output gitlab-codequality` are new in v0.2.0, and
+the templates pin `VERSION=v0.2.0`. Until v0.2.0 is on the
+[releases page](https://github.com/abd-ulbasit/upgradescope/releases),
+that download fails with a 404 and no earlier release has these formats;
+in the meantime, build from `main` with
+`go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@main`.
 
 ## Install a pinned release
 
@@ -67,14 +72,23 @@ when the exit code says so:
 
 A clean report is one passing test, `readiness/no findings`: Jenkins fails
 a build whose reports hold no tests. Times are 0, so the file is the same
-on every run of the same scan.
+on every run of the same scan. The file validates against the Jenkins JUnit
+schema, the xUnit plugin's `junit-10.xsd` (vendored in
+`internal/junit/junittest`), so readers that validate strictly accept it
+too.
 
 **GitLab Code Quality** (`--output gitlab-codequality`): one entry per
-finding and object located in a file, on that file and line (relative to
-the working directory, so scan from the repository root), with the finding
-key as `check_name` and severity blocker → `critical`, warning → `minor`,
-info → `info`.
+finding and object located in a file, on that file and line (line 1 when
+only the file is known; relative to the working directory, so scan from the
+repository root), with the finding key as `check_name` and severity
+blocker → `critical`, warning → `minor`, info → `info`.
 
+- The file is the one scanned. With `helm template --output-dir rendered`,
+  that is the rendered file (`rendered/<chart>/templates/x.yaml`), which is
+  usually not committed: the merge request widget lists the entry, but the
+  diff cannot annotate it. The description names the template it was
+  rendered from (`rendered from <chart>/templates/x.yaml`). Only manifests
+  committed to the repository get inline annotations.
 - GitLab requires a location, but live-cluster findings, add-ons, version
   skew and a stream posted to the gate without `path` have no file. Each
   such finding is one entry on the virtual path
