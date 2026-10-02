@@ -101,8 +101,11 @@ Ingress NGINX blocker for that namespace, and with it the cluster's
 verdict. Hiding works only within the same namespace, but there it works
 today: chart evidence wins over image evidence (above), so a forged
 release whose chart `appVersion` claims a newer version also hides an
-older image of the add-on running beside it. #165 changes this to judge
-conflicting evidence at its oldest.
+older image of the add-on running beside it. The fix for #165 narrows
+this: a release's `appVersion` then stands only for pods on its own
+release line, so an older image on another line is judged at its own
+version, and only a patch-level difference on the same line can be
+hidden.
 The [security model](../operations/security-model-and-rbac.md#findings-are-only-as-trustworthy-as-namespace-write-access)
 says what this means for a multi-tenant cluster.
 

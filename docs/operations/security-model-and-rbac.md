@@ -70,10 +70,11 @@ image or label:
 - **Hide a finding**, within its own namespace: a release's chart
   `appVersion` currently wins over the image tags in its namespace, so a
   forged release that claims a newer version of an add-on also hides an
-  older image of it running there. #165 changes this so that the oldest
-  version the namespace shows is judged; until it lands, and afterwards
-  for an add-on whose image no matcher recognizes, the forged version
-  stands.
+  older image of it running there. The fix for #165 narrows this: a
+  release's `appVersion` then stands only for pods on its own release
+  line, so an older image on another line is judged at its own version;
+  a patch-level difference on the same line, and an add-on whose image
+  no matcher recognizes, can still be hidden.
 
 The effects stay within what the tenant can write: its forged evidence is
 attributed to its own namespace (and team), it cannot change what
