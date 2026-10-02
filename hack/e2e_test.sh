@@ -33,8 +33,13 @@ case "$*" in
   *"get --raw /version"*) echo "{\"major\":\"1\",\"minor\":\"${STUB_SERVER_MINOR:-31}+\"}" ;;
   *"jsonpath={.status.targets[0].score}"*) echo 40 ;;
   *"get clusterreadiness cluster -o json"*)
-    echo "{\"spec\":{\"targets\":[\"${STUB_NEXT:-1.32}\"]},\"status\":{\"targets\":[{\"target\":\"${STUB_NEXT:-1.32}\",\"score\":40,\"verdict\":\"blocked\",\"ready\":false,\"topFindings\":[{\"category\":\"eol-addon\"}]}]}}" ;;
+    [ -z "${STUB_FINALIZER:-}" ] || meta="\"metadata\":{\"name\":\"cluster\",\"finalizers\":[\"upgradescope.dev/hold\"]},"
+    echo "{${meta:-}\"spec\":{\"targets\":[\"${STUB_NEXT:-1.32}\"]},\"status\":{\"targets\":[{\"target\":\"${STUB_NEXT:-1.32}\",\"score\":40,\"verdict\":\"blocked\",\"ready\":false,\"topFindings\":[{\"category\":\"eol-addon\"}]}]}}" ;;
   *"port-forward"*) exec sleep 30 ;;
+  *"get validatingwebhookconfigurations,mutatingwebhookconfigurations -o name"*)
+    echo validatingwebhookconfiguration.admissionregistration.k8s.io/ingress-nginx-admission
+    [ -z "${STUB_NEW_WEBHOOK:-}" ] || [ ! -f "$STUB_STATE/installed" ] ||
+      echo validatingwebhookconfiguration.admissionregistration.k8s.io/upgradescope ;;
   *"get clusterrole,clusterrolebinding -l"*) [ -n "${STUB_LEFTOVER:-}" ] && echo clusterrole/upgradescope-agent; exit 0 ;;
   *"get clusterrole upgradescope-agent"* | *"get clusterrolebinding upgradescope-agent"*) exit 1 ;;
   *"api-versions"*) [ -n "${STUB_NOT_SERVED:-}" ] || printf "v1\\nflowcontrol.apiserver.k8s.io/v1beta3\\nresource.k8s.io/v1beta1\\n" ;;
@@ -43,6 +48,7 @@ esac
 exit 0'
 stub helm '
 case "$*" in
+  *"upgrade --install upgradescope deploy/chart"*) : >"$STUB_STATE/installed" ;;
   *"agent.targets="*) [ -z "${STUB_TARGETS_FAIL:-}" ] || { echo "Error: ClusterReadiness \"cluster\" exists and cannot be imported" >&2; exit 1; } ;;
   *" history "*) echo "[{\"revision\":1,\"status\":\"superseded\"},{\"revision\":2,\"status\":\"${STUB_HISTORY_STATUS:-uninstalled}\"}]" ;;
 esac
@@ -196,6 +202,7 @@ has "the Secrets audit gate passes" "$work/summary" "- PASS — audit: Secrets w
 has "the scan-writes audit gate passes" "$work/summary" "- PASS — audit: scan wrote nothing"
 has "allowlisted requests are listed" "$work/out" "  v1 componentstatuses (scan)"
 has "the positive control is reported" "$work/out" "positive control: 1 request(s) through flowcontrol.apiserver.k8s.io/v1beta3 annotated k8s.io/deprecated"
+has "the webhook/finalizer gate passes" "$work/summary" "- PASS — the install added no webhook configuration; ClusterReadiness/cluster has no finalizer or owner reference"
 has "the unreachable-server gate passes" "$work/summary" "- PASS — scan against an unreachable API server exits 1"
 has "the deprecated-object gate passes" "$work/summary" "- PASS — an object written through flowcontrol.apiserver.k8s.io/v1beta3 is reported with its manager; re-applied through flowcontrol.apiserver.k8s.io/v1 it is not"
 has "the EOL add-on gate passes" "$work/summary" "- PASS — scan reports the EOL ingress-nginx installed from the upstream chart as a blocker and exits 2"
@@ -249,6 +256,14 @@ fi
 
 run "a failing agent.targets upgrade fails the run (#41 is fixed; the check gates)" 1 STUB_TARGETS_FAIL=1
 has "the upgrade gate is a FAIL in the summary" "$work/summary" "- **FAIL** — helm upgrade --set agent.targets={1.32}"
+
+# RB-04: nothing in the cluster changes because of a finding.
+run "a webhook configuration added by the install fails the run" 1 STUB_NEW_WEBHOOK=1
+has "the new webhook is named" "$work/out" "  validatingwebhookconfiguration.admissionregistration.k8s.io/upgradescope"
+has "the webhook/finalizer gate is a FAIL in the summary" "$work/summary" "- **FAIL** — the install added no webhook configuration"
+
+run "a finalizer on the ClusterReadiness fails the run" 1 STUB_FINALIZER=1
+has "the finalizer is named" "$work/out" "upgradescope.dev/hold"
 
 run "a ClusterRole left after uninstall fails the run" 1 STUB_LEFTOVER=1
 has "the leftover is named" "$work/out" "clusterrole/upgradescope-agent"

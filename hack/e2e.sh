@@ -21,6 +21,8 @@
 #      from deploy/chart with the server enabled, --wait;
 #   5. the agent's ClusterReadiness gets a score and a verdict for the next
 #      minor (blocked, with the ingress-nginx eol-addon finding);
+#      the install added no admission webhook, and the CR carries no
+#      finalizer or owner reference;
 #   6. the server ingested the agent's snapshot (GET /api/v1/clusters);
 #   7. `helm upgrade --set agent.targets={<next minor>}` succeeds and the CR
 #      spec follows (#41);
@@ -345,7 +347,11 @@ load_image() {
   kind load image-archive "$work/image.tar" --name "$CLUSTER"
 }
 
+webhook_configs() { k get validatingwebhookconfigurations,mutatingwebhookconfigurations -o name; }
+
+webhooks_before=""
 install_chart() {
+  webhooks_before=$(webhook_configs) || return 1
   # interval=1m so a second tick comes quickly; the first fires at start.
   h upgrade --install "$RELEASE" deploy/chart --namespace "$NS" --create-namespace \
     --set image.tag="$TAG" \
@@ -375,6 +381,23 @@ cr_has_verdict() {
   jq -e '.status.targets[0].verdict == "blocked" and .status.targets[0].ready == false' "$work/cr.json" >/dev/null ||
     { echo "verdict is not blocked (the EOL ingress-nginx add-on is installed)" >&2; return 1; }
   grep -q '"eol-addon"' "$work/cr.json" || { echo "no eol-addon finding in the CR status" >&2; return 1; }
+}
+
+# RB-04: nothing in the cluster changes because of a finding. With the EOL
+# blocker installed and the agent ticking, the install added no admission
+# webhook, and the agent's ClusterReadiness holds nothing up on deletion
+# and belongs to nothing (the audit gates cover the agent's writes).
+no_webhooks_or_finalizers() {
+  local now added
+  now=$(webhook_configs) || return 1
+  added=$(comm -13 <(sort <<<"$webhooks_before") <(sort <<<"$now"))
+  [ -z "$added" ] || { echo "webhook configurations added by the install:" >&2; echo "$added" | sed 's/^/  /' >&2; return 1; }
+  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  jq -e '(.metadata.finalizers // []) == [] and (.metadata.ownerReferences // []) == []' "$work/cr.json" >/dev/null || {
+    echo "clusterreadiness/$CR has finalizers or owner references:" >&2
+    jq -c '.metadata | {finalizers, ownerReferences}' "$work/cr.json" >&2
+    return 1
+  }
 }
 
 server_ingested() {
@@ -563,6 +586,7 @@ gate "scan + agent integration tests" integration_tests
 gate "image built from this tree, kind-loaded" load_image
 gate "helm install deploy/chart (server enabled) --wait" install_chart
 gate "ClusterReadiness has a score and a blocked verdict for $NEXT" cr_has_verdict
+gate "the install added no webhook configuration; ClusterReadiness/$CR has no finalizer or owner reference" no_webhooks_or_finalizers
 gate "server ingested the agent's snapshot" server_ingested
 gate "helm upgrade --set agent.targets={$NEXT}" upgrade_with_targets
 gate "helm uninstall leaves no ClusterRole/ClusterRoleBinding or release object; CRD kept" uninstall_leaves_nothing
