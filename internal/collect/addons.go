@@ -130,7 +130,7 @@ func versionFromTag(tag string) string {
 	return versionRe.FindString(tag)
 }
 
-// versionLess orders detected versions for the conservative-oldest merge:
+// versionLess orders detected versions for the conservative-oldest pick:
 // semver compare when both sides parse ("1.9.4" < "1.10.0"), falling back
 // to lexicographic for unparseable versions. Plain string `<` would rank
 // "1.10.0" before "1.9.4" and mask the older install's EOL risk.
@@ -144,7 +144,7 @@ func versionLess(a, b string) bool {
 }
 
 // olderVersion returns the older of two versions, ignoring "": the
-// conservative pick when several installs of one add-on disagree.
+// conservative pick when the pods or releases of one install disagree.
 func olderVersion(cur, v string) string {
 	if v != "" && (cur == "" || versionLess(v, cur)) {
 		return v
@@ -153,18 +153,23 @@ func olderVersion(cur, v string) string {
 }
 
 // matchAddOns is pure: images + helm releases + registry → detected
-// add-on instances (deduped by ID; the oldest app version wins, a Helm
-// release's appVersion over image tags) and the deduped, sorted, capped
-// list of unmatched image repos (registry gap visibility — never findings,
-// spec §9).
+// add-on instances, one per add-on and namespace, sorted by ID then
+// namespace, and the deduped, sorted, capped list of unmatched image repos
+// (registry gap visibility — never findings, spec §9).
+//
+// Each namespace is its own install, judged at its own version: within
+// one, the oldest version wins, and a Helm release's appVersion over image
+// tags (sidecars and stale pods lag the release). Neither crosses
+// namespaces, so a mesh mid-upgrade or a newer release elsewhere cannot
+// hide an older install, nor lend its version to one.
 func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []registry.AddOn) ([]inventory.AddOnInstance, []string) {
 	type evidence struct {
 		source  string // "image" | "chart"
 		version string // app version
 		chart   string // chart version, chart evidence only
-		ns      string
 	}
-	byID := map[string][]evidence{}
+	type install struct{ id, ns string }
+	byInstall := map[install][]evidence{}
 	unmatched := map[string]bool{}
 
 	for _, img := range images {
@@ -173,11 +178,8 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 		for _, a := range addons {
 			for _, m := range a.Matchers.Images {
 				if imageMatches(ref, m) {
-					byID[a.ID] = append(byID[a.ID], evidence{
-						source:  "image",
-						version: versionFromTag(ref.tag),
-						ns:      img.Namespace,
-					})
+					in := install{a.ID, img.Namespace}
+					byInstall[in] = append(byInstall[in], evidence{source: "image", version: versionFromTag(ref.tag)})
 					matched = true
 					break
 				}
@@ -192,11 +194,11 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 		for _, a := range addons {
 			for _, chart := range a.Matchers.Charts {
 				if rel.ChartName == chart {
-					byID[a.ID] = append(byID[a.ID], evidence{
+					in := install{a.ID, rel.Namespace}
+					byInstall[in] = append(byInstall[in], evidence{
 						source:  "chart",
 						version: versionFromTag(rel.AppVersion),
 						chart:   strings.TrimPrefix(rel.ChartVersion, "v"),
-						ns:      rel.Namespace,
 					})
 				}
 			}
@@ -204,12 +206,10 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 	}
 
 	var out []inventory.AddOnInstance
-	for id, evs := range byID {
-		inst := inventory.AddOnInstance{ID: id, Source: "image"}
-		nsSet := map[string]bool{}
+	for in, evs := range byInstall {
+		inst := inventory.AddOnInstance{ID: in.id, Namespaces: []string{in.ns}, Source: "image"}
 		var imageVersion, appVersion string
 		for _, e := range evs {
-			nsSet[e.ns] = true
 			if e.source == "chart" {
 				inst.Source = "chart"
 				appVersion = olderVersion(appVersion, e.version)
@@ -221,13 +221,11 @@ func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []re
 		// A release's appVersion is authoritative; a chart without one
 		// falls back to the image tag, never to the chart version.
 		inst.Version = cmp.Or(appVersion, imageVersion)
-		for ns := range nsSet {
-			inst.Namespaces = append(inst.Namespaces, ns)
-		}
-		sort.Strings(inst.Namespaces)
 		out = append(out, inst)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool {
+		return cmp.Or(cmp.Compare(out[i].ID, out[j].ID), cmp.Compare(out[i].Namespaces[0], out[j].Namespaces[0])) < 0
+	})
 
 	var unrec []string
 	for repo := range unmatched {
