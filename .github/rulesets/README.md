@@ -1,9 +1,9 @@
 # Repository rulesets
 
-GitHub does not read these files. They record the rulesets applied to this
-repository, so that the rulesets are reviewed like code and can be
-re-applied. Apply or update one with the GitHub API. You need admin on the
-repository.
+GitHub does not read these files. They record this repository's rulesets,
+so that the rulesets are reviewed like code and can be re-applied.
+`release-tags.json` is applied; `major-tag.json` is not (see below). Apply
+or update one with the GitHub API. You need admin on the repository.
 
 ```sh
 # create
@@ -40,22 +40,48 @@ What this means for maintainers:
   assets of a published release, but it stops a half-failed release from
   being re-run in place. Make that trade-off before enabling it.
 
-## `major-tag.json`: `v0` moves only through the release workflow
+## `major-tag.json`: not applied
 
 `v0` is the floating major tag that `uses: abd-ulbasit/upgradescope@v0`
 resolves to. The `major-tag` job of `.github/workflows/release.yml` moves it
-with the workflow's `GITHUB_TOKEN` once a stable release is verified. The
-only bypass actor is the GitHub Actions app (integration id 15368). A
-person cannot move or delete `v0` with their own credentials, but the
-bypass covers every workflow in this repository that runs with a
-`GITHUB_TOKEN` that can write contents, not only release.yml's
-`major-tag` job. So `v0` is as safe as the review of every workflow that
-gets `contents: write`, and a maintainer who can merge such a workflow can
-move it.
+with the workflow's `GITHUB_TOKEN` once a stable release is verified.
+
+`major-tag.json` names the GitHub Actions app (integration id 15368) as the
+only actor that may move or delete `v0`. GitHub refused it on this
+personal-account repository with 422: "Actor GitHub Actions integration
+must be part of the ruleset source or owner organization". A ruleset on
+`v0` with no bypass would also stop the release workflow, so none is
+applied.
+
+What this means today: no ruleset covers `v0`. Anyone with write access can
+move or delete it, and so can any workflow here that runs with
+`contents: write`. If that matters to you, pin the Action to a commit SHA,
+or to a release tag, and set its `version` input to the same release (see
+[Usage](../../action/README.md#usage)). Release tags stay put while
+`release-tags.json` is active. Only a commit SHA does not depend on a
+ruleset.
+
+`major-tag.json` is kept for a repository owner that GitHub accepts it on,
+such as an organization. Even there, it would block a direct tag push and
+make every move of `v0` appear as a workflow run, but it would not narrow
+who can move `v0`. The bypass belongs to the Actions app, not to one
+workflow, and the `main` ruleset protects only the default branch. Anyone
+with write access could push a branch with a workflow that has
+`contents: write` and moves `v0`. To apply it there, run the create command
+above with `--input .github/rulesets/major-tag.json` and the new owner in
+the path.
+
+A narrower option, not tried: give a deploy key or a dedicated GitHub App
+installed on the repository the bypass, and have the `major-tag` job push
+`v0` with that credential.
 
 ## When v1 ships
 
 `v*` in `release-tags.json` also matches a future floating `v1`, which
 would then be locked like a release tag and the release workflow could not
-move it. Before the first v1 release, add `refs/tags/v1` to that file's
-`exclude` list and to `major-tag.json`'s `include` list, and re-apply both.
+move it. Before the first v1 release:
+
+1. add `refs/tags/v1` to the `exclude` list of `release-tags.json` and
+   re-apply it;
+2. if `major-tag.json` is applied by then, add `refs/tags/v1` to its
+   `include` list and re-apply it too.
