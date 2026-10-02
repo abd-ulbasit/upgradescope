@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -176,7 +178,11 @@ func TestEnvtestMatrix(t *testing.T) {
 		t.Fatal("UPGRADESCOPE_ENVTEST=1 but KUBEBUILDER_ASSETS is not set; run make envtest, or point it at setup-envtest's kube-apiserver and etcd")
 	}
 
-	env := &envtest.Environment{}
+	// Always a kube-apiserver of its own: with UseExistingCluster unset,
+	// envtest honours USE_EXISTING_CLUSTER=true and would point this test,
+	// and the objects it creates, at the kubeconfig's current cluster.
+	existing := false
+	env := &envtest.Environment{UseExistingCluster: &existing}
 	cfg, err := env.Start()
 	if err != nil {
 		t.Fatalf("start kube-apiserver and etcd: %v", err)
@@ -186,6 +192,9 @@ func TestEnvtestMatrix(t *testing.T) {
 			t.Errorf("stop kube-apiserver and etcd: %v", err)
 		}
 	})
+	if u, err := url.Parse(cfg.Host); err != nil || !isLoopback(u.Hostname()) {
+		t.Fatalf("envtest kube-apiserver at %q is not a loopback address: refusing to write test objects to it", cfg.Host)
+	}
 
 	clients, err := NewClients(cfg)
 	if err != nil {
@@ -242,18 +251,32 @@ func TestEnvtestMatrix(t *testing.T) {
 		envtestCreate(t, dyn, o)
 	}
 
-	t.Run("GA-only objects have no removed-API finding or other blocker", func(t *testing.T) {
-		inv, report := scan(t, next)
+	// The first scan of the cluster, before anything else has scanned it:
+	// the scanner's own requests only show up in the scans after it (#123),
+	// so the identical-scans check below needs this one as its baseline.
+	inv1, r1 := scan(t, next)
+
+	// assertClean fails on any finding above info: a cluster holding only
+	// GA objects has nothing to migrate, so one is the scanner's own
+	// requests read as a caller (#123).
+	assertClean := func(t *testing.T, n int, report engine.Report) {
+		t.Helper()
 		for _, f := range report.Findings {
 			switch {
 			case f.Category == engine.CatRemovedAPI:
-				t.Errorf("removed-api finding on %s for a cluster holding only GA objects: %s: %s", server, f.Title, f.Detail)
+				t.Errorf("scan %d: removed-api finding on %s for a cluster holding only GA objects: %s: %s", n, server, f.Title, f.Detail)
 			case f.Severity != engine.SevInfo:
-				// Nothing else is wrong either: a finding here is the
-				// scanner's own requests read as a caller (#123).
-				t.Errorf("%s finding on a fresh %s cluster holding only GA objects: %s: %s", f.Severity, server, f.Title, f.Detail)
+				t.Errorf("scan %d: %s finding on %s holding only GA objects: %s: %s", n, f.Severity, server, f.Title, f.Detail)
 			}
 		}
+		if report.Verdict != engine.VerdictReady || !report.Ready {
+			t.Errorf("scan %d: verdict = %s, ready = %v, score %d on %s holding only GA objects, want ready; findings: %s", n, report.Verdict, report.Ready, report.Score, server, findingKeys(report))
+		}
+	}
+
+	t.Run("GA-only objects have no removed-API finding or other blocker", func(t *testing.T) {
+		inv, report := inv1, r1
+		assertClean(t, 1, report)
 		if report.ServerVersion != sv.GitVersion {
 			t.Errorf("report.ServerVersion = %q, want %q", report.ServerVersion, sv.GitVersion)
 		}
@@ -282,19 +305,25 @@ func TestEnvtestMatrix(t *testing.T) {
 		t.Logf("verdict %s, score %d, %d finding(s); capabilities: %s; notAssessed %+v", report.Verdict, report.Score, len(report.Findings), capabilitySummary(inv), report.NotAssessed)
 	})
 
-	t.Run("a second scan of an unchanged cluster is identical", func(t *testing.T) {
-		inv1, r1 := scan(t, next)
-		inv2, r2 := scan(t, next)
+	t.Run("the scans after the first of an unchanged cluster are identical to it", func(t *testing.T) {
 		// The scanner's own requests (its LISTs at a deprecated version,
 		// the /metrics scrape) must not change what the next scan sees
-		// (#123, #139).
-		if a, b := indentJSON(t, r1), indentJSON(t, r2); !bytes.Equal(a, b) {
-			t.Errorf("reports differ between two scans of an unchanged %s cluster\nfirst:\n%s\nsecond:\n%s", server, a, b)
+		// (#123, #139): the second scan is compared with the very first.
+		inv2, r2 := scan(t, next)
+		assertClean(t, 2, r2)
+		inv3, r3 := scan(t, next)
+		assertClean(t, 3, r3)
+		same := func(what string, na, nb int, a, b any) {
+			t.Helper()
+			if x, y := indentJSON(t, a), indentJSON(t, b); !bytes.Equal(x, y) {
+				t.Errorf("%s differ between scan %d and scan %d of an unchanged %s cluster\nscan %d:\n%s\nscan %d:\n%s", what, na, nb, server, na, x, nb, y)
+			}
 		}
-		inv1.CollectedAt, inv2.CollectedAt = time.Time{}, time.Time{}
-		if a, b := indentJSON(t, inv1), indentJSON(t, inv2); !bytes.Equal(a, b) {
-			t.Errorf("inventories differ between two scans of an unchanged %s cluster\nfirst:\n%s\nsecond:\n%s", server, a, b)
-		}
+		same("reports", 1, 2, r1, r2)
+		same("reports", 2, 3, r2, r3)
+		inv1.CollectedAt, inv2.CollectedAt, inv3.CollectedAt = time.Time{}, time.Time{}, time.Time{}
+		same("inventories", 1, 2, inv1, inv2)
+		same("inventories", 2, 3, inv2, inv3)
 	})
 
 	t.Run("an object written through a deprecated beta API blocks at its removal", func(t *testing.T) {
@@ -321,8 +350,8 @@ func TestEnvtestMatrix(t *testing.T) {
 			switch {
 			case f.Key == key:
 				got = &report.Findings[i]
-			case f.Category == engine.CatRemovedAPI:
-				t.Errorf("unexpected removed-api finding %s: only %s was written through a beta API", f.Key, beta.kind)
+			case f.Severity != engine.SevInfo:
+				t.Errorf("unexpected %s finding %s: only %s was written through a beta API", f.Severity, f.Key, beta.kind)
 			}
 		}
 		if got == nil {
@@ -350,6 +379,15 @@ func TestEnvtestMatrix(t *testing.T) {
 			t.Errorf("%s at target %s: want a warning, findings: %s", key, earlier, findingKeys(report))
 		}
 	})
+}
+
+// isLoopback reports whether host is localhost or a loopback IP.
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func envtestUnstructured(manifest string) *unstructured.Unstructured {

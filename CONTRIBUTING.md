@@ -227,7 +227,9 @@ The `envtest` job (`hack/envtest.sh`, `TestEnvtestMatrix` in
 to 1.28, with no Docker: for each minor it downloads that minor's
 kube-apiserver and etcd with `setup-envtest`, starts them on a loopback
 port, and scans them with the same collector and engine as `scan`. It reads
-no kubeconfig and touches no cluster you have a context for. The tool and
+no kubeconfig and touches no cluster you have a context for (the test pins
+`UseExistingCluster` off, so `USE_EXISTING_CLUSTER=true` in your shell is
+ignored, and it refuses a non-loopback apiserver). The tool and
 the bundle index are pinned in `hack/envtest.sh`, each minor's bundle to an
 exact patch release in `hack/envtest-versions.txt`, and downloads are
 sha512-verified; the first run needs network, and CI caches `bin/envtest`.

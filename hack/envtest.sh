@@ -65,8 +65,13 @@ if [ -z "$setup" ]; then
   fi
 fi
 
+# envtest prefers these over KUBEBUILDER_ASSETS: a stale export in the
+# shell must not swap the bundle this script just resolved.
+unset TEST_ASSET_KUBE_APISERVER TEST_ASSET_ETCD TEST_ASSET_KUBECTL
+
 run_test() {
   if [ -n "${ENVTEST_GO_TEST:-}" ]; then
+    # Word-split on purpose: it is a command line (the stub in hack/envtest_test.sh).
     $ENVTEST_GO_TEST
   else
     go test ./internal/collect -run '^TestEnvtestMatrix$' -count=1 -v
