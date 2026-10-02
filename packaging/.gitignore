@@ -1,0 +1,3 @@
+# tools/gen-docs output (completions, man pages) and the registry date,
+# written by GoReleaser's before hooks for the archives and packages.
+/generated/
