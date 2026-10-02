@@ -8,7 +8,8 @@ on:
   # Kubernetes and Postgres patch images ship, and the published Action's
   # release-install path can break, whether or not anyone pushes. The
   # scheduled run is the vuln gate, the full Kubernetes (1.29-1.37) and
-  # Postgres (14-18) matrices, the Action check and KB freshness.
+  # Postgres (14-18) matrices, the envtest apiserver matrix (1.24-1.28,
+  # the same legs as on a PR), the Action check and KB freshness.
   schedule:
     - cron: '41 5 * * 1' # Mondays 05:41 UTC
   # On demand, from any branch: `gh workflow run ci.yml --ref <branch>`
@@ -697,6 +698,47 @@ jobs:
           E2E_MINOR: ${{ matrix.minor }}
         run: make e2e E2E_MINOR="$E2E_MINOR"
 
+  # The live collector and engine against a real kube-apiserver and etcd
+  # (controller-runtime's envtest, no Docker) for the Kubernetes minors
+  # kind's node images do not cover, 1.24 to 1.28 (hack/envtest-versions.txt;
+  # #135, #69): GA-only objects give no removed-API finding, a second scan of
+  # an unchanged cluster is identical, an object written through a beta API
+  # that minor still serves blocks at its removal, and what an apiserver
+  # without nodes cannot answer is reported as not assessed. It is cheap (a
+  # few seconds of test and a bundle download), so every minor runs wherever
+  # the kube job does, the PR set included. make envtest reproduces a leg on
+  # a laptop. hack/envtest.sh pins setup-envtest and its bundle index, and
+  # the downloads are sha512-verified.
+  envtest:
+    name: envtest (Kubernetes ${{ matrix.minor }})
+    needs: changes
+    if: >-
+      !cancelled() &&
+      (needs.changes.outputs.e2e == 'true' || needs.changes.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        minor: ['1.24', '1.25', '1.26', '1.27', '1.28']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # setup-envtest and this minor's kube-apiserver and etcd bundle. The
+      # key changes with the pins, so a bump downloads afresh.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: bin/envtest
+          key: envtest-${{ runner.os }}-${{ matrix.minor }}-${{ hashFiles('hack/envtest.sh', 'hack/envtest-versions.txt') }}
+      - name: envtest on Kubernetes ${{ matrix.minor }}
+        env:
+          ENVTEST_MINOR: ${{ matrix.minor }}
+        run: make envtest ENVTEST_MINOR="$ENVTEST_MINOR"
+
   kb-freshness:
     name: kb dataset is not stale
     runs-on: ubuntu-latest
@@ -742,7 +784,7 @@ jobs:
   # hack-test) fails if a job is missing from needs.
   ci-ok:
     if: always()
-    needs: [changes, lint, test, build, notices, vuln, web, helm, images, registry, pg-conformance, release-check, action, kube-matrix, kube, kb-freshness]
+    needs: [changes, lint, test, build, notices, vuln, web, helm, images, registry, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

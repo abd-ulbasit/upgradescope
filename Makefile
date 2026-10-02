@@ -46,6 +46,16 @@ test:
 it:
 	UPGRADESCOPE_IT=1 go test ./... -run Integration -v
 
+# CI's envtest job (#135, #69): the live collector and engine against a real
+# kube-apiserver and etcd for each Kubernetes minor kind has no node image
+# for, 1.24 to 1.28 (hack/envtest-versions.txt). `make envtest` runs them
+# all, `make envtest ENVTEST_MINOR=1.24` one. It starts the apiserver on a
+# loopback port itself: no Docker, and no kubeconfig or context is read.
+# Needs Go and, on the first run, network (setup-envtest and the bundle).
+.PHONY: envtest
+envtest:
+	./hack/envtest.sh $(ENVTEST_MINOR)
+
 # The fleet-scale gate (#125): 500 clusters with ~35 KiB inventories on
 # SQLite, 10 concurrent /fleet readers; fails when p95 is over 1s or the
 # live heap peaks over 512MiB (the chart's memory limit). Needs only Go.
@@ -279,6 +289,7 @@ hack-test:
 	./hack/check-toolchain_test.sh
 	./hack/install-tool_test.sh
 	./hack/kind-images_test.sh
+	./hack/envtest_test.sh
 	./hack/e2e_test.sh
 	./hack/ci-concurrency_test.sh
 	./hack/ci-ok_test.sh
