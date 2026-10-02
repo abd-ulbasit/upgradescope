@@ -20,11 +20,12 @@ type APILifecycleEntry struct {
 	Deprecated  *inventory.Version `json:"deprecated,omitempty"`
 	Removed     *inventory.Version `json:"removed,omitempty"`
 	Replacement *GVK               `json:"replacement,omitempty"`
-	// RemovedInferred marks a tombstone for a type upstream deleted whose
-	// Removed is no upstream lifecycle tag: tools/gen-kb set it to the
-	// k8s.io/api minor the type disappeared in (when untagged, or tagged
-	// for a later removal), or to the earlier release kube-apiserver
-	// stopped serving it in (its removalFixes).
+	// RemovedInferred marks an entry whose Removed is no upstream lifecycle
+	// tag: tools/gen-kb set it to the k8s.io/api minor a deleted type
+	// disappeared in (when untagged, or tagged for a later removal), to the
+	// earlier release kube-apiserver stopped serving it in (its
+	// removalFixes), or to the release the Kubernetes changelog states for a
+	// type upstream still registers but never tagged (its untaggedLifecycles).
 	RemovedInferred bool `json:"removedInferred,omitempty"`
 }
 
@@ -54,6 +55,35 @@ func parseLifecycle(data []byte) (lifecycleFile, error) {
 		return lifecycleFile{}, fmt.Errorf("kb: apilifecycle.json has no entries")
 	}
 	return f, nil
+}
+
+// The smallest dataset Load accepts. The shipped one has about 200
+// entries, over 120 of them with a removal; a refresh only adds (gen-kb
+// carries deleted types forward as tombstones) except for the explicit
+// nonPersisted list, so a file under these
+// floors is not an old dataset but a damaged or gutted one: valid JSON that
+// would let every removed API scan as ready. (TestDatasetSanity checks the
+// content; this check runs in every binary.)
+const (
+	minLifecycleEntries  = 150
+	minLifecycleRemovals = 100
+)
+
+// checkLifecycleFloors reports a lifecycle dataset too small, or with too
+// few removals, to be the one gen-kb wrote.
+func checkLifecycleFloors(f lifecycleFile) error {
+	removals := 0
+	for _, e := range f.Entries {
+		if e.Removed != nil {
+			removals++
+		}
+	}
+	if len(f.Entries) < minLifecycleEntries || removals < minLifecycleRemovals {
+		return fmt.Errorf("kb: embedded apilifecycle.json is corrupt: %d entries (want >= %d), %d with a removal (want >= %d); "+
+			"it would judge removed APIs as served, so rebuild from a clean source tree (make gen-kb)",
+			len(f.Entries), minLifecycleEntries, removals, minLifecycleRemovals)
+	}
+	return nil
 }
 
 // Index is an O(1) lookup over lifecycle entries by group/version/kind.

@@ -19,9 +19,9 @@ third-party sources.
    Copyright The Kubernetes Authors.
    Licensed under the Apache License, Version 2.0.
 
-   internal/kb/data/supplement.json and the version-skew policy in
+   the cited fixups in tools/gen-kb/fixups.go and the version-skew policy in
    internal/kb/skew.go record facts published in the Kubernetes
-   documentation (https://kubernetes.io/docs/reference/using-api/deprecation-guide/
+   documentation and release notes (https://kubernetes.io/docs/reference/using-api/deprecation-guide/
    and https://kubernetes.io/releases/version-skew-policy/).
    Copyright The Kubernetes Authors.
    Kubernetes documentation is licensed under CC BY 4.0.

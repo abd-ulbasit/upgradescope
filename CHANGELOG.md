@@ -206,6 +206,11 @@ a CI gate.
 
 ### Changed
 
+- The hand-written `supplement.json` is gone: the four entries it held
+  (autoscaling HPA v2beta1 and v2beta2, both PodSecurityPolicy versions)
+  were already in the generated dataset, which won on overlap. The
+  lifecycle dataset is now the generated file alone, and the facts the
+  generator adds by hand carry citations (#166).
 - **Breaking for webhook receivers:** the generic webhook now sends one
   JSON body per cluster and evaluation pass (`schemaVersion` 1, lowercase
   keys: `deliveryId`, `type`, `timestamp`, `cluster`, `targets`, `changes`,
@@ -366,6 +371,28 @@ a CI gate.
   deprecated-API caller rows are sorted before they are judged and folded
   into usage findings, whose evidence sentence listed subresources in the
   order the rows arrived (#165).
+- Knowledge base: `rbac.authorization.k8s.io/v1alpha1` (ClusterRole,
+  ClusterRoleBinding, Role, RoleBinding; removed in 1.23) and
+  `node.k8s.io/v1alpha1` RuntimeClass (removed in 1.24) now block at the
+  release that stopped serving them; they scanned as ready with only an
+  `unknown-api` info. Kinds kube-apiserver never stored as resources, and no manifest can
+  create (`PodStatusResult`, `EphemeralContainers`,
+  `ReplicationControllerDummy`, `JobTemplate`, the removed `Scale` and
+  `DeploymentRollback` bodies, the v1beta1 `AdmissionReview`,
+  `ConversionReview` and `policy` `Eviction`, and the `apidiscovery.k8s.io`
+  v2beta1 `APIGroupDiscovery`) are no longer removed-API blockers.
+  `scheduling.k8s.io/v1alpha3` types stay `unknown-api` infos (#166).
+- `kb.Load` refuses a lifecycle dataset with fewer than 150 entries or 100
+  removals, with an error that says the embedded data is corrupt, instead of
+  judging every API as served (#166).
+- Registry validation rejects a citation on a placeholder or local host
+  (`example.com`, `localhost`, an IP address, or a private name such as
+  `.local`, `.lan` or `.internal`, which an intranet page cited for a private
+  add-on now trips) and `status: unknown` with an
+  `eol_date`, which printed an uncited end-of-life blocker; a test fails on
+  any file in `registry/data` that is not `*.yaml`. The registry notes
+  that endoflife.date puts Istio 1.29's end of life at 31 October 2026
+  where istio.io says 12 October (#166).
 
 ### Security
 

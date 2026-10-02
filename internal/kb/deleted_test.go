@@ -59,3 +59,40 @@ func TestKBCoversDeletedAlphaGVKs(t *testing.T) {
 		t.Fatalf("test covers %d GVKs, want the 20 #124 lists", n)
 	}
 }
+
+// TestKBCoversUntaggedRemovals pins APIs k8s.io/api registers without
+// lifecycle markers whose removal the Kubernetes changelog states
+// (tools/gen-kb untaggedLifecycles, #166): rbac.authorization.k8s.io/v1alpha1
+// is gone in 1.23 (CHANGELOG-1.23, #104248), node.k8s.io/v1alpha1
+// RuntimeClass in 1.24 (CHANGELOG-1.24, #103061). Unknown to the KB, a
+// manifest using one scanned as ready at the target that no longer serves it.
+func TestKBCoversUntaggedRemovals(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	cases := []struct {
+		group, version string
+		kinds          []string
+		removed        int
+	}{
+		{"rbac.authorization.k8s.io", "v1alpha1", []string{"ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding"}, 23},
+		{"node.k8s.io", "v1alpha1", []string{"RuntimeClass"}, 24},
+	}
+	for _, c := range cases {
+		for _, kind := range c.kinds {
+			e, ok := idx.Lookup(c.group, c.version, kind)
+			if !ok {
+				t.Errorf("KB missing %s/%s %s", c.group, c.version, kind)
+				continue
+			}
+			if want := (inventory.Version{Major: 1, Minor: c.removed}); e.Removed == nil || *e.Removed != want {
+				t.Errorf("%s/%s %s: Removed = %v, want %v", c.group, c.version, kind, e.Removed, want)
+			}
+			if e.Replacement == nil || e.Replacement.Version != "v1" || e.Replacement.Kind != kind {
+				t.Errorf("%s/%s %s: Replacement = %v, want the v1 kind", c.group, c.version, kind, e.Replacement)
+			}
+		}
+	}
+}

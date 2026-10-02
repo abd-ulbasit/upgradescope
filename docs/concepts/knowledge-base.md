@@ -7,7 +7,7 @@ new release.
 
 | Part | Source | Maintained by |
 |---|---|---|
-| API lifecycle: for each group/version/kind, when it was introduced, deprecated and removed, and its replacement | generated from `k8s.io/api` source (`internal/kb/data/apilifecycle.json`), plus a short hand-written, cited supplement for types upstream already deleted from `k8s.io/api` | `tools/gen-kb` |
+| API lifecycle: for each group/version/kind, when it was introduced, deprecated and removed, and its replacement | generated from `k8s.io/api` source (`internal/kb/data/apilifecycle.json`), and nothing else: no hand-written overlay. The few facts the source lacks are fixups in the generator, each with a citation | `tools/gen-kb` |
 | Add-on registry: end of life, release lines and Kubernetes compatibility of common add-ons | one YAML file per add-on in `registry/data/`, every claim cited | hand-curated, and synced with endoflife.date where it has the product ([Add-on registry](addon-registry.md)) |
 | Version-skew policy | the upstream [version skew policy](https://kubernetes.io/releases/version-skew-policy/) | `internal/kb/skew.go` ([Version skew](version-skew.md)) |
 
@@ -37,8 +37,38 @@ further ahead than the human-written
 [deprecation guide](https://kubernetes.io/docs/reference/using-api/deprecation-guide/).
 CI regenerates the file on every change and fails when the committed copy
 differs, and checks that the generator imports every `k8s.io/api`
-group/version package. When the generated data and the supplement overlap,
-the generated entries win.
+group/version package.
+
+Three things the generator adds to what the source says, each in
+`tools/gen-kb` (`history.go`, `merge.go` and `fixups.go`) and tested:
+
+- **Tombstones.** A type `k8s.io/api` deleted stays in the data, removed in
+  the release that stopped serving it, so a manifest still using it blocks.
+  The generator reads every `k8s.io/api` release since v0.17 for this.
+- **Untagged types.** Some registered types carry no lifecycle markers, so
+  the source says nothing about them. `rbac.authorization.k8s.io/v1alpha1`
+  (removed in 1.23) and `node.k8s.io/v1alpha1` RuntimeClass (1.24) get their
+  lifecycle from the Kubernetes release notes, cited in the generator. A
+  test fails once upstream tags the type, so the entry cannot go stale
+  quietly.
+- **Non-resources.** An explicit list in the generator, each with its evidence,
+  leaves out wrapper, subresource-body and payload types that
+  kube-apiserver never stored as resources and that no manifest can create:
+  `PodStatusResult`, `EphemeralContainers`, `ReplicationControllerDummy`,
+  `JobTemplate` (`batch/v1beta1`, `batch/v2alpha1`), the `Scale` and
+  `DeploymentRollback` bodies of the removed `apps` and `extensions`
+  versions, the v1beta1 `AdmissionReview` and `ConversionReview`, the
+  `policy/v1beta1` `Eviction` (the body of `pods/eviction`) and the
+  `apidiscovery.k8s.io/v2beta1` `APIGroupDiscovery` (a discovery response
+  format). The list is exactly these 14 kinds; any other kind
+  `k8s.io/api` registers and tags is treated as a resource. A manifest of one is an
+  `unknown-api` info, not a removal. The list is explicit rather than
+  derived, because `k8s.io/api` registers these like any resource. A test
+  checks every inferred removal left in the data against a list of types
+  kube-apiserver served, so a new one cannot slip in unaudited.
+
+Every other fact is `k8s.io/api`'s own. There is no separate hand-written
+dataset; a test fails if one is added.
 
 ## The horizon
 
@@ -67,8 +97,18 @@ the horizon minor, until you upgrade to a release with a newer KB.
 
 ## What it does not cover
 
+- Registered types with no lifecycle markers and no release-note source are
+  not judged, so they never block. A `scheduling.k8s.io/v1alpha3` Workload,
+  PodGroup or CompositePodGroup (still served at 1.37) is an `unknown-api`
+  info, because the KB knows that group. `imagepolicy.k8s.io/v1alpha1`
+  ImageReview and `internal.apiserver.k8s.io/v1alpha1` StorageVersion are in
+  groups the KB has no entries for, so, like CRD groups, they produce no
+  finding at all.
 - CRD versions served by your own or third-party CRDs (deprecated CRD
-  versions and stale `status.storedVersions`) are not in the KB ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
+  versions and stale `status.storedVersions`) are not in the KB: they are
+  judged from the CRDs themselves, deprecated and unserved versions live or
+  in `--files`, stale `status.storedVersions` live only
+  ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
 - Add-ons outside the registry are not judged: their images are listed as
   `unrecognizedImages` in the inventory and the report, and never become
   findings.

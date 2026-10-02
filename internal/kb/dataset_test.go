@@ -6,6 +6,38 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
+// TestNonResourceKindsAreNotInTheKB: wrappers and subresource bodies that
+// kube-apiserver never stored (tools/gen-kb nonPersisted) have no lifecycle
+// to judge. PodStatusResult used to be "removed 1.37" by inference, a
+// removed-api blocker for a manifest no cluster could have (#166).
+func TestNonResourceKindsAreNotInTheKB(t *testing.T) {
+	f, err := parseLifecycle(apilifecycleJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := NewIndex(f.Entries)
+	for _, c := range []struct{ group, version, kind string }{
+		{"", "v1", "PodStatusResult"},
+		{"", "v1", "EphemeralContainers"},
+		{"extensions", "v1beta1", "ReplicationControllerDummy"},
+		{"batch", "v1beta1", "JobTemplate"},
+		{"batch", "v2alpha1", "JobTemplate"},
+		{"apps", "v1beta1", "Scale"},
+		{"apps", "v1beta2", "Scale"},
+		{"extensions", "v1beta1", "Scale"},
+		{"apps", "v1beta1", "DeploymentRollback"},
+		{"extensions", "v1beta1", "DeploymentRollback"},
+		{"admission.k8s.io", "v1beta1", "AdmissionReview"},
+		{"apiextensions.k8s.io", "v1beta1", "ConversionReview"},
+		{"policy", "v1beta1", "Eviction"},
+		{"apidiscovery.k8s.io", "v2beta1", "APIGroupDiscovery"},
+	} {
+		if e, ok := idx.Lookup(c.group, c.version, c.kind); ok {
+			t.Errorf("dataset has %s/%s %s (%+v), want none: it is not a persisted resource", c.group, c.version, c.kind, e)
+		}
+	}
+}
+
 // TestDatasetSanity cross-checks the generated dataset against well-known
 // removal milestones (same facts pluto/kubent encode — used as a sanity
 // check only, never copied).

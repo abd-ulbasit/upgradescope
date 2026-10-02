@@ -31,6 +31,8 @@ func readDataset(path string) ([]entry, error) {
 // manifest still using it must keep failing the scan.
 //
 //   - GVK in gen: the fresh entry wins.
+//   - GVK in nonPersisted: dropped, so a dataset written before the
+//     exclusion existed loses it on the next run.
 //   - GVK still registered upstream but without lifecycle data: the
 //     previous entry is kept unchanged (no evidence it was removed).
 //   - GVK gone from upstream: tombstoned. If it never carried a removal
@@ -48,7 +50,7 @@ func carryForward(prev, gen []entry, upstream map[gvkOut]bool, removedAt version
 	}
 	out = append([]entry(nil), gen...)
 	for _, p := range prev {
-		if fresh[p.gvk()] {
+		if fresh[p.gvk()] || isNonPersisted(p.gvk()) {
 			continue
 		}
 		if !upstream[p.gvk()] {

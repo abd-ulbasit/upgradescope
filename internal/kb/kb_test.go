@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -50,6 +51,89 @@ func TestLoad(t *testing.T) {
 	for _, s := range k.UpgradeSteps {
 		if s.Citation == "" || s.From.Major != s.To.Major || s.To.Minor < s.From.Minor+2 {
 			t.Errorf("upgrade step %v → %v (citation %q): want a citation and a step that skips a minor", s.From, s.To, s.Citation)
+		}
+	}
+}
+
+// TestLoadRefusesHollowLifecycleData: a dataset that parses but holds
+// almost nothing, or no removal at all, would judge every manifest ready.
+// Load must refuse it itself, not rely on this package's tests running
+// against the embedded copy (#166 KB-11).
+func TestLoadRefusesHollowLifecycleData(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(apilifecycleJSON, &doc); err != nil {
+		t.Fatal(err)
+	}
+	entries := doc["entries"].([]any)
+	variant := func(mutate func([]any) []any) []byte {
+		d := map[string]any{"generatedFrom": doc["generatedFrom"], "maxKnownK8s": doc["maxKnownK8s"]}
+		cp := make([]any, len(entries))
+		for i, e := range entries {
+			m := map[string]any{}
+			for k, v := range e.(map[string]any) {
+				m[k] = v
+			}
+			cp[i] = m
+		}
+		d["entries"] = mutate(cp)
+		raw, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	if _, err := load(apilifecycleJSON); err != nil {
+		t.Fatalf("load(embedded) error = %v", err)
+	}
+	for name, raw := range map[string][]byte{
+		"every removal stripped": variant(func(es []any) []any {
+			for _, e := range es {
+				delete(e.(map[string]any), "removed")
+				delete(e.(map[string]any), "removedInferred")
+			}
+			return es
+		}),
+		"a single entry": variant(func(es []any) []any { return es[:1] }),
+		"a few entries":  variant(func(es []any) []any { return es[:minLifecycleEntries-1] }),
+	} {
+		_, err := load(raw)
+		if err == nil {
+			t.Errorf("%s: load() = nil error, want one: the embedded data is corrupt", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "corrupt") {
+			t.Errorf("%s: error = %q, want it to say the embedded data is corrupt", name, err)
+		}
+	}
+}
+
+func TestCheckLifecycleFloors(t *testing.T) {
+	file := func(entries, removals int) lifecycleFile {
+		f := lifecycleFile{}
+		for i := 0; i < entries; i++ {
+			e := APILifecycleEntry{Kind: fmt.Sprintf("K%d", i)}
+			if i < removals {
+				e.Removed = ver(25)
+			}
+			f.Entries = append(f.Entries, e)
+		}
+		return f
+	}
+	cases := []struct {
+		entries, removals int
+		ok                bool
+	}{
+		{minLifecycleEntries, minLifecycleRemovals, true},
+		{minLifecycleEntries - 1, minLifecycleRemovals, false},
+		{minLifecycleEntries, minLifecycleRemovals - 1, false},
+		{minLifecycleEntries, 0, false},
+		{0, 0, false},
+	}
+	for _, c := range cases {
+		err := checkLifecycleFloors(file(c.entries, c.removals))
+		if (err == nil) != c.ok {
+			t.Errorf("%d entries, %d with a removal: error = %v, want ok=%v", c.entries, c.removals, err, c.ok)
 		}
 	}
 }

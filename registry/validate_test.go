@@ -91,6 +91,32 @@ func TestValidate(t *testing.T) {
 		{"citation without host", func(a *AddOn) {
 			a.Support.Citations = []string{"https://"}
 		}, "host"},
+		// A placeholder host passes the shape rules and cites nothing (#166).
+		{"citation on example.com", func(a *AddOn) { a.Support.Citations = []string{"https://example.com/lifecycle"} }, "reserved or local host"},
+		{"citation on a subdomain of example.com", func(a *AddOn) { a.Support.Citations = []string{"https://docs.example.com/x"} }, "reserved or local host"},
+		{"citation on example.org", func(a *AddOn) { a.Support.Citations = []string{"https://example.org/"} }, "reserved or local host"},
+		{"citation on example.net", func(a *AddOn) { a.Support.Citations = []string{"https://EXAMPLE.NET/"} }, "reserved or local host"},
+		{"citation on localhost", func(a *AddOn) { a.Support.Citations = []string{"http://localhost:8080/eol"} }, "reserved or local host"},
+		{"citation on 127.0.0.1", func(a *AddOn) { a.Support.Citations = []string{"http://127.0.0.1/eol"} }, "reserved or local host"},
+		{"citation on an IPv6 loopback", func(a *AddOn) { a.Support.Citations = []string{"http://[::1]/eol"} }, "reserved or local host"},
+		{"citation on a private address", func(a *AddOn) { a.Support.Citations = []string{"http://10.0.0.5/eol"} }, "reserved or local host"},
+		{"citation on a single-label host", func(a *AddOn) { a.Support.Citations = []string{"http://x"} }, "reserved or local host"},
+		{"citation on a .test host", func(a *AddOn) { a.Support.Citations = []string{"https://vendor.test/eol"} }, "reserved or local host"},
+		{"citation on a .invalid host", func(a *AddOn) { a.Support.Citations = []string{"https://vendor.invalid/eol"} }, "reserved or local host"},
+		{"citation on an .internal host", func(a *AddOn) { a.Support.Citations = []string{"https://wiki.corp.internal/eol"} }, "reserved or local host"},
+		{"citation on a .lan host", func(a *AddOn) { a.Support.Citations = []string{"https://nas.lan/eol"} }, "reserved or local host"},
+		{"citation on a .home.arpa host", func(a *AddOn) { a.Support.Citations = []string{"https://box.home.arpa/eol"} }, "reserved or local host"},
+		{"citation on a .localdomain host", func(a *AddOn) { a.Support.Citations = []string{"https://box.localdomain/eol"} }, "reserved or local host"},
+		{"citation on IPv4 shorthand", func(a *AddOn) { a.Support.Citations = []string{"http://127.1/eol"} }, "reserved or local host"},
+		{"citation on a lookalike of example.com is fine", func(a *AddOn) { a.Support.Citations = []string{"https://notexample.com/eol"} }, ""},
+		{"cycle citation on example.com", func(a *AddOn) { a.Cycles[0].Citations = []string{"https://example.com/"} }, "reserved or local host"},
+		{"compat citation on example.com", func(a *AddOn) { a.Compat[0].Citations = []string{"https://example.com/"} }, "reserved or local host"},
+		// A date is a claim: without a cited status it would still print as
+		// a blocker (#166).
+		{"unknown status with an eol_date", func(a *AddOn) {
+			a.Support = Support{Status: "unknown", EOLDate: "2020-01-01"}
+		}, "eol_date requires support.status supported or eol"},
+		{"supported status with an eol_date is fine", func(a *AddOn) { a.Support.Status = "supported" }, ""},
 		{"eol_date wrong format", func(a *AddOn) { a.Support.EOLDate = "24-03-2026" }, "YYYY-MM-DD"},
 		{"eol_date not a date", func(a *AddOn) { a.Support.EOLDate = "2026-13-99" }, "YYYY-MM-DD"},
 		{"empty eol_date is fine", func(a *AddOn) { a.Support.EOLDate = "" }, ""},

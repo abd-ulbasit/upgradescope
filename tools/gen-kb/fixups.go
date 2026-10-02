@@ -13,10 +13,6 @@ var replacementFixes = map[gvkOut]*gvkOut{
 	// Deprecation guide, v1.25 "RuntimeClass": migrate to node.k8s.io/v1.
 	// Upstream tags no replacement.
 	{Group: "node.k8s.io", Version: "v1beta1", Kind: "RuntimeClass"}: {Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass"},
-	// Upstream tags apps/v1 DeploymentRollback, but apps/v1 never had that
-	// type: the rollback subresource was dropped (use `kubectl rollout
-	// undo`), so there is no API to migrate to.
-	{Group: "apps", Version: "v1beta1", Kind: "DeploymentRollback"}: nil,
 }
 
 // fixReplacement corrects e's replacement tag in place: explicit overrides
@@ -55,6 +51,137 @@ var removalFixes = map[gvkOut]version{
 	// scheduling.k8s.io/v1alpha1 priorityclasses, v1.23.0 has no v1alpha1
 	// storage. k8s.io/api never tagged it and deleted it in v0.36.
 	{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClass"}: {Major: 1, Minor: 23},
+}
+
+// untaggedLifecycle is the lifecycle of a type k8s.io/api registers without
+// APILifecycle* markers, from the Kubernetes release notes.
+type untaggedLifecycle struct {
+	introduced  version
+	removed     *version // first release whose kube-apiserver does not serve it
+	replacement *gvkOut
+	citations   []string // release notes or source that state introduced and removed
+}
+
+// entry returns u as a dataset entry for k. Removed is no upstream tag, so
+// it is marked inferred, as removalFixes' are.
+func (u untaggedLifecycle) entry(k gvkOut) entry {
+	e := entry{Group: k.Group, Version: k.Version, Kind: k.Kind, Introduced: u.introduced}
+	if u.removed != nil {
+		r := *u.removed
+		e.Removed, e.RemovedInferred = &r, true
+	}
+	if u.replacement != nil {
+		r := *u.replacement
+		e.Replacement = &r
+	}
+	return e
+}
+
+var (
+	rbacV1alpha1Cites = []string{
+		"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.3.md",  // "Alpha RBAC authorization API group"
+		"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.23.md", // "The rbac.authorization.k8s.io/v1alpha1 API version is removed" (#104248)
+	}
+	rbacV1alpha1Removed = version{Major: 1, Minor: 23}
+)
+
+// untaggedLifecycles gives a lifecycle to types k8s.io/api registers but
+// never tagged with APILifecycle* markers, which extract would otherwise
+// skip: a manifest using one that kube-apiserver no longer serves scored as
+// an unknown-api info, not a blocker (#166). Only add a type whose removal
+// is stated in the Kubernetes changelog, and cite it; the test fails once
+// upstream tags the type, when the entry must go. Registered, untagged
+// types with no entry here (scheduling.k8s.io/v1alpha3 Workload, PodGroup
+// and CompositePodGroup, still served; imagepolicy.k8s.io/v1alpha1
+// ImageReview, a webhook payload; internal.apiserver.k8s.io/v1alpha1
+// StorageVersion) are not judged, since nothing says when they leave: the
+// scheduling ones are unknown-api infos (the KB knows that group), the
+// other two produce no finding, as the KB has no entry in their groups.
+var untaggedLifecycles = map[gvkOut]untaggedLifecycle{
+	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "ClusterRole"}: {
+		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,
+		replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"},
+	},
+	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "ClusterRoleBinding"}: {
+		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,
+		replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"},
+	},
+	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "Role"}: {
+		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,
+		replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "Role"},
+	},
+	{Group: "rbac.authorization.k8s.io", Version: "v1alpha1", Kind: "RoleBinding"}: {
+		introduced: version{Major: 1, Minor: 3}, removed: &rbacV1alpha1Removed, citations: rbacV1alpha1Cites,
+		replacement: &gvkOut{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "RoleBinding"},
+	},
+	{Group: "node.k8s.io", Version: "v1alpha1", Kind: "RuntimeClass"}: {
+		introduced:  version{Major: 1, Minor: 12},
+		removed:     &version{Major: 1, Minor: 24},
+		replacement: &gvkOut{Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass"},
+		citations: []string{
+			"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.12.md", // "The RuntimeClass API has been added. This feature is in alpha" (a CRD until it became built-in in 1.14)
+			"https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.24.md", // "The node.k8s.io/v1alpha1 RuntimeClass API is no longer served" (#103061)
+		},
+	},
+}
+
+// nonPersisted are kinds k8s.io/api registers (or registered) that are
+// wrappers or subresource bodies, not resources: kube-apiserver never
+// stored them as resources, so no manifest or live object can be one and a
+// removal for them is meaningless. Without this, a deleted one became a
+// removed-api blocker through deletedTypes's inferred removal (#166). Each
+// value is the evidence, from the k8s.io/api source that registers the type.
+var nonPersisted = map[gvkOut]string{
+	// core/v1 types.go: "PodStatusResult is a wrapper for PodStatus returned
+	// by kubelet that can be encode/decoded". It has no storage under
+	// pkg/registry/core, and v0.37 stopped registering it.
+	{Group: "", Version: "v1", Kind: "PodStatusResult"}: "kubelet wrapper for PodStatus",
+	// core/v1 types.go (v0.21): "A list of ephemeral containers used with
+	// the Pod ephemeralcontainers subresource": the body of a subresource.
+	{Group: "", Version: "v1", Kind: "EphemeralContainers"}: "body of the pods/ephemeralcontainers subresource",
+	// extensions/v1beta1 types.go (v0.17): "Dummy definition", kept for
+	// the API documentation only.
+	{Group: "extensions", Version: "v1beta1", Kind: "ReplicationControllerDummy"}: "documentation placeholder",
+	// Upstream tags a removal on the types below, but they are the same
+	// kind of thing: none has storage in kube-apiserver's pkg/registry, so a
+	// manifest of one cannot exist and "removed" is a false blocker. Their
+	// current-version siblings (autoscaling/v1 Scale, admission.k8s.io/v1
+	// AdmissionReview, apiextensions.k8s.io/v1 ConversionReview) are not
+	// removed and stay.
+	//
+	// batch JobTemplate: the template embedded in a CronJob.
+	// pkg/registry/batch/rest/storage_batch.go (release-1.20) maps only
+	// jobs and cronjobs; v2alpha1 maps cronjobs only.
+	{Group: "batch", Version: "v1beta1", Kind: "JobTemplate"}:  "template embedded in a CronJob",
+	{Group: "batch", Version: "v2alpha1", Kind: "JobTemplate"}: "template embedded in a CronJob",
+	// Scale: the body of the /scale subresource of deployments, replica
+	// sets, stateful sets and replication controllers.
+	{Group: "apps", Version: "v1beta1", Kind: "Scale"}:       "body of a /scale subresource",
+	{Group: "apps", Version: "v1beta2", Kind: "Scale"}:       "body of a /scale subresource",
+	{Group: "extensions", Version: "v1beta1", Kind: "Scale"}: "body of a /scale subresource",
+	// DeploymentRollback: the body of the deployments/rollback subresource,
+	// dropped in apps/v1 (use `kubectl rollout undo`).
+	{Group: "apps", Version: "v1beta1", Kind: "DeploymentRollback"}:       "body of the deployments/rollback subresource",
+	{Group: "extensions", Version: "v1beta1", Kind: "DeploymentRollback"}: "body of the deployments/rollback subresource",
+	// Review payloads: what kube-apiserver sends to and reads from a
+	// webhook, never an object a manifest or a cluster holds.
+	{Group: "admission.k8s.io", Version: "v1beta1", Kind: "AdmissionReview"}:      "admission webhook payload",
+	{Group: "apiextensions.k8s.io", Version: "v1beta1", Kind: "ConversionReview"}: "conversion webhook payload",
+	// Eviction: the body of the pods/eviction subresource. k8s.io/api says
+	// "This is a subresource of Pod"; kube-apiserver's
+	// pkg/registry/policy/rest maps only poddisruptionbudgets (and, before
+	// 1.25, podsecuritypolicies) under v1beta1. policy/v1 Eviction stays, as
+	// the other current-version siblings do. lifecycle.k8s.io/v1alpha1
+	// Eviction is not this: it is a new resource with its own storage.
+	{Group: "policy", Version: "v1beta1", Kind: "Eviction"}: "body of the pods/eviction subresource",
+	// APIGroupDiscovery: the aggregated discovery response format
+	// (/api and /apis with an Accept header), never a stored resource.
+	{Group: "apidiscovery.k8s.io", Version: "v2beta1", Kind: "APIGroupDiscovery"}: "aggregated discovery response payload",
+}
+
+func isNonPersisted(g gvkOut) bool {
+	_, ok := nonPersisted[g]
+	return ok
 }
 
 // fixRemoval applies removalFixes to e: an override earlier than e's

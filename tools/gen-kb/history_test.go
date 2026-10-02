@@ -115,7 +115,9 @@ func TestReadSnapshotMatchesScheme(t *testing.T) {
 		}
 		fixReplacement(&e)
 		want, tagged := tags[k]
-		if !tagged {
+		// A lifecycle from untaggedLifecycles is no upstream tag: the
+		// source still reads as untagged.
+		if _, fixed := untaggedLifecycles[k]; !tagged || fixed {
 			want = entry{Group: k.Group, Version: k.Version, Kind: k.Kind}
 			fixReplacement(&want)
 		}

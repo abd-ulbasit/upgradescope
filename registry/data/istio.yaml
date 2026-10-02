@@ -2,6 +2,15 @@
 # cycles are generated from the endoflife.date API by tools/eol-sync; do not
 # edit them by hand. support is hand-curated: status eol is only for a
 # product upstream retired as a whole.
+#
+# Known discrepancy (checked 2026-10-03): for 1.29, endoflife.date says
+# 2026-10-31 (kept below, since eol-sync owns the cycles) but
+# https://istio.io/latest/docs/releases/supported-releases/ says "12 Oct 2026
+# (Expected)". An Istio 1.29 install is therefore an eol-approaching warning
+# from 12 to 31 October 2026, where istio.io's own date would already be an
+# eol-addon blocker. For 1.30 and 1.31 istio.io gives only a month ("~Dec
+# 2026", "~Feb 2027"), which agrees with endoflife.date. Remove this note
+# once the two sources agree or 1.29 has ended.
 schema_version: 2
 id: istio
 display_name: Istio
