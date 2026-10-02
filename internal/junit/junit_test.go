@@ -3,176 +3,19 @@ package junit
 import (
 	"bytes"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"flag"
-	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/junit/junittest"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files under testdata")
-
-// The JUnit dialect CI systems read, decoded independently of the
-// writer's model so a field the writer drops is caught. It follows the
-// Jenkins JUnit schema (jenkins-junit.xsd, the de facto reference that
-// GitLab, Azure Pipelines' PublishTestResults and Jenkins' junit step
-// accept): a <testsuites> root, <testsuite> with name and tests (plus the
-// failures, errors, skipped and time counts), <testcase> with name,
-// classname and time, and at most one <failure>, <error> or <skipped> per
-// test case, each with a message attribute.
-type reader struct {
-	XMLName  xml.Name      `xml:"testsuites"`
-	Name     string        `xml:"name,attr"`
-	Tests    *int          `xml:"tests,attr"`
-	Failures *int          `xml:"failures,attr"`
-	Errors   *int          `xml:"errors,attr"`
-	Skipped  *int          `xml:"skipped,attr"`
-	Time     string        `xml:"time,attr"`
-	Suites   []readerSuite `xml:"testsuite"`
-}
-
-type readerSuite struct {
-	Name     string       `xml:"name,attr"`
-	Tests    *int         `xml:"tests,attr"`
-	Failures *int         `xml:"failures,attr"`
-	Errors   *int         `xml:"errors,attr"`
-	Skipped  *int         `xml:"skipped,attr"`
-	Time     string       `xml:"time,attr"`
-	Cases    []readerCase `xml:"testcase"`
-	Other    []xml.Name   `xml:",any"`
-}
-
-type readerCase struct {
-	Name      string         `xml:"name,attr"`
-	Classname string         `xml:"classname,attr"`
-	Time      string         `xml:"time,attr"`
-	Failure   []readerResult `xml:"failure"`
-	Error     []readerResult `xml:"error"`
-	Skipped   []readerResult `xml:"skipped"`
-	SystemOut []string       `xml:"system-out"`
-	Other     []xml.Name     `xml:",any"`
-}
-
-type readerResult struct {
-	Message *string `xml:"message,attr"`
-	Type    string  `xml:"type,attr"`
-	Text    string  `xml:",chardata"`
-}
-
-// status is "failure", "error", "skipped" or "passed".
-func (c readerCase) status() string {
-	switch {
-	case len(c.Failure) > 0:
-		return "failure"
-	case len(c.Error) > 0:
-		return "error"
-	case len(c.Skipped) > 0:
-		return "skipped"
-	}
-	return "passed"
-}
-
-// readJUnit parses raw as a JUnit reader does and checks it against the
-// Jenkins JUnit schema's rules: required attributes, counts that match the
-// test cases, one outcome per test case, numeric times.
-func readJUnit(t *testing.T, raw []byte) reader {
-	t.Helper()
-	if !bytes.HasPrefix(raw, []byte(xml.Header)) {
-		t.Errorf("output does not start with the XML declaration:\n%s", raw)
-	}
-	// Well-formed, strictly: every token decodes.
-	dec := xml.NewDecoder(bytes.NewReader(raw))
-	dec.Strict = true
-	for {
-		_, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("not well-formed XML: %v\n%s", err, raw)
-		}
-	}
-	var doc reader
-	if err := xml.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("not a <testsuites> document: %v\n%s", err, raw)
-	}
-	count := func(where, attr string, got *int, want int) {
-		t.Helper()
-		if got == nil {
-			t.Errorf("%s: no %s attribute", where, attr)
-		} else if *got != want {
-			t.Errorf("%s: %s=%d, want %d", where, attr, *got, want)
-		}
-	}
-	number := func(where, v string) {
-		t.Helper()
-		if _, err := strconv.ParseFloat(v, 64); err != nil {
-			t.Errorf("%s: time %q is not a number", where, v)
-		}
-	}
-	if doc.Name == "" {
-		t.Error("<testsuites> has no name")
-	}
-	number("<testsuites>", doc.Time)
-	if len(doc.Suites) == 0 {
-		t.Fatal("no <testsuite>: Jenkins' junit step fails a build whose reports hold no tests")
-	}
-	var total, failures, errs, skipped int
-	for _, s := range doc.Suites {
-		where := "testsuite " + s.Name
-		if s.Name == "" {
-			t.Error("a <testsuite> has no name")
-		}
-		if len(s.Other) > 0 {
-			t.Errorf("%s: unexpected elements %v", where, s.Other)
-		}
-		number(where, s.Time)
-		var f, e, sk int
-		for _, c := range s.Cases {
-			cw := where + " / " + c.Name
-			if c.Name == "" || c.Classname == "" {
-				t.Errorf("%s: testcase without name or classname: %+v", where, c)
-			}
-			if len(c.Other) > 0 {
-				t.Errorf("%s: unexpected elements %v", cw, c.Other)
-			}
-			number(cw, c.Time)
-			if n := len(c.Failure) + len(c.Error) + len(c.Skipped); n > 1 {
-				t.Errorf("%s: %d outcomes, want at most one", cw, n)
-			}
-			for _, r := range append(append(append([]readerResult{}, c.Failure...), c.Error...), c.Skipped...) {
-				if r.Message == nil || *r.Message == "" {
-					t.Errorf("%s: outcome without a message", cw)
-				}
-			}
-			switch c.status() {
-			case "failure":
-				f++
-			case "error":
-				e++
-			case "skipped":
-				sk++
-			}
-		}
-		count(where, "tests", s.Tests, len(s.Cases))
-		count(where, "failures", s.Failures, f)
-		count(where, "errors", s.Errors, e)
-		count(where, "skipped", s.Skipped, sk)
-		total, failures, errs, skipped = total+len(s.Cases), failures+f, errs+e, skipped+sk
-	}
-	count("<testsuites>", "tests", doc.Tests, total)
-	count("<testsuites>", "failures", doc.Failures, failures)
-	count("<testsuites>", "errors", doc.Errors, errs)
-	count("<testsuites>", "skipped", doc.Skipped, skipped)
-	return doc
-}
 
 func write(t *testing.T, r engine.Report, opts Options) []byte {
 	t.Helper()
@@ -181,17 +24,6 @@ func write(t *testing.T, r engine.Report, opts Options) []byte {
 		t.Fatalf("Write: %v", err)
 	}
 	return buf.Bytes()
-}
-
-// outcomes maps "suite/testcase" to its status.
-func outcomes(doc reader) map[string]string {
-	out := map[string]string{}
-	for _, s := range doc.Suites {
-		for _, c := range s.Cases {
-			out[s.Name+"/"+c.Name] = c.status()
-		}
-	}
-	return out
 }
 
 // TestWriteGolden renders every engine golden report (the reports
@@ -224,7 +56,7 @@ func TestWriteGolden(t *testing.T) {
 			if again := write(t, r, Options{FailOn: "blocker"}); !bytes.Equal(got, again) {
 				t.Fatalf("two runs differ:\n%s\n---\n%s", got, again)
 			}
-			doc := readJUnit(t, got)
+			doc := junittest.Read(t, got)
 			// Every finding is a test case, failing exactly when it is a
 			// blocker (the default gate).
 			var blockers int
@@ -321,7 +153,7 @@ func TestWriteFollowsTheGate(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := write(t, gateReport(), tc.opts)
-			got := outcomes(readJUnit(t, raw))
+			got := junittest.Outcomes(junittest.Read(t, raw))
 			for k, want := range tc.want {
 				if got[k] != want {
 					t.Errorf("%s = %q, want %q", k, got[k], want)
@@ -334,8 +166,8 @@ func TestWriteFollowsTheGate(t *testing.T) {
 	}
 
 	// What each outcome says.
-	doc := readJUnit(t, write(t, gateReport(), Options{FailOn: "blocker"}))
-	byName := map[string]readerCase{}
+	doc := junittest.Read(t, write(t, gateReport(), Options{FailOn: "blocker"}))
+	byName := map[string]junittest.Case{}
 	for _, s := range doc.Suites {
 		for _, c := range s.Cases {
 			byName[s.Name+"/"+c.Name] = c
@@ -377,7 +209,7 @@ func TestWriteTargetGap(t *testing.T) {
 		{Options{FailOn: "warning"}, "error"},
 		{Options{FailOn: "never"}, "skipped"},
 	} {
-		got := outcomes(readJUnit(t, write(t, r, tc.opts)))["not-assessed/target"]
+		got := junittest.Outcomes(junittest.Read(t, write(t, r, tc.opts)))["not-assessed/target"]
 		if got != tc.want {
 			t.Errorf("%+v: target gap = %q, want %q", tc.opts, got, tc.want)
 		}
@@ -388,8 +220,8 @@ func TestWriteTargetGap(t *testing.T) {
 // the build on reports without tests, and Azure warns.
 func TestWriteCleanReport(t *testing.T) {
 	r := engine.Report{Target: inventory.Version{Major: 1, Minor: 36}, Score: 100, Ready: true, Verdict: engine.VerdictReady, KBVersion: "kb-1"}
-	doc := readJUnit(t, write(t, r, Options{FailOn: "blocker"}))
-	if *doc.Tests != 1 || *doc.Failures != 0 || doc.Suites[0].Cases[0].status() != "passed" {
+	doc := junittest.Read(t, write(t, r, Options{FailOn: "blocker"}))
+	if *doc.Tests != 1 || *doc.Failures != 0 || doc.Suites[0].Cases[0].Status() != "passed" {
 		t.Fatalf("clean report = %+v, want one passing test", doc)
 	}
 	if out := doc.Suites[0].Cases[0].SystemOut; len(out) != 1 || !strings.Contains(out[0], "ready") || !strings.Contains(out[0], "1.36") {
@@ -405,7 +237,7 @@ func TestWriteEscapes(t *testing.T) {
 		Title:   "a <b> & \"c\" \x01 ]]> d",
 		Objects: []inventory.ObjectRef{{Name: "n]]>\x0b", File: "f&.yaml", Line: 1}},
 	}}}
-	doc := readJUnit(t, write(t, r, Options{}))
+	doc := junittest.Read(t, write(t, r, Options{}))
 	c := doc.Suites[0].Cases[0]
 	if c.Name != `removed-api/x/v1/K"<&>` || !strings.Contains(*c.Failure[0].Message, `a <b> & "c"`) || !strings.Contains(c.Failure[0].Text, "f&.yaml:1") {
 		t.Errorf("escaped case = %+v", c)
