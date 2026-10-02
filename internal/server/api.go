@@ -417,7 +417,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		ReceivedAt:    now,
 		ServerVersion: inv.ServerVersion, // "" (degraded): ingestSnapshot inherits the last one
 		Inventory:     req.Inventory,
-	}, inv)
+	}, legacyView(inv, req.AgentVersion))
 	var conflict *store.ClusterUIDConflictError
 	if errors.As(err, &conflict) { // another push bound the name meanwhile
 		writeUIDConflict(w, conflict)
@@ -583,7 +583,8 @@ func (s *Server) resolveTarget(w http.ResponseWriter, r *http.Request, clusterID
 // decode.
 var errCorruptInventory = errors.New("stored inventory is corrupt")
 
-// latestInventory loads and decodes the cluster's latest snapshot.
+// latestInventory loads and decodes the cluster's latest snapshot, as this
+// server judges it (legacyView of the pushing agent's version).
 // store.ErrNotFound means the cluster has no snapshots.
 func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Snapshot, inventory.Inventory, error) {
 	snap, err := s.cfg.Store.LatestSnapshot(ctx, clusterID)
@@ -594,7 +595,7 @@ func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Sn
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", clusterID, snap.ID, errCorruptInventory, err)
 	}
-	return snap, inv, nil
+	return snap, legacyView(inv, snap.AgentVersion), nil
 }
 
 // evalSummary is the read API's compact evaluation view. Evaluations are
