@@ -825,12 +825,43 @@ func TestCollectAPIUsagePartialFailureKeepsSuccesses(t *testing.T) {
 	if !strings.Contains(err.Error(), "podsecuritypolicies") {
 		t.Errorf("reason = %q, must name the failed resource", err.Error())
 	}
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"policy/v1beta1 PodSecurityPolicy"}) {
+		t.Errorf("partial = %v, skipped = %q; want incomplete, skipping the flagged API the failed list covered", pe.incomplete, pe.skipped)
+	}
 	want := []inventory.APIUsage{{
 		Group: "networking.k8s.io", Version: "v1beta1", Kind: "Ingress", Count: 1, Namespaces: map[string]int{"default": 1},
 		Objects: []inventory.ObjectRef{{Namespace: "default", Name: "web", Manager: "helm"}},
 	}}
 	if !reflect.DeepEqual(inv.APIUsage, want) {
 		t.Errorf("api usage = %#v\nwant     %#v (successes must be kept)", inv.APIUsage, want)
+	}
+}
+
+// M08/VS-07: a 403 on the ingresses LIST hid a v1beta1-authored Ingress
+// and the report read ready. The capability must come back partial, naming
+// every flagged API that LIST covered, so the engine can tell the gap
+// matters.
+func TestCollectAPIUsageForbiddenIngressesIsPartialNamingIngressAPIs(t *testing.T) {
+	meta := flaggedObjects()
+	meta.PrependReactor("list", "ingresses", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingresses"}, "", errors.New("RBAC denied"))
+	})
+
+	var inv inventory.Inventory
+	err := collectAPIUsage(context.Background(), flaggedDiscovery(), meta, flaggedLifecycle(), &inv)
+
+	var pe partialError
+	if !errors.As(err, &pe) || !pe.incomplete {
+		t.Fatalf("err = %#v, want an incomplete partialError", err)
+	}
+	if !strings.Contains(pe.msg, "list networking.k8s.io/v1 ingresses: ") {
+		t.Errorf("reason = %q, must name the failed list", pe.msg)
+	}
+	if want := []string{"networking.k8s.io/v1beta1 Ingress"}; !reflect.DeepEqual(pe.skipped, want) {
+		t.Errorf("skipped = %q, want %q", pe.skipped, want)
+	}
+	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Kind != "PodSecurityPolicy" {
+		t.Errorf("api usage = %#v, want the PodSecurityPolicy still counted", inv.APIUsage)
 	}
 }
 
@@ -877,7 +908,43 @@ func TestCollectAPIUsagePartialDiscoverySurfacesSkippedGroups(t *testing.T) {
 	if !strings.Contains(err.Error(), "metrics.k8s.io/v1beta1") {
 		t.Errorf("reason = %q, must name the skipped group", err.Error())
 	}
+	// The group holds no flagged API: incomplete, but nothing it skipped
+	// is one the KB tracks.
+	if !pe.incomplete || len(pe.skipped) != 0 {
+		t.Errorf("partial = %v, skipped = %q; want incomplete, nothing flagged skipped", pe.incomplete, pe.skipped)
+	}
 	if len(inv.APIUsage) != 2 {
 		t.Errorf("api usage = %#v, want both served resources still counted", inv.APIUsage)
 	}
+}
+
+// A group/version whose discovery failed may serve a flagged API: every
+// flagged API the KB records at that group/version went unchecked.
+func TestCollectAPIUsageDiscoveryFailureSkipsFlaggedAPIsOfThatGroupVersion(t *testing.T) {
+	disc := failingGroupDiscovery{fakeDiscovery(resources("networking.k8s.io/v1", ingresses)),
+		schema.GroupVersion{Group: "policy", Version: "v1beta1"}}
+
+	var inv inventory.Inventory
+	err := collectAPIUsage(context.Background(), disc, flaggedObjects(), flaggedLifecycle(), &inv)
+
+	var pe partialError
+	if !errors.As(err, &pe) || !pe.incomplete {
+		t.Fatalf("err = %#v, want an incomplete partialError", err)
+	}
+	if want := []string{"policy/v1beta1 PodSecurityPolicy"}; !reflect.DeepEqual(pe.skipped, want) {
+		t.Errorf("skipped = %q, want %q", pe.skipped, want)
+	}
+}
+
+// failingGroupDiscovery reports one group/version's discovery as failed.
+type failingGroupDiscovery struct {
+	*discoveryfake.FakeDiscovery
+	failed schema.GroupVersion
+}
+
+func (p failingGroupDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	groups, lists, _ := p.FakeDiscovery.ServerGroupsAndResources()
+	return groups, lists, &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
+		p.failed: errors.New("the server is currently unable to handle the request"),
+	}}
 }

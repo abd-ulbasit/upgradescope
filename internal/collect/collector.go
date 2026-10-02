@@ -70,10 +70,18 @@ func Collect(ctx context.Context, c Clients, k kb.KB, opts Options) inventory.In
 	return inv
 }
 
-// partialError marks a step that produced usable data but not all of it
-// (e.g. one forbidden resource among many). runSteps keeps the capability
-// available and surfaces the message as the Reason.
-type partialError struct{ msg string }
+// partialError is the outcome of a step that produced usable data and has
+// something to say about it. runSteps keeps the capability available and
+// surfaces msg as the Reason. With incomplete set, some of what the step
+// covers was not read (one forbidden resource among many): the capability
+// is marked Partial, and skipped names what went unread (see
+// inventory.CapabilityStatus.Skipped). Without it the reason is
+// informational and the data complete (helm's per-driver release counts).
+type partialError struct {
+	msg        string
+	incomplete bool
+	skipped    []string
+}
 
 func (e partialError) Error() string { return e.msg }
 
@@ -85,7 +93,8 @@ func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
 		case err == nil:
 			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true}
 		case errors.As(err, &pe):
-			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true, Reason: pe.Error()}
+			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true, Reason: pe.Error(),
+				Partial: pe.incomplete, Skipped: pe.skipped}
 		default:
 			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: false, Reason: err.Error()}
 		}
