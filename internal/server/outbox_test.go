@@ -182,7 +182,8 @@ func TestOutboxGivesUpAfterMaxAttempts(t *testing.T) {
 
 	for range outboxMaxAttempts + 2 {
 		s.deliverOutbox(context.Background())
-		clock.set(clock.now().Add(2 * outboxMaxBackoff))
+		// Steps beyond every backoff used, yet 10 of them fit in outboxMaxAge.
+		clock.set(clock.now().Add(outboxBackoff(outboxMaxAttempts) + time.Second))
 	}
 	if n := len(st.outbox); n != 0 {
 		t.Fatalf("outbox holds %d messages after %d failed attempts, want 0 (given up)", n, outboxMaxAttempts)

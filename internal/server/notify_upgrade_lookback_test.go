@@ -2,11 +2,16 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 // TestUpgradeBaselineSpansASkippedMinor: the agent missed the push at 1.35
@@ -51,5 +56,92 @@ func TestUpgradeBaselineIsTheNearestLowerTarget(t *testing.T) {
 	srv.deliverOutbox(context.Background())
 	if evs := rec.all(); len(evs) != before {
 		t.Fatalf("PSP was already a blocker at the nearest lower target, got %+v", evs[before:])
+	}
+}
+
+// lowHorizonServer is upgradeServer over the real KB cut off at minor,
+// as a server whose knowledge base predates the newest releases.
+func lowHorizonServer(t *testing.T, st store.Store, minor int) (*Server, *recordingNotifier) {
+	t.Helper()
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.MaxKnownK8s = inventory.Version{Major: 1, Minor: minor}
+	k.Version += "; horizon cut to " + k.MaxKnownK8s.String()
+	// What such a knowledge base cannot know yet: removals past its horizon.
+	k.APILifecycle = slices.Clone(k.APILifecycle)
+	for i, e := range k.APILifecycle {
+		if e.Removed != nil && e.Removed.Minor > minor {
+			e.Removed = nil
+			k.APILifecycle[i] = e
+		}
+	}
+	rec := &recordingNotifier{}
+	srv, err := New(Config{Store: st, KB: k, Notifier: rec, IngestToken: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, rec
+}
+
+// TestKBHorizonUnknownThenDecidedNotifies: a cluster upgraded 1.35 → 1.36
+// while the knowledge base ends at 1.36, so its new default target 1.37 is
+// unknown. The decided evaluation of 1.36 (from the 1.35 push) is stored.
+// When a server with a newer knowledge base first decides 1.37, the
+// cluster is told of the blocker 1.37 adds (ServiceCIDR v1beta1), compared
+// with its own 1.36 evaluation.
+func TestKBHorizonUnknownThenDecidedNotifies(t *testing.T) {
+	st := openSQLite(t)
+	old, oldRec := lowHorizonServer(t, st, 36)
+	ts := httptest.NewServer(old.Handler())
+	defer ts.Close()
+	ctx := context.Background()
+
+	pushInventory(t, ts.URL, "tok", atVersion("v1.35.3", serviceCIDRv1beta1))
+	pushInventory(t, ts.URL, "tok", atVersion("v1.36.1", serviceCIDRv1beta1))
+	old.deliverOutbox(ctx)
+	if _, err := st.CurrentEvaluation(ctx, 1, "1.37"); err != nil {
+		t.Fatalf("1.37 evaluation missing under a KB ending at 1.36: %v", err)
+	}
+	if e, err := st.LatestKnownEvaluation(ctx, 1, "1.37"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("1.37 under a KB ending at 1.36 has a decided evaluation %+v (%v); want it unknown", e, err)
+	}
+	if evs := oldRec.all(); len(evs) != 0 {
+		t.Fatalf("nothing is decided yet, got %+v", evs)
+	}
+
+	updated, rec := upgradeServer(t, st)
+	updated.reevaluateAll(ctx)
+	updated.deliverOutbox(ctx)
+	evs := rec.all()
+	if len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker || evs[0].Target != "1.37" ||
+		!strings.Contains(evs[0].Title, "ServiceCIDR") {
+		t.Fatalf("want the ServiceCIDR new-blocker for 1.37 once the KB decides it, got %+v", evs)
+	}
+}
+
+// TestKBHorizonUnknownThenDecidedSilentWithoutLowerEvaluation: a cluster
+// first seen on 1.36 under the same short knowledge base has no stored
+// decided evaluation of a lower target, so when 1.37 is first decided it is
+// a silent baseline (the docs qualify the claim above on this).
+func TestKBHorizonUnknownThenDecidedSilentWithoutLowerEvaluation(t *testing.T) {
+	st := openSQLite(t)
+	old, _ := lowHorizonServer(t, st, 36)
+	ts := httptest.NewServer(old.Handler())
+	defer ts.Close()
+	ctx := context.Background()
+
+	pushInventory(t, ts.URL, "tok", atVersion("v1.36.1", serviceCIDRv1beta1))
+	old.deliverOutbox(ctx)
+
+	updated, rec := upgradeServer(t, st)
+	updated.reevaluateAll(ctx)
+	updated.deliverOutbox(ctx)
+	if evs := rec.all(); len(evs) != 0 {
+		t.Fatalf("no lower evaluation to compare with: want a silent baseline, got %+v", evs)
+	}
+	if e, err := st.LatestKnownEvaluation(ctx, 1, "1.37"); err != nil || e.Blockers == 0 {
+		t.Fatalf("1.37 evaluation = %+v, %v; want it stored decided and blocked", e, err)
 	}
 }

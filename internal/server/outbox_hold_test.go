@@ -126,8 +126,9 @@ func TestOutboxHoldsRateLimitedSink(t *testing.T) {
 }
 
 // TestOutboxHoldDoesNotConsumeAttempts: a sink that stays rate-limited for
-// more than outboxMaxAttempts passes does not lose its queued messages;
-// only the call that met each 429 counts, and it counts against one message.
+// more than outboxMaxAttempts passes does not lose its queued messages
+// within their lifetime (outboxMaxAge); only the call that met each 429
+// counts, and it counts against one message.
 func TestOutboxHoldDoesNotConsumeAttempts(t *testing.T) {
 	st := newFakeStore()
 	limited := &rateLimitedNotifier{after: 10 * time.Minute}
@@ -148,5 +149,66 @@ func TestOutboxHoldDoesNotConsumeAttempts(t *testing.T) {
 	}
 	if n := limited.count(); n != outboxMaxAttempts-1 {
 		t.Errorf("sink called %d times in %d passes, want one per pass", n, outboxMaxAttempts-1)
+	}
+}
+
+// TestOutboxHoldBoundsMessageLifetime: against a sink that is rate-limited
+// for good, every queued message is given up at the latest a poll after
+// outboxMaxAge since it was queued, however many are queued ahead of it.
+// Without the bound the hold lets one message per window be called and the
+// queue drains one message per hold.
+func TestOutboxHoldBoundsMessageLifetime(t *testing.T) {
+	st := newFakeStore()
+	limited := &rateLimitedNotifier{after: outboxMaxRetryAfter}
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s := newTestServer(t, st, func(c *Config) { c.Notifier = limited })
+	s.now = clock.now
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	blockedThenClean(t, ts)
+	queueCopies(st, 9) // 10 messages
+	start := clock.now()
+
+	// A pass every minute, so the bound is measured to within a minute.
+	step := time.Minute
+	gone := time.Duration(-1)
+	for clock.now().Sub(start) <= outboxMaxAge+3*time.Hour {
+		s.deliverOutbox(context.Background())
+		if len(st.outbox) == 0 {
+			gone = clock.now().Sub(start)
+			break
+		}
+		clock.set(clock.now().Add(step))
+	}
+	if gone < 0 {
+		t.Fatalf("%d messages still queued %v after they were queued, want none past outboxMaxAge (%v)",
+			len(st.outbox), outboxMaxAge+3*time.Hour, outboxMaxAge)
+	}
+	if gone < outboxMaxAge {
+		t.Errorf("messages gone after %v, before outboxMaxAge %v: given up too early", gone, outboxMaxAge)
+	}
+	if gone > outboxMaxAge+outboxPoll+step {
+		t.Errorf("messages gone after %v, want within %v of outboxMaxAge %v", gone, outboxPoll+step, outboxMaxAge)
+	}
+}
+
+// TestOutboxExpiredMessageNotSent: a message older than outboxMaxAge is
+// dropped without a call, even to a healthy sink (it would arrive stale).
+func TestOutboxExpiredMessageNotSent(t *testing.T) {
+	st := newFakeStore()
+	sink := &recordingNotifier{}
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s := newTestServer(t, st, func(c *Config) { c.Notifier = sink })
+	s.now = clock.now
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	blockedThenClean(t, ts)
+	clock.set(clock.now().Add(outboxMaxAge + time.Minute))
+	s.deliverOutbox(context.Background())
+	if n := len(st.outbox); n != 0 {
+		t.Errorf("%d expired messages still queued, want 0", n)
+	}
+	if n := len(sink.notifications()); n != 0 {
+		t.Errorf("sink received %d expired notifications, want 0", n)
 	}
 }

@@ -23,12 +23,19 @@ import (
 // has passed (capped at outboxMaxRetryAfter) it is not called for any of
 // its messages, which are put back due at the end of the hold without
 // consuming an attempt. The hold is in memory (sinkHolds), so a restart or
-// another replica forgets it. Because the wait replaces a shorter backoff,
-// the 8 attempts can span about 7h of an hour-long Retry-After.
+// another replica forgets it. Because only one message per hold window is
+// called, a sink that stays limited would drain its queue one message per
+// window, so a message also has a lifetime: it is given up (logged,
+// deleted) once outboxMaxAge has passed since it was queued, whatever its
+// attempts, and never later than a poll after that.
 const (
 	outboxBatch       = 50
 	outboxLease       = 2 * time.Minute // a claimed message is re-claimable after this
 	outboxMaxAttempts = 8               // then the message is dropped (logged)
+	// outboxMaxAge is the longest a message is kept: 8 attempts of the
+	// longest wait (outboxMaxRetryAfter) each. It bounds a message held
+	// behind a rate-limited sink, which the attempt count alone does not.
+	outboxMaxAge      = outboxMaxAttempts * outboxMaxRetryAfter
 	outboxBaseBackoff = 30 * time.Second
 	outboxMaxBackoff  = time.Hour
 	outboxPoll        = 30 * time.Second // retry pickup when nothing kicks the worker
@@ -51,8 +58,8 @@ func outboxError(err error) string {
 // 30s, 1m, 2m, … capped at an hour. With outboxMaxAttempts = 8 the
 // largest delay used is 32m (attempt 7), about 63m in all before giving up.
 // A sink's Retry-After (retryDelay, at most outboxMaxRetryAfter) replaces a
-// shorter backoff: with an hour asked each time, the 7 delays between 8
-// attempts total about 7h.
+// shorter backoff, so the delays can total more; outboxMaxAge bounds the
+// whole, held messages included.
 func outboxBackoff(attempts int) time.Duration {
 	d := outboxBaseBackoff
 	for i := 1; i < attempts && d < outboxMaxBackoff; i++ {
@@ -144,11 +151,19 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
+	// A message that has waited out its lifetime is stale: dropped unsent,
+	// so a sink that stays limited cannot keep a queue growing.
+	if age := s.now().Sub(m.CreatedAt); !m.CreatedAt.IsZero() && age >= outboxMaxAge {
+		log.Printf("server: giving up on notification %s (cluster %s, sink %s): queued %s ago, past the %s limit",
+			n.DeliveryID, n.Cluster.Name, m.Sink, age.Round(time.Minute), outboxMaxAge)
+		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
+		return
+	}
 	// A sink that asked to be left alone (Retry-After) is not called for any
 	// of its messages: they wait out the hold, and the claim that brought
 	// this one here is not an attempt.
 	if until, held := s.holds.heldUntil(m.Sink, s.now()); held {
-		settle(s.cfg.Store.DeferOutbox(ctx, m.ID, until))
+		settle(s.cfg.Store.DeferOutbox(ctx, m.ID, expiryCap(m, until)))
 		return
 	}
 	nctx, cancel := context.WithTimeout(ctx, s.notifyTimeout)
@@ -167,10 +182,23 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
-	next := s.now().Add(retryDelay(m.Attempts, err))
+	next := expiryCap(m, s.now().Add(retryDelay(m.Attempts, err)))
 	log.Printf("server: notification %s failed (cluster %s, sink %s, attempt %d), retrying at %s: %v",
 		n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), err)
 	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, outboxError(err)))
+}
+
+// expiryCap is t, or the moment m outlives outboxMaxAge if that comes
+// first, so a message is picked up again to be given up at its expiry
+// rather than up to an hour later.
+func expiryCap(m store.OutboxMessage, t time.Time) time.Time {
+	if m.CreatedAt.IsZero() {
+		return t
+	}
+	if exp := m.CreatedAt.Add(outboxMaxAge); exp.Before(t) {
+		return exp
+	}
+	return t
 }
 
 // runOutbox is the delivery worker: it drains the outbox when kicked after
