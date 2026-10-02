@@ -48,11 +48,13 @@ var yamlContentTypes = map[string]bool{
 // Without it, the manifests are evaluated standalone (api-usage only, like
 // scan --files).
 //
-// ?fail-on=blocker|warning makes the gate fail like `scan --fail-on`: an
-// introduced finding at or above the threshold, or an unknown verdict,
-// answers 422 with the full body, so `curl -f` fails the CI step. Without
-// it the status stays 200 (the v0.1 contract). X-Upgradescope-Verdict
-// always carries the verdict (ready | blocked | unknown).
+// ?fail-on=blocker|warning|never makes the gate fail like `scan --fail-on`,
+// whose default it shares (blocker): an introduced finding at or above the
+// threshold, or an unknown verdict, answers 422 with the full body, so
+// `curl --fail-with-body` fails the CI step and keeps the report. never
+// always answers 200 (the v0.1 contract, which no longer is the default:
+// a bare request must be able to fail CI). X-Upgradescope-Verdict always
+// carries the verdict (ready | blocked | unknown).
 func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mt, _, err := mime.ParseMediaType(ct)
@@ -81,9 +83,11 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	}
 	failOn := r.URL.Query().Get("fail-on")
 	switch failOn {
-	case "", "blocker", "warning":
+	case "":
+		failOn = "blocker"
+	case "blocker", "warning", "never":
 	default:
-		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid fail-on %q (want blocker or warning)", failOn))
+		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid fail-on %q (want blocker, warning or never)", failOn))
 		return
 	}
 
@@ -302,12 +306,12 @@ func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 	return out
 }
 
-// gateFails applies ?fail-on: "" never fails (the v0.1 always-200
+// gateFails applies ?fail-on: never never fails (the v0.1 always-200
 // contract); blocker fails on an introduced blocker, warning on an
 // introduced blocker or warning; both fail when the verdict is unknown,
 // like `scan --fail-on`.
 func gateFails(resp gateResponse, failOn string) bool {
-	if failOn == "" {
+	if failOn == "never" {
 		return false
 	}
 	if resp.Verdict != engine.VerdictReady {

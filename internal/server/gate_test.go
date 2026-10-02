@@ -52,7 +52,7 @@ func TestGateManifestsOnly(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
-	resp, raw := postGate(t, ts, "?target=1.35", "", pspManifest, "application/x-yaml")
+	resp, raw := postGate(t, ts, "?target=1.35&fail-on=never", "", pspManifest, "application/x-yaml")
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, body %s", resp.StatusCode, raw)
 	}
@@ -97,7 +97,7 @@ items:
     kind: PodSecurityPolicy
     metadata: {name: privileged}
 `
-	resp, raw := postGate(t, ts, "?target=1.35", "", list, "application/x-yaml")
+	resp, raw := postGate(t, ts, "?target=1.35&fail-on=never", "", list, "application/x-yaml")
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, body %s", resp.StatusCode, raw)
 	}
@@ -142,7 +142,7 @@ func TestGateSARIF(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
-	resp, raw := postGate(t, ts, "?target=1.35&format=sarif", "", pspManifest, "application/x-yaml")
+	resp, raw := postGate(t, ts, "?target=1.35&format=sarif&fail-on=never", "", pspManifest, "application/x-yaml")
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, body %s", resp.StatusCode, raw)
 	}
@@ -233,7 +233,7 @@ func TestGateClusterContextMerge(t *testing.T) {
 	}
 
 	for _, clusterRef := range []string{"1", "prod-eu-1"} {
-		resp, raw := postGate(t, ts, "?target=1.35&cluster="+clusterRef, "", pspManifest, "application/x-yaml")
+		resp, raw := postGate(t, ts, "?target=1.35&fail-on=never&cluster="+clusterRef, "", pspManifest, "application/x-yaml")
 		if resp.StatusCode != 200 {
 			t.Fatalf("cluster=%s status = %d, body %s", clusterRef, resp.StatusCode, raw)
 		}
