@@ -22,10 +22,11 @@ import (
 // kubeVersion of 20 MB of quotes was a 84 MB report, a release per
 // finding with a short one eight times its push.
 const (
-	// MaxStringBytes caps every string in an inventory but the few below
-	// (versions, chart names, image repositories, kubeVersion
-	// constraints, file paths, annotation values): what one finding can
-	// repeat of it stays small.
+	// MaxStringBytes caps every string in an inventory, map keys
+	// included (versions, chart names, image repositories, kubeVersion
+	// constraints, file paths and annotation values too), but the two
+	// below, which are capped apart: what one finding can repeat of any
+	// of them stays small.
 	MaxStringBytes = 16 << 10
 	// MaxReasonBytes caps a capability's Reason, which joins one error per
 	// resource a collector could not read.

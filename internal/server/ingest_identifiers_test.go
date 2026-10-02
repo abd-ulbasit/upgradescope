@@ -170,8 +170,10 @@ func TestIngestCutsTheFreeTextOfOlderAgents(t *testing.T) {
 
 // Every inventory the engine's golden tests judge, which the collectors'
 // own tests produce the shapes of, is accepted by the identifier rules and
-// the limits. (Collectors stay within the limits by construction or by
-// CutFreeText; the values they copy unbounded are only those it cuts.)
+// the limits. (Collectors stay within the limits by construction, by
+// CutFreeText for the free text it cuts, or because no genuine value comes
+// near them: image repositories, kubeVersion constraints and chart names
+// are copied as the cluster holds them.)
 func TestIngestAcceptsTheGoldenInventories(t *testing.T) {
 	paths, err := filepath.Glob("../engine/testdata/*/inventory.json")
 	if err != nil || len(paths) < 10 {
