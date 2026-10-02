@@ -24,10 +24,12 @@ inputs:
     default: blocker
   version:
     description: >-
-      upgradescope release tag to install (e.g. v0.2.0; pin it), "latest", or
-      "preinstalled" to use the upgradescope already on PATH. The archive is
-      verified against the release's checksums.txt; without one for this
-      runner, it is built with `go install` when Go is set up.
+      Which upgradescope to run: a release tag such as v0.2.0, "latest"
+      (the newest release), or "preinstalled" (the one already on PATH).
+      For a reproducible gate, pin a tag here and pin the action ref
+      (@vX.Y.Z or a commit SHA): @v0 and "latest" move with each release.
+      The archive is verified against the release's checksums.txt; without
+      one for this runner, it is built with `go install` when Go is set up.
     required: false
     default: latest
 

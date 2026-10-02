@@ -19,17 +19,23 @@ step when findings reach `fail-on`, and it reports in three places:
 
 ## Usage
 
-Pin the action and the binary. Use a release tag or, stricter, the tag's
-full commit SHA. Set `version` too: if you pin only the action ref, the
-binary still floats to the latest release, and with it the knowledge base
-and the gate's verdicts. The examples below use v0.2.0, the first release
-that ships this action (root `action.yml`, outputs, step summary). Put the
-release you pin in its place.
+Pick how the gate moves:
 
-There is no moving `v0` tag, so `@v0` does not resolve. This is
-deliberate. A major tag that moves with each release would change the
-action, and with `version: latest` also the knowledge base, under a
-workflow that looks pinned. Pinning is meant to prevent exactly that.
+- **`@v0` follows the newest v0.x release.** The release workflow moves the
+  `v0` tag to every stable release once it is published and verified
+  (from v0.2.0 on). With the default `version: latest`, the binary and its
+  knowledge base move with it. This is the convenient choice, but a release
+  can change the verdict on an unchanged pull request.
+- **`@vX.Y.Z` or a commit SHA, plus `version`, for a reproducible gate.**
+  Pin the action to a release tag or, stricter, the tag's full commit SHA,
+  and set `version` to the same release. If you pin only the action ref,
+  `version: latest` still floats the binary to the newest release, and with
+  it the knowledge base and the verdicts. With both pinned, the gate changes
+  only when you bump them.
+
+The examples below pin v0.2.0, the first release that ships this action
+(root `action.yml`, outputs, step summary). Put the release you pin in its
+place, or use `@v0` and leave out `version`.
 
 ```yaml
 jobs:
