@@ -1,14 +1,22 @@
 # Claims ledger
 
 Every public claim upgradescope makes (README, chart README, Action,
-CLI help, docs), mapped to the automated test that keeps it true. A claim
-that stops being true should turn CI red, not wait for the next audit.
+CLI help, docs) is listed here, with the automated tests that keep it true
+or the issue that tracks why there are none. A claim that stops being true
+should turn CI red, not wait for the next audit.
 
 The ledger comes out of the October 2026 claims verification (#99): red-team
 missions attacked each claim on real clusters and integrations (results in
-#131 to #137). This file lists the claims that held, or the part of a claim
-that held, with what proves it. Claims that failed are listed at the end
-with the issue that fixes them; they move up when the fix lands with a test.
+#131 to #137). Each claim is in one of three places:
+
+- **the tables by area**: claims that held when audited, or the part of a
+  claim that held, with what proves it. A few are still checked by hand
+  only; those say "not automated" and name #99;
+- **[Under repair](#under-repair)**: claims that did not hold, with the issue
+  that fixes them; they move up when the fix lands with a test;
+- **[Not yet audited](#not-yet-audited)**: claims the missions of round 2
+  (#99) have not reached, with the tests that cover them so far.
+
 IDs are the audit's, so a row can be traced back to its mission.
 
 **How to read "Proven by".** Each reference is checked by
@@ -21,8 +29,8 @@ renamed or deleted test fails CI:
 - `ci:job`: a CI job of `.github/workflows/ci.yml`;
 - `make target`, or a path such as a `hack/` test script.
 
-A row with no reference says "not automated" and names the issue that
-tracks it.
+A row with no reference says "not automated" (or, in the last table, "not
+audited") and names the issue that tracks it.
 
 ## API usage: removed and deprecated APIs
 
@@ -32,7 +40,7 @@ tracks it.
 | API-01b | A freshly created cluster, scanned at its next minor, has no removed-API blocker (#3). | `e2e:no_removed_api_blockers` |
 | API-01c | When the kind itself goes away (no surviving version), every stored object counts. | `TestCollectAPIUsageTypeRemovedKindCountsEveryObject` `TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject` |
 | API-02 | `removed-api` is a blocker when the API is removed at or before the target and a warning when it is removed in the next minor. | `TestEvalAPIUsageRemovedAtTarget` `TestEvalAPIUsageRemovedAtTargetPlusOne` `TestEvaluateGolden` |
-| API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one. On a default kind cluster neither `scan` nor the agent calls a deprecated API, apart from the self-LISTs in `hack/e2e/deprecated-request-allowlist.txt` (#123 removes them); a cluster that serves a kind only at deprecated versions still gets a LIST there (API-04c). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
+| API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one. On the e2e kind cluster, which serves one deprecated group/version on purpose, neither `scan` nor the agent calls a deprecated API (the e2e's own request through that version shows the audit log records them), apart from the self-LISTs in `hack/e2e/deprecated-request-allowlist.txt` (#123 removes them); a cluster that serves a kind only at deprecated versions still gets a LIST there (API-04c). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
 | API-05 | A caller with no stored objects is a standalone `deprecated-api-in-use` finding; caller evidence otherwise merges onto the object finding. | `TestEvaluateCallerWithoutObjectsStaysStandalone` `TestEvaluateMergesCallersIntoAPIUsageFinding` `TestEvaluateMergesSubresourceCallers` `TestEvaluateMoreSevereCallerIsNotFolded` `TestEvaluateGolden` |
 | PF-02 | Every cluster-wide list is paged (500 objects a page); the api-usage and Helm lists are metadata-only, and object references are capped. | `TestCollectAPIUsageFollowsListPagination` `TestCollectAddOnsFollowsListPagination` `TestCollectVersionsFollowsListPagination` `TestCollectHelmFollowsListPagination` `TestCollectHelmFetchesOnlyTheChosenRevision` `TestCollectAPIUsageCapsObjectRefs` |
 
@@ -130,12 +138,14 @@ tracks it.
 |---|---|---|
 | RB-02 | The agent writes only its own ClusterReadiness, that object's status, and (with `manageCRD`) the ClusterReadiness CRD; nothing else, ever. Measured from the API server's audit log of a real install. | `e2e:audit_agent_writes_only_its_cr` `TestRenderedRBACDefault` |
 | RB-03 | Write access is limited to the `agent.crName` object and the one CRD, with no delete. | `TestRenderedRBACDefault` `TestRenderedRBACCustomCRName` `TestRenderedRBACManageCRDOff` `hack/test-chart.sh` |
+| RB-04 | No webhooks, no finalizers, nothing in the cluster changes because of a finding: with an EOL blocker installed, the chart install adds no admission webhook, the ClusterReadiness carries no finalizer or owner reference, and the agent writes nothing but that object and its CRD. | `e2e:no_webhooks_or_finalizers` `e2e:audit_agent_writes_only_its_cr` `TestRenderedRBACDefault` |
 | RB-05 | Helm detection reads Secrets only as `owner=helm` lists and GETs of Helm release Secrets; `rbac.helmSecrets=false` removes the grant. | `e2e:audit_secrets_helm_only` `TestCollectHelmFetchesOnlyTheChosenRevision` `TestRenderedRBACHelmSecretsOff` |
 | RB-06 | The chart grants no non-resource URL but `/version` and `/metrics` (discovery, `/api` and `/apis`, comes from Kubernetes' default `system:discovery` role). | `TestRenderedRBACNonResourceURLs` `TestRenderedRBACDefault` |
 | RB-09 | Token wiring: `existingSecret`, the in-chart ingest token, `readToken`, and a token required with `serverUrl`. | `hack/test-chart.sh` |
 | RB-10 | `agent.interval` is at least 1m and targets are MAJOR.MINOR strings, enforced by the values schema. | `hack/test-chart.sh` `TestConfigIntervalMinimum` |
 | RB-11 | Pods run as non-root 65532 with a read-only root, no privilege escalation, RuntimeDefault seccomp and all capabilities dropped. | `hack/test-chart.sh` |
 | RB-12 | The chart lints strictly, every documented values combination renders and validates at the oldest and newest tested minor, and `crds/` matches the embedded CRD. | `ci:helm` `hack/helm-test.sh` `hack/test-chart.sh` `TestKBRBACRulesInSync` |
+| RB-13 | Every chart knob is documented in the commented `values.yaml`. | not automated: #99 (verified by hand in #137: every value path the templates read is in values.yaml, and every leaf is read) |
 | RB-14 | `helm uninstall` removes everything but the CRD (and the CR the agent made). | `e2e:uninstall_leaves_nothing` |
 | RB-15 | `server.persistence.enabled=false` falls back to emptyDir; the server Deployment uses Recreate (one SQLite writer). | `hack/test-chart.sh` |
 
@@ -177,7 +187,9 @@ tracks it.
 | DB-01 | `serve` embeds the dashboard at `/`: the built binary serves `index.html` and every asset it references, with the right content types. | `make dashboard-smoke` `hack/dashboard-smoke_test.sh` `TestSPAHandlerServesIndexAndAssets` `ci:build` |
 | DB-02 | The committed bundle is the byte-for-byte Vite build of `web/`; CI fails on a stale one. | `ci:web` `hack/web-test.sh` |
 | DB-04 | The read token is kept in localStorage and sent as a bearer header on every API call. | `web/src/api.test.ts` |
+| DB-03 | No runtime JavaScript dependency beyond react and react-dom; the charts are hand-rolled SVG. | not automated: #99 (verified by hand in #133: npm ls lists react, react-dom and scheduler; every request is same-origin) |
 | DB-05 | Without a built bundle (or with `-tags nodashboard`) the API still serves; client-side routes fall back to `index.html`. | `TestSPAHandlerWithoutBuiltDashboard` `TestSPAHandlerFallbackForClientRoutes` |
+| DB-06 | The dashboard dev loop: `cd web && npm run dev` proxies `/api` to `:8080`. | not automated: #99 (verified by hand in #133, macOS included) |
 | DB-07 | Before a tag, the release binary is proven to serve the dashboard and every asset it references. | `ci:release-check` `hack/dashboard-smoke_test.sh` |
 
 ## Knowledge base and add-on registry
@@ -188,6 +200,7 @@ tracks it.
 | KB-02 | Generated entries win over the hand-written supplement; every supplement entry is cited. | `TestMergeEntries` `TestSupplement` |
 | KB-05 | Every add-on EOL claim carries an upstream citation, enforced by `registry.Validate`. | `TestValidate` `TestEmbeddedEntriesProperties` |
 | KB-06 | `tools/eol-sync` reconciles registry entries with endoflife.date, and a PR touching `registry/` fails when they drift. | `TestRun` `TestComputeCycles` `ci:registry` |
+| KB-09 | The knowledge base and the add-on registry are compiled into the binary; nothing is fetched at runtime, so a KB update reaches users only through a release. | `TestLoad` `TestLoadFS`; no outbound connection: not automated, #99 (strace in #133 saw none for scan --files and serve) |
 | KB-10 | The knowledge-base version names the `k8s.io/api` release and digests of both datasets. | `TestDatasetVersion` |
 | KB-13 | `registry` is importable on its own. | `TestLoadFS` |
 | RM-01 | A remediation never points at an API that is itself removed. | `TestRemediationNeverPointsAtRemovedAPI` `TestResolveReplacement` |
@@ -202,6 +215,7 @@ tracks it.
 | IR-10 | Every package compiles for linux, darwin and windows on every PR, so a platform-only break fails its PR, not a tag. | `make cross-build` `hack/cross-build_test.sh` `ci:build` |
 | IR-16 | One required check, `ci-ok`, fails if any job failed or was cancelled. | `ci:ci-ok` `hack/ci-ok_test.sh` |
 | DO-03 | One binary runs `scan`, `agent` and `serve`. | `TestRootHasAgentSubcommand` `TestRootRegistersServe` `e2e:eol_ingress_nginx_blocks` |
+| DO-04 | `engine`, `inventory`, `kb` and `registry` have no client-go dependency; the engine is a pure function with no Kubernetes or network dependency. | `TestEvaluateGolden`; the dependency set: not automated, #99 (verified by hand in #131: go list -deps and a wasm build) |
 | DO-07 | Golden files cover every finding category and the score formula. | `TestEvaluateGolden` |
 | DO-08 | `make lint` is CI's lint (pinned staticcheck), and gofmt covers every module. | `ci:lint` `hack/test.sh` |
 | CL-01 | Every test this ledger names exists. | `make claims-check` `hack/claims-check_test.sh` |
@@ -243,6 +257,40 @@ lands with a test.
 | RB-01 | README and SECURITY.md describe the pre-#16 RBAC grant. | not true yet: #130 |
 | RB-07 | Losing status write access leaves the CR reading ready. | not true yet: #122 |
 | RB-08, IR-01, IR-02, IR-06 to IR-09, IR-11 to IR-14, DB-08, SE-15 | The published release, image and chart predate the fixes; signing and publishing have never run end to end. | not true yet: #127 |
+| KB-14 | A stored snapshot re-judged by a newer knowledge base drops the fields it does not know, and v0.1.1 snapshots' residency rows become false APF blockers (verdicts otherwise re-judge correctly). | not true yet: #125 |
+| DB-09 | The README quickstart (`serve --ingest-token $TOKEN`) works on loopback, but creates the SQLite database and its `-wal` and `-shm` files 0644 under umask 022. | not true yet: #126 |
 | AO-01b | Several installs of one add-on merge into the oldest. | not true yet: #129 |
 | DO-03b | README's "three subcommands": the binary has five, `tokens` and `clusters` too. | not true yet: #130 |
 | KB-04, PF-01, PF-03, PF-04 | Stale numbers: KB horizon, scan time, binary and image sizes. | not true yet: #130 |
+
+## Not yet audited
+
+Round 2 of the audit (#99: the missions on the Action, the agent's
+footprint, the knowledge-base pipeline, performance and the docs) has not
+run yet, so these claims are neither confirmed nor refuted. Each lists the
+tests that already cover part of it; none is fully pinned. A claim moves
+into a table above, or under repair, when its mission reports.
+
+| ID | Claim | Tests so far |
+|---|---|---|
+| AC-01 | The Action (composite, in `action/`) scans a directory of rendered manifests for removed and deprecated APIs and emits SARIF. | `ci:action` `hack/action_test.sh` `TestWriteGitHubAcceptable`; not audited: #99 |
+| AC-04 | The README's workflow (`security-events: write`, `abd-ulbasit/upgradescope/action@main`, `upload-sarif` with `if: always()`) works as written, from a fork PR too. | not audited: #99 |
+| AC-06 | The binary the Action downloads and runs can be trusted. | `hack/action_test.sh` (the archive is checked against the release's checksums.txt, AC-03); not audited: #99 |
+| AG-01 | The agent uses no controller-runtime, informer cache, leader election, webhooks, finalizers or owner references. | `e2e:no_webhooks_or_finalizers` `e2e:audit_agent_writes_only_its_cr`; the dependency set and watch/lease traffic: not audited, #99 |
+| AG-14 | The knowledge base moves only with the binary and the target only with a new upstream minor, with no Kubernetes event. | `TestResolveTargetsDefaultNextMinor` `TestDatasetVersion`; not audited: #99 |
+| AO-06 | Everything but control-plane skew works identically on managed and self-managed clusters (managed add-on images included). | `TestMatchAddOnsRealWorldImages` `TestCollectVersionsManagedClusterEmptyControlPlane`; not audited: #99 |
+| DO-01 | Every number in the README is dated and says how it was measured. | not audited: #99 (KB-04 and PF-01 to PF-04, under repair, are stale numbers) |
+| DO-02 | The comparison with pluto and kubent, and the evidence in `docs/research.md`. | not audited: #99 |
+| DO-05 | The README's note on `Co-authored-by: Claude` trailers. | not audited: #99 |
+| DO-06 | Apache-2.0; third-party licenses in `NOTICE`; endoflife.date data under MIT (`registry/DATA-LICENSE.md`). | not audited: #99 |
+| IR-15 | Every behaviour change is listed in the changelog, and 0.1.1 changed only packaging. | not audited: #99 (VS-15, under repair, is one such gap) |
+| KB-03 | CI reruns the API-lifecycle generator on every push and fails when the committed copy drifts; upstream drift is a warning. | `ci:kb-freshness` `TestDatasetSanity`; not audited: #99 |
+| KB-07 | CI validates the registry and runs `eol-sync -check` on pull requests that touch `registry/`. | `ci:registry` `TestValidate`; not audited: #99 (a pre-audit read of PR #82 found both steps skipped: "no merge base") |
+| KB-08 | The weekly `kb-refresh` opens a reviewable PR, CI re-validates it, and a broken refresh is never silent. | not audited: #99 (a pre-audit read found five failed Mondays and no issue) |
+| KB-11 | `kb.Load` fails loudly on an empty or corrupt dataset, never yielding a silently empty knowledge base. | `TestParseLifecycleFile` `TestLoadFS` `TestLoad`; an empty registry: not audited, #99 |
+| KB-12 | Clean-room: no proprietary code, data, schemas or documents, and no other scanner's dataset copied. | not audited: #99 (KB-05's citations are the automated part) |
+| PF-05 | The agent's default requests and limits (50m/64Mi, 200m/256Mi) are enough. | not audited: #99 |
+| PF-07 | Each tick issues bounded, paged lists, so the agent's cost is predictable, unlike an informer cache. | `TestCollectAPIUsageFollowsListPagination` `TestCollectHelmPeakHeapIsBoundedByOneRelease`; not audited: #99 |
+| SE-11 | CI jobs run with least privilege, actions are pinned by full commit SHA, and the release job uses no caches. | not audited: #99 |
+| SE-13 | Vulnerabilities can be reported privately through GitHub's private vulnerability reporting. | not audited: #99 |
+| SK-03 | kubectl version skew: the README both lists client skew among the questions answered and calls it out of scope. | not audited: #99 (the two statements contradict each other) |
