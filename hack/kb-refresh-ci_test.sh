@@ -1,28 +1,34 @@
 #!/usr/bin/env bash
-# Tests that a kb-refresh bot PR gets CI (make hack-test, #11). The bot opens
-# its PRs with the default GITHUB_TOKEN, and events that token creates start
-# no pull_request or push workflow, so the PRs showed zero checks. GitHub
-# exempts workflow_dispatch: each kb-refresh job dispatches ci.yml on its bot
-# branch after it creates or updates the PR, and the checks attach to the
-# PR's head commit. This pins both halves:
-#  - kb-refresh.yml: each PR-opening job dispatches ci.yml on its branch
-#    (PR sets) exactly when the PR was created or updated, with actions:
-#    write on that job only;
-#  - ci.yml: a workflow_dispatch run is not path-filtered (changes skips, and
-#    release-check, action and kube treat that as "everything changed"), and
-#    the registry job runs on it too, judging "touched registry/" against the
-#    default branch. Its diff once ran in a depth-1 checkout, found no merge
-#    base and read that as "untouched", so the job passed without running
-#    anything; it now has full history and a failed diff fails the job.
+# Tests that a kb-refresh bot PR gets CI that the PR counts (make hack-test,
+# #11). The bot opens its PRs with the default GITHUB_TOKEN as
+# github-actions[bot]; GitHub creates the PR's pull_request runs but holds
+# them for approval (conclusion action_required), so the PR showed no checks
+# and the required ci-ok never reported. A dispatched ci.yml run (#151) is no
+# substitute: its checks land on the commit, but the PR's check rollup
+# ignores them. So each PR-opening job approves its PR's held runs. This pins:
+#  - kb-refresh.yml: each PR-opening job runs 'Approve the PR's CI runs'
+#    exactly when the PR was created or updated, with actions: write on that
+#    job only; against a stub gh it polls the head commit's pull_request
+#    runs (bounded), approves each held one, and is fail-soft: no runs, a
+#    failed listing or a refused approval is a warning naming the
+#    maintainer's commands, never a failed job;
+#  - ci.yml: a workflow_dispatch run (kept for running CI on a branch by
+#    hand) is not path-filtered (changes skips, and release-check, action
+#    and kube treat that as "everything changed"), and the registry job runs
+#    on it too, judging "touched registry/" against the default branch. Its
+#    diff once ran in a depth-1 checkout, found no merge base and read that
+#    as "untouched", so the job passed without running anything; it now has
+#    full history and a failed diff fails the job.
 # Expressions are evaluated with node (they use only ==, !=, !, && and ||,
 # which JavaScript evaluates the same way); run blocks run the way Actions
-# runs a step with no shell: (bash -e), against a stub gh or a scratch git
-# remote. Offline.
+# runs a step with no shell: (bash -e), against stub gh and sleep commands or
+# a scratch git remote. Offline.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 command -v node >/dev/null || { echo "kb-refresh-ci_test: node is required" >&2; exit 1; }
 command -v git >/dev/null || { echo "kb-refresh-ci_test: git is required" >&2; exit 1; }
+command -v jq >/dev/null || { echo "kb-refresh-ci_test: jq is required (the stub gh applies --jq with it)" >&2; exit 1; }
 
 kb=.github/workflows/kb-refresh.yml
 ci=.github/workflows/ci.yml
@@ -79,12 +85,12 @@ want_expr() {
   if [ "$got" = "$3" ]; then ok "$1"; else fail "$1: '$2' is '$got' (want '$3') for $4"; fi
 }
 
-# --- kb-refresh.yml: dispatch ci.yml on each bot branch ---------------------
+# --- kb-refresh.yml: approve each bot PR's held CI runs ----------------------
 
 sed '/^on:/q' "$kb" >"$work/header"
-grep -q 'GITHUB_TOKEN' "$work/header" && grep -q 'gh workflow run ci.yml' "$work/header" &&
-  ok "$kb's header explains the GITHUB_TOKEN gap and the dispatch" ||
-  fail "$kb's header comment does not explain why and how ci.yml is dispatched"
+grep -q 'GITHUB_TOKEN' "$work/header" && grep -q 'action_required' "$work/header" && grep -q '/approve' "$work/header" &&
+  ok "$kb's header explains the held runs and the approval" ||
+  fail "$kb's header comment does not explain why and how the PR's held CI runs are approved"
 if job "$kb" report-failure | grep -q 'actions: write' ||
   awk '/^permissions:/{p=1;next} p&&/^[^ ]/{exit} p' "$kb" | grep -q 'actions:'; then
   fail "actions: write is granted beyond the PR-opening jobs"
@@ -93,15 +99,67 @@ else
 fi
 
 mkdir -p "$work/bin"
-cat >"$work/bin/gh" <<'EOF'
+# gh: logs each call. `gh api <runs url> --jq F` answers with line n of
+# $STUB_RUNS on the n-th listing (the last line once they run out; a line
+# FAIL is an HTTP 500) through jq -r F, as gh --jq does; `gh api -X POST
+# .../approve` succeeds unless STUB_APPROVE=403.
+cat >"$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "gh $* (token:${GH_TOKEN:+set} repo:${GH_REPO:-})" >>"$GH_LOG"
-EOF
-chmod +x "$work/bin/gh"
+[ "$1" = api ] || { echo "stub gh: unexpected call: $*" >&2; exit 2; }
+if [ "$2" = -X ]; then
+  [ "$3 ${4##*/}" = "POST approve" ] || { echo "stub gh: unexpected call: $*" >&2; exit 2; }
+  [ "${STUB_APPROVE:-ok}" = ok ] && { echo '{}'; exit 0; }
+  echo 'gh: Resource not accessible by integration (HTTP 403)' >&2
+  exit 1
+fi
+filter='.'
+while [ $# -gt 0 ]; do [ "$1" = --jq ] && filter=$2; shift; done
+n=$(($(cat "$GH_LOG.n" 2>/dev/null || echo 0) + 1))
+echo "$n" >"$GH_LOG.n"
+total=$(wc -l <"$STUB_RUNS")
+line=$(sed -n "$((n < total ? n : total))p" "$STUB_RUNS")
+[ "$line" != FAIL ] || { echo 'gh: Server Error (HTTP 500)' >&2; exit 1; }
+jq -r "$filter" <<<"$line"
+STUB
+cat >"$work/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$SLEEP_LOG"
+STUB
+chmod +x "$work/bin/gh" "$work/bin/sleep"
 
-# check_dispatch <job> <branch>
-check_dispatch() {
-  local j=$1 branch=$2 id cond op want_if
+# Listings: held runs are completed with conclusion action_required (seen
+# live on PR #152); status action_required is accepted too.
+none='{"total_count":0,"workflow_runs":[]}'
+held='{"total_count":2,"workflow_runs":[{"id":101,"name":"ci","status":"completed","conclusion":"action_required"},{"id":102,"name":"docs","status":"action_required","conclusion":null}]}'
+held1='{"total_count":1,"workflow_runs":[{"id":101,"name":"ci","status":"completed","conclusion":"action_required"}]}'
+running='{"total_count":2,"workflow_runs":[{"id":101,"name":"ci","status":"queued","conclusion":null},{"id":102,"name":"docs","status":"in_progress","conclusion":null}]}'
+
+# approve_case <job> <branch> <label> <approve: ok|403> <listing>...: runs
+# the job's approve block; leaves its output, gh log, sleeps and summary in
+# $work/case.*. Fails the case if the block exits non-zero.
+approve_case() {
+  local j=$1 branch=$2 label=$3 approve=$4
+  shift 4
+  printf '%s\n' "$@" >"$work/case.runs"
+  rm -f "$work/case.gh" "$work/case.gh.n" "$work/case.sleep" "$work/case.summary"
+  touch "$work/case.gh" "$work/case.sleep" "$work/case.summary"
+  echo 0 >"$work/case.gh.n"
+  if PATH="$work/bin:$PATH" GH_LOG="$work/case.gh" SLEEP_LOG="$work/case.sleep" STUB_RUNS="$work/case.runs" \
+    STUB_APPROVE="$approve" GITHUB_STEP_SUMMARY="$work/case.summary" GH_TOKEN=stub GH_REPO=o/r \
+    BRANCH="$branch" HEAD_SHA=abc123 bash --noprofile --norc -e "$work/$j.sh" >"$work/case.out" 2>&1; then
+    return 0
+  fi
+  fail "$j: $label: the step failed (it must be fail-soft): $(tail -5 "$work/case.out")"
+  return 1
+}
+approvals() { grep -oE 'api -X POST [^ ]+' "$work/case.gh" | sort | tr '\n' ' ' | sed 's/ $//' || true; }
+listings() { cat "$work/case.gh.n"; }
+slept() { awk '{ s += $1 } END { print s + 0 }' "$work/case.sleep"; }
+
+# check_approve <job> <branch>
+check_approve() {
+  local j=$1 branch=$2 id cond op want_if got
   job "$kb" "$j" >"$work/$j.job"
   [ -s "$work/$j.job" ] || { fail "$j: no such job in $kb"; return; }
 
@@ -112,6 +170,11 @@ check_dispatch() {
   else
     fail "$j: job permissions are not exactly contents/pull-requests/actions: write: $(tr -s ' \n' ' ' <"$work/$j.perms")"
   fi
+  if grep -q 'gh workflow run' "$work/$j.job"; then
+    fail "$j: still dispatches a workflow; a dispatched run's checks do not count on the PR"
+  else
+    ok "$j: dispatches no workflow"
+  fi
 
   step 'Open PR if anything changed' <"$work/$j.job" >"$work/$j.pr"
   grep -q 'uses: peter-evans/create-pull-request@' "$work/$j.pr" || { fail "$j: no create-pull-request step"; return; }
@@ -120,45 +183,92 @@ check_dispatch() {
   id=$(field 8 id <"$work/$j.pr")
   [ -n "$id" ] || { fail "$j: the create-pull-request step has no id, so nothing can read its outputs"; return; }
 
-  step 'Run CI on the PR' <"$work/$j.job" >"$work/$j.ci"
-  [ -s "$work/$j.ci" ] || { fail "$j: no 'Run CI on the PR' step after the PR step"; return; }
-  # It must come after the PR step.
+  step "Approve the PR's CI runs" <"$work/$j.job" >"$work/$j.ci"
+  [ -s "$work/$j.ci" ] || { fail "$j: no 'Approve the PR's CI runs' step"; return; }
   [ "$(grep -n -- '- name: Open PR if anything changed' "$work/$j.job" | cut -d: -f1)" -lt \
-    "$(grep -n -- '- name: Run CI on the PR' "$work/$j.job" | cut -d: -f1)" ] || { fail "$j: CI is dispatched before the PR step"; return; }
+    "$(grep -n -- "- name: Approve the PR's CI runs" "$work/$j.job" | cut -d: -f1)" ] ||
+    { fail "$j: the approve step runs before the PR step"; return; }
 
   cond=$(field 8 if <"$work/$j.ci")
-  [ -n "$cond" ] || { fail "$j: the dispatch step has no if:"; return; }
+  [ -n "$cond" ] || { fail "$j: the approve step has no if:"; return; }
   # Every output it reads is the PR step's pull-request-operation.
   if grep -oE 'steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+' <<<"$cond" | sort -u | grep -vqx "steps\.$id\.outputs\.pull-request-operation"; then
-    fail "$j: the dispatch step's if: reads something other than steps.$id.outputs.pull-request-operation: $cond"
+    fail "$j: the approve step's if: reads something other than steps.$id.outputs.pull-request-operation: $cond"
     return
   fi
   for op in created updated none closed ''; do
     case "$op" in created | updated) want_if=true ;; *) want_if=false ;; esac
-    want_expr "$j: dispatch when the PR operation is '${op:-<unset>}': $want_if" "$cond" "$want_if" \
+    want_expr "$j: approve when the PR operation is '${op:-<unset>}': $want_if" "$cond" "$want_if" \
       "{\"steps\":{\"$id\":{\"outputs\":{\"pull-request-operation\":\"$op\"}}}}"
   done
 
   [ "$(field 10 BRANCH <"$work/$j.ci")" = "\${{ steps.$id.outputs.pull-request-branch }}" ] &&
+    [ "$(field 10 HEAD_SHA <"$work/$j.ci")" = "\${{ steps.$id.outputs.pull-request-head-sha }}" ] &&
     [ "$(field 10 GH_TOKEN <"$work/$j.ci")" = '${{ github.token }}' ] &&
     [ "$(field 10 GH_REPO <"$work/$j.ci")" = '${{ github.repository }}' ] ||
-    { fail "$j: the dispatch step's env is not BRANCH from steps.$id, GH_TOKEN github.token, GH_REPO github.repository"; return; }
+    { fail "$j: the approve step's env is not BRANCH and HEAD_SHA from steps.$id, GH_TOKEN github.token, GH_REPO github.repository"; return; }
 
   run_block <"$work/$j.ci" >"$work/$j.sh"
-  : >"$work/$j.log"
-  if PATH="$work/bin:$PATH" GH_LOG="$work/$j.log" GH_TOKEN=stub GH_REPO=o/r BRANCH="$branch" HEAD_SHA=abc123 \
-    bash --noprofile --norc -e "$work/$j.sh" >"$work/$j.out" 2>&1; then
-    if [ "$(cat "$work/$j.log")" = "gh workflow run ci.yml --ref $branch -f full-matrix=false (token:set repo:o/r)" ]; then
-      ok "$j: dispatches ci.yml (PR sets) on $branch"
+  [ -s "$work/$j.sh" ] || { fail "$j: the approve step has no run block"; return; }
+
+  # Runs not created yet, a failed listing, then two held runs: each is
+  # approved once, the next listing shows them running, and it stops.
+  if approve_case "$j" "$branch" "held runs" ok "$none" FAIL "$held" "$running"; then
+    got=$(approvals)
+    if [ "$got" = "api -X POST repos/o/r/actions/runs/101/approve api -X POST repos/o/r/actions/runs/102/approve" ] &&
+      ! grep -q '::warning::' "$work/case.out" && [ "$(listings)" = 4 ]; then
+      ok "$j: polls until the held runs appear, approves each once, stops when none is held"
     else
-      fail "$j: gh was called as: $(cat "$work/$j.log")"
+      fail "$j: held runs: approvals '$got', $(listings) listings (want 101 and 102, 4 listings, no warning): $(cat "$work/case.out")"
     fi
-  else
-    fail "$j: the dispatch step failed: $(cat "$work/$j.out")"
+    if grep -v -- '-X POST' "$work/case.gh" | grep -vqE '^gh api repos/o/r/actions/runs\?([^ ]*&)?head_sha=abc123(&| )' ||
+      grep -v -- '-X POST' "$work/case.gh" | grep -vqE '[?&]event=pull_request(&| )' ||
+      grep -vq '(token:set repo:o/r)$' "$work/case.gh"; then
+      fail "$j: listings are not the head commit's pull_request runs with the job's token: $(cat "$work/case.gh")"
+    else
+      ok "$j: lists only the head commit's pull_request runs, with the job's token"
+    fi
+  fi
+
+  # Runs already running (GitHub held nothing): nothing to approve, no
+  # warning, no waiting out the poll.
+  if approve_case "$j" "$branch" "runs not held" ok "$running"; then
+    if [ -z "$(approvals)" ] && ! grep -q '::warning::' "$work/case.out" && [ "$(listings)" = 1 ]; then
+      ok "$j: runs that are not held: approves nothing, no warning, stops"
+    else
+      fail "$j: runs not held: approvals '$(approvals)', $(listings) listings: $(cat "$work/case.out")"
+    fi
+  fi
+
+  # No run ever appears: a warning with the maintainer's commands after a
+  # bounded wait (about five minutes), and the job still passes.
+  if approve_case "$j" "$branch" "no runs" ok "$none"; then
+    got=$(slept)
+    if [ -z "$(approvals)" ] && [ "$got" -ge 240 ] && [ "$got" -le 330 ] &&
+      grep -q "::warning::.*gh run list --branch $branch" "$work/case.out" &&
+      grep -qF '::warning::' "$work/case.out" && grep -qF "gh api -X POST repos/o/r/actions/runs/<id>/approve" "$work/case.out" &&
+      grep -q "gh run list --branch $branch" "$work/case.summary"; then
+      ok "$j: no runs after ${got}s: a warning and a summary line with the maintainer's commands, exit 0"
+    else
+      fail "$j: no runs: slept ${got}s (want 240-330), approvals '$(approvals)': $(cat "$work/case.out") / summary: $(cat "$work/case.summary")"
+    fi
+  fi
+
+  # GITHUB_TOKEN may not approve: tried once, then a warning with the exact
+  # command for that run, and the job still passes.
+  if approve_case "$j" "$branch" "approve refused" 403 "$held1"; then
+    if [ "$(approvals)" = "api -X POST repos/o/r/actions/runs/101/approve" ] &&
+      grep -qF "gh api -X POST repos/o/r/actions/runs/101/approve" "$work/case.out" &&
+      grep -q "::warning::.*gh run list --branch $branch" "$work/case.out" &&
+      grep -qF 'actions/runs/101/approve' "$work/case.summary"; then
+      ok "$j: approval refused (403): tried once, a warning and a summary line with the exact command, exit 0"
+    else
+      fail "$j: approve refused: approvals '$(approvals)': $(cat "$work/case.out") / summary: $(cat "$work/case.summary")"
+    fi
   fi
 }
-check_dispatch api-lifecycle bot/kb-refresh-api
-check_dispatch registry bot/kb-refresh-registry
+check_approve api-lifecycle bot/kb-refresh-api
+check_approve registry bot/kb-refresh-registry
 
 # --- ci.yml: a dispatched run is the whole PR suite --------------------------
 
@@ -178,7 +288,7 @@ done
 job "$ci" registry >"$work/registry.job"
 regif=$(field 4 if <"$work/registry.job")
 want_expr "registry runs on pull_request" "$regif" true "$pr"
-want_expr "registry runs on workflow_dispatch (a kb-refresh bot branch)" "$regif" true "$dispatch"
+want_expr "registry runs on workflow_dispatch (e.g. by hand on a kb-refresh bot branch)" "$regif" true "$dispatch"
 want_expr "registry skips a release re-dispatch" "$regif" false "$redo"
 want_expr "registry skips push" "$regif" false "$push"
 want_expr "registry skips the schedule" "$regif" false "$sched"
