@@ -21,6 +21,14 @@ import (
 // additionalProperties). It follows local "#/..." $refs against root and
 // merges allOf parts; under anyOf or oneOf, v is held to the branch that
 // lists the most of it.
+//
+// A free-form `{type: object}` lists nothing, so every field of a value
+// it describes is reported: a response schema must list its properties
+// (or give an object-valued additionalProperties). The document's only
+// free-form objects never reach this check: the SARIF log, served as
+// application/sarif+json (only JSON bodies are checked), and the
+// Inventory's array items, which describe a request body the server
+// stores as sent.
 func unlistedFields(root, schema, v any, path string) []string {
 	props, items, extra, alts := schemaParts(root, schema)
 	if len(alts) > 0 {
