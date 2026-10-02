@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-// TestRetryAfterOn429: a receiver that rate-limits with 429 and a
+// TestRetryAfterOn429: a receiver that rate-limits with 429 or 503 and a
 // Retry-After header (delta-seconds or an HTTP-date) fails the delivery,
 // and the error carries the delay it asked for. No header, an unparseable
-// one, or another status carries none.
+// one, or another status carries none. A value too large to represent is
+// the longest wait (MaxRetryAfter), not absent.
 func TestRetryAfterOn429(t *testing.T) {
 	inAnHour := time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)
 	tests := []struct {
@@ -27,7 +28,11 @@ func TestRetryAfterOn429(t *testing.T) {
 		{"no header", http.StatusTooManyRequests, "", 0, false},
 		{"garbage", http.StatusTooManyRequests, "soon", 0, false},
 		{"negative", http.StatusTooManyRequests, "-5", 0, false},
-		{"not a 429", http.StatusServiceUnavailable, "120", 0, false},
+		{"503 is honoured too", http.StatusServiceUnavailable, "120", 2 * time.Minute, true},
+		{"503 without header", http.StatusServiceUnavailable, "", 0, false},
+		{"beyond 32 bits is the longest wait", http.StatusTooManyRequests, "4294967296", MaxRetryAfter, true},
+		{"absurdly large is the longest wait", http.StatusTooManyRequests, "99999999999999999999999", MaxRetryAfter, true},
+		{"another status", http.StatusInternalServerError, "120", 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

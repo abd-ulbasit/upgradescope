@@ -115,7 +115,7 @@ func (g *GenericWebhook) Notify(ctx context.Context, n Notification) error {
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // postJSON sends one JSON POST and treats any non-2xx status, a redirect
-// included, as an error: a RetryAfterError for a 429 with Retry-After.
+// included, as an error: a RetryAfterError for a 429 or 503 with Retry-After.
 func postJSON(ctx context.Context, client *http.Client, label, url string, body []byte, header http.Header) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -135,7 +135,7 @@ func postJSON(ctx context.Context, client *http.Client, label, url string, body 
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) // drain for connection reuse
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		err := fmt.Errorf("%s: unexpected status %d", label, resp.StatusCode)
-		if resp.StatusCode == http.StatusTooManyRequests {
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			if after, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok {
 				return &RetryAfterError{Err: err, After: after}
 			}
