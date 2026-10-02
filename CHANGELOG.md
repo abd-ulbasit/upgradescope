@@ -293,6 +293,16 @@ a CI gate.
   answered 200. Use `curl --fail-with-body` to fail the CI step and keep
   the SARIF; `?path=` gives SARIF results file locations, and with
   `?cluster=` only what the manifests introduce counts (#120).
+- A live scan whose control-plane skew could not be judged where upstream
+  would have told the version now gives `unknown` and exits 2 (it gave
+  `ready` and exited 0): a `kube-system` pod on an upstream-named
+  component image under a digest or a tag that is not a version
+  (`kube-proxy@sha256:…`, `kube-scheduler:latest`), or a
+  kube-apiserver, kube-controller-manager or kube-scheduler pod whose
+  version is not read. Pin the image to a version tag, or pass
+  `--allow-incomplete`. A kube-proxy pod on a vendor image of another
+  name (Oracle OKE's `oke-public-kube-proxy`) does not change the
+  verdict (#169).
 - A scan of a cluster that could not be read at all exits 1, and so does a
   `--files` scan that found no Kubernetes objects. Neither reports
   100/100 any more.
@@ -344,9 +354,15 @@ a CI gate.
 
 ### Fixed
 
-- A control-plane or kube-proxy pod whose version cannot be read makes
-  the verdict `unknown`, not `ready`: its skew was not evaluated, and it
-  may be the component past the policy (#169).
+- A control-plane or kube-proxy pod whose version upstream would have
+  told but cannot be read makes the verdict `unknown`, not `ready`: an
+  upstream-named component image under a digest or a tag that is not a
+  version (`latest`), or an unread kube-apiserver, kube-controller-manager
+  or kube-scheduler pod. Its skew was not evaluated, and it may be the
+  component past the policy. A kube-proxy pod on a vendor image of
+  another name (Oracle OKE's `oke-public-kube-proxy`) is an optional,
+  disclosed `versions` gap, and the verdict is unaffected. The gate
+  change this brings is under **Changed** (#169).
 - Notifications after a cluster upgrade: a blocker that the cluster's new
   default target adds (for example `networking.k8s.io/v1beta1` ServiceCIDR,
   removed in 1.37, once the cluster runs 1.36) is notified instead of being
@@ -419,7 +435,9 @@ a CI gate.
   (a digest-only image, a tag such as `latest`, or a labelled pod running
   an image of another name) makes the `versions` capability partial,
   naming the components and the first pod, instead of being dropped
-  silently (#169).
+  silently. scheduler-plugins' `kube-scheduler` is read by the Kubernetes
+  minor its tag is built on (`v0.31.8` as `v1.31.8`), and kOps' and
+  Talos' `k8s-app=<component>` labels mark component pods (#169).
 - The containerd compat blocker (`chart-incompat/containerd/<line>`) names
   the nodes that cannot run the target even when they all run one version,
   so blocker-only outputs (gate, JUnit, code quality) say where (#169).
