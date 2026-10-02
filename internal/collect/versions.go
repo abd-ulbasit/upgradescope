@@ -20,7 +20,7 @@ import (
 // best-effort: fields populated before an error persist even though the
 // capability degrades.
 func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kube kubernetes.Interface, teamLabel string, inv *inventory.Inventory) error {
-	sv, err := disc.ServerVersion()
+	sv, err := discovery.ToServerVersionInterfaceWithContext(disc).ServerVersionWithContext(ctx)
 	if err != nil {
 		return fmt.Errorf("server version: %w", err)
 	}

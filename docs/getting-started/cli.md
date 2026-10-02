@@ -54,6 +54,13 @@ that your credentials cannot read is reported as not assessed with the
 reason, and the rest of the scan still runs. A scan that could read nothing
 at all (an unreachable cluster) is an error, exit 1.
 
+A slow or stalled API server cannot hang the scan: each request is given
+up after `--request-timeout` (default 30s), and each collector step has its
+own share of the scan's 5 minutes, so a stalled step leaves only its own
+check not assessed. The report's header names the kube context and the API
+server it read (`Context:  prod (API server https://10.0.0.1:6443)`), so a
+saved report says which cluster it is about.
+
 ## Read the result
 
 ```text

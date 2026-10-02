@@ -97,6 +97,12 @@ a CI gate.
 - `NOTICE` and `registry/DATA-LICENSE.md` give endoflife.date and the
   Kubernetes sources their attribution. The repository adds CONTRIBUTING,
   SECURITY, an architecture guide and an observability guide.
+- `--request-timeout` for `scan` and `agent` (default 30s; 0 = no
+  per-request limit): client-go gives up on a single API request after it.
+- A live scan's report names the kube context and the API server it read:
+  JSON `kubeContext` and `apiServer` (scheme, host and port only, never
+  credentials), a `Context:` line in the table header, and `Context ... ·
+  API server ...` in the markdown summary.
 
 ### Changed
 
@@ -173,6 +179,11 @@ a CI gate.
   expands `List` objects, and records object locations.
 - The agent evaluates a repeated target once, and a stop in the middle of
   a tick is no longer counted as a failure.
+- A stalled or unresponsive API server no longer hangs `scan` (one ran for
+  more than 7 minutes). Each request is bounded by `--request-timeout`,
+  `/version` and discovery honour the scan's deadline, and each collector
+  step has its own share of the 5-minute budget, so one stalled step
+  degrades only its own capability (#94).
 
 ### Security
 

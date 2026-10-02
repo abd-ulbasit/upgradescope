@@ -173,8 +173,14 @@ type Report struct {
 	// ServerVersion is the inventory's raw kube-apiserver GitVersion, the
 	// version the target was judged against; empty in files mode.
 	ServerVersion string `json:"serverVersion,omitempty"`
-	KBVersion     string `json:"kbVersion"`
-	Score         int    `json:"score"` // from findings only; see Score
+	// KubeContext and APIServer say which cluster a live scan read: the
+	// kubeconfig context and the API server URL (scheme, host and port;
+	// no credentials, path or query). Evaluate never sets them; the scan
+	// command does. Empty in files mode.
+	KubeContext string `json:"kubeContext,omitempty"`
+	APIServer   string `json:"apiServer,omitempty"`
+	KBVersion   string `json:"kbVersion"`
+	Score       int    `json:"score"` // from findings only; see Score
 	// Ready is Verdict == VerdictReady, kept for v0.1 consumers.
 	Ready       bool            `json:"ready"`
 	Verdict     Verdict         `json:"verdict"`

@@ -84,6 +84,12 @@ What this metric is, and is not:
 - Managed control planes often deny `/metrics` regardless of RBAC. The
   capability is then reported as not assessed, with the reason; it is not
   required for the verdict ([Managed clusters](../guides/managed-clusters.md)).
+- A `/metrics` that never answers is given up after `--request-timeout`
+  (default 30s), or at the latest when its step's share of the scan's time
+  runs out. Only `deprecated-calls` is then not assessed; every other check
+  has already run. Because `deprecated-calls` is not required, such a scan
+  can still be `ready`: the verdict then rests on stored objects alone, and
+  the report's `NOT ASSESSED` section says the request signal is missing.
 
 ## Manifests
 

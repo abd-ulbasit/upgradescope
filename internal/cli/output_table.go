@@ -19,6 +19,14 @@ func WriteTable(out io.Writer, r engine.Report) error {
 	fmt.Fprintln(w, "upgradescope upgrade readiness report")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Cluster:  %s\n", r.ClusterID)
+	switch { // live scans only: which cluster this was
+	case r.KubeContext != "" && r.APIServer != "":
+		fmt.Fprintf(w, "Context:  %s (API server %s)\n", r.KubeContext, r.APIServer)
+	case r.KubeContext != "":
+		fmt.Fprintf(w, "Context:  %s\n", r.KubeContext)
+	case r.APIServer != "":
+		fmt.Fprintf(w, "Context:  (API server %s)\n", r.APIServer)
+	}
 	if r.ServerVersion != "" { // files mode has no cluster version
 		fmt.Fprintf(w, "Server:   %s\n", r.ServerVersion)
 	}

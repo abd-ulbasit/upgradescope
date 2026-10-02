@@ -31,6 +31,7 @@ type agentOptions struct {
 	forceSyncEvery time.Duration
 	kubeconfig     string
 	kubecontext    string
+	requestTimeout time.Duration
 	targets        []string
 	manageCRD      bool
 	healthAddr     string
@@ -70,7 +71,7 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 	if err != nil {
 		return fmt.Errorf("load knowledge base: %w", err)
 	}
-	cfg, err := buildAgentRESTConfig(opts.kubeconfig, opts.kubecontext)
+	cfg, err := buildAgentRESTConfig(opts.kubeconfig, opts.kubecontext, opts.requestTimeout)
 	if err != nil {
 		return err
 	}
@@ -105,9 +106,11 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 // buildAgentRESTConfig prefers in-cluster config (the agent's normal home)
 // and falls back to kubeconfig loading rules — the same rules as scan. An
 // explicit --kubeconfig or --context skips the in-cluster attempt entirely.
-var buildAgentRESTConfig = func(kubeconfig, kubecontext string) (*rest.Config, error) {
+// requestTimeout becomes rest.Config.Timeout (see scanRESTConfig).
+var buildAgentRESTConfig = func(kubeconfig, kubecontext string, requestTimeout time.Duration) (*rest.Config, error) {
 	if kubeconfig == "" && kubecontext == "" {
 		if cfg, err := rest.InClusterConfig(); err == nil {
+			cfg.Timeout = requestTimeout
 			return cfg, nil
 		}
 	}
@@ -120,6 +123,7 @@ var buildAgentRESTConfig = func(kubeconfig, kubecontext string) (*rest.Config, e
 	if err != nil {
 		return nil, fmt.Errorf("load kubeconfig (not in-cluster, no kubeconfig found): %w", err)
 	}
+	cfg.Timeout = requestTimeout
 	return cfg, nil
 }
 
@@ -152,6 +156,9 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if err := serverToken.resolve(cmd); err != nil {
 				return err
 			}
+			if err := validRequestTimeout(opts.requestTimeout); err != nil {
+				return err
+			}
 			if _, err := newAgentLogger(io.Discard, opts.logFormat, opts.logLevel); err != nil {
 				return err // a typo fails before any cluster access
 			}
@@ -178,5 +185,6 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().StringVar(&opts.logLevel, "log-level", "info", "log level: debug, info, warn or error")
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: in-cluster config, then standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
+	cmd.Flags().DurationVar(&opts.requestTimeout, "request-timeout", defaultRequestTimeout, "give up on a single API request after this long (0 = no per-request limit)")
 	return cmd
 }

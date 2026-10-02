@@ -12,7 +12,8 @@ import (
 
 // WriteMarkdown renders the report as GitHub-flavoured Markdown: a header
 // line (verdict, target, score, finding and suppressed counts, KB
-// version); against a baseline, how many findings are new; one table row
+// version); for a live scan, the kubeconfig context and API server it
+// read; against a baseline, how many findings are new; one table row
 // per finding (severity, baseline state when compared, title, objects as
 // file:line, remediation); the suppressed findings with the reason each
 // was accepted and what accepted it; then the NOT ASSESSED gaps. The
@@ -40,6 +41,16 @@ func WriteMarkdown(w io.Writer, r engine.Report) {
 		r.Target, r.Score,
 		plural(counts[engine.SevBlocker], "blocker"), plural(counts[engine.SevWarning], "warning"),
 		counts[engine.SevInfo], suppressed, mdCode(r.KBVersion))
+	var cluster []string // live scans only: which cluster this was
+	if r.KubeContext != "" {
+		cluster = append(cluster, "Context "+mdCode(r.KubeContext))
+	}
+	if r.APIServer != "" {
+		cluster = append(cluster, "API server "+mdCode(r.APIServer))
+	}
+	if len(cluster) > 0 {
+		fmt.Fprintf(w, "\n%s\n", strings.Join(cluster, " · "))
+	}
 
 	added, unchanged := baselineCounts(r)
 	compared := added+unchanged > 0

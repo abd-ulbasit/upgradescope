@@ -1013,8 +1013,8 @@ type partialDiscovery struct {
 	*discoveryfake.FakeDiscovery
 }
 
-func (p partialDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
-	groups, lists, _ := p.FakeDiscovery.ServerGroupsAndResources()
+func (p partialDiscovery) ServerGroupsAndResourcesWithContext(ctx context.Context) ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	groups, lists, _ := p.FakeDiscovery.ServerGroupsAndResourcesWithContext(ctx)
 	return groups, lists, &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
 		{Group: "metrics.k8s.io", Version: "v1beta1"}: errors.New("the server is currently unable to handle the request"),
 	}}
@@ -1093,8 +1093,8 @@ type failingGroupDiscovery struct {
 	failed schema.GroupVersion
 }
 
-func (p failingGroupDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
-	groups, lists, _ := p.FakeDiscovery.ServerGroupsAndResources()
+func (p failingGroupDiscovery) ServerGroupsAndResourcesWithContext(ctx context.Context) ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	groups, lists, _ := p.FakeDiscovery.ServerGroupsAndResourcesWithContext(ctx)
 	return groups, lists, &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
 		p.failed: errors.New("the server is currently unable to handle the request"),
 	}}

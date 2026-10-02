@@ -23,6 +23,32 @@ RBAC. The check is optional: the verdict does not depend on it, and stored
 objects are still checked. Nothing to fix;
 see [Managed clusters](guides/managed-clusters.md).
 
+The same holds when `/metrics` does not answer: the request is given up
+after `--request-timeout` (default 30s), the reason (`get /metrics: …`
+naming a timeout, in one of the forms below) says so, and the verdict can
+still be `ready`, judged on stored objects without the request signal.
+
+## A check not assessed with a timeout or a step deadline
+
+A live scan has 5 minutes. Each API request is given up after
+`--request-timeout` (default 30s; `0` turns the per-request limit off), and
+each of the five collector steps runs under its own share of the time left,
+so a slow or stalled API server degrades only the step it stalled: that
+capability is not assessed, and the other steps still run.
+
+When a single request timed out, the reason names a timeout:
+`Client.Timeout exceeded`, `request canceled` or
+`context deadline exceeded`, alone or together. Which form appears varies
+from run to run, because client-go's per-request context and the HTTP
+client's own timeout race each other. When the step's share of the time ran
+out, the reason ends with
+`(step deadline: gave up after …, this step's share of the scan's time)`,
+typically after `context deadline exceeded`. When the step is a required one
+(`versions`, `addons`, `api-usage`) the verdict is `unknown`. Check the API
+server's health and the network path to it, or raise `--request-timeout`
+when single requests are slow but complete (a very large list page, a big
+`/metrics`).
+
 ## `helm` not assessed: Secrets forbidden
 
 The agent was installed with `rbac.helmSecrets=false`, or your own identity

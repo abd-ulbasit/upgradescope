@@ -138,7 +138,7 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 	var failures []string
 	unchecked := map[string]bool{} // flagged APIs not checked, "group/version Kind"
 
-	groups, lists, err := disc.ServerGroupsAndResources()
+	groups, lists, err := discovery.ToServerResourcesInterfaceWithContext(disc).ServerGroupsAndResourcesWithContext(ctx)
 	if err != nil {
 		// Partial discovery failure (one broken aggregated API) must not
 		// kill the capability; total failure does. Skipped groups are

@@ -653,6 +653,8 @@ The engine's report, as `scan --output json` writes it.
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
+| `kubeContext` | string | no | `scan` of a live cluster only: the kubeconfig context it read. The server never sets it. |
+| `apiServer` | string | no | `scan` of a live cluster only: the API server it read, as scheme, host and port, without credentials, path or query. The server never sets it. |
 | `kbVersion` | string | yes | — |
 | `score` | integer | yes | max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)) |
 | `ready` | boolean | yes | verdict == ready. |
@@ -670,6 +672,8 @@ The report's fields other than its findings.
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
+| `kubeContext` | string | no | `scan` of a live cluster only: the kubeconfig context it read. The server never sets it. |
+| `apiServer` | string | no | `scan` of a live cluster only: the API server it read, as scheme, host and port, without credentials, path or query. The server never sets it. |
 | `kbVersion` | string | yes | — |
 | `score` | integer | yes | max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)) |
 | `ready` | boolean | yes | verdict == ready. |
@@ -695,6 +699,8 @@ The report's fields other than its findings.
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | — |
+| `kubeContext` | string | no | `scan` of a live cluster only: the kubeconfig context it read. The server never sets it. |
+| `apiServer` | string | no | `scan` of a live cluster only: the API server it read, as scheme, host and port, without credentials, path or query. The server never sets it. |
 | `kbVersion` | string | yes | — |
 | `score` | integer | yes | max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)) |
 | `ready` | boolean | yes | verdict == ready. |
@@ -829,6 +835,8 @@ The report's fields other than its findings.
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
+| `kubeContext` | string | no | `scan` of a live cluster only: the kubeconfig context it read. The server never sets it. |
+| `apiServer` | string | no | `scan` of a live cluster only: the API server it read, as scheme, host and port, without credentials, path or query. The server never sets it. |
 | `kbVersion` | string | yes | — |
 | `score` | integer | yes | max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)) |
 | `ready` | boolean | yes | verdict == ready. |

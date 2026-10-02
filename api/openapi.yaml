@@ -766,6 +766,8 @@ components:
         clusterId: {type: string}
         target: {$ref: "#/components/schemas/Target"}
         serverVersion: {type: string, description: "The kube-apiserver gitVersion the target was judged against; absent for manifests."}
+        kubeContext: {type: string, description: "`scan` of a live cluster only: the kubeconfig context it read. The server never sets it."}
+        apiServer: {type: string, description: "`scan` of a live cluster only: the API server it read, as scheme, host and port, without credentials, path or query. The server never sets it."}
         kbVersion: {type: string}
         score:
           type: integer

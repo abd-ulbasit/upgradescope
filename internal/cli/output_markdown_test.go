@@ -294,3 +294,29 @@ func TestWriteMarkdownSuppressedEscapes(t *testing.T) {
 		t.Errorf("suppressed row\n got: %s\nwant suffix: %s", buf.String(), want)
 	}
 }
+
+// #94: a live scan's summary says which cluster it read; the context
+// name comes from a kubeconfig, so it is escaped like every other value.
+func TestWriteMarkdownNamesTheCluster(t *testing.T) {
+	r := engine.Report{
+		Target:      inventory.Version{Major: 1, Minor: 36},
+		KBVersion:   "test-kb",
+		Score:       100,
+		Ready:       true,
+		Verdict:     engine.VerdictReady,
+		KubeContext: "prod|eu",
+		APIServer:   "https://10.0.0.1:6443",
+	}
+	var buf bytes.Buffer
+	WriteMarkdown(&buf, r)
+	want := "### upgradescope: ready\n" +
+		"\n" +
+		"Target **1.36** · score **100/100** · 0 blockers, 0 warnings, 0 info · KB `test-kb`\n" +
+		"\n" +
+		"Context `prod\\|eu` · API server `https://10.0.0.1:6443`\n" +
+		"\n" +
+		"No findings.\n"
+	if got := buf.String(); got != want {
+		t.Errorf("markdown output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}

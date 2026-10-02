@@ -73,6 +73,8 @@ the binary that wrote the report and carries no compatibility meaning.
 | `clusterId` | The cluster's `kube-system` namespace UID, or `files`. |
 | `target` | The target minor. |
 | `serverVersion` | Live scans only: the kube-apiserver's `gitVersion` (`v1.34.2-gke.100`), the version the target was judged against. |
+| `kubeContext` | Live scans only: the kubeconfig context the scan read. |
+| `apiServer` | Live scans only: the API server the scan read, as scheme, host and port (`https://10.0.0.1:6443`); never the kubeconfig's credentials, path or query. |
 | `kbVersion` | The knowledge base the report was judged with. |
 | `score` | 0–100 ([formula](../concepts/verdict-and-score.md#the-score)). |
 | `verdict` | `ready`, `blocked` or `unknown` ([rules](../concepts/verdict-and-score.md#the-verdict)). |
@@ -82,6 +84,7 @@ the binary that wrote the report and carries no compatibility meaning.
 | `suppressed[]` | Findings an ignore rule or annotation accepted, with `reason`, `source` and `expires`. Not in the score or verdict. |
 | `teams` | Per-team scores; findings without a team are under `unattributed`. A team's `ready` means no blocker among its own findings: it ignores the report's not-assessed gaps and other teams' blockers, so gate on `verdict`. |
 
-The server's report endpoint serves the same report fields, plus where the
+The server's report endpoint serves the same report fields (except
+`kubeContext` and `apiServer`, which only `scan` sets), plus where the
 report came from ([`GET /api/v1/clusters/{id}/report`](api.md#clusters));
 the SARIF output carries the same findings as results, keyed by `key`.

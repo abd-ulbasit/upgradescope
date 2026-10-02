@@ -53,7 +53,11 @@ status was written, and the agent's local result never depends on the
 server. Push failures are logged at WARN and counted separately.
 
 Each tick runs under a deadline of half the interval, at most 5 minutes, so a
-wedged API call cannot stop the loop. A stop (SIGTERM) that lands mid-tick
+wedged API call cannot stop the loop. Within a tick, each API request is
+given up after `--request-timeout` (default 30s; in the chart, set it
+through `agent.extraArgs`), and each collector step gets its own share of
+the tick deadline, so a stalled step leaves only its capability not
+assessed. A stop (SIGTERM) that lands mid-tick
 cancels the tick's calls; that tick is not counted or logged as failed, and
 the agent logs `agent stopping` with `interruptedTick=true`.
 
