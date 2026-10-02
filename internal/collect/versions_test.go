@@ -191,6 +191,7 @@ func TestComponentImageTagUnreadableReasons(t *testing.T) {
 		{"registry.k8s.io/kube-scheduler:v1.34.2@sha256:abc", "v1.34.2", ""},
 		{"gke.gcr.io/kube-scheduler-amd64:v1.32.0-gke.1000", "v1.32.0", ""},
 		{"docker.io/rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101", "v1.34.2", ""},
+		{"projects.registry.vmware.com/tkg/kube-scheduler:v1.28.7_vmware.1", "v1.28.7", ""}, // TKG: Docker tags cannot hold '+'
 		{"registry.k8s.io/kube-scheduler@sha256:abc", "", "kube-scheduler image registry.k8s.io/kube-scheduler@sha256:abc has no version tag"},
 		{"registry.k8s.io/kube-scheduler:latest", "", `kube-scheduler image registry.k8s.io/kube-scheduler:latest has tag "latest", not a version`},
 		{"registry.k8s.io/kube-scheduler", "", "kube-scheduler image registry.k8s.io/kube-scheduler has no version tag"},

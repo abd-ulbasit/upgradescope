@@ -22,7 +22,7 @@ per-architecture images such as GKE's `gke.gcr.io/kube-proxy-amd64` and
 older kubeadm's `kube-scheduler-amd64`, `<name>-<arch>`, or RKE2's
 `rancher/hardened-kubernetes`, which runs every component and is tagged
 with the Kubernetes version; a build suffix (`-gke.1000`, `-eksbuild.1`,
-`-rke2r1-build…`) is dropped. A component pod whose version
+`-rke2r1-build…`, VMware TKG's `_vmware.1`) is dropped. A component pod whose version
 cannot be read — a digest-only image, a tag that is not a version
 (`latest`), or a labelled pod that runs no image of the component's name
 (a vendor image named otherwise) — is not skipped silently: the

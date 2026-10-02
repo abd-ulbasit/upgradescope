@@ -411,7 +411,8 @@ a CI gate.
   where istio.io says 12 October (#166).
 - Control-plane and kube-proxy versions are read from per-architecture
   images (`gke.gcr.io/kube-proxy-amd64`, `kube-scheduler-amd64`), so GKE's
-  kube-proxy is skew-checked. A component pod whose version cannot be read
+  kube-proxy is skew-checked, and from VMware TKG's tags, whose build
+  suffix follows an underscore (`v1.28.7_vmware.1`). A component pod whose version cannot be read
   (a digest-only image, a tag such as `latest`, or a labelled pod running
   an image of another name) makes the `versions` capability partial,
   naming the components and the first pod, instead of being dropped

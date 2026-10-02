@@ -194,8 +194,10 @@ var allComponentsImages = []string{"hardened-kubernetes"}
 // component (e.g. ".../eks/kube-proxy:v1.33.0",
 // "gke.gcr.io/kube-proxy-amd64:v1.32.0-gke.1000", RKE2's
 // "rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101").
-// Build suffixes ("v1.33.0-eksbuild.1", "+fips") are stripped; the tag is
-// returned only if inventory.ParseVersion accepts the normalized form.
+// Build suffixes ("v1.33.0-eksbuild.1", "+fips", and VMware TKG's
+// "v1.28.7_vmware.1", where "_" stands for the "+" a tag cannot hold) are
+// stripped; the tag is returned only if inventory.ParseVersion accepts the
+// normalized form.
 // When comp's image is there but no tag parses, why says so, naming the
 // first such image; both are empty when no container runs comp's image.
 func componentImageTag(containers []corev1.Container, comp string) (tag, why string) {
@@ -207,7 +209,7 @@ func componentImageTag(containers []corev1.Container, comp string) (tag, why str
 			continue
 		}
 		v := t
-		if i := strings.IndexAny(v, "-+"); i >= 0 {
+		if i := strings.IndexAny(v, "-+_"); i >= 0 {
 			v = v[:i]
 		}
 		if _, err := inventory.ParseVersion(v); err == nil {
