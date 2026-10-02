@@ -147,7 +147,7 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
-	next := s.now().Add(outboxBackoff(m.Attempts))
+	next := s.now().Add(retryDelay(m.Attempts, err))
 	log.Printf("server: notification %s failed (cluster %s, sink %s, attempt %d), retrying at %s: %v",
 		n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), err)
 	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, outboxError(err)))
