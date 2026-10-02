@@ -689,22 +689,34 @@ type FileWarning struct {
 	Unassessed bool
 }
 
-func (w FileWarning) String() string { return fmt.Sprintf("%s:%d: %v", w.File, w.Line, w.Err) }
+// String is "file:line: error", or "dir: error" for a directory not walked
+// (Line 0).
+func (w FileWarning) String() string {
+	if w.Line == 0 {
+		return fmt.Sprintf("%s: %v", w.File, w.Err)
+	}
+	return fmt.Sprintf("%s:%d: %v", w.File, w.Line, w.Err)
+}
 
 // skipDir reports whether a directory below the scan root holds files that
 // are not the repository's manifests: VCS metadata, node packages, and a
 // Go module vendor directory (recognised by its modules.txt; vendored Go
 // modules ship test manifests with old API versions). Any other vendor/
 // is walked — GitOps repositories vendor upstream manifests they deploy.
-func skipDir(path, name string) bool {
+// why names a skipped dependency tree for the warning; skipped VCS
+// metadata has none, and is not worth one.
+func skipDir(path, name string) (skip bool, why string) {
 	switch name {
-	case ".git", ".hg", ".svn", "node_modules":
-		return true
+	case ".git", ".hg", ".svn":
+		return true, ""
+	case "node_modules":
+		return true, "node packages"
 	case "vendor":
-		_, err := os.Stat(filepath.Join(path, "modules.txt"))
-		return err == nil
+		if _, err := os.Stat(filepath.Join(path, "modules.txt")); err == nil {
+			return true, "a Go module vendor directory"
+		}
 	}
-	return false
+	return false, ""
 }
 
 // CollectFiles builds an Inventory from rendered manifests on disk
@@ -723,8 +735,12 @@ func skipDir(path, name string) bool {
 // the engine's verdict is at least unknown.
 //
 // Object refs carry paths relative to root (the base name for a single
-// file). VCS metadata and dependency trees below root are not walked (see
-// skipDir). Only I/O errors fail the walk.
+// file). A symlink named as root is resolved. VCS metadata and dependency
+// trees below root are not walked (see skipDir), nor are symlinked
+// directories, which kubectl apply -R does not walk either (following them
+// could also leave the repository, or loop); each skipped directory but VCS
+// metadata is a warning. Symlinked files are read, as kubectl reads them.
+// Only I/O errors fail the walk.
 func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inventory, FilesSummary, error) {
 	removed := map[gvk]bool{}
 	for _, e := range lifecycle {
@@ -735,29 +751,51 @@ func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inve
 	var hiding []string // "file:line (group/version Kind)" per unassessed part naming a removed API
 	counts := map[gvk]*inventory.APIUsage{}
 	var sum FilesSummary
+	if fi, err := os.Lstat(root); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		if st, err := os.Stat(root); err == nil && st.IsDir() { // WalkDir would read it as a file
+			if root, err = filepath.EvalSymlinks(root); err != nil {
+				return manifestInventory("files", "files mode", nil), sum, err
+			}
+		}
+	}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		rel := filepath.Base(path)
+		if path != root {
+			if rel, err = filepath.Rel(root, path); err != nil {
+				return err
+			}
+		}
+		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if path != root && skipDir(path, d.Name()) {
+			if path == root {
+				return nil
+			}
+			if skip, why := skipDir(path, d.Name()); skip {
+				if why != "" {
+					sum.Warnings = append(sum.Warnings, FileWarning{File: rel, Err: fmt.Errorf("not walked: %s (scan it as the root to include it)", why)})
+				}
 				return filepath.SkipDir
 			}
 			return nil
 		}
+		if d.Type()&fs.ModeSymlink != 0 && path != root {
+			if st, err := os.Stat(path); err == nil && st.IsDir() {
+				sum.Warnings = append(sum.Warnings, FileWarning{File: rel,
+					Err: errors.New("symlinked directory not walked, as kubectl apply -R does not walk it (scan its target as the root to include it)")})
+				return nil
+			}
+		}
 		sum.Files++
-		rel := filepath.Base(path)
 		if path != root {
 			ext := strings.ToLower(filepath.Ext(path))
 			if ext != ".yaml" && ext != ".yml" && ext != ".json" {
 				sum.Skipped++
 				return nil
 			}
-			if rel, err = filepath.Rel(root, path); err != nil {
-				return err
-			}
 		}
-		rel = filepath.ToSlash(rel)
 		f, err := os.Open(path)
 		if err != nil {
 			return err

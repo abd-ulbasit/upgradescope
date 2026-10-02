@@ -81,7 +81,7 @@ func TestScanFilesUnassessedRemovedAPIIsUnknown(t *testing.T) {
 // the verdict.
 func TestScanHelpDocumentsFilesDecoding(t *testing.T) {
 	cmd := newScanCmd()
-	for _, want := range []string{"kubectl apply -f", "last value", "unknown"} {
+	for _, want := range []string{"kubectl apply -f", "last value", "unknown", "symlinked", "node_modules"} {
 		if !strings.Contains(cmd.Long, want) {
 			t.Errorf("scan --help lacks %q", want)
 		}

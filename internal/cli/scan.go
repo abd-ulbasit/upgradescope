@@ -345,7 +345,10 @@ pretty-printed or adjacent), List items expanded, a duplicate key taking its
 last value. Documents that are not Kubernetes objects are skipped. A document
 that cannot be decoded is skipped with a warning; when its text names an API
 the knowledge base lists as removed, api-usage is not assessed, so the verdict
-is at least unknown and the gate fails unless --allow-incomplete.
+is at least unknown and the gate fails unless --allow-incomplete. VCS metadata,
+node_modules and Go vendor/ directories (with modules.txt) are not walked, nor
+are symlinked directories (kubectl apply -R does not follow them either); each
+of these but VCS metadata is a warning.
 
 Suppression: ignore rules in ` + suppress.ConfigFile + ` (found in the scan root,
 i.e. the --files directory or else the working directory, then at the git

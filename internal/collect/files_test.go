@@ -310,6 +310,80 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 	}
 }
 
+// Skipped dependency trees are warned about, so a scan never silently
+// covers less than the user pointed it at; VCS metadata stays silent.
+func TestCollectFiles_SkippedDirsReported(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"rendered.yaml":                       ingressV1beta1,
+		".git/hooks/x.yaml":                   ingressV1beta1,
+		"node_modules/pkg/fixture.yaml":       ingressV1beta1,
+		"vendor/modules.txt":                  "# k8s.io/api v0.30.0\n",
+		"vendor/k8s.io/api/testdata/ing.yaml": ingressV1beta1,
+	})
+	_, sum, err := CollectFiles(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, w := range sum.Warnings {
+		got = append(got, w.String())
+		if w.Unassessed || w.Line != 0 {
+			t.Errorf("warning %+v: want a directory warning (no line)", w)
+		}
+	}
+	if len(got) != 2 || !strings.HasPrefix(got[0], "node_modules: not walked") || !strings.HasPrefix(got[1], "vendor: not walked") {
+		t.Errorf("warnings = %q, want node_modules and vendor, in walk order", got)
+	}
+}
+
+// Symlinked directories below the root are not followed, as kubectl apply
+// -R does not follow them (and following could leave the repository or
+// loop); each is a warning instead of a silent gap. Symlinked files are
+// read, as kubectl reads them.
+func TestCollectFiles_SymlinkedDirWarns(t *testing.T) {
+	dir := writeTree(t, map[string]string{"real/ing.yaml": ingressV1beta1, "outside/cron.yaml": "apiVersion: batch/v1beta1\nkind: CronJob\n"})
+	if err := os.Symlink(filepath.Join(dir, "outside"), filepath.Join(dir, "real", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "real", "loop")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "outside", "cron.yaml"), filepath.Join(dir, "real", "cron-link.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	inv, sum, err := CollectFiles(filepath.Join(dir, "real"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := usageCounts(inv); !reflect.DeepEqual(got, map[string]int{"networking.k8s.io/v1beta1/Ingress": 1, "batch/v1beta1/CronJob": 1}) {
+		t.Errorf("usage = %v, want the Ingress and the symlinked file's CronJob, once each", got)
+	}
+	var got []string
+	for _, w := range sum.Warnings {
+		got = append(got, w.String())
+	}
+	if len(got) != 2 || !strings.HasPrefix(got[0], "linked: symlinked directory not walked") || !strings.HasPrefix(got[1], "loop: symlinked directory not walked") {
+		t.Errorf("warnings = %q, want one per symlinked directory", got)
+	}
+}
+
+// A symlink named as the root is resolved and walked: `--files rendered`
+// where rendered links to the output directory.
+func TestCollectFiles_SymlinkRoot(t *testing.T) {
+	dir := writeTree(t, map[string]string{"out/sub/ing.yaml": ingressV1beta1})
+	link := filepath.Join(dir, "rendered")
+	if err := os.Symlink(filepath.Join(dir, "out"), link); err != nil {
+		t.Fatal(err)
+	}
+	inv, sum, err := CollectFiles(link, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Objects[0].File != "sub/ing.yaml" || len(sum.Warnings) != 0 {
+		t.Errorf("usage = %+v, warnings %v; want sub/ing.yaml, relative to the root", inv.APIUsage, sum.Warnings)
+	}
+}
+
 // A file named explicitly is parsed whatever its extension
 // (`kustomize build overlays/prod > rendered`).
 func TestCollectFilesSingleFileAnyExtension(t *testing.T) {
