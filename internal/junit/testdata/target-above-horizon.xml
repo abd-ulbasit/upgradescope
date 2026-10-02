@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="upgradescope" tests="2" failures="0" errors="1" skipped="0" time="0">
+<testsuites name="upgradescope" tests="2" failures="0" errors="1" time="0">
   <testsuite name="kb-stale" tests="1" failures="0" errors="0" skipped="0" time="0">
     <testcase name="kb-stale" classname="upgradescope.kb-stale" time="0">
       <system-out>warning: knowledge base does not cover Kubernetes 1.37 (newest known: 1.36).&#xA;Findings may be incomplete; regenerate the knowledge base (kb version test-kb-1).</system-out>

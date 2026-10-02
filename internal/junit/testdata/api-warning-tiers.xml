@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="upgradescope" tests="5" failures="0" errors="0" skipped="0" time="0">
+<testsuites name="upgradescope" tests="5" failures="0" errors="0" time="0">
   <testsuite name="removed-api" tests="1" failures="0" errors="0" skipped="0" time="0">
     <testcase name="removed-api/batch/v1beta1/CronJob" classname="upgradescope.removed-api" time="0">
       <system-out>warning: batch/v1beta1 CronJob removed in 1.25 (2 objects).&#xA;2 object(s) written through this API version: jobs (2). Written by: helm. apiserver_requested_deprecated_apis also records requests to batch/v1beta1 cronjobs since the last apiserver restart; the metric does not identify the client.&#xA;Objects:&#xA;- jobs/nightly&#xA;- jobs/weekly&#xA;Teams: batch&#xA;Fix: migrate to batch/v1 CronJob.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>

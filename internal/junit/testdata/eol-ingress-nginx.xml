@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="upgradescope" tests="1" failures="1" errors="0" skipped="0" time="0">
+<testsuites name="upgradescope" tests="1" failures="1" errors="0" time="0">
   <testsuite name="eol-addon" tests="1" failures="1" errors="0" skipped="0" time="0">
     <testcase name="eol-addon/ingress-nginx" classname="upgradescope.eol-addon" time="0">
       <failure message="ingress-nginx is end-of-life since 2026-03-26" type="blocker">ingress-nginx is end-of-life since 2026-03-26.&#xA;Detected ingress-nginx version 4.7.1 via chart in namespace(s): ingress-nginx. Upstream support has ended.&#xA;Teams: platform&#xA;Fix: migrate to Gateway API (ingress2gateway) or another maintained ingress controller.&#xA;References:&#xA;- https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/</failure>

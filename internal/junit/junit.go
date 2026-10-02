@@ -23,15 +23,16 @@ type Options struct {
 	AllowIncomplete bool
 }
 
-// The JUnit model: only the fields we emit, in the Jenkins JUnit schema's
-// shape (see the package tests).
+// The JUnit model: only the fields we emit, valid against the Jenkins
+// JUnit schema (the xUnit plugin's junit-10.xsd; the package tests check
+// it). That schema has no skipped count on <testsuites>, only on each
+// <testsuite>.
 type testsuites struct {
 	XMLName  xml.Name    `xml:"testsuites"`
 	Name     string      `xml:"name,attr"`
 	Tests    int         `xml:"tests,attr"`
 	Failures int         `xml:"failures,attr"`
 	Errors   int         `xml:"errors,attr"`
-	Skipped  int         `xml:"skipped,attr"`
 	Time     string      `xml:"time,attr"`
 	Suites   []testsuite `xml:"testsuite"`
 }
@@ -182,7 +183,6 @@ func Write(w io.Writer, r engine.Report, opts Options) error {
 		doc.Tests += s.Tests
 		doc.Failures += s.Failures
 		doc.Errors += s.Errors
-		doc.Skipped += s.Skipped
 		doc.Suites = append(doc.Suites, *s)
 	}
 

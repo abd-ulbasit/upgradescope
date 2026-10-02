@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="upgradescope" tests="5" failures="0" errors="0" skipped="4" time="0">
+<testsuites name="upgradescope" tests="5" failures="0" errors="0" time="0">
   <testsuite name="unknown-api" tests="1" failures="0" errors="0" skipped="0" time="0">
     <testcase name="unknown-api/batch/v2alpha1/CronJob" classname="upgradescope.unknown-api" time="0">
       <system-out>info: batch/v2alpha1 CronJob is not in the knowledge base (1 object).&#xA;1 manifest object(s) use this API: jobs (1). The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes 1.34 serves it.&#xA;Objects:&#xA;- jobs/nightly (jobs/cronjob.yaml:1)&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>

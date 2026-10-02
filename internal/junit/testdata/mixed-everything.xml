@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="upgradescope" tests="17" failures="7" errors="1" skipped="0" time="0">
+<testsuites name="upgradescope" tests="17" failures="7" errors="1" time="0">
   <testsuite name="removed-api" tests="1" failures="1" errors="0" skipped="0" time="0">
     <testcase name="removed-api/extensions/v1beta1/Ingress" classname="upgradescope.removed-api" time="0">
       <failure message="extensions/v1beta1 Ingress removed in 1.22 (2 objects)" type="blocker">extensions/v1beta1 Ingress removed in 1.22 (2 objects).&#xA;2 object(s) still stored/served at this version: shop (2).&#xA;Teams: storefront&#xA;Fix: migrate to networking.k8s.io/v1 Ingress.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
