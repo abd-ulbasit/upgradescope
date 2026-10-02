@@ -155,6 +155,71 @@ func TestEvalAddOnsEOLStatusWithFutureDateUsesFutureTense(t *testing.T) {
 	}
 }
 
+// The EOL boundaries, for a product date and a release-line date alike: an
+// end date of today has passed (blocker), one exactly 90 days out is inside
+// the window (warning), one 91 days out is outside it (nothing).
+func TestAddonEOLBoundaries(t *testing.T) {
+	now := day("2026-10-02")
+	cases := []struct {
+		name string
+		eol  time.Time
+		want []string // severity category
+	}{
+		{"eol date is today", now, []string{"blocker eol-addon"}},
+		{"eol date in 90 days", now.AddDate(0, 0, 90), []string{"warning eol-approaching"}},
+		{"eol date in 91 days", now.AddDate(0, 0, 91), nil},
+	}
+	for _, tc := range cases {
+		date := tc.eol.Format("2006-01-02")
+		product := registry.AddOn{
+			SchemaVersion: 1, ID: "dated", DisplayName: "Dated",
+			Support: registry.Support{Status: "supported", EOLDate: date},
+		}
+		cycle := registry.AddOn{
+			SchemaVersion: 2, ID: "lined", DisplayName: "Lined",
+			Support: registry.Support{Status: "supported"},
+			Cycles:  []registry.Cycle{{Cycle: "2.1", EOL: &registry.CycleEOL{Date: date}}},
+		}
+		for _, a := range []registry.AddOn{product, cycle} {
+			t.Run(tc.name+"/"+a.ID, func(t *testing.T) {
+				k := kb.KB{AddOns: []registry.AddOn{a}}
+				var got []string
+				for _, f := range evalAddOns(addOnAt(a.ID, "2.1.0"), k, inventory.Version{Major: 1, Minor: 34}, now) {
+					got = append(got, string(f.Severity)+" "+string(f.Category))
+				}
+				if !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("eol %s at %s: got %q, want %q", date, now.Format("2006-01-02"), got, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// A target at either end of the supported Kubernetes range is supported:
+// both bounds are inclusive, for release-line and compat-row ranges.
+func TestChartIncompatAtK8sMin(t *testing.T) {
+	a := registry.AddOn{
+		SchemaVersion: 2, ID: "ranged", DisplayName: "Ranged",
+		Support: registry.Support{Status: "supported"},
+		Cycles:  []registry.Cycle{{Cycle: "3.0", EOL: &registry.CycleEOL{Date: "2030-01-01"}, K8sMin: "1.30", K8sMax: "1.33"}},
+		Compat:  []registry.Compat{{Range: ">=4.0.0", K8sMin: "1.30", K8sMax: "1.33"}},
+	}
+	k := kb.KB{AddOns: []registry.AddOn{a}}
+	for _, version := range []string{"3.0.1", "4.0.0"} {
+		for _, minor := range []int{29, 30, 33, 34} {
+			n := 0
+			for _, f := range evalAddOns(addOnAt("ranged", version), k, inventory.Version{Major: 1, Minor: minor}, testNow) {
+				if f.Category == CatChartIncompat {
+					n++
+				}
+			}
+			if want := map[bool]int{true: 1, false: 0}[minor < 30 || minor > 33]; n != want {
+				t.Errorf("version %s at target 1.%d: %d chart-incompat finding(s), want %d", version, minor, n, want)
+			}
+		}
+	}
+}
+
 func TestEvalAddOnsNoVersionSkipsCompat(t *testing.T) {
 	inv := inventory.Inventory{
 		AddOns: []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "", Namespaces: []string{"ingress-nginx"}, Source: "image"}},
