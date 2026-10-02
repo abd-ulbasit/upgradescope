@@ -274,12 +274,14 @@ always give the same bytes out.
 |---|---|---|
 | `removed-api` | blocker | An object written through a group/version removed at or before the target (for a kind that goes away, any stored object). Matching `deprecated-calls` rows are folded in as evidence. |
 | `removed-api` | warning | Removed in the minor after the target. |
-| `deprecated-api` | info | Deprecated, with no removal within that window. |
+| `deprecated-api` | info | Deprecated, with no removal within that window (a deprecation after the target is titled as one). |
+| `deprecated-api` | warning | A Helm release's stored manifest uses a deprecated API that the target still serves. |
 | `deprecated-api-in-use` | blocker / warning / info | Requests seen in the apiserver metric for an API with no `removed-api` or `deprecated-api` finding. Otherwise they are evidence on that finding, unless the row is more severe than it (the apiserver reports a removal release the knowledge base does not have); then the row stays a finding of its own. Same window as above. Info when the removal release is missing. |
 | `eol-addon` | blocker | The product is retired (`support.status: eol`, or a past product EOL date), or the installed version's release line has ended. A node container runtime's ended line is a warning. |
 | `eol-approaching` | warning | The EOL date falls within the next 90 days. |
 | `chart-incompat` | blocker | The installed release line's, or the first matching compat row's, Kubernetes range excludes the target; a Helm release's chart `kubeVersion` excludes the target (info when it does not parse). |
 | `addon-no-data` | info | A detected add-on whose version has no lifecycle data. |
+| `unknown-api` | info | An object of a built-in API group (one the knowledge base has entries for, core included) at a version or kind the knowledge base does not know: whether the target serves it was not assessed. CRD groups produce nothing. |
 | `version-skew` | blocker / warning / info | Kubelets that would fall more than 3 minors behind after the upgrade (blocker), or are already behind (warning). Controller-manager or scheduler newer than the apiserver (blocker), or too far behind (warning). HA apiserver spread, and kube-proxy rules. Unparseable kubelet versions (info). |
 | `kb-stale` | warning | The cluster or the target is newer than the newest minor the knowledge base knows (`maxKnownK8s`). |
 

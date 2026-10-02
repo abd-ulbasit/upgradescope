@@ -10,8 +10,8 @@ patch release (0.x.y) never breaks anything below.
 
 | Contract | Version marker | What stays stable within it |
 |---|---|---|
-| JSON report (`scan --output json`, `--write-baseline`) | `schemaVersion` (1), [schema](reference/json-report.md) | Fields are only added: never renamed, removed, retyped or given a new meaning. Ignore unknown fields. |
-| REST API | the `/api/v1` path prefix, [OpenAPI document](reference/api.md) | Paths, parameters and response fields keep their meaning; fields may be added. A breaking change goes under a new prefix (`/api/v2`) and `/api/v1` keeps serving for at least one minor release. |
+| JSON report (`scan --output json`, `--write-baseline`) | `schemaVersion` (1), [schema](reference/json-report.md) | Fields are only added: never renamed, removed, retyped or given a new meaning. Ignore unknown fields. A new finding category is an addition, not a break (see [Enumerated values](#enumerated-values)). |
+| REST API | the `/api/v1` path prefix, [OpenAPI document](reference/api.md) | Paths, parameters and response fields keep their meaning; fields, and finding categories, may be added. A breaking change goes under a new prefix (`/api/v2`) and `/api/v1` keeps serving for at least one minor release. |
 | Webhook payload | `schemaVersion` (1), [schema](reference/webhook.md) | As for the JSON report. |
 | Snapshot push protocol (agent to server) | envelope `schemaVersion` (1) and inventory `schemaVersion` (1) | The server refuses a version it does not know (422) rather than misreading it; a newer server keeps judging older agents' pushes, naming what it cannot judge. |
 | `ClusterReadiness` CRD | `upgradescope.dev/v1alpha1` | See below. |
@@ -26,6 +26,22 @@ lines other than the fixed messages documented in
 [Metrics, logs and probes](observability.md#agent-logs), and the knowledge
 base itself, which changes every release by design. A new knowledge base
 changing a verdict is not a breaking change.
+
+## Enumerated values
+
+Finding **categories** grow as checks are added (`unknown-api` arrived
+within `schemaVersion` 1), so a new category is an addition: it can ship in
+any release, under the same `schemaVersion` and `/api/v1`. The published
+schemas therefore give `category` as a string and list the known values in
+its description, and a consumer should treat a category it does not know by
+its `severity`. A test fails when the engine defines a category that the
+schemas or the docs do not list. The `capability` of a not-assessed gap is
+open in the same way (`target` was added within `schemaVersion` 1).
+
+The other enumerated values are closed: `severity` (`blocker`, `warning`,
+`info`), `verdict` (`ready`, `blocked`, `unknown`), `baselineState` (`new`,
+`unchanged`) and the webhook event `kind`. Adding a value to one of them
+bumps `schemaVersion` (and, for the REST API, the path prefix).
 
 ## CLI flags
 

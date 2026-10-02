@@ -469,7 +469,13 @@ Type: `blocker`, `warning`, `info`.
 
 ### Category
 
-Type: `removed-api`, `deprecated-api`, `deprecated-api-in-use`, `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`, `kb-stale`, `addon-no-data`.
+One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`,
+`eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`,
+`kb-stale`, `addon-no-data`, `unknown-api`. A release may add
+categories under `/api/v1`, so this is not an enum: treat one you do
+not know by its severity.
+
+Type: string.
 
 ### Cluster
 
@@ -497,7 +503,7 @@ Something the evaluation could not assess.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions) or kb-coverage. |
+| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions), kb-coverage, or target (the target is not an upgrade of the cluster). |
 | `reason` | string | yes | — |
 | `partial` | boolean | no | The capability ran but did not read everything. |
 | `skipped` | array of string | no | What a partial capability did not read. |
@@ -644,6 +650,7 @@ The engine's report, as `scan --output json` writes it.
 |---|---|---|---|
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
+| `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
 | `kbVersion` | string | yes | — |
 | `score` | integer | yes | max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)) |
 | `ready` | boolean | yes | verdict == ready. |
@@ -660,6 +667,7 @@ The report's fields other than its findings.
 |---|---|---|---|
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
+| `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
 | `kbVersion` | string | yes | — |
 | `score` | integer | yes | max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)) |
 | `ready` | boolean | yes | verdict == ready. |
@@ -684,6 +692,7 @@ The report's fields other than its findings.
 |---|---|---|---|
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
+| `serverVersion` | string | no | — |
 | `kbVersion` | string | yes | — |
 | `score` | integer | yes | max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)) |
 | `ready` | boolean | yes | verdict == ready. |
@@ -694,7 +703,6 @@ The report's fields other than its findings.
 | `evaluatedAt` | string (date-time) | yes | — |
 | `snapshotId` | integer (int64) | yes | — |
 | `source` | `stored` \| `what-if` | yes | — |
-| `serverVersion` | string | no | — |
 | `notApplicable` | boolean | no | The cluster already runs the target. |
 | `outdated` | boolean | no | — |
 | `teams` | [TeamScores](#teamscores) | no | — |
@@ -818,6 +826,7 @@ The report's fields other than its findings.
 |---|---|---|---|
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
+| `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
 | `kbVersion` | string | yes | — |
 | `score` | integer | yes | max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)) |
 | `ready` | boolean | yes | verdict == ready. |

@@ -15,7 +15,11 @@ not-assessed gaps, and fails on any field the schema does not list.
 
 `schemaVersion` is `1`. Within a schema version, fields are only added:
 never renamed, removed, retyped or given a new meaning. Ignore fields you do
-not know; the schema allows them for that reason. A breaking change bumps
+not know; the schema allows them for that reason. Finding categories may be
+added too (`unknown-api` was), so the schema gives `category` as a string
+and lists the known ones in its description: handle a category you do not
+know by its `severity`. The `severity`, `verdict` and `baselineState`
+values are fixed. A breaking change bumps
 `schemaVersion` and is listed in the changelog
 ([compatibility policy](../compatibility-policy.md)). `toolVersion` names
 the binary that wrote the report and carries no compatibility meaning.
@@ -65,14 +69,15 @@ the binary that wrote the report and carries no compatibility meaning.
 |---|---|
 | `schemaVersion` | `1`. |
 | `toolVersion` | The `upgradescope` version that wrote it. |
-| `filesBase` | `--files` only: the scanned directory, relative to the working directory, that object `file` paths are relative to. |
+| `filesBase` | `--files` only: the scanned directory that object `file` paths are relative to; relative to the working directory when inside it, absolute otherwise. |
 | `clusterId` | The cluster's `kube-system` namespace UID, or `files`. |
 | `target` | The target minor. |
+| `serverVersion` | Live scans only: the kube-apiserver's `gitVersion` (`v1.34.2-gke.100`), the version the target was judged against. |
 | `kbVersion` | The knowledge base the report was judged with. |
 | `score` | 0–100 ([formula](../concepts/verdict-and-score.md#the-score)). |
 | `verdict` | `ready`, `blocked` or `unknown` ([rules](../concepts/verdict-and-score.md#the-verdict)). |
 | `ready` | `verdict == "ready"`, kept for v0.1 readers. |
-| `findings[]` | Sorted by severity, then category, then title. Each has `category`, `severity`, `key` (stable across runs: baselines and notifications match on it), `title`, `detail`, and where they apply `teams`, `namespaces`, `remediation`, `citations`, `objects` (at most 100, with `objectsOmitted`) and `baselineState` (`new` or `unchanged`, with `--baseline`). |
+| `findings[]` | Sorted by severity, then category, then title. Each has `category` ([list](../concepts/verdict-and-score.md#severity-by-category)), `severity`, `key` (stable across runs: baselines and notifications match on it), `title`, `detail`, and where they apply `teams`, `namespaces`, `remediation`, `citations`, `objects` (at most 100, with `objectsOmitted`) and `baselineState` (`new` or `unchanged`, with `--baseline`). |
 | `notAssessed[]` | What the scan could not see: `capability`, `reason`, and `required` when the gap makes the verdict unknown, `partial` and `skipped` when a capability read only part of what it covers. |
 | `suppressed[]` | Findings an ignore rule or annotation accepted, with `reason`, `source` and `expires`. Not in the score or verdict. |
 | `teams` | Per-team scores; findings without a team are under `unattributed`. |

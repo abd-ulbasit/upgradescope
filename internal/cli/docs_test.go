@@ -7,16 +7,21 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"sigs.k8s.io/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
@@ -170,8 +175,9 @@ func TestDocsAgentRBAC(t *testing.T) {
 }
 
 // TestDocsConfigReference: docs/reference/config.md lists every field the
-// config loader accepts and every category a rule can name, and its example
-// loads.
+// config loader accepts and exactly the categories a rule can name (each
+// one it lists loads, and each category the engine defines is listed and
+// loads), and its example loads.
 func TestDocsConfigReference(t *testing.T) {
 	page := readDoc(t, "docs/reference/config.md")
 	for _, typ := range []reflect.Type{reflect.TypeFor[suppress.Config](), reflect.TypeFor[suppress.Rule]()} {
@@ -211,12 +217,128 @@ func TestDocsConfigReference(t *testing.T) {
 	if _, err := suppress.LoadConfig(write("ignore:\n  - category: not-a-category\n    reason: x\n")); err == nil {
 		t.Fatal("the loader accepted an unknown category; this test cannot tell listed categories apart")
 	}
+	// The other direction: the loader's categories are engine categories,
+	// so every engine category must be listed, and must load.
+	for _, c := range engineCategories(t) {
+		if !slices.ContainsFunc(listed, func(m []string) bool { return m[1] == c }) {
+			t.Errorf("docs/reference/config.md does not list category %q under Categories", c)
+		}
+		if _, err := suppress.LoadConfig(write("ignore:\n  - category: " + c + "\n    reason: x\n")); err != nil {
+			t.Errorf("the loader rejects engine category %q (add it to suppress's categories): %v", c, err)
+		}
+	}
 }
 
-// TestJSONReportMatchesSchema: real `scan --output json` reports, with
-// findings, suppressions, a baseline and gaps, validate against
-// api/report.schema.json, and carry no field it does not list (#60).
-func TestJSONReportMatchesSchema(t *testing.T) {
+// engineCategories reads the finding categories the engine defines, its
+// constants of type Category, from internal/engine's source, so a new
+// category is seen without a second list to keep in step.
+func engineCategories(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(repoRoot, "internal", "engine", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var cats []string
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, f, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range file.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				if typ, ok := vs.Type.(*ast.Ident); !ok || typ.Name != "Category" {
+					continue
+				}
+				for _, v := range vs.Values {
+					if lit, ok := v.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						c, _ := strconv.Unquote(lit.Value)
+						cats = append(cats, c)
+					}
+				}
+			}
+		}
+	}
+	sort.Strings(cats)
+	if !slices.Contains(cats, "removed-api") || !slices.Contains(cats, "unknown-api") {
+		t.Fatalf("read categories %v from internal/engine; this test no longer finds them", cats)
+	}
+	return cats
+}
+
+// TestDocsListEveryCategory: every category the engine defines is named in
+// the published schemas and on the pages that explain categories, and the
+// schemas do not close the list: within schemaVersion 1 a category may be
+// added (docs/compatibility-policy.md), so a report with one the schema
+// has not seen yet must still validate.
+func TestDocsListEveryCategory(t *testing.T) {
+	cats := engineCategories(t)
+	sch, schemaDoc := compileReportSchema(t)
+	defs, _ := schemaDoc.(map[string]any)["$defs"].(map[string]any)
+	fields, _ := defs["findingFields"].(map[string]any)
+	props, _ := fields["properties"].(map[string]any)
+	category, _ := props["category"].(map[string]any)
+	y, err := os.ReadFile(filepath.Join(repoRoot, "api", "openapi.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var openapi struct {
+		Components struct {
+			Schemas map[string]map[string]any `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := yaml.Unmarshal(y, &openapi); err != nil {
+		t.Fatal(err)
+	}
+	for name, s := range map[string]map[string]any{
+		"api/report.schema.json $defs.findingFields.category": category,
+		"api/openapi.yaml components.schemas.Category":        openapi.Components.Schemas["Category"],
+	} {
+		if s == nil {
+			t.Errorf("%s: not found", name)
+			continue
+		}
+		if _, ok := s["enum"]; ok {
+			t.Errorf("%s is an enum: a category added in a release would fail consumers that validate with it", name)
+		}
+		desc, _ := s["description"].(string)
+		for _, c := range cats {
+			if !strings.Contains(desc, "`"+c+"`") {
+				t.Errorf("%s: the description does not list category %q", name, c)
+			}
+		}
+	}
+	for _, page := range []string{"docs/concepts/verdict-and-score.md", "docs/architecture.md"} {
+		doc := readDoc(t, page)
+		for _, c := range cats {
+			if !strings.Contains(doc, "| `"+c+"` |") {
+				t.Errorf("%s has no table row for category %q", page, c)
+			}
+		}
+	}
+	future := `{"schemaVersion":1,"toolVersion":"9.9.9","clusterId":"files","target":"1.99","kbVersion":"x","score":100,"ready":true,"verdict":"ready",` +
+		`"findings":[{"category":"a-future-category","severity":"info","key":"a-future-category/x","title":"t","detail":"d"}]}`
+	inst, err := jsonschema.UnmarshalJSON(strings.NewReader(future))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sch.Validate(inst); err != nil {
+		t.Errorf("a report with a category added in a later release does not validate against api/report.schema.json: %v", err)
+	}
+}
+
+// compileReportSchema compiles api/report.schema.json and returns it with
+// its parsed document.
+func compileReportSchema(t *testing.T) (*jsonschema.Schema, any) {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(repoRoot, "api", "report.schema.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -233,9 +355,19 @@ func TestJSONReportMatchesSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return sch, schemaDoc
+}
+
+// TestJSONReportMatchesSchema: real `scan --output json` reports, with
+// findings (an unknown-api one included), suppressions, a baseline, gaps
+// and a live cluster's serverVersion, validate against
+// api/report.schema.json, and carry no field it does not list (#60).
+func TestJSONReportMatchesSchema(t *testing.T) {
+	sch, schemaDoc := compileReportSchema(t)
 
 	dir := writeFiles(t, map[string]string{
-		"rendered/all.yaml":  removedAPIs + "---\napiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: pdb\n  namespace: shop\n",
+		"rendered/all.yaml": removedAPIs + "---\napiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: pdb\n  namespace: shop\n" +
+			"---\napiVersion: apps/v1beta9\nkind: Deployment\nmetadata:\n  name: typo\n  namespace: shop\n",
 		".upgradescope.yaml": "ignore:\n  - key: removed-api/batch/v1beta1/CronJob\n    reason: deleted next sprint\n    expires: 2099-01-01\n",
 	})
 	files := filepath.Join(dir, "rendered")
@@ -255,11 +387,26 @@ func TestJSONReportMatchesSchema(t *testing.T) {
 	} else if extra := unlistedFields(schemaDoc, schemaDoc, inst, ""); len(extra) > 0 {
 		t.Errorf("docs/reference/json-report.md: the example has unlisted fields %v", extra)
 	}
+	outs := make([]string, 0, len(runs)+1)
 	for i, args := range runs {
 		out, _, err := execScanFiles(t, args...)
 		if err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
+		outs = append(outs, out)
+	}
+	live, _, err := execScanStderr(t, []string{"--target", "1.37", "--output", "json", "--fail-on", "never"}, evalStub(t, liveInventory("v1.36.4")))
+	if err != nil {
+		t.Fatalf("live run: %v", err)
+	}
+	outs = append(outs, live)
+	all := strings.Join(outs, "\n")
+	for _, want := range []string{`"category": "unknown-api"`, `"serverVersion": "v1.36.4"`, `"baselineState"`, `"suppressed"`, `"notAssessed"`} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no run produced %s; this test no longer covers it", want)
+		}
+	}
+	for i, out := range outs {
 		inst, err := jsonschema.UnmarshalJSON(strings.NewReader(out))
 		if err != nil {
 			t.Fatalf("run %d: not JSON: %v", i, err)

@@ -52,7 +52,7 @@ selectors it takes only the objects that match all of them.
 
 `removed-api`, `deprecated-api`, `deprecated-api-in-use`, `eol-addon`,
 `eol-approaching`, `version-skew`, `chart-incompat`, `kb-stale`,
-`addon-no-data`. What each means and its severity:
+`addon-no-data`, `unknown-api`. What each means and its severity:
 [Verdict and score](../concepts/verdict-and-score.md#severity-by-category).
 
 ## Where the file is found

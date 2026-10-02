@@ -618,7 +618,13 @@ components:
       enum: [blocker, warning, info]
     Category:
       type: string
-      enum: [removed-api, deprecated-api, deprecated-api-in-use, eol-addon, eol-approaching, version-skew, chart-incompat, kb-stale, addon-no-data]
+      description: |
+        One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`,
+        `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`,
+        `kb-stale`, `addon-no-data`, `unknown-api`. A release may add
+        categories under `/api/v1`, so this is not an enum: treat one you do
+        not know by its severity.
+      example: removed-api
 
     Cluster:
       allOf:
@@ -639,7 +645,7 @@ components:
       required: [capability, reason]
       additionalProperties: false
       properties:
-        capability: {type: string, description: "A collector capability (api-usage, deprecated-calls, helm, addons, versions) or kb-coverage."}
+        capability: {type: string, description: "A collector capability (api-usage, deprecated-calls, helm, addons, versions), kb-coverage, or target (the target is not an upgrade of the cluster)."}
         reason: {type: string}
         partial: {type: boolean, description: The capability ran but did not read everything.}
         skipped: {type: array, items: {type: string}, description: What a partial capability did not read.}
@@ -764,6 +770,7 @@ components:
       properties:
         clusterId: {type: string}
         target: {$ref: "#/components/schemas/Target"}
+        serverVersion: {type: string, description: "The kube-apiserver gitVersion the target was judged against; absent for manifests."}
         kbVersion: {type: string}
         score:
           type: integer
