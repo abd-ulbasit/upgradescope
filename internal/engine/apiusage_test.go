@@ -58,7 +58,7 @@ func TestEvalAPIUsageRemovedAtTarget(t *testing.T) {
 		}},
 		Namespaces: testNamespaces(),
 	}
-	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 22})
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 22}, nil)
 	if len(fs) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
@@ -87,7 +87,7 @@ func TestEvalAPIUsageRemovedAtTargetPlusOne(t *testing.T) {
 		Namespaces: testNamespaces(),
 	}
 	// removed in 1.22, target 1.21 → removal lands at target+1 → warning
-	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 21})
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 21}, nil)
 	if len(fs) != 1 || fs[0].Severity != SevWarning || fs[0].Category != CatRemovedAPI {
 		t.Fatalf("want one removed-api warning, got %+v", fs)
 	}
@@ -111,7 +111,7 @@ func TestEvalAPIUsageKeyIsCountFree(t *testing.T) {
 				Count: count, Namespaces: map[string]int{"default": count},
 			}},
 		}
-		fs := evalAPIUsage(inv, testKB(), target)
+		fs := evalAPIUsage(inv, testKB(), target, nil)
 		if len(fs) != 1 {
 			t.Fatalf("want 1 finding, got %d", len(fs))
 		}
@@ -135,7 +135,7 @@ func TestEvalAPIUsageDeprecatedBeyondWindowIsInfo(t *testing.T) {
 		Namespaces: testNamespaces(),
 	}
 	// removed in 1.25, target 1.22 → beyond target+1 → info, deprecated-api
-	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 22})
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 22}, nil)
 	if len(fs) != 1 || fs[0].Severity != SevInfo || fs[0].Category != CatDeprecatedAPI {
 		t.Fatalf("want one deprecated-api info, got %+v", fs)
 	}
@@ -181,7 +181,7 @@ func TestEvalAPIUsageFutureDeprecationTitle(t *testing.T) {
 			"admissionregistration.k8s.io/v1beta1 MutatingAdmissionPolicy deprecated in 1.37, after target 1.35 (1 object)"},
 	}
 	for _, tc := range cases {
-		fs := evalAPIUsage(tc.inv, k, tc.target)
+		fs := evalAPIUsage(tc.inv, k, tc.target, nil)
 		if len(fs) != 1 || fs[0].Severity != SevInfo || fs[0].Category != CatDeprecatedAPI {
 			t.Fatalf("want one deprecated-api info, got %+v", fs)
 		}
@@ -198,7 +198,7 @@ func TestEvalAPIUsageCoreGroupRendering(t *testing.T) {
 			Count: 1, Namespaces: map[string]int{"": 1}, // cluster-scoped
 		}},
 	}
-	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 34})
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 34}, nil)
 	if len(fs) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
@@ -233,7 +233,7 @@ func TestEvalAPIUsageManifestObjects(t *testing.T) {
 			ObjectsOmitted: 1,
 		}},
 	}
-	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 25})
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 25}, nil)
 	if len(fs) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
@@ -269,7 +269,7 @@ func TestEvalAPIUsageAuthoredObjects(t *testing.T) {
 			},
 		}},
 	}
-	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 25})
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 25}, nil)
 	if len(fs) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
@@ -293,7 +293,7 @@ func TestEvalAPIUsageAuthoredObjectsOmittedRefs(t *testing.T) {
 			ObjectsOmitted: 3,
 		}},
 	}
-	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 25})
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 25}, nil)
 	if len(fs) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
@@ -326,7 +326,7 @@ func TestEvalAPIUsageTombstoneBoundary(t *testing.T) {
 	}
 	for _, c := range cases {
 		var got []string
-		for _, f := range evalAPIUsage(inv, k, inventory.Version{Major: 1, Minor: c.target}) {
+		for _, f := range evalAPIUsage(inv, k, inventory.Version{Major: 1, Minor: c.target}, nil) {
 			got = append(got, string(f.Severity)+" "+f.Key+" "+f.Title)
 		}
 		if !reflect.DeepEqual(got, c.want) {
@@ -358,7 +358,7 @@ func TestEvalAPIUsageUnknownGVK(t *testing.T) {
 		},
 		Namespaces: testNamespaces(),
 	}
-	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 34})
+	fs := evalAPIUsage(inv, testKB(), inventory.Version{Major: 1, Minor: 34}, nil)
 	want := []Finding{
 		{
 			Category: CatUnknownAPI, Severity: SevInfo,
@@ -391,7 +391,7 @@ func TestEvalAPIUsageUnknownGVK(t *testing.T) {
 	k.APILifecycle = append(k.APILifecycle, kb.APILifecycleEntry{Group: "batch", Version: "v1", Kind: "CronJob",
 		Introduced: inventory.Version{Major: 1, Minor: 21}})
 	inv.APIUsage = []inventory.APIUsage{{Group: "batch", Version: "v1", Kind: "CronJob", Count: 3}}
-	if fs := evalAPIUsage(inv, k, inventory.Version{Major: 1, Minor: 34}); len(fs) != 0 {
+	if fs := evalAPIUsage(inv, k, inventory.Version{Major: 1, Minor: 34}, nil); len(fs) != 0 {
 		t.Errorf("a known, current API must produce no findings, got %+v", fs)
 	}
 }
