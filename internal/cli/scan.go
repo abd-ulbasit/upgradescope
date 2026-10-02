@@ -344,7 +344,8 @@ func withFileBase(r engine.Report, base string) engine.Report {
 const scanLong = `Scan a cluster (or rendered manifests) for upgrade readiness.
 
 Exit codes: 0 when the gate passes; 1 on an operational error, including an
-invalid config file or baseline; 2 when the gate fails.
+invalid config file or baseline and a report that could not be written; 2
+when the gate fails, which includes an unknown verdict.
 
 The gate (--fail-on) fails when a finding at or above the threshold remains,
 or (unless --allow-incomplete) when a required check was not assessed, so a
@@ -487,7 +488,8 @@ func validateScanOptions(opts *scanOptions) error {
 }
 
 // writeReport renders r; filesBase is the JSON filesBase (nil outside
-// --files mode).
+// --files mode). A failed write is returned in every format, so the scan
+// exits 1 instead of passing or failing the gate with the report lost.
 func writeReport(w io.Writer, format string, r engine.Report, filesBase *string) error {
 	switch format {
 	case "json":
@@ -495,11 +497,11 @@ func writeReport(w io.Writer, format string, r engine.Report, filesBase *string)
 	case "sarif":
 		return WriteSARIF(w, r)
 	case "markdown":
-		WriteMarkdown(w, r)
-		return nil
+		ew := &errWriter{w: w}
+		WriteMarkdown(ew, r)
+		return ew.err
 	default: // "table", already validated
-		WriteTable(w, r)
-		return nil
+		return WriteTable(w, r)
 	}
 }
 

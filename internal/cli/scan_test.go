@@ -228,3 +228,30 @@ func TestBaselineSkewEscalationIsNew(t *testing.T) {
 		t.Errorf("table does not count the blocker as new:\n%s", out)
 	}
 }
+
+// failingWriter fails every write, like stdout on a full disk.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+// A report that could not be written is an operational error (exit 1) in
+// every format, also when the gate would have failed: CI must not read a
+// lost report as a gate decision.
+func TestWriteReportPropagatesWriteErrors(t *testing.T) {
+	ready := engine.Report{ClusterID: "c", Score: 100, Ready: true, Verdict: engine.VerdictReady}
+	for _, format := range []string{"table", "json", "sarif", "markdown"} {
+		for _, r := range []engine.Report{ready, eolNginxReport()} {
+			orig := runScan
+			runScan = okStub(r)
+			cmd := newScanCmd()
+			cmd.SetOut(failingWriter{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"--target", "1.36", "--output", format})
+			err := cmd.Execute()
+			runScan = orig
+			if got := ExitCode(err); got != 1 || err == nil || !strings.Contains(err.Error(), "no space left on device") {
+				t.Errorf("--output %s, verdict %s: err = %v (exit %d), want the write error, exit 1", format, r.Verdict, err, got)
+			}
+		}
+	}
+}
