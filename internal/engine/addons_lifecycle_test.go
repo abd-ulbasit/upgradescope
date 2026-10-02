@@ -30,6 +30,7 @@ func lifecycleKB() kb.KB {
 					{Cycle: "1.31", EOL: eol("2027-02-28"), K8sMin: "1.32", K8sMax: "1.36", Citations: cite},
 					{Cycle: "1.30", EOL: eol("2026-12-31"), K8sMin: "1.32", K8sMax: "1.36", Citations: cite},
 					{Cycle: "1.29", EOL: eol("2026-10-31"), K8sMin: "1.31", K8sMax: "1.35", Citations: cite},
+					{Cycle: "1.28", EOL: eol("2026-07-01"), K8sMin: "1.30", K8sMax: "1.34", Citations: cite},
 					{Cycle: "1.27", EOL: eol("2026-04-07"), K8sMin: "1.29", K8sMax: "1.33", Citations: cite},
 					{Cycle: "1.5", EOL: &registry.CycleEOL{Ended: true}, Citations: cite},
 				},
@@ -277,5 +278,119 @@ func TestEmbeddedExternalDNSCompatRows(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s at %s: chart-incompat %q, want %q", tc.version, tc.target, got, tc.want)
 		}
+	}
+}
+
+// installs builds one add-on instance per "namespace=version" pair, each
+// namespace owned by the team of the same name with "team" appended.
+func installs(id, source string, pairs ...string) inventory.Inventory {
+	var inv inventory.Inventory
+	for _, p := range pairs {
+		ns, ver, _ := strings.Cut(p, "=")
+		inv.AddOns = append(inv.AddOns, inventory.AddOnInstance{ID: id, Version: ver, Namespaces: []string{ns}, Source: source})
+		inv.Namespaces = append(inv.Namespaces, inventory.NamespaceInfo{Name: ns, Team: strings.TrimPrefix(ns, "mesh-") + "team"})
+	}
+	return inv
+}
+
+// whereSummary renders findings as "key ns=[...] teams=[...]" lines.
+func whereSummary(fs []Finding) []string {
+	var out []string
+	for _, f := range fs {
+		out = append(out, fmt.Sprintf("%s %s ns=%v teams=%v", f.Severity, f.Key, f.Namespaces, f.Teams))
+	}
+	return out
+}
+
+// A mesh that mixes release lines is judged per line: the 1.28 blocker
+// names only the namespace running 1.28, the 1.30 warning survives, and
+// the team on 1.31 is not blamed for anyone else's install.
+func TestEvalAddOnsGroupsByReleaseLine(t *testing.T) {
+	inv := installs("istio", "image", "mesh-new=1.31.1", "mesh-mid=1.30.5", "mesh-old=1.28.10")
+	target, now := inventory.Version{Major: 1, Minor: 36}, day("2026-10-02")
+	fs := evalAddOns(inv, lifecycleKB(), target, now)
+	sortFindings(fs)
+	want := []string{
+		"blocker chart-incompat/istio/1.28 ns=[mesh-old] teams=[oldteam]",
+		"blocker eol-addon/istio/1.28 ns=[mesh-old] teams=[oldteam]",
+		"warning eol-approaching/istio/1.30 ns=[mesh-mid] teams=[midteam]",
+	}
+	if got := whereSummary(fs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	if want := "Detected Istio version 1.28.10 via image in namespace(s): mesh-old. Upstream support for the 1.28 release line ended on 2026-07-01."; fs[1].Detail != want {
+		t.Errorf("detail = %q, want %q", fs[1].Detail, want)
+	}
+	// TeamScores scores the teams findings name: newteam has none, so it
+	// is not scored down (the merge scored it 50).
+	scores := TeamScores(Report{Findings: fs})
+	if s, ok := scores["newteam"]; ok {
+		t.Errorf("newteam = %+v, want no findings", s)
+	}
+	if s := scores["oldteam"]; s.Score != 50 || s.Ready {
+		t.Errorf("oldteam = %+v, want 50, not ready", s)
+	}
+}
+
+// Two installs on one release line make one finding naming both, judged at
+// the older one, and the detail names each namespace's version.
+func TestEvalAddOnsReleaseLineNamesEachVersion(t *testing.T) {
+	inv := installs("istio", "image", "mesh-a=1.29.2", "mesh-b=1.29.8")
+	fs := evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+	want := []Finding{{
+		Category: CatEOLApproaching, Severity: SevWarning, Key: "eol-approaching/istio/1.29",
+		Title:       "Istio 1.29 reaches end-of-life on 2026-10-31",
+		Detail:      "Detected Istio in namespace(s): mesh-a (1.29.2 via image), mesh-b (1.29.8 via image). Upstream support for the 1.29 release line ends on 2026-10-31.",
+		Teams:       []string{"ateam", "bteam"},
+		Namespaces:  []string{"mesh-a", "mesh-b"},
+		Remediation: "Upgrade Istio to a supported release line (newest: 1.31).",
+		Citations:   []string{"https://endoflife.date/istio", "https://istio.io/latest/docs/releases/supported-releases/"},
+	}}
+	if !reflect.DeepEqual(fs, want) {
+		t.Fatalf("got  %+v\nwant %+v", fs, want)
+	}
+}
+
+// A product-level end of life (ingress-nginx retired as a whole) is one
+// finding per add-on, naming every install, not one per release line.
+func TestEvalAddOnsProductEOLOncePerAddOn(t *testing.T) {
+	inv := installs("ingress-nginx", "chart", "edge=4.7.1", "internal=4.11.2")
+	fs := evalAddOns(inv, testRegistryKB(), inventory.Version{Major: 1, Minor: 30}, testNow)
+	want := []string{"blocker eol-addon/ingress-nginx ns=[edge internal] teams=[edgeteam internalteam]"}
+	if got := whereSummary(fs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	if want := "Detected ingress-nginx in namespace(s): edge (4.7.1 via chart), internal (4.11.2 via chart). Upstream support has ended."; fs[0].Detail != want {
+		t.Errorf("detail = %q, want %q", fs[0].Detail, want)
+	}
+}
+
+// Without release lines, compat rows still judge each install: only the
+// install whose version is out of range is named, though every install
+// without lifecycle data shares one info.
+func TestEvalAddOnsCompatNamesOnlyIncompatibleInstalls(t *testing.T) {
+	inv := installs("external-dns", "image", "dns-a=0.9.0", "dns-b=0.14.2")
+	fs := evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 30}, day("2026-10-02"))
+	want := []string{
+		"blocker chart-incompat/external-dns ns=[dns-a] teams=[dns-ateam]",
+		"info addon-no-data/external-dns ns=[dns-a dns-b] teams=[dns-ateam dns-bteam]",
+	}
+	if got := whereSummary(fs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	if want := "ExternalDNS 0.9.0 supports Kubernetes up to 1.21 (target 1.30)"; fs[0].Title != want {
+		t.Errorf("title = %q, want %q", fs[0].Title, want)
+	}
+	if want := "Detected ExternalDNS in namespace(s): dns-a (0.9.0 via image), dns-b (0.14.2 via image). The registry has no release-line data for this version, so its end of life was not assessed."; fs[1].Detail != want {
+		t.Errorf("detail = %q, want %q", fs[1].Detail, want)
+	}
+	// At 1.34 both are out of range, under different rows: one finding,
+	// titled for the older, naming both and each version.
+	fs = evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+	if got := whereSummary(fs[:1]); !reflect.DeepEqual(got, []string{"blocker chart-incompat/external-dns ns=[dns-a dns-b] teams=[dns-ateam dns-bteam]"}) {
+		t.Fatalf("got %q", got)
+	}
+	if want := `Installed version 0.9.0 matches compatibility range "<0.10.0", which supports Kubernetes up to 1.21. Incompatible installs: dns-a (0.9.0), dns-b (0.14.2).`; fs[0].Detail != want {
+		t.Errorf("detail = %q, want %q", fs[0].Detail, want)
 	}
 }
