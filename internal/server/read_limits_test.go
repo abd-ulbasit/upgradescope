@@ -44,9 +44,10 @@ func pspUsagesNamed(size int, suffix string) string {
 // maxReadHeap is what any number of concurrent reads of one cluster may
 // add to the heap: one read in the slot (up to ~90 MiB on SQLite at the
 // snapshot node budget: a stored report as large as a 17 MB snapshot, read
-// through a driver that copies both) and the garbage the one before it
-// left.
-const maxReadHeap = 100 << 20
+// through a driver that copies both) and what the one before it left: its
+// garbage, and its response, as large as that report, still being written
+// to its client (measured up to 107 MiB in all).
+const maxReadHeap = 128 << 20
 
 // The read API decoded a cluster's stored inventory on every request, with
 // no limit on how many at once: after one push of 370 KB of `{}` object

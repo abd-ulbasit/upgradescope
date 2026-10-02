@@ -72,10 +72,12 @@ costs what it loads: on SQLite, whose driver holds a copy of every
 snapshot and report it reads beside the one it returns, a report or its
 findings from a stored evaluation of a 17 MB snapshot (at the node
 budget, every API-usage entry a finding, so the report is as large)
-grew the heap ~90 MiB, a what-if of it ~88 MiB, and 10 concurrent
-requests to any of these endpoints at most as much, since they run one
-at a time (`TestReadHeapIsBounded`, on SQLite at the snapshot node
-budget, fails above 100 MiB).
+grew the heap ~90 MiB, a what-if of it ~88 MiB. Since they run one at a
+time, 10 concurrent requests to any of these endpoints add only what the
+one before left: its garbage and its response, still being written to
+its client (one of the two things outside the bounds below); up to
+107 MiB in all (`TestReadHeapIsBounded`, on SQLite at the snapshot node
+budget, fails above 128 MiB).
 
 `/clusters`, `/fleet` and `/metrics` take no slot, so they must cost
 about their response whatever was stored: they read each cluster's
