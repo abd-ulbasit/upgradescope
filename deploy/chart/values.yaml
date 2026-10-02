@@ -141,7 +141,9 @@ agent:
       drop: ["ALL"]
   # The memory limit also sets GOMEMLIMIT to 90% of it (the Go runtime does
   # not read the container limit itself); set GOMEMLIMIT in extraEnv to
-  # override. Without a memory limit GOMEMLIMIT is not set.
+  # override. Without a memory limit, or with one the chart cannot read
+  # (e.g. "100m"), the chart sets none; the binary then takes 90% of its
+  # cgroup limit itself, when it has one.
   resources:
     requests:
       cpu: 50m

@@ -249,7 +249,8 @@ settings, so the read token still protects all data.
   token: only per-cluster tokens push, and the in-chart agent needs its own
   (`agent.existingSecret` or `agent.serverToken`).
 - Memory: both containers get `GOMEMLIMIT` at 90% of their memory limit
-  (the Go runtime does not read the limit itself); `extraEnv` can set it
+  (the Go runtime does not read the limit itself), from a byte count or a
+  quantity up to `E`/`Ei`; `extraEnv` can set it
   instead. The server's 512Mi holds its worst case: one `/gate` decode and
   one snapshot ingest at their node budgets plus their buffered bodies
   (see `docs/operations.md`).

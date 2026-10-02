@@ -17,11 +17,16 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
-// render renders the chart with the given --set flags into its objects.
+// render renders the chart with the given --set flags into its objects;
+// a "-f=<path>" entry passes a values file instead.
 func render(t *testing.T, sets ...string) []unstructured.Unstructured {
 	t.Helper()
 	args := []string{"template", "upgradescope", ".", "--namespace", "upgradescope"}
 	for _, s := range sets {
+		if f, ok := strings.CutPrefix(s, "-f="); ok {
+			args = append(args, "-f", f)
+			continue
+		}
 		args = append(args, "--set", s)
 	}
 	cmd := exec.Command(helmBin(t), args...)

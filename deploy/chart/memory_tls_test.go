@@ -2,7 +2,9 @@ package chart
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -47,6 +49,12 @@ func renderErr(t *testing.T, sets ...string) string {
 // containers get GOMEMLIMIT at 90% of their memory limit, leaving room for
 // memory the Go heap does not count.
 func TestGoMemLimitFollowsTheContainerLimit(t *testing.T) {
+	// A values file gives a plain byte count as a YAML number, which helm
+	// reads as a float64 (5.36870912e+08), unlike --set's int64.
+	valuesFile := filepath.Join(t.TempDir(), "values.yaml")
+	if err := os.WriteFile(valuesFile, []byte("agent: {resources: {limits: {memory: 536870912}}}\nserver: {resources: {limits: {memory: 1073741824}}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name  string
 		sets  []string
@@ -57,7 +65,12 @@ func TestGoMemLimitFollowsTheContainerLimit(t *testing.T) {
 		{"binary units", []string{"agent.resources.limits.memory=1Gi", "server.resources.limits.memory=1536Mi"}, "966367641", "1449551462"},
 		{"decimal units and plain bytes", []string{"agent.resources.limits.memory=500M", "server.resources.limits.memory=1000000000"}, "450000000", "900000000"},
 		{"a fraction", []string{"agent.resources.limits.memory=0.5Gi"}, "483183820", "483183820"},
+		{"plain bytes from a values file", []string{"-f=" + valuesFile}, "483183820", "966367641"},
+		{"an exponent and P units", []string{"agent.resources.limits.memory=5e8", "server.resources.limits.memory=1Pi"}, "450000000", "1013309916158361"},
 		{"no limit", []string{"agent.resources.limits=null", "server.resources.limits=null"}, "", ""},
+		// A quantity the chart cannot read is left to the binary, which
+		// reads the limit from its cgroup when GOMEMLIMIT is unset.
+		{"unreadable", []string{"agent.resources.limits.memory=lots", "server.resources.limits.memory=100m"}, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			objs := render(t, append([]string{"server.enabled=true", "server.ingestToken=t"}, tc.sets...)...)
@@ -80,9 +93,6 @@ func TestGoMemLimitFollowsTheContainerLimit(t *testing.T) {
 	}
 	if v, _ := envVar(container(t, objs, "upgradescope-agent"), "GOMEMLIMIT"); n != 1 || v != "100MiB" {
 		t.Errorf("agent has %d GOMEMLIMIT entries, value %q; want exactly the extraEnv one", n, v)
-	}
-	if msg := renderErr(t, "agent.resources.limits.memory=lots"); !strings.Contains(msg, "memory") {
-		t.Errorf("an unparseable memory limit rendered (stderr %q)", msg)
 	}
 }
 

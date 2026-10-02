@@ -130,19 +130,30 @@ it has no limit or its extraEnv sets GOMEMLIMIT itself. The Go runtime does
 not read the cgroup limit: without this the collector lets garbage grow
 to as much as the live heap again (GOGC=100), and a pod whose live heap
 fits its limit is OOM-killed anyway. The 10% left is for memory the Go
-heap does not count. Call with (dict "resources" .resources "extraEnv"
-.extraEnv).
+heap does not count. The limit is a number of bytes (a values file's YAML
+number arrives as a float64, --set's as an int64) or a quantity string
+with an optional exponent and a k..E or Ki..Ei suffix. Anything else (say
+"100m") is "" too: serve and agent then read the limit from their cgroup
+themselves. Call with (dict "resources" .resources "extraEnv" .extraEnv).
 */}}
 {{- define "upgradescope.goMemLimit" -}}
-{{- $q := toString (dig "limits" "memory" "" (.resources | default dict)) -}}
-{{- if and $q (not (include "upgradescope.setsEnv" (dict "env" .extraEnv "name" "GOMEMLIMIT"))) -}}
-{{- $n := regexFind "^[0-9]+(\\.[0-9]+)?" $q -}}
-{{- $units := dict "" 1 "k" 1000 "M" 1000000 "G" 1000000000 "T" 1000000000000 "Ki" 1024 "Mi" 1048576 "Gi" 1073741824 "Ti" 1099511627776 -}}
+{{- $v := dig "limits" "memory" "" (.resources | default dict) -}}
+{{- if and $v (not (include "upgradescope.setsEnv" (dict "env" .extraEnv "name" "GOMEMLIMIT"))) -}}
+{{- $bytes := 0.0 -}}
+{{- if or (kindIs "float64" $v) (kindIs "int64" $v) (kindIs "int" $v) -}}
+{{- $bytes = float64 $v -}}
+{{- else -}}
+{{- $q := toString $v -}}
+{{- $n := regexFind "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?" $q -}}
+{{- $units := dict "" 1 "k" 1000 "M" 1000000 "G" 1000000000 "T" 1000000000000 "P" 1000000000000000 "E" 1000000000000000000 "Ki" 1024 "Mi" 1048576 "Gi" 1073741824 "Ti" 1099511627776 "Pi" 1125899906842624 "Ei" 1152921504606846976 -}}
 {{- $unit := trimPrefix $n $q -}}
-{{- if or (not $n) (not (hasKey $units $unit)) -}}
-{{- fail (printf "cannot read the memory limit %q to set GOMEMLIMIT (want bytes or a k, M, G, Ki, Mi or Gi quantity such as 512Mi)" $q) -}}
+{{- if and $n (hasKey $units $unit) -}}
+{{- $bytes = mulf (float64 $n) (float64 (get $units $unit)) -}}
 {{- end -}}
-{{- printf "%d" (int64 (floor (mulf (float64 $n) (float64 (get $units $unit)) 0.9))) -}}
+{{- end -}}
+{{- if and (ge $bytes 1.0) (lt $bytes 9e18) -}}
+{{- printf "%d" (int64 (floor (mulf $bytes 0.9))) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
