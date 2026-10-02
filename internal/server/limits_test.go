@@ -434,6 +434,13 @@ func TestGateRejectsInvalidSeparator(t *testing.T) {
 		strings.Contains(string(raw), "separator") {
 		t.Fatalf("status = %d (%s), want the stream evaluated", code, raw)
 	}
+	// Any Unicode white space may, as the stream parser trims it.
+	for _, sep := range []string{"---\v\n", "---  # next\n", "---　\n"} {
+		if code, _, raw := gateStatus(t, s, pspManifest+sep+pspManifest); code != http.StatusOK && code != http.StatusUnprocessableEntity ||
+			strings.Contains(string(raw), "separator") {
+			t.Fatalf("%q: status = %d (%s), want the stream evaluated", sep, code, raw)
+		}
+	}
 }
 
 // yaml.v3 and kubectl's decoder read a document that starts with a UTF-16

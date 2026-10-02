@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"unicode/utf8"
 
 	yaml "go.yaml.in/yaml/v3"
 )
@@ -60,6 +61,17 @@ func (s *byteSource) at(i int) byte {
 		s.cur = sort.Search(len(s.starts), func(k int) bool { return s.starts[k] > i }) - 1
 	}
 	return s.chunks[s.cur][i-s.starts[s.cur]]
+}
+
+// runeAt decodes the UTF-8 character at offset i, as utf8.DecodeRune does.
+func (s *byteSource) runeAt(i int) (rune, int) {
+	var buf [utf8.UTFMax]byte
+	n := 0
+	for n < len(buf) && i+n < s.size {
+		buf[n] = s.at(i + n)
+		n++
+	}
+	return utf8.DecodeRune(buf[:n])
 }
 
 // contains reports whether src[start:end] holds the byte c.

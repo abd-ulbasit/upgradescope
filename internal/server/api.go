@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -295,7 +296,7 @@ func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body 
 }
 
 // checkManifestStream splits a buffered manifest stream into documents as
-// kubectl does (a line starting with "---" ends one; only spaces or a
+// kubectl does (a line starting with "---" ends one; only white space or a
 // comment may follow it) and checks it against the shape limits before
 // anything decodes it: the document count, each document's size, and the
 // YAML nodes the whole stream holds, each alias counted as what it names
@@ -362,8 +363,12 @@ func checkManifestStream(body bufferedBody) (status int, msg string) {
 		next++ // past the newline
 		if src.at(off) == '-' && src.at(off+1) == '-' && src.at(off+2) == '-' {
 			i := off + 3
-			for i < next && (src.at(i) == ' ' || src.at(i) == '\t' || src.at(i) == '\r') {
-				i++
+			for i < next { // white space, as the stream parser's bytes.TrimSpace
+				r, size := src.runeAt(i)
+				if !unicode.IsSpace(r) {
+					break
+				}
+				i += size
 			}
 			if c := src.at(i); i < min(next, src.size) && c != '\n' && c != '#' {
 				return http.StatusUnprocessableEntity, fmt.Sprintf(
@@ -575,7 +580,9 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseSlot()
 	raw := body.bytes()
-	release() // the copy in raw is the slot's to hold now
+	// raw (a copy, or the body's only chunk) is the slot's to hold now: one
+	// ingest at a time, so giving the budget back here still bounds it.
+	release()
 	var req pushRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid JSON: "+err.Error())
