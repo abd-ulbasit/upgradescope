@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -12,18 +13,36 @@ import (
 // names its config file.
 const gateConfigSource = "config"
 
+// maxGateConfigBytes bounds ?config= (its decoded text). The server's
+// request-header limit (64 KiB, request line included) bounds it too, but
+// the handler does not rely on whatever http.Server serves it: 32 KiB is a
+// few hundred reasoned rules, and the rules are parsed (yaml.v3 refuses
+// alias bombs) and applied inside the evaluation slot's budget.
+const maxGateConfigBytes = 32 << 10
+
 // gateIgnoreRules reads ?config=, a .upgradescope.yaml whose ignore rules
-// the gate applies as `scan --config` applies the file (#44). An invalid
-// config is refused (422, written here) before anything is judged, as
-// scan exits 1 before it scans: a typo fails loudly instead of suppressing
-// nothing. The parameter is bounded by the server's request-header limit
-// (64 KiB, request line included).
+// the gate applies as `scan --config` applies the file (#44), parsed and
+// validated by the same code (suppress.ParseConfig): unknown fields are
+// errors, every rule needs a reason, expires must be a date. An invalid
+// config is refused (422, written here) before the body is read or
+// anything is judged, as scan exits 1 before it scans: a typo fails loudly
+// instead of suppressing nothing. So is a config over maxGateConfigBytes,
+// and config given more than once (which one a proxy or client library
+// means is ambiguous).
 func gateIgnoreRules(w http.ResponseWriter, r *http.Request) ([]suppress.Rule, bool) {
-	raw := r.URL.Query().Get("config")
-	if raw == "" {
+	values := r.URL.Query()["config"]
+	switch {
+	case len(values) == 0 || len(values) == 1 && values[0] == "":
 		return nil, true
+	case len(values) > 1:
+		errJSON(w, http.StatusUnprocessableEntity, "invalid config: given more than once (send one .upgradescope.yaml)")
+		return nil, false
+	case len(values[0]) > maxGateConfigBytes:
+		errJSON(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("invalid config: %d bytes, more than the %d KiB limit", len(values[0]), maxGateConfigBytes>>10))
+		return nil, false
 	}
-	cfg, err := suppress.ParseConfig([]byte(raw), gateConfigSource)
+	cfg, err := suppress.ParseConfig([]byte(values[0]), gateConfigSource)
 	if err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid "+err.Error())
 		return nil, false

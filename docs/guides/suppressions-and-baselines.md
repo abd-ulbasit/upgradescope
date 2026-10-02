@@ -163,9 +163,12 @@ curl -sS --fail-with-body -X POST \
 
 `--url-query` needs curl 7.87 or later; with an older curl, append
 `&config=` and the file's URL-encoded text to the URL yourself. Rule `file`
-globs match the `path` parameter. An invalid config is refused with 422
-before anything is judged. The parameter counts toward the server's 64 KiB
-limit on the request line and headers, which is ample for ignore rules.
+globs match the `path` parameter. The config is parsed and validated by
+the same code as `scan --config`: an invalid config (an unknown field, a
+rule without a `reason`, an `expires` that is not a date), one over 32 KiB,
+or `config` given twice is refused with 422 before anything is judged. The
+parameter also counts toward the server's 64 KiB limit on the request line
+and headers; 32 KiB is a few hundred rules.
 
 Suppressed findings count toward neither the verdict nor `fail-on`. The
 JSON answer lists them in `suppressed` with a `suppressedCount`, and names

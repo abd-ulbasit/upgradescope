@@ -264,3 +264,34 @@ func TestGateClusterSuppression(t *testing.T) {
 		t.Errorf("SARIF lacks the manifest PSP's suppression:\n%s", raw)
 	}
 }
+
+// #44: ?config= is bounded and unambiguous on its own terms, not only by
+// the request-header limit of the http.Server in front of the handler: a
+// config over maxGateConfigBytes, or config given twice, is refused
+// before anything is judged.
+func TestGateConfigBounds(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler()) // httptest: Go's 1 MiB header limit
+	defer ts.Close()
+
+	pad := "# " + strings.Repeat("x", maxGateConfigBytes) + "\n"
+	for name, q := range map[string]string{
+		"too large": "?target=1.35" + withConfig(pspRule+pad),
+		"twice":     "?target=1.35" + withConfig(pspRule) + withConfig("ignore: []\n"),
+	} {
+		resp, raw := postGate(t, ts, q, "", pspManifest, "application/x-yaml")
+		var e struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &e); err != nil || resp.StatusCode != http.StatusUnprocessableEntity || !strings.HasPrefix(e.Error, "invalid config: ") {
+			t.Errorf("%s: %d %s, want 422 invalid config", name, resp.StatusCode, raw)
+		}
+	}
+	// A config of exactly the bound still applies.
+	fits := pspRule + "# " + strings.Repeat("x", maxGateConfigBytes-len(pspRule)-3) + "\n"
+	if len(fits) != maxGateConfigBytes {
+		t.Fatalf("fits is %d bytes", len(fits))
+	}
+	if resp, raw := postGate(t, ts, "?target=1.35"+withConfig(fits), "", pspManifest, "application/x-yaml"); resp.StatusCode != http.StatusOK {
+		t.Errorf("config of exactly maxGateConfigBytes: %d %s, want 200", resp.StatusCode, raw)
+	}
+}

@@ -347,7 +347,7 @@ Auth: `readToken` (bearer).
 | `format` | query | `json` \| `sarif` \| `junit` \| `gitlab-codequality` | no | — |
 | `fail-on` | query | `blocker` \| `warning` \| `never` | no | — |
 | `path` | query | string | no | The repository-relative file the stream was rendered to (`deploy/rendered.yaml`). Introduced findings are then located in it in SARIF and Code Quality, so code scanning or the merge request widget shows them on the change. |
-| `config` | query | string | no | A `.upgradescope.yaml` (its text, URL-encoded): ignore rules applied as `scan --config` applies them, `file` globs matched against `path`. An invalid config is a 422. The request line, and so this parameter, counts toward the server's 64 KiB request-header limit. |
+| `config` | query | string | no | A `.upgradescope.yaml` (its text, URL-encoded): ignore rules applied as `scan --config` applies them, `file` globs matched against `path`. An invalid config, one over 32 KiB, or `config` given more than once is a 422. The request line, and so this parameter, also counts toward the server's 64 KiB request-header limit. |
 
 Request body (`application/x-yaml`): string
 
@@ -881,7 +881,7 @@ The report's fields other than its findings.
 | `teams` | [TeamScores](#teamscores) | no | — |
 | `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included. |
 | `suppressedCount` | integer | yes | The number of `suppressed` entries. |
-| `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply) or are invalid, and `upgradescope.dev/ignore` annotations without a reason (not applied). |
+| `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply), and `upgradescope.dev/ignore` annotations without a reason (not applied). |
 
 ### SARIF
 

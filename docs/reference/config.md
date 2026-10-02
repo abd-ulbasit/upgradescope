@@ -99,6 +99,6 @@ validates `expires`.
 `POST /api/v1/gate` takes the file's text, URL-encoded, in its `config`
 query parameter and applies it as `scan` does, with the object
 annotations. `file` globs match the gate's `path` parameter. Each error
-above is a 422 there, before anything is judged; expired rules are named in
+above, and a config over 32 KiB, is a 422 there, before anything is judged; expired rules are named in
 the answer's `warnings`
 ([The server gate](../guides/suppressions-and-baselines.md#the-server-gate)).

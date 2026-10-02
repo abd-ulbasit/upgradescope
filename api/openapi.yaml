@@ -531,8 +531,9 @@ paths:
           description: |
             A `.upgradescope.yaml` (its text, URL-encoded): ignore rules
             applied as `scan --config` applies them, `file` globs matched
-            against `path`. An invalid config is a 422. The request line,
-            and so this parameter, counts toward the server's 64 KiB
+            against `path`. An invalid config, one over 32 KiB, or
+            `config` given more than once is a 422. The request line,
+            and so this parameter, also counts toward the server's 64 KiB
             request-header limit.
           schema: {type: string}
       requestBody:
@@ -952,7 +953,7 @@ components:
             warnings:
               type: array
               items: {type: string}
-              description: "Suppression warnings: rules in `config` that expired (they no longer apply) or are invalid, and `upgradescope.dev/ignore` annotations without a reason (not applied)."
+              description: "Suppression warnings: rules in `config` that expired (they no longer apply), and `upgradescope.dev/ignore` annotations without a reason (not applied)."
     SARIF:
       type: object
       description: "A SARIF 2.1.0 log (https://json.schemastore.org/sarif-2.1.0.json) with one run, the report's findings as results."
