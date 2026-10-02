@@ -19,8 +19,18 @@ var crdGVK = schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1
 
 // notCustomResources are API groups of files that carry apiVersion and
 // kind but are never sent to a cluster, so no CRD is expected for them.
+// Groups without a dot (skaffold/v4beta6 Config) need no entry: a CRD's
+// group must contain one, so no CRD can define them (customResource).
 var notCustomResources = map[string]bool{
 	"kustomize.config.k8s.io": true, // kustomization.yaml
+	"kpt.dev":                 true, // Kptfile
+}
+
+// customResource reports whether objects of group can only be served
+// through a CRD: the group is not built in, not tool configuration, and
+// is a domain with a dot, as the apiserver requires of a CRD's group.
+func customResource(group string) bool {
+	return strings.Contains(group, ".") && !builtinGroup(group) && !notCustomResources[group]
 }
 
 // manifestCRD reads a CustomResourceDefinition manifest as the live
@@ -73,8 +83,8 @@ func crdsOf(objs []manifestObject) []inventory.CRD {
 // a later kubectl apply does) and, as each one's Usage, the manifest
 // objects of its kind at a version it deprecates, does not serve or does
 // not list, from inv.APIUsage (every manifest object). Custom resources
-// with no CRD in the manifests, in a group that is not built in, could
-// not be judged: the crds capability is then partial, naming them.
+// with no CRD in the manifests (customResource) could not be judged:
+// the crds capability is then partial, naming them.
 func assessCRDs(inv *inventory.Inventory, crds []inventory.CRD) {
 	byKind := map[schema.GroupKind]int{}
 	var out []inventory.CRD
@@ -91,7 +101,7 @@ func assessCRDs(inv *inventory.Inventory, crds []inventory.CRD) {
 	for _, u := range inv.APIUsage {
 		i, ok := byKind[schema.GroupKind{Group: u.Group, Kind: u.Kind}]
 		if !ok {
-			if !builtinGroup(u.Group) && !notCustomResources[u.Group] {
+			if customResource(u.Group) {
 				orphans = append(orphans, apiName(u.Group+"/"+u.Version, u.Kind))
 			}
 			continue

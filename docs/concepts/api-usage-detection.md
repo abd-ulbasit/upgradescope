@@ -143,7 +143,9 @@ file and line. A cert-manager 1.6 CRD (v1alpha2 no longer served) next to a
 is ignored. A custom resource whose CRD is not in the files cannot be
 judged: `crds` is then partial, naming it, so it reads as not assessed, not
 as fine. Render charts with `helm template --include-crds` to include
-their CRDs.
+their CRDs. Tool configuration that is never applied to a cluster needs
+no CRD: a `Kustomization`, a `Kptfile`, and any group without a dot (such
+as `skaffold/v4beta6`), which no CRD can define.
 
 `crds` is never required: CRD versions do not decide whether Kubernetes can
 be upgraded. An inventory from an agent that predates the capability does

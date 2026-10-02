@@ -68,7 +68,8 @@ func TestCollectFilesCRDVersions(t *testing.T) {
 // Files mode reads CRDs wherever kubectl reads objects (a List, JSON) and
 // judges custom resources at a deprecated served version; one at a served
 // version is not usage. Nothing is skipped when every custom resource has
-// its CRD: built-in objects and kustomization files need none.
+// its CRD: built-in objects and tool configuration (kustomize, kpt, and
+// skaffold, whose group has no dot, so no CRD can define it) need none.
 func TestCollectManifestsCRDVersions(t *testing.T) {
 	stream := `apiVersion: v1
 kind: List
@@ -97,6 +98,14 @@ metadata: {name: cfg, namespace: shop}
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources: [routes.yaml]
+---
+apiVersion: kpt.dev/v1
+kind: Kptfile
+metadata: {name: shop}
+---
+apiVersion: skaffold/v4beta6
+kind: Config
+metadata: {name: shop}
 `
 	inv, err := CollectManifests(strings.NewReader(stream), nil)
 	if err != nil {
