@@ -157,7 +157,7 @@ at the cost of Helm findings.
 |---|---|---|
 | `scan` against a live kind cluster (Kubernetes 1.37) | median 0.49 s, p90 0.52 s | 30 runs on a ThinkPad (Linux, amd64), October 2026 audit at main `8a951dd` (#130) |
 | `scan --files` on the demo's four rendered objects (`hack/demo/rendered`) | median 0.022 s, p90 0.022 s | 30 runs, Apple M1 Pro, main `9d0b161`, 2026-10-02 |
-| Binary and archive, linux/amd64 (stripped binary, `.tar.gz` download) | 57.5 MiB binary, 17.4 MiB archive | GoReleaser v2.17.1 snapshot (`make release-check`), Go 1.26.8, main `2e497c1`, 2026-10-02; the release check fails beyond 2% |
+| Binary and archive, linux/amd64 (stripped binary, `.tar.gz` download) | 57.5 MiB binary, 17.4 MiB archive | GoReleaser v2.17.1 snapshot (`make release-check`) on an Apple M1 Pro, Go 1.26.8, main `2e497c1`, 2026-10-02; cross-compiled with `CGO_ENABLED=0`, so the build host does not change the size; the release check fails beyond 2% |
 
 More, with sizes per platform: [Install](https://abd-ulbasit.github.io/upgradescope/operations/install/#sizes).
 

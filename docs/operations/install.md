@@ -119,10 +119,11 @@ and [Helm values](../reference/helm-values.md).
 
 What a release ships, from a GoReleaser v2.17.1 snapshot (`make
 release-check`, the build the release workflow runs) of main `2e497c1`,
-with Go 1.26.8, on 2026-10-02. The binary is stripped (`CGO_ENABLED=0
--trimpath -ldflags "-s -w"`); the archive is the download, with the
-licenses, README, completions and man pages beside the binary. 1 MiB is
-1,048,576 bytes.
+with Go 1.26.8, on 2026-10-02, on an Apple M1 Pro. The binary is stripped
+(`CGO_ENABLED=0 -trimpath -ldflags "-s -w"`); the archive is the download,
+with the licenses, README, completions and man pages beside the binary.
+Every platform is cross-compiled without cgo, so the build host does not
+change a size; the Go version and the commit do. 1 MiB is 1,048,576 bytes.
 
 | Platform | Binary | Archive |
 |---|---|---|
@@ -136,7 +137,11 @@ licenses, README, completions and man pages beside the binary. 1 MiB is
 Archives are `.tar.gz`, `.zip` on Windows. The release check
 (`hack/check-doc-sizes.sh`, after the snapshot) fails when a size here or
 in the README differs from the build by more than 2%, so these are re-measured
-before a release ships a different size.
+before a release ships a different size. On pull requests CI runs that
+check only when they touch release inputs, so a code change that grows the
+binary first fails the weekly run or the release: run `make release-check`
+(no Docker engine: `GORELEASER_SKIP=publish,sign,sbom,docker`) before
+tagging, and update both pages when it fails.
 
 The image adds the distroless base, whose layers are 0.7 MB compressed
 (`gcr.io/distroless/static-debian12:nonroot`, as pinned in
