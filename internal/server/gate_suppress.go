@@ -16,8 +16,11 @@ const gateConfigSource = "config"
 // maxGateConfigBytes bounds ?config= (its decoded text). The server's
 // request-header limit (64 KiB, request line included) bounds it too, but
 // the handler does not rely on whatever http.Server serves it: 32 KiB is a
-// few hundred reasoned rules, and the rules are parsed (yaml.v3 refuses
-// alias bombs) and applied inside the evaluation slot's budget.
+// few hundred reasoned rules. The rules are parsed before the evaluation
+// slot is taken (32 KiB of YAML is cheap to parse, and yaml.v3 refuses
+// alias bombs) and applied inside it. URL-encoding expands YAML, so a
+// config near the bound can exceed the header limit, or a proxy's, first:
+// the suppressions guide says so.
 const maxGateConfigBytes = 32 << 10
 
 // gateIgnoreRules reads ?config=, a .upgradescope.yaml whose ignore rules
@@ -57,4 +60,34 @@ func gateIgnoreRules(w http.ResponseWriter, r *http.Request) ([]suppress.Rule, b
 // file globs match the objects' file, which is ?path=.
 func (s *Server) suppressGate(rep engine.Report, rules []suppress.Rule) (engine.Report, []string) {
 	return suppress.Apply(rep, rules, suppress.Options{Now: s.now(), Source: gateConfigSource})
+}
+
+// gateSide is what the manifests introduce with ?cluster=, after
+// suppression (suppressSide): the keys gateResult blames on them, and
+// their suppressed findings, which the CI formats carry.
+type gateSide struct {
+	keys       map[string]bool
+	suppressed []engine.SuppressedFinding
+}
+
+// suppressSide applies the request's rules and the objects' annotations to
+// the manifests' side report (mergeManifests) before taking what the
+// manifests introduce from it (introducedKeys), as suppressGate does to
+// the proposed state's. Taken before suppression, the key of a finding
+// whose manifest objects are all accepted would stay introduced, and the
+// cluster's objects that remain at that key would fail the PR as the
+// manifests'; after it, such a key falls back to the baseline's
+// attribution. The suppressed findings are the side's own, so they hold
+// the manifests' objects only. Its warnings repeat suppressGate's (the
+// side's objects are the proposed state's too) and are dropped.
+func (s *Server) suppressSide(side engine.Report, rules []suppress.Rule) gateSide {
+	produced := introducedKeys(side)
+	rep, _ := s.suppressGate(side, rules)
+	out := gateSide{keys: introducedKeys(rep)}
+	for _, sf := range rep.Suppressed {
+		if produced[findingKey(sf.Finding)] {
+			out.suppressed = append(out.suppressed, sf)
+		}
+	}
+	return out
 }

@@ -148,7 +148,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 
 	inv := manifests
 	var baseline *engine.Report
-	var introduced map[string]bool
+	var introduced gateSide
 	if ref := r.URL.Query().Get("cluster"); ref != "" {
 		clusterInv, ok := s.gateClusterContext(w, r, ref)
 		if !ok {
@@ -171,13 +171,10 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		}
 		inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true}
 		// The manifests' add-ons and CRDs are merged too (mergeManifests),
-		// and the findings the manifests' own content produces are
-		// introduced by the PR (introducedKeys): a removed or deprecated
-		// API a manifest object uses, even when the cluster already has
-		// objects at that API, an add-on it deploys, a custom resource at
-		// a version the proposed CRDs do not serve.
+		// and the findings the manifests' own content produces, once
+		// suppressed, are introduced by the PR (suppressSide).
 		side := mergeManifests(&inv, manifests)
-		introduced = introducedKeys(engine.Evaluate(side, s.cfg.KB, target, s.now()))
+		introduced = s.suppressSide(engine.Evaluate(side, s.cfg.KB, target, s.now()), rules)
 	} else {
 		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	}
@@ -255,23 +252,24 @@ type gateResponse struct {
 // metrics supply caller rows), as is any finding whose key the baseline
 // has; anything else is the manifests' (fail closed). The verdict is
 // blocked on an introduced blocker, else unknown when the proposed state
-// has a required gap (a blocker may have gone unseen), else ready.
-func gateResult(rep engine.Report, baseline *engine.Report, introduced map[string]bool) gateResponse {
+// has a required gap (a blocker may have gone unseen), else ready. The
+// suppressed findings the CI formats carry are all of rep's without a
+// baseline, else the manifests' side's (introduced.suppressed).
+func gateResult(rep engine.Report, baseline *engine.Report, introduced gateSide) gateResponse {
 	existing := map[string]bool{}
 	if baseline != nil {
 		existing = keySet(baseline.Findings, func(engine.Finding) bool { return true })
 	}
 	source := func(f engine.Finding) string {
-		if baseline != nil && !introduced[findingKey(f)] && (f.Category == engine.CatDeprecatedAPIInUse || existing[findingKey(f)]) {
+		if baseline != nil && !introduced.keys[findingKey(f)] && (f.Category == engine.CatDeprecatedAPIInUse || existing[findingKey(f)]) {
 			return sourceCluster
 		}
 		return sourceManifest
 	}
 	resp := gateResponse{reportWithTeams: withTeams(rep), Findings: []gateFinding{}, Verdict: engine.VerdictReady, SuppressedCount: len(rep.Suppressed)}
-	for _, s := range rep.Suppressed {
-		if source(s.Finding) == sourceManifest {
-			resp.introducedSuppressed = append(resp.introducedSuppressed, s)
-		}
+	resp.introducedSuppressed = rep.Suppressed
+	if baseline != nil {
+		resp.introducedSuppressed = introduced.suppressed
 	}
 	for _, f := range rep.Findings {
 		src := source(f)
