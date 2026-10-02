@@ -189,6 +189,14 @@ type Report struct {
 	// Suppressed lists what ignore rules took out of Findings (see
 	// internal/suppress); Evaluate never sets it.
 	Suppressed []SuppressedFinding `json:"suppressed,omitempty"`
+	// UnrecognizedImages are the image repositories no registry image
+	// matcher claims (inventory.UnrecognizedImages), so an add-on
+	// detection gap is visible; never findings, so they change neither
+	// score nor verdict. Sorted, deduplicated, at most
+	// inventory.MaxUnrecognizedImages; UnrecognizedImagesOmitted counts
+	// the ones the cap dropped.
+	UnrecognizedImages        []string `json:"unrecognizedImages,omitempty"`
+	UnrecognizedImagesOmitted int      `json:"unrecognizedImagesOmitted,omitempty"`
 }
 
 // Rescore recomputes Score, Verdict and Ready from Findings and

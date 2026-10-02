@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -17,8 +18,6 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/registry"
 )
-
-const maxUnrecognizedImages = 200
 
 // nsImage is one container image observed in a namespace.
 type nsImage struct {
@@ -124,7 +123,9 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 		}
 		opts.Continue = classes.Continue
 	}
-	inv.AddOns, inv.UnrecognizedImages = matchAddOns(ev, addons)
+	var unrec []string
+	inv.AddOns, unrec = matchAddOns(ev, addons)
+	setUnrecognized(inv, unrec)
 	return classErr
 }
 
@@ -291,7 +292,7 @@ var ingressClassAddOns = map[string][]string{
 
 // matchAddOns is pure: pod images and labels + helm releases + IngressClass
 // controllers + registry → detected add-on instances, one per add-on and
-// namespace, sorted by ID then namespace, and the deduped, sorted, capped
+// namespace, sorted by ID then namespace, and the deduped, sorted
 // list of image repos no image matcher claims (registry gap visibility —
 // never findings, spec §9; an add-on found from labels may still run one).
 //
@@ -423,13 +424,14 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		return cmp.Or(cmp.Compare(out[i].ID, out[j].ID), slices.Compare(out[i].Namespaces, out[j].Namespaces)) < 0
 	})
 
-	var unrec []string
-	for repo := range unmatched {
-		unrec = append(unrec, repo)
+	return out, slices.Sorted(maps.Keys(unmatched))
+}
+
+// setUnrecognized records sorted unrecognized image repos in inv, capped
+// at inventory.MaxUnrecognizedImages, counting the ones the cap drops.
+func setUnrecognized(inv *inventory.Inventory, repos []string) {
+	inv.UnrecognizedImages, inv.UnrecognizedImagesOmitted = repos, 0
+	if n := len(repos) - inventory.MaxUnrecognizedImages; n > 0 {
+		inv.UnrecognizedImages, inv.UnrecognizedImagesOmitted = repos[:inventory.MaxUnrecognizedImages], n
 	}
-	sort.Strings(unrec)
-	if len(unrec) > maxUnrecognizedImages {
-		unrec = unrec[:maxUnrecognizedImages]
-	}
-	return out, unrec
 }

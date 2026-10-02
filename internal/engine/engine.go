@@ -1495,6 +1495,12 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	score, _ := Score(findings)
 	gaps := assessmentGaps(inv, k, target)
 	verdict := verdictFor(findings, gaps)
+	// Inventories from other collectors may arrive unsorted or over the cap.
+	unrecognized := sortedSet(slices.Clone(inv.UnrecognizedImages))
+	omitted := inv.UnrecognizedImagesOmitted
+	if n := len(unrecognized) - inventory.MaxUnrecognizedImages; n > 0 {
+		unrecognized, omitted = unrecognized[:inventory.MaxUnrecognizedImages], omitted+n
+	}
 
 	return Report{
 		ClusterID:     inv.ClusterID,
@@ -1506,5 +1512,8 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 		Verdict:       verdict,
 		Findings:      findings,
 		NotAssessed:   gaps,
+
+		UnrecognizedImages:        unrecognized,
+		UnrecognizedImagesOmitted: omitted,
 	}
 }

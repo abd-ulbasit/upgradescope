@@ -310,11 +310,13 @@ func TestMatchAddOnsUnrecognizedCap(t *testing.T) {
 		images = append(images, nsImage{Namespace: "ns", Image: fmt.Sprintf("example.com/app-%03d:1.0", i)})
 	}
 	_, unrec := matchAddOns(addOnEvidence{images: images}, nil)
-	if len(unrec) != 200 {
-		t.Fatalf("len(unrecognized) = %d, want capped at 200", len(unrec))
+	var inv inventory.Inventory
+	setUnrecognized(&inv, unrec)
+	if len(inv.UnrecognizedImages) != 200 || inv.UnrecognizedImagesOmitted != 50 {
+		t.Fatalf("unrecognized = %d, omitted %d; want capped at 200, 50 omitted", len(inv.UnrecognizedImages), inv.UnrecognizedImagesOmitted)
 	}
-	if unrec[0] != "example.com/app-000" {
-		t.Errorf("unrec[0] = %q, want sorted before capping", unrec[0])
+	if inv.UnrecognizedImages[0] != "example.com/app-000" {
+		t.Errorf("unrec[0] = %q, want sorted before capping", inv.UnrecognizedImages[0])
 	}
 }
 

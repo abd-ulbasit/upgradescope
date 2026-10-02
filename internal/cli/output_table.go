@@ -111,6 +111,7 @@ func WriteTable(out io.Writer, r engine.Report) error {
 			}
 		}
 	}
+	writeUnrecognizedImages(w, r)
 	return w.err
 }
 
