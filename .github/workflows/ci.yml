@@ -14,8 +14,11 @@ on:
   # On demand, from any branch: `gh workflow run ci.yml --ref <branch>`
   # proves the weekly matrices before the schedule does (a new kind node
   # image, a change to hack/e2e.sh); -f full-matrix=false runs the PR sets.
-  # kb-refresh.yml dispatches it that way on its bot branches: their PRs,
-  # opened with GITHUB_TOKEN, start no pull_request run.
+  # A dispatched run's checks land on the commit but do not count on a PR
+  # (its check rollup ignores a workflow_dispatch suite, so they cannot
+  # satisfy the required ci-ok there). A kb-refresh bot PR's own
+  # pull_request runs are held for approval instead, and kb-refresh.yml
+  # approves them; dispatching on a bot branch only checks it by hand.
   workflow_dispatch:
     inputs:
       full-matrix:
@@ -313,10 +316,10 @@ jobs:
         run: make images
 
   # When a branch changes registry/: its entries validate, and they match the
-  # live endoflife.date data. On PRs, and on the workflow_dispatch run that
-  # kb-refresh.yml sends for its bot branches (a PR opened with GITHUB_TOKEN
-  # starts no pull_request run), which is diffed against the default
-  # branch. Not on a release re-dispatch: upstream drift must not gate a tag.
+  # live endoflife.date data. On PRs (kb-refresh's registry PR included, once
+  # its held run is approved), and on a dispatched run, e.g. by hand on a
+  # bot branch, which is diffed against the default branch. Not on a release
+  # re-dispatch: upstream drift must not gate a tag.
   # hack/kb-refresh-ci_test.sh (make hack-test) runs the diff step against a
   # scratch remote.
   registry:
