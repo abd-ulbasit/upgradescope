@@ -91,8 +91,8 @@ for f in action.yml 'action/**' hack/action_test.sh "$ci" Makefile go.mod go.sum
   fi
 done
 set +f
-if job changes | grep -qE '^      action: \$\{\{ steps\.[a-z]+\.outputs\.action \}\}$' &&
-  job action | grep -qF "needs.changes.outputs.action == 'true'"; then
+if grep -qE '^      action: \$\{\{ steps\.[a-z]+\.outputs\.action \}\}$' <<<"$(job changes)" &&
+  grep -qF "needs.changes.outputs.action == 'true'" <<<"$(job action)"; then
   ok "the action job runs on the changes job's action output"
 else
   job action >"$work/out"
