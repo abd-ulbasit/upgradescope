@@ -938,10 +938,11 @@ func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Sn
 
 // decodeInventory decodes a stored snapshot's whole inventory, as this
 // server judges it (legacyView), its free text cut as ingest cuts it
-// (inventory.CutFreeText): the snapshot keeps the inventory as pushed,
-// an older agent's longer reasons and ignore annotations included. Its cost follows the inventory's
-// structure (~45 MB of heap for a snapshot at its node budget), so a
-// request handler calls it only in the read slot (inReadSlot).
+// (inventory.CutFreeText): the snapshot keeps the inventory as pushed, an
+// older agent's longer reasons and ignore annotations included. Its cost
+// follows the inventory's structure (~45 MB of heap for a snapshot at its
+// node budget), so a request handler calls it only in the read slot
+// (inReadSlot).
 func decodeInventory(snap store.Snapshot) (inventory.Inventory, error) {
 	var inv inventory.Inventory
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
@@ -1031,9 +1032,9 @@ type summaryGap struct {
 // listing them all made a 500-cluster /fleet of three targets a 10 MB
 // answer that grew the heap 45 MiB, 4.5 times the ~10 MiB the server's
 // worst case allows two fleet reads. A genuine gap is a few hundred
-// bytes, so a summary lists the one or two that make a verdict unknown;
-// the rest are counted, and a cluster's own detail and report list them
-// all.
+// bytes, so the gaps of a typical evaluation fit, the required ones
+// (which make a verdict unknown) listed first; the rest are counted, and
+// a cluster's own detail and its report list them all.
 const fleetSummaryBytes = 1 << 10
 
 // gapsOf decodes the evaluation's notAssessed, which the store keeps beside

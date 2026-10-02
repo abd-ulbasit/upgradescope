@@ -153,11 +153,11 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 			e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, t.String())
 			switch {
 			case err == nil:
-				gaps, omitted := gapsOf(e, fleetSummaryBytes)
+				gaps, gapsOmitted := gapsOf(e, fleetSummaryBytes)
 				row.Cells[t.String()] = &fleetCell{
 					Score: e.Score, Ready: e.Ready, Verdict: verdictOf(e), Blockers: e.Blockers,
 					EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID, Source: sourceStored, Outdated: s.outdated(e, now),
-					NotAssessed: gaps, NotAssessedOmitted: omitted,
+					NotAssessed: gaps, NotAssessedOmitted: gapsOmitted,
 				}
 			case errors.Is(err, store.ErrNotFound):
 			default:
