@@ -49,6 +49,10 @@
 # inspection; `make demo-down` deletes it.
 #
 # Needs Docker, helm, go, jq and curl; installs kind and kubectl itself.
+# Docker must be this machine's engine: kind mounts the audit policy from
+# this checkout's path, and the integration tests trust a kind-* context only
+# when its API server is on loopback. With a remote engine, run the e2e on
+# that machine.
 #
 # Knobs: E2E_MINOR (default 1.37). For hack/e2e_test.sh, which runs this
 # against stubs: E2E_INSTALL_TOOL, E2E_UPGRADESCOPE (the binary `make build`
