@@ -1,0 +1,2 @@
+go test fuzz v1
+string("kind: A\n0: &hidden\n    apiVersion: a\n    kind: A\nitems:\n- *hidden")

@@ -91,6 +91,11 @@ func TestAdversarialCorpus(t *testing.T) {
 		"quoted-keys.yaml":                   {counts: map[string]int{ingOld: 1}},
 		"aliased-items.yaml":                 {counts: map[string]int{}, named: []string{ingOld}},
 		"unrendered-template.yaml":           {counts: map[string]int{}, named: []string{pdbOld}},
+		"alias-key.yaml":                     {counts: map[string]int{ingOld: 1}, lines: []int{4}, warnings: 1},
+		"list-without-apiversion.yaml":       {counts: map[string]int{ingOld: 1}, lines: []int{3}},
+		"binary-kind.yaml":                   {counts: map[string]int{ingOld: 1}, lines: []int{1}},
+		"binary-key.yaml":                    {counts: map[string]int{ingOld: 1}, lines: []int{1}},
+		"typed-list-null-items.yaml":         {counts: map[string]int{ingOld: 2}, lines: []int{4, 5}},
 	}
 	files, err := filepath.Glob("testdata/adversarial/*")
 	if err != nil {

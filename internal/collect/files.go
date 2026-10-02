@@ -2,6 +2,7 @@ package collect
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -273,14 +274,18 @@ func linesFrom(text []byte, n int) []byte {
 // YAML-to-JSON conversion and unstructured scheme:
 //
 //   - A key's last value wins (a duplicate key is a warning), and merge keys
-//     (`<<: *base`) apply (see lookup).
-//   - An object with an items key is a list, whatever its kind
-//     (decodeToList): the wrapper is not counted, null items count nothing,
-//     and an item with neither apiVersion nor kind takes the list's
-//     apiVersion and its kind minus "List" (an IngressList's untyped items
-//     are Ingresses). An item holding an items sequence is a list too,
-//     expanded without that inference (FlattenListVisitor). kind: List
-//     without items counts nothing.
+//     (`<<: *base`) apply (see lookup). Keys and values are read through
+//     aliases (`*k : v` sets the key k's anchor holds) and !!binary
+//     scalars are base64-decoded, as go-yaml v2 reads them.
+//   - A top-level mapping with kind and an items key is a list, whatever
+//     its kind and even without apiVersion (decodeToList): the wrapper is
+//     not counted, `items: null` counts nothing, and an item with neither
+//     apiVersion nor kind (a null item too) takes the list's apiVersion and
+//     its kind minus "List" (an IngressList's untyped items are Ingresses;
+//     without an apiVersion they have no version, and are not sent). An
+//     item holding an items sequence is a list too, expanded without that
+//     inference (kubectl rejects such a list: counting it errs safe).
+//     kind: List without items counts nothing.
 //
 // It is an error, so the document is reported rather than counted:
 //
@@ -322,6 +327,11 @@ type mergeKey struct {
 // list items without apiVersion and kind take defAPIVersion and defKind.
 func (d *objectReader) read(n *yaml.Node, top bool, defAPIVersion, defKind string) error {
 	if n.Kind != yaml.MappingNode {
+		if n.Kind == yaml.ScalarNode && n.Tag == "!!null" && defKind != "" && defAPIVersion != "" {
+			// A typed list's null item: decodeToList infers it as it
+			// infers an empty mapping.
+			return d.object(n, defAPIVersion, defKind, n.Line)
+		}
 		return nil
 	}
 	avHit, err := d.lookup(n, "apiVersion")
@@ -332,6 +342,10 @@ func (d *objectReader) read(n *yaml.Node, top bool, defAPIVersion, defKind strin
 	if err != nil {
 		return err
 	}
+	items, err := d.lookup(n, "items")
+	if err != nil {
+		return err
+	}
 	av, k := scalar(avHit.value), scalar(kindHit.value)
 	line := n.Line
 	if av == "" && k == "" {
@@ -339,14 +353,13 @@ func (d *objectReader) read(n *yaml.Node, top bool, defAPIVersion, defKind strin
 	} else if avHit.key != nil {
 		line = avHit.key.Line
 	}
-	if av == "" || k == "" {
+	// The unstructured scheme requires only kind: a top-level mapping
+	// with kind and items is a list even without apiVersion (its untyped
+	// items, inferred without a version, are not sent).
+	if k == "" || av == "" && (!top || items.value == nil) {
 		return nil
 	}
 	d.warnDuplicates(n, av, k, "apiVersion", "kind", "metadata", "items")
-	items, err := d.lookup(n, "items")
-	if err != nil {
-		return err
-	}
 	isSeq := items.value != nil && deref(items.value).Kind == yaml.SequenceNode
 	if k != "List" && !isSeq && (!top || items.value == nil) {
 		return d.object(n, av, k, line)
@@ -438,10 +451,7 @@ func (d *objectReader) lookup(m *yaml.Node, name string) (hit, error) {
 	var h hit
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		k, v := m.Content[i], m.Content[i+1]
-		if k.Kind != yaml.ScalarNode {
-			continue
-		}
-		if k.Tag == "!!merge" {
+		if isMergeKey(k) {
 			mh, err := d.merge(v, name)
 			if err != nil {
 				return hit{}, err
@@ -449,11 +459,17 @@ func (d *objectReader) lookup(m *yaml.Node, name string) (hit, error) {
 			if mh.value != nil {
 				h = hit{key: mh.key, value: mh.value, merged: true}
 			}
-		} else if k.Value == name {
+		} else if scalar(k) == name {
 			h = hit{key: k, value: v}
 		}
 	}
 	return h, nil
+}
+
+// isMergeKey reports whether mapping key k is a merge key as go-yaml v2
+// reads one: a plain `<<` (or `!!merge <<`), not an alias of one.
+func isMergeKey(k *yaml.Node) bool {
+	return k.Kind == yaml.ScalarNode && k.Tag == "!!merge" && k.Value == "<<"
 }
 
 // merge looks name up in the value of a merge key: a mapping, or a
@@ -499,19 +515,22 @@ func (d *objectReader) warnDuplicates(m *yaml.Node, av, k string, names ...strin
 	seen := map[string]bool{}
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		key := m.Content[i]
-		if key.Kind != yaml.ScalarNode || key.Tag == "!!merge" || !slices.Contains(names, key.Value) {
+		name := scalar(key)
+		if isMergeKey(key) || !slices.Contains(names, name) {
 			continue
 		}
-		if seen[key.Value] {
+		if seen[name] {
 			d.warnings = append(d.warnings, docError{line: key.Line + d.lineOffset,
-				err: fmt.Errorf("%s %s: duplicate key %q: kubectl uses its last value", av, k, key.Value)})
+				err: fmt.Errorf("%s %s: duplicate key %q: kubectl uses its last value", av, k, name)})
 		}
-		seen[key.Value] = true
+		seen[name] = true
 	}
 }
 
-// scalar returns a non-null scalar's value; anything else (absent, null, a
-// mapping such as an unrendered `{{ .Values.name }}`) is "".
+// scalar returns a non-null scalar's value as kubectl's YAML decoder reads
+// it, through aliases and with a !!binary scalar base64-decoded; anything
+// else (absent, null, a mapping such as an unrendered `{{ .Values.name
+// }}`, invalid base64, which kubectl rejects) is "".
 func scalar(n *yaml.Node) string {
 	if n == nil {
 		return ""
@@ -519,6 +538,13 @@ func scalar(n *yaml.Node) string {
 	n = deref(n)
 	if n.Kind != yaml.ScalarNode || n.Tag == "!!null" {
 		return ""
+	}
+	if n.Tag == "!!binary" {
+		b, err := base64.StdEncoding.DecodeString(n.Value)
+		if err != nil {
+			return ""
+		}
+		return string(b)
 	}
 	return n.Value
 }
