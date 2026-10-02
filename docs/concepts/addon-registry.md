@@ -98,14 +98,13 @@ namespace can forge a Helm release, and one that creates pods chooses
 their images and labels, so findings are only as trustworthy as namespace
 write access. A forged release of chart `ingress-nginx` raises the
 Ingress NGINX blocker for that namespace, and with it the cluster's
-verdict. Hiding works only within the same namespace, but there it works
-today: chart evidence wins over image evidence (above), so a forged
-release whose chart `appVersion` claims a newer version also hides an
-older image of the add-on running beside it. The fix for #165 narrows
-this: a release's `appVersion` then stands only for pods on its own
-release line, so an older image on another line is judged at its own
-version, and only a patch-level difference on the same line can be
-hidden.
+verdict. Hiding is narrower. A release's `appVersion` stands only for
+pods on its own release line in its namespace (the **Helm releases**
+bullet above), so a forged release that claims a newer version does not
+hide an older image of the add-on on another line: that image is judged
+at its own version. What it can still hide, in its own namespace, is a
+patch-level difference on the same line, a pod whose image has no
+version tag, and an add-on whose image no matcher recognizes.
 The [security model](../operations/security-model-and-rbac.md#findings-are-only-as-trustworthy-as-namespace-write-access)
 says what this means for a multi-tenant cluster.
 

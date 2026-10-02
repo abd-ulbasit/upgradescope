@@ -447,8 +447,11 @@ a CI gate.
   (#168).
 - The security model documents that Helm release Secrets, pod images and
   labels are tenant-controlled evidence: findings are only as trustworthy
-  as namespace write access, and a forged release in a namespace can still
-  hide an older image of its add-on there until #165 lands.
+  as namespace write access. A forged release can raise a finding in its
+  namespace; its `appVersion` stands only for pods on its own release
+  line, so it cannot hide an older image on another line there, only a
+  patch-level difference on the same line, an untagged image, or an
+  image no matcher recognizes (#165).
 
 ## [0.1.1] - 2026-07-27
 

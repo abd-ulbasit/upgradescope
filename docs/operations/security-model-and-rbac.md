@@ -67,14 +67,14 @@ image or label:
   pod labelled `app.kubernetes.io/name=ingress-nginx`, raises the
   `eol-addon/ingress-nginx` blocker for that namespace and, through it,
   the cluster's verdict and every gate that reads it.
-- **Hide a finding**, within its own namespace: a release's chart
-  `appVersion` currently wins over the image tags in its namespace, so a
-  forged release that claims a newer version of an add-on also hides an
-  older image of it running there. The fix for #165 narrows this: a
-  release's `appVersion` then stands only for pods on its own release
-  line, so an older image on another line is judged at its own version;
-  a patch-level difference on the same line, and an add-on whose image
-  no matcher recognizes, can still be hidden.
+- **Hide a finding**, only within its own namespace and only narrowly. A
+  release's chart `appVersion` stands only for pods on its own release
+  line there, so a forged release that claims a newer version of an
+  add-on does not hide an older image of it on another line: that image
+  is judged at its own version (#165). A patch-level difference on the
+  same line, a pod whose image has no version tag, and an add-on whose
+  image no matcher recognizes can still be hidden
+  ([Add-on registry](../concepts/addon-registry.md#how-an-add-on-is-found)).
 
 The effects stay within what the tenant can write: its forged evidence is
 attributed to its own namespace (and team), it cannot change what
