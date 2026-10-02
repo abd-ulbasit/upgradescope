@@ -14,9 +14,10 @@ import (
 // Notification delivery. Events are committed to the outbox in the same
 // transaction as the evaluations that produced them, one message per
 // (event, sink), and a background worker delivers them after commit. So a
-// push never waits on a webhook, a restart loses nothing, and a failed
-// delivery is retried with exponential backoff — per sink, so a retry never
-// re-sends to a sink that already succeeded. Delivery is at-least-once: a
+// push never waits on a webhook, a restart loses nothing (but messages past
+// outboxMaxAge, which are dropped unsent), and a failed delivery is retried
+// with exponential backoff — per sink, so a retry never re-sends to a sink
+// that already succeeded. Delivery is at-least-once: a
 // crash between a successful send and the delete re-sends after the lease.
 //
 // A sink that answers 429 or 503 with Retry-After is held: until the delay
@@ -27,7 +28,8 @@ import (
 // called, a sink that stays limited would drain its queue one message per
 // window, so a message also has a lifetime: it is given up (logged,
 // deleted) once outboxMaxAge has passed since it was queued, whatever its
-// attempts, and never later than a poll after that.
+// attempts, shortly after that (within a few minutes: the worker polls every
+// outboxPoll, a pass can run longer, and a crash leaves a lease).
 const (
 	outboxBatch       = 50
 	outboxLease       = 2 * time.Minute // a claimed message is re-claimable after this

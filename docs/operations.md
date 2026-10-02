@@ -155,9 +155,10 @@ evaluation of the new target is then a silent baseline.
 
 Delivery: notifications are committed to an outbox with the evaluations
 that produced them and delivered by a background worker, so a push never
-waits on a receiver and a restart loses nothing. A failed delivery (an
-error, a timeout of 2s, any non-2xx status, **including redirects**, which
-are not followed) is retried with exponential backoff from 30s, up to 8
+waits on a receiver and a restart does not lose queued messages (unless the
+server was down so long that they have passed the 8 hour limit below, when
+they are dropped unsent). A failed delivery (an error, a timeout of 2s, any
+non-2xx status, **including redirects**, which are not followed) is retried with exponential backoff from 30s, up to 8
 attempts (about an hour), separately per sink. A receiver that answers
 `429` or `503` with a `Retry-After` header (seconds or an HTTP date) is
 left alone for that delay, capped at an hour: the sink is not called for

@@ -219,7 +219,8 @@ a CI gate.
   message or any other queued for it, and the held messages keep their
   attempts. A queued notification is given up once it has been queued for
   8 hours, so a receiver limited for good cannot hold a growing backlog.
-  The hold is kept in memory, so a restart forgets it.
+  The hold is kept in memory, so a restart forgets it, and messages still
+  queued after a server outage longer than 8 hours are dropped unsent.
 - Inventories from collectors that predate this release report `crds` as
   not assessed. This includes the reports the server re-evaluates for
   existing v0.1 agents, and saved `--files` inventories. The gap is not
