@@ -57,6 +57,7 @@ audited") and names the issue that tracks it.
 | ID | Claim | Proven by |
 |---|---|---|
 | AO-01 | Add-ons past end of life are detected by container image and by Helm chart. | `TestCollectAddOnsUsesPodImagesAndHelmReleases` `TestMatchAddOns` `TestMatchAddOnsRealWorldImages` `TestEvalAddOnsHelmEvidence` |
+| AO-01b | Each install of an add-on (one per namespace) is judged on its own, grouped by release line: a finding names only the namespaces and teams on its line, so a newer install neither masks an older one nor shares its blame (#129). On a real cluster, Istio on three lines in three teams' namespaces gets findings that each name only their own line's, and EOL 1.28 blocks. | `TestMatchAddOns` `TestEvalAddOnsGroupsByReleaseLine` `TestEvalAddOnsGroupsByReleaseLineRealKB` `TestEvalAddOnsProductEOLOncePerAddOn` `TestEvaluateGolden` `e2e:istio_lines_judged_per_install` |
 | AO-02 | Ingress NGINX, past EOL since March 2026, is a blocker: installed from the upstream chart on a real cluster, `scan` reports it and exits 2. | `TestIngressNginxRetirement` `TestImageOnlyIngressNginxVerdicts` `TestScanIntegration_KindEOLIngressNginx` `e2e:eol_ingress_nginx_blocks` `e2e:cr_has_verdict` |
 | AO-03 | Matching is by image repository prefix or exact chart name; the image tag, `v` stripped, is the detected version. | `TestMatchAddOns` `TestParseImage` `TestVersionFromTag` `TestHelmInstallsJudgedByAppVersion` |
 | AO-04 | Unmatched images go to `unrecognizedImages` (capped) and never become findings. | `TestMatchAddOnsUnrecognizedCap` |
@@ -259,7 +260,6 @@ lands with a test.
 | RB-08, IR-01, IR-02, IR-06 to IR-09, IR-11 to IR-14, DB-08, SE-15 | The published release, image and chart predate the fixes; signing and publishing have never run end to end. | not true yet: #127 |
 | KB-14 | A stored snapshot re-judged by a newer knowledge base drops the fields it does not know, and v0.1.1 snapshots' residency rows become false APF blockers (verdicts otherwise re-judge correctly). | not true yet: #125 |
 | DB-09 | The README quickstart (`serve --ingest-token $TOKEN`) works on loopback, but creates the SQLite database and its `-wal` and `-shm` files 0644 under umask 022. | not true yet: #126 |
-| AO-01b | Several installs of one add-on merge into the oldest. | not true yet: #129 |
 | DO-03b | README's "three subcommands": the binary has five, `tokens` and `clusters` too. | not true yet: #130 |
 | KB-04, PF-01, PF-03, PF-04 | Stale numbers: KB horizon, scan time, binary and image sizes. | not true yet: #130 |
 
