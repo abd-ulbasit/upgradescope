@@ -11,9 +11,11 @@
 // The group/version imports live in zz_generated_imports.go, written by
 // internal/genimports from `go list k8s.io/api/...`. After bumping
 // k8s.io/api, `go generate ./...` is the only step: it rewrites the import
-// list, tidies go.mod, and regenerates the dataset. Entries of the
-// previously written dataset whose types upstream has since deleted are
-// carried forward as tombstones (see carryForward), never dropped.
+// list, tidies go.mod, and regenerates the dataset. Types upstream has
+// deleted become tombstones, removed in the release that deleted them:
+// every run reads the k8s.io/api releases since historyFrom from source
+// (see deletedTypes), and entries of the previously written dataset are
+// carried forward (see carryForward), never dropped.
 package main
 
 //go:generate go run ./internal/genimports -out zz_generated_imports.go
@@ -60,6 +62,11 @@ func (v version) String() string { return fmt.Sprintf("%d.%d", v.Major, v.Minor)
 
 func (v version) MarshalJSON() ([]byte, error) { return json.Marshal(v.String()) }
 
+// before reports whether v is an earlier release than o.
+func (v version) before(o version) bool {
+	return v.Major < o.Major || v.Major == o.Major && v.Minor < o.Minor
+}
+
 // UnmarshalJSON reads the canonical "1.36" form back, so gen-kb can load
 // the previously committed dataset (see carryForward).
 func (v *version) UnmarshalJSON(b []byte) error {
@@ -95,6 +102,17 @@ type entry struct {
 
 func (e entry) gvk() gvkOut { return gvkOut{Group: e.Group, Version: e.Version, Kind: e.Kind} }
 
+// less orders entries by group, version, kind: the dataset's order.
+func (e entry) less(o entry) bool {
+	if e.Group != o.Group {
+		return e.Group < o.Group
+	}
+	if e.Version != o.Version {
+		return e.Version < o.Version
+	}
+	return e.Kind < o.Kind
+}
+
 type output struct {
 	GeneratedFrom string  `json:"generatedFrom"`
 	MaxKnownK8s   string  `json:"maxKnownK8s"`
@@ -115,9 +133,70 @@ func main() {
 		}
 	}
 
-	var entries []entry
-	upstream := map[gvkOut]bool{} // every GVK the pinned modules still register
-	var noLifecycle []string
+	entries, upstream, noLifecycle := extract(scheme)
+
+	// A near-empty result means the APILifecycle* type assertions stopped
+	// matching (e.g. upstream renamed the generated methods) — refuse to
+	// write a dataset that would make every scan silently green.
+	if len(entries) < 100 {
+		log.Fatalf("gen-kb: only %d entries extracted (want >= 100) — did upstream rename the APILifecycle* methods?", len(entries))
+	}
+	sort.Strings(noLifecycle)
+	for _, s := range noLifecycle {
+		log.Printf("gen-kb: skipped %s (no APILifecycle* methods)", s)
+	}
+
+	apiVer := k8sAPIModuleVersion()
+	maxKnown := maxKnownK8s(apiVer)
+
+	// Types upstream deleted before any dataset recorded them, from the
+	// k8s.io/api releases since historyFrom. They join the fresh entries,
+	// so they are rederived on every run rather than only carried forward.
+	hist, err := readHistory(historyFrom, maxKnown.Minor)
+	if err != nil {
+		log.Fatalf("gen-kb: reading k8s.io/api history: %v", err)
+	}
+	deleted := deletedTypes(hist, upstream)
+	for _, e := range deleted {
+		log.Printf("gen-kb: history: %s/%s %s gone upstream (removed %s, inferred=%v)",
+			e.Group, e.Version, e.Kind, e.Removed, e.RemovedInferred)
+	}
+	entries = append(entries, deleted...)
+
+	prev, err := readDataset(*out)
+	if err != nil {
+		log.Fatalf("gen-kb: reading previous dataset: %v", err)
+	}
+	entries, tombstoned := carryForward(prev, entries, upstream, maxKnown)
+	for _, e := range tombstoned {
+		log.Printf("gen-kb: carried forward %s/%s %s (gone upstream; removed %s, inferred=%v)",
+			e.Group, e.Version, e.Kind, e.Removed, e.RemovedInferred)
+	}
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].less(entries[j]) })
+
+	doc := output{
+		GeneratedFrom: "k8s.io/api " + apiVer,
+		MaxKnownK8s:   maxKnown.String(),
+		Entries:       entries,
+	}
+	buf, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		log.Fatalf("gen-kb: marshal: %v", err)
+	}
+	buf = append(buf, '\n')
+	if err := os.WriteFile(*out, buf, 0o644); err != nil {
+		log.Fatalf("gen-kb: write %s: %v", *out, err)
+	}
+	fmt.Printf("gen-kb: wrote %d entries (k8s.io/api %s, maxKnownK8s %s) to %s\n",
+		len(entries), apiVer, doc.MaxKnownK8s, *out)
+}
+
+// extract walks every type registered in scheme: entries holds the ones
+// with generated lifecycle data, upstream every registered GVK, and
+// noLifecycle ("group/version Kind") the registered ones without.
+func extract(scheme *runtime.Scheme) (entries []entry, upstream map[gvkOut]bool, noLifecycle []string) {
+	upstream = map[gvkOut]bool{}
 	for k, t := range scheme.AllKnownTypes() {
 		if skipKind(k) {
 			continue
@@ -152,57 +231,7 @@ func main() {
 		fixReplacement(&e)
 		entries = append(entries, e)
 	}
-
-	// A near-empty result means the APILifecycle* type assertions stopped
-	// matching (e.g. upstream renamed the generated methods) — refuse to
-	// write a dataset that would make every scan silently green.
-	if len(entries) < 100 {
-		log.Fatalf("gen-kb: only %d entries extracted (want >= 100) — did upstream rename the APILifecycle* methods?", len(entries))
-	}
-	sort.Strings(noLifecycle)
-	for _, s := range noLifecycle {
-		log.Printf("gen-kb: skipped %s (no APILifecycle* methods)", s)
-	}
-
-	apiVer := k8sAPIModuleVersion()
-	maxKnown := maxKnownK8s(apiVer)
-
-	prev, err := readDataset(*out)
-	if err != nil {
-		log.Fatalf("gen-kb: reading previous dataset: %v", err)
-	}
-	entries, tombstoned := carryForward(prev, entries, upstream, maxKnown)
-	for _, e := range tombstoned {
-		log.Printf("gen-kb: carried forward %s/%s %s (gone upstream; removed %s, inferred=%v)",
-			e.Group, e.Version, e.Kind, e.Removed, e.RemovedInferred)
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		a, b := entries[i], entries[j]
-		if a.Group != b.Group {
-			return a.Group < b.Group
-		}
-		if a.Version != b.Version {
-			return a.Version < b.Version
-		}
-		return a.Kind < b.Kind
-	})
-
-	doc := output{
-		GeneratedFrom: "k8s.io/api " + apiVer,
-		MaxKnownK8s:   maxKnown.String(),
-		Entries:       entries,
-	}
-	buf, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		log.Fatalf("gen-kb: marshal: %v", err)
-	}
-	buf = append(buf, '\n')
-	if err := os.WriteFile(*out, buf, 0o644); err != nil {
-		log.Fatalf("gen-kb: write %s: %v", *out, err)
-	}
-	fmt.Printf("gen-kb: wrote %d entries (k8s.io/api %s, maxKnownK8s %s) to %s\n",
-		len(entries), apiVer, doc.MaxKnownK8s, *out)
+	return entries, upstream, noLifecycle
 }
 
 func skipKind(k schema.GroupVersionKind) bool {

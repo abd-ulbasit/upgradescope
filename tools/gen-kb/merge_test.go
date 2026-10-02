@@ -33,6 +33,11 @@ func TestCarryForward(t *testing.T) {
 		// Still registered upstream but lost its lifecycle methods: keep the
 		// last known data rather than inventing a removal.
 		{Group: "node.k8s.io", Version: "v1alpha1", Kind: "RuntimeClass", Introduced: *v(1, 12)},
+		// Package deleted upstream before its scheduled removal (alpha DRA
+		// types were tagged for removal releases after they were deleted):
+		// the deletion is the removal.
+		{Group: "example.k8s.io", Version: "v1alpha1", Kind: "Early", Introduced: *v(1, 33),
+			Deprecated: v(1, 36), Removed: v(1, 39)},
 	}
 	upstream := map[gvkOut]bool{
 		{Group: "scheduling.k8s.io", Version: "v1", Kind: "PriorityClass"}:                      true,
@@ -50,12 +55,17 @@ func TestCarryForward(t *testing.T) {
 		prev[3],
 		prev[4],
 		prev[5],
+		{Group: "example.k8s.io", Version: "v1alpha1", Kind: "Early", Introduced: *v(1, 33),
+			Deprecated: v(1, 36), Removed: v(1, 37), RemovedInferred: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("carryForward() =\n%+v\nwant\n%+v", got, want)
 	}
-	if len(tombstoned) != 3 {
-		t.Errorf("tombstoned = %+v, want the 3 entries missing upstream", tombstoned)
+	if len(tombstoned) != 4 {
+		t.Errorf("tombstoned = %+v, want the 4 entries missing upstream", tombstoned)
+	}
+	if prev[6].Removed.Minor != 39 {
+		t.Errorf("carryForward mutated prev: Early.Removed = %v", prev[6].Removed)
 	}
 	// carryForward must not alias prev's pointers into the output.
 	if prev[2].Removed != nil {
