@@ -122,7 +122,7 @@ skip() {
 
 reused=""
 create_cluster() {
-  if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
+  if grep -qx "$CLUSTER" <<<"$(kind get clusters 2>/dev/null)"; then
     echo "kind cluster '$CLUSTER' already exists, reusing it"
     reused=1
   else
@@ -208,7 +208,7 @@ server_ingested() {
   echo "GET /api/v1/clusters: $body"
   grep -q '"name"' <<<"$body" && grep -q '"score"' <<<"$body" ||
     { echo "the server lists no scored cluster after 120s (agent push failing?)" >&2; return 1; }
-  curl -fsS http://127.0.0.1:18080/healthz | grep -q '"ok"' || { echo "/healthz is not ok" >&2; return 1; }
+  grep -q '"ok"' <<<"$(curl -fsS http://127.0.0.1:18080/healthz)" || { echo "/healthz is not ok" >&2; return 1; }
   kill "$pf_pid" 2>/dev/null || true
   pf_pid=""
 }

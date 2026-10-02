@@ -1,0 +1,25 @@
+# APIs removed long before any supported target: the gate must fail.
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: web
+  namespace: shop
+spec:
+  backend:
+    serviceName: web
+    servicePort: 80
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: nightly
+spec:
+  schedule: "0 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: job
+              image: busybox

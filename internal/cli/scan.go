@@ -244,7 +244,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
 	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
-	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif")
+	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never")
 	cmd.Flags().BoolVar(&opts.allowIncomplete, "allow-incomplete", false, "with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed)")
@@ -442,9 +442,9 @@ func validateScanOptions(opts *scanOptions) error {
 	}
 	opts.targetVersion = target
 	switch opts.output {
-	case "table", "json", "sarif":
+	case "table", "json", "sarif", "markdown":
 	default:
-		return fmt.Errorf("invalid --output %q (want table, json, or sarif)", opts.output)
+		return fmt.Errorf("invalid --output %q (want table, json, sarif, or markdown)", opts.output)
 	}
 	switch opts.failOn {
 	case "blocker", "warning", "never":
@@ -462,6 +462,9 @@ func writeReport(w io.Writer, format string, r engine.Report, filesBase *string)
 		return writeJSON(w, r, filesBase)
 	case "sarif":
 		return WriteSARIF(w, r)
+	case "markdown":
+		WriteMarkdown(w, r)
+		return nil
 	default: // "table", already validated
 		WriteTable(w, r)
 		return nil

@@ -12,7 +12,7 @@ ci=.github/workflows/ci.yml
 
 # Job ids: two-space-indented keys under the top-level `jobs:`.
 jobs=$(awk '/^jobs:/{j=1;next} j&&/^[^ #]/{j=0} j&&/^  [a-z0-9_-]+:[ ]*$/{sub(/^  /,"");sub(/:.*/,"");print}' "$ci" | sort)
-echo "$jobs" | grep -qx ci-ok || { echo "FAIL $ci has no ci-ok job" >&2; exit 1; }
+grep -qx ci-ok <<<"$jobs" || { echo "FAIL $ci has no ci-ok job" >&2; exit 1; }
 
 # ci-ok's needs, written as a flow list: needs: [a, b, ...] (one line).
 needs=$(awk '/^  ci-ok:/{c=1;next} c&&/^  [^ ]/{c=0} c&&/^    needs:/{sub(/^    needs: *\[/,"");sub(/\].*/,"");print}' "$ci" |
@@ -31,6 +31,6 @@ echo "ok   $ci ci-ok needs every other job ($(echo "$want" | wc -l | tr -d ' '))
 
 # It must run when a job it needs failed or was cancelled (a plain needs
 # would skip it, and a skipped required check counts as passing).
-awk '/^  ci-ok:/{c=1;next} c&&/^  [^ ]/{c=0} c' "$ci" | grep -q "^    if: always()" ||
+grep -q "^    if: always()" <<<"$(awk '/^  ci-ok:/{c=1;next} c&&/^  [^ ]/{c=0} c' "$ci")" ||
   { echo "FAIL ci-ok does not run with if: always()" >&2; exit 1; }
 echo "ok   ci-ok runs with if: always()"

@@ -21,8 +21,8 @@ assert_no_line() { grep -qxF -- "$2" "$1" && fail "$3 (unexpected line: $2)" || 
 assert_env_secret() {
   local block
   block="$(grep -A5 -xE "[[:space:]]*- name: $2" "$1" || true)"
-  if printf '%s\n' "$block" | grep -qxE "[[:space:]]*name: $3" &&
-     printf '%s\n' "$block" | grep -qxE "[[:space:]]*key: $4"; then
+  if grep -qxE "[[:space:]]*name: $3" <<<"$block" &&
+     grep -qxE "[[:space:]]*key: $4" <<<"$block"; then
     pass "$5"
   else
     fail "$5 (env $2 is not secretKeyRef $3/$4)"

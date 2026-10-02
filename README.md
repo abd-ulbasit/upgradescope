@@ -170,28 +170,37 @@ curl -sf -X POST "$SERVER/api/v1/gate?target=1.36&cluster=prod-eu-1&format=sarif
 Omit `cluster=` to evaluate the manifests standalone; `format=json` (default)
 returns the full report.
 
-**GitHub Action** (composite, in `action/`):
+**GitHub Action** (composite, `action.yml` at the repository root):
 
 ```yaml
 jobs:
   upgrade-gate:
     runs-on: ubuntu-latest
     permissions:
-      security-events: write   # for SARIF upload
+      contents: read          # actions/checkout
+      security-events: write  # upload-sarif
+      actions: read           # upload-sarif, private repositories only
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - run: helm template ./chart --output-dir rendered
-      - uses: abd-ulbasit/upgradescope/action@main
+      - uses: abd-ulbasit/upgradescope@v0.2.0   # @v0 follows the newest v0.x release
         id: gate
         with:
           path: rendered
           target: "1.36"
           fail-on: blocker
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always()           # annotate the PR even when the gate fails
+          version: v0.2.0                        # pin the binary too
+      - uses: github/codeql-action/upload-sarif@v4
+        if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}  # also when the gate failed
         with:
           sarif_file: ${{ steps.gate.outputs.sarif-file }}
 ```
+
+The step summary lists every finding with its fix, whether the gate passes
+or fails. Inputs, outputs, pinning and use without code scanning are in
+[action/README.md](action/README.md).
 
 ## Auditor export
 

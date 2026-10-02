@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "toolVersion": "dev",
+  "filesBase": "action/testdata/removed",
+  "clusterId": "files",
+  "target": "1.36",
+  "kbVersion": "k8s.io/api v0.37.1; lifecycle 696a4b81; registry de96a5da",
+  "score": 75,
+  "ready": false,
+  "verdict": "blocked",
+  "findings": [
+    {
+      "category": "removed-api",
+      "severity": "blocker",
+      "key": "removed-api/batch/v1beta1/CronJob",
+      "title": "batch/v1beta1 CronJob removed in 1.25 (1 object)",
+      "detail": "1 manifest object(s) use this API: namespace unset (1).",
+      "remediation": "migrate to batch/v1 CronJob",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "objects": [
+        {
+          "name": "nightly",
+          "file": "all.yaml",
+          "line": 1
+        }
+      ]
+    }
+  ],
+  "notAssessed": [
+    {
+      "capability": "addons",
+      "reason": "files mode"
+    },
+    {
+      "capability": "deprecated-calls",
+      "reason": "files mode"
+    },
+    {
+      "capability": "helm",
+      "reason": "files mode"
+    },
+    {
+      "capability": "versions",
+      "reason": "files mode"
+    }
+  ],
+  "teams": {
+    "unattributed": {
+      "score": 75,
+      "ready": false,
+      "blockers": 1,
+      "warnings": 0
+    }
+  }
+}

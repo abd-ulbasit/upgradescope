@@ -21,7 +21,9 @@ name: release
 #   verify     anonymously, on a fresh kind cluster: the image pulls for both
 #              arches and verifies, the published chart installs and runs it;
 #   major-tag  for a stable tag only, moves the floating major tag (v0) that
-#              `uses: abd-ulbasit/upgradescope/action@v0` resolves to.
+#              `uses: abd-ulbasit/upgradescope@v0` (and .../action@v0)
+#              resolves to; action/README.md tells users to pin @vX.Y.Z or
+#              a SHA instead when they need a reproducible gate.
 #
 # Dry run: ci.yml's release-check job (make release-check) builds the same
 # snapshot on any PR that touches the release inputs, or on workflow_dispatch.

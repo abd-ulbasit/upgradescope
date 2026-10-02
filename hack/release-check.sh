@@ -4,8 +4,8 @@
 #   1. `goreleaser check`: .goreleaser.yml is valid for the pinned GoReleaser;
 #   2. `goreleaser release --snapshot`: every archive (and, with Docker, every
 #      per-arch image from Dockerfile.release) builds;
-#   3. the archive names are the ones action/action.yml downloads from
-#      /releases/latest/download — a drift here 404s every Action consumer;
+#   3. the archive names are the ones the Action (action/run.sh) downloads from
+#      each release — a drift here 404s every Action consumer;
 #   4. the binary for this machine serves the embedded dashboard at /.
 #
 # GoReleaser runs through `go run` at GORELEASER_VERSION (the Makefile pins
@@ -31,14 +31,14 @@ goreleaser check
 echo "== goreleaser $GORELEASER_VERSION release --snapshot --clean --skip=$SKIP"
 goreleaser release --snapshot --clean --skip="$SKIP"
 
-echo "== archive names match what action/action.yml downloads"
-template="$(sed -n 's/^ *asset="\(.*\)"$/\1/p' action/action.yml)"
-[ -n "$template" ] || die "no asset=\"...\" line in action/action.yml"
+echo "== archive names match what action/run.sh downloads"
+template="$(sed -n 's/^ *asset="\(.*\)"$/\1/p' action/run.sh)"
+[ -n "$template" ] || die "no asset=\"...\" line in action/run.sh"
 for os in linux darwin; do
   for arch in amd64 arm64; do
     name="${template//\$\{os\}/$os}"
     name="${name//\$\{arch\}/$arch}"
-    [ -f "dist/$name" ] || { ls dist >&2; die "action.yml expects dist/$name, goreleaser did not produce it"; }
+    [ -f "dist/$name" ] || { ls dist >&2; die "action/run.sh expects dist/$name, goreleaser did not produce it"; }
     echo "ok: $name"
   done
 done
