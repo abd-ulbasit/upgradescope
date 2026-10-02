@@ -26,6 +26,12 @@ const (
 	// has entries for, core included) at a version/kind the KB does not
 	// know, so whether the target serves it was not assessed.
 	CatUnknownAPI Category = "unknown-api"
+	// CatCRDVersion: a CustomResourceDefinition version problem that
+	// breaks an add-on upgrade, whatever the Kubernetes target: custom
+	// resources at a version the CRD does not serve (blocker) or
+	// deprecates (warning; info when none is in use), or a
+	// status.storedVersions entry it no longer serves (warning).
+	CatCRDVersion Category = "crd-version"
 )
 
 type Severity string

@@ -162,6 +162,8 @@ var categoryText = map[engine.Category][2]string{
 	engine.CatKBStale:        {"Knowledge base out of date", "The knowledge base does not cover the Kubernetes version being assessed."},
 	engine.CatUnknownAPI: {"Unknown Kubernetes API",
 		"The object uses a built-in API group at a version or kind the knowledge base has no lifecycle data for; the target Kubernetes version may not serve it."},
+	engine.CatCRDVersion: {"CustomResourceDefinition version",
+		"The custom resource uses a version its CRD does not serve (the apiserver rejects it) or deprecates (an add-on upgrade may stop serving it)."},
 }
 
 // Unanchored counts the findings Write leaves out because none of their

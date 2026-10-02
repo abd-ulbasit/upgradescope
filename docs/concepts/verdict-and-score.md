@@ -60,6 +60,7 @@ target.
 | `kb-stale` | — | The cluster or the target is newer than the knowledge base's horizon. | — |
 | `addon-no-data` | — | — | A detected add-on whose version has no lifecycle data. |
 | `unknown-api` | — | — | An object of a built-in API group (core, or a group the knowledge base has entries for) at a version or kind the knowledge base does not know, such as the typo `apps/v1beta9`: whether the target serves it was not assessed. API groups of CRDs produce nothing. |
+| `crd-version` | Custom resources at a version their CRD does not serve (`served: false`, or no longer listed): the apiserver rejects them. **Whatever the target.** | Custom resources written through a version the CRD marks `deprecated: true`; a `status.storedVersions` entry the CRD no longer serves. | A deprecated CRD version nothing was found using. |
 
 [Version skew](version-skew.md) has the skew rules; the
 [add-on registry](addon-registry.md) the EOL data.

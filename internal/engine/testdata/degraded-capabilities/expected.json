@@ -4,6 +4,10 @@
   "kbVersion": "test-kb-1",
   "notAssessed": [
     {
+      "capability": "crds",
+      "reason": "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"
+    },
+    {
       "capability": "deprecated-calls",
       "reason": "GET /metrics forbidden"
     },

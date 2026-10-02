@@ -626,7 +626,7 @@ components:
       description: |
         One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`,
         `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`,
-        `kb-stale`, `addon-no-data`, `unknown-api`. A release may add
+        `kb-stale`, `addon-no-data`, `unknown-api`, `crd-version`. A release may add
         categories under `/api/v1`, so this is not an enum: treat one you do
         not know by its severity.
       example: removed-api

@@ -35,7 +35,7 @@
       "type": "object",
       "required": ["category", "severity", "title", "detail"],
       "properties": {
-        "category": {"description": "One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`, `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`, `kb-stale`, `addon-no-data`, `unknown-api`. A release may add categories within schemaVersion 1, so this is not an enum: treat one you do not know by its severity.", "type": "string"},
+        "category": {"description": "One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`, `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`, `kb-stale`, `addon-no-data`, `unknown-api`, `crd-version`. A release may add categories within schemaVersion 1, so this is not an enum: treat one you do not know by its severity.", "type": "string"},
         "severity": {"enum": ["blocker", "warning", "info"]},
         "key": {"description": "Stable, count-free identity: category/discriminator. Baselines and notifications match on it.", "type": "string"},
         "title": {"type": "string"},

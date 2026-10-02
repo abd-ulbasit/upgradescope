@@ -92,7 +92,7 @@ func TestEvaluateUnparseableServerVersionIsVersionsGap(t *testing.T) {
 	for _, sv := range []string{"", "garbage"} {
 		inv := inventory.Inventory{
 			ServerVersion: sv,
-			Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true}},
+			Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true}, inventory.CapCRDs: {Available: true}},
 			Nodes:         []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.20.0"}},
 		}
 		r := Evaluate(inv, testKB(), inventory.Version{Major: 1, Minor: 35}, time.Now())
@@ -326,7 +326,7 @@ func keys(fs []Finding) []string {
 func TestEvalControlPlaneSkewKubeProxyPostUpgrade(t *testing.T) {
 	inv := inventory.Inventory{
 		ServerVersion: "v1.33.4",
-		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true}},
+		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true}, inventory.CapCRDs: {Available: true}},
 		Nodes:         []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.33.4-eks-aeac579"}},
 		ControlPlane:  []inventory.ComponentVersion{{Component: "kube-proxy", Version: "v1.30.0"}},
 	}

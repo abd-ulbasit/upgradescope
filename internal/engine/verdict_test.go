@@ -18,6 +18,7 @@ func allCaps() map[inventory.Capability]inventory.CapabilityStatus {
 		inventory.CapHelm:            {Available: true},
 		inventory.CapAddOns:          {Available: true},
 		inventory.CapVersions:        {Available: true},
+		inventory.CapCRDs:            {Available: true},
 	}
 }
 

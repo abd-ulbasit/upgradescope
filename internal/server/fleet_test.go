@@ -139,6 +139,7 @@ func TestFleetAndClusterViewsCarryGaps(t *testing.T) {
 	charlie.ClusterID = "uid-charlie"
 	charlie.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
 		inventory.CapVersions: {Available: true},
+		inventory.CapCRDs:     {Available: true},
 		inventory.CapAPIUsage: {Available: true, Partial: true, Reason: "list policy/v1beta1 podsecuritypolicies: forbidden",
 			Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}},
 	}

@@ -287,6 +287,7 @@ always give the same bytes out.
 | `chart-incompat` | blocker | The installed release line's, or the first matching compat row's, Kubernetes range excludes the target; a Helm release's chart `kubeVersion` excludes the target (info when it does not parse). |
 | `addon-no-data` | info | A detected add-on whose version has no lifecycle data. |
 | `unknown-api` | info | An object of a built-in API group (one the knowledge base has entries for, core included) at a version or kind the knowledge base does not know: whether the target serves it was not assessed. CRD groups produce nothing. |
+| `crd-version` | blocker / warning / info | A CRD's own versions, whatever the target: custom resources at a version the CRD does not serve (blocker); custom resources written through a `deprecated: true` version (warning, quoting its `deprecationWarning`; info when none is found); a `status.storedVersions` entry the CRD no longer serves (warning). |
 | `version-skew` | blocker / warning / info | Kubelets that would fall more than 3 minors behind after the upgrade (blocker), or are already behind (warning). Controller-manager or scheduler newer than the apiserver (blocker), or too far behind (warning). HA apiserver spread, and kube-proxy rules. Unparseable kubelet versions (info). |
 | `kb-stale` | warning | The cluster or the target is newer than the newest minor the knowledge base knows (`maxKnownK8s`). |
 

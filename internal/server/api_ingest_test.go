@@ -39,6 +39,7 @@ func testInventory() inventory.Inventory {
 		ServerVersion: "v1.34.2",
 		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{
 			inventory.CapVersions: {Available: true},
+			inventory.CapCRDs:     {Available: true},
 		},
 	}
 }
@@ -317,7 +318,7 @@ func TestIngestDuplicateCanonicalHash(t *testing.T) {
 	  "agentVersion": "v0.2.0-test",
 	  "kbVersion": "agent-kb",
 	  "inventory": {
-	    "capabilities": {"versions": {"available": true}},
+	    "capabilities": {"crds": {"available": true}, "versions": {"available": true}},
 	    "serverVersion": "v1.34.2",
 	    "collectedAt": "2026-06-10T11:00:00Z",
 	    "clusterId": "uid-123",

@@ -20,6 +20,8 @@ var goldenParams = map[string]struct{ target, now string }{
 	"removed-api-at-target": {"1.22", "2026-06-10T00:00:00Z"},
 	"eol-ingress-nginx":     {"1.30", "2026-06-10T00:00:00Z"},
 	"mixed-everything":      {"1.38", "2026-06-10T00:00:00Z"},
+	// Optional capabilities degraded, and no crds capability at all (a
+	// collector that predates it): gaps, none required.
 	"degraded-capabilities": {"1.34", "2026-06-10T00:00:00Z"},
 	// verdict unknown: a required capability (api-usage) was not assessed.
 	"required-capability-missing": {"1.34", "2026-06-10T00:00:00Z"},
@@ -65,6 +67,14 @@ var goldenParams = map[string]struct{ target, now string }{
 	// status-page's manifest uses a deprecated API (warning); legacy/gone
 	// was uninstalled with --keep-history and is ignored.
 	"helm-releases": {"1.25", "2026-06-10T00:00:00Z"},
+	// #48 CRD versions, independent of the target: Certificates written
+	// through deprecated v1alpha2 (warning, quoting the CRD's warning, and
+	// still stored there) and through v1alpha3, served: false (blocker);
+	// v1alpha3 still in status.storedVersions (warning); an unused
+	// deprecated Issuer version and an HTTPRoute version whose objects the
+	// partial crds capability did not check (info); a clean Widget CRD
+	// (nothing). The v1alpha2 caller row stays its own info finding.
+	"crd-versions": {"1.35", "2026-06-10T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte

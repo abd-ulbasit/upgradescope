@@ -41,7 +41,7 @@ var categories = []engine.Category{
 	engine.CatRemovedAPI, engine.CatDeprecatedAPI, engine.CatDeprecatedAPIInUse,
 	engine.CatEOLAddon, engine.CatEOLApproaching, engine.CatVersionSkew,
 	engine.CatChartIncompat, engine.CatKBStale, engine.CatAddOnNoData,
-	engine.CatUnknownAPI,
+	engine.CatUnknownAPI, engine.CatCRDVersion,
 }
 
 // Rule is one ignore entry. It names findings by Key (exact) or Category,
