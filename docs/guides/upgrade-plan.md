@@ -27,8 +27,9 @@ upgradescope scan --files rendered/ --from 1.31 --target 1.36 --plan
 ```
 
 `--plan` works with `--output table` (the default), `markdown` and `json`.
-SARIF has no place for upgrade steps, so `--plan --output sarif` is an
-error; run the SARIF scan without `--plan`.
+SARIF, JUnit and GitLab Code Quality have no place for upgrade steps, so
+`--plan` with `--output sarif`, `junit` or `gitlab-codequality` is an
+error; run those scans without `--plan`.
 
 ## Reading the plan
 
