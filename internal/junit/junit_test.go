@@ -26,12 +26,12 @@ func write(t *testing.T, r engine.Report, opts Options) []byte {
 	return buf.Bytes()
 }
 
-// TestWriteGolden renders every engine golden report (the reports
+// TestJUnitGolden renders every engine golden report (the reports
 // internal/engine's TestEvaluateGolden pins) as JUnit with the default
 // gate, twice: the output is stable, a JUnit reader accepts it, and it
 // matches testdata/<case>.xml (go test ./internal/junit -update rewrites
 // them).
-func TestWriteGolden(t *testing.T) {
+func TestJUnitGolden(t *testing.T) {
 	entries, err := os.ReadDir("../engine/testdata")
 	if err != nil {
 		t.Fatal(err)

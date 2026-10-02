@@ -26,13 +26,13 @@ func write(t *testing.T, r engine.Report) []byte {
 	return buf.Bytes()
 }
 
-// TestWriteGolden renders every engine golden report (the reports
+// TestCodeQualityGolden renders every engine golden report (the reports
 // internal/engine's TestEvaluateGolden pins) as a Code Quality report,
 // twice: the output, fingerprints included, is stable, GitLab's schema and
 // documented requirements accept it, and it matches
 // testdata/golden/<case>.json (go test ./internal/codequality -update
 // rewrites them).
-func TestWriteGolden(t *testing.T) {
+func TestCodeQualityGolden(t *testing.T) {
 	entries, err := os.ReadDir("../engine/testdata")
 	if err != nil {
 		t.Fatal(err)
