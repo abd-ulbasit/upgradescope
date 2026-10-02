@@ -360,7 +360,10 @@ jobs:
   #     archive, sha256-checked against its checksums.txt (not the go
   #     install fallback), and fails the gate on a removed API;
   #   - action.yml (the root, Marketplace path) runs this tree's binary
-  #     (version: preinstalled) on a removed API and on a clean set.
+  #     (version: preinstalled) on a removed API and on a clean set, then
+  #     with an ignore rule per removed API (config: the gate passes, the
+  #     summary lists them as suppressed) and against a baseline (only the
+  #     new finding fails the gate; write-baseline's file then passes it).
   # On main, the SARIF goes to code scanning, proving GitHub accepts it.
   action:
     needs: changes
@@ -456,6 +459,74 @@ jobs:
           [ "$CLEAN_OUTCOME" = success ] || fail "clean gate outcome=$CLEAN_OUTCOME, want success"
           jq -e '.verdict == "ready" and .ready == "true" and .score == "100" and .blockers == "0" and .warnings == "0"' <<<"$CLEAN_OUTPUTS" \
             || fail "clean outputs are not ready, 100, 0 blockers, 0 warnings"
+
+      # An ignore rule per removed API: the gate passes (exit 0).
+      - id: suppressed
+        uses: ./
+        continue-on-error: true # asserted below, with a reason on failure
+        with:
+          path: action/testdata/removed
+          target: '1.36'
+          version: preinstalled
+          config: action/testdata/ignore-removed.yaml
+      # A baseline holding only the CronJob: the Ingress is new and fails
+      # the gate. The step writes the full baseline the next one reads,
+      # against which nothing is new.
+      - id: baseline
+        uses: ./
+        continue-on-error: true # the gate is expected to fail
+        with:
+          path: action/testdata/removed
+          target: '1.36'
+          version: preinstalled
+          baseline: action/testdata/baseline-cronjob.json
+          write-baseline: ${{ runner.temp }}/upgradescope-baseline.json
+      - id: rebaselined
+        uses: ./
+        continue-on-error: true # asserted below, with a reason on failure
+        with:
+          path: action/testdata/removed
+          target: '1.36'
+          version: preinstalled
+          baseline: ${{ runner.temp }}/upgradescope-baseline.json
+      - name: ignore rules and baselines decide the gate, and the summary says why
+        env:
+          SUPPRESSED_OUTCOME: ${{ steps.suppressed.outcome }}
+          SUPPRESSED_OUTPUTS: ${{ toJSON(steps.suppressed.outputs) }}
+          BASELINE_OUTCOME: ${{ steps.baseline.outcome }}
+          BASELINE_OUTPUTS: ${{ toJSON(steps.baseline.outputs) }}
+          REBASELINED_OUTCOME: ${{ steps.rebaselined.outcome }}
+          REBASELINED_OUTPUTS: ${{ toJSON(steps.rebaselined.outputs) }}
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          summary() { jq -r '."summary-file"' <<<"$1"; }
+          echo "suppressed: $SUPPRESSED_OUTCOME $SUPPRESSED_OUTPUTS"
+          echo "baseline: $BASELINE_OUTCOME $BASELINE_OUTPUTS"
+          echo "rebaselined: $REBASELINED_OUTCOME $REBASELINED_OUTPUTS"
+
+          [ "$SUPPRESSED_OUTCOME" = success ] || fail "suppressed gate outcome=$SUPPRESSED_OUTCOME, want success"
+          jq -e '.verdict == "ready" and .blockers == "0" and .suppressed == "2"' <<<"$SUPPRESSED_OUTPUTS" \
+            || fail "suppressed outputs are not ready with 0 blockers and 2 suppressed"
+          s="$(summary "$SUPPRESSED_OUTPUTS")"
+          grep -qF 'No findings left after suppression.' "$s" && grep -qF '**Suppressed (2).**' "$s" \
+            && grep -qF "shop's legacy Ingress is replaced before the upgrade (test fixture)" "$s" \
+            || fail "summary at $s does not list the suppressed findings with their reasons"
+
+          [ "$BASELINE_OUTCOME" = failure ] || fail "baseline gate outcome=$BASELINE_OUTCOME, want failure (new Ingress)"
+          jq -e '.verdict == "blocked" and .blockers == "2" and ."new-blockers" == "1"' <<<"$BASELINE_OUTPUTS" \
+            || fail "baseline outputs are not 2 blockers, 1 new"
+          s="$(summary "$BASELINE_OUTPUTS")"
+          grep -qF '**Baseline:** 1 new, 1 unchanged.' "$s" && grep -qF '| blocker | **new** | networking.k8s.io/v1beta1 Ingress' "$s" \
+            || fail "summary at $s does not mark the Ingress new against the baseline"
+          jq -e '.findings | length == 2' "$RUNNER_TEMP/upgradescope-baseline.json" \
+            || fail "write-baseline did not write both findings"
+
+          [ "$REBASELINED_OUTCOME" = success ] || fail "rebaselined gate outcome=$REBASELINED_OUTCOME, want success (nothing new)"
+          jq -e '.verdict == "blocked" and .blockers == "2" and ."new-blockers" == "0"' <<<"$REBASELINED_OUTPUTS" \
+            || fail "rebaselined outputs are not 2 blockers, 0 new"
+          grep -qF '**Baseline:** 0 new, 2 unchanged.' "$(summary "$REBASELINED_OUTPUTS")" \
+            || fail "rebaselined summary does not say nothing is new"
 
       # This leaves the fixture's two blockers as open alerts on
       # action/testdata/removed/all.yaml in the Security tab: dismiss them

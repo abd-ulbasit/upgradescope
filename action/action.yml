@@ -32,6 +32,27 @@ inputs:
       one for this runner, it is built with `go install` when Go is set up.
     required: false
     default: latest
+  config:
+    description: >-
+      Path to an .upgradescope.yaml with ignore rules (scan --config).
+      Suppressed findings are not scored and do not fail the gate; the step
+      summary lists each with its reason. Unset, scan looks for
+      .upgradescope.yaml in path, then at the repository root.
+    required: false
+    default: ""
+  baseline:
+    description: >-
+      Path to the JSON report of an earlier scan (the report-json output,
+      or a write-baseline file; scan --baseline). The gate then fails only
+      on findings that are new since; score and verdict still count all.
+    required: false
+    default: ""
+  write-baseline:
+    description: >-
+      Also write this scan's JSON report (after suppression) to this path,
+      for a later baseline (scan --write-baseline).
+    required: false
+    default: ""
 
 outputs:
   sarif-file:
@@ -55,6 +76,18 @@ outputs:
   warnings:
     description: Number of warning findings.
     value: ${{ steps.scan.outputs.warnings }}
+  new-blockers:
+    description: Blocker findings not in the baseline, the ones the gate counts (equals blockers without a baseline).
+    value: ${{ steps.scan.outputs.new-blockers }}
+  new-warnings:
+    description: Warning findings not in the baseline (equals warnings without a baseline).
+    value: ${{ steps.scan.outputs.new-warnings }}
+  suppressed:
+    description: Number of findings suppressed by ignore rules or annotations (not counted in blockers or warnings).
+    value: ${{ steps.scan.outputs.suppressed }}
+  summary-file:
+    description: Path to the Markdown summary, the same text as the step summary (e.g. for a pull request comment).
+    value: ${{ steps.scan.outputs.summary-file }}
 
 runs:
   using: composite
@@ -66,6 +99,9 @@ runs:
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_VERSION: ${{ inputs.version }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_WRITE_BASELINE: ${{ inputs.write-baseline }}
       run: bash "$GITHUB_ACTION_PATH/run.sh" install
 
     - name: Scan manifests
@@ -76,6 +112,9 @@ runs:
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_VERSION: ${{ inputs.version }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_WRITE_BASELINE: ${{ inputs.write-baseline }}
       run: bash "$GITHUB_ACTION_PATH/run.sh" scan
 
 branding:

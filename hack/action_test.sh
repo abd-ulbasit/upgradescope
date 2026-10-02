@@ -9,7 +9,8 @@
 #     the release's checksums.txt (fail closed), the go install fallback
 #     only with a Go toolchain, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
-#     summary on action/testdata, and an injection payload as data.
+#     summary on action/testdata, the config, baseline and write-baseline
+#     inputs, and an injection payload as data.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -37,6 +38,27 @@ for yml in action.yml action/action.yml; do
   else
     echo "$bad" >"$work/out"
     fail "$yml: \${{ }} expression in a run: script (pass it through env:)" "$work/out"
+  fi
+done
+# Every input reaches run.sh: both steps pass each one as INPUT_<NAME>
+# (upper case, - as _), and run.sh reads no INPUT_ variable that is not
+# an input.
+inputs=$(awk '/^inputs:/ { on = 1; next } on && /^[^ #]/ { on = 0 } on && /^  [a-z-]+:$/ { gsub(/[ :]/, ""); print }' action.yml)
+for i in $inputs; do
+  var=INPUT_$(tr 'a-z-' 'A-Z_' <<<"$i")
+  if [ "$(grep -cxF "        $var: \${{ inputs.$i }}" action.yml)" = 2 ]; then
+    ok "action.yml passes input $i to both steps as $var"
+  else
+    grep -n "$var\|inputs\.$i" action.yml >"$work/out" || true
+    fail "action.yml passes input $i to both steps as $var" "$work/out"
+  fi
+done
+for var in $(grep -o 'INPUT_[A-Z_]*' action/run.sh | sort -u); do
+  if grep -qx "$var" < <(for i in $inputs; do echo "INPUT_$(tr 'a-z-' 'A-Z_' <<<"$i")"; done); then
+    ok "run.sh's $var is an input"
+  else
+    echo "declare it under inputs: in both action.yml files" >"$work/out"
+    fail "run.sh's $var is an input" "$work/out"
   fi
 done
 if diff <(sed 's#\$GITHUB_ACTION_PATH/action/run\.sh#$GITHUB_ACTION_PATH/run.sh#' action.yml) action/action.yml >"$work/out"; then
@@ -191,6 +213,17 @@ run install "$work/stub-curl:" INPUT_PATH=does/not/exist
 expect "missing path is rejected" 1 "path 'does/not/exist' does not exist"
 run install "$work/stub-curl:" INPUT_PATH=
 expect "empty path is rejected" 1 "path is required"
+run install "$work/stub-curl:" INPUT_CONFIG=no/such/.upgradescope.yaml
+expect "a missing config file is rejected" 1 "config 'no/such/.upgradescope.yaml' is not a file"
+hasnt "a missing config file downloads nothing" "$work/calls" curl
+run install "$work/stub-curl:" INPUT_CONFIG=action/testdata
+expect "a directory as config is rejected" 1 "config 'action/testdata' is not a file"
+run install "$work/stub-curl:" INPUT_BASELINE=no/such/report.json
+expect "a missing baseline is rejected" 1 "baseline 'no/such/report.json' is not a file"
+run install "$work/stub-curl:" INPUT_WRITE_BASELINE=no/such/dir/report.json
+expect "write-baseline into a missing directory is rejected" 1 "write-baseline 'no/such/dir/report.json': directory 'no/such/dir' does not exist"
+run install "$work/stub-curl:" INPUT_WRITE_BASELINE=action/testdata
+expect "a directory as write-baseline is rejected" 1 "write-baseline 'action/testdata' is a directory"
 
 # --- install ----------------------------------------------------------------
 
@@ -241,9 +274,12 @@ jq -e '.runs[0].results | length == 2' "$sarif" >/dev/null &&
   ok "SARIF is complete when the gate fails" || fail "SARIF is complete when the gate fails" "$rt/output"
 jq -e '.findings | length == 2' "$report" >/dev/null &&
   ok "report-json output is the JSON report" || fail "report-json output is the JSON report" "$rt/output"
-for kv in verdict=blocked score=50 ready=false blockers=2 warnings=0; do
+for kv in verdict=blocked score=50 ready=false blockers=2 warnings=0 suppressed=0 new-blockers=2 new-warnings=0; do
   has "output $kv" "$rt/output" "$kv"
 done
+summary=$(output summary-file)
+case $summary in "$tmp"/*.md) ok "summary-file output is under RUNNER_TEMP" ;; *) fail "summary-file output is under RUNNER_TEMP" "$rt/output" ;; esac
+cmp -s "$summary" "$rt/summary" && ok "summary-file holds the step summary" || fail "summary-file holds the step summary" "$rt/output"
 has "summary has the findings table" "$rt/summary" "| blocker | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | \`action/testdata/removed/all.yaml:2\` shop/web | migrate to networking.k8s.io/v1 Ingress |"
 has "summary header" "$rt/summary" "### upgradescope: blocked"
 has "log lists every blocker with its fix" "$work/out" "batch/v1beta1 CronJob removed in 1.25 (1 object) | \`action/testdata/removed/all.yaml:12\` nightly | migrate to batch/v1 CronJob"
@@ -274,11 +310,66 @@ expect "fail-on never passes with blockers" 0 "### upgradescope: blocked"
 has "fail-on never annotates a blocker as a warning" "$work/out" "::warning file=action/testdata/removed/all.yaml,line=2,title=upgradescope blocker (removed-api)::"
 if grep -q '^::error' "$work/out"; then fail "fail-on never emits no ::error" "$work/out"; else ok "fail-on never emits no ::error"; fi
 
+# --- config, baseline and write-baseline -------------------------------------
+
+# An ignore rule per removed API: the gate passes, and the summary says
+# why (every finding suppressed, each with its reason and the config file).
+run scan "$work/real:" INPUT_CONFIG=action/testdata/ignore-removed.yaml
+expect "ignore rules for every blocker pass the gate" 0 "### upgradescope: ready"
+for kv in verdict=ready ready=true score=100 blockers=0 suppressed=2 new-blockers=0; do
+  has "suppressed output $kv" "$rt/output" "$kv"
+done
+has "the summary says nothing is left after suppression" "$rt/summary" "No findings left after suppression."
+has "the summary counts the suppressed findings" "$rt/summary" "**Suppressed (2).**"
+has "the summary gives each suppression's reason and config file" "$rt/summary" "| blocker | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | \`action/testdata/removed/all.yaml:2\` shop/web | shop's legacy Ingress is replaced before the upgrade (test fixture) | \`action/testdata/ignore-removed.yaml\` |"
+if grep -q '^::\(error\|warning\) ' "$work/out"; then fail "suppressed findings are not annotated" "$work/out"; else ok "suppressed findings are not annotated"; fi
+jq -e '.runs[0].results | length == 2 and all(.[]; .suppressions[0].justification != null)' "$(output sarif-file)" >/dev/null &&
+  ok "the SARIF keeps suppressed results with their justification" || fail "the SARIF keeps suppressed results with their justification" "$(output sarif-file)"
+
+# A baseline holding only the CronJob: the Ingress is new and fails the
+# gate; the CronJob is marked unchanged, annotated as a warning only.
+run scan "$work/real:" INPUT_BASELINE=action/testdata/baseline-cronjob.json
+expect "a new blocker against the baseline fails the gate" 2 "readiness gate failed"
+for kv in verdict=blocked blockers=2 new-blockers=1 new-warnings=0; do
+  has "baseline output $kv" "$rt/output" "$kv"
+done
+has "the summary counts new and unchanged findings" "$rt/summary" "**Baseline:** 1 new, 1 unchanged. Only new findings fail the gate"
+has "the summary marks the new finding" "$rt/summary" "| blocker | **new** | networking.k8s.io/v1beta1 Ingress removed in 1.22"
+has "the summary marks the unchanged finding" "$rt/summary" "| blocker | unchanged | batch/v1beta1 CronJob removed in 1.25"
+has "the new blocker is an error annotation" "$work/out" "::error file=action/testdata/removed/all.yaml,line=2,title=upgradescope blocker (removed-api)::networking.k8s.io/v1beta1 Ingress"
+has "a blocker in the baseline is a warning annotation" "$work/out" "::warning file=action/testdata/removed/all.yaml,line=12,title=upgradescope blocker (removed-api%2C in baseline)::batch/v1beta1 CronJob"
+
+# write-baseline, then that file as the baseline: nothing is new, so the
+# gate passes though both blockers (and the blocked verdict) remain.
+run scan "$work/real:" INPUT_FAIL_ON=never INPUT_WRITE_BASELINE="$work/baseline.json"
+expect "write-baseline runs" 0 "### upgradescope: blocked"
+jq -e '.schemaVersion and (.findings | length == 2)' "$work/baseline.json" >/dev/null &&
+  ok "write-baseline writes the JSON report" || fail "write-baseline writes the JSON report" "$work/out"
+run scan "$work/real:" INPUT_BASELINE="$work/baseline.json"
+expect "nothing new against the baseline passes the gate" 0 "**Baseline:** 0 new, 2 unchanged."
+for kv in verdict=blocked blockers=2 new-blockers=0; do
+  has "rebaselined output $kv" "$rt/output" "$kv"
+done
+if grep -q '^::error' "$work/out"; then fail "nothing new emits no ::error" "$work/out"; else ok "nothing new emits no ::error"; fi
+
+# baseline and write-baseline naming one file: every pass of the scan
+# compares with the old baseline, and the file ends up as the new one.
+cp action/testdata/baseline-cronjob.json "$work/rolling.json"
+run scan "$work/real:" INPUT_BASELINE="$work/rolling.json" INPUT_WRITE_BASELINE="$work/rolling.json"
+expect "a rolling baseline gates on the old one" 2 "**Baseline:** 1 new, 1 unchanged."
+has "a rolling baseline's outputs use the old one" "$rt/output" "new-blockers=1"
+jq -e '.findings | length == 2' "$work/rolling.json" >/dev/null &&
+  ok "a rolling baseline is replaced by this scan's report" || fail "a rolling baseline is replaced by this scan's report" "$work/rolling.json"
+
 # The audit's payload, and a command substitution, as a directory name.
 payload="$work/x\" ; echo INJECTED-COMMAND-RAN ; touch $work/pwned ; echo \"\$(touch $work/pwned2)"
 mkdir -p "$payload" && cp action/testdata/clean/all.yaml "$payload/"
-run scan "$work/real:" INPUT_PATH="$payload"
+cp action/testdata/ignore-removed.yaml action/testdata/baseline-cronjob.json "$payload/"
+run scan "$work/real:" INPUT_PATH="$payload" INPUT_CONFIG="$payload/ignore-removed.yaml" \
+  INPUT_BASELINE="$payload/baseline-cronjob.json" INPUT_WRITE_BASELINE="$payload/new-baseline.json"
 expect "an injection payload in path is scanned as a path" 0 "### upgradescope: ready"
+[ -f "$payload/new-baseline.json" ] && ok "an injection payload in write-baseline is written as a path" ||
+  fail "an injection payload in write-baseline is written as a path" "$work/out"
 [ ! -e "$work/pwned" ] && [ ! -e "$work/pwned2" ] && ! grep -qx INJECTED-COMMAND-RAN "$work/out" &&
   ok "the injection payload did not run" || fail "the injection payload did not run" "$work/out"
 
@@ -299,9 +390,10 @@ EOF
 chmod +x "$work/old/upgradescope"
 run scan "$work/old:"
 expect "a v0.1.x upgradescope still gates" 2 "cannot write the step summary"
-for kv in verdict=blocked score=50 ready=false blockers=2 warnings=0; do
+for kv in verdict=blocked score=50 ready=false blockers=2 warnings=0 suppressed=0 new-blockers=2 new-warnings=0; do
   has "a v0.1.x upgradescope sets output $kv" "$rt/output" "$kv"
 done
+hasnt "a v0.1.x upgradescope sets no summary-file" "$rt/output" "summary-file="
 hasnt "a v0.1.x upgradescope sets no output to null" "$rt/output" "=null"
 has "a v0.1.x blocker annotation has no file" "$work/out" "::error title=upgradescope blocker (removed-api)::networking.k8s.io/v1beta1 Ingress removed in 1.22"
 run scan "$work/old:" INPUT_PATH=action/testdata/clean

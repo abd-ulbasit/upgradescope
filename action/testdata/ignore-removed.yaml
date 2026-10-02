@@ -1,0 +1,12 @@
+# Ignore rules for the action's tests (hack/action_test.sh and CI's action
+# job pass this file as the config input). They accept both removed APIs
+# in action/testdata/removed, so the gate passes and the step summary lists
+# both findings as suppressed, with these reasons.
+ignore:
+  - key: removed-api/networking.k8s.io/v1beta1/Ingress
+    namespace: shop
+    reason: shop's legacy Ingress is replaced before the upgrade (test fixture)
+  - category: removed-api
+    name: nightly
+    reason: the nightly CronJob retires with the old cluster (test fixture)
+    expires: 2099-12-31

@@ -7,7 +7,8 @@
 #                    step summary
 #
 # Inputs arrive as environment variables (INPUT_PATH, INPUT_TARGET,
-# INPUT_FAIL_ON, INPUT_VERSION), never as ${{ }} expressions in a script:
+# INPUT_FAIL_ON, INPUT_VERSION, INPUT_CONFIG, INPUT_BASELINE,
+# INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
 # the runner pastes an expression's value into the script text, so a value
 # holding `"; cmd` would run cmd (GitHub's script-injection guidance).
 # hack/action_test.sh (make action-test) covers every path here offline.
@@ -33,6 +34,15 @@ validate() {
   esac
   [ -n "$p" ] || die "path is required"
   [ -e "$p" ] || die "path '$p' does not exist (render the manifests before this step)"
+  local c=${INPUT_CONFIG-} b=${INPUT_BASELINE-} w=${INPUT_WRITE_BASELINE-}
+  [ -z "$c" ] || [ -f "$c" ] || die "config '$c' is not a file (want the path to an .upgradescope.yaml)"
+  [ -z "$b" ] || [ -f "$b" ] || die "baseline '$b' is not a file (want the JSON report of an earlier scan)"
+  if [ -n "$w" ]; then
+    [ ! -d "$w" ] || die "write-baseline '$w' is a directory (want a file path)"
+    local d=.
+    case $w in */*) d=${w%/*} && d=${d:-/} ;; esac
+    [ -d "$d" ] || die "write-baseline '$w': directory '$d' does not exist"
+  fi
   : "${RUNNER_TEMP:?run.sh runs in a GitHub Actions step}" "${GITHUB_OUTPUT:?}" "${GITHUB_PATH:?}"
 }
 
@@ -119,7 +129,9 @@ install() {
 # annotations: one annotation per blocker or warning finding, at its first
 # object's file and line when it has one: ::error when the finding fails
 # the gate at INPUT_FAIL_ON, else ::warning (so with fail-on never, a
-# passing step shows no errors). Values are escaped per the
+# passing step shows no errors). A finding the baseline already had never
+# fails the gate, so it is a ::warning titled "in baseline"; suppressed
+# findings are not in .findings and get none. Values are escaped per the
 # workflow-command format.
 annotations() {
   jq -r --arg failon "$INPUT_FAIL_ON" '
@@ -129,12 +141,13 @@ annotations() {
     | (.findings // [])[]
     | select(.severity == "blocker" or .severity == "warning")
     | ([(.objects // [])[] | select(.file)] | first) as $o
-    | (if $failon == "warning" or (.severity == "blocker" and $failon == "blocker")
+    | (.baselineState == "unchanged") as $known
+    | (if ($known | not) and ($failon == "warning" or (.severity == "blocker" and $failon == "blocker"))
        then "error" else "warning" end) as $level
     | "::" + $level + " "
       + (if $o then "file=" + ((if $base == "" then $o.file else $base + "/" + $o.file end) | prop)
            + ",line=" + ($o.line | tostring) + "," else "" end)
-      + "title=" + ("upgradescope \(.severity) (\(.category))" | prop)
+      + "title=" + ("upgradescope \(.severity) (\(.category)\(if $known then ", in baseline" else "" end))" | prop)
       + "::" + ((.title + (if .remediation then ". Fix: " + .remediation else "" end)) | data)
   ' "$1"
 }
@@ -153,12 +166,21 @@ scan() {
   out=$(mktemp -d "$RUNNER_TEMP/upgradescope.XXXXXX")
   local sarif="$out/results.sarif" json="$out/report.json" md="$out/summary.md"
   local args=(--files="$INPUT_PATH" --target="$INPUT_TARGET")
+  [ -z "${INPUT_CONFIG-}" ] || args+=(--config="$INPUT_CONFIG")
+  if [ -n "${INPUT_BASELINE-}" ]; then
+    # All three passes compare with a copy: with write-baseline naming the
+    # same file, the gate pass replaces it before the others read it.
+    cp -- "$INPUT_BASELINE" "$out/baseline.json"
+    args+=(--baseline="$out/baseline.json")
+  fi
+  local gate=("${args[@]}")
+  [ -z "${INPUT_WRITE_BASELINE-}" ] || gate+=(--write-baseline="$INPUT_WRITE_BASELINE")
   echo "sarif-file=$sarif" >>"$GITHUB_OUTPUT"
 
   # The gate. exit 0: passed; 2: scan worked, gate failed (the SARIF is
   # still complete: upload it with `if: always()`); 1: the scan broke.
   local status=0
-  upgradescope scan "${args[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" >"$sarif" || status=$?
+  upgradescope scan "${gate[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" >"$sarif" || status=$?
   if [ "$status" != 0 ] && [ "$status" != 2 ]; then
     printf '### upgradescope: scan failed (exit %s)\n\nThe job log has the error.\n' "$status" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
     echo "::error::upgradescope scan failed (exit $status)"
@@ -168,23 +190,29 @@ scan() {
   # The same scan as JSON (outputs, annotations) and Markdown (summary,
   # log). --fail-on never: the gate above already decided the exit code.
   if ! command -v jq >/dev/null; then
-    echo "::warning::jq is not installed, so the verdict, score, blockers and warnings outputs and the annotations are not set"
+    echo "::warning::jq is not installed, so report-json, the verdict, score and count outputs and the annotations are not set"
   elif upgradescope scan "${args[@]}" --output json --fail-on never >"$json" 2>"$out/json.err"; then
     echo "report-json=$json" >>"$GITHUB_OUTPUT"
     # v0.1.x reports have no verdict: derive it as the engine does (a
-    # blocker is blocked; else ready, or unknown when not ready).
+    # blocker is blocked; else ready, or unknown when not ready). new-*
+    # leave out what the baseline already had: the findings the gate
+    # counts.
     jq -r '
+      def count($sev): [(.findings // [])[] | select(.severity == $sev)] | length;
+      def new($sev): [(.findings // [])[] | select(.severity == $sev and .baselineState != "unchanged")] | length;
       (.verdict // (if any((.findings // [])[]; .severity == "blocker") then "blocked"
                     elif .ready then "ready" else "unknown" end)) as $verdict
       | "verdict=\($verdict)", "score=\(.score)", "ready=\(.ready)",
-      "blockers=\([(.findings // [])[] | select(.severity == "blocker")] | length)",
-      "warnings=\([(.findings // [])[] | select(.severity == "warning")] | length)"
+      "blockers=\(count("blocker"))", "warnings=\(count("warning"))",
+      "new-blockers=\(new("blocker"))", "new-warnings=\(new("warning"))",
+      "suppressed=\((.suppressed // []) | length)"
     ' "$json" >>"$GITHUB_OUTPUT"
     annotations "$json"
   else
     echo "::warning::upgradescope --output json failed, so the outputs and annotations are not set: $(escaped "$out/json.err")"
   fi
   if upgradescope scan "${args[@]}" --output markdown --fail-on never >"$md" 2>"$out/md.err"; then
+    echo "summary-file=$md" >>"$GITHUB_OUTPUT"
     cat "$md"
     cat "$md" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
   else
