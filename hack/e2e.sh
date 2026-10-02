@@ -37,7 +37,16 @@
 #      Ready Unknown/NotAssessed (the rules are removed again);
 #      the install added no admission webhook, and the CR carries no
 #      finalizer or owner reference;
-#   6. the server ingested the agent's snapshot (GET /api/v1/clusters);
+#   6. the server ingested the agent's snapshot (GET /api/v1/clusters); then
+#      the server-gate command documented on the CI gate page
+#      (docs/getting-started/ci-gate.md, #120), run as written against the
+#      same port-forward with ?cluster= naming the agent's cluster: a clean
+#      ConfigMap passes, because the cluster's own blockers (the EOL
+#      ingress-nginx) are source=cluster and do not fail the pull request
+#      (on the newest minor the next one is past the horizon, so its verdict
+#      is unknown, exit 22, with no finding blamed on the manifest); a
+#      manifest at extensions/v1beta1 (removed in 1.22) fails the step and
+#      still leaves a non-empty SARIF with a result for that object;
 #   7. `helm upgrade --set agent.targets={<next minor>}` succeeds and the CR
 #      spec follows (#41);
 #   8. `helm uninstall` leaves no ClusterRole/ClusterRoleBinding and no
@@ -77,7 +86,8 @@
 # against stubs: E2E_INSTALL_TOOL, E2E_UPGRADESCOPE (the binary `make build`
 # produces), E2E_NAP (seconds between polls, overriding each poll's own),
 # E2E_DEPRECATED_ALLOWLIST (default hack/e2e/deprecated-request-allowlist.txt),
-# E2E_DEPRECATED_TABLE (default hack/e2e/deprecated-api.txt).
+# E2E_DEPRECATED_TABLE (default hack/e2e/deprecated-api.txt),
+# E2E_GATE_DOC (default docs/getting-started/ci-gate.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -86,6 +96,7 @@ INSTALL_TOOL=${E2E_INSTALL_TOOL:-hack/install-tool.sh}
 UPGRADESCOPE=${E2E_UPGRADESCOPE:-bin/upgradescope}
 ALLOWLIST=${E2E_DEPRECATED_ALLOWLIST:-hack/e2e/deprecated-request-allowlist.txt}
 DEPRECATED_TABLE=${E2E_DEPRECATED_TABLE:-hack/e2e/deprecated-api.txt}
+GATE_DOC=${E2E_GATE_DOC:-docs/getting-started/ci-gate.md}
 CLUSTER=upgradescope-demo # the cluster kind-setup.sh and the ITs use
 CTX=kind-$CLUSTER
 NS=upgradescope
@@ -581,21 +592,111 @@ no_webhooks_or_finalizers() {
   }
 }
 
+SERVER_URL=http://127.0.0.1:18080
+# Leaves the port-forward up for the server-gate steps below.
 server_ingested() {
   k -n "$NS" port-forward "svc/$RELEASE-server" 18080:8080 >"$work/pf.log" 2>&1 &
   pf_pid=$!
   local body="" i
   for i in $(seq 1 24); do
-    body=$(curl -fsS http://127.0.0.1:18080/api/v1/clusters 2>/dev/null || true)
+    body=$(curl -fsS "$SERVER_URL/api/v1/clusters" 2>/dev/null || true)
     if grep -q '"name"' <<<"$body" && grep -q '"score"' <<<"$body"; then break; fi
     nap 5
   done
   echo "GET /api/v1/clusters: $body"
   grep -q '"name"' <<<"$body" && grep -q '"score"' <<<"$body" ||
     { echo "the server lists no scored cluster after 120s (agent push failing?)" >&2; return 1; }
-  grep -q '"ok"' <<<"$(curl -fsS http://127.0.0.1:18080/healthz)" || { echo "/healthz is not ok" >&2; return 1; }
-  kill "$pf_pid" 2>/dev/null || true
-  pf_pid=""
+  grep -q '"ok"' <<<"$(curl -fsS "$SERVER_URL/healthz")" || { echo "/healthz is not ok" >&2; return 1; }
+}
+
+# The server-gate command as the CI gate page documents it: the sh block
+# that POSTs to /api/v1/gate, which TestGateDocsExample runs too, so the
+# page, that test and this step cannot drift apart. Only its example target
+# and cluster name become this run's; the rest of the block runs as written,
+# and one that lost what the checks below read fails the step.
+GATE_CMD="" GATE_CLUSTER=""
+documented_gate_command() {
+  local cmd name want
+  cmd=$(awk '/^```sh$/ { blk = ""; inb = 1; next }
+    /^```$/ && inb { inb = 0; if (blk ~ /\/api\/v1\/gate/) { printf "%s", blk; exit }; next }
+    inb { blk = blk $0 "\n" }' "$GATE_DOC") || return 1
+  [ -n "$cmd" ] || { echo "$GATE_DOC has no sh block that POSTs to /api/v1/gate" >&2; return 1; }
+  name=$(curl -fsS "$SERVER_URL/api/v1/clusters" | jq -r '.[0].name // empty') && [ -n "$name" ] ||
+    { echo "the server lists no cluster to name in the gate command" >&2; return 1; }
+  GATE_CLUSTER=$(jq -rn --arg n "$name" '$n | @uri')
+  GATE_CMD=$(sed -e "s/target=[^&\"]*/target=$NEXT/" -e "s/cluster=[^&\"]*/cluster=$GATE_CLUSTER/" <<<"$cmd")
+  for want in "target=$NEXT" "cluster=$GATE_CLUSTER" "format=sarif" "--fail-with-body" "> results.sarif" "@rendered.yaml"; do
+    grep -qF -- "$want" <<<"$GATE_CMD" || {
+      echo "the gate command on $GATE_DOC has no '$want' (this step needs ?target=, ?cluster=, format=sarif and --fail-with-body, and reads results.sarif):" >&2
+      echo "$cmd" >&2
+      return 1
+    }
+  done
+  echo "$GATE_CMD"
+}
+
+# gate_post <dir> <manifest>: the documented command, in <dir> beside a copy
+# of the manifest as rendered.yaml. Returns curl's exit code; the report is
+# <dir>/results.sarif. The server has no read token here, so READ_TOKEN is
+# any value; no_proxy keeps the port-forward off a CI proxy.
+gate_post() {
+  mkdir -p "$1" && cp "$2" "$1/rendered.yaml" || return 1
+  (cd "$1" && env SERVER="$SERVER_URL" READ_TOKEN=e2e-open-read no_proxy=127.0.0.1 sh -ec "$GATE_CMD") 2>"$1/curl.err"
+}
+
+# #120 (FS-04, SV-06), the clean half: a ConfigMap posted with ?cluster= adds
+# nothing, so the pull request passes although the cluster has blockers of
+# its own. Within the KB horizon the documented command exits 0 with verdict
+# ready; at a target past it (the newest minor's next) the verdict is
+# unknown, so curl exits 22, but nothing is blamed on the manifest and the
+# one required gap is kb-coverage. Either way the SARIF is non-empty and
+# holds no result, and the same request as JSON attributes every finding,
+# the EOL ingress-nginx included, to the cluster.
+gate_passes_clean_manifest() {
+  local dir=$work/gate-clean rc=0 want=ready
+  past_horizon && want=unknown
+  gate_post "$dir" hack/e2e/gate/clean.yaml || rc=$?
+  [ -s "$dir/results.sarif" ] || { echo "clean manifest: results.sarif is empty (curl exit $rc)" >&2; cat "$dir/curl.err" >&2; return 1; }
+  jq -e --arg want "$want" '.runs[0] | .properties.verdict == $want and (.results | length) == 0
+      and ([.properties.notAssessed[]? | select(.required) | .capability] == (if $want == "ready" then [] else ["kb-coverage"] end))' \
+    "$dir/results.sarif" >/dev/null || {
+    echo "clean manifest: want verdict $want, no result and no required gap beyond the horizon in results.sarif (curl exit $rc); got:" >&2
+    jq -c '.runs[0] | {properties, results: [.results[]? | .ruleId]}' "$dir/results.sarif" >&2
+    return 1
+  }
+  if [ "$want" = ready ]; then
+    [ "$rc" = 0 ] || { echo "clean manifest: the documented command exited $rc, want 0:" >&2; cat "$dir/curl.err" >&2; return 1; }
+  else
+    [ "$rc" = 22 ] || { echo "clean manifest at $NEXT (past the KB horizon $HORIZON): curl exited $rc, want 22 (verdict unknown)" >&2; return 1; }
+  fi
+  curl -fsS -X POST "$SERVER_URL/api/v1/gate?target=$NEXT&cluster=$GATE_CLUSTER&fail-on=never" \
+    -H "Content-Type: application/x-yaml" --data-binary @hack/e2e/gate/clean.yaml >"$dir/gate.json" || return 1
+  jq -e '.clusterVerdict == "blocked" and any(.findings[]; .severity == "blocker")
+      and all(.findings[]; .source == "cluster")' "$dir/gate.json" >/dev/null || {
+    echo "clean manifest: want the cluster's blockers with every finding source=cluster; got:" >&2
+    jq -c '{verdict, clusterVerdict, findings: [.findings[] | {key, severity, source}]}' "$dir/gate.json" >&2
+    return 1
+  }
+}
+
+# #120, the removed half: a manifest at extensions/v1beta1 is the pull
+# request's blocker at any target. The documented command fails the step
+# (curl 22, the 422 of --fail-with-body) and still writes the SARIF, with a
+# result for the object at the file ?path= names.
+gate_fails_removed_api() {
+  local dir=$work/gate-removed rc=0
+  gate_post "$dir" hack/e2e/gate/removed-api.yaml || rc=$?
+  [ "$rc" != 0 ] || { echo "removed-API manifest: the documented command passed it (exit 0)" >&2; return 1; }
+  [ "$rc" = 22 ] || { echo "removed-API manifest: curl exited $rc, want 22 (HTTP 422):" >&2; cat "$dir/curl.err" >&2; return 1; }
+  [ -s "$dir/results.sarif" ] || { echo "removed-API manifest: results.sarif is empty, the failing report was lost" >&2; return 1; }
+  jq -e '.runs[0] | .properties.verdict == "blocked"
+      and any(.results[]?; (.ruleId | startswith("removed-api/extensions/v1beta1/Ingress"))
+        and (.message.text | contains("upgradescope-e2e-gate"))
+        and .locations[0].physicalLocation.artifactLocation.uri == "rendered.yaml")' "$dir/results.sarif" >/dev/null || {
+    echo "removed-API manifest: want a blocked verdict and a removed-api result for the Ingress at rendered.yaml; got:" >&2
+    jq -c '.runs[0] | {properties, results: [.results[]? | {ruleId, uri: .locations[0].physicalLocation.artifactLocation.uri}]}' "$dir/results.sarif" >&2
+    return 1
+  }
 }
 
 # #41: the chart never renders the ClusterReadiness; agent.targets reaches the
@@ -788,6 +889,11 @@ else
 fi
 gate "the install added no webhook configuration; ClusterReadiness/$CR has no finalizer or owner reference" no_webhooks_or_finalizers
 gate "server ingested the agent's snapshot" server_ingested
+gate "the server-gate command documented in $GATE_DOC is found and aimed at this cluster" documented_gate_command
+gate "the documented server-gate command passes a clean manifest: the cluster's own blockers are not the pull request's" gate_passes_clean_manifest
+gate "the documented server-gate command fails a removed-API manifest and still writes a SARIF with a result for it" gate_fails_removed_api
+[ -z "$pf_pid" ] || kill "$pf_pid" 2>/dev/null || true
+pf_pid=""
 gate "helm upgrade --set agent.targets={$NEXT}" upgrade_with_targets
 gate "helm uninstall leaves no ClusterRole/ClusterRoleBinding or release object; CRD kept" uninstall_leaves_nothing
 audit_checks=(

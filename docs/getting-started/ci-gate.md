@@ -97,6 +97,12 @@ versions its own CRDs deprecate or do not serve, so live custom resources
 at a version that a posted CRD newly deprecates or stops serving are not
 judged.
 
+The server gate has no counterpart to `allow-incomplete`. A cluster
+already on the knowledge base's newest minor has a default target past the
+horizon, so every request answers `unknown` (422) until a release with a
+newer knowledge base is deployed; pass an explicit `target` the release
+knows, or `fail-on=never` and read the verdict header yourself, until then.
+
 ```sh
 curl -sS --fail-with-body -X POST \
   "$SERVER/api/v1/gate?target=1.37&cluster=prod-eu-1&format=sarif&path=rendered.yaml" \

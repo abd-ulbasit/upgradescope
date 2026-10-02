@@ -100,10 +100,71 @@ case "$1" in
     echo "ok  	github.com/abd-ulbasit/upgradescope/internal/cli	10.4s" ;;
 esac'
 stub make 'exit 0'
+# curl answers the server-gate step like the real /api/v1/gate: the cluster
+# must be the one /api/v1/clusters lists (kind), a manifest at
+# extensions/v1beta1 is blocked (422), a clean one is ready within the
+# horizon STUB_HORIZON (default 1.37) and unknown past it (422), and
+# --fail-with-body makes a 422 exit 22 keeping the body (-f drops it). The
+# SARIF is the properties and results the e2e reads; format=json is the
+# cluster-attributed JSON report. Break it with STUB_GATE_EMPTY_SARIF (the
+# failing report is lost), STUB_GATE_NO_RESULT (a blocked verdict without a
+# result), STUB_GATE_REMOVED_PASSES, STUB_GATE_CLEAN_BLOCKED (the clean
+# manifest is blamed), STUB_GATE_CLUSTER_BLAMED (the JSON blames the PR for
+# the cluster's blocker).
 stub curl '
 case "$*" in
   */api/v1/clusters*) echo "[{\"name\":\"kind\",\"score\":40}]" ;;
   */healthz*) echo "{\"status\":\"ok\"}" ;;
+  */api/v1/gate*)
+    url="" file="" fwb="" fail=""
+    for a; do
+      case "$a" in
+        http*) url=$a ;;
+        @*) file=${a#@} ;;
+        --fail-with-body) fwb=1 ;;
+        -f | -sf | -fsS) fail=1 ;;
+      esac
+    done
+    query() { sed -n "s/.*[?&]$1=\([^&]*\).*/\1/p" <<<"$url"; }
+    target=$(query target) cluster=$(query cluster) format=$(query format) path=$(query path)
+    horizon=${STUB_HORIZON:-1.37}
+    [ "$cluster" = kind ] || { echo "{\"error\":\"cluster not found\"}"; exit 22; }
+    verdict=ready gaps="[]" results="[]"
+    if grep -q "extensions/v1beta1" "$file"; then
+      [ -n "${STUB_GATE_REMOVED_PASSES:-}" ] || verdict=blocked
+      [ -n "${STUB_GATE_NO_RESULT:-}" ] ||
+        results="[{\"ruleId\":\"removed-api/extensions/v1beta1/Ingress\",\"message\":{\"text\":\"extensions/v1beta1 Ingress removed in 1.22 (1 object): default/upgradescope-e2e-gate.\"},\"locations\":[{\"physicalLocation\":{\"artifactLocation\":{\"uri\":\"$path\"}}}]}]"
+    fi
+    if [ "${target#1.}" -gt "${horizon#1.}" ]; then
+      gaps="[{\"capability\":\"kb-coverage\",\"required\":true}]"
+      [ "$verdict" != ready ] || verdict=unknown
+    fi
+    if [ -n "${STUB_GATE_CLEAN_BLOCKED:-}" ] && ! grep -q "extensions/v1beta1" "$file"; then
+      verdict=blocked results="[{\"ruleId\":\"deprecated-api-in-use/x\",\"locations\":[{\"physicalLocation\":{\"artifactLocation\":{\"uri\":\"$path\"}}}]}]"
+    fi
+    status=200
+    [ "$verdict" = ready ] || [ "$(query fail-on)" = never ] || status=422
+    source=cluster
+    [ -z "${STUB_GATE_CLUSTER_BLAMED:-}" ] || source=manifest
+    if [ "$format" = sarif ]; then
+      body="{\"runs\":[{\"results\":$results,\"properties\":{\"ready\":false,\"verdict\":\"$verdict\",\"notAssessed\":$gaps}}]}"
+      case "${STUB_GATE_EMPTY_SARIF:-}" in
+        "") ;;
+        removed) ! grep -q "extensions/v1beta1" "$file" || body="" ;;
+        *) body="" ;;
+      esac
+    else
+      body="{\"verdict\":\"$verdict\",\"clusterVerdict\":\"blocked\",\"findings\":[{\"key\":\"eol-addon/ingress-nginx\",\"severity\":\"blocker\",\"source\":\"$source\"}]}"
+    fi
+    if [ "$status" = 422 ] && [ -n "$fail" ] && [ -z "$fwb" ]; then
+      echo "curl: (22) The requested URL returned error: 422" >&2
+      exit 22
+    fi
+    [ -z "$body" ] || echo "$body"
+    if [ "$status" = 422 ] && [ -n "$fwb" ]; then
+      echo "curl: (22) The requested URL returned error: 422" >&2
+      exit 22
+    fi ;;
 esac'
 # The scanner: `version --output json` reports the knowledge base horizon
 # STUB_HORIZON (default 1.37); an unreachable --kubeconfig exits 1;
@@ -290,6 +351,26 @@ has "1.31's kind config serves flowcontrol v1beta3" "$work/kind-config.yaml" '"f
 has "the object is applied server-side under a named manager" "$work/log" "kubectl --context kind-upgradescope-demo apply --server-side --field-manager=upgradescope-e2e -f -"
 has "the last apply went through the GA version" "$work/state/applied.yaml" "apiVersion: flowcontrol.apiserver.k8s.io/v1"
 has "the kept release is uninstalled with --keep-history" "$work/log" "helm --kube-context kind-upgradescope-demo uninstall e2e-eol-uninstalled --namespace e2e-keep-history --keep-history"
+# #120: the server gate runs the documented command (curl's arguments are
+# the page's) at this run's target against the agent's cluster, through the
+# port-forward the ingestion step opened.
+gate_clean="the documented server-gate command passes a clean manifest: the cluster's own blockers are not the pull request's"
+gate_removed="the documented server-gate command fails a removed-API manifest and still writes a SARIF with a result for it"
+has "the gate command is found in the CI gate page" "$work/summary" "- PASS — the server-gate command documented in docs/getting-started/ci-gate.md is found and aimed at this cluster"
+has "the clean-manifest gate passes" "$work/summary" "- PASS — $gate_clean"
+has "the removed-API gate passes" "$work/summary" "- PASS — $gate_removed"
+has "the documented command is posted at the next minor to the agent's cluster, the page's way" "$work/log" \
+  "curl -sS --fail-with-body -X POST http://127.0.0.1:18080/api/v1/gate?target=1.32&cluster=kind&format=sarif&path=rendered.yaml -H Authorization: Bearer"
+has "the clean manifest is posted" "$work/log" "--data-binary @rendered.yaml"
+gate_at=$(grep -n -- '/api/v1/gate' "$work/log" | head -1 | cut -d: -f1 || true)
+pf_at=$(grep -n -- 'port-forward' "$work/log" | head -1 | cut -d: -f1 || true)
+up_at=$(grep -n -- 'agent.targets=' "$work/log" | head -1 | cut -d: -f1 || true)
+if [ -n "$gate_at" ] && [ -n "$pf_at" ] && [ -n "$up_at" ] && [ "$pf_at" -lt "$gate_at" ] && [ "$gate_at" -lt "$up_at" ]; then
+  echo "ok   the server gate runs through the ingestion step's port-forward, before the helm upgrade" | tee -a "$work/results"
+else
+  echo "FAIL the server gate is not between the port-forward and the helm upgrade (port-forward at ${pf_at:-none}, gate ${gate_at:-none}, upgrade ${up_at:-none})" >&2
+  echo "FAIL server gate order" >>"$work/results"
+fi
 # Every kubectl call names the kind context (kind-setup.sh's use-context is
 # the one documented exception), and so does every helm call on the release.
 if grep '^kubectl ' "$work/log" | grep -v '^kubectl config use-context kind-upgradescope-demo$' |
@@ -463,6 +544,11 @@ has "1.37 at 1.38: the past-horizon scan gates and passes" "$work/summary" "- PA
 has "1.37 at 1.38: --allow-incomplete is scanned" "$work/log" "upgradescope scan --context kind-upgradescope-demo --target 1.38 --allow-incomplete --output json"
 has "1.37 at 1.38: the CR kb-coverage gate gates and passes" "$work/summary" "- PASS — $cr_gap_gate"
 has "1.37 at 1.38: the CR unknown gate gates and passes" "$work/summary" "- PASS — $cr_unknown_gate"
+# Past the horizon the clean manifest's verdict is unknown (curl exits 22),
+# not ready: the gate step still passes, on no result and the kb-coverage gap.
+has "1.37 at 1.38: the clean-manifest gate passes on an unknown verdict" "$work/summary" "- PASS — $gate_clean"
+has "1.37 at 1.38: the documented command targets 1.38" "$work/log" "api/v1/gate?target=1.38&cluster=kind&format=sarif&path=rendered.yaml"
+has "1.37 at 1.38: the removed-API gate passes" "$work/summary" "- PASS — $gate_removed"
 has "the CR's blocker categories are accepted in ingress-nginx only, plus the run's own deprecated caller by key" "$work/log" \
   'kubectl --context kind-upgradescope-demo patch clusterreadiness cluster --type merge -p {"spec":{"ignore":[{"category":"chart-incompat","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"category":"eol-addon","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"key":"deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses","reason":"e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}]}}'
 # The rules are removed again, before the later gates read the CR.
@@ -536,6 +622,49 @@ if grep -q 'check skipped::a vanilla cluster scanned past the KB horizon' "$work
   echo "FAIL N/A is a warning" >&2; echo "FAIL N/A warns" >>"$work/results"
 else
   echo "ok   N/A is not a warning" | tee -a "$work/results"
+fi
+
+# The server gate (#120): every way it can be wrong fails the run.
+run "a clean manifest the gate blocks fails the run" 1 STUB_GATE_CLEAN_BLOCKED=1
+has "the blocked clean manifest is a FAIL in the summary" "$work/summary" "- **FAIL** — $gate_clean"
+has "the clean manifest's verdict is shown" "$work/out" "want verdict ready, no result and no required gap beyond the horizon in results.sarif"
+if grep -qF -- "$gate_removed" "$work/summary"; then
+  echo "FAIL the run went on past a failed gate step" >&2; echo "FAIL gate run continued" >>"$work/results"
+else
+  echo "ok   a failed gate step stops the run" | tee -a "$work/results"
+fi
+
+run "a clean manifest whose SARIF body is empty fails the run" 1 STUB_GATE_EMPTY_SARIF=1
+has "the empty SARIF is named" "$work/out" "clean manifest: results.sarif is empty"
+has "the empty clean SARIF is a FAIL in the summary" "$work/summary" "- **FAIL** — $gate_clean"
+
+run "a clean manifest the cluster's blockers are blamed on fails the run" 1 STUB_GATE_CLUSTER_BLAMED=1
+has "the misattributed finding is shown" "$work/out" "clean manifest: want the cluster's blockers with every finding source=cluster"
+has "the misattributed clean manifest is a FAIL in the summary" "$work/summary" "- **FAIL** — $gate_clean"
+
+run "a failing report whose SARIF body is lost fails the run" 1 STUB_GATE_EMPTY_SARIF=removed
+has "the lost report is named" "$work/out" "removed-API manifest: results.sarif is empty"
+has "the lost removed-API report is a FAIL in the summary" "$work/summary" "- **FAIL** — $gate_removed"
+
+run "a removed-API manifest the gate passes fails the run" 1 STUB_GATE_REMOVED_PASSES=1
+has "the passed removed API is named" "$work/out" "removed-API manifest: the documented command passed it"
+
+run "a blocked verdict without a result for the object fails the run" 1 STUB_GATE_NO_RESULT=1
+has "the missing result is shown" "$work/out" "want a blocked verdict and a removed-api result for the Ingress at rendered.yaml"
+
+# The page is the command: one that no longer keeps the body on failure, or
+# has no gate command at all, fails the step before anything is posted.
+sed 's/--fail-with-body/-f/' docs/getting-started/ci-gate.md >"$work/doc-f.md"
+run "a gate page whose command drops --fail-with-body fails the run" 1 E2E_GATE_DOC="$work/doc-f.md"
+has "the missing flag is named" "$work/out" "has no '--fail-with-body'"
+has "the unusable command is a FAIL in the summary" "$work/summary" "- **FAIL** — the server-gate command documented in $work/doc-f.md is found and aimed at this cluster"
+printf '# CI gate\n\n```sh\nupgradescope scan --files rendered\n```\n' >"$work/doc-none.md"
+run "a gate page without a server-gate command fails the run" 1 E2E_GATE_DOC="$work/doc-none.md"
+has "the missing command is named" "$work/out" "has no sh block that POSTs to /api/v1/gate"
+if grep -q '/api/v1/gate' "$work/log"; then
+  echo "FAIL a gate page without a command still posted to the gate" >&2; echo "FAIL gate posted without a command" >>"$work/results"
+else
+  echo "ok   no manifest is posted without a documented command" | tee -a "$work/results"
 fi
 
 # Once the KB horizon reaches the newest minor's next one, no minor of the
