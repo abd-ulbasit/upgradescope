@@ -215,7 +215,8 @@ jobs:
       # Artifact Hub reads repository metadata (owners, repository ID) from
       # the artifacthub.io tag of the chart's OCI repository. Registering the
       # repository on artifacthub.io is a one-time manual step
-      # (packaging/README.md).
+      # (packaging/README.md). hack/release-artifacthub-workflow_test.sh
+      # (make hack-test) runs this step offline against a stub oras.
       - name: Push the Artifact Hub repository metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

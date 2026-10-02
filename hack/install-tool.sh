@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Installs a pinned, checksum-verified CLI the CI scripts need and prints its
-# path:   kind=$(hack/install-tool.sh kind)
+# absolute path, so it runs from any directory:
+#   kind=$(hack/install-tool.sh kind)
 #
 # Every tool is pinned to one release, and every platform to the sha256 its
 # upstream publishes for that release (kind: the .sha256sum assets;
@@ -10,8 +11,9 @@
 # access to the runner's Docker. Bump version and every checksum together,
 # from the upstream release page, never from a download of your own.
 #
-# Installs into $TOOLS_BIN (default bin/tools, gitignored) and reuses an
-# install whose recorded pin still matches. Messages go to stderr.
+# Installs into $TOOLS_BIN (default bin/tools, gitignored; a relative path is
+# relative to the repository root) and reuses an install whose recorded pin
+# still matches. Messages go to stderr.
 #
 # Exit status: 0 installed, 1 download or checksum failed, 2 bad request.
 #
@@ -22,6 +24,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TOOLS_BIN=${TOOLS_BIN:-bin/tools}
+case "$TOOLS_BIN" in /*) ;; *) TOOLS_BIN="$PWD/$TOOLS_BIN" ;; esac
 
 KIND_VERSION=v0.33.0
 KUBECTL_VERSION=v1.37.1
