@@ -39,6 +39,8 @@ expect "failed download fails" 1 "could not download kubectl" kubectl \
   UPGRADESCOPE_TOOL_URL="file://$work/does-not-exist"
 expect "tarball checksum mismatch fails" 1 "sha256 mismatch for kubeconform" kubeconform \
   UPGRADESCOPE_TOOL_URL="file://$work/junk"
+expect "oras tarball checksum mismatch fails" 1 "sha256 mismatch for oras" oras \
+  UPGRADESCOPE_TOOL_URL="file://$work/junk"
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)

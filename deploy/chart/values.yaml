@@ -5,8 +5,15 @@
 image:
   repository: ghcr.io/abd-ulbasit/upgradescope
   # Empty = the chart's appVersion, i.e. the release this chart was
-  # published with. Release tags are immutable, so IfNotPresent is safe.
+  # published with.
   tag: ""
+  # sha256:<64 hex>. When set, the pods pull repository:tag@digest, so the
+  # image cannot change under the tag. The published chart sets it to the
+  # digest of the image released with it; a digest wins over the tag, so
+  # when you override repository or tag, set digest too (or to "").
+  digest: ""
+  # The default image is pinned by digest in the published chart, so
+  # IfNotPresent always runs the released bytes.
   pullPolicy: IfNotPresent
 
 # Pull secrets for a private registry or mirror, set on both pods,

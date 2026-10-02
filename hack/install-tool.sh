@@ -5,7 +5,7 @@
 # Every tool is pinned to one release, and every platform to the sha256 its
 # upstream publishes for that release (kind: the .sha256sum assets;
 # kubectl: dl.k8s.io/.../kubectl.sha256; kubeconform: the release's
-# CHECKSUMS file), written down here so a tampered or substituted download
+# CHECKSUMS file; oras: the release's oras_<v>_checksums.txt), written down here so a tampered or substituted download
 # fails instead of running — in CI, kind and kubectl run with root-equivalent
 # access to the runner's Docker. Bump version and every checksum together,
 # from the upstream release page, never from a download of your own.
@@ -26,6 +26,7 @@ TOOLS_BIN=${TOOLS_BIN:-bin/tools}
 KIND_VERSION=v0.33.0
 KUBECTL_VERSION=v1.37.1
 KUBECONFORM_VERSION=v0.8.0
+ORAS_VERSION=v1.3.4 # release.yml pushes the Artifact Hub metadata with it
 
 # sha256 <tool> <os/arch>
 sha256_for() {
@@ -42,6 +43,10 @@ sha256_for() {
     "kubeconform linux/arm64") echo 1f53fc8e81258197a35e8603054162a5af1de8c5af13746c71ab680d9534ed87 ;;
     "kubeconform darwin/amd64") echo 71dbc87ac9f24099a62b93570e65aa06312ba6ac8aea63b7f86e9d999edf5a92 ;;
     "kubeconform darwin/arm64") echo f84f4dfbebf4a6b0b230385fa065a39ea35e02608c2b50d025dcf64775a69d67 ;;
+    "oras linux/amd64") echo f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454 ;;
+    "oras linux/arm64") echo 15702c6e3a4a56a8bd8ac5c17efdbcab56d9bada661ccbcf017f5b10c1d89399 ;;
+    "oras darwin/amd64") echo 5e964f3d5a36eb9499a9d3e252a86b09e7adf3e6f6447eec56fd249c6702af7e ;;
+    "oras darwin/arm64") echo 217761a9500242ff473de8656b5aca21136ff39e17e9e61fd8936bbfd902704c ;;
   esac
 }
 
@@ -53,7 +58,8 @@ case "$tool" in
   kind) version=$KIND_VERSION ;;
   kubectl) version=$KUBECTL_VERSION ;;
   kubeconform) version=$KUBECONFORM_VERSION ;;
-  *) bad "unknown tool '$tool' (kind, kubectl, kubeconform)" ;;
+  oras) version=$ORAS_VERSION ;;
+  *) bad "unknown tool '$tool' (kind, kubectl, kubeconform, oras)" ;;
 esac
 
 platform=${UPGRADESCOPE_TOOL_PLATFORM:-$(uname -s | tr '[:upper:]' '[:lower:]')/$(uname -m)}
@@ -68,6 +74,7 @@ case "$tool" in
   kind) url="https://kind.sigs.k8s.io/dl/$version/kind-$os-$arch" ;;
   kubectl) url="https://dl.k8s.io/release/$version/bin/$os/$arch/kubectl" ;;
   kubeconform) url="https://github.com/yannh/kubeconform/releases/download/$version/kubeconform-$os-$arch.tar.gz" ;;
+  oras) url="https://github.com/oras-project/oras/releases/download/$version/oras_${version#v}_${os}_$arch.tar.gz" ;;
 esac
 url=${UPGRADESCOPE_TOOL_URL:-$url}
 
@@ -94,6 +101,10 @@ case "$tool" in
   kubeconform)
     tar -xzf "$work/download" -C "$work" kubeconform || die "no kubeconform in the $version archive"
     mv "$work/kubeconform" "$work/bin"
+    ;;
+  oras)
+    tar -xzf "$work/download" -C "$work" oras || die "no oras in the $version archive"
+    mv "$work/oras" "$work/bin"
     ;;
   *) mv "$work/download" "$work/bin" ;;
 esac

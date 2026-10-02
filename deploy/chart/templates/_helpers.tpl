@@ -21,6 +21,20 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end -}}
 
+{{/*
+The container image of both Deployments: repository:tag (tag defaults to the
+chart's appVersion), plus @digest when image.digest is set. The release
+workflow sets image.digest when it packages the chart, so the published
+chart runs exactly the image released with it.
+*/}}
+{{- define "upgradescope.image" -}}
+{{- $ref := printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- with .Values.image.digest -}}
+{{- $ref = printf "%s@%s" $ref . -}}
+{{- end -}}
+{{- $ref -}}
+{{- end -}}
+
 {{/* Agent ServiceAccount name */}}
 {{- define "upgradescope.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}

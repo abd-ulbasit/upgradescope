@@ -30,7 +30,7 @@ spec:
       {{- include "upgradescope.podOptions" (dict "root" . "c" .Values.agent) | trim | nindent 6 }}
       containers:
         - name: agent
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "upgradescope.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - agent

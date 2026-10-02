@@ -135,6 +135,23 @@ helm template upgradescope "$CHART" --namespace upgradescope \
   --set image.tag=dev > "$TMP/devtag.yaml"
 assert_contains "$TMP/devtag.yaml" 'image: "ghcr.io/abd-ulbasit/upgradescope:dev"' "image.tag overrides appVersion"
 assert_not_contains "$TMP/devtag.yaml" "upgradescope:$APP_VERSION\"" "no appVersion image left when image.tag is set (agent + server)"
+assert_not_contains "$TMP/default.yaml" '@sha256:' "the in-repo chart pins no digest (release.yml sets it at package time)"
+
+echo "== image.digest pins the image (the published chart sets it)"
+DIGEST="sha256:$(printf '%064d' 7)"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set image.digest="$DIGEST" > "$TMP/digest.yaml"
+[ "$(grep -cF "image: \"ghcr.io/abd-ulbasit/upgradescope:$APP_VERSION@$DIGEST\"" "$TMP/digest.yaml")" = 2 ] \
+  && pass "image.digest pins agent and server to repository:tag@digest" \
+  || fail "image.digest does not pin both pods to ghcr.io/abd-ulbasit/upgradescope:$APP_VERSION@$DIGEST"
+for bad in 'image.digest=latest' 'image.digest=sha256:abc' "image.digest=$APP_VERSION"; do
+  if helm template upgradescope "$CHART" --set "$bad" >/dev/null 2>&1; then
+    fail "schema accepted --set $bad (want sha256:<64 hex>)"
+  else
+    pass "schema rejects --set $bad"
+  fi
+done
 
 echo "== agent assertions: external-server render"
 assert_contains "$TMP/external.yaml" '--server-url=https://uscope.example.com' "explicit serverUrl wins"
