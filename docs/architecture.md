@@ -506,6 +506,10 @@ if it is deleted, and writes status with conflict retry.
   It emits `new-blocker` (capped at 5, plus an "N more" summary),
   `became-ready` and `eol-approaching` events. Nothing is sent on a
   cluster's first evaluation, and nothing is sent for unchanged snapshots.
+  When a cluster upgrades, its new default target has no earlier
+  evaluation; the previous default target's last decided evaluation is the
+  baseline, so blockers the new target adds are announced and ones the
+  cluster already had are not.
 - **Dashboard**: the SPA under `web/` is built into
   `internal/server/webdist/` and embedded. Static assets are served without
   auth, and the SPA sends the read token on API calls. The build tag

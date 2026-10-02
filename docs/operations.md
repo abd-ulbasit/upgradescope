@@ -135,15 +135,34 @@ evaluation in the same pass, each compared with its own lower target, so
 each is notified once of the blockers that are new to it (at most one
 notification per cluster, its changes capped as usual).
 
+This differs from a target added to `--targets`, which stays silent: adding
+a target asks a new question about a cluster that has not changed, and
+every blocker it finds was already there. A default target that was
+unknown until a knowledge-base update is the cluster's real next upgrade,
+and the update is the first time anyone could say what blocks it, so those
+blockers are genuinely new to each cluster and are announced, once.
+
+Retention edge: the old target's evaluation is the baseline only while it
+is stored. If a new default target stays `unknown` for longer than
+`--retention` after the upgrade (no knowledge base for it that long), the
+old target's evaluations are pruned (see [Retention and
+backup](operations/retention-and-backup.md)), and the first decided
+evaluation of the new target is then a silent baseline.
+
 Delivery: notifications are committed to an outbox with the evaluations
 that produced them and delivered by a background worker, so a push never
 waits on a receiver and a restart loses nothing. A failed delivery (an
 error, a timeout of 2s, any non-2xx status, **including redirects**, which
 are not followed) is retried with exponential backoff from 30s, up to 8
 attempts (about an hour), separately per sink. A receiver that answers
-`429` with a `Retry-After` header (seconds or an HTTP date) is not retried
-before that delay, capped at an hour per attempt, so its 8 attempts may
-span several hours. Delivery is **at least once**:
+`429` or `503` with a `Retry-After` header (seconds or an HTTP date) is
+left alone for that delay, capped at an hour: the sink is not called for
+that message or for any other message queued for it (which are put back
+without counting an attempt), so a burst after a fleet-wide pass does not
+hammer a rate-limited receiver or use up its messages' attempts. The wait
+replaces a shorter backoff, so 8 attempts may span several hours (up to
+about 7). The hold is kept in memory: a restart, or another replica,
+forgets it and finds out with the next call. Delivery is **at least once**:
 the same notification may arrive more than once, so deduplicate on
 `deliveryId`, which is the same on every retry and for every sink.
 

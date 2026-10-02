@@ -214,8 +214,10 @@ a CI gate.
   is signed (`X-Upgradescope-Signature`, HMAC-SHA256). Delivery is at least
   once: deduplicate on `deliveryId`. Update receivers; see
   `docs/reference/webhook.md` and `api/webhook.schema.json`.
-- A Slack or webhook sink that answers 429 with `Retry-After` is not retried
-  before that delay (capped at an hour per attempt).
+- A Slack or webhook sink that answers 429 or 503 with `Retry-After` is left
+  alone for that delay (capped at an hour): the sink is not called for that
+  message or any other queued for it, and the held messages keep their
+  attempts. The hold is kept in memory, so a restart forgets it.
 - Inventories from collectors that predate this release report `crds` as
   not assessed. This includes the reports the server re-evaluates for
   existing v0.1 agents, and saved `--files` inventories. The gap is not
@@ -288,8 +290,8 @@ a CI gate.
 - Notifications after a cluster upgrade: a blocker that the cluster's new
   default target adds (for example `networking.k8s.io/v1beta1` ServiceCIDR,
   removed in 1.37, once the cluster runs 1.36) is notified instead of being
-  taken as a silent baseline. Blockers the cluster already had are not
-  announced again (#34).
+  taken as a silent baseline. Blockers it already had at its previous
+  default target are not announced again (#34).
 - `--output table` and `--output markdown` exit 1 when the report cannot
   be written, like JSON and SARIF.
 - Pre-GA kinds written only by control-plane components (for example

@@ -18,6 +18,13 @@ import (
 // delivery is retried with exponential backoff — per sink, so a retry never
 // re-sends to a sink that already succeeded. Delivery is at-least-once: a
 // crash between a successful send and the delete re-sends after the lease.
+//
+// A sink that answers 429 or 503 with Retry-After is held: until the delay
+// has passed (capped at outboxMaxRetryAfter) it is not called for any of
+// its messages, which are put back due at the end of the hold without
+// consuming an attempt. The hold is in memory (sinkHolds), so a restart or
+// another replica forgets it. Because the wait replaces a shorter backoff,
+// the 8 attempts can span about 7h of an hour-long Retry-After.
 const (
 	outboxBatch       = 50
 	outboxLease       = 2 * time.Minute // a claimed message is re-claimable after this
@@ -43,6 +50,9 @@ func outboxError(err error) string {
 // outboxBackoff is the delay after the attempts-th failed attempt:
 // 30s, 1m, 2m, … capped at an hour. With outboxMaxAttempts = 8 the
 // largest delay used is 32m (attempt 7), about 63m in all before giving up.
+// A sink's Retry-After (retryDelay, at most outboxMaxRetryAfter) replaces a
+// shorter backoff: with an hour asked each time, the 7 delays between 8
+// attempts total about 7h.
 func outboxBackoff(attempts int) time.Duration {
 	d := outboxBaseBackoff
 	for i := 1; i < attempts && d < outboxMaxBackoff; i++ {
