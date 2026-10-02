@@ -129,9 +129,22 @@ func newAgentCmd() *cobra.Command {
 		serverToken *secretFlag
 	)
 	cmd := &cobra.Command{
-		Use:           "agent",
-		Short:         "Run the in-cluster continuous upgrade-readiness agent",
-		Long:          "Continuously collects cluster inventory, evaluates upgrade readiness, writes the ClusterReadiness CRD status, and (optionally) pushes snapshots to an upgradescope server.",
+		Use:   "agent",
+		Short: "Run the in-cluster continuous upgrade-readiness agent",
+		Long: `Continuously collect the cluster's inventory, evaluate upgrade readiness
+every --interval, write the result to the status of the ClusterReadiness
+object, and (with --server-url) push snapshots to an upgradescope server.
+
+The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
+		Example: `  # In the cluster, CRD status only (what the Helm chart runs)
+  upgradescope agent
+
+  # Also push snapshots to a fleet server
+  upgradescope agent --server-url https://upgradescope.example.com \
+    --server-token-file /var/run/secrets/upgradescope/token
+
+  # Try it from a laptop against a kubeconfig context
+  upgradescope agent --context kind-dev --interval 1m --cr-name dev`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

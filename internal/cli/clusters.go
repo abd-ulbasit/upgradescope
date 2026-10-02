@@ -28,6 +28,7 @@ func newClustersDeleteCmd() *cobra.Command {
 			"push from another UID. When the cluster was rebuilt (new UID, same name), delete the old\n" +
 			"record and the next push registers the new one. Ingest tokens are keyed by name and keep\n" +
 			"working.",
+		Example:       "  upgradescope clusters delete prod-eu --db upgradescope.db",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,

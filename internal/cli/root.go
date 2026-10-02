@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -89,6 +90,11 @@ a fleet with 'serve'.`,
 		SilenceErrors: true,
 	}
 	root.SetVersionTemplate(`{{ upgradescopeVersion }}`)
+	// Usage is silenced (an error prints one line, not the whole usage), so
+	// a mistyped flag says where the usage is. Subcommands inherit it.
+	root.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return fmt.Errorf("%w\nRun '%s --help' for usage.", err, c.CommandPath())
+	})
 	root.AddCommand(newScanCmd())
 	root.AddCommand(newAgentCmd())
 	root.AddCommand(newServeCmd())
