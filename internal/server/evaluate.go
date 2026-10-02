@@ -117,10 +117,18 @@ func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, targ
 	}, rep, nil
 }
 
-// stale reports whether a stored evaluation must be recomputed now.
+// futureTolerance is how far ahead of this server's clock a stored
+// evaluation may be dated before it counts as future-dated: replicas'
+// clocks differ by a little, a stepped-back clock by much more.
+const futureTolerance = 5 * time.Minute
+
+// stale reports whether a stored evaluation must be recomputed now. A row
+// evaluated "in the future" (the clock stepped backwards since) is stale
+// too: its EOL math used a date that has not come yet.
 func (s *Server) stale(e store.Evaluation, now time.Time) bool {
 	today := now.UTC().Truncate(24 * time.Hour)
-	return e.KBVersion != s.cfg.KB.Version || e.TeamMapHash != s.teamMapHash || e.EvaluatedAt.Before(today)
+	return e.KBVersion != s.cfg.KB.Version || e.TeamMapHash != s.teamMapHash ||
+		e.EvaluatedAt.Before(today) || e.EvaluatedAt.After(now.Add(futureTolerance))
 }
 
 // sameResult reports whether rep matches the stored row on everything a
