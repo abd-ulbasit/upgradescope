@@ -521,19 +521,25 @@ cr_reports_kb_coverage_gap() {
 # spec.ignore accepts each blocker category it lists, narrowed to that
 # namespace; the agent applies the rules on its next tick, leaving the
 # kb-coverage gap alone: verdict unknown, no blocker, Ready
-# Unknown/NotAssessed naming it. A blocker elsewhere is not accepted and
-# fails the gate. The rules are removed again before the gate judges, so
-# the later gates see the CR as the install left it.
+# Unknown/NotAssessed naming it. The one cluster-scoped blocker this run
+# causes itself is accepted by its exact key: the deprecated-api step
+# server-side-applies a DeviceClass through resource.k8s.io/v1beta1 (on
+# 1.37), which the apiserver rightly counts as a caller of an API removed
+# in 1.38. Any other blocker is not accepted and fails the gate. The rules
+# are removed again before the gate judges, so the later gates see the CR
+# as the install left it.
 ACCEPTED_NS=ingress-nginx
+ACCEPTED_KEYS='["deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses"]'
 cr_unknown_once_blockers_accepted() {
   k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
   local cats patch gen i
   cats=$(jq -c '[.status.targets[0].topFindings[]? | select(.severity == "blocker") | .category] | unique' "$work/cr.json") ||
     return 1
   [ "$cats" != "[]" ] || { echo "clusterreadiness/$CR lists no blocker to accept (cr_has_verdict saw it blocked)" >&2; return 1; }
-  patch=$(jq -c --arg ns "$ACCEPTED_NS" '{spec: {ignore: [.[] | {category: ., namespace: $ns,
-      reason: "e2e: accepted to observe the kb-coverage gap alone"}]}}' <<<"$cats") || return 1
-  echo "accepting blocker categories $cats in namespace $ACCEPTED_NS"
+  patch=$(jq -c --arg ns "$ACCEPTED_NS" --argjson keys "$ACCEPTED_KEYS" '{spec: {ignore: ([.[] | {category: ., namespace: $ns,
+      reason: "e2e: accepted to observe the kb-coverage gap alone"}] + [$keys[] | {key: .,
+      reason: "e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}])}}' <<<"$cats") || return 1
+  echo "accepting blocker categories $cats in namespace $ACCEPTED_NS, and keys $ACCEPTED_KEYS"
   k patch clusterreadiness "$CR" --type merge -p "$patch" || return 1
   gen=$(k get clusterreadiness "$CR" -o jsonpath='{.metadata.generation}') || return 1
   [[ $gen =~ ^[0-9]+$ ]] || { echo "clusterreadiness/$CR metadata.generation is '$gen'" >&2; return 1; }

@@ -463,8 +463,8 @@ has "1.37 at 1.38: the past-horizon scan gates and passes" "$work/summary" "- PA
 has "1.37 at 1.38: --allow-incomplete is scanned" "$work/log" "upgradescope scan --context kind-upgradescope-demo --target 1.38 --allow-incomplete --output json"
 has "1.37 at 1.38: the CR kb-coverage gate gates and passes" "$work/summary" "- PASS — $cr_gap_gate"
 has "1.37 at 1.38: the CR unknown gate gates and passes" "$work/summary" "- PASS — $cr_unknown_gate"
-has "the CR's blocker categories are accepted in ingress-nginx only" "$work/log" \
-  'kubectl --context kind-upgradescope-demo patch clusterreadiness cluster --type merge -p {"spec":{"ignore":[{"category":"chart-incompat","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"category":"eol-addon","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"}]}}'
+has "the CR's blocker categories are accepted in ingress-nginx only, plus the run's own deprecated caller by key" "$work/log" \
+  'kubectl --context kind-upgradescope-demo patch clusterreadiness cluster --type merge -p {"spec":{"ignore":[{"category":"chart-incompat","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"category":"eol-addon","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"key":"deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses","reason":"e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}]}}'
 # The rules are removed again, before the later gates read the CR.
 accept_at=$(grep -n -- '--type merge' "$work/log" | head -1 | cut -d: -f1 || true)
 unaccept_at=$(grep -n -- 'patch clusterreadiness cluster --type json -p \[{"op":"remove","path":"/spec/ignore"}\]' "$work/log" | head -1 | cut -d: -f1 || true)
