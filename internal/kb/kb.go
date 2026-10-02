@@ -32,6 +32,20 @@ type KB struct {
 	AddOns       []registry.AddOn
 	Skew         SkewPolicy
 	MaxKnownK8s  inventory.Version // newest minor the lifecycle data covers
+	// UpgradeSteps are control-plane upgrades allowed to skip minors;
+	// upgrade plans take them in place of the one-minor hops they span
+	// (engine.HopTargets). Upstream has none, since the control plane is
+	// upgraded one minor at a time, and Load adds none.
+	UpgradeSteps []UpgradeStep
+}
+
+// UpgradeStep is one control-plane upgrade from From straight to To,
+// skipping the minors between, such as a provider's long-term-support
+// path. Citation links the provider documentation that allows it: a step
+// is never added without one.
+type UpgradeStep struct {
+	From, To inventory.Version
+	Citation string
 }
 
 // Load builds the KB from the embedded API lifecycle dataset, the embedded

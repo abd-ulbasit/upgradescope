@@ -61,6 +61,7 @@ func WriteTable(out io.Writer, r engine.Report) error {
 		fmt.Fprintf(w, "       %d suppressed (not scored; see SUPPRESSED)\n", n)
 	}
 	writeBaselineSummary(w, r)
+	writePlan(w, r)
 
 	for _, sev := range []engine.Severity{engine.SevBlocker, engine.SevWarning, engine.SevInfo} {
 		var group []engine.Finding

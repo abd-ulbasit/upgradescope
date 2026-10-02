@@ -84,9 +84,10 @@ the binary that wrote the report and carries no compatibility meaning.
 | `suppressed[]` | Findings an ignore rule or annotation accepted, with `reason`, `source` and `expires`. Not in the score or verdict. |
 | `unrecognizedImages[]` | Image repositories (`host/path`, no tag) that no add-on image matcher recognised, sorted, at most 200. A gap in add-on detection, not a finding: not in the score or verdict, and an add-on running one may still have been found by its labels or Helm release. |
 | `unrecognizedImagesOmitted` | How many more unrecognized repositories there were beyond the 200 listed. |
+| `hops[]` | `scan --plan` only: the [upgrade plan](../guides/upgrade-plan.md), one entry per control-plane upgrade from the cluster's minor (or `--from`) to `target`, in order. Each has `from`, `to`, the `score` and `verdict` at `to`, `findings` (the ones first seen at this upgrade, in full), `changed` and `carried` (findings listed at an earlier upgrade, by `key`, with their `severity` and `title` here, `since`, the upgrade that lists them, and in `changed`, `was`, the earlier severity) and `notAssessed`. Every other field is the report at `target`, the verdict included. |
 | `teams` | Per-team scores; findings without a team are under `unattributed`. A team's `ready` means no blocker among its own findings: it ignores the report's not-assessed gaps and other teams' blockers, so gate on `verdict`. |
 
 The server's report endpoint serves the same report fields (except
-`kubeContext` and `apiServer`, which only `scan` sets), plus where the
+`kubeContext`, `apiServer` and `hops`, which only `scan` sets), plus where the
 report came from ([`GET /api/v1/clusters/{id}/report`](api.md#clusters));
 the SARIF output carries the same findings as results, keyed by `key`.

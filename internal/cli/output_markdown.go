@@ -58,6 +58,7 @@ func WriteMarkdown(w io.Writer, r engine.Report) {
 	if compared {
 		fmt.Fprintf(w, "\n**Baseline:** %d new, %d unchanged. Only new findings fail the gate; score and verdict count both.\n", added, unchanged)
 	}
+	mdPlan(w, r)
 
 	switch {
 	case len(r.Findings) == 0 && len(r.Suppressed) > 0:

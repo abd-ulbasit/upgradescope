@@ -23,6 +23,7 @@
     "suppressed": {"type": "array", "items": {"$ref": "#/$defs/suppressed"}},
     "unrecognizedImages": {"description": "Image repositories (host/path, no tag) that no add-on image matcher recognised: a gap in add-on detection, not a finding, so they change neither score nor verdict. An add-on running one is still found through its pod labels, IngressClass or Helm release. Sorted, deduplicated, at most 200.", "type": "array", "maxItems": 200, "items": {"type": "string"}},
     "unrecognizedImagesOmitted": {"description": "Unrecognized image repositories beyond the 200 listed.", "type": "integer", "minimum": 1},
+    "hops": {"description": "scan --plan only: the upgrade plan, one entry per control-plane upgrade from the cluster's minor (a live scan's oldest kube-apiserver, or --from) to target, in order. Each finding is listed in full at the first hop that has it and referenced by key at later ones. The rest of the report, the verdict included, is the final target's.", "type": "array", "items": {"$ref": "#/$defs/hop"}},
     "teams": {
       "description": "Per-team scores; findings with no team are under \"unattributed\". Present when there are findings.",
       "type": "object",
@@ -81,6 +82,31 @@
         "partial": {"type": "boolean"},
         "skipped": {"type": "array", "items": {"type": "string"}},
         "required": {"description": "The gap makes the verdict unknown.", "type": "boolean"}
+      }
+    },
+    "hop": {
+      "type": "object",
+      "required": ["from", "to", "score", "verdict", "findings"],
+      "properties": {
+        "from": {"$ref": "#/$defs/minor"},
+        "to": {"description": "The minor the control plane reaches at this hop; the cluster as it is, judged at it.", "$ref": "#/$defs/minor"},
+        "score": {"description": "The score at this hop's to.", "type": "integer", "minimum": 0, "maximum": 100},
+        "verdict": {"description": "The verdict at this hop's to, counting new and referenced findings.", "enum": ["ready", "blocked", "unknown"]},
+        "findings": {"description": "Findings first seen at this hop, in full.", "type": "array", "items": {"$ref": "#/$defs/finding"}},
+        "changed": {"description": "Findings listed at an earlier hop whose severity differs from the last earlier hop that had them.", "type": "array", "items": {"$ref": "#/$defs/findingRef"}},
+        "carried": {"description": "Findings listed at an earlier hop, at the same severity.", "type": "array", "items": {"$ref": "#/$defs/findingRef"}},
+        "notAssessed": {"description": "Every gap at this hop's to.", "type": "array", "items": {"$ref": "#/$defs/gap"}}
+      }
+    },
+    "findingRef": {
+      "type": "object",
+      "required": ["key", "severity", "title", "since"],
+      "properties": {
+        "key": {"type": "string"},
+        "severity": {"description": "At this hop.", "enum": ["blocker", "warning", "info"]},
+        "was": {"description": "changed only: the severity at the last earlier hop that had the finding.", "enum": ["blocker", "warning", "info"]},
+        "title": {"description": "At this hop.", "type": "string"},
+        "since": {"description": "The to of the hop that lists the finding in full.", "$ref": "#/$defs/minor"}
       }
     },
     "teamScore": {

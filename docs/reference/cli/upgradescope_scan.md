@@ -26,6 +26,14 @@ minor, info info) with a fingerprint that survives line moves; a finding
 without a file is placed on the virtual path upgradescope/<finding key>, and
 suppressed findings are left out.
 
+Upgrade plan (--plan): the control plane is upgraded one minor at a time, so
+--plan also judges the cluster at each minor between the one it runs (a live
+scan's oldest kube-apiserver; --from with --files) and --target, and lists
+each finding at the first upgrade it affects, with the upgrade where its
+severity changes. Table and markdown show the plan before the findings; JSON
+adds hops. Ignore rules apply to every upgrade. The rest of the report, and
+the gate, judge --target alone.
+
 Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
 or the one file named, is decoded as kubectl apply -f decodes it: each
 document of a YAML stream and each object of a JSON stream (NDJSON,
@@ -75,6 +83,9 @@ upgradescope scan [flags]
   # Another context, as JSON
   upgradescope scan --context prod --target 1.37 --output json
 
+  # What each control-plane upgrade on the way to 1.37 needs fixed first
+  upgradescope scan --target 1.37 --plan
+
   # Rendered manifests in CI: SARIF for code scanning, exit 2 on a blocker
   upgradescope scan --files rendered/ --target 1.37 --output sarif > upgradescope.sarif
 
@@ -96,9 +107,11 @@ upgradescope scan [flags]
       --context string             kubeconfig context to use
       --fail-on string             exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never (default "blocker")
       --files string               scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster
+      --from string                with --plan and --files: the minor the cluster runs now, where the plan starts (a live scan reads it from the cluster)
   -h, --help                       help for scan
       --kubeconfig string          path to kubeconfig (default: standard loading rules)
       --output string              output format: table|json|sarif|markdown|junit|gitlab-codequality (default "table")
+      --plan                       also judge each control-plane upgrade on the way to --target, one minor at a time, listing each finding at the first upgrade it affects (table, markdown, json)
       --request-timeout duration   give up on a single API request after this long (0 = no per-request limit) (default 30s)
       --target string              target Kubernetes minor version, e.g. 1.36 (required)
       --team-label string          namespace label used for team attribution (default "team")

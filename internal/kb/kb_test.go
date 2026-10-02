@@ -45,6 +45,13 @@ func TestLoad(t *testing.T) {
 	if k.Skew != DefaultSkewPolicy() {
 		t.Errorf("Skew = %+v, want DefaultSkewPolicy()", k.Skew)
 	}
+	// An upgrade step skips at least one minor and cites the provider
+	// documentation that allows it (none ship today).
+	for _, s := range k.UpgradeSteps {
+		if s.Citation == "" || s.From.Major != s.To.Major || s.To.Minor < s.From.Minor+2 {
+			t.Errorf("upgrade step %v → %v (citation %q): want a citation and a step that skips a minor", s.From, s.To, s.Citation)
+		}
+	}
 }
 
 // TestDatasetVersion: the label is derived from content, so any change to

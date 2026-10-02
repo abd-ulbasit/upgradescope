@@ -203,6 +203,10 @@ type Report struct {
 	// the ones the cap dropped.
 	UnrecognizedImages        []string `json:"unrecognizedImages,omitempty"`
 	UnrecognizedImagesOmitted int      `json:"unrecognizedImagesOmitted,omitempty"`
+	// Hops is the upgrade plan up to Target (see Plan), set by scan
+	// --plan; Evaluate never sets it. The rest of the report is the
+	// final target's.
+	Hops []Hop `json:"hops,omitempty"`
 }
 
 // Rescore recomputes Score, Verdict and Ready from Findings and

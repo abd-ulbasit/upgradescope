@@ -162,6 +162,21 @@ a CI gate.
   `junit` step) and Azure Pipelines (`ci/azure/azure-pipelines.yml`,
   `PublishTestResults@2`). Each installs a pinned, checksum-verified
   release and keeps the report when the gate fails (#73).
+- `scan --plan`: an upgrade plan for a multi-minor upgrade. The control
+  plane is upgraded one minor at a time, so `--plan` judges the cluster at
+  every minor from the one it runs (the oldest kube-apiserver) to
+  `--target`, and lists each finding in full at the first upgrade it
+  affects, with the upgrade where its severity changes (a warning at 1.33
+  that blocks at 1.34 shows both). The table and markdown outputs show a
+  per-upgrade section before the findings; the JSON report gains `hops[]`,
+  an addition within `schemaVersion` 1 that the server does not serve.
+  With `--files`, `--from` gives the minor the cluster runs now. Ignore
+  rules and annotations apply to every upgrade. The verdict, score and
+  `--fail-on` gate stay those of `--target`. SARIF, JUnit and Code Quality
+  have no place for upgrade steps, so `--plan` with those outputs is an
+  error. Hops come
+  from the knowledge base's upgrade steps, one minor each by default; a
+  step that skips minors needs a citation, and none ship (#78).
 
 ### Changed
 
