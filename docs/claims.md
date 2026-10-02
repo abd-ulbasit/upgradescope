@@ -285,8 +285,8 @@ compare them with the code; the compatibility policy
 | DS-08 | The add-on counts in the README and on the registry page match `registry/data`, and the registry page lists every entry. | `TestDocsRegistryCounts` |
 | DS-09 | The config reference lists every field an `.upgradescope.yaml` accepts, and its example loads. | `TestDocsConfigReference` |
 | DS-10 | The GitLab CI template (`ci/gitlab/upgradescope.gitlab-ci.yml`, included on the other-CI page) avoids each way the job broke before: the image's entrypoint is cleared, no line needs GNU-only flags or a pipeline's exit status, the archive is checked against `checksums.txt`, and the last line, unpiped, is the gate; its `artifacts:reports` name the Code Quality and JUnit files the scans write. No GitLab runner executes it. | `TestDocsGitLabJob` |
-| DS-12 | The Jenkins and Azure Pipelines templates (`ci/jenkins/Jenkinsfile`, `ci/azure/azure-pipelines.yml`) pin the release the docs install, check it against `checksums.txt`, run an unpiped gate that writes JUnit, and publish it in a step that runs when the gate fails. Neither CI system runs them. | `TestCITemplateJenkins` `TestCITemplateAzure` |
 | DS-11 | The site builds with `mkdocs build --strict` (no broken link, anchor or page missing from the nav) on every pull request, from hash-pinned requirements. | `.github/workflows/docs.yml` `hack/docs/requirements.txt` |
+| DS-12 | The Jenkins and Azure Pipelines templates (`ci/jenkins/Jenkinsfile`, `ci/azure/azure-pipelines.yml`) pin the release the docs install, check it against `checksums.txt`, run an unpiped gate that writes JUnit, and publish it in a step that runs when the gate fails. Neither CI system runs them. | `TestCITemplateJenkins` `TestCITemplateAzure` |
 
 ## Under repair
 
