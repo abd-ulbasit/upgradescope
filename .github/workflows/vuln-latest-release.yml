@@ -1,0 +1,89 @@
+name: vuln-latest-release
+
+# govulncheck on the binary users download, not on main (ci.yml's vuln job
+# covers main). Daily: advisories land without any commit here, and only a
+# new release fixes a published binary. Findings open (or update) one
+# tracking issue, so a vulnerable latest release is never silent; a clean
+# scan closes it. The scan itself is hack/vuln-latest-release.sh
+# (make vuln-latest): the latest release's linux/amd64 archive,
+# sha256-checked and signature-verified, through hack/vulncheck.sh's
+# binary-mode gate and allowlist.
+on:
+  schedule:
+    - cron: '47 6 * * *' # daily 06:47 UTC
+  workflow_dispatch:
+  # A release that just published is scanned right away.
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vuln-latest-release
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write # the tracking issue
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      UPGRADESCOPE_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod # builds the pinned govulncheck
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: govulncheck (binary mode) on the latest release
+        id: scan
+        run: |
+          set +e
+          UPGRADESCOPE_RELEASE_TAG_FILE="$RUNNER_TEMP/tag" make vuln-latest 2>&1 | tee "$RUNNER_TEMP/report.txt"
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "tag=$(cat "$RUNNER_TEMP/tag" 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Open, update or close the tracking issue
+        env:
+          CODE: ${{ steps.scan.outputs.code }}
+          TAG: ${{ steps.scan.outputs.tag }}
+        run: |
+          title='Latest release has reachable vulnerabilities'
+          gh label create security --color b60205 --description 'Security issue' --force
+          number="$(gh issue list --state open --label security --search "\"$title\" in:title" \
+            --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          case "$CODE" in
+            0)
+              if [ -n "$number" ]; then
+                gh issue comment "$number" --body "govulncheck finds no reachable advisory in ${TAG:-the latest release} any more: $RUN_URL"
+                gh issue close "$number"
+              fi
+              echo "${TAG:-latest release}: clean" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+              ;;
+            1) what="govulncheck finds reachable advisories in the published binary of ${TAG}" ;;
+            *) what="the scan of the latest release (${TAG:-unknown tag}) could not run" ;;
+          esac
+          {
+            printf '%s (linux/amd64 archive, binary mode): %s\n\n' "$what" "$RUN_URL"
+            printf 'Only a new release fixes a published binary: bump the dependency or Go patch on main, then tag a patch release.\n\n'
+            printf '```\n'
+            grep -E '::error::|::warning::|^allowed:|^vuln' "$RUNNER_TEMP/report.txt" | sed 's/^::[a-z]*:://' | head -60
+            printf '```\n'
+          } >"$RUNNER_TEMP/body.md"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --title "$title" --label security --body-file "$RUNNER_TEMP/body.md"
+          fi
+          echo "::error::$what (see the issue)"
+          exit 1

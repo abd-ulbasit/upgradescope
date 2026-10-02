@@ -48,6 +48,13 @@ lint:
 vuln:
 	./hack/vulncheck.sh
 
+# The same gate on the binary users download: the latest release's
+# linux/amd64 archive, sha256- (and, with cosign, signature-) verified
+# (.github/workflows/vuln-latest-release.yml runs it daily). Needs gh.
+.PHONY: vuln-latest
+vuln-latest:
+	./hack/vuln-latest-release.sh
+
 # Offline tests for the gate itself: a stub scanner drives hack/vulncheck.sh
 # through its pass, fail and fail-closed paths.
 vuln-test:
@@ -188,6 +195,9 @@ hack-test:
 	./hack/ci-concurrency_test.sh
 	./hack/ci-ok_test.sh
 	./hack/notices_test.sh
+	./hack/check-changelog_test.sh
+	./hack/chart-release-annotations_test.sh
+	./packaging/homebrew-tap/script/render-formula_test.sh
 
 .PHONY: demo-up demo-down
 demo-up:
