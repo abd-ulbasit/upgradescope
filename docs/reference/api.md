@@ -634,7 +634,7 @@ Something the evaluation could not assess.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `score` | integer | yes | — |
-| `ready` | boolean | yes | — |
+| `ready` | boolean | yes | No blocker among this team's findings. It counts only the team's findings: the cluster's not-assessed gaps and unattributed blockers do not lower it, so gate on the report's verdict, not on a team's ready. |
 | `blockers` | integer | yes | — |
 | `warnings` | integer | yes | — |
 

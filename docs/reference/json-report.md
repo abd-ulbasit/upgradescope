@@ -80,7 +80,7 @@ the binary that wrote the report and carries no compatibility meaning.
 | `findings[]` | Sorted by severity, then category, then title. Each has `category` ([list](../concepts/verdict-and-score.md#severity-by-category)), `severity`, `key` (stable across runs: baselines and notifications match on it), `title`, `detail`, and where they apply `teams`, `namespaces`, `remediation`, `citations`, `objects` (at most 100, with `objectsOmitted`) and `baselineState` (`new` or `unchanged`, with `--baseline`). |
 | `notAssessed[]` | What the scan could not see: `capability`, `reason`, and `required` when the gap makes the verdict unknown, `partial` and `skipped` when a capability read only part of what it covers. |
 | `suppressed[]` | Findings an ignore rule or annotation accepted, with `reason`, `source` and `expires`. Not in the score or verdict. |
-| `teams` | Per-team scores; findings without a team are under `unattributed`. |
+| `teams` | Per-team scores; findings without a team are under `unattributed`. A team's `ready` means no blocker among its own findings: it ignores the report's not-assessed gaps and other teams' blockers, so gate on `verdict`. |
 
 The server's report endpoint serves the same report fields, plus where the
 report came from ([`GET /api/v1/clusters/{id}/report`](api.md#clusters));

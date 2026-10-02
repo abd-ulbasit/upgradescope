@@ -49,6 +49,13 @@ answer. To block a script or pipeline on readiness:
 kubectl wait clusterreadiness/cluster --for=condition=Ready --timeout=15m
 ```
 
+The status is only as fresh as the agent's last successful write. An agent
+that can no longer write it (its role narrowed, for example) leaves the
+last verdict and `Ready` condition in place; its own `/readyz`, the
+`upgradescope_agent_last_success_timestamp_seconds` metric and the chart's
+`UpgradescopeAgentNotTicking` alert report the failure
+([#137](https://github.com/abd-ulbasit/upgradescope/issues/137)).
+
 ## Choose the targets
 
 With no targets, the agent evaluates the next minor above the cluster's

@@ -16,7 +16,11 @@ upgradescope serve --ingest-token "$(openssl rand -hex 32)"
 ```
 
 The defaults are deliberately narrow: it listens on loopback
-(`--listen 127.0.0.1:8080`) and keeps SQLite in `upgradescope.db`. On any
+(`--listen 127.0.0.1:8080`) and keeps SQLite in `upgradescope.db`. That
+file and its `-wal` and `-shm` files hold every cluster's inventory and the
+token hashes, and are created with your umask, so 0644 under the usual 022
+([#126](https://github.com/abd-ulbasit/upgradescope/issues/126)): put them
+in a directory only the server's user can read. On any
 other address it refuses to start without a read token, unless
 `--allow-anonymous-read` says something else guards it:
 

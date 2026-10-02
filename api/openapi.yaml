@@ -743,7 +743,7 @@ components:
       required: [score, ready, blockers, warnings]
       properties:
         score: {type: integer}
-        ready: {type: boolean}
+        ready: {type: boolean, description: "No blocker among this team's findings. It counts only the team's findings: the cluster's not-assessed gaps and unattributed blockers do not lower it, so gate on the report's verdict, not on a team's ready."}
         blockers: {type: integer}
         warnings: {type: integer}
     TeamScores:
