@@ -104,10 +104,13 @@ func TestGateClusterBenignManifestKeepsFold(t *testing.T) {
 	}
 }
 
-// The maintainer's rule (#120): a manifest object at a removed API is
-// always introduced by the PR, also when it re-renders an object the
-// cluster already has. It replaces that object (no double count), and
-// the gate blocks until the manifest is migrated.
+// A manifest object at a removed API is always introduced by the PR (the
+// work package's rule; #120's criterion of the same name says source:
+// cluster, and is to be updated to match), also when it re-renders an
+// object the cluster already has. It replaces that object (no double
+// count), and the gate blocks until the manifest is migrated: in a GitOps
+// repository that renders everything on every PR, every PR fails until
+// the legacy object is migrated.
 func TestGateClusterRerenderedObject(t *testing.T) {
 	ts := callersCluster(t)
 	reports := "apiVersion: batch/v1beta1\nkind: CronJob\nmetadata: {name: reports, namespace: shop}\n"

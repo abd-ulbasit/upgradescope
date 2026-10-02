@@ -288,7 +288,10 @@ func usageKeys(rep engine.Report) map[string]bool {
 // the PR. Manifest refs keep their place under the MaxObjectRefs cap
 // (cluster refs are dropped first), so SARIF can still place them. What
 // the manifests delete or move to another API stays invisible: a stream
-// says what it applies, not what it removes.
+// says what it applies, not what it removes. Identity is the exact
+// namespace and name, so a rendered manifest without a namespace (applied
+// to kubectl's default) does not replace its namespaced twin in the
+// cluster and is counted beside it: Count and Namespaces overstate by one.
 func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 	type gvk struct{ group, version, kind string }
 	out := make([]inventory.APIUsage, 0, len(cluster)+len(manifests))
