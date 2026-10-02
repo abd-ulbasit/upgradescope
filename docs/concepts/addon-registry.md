@@ -37,7 +37,10 @@ the dashboard.
   Kubernetes Ingress NGINX provider serves that class). It is enough for a
   blocker, because Ingress NGINX is retired as a whole.
 - **Node container runtimes.** `node.status.nodeInfo.containerRuntimeVersion`
-  (`containerd://1.7.27`).
+  (`containerd://1.7.27`). Only containerd has an entry: other runtimes
+  (`cri-o://`, `docker://`) are reported as an `addon-no-data/<runtime>`
+  info finding naming their nodes, because their end of life and
+  Kubernetes compatibility are not assessed.
 
 Rendered manifests (`scan --files`, and `/gate`, which with `?cluster=`
 merges the add-ons it finds into the cluster's) are matched the same way,
@@ -81,7 +84,26 @@ on its own, grouped by release line: with Istio 1.28 in one team's
 namespace and 1.29 in another's, the ended 1.28 line is a finding keyed
 `eol-addon/istio/1.28` that names only the namespaces and teams running
 1.28, so a newer install neither hides an older one nor shares its blame. A product retired as a
-whole is one finding naming every install.
+whole is one finding naming every install. A node runtime's
+`chart-incompat` blocker always lists the nodes that cannot run the target
+(at most 10 named, the rest counted), since nodes have no namespace to
+name them by.
+
+## Evidence is tenant-controlled
+
+Every source above except node runtimes and IngressClasses is written by
+whoever can write to the namespace: Helm release Secrets and ConfigMaps,
+pod images and pod labels. A tenant with `secrets: create` in its own
+namespace can forge a Helm release, and one that creates pods chooses
+their images and labels, so findings are only as trustworthy as namespace
+write access. A forged release of chart `ingress-nginx` raises the
+Ingress NGINX blocker for that namespace, and with it the cluster's
+verdict. Hiding works only within the same namespace and only where
+nothing there contradicts the forgery: conflicting evidence is judged at
+its oldest, so a release's chart `appVersion` no longer masks an older
+image running beside it (#165).
+The [security model](../operations/security-model-and-rbac.md#findings-are-only-as-trustworthy-as-namespace-write-access)
+says what this means for a multi-tenant cluster.
 
 Within one namespace, pods without a Helm release behind them (or off its
 release line) are one install at their oldest version: a namespace running

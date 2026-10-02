@@ -59,6 +59,9 @@ a CI gate.
   in the stored release manifests. Releases stored by Helm's configmaps
   driver are read too.
 - Node container runtimes (containerd) are judged against the registry.
+  A runtime the registry does not cover (cri-o, docker) is an
+  `addon-no-data/<runtime>` info finding naming its nodes, instead of
+  nothing (#169).
 - Add-on end of life is judged per release line (Istio 1.24, not "Istio"),
   keyed on the installed app version. Registry schema v2 adds
   `tools/eol-sync`-generated cycles, path-suffix image matchers and Helm
@@ -406,6 +409,16 @@ a CI gate.
   any file in `registry/data` that is not `*.yaml`. The registry notes
   that endoflife.date puts Istio 1.29's end of life at 31 October 2026
   where istio.io says 12 October (#166).
+- Control-plane and kube-proxy versions are read from per-architecture
+  images (`gke.gcr.io/kube-proxy-amd64`, `kube-scheduler-amd64`), so GKE's
+  kube-proxy is skew-checked. A component pod whose version cannot be read
+  (a digest-only image, a tag such as `latest`, or a labelled pod running
+  an image of another name) makes the `versions` capability partial,
+  naming the components and the first pod, instead of being dropped
+  silently (#169).
+- The containerd compat blocker (`chart-incompat/containerd/<line>`) names
+  the nodes that cannot run the target even when they all run one version,
+  so blocker-only outputs (gate, JUnit, code quality) say where (#169).
 
 ### Security
 
@@ -419,6 +432,17 @@ a CI gate.
   SLSA provenance and build attestations. A ruleset makes release tags
   immutable.
 - An OpenSSF Scorecard workflow publishes its results.
+- One Helm release object can no longer exhaust the agent's memory. A
+  951 KB release Secret whose gzip held 700 MiB took a scan to 1.93 GB and
+  OOM-killed the agent at its 256Mi limit; anyone who can create a Secret
+  or ConfigMap in one namespace could plant one. Each release payload is
+  now decoded within 4 MiB stored and 32 MiB decompressed (real releases
+  are a few MiB); one over either is skipped as `release payload too
+  large` on a partial `helm` capability, and the rest are still read
+  (#168).
+- The security model documents that Helm release Secrets, pod images and
+  labels are tenant-controlled evidence: findings are only as trustworthy
+  as namespace write access (#165).
 
 ## [0.1.1] - 2026-07-27
 

@@ -15,6 +15,18 @@ once the control plane runs the target.
 | kube-controller-manager, kube-scheduler | `kube-system` pod image tags | not newer than the oldest apiserver; at most 1 minor behind the newest |
 | kube-proxy | `kube-system` pod image tags | not newer than the oldest apiserver; at most 3 minors behind (2 before 1.25) |
 
+A component pod is one labelled `component=<name>` (or `k8s-app=kube-proxy`),
+or one named `<name>-…` that runs the component's image. Its version is
+the tag of the container whose image is named `<name>` or, for
+per-architecture images such as GKE's `gke.gcr.io/kube-proxy-amd64` and
+older kubeadm's `kube-scheduler-amd64`, `<name>-<arch>`; a build suffix
+(`-gke.1000`, `-eksbuild.1`) is dropped. A component pod whose version
+cannot be read — a digest-only image, a tag that is not a version
+(`latest`), or a labelled pod that runs no image of the component's name
+(a vendor image named otherwise) — is not skipped silently: the
+`versions` capability is reported partial, naming the components and the
+first such pod with its image, because its skew was not evaluated.
+
 `kubectl` client skew is in the policy but is not checked: client versions
 appear only in apiserver audit logs, which upgradescope does not read.
 
@@ -56,7 +68,7 @@ controller-manager or scheduler pods to read. The skew checks then use the
 `/version` answer as the apiserver version and simply have no
 controller-manager or scheduler to judge: no finding, and no false one.
 Kubelets and, where it runs as a pod in `kube-system`, kube-proxy are still
-checked. Managed-cluster version strings (`v1.33.1-eks-…`, `-gke.…`, k3s,
+checked (GKE's `kube-proxy-amd64` image included). Managed-cluster version strings (`v1.33.1-eks-…`, `-gke.…`, k3s,
 RKE2 and OpenShift suffixes) parse
 ([Managed clusters](../guides/managed-clusters.md)).
 

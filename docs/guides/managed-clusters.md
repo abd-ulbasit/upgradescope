@@ -19,7 +19,11 @@ see.
   pods to read. Their skew rules have nothing to compare and produce no
   finding (and no false one); the apiserver version comes from `/version`.
   Kubelets are still checked against it, and so is kube-proxy wherever it
-  runs as pods in `kube-system` ([Version skew](../concepts/version-skew.md)).
+  runs as pods in `kube-system`, including GKE's per-architecture
+  `gke.gcr.io/kube-proxy-amd64` image. A kube-proxy pod whose version
+  cannot be read from its image (digest-only, or a vendor image of another
+  name) makes the `versions` capability partial, naming the pod, rather
+  than passing silently ([Version skew](../concepts/version-skew.md)).
 - **Provider version strings parse**: `v1.33.1-eks-…`, `v1.33.1-gke.…`,
   and the k3s, RKE2 and OpenShift suffixes (tested with observed git
   versions, `TestParseVersionObservedGitVersions`).

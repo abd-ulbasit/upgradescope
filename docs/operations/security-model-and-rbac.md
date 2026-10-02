@@ -52,6 +52,50 @@ way.
 `rbac.create=false` lets you bind a role of your own; each collector that
 lacks access degrades to "not assessed" with the reason.
 
+## Findings are only as trustworthy as namespace write access
+
+Most of what upgradescope judges comes from objects that whoever can
+write to a namespace controls: Helm release Secrets and ConfigMaps (labels
+`owner=helm`), pod images and tags, and pod labels such as
+`app.kubernetes.io/name` and `app.kubernetes.io/version`. Nothing proves
+that a release object was written by Helm or that a label tells the
+truth. A tenant with `create` on Secrets (or ConfigMaps) in its own
+namespace can forge a release, and one that can create pods can run any
+image or label:
+
+- **Fabricate a finding.** A forged release of chart `ingress-nginx`, or a
+  pod labelled `app.kubernetes.io/name=ingress-nginx`, raises the
+  `eol-addon/ingress-nginx` blocker for that namespace and, through it,
+  the cluster's verdict and every gate that reads it.
+- **Hide a finding**, within its own namespace and only where nothing
+  else there contradicts the forgery: a release whose chart `appVersion`
+  claims a newer version of an add-on no longer masks an older image
+  running in the same namespace, because the oldest version the namespace
+  shows is judged (#165), but it still stands for an add-on whose image
+  no matcher recognizes.
+
+The effects stay within what the tenant can write: its forged evidence is
+attributed to its own namespace (and team), it cannot change what
+upgradescope reads from other namespaces, nodes or the API server
+(`/version`, `/metrics`, discovery), and it cannot make the agent write
+anything but its own `ClusterReadiness`. Treat findings about add-ons and
+Helm releases in a namespace as no more trustworthy than the namespace's
+write access; where tenants are not trusted, review a blocker's namespaces
+before acting on it, and suppress with a reason what you have verified
+to be forged ([Suppressions and baselines](../guides/suppressions-and-baselines.md)).
+
+Forged or not, one object cannot take the agent down: each Helm release
+payload is decoded within fixed bounds (4 MiB stored, 32 MiB of JSON once
+decompressed). A release over them, such as a gzip bomb that decompresses
+to hundreds of MiB, is skipped as `release payload too large` and named on
+the `helm` capability, which becomes partial; the others are still read.
+Decoding one over-cap release peaks at about 112 MiB of heap above the
+collector's baseline (`TestCollectHelmGzipBombIsBounded`; its whole test
+process peaks at 157 MB resident), which fits the agent's default 256Mi
+limit; before the bound, a 951 KB Secret that decompressed to 700 MiB took
+a scan to 1.93 GB and OOM-killed the agent (#168). Releases are decoded
+one at a time, so the bound holds however many such objects there are.
+
 ## What the agent writes
 
 Only its own `ClusterReadiness` object (`agent.crName`, default `cluster`),
