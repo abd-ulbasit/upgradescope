@@ -94,9 +94,9 @@ var controlPlaneComponents = []string{
 // first one by name, and the versions that were read are still recorded.
 // That is a pod running the component's image under a tag that is not a
 // version (digest-only, "latest"), or a pod labelled as the component
-// (component=, k8s-app=kube-proxy) that runs no image of its name (RKE2's
-// hardened-kubernetes). A pod only named like a component that runs
-// another image (kube-scheduler-extender) is not that component.
+// (component=, k8s-app=kube-proxy) that runs no image of its name or of
+// every component (a wrapper image). A pod only named like a component
+// that runs another image (kube-scheduler-extender) is not that component.
 //
 // Managed control planes (EKS, GKE, AKS, ...) run the apiserver, controller
 // manager, and scheduler outside the cluster: no matching pods exist, which
@@ -184,9 +184,16 @@ func classifyControlPlanePod(name string, labels map[string]string) (comp string
 // which GKE and older kubeadm releases use.
 var componentArches = []string{"amd64", "arm64", "arm", "ppc64le", "s390x"}
 
+// allComponentsImages are images that run every control-plane component
+// and kube-proxy, tagged with the Kubernetes version: RKE2's static pods
+// all run "docker.io/rancher/hardened-kubernetes:v1.34.2-rke2r1-build...".
+var allComponentsImages = []string{"hardened-kubernetes"}
+
 // componentImageTag extracts the version tag for comp from the container
-// whose image repo basename is comp or comp-<arch> (e.g.
-// ".../eks/kube-proxy:v1.33.0", "gke.gcr.io/kube-proxy-amd64:v1.32.0-gke.1000").
+// whose image repo basename is comp, comp-<arch> or an image of every
+// component (e.g. ".../eks/kube-proxy:v1.33.0",
+// "gke.gcr.io/kube-proxy-amd64:v1.32.0-gke.1000", RKE2's
+// "rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101").
 // Build suffixes ("v1.33.0-eksbuild.1", "+fips") are stripped; the tag is
 // returned only if inventory.ParseVersion accepts the normalized form.
 // When comp's image is there but no tag parses, why says so, naming the
@@ -195,7 +202,8 @@ func componentImageTag(containers []corev1.Container, comp string) (tag, why str
 	for _, c := range containers {
 		repo, t := splitImage(c.Image)
 		base := repo[strings.LastIndex(repo, "/")+1:]
-		if arch, ok := strings.CutPrefix(base, comp+"-"); base != comp && (!ok || !slices.Contains(componentArches, arch)) {
+		arch, ok := strings.CutPrefix(base, comp+"-")
+		if base != comp && !(ok && slices.Contains(componentArches, arch)) && !slices.Contains(allComponentsImages, base) {
 			continue
 		}
 		v := t
