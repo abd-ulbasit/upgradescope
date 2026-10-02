@@ -336,7 +336,7 @@ func TestEvalAPIUsageTombstoneBoundary(t *testing.T) {
 }
 
 // A GVK the KB does not know is judged by its group. In a group the KB
-// knows (or core), it is a built-in API the KB has no lifecycle data for:
+// has entries for (core here), it is a built-in API the KB has no lifecycle data for:
 // one upstream deleted, a typo, or a type never tagged. Dropping it read
 // as ready, so it is an unscored info finding (#124 KB-01). A CRD or
 // aggregated API group stays silent: the KB never covers those.
