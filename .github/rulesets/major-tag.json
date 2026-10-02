@@ -1,0 +1,19 @@
+{
+  "name": "floating major tag v0 moves only through the release workflow",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/tags/v0"],
+      "exclude": []
+    }
+  },
+  "bypass_actors": [
+    { "actor_id": 15368, "actor_type": "Integration", "bypass_mode": "always" }
+  ],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "update" },
+    { "type": "non_fast_forward" }
+  ]
+}
