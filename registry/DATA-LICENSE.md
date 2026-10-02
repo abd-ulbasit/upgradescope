@@ -22,11 +22,14 @@ ranges) and links to the pages that state them. It does not copy those pages.
 
 ### endoflife.date
 
-Entries that declare an `endoflife_product` slug (10 of the current 18) do
-not hand-maintain `support.status` and `support.eol_date`. Those two fields
-are synced by [`tools/eol-sync`](../tools/eol-sync) from the
+Entries that declare an `endoflife_product` slug (11 of the 20 on
+2026-10-03; `grep -l '^endoflife_product:' registry/data/*.yaml` counts them)
+do not hand-maintain their `cycles`. The `cycles:` block, each release line
+with its end-of-life date and the Kubernetes range it supports, is synced by
+[`tools/eol-sync`](../tools/eol-sync) from the
 [endoflife.date](https://endoflife.date) API
-(`https://endoflife.date/api/<slug>.json`).
+(`https://endoflife.date/api/<slug>.json`), one cycle at a time. eol-sync
+never writes `support.status` or `support.eol_date`: a person records those.
 
 endoflife.date is published under the
 [MIT License](https://github.com/endoflife-date/endoflife.date/blob/master/LICENSE),
@@ -37,9 +40,9 @@ The MIT License requires the copyright notice and permission notice to travel
 with copies. Both are reproduced in full in the repository's
 [`NOTICE`](../NOTICE) file.
 
-When you redistribute the synced fields, keep this attribution:
+When you redistribute the synced cycles, keep this attribution:
 
-> End-of-life data for synced entries from [endoflife.date](https://endoflife.date),
+> End-of-life data for synced cycles from [endoflife.date](https://endoflife.date),
 > Copyright 2020 endoflife.date contributors, MIT License.
 
 The remaining entries are hand-curated from the upstream project pages they
@@ -48,7 +51,7 @@ cite, such as release and support-policy pages and compatibility matrices.
 ## Reusing the dataset
 
 - The entries are plain YAML, and the schema is documented in
-  [`CONTRIBUTING.md`](CONTRIBUTING.md#schema-schema_version-1).
+  [`CONTRIBUTING.md`](CONTRIBUTING.md#schema-schema_version-2).
 - Go programs can import `github.com/abd-ulbasit/upgradescope/registry` and
   call `registry.Load()`, which returns the validated, embedded entries.
 - No warranty: dates and statuses are as accurate as the cited sources and

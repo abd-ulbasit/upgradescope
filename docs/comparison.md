@@ -3,20 +3,22 @@
 Several tools answer parts of "what breaks when this cluster moves to the
 next Kubernetes minor?". This page says what each does that upgradescope
 does not, and the other way round, with a source for every claim about
-another tool (checked 2026-10-02; tools change, so check their current docs
+another tool (checked 2026-10-02, and 2026-10-03 for Radar and
+pluto's FAQ and data file; tools change, so check their current docs
 before deciding). Corrections are welcome as issues.
 
 ## In one table
 
 | | Deprecated / removed APIs | Add-on end of life | Version skew | Continuous | Fleet view |
 |---|---|---|---|---|---|
-| **pluto** | manifests, Helm releases, in-cluster resources | no | no | no (CLI) | no |
+| **pluto** | manifests, Helm releases, in-cluster resources | no (API versions of cert-manager and Istio only) | no | no (CLI) | no |
 | **kubent** | manifests, last-applied annotations, Helm releases | no | no | no (CLI) | no |
 | **kubepug** | live cluster or manifests, against a target's data | no | no | no (CLI) | no |
 | **Nova** | no | outdated and deprecated Helm charts, outdated images | no | no (CLI) | no |
 | **EKS cluster insights** | yes | EKS-managed add-on compatibility | kubelet, kube-proxy | yes, every 24 h | no (per cluster) |
 | **GKE deprecation insights** | requests to deprecated APIs | no | no | yes | per project and location |
 | **AKS** | blocks a minor upgrade on recent deprecated API use | no | no | at upgrade time | — |
+| **Radar** (Skyhook) | removed APIs in the target, from live resources, Helm manifests, last-applied configuration and apiserver metrics | not documented | kubelet, kube-proxy | live UI, checked when opened | hosted Radar Cloud (commercial) |
 | **Chkk** (commercial) | breaking changes and incompatibilities, curated (see below) | see below | see below | yes (SaaS) | yes |
 | **upgradescope** | written objects, manifests, Helm releases, apiserver requests | 20 add-ons, cited | kubelet, kube-proxy, control plane | yes (agent) | yes (server) |
 
@@ -30,8 +32,18 @@ apiVersions in manifests and Helm charts (`detect-files`), in Helm releases
 in a cluster (`detect-helm`), in resources running in a cluster
 (`detect-api-resources`, which reads the `last-applied-configuration`
 annotation), and both of the latter at once (`detect-all-in-cluster`)
-([quickstart](https://pluto.docs.fairwinds.com/quickstart/)). It has CI exit
-codes and a GitHub Action.
+([quickstart](https://pluto.docs.fairwinds.com/quickstart/)). Its own
+[FAQ](https://pluto.docs.fairwinds.com/faq/) calls that annotation an
+unreliable way to detect deprecated APIs on a live cluster: it holds the
+version an object was created with, and a `kubectl patch` removes it. pluto
+has CI exit codes and a GitHub Action.
+
+Its data, `versions.yaml`, also lists the deprecated API versions of two
+add-ons besides Kubernetes itself: cert-manager (24 entries on 2026-10-03)
+and Istio (2)
+([versions.yaml](https://github.com/FairwindsOps/pluto/blob/master/versions.yaml)).
+That is API-version coverage for their custom resources, not product end of
+life, which is why the table says "no" for add-on end of life.
 
 - **pluto, not upgradescope:** a lighter single-purpose binary; a long
   record in CI pipelines.
@@ -41,6 +53,30 @@ codes and a GitHub Action.
   apiserver's record of deprecated requests; add-on EOL, version skew and
   chart `kubeVersion`; a verdict that says when it could not see enough; a
   continuous agent and a fleet server.
+
+## Radar (Skyhook)
+
+[Radar](https://github.com/skyhook-io/radar) is an Apache-2.0 Kubernetes UI
+that runs as one binary from a laptop or in the cluster. It is made by
+Skyhook (the skyhook-io organisation), not Fairwinds. Its *Upgrade impact* check compares the cluster with a
+target minor and lists blockers (skipped minors, APIs removed in the target,
+unsupported kubelet or kube-proxy skew) and warnings. It reads live
+resources, Helm release manifests, kubectl last-applied configuration, API
+server usage metrics and PrometheusRule expressions, and marks a check
+Incomplete when evidence is missing
+([README](https://github.com/skyhook-io/radar#kubernetes-upgrade-impact)).
+The README does not describe add-on end-of-life data, and a hosted
+multi-cluster Radar Cloud is the commercial product
+([README](https://github.com/skyhook-io/radar#readme)).
+
+- **Radar, not upgradescope:** a general cluster UI (topology, Helm, GitOps,
+  traffic) with upgrade impact as one view; checks beyond APIs and skew,
+  such as PodDisruptionBudgets and feature gates; a catalog reviewed
+  through Kubernetes 1.37.
+- **upgradescope, not Radar:** a CI gate (exit codes, SARIF, JUnit, GitLab),
+  baselines and suppressions with reasons, cited add-on end-of-life data, a
+  continuous agent and an open-source fleet server with history and
+  notifications.
 
 ## kubent (kube-no-trouble)
 
@@ -137,6 +173,8 @@ public, cited pages ([background research](research.md)).
 - Only deprecated and removed APIs, in one CI step: pluto, kubent or
   kubepug are smaller, single-purpose binaries.
 - "Is there a newer chart?": Nova.
+- A UI to browse the cluster, with an upgrade-impact view and more
+  upgrade checks (PodDisruptionBudgets, feature gates): Radar.
 - On a single managed cluster, the provider's insights are already there;
   upgradescope adds pre-merge CI gating, third-party add-ons and a
   cross-provider fleet view.

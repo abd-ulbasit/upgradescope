@@ -177,6 +177,13 @@ GORELEASER_VERSION ?= v2.17.1
 release-check:
 	GORELEASER_VERSION=$(GORELEASER_VERSION) ./hack/release-check.sh
 
+# Builds the last release tag and this tree and fails when a removed flag,
+# changed default or changed usage line is not named under CHANGELOG.md's
+# Changed (needs the tags; CI's release-check job, #167).
+.PHONY: flags-diff
+flags-diff:
+	./hack/flags-diff.sh
+
 # Builds the snapshot of HEAD twice from fresh clones and fails unless the
 # checksums (archives, packages) match; with GORELEASER_SKIP=publish,sign,sbom
 # (Docker needed) the per-platform image IDs must match too.
@@ -278,6 +285,7 @@ hack-test:
 	./hack/kb-refresh-ci_test.sh
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh
+	./hack/flags-diff_test.sh
 	./hack/check-doc-sizes_test.sh
 	./hack/chart-release-annotations_test.sh
 	./hack/vuln-latest-release_test.sh

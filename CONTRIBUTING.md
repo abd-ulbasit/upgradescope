@@ -194,7 +194,7 @@ kubectl and kubeconform are also checked against their upstream sha256
 | `helm` | PR, push | `make helm-test` | `helm lint --strict`, the values render matrix, kubeconform (strict) on every render against Kubernetes 1.29 and 1.37, `hack/test-chart.sh` contract |
 | `images` | PR, push | `make images` | `Dockerfile` and `Dockerfile.release` build for linux/amd64 and linux/arm64 (nothing pushed) |
 | `pg-conformance` | PR, push (Postgres 17); weekly (14–18) | `make pg-test` (`PG_VERSION=14`, …) | the store conformance suite against a real Postgres |
-| `release-check` | PRs touching release inputs, dispatch, release | `make release-check` (no Docker: `GORELEASER_SKIP=publish,sign,sbom,docker`) | `goreleaser check` and a snapshot with the pinned GoReleaser, archive names match what `action/run.sh` downloads, `checksums.txt` covers the `api/` contracts, the sizes the README and Install page state are within 2% of the build, the binary serves the dashboard |
+| `release-check` | PRs touching release inputs, dispatch, release | `make release-check` (no Docker: `GORELEASER_SKIP=publish,sign,sbom,docker`) | `goreleaser check` and a snapshot with the pinned GoReleaser, archive names match what `action/run.sh` downloads, `checksums.txt` covers the `api/` contracts, the sizes the README and Install page state are within 2% of the build, the binary serves the dashboard, and every flag, default or usage line the CLI lost or changed since the last release tag is named under CHANGELOG.md's Changed (`make flags-diff`) |
 | `kube` | PR, push (Kubernetes 1.31, 1.37); weekly (1.29–1.37) | `make e2e E2E_MINOR=1.31` | see below |
 | `action` | PRs touching the action or anything the binary is built from (`cmd/`, `internal/`, `registry/`, `go.mod`/`go.sum`); weekly (Linux, macOS) | `make action-test` (offline); the rest needs a published release | `action/run.sh` offline (input validation, checksum-verified install, outputs, annotations, step summary, an injection payload); then both `action.yml` paths for real: the latest release archive, this tree's binary on removed and clean fixtures, with an ignore rule (`config`) and against a baseline (`baseline`, `write-baseline`) |
 | `registry` | PRs touching `registry/` | `go test ./registry/ && make eol-check` | registry entries are valid and in sync with endoflife.date |
@@ -223,6 +223,18 @@ matrices, the Action check and KB freshness, because advisories, images and
 releases change without a commit here. `release.yml` calls `ci.yml` at the
 tagged commit and publishes nothing unless it passes.
 
+Breaking CLI changes are caught only at that point, because `release-check`
+runs for release inputs and the release, not for every PR that edits `cmd/` or
+`internal/`. `hack/flags-diff.sh` (`make flags-diff`) builds the last stable
+release tag and this tree, walks both command trees through `--help`, and
+fails when a removed flag, a changed default or type, a removed command or a
+changed usage line is not named under **Changed** in `CHANGELOG.md` (the flag
+as `--name`, a changed default with its new value, a command by its path). It
+needs the tags (`git fetch --tags`) and a Go toolchain. Run it when your PR
+changes a flag, and add the entry with a migration note in the same PR; the
+release run is the backstop. A new flag, a relaxed requirement and reworded
+help are not checked: list the ones that matter anyway. The old tag is built
+in the job (a minute of `go build`), so no manual step is needed.
 To add a Kubernetes minor, add its node image (with the digest from the kind
 release notes) to `hack/kind-node-images.txt`; `make hack-test` validates the
 table.
@@ -257,6 +269,7 @@ PR checklist (the template repeats it):
 - [ ] `go test -race` passes for the packages you touched
 - [ ] new behaviour has tests, and golden diffs are intentional and explained
 - [ ] user-facing changes are documented (README, chart README, `--help` text)
+- [ ] a removed or renamed flag, a changed default and any other break is under Changed in `CHANGELOG.md` with a migration note (`make flags-diff` checks flags)
 - [ ] registry changes follow [`registry/CONTRIBUTING.md`](registry/CONTRIBUTING.md), and `make eol-check` passes
 - [ ] the commit messages follow the conventions above
 

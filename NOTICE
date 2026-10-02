@@ -28,10 +28,11 @@ third-party sources.
 
 2. endoflife.date
 
-   For registry entries that declare `endoflife_product`, the
-   support.status and support.eol_date fields in registry/data/*.yaml are
-   synced by tools/eol-sync from the endoflife.date API
-   (https://endoflife.date). See registry/DATA-LICENSE.md.
+   For registry entries that declare `endoflife_product`, the `cycles:`
+   blocks (release lines with their end-of-life dates and supported
+   Kubernetes ranges) in registry/data/*.yaml are synced by tools/eol-sync
+   from the endoflife.date API (https://endoflife.date). See
+   registry/DATA-LICENSE.md.
 
    Copyright 2020 endoflife.date contributors.
    Licensed under the MIT License:

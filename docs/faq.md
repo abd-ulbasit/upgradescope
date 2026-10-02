@@ -58,8 +58,11 @@ not an access boundary. Run one server per tenant, or put an authenticating
 proxy in front. [Tenancy](operations/tenancy.md).
 
 **Does it support kubectl client skew, CRD versions, feature gates?**
-Not today: client skew needs audit logs, deprecated CRD versions are
-tracked in [#48](https://github.com/abd-ulbasit/upgradescope/issues/48), and feature gates are not in the knowledge base.
+CRD versions yes: a scan reports deprecated, unserved and
+stored-but-unserved versions of the CRDs it finds, live and in `--files`
+([#157](https://github.com/abd-ulbasit/upgradescope/pull/157)). Not today:
+client skew needs audit logs, and feature gates are not in the knowledge
+base.
 
 **Who wrote it?**
 The design, the decisions in the [architecture guide](architecture.md)
