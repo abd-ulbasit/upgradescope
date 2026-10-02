@@ -7,13 +7,11 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
-// reportSchemaVersion versions the shape of the JSON report. Stability
-// promise: within one schemaVersion, fields are only ever added — never
-// renamed, removed, retyped or given a new meaning — so consumers must
-// ignore fields they do not know. Any breaking change bumps it. toolVersion
-// is informational (the binary that produced the report) and carries no
-// compatibility meaning.
-const reportSchemaVersion = 1
+// reportSchemaVersion versions the shape of the JSON report, shared with the
+// server's report-shaped responses (engine.ReportSchemaVersion, which states
+// the stability promise). toolVersion is informational (the binary that
+// produced the report) and carries no compatibility meaning.
+const reportSchemaVersion = engine.ReportSchemaVersion
 
 // WriteJSON renders the report as canonical two-space-indented JSON with a
 // trailing newline. This is the machine-readable contract; field names come
@@ -32,12 +30,11 @@ func WriteJSON(w io.Writer, r engine.Report) error {
 // that the findings' object file paths are relative to.
 func writeJSON(w io.Writer, r engine.Report, filesBase *string) error {
 	out := struct {
-		SchemaVersion int     `json:"schemaVersion"`
-		ToolVersion   string  `json:"toolVersion"`
-		FilesBase     *string `json:"filesBase,omitempty"`
+		engine.Envelope
+		FilesBase *string `json:"filesBase,omitempty"`
 		engine.Report
 		Teams map[string]engine.TeamScore `json:"teams,omitempty"`
-	}{SchemaVersion: reportSchemaVersion, ToolVersion: version, FilesBase: filesBase, Report: r, Teams: teamScoresForOutput(r)}
+	}{Envelope: engine.NewEnvelope(version), FilesBase: filesBase, Report: r, Teams: teamScoresForOutput(r)}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)

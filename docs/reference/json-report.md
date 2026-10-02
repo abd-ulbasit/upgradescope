@@ -25,6 +25,12 @@ values are fixed. A breaking change bumps
 ([compatibility policy](../compatibility-policy.md)). `toolVersion` names
 the binary that wrote the report and carries no compatibility meaning.
 
+The server's report-shaped responses lead with the same two fields: a
+cluster's report (`GET /api/v1/clusters/{id}/report`, stored or what-if)
+and the gate's JSON answer (`POST /api/v1/gate`). There `toolVersion` is
+the serving server's build, also for an evaluation an older server stored
+([REST API](api.md)).
+
 ## Example
 
 `scan --files rendered --target 1.37 --output json` on one

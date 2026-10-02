@@ -43,15 +43,18 @@ var yamlContentTypes = map[string]bool{
 // With ?cluster=<name|id>, the cluster's latest inventory provides the
 // evaluation context (server version, nodes, add-ons, deprecated calls,
 // namespace team labels) and the manifest objects are upserted into its
-// API usage — "would THESE manifests block THIS cluster's upgrade". The
-// cluster as it is is evaluated too (the baseline): findings it already has
-// are tagged source "cluster" and kept for context, and the verdict judges
-// only the findings the manifests introduce (source "manifest"), so a
-// cluster's existing EOL add-on does not fail every PR. A removed or
-// deprecated API that a manifest object uses is always introduced, even
-// when the cluster already has objects at that API (see gateResult).
-// Without it, the manifests are evaluated standalone (api-usage only, like
-// scan --files).
+// API usage, the add-ons they deploy into its add-ons, and their CRDs and
+// custom resources into its CRDs (mergeManifests) — "would THESE
+// manifests block THIS cluster's upgrade". The cluster as it is is
+// evaluated too (the baseline): findings it already has are tagged source
+// "cluster" and kept for context, and the verdict judges only the findings
+// the manifests introduce (source "manifest"), so a cluster's existing EOL
+// add-on does not fail every PR. A removed or deprecated API that a
+// manifest object uses, an add-on the manifests deploy and a custom
+// resource they write at a version the CRDs do not serve are always
+// introduced, even when the cluster already has the same (see
+// introducedKeys and gateResult). Without it, the manifests are evaluated
+// standalone, like scan --files (API usage, add-ons and CRDs).
 //
 // ?fail-on=blocker|warning|never makes the gate fail like `scan --fail-on`,
 // whose default it shares (blocker): an introduced finding at or above the
@@ -112,6 +115,10 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("invalid path %q (want the repository-relative file the stream was rendered to, e.g. deploy/rendered.yaml)", artifact))
 		return
 	}
+	rules, ok := gateIgnoreRules(w, r)
+	if !ok {
+		return
+	}
 
 	// The body stays charged to the shared buffered-body budget until it is
 	// decoded, and the evaluation slot is held only for decoding and
@@ -141,7 +148,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 
 	inv := manifests
 	var baseline *engine.Report
-	var introduced map[string]bool
+	var introduced gateSide
 	if ref := r.URL.Query().Get("cluster"); ref != "" {
 		clusterInv, ok := s.gateClusterContext(w, r, ref)
 		if !ok {
@@ -152,14 +159,10 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		// not blamed on the PR.
 		base := engine.Evaluate(clusterInv, s.cfg.KB, target, s.now())
 		baseline = &base
-		// The findings the manifests' own objects produce: a removed or
-		// deprecated API a manifest object uses is introduced by the PR,
-		// even when the cluster already has objects at that API.
-		introduced = usageKeys(engine.Evaluate(manifests, s.cfg.KB, target, s.now()))
 		// Merge: cluster context + manifest API usage. The manifest objects
 		// are upserted into the cluster's API usage (see upsertUsage), and
-		// every other signal (server version, nodes, add-ons, deprecated
-		// calls, namespaces) stays.
+		// every other signal (server version, nodes, deprecated calls,
+		// namespaces) stays.
 		inv = clusterInv
 		inv.APIUsage = upsertUsage(clusterInv.APIUsage, manifests.APIUsage)
 		inv.Capabilities = maps.Clone(clusterInv.Capabilities)
@@ -167,13 +170,20 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 			inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{}
 		}
 		inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true}
+		// The manifests' add-ons and CRDs are merged too (mergeManifests),
+		// and the findings the manifests' own content produces, once
+		// suppressed, are introduced by the PR (suppressSide).
+		side := mergeManifests(&inv, manifests)
+		introduced = s.suppressSide(engine.Evaluate(side, s.cfg.KB, target, s.now()), rules)
 	} else {
 		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	}
 
-	rep := engine.Evaluate(inv, s.cfg.KB, target, s.now())
+	rep, warnings := s.suppressGate(engine.Evaluate(inv, s.cfg.KB, target, s.now()), rules)
 	releaseSlot()
 	resp := gateResult(rep, baseline, introduced)
+	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
+	resp.Warnings = warnings
 	w.Header().Set("X-Upgradescope-Verdict", string(resp.Verdict))
 	status := http.StatusOK
 	if gateFails(resp, failOn) {
@@ -216,13 +226,21 @@ type gateFinding struct {
 // verdict judges only what the manifests introduce: Verdict and Ready
 // shadow the report's, and ClusterVerdict keeps the whole proposed state's.
 // Score stays the whole proposed state's, cluster findings included: gate
-// on verdict (or fail-on), not on score.
+// on verdict (or fail-on), not on score. Suppressed findings (the report's
+// suppressed, counted in SuppressedCount) count toward none of them.
 type gateResponse struct {
 	reportWithTeams
-	Findings       []gateFinding  `json:"findings"`
-	Verdict        engine.Verdict `json:"verdict"`
-	Ready          bool           `json:"ready"`
-	ClusterVerdict engine.Verdict `json:"clusterVerdict,omitempty"` // with ?cluster= only
+	Findings        []gateFinding  `json:"findings"`
+	Verdict         engine.Verdict `json:"verdict"`
+	Ready           bool           `json:"ready"`
+	ClusterVerdict  engine.Verdict `json:"clusterVerdict,omitempty"` // with ?cluster= only
+	SuppressedCount int            `json:"suppressedCount"`          // len(Suppressed)
+	// Warnings are suppression's (see suppressGate): scan prints them on
+	// stderr, the gate's JSON answer carries them.
+	Warnings []string `json:"warnings,omitempty"`
+	// introducedSuppressed are the suppressed findings attributed to the
+	// manifests, for the formats that hold only what they introduce.
+	introducedSuppressed []engine.SuppressedFinding
 }
 
 // gateResult tags every finding of rep with its source and computes the
@@ -234,18 +252,27 @@ type gateResponse struct {
 // metrics supply caller rows), as is any finding whose key the baseline
 // has; anything else is the manifests' (fail closed). The verdict is
 // blocked on an introduced blocker, else unknown when the proposed state
-// has a required gap (a blocker may have gone unseen), else ready.
-func gateResult(rep engine.Report, baseline *engine.Report, introduced map[string]bool) gateResponse {
+// has a required gap (a blocker may have gone unseen), else ready. The
+// suppressed findings the CI formats carry are all of rep's without a
+// baseline, else the manifests' side's (introduced.suppressed).
+func gateResult(rep engine.Report, baseline *engine.Report, introduced gateSide) gateResponse {
 	existing := map[string]bool{}
 	if baseline != nil {
 		existing = keySet(baseline.Findings, func(engine.Finding) bool { return true })
 	}
-	resp := gateResponse{reportWithTeams: withTeams(rep), Findings: []gateFinding{}, Verdict: engine.VerdictReady}
-	for _, f := range rep.Findings {
-		src := sourceManifest
-		if baseline != nil && !introduced[findingKey(f)] && (f.Category == engine.CatDeprecatedAPIInUse || existing[findingKey(f)]) {
-			src = sourceCluster
+	source := func(f engine.Finding) string {
+		if baseline != nil && !introduced.keys[findingKey(f)] && (f.Category == engine.CatDeprecatedAPIInUse || existing[findingKey(f)]) {
+			return sourceCluster
 		}
+		return sourceManifest
+	}
+	resp := gateResponse{reportWithTeams: withTeams(rep), Findings: []gateFinding{}, Verdict: engine.VerdictReady, SuppressedCount: len(rep.Suppressed)}
+	resp.introducedSuppressed = rep.Suppressed
+	if baseline != nil {
+		resp.introducedSuppressed = introduced.suppressed
+	}
+	for _, f := range rep.Findings {
+		src := source(f)
 		resp.Findings = append(resp.Findings, gateFinding{Finding: f, Source: src})
 		if src == sourceManifest && f.Severity == engine.SevBlocker {
 			resp.Verdict = engine.VerdictBlocked
@@ -270,8 +297,10 @@ func gateResult(rep engine.Report, baseline *engine.Report, introduced map[strin
 // with the gate's verdict; findings the cluster already has stay in the
 // JSON answer, tagged source cluster. Score stays the proposed state's.
 // The JUnit and Code Quality answers, which land on the PR too, carry it.
+// Suppressed findings are kept on the same terms: the manifests' only.
 func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
 	out := rep
+	out.Suppressed = resp.introducedSuppressed
 	out.Findings = []engine.Finding{}
 	for _, f := range resp.Findings {
 		if f.Source == sourceManifest {

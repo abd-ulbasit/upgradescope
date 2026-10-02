@@ -299,10 +299,14 @@ The CI gate for rendered manifests.
 **Gate rendered manifests.** Evaluates a YAML (or JSON) manifest stream against a target and
 stores nothing. Without `cluster`, the manifests are judged alone,
 like `scan --files`. With `cluster`, they are judged inside that
-cluster's latest stored inventory (its version, nodes, add-ons and
-team labels), and the verdict counts only what the manifests
-introduce (findings tagged `source: manifest`); findings the
-cluster already has are tagged `source: cluster`.
+cluster's latest stored inventory (its version, nodes, add-ons,
+CRDs and team labels), with the manifests' objects, add-ons and
+CRDs merged into it, and the verdict counts only what the
+manifests introduce (findings tagged `source: manifest`); findings
+the cluster already has are tagged `source: cluster`. A removed or
+deprecated API a posted object uses, an add-on the manifests
+deploy, and a custom resource they write at a version the CRDs do
+not serve are always the manifests'.
 
 `fail-on` works like `scan --fail-on` (default `blocker`): when an
 introduced finding reaches it, or the verdict is `unknown`, the
@@ -315,6 +319,19 @@ JUnit XML whose test outcomes follow `fail-on`, or a GitLab Code
 Quality report. SARIF, JUnit and Code Quality hold only the
 findings the manifests introduce; the status and verdict header
 are the same in every format.
+
+Suppression works as in `scan`: the `upgradescope.dev/ignore` and
+`upgradescope.dev/ignore-reason` annotations of posted (and, with
+`cluster`, stored) objects, and the ignore rules of a
+`.upgradescope.yaml` sent in `config`. Suppressed findings count
+toward neither the verdict nor `fail-on`; the JSON answer lists
+them in `suppressed` with `suppressedCount`, SARIF as results with
+an external suppression, JUnit as skipped test cases, and Code
+Quality leaves them out. An expired rule no longer applies; it and
+an annotation without a reason are named in `warnings`. There is
+no baseline input: with `cluster`, the cluster's own findings are
+the baseline (`source: cluster`), and manifest-level debt is
+accepted with `scan --baseline` or ignore rules.
 
 Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
 document, 20,000 documents. Evaluations run one at a time; a
@@ -330,6 +347,7 @@ Auth: `readToken` (bearer).
 | `format` | query | `json` \| `sarif` \| `junit` \| `gitlab-codequality` | no | — |
 | `fail-on` | query | `blocker` \| `warning` \| `never` | no | — |
 | `path` | query | string | no | The repository-relative file the stream was rendered to (`deploy/rendered.yaml`). Introduced findings are then located in it in SARIF and Code Quality, so code scanning or the merge request widget shows them on the change. |
+| `config` | query | string | no | A `.upgradescope.yaml` (its text, URL-encoded): ignore rules applied as `scan --config` applies them, `file` globs matched against `path`. An invalid config, one over 32 KiB, or `config` given more than once is a 422. The request line, and so this parameter, also counts toward the server's 64 KiB request-header limit: URL-encoding expands YAML, so a config under 32 KiB can exceed it, and the server then answers 431 with a plain-text body. A reverse proxy in front of the server may refuse a long request line sooner (ingress-nginx's default answers 414 above 8 KiB). |
 
 Request body (`application/x-yaml`): string
 
@@ -340,9 +358,9 @@ Request body (`application/json`): string
 | 200 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) | The gate passed. |
 | 200 | `application/sarif+json` | [SARIF](#sarif) | The gate passed. |
 | 200 | `application/xml` | [JUnit](#junit) | The gate passed. |
-| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on` or `path`, or an undecodable manifest stream: an Error body). |
-| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on` or `path`, or an undecodable manifest stream: an Error body). |
-| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on` or `path`, or an undecodable manifest stream: an Error body). |
+| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
+| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
+| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 413 | `application/json` | [Error](#error) | An error. |
@@ -652,12 +670,23 @@ Team name to score; findings with no team are under `unattributed`.
 
 Type: map of [TeamScore](#teamscore).
 
+### ReportEnvelope
+
+The first two fields of every report-shaped response (a cluster's report and the gate's JSON answer), as of `scan --output json`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `schemaVersion` | `1` | yes | The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy). |
+| `toolVersion` | string | yes | The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning. |
+
 ### ReportFields
 
 The engine's report, as `scan --output json` writes it.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `schemaVersion` | `1` | yes | The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy). |
+| `toolVersion` | string | yes | The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning. |
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
@@ -708,6 +737,8 @@ The report's fields other than its findings.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `schemaVersion` | `1` | yes | The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy). |
+| `toolVersion` | string | yes | The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning. |
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | — |
@@ -846,6 +877,8 @@ The report's fields other than its findings.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `schemaVersion` | `1` | yes | The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy). |
+| `toolVersion` | string | yes | The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning. |
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
@@ -862,6 +895,8 @@ The report's fields other than its findings.
 | `findings` | array of [GateFinding](#gatefinding) | yes | — |
 | `teams` | [TeamScores](#teamscores) | no | — |
 | `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included. |
+| `suppressedCount` | integer | yes | The number of `suppressed` entries. |
+| `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply), and `upgradescope.dev/ignore` annotations without a reason (not applied). |
 
 ### SARIF
 

@@ -49,7 +49,7 @@ type Config struct {
 	ReadToken    string          // optional bearer for the read API; "" = open (document loudly)
 	AdminToken   string          // bearer for cluster delete/rename (also accepted for reads); "" = both refused
 	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
-	Version      string          // build version stamped into SARIF tool metadata ("" = omitted)
+	Version      string          // build version: SARIF tool metadata ("" = omitted there) and toolVersion in report responses ("" when unset)
 
 	// StaleAfter marks a cluster stale when its agent has not pushed
 	// (duplicates included) for longer; 0 = DefaultStaleAfter.

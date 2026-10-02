@@ -488,13 +488,19 @@ if it is deleted, and writes status with conflict retry.
   The read token is optional. Without one, the read API is open.
 - **CI gate** (`POST /api/v1/gate`): the request body is a YAML manifest
   stream. With `?cluster=`, the cluster's latest stored inventory supplies
-  the context (server version, nodes, add-ons, team labels), and only API
-  usage is replaced by the manifests: add-ons in the manifests are not
-  judged there yet ([#150](https://github.com/abd-ulbasit/upgradescope/issues/150)).
-  The question it answers is "would these manifests block this cluster's
-  upgrade?". Without `?cluster=`, the manifests are judged on their own,
-  add-ons included, as `scan --files` judges them. The gate stores nothing
-  and can return SARIF.
+  the context (server version, nodes, add-ons, CRDs, team labels), and the
+  manifests' API usage, add-ons and CRDs are merged into it; the posted
+  custom resources are judged again against the merged CRDs. The question
+  it answers is "would these manifests block this cluster's upgrade?": the
+  cluster as it is serves as the baseline, and only the findings the
+  manifests introduce count toward the verdict. Without `?cluster=`, the
+  manifests are judged on their own (API usage, add-ons, and custom
+  resources against the CRDs in the stream) as `scan --files` judges them.
+  Either way, `upgradescope.dev/ignore` annotations and the ignore rules of
+  a `.upgradescope.yaml` sent in `?config=` are applied with `scan`'s code.
+  The gate stores nothing; it answers JSON (leading with `schemaVersion`
+  and `toolVersion`, like the server's other report responses), SARIF,
+  JUnit or GitLab Code Quality.
 - **Notifications**: after each evaluation, the server diffs the new report
   against the previous one for that cluster and target, using finding keys.
   It emits `new-blocker` (capped at 5, plus an "N more" summary),

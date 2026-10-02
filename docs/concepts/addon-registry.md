@@ -31,10 +31,11 @@ the dashboard.
 - **Node container runtimes.** `node.status.nodeInfo.containerRuntimeVersion`
   (`containerd://1.7.27`).
 
-Rendered manifests (`scan --files`, and `/gate` without `?cluster=`) are
-matched the same way, from the images and labels of Pod, Deployment,
-DaemonSet, StatefulSet, ReplicaSet, Job and CronJob pod templates and from
-IngressClasses. Images injected at admission time are not in them.
+Rendered manifests (`scan --files`, and `/gate`, which with `?cluster=`
+merges the add-ons it finds into the cluster's) are matched the same way,
+from the images and labels of Pod, Deployment, DaemonSet, StatefulSet,
+ReplicaSet, Job and CronJob pod templates and from IngressClasses. Images
+injected at admission time are not in them.
 
 Image repositories that match no entry are listed as `unrecognizedImages`
 (at most 200) in the inventory and the report, in JSON, the table, Markdown

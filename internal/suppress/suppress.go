@@ -119,15 +119,22 @@ func LoadConfig(file string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
+	return ParseConfig(raw, "config "+file)
+}
+
+// ParseConfig parses and validates a config document, as LoadConfig does
+// a file; errors start with name. The server gate reads its config
+// parameter with it.
+func ParseConfig(raw []byte, name string) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	var cfg Config
 	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
-		return Config{}, fmt.Errorf("config %s: %w", file, err)
+		return Config{}, fmt.Errorf("%s: %w", name, err)
 	}
 	for i, r := range cfg.Ignore {
 		if err := r.Validate(); err != nil {
-			return Config{}, fmt.Errorf("config %s: ignore[%d]: %w", file, i, err)
+			return Config{}, fmt.Errorf("%s: ignore[%d]: %w", name, i, err)
 		}
 	}
 	return cfg, nil

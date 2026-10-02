@@ -31,8 +31,10 @@ func renderTeamScores(m map[string]engine.TeamScore) map[string]engine.TeamScore
 
 // reportWithTeams decorates an engine.Report with per-team scores at the
 // presentation layer — Teams is computed, never stored, so the engine's
-// Report contract stays pure.
+// Report contract stays pure. Envelope (schemaVersion, toolVersion) leads
+// the JSON; withTeams leaves it zero and the handler sets it (versioned).
 type reportWithTeams struct {
+	engine.Envelope
 	engine.Report
 	Teams map[string]engine.TeamScore `json:"teams,omitempty"`
 }

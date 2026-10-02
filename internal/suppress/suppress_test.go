@@ -336,6 +336,20 @@ func TestLoadConfigErrors(t *testing.T) {
 	}
 }
 
+// ParseConfig is LoadConfig's parser, for a config that is not a file
+// (the server gate's config parameter): errors name the given source.
+func TestParseConfig(t *testing.T) {
+	cfg, err := ParseConfig([]byte("ignore:\n  - key: kb-stale\n    reason: r\n"), "config")
+	if err != nil || !reflect.DeepEqual(cfg, Config{Ignore: []Rule{{Key: "kb-stale", Reason: "r"}}}) {
+		t.Errorf("config = %+v, %v", cfg, err)
+	}
+	for _, raw := range []string{"ignore:\n  - key: kb-stale\n", "ignores: []\n", "ignore: [\n"} {
+		if _, err := ParseConfig([]byte(raw), "config"); err == nil || !strings.HasPrefix(err.Error(), "config: ") {
+			t.Errorf("%q: err = %v, want an error naming the source", raw, err)
+		}
+	}
+}
+
 func TestFindConfig(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
