@@ -131,6 +131,20 @@ func TestExportCSVNotAssessedRows(t *testing.T) {
 	}
 }
 
+// A finding lists at most 100 namespaces; the CSV says how many more
+// there are, as the HTML export does.
+func TestExportCSVCountsOmittedNamespaces(t *testing.T) {
+	rep := engine.Report{Findings: []engine.Finding{{Severity: engine.SevWarning, Title: "wide",
+		Namespaces: []string{"a", "b"}, NamespacesOmitted: 98}}}
+	var b strings.Builder
+	if err := writeExportCSV(&b, "prod", store.Evaluation{}, rep); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), ",a;b;and 98 more,") {
+		t.Errorf("CSV = %s, want the namespaces column to end in \"and 98 more\"", b.String())
+	}
+}
+
 // TestSparklineTimeProportional: points are placed by time, not index, so
 // a burst of changes and a quiet month do not look alike, and the SVG
 // labels the dates it spans.

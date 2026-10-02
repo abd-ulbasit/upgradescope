@@ -611,7 +611,9 @@ verdict and score. The `severity` column types the rows:
   (`key` is the capability, `detail` the reason). A required one makes the
   verdict `unknown`, never `ready`.
 
-Teams, namespaces and citations are `;`-joined. A spreadsheet may split
+Teams, namespaces and citations are `;`-joined. A finding lists at most
+100 namespaces; past that its namespaces end in `and N more`, as in the
+HTML export and the dashboard. A spreadsheet may split
 a field again on `,`, `;`, tab or a line break (Excel imports with `;` in
 many locales), so wherever a cell could start, at a field's start or
 after any of those, past any white space (no-break and ideographic

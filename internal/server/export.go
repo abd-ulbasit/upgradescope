@@ -188,7 +188,8 @@ const (
 // finding, then one not-assessed row per capability gap — so a clean
 // cluster's export is not a bare header, and a partly assessed one does
 // not look clean. Multi-valued columns (teams, namespaces, citations) are
-// ";"-joined inside a single CSV field. All non-numeric fields pass
+// ";"-joined inside a single CSV field; a finding's namespaces end in
+// "and N more" when it lists only some. All non-numeric fields pass
 // through csvSafe.
 func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engine.Report) error {
 	cw := csv.NewWriter(w)
@@ -232,7 +233,11 @@ func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engi
 		return err
 	}
 	for _, f := range rep.Findings {
-		if err := row(string(f.Severity), string(f.Category), f.Key, f.Title, f.Detail, f.Remediation, f.Teams, f.Namespaces, f.Citations); err != nil {
+		namespaces := f.Namespaces
+		if f.NamespacesOmitted > 0 { // as the HTML export says it
+			namespaces = append(slices.Clip(namespaces), fmt.Sprintf("and %d more", f.NamespacesOmitted))
+		}
+		if err := row(string(f.Severity), string(f.Category), f.Key, f.Title, f.Detail, f.Remediation, f.Teams, namespaces, f.Citations); err != nil {
 			return err
 		}
 	}

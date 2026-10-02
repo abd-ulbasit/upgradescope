@@ -52,6 +52,8 @@ export interface Finding {
   detail: string;
   teams?: string[];
   namespaces?: string[];
+  // Newer servers list at most 100 namespaces and count the rest here.
+  namespacesOmitted?: number;
   remediation?: string;
   citations?: string[];
 }
