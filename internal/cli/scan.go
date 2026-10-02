@@ -240,6 +240,10 @@ func newScanCmd() *cobra.Command {
   # Rendered manifests in CI: SARIF for code scanning, exit 2 on a blocker
   upgradescope scan --files rendered/ --target 1.37 --output sarif > upgradescope.sarif
 
+  # GitLab, Jenkins or Azure Pipelines: a Code Quality or JUnit report
+  upgradescope scan --files rendered/ --target 1.37 --output gitlab-codequality > gl-code-quality-report.json
+  upgradescope scan --files rendered/ --target 1.37 --output junit > upgradescope-junit.xml
+
   # Fail only on findings that are new since an accepted scan
   upgradescope scan --files rendered/ --target 1.37 --write-baseline baseline.json
   upgradescope scan --files rendered/ --target 1.37 --baseline baseline.json`,
@@ -295,11 +299,14 @@ func newScanCmd() *cobra.Command {
 			} else if opts.filesDir != "" {
 				filesBase = &opts.fileBase
 			}
-			if err := writeReport(cmd.OutOrStdout(), opts.output, out, filesBase); err != nil {
+			if err := writeReport(cmd.OutOrStdout(), opts, out, filesBase); err != nil {
 				return err
 			}
 			if opts.output == "sarif" && filepath.IsAbs(filepath.FromSlash(opts.fileBase)) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: --files %s is outside the working directory, so SARIF locations are absolute file:// URIs that GitHub code scanning cannot place in the repository; run from the repository root\n", opts.filesDir)
+			}
+			if opts.output == "gitlab-codequality" && filepath.IsAbs(filepath.FromSlash(opts.fileBase)) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: --files %s is outside the working directory, so Code Quality paths are absolute and GitLab cannot place them in the repository; run from the repository root\n", opts.filesDir)
 			}
 			if n := sarif.Unanchored(report); opts.output == "sarif" && n > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: %d finding(s) have no file location, so they are not SARIF results (GitHub rejects results without one); the SARIF lists them as tool execution notifications, and --output table or json shows them in full\n", n)
@@ -313,7 +320,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
 	cmd.Flags().DurationVar(&opts.requestTimeout, "request-timeout", defaultRequestTimeout, "give up on a single API request after this long (0 = no per-request limit)")
 	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
-	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown")
+	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown|junit|gitlab-codequality")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never")
 	cmd.Flags().BoolVar(&opts.allowIncomplete, "allow-incomplete", false, "with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed); a --target that is not an upgrade still fails")
@@ -404,6 +411,17 @@ The gate (--fail-on) fails when a finding at or above the threshold remains,
 or (unless --allow-incomplete) when a required check was not assessed, so a
 blocker may have been missed. A --target that is not an upgrade of the
 cluster (at or below the minor its kube-apiserver runs) always fails it.
+
+CI report formats: the exit code is the gate's in every --output format.
+--output junit writes JUnit XML, one test suite per finding category and one
+test case per finding, whose outcomes follow --fail-on and --allow-incomplete:
+a finding the gate fails on is a failure, one below it passes, suppressed and
+baseline-unchanged findings are skipped, and a required check that was not
+assessed is an error. --output gitlab-codequality writes a GitLab Code Quality
+report: an entry per finding and file location (blocker critical, warning
+minor, info info) with a fingerprint that survives line moves; a finding
+without a file is placed on the virtual path upgradescope/<finding key>, and
+suppressed findings are left out.
 
 Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
 or the one file named, is decoded as kubectl apply -f decodes it: each
@@ -534,9 +552,9 @@ func validateScanOptions(opts *scanOptions) error {
 	}
 	opts.targetVersion = target
 	switch opts.output {
-	case "table", "json", "sarif", "markdown":
+	case "table", "json", "sarif", "markdown", "junit", "gitlab-codequality":
 	default:
-		return fmt.Errorf("invalid --output %q (want table, json, sarif, or markdown)", opts.output)
+		return fmt.Errorf("invalid --output %q (want table, json, sarif, markdown, junit, or gitlab-codequality)", opts.output)
 	}
 	switch opts.failOn {
 	case "blocker", "warning", "never":
@@ -558,15 +576,20 @@ func validRequestTimeout(d time.Duration) error {
 	return nil
 }
 
-// writeReport renders r; filesBase is the JSON filesBase (nil outside
-// --files mode). A failed write is returned in every format, so the scan
-// exits 1 instead of passing or failing the gate with the report lost.
-func writeReport(w io.Writer, format string, r engine.Report, filesBase *string) error {
-	switch format {
+// writeReport renders r in opts.output; filesBase is the JSON filesBase
+// (nil outside --files mode), and JUnit outcomes follow opts' gate. A
+// failed write is returned in every format, so the scan exits 1 instead of
+// passing or failing the gate with the report lost.
+func writeReport(w io.Writer, opts scanOptions, r engine.Report, filesBase *string) error {
+	switch opts.output {
 	case "json":
 		return writeJSON(w, r, filesBase)
 	case "sarif":
 		return WriteSARIF(w, r)
+	case "junit":
+		return WriteJUnit(w, r, opts.failOn, opts.allowIncomplete)
+	case "gitlab-codequality":
+		return WriteGitLabCodeQuality(w, r)
 	case "markdown":
 		ew := &errWriter{w: w}
 		WriteMarkdown(ew, r)

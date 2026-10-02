@@ -1,0 +1,14 @@
+[
+  {
+    "description": "resource.k8s.io/v1alpha3 DeviceClass removed in 1.34 (1 object): gpu.example.com. Fix: migrate to resource.k8s.io/v1 DeviceClass.",
+    "check_name": "removed-api/resource.k8s.io/v1alpha3/DeviceClass",
+    "fingerprint": "e8c872b153ef49f74a626bc692c94238fa94f88aee117d5893eb0a4de99787f7",
+    "severity": "critical",
+    "location": {
+      "path": "dra/deviceclass.yaml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

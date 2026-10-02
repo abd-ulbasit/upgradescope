@@ -1,0 +1,26 @@
+[
+  {
+    "description": "knowledge base does not cover Kubernetes 1.37 (newest known: 1.36). Findings may be incomplete; regenerate the knowledge base (kb version test-kb-1).",
+    "check_name": "kb-stale",
+    "fingerprint": "37c75cb4eb8abf585f404472e6c9ebb95b7b47c95a998ef91afb8610e4f62b90",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/kb-stale",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Not assessed: kb-coverage (required): knowledge base covers Kubernetes up to 1.36; target 1.37 cannot be assessed. The verdict is unknown: a blocker may have been missed.",
+    "check_name": "not-assessed/kb-coverage",
+    "fingerprint": "21ff8b73ded6d4ac93b8e36cf784cb04806611d3e2b45fd5401bd6d9594d4a92",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/not-assessed/kb-coverage",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

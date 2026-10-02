@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="5" failures="0" errors="0" time="0">
+  <testsuite name="removed-api" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="removed-api/batch/v1beta1/CronJob" classname="upgradescope.removed-api" time="0">
+      <system-out>warning: batch/v1beta1 CronJob removed in 1.25 (2 objects).&#xA;2 object(s) written through this API version: jobs (2). Written by: helm. apiserver_requested_deprecated_apis also records requests to batch/v1beta1 cronjobs since the last apiserver restart; the metric does not identify the client.&#xA;Objects:&#xA;- jobs/nightly&#xA;- jobs/weekly&#xA;Teams: batch&#xA;Fix: migrate to batch/v1 CronJob.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="deprecated-api-in-use" tests="3" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="deprecated-api-in-use/policy/v1beta1/podsecuritypolicies" classname="upgradescope.deprecated-api-in-use" time="0">
+      <system-out>warning: clients still requesting policy/v1beta1 podsecuritypolicies (removed in 1.25).&#xA;apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+    <testcase name="deprecated-api-in-use/example.dev/v1alpha1/widgets/status" classname="upgradescope.deprecated-api-in-use" time="0">
+      <system-out>info: clients still requesting example.dev/v1alpha1 widgets/status (deprecated).&#xA;apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; no removal release is recorded. The metric does not identify the client; apiserver audit logs do.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+    <testcase name="deprecated-api-in-use/flowcontrol.apiserver.k8s.io/v1beta2/flowschemas" classname="upgradescope.deprecated-api-in-use" time="0">
+      <system-out>info: clients still requesting flowcontrol.apiserver.k8s.io/v1beta2 flowschemas (removed in 1.29).&#xA;apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.29. The metric does not identify the client; apiserver audit logs do.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="version-skew" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="version-skew/kubelet-unparseable" classname="upgradescope.version-skew" time="0">
+      <system-out>info: 1 node(s) have unparseable kubelet versions.&#xA;These nodes could not be evaluated against the kubelet skew policy: node-edge (&#34;custom-build&#34;).&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

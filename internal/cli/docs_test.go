@@ -512,61 +512,97 @@ func schemaParts(root, schema any) (props map[string]any, items, extra any) {
 	return props, items, extra
 }
 
-// TestDocsGitLabJob: the GitLab CI example in docs/guides/other-ci.md runs
-// as GitLab runs it. CI has no GitLab runner, so this checks the ways the
-// job broke before: the image's entrypoint is cleared (alpine/helm's is
-// `helm`, and the Docker executor runs the script through it), no line
-// depends on GNU-only flags (the image's sha256sum is busybox) or on a
-// pipeline's exit status (GitLab's bash runs `set -eo pipefail`), and the
-// last line, unpiped, is the gate.
+// TestDocsGitLabJob: the GitLab CI template, ci/gitlab/upgradescope.gitlab-ci.yml,
+// which docs/guides/other-ci.md includes verbatim, runs as GitLab runs it.
+// CI has no GitLab runner, so this checks the ways the job broke before:
+// the image's entrypoint is cleared (alpine/helm's is `helm`, and the
+// Docker executor runs the script through it), no line depends on
+// GNU-only flags (the image's sha256sum is busybox) or on a pipeline's
+// exit status (GitLab's bash runs `set -eo pipefail`), the archive is
+// checked against checksums.txt, and the last line, unpiped, is the gate.
+// The reports GitLab reads (#73) are the files the scans write: the
+// Code Quality report by the gate itself, the JUnit report by a scan that
+// cannot stop the job before it.
 func TestDocsGitLabJob(t *testing.T) {
+	const template = "ci/gitlab/upgradescope.gitlab-ci.yml"
 	page := readDoc(t, "docs/guides/other-ci.md")
 	_, section, ok := strings.Cut(page, "## GitLab CI\n")
 	if !ok {
 		t.Fatal(`docs/guides/other-ci.md: no "## GitLab CI" section`)
 	}
-	_, block, ok := strings.Cut(section, "```yaml\n")
-	if !ok {
-		t.Fatal("docs/guides/other-ci.md: the GitLab section has no yaml block")
+	if !strings.Contains(section, "```yaml\n--8<-- \""+template+"\"\n```") {
+		t.Errorf("docs/guides/other-ci.md: the GitLab section does not include %s as a yaml block", template)
 	}
-	block, _, _ = strings.Cut(block, "```")
 	var jobs map[string]struct {
 		Image struct {
 			Name       string   `json:"name"`
 			Entrypoint []string `json:"entrypoint"`
 		} `json:"image"`
-		Script    []string `json:"script"`
-		Artifacts struct {
-			When string `json:"when"`
+		Variables    map[string]string `json:"variables"`
+		BeforeScript []string          `json:"before_script"`
+		Script       []string          `json:"script"`
+		Artifacts    struct {
+			When    string            `json:"when"`
+			Paths   []string          `json:"paths"`
+			Reports map[string]string `json:"reports"`
 		} `json:"artifacts"`
 	}
-	if err := yaml.Unmarshal([]byte(block), &jobs); err != nil {
-		t.Fatalf("docs/guides/other-ci.md: the GitLab job does not parse (image must be a {name, entrypoint} mapping): %v", err)
+	if err := yaml.UnmarshalStrict([]byte(readDoc(t, template)), &jobs); err != nil {
+		t.Fatalf("%s: the job does not parse (image must be a {name, entrypoint} mapping): %v", template, err)
 	}
 	job, ok := jobs["upgrade-readiness"]
 	if !ok || len(job.Script) == 0 {
-		t.Fatalf("docs/guides/other-ci.md: no upgrade-readiness job with a script: %v", jobs)
+		t.Fatalf("%s: no upgrade-readiness job with a script: %v", template, jobs)
 	}
 	if job.Image.Name == "" || !reflect.DeepEqual(job.Image.Entrypoint, []string{""}) {
-		t.Errorf("docs/guides/other-ci.md: the image is %q with entrypoint %q; clear the entrypoint ([\"\"]) so GitLab can start a shell", job.Image.Name, job.Image.Entrypoint)
+		t.Errorf("%s: the image is %q with entrypoint %q; clear the entrypoint ([\"\"]) so GitLab can start a shell", template, job.Image.Name, job.Image.Entrypoint)
 	}
 	if job.Artifacts.When != "always" {
-		t.Errorf("docs/guides/other-ci.md: artifacts.when is %q; the report is wanted when the gate fails", job.Artifacts.When)
+		t.Errorf("%s: artifacts.when is %q; the report is wanted when the gate fails", template, job.Artifacts.When)
 	}
+	if len(job.BeforeScript) == 0 {
+		t.Errorf("%s: no before_script rendering the manifests", template)
+	}
+	written := map[string]string{} // file → the scan line writing it
+	verified := false
 	for _, line := range job.Script {
 		if strings.Contains(line, "--ignore-missing") {
-			t.Errorf("docs/guides/other-ci.md: %q uses --ignore-missing, which busybox sha256sum lacks", line)
+			t.Errorf("%s: %q uses --ignore-missing, which busybox sha256sum lacks", template, line)
 		}
 		if strings.Contains(line, "sha256sum") && strings.Contains(line, "|") {
-			t.Errorf("docs/guides/other-ci.md: %q pipes sha256sum; under pipefail its failures on the other archives fail the job", line)
+			t.Errorf("%s: %q pipes sha256sum; under pipefail its failures on the other archives fail the job", template, line)
 		}
+		verified = verified || strings.Contains(line, "sha256sum -c")
 		if strings.Contains(line, "upgradescope scan") && strings.Contains(line, "|") && !strings.HasSuffix(line, "|| true") {
-			t.Errorf("docs/guides/other-ci.md: %q pipes a scan; under pipefail a failed gate stops the job there", line)
+			t.Errorf("%s: %q pipes a scan; under pipefail a failed gate stops the job there", template, line)
 		}
+		if strings.HasPrefix(line, "./upgradescope scan ") {
+			_, file, _ := strings.Cut(line, " > ")
+			file, _, _ = strings.Cut(file, " ")
+			written[file] = line
+		}
+	}
+	if !verified {
+		t.Errorf("%s: the archive is not checked against checksums.txt (sha256sum -c)", template)
 	}
 	last := job.Script[len(job.Script)-1]
 	if !strings.HasPrefix(last, "./upgradescope scan ") || strings.Contains(last, "|") {
-		t.Errorf("docs/guides/other-ci.md: the last script line %q should be the unpiped scan that gates the job", last)
+		t.Errorf("%s: the last script line %q should be the unpiped scan that gates the job", template, last)
+	}
+	for report, format := range map[string]string{"codequality": "--output gitlab-codequality", "junit": "--output junit"} {
+		file := job.Artifacts.Reports[report]
+		if line := written[file]; file == "" || !strings.Contains(line, format) {
+			t.Errorf("%s: artifacts:reports:%s is %q, which no %s scan writes (scans: %v)", template, report, file, format, written)
+		}
+		if !slices.Contains(job.Artifacts.Paths, file) {
+			t.Errorf("%s: %s is not in artifacts:paths, so a failed gate's report cannot be downloaded", template, file)
+		}
+	}
+	if !strings.Contains(last, "--output gitlab-codequality") {
+		t.Errorf("%s: the gate %q should write the Code Quality report", template, last)
+	}
+	if v := job.Variables["UPGRADESCOPE_VERSION"]; !strings.Contains(page, "VERSION="+v+"\n") {
+		t.Errorf("%s pins %s; the install section of docs/guides/other-ci.md pins another release", template, v)
 	}
 }
 

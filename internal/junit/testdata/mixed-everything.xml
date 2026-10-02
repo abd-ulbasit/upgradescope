@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="17" failures="7" errors="1" time="0">
+  <testsuite name="removed-api" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="removed-api/extensions/v1beta1/Ingress" classname="upgradescope.removed-api" time="0">
+      <failure message="extensions/v1beta1 Ingress removed in 1.22 (2 objects)" type="blocker">extensions/v1beta1 Ingress removed in 1.22 (2 objects).&#xA;2 object(s) still stored/served at this version: shop (2).&#xA;Teams: storefront&#xA;Fix: migrate to networking.k8s.io/v1 Ingress.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="deprecated-api" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="deprecated-api/core/v1/ComponentStatus" classname="upgradescope.deprecated-api" time="0">
+      <system-out>info: v1 ComponentStatus deprecated since 1.19 (1 object).&#xA;1 object(s) still stored/served at this version: cluster-scoped (1).&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="deprecated-api-in-use" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="deprecated-api-in-use/batch/v1beta1/cronjobs" classname="upgradescope.deprecated-api-in-use" time="0">
+      <failure message="clients still requesting batch/v1beta1 cronjobs (removed in 1.25)" type="blocker">clients still requesting batch/v1beta1 cronjobs (removed in 1.25).&#xA;apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="eol-addon" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="eol-addon/ingress-nginx" classname="upgradescope.eol-addon" time="0">
+      <failure message="ingress-nginx is end-of-life since 2026-03-26" type="blocker">ingress-nginx is end-of-life since 2026-03-26.&#xA;Detected ingress-nginx version 4.7.1 via chart in namespace(s): ingress-nginx. Upstream support has ended.&#xA;Teams: platform&#xA;Fix: migrate to Gateway API (ingress2gateway) or another maintained ingress controller.&#xA;References:&#xA;- https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="eol-approaching" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="eol-approaching/legacy-mesh" classname="upgradescope.eol-approaching" time="0">
+      <system-out>warning: Legacy Mesh reaches end-of-life on 2026-08-15.&#xA;Detected Legacy Mesh version 1.2.0 via image in namespace(s): mesh. Upstream support ends on 2026-08-15.&#xA;Teams: platform&#xA;References:&#xA;- https://endoflife.date/legacy-mesh</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="chart-incompat" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="chart-incompat/ingress-nginx" classname="upgradescope.chart-incompat" time="0">
+      <failure message="ingress-nginx 4.7.1 supports Kubernetes up to 1.33 (target 1.38)" type="blocker">ingress-nginx 4.7.1 supports Kubernetes up to 1.33 (target 1.38).&#xA;Installed version 4.7.1 matches compatibility range &#34;&gt;=4.0.0&#34;, which supports Kubernetes 1.21 through 1.33.&#xA;Teams: platform&#xA;Fix: migrate to Gateway API (ingress2gateway) or another maintained ingress controller.&#xA;References:&#xA;- https://github.com/kubernetes/ingress-nginx#supported-versions-table</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="version-skew" tests="9" failures="3" errors="0" skipped="0" time="0">
+    <testcase name="version-skew/kubelet-post-upgrade" classname="upgradescope.version-skew" time="0">
+      <failure message="1 node(s) would exceed kubelet version skew after upgrading to 1.38" type="blocker">1 node(s) would exceed kubelet version skew after upgrading to 1.38.&#xA;After upgrading the control plane to 1.38 these nodes would be more than 3 minor versions behind: node-b (v1.33.0).&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</failure>
+    </testcase>
+    <testcase name="version-skew/kube-proxy-post-upgrade" classname="upgradescope.version-skew" time="0">
+      <failure message="kube-proxy would exceed version skew after upgrading to 1.38" type="blocker">kube-proxy would exceed version skew after upgrading to 1.38.&#xA;After upgrading the control plane to 1.38, kube-proxy 1.33 would be more than 3 minor versions behind kube-apiserver; upgrade kube-proxy first.&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</failure>
+    </testcase>
+    <testcase name="version-skew/kube-scheduler-newer" classname="upgradescope.version-skew" time="0">
+      <failure message="kube-scheduler is newer than kube-apiserver" type="blocker">kube-scheduler is newer than kube-apiserver.&#xA;kube-scheduler 1.37 is newer than the oldest kube-apiserver (1.35); control-plane components must not be newer than the apiservers they talk to.&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</failure>
+    </testcase>
+    <testcase name="version-skew/kubelet-current" classname="upgradescope.version-skew" time="0">
+      <system-out>warning: 1 node(s) exceed kubelet version skew vs control plane 1.37.&#xA;Nodes more than 3 minor versions behind: node-b (v1.33.0).&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</system-out>
+    </testcase>
+    <testcase name="version-skew/kubelet-newer-than-apiserver" classname="upgradescope.version-skew" time="0">
+      <system-out>warning: 1 node(s) run a kubelet newer than kube-apiserver 1.35.&#xA;kubelet must not be newer than kube-apiserver; when kube-apiserver versions differ, the oldest one (1.35) bounds the allowed kubelet versions. Newer nodes: node-a (v1.37.0).&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</system-out>
+    </testcase>
+    <testcase name="version-skew/apiserver-ha-spread" classname="upgradescope.version-skew" time="0">
+      <system-out>warning: HA kube-apiserver replicas span 2 minor versions.&#xA;Observed kube-apiserver versions: 1.35, 1.37. The version-skew policy requires HA kube-apiserver instances to be within 1 minor version of each other.&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</system-out>
+    </testcase>
+    <testcase name="version-skew/kube-controller-manager-behind" classname="upgradescope.version-skew" time="0">
+      <system-out>warning: kube-controller-manager exceeds version skew vs kube-apiserver.&#xA;kube-controller-manager 1.35 is more than 1 minor version(s) behind the newest kube-apiserver (1.37).&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</system-out>
+    </testcase>
+    <testcase name="version-skew/kube-proxy-behind" classname="upgradescope.version-skew" time="0">
+      <system-out>warning: kube-proxy exceeds version skew vs kube-apiserver.&#xA;kube-proxy 1.33 is more than 3 minor version(s) behind the newest kube-apiserver (1.37).&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</system-out>
+    </testcase>
+    <testcase name="version-skew/upgrade-path" classname="upgradescope.version-skew" time="0">
+      <system-out>info: upgrading from 1.35 to 1.38 takes 3 minor-version upgrades: 1.36, 1.37, 1.38.&#xA;The control plane is upgraded one minor version at a time. This report judges the cluster as it is against 1.38; add-ons, charts and nodes may need upgrading at each step in between.&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="kb-stale" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="kb-stale" classname="upgradescope.kb-stale" time="0">
+      <system-out>warning: knowledge base does not cover Kubernetes 1.38 (newest known: 1.36).&#xA;Findings may be incomplete; regenerate the knowledge base (kb version test-kb-1).</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="not-assessed" tests="1" failures="0" errors="1" skipped="0" time="0">
+    <testcase name="kb-coverage" classname="upgradescope.not-assessed" time="0">
+      <error message="not assessed: kb-coverage (required): knowledge base covers Kubernetes up to 1.36; target 1.38 cannot be assessed" type="not-assessed">The verdict is unknown: a required check did not run, so a blocker may have been missed.</error>
+    </testcase>
+  </testsuite>
+</testsuites>

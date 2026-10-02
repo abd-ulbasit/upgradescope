@@ -15,6 +15,17 @@ or (unless --allow-incomplete) when a required check was not assessed, so a
 blocker may have been missed. A --target that is not an upgrade of the
 cluster (at or below the minor its kube-apiserver runs) always fails it.
 
+CI report formats: the exit code is the gate's in every --output format.
+--output junit writes JUnit XML, one test suite per finding category and one
+test case per finding, whose outcomes follow --fail-on and --allow-incomplete:
+a finding the gate fails on is a failure, one below it passes, suppressed and
+baseline-unchanged findings are skipped, and a required check that was not
+assessed is an error. --output gitlab-codequality writes a GitLab Code Quality
+report: an entry per finding and file location (blocker critical, warning
+minor, info info) with a fingerprint that survives line moves; a finding
+without a file is placed on the virtual path upgradescope/<finding key>, and
+suppressed findings are left out.
+
 Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
 or the one file named, is decoded as kubectl apply -f decodes it: each
 document of a YAML stream and each object of a JSON stream (NDJSON,
@@ -67,6 +78,10 @@ upgradescope scan [flags]
   # Rendered manifests in CI: SARIF for code scanning, exit 2 on a blocker
   upgradescope scan --files rendered/ --target 1.37 --output sarif > upgradescope.sarif
 
+  # GitLab, Jenkins or Azure Pipelines: a Code Quality or JUnit report
+  upgradescope scan --files rendered/ --target 1.37 --output gitlab-codequality > gl-code-quality-report.json
+  upgradescope scan --files rendered/ --target 1.37 --output junit > upgradescope-junit.xml
+
   # Fail only on findings that are new since an accepted scan
   upgradescope scan --files rendered/ --target 1.37 --write-baseline baseline.json
   upgradescope scan --files rendered/ --target 1.37 --baseline baseline.json
@@ -83,7 +98,7 @@ upgradescope scan [flags]
       --files string               scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster
   -h, --help                       help for scan
       --kubeconfig string          path to kubeconfig (default: standard loading rules)
-      --output string              output format: table|json|sarif|markdown (default "table")
+      --output string              output format: table|json|sarif|markdown|junit|gitlab-codequality (default "table")
       --request-timeout duration   give up on a single API request after this long (0 = no per-request limit) (default 30s)
       --target string              target Kubernetes minor version, e.g. 1.36 (required)
       --team-label string          namespace label used for team attribution (default "team")

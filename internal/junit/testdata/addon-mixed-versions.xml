@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="3" failures="2" errors="0" time="0">
+  <testsuite name="eol-addon" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="eol-addon/istio/1.27" classname="upgradescope.eol-addon" time="0">
+      <failure message="Istio 1.27 is end-of-life since 2026-04-07" type="blocker">Istio 1.27 is end-of-life since 2026-04-07.&#xA;Detected Istio version 1.27.3 via image in namespace(s): istio-legacy. Upstream support for the 1.27 release line ended on 2026-04-07.&#xA;Teams: legacy&#xA;Fix: Upgrade Istio to a supported release line (newest: 1.31).&#xA;References:&#xA;- https://endoflife.date/istio</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="eol-approaching" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="eol-approaching/istio/1.31" classname="upgradescope.eol-approaching" time="0">
+      <system-out>warning: Istio 1.31 reaches end-of-life on 2027-02-28.&#xA;Detected Istio in namespace(s): istio-system (1.31.1 via chart 1.31.1), shop (1.31.0 via image). Upstream support for the 1.31 release line ends on 2027-02-28.&#xA;Teams: mesh, storefront&#xA;Fix: Upgrade Istio to a supported release line (newest: 1.31).&#xA;References:&#xA;- https://endoflife.date/istio</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="chart-incompat" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="chart-incompat/istio/1.27" classname="upgradescope.chart-incompat" time="0">
+      <failure message="Istio 1.27.3 supports Kubernetes up to 1.33 (target 1.34)" type="blocker">Istio 1.27.3 supports Kubernetes up to 1.33 (target 1.34).&#xA;Installed version 1.27.3 is in the 1.27 release line, which supports Kubernetes 1.29 through 1.33.&#xA;Teams: legacy&#xA;References:&#xA;- https://endoflife.date/istio</failure>
+    </testcase>
+  </testsuite>
+</testsuites>

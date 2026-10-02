@@ -1,10 +1,23 @@
 # Other CI systems
 
 Outside GitHub, run the CLI directly: install a pinned release, render the
-manifests, scan, and let the exit code gate the job. There are no native
-templates or CI-specific report formats yet (GitLab Code Quality, JUnit;
-[#73](https://github.com/abd-ulbasit/upgradescope/issues/73)), so keep the SARIF or JSON report as an artifact and, where you want a
-human-readable summary, the Markdown output.
+manifests, scan, and let the exit code gate the job. The repository has a
+template for each of GitLab CI, Jenkins and Azure Pipelines under
+[`ci/`](https://github.com/abd-ulbasit/upgradescope/tree/main/ci). Each one
+publishes a report its CI shows natively:
+
+| CI system | Template | Report |
+|---|---|---|
+| GitLab CI | `ci/gitlab/upgradescope.gitlab-ci.yml` | Code Quality (merge request widget) and JUnit (test report) |
+| Jenkins | `ci/jenkins/Jenkinsfile` | JUnit, through the `junit` step |
+| Azure Pipelines | `ci/azure/azure-pipelines.yml` | JUnit, through `PublishTestResults@2` |
+
+`--output junit` and `--output gitlab-codequality` are new in v0.2.0, and
+the templates pin `VERSION=v0.2.0`. Until v0.2.0 is on the
+[releases page](https://github.com/abd-ulbasit/upgradescope/releases),
+that download fails with a 404 and no earlier release has these formats;
+in the meantime, build from `main` with
+`go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@main`.
 
 ## Install a pinned release
 
@@ -27,7 +40,7 @@ whose entrypoint is the binary.
 ## The scan
 
 ```sh
-./upgradescope scan --files rendered --target 1.37 --output json > upgradescope.json
+./upgradescope scan --files rendered --target 1.37 --output junit > upgradescope-junit.xml
 ```
 
 | Exit code | Meaning |
@@ -36,30 +49,84 @@ whose entrypoint is the binary.
 | 1 | An error (no manifests found, an invalid flag, config file or baseline). |
 | 2 | The gate failed: a finding at or above `--fail-on`, or the verdict is `unknown` (pass `--allow-incomplete` to gate on findings alone). |
 
-Most CI systems fail the job on any non-zero exit, which is what you want
-for 1 and 2. To keep the report on failure, write it to a file (as above)
-and mark it as an artifact that is kept on failure.
+The exit code is the same whatever `--output` is. Most CI systems fail the
+job on any non-zero exit, which is what you want for 1 and 2. To keep the
+report on failure, write it to a file (as above) and publish it in a step
+that runs when the job fails.
+
+## The report formats
+
+**JUnit** (`--output junit`): one test suite per finding category
+(`removed-api`, `eol-addon`, ...) and one test case per finding, named by
+its key. The outcomes follow the gate, so the test report fails exactly
+when the exit code says so:
+
+| Finding | Test case |
+|---|---|
+| At or above `--fail-on` | failure: the title, then the evidence, objects as `file:line`, fix and references |
+| Below `--fail-on` (or `--fail-on never`) | passed, with the same text as its output |
+| Unchanged since `--baseline` | skipped, "unchanged since the baseline" |
+| Suppressed by an ignore rule or annotation | skipped, with the reason, expiry and source |
+| A required check not assessed (verdict `unknown`) | error, in the `not-assessed` suite; skipped with `--allow-incomplete` (a `--target` that is not an upgrade stays an error) |
+| An optional check that did not run (Helm in files mode) | skipped, in the `not-assessed` suite |
+
+A clean report is one passing test, `readiness/no findings`: Jenkins fails
+a build whose reports hold no tests. Times are 0, so the file is the same
+on every run of the same scan. The file validates against the Jenkins JUnit
+schema, the xUnit plugin's `junit-10.xsd` (vendored in
+`internal/junit/junittest`), so readers that validate strictly accept it
+too.
+
+**GitLab Code Quality** (`--output gitlab-codequality`): one entry per
+finding and object located in a file, on that file and line (line 1 when
+only the file is known; relative to the working directory, so scan from the
+repository root), with the finding key as `check_name` and severity
+blocker → `critical`, warning → `minor`, info → `info`.
+
+- The file is the one scanned. With `helm template --output-dir rendered`,
+  that is the rendered file (`rendered/<chart>/templates/x.yaml`), which is
+  usually not committed: the merge request widget lists the entry, but the
+  diff cannot annotate it. The description names the template it was
+  rendered from (`rendered from <chart>/templates/x.yaml`). Only manifests
+  committed to the repository get inline annotations.
+- GitLab requires a location, but live-cluster findings, add-ons, version
+  skew and a stream posted to the gate without `path` have no file. Each
+  such finding is one entry on the virtual path
+  `upgradescope/<finding key>`, line 1: it shows in the merge request
+  widget, and its file link goes nowhere. So are affected objects of a
+  located finding that have no file or were not recorded.
+- The fingerprint hashes the key and the object's file, namespace and
+  name, never its line or the counts in its title, so GitLab's comparison
+  with the target branch does not report a finding as fixed and new when
+  its object moves within the file.
+- A required check that was not assessed is a `critical` entry
+  (`not-assessed/<capability>`): the verdict is `unknown`. A partial
+  check is `info`.
+- Suppressed findings are left out: GitLab has no dismissed state. Every
+  other output lists them.
+
+The report validates against the schema GitLab checks each entry with
+(vendored in `internal/codequality/codequalitytest`), and GitLab stops
+reading a report at the first entry that does not.
 
 ## GitLab CI
 
 ```yaml
+--8<-- "ci/gitlab/upgradescope.gitlab-ci.yml"
+```
+
+Copy the job, or include the file at a release tag and override what
+differs, such as `before_script` for your render step:
+
+```yaml
+include:
+  - remote: https://raw.githubusercontent.com/abd-ulbasit/upgradescope/v0.2.0/ci/gitlab/upgradescope.gitlab-ci.yml
+
 upgrade-readiness:
-  image:
-    name: alpine/helm:3   # helm, curl, tar and bash; any image with those works
-    entrypoint: [""]      # its entrypoint is `helm`; GitLab needs a shell
   variables:
-    UPGRADESCOPE_VERSION: v0.2.0
-  script:
-    - helm template my-release ./chart --output-dir rendered
-    - base=https://github.com/abd-ulbasit/upgradescope/releases/download/$UPGRADESCOPE_VERSION
-    - curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz" && curl -fsSLO "$base/checksums.txt"
-    - grep ' upgradescope_linux_amd64.tar.gz$' checksums.txt > upgradescope.sha256 && sha256sum -c upgradescope.sha256
-    - tar -xzf upgradescope_linux_amd64.tar.gz upgradescope
-    - ./upgradescope scan --files rendered --target 1.37 --output markdown > upgradescope.md || true
-    - ./upgradescope scan --files rendered --target 1.37 --output json > upgradescope.json
-  artifacts:
-    when: always
-    paths: [upgradescope.md, upgradescope.json]
+    UPGRADESCOPE_TARGET: "1.38"
+  before_script:
+    - helm template shop ./deploy/shop --output-dir rendered
 ```
 
 Why it is written this way:
@@ -72,41 +139,65 @@ Why it is written this way:
   GitLab runs the script under `set -eo pipefail`, so a
   `sha256sum -c checksums.txt | grep` would fail on the archives you did
   not download.
-- **Two scans.** The first writes the Markdown summary and never fails the
-  job (`|| true`); the second, unpiped, is the gate, and its exit code is
-  the job's. `upgradescope.md` is the same Markdown table the GitHub Action
-  posts, ready to paste into a merge request comment.
+- **Three scans.** The JUnit and Markdown scans never fail the job
+  (`|| true`); the last one, unpiped, is the gate, and its exit code is
+  the job's. It writes the Code Quality report, which, like the JUnit
+  report, is published with `artifacts:when: always`, so a failed gate
+  still shows its findings. `upgradescope.md` is the same Markdown table
+  the GitHub Action posts, ready to paste into a merge request comment.
 
 !!! note "How this was checked"
-    `TestDocsGitLabJob` (in `internal/cli`) keeps the job's shape: the
-    entrypoint override, no GNU-only flags, no piped gate. The script itself
-    was run under `bash -eo pipefail` on 2026-10-02: in `alpine/helm:3`
-    (entrypoint cleared) against the v0.1.1 release for the download,
-    checksum and JSON gate, and the two scan lines again with a build of
-    `main`, since `--output markdown` is new in v0.2.0. No GitLab runner is
-    part of CI.
+    `TestDocsGitLabJob` (in `internal/cli`) keeps the template's shape:
+    the entrypoint override, no GNU-only flags, a checksum check, no piped
+    gate, and `artifacts:reports` naming the files the scans write. The
+    download and checksum lines were run under `bash -eo pipefail` in
+    `alpine/helm:3` (entrypoint cleared) against the v0.1.1 release
+    before the report formats existed. On 2026-10-02 the template's three
+    scan lines, and the Jenkins and Azure gate lines, were run with a
+    development build on macOS (not in the image) against manifests with
+    removed APIs: each wrote its reports and exited 2. No GitLab runner,
+    Jenkins or Azure Pipelines agent is part of CI.
 
 ## Jenkins
 
 ```groovy
-stage('Upgrade readiness') {
-  steps {
-    sh '''
-      helm template my-release ./chart --output-dir rendered
-      ./upgradescope scan --files rendered --target 1.37 --output sarif > upgradescope.sarif
-    '''
-  }
-  post {
-    always { archiveArtifacts artifacts: 'upgradescope.sarif' }
-  }
-}
+--8<-- "ci/jenkins/Jenkinsfile"
 ```
 
-(Install the binary in an earlier stage, as above.) The Warnings Next
-Generation plugin can read SARIF to show findings in the build.
+`sh` steps run with `-e`, so a failed download or checksum stops the stage,
+and the gate's exit code fails it. The `junit` step runs under
+`post { always }`, so a failed gate still publishes its tests: one per
+finding, failing where the gate does.
+
+## Azure Pipelines
+
+```yaml
+--8<-- "ci/azure/azure-pipelines.yml"
+```
+
+A multi-line `script` step runs without `-e`, so the install step sets it.
+`PublishTestResults@2` runs on `succeededOrFailed()`, so a failed gate still
+publishes its tests to the run's Tests tab; `failTaskOnFailedTests` is off
+because the gate step has already failed the job.
+
+`TestCITemplateJenkins` and `TestCITemplateAzure` (in `internal/cli`) keep
+both templates' shape: the pinned release and its checksum check, an
+unpiped gate, and a publishing step that runs when it fails and reads the
+file it writes. Neither CI system is part of CI.
 
 ## Against a server
 
 If an `upgradescope serve` holds the cluster you deploy to, the gate
 endpoint judges the manifests in that cluster's context and needs no binary
 in the job: [CI gate](../getting-started/ci-gate.md#the-servers-gate-endpoint).
+It answers in the same formats (`format=junit` or
+`format=gitlab-codequality`), holding the findings the manifests
+introduce, with the same status code whatever the format:
+
+```sh
+curl -sS --fail-with-body -X POST \
+  "$SERVER/api/v1/gate?target=1.37&cluster=prod-eu-1&format=gitlab-codequality&path=rendered.yaml" \
+  -H "Authorization: Bearer $READ_TOKEN" \
+  -H "Content-Type: application/x-yaml" \
+  --data-binary @rendered.yaml > gl-code-quality-report.json
+```
