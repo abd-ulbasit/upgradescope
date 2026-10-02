@@ -75,17 +75,6 @@ func (s *byteSource) runeAt(i int) (rune, int) {
 	return utf8.DecodeRune(buf[:n])
 }
 
-// contains reports whether src[start:end] holds the byte c.
-func (s *byteSource) contains(start, end int, c byte) bool {
-	for i, chunk := range s.chunks {
-		lo, hi := max(start-s.starts[i], 0), min(end-s.starts[i], len(chunk))
-		if lo < hi && bytes.IndexByte(chunk[lo:hi], c) >= 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // utf16BOM returns the offset of the first UTF-16 byte order mark (FF FE
 // or FE FF) in src, or -1. Neither byte is ever part of UTF-8.
 func (s *byteSource) utf16BOM() int {
