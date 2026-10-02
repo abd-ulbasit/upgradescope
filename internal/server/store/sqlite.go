@@ -326,6 +326,35 @@ func (s *SQLite) LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot,
 	return snap, nil
 }
 
+// LatestSnapshotHeads returns every cluster's latest snapshot without its
+// inventory, in one query over idx_snapshots_cluster_id.
+func (s *SQLite) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT s.id, s.cluster_id, s.hash, s.kb_version, s.agent_version, s.received_at, s.server_version
+		FROM snapshots s
+		JOIN (SELECT MAX(id) AS id FROM snapshots GROUP BY cluster_id) latest ON s.id = latest.id`)
+	if err != nil {
+		return nil, fmt.Errorf("latest snapshot heads: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]Snapshot{}
+	for rows.Next() {
+		var snap Snapshot
+		var received string
+		if err := rows.Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &received, &snap.ServerVersion); err != nil {
+			return nil, fmt.Errorf("latest snapshot heads: %w", err)
+		}
+		if snap.ReceivedAt, err = parseStoredTime(received); err != nil {
+			return nil, fmt.Errorf("latest snapshot heads: %w", err)
+		}
+		out[snap.ClusterID] = snap
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("latest snapshot heads: %w", err)
+	}
+	return out, nil
+}
+
 // sqlExecer is the subset of *sql.DB and *sql.Tx the write helpers use.
 type sqlExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)

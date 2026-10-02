@@ -73,6 +73,11 @@ type Store interface {
 
 	InsertSnapshot(ctx context.Context, s Snapshot) (int64, bool, error) // (id, duplicate, err) — duplicate iff same cluster+hash as latest
 	LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error)
+	// LatestSnapshotHeads returns every cluster's latest snapshot, keyed by
+	// cluster id, without Inventory (nil): fleet views need the id and
+	// server version of each, not hundreds of inventory blobs. Clusters
+	// without a snapshot are absent.
+	LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error)
 	ListClusters(ctx context.Context) ([]Cluster, error)
 	GetCluster(ctx context.Context, id int64) (Cluster, error)
 	InsertEvaluation(ctx context.Context, e Evaluation) (int64, error)

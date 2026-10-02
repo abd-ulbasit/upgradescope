@@ -217,6 +217,20 @@ func (f *fakeStore) LatestSnapshot(_ context.Context, clusterID int64) (store.Sn
 	return store.Snapshot{}, store.ErrNotFound
 }
 
+func (f *fakeStore) LatestSnapshotHeads(_ context.Context) (map[int64]store.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["LatestSnapshotHeads"]; err != nil {
+		return nil, err
+	}
+	out := map[int64]store.Snapshot{}
+	for _, sn := range f.snapshots { // ascending id: the last one wins
+		sn.Inventory = nil
+		out[sn.ClusterID] = sn
+	}
+	return out, nil
+}
+
 func (f *fakeStore) ListClusters(_ context.Context) ([]store.Cluster, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -312,6 +312,31 @@ func (p *Postgres) LatestSnapshot(ctx context.Context, clusterID int64) (Snapsho
 	return snap, nil
 }
 
+// LatestSnapshotHeads returns every cluster's latest snapshot without its
+// inventory, in one query over idx_snapshots_cluster_id.
+func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (cluster_id) id, cluster_id, hash, kb_version, agent_version, received_at, server_version
+		FROM snapshots ORDER BY cluster_id, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("latest snapshot heads: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]Snapshot{}
+	for rows.Next() {
+		var snap Snapshot
+		if err := rows.Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &snap.ReceivedAt, &snap.ServerVersion); err != nil {
+			return nil, fmt.Errorf("latest snapshot heads: %w", err)
+		}
+		snap.ReceivedAt = snap.ReceivedAt.UTC()
+		out[snap.ClusterID] = snap
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("latest snapshot heads: %w", err)
+	}
+	return out, nil
+}
+
 // scanEvaluationPg mirrors scanEvaluation for TIMESTAMPTZ columns.
 func scanEvaluationPg(rs rowScanner) (Evaluation, error) {
 	var e Evaluation

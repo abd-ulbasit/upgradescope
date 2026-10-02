@@ -48,6 +48,7 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("ConcurrentIngestSerializes", func(t *testing.T) { testConcurrentIngest(t, newStore(t)) })
 	t.Run("LatestSnapshotRoundTrip", func(t *testing.T) { testLatestSnapshot(t, newStore(t)) })
 	t.Run("SnapshotServerVersionAndBytesRoundTrip", func(t *testing.T) { testSnapshotServerVersion(t, newStore(t)) })
+	t.Run("LatestSnapshotHeads", func(t *testing.T) { testLatestSnapshotHeads(t, newStore(t)) })
 	t.Run("EvaluationsLatestPerTarget", func(t *testing.T) { testEvaluations(t, newStore(t)) })
 	t.Run("LatestEvaluationTieBreakHigherID", func(t *testing.T) { testLatestEvaluationTieBreak(t, newStore(t)) })
 	t.Run("ScoreHistoryOldestFirstLimitNewest", func(t *testing.T) { testScoreHistory(t, newStore(t)) })
@@ -559,6 +560,46 @@ func testLatestSnapshot(t *testing.T, s store.Store) {
 	}
 	if !bytes.Equal(got.Inventory, []byte(`{"hash":"bbb"}`)) {
 		t.Errorf("Inventory = %s, want raw bytes back", got.Inventory)
+	}
+}
+
+// testLatestSnapshotHeads: one call returns every cluster's latest
+// snapshot — the same row LatestSnapshot returns — without the inventory
+// bytes, and nothing for a cluster with no snapshot.
+func testLatestSnapshotHeads(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	if heads, err := s.LatestSnapshotHeads(ctx); err != nil || len(heads) != 0 {
+		t.Fatalf("empty store heads = (%v, %v), want none", heads, err)
+	}
+	prod, dev := mustCluster(t, s, "prod"), mustCluster(t, s, "dev")
+	mustCluster(t, s, "empty")
+	mustSnapshot(t, s, prod, "aaa", base)
+	if _, _, err := s.InsertSnapshot(ctx, store.Snapshot{ClusterID: dev, Hash: "ddd", ServerVersion: "v1.33.1", ReceivedAt: at(1), Inventory: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	mustSnapshot(t, s, prod, "bbb", at(2))
+
+	heads, err := s.LatestSnapshotHeads(ctx)
+	if err != nil {
+		t.Fatalf("LatestSnapshotHeads: %v", err)
+	}
+	if len(heads) != 2 {
+		t.Fatalf("heads = %+v, want prod and dev only", heads)
+	}
+	for _, cid := range []int64{prod, dev} {
+		want, err := s.LatestSnapshot(ctx, cid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want.Inventory = nil
+		got := heads[cid]
+		if got.ID != want.ID || got.ClusterID != want.ClusterID || got.Hash != want.Hash || got.KBVersion != want.KBVersion ||
+			got.AgentVersion != want.AgentVersion || got.ServerVersion != want.ServerVersion || !got.ReceivedAt.Equal(want.ReceivedAt) || got.Inventory != nil {
+			t.Errorf("head of cluster %d = %+v, want %+v without inventory", cid, got, want)
+		}
+	}
+	if heads[prod].Hash != "bbb" || heads[dev].ServerVersion != "v1.33.1" {
+		t.Errorf("heads = %+v, want prod at bbb and dev judged at v1.33.1", heads)
 	}
 }
 
