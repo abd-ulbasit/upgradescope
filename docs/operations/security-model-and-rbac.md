@@ -96,8 +96,9 @@ its gzip size trailer, is not decodable either. The stored manifest of a release
 documents at a time, each run at most 1 MiB and 64Ki YAML nodes, because
 parsing amplifies its input: a manifest of tiny objects or of newlines
 that fits the cap took 390–564 MiB parsed whole. A single document over 2
-MiB or 64Ki nodes (the largest real one found, kyverno's policies CRD, is
-1.4 MiB and about 45,000 nodes) is not parsed: the release is recorded
+MiB or 64Ki nodes (the largest real ones found are kyverno's policies
+CRD, 1.4 MiB, and Argo CD's applicationsets CRD, about 48,500 nodes) is
+not parsed: the release is recorded
 with what its other documents hold, and named. Either way the `helm`
 capability becomes partial and names the release; the others are still
 read. Measured on the test harness, above the collector's baseline: the

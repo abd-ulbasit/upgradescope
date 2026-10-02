@@ -65,10 +65,18 @@ const (
 	maxManifestDocBytes = 2 << 20
 	// maxManifestNodes bounds the YAML nodes (see yamlNodeBound) parsed at
 	// once, in one run of documents or one document: each costs about 550
-	// bytes of heap, so 64Ki nodes is about 35 MiB. The largest real
-	// document found bounds at 44,746 (kyverno's policies.kyverno.io CRD;
-	// kube-prometheus-stack's prometheuses CRD 31,078). A document over it
-	// is not parsed.
+	// bytes of heap, so 64Ki nodes is about 35 MiB. Measured on the
+	// manifests Helm stores (helm template, no crds/ directory), the
+	// largest real document bounds at 48,550: argo-cd 10.9.6's
+	// applicationsets.argoproj.io CRD, rendered from templates/crds. The
+	// densest is external-secrets 2.11.0's clustersecretstores CRD, 43,220
+	// in 688 KiB; then kyverno 3.9.1's policies CRD 44,746,
+	// kube-prometheus-stack's prometheuses CRD 31,078,
+	// opentelemetry-operator's collectors CRD 28,146, and keda, cnpg,
+	// strimzi and istio base under 22,000. crossplane 2.4.2 and
+	// tigera-operator store no CRDs in the release. Doubling the bound
+	// would double what a planted run costs; a document over it is not
+	// parsed, a gap the report shows.
 	maxManifestNodes = 1 << 16
 )
 
