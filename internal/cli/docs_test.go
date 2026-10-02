@@ -543,3 +543,18 @@ func TestDocsGitLabJob(t *testing.T) {
 		t.Errorf("docs/guides/other-ci.md: the last script line %q should be the unpiped scan that gates the job", last)
 	}
 }
+
+// TestDocsHelmCapabilities: the page that tells readers to render with
+// `helm template` says what that renders (#119 FS-05): Helm's built-in
+// Capabilities, not the cluster's or the target's, so a chart that picks
+// API versions from them can render something other than what is
+// deployed. It names the flags that pin them and where the installed
+// manifests are.
+func TestDocsHelmCapabilities(t *testing.T) {
+	page := readDoc(t, "docs/getting-started/cli.md")
+	for _, want := range []string{"helm template", ".Capabilities", "--kube-version", "--api-versions", "helm get manifest"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("docs/getting-started/cli.md does not mention %s", want)
+		}
+	}
+}

@@ -29,6 +29,17 @@ In files mode only API usage can be assessed; add-ons, version skew,
 deprecated-API requests and Helm releases are listed under `NOT ASSESSED`
 with the reason `files mode`, and do not count against the verdict.
 
+What you scan is what the renderer produced. Without a cluster,
+`helm template` fills `.Capabilities` with Helm's built-in defaults (its
+own Kubernetes version and API list), not your cluster's or the target's.
+A chart that picks an API version from `.Capabilities.KubeVersion` or
+`.Capabilities.APIVersions.Has` can then render a different version from
+the one deployed: a false blocker, or a missed one. Pin them to the cluster
+you are judging with `--kube-version` (for example `1.36.0`) and one
+`--api-versions` per API the chart tests (for example
+`policy/v1beta1/PodDisruptionBudget`). For what a release has actually
+installed, scan `helm get manifest <release>` output, or scan the cluster.
+
 ## Scan a live cluster
 
 ```sh
