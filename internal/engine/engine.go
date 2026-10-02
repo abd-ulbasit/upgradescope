@@ -712,8 +712,10 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 // evalAddOnCompat judges each install of a group against target (see
 // compatFor) and returns one chart-incompat blocker naming only the
 // installs that cannot run it, titled for the oldest of them; ok is false
-// when every install can. The detail lists at most addOnLocatedLimit of
-// them; Namespaces and Teams name them all. Key is left to the caller.
+// when every install can. The detail lists them, at most addOnLocatedLimit,
+// when their versions differ, and for node runtimes always: nodes have no
+// Namespaces to name them by. Namespaces and Teams name them all. Key is
+// left to the caller.
 func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version) (Finding, bool) {
 	f := Finding{Category: CatChartIncompat, Severity: SevBlocker, Remediation: a.Recommendation}
 	var named []string // "where (version)" of each install that cannot run target
@@ -744,7 +746,11 @@ func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version)
 		return Finding{}, false
 	}
 	f.Namespaces, f.Teams = namedNamespaces(sortedSet(f.Namespaces)), sortedSet(f.Teams)
-	if len(versions) > 1 {
+	switch {
+	case s.node: // no namespaces to name them by: always list the nodes (#169)
+		sort.Strings(named)
+		f.Detail += " Incompatible nodes: " + located(named) + "."
+	case len(versions) > 1:
 		sort.Strings(named)
 		f.Detail += " Incompatible installs: " + located(named) + "."
 	}
@@ -1626,6 +1632,7 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings := []Finding{} // non-nil so JSON renders "findings": []
 	findings = append(findings, foldDeprecatedCalls(inv, evalAPIUsage(inv, k, target), evalDeprecatedCalls(inv, target))...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
+	findings = append(findings, evalUncoveredRuntimes(inv, k.AddOns)...)
 	findings = append(findings, evalHelmReleases(inv, k, target)...)
 	findings = append(findings, evalSkew(inv, k, target)...)
 	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)
