@@ -150,7 +150,7 @@ func TestEvalAddOnsCycleCompatDetail(t *testing.T) {
 
 func TestEvalAddOnsNoDataDetail(t *testing.T) {
 	fs := evalAddOns(addOnAt("istio", ""), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
-	want := "Detected Istio version (unknown) via image in namespace(s): istio-system. No version could be read from the image tag or chart, so its end of life and Kubernetes compatibility were not assessed."
+	want := "Detected Istio version (unknown) via image in namespace(s): istio-system. No version could be read from an image tag, chart appVersion or app.kubernetes.io/version label, so its end of life and Kubernetes compatibility were not assessed."
 	if len(fs) != 1 || fs[0].Detail != want || fs[0].Severity != SevInfo {
 		t.Fatalf("got %+v, want one info with detail %q", fs, want)
 	}

@@ -65,11 +65,10 @@ type Inventory struct {
 	Nodes              []NodeInfo                      `json:"nodes,omitempty"`
 	ControlPlane       []ComponentVersion              `json:"controlPlane,omitempty"`
 	Namespaces         []NamespaceInfo                 `json:"namespaces,omitempty"`
-	UnrecognizedImages []string                        `json:"unrecognizedImages,omitempty"` // deduped, sorted, cap MaxUnrecognizedImages
+	UnrecognizedImages []string                        `json:"unrecognizedImages,omitempty"` // repos ("host/path") no image matcher claims; deduped, sorted, cap MaxUnrecognizedImages
 
-	// UnrecognizedImages are the image repositories ("host/path", no tag)
-	// no registry image matcher claims: add-on detection gaps, never
-	// findings. UnrecognizedImagesOmitted counts the ones the cap dropped.
+	// UnrecognizedImagesOmitted counts the UnrecognizedImages the cap
+	// dropped. Both are add-on detection gaps, never findings.
 	UnrecognizedImagesOmitted int `json:"unrecognizedImagesOmitted,omitempty"`
 }
 
