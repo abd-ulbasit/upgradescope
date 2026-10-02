@@ -918,6 +918,33 @@ func TestCollectAPIUsagePartialDiscoverySurfacesSkippedGroups(t *testing.T) {
 	}
 }
 
+// M08/VS-08: a forbidden PodSecurityPolicy LIST on 1.24 turned blocked/75
+// into ready/100 with no gap. End to end, the partial capability is now a
+// required gap at 1.25 (PSP is removed there), and the verdict unknown.
+func TestForbiddenPodSecurityPolicyListIsARequiredGapAtRemoval(t *testing.T) {
+	meta := metaClient(servedAt("PodSecurityPolicy", []string{"policy/v1beta1"}, obj{name: "privileged"}))
+	meta.PrependReactor("list", "podsecuritypolicies", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "policy", Resource: "podsecuritypolicies"}, "", errors.New("RBAC denied"))
+	})
+	disc := fakeDiscovery(resources("policy/v1", pdbs), resources("policy/v1beta1", pdbs, psps))
+	k := loadKB(t)
+
+	inv := inventory.Inventory{Source: inventory.SourceCluster, ServerVersion: "v1.24.17",
+		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{inventory.CapVersions: {Available: true}}}
+	runSteps(context.Background(), &inv, []step{{cap: inventory.CapAPIUsage, run: func(ctx context.Context, inv *inventory.Inventory) error {
+		return collectAPIUsage(ctx, disc, meta, k.APILifecycle, inv)
+	}}})
+	k.AddOns = nil // only api-usage is under test
+
+	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 25}, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	want := []engine.CapabilityGap{{Capability: inventory.CapAPIUsage, Partial: true, Required: true,
+		Reason:  inv.Capabilities[inventory.CapAPIUsage].Reason,
+		Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}}
+	if rep.Verdict != engine.VerdictUnknown || !reflect.DeepEqual(rep.NotAssessed, want) {
+		t.Errorf("verdict %s, notAssessed %+v\nwant unknown, %+v", rep.Verdict, rep.NotAssessed, want)
+	}
+}
+
 // A group/version whose discovery failed may serve a flagged API: every
 // flagged API the KB records at that group/version went unchecked.
 func TestCollectAPIUsageDiscoveryFailureSkipsFlaggedAPIsOfThatGroupVersion(t *testing.T) {

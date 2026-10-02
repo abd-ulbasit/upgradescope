@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/registry"
 )
 
 // allCaps returns a capability map with every capability available.
@@ -136,5 +138,96 @@ func TestEvaluateUnknownKeepsScoreAndKBStaleWarning(t *testing.T) {
 	}
 	if len(r.Findings) != 1 || r.Findings[0].Category != CatKBStale {
 		t.Errorf("findings = %+v, want exactly the kb-stale warning", r.Findings)
+	}
+}
+
+// partially marks c available but Partial, skipping skipped.
+func partially(inv inventory.Inventory, c inventory.Capability, reason string, skipped ...string) inventory.Inventory {
+	caps := make(map[inventory.Capability]inventory.CapabilityStatus, len(inv.Capabilities))
+	for k, v := range inv.Capabilities {
+		caps[k] = v
+	}
+	caps[c] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: reason, Skipped: skipped}
+	inv.Capabilities = caps
+	return inv
+}
+
+// Issue #122: a partial capability is a gap in every report, and the
+// verdict is unknown exactly when the gap can hide a blocker: a partial
+// api-usage skipping an API the KB removes at or before the target, or a
+// cluster scan with no add-on data while the registry knows add-ons.
+func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
+	now := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	t125 := inventory.Version{Major: 1, Minor: 25}
+	t124 := inventory.Version{Major: 1, Minor: 24}
+	k := testKB()
+	k.APILifecycle = append(k.APILifecycle, kb.APILifecycleEntry{
+		Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy",
+		Introduced: inventory.Version{Major: 1, Minor: 10}, Deprecated: vp(1, 21), Removed: vp(1, 25),
+	})
+	withRegistry := k
+	withRegistry.AddOns = []registry.AddOn{{ID: "ingress-nginx"}}
+
+	on124 := clusterInv()
+	on124.ServerVersion = "v1.24.17"
+	on124.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.24.17"}}
+	const pspForbidden = "list policy/v1beta1 podsecuritypolicies: forbidden"
+	pspSkipped := partially(on124, inventory.CapAPIUsage, pspForbidden, "policy/v1beta1 PodSecurityPolicy")
+	const helmReason = "helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip"
+
+	cases := []struct {
+		name    string
+		inv     inventory.Inventory
+		kb      kb.KB
+		target  inventory.Version
+		verdict Verdict
+		gaps    []CapabilityGap
+	}{
+		{"partial api-usage skipping an API removed at the target", pspSkipped, k, t125, VerdictUnknown,
+			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: pspForbidden, Partial: true,
+				Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}, Required: true}}},
+		{"partial api-usage skipping an API removed after the target", pspSkipped, k, t124, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: pspForbidden, Partial: true,
+				Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}}},
+		{"partial api-usage skipping a never-removed API",
+			partially(on124, inventory.CapAPIUsage, "list v1 componentstatuses: forbidden", "v1 ComponentStatus"), k, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: "list v1 componentstatuses: forbidden", Partial: true,
+				Skipped: []string{"v1 ComponentStatus"}}}},
+		{"partial api-usage skipping an API the KB does not know",
+			partially(on124, inventory.CapAPIUsage, "list example.com/v1 widgets: forbidden", "example.com/v1 Widget"), k, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: "list example.com/v1 widgets: forbidden", Partial: true,
+				Skipped: []string{"example.com/v1 Widget"}}}},
+		{"partial api-usage skipping nothing flagged",
+			partially(on124, inventory.CapAPIUsage, "discovery: groups metrics.k8s.io/v1beta1 skipped"), k, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: "discovery: groups metrics.k8s.io/v1beta1 skipped", Partial: true}}},
+		{"partial helm is an optional gap", partially(on124, inventory.CapHelm, helmReason, "a/b"), withRegistry, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapHelm, Reason: helmReason, Partial: true, Skipped: []string{"a/b"}}}},
+		{"an informational reason is no gap", func() inventory.Inventory {
+			inv := clusterInv()
+			inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true, Reason: "helm releases: 2 via secrets, 0 via configmaps"}
+			return inv
+		}(), withRegistry, t125, VerdictReady, nil},
+		{"addons missing in cluster mode with a registry", degrade(clusterInv(), inventory.CapAddOns, "list pods: forbidden"), withRegistry, t125, VerdictUnknown,
+			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: "list pods: forbidden", Required: true}}},
+		{"addons missing with an empty registry", degrade(clusterInv(), inventory.CapAddOns, "list pods: forbidden"), k, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: "list pods: forbidden"}}},
+		{"addons missing in files mode", filesInv(), withRegistry, t125, VerdictReady,
+			[]CapabilityGap{
+				{Capability: inventory.CapAddOns, Reason: "files mode"},
+				{Capability: inventory.CapDeprecatedCalls, Reason: "files mode"},
+				{Capability: inventory.CapHelm, Reason: "files mode"},
+				{Capability: inventory.CapVersions, Reason: "files mode"},
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Evaluate(tc.inv, tc.kb, tc.target, now)
+			if r.Verdict != tc.verdict {
+				t.Errorf("Verdict = %q, want %q (gaps %+v)", r.Verdict, tc.verdict, r.NotAssessed)
+			}
+			if !reflect.DeepEqual(r.NotAssessed, tc.gaps) {
+				t.Errorf("NotAssessed = %+v\nwant %+v", r.NotAssessed, tc.gaps)
+			}
+		})
 	}
 }

@@ -990,41 +990,68 @@ func evalKBStale(inv inventory.Inventory, k kb.KB, target inventory.Version) []F
 }
 
 // assessmentGaps lists what the evaluation could not assess, sorted by
-// capability: every unavailable inventory capability, a versions gap when
-// the server version is missing or unparseable (unless versions is already
-// unavailable), and a kb-coverage gap when the target is beyond the KB
-// horizon. Required is set per the verdict rules on CapabilityGap. A
-// capability absent from inv.Capabilities is not a gap: collectors always
-// report all of theirs, so absence only occurs in hand-built inventories.
+// capability: every unavailable or partial inventory capability, a
+// versions gap when the server version is missing or unparseable (unless
+// versions is already unavailable), and a kb-coverage gap when the target
+// is beyond the KB horizon. Required is set per the verdict rules on
+// CapabilityGap. A capability absent from inv.Capabilities is not a gap:
+// collectors always report all of theirs, so absence only occurs in
+// hand-built inventories.
 func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
 	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
 	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
 		required[inventory.CapVersions] = true
+		if len(k.AddOns) > 0 {
+			required[inventory.CapAddOns] = true
+		}
 	}
+	idx := kb.NewIndex(k.APILifecycle)
 	var gaps []CapabilityGap
 	for c, st := range inv.Capabilities {
-		if !st.Available {
-			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason})
+		switch {
+		case !st.Available:
+			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason, Required: required[c]})
+		case st.Partial:
+			g := CapabilityGap{Capability: c, Reason: st.Reason, Partial: true, Skipped: st.Skipped}
+			if c == inventory.CapAPIUsage {
+				g.Required = slices.ContainsFunc(st.Skipped, func(api string) bool { return removedBy(idx, api, target) })
+			}
+			gaps = append(gaps, g)
 		}
 	}
 	if st, ok := inv.Capabilities[inventory.CapVersions]; !ok || st.Available {
 		const notEvaluated = "kubelet and control-plane skew were not evaluated"
 		if inv.ServerVersion == "" {
-			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Reason: "server version not reported; " + notEvaluated})
+			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Reason: "server version not reported; " + notEvaluated,
+				Required: required[inventory.CapVersions]})
 		} else if _, err := inventory.ParseVersion(inv.ServerVersion); err != nil {
-			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions,
+			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Required: required[inventory.CapVersions],
 				Reason: fmt.Sprintf("server version %q could not be parsed; %s", inv.ServerVersion, notEvaluated)})
 		}
 	}
 	if target.Compare(k.MaxKnownK8s) > 0 {
-		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage,
+		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage, Required: true,
 			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed", k.MaxKnownK8s, target)})
-	}
-	for i := range gaps {
-		gaps[i].Required = required[gaps[i].Capability]
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i].Capability < gaps[j].Capability })
 	return gaps
+}
+
+// removedBy reports whether api, a flagged API as a partial api-usage
+// capability names it in Skipped ("group/version Kind", core "v1 Kind"),
+// is one the KB removes at or before target. An API the KB does not know
+// could not have produced a finding either way.
+func removedBy(idx kb.Index, api string, target inventory.Version) bool {
+	gv, kind, ok := strings.Cut(api, " ")
+	if !ok {
+		return false
+	}
+	group, version := "", gv
+	if i := strings.LastIndex(gv, "/"); i >= 0 {
+		group, version = gv[:i], gv[i+1:]
+	}
+	e, ok := idx.Lookup(group, version, kind)
+	return ok && e.Removed != nil && e.Removed.Compare(target) <= 0
 }
 
 // verdictFor: blocked on any blocker; otherwise unknown on any required gap

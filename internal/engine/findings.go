@@ -91,13 +91,33 @@ type SuppressedFinding struct {
 //     than the knowledge base's MaxKnownK8s — removals in releases the KB
 //     does not know about cannot be found.
 //
-// Required marks gaps that make the verdict unknown: api-usage and
-// kb-coverage always, versions for cluster inventories. Other gaps only
-// narrow what the report covers.
+// A capability that is available but Partial (it could not read all it
+// covers) is a gap too, with Partial set and the capability's Skipped.
+//
+// Required marks gaps that make the verdict unknown, because a blocker may
+// be behind them:
+//
+//   - api-usage and kb-coverage, always;
+//   - versions, for cluster inventories;
+//   - addons, for cluster inventories while the KB's add-on registry is
+//     not empty: the EOL add-on check is a headline check, and files mode
+//     has no running add-ons to detect;
+//   - a partial api-usage, when Skipped names an API the KB removes at or
+//     before the target (an unchecked object of it would be a blocker).
+//
+// Other gaps only narrow what the report covers: a partial api-usage that
+// skipped only APIs removed later or never (their findings are warnings
+// or info) or none the KB flags, deprecated-calls (managed control planes
+// commonly deny /metrics), helm (Secrets are commonly denied; live objects
+// are still checked by api-usage, and add-ons by their images).
 type CapabilityGap struct {
 	Capability inventory.Capability `json:"capability"`
 	Reason     string               `json:"reason"`
-	Required   bool                 `json:"required,omitempty"`
+	// Partial: the capability ran but did not read everything; Skipped is
+	// what it named as unread (see inventory.CapabilityStatus).
+	Partial  bool     `json:"partial,omitempty"`
+	Skipped  []string `json:"skipped,omitempty"`
+	Required bool     `json:"required,omitempty"`
 }
 
 // GapKBCoverage is the CapabilityGap capability recorded when the target is
