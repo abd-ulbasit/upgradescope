@@ -160,8 +160,8 @@ var categoryText = map[engine.Category][2]string{
 
 // Unanchored counts the findings Write leaves out because none of their
 // objects has a file location (live-cluster findings, add-ons, skew,
-// kb-stale, a posted manifest stream). Callers can tell users the SARIF is
-// not the whole report.
+// kb-stale, a manifest stream posted to /gate without ?path=). Callers can
+// tell users the SARIF is not the whole report.
 func Unanchored(r engine.Report) int {
 	n := 0
 	for _, f := range r.Findings {
@@ -194,11 +194,11 @@ func anchored(f engine.Finding) []inventory.ObjectRef {
 // toolVersion stamps tool.driver.version ("" omits it).
 //
 // Nothing is dropped silently: every unanchored finding is a tool
-// execution notification at its severity's level (a /gate stream has no
-// file names, so all of its findings land there), objects not listed as
-// results are counted in a note, and run.properties records ready, score
-// and the counts, so the document never reads as a clean pass that the
-// report is not.
+// execution notification at its severity's level (a /gate stream without
+// ?path= has no file names, so all of its findings land there), objects
+// not listed as results are counted in a note, and run.properties records
+// ready, score and the counts, so the document never reads as a clean pass
+// that the report is not.
 //
 // Suppressed findings (Report.Suppressed) follow: their located objects
 // are results carrying an external suppression whose justification is the

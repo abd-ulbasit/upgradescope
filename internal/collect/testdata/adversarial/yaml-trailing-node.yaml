@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: first
+...
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: hidden

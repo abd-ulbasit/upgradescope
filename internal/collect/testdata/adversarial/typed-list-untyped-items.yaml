@@ -1,0 +1,7 @@
+apiVersion: extensions/v1beta1
+kind: IngressList
+items:
+- metadata:
+    name: a
+- metadata:
+    name: b

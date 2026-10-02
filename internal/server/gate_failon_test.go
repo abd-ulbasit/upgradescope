@@ -36,9 +36,11 @@ func decodeGate(t *testing.T, raw []byte) failOnGateResponse {
 	return b
 }
 
-// TestGateFailOn: without fail-on the gate keeps answering 200 (existing
-// clients); with it, reaching the threshold is a 422 carrying the full
-// report, so `curl -f` fails the CI step. The verdict header is always set.
+// TestGateFailOn: fail-on defaults to blocker, like scan --fail-on, so a
+// bare request fails CI (#120 FS-04): reaching the threshold is a 422
+// carrying the full report, so `curl --fail-with-body` fails the CI step
+// and keeps the body. fail-on=never keeps the always-200 contract. The
+// verdict header is always set.
 func TestGateFailOn(t *testing.T) {
 	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
 	defer ts.Close()
@@ -48,7 +50,9 @@ func TestGateFailOn(t *testing.T) {
 		wantStatus        int
 		wantVerdict       string
 	}{
-		{"no fail-on keeps 200", "?target=1.35", pspManifest, http.StatusOK, "blocked"},
+		{"no fail-on fails on a blocker", "?target=1.35", pspManifest, http.StatusUnprocessableEntity, "blocked"},
+		{"no fail-on passes a clean stream", "?target=1.35", deploymentManifest, http.StatusOK, "ready"},
+		{"never keeps 200", "?target=1.35&fail-on=never", pspManifest, http.StatusOK, "blocked"},
 		{"blocker hit", "?target=1.35&fail-on=blocker", pspManifest, http.StatusUnprocessableEntity, "blocked"},
 		{"blocker clean", "?target=1.35&fail-on=blocker", deploymentManifest, http.StatusOK, "ready"},
 		// PSP is removed in 1.35, so for target 1.34 it is a warning.
@@ -71,8 +75,8 @@ func TestGateFailOn(t *testing.T) {
 		})
 	}
 
-	resp, raw := postGate(t, ts, "?target=1.35&fail-on=never", "", pspManifest, "application/x-yaml")
-	if resp.StatusCode != http.StatusUnprocessableEntity || !json.Valid(raw) {
+	resp, raw := postGate(t, ts, "?target=1.35&fail-on=sometimes", "", pspManifest, "application/x-yaml")
+	if resp.StatusCode != http.StatusUnprocessableEntity || !json.Valid(raw) || resp.Header.Get("X-Upgradescope-Verdict") != "" {
 		t.Fatalf("invalid fail-on = %d %s, want a 422 JSON error", resp.StatusCode, raw)
 	}
 }

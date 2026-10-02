@@ -5,14 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 func TestCollectFiles(t *testing.T) {
-	inv, sum, err := CollectFiles("testdata/files")
+	inv, sum, err := CollectFiles("testdata/files", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +64,7 @@ func TestCollectFiles(t *testing.T) {
 }
 
 func TestCollectFilesMissingDir(t *testing.T) {
-	if _, _, err := CollectFiles("testdata/does-not-exist"); err == nil {
+	if _, _, err := CollectFiles("testdata/does-not-exist", nil); err == nil {
 		t.Fatal("want error for missing directory")
 	}
 }
@@ -108,7 +111,7 @@ func TestCollectFilesSkipsNonManifests(t *testing.T) {
 		"tsconfig.json":                  "/* compiler options */\n{\"compilerOptions\": {}}\n",
 	})
 
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatalf("CollectFiles must not fail on non-manifest input: %v", err)
 	}
@@ -152,7 +155,7 @@ items:
     name: ok
     namespace: {{ .Release.Namespace }}
 `})
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,13 +167,91 @@ items:
 	}
 }
 
+// A document that could not be decoded but names an API the knowledge base
+// lists as removed may hide a blocker: api-usage is then not assessed (a
+// required gap, so the verdict is at least unknown), naming each such
+// document. Other undecodable documents (JSONC, a template that names no
+// removed API) stay warnings.
+func TestCollectFilesUnassessedRemovedAPI(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := map[string]string{
+		"app.yaml":                  "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: web}\n",
+		"tsconfig.json":             "/* compiler options */\n{\"compilerOptions\": {}}\n",
+		"chart/templates/svc.yaml":  "apiVersion: v1\nkind: Service\nmetadata:\n  name: {{ .Release.Name }}\n",
+		"chart/templates/hpa.yaml":  "apiVersion: {{ include \"hpa.apiVersion\" . }}\nkind: HorizontalPodAutoscaler\n",
+		"rendered/configmaps.json":  `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n{",
+		"chart/templates/notes.txt": "apiVersion: policy/v1beta1\nkind: PodDisruptionBudget\n",
+	}
+	inv, sum, err := CollectFiles(writeTree(t, clean), k.APILifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := inv.Capabilities[inventory.CapAPIUsage]; !st.Available || len(sum.Warnings) != 3 {
+		t.Fatalf("api-usage = %+v with warnings %v; want available: no undecodable document names a removed API", st, sum.Warnings)
+	}
+
+	clean["chart/templates/pdb.yaml"] = "apiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: {{ include \"chart.fullname\" . }}\n"
+	clean["rendered/all.json"] = `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n" + `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n" + `{"apiVersion": "batch/v1beta1", "kind": "CronJob",`
+	inv, _, err = CollectFiles(writeTree(t, clean), k.APILifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := inv.Capabilities[inventory.CapAPIUsage]
+	if st.Available {
+		t.Fatalf("api-usage = %+v, want not assessed", st)
+	}
+	for _, want := range []string{"2 document(s)", "chart/templates/pdb.yaml:1 (policy/v1beta1 PodDisruptionBudget)", "rendered/all.json:3 (batch/v1beta1 CronJob)"} {
+		if !strings.Contains(st.Reason, want) {
+			t.Errorf("reason %q lacks %q", st.Reason, want)
+		}
+	}
+	if len(inv.APIUsage) == 0 {
+		t.Error("the objects that were decoded must still be counted")
+	}
+}
+
+// An undecodable document's text is searched for each removed API, never
+// for every apiVersion paired with every kind: a crafted file holding
+// thousands of each costs no more than reading it. A typed list's kind
+// (CronJobList) names its item kind.
+func TestCollectFilesUnassessedManyNames(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	b.WriteString("kind: [unclosed\n")
+	for i := range 20000 {
+		fmt.Fprintf(&b, "apiVersion: g%d.example.com/v1\nkind: K%d\n", i, i)
+	}
+	b.WriteString("apiVersion: batch/v1beta1\nkind: CronJobList\n")
+	dir := writeTree(t, map[string]string{"crafted.yaml": b.String()})
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	inv, _, err := CollectFiles(dir, k.APILifecycle)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := inv.Capabilities[inventory.CapAPIUsage]; st.Available || !strings.Contains(st.Reason, "crafted.yaml:1 (batch/v1beta1 CronJob)") {
+		t.Errorf("api-usage = %+v, want not assessed, naming the CronJob", st)
+	}
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 256<<20 {
+		t.Errorf("allocated %d MiB reading a %d KiB file", alloc>>20, b.Len()>>10)
+	}
+}
+
 // An invalid separator ("----", "---foo") makes the rest of the stream
 // unsplittable, but the document before it is complete and still counted:
 // dropping it would let a removed API slip out of the gate while the
 // warning names only the separator line.
 func TestCollectFilesInvalidSeparatorKeepsPrecedingDoc(t *testing.T) {
 	dir := writeTree(t, map[string]string{"rendered.yaml": ingressV1beta1 + "----\napiVersion: v1\nkind: ConfigMap\n"})
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,9 +266,9 @@ func TestCollectFilesInvalidSeparatorKeepsPrecedingDoc(t *testing.T) {
 	}
 }
 
-// kubectl rejects an object with a duplicated identity key, and which copy
-// wins is decoder-specific, so such a document is a warning rather than an
-// object counted under a guessed API version.
+// kubectl accepts an object with a duplicated identity key and sends the
+// last value (#119): the object is counted that way, with a warning on the
+// duplicate's line.
 func TestCollectFilesDuplicateKeys(t *testing.T) {
 	dir := writeTree(t, map[string]string{"dup.yaml": `apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -201,19 +282,25 @@ metadata:
   name: c
 ---
 ` + ingressV1beta1})
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := usageCounts(inv); !reflect.DeepEqual(got, map[string]int{"networking.k8s.io/v1beta1/Ingress": 1}) {
-		t.Errorf("usage = %v, want only the well-formed Ingress", got)
+	want := map[string]int{"extensions/v1beta1/Ingress": 1, "/v1/ConfigMap": 1, "networking.k8s.io/v1beta1/Ingress": 1}
+	if got := usageCounts(inv); !reflect.DeepEqual(got, want) {
+		t.Errorf("usage = %v, want %v (last values win)", got, want)
 	}
-	if len(sum.Warnings) != 2 || sum.Warnings[0].Line != 1 || sum.Warnings[1].Line != 6 {
-		t.Fatalf("warnings = %+v, want lines 1 and 6", sum.Warnings)
+	for _, u := range inv.APIUsage {
+		if u.Kind == "ConfigMap" && u.Objects[0].Name != "c" {
+			t.Errorf("ConfigMap = %+v, want the last name, c", u.Objects[0])
+		}
+	}
+	if len(sum.Warnings) != 2 || sum.Warnings[0].Line != 3 || sum.Warnings[1].Line != 10 {
+		t.Fatalf("warnings = %+v, want lines 3 and 10 (the duplicates)", sum.Warnings)
 	}
 	for _, w := range sum.Warnings {
-		if !strings.Contains(w.Err.Error(), "duplicate") {
-			t.Errorf("warning %v: want a duplicate-key error", w)
+		if !strings.Contains(w.Err.Error(), "duplicate") || w.Unassessed {
+			t.Errorf("warning %v: want a duplicate-key warning on a counted object", w)
 		}
 	}
 }
@@ -234,7 +321,7 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 		"vendor/k8s.io/api/testdata/ing.yaml": ingressV1beta1,
 		"deploy/vendor/upstream/ing.yml":      ingressV1beta1,
 	})
-	inv, sum, err := CollectFiles(dir)
+	inv, sum, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +334,7 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 	if want := []string{"deploy/vendor/upstream/ing.yml", "rendered.yaml"}; !reflect.DeepEqual(files, want) || sum.Files != 2 || sum.Skipped != 0 {
 		t.Errorf("objects in %v, summary %+v; want %v walked", files, sum, want)
 	}
-	inv, _, err = CollectFiles(filepath.Join(dir, "vendor"))
+	inv, _, err = CollectFiles(filepath.Join(dir, "vendor"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,11 +343,85 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 	}
 }
 
+// Skipped dependency trees are warned about, so a scan never silently
+// covers less than the user pointed it at; VCS metadata stays silent.
+func TestCollectFiles_SkippedDirsReported(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"rendered.yaml":                       ingressV1beta1,
+		".git/hooks/x.yaml":                   ingressV1beta1,
+		"node_modules/pkg/fixture.yaml":       ingressV1beta1,
+		"vendor/modules.txt":                  "# k8s.io/api v0.30.0\n",
+		"vendor/k8s.io/api/testdata/ing.yaml": ingressV1beta1,
+	})
+	_, sum, err := CollectFiles(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, w := range sum.Warnings {
+		got = append(got, w.String())
+		if w.Unassessed || w.Line != 0 {
+			t.Errorf("warning %+v: want a directory warning (no line)", w)
+		}
+	}
+	if len(got) != 2 || !strings.HasPrefix(got[0], "node_modules: not walked") || !strings.HasPrefix(got[1], "vendor: not walked") {
+		t.Errorf("warnings = %q, want node_modules and vendor, in walk order", got)
+	}
+}
+
+// Symlinked directories below the root are not followed, as kubectl apply
+// -R does not follow them (and following could leave the repository or
+// loop); each is a warning instead of a silent gap. Symlinked files are
+// read, as kubectl reads them.
+func TestCollectFiles_SymlinkedDirWarns(t *testing.T) {
+	dir := writeTree(t, map[string]string{"real/ing.yaml": ingressV1beta1, "outside/cron.yaml": "apiVersion: batch/v1beta1\nkind: CronJob\n"})
+	if err := os.Symlink(filepath.Join(dir, "outside"), filepath.Join(dir, "real", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "real", "loop")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "outside", "cron.yaml"), filepath.Join(dir, "real", "cron-link.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	inv, sum, err := CollectFiles(filepath.Join(dir, "real"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := usageCounts(inv); !reflect.DeepEqual(got, map[string]int{"networking.k8s.io/v1beta1/Ingress": 1, "batch/v1beta1/CronJob": 1}) {
+		t.Errorf("usage = %v, want the Ingress and the symlinked file's CronJob, once each", got)
+	}
+	var got []string
+	for _, w := range sum.Warnings {
+		got = append(got, w.String())
+	}
+	if len(got) != 2 || !strings.HasPrefix(got[0], "linked: symlinked directory not walked") || !strings.HasPrefix(got[1], "loop: symlinked directory not walked") {
+		t.Errorf("warnings = %q, want one per symlinked directory", got)
+	}
+}
+
+// A symlink named as the root is resolved and walked: `--files rendered`
+// where rendered links to the output directory.
+func TestCollectFiles_SymlinkRoot(t *testing.T) {
+	dir := writeTree(t, map[string]string{"out/sub/ing.yaml": ingressV1beta1})
+	link := filepath.Join(dir, "rendered")
+	if err := os.Symlink(filepath.Join(dir, "out"), link); err != nil {
+		t.Fatal(err)
+	}
+	inv, sum, err := CollectFiles(link, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Objects[0].File != "sub/ing.yaml" || len(sum.Warnings) != 0 {
+		t.Errorf("usage = %+v, warnings %v; want sub/ing.yaml, relative to the root", inv.APIUsage, sum.Warnings)
+	}
+}
+
 // A file named explicitly is parsed whatever its extension
 // (`kustomize build overlays/prod > rendered`).
 func TestCollectFilesSingleFileAnyExtension(t *testing.T) {
 	dir := writeTree(t, map[string]string{"rendered": ingressV1beta1})
-	inv, sum, err := CollectFiles(filepath.Join(dir, "rendered"))
+	inv, sum, err := CollectFiles(filepath.Join(dir, "rendered"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +449,7 @@ kind: CronJob
 metadata:
   name: nightly
 `})
-	inv, _, err := CollectFiles(dir)
+	inv, _, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +475,7 @@ func TestCollectFilesCapsObjectRefs(t *testing.T) {
 		fmt.Fprintf(&b, "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm-%d\n", i)
 	}
 	dir := writeTree(t, map[string]string{"many.yaml": b.String()})
-	inv, _, err := CollectFiles(dir)
+	inv, _, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,11 +526,11 @@ items:
     name: restricted
 `
 	dir := writeTree(t, map[string]string{"stream/s.yaml": stream, "list/l.yaml": list})
-	want, _, err := CollectFiles(filepath.Join(dir, "stream"))
+	want, _, err := CollectFiles(filepath.Join(dir, "stream"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := CollectFiles(filepath.Join(dir, "list"))
+	got, _, err := CollectFiles(filepath.Join(dir, "list"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,19 +575,15 @@ items:
 		{"JSON List", `{"apiVersion": "v1", "kind": "List", "items": [
   {"apiVersion": "policy/v1beta1", "kind": "PodSecurityPolicy", "metadata": {"name": "p"}}
 ]}`, map[string]int{"policy/v1beta1/PodSecurityPolicy": 1}},
-		{"CRD-like *List without typed items is an object, not a wrapper", `apiVersion: example.com/v1
+		// kubectl decodes any object with items as a list (#119; the
+		// trade-off of #13): a custom resource whose kind ends in List
+		// is expanded too, its untyped items inferred.
+		{"CRD-like *List with untyped items is a list, as kubectl decodes it", `apiVersion: example.com/v1
 kind: AllowList
 metadata: {name: office}
 items:
 - cidr: 10.0.0.0/8
-`, map[string]int{"example.com/v1/AllowList": 1}},
-		{"aliased List items are not expanded (alias-bomb guard)", `apiVersion: v1
-kind: List
-items:
-- &cm {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}
-- *cm
-- *cm
-`, map[string]int{"/v1/ConfigMap": 1}},
+`, map[string]int{"example.com/v1/Allow": 1}},
 		{"untyped List items are skipped", `apiVersion: v1
 kind: List
 items:
@@ -434,11 +591,11 @@ items:
 `, map[string]int{}},
 		{"List with null items is an empty wrapper", "apiVersion: v1\nkind: List\nitems:\n", map[string]int{}},
 		{"List without items is an empty wrapper", "apiVersion: v1\nkind: List\nmetadata: {}\n", map[string]int{}},
-		{"CRD-like *List with empty items is an object", `apiVersion: example.com/v1
+		{"CRD-like *List with empty items is an empty list", `apiVersion: example.com/v1
 kind: AllowList
 metadata: {name: none}
 items: []
-`, map[string]int{"example.com/v1/AllowList": 1}},
+`, map[string]int{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -453,9 +610,25 @@ items: []
 	}
 }
 
-// FuzzScanManifestStream: arbitrary input never panics, and every object
-// found carries a positive line.
+// apiName matches "group/version/Kind" values a Kubernetes API can have.
+var apiName = regexp.MustCompile(`^([a-z0-9][-a-z0-9.]*)?/[a-z0-9]+/[A-Za-z][A-Za-z0-9]*$`)
+
+// FuzzScanManifestStream: arbitrary input never panics, every object found
+// carries a positive line, and every object kubectl's own decoder would
+// apply (kubectlObjects) is counted or named by a part reported as not
+// assessed — the scan never silently drops what kubectl sends.
 func FuzzScanManifestStream(f *testing.F) {
+	corpus, err := filepath.Glob("testdata/adversarial/*")
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, name := range corpus {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(string(raw))
+	}
 	for _, seed := range []string{
 		ingressV1beta1,
 		"- a\n- b\n",
@@ -470,13 +643,23 @@ func FuzzScanManifestStream(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		objs, _, err := parseManifestStream(strings.NewReader(s))
+		objs, bad, err := parseManifestStream(strings.NewReader(s))
 		if err != nil {
 			t.Fatalf("in-memory reader cannot fail, got %v", err)
 		}
+		seen := map[string]bool{}
 		for _, o := range objs {
 			if o.ref.Line < 1 || o.kind == "" || o.version == "" {
 				t.Fatalf("object %+v: want kind, version and a positive line", o)
+			}
+			seen[o.group+"/"+o.version+"/"+o.kind] = true
+		}
+		kubectl, _ := kubectlObjects(s)
+		for _, g := range kubectl {
+			// Only names an API can have: the knowledge base flags no
+			// other, and text that did not decode is read for such names.
+			if !seen[g] && apiName.MatchString(g) && !unassessedNames(bad, g) {
+				t.Fatalf("kubectl applies %s, which is neither counted nor named by an unassessed part (bad %+v)", g, bad)
 			}
 		}
 	})
