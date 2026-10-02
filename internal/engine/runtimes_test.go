@@ -66,6 +66,11 @@ func TestEvalUncoveredNodeRuntimes(t *testing.T) {
 	if got := evalUncoveredRuntimes(nodes("containerd://1.7.27"), []registry.AddOn{{ID: "istio"}}); len(got) != 1 || got[0].Key != "addon-no-data/containerd" {
 		t.Errorf("containerd without a registry entry: got %+v, want one addon-no-data/containerd finding", got)
 	}
+	// A KB without add-ons (a custom --kb of API lifecycle only) assesses
+	// no add-on at all: runtimes are not singled out among them.
+	if got := evalUncoveredRuntimes(nodes("containerd://1.7.27", "cri-o://1.30.4"), nil); len(got) != 0 {
+		t.Errorf("KB without add-ons: got %+v, want no finding", got)
+	}
 
 	crio := nodes("cri-o://1.30.4")
 	crio.ServerVersion = "v1.35.2"

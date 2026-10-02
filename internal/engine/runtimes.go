@@ -15,8 +15,13 @@ import (
 // addon-no-data/<runtime> and naming its nodes like evalNodeRuntimes does,
 // so a runtime whose end of life and Kubernetes compatibility were not
 // assessed does not read as checked and fine (#169). A runtime field
-// without "<runtime>://" names no runtime and is skipped.
+// without "<runtime>://" names no runtime and is skipped. A KB without
+// add-ons (a custom --kb of API lifecycle only) assesses no add-on at all,
+// so runtimes are not singled out: nothing is disclosed.
 func evalUncoveredRuntimes(inv inventory.Inventory, addons []registry.AddOn) []Finding {
+	if len(addons) == 0 {
+		return nil
+	}
 	covered := map[string]bool{}
 	for _, a := range addons {
 		for _, r := range a.Matchers.Runtimes {
