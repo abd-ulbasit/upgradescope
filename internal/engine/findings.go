@@ -22,6 +22,10 @@ const (
 	// CatAddOnNoData (info): a detected add-on whose version has no
 	// lifecycle data, so its EOL and compatibility were not assessed.
 	CatAddOnNoData Category = "addon-no-data"
+	// CatUnknownAPI (info): objects of a built-in API group (one the KB
+	// has entries for, core included) at a version/kind the KB does not
+	// know, so whether the target serves it was not assessed.
+	CatUnknownAPI Category = "unknown-api"
 )
 
 type Severity string

@@ -1,0 +1,49 @@
+{
+  "clusterId": "files",
+  "findings": [
+    {
+      "category": "unknown-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: jobs (1). The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes 1.34 serves it.",
+      "key": "unknown-api/batch/v2alpha1/CronJob",
+      "namespaces": [
+        "jobs"
+      ],
+      "objects": [
+        {
+          "file": "jobs/cronjob.yaml",
+          "line": 1,
+          "name": "nightly",
+          "namespace": "jobs"
+        }
+      ],
+      "severity": "info",
+      "title": "batch/v2alpha1 CronJob is not in the knowledge base (1 object)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "addons",
+      "reason": "files mode"
+    },
+    {
+      "capability": "deprecated-calls",
+      "reason": "files mode"
+    },
+    {
+      "capability": "helm",
+      "reason": "files mode"
+    },
+    {
+      "capability": "versions",
+      "reason": "files mode"
+    }
+  ],
+  "ready": true,
+  "score": 100,
+  "target": "1.34",
+  "verdict": "ready"
+}

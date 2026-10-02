@@ -34,9 +34,10 @@ func readDataset(path string) ([]entry, error) {
 //   - GVK still registered upstream but without lifecycle data: the
 //     previous entry is kept unchanged (no evidence it was removed).
 //   - GVK gone from upstream: tombstoned. If it never carried a removal
-//     version, removed is set to removedAt (the k8s.io/api minor that
-//     dropped it) and marked removedInferred; a documented or earlier
-//     inferred removal is kept as-is, so reruns are idempotent.
+//     version, or one after removedAt (the k8s.io/api minor that dropped
+//     it — a deleted type is not served), removed is set to removedAt and
+//     marked removedInferred; a documented or inferred removal at or
+//     before removedAt is kept as-is, so reruns are idempotent.
 //
 // It returns gen followed by the carried entries, and the subset of those
 // that are gone from upstream (for logging).
@@ -51,7 +52,7 @@ func carryForward(prev, gen []entry, upstream map[gvkOut]bool, removedAt version
 			continue
 		}
 		if !upstream[p.gvk()] {
-			if p.Removed == nil {
+			if p.Removed == nil || removedAt.before(*p.Removed) {
 				at := removedAt
 				p.Removed = &at
 				p.RemovedInferred = true

@@ -29,6 +29,12 @@ var goldenParams = map[string]struct{ target, now string }{
 	// 1.33) but not after the control plane reaches 1.34 → blocker.
 	"gke-vendor-versions": {"1.34", "2026-06-10T00:00:00Z"},
 	"files-mode":          {"1.36", "2026-06-10T00:00:00Z"},
+	// #124: a resource.k8s.io/v1alpha3 DeviceClass, deleted upstream in
+	// 1.34 (a KB tombstone), at target 1.34 — the removal release — blocks.
+	"removed-alpha-tombstone": {"1.34", "2026-06-10T00:00:00Z"},
+	// A built-in group at a version the KB does not know (batch/v2alpha1)
+	// is an unscored unknown-api info finding; a CRD group stays silent.
+	"unknown-builtin-api": {"1.34", "2026-06-10T00:00:00Z"},
 	// CronJobs written via batch/v1beta1 plus caller rows for the same API:
 	// one blocker carrying both; the PDB caller row has no objects and
 	// stays a standalone deprecated-api-in-use blocker.

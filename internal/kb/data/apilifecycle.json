@@ -36,6 +36,14 @@
     {
       "group": "",
       "version": "v1",
+      "kind": "EphemeralContainers",
+      "introduced": "1.17",
+      "removed": "1.22",
+      "removedInferred": true
+    },
+    {
+      "group": "",
+      "version": "v1",
       "kind": "Event",
       "introduced": "1.0"
     },
@@ -526,6 +534,14 @@
       }
     },
     {
+      "group": "auditregistration.k8s.io",
+      "version": "v1alpha1",
+      "kind": "AuditSink",
+      "introduced": "1.17",
+      "removed": "1.19",
+      "removedInferred": true
+    },
+    {
       "group": "authentication.k8s.io",
       "version": "v1",
       "kind": "SelfSubjectReview",
@@ -667,6 +683,32 @@
       "introduced": "1.23"
     },
     {
+      "group": "autoscaling",
+      "version": "v2beta1",
+      "kind": "HorizontalPodAutoscaler",
+      "introduced": "1.8",
+      "deprecated": "1.22",
+      "removed": "1.25",
+      "replacement": {
+        "group": "autoscaling",
+        "version": "v2",
+        "kind": "HorizontalPodAutoscaler"
+      }
+    },
+    {
+      "group": "autoscaling",
+      "version": "v2beta2",
+      "kind": "HorizontalPodAutoscaler",
+      "introduced": "1.12",
+      "deprecated": "1.23",
+      "removed": "1.26",
+      "replacement": {
+        "group": "autoscaling",
+        "version": "v2",
+        "kind": "HorizontalPodAutoscaler"
+      }
+    },
+    {
       "group": "batch",
       "version": "v1",
       "kind": "CronJob",
@@ -690,6 +732,30 @@
         "version": "v1",
         "kind": "CronJob"
       }
+    },
+    {
+      "group": "batch",
+      "version": "v1beta1",
+      "kind": "JobTemplate",
+      "introduced": "1.8",
+      "deprecated": "1.22",
+      "removed": "1.25"
+    },
+    {
+      "group": "batch",
+      "version": "v2alpha1",
+      "kind": "CronJob",
+      "introduced": "1.17",
+      "removed": "1.21",
+      "removedInferred": true
+    },
+    {
+      "group": "batch",
+      "version": "v2alpha1",
+      "kind": "JobTemplate",
+      "introduced": "1.17",
+      "removed": "1.21",
+      "removedInferred": true
     },
     {
       "group": "certificates.k8s.io",
@@ -716,6 +782,15 @@
       "introduced": "1.26",
       "deprecated": "1.34",
       "removed": "1.37"
+    },
+    {
+      "group": "certificates.k8s.io",
+      "version": "v1alpha1",
+      "kind": "PodCertificateRequest",
+      "introduced": "1.34",
+      "deprecated": "1.37",
+      "removed": "1.35",
+      "removedInferred": true
     },
     {
       "group": "certificates.k8s.io",
@@ -764,6 +839,15 @@
     },
     {
       "group": "coordination.k8s.io",
+      "version": "v1alpha1",
+      "kind": "LeaseCandidate",
+      "introduced": "1.31",
+      "deprecated": "1.34",
+      "removed": "1.32",
+      "removedInferred": true
+    },
+    {
+      "group": "coordination.k8s.io",
       "version": "v1alpha2",
       "kind": "LeaseCandidate",
       "introduced": "1.32",
@@ -796,6 +880,14 @@
       "version": "v1",
       "kind": "EndpointSlice",
       "introduced": "1.21"
+    },
+    {
+      "group": "discovery.k8s.io",
+      "version": "v1alpha1",
+      "kind": "EndpointSlice",
+      "introduced": "1.17",
+      "removed": "1.21",
+      "removedInferred": true
     },
     {
       "group": "discovery.k8s.io",
@@ -892,6 +984,19 @@
     {
       "group": "extensions",
       "version": "v1beta1",
+      "kind": "PodSecurityPolicy",
+      "introduced": "1.2",
+      "deprecated": "1.11",
+      "removed": "1.16",
+      "replacement": {
+        "group": "policy",
+        "version": "v1beta1",
+        "kind": "PodSecurityPolicy"
+      }
+    },
+    {
+      "group": "extensions",
+      "version": "v1beta1",
       "kind": "ReplicaSet",
       "introduced": "1.2",
       "deprecated": "1.8",
@@ -901,6 +1006,14 @@
         "version": "v1",
         "kind": "ReplicaSet"
       }
+    },
+    {
+      "group": "extensions",
+      "version": "v1beta1",
+      "kind": "ReplicationControllerDummy",
+      "introduced": "1.17",
+      "removed": "1.18",
+      "removedInferred": true
     },
     {
       "group": "extensions",
@@ -921,6 +1034,32 @@
       "version": "v1",
       "kind": "PriorityLevelConfiguration",
       "introduced": "1.29"
+    },
+    {
+      "group": "flowcontrol.apiserver.k8s.io",
+      "version": "v1alpha1",
+      "kind": "FlowSchema",
+      "introduced": "1.18",
+      "deprecated": "1.20",
+      "removed": "1.21",
+      "replacement": {
+        "group": "flowcontrol.apiserver.k8s.io",
+        "version": "v1beta3",
+        "kind": "FlowSchema"
+      }
+    },
+    {
+      "group": "flowcontrol.apiserver.k8s.io",
+      "version": "v1alpha1",
+      "kind": "PriorityLevelConfiguration",
+      "introduced": "1.18",
+      "deprecated": "1.20",
+      "removed": "1.21",
+      "replacement": {
+        "group": "flowcontrol.apiserver.k8s.io",
+        "version": "v1beta3",
+        "kind": "PriorityLevelConfiguration"
+      }
     },
     {
       "group": "flowcontrol.apiserver.k8s.io",
@@ -1048,6 +1187,33 @@
     },
     {
       "group": "networking.k8s.io",
+      "version": "v1alpha1",
+      "kind": "ClusterCIDR",
+      "introduced": "1.25",
+      "deprecated": "1.28",
+      "removed": "1.29",
+      "removedInferred": true
+    },
+    {
+      "group": "networking.k8s.io",
+      "version": "v1alpha1",
+      "kind": "IPAddress",
+      "introduced": "1.27",
+      "deprecated": "1.30",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "networking.k8s.io",
+      "version": "v1alpha1",
+      "kind": "ServiceCIDR",
+      "introduced": "1.27",
+      "deprecated": "1.30",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "networking.k8s.io",
       "version": "v1beta1",
       "kind": "IPAddress",
       "introduced": "1.31",
@@ -1139,6 +1305,14 @@
         "version": "v1",
         "kind": "PodDisruptionBudget"
       }
+    },
+    {
+      "group": "policy",
+      "version": "v1beta1",
+      "kind": "PodSecurityPolicy",
+      "introduced": "1.10",
+      "deprecated": "1.21",
+      "removed": "1.25"
     },
     {
       "group": "rbac.authorization.k8s.io",
@@ -1248,6 +1422,108 @@
     },
     {
       "group": "resource.k8s.io",
+      "version": "v1alpha1",
+      "kind": "PodScheduling",
+      "introduced": "1.26",
+      "removed": "1.27",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha1",
+      "kind": "ResourceClaim",
+      "introduced": "1.26",
+      "removed": "1.27",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha1",
+      "kind": "ResourceClaimTemplate",
+      "introduced": "1.26",
+      "removed": "1.27",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha1",
+      "kind": "ResourceClass",
+      "introduced": "1.26",
+      "removed": "1.27",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "PodSchedulingContext",
+      "introduced": "1.27",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceClaim",
+      "introduced": "1.27",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceClaimParameters",
+      "introduced": "1.30",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceClaimTemplate",
+      "introduced": "1.27",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceClass",
+      "introduced": "1.27",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceClassParameters",
+      "introduced": "1.30",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceSlice",
+      "introduced": "1.30",
+      "removed": "1.31",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha3",
+      "kind": "DeviceClass",
+      "introduced": "1.31",
+      "deprecated": "1.34",
+      "removed": "1.34",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1beta1",
+        "kind": "DeviceClass"
+      },
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
       "version": "v1alpha3",
       "kind": "DeviceTaintRule",
       "introduced": "1.33",
@@ -1257,10 +1533,60 @@
     {
       "group": "resource.k8s.io",
       "version": "v1alpha3",
+      "kind": "PodSchedulingContext",
+      "introduced": "1.31",
+      "removed": "1.32",
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha3",
+      "kind": "ResourceClaim",
+      "introduced": "1.31",
+      "deprecated": "1.34",
+      "removed": "1.34",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1beta1",
+        "kind": "ResourceClaim"
+      },
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha3",
+      "kind": "ResourceClaimTemplate",
+      "introduced": "1.31",
+      "deprecated": "1.34",
+      "removed": "1.34",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1beta1",
+        "kind": "ResourceClaimTemplate"
+      },
+      "removedInferred": true
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha3",
       "kind": "ResourcePoolStatusRequest",
       "introduced": "1.36",
       "deprecated": "1.39",
       "removed": "1.42"
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha3",
+      "kind": "ResourceSlice",
+      "introduced": "1.31",
+      "deprecated": "1.34",
+      "removed": "1.34",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1beta1",
+        "kind": "ResourceSlice"
+      },
+      "removedInferred": true
     },
     {
       "group": "resource.k8s.io",
@@ -1342,6 +1668,38 @@
     },
     {
       "group": "scheduling.k8s.io",
+      "version": "v1alpha1",
+      "kind": "PriorityClass",
+      "introduced": "1.17",
+      "removed": "1.23",
+      "removedInferred": true
+    },
+    {
+      "group": "scheduling.k8s.io",
+      "version": "v1alpha1",
+      "kind": "Workload",
+      "introduced": "1.35",
+      "removed": "1.36",
+      "removedInferred": true
+    },
+    {
+      "group": "scheduling.k8s.io",
+      "version": "v1alpha2",
+      "kind": "PodGroup",
+      "introduced": "1.36",
+      "removed": "1.37",
+      "removedInferred": true
+    },
+    {
+      "group": "scheduling.k8s.io",
+      "version": "v1alpha2",
+      "kind": "Workload",
+      "introduced": "1.36",
+      "removed": "1.37",
+      "removedInferred": true
+    },
+    {
+      "group": "scheduling.k8s.io",
       "version": "v1beta1",
       "kind": "PodGroup",
       "introduced": "1.37",
@@ -1368,6 +1726,14 @@
       "introduced": "1.37",
       "deprecated": "1.40",
       "removed": "1.43"
+    },
+    {
+      "group": "settings.k8s.io",
+      "version": "v1alpha1",
+      "kind": "PodPreset",
+      "introduced": "1.17",
+      "removed": "1.20",
+      "removedInferred": true
     },
     {
       "group": "storage.k8s.io",
@@ -1527,6 +1893,15 @@
       "version": "v1",
       "kind": "StorageVersionMigration",
       "introduced": "1.37"
+    },
+    {
+      "group": "storagemigration.k8s.io",
+      "version": "v1alpha1",
+      "kind": "StorageVersionMigration",
+      "introduced": "1.30",
+      "deprecated": "1.33",
+      "removed": "1.35",
+      "removedInferred": true
     },
     {
       "group": "storagemigration.k8s.io",

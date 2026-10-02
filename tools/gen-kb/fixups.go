@@ -36,3 +36,34 @@ func fixReplacement(e *entry) {
 		e.Replacement = &gvkOut{Group: r.Group, Version: r.Version, Kind: strings.TrimSuffix(r.Kind, "List")}
 	}
 }
+
+// removalFixes overrides the removal of types k8s.io/api deleted only
+// releases after kube-apiserver stopped serving them, so neither the
+// deletion nor the upstream tag is the release that removed them. Each
+// value is the first release whose kube-apiserver registers no storage for
+// the type at that version (pkg/registry/<group>/rest in
+// kubernetes/kubernetes, cited per entry). Only a removal earlier than the
+// recorded one is applied (fixRemoval), and only to deleted types
+// (deletedTypes; TestRemovalFixesAreDeletedTypes).
+var removalFixes = map[gvkOut]version{
+	// pkg/registry/networking/rest/storage_settings.go: v1.30.0 maps
+	// ipaddresses and servicecidrs under v1alpha1, v1.31.0 only under
+	// v1beta1. k8s.io/api tagged a 1.33 removal and deleted them in v0.34.
+	{Group: "networking.k8s.io", Version: "v1alpha1", Kind: "IPAddress"}:   {Major: 1, Minor: 31},
+	{Group: "networking.k8s.io", Version: "v1alpha1", Kind: "ServiceCIDR"}: {Major: 1, Minor: 31},
+	// pkg/registry/scheduling/rest/storage_scheduling.go: v1.22.0 serves
+	// scheduling.k8s.io/v1alpha1 priorityclasses, v1.23.0 has no v1alpha1
+	// storage. k8s.io/api never tagged it and deleted it in v0.36.
+	{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClass"}: {Major: 1, Minor: 23},
+}
+
+// fixRemoval applies removalFixes to e: an override earlier than e's
+// removal, or e without one, sets the removal, marked inferred since it is
+// no upstream tag.
+func fixRemoval(e *entry) {
+	r, ok := removalFixes[e.gvk()]
+	if !ok || e.Removed != nil && !r.before(*e.Removed) {
+		return
+	}
+	e.Removed, e.RemovedInferred = &r, true
+}

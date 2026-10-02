@@ -229,6 +229,8 @@ func TestRuleValidate(t *testing.T) {
 	}{
 		{Rule{Key: "eol-addon/ingress-nginx", Reason: "r"}, ""},
 		{Rule{Key: "kb-stale", Reason: "r", Expires: "2027-01-31", Namespace: "a*", Name: "[ab]", File: "x/**/*.yaml"}, ""},
+		{Rule{Key: "unknown-api/batch/v2alpha1/CronJob", Reason: "r"}, ""},
+		{Rule{Category: "unknown-api", Reason: "r"}, ""},
 		{Rule{Reason: "r"}, "set key or category"},
 		{Rule{Key: "kb-stale", Category: "kb-stale", Reason: "r"}, "set only one of key and category"},
 		{Rule{Key: "kb-stale"}, "reason is required"},
