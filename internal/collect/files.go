@@ -42,6 +42,10 @@ type manifestObject struct {
 	// controller.
 	template          *podTemplate
 	ingressController string
+	// crd is what a CustomResourceDefinition (apiextensions.k8s.io/v1)
+	// defines, set on every such object counted (see attachCRDs); an
+	// unreadable one is empty.
+	crd *inventory.CRD
 }
 
 // podTemplate is what add-on detection reads of a pod template: its
@@ -340,6 +344,7 @@ func (p *streamParser) decoded(root *yaml.Node, yerr error, text []byte, first i
 			"counted %s, which kubectl's decoder does not send from here (it would reject or skip it)", gvkList(extra))})
 	}
 	p.bad = append(p.bad, warnings...)
+	attachCRDs(objs, kubectl)
 	p.objs = append(p.objs, objs...)
 	p.addEvidence(kubectl)
 }
@@ -405,6 +410,9 @@ func kubectlDecode(text []byte, isJSON bool) ([]manifestObject, error) {
 			mo.template = podTemplateOf(k.GroupKind(), u.Object)
 			if k.GroupKind() == (schema.GroupKind{Group: "networking.k8s.io", Kind: "IngressClass"}) {
 				mo.ingressController, _, _ = unstructured.NestedString(u.Object, "spec", "controller")
+			}
+			if k == crdGVK {
+				mo.crd = manifestCRD(u)
 			}
 		}
 		out = append(out, mo)
@@ -898,7 +906,8 @@ func accumulate(counts map[gvk]*inventory.APIUsage, objs []manifestObject) {
 
 // manifestInventory wraps accumulated GVK counts in the offline-inventory
 // envelope: only api-usage is assessable; every other capability degrades
-// with reason (the callers then assess add-ons, see assessAddOns).
+// with reason (the callers then assess add-ons and CRDs, see assessAddOns
+// and assessCRDs).
 func manifestInventory(clusterID, reason string, counts map[gvk]*inventory.APIUsage) inventory.Inventory {
 	inv := inventory.Inventory{
 		SchemaVersion: 1,
@@ -944,8 +953,8 @@ func usageRows(counts map[gvk]*inventory.APIUsage) []inventory.APIUsage {
 // has nowhere to put a warning, so silently dropping it would be a false
 // pass. Warnings about documents decoded anyway (duplicate keys, objects
 // located by kubectl's decoder) are dropped. Object refs carry stream lines
-// and no file. Add-ons are assessed as CollectFiles assesses them, so the
-// two gates judge a render alike.
+// and no file. Add-ons and CRDs are assessed as CollectFiles assesses them,
+// so the two gates judge a render alike.
 func CollectManifests(r io.Reader, addons []registry.AddOn) (inventory.Inventory, error) {
 	objs, ev, bad, err := parseManifestStream(r)
 	if err != nil {
@@ -960,6 +969,7 @@ func CollectManifests(r io.Reader, addons []registry.AddOn) (inventory.Inventory
 	accumulate(counts, objs)
 	inv := manifestInventory("manifests", "manifests mode", counts)
 	assessAddOns(&inv, ev, addons)
+	assessCRDs(&inv, crdsOf(objs))
 	return inv, nil
 }
 
@@ -1025,11 +1035,13 @@ func skipDir(path, name string) (skip bool, why string) {
 // CollectFiles builds an Inventory from rendered manifests on disk
 // (--files mode, CI gating). root is a directory, walked recursively in
 // lexical order for *.yaml/*.yml/*.json, or a single file, parsed whatever
-// its extension. API usage and add-ons are assessed offline: add-ons from
-// the pod templates of workload manifests (images and labels, see
-// podTemplateOf) and IngressClass controllers, with the matchers a live
-// scan uses (matchAddOns). Every other capability degrades with reason
-// "files mode": a manifest carries no cluster version and no Helm release.
+// its extension. API usage, add-ons and CRDs are assessed offline:
+// add-ons from the pod templates of workload manifests (images and labels,
+// see podTemplateOf) and IngressClass controllers, with the matchers a
+// live scan uses (matchAddOns); CRDs from CustomResourceDefinition
+// manifests, which judge the custom resources in the files (assessCRDs).
+// Every other capability degrades with reason "files mode": a manifest
+// carries no cluster version and no Helm release.
 //
 // A repository holds YAML that is not Kubernetes manifests (values files,
 // workflows, unrendered chart templates), so non-manifest documents are
@@ -1057,6 +1069,7 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 	}
 	slices.SortFunc(removed, compareGVK)
 	var hiding []string // "file:line (group/version Kind)" per unassessed part naming a removed API
+	var crds []inventory.CRD
 	counts := map[gvk]*inventory.APIUsage{}
 	var ev addOnEvidence
 	var sum FilesSummary
@@ -1129,6 +1142,7 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 		}
 		sum.Objects += len(objs)
 		accumulate(counts, objs)
+		crds = append(crds, crdsOf(objs)...)
 		ev.images = append(ev.images, fileEv.images...)
 		ev.labelled = append(ev.labelled, fileEv.labelled...)
 		ev.ingressControllers = append(ev.ingressControllers, fileEv.ingressControllers...)
@@ -1139,6 +1153,7 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 	}
 	inv := manifestInventory("files", "files mode", counts)
 	assessAddOns(&inv, ev, k.AddOns)
+	assessCRDs(&inv, crds)
 	if len(hiding) > 0 {
 		listed := hiding[:min(len(hiding), 5)]
 		more := ""
