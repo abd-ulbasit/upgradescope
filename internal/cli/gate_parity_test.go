@@ -166,7 +166,8 @@ func TestGateParityWithScanFiles(t *testing.T) {
 	// and an expired rule, which suppresses nothing in either.
 	t.Run("suppression", func(t *testing.T) {
 		dir := writeFiles(t, map[string]string{"rendered.yaml": suppressionStream, ".upgradescope.yaml": parityConfig})
-		out, _, err := execScanFiles(t, "--files", filepath.Join(dir, "rendered.yaml"), "--output", "json", "--fail-on", "never")
+		out, _, err := execScanFiles(t, "--files", filepath.Join(dir, "rendered.yaml"), "--config", filepath.Join(dir, ".upgradescope.yaml"),
+			"--output", "json", "--fail-on", "never")
 		if err != nil {
 			t.Fatal(err)
 		}
