@@ -109,12 +109,17 @@ most 253 bytes, and the inventory's identifiers are what the
 apiserver accepts for what they name: namespaces RFC 1123 labels,
 object names at most 253 bytes without `/` or `%`, node and Helm
 release names RFC 1123 subdomains, team labels label values. Its
-other values are within what any collector records: strings at most
-16 KiB (a capability's reason 64 KiB, an object's field manager 128
-printable bytes), at most 100 objects per API usage entry, each
-group/version/kind once per list, at most 200 unrecognized images
-and 32 capabilities. Anything else is 422, naming the field and
-the rule, before anything is stored.
+other values are within the limits collectors keep to: strings at
+most 16 KiB (a capability's reason 64 KiB, an object's field
+manager 128 printable bytes), at most 100 objects per API usage
+entry, each group/version/kind once per list, at most 200
+unrecognized images and 32 capabilities. Anything else is 422,
+naming the field and the rule, before anything is stored. The free
+text a collector copies whole from the cluster is cut to the
+limits, not refused: a capability's reason and skipped entries,
+and an object's `ignore` (to its whole tokens) and `ignoreReason`
+(the upgradescope.dev/ignore annotations). The snapshot keeps the
+push as sent.
 
 Each target's report is at most `--max-snapshot-bytes`: a push
 whose report for one would be larger is 413, and nothing is
@@ -147,7 +152,7 @@ Request body (`application/json`): [PushRequest](#pushrequest)
 | 409 | `application/json` | [Error](#error) | An error. |
 | 413 | `application/json` | [Error](#error) | Over the byte cap (on the wire or after decompression) or over the node budget, before anything is decoded; or, once decoded, a report for one of the targets would be over `--max-snapshot-bytes`, and nothing is stored. |
 | 415 | `application/json` | [Error](#error) | An error. |
-| 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no `clusterName` or one that is not an RFC 1123 subdomain of at most 253 bytes, a missing or `null` inventory, an inventory `schemaVersion` other than 1, a `serverVersion` that is not a Kubernetes 1.x version, an identifier that is not valid for what it names, or a value beyond what any collector records (see above). The message names the field and the rule. |
+| 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no `clusterName` or one that is not an RFC 1123 subdomain of at most 253 bytes, a missing or `null` inventory, an inventory `schemaVersion` other than 1, a `serverVersion` that is not a Kubernetes 1.x version, an identifier that is not valid for what it names, or a value beyond the limits collectors keep to (see above). The message names the field and the rule. |
 | 500 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`. |
 
@@ -296,7 +301,7 @@ Auth: `readToken` (bearer).
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
-| `targets` | query | string | no | Comma-separated minors, at most 16 distinct (more is 422). Default: every cluster's next minor plus the `serve --targets` minors some cluster does not run yet. |
+| `targets` | query | string | no | Comma-separated minors, at most 16 distinct (more is 422). Default: every cluster's next minor plus the `serve --targets` minors some cluster does not run yet, at most 16 of them: those with the most clusters to fill them (the older minor on a tie), the rest counted in `targetsOmitted`. |
 
 | Status | Content type | Schema | Description |
 |---|---|---|---|
@@ -607,9 +612,10 @@ Something the evaluation could not assess.
 ### SummaryGap
 
 A report's gap as an evaluation summary carries it, bounded: its
-reason cut to 1 KiB and at most 10 of what it skipped, each cut to
-512 bytes (a cut one ends in "…"), with `skippedOmitted` counting
-the rest. The report lists every gap whole.
+capability cut to 64 bytes, its reason to 256 and at most 3 of what
+it skipped, each cut to 128 bytes (a cut one ends in "…"), with
+`skippedOmitted` counting the rest. The report lists every gap
+whole.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -643,7 +649,8 @@ the rest. The report lists every gap whole.
 | `evaluatedAt` | string (date-time) | yes | When the result was last confirmed. |
 | `snapshotId` | integer (int64) | yes | — |
 | `outdated` | boolean | no | Evaluated before today (UTC), or under another knowledge base or team map; the next pass replaces it. |
-| `notAssessed` | array of [SummaryGap](#summarygap) | no | — |
+| `notAssessed` | array of [SummaryGap](#summarygap) | no | The required gaps first, then the rest. A cluster's detail lists every gap; `/clusters` lists at most 1 KiB of them (encoded) and counts the rest in `notAssessedOmitted`. |
+| `notAssessedOmitted` | integer | no | Gaps not listed (only in /clusters). |
 
 ### ClusterSummary
 
@@ -892,7 +899,8 @@ The report's fields other than its findings.
 | `snapshotId` | integer (int64) | yes | — |
 | `source` | `stored` | yes | — |
 | `outdated` | boolean | no | — |
-| `notAssessed` | array of [SummaryGap](#summarygap) | no | — |
+| `notAssessed` | array of [SummaryGap](#summarygap) | no | The required gaps first, then the rest, at most 1 KiB of them (encoded). |
+| `notAssessedOmitted` | integer | no | Gaps not listed. |
 
 ### FleetRow
 
@@ -911,6 +919,7 @@ The report's fields other than its findings.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `targets` | array of [Target](#target) | yes | — |
+| `targetsOmitted` | integer | no | Default columns left out past the 16 (absent with `?targets=` and when none are); ask for them with `?targets=`. |
 | `clusters` | array of [FleetRow](#fleetrow) | yes | — |
 
 ### FleetTeam

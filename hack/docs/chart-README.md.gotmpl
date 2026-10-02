@@ -267,7 +267,8 @@ settings, so the read token still protects all data.
   clients. Open connections, kernel socket buffers and larger fleets are
   not in that figure
   ([memory and request limits](https://abd-ulbasit.github.io/upgradescope/operations/#memory-and-request-limits)).
-  Below about 665Mi, that worst case no longer fits under `GOMEMLIMIT`.
+  Below about 739Mi, that worst case (~665 MiB of heap) no longer fits
+  under `GOMEMLIMIT`.
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
   them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.

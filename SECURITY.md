@@ -101,9 +101,11 @@ In scope:
   `--max-gate-bytes` is `413` (`?path=` is at most 512 bytes). A push
   whose identifiers are not valid for what they name (the cluster name
   an RFC 1123 subdomain, namespaces RFC 1123 labels, and so on), or that
-  carries more than any collector records (a string over 16 KiB, more
-  than 100 objects per API usage entry, a group/version/kind listed
-  twice), is `422` before anything is stored. Every report the server
+  carries more than the limits collectors keep to (a string over 16 KiB,
+  more than 100 objects per API usage entry, a group/version/kind listed
+  twice), is `422` before anything is stored; the free text a collector
+  copies whole from the cluster (capability reasons, the ignore
+  annotations) is cut to the limits instead. Every report the server
   evaluates, stores or exports is at most `--max-snapshot-bytes`, since a
   report repeats what its inventory names: a push, a what-if or a
   `/gate?cluster=` over it is `413`, and so is an export (HTML writes

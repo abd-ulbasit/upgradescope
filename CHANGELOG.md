@@ -373,10 +373,28 @@ a CI gate.
   object's field manager over the apiserver's 128 bytes or not
   printable), more than 100 objects in an API usage entry, a
   group/version/kind listed twice in one list, more than 200
-  unrecognized images or more than 32 capabilities. v0.1 agents' pushes
-  are within all of them. `tokens create`, cluster rename and the agent's
-  `--cluster-name` (checked at startup, with `--team-label`) take the
-  same cluster names (#121, #37).
+  unrecognized images or more than 32 capabilities. The free text a
+  collector copies whole from the cluster is cut to those limits, by the
+  agent and at ingest, not refused: a capability's reason (one failure
+  per resource the agent could not read) and skipped entries, and the
+  `upgradescope.dev/ignore` and `ignore-reason` annotations. v0.1 agents'
+  inventories are within the rest, but not necessarily their cluster
+  names: `tokens create`, cluster rename (the CLI's too) and the agent's
+  `--cluster-name` (checked at startup, with `--team-label`) take only
+  RFC 1123 subdomains now, and v0.1 took any name (#121, #37).
+- **Upgrade note:** a cluster a v0.1 server registered under a name that
+  is not an RFC 1123 subdomain (uppercase, `_` or spaces: `Prod-EU`,
+  `prod_eu`) gets `422` on every push once the server is upgraded, and
+  its per-cluster tokens are bound to that name. For each such cluster
+  (`upgradescope clusters list`), run `upgradescope clusters rename
+  <old> <new>`, which keeps its history and re-binds its tokens, then set
+  the agent's `--cluster-name` (chart `agent.clusterName`) to the new
+  name. See the operations guide's cluster lifecycle (#37).
+- Server: `/api/v1/fleet` without `?targets=` opens at most 16 columns,
+  as `?targets=` takes at most 16: the minors with the most clusters to
+  fill them, the older on a tie. The rest are counted in a new
+  `targetsOmitted`, which the dashboard shows; ask for them with
+  `?targets=` (#121).
 - Server: a report is at most `--max-snapshot-bytes`. A push whose report
   for a target would be larger is `413` and stores nothing; a what-if
   report is `413` (the fleet teams rollup lists such a cluster as
@@ -384,9 +402,11 @@ a CI gate.
   what is stored. An export larger than the limit is `413`, saying to
   read the JSON report (#121).
 - Server: the evaluation summaries that `/clusters`, `/fleet` and a
-  cluster's detail carry list each gap's reason cut to 1 KiB and at most
-  10 skipped entries, with a new `skippedOmitted` count; the report keeps
-  every gap whole (#121).
+  cluster's detail carry list each gap's capability cut to 64 bytes, its
+  reason to 256 and at most 3 skipped entries of 128 bytes, with a new
+  `skippedOmitted` count; `/clusters` and `/fleet` list at most 1 KiB of
+  gaps per evaluation, the required ones first, and count the rest in a
+  new `notAssessedOmitted`. The report keeps every gap whole (#121).
 - The kubelet skew findings name at most 100 nodes, and count the rest
   ("and N more"); their titles count every node.
 - Server: `POST /api/v1/gate` answers `413` for a stream over its node
@@ -410,7 +430,7 @@ a CI gate.
   `GOMEMLIMIT` 691MiB: the worst case of one `/gate` request, one push,
   one read, two reads of a 500-cluster fleet, the responses held for
   their clients and the re-evaluation pass, measured on SQLite, is
-  ~655 MiB.
+  ~665 MiB.
 
 ### Fixed
 

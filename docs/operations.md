@@ -28,7 +28,7 @@ request is measured before it is decoded:
 | with aliases expanded | the whole stream within the body cap, each document within 4 MiB; 20,000 documents | — |
 | node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4, an alias what it names | 1M units: a JSON value 1, an object 8 |
 | answer | at most `--max-gate-bytes`, bounded before it is encoded; `?path=` at most 512 bytes | — |
-| what it may carry | — | identifiers valid for what they name, values within what any collector records (`422`) |
+| what it may carry | — | identifiers valid for what they name, values within limits no genuine inventory reaches (`422`); free text a collector copies whole is cut to them |
 | reports | — | each at most `--max-snapshot-bytes`; the evaluation stops there (`413`) |
 | worst live heap within the budget (measured on SQLite) | ~176 MiB, with `?cluster=` too, the answer included | ~119 MiB, the body's copy and the reports it stores included |
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
@@ -117,12 +117,22 @@ they name: the cluster name an RFC 1123 subdomain of at most 253 bytes
 namespaces RFC 1123 labels, object names at most 253 bytes without `/`
 or `%` (the most any kind accepts: RBAC names take `:`), node and Helm
 release names RFC 1123 subdomains, team labels label values. Its other
-values must be within what any collector records: strings of at most
-16 KiB (a capability's reason 64 KiB, an object's field manager the
-apiserver's 128 printable bytes), at most 100 objects per API usage
-entry, each group/version/kind once per list, at most 200 unrecognized
-images and 32 capabilities. Anything else is `422`, naming the field
-and the rule, before anything is stored. Before that, namespace "names"
+values must be within limits that collectors keep to or that no genuine
+value comes near: strings of at most 16 KiB (a capability's reason
+64 KiB, an object's field manager the apiserver's 128 printable bytes),
+at most 100 objects per API usage entry, each group/version/kind once
+per list, at most 200 unrecognized images and 32 capabilities. Anything
+else is `422`, naming the field and the rule, before anything is
+stored. The free text a collector copies whole from the cluster, which
+Kubernetes lets be longer, is cut to those limits instead: a
+capability's reason, which joins one failure per resource the agent
+could not read (without RBAC for custom resources, the default chart's,
+~200 bytes per CRD at a deprecated version, past 64 KiB at ~320 of
+them), its skipped entries, and an object's `upgradescope.dev/ignore`
+(to the tokens that fit whole) and `ignore-reason` annotations (up to
+256 KiB). The agent cuts them itself; the server cuts what an older
+agent sends, in the push and whenever it reads the snapshot back, which
+keeps the push as sent. Before that, namespace "names"
 of 190 apostrophes, written twice in each finding (in its namespaces and
 its evidence), made a 21 MB push three 42 MB reports and a 200 MB HTML
 export, and a `kubeVersion` of 20 MB of quotes three 84 MB reports.
@@ -201,21 +211,37 @@ evaluation's score, verdict, counts and what it could not assess from
 its own columns, never the stored report. Before that, one 17 MB push
 made 30 concurrent requests to any of them grow the heap by 285-584 MiB;
 now by at most 9 MiB (`TestFleetReadsLoadNoReport`). What an evaluation
-could not assess is in those columns as a summary: each gap's reason
-cut to 1 KiB and its first 10 skipped entries, each cut to 512 bytes,
-with `skippedOmitted` counting the rest, so with at most 32 capabilities
-an evaluation's is at most about 200 KB (a push of 31 capabilities with
-64 KiB reasons and 20 MB of skipped entries answers `/clusters` in
-76 KB); the report keeps every gap whole. Their responses do
+could not assess is in those columns as a summary: each gap's
+capability name cut to 64 bytes, its reason to 256 and its first 3
+skipped entries, each cut to 128 bytes, with `skippedOmitted` counting
+the rest, so with at most 32 capabilities an evaluation's is at most
+about 30 KB. `/clusters` and `/fleet` list at most 1 KiB of it per
+evaluation, the required gaps first, and count the rest in
+`notAssessedOmitted`; a cluster's detail lists every gap, and the report
+keeps every gap whole. A push within the limits may name 32 capabilities
+of 16 KiB with 64 KiB reasons and long skipped lists: with the gaps
+listed whole but for 1 KiB reasons and 10 skipped entries of 512 bytes,
+50 such clusters made `/fleet` answer 108 MB and grow the heap 516 MiB;
+now 500 of them, each evaluated at three targets, grow it 9.6 MiB for
+`/fleet` (a 1.5 MB answer), 3.9 for `/clusters` and 5.6 for `/metrics`
+(`TestFleetReadsOfTheWidestGapsAreBounded`). Their responses do
 grow with the fleet: at 500 clusters `/clusters` is ~230 KB, `/fleet`
 ~480 KB (~590 KB with 16 `?targets=`) and `/metrics` ~740 KB, and
 building one adds up to ~5 MiB to the heap (`/metrics` the most, about
-five times its response); at 2000 clusters with 200-byte names, with two
+five times its response; ~10 MiB for the `/fleet` of the widest gaps
+above); at 2000 clusters with 200-byte names, with two
 `--targets`, they are 1.3, 2.3 (2.7 with 16 `?targets=`) and 9 MB, and
 `/metrics` adds ~47 MiB. `/fleet?targets=` takes at most 16 distinct
 minors (`422` above): each is a column and a store query per cluster,
 and unbounded but for the 64 KiB URL, 8,718 of them against 500 clusters
 held a fleet slot for 2m13s, grew the heap 418 MiB and answered 57 MiB.
+Without `?targets=`, `/fleet` opens a column for every cluster's next
+minor and the `--targets` some cluster does not run yet, at most 16 of
+them too: those with the most clusters to fill them (the older minor on
+a tie), the rest counted in `targetsOmitted`, which the dashboard shows.
+Uncapped, 500 clusters pushed at 500 minors took ~5s, grew the heap
+36 MiB and answered 4.4 MB; now 19 ms, 1.9 MiB and 217 KB
+(`TestFleetDefaultColumnsAreMeasured`).
 They run two at a time in fleet slots of their own (the dashboard's
 reads wait up to 30s, a `/metrics` scrape up to 5s, within Prometheus'
 default 10s scrape timeout, then get `503` with `Retry-After`), and
@@ -237,7 +263,8 @@ with reports at the report limit, of every string class above
 `TestStoredSnapshotHeapIsBounded`, `TestReadHeapIsBounded`,
 `TestGateAnswerHeapIsBounded`, `TestUnreadResponsesAreBounded`,
 `TestUnreadGateResponsesAreBounded`,
-`TestUnreadFleetResponsesAreBounded`):
+`TestUnreadFleetResponsesAreBounded`,
+`TestFleetReadsOfTheWidestGapsAreBounded`):
 one `/gate` request in the evaluation slot (~176 MiB, with `?cluster=`
 too, since the cluster's inventory is decoded once the manifests' node
 trees are garbage, its answer included: answers big enough to cost more
@@ -246,14 +273,15 @@ namespace keys, 1,000 per API usage entry, its copy of the body and
 the reports it stores included) plus one read in the read slot
 (~132 MiB, the HTML export of a report at the report limit, its
 response included) plus two reads of the whole fleet in their slots
-(up to ~10 MiB for 500 clusters) plus the read, fleet read and `/gate`
-responses held for their clients (the one 40 MiB budget) plus the
+(up to ~10 MiB each for 500 clusters, a `/fleet` of evaluations that
+list the most of what they could not assess) plus the read, fleet read
+and `/gate` responses held for their clients (the one 40 MiB budget) plus the
 background re-evaluation pass, which takes clusters one at a time
 (~108 MiB for a 20 MB snapshot whose three reports are each about the
 report limit) plus both body budgets (70 MiB; an ingest gives its share
 back once it holds that copy, so another push can wait in it): about
-655 MiB for a 500-cluster fleet, inside the 691 MiB `GOMEMLIMIT` the
-chart derives from the limit. Below about 728Mi, that sum no longer
+665 MiB for a 500-cluster fleet, inside the 691 MiB `GOMEMLIMIT` the
+chart derives from the limit. Below about 739Mi, that sum no longer
 fits under `GOMEMLIMIT`. (Each figure is
 a peak with its garbage, measured with the collector held near the live
 heap; runs differ by a few MiB.)
@@ -281,13 +309,9 @@ What is outside these bounds, and what it costs:
 - **The fleet's size.** Nothing caps how many clusters the server
   holds, and a holder of the shared ingest token registers a new one
   with each new name it pushes. What a fleet read costs grows with the
-  fleet (above): about 5 MiB for 500 clusters, ~47 MiB for a `/metrics`
-  of 2000 clusters with 200-byte names, twice that with both fleet slots
-  busy. Without `?targets=`, `/fleet` has a column for every minor some
-  cluster runs the next of, so clusters pushed at many minors widen it
-  too, at a store query per column and cluster: 500 clusters at 500
-  minors took ~5s on SQLite, grew the heap 36 MiB and answered 4.4 MB
-  (`TestFleetDefaultColumnsAreMeasured`).
+  fleet (above): up to ~10 MiB for 500 clusters, ~47 MiB for a
+  `/metrics` of 2000 clusters with 200-byte names, twice that with both
+  fleet slots busy.
 - **Snapshots stored by v0.1.** A snapshot a v0.1 server stored before
   the budgets existed (up to 20 MiB of any shape) is decoded without a
   node count when `/gate?cluster=`, the re-evaluation pass or a what-if
@@ -421,6 +445,25 @@ is stopped.
   the shared ingest token.
 
 Every delete and rename is logged by the server.
+
+**Upgrading from v0.1 with a cluster name that is not valid.** v0.1
+agents sent `--cluster-name` (chart `agent.clusterName`) unchecked, and
+a v0.1 server registered and renamed clusters under any name: uppercase,
+`_` and spaces included. After the upgrade every push under such a name
+(`Prod-EU`, `prod_eu`) is `422`, and an upgraded agent refuses to
+start with it. `upgradescope clusters list` shows each name; for each one
+that is not valid, rename the cluster, which keeps its history and
+re-binds its per-cluster tokens to the new name, then set the agent's
+`--cluster-name` to that name:
+
+```sh
+upgradescope clusters rename Prod_EU prod-eu --server https://upgradescope.example.com
+helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope -n upgradescope \
+  --reuse-values --set agent.clusterName=prod-eu
+```
+
+Until the agent is changed its pushes are refused; nothing is lost but
+the data of those cycles.
 
 ## Stale clusters
 
