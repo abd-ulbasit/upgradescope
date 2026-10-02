@@ -12,16 +12,23 @@ import (
 
 // Baseline is what a previous JSON report found, for gating only on what
 // is new since. Findings are matched by Key, which is count-free and
-// stable across runs (engine.Finding.Key); objects by namespace, name and
+// stable across runs (engine.Finding.Key), and by severity, because a key
+// can escalate (an API removed one minor past the target is a warning; at
+// the target, the same key is a blocker); objects by namespace, name and
 // file, not line, so editing around an object does not make it new.
 type Baseline struct {
 	findings map[string]baselineEntry
 }
 
 type baselineEntry struct {
-	objects map[objectID]bool
-	total   int // listed plus omitted objects, summed over findings with the key
+	objects  map[objectID]bool
+	total    int // listed plus omitted objects, summed over findings with the key
+	severity int // highest severityRank among findings with the key
 }
+
+// severityRank orders severities for escalation. A missing or unknown
+// severity ranks lowest, so a baseline entry without one matches nothing.
+var severityRank = map[engine.Severity]int{engine.SevInfo: 1, engine.SevWarning: 2, engine.SevBlocker: 3}
 
 type objectID struct{ namespace, name, file string }
 
@@ -53,20 +60,22 @@ func ReadBaseline(r io.Reader, schemaVersion int) (Baseline, error) {
 			e.objects[objectID{o.Namespace, o.Name, o.File}] = true
 		}
 		e.total += len(f.Objects) + f.ObjectsOmitted
+		e.severity = max(e.severity, severityRank[f.Severity])
 		b.findings[findingID(f)] = e
 	}
 	return b, nil
 }
 
 // Mark returns r with every finding's BaselineState set: unchanged when
-// the baseline had its key, every object it lists, and at least as many
-// objects in all (new ones could hide among the unlisted); new otherwise.
+// the baseline had its key at the same or a higher severity, every object
+// it lists, and at least as many objects in all (new ones could hide
+// among the unlisted); new otherwise.
 // r itself is not modified.
 func (b Baseline) Mark(r engine.Report) engine.Report {
 	r.Findings = slices.Clone(r.Findings)
 	for i, f := range r.Findings {
 		state := engine.BaselineNew
-		if e, ok := b.findings[findingID(f)]; ok && len(f.Objects)+f.ObjectsOmitted <= e.total {
+		if e, ok := b.findings[findingID(f)]; ok && severityRank[f.Severity] <= e.severity && len(f.Objects)+f.ObjectsOmitted <= e.total {
 			state = engine.BaselineUnchanged
 			for _, o := range f.Objects {
 				if !e.objects[objectID{o.Namespace, o.Name, o.File}] {

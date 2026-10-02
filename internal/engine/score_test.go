@@ -36,6 +36,18 @@ func TestScore(t *testing.T) {
 	}
 }
 
+// The caps bound the deductions at 75 + 20, so the lowest score is 5, not
+// 0: no number of findings takes a cluster below it.
+func TestScoreFloorIsFive(t *testing.T) {
+	fs := make([]Finding, 0, 2000)
+	for range 1000 {
+		fs = append(fs, Finding{Severity: SevBlocker}, Finding{Severity: SevWarning})
+	}
+	if score, ready := Score(fs); score != 5 || ready {
+		t.Fatalf("Score(1000 blockers, 1000 warnings) = (%d, %v), want (5, false)", score, ready)
+	}
+}
+
 // Rescore recomputes a report's score and verdict from its current
 // findings: a caller that removes findings after Evaluate (suppression)
 // must not leave the score and verdict of the findings it removed.

@@ -58,7 +58,7 @@ func TestTeamScores(t *testing.T) {
 			},
 		},
 		{
-			name: "score floors at 0 (same formula as Score)",
+			name: "score floors at 5 (same formula as Score)",
 			findings: []Finding{
 				{Severity: SevBlocker, Teams: []string{"x"}},
 				{Severity: SevBlocker, Teams: []string{"x"}},

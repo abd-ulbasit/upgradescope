@@ -33,12 +33,25 @@ var goldenParams = map[string]struct{ target, now string }{
 	// one blocker carrying both; the PDB caller row has no objects and
 	// stays a standalone deprecated-api-in-use blocker.
 	"removed-api-with-callers": {"1.25", "2026-06-10T00:00:00Z"},
+	// The warning and info tiers: CronJobs written via batch/v1beta1
+	// (removed 1.25, one release after the target) are a removed-api
+	// warning that carries the matching caller row; PSP callers (removed
+	// 1.25) are a deprecated-api-in-use warning; FlowSchema callers
+	// (removed 1.29) and a row without a removal release are info; an
+	// unparseable kubelet version is a version-skew info.
+	"api-warning-tiers": {"1.24", "2026-06-10T00:00:00Z"},
 	// Release-line lifecycle: Istio 1.27 (ended) blocks; the containerd 1.7
 	// node is EOL but only warns (the node image carries it, and the
 	// kubelet keeps 1.x support through 1.37); a containerd 2.0 node is
 	// fine; ExternalDNS from Helm is judged by appVersion 0.14.2 (compat
 	// row, no lifecycle data → info).
 	"addon-lifecycle": {"1.36", "2026-10-02T00:00:00Z"},
+	// One Istio per namespace, as the collector reports them: a Helm
+	// release (1.31.1) and sidecars (1.31.0) on the 1.31 line, whose end is
+	// within 90 days (one warning naming both namespaces and versions), and
+	// an older image-only install (1.27.3) the release must not mask: its
+	// EOL and compat blockers name only istio-legacy and team legacy.
+	"addon-mixed-versions": {"1.34", "2026-12-15T00:00:00Z"},
 	// Helm releases, no registry data needed: shop/web's chart kubeVersion
 	// excludes 1.25 (blocker); shop/legacy-web's does not parse (info);
 	// batch/jobs renders two batch/v1beta1 CronJobs, one of which the live
@@ -107,6 +120,15 @@ func TestEvaluateGolden(t *testing.T) {
 			}
 
 			got := Evaluate(inv, k, target, now)
+			// A key identifies one finding: baselines, ignore rules,
+			// notification deltas and SARIF rule ids all match on it.
+			seen := map[string]bool{}
+			for _, f := range got.Findings {
+				if f.Key == "" || seen[f.Key] {
+					t.Errorf("finding key %q is empty or not unique (%s)", f.Key, f.Title)
+				}
+				seen[f.Key] = true
+			}
 			gotRaw, err := json.Marshal(got)
 			if err != nil {
 				t.Fatal(err)

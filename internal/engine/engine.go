@@ -99,7 +99,9 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 // manifest objects in files mode),
 //   - removed at ≤ target          → blocker, removed-api
 //   - removed exactly at target+1  → warning, removed-api
-//   - deprecated, removal beyond the window or unset → info, deprecated-api
+//   - deprecated, removal beyond the window or unset → info, deprecated-api;
+//     a deprecation after the target is titled as such, and "projected"
+//     past the KB horizon
 func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
 	idx := kb.NewIndex(k.APILifecycle)
 	var out []Finding
@@ -142,6 +144,13 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 			f.Category = CatDeprecatedAPI
 			f.Severity = SevInfo
 			f.Title = fmt.Sprintf("%s %s deprecated since %s (%s)", gv, u.Kind, e.Deprecated, pluralObjects(u.Count))
+			if e.Deprecated.Compare(target) > 0 {
+				when := e.Deprecated.String()
+				if e.Deprecated.Compare(k.MaxKnownK8s) > 0 {
+					when += " (projected)" // k8s.io/api's lifecycle markers, not a release
+				}
+				f.Title = fmt.Sprintf("%s %s deprecated in %s, after target %s (%s)", gv, u.Kind, when, target, pluralObjects(u.Count))
+			}
 		default:
 			continue // KB entry exists but is neither deprecated nor removed
 		}
@@ -341,94 +350,159 @@ func kindMatchesResource(kind, resource string) bool {
 	return resource == k+"s"
 }
 
+// addOnInstall is one detected install of a registry add-on: an inventory
+// instance (one namespace; several in inventories from agents that merged
+// installs) or one node's container runtime.
+type addOnInstall struct {
+	version string   // normalised app version; "" when unknown
+	via     string   // "image", "chart 1.14.5"; "" for a node runtime
+	where   []string // sorted namespaces, or the node's name
+	teams   []string // of the namespaces
+}
+
 // evalAddOns looks every detected add-on up in the registry by ID and
-// judges it with evalAddOn; an ID absent from the registry produces nothing.
+// judges all of its installs with evalAddOn, grouped by release line
+// (groupInstalls), so each finding names only the namespaces and teams of
+// the installs it is about; an ID absent from the registry produces
+// nothing.
 func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) []Finding {
 	byID := make(map[string]registry.AddOn, len(k.AddOns))
 	for _, a := range k.AddOns {
 		byID[a.ID] = a
 	}
-	var out []Finding
+	installs := map[string][]addOnInstall{}
+	var ids []string // in inventory order
 	for _, inst := range inv.AddOns {
-		a, ok := byID[inst.ID]
-		if !ok {
+		if _, ok := byID[inst.ID]; !ok {
 			continue
 		}
-		ns := append([]string(nil), inst.Namespaces...)
-		sort.Strings(ns)
-		ver := inst.Version
-		if ver == "" {
-			ver = "(unknown)"
+		if _, seen := installs[inst.ID]; !seen {
+			ids = append(ids, inst.ID)
 		}
 		via := inst.Source
 		if inst.ChartVersion != "" {
 			via += " " + inst.ChartVersion // chart version: evidence only
 		}
-		out = append(out, evalAddOn(a, addOnSubject{
-			version: inst.Version,
-			located: fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
-				a.DisplayName, ver, via, strings.Join(ns, ", ")),
-			namespaces: ns,
-			teams:      teamsFor(ns, inv.Namespaces),
-		}, target, now)...)
+		ns := slices.Sorted(slices.Values(inst.Namespaces))
+		installs[inst.ID] = append(installs[inst.ID], addOnInstall{
+			version: inst.Version, via: via, where: ns, teams: teamsFor(ns, inv.Namespaces),
+		})
+	}
+	var out []Finding
+	for _, id := range ids {
+		a := byID[id]
+		all, groups := groupInstalls(a, installs[id], false)
+		out = append(out, evalAddOn(a, all, groups, target, now)...)
 	}
 	return append(out, evalNodeRuntimes(inv, k.AddOns, target, now)...)
 }
 
 // evalNodeRuntimes judges node container runtimes
 // (status.nodeInfo.containerRuntimeVersion, "containerd://1.7.27") against
-// registry entries with a runtimes matcher, with evalAddOn. Nodes are
-// grouped by release line so each finding names exactly the nodes on that
-// line; a group is judged at its oldest version, and nodes whose version
-// maps to no cycle (or is unknown) form one group that names each node's
-// version.
+// registry entries with a runtimes matcher, with evalAddOn: each node is an
+// install, grouped by release line like any add-on's.
 func evalNodeRuntimes(inv inventory.Inventory, addons []registry.AddOn, target inventory.Version, now time.Time) []Finding {
-	type group struct {
-		version string
-		nodes   []string
-	}
 	var out []Finding
 	for _, a := range addons {
 		if len(a.Matchers.Runtimes) == 0 {
 			continue
 		}
-		groups := map[string]*group{} // by cycle; "" = no cycle
+		var ins []addOnInstall
 		for _, n := range inv.Nodes {
 			runtime, ver, ok := strings.Cut(n.ContainerRuntime, "://")
 			if !ok || !slices.Contains(a.Matchers.Runtimes, runtime) {
 				continue
 			}
-			ver = strings.TrimPrefix(ver, "v")
-			c, _ := cycleFor(ver, a.Cycles)
-			g := groups[c.Cycle]
-			if g == nil {
-				g = &group{}
-				groups[c.Cycle] = g
-			}
-			name := n.Name
-			if c.Cycle == "" { // versions differ within this group: name each
-				name += " (" + cmp.Or(ver, "version unknown") + ")"
-			}
-			g.nodes = append(g.nodes, name)
-			if ver != "" && (g.version == "" || versionBefore(ver, g.version)) {
-				g.version = ver
-			}
+			ins = append(ins, addOnInstall{version: strings.TrimPrefix(ver, "v"), where: []string{n.Name}})
 		}
-		for _, key := range slices.Sorted(maps.Keys(groups)) {
-			g := groups[key]
-			sort.Strings(g.nodes)
-			located := fmt.Sprintf("Detected %s on node(s): %s.", a.DisplayName, strings.Join(g.nodes, ", "))
-			if key != "" {
-				located = fmt.Sprintf("Detected %s version %s on node(s): %s.", a.DisplayName, g.version, strings.Join(g.nodes, ", "))
-			}
-			out = append(out, evalAddOn(a, addOnSubject{
-				version: g.version,
-				located: located,
-				node:    true,
-			}, target, now)...)
+		if len(ins) == 0 {
+			continue
 		}
+		all, groups := groupInstalls(a, ins, true)
+		out = append(out, evalAddOn(a, all, groups, target, now)...)
 	}
 	return out
+}
+
+// groupInstalls groups an add-on's installs by release line (cycleFor);
+// installs whose version maps to no cycle, or is unknown, form one group,
+// sorted first. all covers every install, for product-level findings.
+func groupInstalls(a registry.AddOn, ins []addOnInstall, node bool) (all addOnSubject, groups []addOnSubject) {
+	byCycle := map[string][]addOnInstall{} // "" = no cycle
+	for _, in := range ins {
+		c, _ := cycleFor(in.version, a.Cycles)
+		byCycle[c.Cycle] = append(byCycle[c.Cycle], in)
+	}
+	for _, key := range slices.Sorted(maps.Keys(byCycle)) {
+		groups = append(groups, newAddOnSubject(a.DisplayName, byCycle[key], key != "", node))
+	}
+	if len(groups) == 1 {
+		return groups[0], groups
+	}
+	return newAddOnSubject(a.DisplayName, ins, false, node), groups
+}
+
+// newAddOnSubject describes a set of installs: judged at the oldest known
+// version, located by an evidence sentence that names each install's
+// version where they differ. Node runtimes on one release line (line) are
+// named by the line's oldest version alone. The sentence lists at most
+// addOnLocatedLimit installs, so a mesh with sidecars in hundreds of
+// namespaces stays one bounded finding; Namespaces and Teams name them all.
+func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addOnSubject {
+	s := addOnSubject{installs: ins, node: node}
+	for _, in := range ins {
+		if in.version != "" && (s.version == "" || versionBefore(in.version, s.version)) {
+			s.version = in.version
+		}
+	}
+	if node {
+		var names []string
+		for _, in := range ins {
+			n := in.where[0]
+			if !line { // versions differ within this group: name each
+				n += " (" + cmp.Or(in.version, "version unknown") + ")"
+			}
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		s.located = fmt.Sprintf("Detected %s on node(s): %s.", name, located(names))
+		if line {
+			s.located = fmt.Sprintf("Detected %s version %s on node(s): %s.", name, s.version, located(names))
+		}
+		return s
+	}
+	same := true
+	var parts []string
+	for _, in := range ins {
+		s.namespaces = append(s.namespaces, in.where...)
+		s.teams = append(s.teams, in.teams...)
+		same = same && in.version == ins[0].version && in.via == ins[0].via
+		for _, ns := range in.where {
+			parts = append(parts, fmt.Sprintf("%s (%s via %s)", ns, cmp.Or(in.version, "version unknown"), in.via))
+		}
+	}
+	s.namespaces, s.teams = sortedSet(s.namespaces), sortedSet(s.teams)
+	if same {
+		s.located = fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
+			name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via, located(s.namespaces))
+	} else {
+		sort.Strings(parts)
+		s.located = fmt.Sprintf("Detected %s in namespace(s): %s.", name, located(parts))
+	}
+	return s
+}
+
+// addOnLocatedLimit caps the installs an add-on finding's evidence
+// sentence lists.
+const addOnLocatedLimit = 10
+
+// located joins sorted install names, listing the first
+// addOnLocatedLimit and counting the rest.
+func located(names []string) string {
+	if len(names) <= addOnLocatedLimit {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(names[:addOnLocatedLimit], ", "), len(names)-addOnLocatedLimit)
 }
 
 // versionBefore orders versions numerically ("1.7.9" < "1.7.20"), falling
@@ -442,39 +516,45 @@ func versionBefore(a, b string) bool {
 	return a < b
 }
 
-// addOnSubject is one detected installation of a registry add-on.
+// addOnSubject is a set of installs of one registry add-on, judged
+// together (see newAddOnSubject).
 type addOnSubject struct {
-	version    string   // normalised app version; "" when unknown
+	version    string   // oldest normalised app version; "" when none is known
 	located    string   // evidence sentence that opens every finding's detail
 	namespaces []string // sorted
 	teams      []string
-	// node marks a node container runtime. It ships with the node image or
+	installs   []addOnInstall
+	// node marks node container runtimes. They ship with the node image or
 	// OS, which a node upgrade or node-pool image bump replaces, so an
 	// ended release line is a warning; only a compat row (the kubelet
 	// dropping support) blocks.
 	node bool
 }
 
-// evalAddOn judges one detected add-on:
+// evalAddOn judges the installs of one detected add-on, all of them for
+// the product and each release-line group (see groupInstalls) on its own:
 //
 //   - product level (support), for whole-product retirements such as
 //     ingress-nginx: status "eol" or eol_date ≤ now → blocker, eol-addon;
-//     eol_date in (now, now+90d] → warning, eol-approaching.
+//     eol_date in (now, now+90d] → warning, eol-approaching. One finding
+//     naming every install.
 //   - release line (cycles), unless the product carries a date or EOL
-//     status: the installed version's cycle has ended → blocker, eol-addon
-//     (warning for a node runtime); it ends in (now, now+90d] → warning,
+//     status: the group's cycle has ended → blocker, eol-addon (warning
+//     for a node runtime); it ends in (now, now+90d] → warning,
 //     eol-approaching.
-//   - target outside the cycle's [k8s_min, k8s_max], or else outside the
-//     bounds of the first compat row whose range matches the version
-//     → blocker, chart-incompat.
+//   - an install whose version's cycle range [k8s_min, k8s_max], or else
+//     the first compat row whose range matches the version, excludes the
+//     target → blocker, chart-incompat, naming only such installs of the
+//     group.
 //   - no product date and no cycle for the version, or no version at all
 //     → info, addon-no-data: missing data must neither block nor read as
 //     "checked, fine".
 //
 // Findings about a release line are keyed category/id/cycle, others
-// category/id. Without a detected version no compat row is matched.
-func evalAddOn(a registry.AddOn, s addOnSubject, target inventory.Version, now time.Time) []Finding {
-	finding := func(cat Category, sev Severity, key, title, detail string, citations []string) Finding {
+// category/id, so each key is one finding. A group is judged at its oldest
+// version; an install without a detected version matches no compat row.
+func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target inventory.Version, now time.Time) []Finding {
+	finding := func(s addOnSubject, cat Category, sev Severity, key, title, detail string, citations []string) Finding {
 		return Finding{
 			Category: cat, Severity: sev, Key: key, Title: title, Detail: detail,
 			Teams: s.teams, Namespaces: s.namespaces, Remediation: a.Recommendation,
@@ -496,78 +576,134 @@ func evalAddOn(a registry.AddOn, s addOnSubject, target inventory.Version, now t
 		// Tense follows the date: status "eol" can carry a future
 		// effective date (upstream already declared EOL).
 		title := fmt.Sprintf("%s is end-of-life", a.DisplayName)
-		detail := s.located + " Upstream support has ended."
+		detail := all.located + " Upstream support has ended."
 		switch {
 		case hasDate && eolDate.After(now):
 			title = fmt.Sprintf("%s is end-of-life on %s", a.DisplayName, a.Support.EOLDate)
-			detail = s.located + fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate)
+			detail = all.located + fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate)
 		case a.Support.EOLDate != "":
 			title = fmt.Sprintf("%s is end-of-life since %s", a.DisplayName, a.Support.EOLDate)
 		}
-		out = append(out, finding(CatEOLAddon, SevBlocker, string(CatEOLAddon)+"/"+a.ID, title, detail, a.Support.Citations))
+		out = append(out, finding(all, CatEOLAddon, SevBlocker, string(CatEOLAddon)+"/"+a.ID, title, detail, a.Support.Citations))
 	case hasDate && !eolDate.After(window):
-		out = append(out, finding(CatEOLApproaching, SevWarning, string(CatEOLApproaching)+"/"+a.ID,
+		out = append(out, finding(all, CatEOLApproaching, SevWarning, string(CatEOLApproaching)+"/"+a.ID,
 			fmt.Sprintf("%s reaches end-of-life on %s", a.DisplayName, a.Support.EOLDate),
-			s.located+fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate),
+			all.located+fmt.Sprintf(" Upstream support ends on %s.", a.Support.EOLDate),
 			a.Support.Citations))
 	}
 	productDated := a.Support.Status == "eol" || hasDate
 
-	cycle, inCycle := cycleFor(s.version, a.Cycles)
-	key := func(cat Category) string {
-		if inCycle {
-			return string(cat) + "/" + a.ID + "/" + cycle.Cycle
-		}
-		return string(cat) + "/" + a.ID
-	}
-	if inCycle && !productDated {
-		if f, ok := cycleEOL(a, cycle, s, now, window); ok {
-			f.Key = key(f.Category)
-			f.Teams, f.Namespaces = s.teams, s.namespaces
-			if s.node && f.Severity == SevBlocker {
-				f.Severity = SevWarning
-				f.Detail += " The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself."
+	for _, s := range groups {
+		cycle, inCycle := cycleFor(s.version, a.Cycles)
+		key := func(cat Category) string {
+			if inCycle {
+				return string(cat) + "/" + a.ID + "/" + cycle.Cycle
 			}
+			return string(cat) + "/" + a.ID
+		}
+		if inCycle && !productDated {
+			if f, ok := cycleEOL(a, cycle, s, now, window); ok {
+				f.Key = key(f.Category)
+				f.Teams, f.Namespaces = s.teams, s.namespaces
+				if s.node && f.Severity == SevBlocker {
+					f.Severity = SevWarning
+					f.Detail += " The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself."
+				}
+				out = append(out, f)
+			}
+		}
+
+		if f, ok := evalAddOnCompat(a, s, target); ok {
+			f.Key = key(CatChartIncompat)
+			out = append(out, f)
+		}
+
+		if !productDated && !inCycle {
+			ver, reason := s.version, " The registry has no release-line data for this version, so its end of life was not assessed."
+			if ver == "" {
+				ver, reason = "(version unknown)", " No version could be read from the image tag or chart, so its end of life and Kubernetes compatibility were not assessed."
+			}
+			f := finding(s, CatAddOnNoData, SevInfo, string(CatAddOnNoData)+"/"+a.ID,
+				fmt.Sprintf("no lifecycle data for %s %s", a.DisplayName, ver), s.located+reason, a.Support.Citations)
+			f.Remediation = ""
 			out = append(out, f)
 		}
 	}
-
-	if s.version != "" {
-		compat := false
-		if inCycle {
-			if title, bad := k8sOutOfRange(a.DisplayName, s.version, cycle.K8sMin, cycle.K8sMax, target); bad {
-				out = append(out, finding(CatChartIncompat, SevBlocker, key(CatChartIncompat), title,
-					fmt.Sprintf("Installed version %s is in the %s release line, which supports Kubernetes %s.",
-						s.version, cycle.Cycle, k8sRangeText(cycle.K8sMin, cycle.K8sMax)),
-					cycle.Citations))
-				compat = true
-			}
-		}
-		for _, c := range a.Compat {
-			if compat || !matchesRange(s.version, c.Range) {
-				continue
-			}
-			if title, bad := k8sOutOfRange(a.DisplayName, s.version, c.K8sMin, c.K8sMax, target); bad {
-				out = append(out, finding(CatChartIncompat, SevBlocker, key(CatChartIncompat), title,
-					fmt.Sprintf("Installed version %s matches compatibility range %q, which supports Kubernetes %s.",
-						s.version, c.Range, k8sRangeText(c.K8sMin, c.K8sMax)),
-					c.Citations))
-			}
-			break // first matching range wins
-		}
-	}
-
-	if !productDated && !inCycle {
-		ver, reason := s.version, " The registry has no release-line data for this version, so its end of life was not assessed."
-		if ver == "" {
-			ver, reason = "(version unknown)", " No version could be read from the image tag or chart, so its end of life and Kubernetes compatibility were not assessed."
-		}
-		f := finding(CatAddOnNoData, SevInfo, string(CatAddOnNoData)+"/"+a.ID,
-			fmt.Sprintf("no lifecycle data for %s %s", a.DisplayName, ver), s.located+reason, a.Support.Citations)
-		f.Remediation = ""
-		out = append(out, f)
-	}
 	return out
+}
+
+// evalAddOnCompat judges each install of a group against target (see
+// compatFor) and returns one chart-incompat blocker naming only the
+// installs that cannot run it, titled for the oldest of them; ok is false
+// when every install can. The detail lists at most addOnLocatedLimit of
+// them; Namespaces and Teams name them all. Key is left to the caller.
+func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version) (Finding, bool) {
+	f := Finding{Category: CatChartIncompat, Severity: SevBlocker, Remediation: a.Recommendation}
+	var named []string // "where (version)" of each install that cannot run target
+	versions := map[string]bool{}
+	oldest := ""
+	for _, in := range s.installs {
+		if in.version == "" {
+			continue
+		}
+		title, detail, citations, bad := compatFor(a, in.version, target)
+		if !bad {
+			continue
+		}
+		for _, w := range in.where {
+			named = append(named, fmt.Sprintf("%s (%s)", w, in.version))
+		}
+		versions[in.version] = true
+		if !s.node {
+			f.Namespaces = append(f.Namespaces, in.where...)
+			f.Teams = append(f.Teams, in.teams...)
+		}
+		if oldest == "" || versionBefore(in.version, oldest) {
+			oldest = in.version
+			f.Title, f.Detail, f.Citations = title, detail, slices.Clone(citations)
+		}
+	}
+	if oldest == "" {
+		return Finding{}, false
+	}
+	f.Namespaces, f.Teams = sortedSet(f.Namespaces), sortedSet(f.Teams)
+	if len(versions) > 1 {
+		sort.Strings(named)
+		f.Detail += " Incompatible installs: " + located(named) + "."
+	}
+	return f, true
+}
+
+// sortedSet sorts s and drops duplicates, in place; empty stays nil.
+func sortedSet(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	slices.Sort(s)
+	return slices.Compact(s)
+}
+
+// compatFor judges one installed version against target: the range of its
+// release line when it has one, else the first compat row whose range
+// matches it. ok reports that target is outside the range.
+func compatFor(a registry.AddOn, version string, target inventory.Version) (title, detail string, citations []string, ok bool) {
+	if cycle, inCycle := cycleFor(version, a.Cycles); inCycle {
+		if title, bad := k8sOutOfRange(a.DisplayName, version, cycle.K8sMin, cycle.K8sMax, target); bad {
+			return title, fmt.Sprintf("Installed version %s is in the %s release line, which supports Kubernetes %s.",
+				version, cycle.Cycle, k8sRangeText(cycle.K8sMin, cycle.K8sMax)), cycle.Citations, true
+		}
+	}
+	for _, c := range a.Compat {
+		if !matchesRange(version, c.Range) {
+			continue
+		}
+		if title, bad := k8sOutOfRange(a.DisplayName, version, c.K8sMin, c.K8sMax, target); bad {
+			return title, fmt.Sprintf("Installed version %s matches compatibility range %q, which supports Kubernetes %s.",
+				version, c.Range, k8sRangeText(c.K8sMin, c.K8sMax)), c.Citations, true
+		}
+		break // first matching range wins
+	}
+	return "", "", nil, false
 }
 
 // cycleEOL judges the end of life of the release line a version is in:
@@ -874,6 +1010,10 @@ func minorsBehind(ctrl, kubelet inventory.Version) int {
 //     upgrade would put it out of policy (mirrors the kubelet rule). A
 //     kube-proxy older than 1.25 may only be 2 minors behind.
 //
+// The newer and behind findings are keyed <component>-newer and
+// <component>-behind: one component can be both at once (HA replicas
+// mid-upgrade), at different severities.
+//
 // An empty ControlPlane (managed control planes — EKS/GKE/AKS run these
 // components outside the cluster) yields no findings. When apiserver pods
 // are not observed but other components are, inv.ServerVersion stands in
@@ -972,7 +1112,7 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB, target inventory.Ver
 		if len(newer) > 0 {
 			out = append(out, Finding{
 				Category: CatVersionSkew, Severity: rule.newerSev,
-				Key:       string(CatVersionSkew) + "/" + rule.component,
+				Key:       string(CatVersionSkew) + "/" + rule.component + "-newer",
 				Title:     fmt.Sprintf("%s is newer than kube-apiserver", rule.component),
 				Detail:    fmt.Sprintf("%s %s is newer than the oldest kube-apiserver (%s); %s.", rule.component, strings.Join(newer, ", "), oldest, rule.newerDetail),
 				Citations: []string{skewPolicyURL},
@@ -981,7 +1121,7 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB, target inventory.Ver
 		if len(behind) > 0 {
 			out = append(out, Finding{
 				Category: CatVersionSkew, Severity: SevWarning,
-				Key:       string(CatVersionSkew) + "/" + rule.component,
+				Key:       string(CatVersionSkew) + "/" + rule.component + "-behind",
 				Title:     fmt.Sprintf("%s exceeds version skew vs kube-apiserver", rule.component),
 				Detail:    fmt.Sprintf("%s %s is more than %d minor version(s) behind the newest kube-apiserver (%s).", rule.component, strings.Join(behind, ", "), rule.maxBehind, newest) + legacyNote("kube-proxy versions", behindLegacy),
 				Citations: []string{skewPolicyURL},
@@ -1012,14 +1152,50 @@ func evalKBStale(inv inventory.Inventory, k kb.KB, target inventory.Version) []F
 	}}
 }
 
+// upgradeFrom is the minor a live cluster upgrades from: its oldest
+// observed kube-apiserver (HA replicas mid-upgrade still need the newer
+// minor). ok is false in files mode or without a parseable version.
+func upgradeFrom(inv inventory.Inventory) (inventory.Version, bool) {
+	if inv.Source == inventory.SourceFiles {
+		return inventory.Version{}, false
+	}
+	apis := apiserverVersions(inv)
+	if len(apis) == 0 {
+		return inventory.Version{}, false
+	}
+	return apis[0], true
+}
+
+// evalUpgradePath: a target more than one minor ahead of the cluster is
+// several upgrades, since the control plane moves one minor at a time →
+// info naming each step.
+func evalUpgradePath(inv inventory.Inventory, target inventory.Version) []Finding {
+	from, ok := upgradeFrom(inv)
+	if !ok || target.Major != from.Major || target.Minor-from.Minor < 2 {
+		return nil
+	}
+	var steps []string
+	for v := from.Next(); v.Compare(target) <= 0; v = v.Next() {
+		steps = append(steps, v.String())
+	}
+	return []Finding{{
+		Category: CatVersionSkew, Severity: SevInfo,
+		Key:       string(CatVersionSkew) + "/upgrade-path",
+		Title:     fmt.Sprintf("upgrading from %s to %s takes %d minor-version upgrades: %s", from, target, len(steps), strings.Join(steps, ", ")),
+		Detail:    fmt.Sprintf("The control plane is upgraded one minor version at a time. This report judges the cluster as it is against %s; add-ons, charts and nodes may need upgrading at each step in between.", target),
+		Citations: []string{skewPolicyURL},
+	}}
+}
+
 // assessmentGaps lists what the evaluation could not assess, sorted by
 // capability: every unavailable or partial inventory capability, a
 // versions gap when the server version is missing or unparseable (unless
-// versions is already unavailable), and a kb-coverage gap when the target
-// is beyond the KB horizon. Required is set per the verdict rules on
-// CapabilityGap. A capability absent from inv.Capabilities is not a gap:
-// collectors always report all of theirs, so absence only occurs in
-// hand-built inventories.
+// versions is already unavailable), a kb-coverage gap when the target is
+// beyond the KB horizon, and a target gap when the target is not an
+// upgrade of the cluster (see upgradeFrom). Required is set per the
+// verdict rules on CapabilityGap. A capability absent from
+// inv.Capabilities is not a gap: collectors always report all of theirs,
+// so absence only occurs in hand-built inventories.
 func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
 	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
 	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
@@ -1055,6 +1231,10 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 	if target.Compare(k.MaxKnownK8s) > 0 {
 		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage, Required: true,
 			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed", k.MaxKnownK8s, target)})
+	}
+	if from, ok := upgradeFrom(inv); ok && target.Compare(from) <= 0 {
+		gaps = append(gaps, CapabilityGap{Capability: GapTarget, Required: true,
+			Reason: fmt.Sprintf("target %s is not an upgrade: kube-apiserver already runs %s, and every check judges a newer minor", target, from)})
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i].Capability < gaps[j].Capability })
 	return gaps
@@ -1287,19 +1467,21 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalSkew(inv, k, target)...)
 	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)
 	findings = append(findings, evalKBStale(inv, k, target)...)
+	findings = append(findings, evalUpgradePath(inv, target)...)
 	sortFindings(findings)
 	score, _ := Score(findings)
 	gaps := assessmentGaps(inv, k, target)
 	verdict := verdictFor(findings, gaps)
 
 	return Report{
-		ClusterID:   inv.ClusterID,
-		Target:      target,
-		KBVersion:   k.Version,
-		Score:       score,
-		Ready:       verdict == VerdictReady,
-		Verdict:     verdict,
-		Findings:    findings,
-		NotAssessed: gaps,
+		ClusterID:     inv.ClusterID,
+		Target:        target,
+		ServerVersion: inv.ServerVersion,
+		KBVersion:     k.Version,
+		Score:         score,
+		Ready:         verdict == VerdictReady,
+		Verdict:       verdict,
+		Findings:      findings,
+		NotAssessed:   gaps,
 	}
 }

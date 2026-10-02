@@ -19,6 +19,7 @@
   ],
   "ready": false,
   "score": 95,
+  "serverVersion": "v1.36.1",
   "target": "1.37",
   "verdict": "unknown"
 }

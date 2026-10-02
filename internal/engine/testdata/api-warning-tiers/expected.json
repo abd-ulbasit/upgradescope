@@ -1,0 +1,80 @@
+{
+  "clusterId": "99999999-9999-9999-9999-999999999999",
+  "findings": [
+    {
+      "category": "deprecated-api-in-use",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.",
+      "key": "deprecated-api-in-use/policy/v1beta1/podsecuritypolicies",
+      "severity": "warning",
+      "title": "clients still requesting policy/v1beta1 podsecuritypolicies (removed in 1.25)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "2 object(s) written through this API version: jobs (2). Written by: helm. apiserver_requested_deprecated_apis also records requests to batch/v1beta1 cronjobs since the last apiserver restart; the metric does not identify the client.",
+      "key": "removed-api/batch/v1beta1/CronJob",
+      "namespaces": [
+        "jobs"
+      ],
+      "objects": [
+        {
+          "manager": "helm",
+          "name": "nightly",
+          "namespace": "jobs"
+        },
+        {
+          "manager": "helm",
+          "name": "weekly",
+          "namespace": "jobs"
+        }
+      ],
+      "remediation": "migrate to batch/v1 CronJob",
+      "severity": "warning",
+      "teams": [
+        "batch"
+      ],
+      "title": "batch/v1beta1 CronJob removed in 1.25 (2 objects)"
+    },
+    {
+      "category": "deprecated-api-in-use",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; no removal release is recorded. The metric does not identify the client; apiserver audit logs do.",
+      "key": "deprecated-api-in-use/example.dev/v1alpha1/widgets/status",
+      "severity": "info",
+      "title": "clients still requesting example.dev/v1alpha1 widgets/status (deprecated)"
+    },
+    {
+      "category": "deprecated-api-in-use",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.29. The metric does not identify the client; apiserver audit logs do.",
+      "key": "deprecated-api-in-use/flowcontrol.apiserver.k8s.io/v1beta2/flowschemas",
+      "severity": "info",
+      "title": "clients still requesting flowcontrol.apiserver.k8s.io/v1beta2 flowschemas (removed in 1.29)"
+    },
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "These nodes could not be evaluated against the kubelet skew policy: node-edge (\"custom-build\").",
+      "key": "version-skew/kubelet-unparseable",
+      "severity": "info",
+      "title": "1 node(s) have unparseable kubelet versions"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "ready": true,
+  "score": 90,
+  "serverVersion": "v1.23.17",
+  "target": "1.24",
+  "verdict": "ready"
+}

@@ -13,11 +13,15 @@ import (
 // WriteTable renders a human-readable plain-text report. No ANSI escape
 // codes are emitted (NO_COLOR-safe by construction). Findings arrive
 // pre-sorted from the engine (severity desc, category, title); we only
-// group them under severity headers.
-func WriteTable(w io.Writer, r engine.Report) {
+// group them under severity headers. It returns the first write error.
+func WriteTable(out io.Writer, r engine.Report) error {
+	w := &errWriter{w: out}
 	fmt.Fprintln(w, "upgradescope upgrade readiness report")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Cluster:  %s\n", r.ClusterID)
+	if r.ServerVersion != "" { // files mode has no cluster version
+		fmt.Fprintf(w, "Server:   %s\n", r.ServerVersion)
+	}
 	fmt.Fprintf(w, "Target:   %s\n", r.Target)
 	fmt.Fprintf(w, "KB:       %s\n", r.KBVersion)
 	fmt.Fprintln(w)
@@ -99,6 +103,24 @@ func WriteTable(w io.Writer, r engine.Report) {
 			}
 		}
 	}
+	return w.err
+}
+
+// errWriter remembers the first write error and drops every later write,
+// so a renderer can write unchecked and report the failure once at the
+// end: a full disk or closed pipe must not exit 0 with the report lost.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) Write(p []byte) (int, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	n, err := e.w.Write(p)
+	e.err = err
+	return n, err
 }
 
 // tableObjectLimit caps the objects listed under one finding so a large

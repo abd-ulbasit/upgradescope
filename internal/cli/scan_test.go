@@ -3,11 +3,15 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 // execScan runs the scan command with args, swapping the I/O pipeline for stub.
@@ -176,5 +180,152 @@ func TestScanWritesSelectedFormat(t *testing.T) {
 	}
 	if !strings.Contains(out, "SCORE  100/100") {
 		t.Errorf("table output:\n%s", out)
+	}
+}
+
+// evalStub evaluates inv against the embedded KB at the scan's parsed
+// --target, the way runScan does after collecting.
+func evalStub(t *testing.T, inv inventory.Inventory) func(scanOptions) (engine.Report, error) {
+	t.Helper()
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(opts scanOptions) (engine.Report, error) {
+		return engine.Evaluate(inv, k, opts.targetVersion, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)), nil
+	}
+}
+
+// liveInventory is a fully assessed live inventory of a cluster at server.
+func liveInventory(server string, cp ...inventory.ComponentVersion) inventory.Inventory {
+	return inventory.Inventory{
+		ClusterID: "c", Source: inventory.SourceCluster, ServerVersion: server,
+		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{
+			inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true},
+			inventory.CapAddOns: {Available: true}, inventory.CapHelm: {Available: true},
+			inventory.CapDeprecatedCalls: {Available: true},
+		},
+		ControlPlane: cp,
+	}
+}
+
+// A kube-scheduler that was too far behind (warning, in the baseline) and
+// is now newer than kube-apiserver (blocker) is a new problem: the gate
+// must fail on it, not match it to the baselined warning.
+func TestBaselineSkewEscalationIsNew(t *testing.T) {
+	apiserver := inventory.ComponentVersion{Component: "kube-apiserver", Version: "v1.35.2"}
+	behind := liveInventory("v1.35.2", apiserver, inventory.ComponentVersion{Component: "kube-scheduler", Version: "v1.33.0"})
+	newer := liveInventory("v1.35.2", apiserver, inventory.ComponentVersion{Component: "kube-scheduler", Version: "v1.36.0"})
+
+	baseline := filepath.Join(t.TempDir(), "baseline.json")
+	if _, _, err := execScanStderr(t, []string{"--target", "1.36", "--write-baseline", baseline}, evalStub(t, behind)); err != nil {
+		t.Fatalf("baseline run: err = %v, want a passing gate (warning only)", err)
+	}
+	out, _, err := execScanStderr(t, []string{"--target", "1.36", "--baseline", baseline}, evalStub(t, newer))
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("err = %v, want ErrGateFailed for the new blocker\n%s", err, out)
+	}
+	if !strings.Contains(out, "BASELINE  0 unchanged, 1 new") {
+		t.Errorf("table does not count the blocker as new:\n%s", out)
+	}
+}
+
+// A batch/v1beta1 CronJob is a removed-api warning at target 1.24 (removed
+// in the next minor) and a blocker at 1.25, under the same key. The
+// blocker is new against a baseline written at 1.24: the gate must fail.
+func TestBaselineSeverityIncreaseIsNew(t *testing.T) {
+	inv := liveInventory("v1.23.4")
+	inv.APIUsage = []inventory.APIUsage{{
+		Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 1, Namespaces: map[string]int{"jobs": 1},
+		Objects: []inventory.ObjectRef{{Namespace: "jobs", Name: "nightly"}},
+	}}
+
+	baseline := filepath.Join(t.TempDir(), "baseline.json")
+	if _, _, err := execScanStderr(t, []string{"--target", "1.24", "--write-baseline", baseline}, evalStub(t, inv)); err != nil {
+		t.Fatalf("baseline run: err = %v, want a passing gate (warning only)", err)
+	}
+	b, err := os.ReadFile(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"key": "removed-api/batch/v1beta1/CronJob"`) || !strings.Contains(string(b), `"severity": "warning"`) {
+		t.Fatalf("baseline lacks the removed-api warning:\n%s", b)
+	}
+	out, _, err := execScanStderr(t, []string{"--target", "1.25", "--baseline", baseline, "--fail-on", "blocker"}, evalStub(t, inv))
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("err = %v, want ErrGateFailed for the escalated blocker\n%s", err, out)
+	}
+	if strings.Contains(out, "(in baseline)") || !strings.Contains(out, "BASELINE  0 unchanged") {
+		t.Errorf("table matches the blocker to the baselined warning:\n%s", out)
+	}
+}
+
+// --target is compared with the cluster: on a 1.37 cluster, 1.36 and the
+// typo 1.4 are not upgrades (unknown, exit 2, the gap named in the table)
+// and 1.40 is three upgrades (named in an info finding). The table header
+// shows the server version the target was judged against.
+func TestScanTargetNotAnUpgrade(t *testing.T) {
+	inv := liveInventory("v1.37.0")
+	for _, target := range []string{"1.36", "1.4", "1.37"} {
+		out, _, err := execScanStderr(t, []string{"--target", target}, evalStub(t, inv))
+		if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 {
+			t.Errorf("--target %s: err = %v, want ErrTargetNotUpgrade (exit 2)", target, err)
+		}
+		for _, want := range []string{
+			"Server:   v1.37.0",
+			"READY  unknown (required checks were not assessed)",
+			"target (required): target " + target + " is not an upgrade: kube-apiserver already runs 1.37",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("--target %s: table lacks %q:\n%s", target, want, out)
+			}
+		}
+	}
+	out, _, _ := execScanStderr(t, []string{"--target", "1.40", "--output", "json"}, evalStub(t, inv))
+	for _, want := range []string{`"serverVersion": "v1.37.0"`, `"key": "version-skew/upgrade-path"`,
+		`"title": "upgrading from 1.37 to 1.40 takes 3 minor-version upgrades: 1.38, 1.39, 1.40"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--target 1.40: JSON lacks %s:\n%s", want, out)
+		}
+	}
+	// One minor ahead (within the KB horizon) is a plain upgrade.
+	if out, _, err := execScanStderr(t, []string{"--target", "1.37"}, evalStub(t, liveInventory("v1.36.4"))); err != nil {
+		t.Errorf("1.36 → 1.37: err = %v, want a passing gate\n%s", err, out)
+	}
+	// A target that is not an upgrade is a user error, not a coverage
+	// limit: --allow-incomplete does not let it pass; --fail-on never does.
+	_, _, err := execScanStderr(t, []string{"--target", "1.4", "--allow-incomplete"}, evalStub(t, inv))
+	if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 || !strings.Contains(err.Error(), "target 1.4 is not an upgrade") {
+		t.Errorf("--allow-incomplete --target 1.4: err = %v, want ErrTargetNotUpgrade naming the target (exit 2)", err)
+	}
+	if _, _, err := execScanStderr(t, []string{"--target", "1.4", "--fail-on", "never"}, evalStub(t, inv)); err != nil {
+		t.Errorf("--fail-on never --target 1.4: err = %v, want nil", err)
+	}
+}
+
+// failingWriter fails every write, like stdout on a full disk.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+// A report that could not be written is an operational error (exit 1) in
+// every format, also when the gate would have failed: CI must not read a
+// lost report as a gate decision.
+func TestWriteReportPropagatesWriteErrors(t *testing.T) {
+	ready := engine.Report{ClusterID: "c", Score: 100, Ready: true, Verdict: engine.VerdictReady}
+	for _, format := range []string{"table", "json", "sarif", "markdown"} {
+		for _, r := range []engine.Report{ready, eolNginxReport()} {
+			orig := runScan
+			runScan = okStub(r)
+			cmd := newScanCmd()
+			cmd.SetOut(failingWriter{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"--target", "1.36", "--output", format})
+			err := cmd.Execute()
+			runScan = orig
+			if got := ExitCode(err); got != 1 || err == nil || !strings.Contains(err.Error(), "no space left on device") {
+				t.Errorf("--output %s, verdict %s: err = %v (exit %d), want the write error, exit 1", format, r.Verdict, err, got)
+			}
+		}
 	}
 }

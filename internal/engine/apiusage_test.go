@@ -150,6 +150,47 @@ func TestEvalAPIUsageDeprecatedBeyondWindowIsInfo(t *testing.T) {
 	}
 }
 
+// A deprecation that comes after the target is not "since": the title says
+// it is later than the target, and "projected" when the release is beyond
+// the KB horizon (k8s.io/api's lifecycle markers project it for betas).
+// Real KB: scheduling.k8s.io/v1beta1 Workload deprecated 1.40, horizon
+// 1.37; coordination.k8s.io/v1beta1 LeaseCandidate deprecated 1.36.
+func TestEvalAPIUsageFutureDeprecationTitle(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := func(group, version, kind string) inventory.Inventory {
+		return inventory.Inventory{APIUsage: []inventory.APIUsage{{
+			Group: group, Version: version, Kind: kind, Count: 1, Namespaces: map[string]int{"default": 1},
+		}}}
+	}
+	cases := []struct {
+		inv    inventory.Inventory
+		target inventory.Version
+		want   string
+	}{
+		{usage("scheduling.k8s.io", "v1beta1", "Workload"), inventory.Version{Major: 1, Minor: 37},
+			"scheduling.k8s.io/v1beta1 Workload deprecated in 1.40 (projected), after target 1.37 (1 object)"},
+		{usage("coordination.k8s.io", "v1beta1", "LeaseCandidate"), inventory.Version{Major: 1, Minor: 34},
+			"coordination.k8s.io/v1beta1 LeaseCandidate deprecated in 1.36, after target 1.34 (1 object)"},
+		{usage("coordination.k8s.io", "v1beta1", "LeaseCandidate"), inventory.Version{Major: 1, Minor: 36},
+			"coordination.k8s.io/v1beta1 LeaseCandidate deprecated since 1.36 (1 object)"},
+		// Deprecated at the horizon itself: a known release, not projected.
+		{usage("admissionregistration.k8s.io", "v1beta1", "MutatingAdmissionPolicy"), inventory.Version{Major: 1, Minor: 35},
+			"admissionregistration.k8s.io/v1beta1 MutatingAdmissionPolicy deprecated in 1.37, after target 1.35 (1 object)"},
+	}
+	for _, tc := range cases {
+		fs := evalAPIUsage(tc.inv, k, tc.target)
+		if len(fs) != 1 || fs[0].Severity != SevInfo || fs[0].Category != CatDeprecatedAPI {
+			t.Fatalf("want one deprecated-api info, got %+v", fs)
+		}
+		if fs[0].Title != tc.want {
+			t.Errorf("title = %q, want %q", fs[0].Title, tc.want)
+		}
+	}
+}
+
 func TestEvalAPIUsageCoreGroupRendering(t *testing.T) {
 	inv := inventory.Inventory{
 		APIUsage: []inventory.APIUsage{{

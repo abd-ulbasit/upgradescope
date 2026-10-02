@@ -88,7 +88,7 @@
         "https://kubernetes.io/releases/version-skew-policy/"
       ],
       "detail": "kube-scheduler 1.37 is newer than the oldest kube-apiserver (1.35); control-plane components must not be newer than the apiservers they talk to.",
-      "key": "version-skew/kube-scheduler",
+      "key": "version-skew/kube-scheduler-newer",
       "severity": "blocker",
       "title": "kube-scheduler is newer than kube-apiserver"
     },
@@ -151,7 +151,7 @@
         "https://kubernetes.io/releases/version-skew-policy/"
       ],
       "detail": "kube-controller-manager 1.35 is more than 1 minor version(s) behind the newest kube-apiserver (1.37).",
-      "key": "version-skew/kube-controller-manager",
+      "key": "version-skew/kube-controller-manager-behind",
       "severity": "warning",
       "title": "kube-controller-manager exceeds version skew vs kube-apiserver"
     },
@@ -161,7 +161,7 @@
         "https://kubernetes.io/releases/version-skew-policy/"
       ],
       "detail": "kube-proxy 1.33 is more than 3 minor version(s) behind the newest kube-apiserver (1.37).",
-      "key": "version-skew/kube-proxy",
+      "key": "version-skew/kube-proxy-behind",
       "severity": "warning",
       "title": "kube-proxy exceeds version skew vs kube-apiserver"
     },
@@ -174,6 +174,16 @@
       "key": "deprecated-api/core/v1/ComponentStatus",
       "severity": "info",
       "title": "v1 ComponentStatus deprecated since 1.19 (1 object)"
+    },
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "The control plane is upgraded one minor version at a time. This report judges the cluster as it is against 1.38; add-ons, charts and nodes may need upgrading at each step in between.",
+      "key": "version-skew/upgrade-path",
+      "severity": "info",
+      "title": "upgrading from 1.35 to 1.38 takes 3 minor-version upgrades: 1.36, 1.37, 1.38"
     }
   ],
   "kbVersion": "test-kb-1",
@@ -186,6 +196,7 @@
   ],
   "ready": false,
   "score": 5,
+  "serverVersion": "v1.37.0",
   "target": "1.38",
   "verdict": "blocked"
 }

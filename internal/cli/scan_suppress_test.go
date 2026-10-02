@@ -273,7 +273,7 @@ func TestScanBaselineStillGatesIncomplete(t *testing.T) {
 	r := eolNginxReport()
 	r.NotAssessed = []engine.CapabilityGap{{Capability: "api-usage", Reason: "forbidden", Required: true}}
 	baseline := filepath.Join(t.TempDir(), "b.json")
-	if err := os.WriteFile(baseline, []byte(`{"schemaVersion": 1, "findings": [{"key": "eol-addon/ingress-nginx"}]}`), 0o644); err != nil {
+	if err := os.WriteFile(baseline, []byte(`{"schemaVersion": 1, "findings": [{"severity": "blocker", "key": "eol-addon/ingress-nginx"}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err := execScanStderr(t, []string{"--target", "1.36", "--baseline", baseline}, okStub(r))

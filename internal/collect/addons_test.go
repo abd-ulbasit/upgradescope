@@ -25,6 +25,10 @@ func testRegistry() []registry.AddOn {
 		{ID: "cilium", Matchers: registry.Matchers{
 			Images: []string{"cilium/cilium"},
 		}},
+		{ID: "istio", Matchers: registry.Matchers{
+			Images: []string{"istio/proxyv2", "istio/pilot"},
+			Charts: []string{"istiod"},
+		}},
 	}
 }
 
@@ -75,12 +79,61 @@ func TestMatchAddOns(t *testing.T) {
 			want:     []inventory.AddOnInstance{{ID: "ingress-nginx", ChartVersion: "4.8.3", Namespaces: []string{"ingress-nginx"}, Source: "chart"}},
 		},
 		{
-			name: "two releases: oldest app version and oldest chart version",
+			name: "two releases in two namespaces: one instance each",
 			releases: []inventory.HelmRelease{
 				{Name: "a", Namespace: "a", ChartName: "ingress-nginx", ChartVersion: "4.10.0", AppVersion: "1.10.0"},
 				{Name: "b", Namespace: "b", ChartName: "ingress-nginx", ChartVersion: "4.9.1", AppVersion: "1.9.6"},
 			},
-			want: []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.9.6", ChartVersion: "4.9.1", Namespaces: []string{"a", "b"}, Source: "chart"}},
+			want: []inventory.AddOnInstance{
+				{ID: "ingress-nginx", Version: "1.10.0", ChartVersion: "4.10.0", Namespaces: []string{"a"}, Source: "chart"},
+				{ID: "ingress-nginx", Version: "1.9.6", ChartVersion: "4.9.1", Namespaces: []string{"b"}, Source: "chart"},
+			},
+		},
+		{
+			name: "two releases in one namespace: oldest app version and oldest chart version",
+			releases: []inventory.HelmRelease{
+				{Name: "a", Namespace: "ingress", ChartName: "ingress-nginx", ChartVersion: "4.10.0", AppVersion: "1.10.0"},
+				{Name: "b", Namespace: "ingress", ChartName: "ingress-nginx", ChartVersion: "4.9.1", AppVersion: "1.9.6"},
+			},
+			want: []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.9.6", ChartVersion: "4.9.1", Namespaces: []string{"ingress"}, Source: "chart"}},
+		},
+		{
+			// Each namespace is its own install, judged at its own version:
+			// merging them put the oldest line's EOL on every namespace.
+			name: "mixed versions across namespaces are not merged",
+			images: []nsImage{
+				{"mesh-new", "istio/proxyv2:1.31.1"},
+				{"mesh-mid", "docker.io/istio/proxyv2:1.30.5"},
+				{"mesh-old", "istio/proxyv2:1.28.10"},
+			},
+			want: []inventory.AddOnInstance{
+				{ID: "istio", Version: "1.30.5", Namespaces: []string{"mesh-mid"}, Source: "image"},
+				{ID: "istio", Version: "1.31.1", Namespaces: []string{"mesh-new"}, Source: "image"},
+				{ID: "istio", Version: "1.28.10", Namespaces: []string{"mesh-old"}, Source: "image"},
+			},
+		},
+		{
+			// The release's appVersion beats image tags in its own namespace
+			// only: an older image-only install elsewhere keeps its version.
+			name: "Helm appVersion applies only in the release's namespace",
+			images: []nsImage{
+				{"istio-system", "istio/pilot:1.31.1"},
+				{"istio-legacy", "istio/pilot:1.28.10"},
+			},
+			releases: []inventory.HelmRelease{{Name: "istiod", Namespace: "istio-system", ChartName: "istiod", ChartVersion: "1.31.1", AppVersion: "1.31.1", Status: "deployed"}},
+			want: []inventory.AddOnInstance{
+				{ID: "istio", Version: "1.28.10", Namespaces: []string{"istio-legacy"}, Source: "image"},
+				{ID: "istio", Version: "1.31.1", ChartVersion: "1.31.1", Namespaces: []string{"istio-system"}, Source: "chart"},
+			},
+		},
+		{
+			name: "Helm appVersion wins over a stale image tag in the release's namespace",
+			images: []nsImage{
+				{"istio-system", "istio/pilot:1.31.1"},
+				{"istio-system", "istio/proxyv2:1.28.10"},
+			},
+			releases: []inventory.HelmRelease{{Name: "istiod", Namespace: "istio-system", ChartName: "istiod", ChartVersion: "1.31.1", AppVersion: "1.31.1", Status: "deployed"}},
+			want:     []inventory.AddOnInstance{{ID: "istio", Version: "1.31.1", ChartVersion: "1.31.1", Namespaces: []string{"istio-system"}, Source: "chart"}},
 		},
 		{
 			name: "oldest version wins semver-aware, not lexicographically",
@@ -96,13 +149,18 @@ func TestMatchAddOns(t *testing.T) {
 			wantUnrec: []string{"docker.io/library/redis"},
 		},
 		{
-			name: "namespaces deduped and sorted",
+			name: "one instance per namespace, sorted by add-on then namespace",
 			images: []nsImage{
 				{"b-ns", "registry.k8s.io/ingress-nginx/controller:v1.9.4"},
+				{"kube-system", "quay.io/cilium/cilium:v1.16.1"},
 				{"a-ns", "registry.k8s.io/ingress-nginx/controller:v1.9.4"},
 				{"a-ns", "registry.k8s.io/ingress-nginx/controller:v1.9.4"},
 			},
-			want: []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.9.4", Namespaces: []string{"a-ns", "b-ns"}, Source: "image"}},
+			want: []inventory.AddOnInstance{
+				{ID: "cilium", Version: "1.16.1", Namespaces: []string{"kube-system"}, Source: "image"},
+				{ID: "ingress-nginx", Version: "1.9.4", Namespaces: []string{"a-ns"}, Source: "image"},
+				{ID: "ingress-nginx", Version: "1.9.4", Namespaces: []string{"b-ns"}, Source: "image"},
+			},
 		},
 	}
 	for _, tc := range cases {
