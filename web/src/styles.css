@@ -74,8 +74,9 @@ select:focus-visible {
 
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 24px;
+  gap: 12px 24px;
   padding: 14px 0;
   border-bottom: 1px solid var(--border);
   margin-bottom: 28px;
@@ -117,13 +118,16 @@ select:focus-visible {
   position: absolute;
   right: 0;
   top: calc(100% + 8px);
-  width: 320px;
+  width: min(320px, calc(100vw - 40px));
   z-index: 10;
   display: grid;
   gap: 8px;
 }
 .token-pop label {
   font-weight: 600;
+}
+.token-pop label.check {
+  font-weight: 400;
 }
 
 /* ----- generic ----- */
@@ -197,6 +201,11 @@ h3 {
 }
 .btn-ghost:hover {
   color: var(--text);
+}
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  filter: none;
 }
 
 input,
@@ -340,6 +349,51 @@ tbody tr:hover {
   font-weight: 400;
   font-size: 11px;
 }
+/* unknown is neither ready nor blocked: dashed, never the "good" colour */
+.score-badge.verdict-unknown {
+  border-style: dashed;
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 60%, transparent);
+}
+
+.verdict,
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 8px;
+  border-radius: 4px;
+  vertical-align: 2px;
+  white-space: nowrap;
+}
+.verdict-ready {
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+.verdict-blocked {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+}
+.verdict-unknown {
+  color: var(--warn);
+  border: 1px dashed color-mix(in srgb, var(--warn) 60%, transparent);
+}
+.badge-stale {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.badge-whatif {
+  color: var(--info);
+  border: 1px solid color-mix(in srgb, var(--info) 45%, transparent);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+h1 .badge {
+  font-size: 12px;
+}
 
 .score-card .score-big {
   display: flex;
@@ -382,7 +436,8 @@ tbody tr:hover {
 
 .filters {
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 8px 14px;
 }
 
 .findings {
@@ -446,10 +501,44 @@ tbody tr:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
-.not-assessed ul {
+.not-assessed ul,
+.verdict-unknown-card ul {
   margin: 0;
   padding-left: 18px;
   color: var(--muted);
+}
+.verdict-unknown-card {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+.verdict-unknown-card h2 {
+  color: var(--warn);
+}
+.tag {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 6px;
+  margin-left: 6px;
+}
+.tag-required {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.exports {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+.field-error {
+  color: var(--bad);
+  margin: 0;
+  font-size: 13px;
+  flex-basis: 100%;
 }
 
 /* ----- sparkline ----- */
@@ -526,6 +615,36 @@ tbody tr:hover {
   padding: 6px 10px;
 }
 
-.target-pick select {
-  min-width: 180px;
+.target-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.target-pick input {
+  width: 13em;
+  max-width: 100%;
+}
+
+/* ----- fleet + teams ----- */
+
+.row-meta {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+}
+.cell-empty {
+  color: var(--muted);
+  padding: 2px 10px;
+}
+.cluster-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  white-space: normal;
+}
+.rollup-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
 }
