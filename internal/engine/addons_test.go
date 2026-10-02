@@ -195,6 +195,28 @@ func TestAddonEOLBoundaries(t *testing.T) {
 	}
 }
 
+// On its EOL day an add-on has ended: the title reads "since", and a
+// release line ending that day is no longer the newest supported one.
+func TestAddonEOLDayIsPast(t *testing.T) {
+	now := day("2026-10-02")
+	a := registry.AddOn{
+		SchemaVersion: 1, ID: "dated", DisplayName: "Dated",
+		Support: registry.Support{Status: "supported", EOLDate: "2026-10-02"},
+	}
+	fs := evalAddOns(addOnAt("dated", "2.1.0"), kb.KB{AddOns: []registry.AddOn{a}}, inventory.Version{Major: 1, Minor: 34}, now)
+	if want := "Dated is end-of-life since 2026-10-02"; len(fs) != 1 || fs[0].Title != want {
+		t.Errorf("got %+v, want one finding titled %q", fs, want)
+	}
+
+	cycles := []registry.Cycle{
+		{Cycle: "2.2", EOL: &registry.CycleEOL{Date: "2026-10-02"}},
+		{Cycle: "2.1", EOL: &registry.CycleEOL{Date: "2026-10-03"}},
+	}
+	if got := newestSupportedCycle(cycles, now); got != "2.1" {
+		t.Errorf("newestSupportedCycle on 2.2's EOL day = %q, want 2.1", got)
+	}
+}
+
 // A target at either end of the supported Kubernetes range is supported:
 // both bounds are inclusive, for release-line and compat-row ranges.
 func TestChartIncompatAtK8sMin(t *testing.T) {
