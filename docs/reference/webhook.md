@@ -39,7 +39,7 @@ cannot drift from what the server sends.
     },
     {
       "kind": "eol-approaching",
-      "key": "eol-approaching/istio",
+      "key": "eol-approaching/istio/1.24",
       "severity": "warning",
       "title": "Istio 1.24 reaches end-of-life on 2026-11-30",
       "targets": ["1.36"]
@@ -53,7 +53,7 @@ cannot drift from what the server sends.
 |---|---|
 | `schemaVersion` | `1`. Fields may be added within a version; a rename or removal bumps it. |
 | `deliveryId` | 32 hex characters, the same on every retry and for every sink. |
-| `type` | `readiness.changed`, the only type so far. |
+| `type` | `readiness.changed`. The set of types is closed: a new one bumps `schemaVersion` ([compatibility policy](../compatibility-policy.md#enumerated-values)). |
 | `timestamp` | When the evaluation pass ran, RFC 3339 UTC. |
 | `cluster` | `id` (the API's cluster id) and `name`. |
 | `targets[]` | The verdict after the pass (`ready`, `blocked` or `unknown`), score and blocker count of every target with a change. |

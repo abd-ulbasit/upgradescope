@@ -40,8 +40,10 @@ open in the same way (`target` was added within `schemaVersion` 1).
 
 The other enumerated values are closed: `severity` (`blocker`, `warning`,
 `info`), `verdict` (`ready`, `blocked`, `unknown`), `baselineState` (`new`,
-`unchanged`) and the webhook event `kind`. Adding a value to one of them
-bumps `schemaVersion` (and, for the REST API, the path prefix).
+`unchanged`), and the webhook's event `type` (`readiness.changed`) and
+change `kind` (`new-blocker`, `became-ready`, `eol-approaching`). Adding a
+value to one of them bumps `schemaVersion` (and, for the REST API, the path
+prefix).
 
 ## CLI flags
 

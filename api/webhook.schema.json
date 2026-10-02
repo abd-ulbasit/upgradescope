@@ -15,7 +15,7 @@
       "pattern": "^([0-9a-f]{32}|outbox-[0-9]+)$"
     },
     "type": {
-      "description": "The event type; readiness.changed is the only one so far.",
+      "description": "The event type. The set is closed: a new type bumps schemaVersion (docs/compatibility-policy.md).",
       "const": "readiness.changed"
     },
     "timestamp": {
