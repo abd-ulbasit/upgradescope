@@ -39,6 +39,8 @@ type CapabilityStatus struct {
 	//     cannot be told apart from its own requests;
 	//   - helm: storage drivers not read ("configmaps") and releases not
 	//     read or not decodable ("namespace/name");
+	//   - versions: the control-plane components with a kube-system pod
+	//     whose version could not be read ("kube-proxy", "kube-scheduler");
 	//   - addons: resources not read for add-on evidence,
 	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses");
 	//   - crds: the custom resources not checked for use of a deprecated

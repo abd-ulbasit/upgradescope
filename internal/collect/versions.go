@@ -3,6 +3,8 @@ package collect
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -81,10 +83,20 @@ var controlPlaneComponents = []string{
 }
 
 // collectControlPlane fills inv.ControlPlane from kube-system pods: the
-// component version is the pod's image tag (the container whose image repo
-// basename equals the component name), normalized (build suffix after "-"/"+"
-// stripped) and kept only if inventory.ParseVersion accepts it. The result is
-// (Component, Version)-deduped and sorted.
+// component version is the pod's image tag (the container whose image is
+// the component's, see componentImageTag), normalized (build suffix after
+// "-"/"+" stripped) and kept only if inventory.ParseVersion accepts it. The
+// result is (Component, Version)-deduped and sorted.
+//
+// A component pod whose version cannot be read is never dropped silently
+// (#169): its skew cannot be judged, so the capability is returned partial
+// (a partialError) naming the components, the number of such pods and the
+// first one by name, and the versions that were read are still recorded.
+// That is a pod running the component's image under a tag that is not a
+// version (digest-only, "latest"), or a pod labelled as the component
+// (component=, k8s-app=kube-proxy) that runs no image of its name (RKE2's
+// hardened-kubernetes). A pod only named like a component that runs
+// another image (kube-scheduler-extender) is not that component.
 //
 // Managed control planes (EKS, GKE, AKS, ...) run the apiserver, controller
 // manager, and scheduler outside the cluster: no matching pods exist, which
@@ -92,6 +104,8 @@ var controlPlaneComponents = []string{
 // control-plane skew findings.
 func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *inventory.Inventory) error {
 	seen := map[inventory.ComponentVersion]bool{}
+	unread := map[string]string{} // pod name → why its version was not read
+	unreadComps := map[string]bool{}
 	podOpts := metav1.ListOptions{Limit: listPageSize}
 	for {
 		pods, err := kube.CoreV1().Pods("kube-system").List(ctx, podOpts)
@@ -100,15 +114,21 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 		}
 		for i := range pods.Items {
 			p := &pods.Items[i]
-			comp := classifyControlPlanePod(p.Name, p.Labels)
+			comp, labelled := classifyControlPlanePod(p.Name, p.Labels)
 			if comp == "" {
 				continue
 			}
-			tag, ok := componentImageTag(p.Spec.Containers, comp)
-			if !ok {
-				continue // no matching container or unparseable tag — skip, never error
+			tag, why := componentImageTag(p.Spec.Containers, comp)
+			if why == "" && tag == "" && labelled {
+				why = fmt.Sprintf("labelled %s but runs no %s image (%s)", comp, comp, podImages(p.Spec.Containers))
 			}
-			seen[inventory.ComponentVersion{Component: comp, Version: tag}] = true
+			switch {
+			case tag != "":
+				seen[inventory.ComponentVersion{Component: comp, Version: tag}] = true
+			case why != "":
+				unread[p.Name] = why
+				unreadComps[comp] = true
+			}
 		}
 		if pods.Continue == "" {
 			break
@@ -125,41 +145,83 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 		}
 		return a.Version < b.Version
 	})
-	return nil
+	if len(unread) == 0 {
+		return nil
+	}
+	first := slices.Min(slices.Collect(maps.Keys(unread)))
+	comps := slices.Sorted(maps.Keys(unreadComps))
+	return partialError{
+		msg: fmt.Sprintf("version not read from %d control-plane pod(s) (%s), first kube-system/%s: %s; their skew was not evaluated",
+			len(unread), strings.Join(comps, ", "), first, unread[first]),
+		incomplete: true,
+		skipped:    comps,
+	}
 }
 
 // classifyControlPlanePod maps a kube-system pod to a control-plane
 // component via the kubeadm component label, the kube-proxy DaemonSet's
 // k8s-app label, or the pod-name prefix; "" means not a control-plane pod.
-func classifyControlPlanePod(name string, labels map[string]string) string {
+// labelled is true when a label, not only the name, said so.
+func classifyControlPlanePod(name string, labels map[string]string) (comp string, labelled bool) {
 	for _, comp := range controlPlaneComponents {
-		if labels["component"] == comp || strings.HasPrefix(name, comp+"-") {
-			return comp
+		if labels["component"] == comp {
+			return comp, true
 		}
 	}
 	if labels["k8s-app"] == "kube-proxy" {
-		return "kube-proxy"
+		return "kube-proxy", true
 	}
-	return ""
-}
-
-// componentImageTag extracts the version tag for comp from the container
-// whose image repo basename is comp (e.g. ".../eks/kube-proxy:v1.33.0").
-// Build suffixes ("v1.33.0-eksbuild.1", "+fips") are stripped; the tag is
-// returned only if inventory.ParseVersion accepts the normalized form.
-func componentImageTag(containers []corev1.Container, comp string) (string, bool) {
-	for _, c := range containers {
-		repo, tag := splitImage(c.Image)
-		if repo != comp && !strings.HasSuffix(repo, "/"+comp) {
-			continue
+	for _, comp := range controlPlaneComponents {
+		if strings.HasPrefix(name, comp+"-") {
+			return comp, false
 		}
-		if i := strings.IndexAny(tag, "-+"); i >= 0 {
-			tag = tag[:i]
-		}
-		if _, err := inventory.ParseVersion(tag); err != nil {
-			continue
-		}
-		return tag, true
 	}
 	return "", false
+}
+
+// componentArches are the architecture suffixes of per-architecture image
+// names ("gke.gcr.io/kube-proxy-amd64", "k8s.gcr.io/kube-scheduler-arm64"),
+// which GKE and older kubeadm releases use.
+var componentArches = []string{"amd64", "arm64", "arm", "ppc64le", "s390x"}
+
+// componentImageTag extracts the version tag for comp from the container
+// whose image repo basename is comp or comp-<arch> (e.g.
+// ".../eks/kube-proxy:v1.33.0", "gke.gcr.io/kube-proxy-amd64:v1.32.0-gke.1000").
+// Build suffixes ("v1.33.0-eksbuild.1", "+fips") are stripped; the tag is
+// returned only if inventory.ParseVersion accepts the normalized form.
+// When comp's image is there but no tag parses, why says so, naming the
+// first such image; both are empty when no container runs comp's image.
+func componentImageTag(containers []corev1.Container, comp string) (tag, why string) {
+	for _, c := range containers {
+		repo, t := splitImage(c.Image)
+		base := repo[strings.LastIndex(repo, "/")+1:]
+		if arch, ok := strings.CutPrefix(base, comp+"-"); base != comp && (!ok || !slices.Contains(componentArches, arch)) {
+			continue
+		}
+		v := t
+		if i := strings.IndexAny(v, "-+"); i >= 0 {
+			v = v[:i]
+		}
+		if _, err := inventory.ParseVersion(v); err == nil {
+			return v, ""
+		}
+		if why != "" {
+			continue
+		}
+		if t == "" {
+			why = fmt.Sprintf("%s image %s has no version tag", comp, c.Image)
+		} else {
+			why = fmt.Sprintf("%s image %s has tag %q, not a version", comp, c.Image, t)
+		}
+	}
+	return "", why
+}
+
+// podImages lists a pod's container images for a reason, comma-separated.
+func podImages(containers []corev1.Container) string {
+	images := make([]string, len(containers))
+	for i, c := range containers {
+		images[i] = c.Image
+	}
+	return strings.Join(images, ", ")
 }
