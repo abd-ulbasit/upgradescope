@@ -146,41 +146,49 @@ func findingSignature(rep engine.Report) []string {
 	return sig
 }
 
-// outboxFor computes the notification delta of one new evaluation and
-// turns it into one outbox message per sink. The baseline is the last
-// evaluation with a decided verdict, so an "unknown" pass (a collector
-// failure) is neither a transition nor a reset; a pass whose own verdict
-// is unknown notifies nothing — what it could not see is not news.
-// Failures are logged and never fail the pass.
-func (s *Server) outboxFor(ctx context.Context, cluster store.Cluster, cur engine.Report, now time.Time) []store.OutboxMessage {
-	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown {
-		return nil
+// deltaFor computes the notification delta of one new evaluation. The
+// baseline is the last evaluation with a decided verdict, so an "unknown"
+// pass (a collector failure) is neither a transition nor a reset; a pass
+// whose own verdict is unknown notifies nothing — what it could not see is
+// not news. Failures are logged and never fail the pass.
+func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report) targetDelta {
+	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
+	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
+		return d // a cluster's first push has no baseline either
 	}
 	target := cur.Target.String()
 	prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, cluster.ID, target)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil // first decided evaluation of this target: no delta
+		return d // first decided evaluation of this target: no delta
 	}
 	if err != nil {
 		log.Printf("server: loading notification baseline (cluster %d, target %s): %v", cluster.ID, target, err)
-		return nil
+		return d
 	}
 	var prevRep engine.Report
 	if err := json.Unmarshal(prev.Report, &prevRep); err != nil {
 		log.Printf("server: decoding previous report (cluster %d, target %s): %v", cluster.ID, target, err)
+		return d
+	}
+	d.changes = ComputeDelta(&prevRep, cur)
+	return d
+}
+
+// outboxFor turns one pass's deltas into one notification for the
+// cluster, queued once per sink with the same delivery id.
+func (s *Server) outboxFor(cluster store.Cluster, deltas []targetDelta, now time.Time) []store.OutboxMessage {
+	n, ok := buildNotification(cluster, deltas, now, newDeliveryID())
+	if !ok {
 		return nil
 	}
-	var msgs []store.OutboxMessage
-	for _, ev := range ComputeDelta(&prevRep, cur) {
-		ev.Cluster = cluster.Name
-		payload, err := json.Marshal(ev)
-		if err != nil {
-			log.Printf("server: encoding notification (cluster %s, target %s): %v", cluster.Name, target, err)
-			continue
-		}
-		for _, sk := range s.sinks {
-			msgs = append(msgs, store.OutboxMessage{Sink: sk.name, Payload: payload, CreatedAt: now})
-		}
+	payload, err := json.Marshal(n)
+	if err != nil {
+		log.Printf("server: encoding notification (cluster %s): %v", cluster.Name, err)
+		return nil
+	}
+	msgs := make([]store.OutboxMessage, 0, len(s.sinks))
+	for _, sk := range s.sinks {
+		msgs = append(msgs, store.OutboxMessage{Sink: sk.name, Payload: payload, CreatedAt: now})
 	}
 	return msgs
 }
@@ -216,19 +224,20 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	// Server-side team override (spec: labels + server override) — rewrite
 	// namespace→team attribution before evaluation; stored reports carry the
 	// mapped teams. The stored snapshot keeps the original labels.
-
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap}
+	var deltas []targetDelta
 	for _, target := range s.evalTargets(inv) {
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
 		if err != nil {
 			return 0, false, err
 		}
 		batch.Insert = append(batch.Insert, e)
-		batch.Outbox = append(batch.Outbox, s.outboxFor(ctx, cluster, rep, now)...)
+		deltas = append(deltas, s.deltaFor(ctx, cluster, e, rep))
 	}
+	batch.Outbox = s.outboxFor(cluster, deltas, now)
 	snapID, duplicate, err := s.cfg.Store.CommitEvaluations(ctx, batch)
 	if err != nil {
 		return 0, false, err
@@ -259,6 +268,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
 	batch := store.EvaluationBatch{ClusterID: cluster.ID, SnapshotID: snapID, Current: map[string]int64{}}
+	var deltas []targetDelta
 	for _, target := range s.evalTargets(inv) {
 		cur, err := s.cfg.Store.CurrentEvaluation(ctx, cluster.ID, target.String())
 		found := err == nil
@@ -284,11 +294,12 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			continue
 		}
 		batch.Insert = append(batch.Insert, e)
-		batch.Outbox = append(batch.Outbox, s.outboxFor(ctx, cluster, rep, now)...)
+		deltas = append(deltas, s.deltaFor(ctx, cluster, e, rep))
 	}
 	if len(batch.Current) == 0 {
 		return nil
 	}
+	batch.Outbox = s.outboxFor(cluster, deltas, now)
 	_, _, err := s.cfg.Store.CommitEvaluations(ctx, batch)
 	if errors.Is(err, store.ErrConflict) {
 		log.Printf("server: re-evaluation of cluster %d skipped: %v", cluster.ID, err)
@@ -350,9 +361,35 @@ func (s *Server) runReevaluation(ctx context.Context) {
 	}
 }
 
-// eventFromPayload decodes an outbox payload back into the event.
-func eventFromPayload(b []byte) (notify.Event, error) {
-	var ev notify.Event
-	err := json.Unmarshal(b, &ev)
-	return ev, err
+// notificationOf decodes an outbox message's payload. A message queued by
+// a server that predates the versioned payload holds one PascalCase event
+// ({"Cluster", "Target", "Kind", "Title", "Detail"}); it becomes a
+// one-change notification whose delivery id is derived from the message.
+func notificationOf(m store.OutboxMessage) (notify.Notification, error) {
+	var probe struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if err := json.Unmarshal(m.Payload, &probe); err != nil {
+		return notify.Notification{}, err
+	}
+	if probe.SchemaVersion != 0 {
+		var n notify.Notification
+		err := json.Unmarshal(m.Payload, &n)
+		return n, err
+	}
+	var ev struct{ Cluster, Target, Kind, Title, Detail string }
+	if err := json.Unmarshal(m.Payload, &ev); err != nil {
+		return notify.Notification{}, err
+	}
+	if ev.Kind == "" {
+		return notify.Notification{}, errors.New("payload is neither a notification nor a legacy event")
+	}
+	return notify.Notification{
+		SchemaVersion: notify.SchemaVersion,
+		DeliveryID:    fmt.Sprintf("outbox-%d", m.ID),
+		Type:          notify.TypeReadinessChanged,
+		Timestamp:     m.CreatedAt.UTC(),
+		Cluster:       notify.Cluster{ID: m.ClusterID, Name: ev.Cluster},
+		Changes:       []notify.Change{{Kind: ev.Kind, Title: ev.Title, Detail: ev.Detail, Targets: []string{ev.Target}}},
+	}, nil
 }

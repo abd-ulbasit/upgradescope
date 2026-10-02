@@ -128,28 +128,28 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
-	ev, err := eventFromPayload(m.Payload)
+	n, err := notificationOf(m)
 	if err != nil {
 		log.Printf("server: dropping notification %d: corrupt payload: %v", m.ID, err)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
 	nctx, cancel := context.WithTimeout(ctx, s.notifyTimeout)
-	err = target.Notify(nctx, ev)
+	err = target.Notify(nctx, n)
 	cancel()
 	if err == nil {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
 	if m.Attempts >= outboxMaxAttempts {
-		log.Printf("server: giving up on notification (cluster %s, target %s, kind %s, sink %s) after %d attempts: %v",
-			ev.Cluster, ev.Target, ev.Kind, m.Sink, m.Attempts, err)
+		log.Printf("server: giving up on notification %s (cluster %s, sink %s) after %d attempts: %v",
+			n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, err)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
 	next := s.now().Add(outboxBackoff(m.Attempts))
-	log.Printf("server: notification failed (cluster %s, target %s, kind %s, sink %s, attempt %d), retrying at %s: %v",
-		ev.Cluster, ev.Target, ev.Kind, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), err)
+	log.Printf("server: notification %s failed (cluster %s, sink %s, attempt %d), retrying at %s: %v",
+		n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), err)
 	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, outboxError(err)))
 }
 

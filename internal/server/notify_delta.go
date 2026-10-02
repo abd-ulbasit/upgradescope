@@ -1,48 +1,57 @@
 package server
 
 import (
-	"fmt"
+	"cmp"
+	"crypto/rand"
+	"encoding/hex"
+	"slices"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
-// maxBlockerEvents caps per-evaluation new-blocker noise; the overflow is
-// summarized as one "and N more new blockers" event.
-const maxBlockerEvents = 5
+// Per-notification caps on noisy kinds: the overflow is counted in
+// Notification.Omitted instead of listed.
+const (
+	maxBlockerChanges = 5
+	maxEOLChanges     = 5
+)
 
-// ComputeDelta implements the notification delta rules (shared contract):
+// becameReadyTitle is the became-ready change's title, the same for every
+// target so the change merges across them (each target's score is in
+// Notification.Targets).
+const becameReadyTitle = "ready: all blockers resolved"
+
+// ComputeDelta implements the notification delta rules for one target:
 //
-//   - prev == nil (first-ever evaluation of this cluster+target) → no events.
+//   - prev == nil (first-ever evaluation of this cluster+target) → nothing.
 //   - Blocker findings added since prev (diff by stable finding key) → one
-//     new-blocker event each, capped at maxBlockerEvents, then a single
-//     "and N more".
+//     new-blocker change each.
 //   - Blocker count went >0 → 0 AND curr.Verdict is ready → one became-ready
-//     event. Zero blockers with verdict unknown (a required check was not
+//     change. Zero blockers with verdict unknown (a required check was not
 //     assessed, e.g. a transient collector failure) is not readiness.
-//   - eol-approaching warnings added since prev (by key) → one event each.
+//   - eol-approaching warnings added since prev (by key) → one change each.
 //
 // Identity is Finding.Key — deliberately count-free, so a title-only change
 // ("3 objects" → "2 objects") never re-alerts the same blocker. Findings
 // with an empty Key (reports stored before Key existed) fall back to Title.
-// Duplicate keys within one report emit one event (first occurrence wins).
+// Duplicate keys within one report give one change (first occurrence wins).
 //
-// Event.Cluster is filled with curr.ClusterID (the inventory UID); the
-// caller (outboxFor) overwrites it with the human cluster name from the
-// push envelope before delivery. Order is deterministic: new-blockers in
-// report order, summary, became-ready, eol-approaching in report order.
-func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Event {
+// Every change lists curr's target; buildNotification merges and caps the
+// changes of one pass across targets. Order is deterministic: new-blockers
+// in report order, became-ready, eol-approaching in report order.
+func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Change {
 	if prev == nil {
 		return nil
 	}
-	cluster, target := curr.ClusterID, curr.Target.String()
+	target := []string{curr.Target.String()}
 
 	prevBlockers := keySet(prev.Findings, isBlocker)
 	prevEOL := keySet(prev.Findings, isEOLApproaching)
 
-	var events []notify.Event
-
-	var newBlockers []engine.Finding
+	var changes []notify.Change
 	currBlockerCount := 0
 	seenBlockers := map[string]bool{}
 	for _, f := range curr.Findings {
@@ -56,29 +65,12 @@ func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Event {
 		}
 		seenBlockers[k] = true
 		if !prevBlockers[k] {
-			newBlockers = append(newBlockers, f)
+			changes = append(changes, change(notify.KindNewBlocker, f, target))
 		}
-	}
-	for i, f := range newBlockers {
-		if i == maxBlockerEvents {
-			events = append(events, notify.Event{
-				Cluster: cluster, Target: target, Kind: notify.KindNewBlocker,
-				Title: fmt.Sprintf("and %d more new blockers", len(newBlockers)-maxBlockerEvents),
-			})
-			break
-		}
-		events = append(events, notify.Event{
-			Cluster: cluster, Target: target, Kind: notify.KindNewBlocker,
-			Title: f.Title, Detail: f.Detail,
-		})
 	}
 
 	if len(prevBlockers) > 0 && currBlockerCount == 0 && curr.Verdict == engine.VerdictReady {
-		events = append(events, notify.Event{
-			Cluster: cluster, Target: target, Kind: notify.KindBecameReady,
-			Title:  fmt.Sprintf("ready for %s: all blockers resolved", target),
-			Detail: fmt.Sprintf("score %d", curr.Score),
-		})
+		changes = append(changes, notify.Change{Kind: notify.KindBecameReady, Title: becameReadyTitle, Targets: target})
 	}
 
 	seenEOL := map[string]bool{}
@@ -92,13 +84,88 @@ func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Event {
 		}
 		seenEOL[k] = true
 		if !prevEOL[k] {
-			events = append(events, notify.Event{
-				Cluster: cluster, Target: target, Kind: notify.KindEOLApproaching,
-				Title: f.Title, Detail: f.Detail,
-			})
+			changes = append(changes, change(notify.KindEOLApproaching, f, target))
 		}
 	}
-	return events
+	return changes
+}
+
+func change(kind string, f engine.Finding, targets []string) notify.Change {
+	return notify.Change{Kind: kind, Key: f.Key, Severity: string(f.Severity), Title: f.Title, Detail: f.Detail, Targets: targets}
+}
+
+// targetDelta is one target's verdict after a pass and its changes.
+type targetDelta struct {
+	target  notify.Target
+	changes []notify.Change
+}
+
+// kindRank orders a notification's changes: blockers first.
+var kindRank = map[string]int{notify.KindNewBlocker: 0, notify.KindBecameReady: 1, notify.KindEOLApproaching: 2}
+
+// kindCap is the per-notification cap of a kind (0 = none).
+var kindCap = map[string]int{notify.KindNewBlocker: maxBlockerChanges, notify.KindEOLApproaching: maxEOLChanges}
+
+// buildNotification groups one pass's deltas for one cluster into a single
+// notification: a change found for several targets (an EOL add-on is a
+// blocker for each of them) becomes one change listing them all, then
+// new-blocker and eol-approaching changes are capped, the rest counted in
+// Omitted. ok is false when the pass changed nothing.
+func buildNotification(cluster store.Cluster, deltas []targetDelta, now time.Time, deliveryID string) (n notify.Notification, ok bool) {
+	n = notify.Notification{
+		SchemaVersion: notify.SchemaVersion,
+		DeliveryID:    deliveryID,
+		Type:          notify.TypeReadinessChanged,
+		Timestamp:     now.UTC(),
+		Cluster:       notify.Cluster{ID: cluster.ID, Name: cluster.Name},
+	}
+	merged := map[string]int{} // identity → index in n.Changes
+	for _, d := range deltas {
+		if len(d.changes) == 0 {
+			continue
+		}
+		n.Targets = append(n.Targets, d.target)
+		for _, c := range d.changes {
+			id := c.Kind + "\x00" + c.Key
+			if c.Key == "" {
+				id += "\x00" + c.Title
+			}
+			if i, seen := merged[id]; seen {
+				n.Changes[i].Targets = append(n.Changes[i].Targets, c.Targets...)
+				continue
+			}
+			merged[id] = len(n.Changes)
+			c.Targets = slices.Clone(c.Targets)
+			n.Changes = append(n.Changes, c)
+		}
+	}
+	if len(n.Changes) == 0 {
+		return notify.Notification{}, false
+	}
+	slices.SortStableFunc(n.Changes, func(a, b notify.Change) int { return cmp.Compare(kindRank[a.Kind], kindRank[b.Kind]) })
+	kept := n.Changes[:0]
+	count := map[string]int{}
+	for _, c := range n.Changes {
+		count[c.Kind]++
+		if limit := kindCap[c.Kind]; limit > 0 && count[c.Kind] > limit {
+			if n.Omitted == nil {
+				n.Omitted = map[string]int{}
+			}
+			n.Omitted[c.Kind]++
+			continue
+		}
+		kept = append(kept, c)
+	}
+	n.Changes = kept
+	return n, true
+}
+
+// newDeliveryID returns a random 128-bit id, hex: the notification's
+// identity across retries and sinks.
+func newDeliveryID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails (Go 1.24+)
+	return hex.EncodeToString(b[:])
 }
 
 func isBlocker(f engine.Finding) bool { return f.Severity == engine.SevBlocker }

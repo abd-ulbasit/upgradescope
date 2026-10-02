@@ -96,7 +96,7 @@ func (h *harness) tick() {
 }
 
 // drain delivers every due outbox message, as the worker does after commit.
-func (h *harness) drain() []notify.Event {
+func (h *harness) drain() []event {
 	h.t.Helper()
 	before := len(h.rec.all())
 	h.srv.deliverOutbox(context.Background())

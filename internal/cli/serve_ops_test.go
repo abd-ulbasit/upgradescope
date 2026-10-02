@@ -83,6 +83,23 @@ func TestServeRetention(t *testing.T) {
 	}
 }
 
+// The webhook signing key is a secret (env/file), and is meaningless
+// without the webhook it signs.
+func TestServeWebhookSecret(t *testing.T) {
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error {
+		got = opts
+		return nil
+	}
+	t.Setenv("UPGRADESCOPE_WEBHOOK_SECRET", "env-key")
+	if err := execServe(t, []string{"--webhook", "https://hook.test/x"}, capture); err != nil || got.webhookKey != "env-key" {
+		t.Fatalf("webhook secret from env = %q (err %v)", got.webhookKey, err)
+	}
+	if err := execServe(t, nil, serveOK()); err == nil || !strings.Contains(err.Error(), "--webhook") {
+		t.Errorf("secret without --webhook: err = %v, want a refusal", err)
+	}
+}
+
 // Reusing the read or ingest token as the admin token would hand cluster
 // deletion to every dashboard user or agent.
 func TestServeRefusesSharedAdminToken(t *testing.T) {

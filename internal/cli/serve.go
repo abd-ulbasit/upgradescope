@@ -32,6 +32,7 @@ type serveOptions struct {
 	adminToken   string
 	slackWebhook string
 	webhook      string
+	webhookKey   string
 	targets      string
 	teamMap      string
 
@@ -74,7 +75,9 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		notifiers = append(notifiers, notify.NewSlack(opts.slackWebhook))
 	}
 	if opts.webhook != "" {
-		notifiers = append(notifiers, notify.NewGenericWebhook(opts.webhook))
+		hook := notify.NewGenericWebhook(opts.webhook)
+		hook.Secret = opts.webhookKey
+		notifiers = append(notifiers, hook)
 	}
 
 	extraTargets := make([]string, 0, len(opts.parsedTargets))
@@ -176,7 +179,9 @@ func newServeCmd() *cobra.Command {
 		addSecretFlag(cmd, &opts.slackWebhook, "slack-webhook", "UPGRADESCOPE_SLACK_WEBHOOK",
 			"Slack incoming-webhook URL for delta notifications"),
 		addSecretFlag(cmd, &opts.webhook, "webhook", "UPGRADESCOPE_WEBHOOK_URL",
-			"generic webhook URL (POSTed the raw event JSON)"),
+			"generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in docs/operations.md)"),
+		addSecretFlag(cmd, &opts.webhookKey, "webhook-secret", "UPGRADESCOPE_WEBHOOK_SECRET",
+			"sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key>"),
 	}
 	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
@@ -223,6 +228,9 @@ func validateServeOptions(opts *serveOptions) error {
 	}
 	if opts.maxGateBytes <= 0 {
 		return fmt.Errorf("--max-gate-bytes must be positive, got %d", opts.maxGateBytes)
+	}
+	if opts.webhookKey != "" && opts.webhook == "" {
+		return fmt.Errorf("--webhook-secret signs the generic webhook: set --webhook too")
 	}
 	if opts.adminToken != "" && (opts.adminToken == opts.readToken || opts.adminToken == opts.ingestToken) {
 		return fmt.Errorf("--admin-token must differ from --read-token and --ingest-token: " +
