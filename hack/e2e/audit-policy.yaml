@@ -1,0 +1,21 @@
+# API-server audit policy for the kind e2e (hack/e2e.sh, via
+# hack/e2e/kind-config.yaml). Every request at Metadata level: who
+# (user, userAgent), what (verb, objectRef, requestURI), and the
+# apiserver's own annotations, k8s.io/deprecated among them. No request or
+# response bodies, so no Secret data ever reaches the log. The e2e's audit
+# gates read it to check what upgradescope claims about its own traffic:
+# no deprecated-API requests, the agent writes only its ClusterReadiness
+# (+ CRD), Secrets only through Helm's selectors, and `scan` writes nothing.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+# One event per request (ResponseComplete), not two.
+omitStages:
+  - RequestReceived
+rules:
+  # Kubelet and probe health checks: frequent, and nothing the gates read.
+  - level: None
+    nonResourceURLs:
+      - /healthz*
+      - /livez*
+      - /readyz*
+  - level: Metadata

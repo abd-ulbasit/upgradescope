@@ -19,7 +19,15 @@
 #      spec follows (#41);
 #   8. `helm uninstall` leaves no ClusterRole/ClusterRoleBinding and no
 #      namespaced release object behind, and keeps the CRD, as the chart
-#      README documents (Helm never deletes crds/).
+#      README documents (Helm never deletes crds/);
+#   9. from the API server's audit log (hack/e2e/audit-policy.yaml, Metadata
+#      level, over the whole run): `upgradescope scan` and the agent's
+#      ServiceAccount made no deprecated-API request (k8s.io/deprecated)
+#      outside hack/e2e/deprecated-request-allowlist.txt; the agent wrote
+#      only its ClusterReadiness (+ status) and the ClusterReadiness CRD;
+#      Secrets were read only through Helm's owner=helm list and GETs of
+#      Helm release Secrets; scan wrote nothing. Skipped on a reused
+#      cluster, whose log (if any) is not this run's.
 #
 # Steps marked best-effort below guard bugs that are not fixed on this
 # branch's base yet: they report PASS/FAIL in the job summary
@@ -29,20 +37,23 @@
 # Safety: every kubectl/helm call names the kind context explicitly
 # (kind-upgradescope-demo); nothing here reads the current context.
 # hack/demo/kind-setup.sh does switch the current context to the kind
-# cluster, as `make demo-up` always has. The cluster is left running for
+# cluster, as `make demo-up` always has. The audit log is read from the
+# control-plane node with `docker exec`. The cluster is left running for
 # inspection; `make demo-down` deletes it.
 #
 # Needs Docker, helm, go, jq and curl; installs kind and kubectl itself.
 #
 # Knobs: E2E_MINOR (default 1.37). For hack/e2e_test.sh, which runs this
 # against stubs: E2E_INSTALL_TOOL, E2E_UPGRADESCOPE (the binary `make build`
-# produces), E2E_NAP (seconds between polls, overriding each poll's own).
+# produces), E2E_NAP (seconds between polls, overriding each poll's own),
+# E2E_DEPRECATED_ALLOWLIST (default hack/e2e/deprecated-request-allowlist.txt).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MINOR=${E2E_MINOR:-1.37}
 INSTALL_TOOL=${E2E_INSTALL_TOOL:-hack/install-tool.sh}
 UPGRADESCOPE=${E2E_UPGRADESCOPE:-bin/upgradescope}
+ALLOWLIST=${E2E_DEPRECATED_ALLOWLIST:-hack/e2e/deprecated-request-allowlist.txt}
 CLUSTER=upgradescope-demo # the cluster kind-setup.sh and the ITs use
 CTX=kind-$CLUSTER
 NS=upgradescope
@@ -51,9 +62,30 @@ IMAGE=ghcr.io/abd-ulbasit/upgradescope
 TAG=e2e
 TOKEN=e2e-token
 CR=cluster
+# The chart's agent ServiceAccount: the release name, which contains the
+# chart name (templates/_helpers.tpl fullname).
+AGENT_SA=system:serviceaccount:$NS:$RELEASE
+CRD=clusterreadinesses.upgradescope.dev
+# Inside the control-plane node (hack/e2e/kind-config.yaml).
+AUDIT_LOGS=/var/log/kubernetes/upgradescope-e2e
 
 NODE_IMAGE=$(hack/kind-images.sh image "$MINOR")
 NEXT=$(hack/kind-images.sh next "$MINOR")
+
+# The allowlist as "<apiVersion> <resource>" lines; a malformed line fails
+# the run before anything starts.
+read_allowlist() {
+  local apiv res issue reason
+  while read -r apiv res issue reason; do
+    case "$apiv" in '' | '#'*) continue ;; esac
+    [[ "$issue" =~ ^#[0-9]+$ ]] && [ -n "$res" ] && [ -n "$reason" ] || {
+      echo "ERROR: $ALLOWLIST: '$apiv $res $issue $reason' is not '<apiVersion> <resource> #<issue> <reason>'" >&2
+      return 1
+    }
+    echo "$apiv $res"
+  done <"$ALLOWLIST"
+}
+allowed=$(read_allowlist)
 
 for tool in docker helm go jq curl; do
   command -v "$tool" >/dev/null || { echo "ERROR: $tool not found in PATH" >&2; exit 1; }
@@ -126,7 +158,10 @@ create_cluster() {
     echo "kind cluster '$CLUSTER' already exists, reusing it"
     reused=1
   else
-    kind create cluster --name "$CLUSTER" --image "$NODE_IMAGE" --wait 120s || return 1
+    # kind needs the audit policy's absolute path (an extraMount).
+    sed -e "s|__AUDIT_POLICY__|$PWD/hack/e2e/audit-policy.yaml|" \
+      hack/e2e/kind-config.yaml >"$work/kind-config.yaml" || return 1
+    kind create cluster --name "$CLUSTER" --image "$NODE_IMAGE" --config "$work/kind-config.yaml" --wait 120s || return 1
   fi
   local got
   got=$(k get --raw /version | jq -r '.major + "." + (.minor | rtrimstr("+"))')
@@ -259,6 +294,104 @@ uninstall_leaves_nothing() {
     { echo "the ClusterReadiness CRD is gone; the chart README says uninstall keeps it" >&2; return 1; }
 }
 
+# --- audit log (step 9) ---------------------------------------------------
+# Who is who in the log: `scan` runs as the kind admin with client-go's
+# default user agent, "upgradescope/<version> (...)"; the agent is the
+# chart's ServiceAccount. The ITs run in-process as cli.test and are
+# neither (the agent IT creates and deletes its own CRD and CR).
+JQ_ACTORS='
+  def actor:
+    if .user.username == $sa then "agent"
+    elif ((.userAgent // "") | startswith("upgradescope/"))
+      and ((.user.username // "") | startswith("system:serviceaccount:") | not) then "scan"
+    else empty end;
+  def write: .verb | IN("create", "update", "patch", "delete", "deletecollection");
+  def gv: ((.objectRef.apiGroup // "") | if . == "" then "" else . + "/" end) + (.objectRef.apiVersion // "");
+  def show: "\(actor) \(.verb) \(.requestURI) -> \(.responseStatus.code // "?")";
+'
+# audit <jq filter>: the filter over every event of this run's audit log,
+# with JQ_ACTORS and $sa, $cr and $crd bound.
+audit() {
+  if [ ! -s "$work/audit.log" ]; then
+    docker exec "$CLUSTER-control-plane" sh -c "cat $AUDIT_LOGS/audit*.log" >"$work/audit.log" || return 1
+    [ -s "$work/audit.log" ] || { echo "the API server's audit log is empty (hack/e2e/kind-config.yaml not applied?)" >&2; return 1; }
+    echo "audit log: $(wc -l <"$work/audit.log" | tr -d ' ') events" >&2
+  fi
+  jq -r --arg sa "$AGENT_SA" --arg cr "$CR" --arg crd "$CRD" "$JQ_ACTORS $1" "$work/audit.log"
+}
+
+# count <jq filter>: how many events it selects.
+count() {
+  local out
+  out=$(audit "$1 | 1") || return 1
+  grep -c . <<<"$out" || true
+}
+
+# Every assertion below would pass on a log that never saw the actor, so
+# each first proves the log holds that actor's traffic.
+audit_saw_both() {
+  local a n
+  for a in scan agent; do
+    n=$(count "select(actor == \"$a\")") || return 1
+    [ "$n" -gt 0 ] || { echo "no request from $a in the audit log: the assertions below would be vacuous" >&2; return 1; }
+    echo "$a: $n requests"
+  done
+}
+
+audit_no_deprecated_requests() {
+  audit_saw_both || return 1
+  local got
+  got=$(audit 'select(.annotations["k8s.io/deprecated"] == "true") | select(actor) | "\(gv) \(.objectRef.resource) \(actor) \(.verb) \(.requestURI)"' |
+    sort -u) || return 1
+  local bad gv res rest
+  bad=$(while read -r gv res rest; do
+    [ -n "$gv" ] || continue
+    grep -qxF "$gv $res" <<<"$allowed" || echo "$gv $res $rest"
+  done <<<"$got")
+  [ -z "$got" ] || { echo "deprecated-API requests seen:"; echo "$got" | awk '{print "  " $1 " " $2 " (" $3 ")"}' | sort -u; }
+  [ -z "$bad" ] || {
+    echo "deprecated-API requests from upgradescope not in $ALLOWLIST:" >&2
+    echo "$bad" | sed 's/^/  /' >&2
+    return 1
+  }
+}
+
+audit_agent_writes_only_its_cr() {
+  audit_saw_both || return 1
+  local n bad
+  n=$(count 'select(actor == "agent" and write and .objectRef.resource == "clusterreadinesses")') || return 1
+  [ "$n" -gt 0 ] || { echo "the agent never wrote its ClusterReadiness: the write set is not observed" >&2; return 1; }
+  bad=$(audit 'select(actor == "agent" and write) | select(
+      ((.objectRef.apiGroup == "upgradescope.dev" and .objectRef.resource == "clusterreadinesses"
+        and ((.objectRef.subresource // "") | IN("", "status"))
+        and (.verb | IN("create", "update", "patch"))
+        and ((.objectRef.name // "") == $cr or (.verb == "create" and (.objectRef.name // "") == "")))
+       or (.objectRef.apiGroup == "apiextensions.k8s.io" and .objectRef.resource == "customresourcedefinitions"
+        and .objectRef.name == $crd and (.verb | IN("create", "update", "patch")))) | not) | show') || return 1
+  echo "agent writes: $n to clusterreadinesses/$CR"
+  [ -z "$bad" ] || { echo "the agent wrote something other than ClusterReadiness/$CR and $CRD:" >&2; echo "$bad" | sed 's/^/  /' >&2; return 1; }
+}
+
+audit_secrets_helm_only() {
+  audit_saw_both || return 1
+  local a n bad
+  for a in scan agent; do
+    n=$(count "select(actor == \"$a\" and .verb == \"list\" and .objectRef.resource == \"secrets\")") || return 1
+    [ "$n" -gt 0 ] || { echo "$a never listed Secrets: Helm detection is not observed" >&2; return 1; }
+  done
+  bad=$(audit 'select(actor and .objectRef.resource == "secrets" and (.objectRef.apiGroup // "") == "") | select(
+      (.verb == "list" and (.requestURI | test("[?&]labelSelector=owner(%3D|=)helm(&|$)")))
+      or (.verb == "get" and ((.objectRef.name // "") | startswith("sh.helm.release.v1."))) | not) | show') || return 1
+  [ -z "$bad" ] || { echo "Secret requests other than Helm's owner=helm list and release GETs:" >&2; echo "$bad" | sed 's/^/  /' >&2; return 1; }
+}
+
+audit_scan_writes_nothing() {
+  audit_saw_both || return 1
+  local bad
+  bad=$(audit 'select(actor == "scan" and write) | show') || return 1
+  [ -z "$bad" ] || { echo "upgradescope scan wrote to the cluster:" >&2; echo "$bad" | sed 's/^/  /' >&2; return 1; }
+}
+
 gate "kind cluster on Kubernetes $MINOR" create_cluster
 gate "build bin/upgradescope" make build
 # A reused cluster (a local re-run) already has the demo add-on, the CRD and
@@ -277,4 +410,17 @@ gate "ClusterReadiness has a score and a blocked verdict for $NEXT" cr_has_verdi
 gate "server ingested the agent's snapshot" server_ingested
 gate "helm upgrade --set agent.targets={$NEXT}" upgrade_with_targets
 gate "helm uninstall leaves no ClusterRole/ClusterRoleBinding or release object; CRD kept" uninstall_leaves_nothing
+audit_checks=(
+  "audit: scan and the agent made no deprecated-API request outside the allowlist|audit_no_deprecated_requests"
+  "audit: the agent wrote only ClusterReadiness/$CR (+ status) and the $CRD CRD|audit_agent_writes_only_its_cr"
+  "audit: Secrets were read only through Helm's owner=helm list and release GETs|audit_secrets_helm_only"
+  "audit: scan wrote nothing|audit_scan_writes_nothing"
+)
+for c in "${audit_checks[@]}"; do
+  if [ -n "$reused" ]; then
+    skip "${c%|*}" "cluster reused, its audit log is not this run's; make demo-down first"
+  else
+    gate "${c%|*}" "${c#*|}"
+  fi
+done
 echo "e2e $MINOR: OK"

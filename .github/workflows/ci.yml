@@ -593,9 +593,14 @@ jobs:
   # kind e2e per minor (make e2e, hack/e2e.sh): pinned node image, kind and
   # kubectl pinned and sha256-verified, the zero-false-blocker regression,
   # scan + agent ITs, the chart from this tree's image, ClusterReadiness
-  # verdict, server ingest, agent.targets upgrade, clean uninstall. Checks
-  # that guard a fix not on main yet are best-effort and reported PASS/FAIL
-  # in the job summary rather than silently ignored.
+  # verdict, server ingest, agent.targets upgrade, clean uninstall, then the
+  # API server's audit log of the whole run (hack/e2e/audit-policy.yaml):
+  # scan and the agent make no deprecated-API request outside
+  # hack/e2e/deprecated-request-allowlist.txt, the agent writes only its
+  # ClusterReadiness (+ CRD), Secrets are read only through Helm's selector,
+  # and scan writes nothing (#99). Checks that guard a fix not on main yet
+  # are best-effort and reported PASS/FAIL in the job summary rather than
+  # silently ignored.
   kube:
     name: kube (kind e2e, Kubernetes ${{ matrix.minor }})
     needs: [changes, kube-matrix]

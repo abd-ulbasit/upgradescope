@@ -1,0 +1,37 @@
+# kind cluster config for the e2e (hack/e2e.sh renders it into its work dir:
+# __AUDIT_POLICY__ becomes the absolute path of hack/e2e/audit-policy.yaml).
+#
+# The API server writes an audit log (Metadata level) inside the node, at
+# /var/log/kubernetes/upgradescope-e2e/; the e2e reads it with `docker exec`
+# (the file is root-owned) for its audit gates.
+#
+# The patch is unversioned with map-style extraArgs: kind (v0.32+) converts
+# it for kubeadm v1beta4, which it uses from Kubernetes 1.36, and applies it
+# as is to v1beta3 below that.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            audit-policy-file: /etc/kubernetes/upgradescope-e2e/audit-policy.yaml
+            audit-log-path: /var/log/kubernetes/upgradescope-e2e/audit.log
+            audit-log-maxsize: "1024"
+          extraVolumes:
+            - name: upgradescope-e2e-audit-policy
+              hostPath: /etc/kubernetes/upgradescope-e2e
+              mountPath: /etc/kubernetes/upgradescope-e2e
+              readOnly: true
+              pathType: DirectoryOrCreate
+            - name: upgradescope-e2e-audit-log
+              hostPath: /var/log/kubernetes/upgradescope-e2e
+              mountPath: /var/log/kubernetes/upgradescope-e2e
+              readOnly: false
+              pathType: DirectoryOrCreate
+    extraMounts:
+      - hostPath: __AUDIT_POLICY__
+        containerPath: /etc/kubernetes/upgradescope-e2e/audit-policy.yaml
+        readOnly: true

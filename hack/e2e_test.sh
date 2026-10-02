@@ -19,7 +19,12 @@ stub() {
   chmod +x "$stubs/$1"
 }
 
-stub kind 'case "$1" in get) [ -z "${STUB_KIND_EXISTS:-}" ] || echo upgradescope-demo; exit 0 ;; esac; exit 0'
+stub kind '
+case "$1" in
+  get) [ -z "${STUB_KIND_EXISTS:-}" ] || echo upgradescope-demo; exit 0 ;;
+  create) for a; do [ "$p" = --config ] && cp "$a" "$STUB_KIND_CONFIG"; p=$a; done ;;
+esac
+exit 0'
 stub kubectl '
 case "$*" in
   *"get --raw /version"*) echo "{\"major\":\"1\",\"minor\":\"${STUB_SERVER_MINOR:-31}+\"}" ;;
@@ -36,7 +41,13 @@ case "$*" in
   *"agent.targets="*) [ -z "${STUB_TARGETS_FAIL:-}" ] || { echo "Error: ClusterReadiness \"cluster\" exists and cannot be imported" >&2; exit 1; } ;;
 esac
 exit 0'
-stub docker 'case "$1" in version) echo linux/amd64 ;; save) for a; do [ "$p" = -o ] && : >"$a"; p=$a; done ;; esac; exit 0'
+stub docker '
+case "$1" in
+  version) echo linux/amd64 ;;
+  save) for a; do [ "$p" = -o ] && : >"$a"; p=$a; done ;;
+  exec) cat "$STUB_AUDIT" ;;
+esac
+exit 0'
 stub go '
 case "$1" in
   test)
@@ -62,6 +73,47 @@ else
 fi'
 stub install-tool 'echo "'"$stubs"'/$1"'
 
+# The API server's audit log (one JSON event per line, Metadata level) as
+# the e2e reads it with docker exec. ev <user> <userAgent> <verb> <apiGroup>
+# <apiVersion> <resource> <name> <requestURI> [deprecated] [subresource].
+SCAN_UA="upgradescope/v0.0.0 (linux/amd64) kubernetes/\$Format"
+AGENT=system:serviceaccount:upgradescope:upgradescope
+ev() {
+  jq -nc --arg user "$1" --arg ua "$2" --arg verb "$3" --arg group "$4" --arg version "$5" \
+    --arg resource "$6" --arg name "$7" --arg uri "$8" --arg dep "${9:-}" --arg sub "${10:-}" '{
+      kind: "Event", apiVersion: "audit.k8s.io/v1", level: "Metadata", stage: "ResponseComplete",
+      verb: $verb, requestURI: $uri, user: {username: $user}, userAgent: $ua,
+      objectRef: ({resource: $resource, apiVersion: $version}
+        + (if $group == "" then {} else {apiGroup: $group} end)
+        + (if $name == "" then {} else {name: $name} end)
+        + (if $sub == "" then {} else {subresource: $sub} end)),
+      responseStatus: {code: 200},
+      annotations: (if $dep == "" then {} else {"k8s.io/deprecated": "true"} end)}'
+}
+{
+  ev kubernetes-admin "$SCAN_UA" list flowcontrol.apiserver.k8s.io v1 flowschemas "" "/apis/flowcontrol.apiserver.k8s.io/v1/flowschemas?limit=500"
+  ev kubernetes-admin "$SCAN_UA" list "" v1 componentstatuses "" "/api/v1/componentstatuses?limit=500" deprecated
+  ev kubernetes-admin "$SCAN_UA" list "" v1 secrets "" "/api/v1/secrets?labelSelector=owner%3Dhelm&limit=500"
+  ev kubernetes-admin "$SCAN_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
+  ev "$AGENT" "$SCAN_UA" list "" v1 endpoints "" "/api/v1/endpoints?limit=500" deprecated
+  ev "$AGENT" "$SCAN_UA" list "" v1 secrets "" "/api/v1/secrets?labelSelector=owner%3Dhelm&limit=500"
+  ev "$AGENT" "$SCAN_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
+  ev "$AGENT" "$SCAN_UA" patch apiextensions.k8s.io v1 customresourcedefinitions clusterreadinesses.upgradescope.dev "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterreadinesses.upgradescope.dev?fieldManager=upgradescope-agent"
+  ev "$AGENT" "$SCAN_UA" create upgradescope.dev v1alpha1 clusterreadinesses cluster "/apis/upgradescope.dev/v1alpha1/clusterreadinesses"
+  ev "$AGENT" "$SCAN_UA" update upgradescope.dev v1alpha1 clusterreadinesses cluster "/apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster/status" "" status
+  # Not upgradescope: kubectl through a deprecated API, the in-process ITs
+  # writing their own CRD and CR, a controller writing a Secret.
+  ev kubernetes-admin "kubectl/v1.37.1 (linux/amd64) kubernetes/abc" patch flowcontrol.apiserver.k8s.io v1beta3 flowschemas e2e "/apis/flowcontrol.apiserver.k8s.io/v1beta3/flowschemas/e2e" deprecated
+  ev kubernetes-admin "cli.test/v0.0.0 (linux/amd64) kubernetes/\$Format" create upgradescope.dev v1alpha1 clusterreadinesses it-agent "/apis/upgradescope.dev/v1alpha1/clusterreadinesses"
+  ev system:serviceaccount:kube-system:token-cleaner kube-controller-manager update "" v1 secrets bootstrap-token-abcdef "/api/v1/namespaces/kube-system/secrets/bootstrap-token-abcdef"
+} >"$work/audit.jsonl"
+# audit_with <name> <event...>: the good log plus these events, in $work/<name>.
+audit_with() {
+  local f="$work/$1"
+  shift
+  { cat "$work/audit.jsonl"; for e in "$@"; do echo "$e"; done; } >"$f"
+}
+
 : >"$work/results"
 # run <name> <want-exit> [env...]: run e2e.sh against the stubs; the log and
 # summary of the last run stay in $work for the assertions that follow.
@@ -72,6 +124,7 @@ run() {
   : >"$work/summary"
   env PATH="$stubs:$PATH" KUBECONFIG="$work/no-kubeconfig" STUB_LOG="$work/log" \
     GITHUB_STEP_SUMMARY="$work/summary" E2E_MINOR=1.31 E2E_NAP=0 \
+    STUB_AUDIT="$work/audit.jsonl" STUB_KIND_CONFIG="$work/kind-config.yaml" \
     E2E_INSTALL_TOOL="$stubs/install-tool" E2E_UPGRADESCOPE="$stubs/upgradescope" \
     "$@" hack/e2e.sh >"$work/out" 2>&1 || got=$?
   if [ "$got" = "$want" ]; then
@@ -99,6 +152,13 @@ has "regression passes on a clean scan" "$work/summary" "- PASS — vanilla 1.31
 has "uninstall check gates and passes" "$work/summary" "- PASS — helm uninstall leaves no ClusterRole/ClusterRoleBinding"
 has "the cluster is created on the pinned image" "$work/log" "kind create cluster --name upgradescope-demo --image kindest/node:v1.31.14@sha256:"
 has "the agent-targets upgrade uses --set-string" "$work/log" "--set-string agent.targets={1.32}"
+has "the cluster is created from the e2e kind config" "$work/log" "--config "
+has "the kind config mounts the audit policy by absolute path" "$work/kind-config.yaml" "- hostPath: $PWD/hack/e2e/audit-policy.yaml"
+has "the deprecated-request audit gate passes" "$work/summary" "- PASS — audit: scan and the agent made no deprecated-API request outside the allowlist"
+has "the agent write-set audit gate passes" "$work/summary" "- PASS — audit: the agent wrote only ClusterReadiness/cluster (+ status) and the clusterreadinesses.upgradescope.dev CRD"
+has "the Secrets audit gate passes" "$work/summary" "- PASS — audit: Secrets were read only through Helm's owner=helm list and release GETs"
+has "the scan-writes audit gate passes" "$work/summary" "- PASS — audit: scan wrote nothing"
+has "allowlisted requests are listed" "$work/out" "  v1 componentstatuses (scan)"
 # Every kubectl call names the kind context (kind-setup.sh's use-context is
 # the one documented exception), and so does every helm call on the release.
 if grep '^kubectl ' "$work/log" | grep -v '^kubectl config use-context kind-upgradescope-demo$' |
@@ -125,6 +185,13 @@ run "a reused cluster still runs the gates" 0 STUB_KIND_EXISTS=1 STUB_REMOVED=1
 has "the reused cluster is not recreated" "$work/out" "kind cluster 'upgradescope-demo' already exists, reusing it"
 has "the #3 check is a SKIP in the summary, not a PASS" "$work/summary" "- SKIP — vanilla 1.31 cluster scanned at 1.32 has zero removed-api blockers (cluster reused, not vanilla; make demo-down first)"
 has "the skip is a warning" "$work/out" "::warning title=kind e2e 1.31: check skipped::"
+has "the audit gates are a SKIP on a reused cluster" "$work/summary" "- SKIP — audit: scan wrote nothing (cluster reused, its audit log is not this run's"
+if grep -q '^docker exec' "$work/log"; then
+  echo "FAIL a reused cluster's audit log was still read" >&2
+  echo "FAIL reused cluster audited" >>"$work/results"
+else
+  echo "ok   a reused cluster's audit log is not read" | tee -a "$work/results"
+fi
 if grep -q '^upgradescope scan' "$work/log"; then
   echo "FAIL a reused cluster was still scanned as vanilla" >&2
   echo "FAIL reused cluster scanned" >>"$work/results"
@@ -144,6 +211,51 @@ has "the uninstall gate is a FAIL in the summary" "$work/summary" "- **FAIL** �
 run "a skipped integration test fails the run" 1 STUB_IT_SKIP=1
 has "the skipped IT is named" "$work/out" "TestScanIntegration_KindEOLIngressNginx did not PASS"
 has "the IT gate is a FAIL in the summary" "$work/summary" "- **FAIL** — scan + agent integration tests"
+
+# The audit gates, each against a log with one offending event added.
+audit_with dep.jsonl "$(ev kubernetes-admin "$SCAN_UA" list coordination.k8s.io v1beta1 leasecandidates "" "/apis/coordination.k8s.io/v1beta1/leasecandidates?limit=500" deprecated)"
+run "a deprecated-API request from scan outside the allowlist fails the run" 1 STUB_AUDIT="$work/dep.jsonl"
+has "the request is named" "$work/out" "coordination.k8s.io/v1beta1 leasecandidates scan list"
+has "the deprecated-request gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: scan and the agent made no deprecated-API request"
+
+printf '# nothing allowed\n' >"$work/empty-allowlist.txt"
+run "an emptied allowlist makes today's self-requests fail" 1 E2E_DEPRECATED_ALLOWLIST="$work/empty-allowlist.txt"
+has "the agent's endpoints LIST is named" "$work/out" "v1 endpoints agent list"
+
+printf 'v1 componentstatuses no issue number here\n' >"$work/bad-allowlist.txt"
+run "a malformed allowlist line fails before anything runs" 1 E2E_DEPRECATED_ALLOWLIST="$work/bad-allowlist.txt"
+has "the bad line is quoted" "$work/out" "is not '<apiVersion> <resource> #<issue> <reason>'"
+
+audit_with cm.jsonl "$(ev "$AGENT" "$SCAN_UA" patch "" v1 configmaps kube-root-ca.crt "/api/v1/namespaces/default/configmaps/kube-root-ca.crt")"
+run "an agent write outside its CR fails the run" 1 STUB_AUDIT="$work/cm.jsonl"
+has "the write is named" "$work/out" "agent patch /api/v1/namespaces/default/configmaps/kube-root-ca.crt"
+has "the write-set gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: the agent wrote only ClusterReadiness/cluster"
+
+audit_with othercr.jsonl "$(ev "$AGENT" "$SCAN_UA" update upgradescope.dev v1alpha1 clusterreadinesses someone-elses "/apis/upgradescope.dev/v1alpha1/clusterreadinesses/someone-elses/status" "" status)"
+run "an agent write to another ClusterReadiness fails the run" 1 STUB_AUDIT="$work/othercr.jsonl"
+has "the other CR is named" "$work/out" "clusterreadinesses/someone-elses/status"
+
+audit_with secret.jsonl "$(ev "$AGENT" "$SCAN_UA" get "" v1 secrets db-password "/api/v1/namespaces/default/secrets/db-password")"
+run "an agent GET of a non-Helm Secret fails the run" 1 STUB_AUDIT="$work/secret.jsonl"
+has "the Secret is named" "$work/out" "agent get /api/v1/namespaces/default/secrets/db-password"
+has "the Secrets gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: Secrets were read only through Helm's"
+
+audit_with list.jsonl "$(ev kubernetes-admin "$SCAN_UA" list "" v1 secrets "" "/api/v1/secrets?limit=500")"
+run "a Secret list without Helm's selector fails the run" 1 STUB_AUDIT="$work/list.jsonl"
+has "the unselected list is named" "$work/out" "scan list /api/v1/secrets?limit=500"
+
+audit_with write.jsonl "$(ev kubernetes-admin "$SCAN_UA" create "" v1 events "" "/api/v1/namespaces/default/events")"
+run "a write by scan fails the run" 1 STUB_AUDIT="$work/write.jsonl"
+has "the scan write is named" "$work/out" "scan create /api/v1/namespaces/default/events"
+has "the scan-writes gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: scan wrote nothing"
+
+grep -v "$AGENT" "$work/audit.jsonl" >"$work/noagent.jsonl"
+run "a log without the agent's requests fails the run, not passes vacuously" 1 STUB_AUDIT="$work/noagent.jsonl"
+has "the missing actor is named" "$work/out" "no request from agent in the audit log"
+
+: >"$work/empty.jsonl"
+run "an empty audit log fails the run" 1 STUB_AUDIT="$work/empty.jsonl"
+has "the empty log is explained" "$work/out" "audit log is empty"
 
 run "a cluster on the wrong minor fails the run" 1 STUB_SERVER_MINOR=30
 has "the version mismatch is explained" "$work/out" "cluster runs Kubernetes 1.30, want 1.31"

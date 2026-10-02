@@ -1,0 +1,11 @@
+# Deprecated-API requests `upgradescope scan` and the agent may still make,
+# read by hack/e2e.sh's audit gate: any audit event from either with the
+# apiserver's k8s.io/deprecated=true annotation must match a line here.
+# One per line, each with the issue that removes it and why it is here:
+#
+#   <apiVersion> <resource> #<issue> <reason>
+#
+# Delete a line when its issue lands; the gate then fails if the request
+# comes back.
+v1 componentstatuses #123 api-usage LISTs ComponentStatus at v1, its only version (deprecated since 1.19, no replacement), to count the objects
+v1 endpoints #123 api-usage LISTs Endpoints at v1, deprecated since 1.33: its replacement EndpointSlice is another resource, so no other version lists them
