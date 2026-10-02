@@ -91,12 +91,19 @@ type simpleKey struct {
 // flowItem is the counting state of one open flow collection's current
 // entry.
 type flowItem struct {
-	seq                    bool
-	started                bool // the entry has content (seq: counted in entries)
-	explicitKey            bool // it began with '?'
-	keyFilled, sawValue    bool
-	valueFilled, pairCount bool
+	seq         bool
+	started     bool // the entry has content (seq: counted in entries)
+	explicitKey bool // it began with '?'
+	keyFilled   bool // a node before its ':' (or after its '?')
+	sawValue    bool // its ':'
+	valueFilled bool // a node after its ':'
 }
+
+// maxYAMLDepth is how deep yaml.v3 and go-yaml v2 nest flow collections,
+// and block indentation levels, before they fail with "exceeded max
+// depth"; past it nothing more of the document is decoded, and the
+// scanner's own stacks stay bounded.
+const maxYAMLDepth = 10000
 
 // yamlScanner mirrors yaml.v3's scanner (scannerc.go) closely enough to see
 // the same tokens, and counts nodes. In the block context the parser fills
@@ -235,6 +242,10 @@ func (s *yamlScanner) token() {
 	case c == '[' || c == '{':
 		s.saveKey()
 		s.node()
+		if s.flowLevel == maxYAMLDepth {
+			s.pos = s.end // yaml.v3 and go-yaml v2 stop here: "exceeded max depth"
+			return
+		}
 		s.flowLevel++
 		s.keys = append(s.keys, simpleKey{})
 		s.flows = append(s.flows, flowItem{seq: c == '['})
@@ -342,6 +353,10 @@ func isIndicatorByte(c byte) bool {
 // did.
 func (s *yamlScanner) roll(col int, fill bool) bool {
 	if s.flowLevel > 0 || s.indent >= col {
+		return false
+	}
+	if len(s.indents) == maxYAMLDepth {
+		s.pos = s.end // yaml.v3 and go-yaml v2 stop here: "exceeded max depth"
 		return false
 	}
 	s.indents = append(s.indents, s.indent)

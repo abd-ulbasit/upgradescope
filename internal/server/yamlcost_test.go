@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -177,6 +178,22 @@ func TestMeasureYAMLNeverUndercounts(t *testing.T) {
 	}
 }
 
+// yaml.v3 and go-yaml v2 stop at 10,000 levels of nesting, and so does the
+// meter: a megabyte of `[` neither grows its stacks without bound nor
+// counts what neither decoder builds, and up to the limit it counts all.
+func TestMeasureYAMLDepthLimit(t *testing.T) {
+	deep := strings.Repeat("[", maxYAMLDepth) + strings.Repeat("]", maxYAMLDepth) + "\n"
+	checkNoUndercount(t, "10000 nested flow sequences", []byte(deep))
+	var block strings.Builder
+	for i := range 3000 {
+		fmt.Fprintf(&block, "%sk:\n", strings.Repeat(" ", i))
+	}
+	checkNoUndercount(t, "3000 nested block mappings", []byte(block.String()))
+	if c := measureYAML([]byte(strings.Repeat("[", 1<<20))); c.nodes > maxYAMLDepth+2 {
+		t.Fatalf("1 MiB of [ counted %d nodes, want at most the %d levels decoders accept", c.nodes, maxYAMLDepth)
+	}
+}
+
 // Over-counting refuses legitimate manifests early. On realistic ones the
 // count is what yaml.v3 builds.
 func TestMeasureYAMLIsExactOnRealisticManifests(t *testing.T) {
@@ -190,6 +207,19 @@ func TestMeasureYAMLIsExactOnRealisticManifests(t *testing.T) {
 				t.Fatalf("measured %+v, yaml.v3 builds %+v\n%.200s", got, want, d)
 			}
 		}
+	}
+}
+
+// The check runs before every /gate decode, over up to 10 MiB in chunks.
+func BenchmarkCheckManifestStream(b *testing.B) {
+	doc := []byte(deploymentList(3000))
+	var body bufferedBody
+	for p := doc; len(p) > 0; p = p[min(len(p), maxBodyChunk):] {
+		body = append(body, p[:min(len(p), maxBodyChunk)])
+	}
+	b.SetBytes(int64(len(doc)))
+	for b.Loop() {
+		checkManifestStream(body)
 	}
 }
 
