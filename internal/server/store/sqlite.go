@@ -182,7 +182,7 @@ func (s *SQLite) RenameCluster(ctx context.Context, name, newName string) error 
 		return fmt.Errorf("rename cluster %q: %w", name, err)
 	}
 	var taken int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clusters WHERE name = ?`, newName).Scan(&taken); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clusters WHERE name = ? AND id <> ?`, newName, id).Scan(&taken); err != nil {
 		return fmt.Errorf("rename cluster %q: %w", name, err)
 	}
 	if taken > 0 {

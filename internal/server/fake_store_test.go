@@ -125,11 +125,13 @@ func (f *fakeStore) RenameCluster(_ context.Context, name, newName string) error
 	}
 	found := int64(0)
 	for id, c := range f.clusters {
-		if c.Name == newName {
-			return store.ErrClusterNameTaken
-		}
 		if c.Name == name {
 			found = id
+		}
+	}
+	for id, c := range f.clusters {
+		if c.Name == newName && id != found && found != 0 {
+			return store.ErrClusterNameTaken
 		}
 	}
 	if found == 0 {

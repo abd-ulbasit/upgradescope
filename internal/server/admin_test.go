@@ -133,6 +133,10 @@ func TestClusterRenameAPI(t *testing.T) {
 	if st.clusters[1].Name != "prod-eu-west-1" {
 		t.Errorf("stored name = %q", st.clusters[1].Name)
 	}
+	// Its own name again is a no-op, not a conflict with itself.
+	if code, out := adminRequest(t, ts, http.MethodPatch, "/api/v1/clusters/1", "admin-tok", `{"name":"prod-eu-west-1"}`); code != http.StatusOK {
+		t.Errorf("PATCH to its own name = %d %v, want 200", code, out)
+	}
 }
 
 // TestReadAPIAcceptsAdminToken: the admin token is a superset of the read

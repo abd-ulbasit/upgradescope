@@ -65,6 +65,17 @@ func testRenameCluster(t *testing.T, s store.Store) {
 	if got, _ := s.GetCluster(ctx, cid); got.Name != "prod-eu" {
 		t.Errorf("refused rename changed the name to %q", got.Name)
 	}
+	// Renaming a cluster onto its own name is a no-op in every store, not
+	// a conflict with itself.
+	if err := s.RenameCluster(ctx, "prod-eu", "prod-eu"); err != nil {
+		t.Errorf("rename onto its own name: err = %v, want nil", err)
+	}
+	if got, _ := s.GetCluster(ctx, cid); got.Name != "prod-eu" {
+		t.Errorf("no-op rename changed the name to %q", got.Name)
+	}
+	if err := s.RenameCluster(ctx, "nope", "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("no-op rename of an unknown name: err = %v, want ErrNotFound", err)
+	}
 	if err := s.RenameCluster(ctx, "nope", "x"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("rename unknown: err = %v, want ErrNotFound", err)
 	}

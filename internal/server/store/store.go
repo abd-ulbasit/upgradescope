@@ -61,7 +61,8 @@ type Store interface {
 	DeleteCluster(ctx context.Context, name string) error
 	// RenameCluster renames a cluster; its history and its ingest tokens
 	// move with it. ErrNotFound when name is unknown, ErrClusterNameTaken
-	// when newName is registered already.
+	// when newName is registered to another cluster. Renaming a cluster to
+	// its own name is a no-op.
 	RenameCluster(ctx context.Context, name, newName string) error
 	// Prune is retention: it deletes evaluations created before cutoff and
 	// then snapshots received before it that no evaluation refers to any
