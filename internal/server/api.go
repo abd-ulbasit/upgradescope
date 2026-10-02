@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -433,7 +434,7 @@ func (m *manifestShape) checkAliases() (status int, msg string) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_ = encodeJSON(w, v)
 }
 
 func errJSON(w http.ResponseWriter, status int, msg string) {
@@ -630,6 +631,12 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// raw (a copy, or the body's only chunk) is the slot's to hold now: one
 	// ingest at a time, so giving the budget back here still bounds it.
 	release()
+	// encoding/json would decode each invalid byte to U+FFFD, three bytes
+	// in every report that names it; JSON is UTF-8, and agents write it.
+	if !utf8.Valid(raw) {
+		errJSON(w, http.StatusUnprocessableEntity, "invalid JSON: the body is not valid UTF-8")
+		return
+	}
 	var req pushRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid JSON: "+err.Error())

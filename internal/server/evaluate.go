@@ -111,7 +111,7 @@ func verdictOf(e store.Evaluation) engine.Verdict {
 // evaluation runs the engine for one target and builds the row to store.
 func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, target inventory.Version, now time.Time) (store.Evaluation, engine.Report, error) {
 	rep := engine.Evaluate(inv, s.cfg.KB, target, now)
-	repJSON, err := json.Marshal(rep)
+	repJSON, err := marshalJSON(rep)
 	if err != nil {
 		return store.Evaluation{}, engine.Report{}, fmt.Errorf("marshaling report (cluster %d, target %s): %w", cluster.ID, target, err)
 	}
