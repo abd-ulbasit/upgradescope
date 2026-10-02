@@ -321,18 +321,19 @@ server:
     readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
-  # -- Sets GOMEMLIMIT as agent.resources does. 512Mi holds one /gate decode,
-  # one snapshot ingest, one cluster read and the re-evaluation pass at their
-  # worst (~155 MB, ~80 MB, ~50 MiB and ~60 MiB of heap) plus the buffered
-  # /gate and snapshot bodies (30 and 40 MiB), ~425 MB; snapshots a v0.1
-  # server stored are outside it: see docs/operations.md.
+  # -- Sets GOMEMLIMIT as agent.resources does (576MiB for 640Mi). 640Mi
+  # holds one /gate decode, one snapshot ingest, one cluster read and the
+  # re-evaluation pass at their worst, measured on SQLite (~155, ~115, ~90
+  # and ~85 MiB of heap), plus the buffered /gate and snapshot bodies (30
+  # and 40 MiB): ~515 MiB. Responses being sent and snapshots a v0.1 server
+  # stored are outside it: see docs/operations.md.
   resources:
     requests:
       cpu: 100m
       memory: 128Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 640Mi
 
 networkPolicy:
   # -- Render a NetworkPolicy that admits traffic to the server only from this
