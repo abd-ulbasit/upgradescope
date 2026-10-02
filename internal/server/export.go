@@ -100,18 +100,37 @@ func exportFilename(cluster, target, ext string) string {
 }
 
 // csvSafe guards against spreadsheet formula injection: cluster names,
-// namespaces, and team labels are attacker-influenceable, and a cell
-// starting with = + - @ (or a tab/CR remnant) executes as a formula when
-// the CSV is opened in Excel/Sheets. Prefixing with ' forces text.
+// namespaces, team labels and field-manager names are
+// attacker-influenceable, and a cell starting with = + - @ (or a tab or
+// CR, or a full-width ＝＋－＠) executes as a formula when the CSV is
+// opened in Excel, Sheets or LibreOffice. A cell can start anywhere a
+// spreadsheet may split the field again, not only at its first byte: an
+// import with ; as the separator (Excel's default in many locales) turned
+// the manager `x;=1+1;` in a finding's detail into the cell `=1+1`. So
+// every such place — the start, and after each , ; tab CR or newline, past
+// any spaces — gets a ' in front of a trigger, which makes the spreadsheet
+// read text.
 func csvSafe(s string) string {
-	if s == "" {
+	if !strings.ContainsAny(s, "=+-@\t\r＝＋－＠") {
 		return s
 	}
-	switch s[0] {
-	case '=', '+', '-', '@', '\t', '\r':
-		return "'" + s
+	var b strings.Builder
+	cellStart := true
+	for _, r := range s {
+		if cellStart && r != ' ' {
+			switch r {
+			case '=', '+', '-', '@', '\t', '\r', '＝', '＋', '－', '＠':
+				b.WriteByte('\'')
+			}
+			cellStart = false
+		}
+		b.WriteRune(r)
+		switch r {
+		case ',', ';', '\t', '\r', '\n':
+			cellStart = true
+		}
 	}
-	return s
+	return b.String()
 }
 
 // CSV row types beyond the finding severities (blocker, warning, info), in

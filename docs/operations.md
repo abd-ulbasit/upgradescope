@@ -270,5 +270,8 @@ verdict and score. The `severity` column types the rows:
   (`key` is the capability, `detail` the reason). A required one makes the
   verdict `unknown`, never `ready`.
 
-Teams, namespaces and citations are `;`-joined. Cells that a spreadsheet
-would run as a formula are prefixed with `'`.
+Teams, namespaces and citations are `;`-joined. A spreadsheet may split
+a field again on `,`, `;`, tab or a line break (Excel imports with `;` in
+many locales), so wherever a cell could start, at a field's start or
+after any of those, a formula trigger (`=`, `+`, `-`, `@`, tab, CR, or
+their full-width forms) gets a `'` in front of it and is read as text.
