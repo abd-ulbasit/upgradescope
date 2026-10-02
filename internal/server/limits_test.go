@@ -388,8 +388,8 @@ const maxGateDecodeHeap = 200 << 20
 // decoded within maxGateDecodeHeap, and gives its body budget back either
 // way. Within the node budget everything is decoded.
 func TestGateDecodeHeapIsBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("decodes several 4 MiB documents; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("decodes several 4 MiB documents; make test-heap runs it, without the race detector")
 	}
 	// The chart runs the server with GOMEMLIMIT, under which the collector
 	// holds the heap near its live size as it nears the limit. A low GOGC
@@ -463,8 +463,8 @@ func checkGateHeap(t *testing.T, body string, decode bool) {
 // evaluated, and the heap stays within one decode plus the bodies (#121:
 // measured before the slot, these 13 took ~1.2 GiB).
 func TestGateAliasCheckWaitsForTheSlot(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("decodes a dozen 2 MiB documents; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("decodes a dozen 2 MiB documents; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	body := atNodeBudget(gateHeapShapes()["many keys and an alias"])
@@ -502,8 +502,8 @@ func TestGateAliasCheckWaitsForTheSlot(t *testing.T) {
 // node budget against the dearest snapshot at the snapshot budget still
 // stays within maxGateDecodeHeap.
 func TestGateClusterContextHeapIsBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("decodes a 2 MiB manifest and a 6 MiB snapshot; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("decodes a 2 MiB manifest and a 6 MiB snapshot; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	s := newTestServer(t, newFakeStore())

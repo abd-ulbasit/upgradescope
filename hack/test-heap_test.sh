@@ -35,5 +35,14 @@ else
   echo "ok   lists only '<dir> <TestName>' lines"
   pass=$((pass + 1))
 fi
+# The server's heap tests skip unless UPGRADESCOPE_HEAP=1 (heapRun): the
+# script must set it, or it would fail every one of them as skipped.
+if grep -qx 'export UPGRADESCOPE_HEAP=1' hack/test-heap.sh; then
+  echo "ok   sets UPGRADESCOPE_HEAP=1"
+  pass=$((pass + 1))
+else
+  echo "FAIL does not set UPGRADESCOPE_HEAP=1" >&2
+  fail=$((fail + 1))
+fi
 echo "test-heap_test: $pass passed, $fail failed"
 [ "$fail" = 0 ]

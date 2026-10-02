@@ -66,8 +66,8 @@ func liveHeap() uint64 {
 // pushedLargestReport), the live heap grows by no more than that budget,
 // and it is given back once the clients are gone.
 func TestUnreadResponsesAreBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("stores a snapshot at the node budget; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("stores a snapshot at the node budget; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	s := pushedLargestReport(t)
@@ -87,8 +87,8 @@ func TestUnreadResponsesAreBounded(t *testing.T) {
 // against a cluster with 100 objects of each of the KB's deprecated or
 // removed GVKs, with long names.
 func TestUnreadGateResponsesAreBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("stores a snapshot with 13,600 object refs; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("stores a snapshot with 13,600 object refs; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	k, err := kb.Load()

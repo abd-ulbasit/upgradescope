@@ -12,8 +12,13 @@
 # heap test that skips under -race is picked up without editing this
 # script, and one cannot be cited yet silently never run.
 #
+# The server's heap tests take about ten minutes, past go test's default
+# timeout, so they also skip unless UPGRADESCOPE_HEAP=1, which this sets:
+# a plain `go test ./...` passes without them.
+#
 # --list prints "<package dir> <TestName>" per test and runs nothing.
 set -euo pipefail
+export UPGRADESCOPE_HEAP=1
 cd "$(dirname "$0")/.."
 
 # "<dir> <TestName>" for each test function that mentions raceEnabled.

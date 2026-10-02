@@ -63,8 +63,8 @@ const maxReadHeap = 160 << 20
 // report limit, with strings an export lengthens), stay within
 // maxReadHeap and all succeed, an export over the report limit with 413.
 func TestReadHeapIsBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("decodes snapshots at the node budget; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("decodes snapshots at the node budget; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	paths := []string{

@@ -176,8 +176,8 @@ func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {
 // collector writes it (422) or its report would be over the report
 // limit (413, afterDecode), and the body budget is given back either way.
 func TestIngestDecodeHeapIsBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("decodes several 20 MiB snapshots; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("decodes several 20 MiB snapshots; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // live heap, as under GOMEMLIMIT (see TestGateDecodeHeapIsBounded)
 	for name, shape := range ingestHeapShapes() {

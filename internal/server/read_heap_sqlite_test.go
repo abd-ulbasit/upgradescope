@@ -106,8 +106,8 @@ func storedHeapShapes() map[string]func(int) string {
 // (answered, or 413 when the answer would be over the answer limit).
 // docs/operations.md adds these up for the chart's memory limit.
 func TestStoredSnapshotHeapIsBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("stores snapshots at the node budget; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("stores snapshots at the node budget; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	gate := atNodeBudget(gateHeapShapes()["many keys and an alias"])
@@ -164,8 +164,8 @@ const maxFleetReadHeap = 16 << 20
 // dashboard polls exceeded the chart's memory limit. They now read the
 // summary columns only: 0-2 MiB for 30 at once.
 func TestFleetReadsLoadNoReport(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("stores a snapshot at the node budget; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("stores a snapshot at the node budget; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	for name, shape := range storedHeapShapes() {

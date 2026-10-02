@@ -77,8 +77,8 @@ func pushedFleet(t *testing.T, n, nameLen int) *Server {
 // own, written to memory and held under the budget the per-cluster reads
 // and /gate share, so clients that never read hold at most that budget.
 func TestUnreadFleetResponsesAreBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("seeds a 2000-cluster fleet; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("seeds a 2000-cluster fleet; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	s := pushedFleet(t, unreadFleetSize, unreadFleetNameLen)

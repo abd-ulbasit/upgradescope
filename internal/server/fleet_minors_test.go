@@ -26,8 +26,8 @@ const fleetMinors = 500
 // answered within maxFleetSlotHeap; the test logs the time, heap and
 // response that figure is measured from.
 func TestFleetDefaultColumnsAreMeasured(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("seeds 500 clusters; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("seeds 500 clusters; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	st, err := store.Open(filepath.Join(t.TempDir(), "upgradescope.db"))

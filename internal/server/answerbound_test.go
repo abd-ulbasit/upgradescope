@@ -225,8 +225,8 @@ func manyRefsStream(k kb.KB, per int, name string) string {
 // long as fit, in every format, plain and escape-heavy, with a path. Each
 // is answered within maxGateDecodeHeap, its answer within the limit.
 func TestGateAnswerHeapIsBounded(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("encodes answers of up to 10 MiB; heap figures under the race detector mean nothing")
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("encodes answers of up to 10 MiB; make test-heap runs it, without the race detector")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	k, err := kb.Load()
