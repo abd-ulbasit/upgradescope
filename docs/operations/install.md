@@ -32,7 +32,7 @@ VERSION=v0.2.0
 base=https://github.com/abd-ulbasit/upgradescope/releases/download/$VERSION
 curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz"
 curl -fsSLO "$base/checksums.txt"
-sha256sum --ignore-missing -c checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore-missing checksums.txt
 tar -xzf upgradescope_linux_amd64.tar.gz
 sudo install upgradescope /usr/local/bin/
 ```
@@ -49,7 +49,7 @@ curl -fsSLO "$base/checksums.txt.sigstore.json"
 cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
   --certificate-identity "https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/$VERSION" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-sha256sum --ignore-missing -c checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore-missing checksums.txt
 ```
 
 Each archive also has an SPDX SBOM (`<archive>.sbom.json`) and a GitHub

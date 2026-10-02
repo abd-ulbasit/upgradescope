@@ -37,7 +37,7 @@ every public claim, with the test that proves it: [claims ledger](docs/claims.md
 Verifying a download:
 
 ```sh
-sha256sum --ignore-missing -c checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore-missing checksums.txt
 cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
   --certificate-identity "https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/$VERSION" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
