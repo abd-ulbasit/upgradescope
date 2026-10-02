@@ -118,6 +118,7 @@ paths:
               schema: {type: string}
         "401":
           $ref: "#/components/responses/Error"
+        "503": {$ref: "#/components/responses/FleetBusy"}
 
   /api/v1/snapshots:
     post:
@@ -230,6 +231,7 @@ paths:
                 items: {$ref: "#/components/schemas/ClusterSummary"}
         "401": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/FleetBusy"}
 
   /api/v1/clusters/{id}:
     parameters:
@@ -466,6 +468,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/FleetBusy"}
 
   /api/v1/fleet/teams:
     get:
@@ -550,10 +553,11 @@ paths:
 
         The answer is built before it is sent, with its `Content-Length`.
         Answers waiting for their clients share a budget of twice
-        `--max-snapshot-bytes` with the per-cluster reads; an answer that
-        does not fit what is left of it is 503 with `Retry-After`, and one
-        larger than the whole budget is sent while the next request waits,
-        and cut off if the client has not taken it within 20s.
+        `--max-snapshot-bytes` with the per-cluster and fleet reads; an
+        answer that does not fit what is left of it is 503 with
+        `Retry-After`, and one larger than the whole budget is sent while
+        the next request waits, and cut off if the client has not taken it
+        within 20s.
       parameters:
         - name: target
           in: query
@@ -722,10 +726,27 @@ components:
         Reads that load a cluster's snapshot run one at a time, and this
         one waited more than 30s for its turn, or the responses waiting for
         their clients leave no room for this one (they share a budget of
-        twice `--max-snapshot-bytes` with `/gate`); retry after
+        twice `--max-snapshot-bytes` with the fleet reads and `/gate`);
+        retry after
         `Retry-After`. A response is sent with its `Content-Length`; one
         larger than that whole budget is sent while the next read waits,
         and cut off if the client has not taken it within 20s.
+      headers:
+        Retry-After: {$ref: "#/components/headers/RetryAfter"}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    FleetBusy:
+      description: |
+        Reads of the whole fleet (`/api/v1/clusters`, `/api/v1/fleet`,
+        `/metrics`) run two at a time, and this one waited more than 30s
+        for its turn, or the responses waiting for their clients leave no
+        room for this one (they share a budget of twice
+        `--max-snapshot-bytes` with the per-cluster reads and `/gate`);
+        retry after `Retry-After`. A response is sent with its
+        `Content-Length`; one larger than that whole budget is sent while
+        the next fleet read waits, and cut off if the client has not taken
+        it within 20s.
       headers:
         Retry-After: {$ref: "#/components/headers/RetryAfter"}
       content:

@@ -139,19 +139,30 @@ const (
 // response included). Unbounded, 10 such reads at once grew the heap
 // ~400 MiB, so these reads run one at a time, on the /gate model (a
 // normal one takes milliseconds): a read waits up to readQueueTimeout for
-// the slot, then gets 503 + Retry-After. Reads of the whole fleet
-// (/clusters, /fleet, /metrics) take no slot: they read each cluster's
-// snapshot head from one store query and each evaluation's summary
-// columns, so they load no inventory and no report. One read in the slot
-// costs up to ~90 MiB on SQLite at the snapshot node budget
-// (TestReadHeapIsBounded).
+// the slot, then gets 503 + Retry-After. One read in the slot costs up
+// to ~90 MiB on SQLite at the snapshot node budget (TestReadHeapIsBounded).
+//
+// Reads of the whole fleet (/clusters, /fleet, /metrics) load no inventory
+// and no report: they read each cluster's snapshot head from one store
+// query and each evaluation's summary columns, so one costs about its
+// response (TestFleetReadsLoadNoReport). They run up to
+// maxConcurrentFleetReads at a time in fleet slots of their own, apart
+// from the per-cluster reads (503 + Retry-After after readQueueTimeout),
+// and their responses are held like the per-cluster reads' (see
+// maxHeldResponses). Written straight to their clients, with nothing
+// capping how many, 100 clients that never read held 201 MiB (/clusters)
+// and 251 MiB (/fleet) of a 2000-cluster fleet's, and 30 held 433 MiB
+// of /metrics, whose handler keeps the gathered metric families until
+// its write returns (TestUnreadFleetResponsesAreBounded).
 const (
-	maxConcurrentReads = 1
-	readQueueTimeout   = 30 * time.Second
+	maxConcurrentReads      = 1
+	maxConcurrentFleetReads = 2
+	readQueueTimeout        = 30 * time.Second
 )
 
-// Responses held for their clients. A per-cluster read and /gate write
-// their response to memory in their slot (heldResponse), so what a
+// Responses held for their clients. Every read (per-cluster or of the
+// whole fleet) and /gate write their response to memory in their slot
+// (heldResponse), so what a
 // response is built from (a stored report, the gate's evaluations) is
 // garbage before the slot is released, and send gives the slot back
 // before a slow client reads a byte. Those held bytes are charged to one
@@ -191,7 +202,10 @@ type Server struct {
 	readSlots        chan struct{} // semaphore: one token per read that loads a snapshot
 	readQueueTimeout time.Duration // how long such a read waits for a slot
 
-	heldResponses    *byteBudget   // read and /gate response bytes held for clients after their slot
+	fleetSlots        chan struct{} // semaphore: one token per read of the whole fleet being built
+	fleetQueueTimeout time.Duration // how long such a read waits for a slot
+
+	heldResponses    *byteBudget   // read, fleet read and /gate response bytes held for clients after their slot
 	slotWriteTimeout time.Duration // how long a response sent in its slot may take
 
 	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
@@ -232,6 +246,8 @@ func New(cfg Config) (*Server, error) {
 	s.ingestBuffered = newByteBudget(maxBufferedSnapshotBodies * s.maxSnapshotBytes())
 	s.readSlots = make(chan struct{}, maxConcurrentReads)
 	s.readQueueTimeout = readQueueTimeout
+	s.fleetSlots = make(chan struct{}, maxConcurrentFleetReads)
+	s.fleetQueueTimeout = readQueueTimeout
 	s.heldResponses = newByteBudget(maxHeldResponses * s.maxSnapshotBytes())
 	s.slotWriteTimeout = slotWriteTimeout
 	s.teamMapHash = hashTeamMap(cfg.TeamMap)
@@ -283,9 +299,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	// Per-cluster scores are what the read token protects, so /metrics
 	// takes it too (the chart's ServiceMonitor sends it).
-	s.mux.HandleFunc("GET /metrics", s.readAuth(s.metrics.handler().ServeHTTP))
+	s.mux.HandleFunc("GET /metrics", s.readAuth(s.inFleetSlot(s.metrics.handler().ServeHTTP)))
 	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
-	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.handleListClusters))
+	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.inFleetSlot(s.handleListClusters)))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.inReadSlot(s.handleGetCluster)))
 	s.mux.HandleFunc("DELETE /api/v1/clusters/{id}", s.adminAuth(s.handleDeleteCluster))
 	s.mux.HandleFunc("PATCH /api/v1/clusters/{id}", s.adminAuth(s.handleRenameCluster))
@@ -293,7 +309,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/findings", s.readAuth(s.inReadSlot(s.handleFindings)))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/history", s.readAuth(s.inReadSlot(s.handleHistory)))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/teams", s.readAuth(s.inReadSlot(s.handleTeams)))
-	s.mux.HandleFunc("GET /api/v1/fleet", s.readAuth(s.handleFleet))
+	s.mux.HandleFunc("GET /api/v1/fleet", s.readAuth(s.inFleetSlot(s.handleFleet)))
 	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.inReadSlot(s.handleFleetTeams)))
 	s.mux.HandleFunc("POST /api/v1/gate", s.readAuth(s.handleGate))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/export", s.readAuth(s.inReadSlot(s.handleExport)))
@@ -446,15 +462,30 @@ func acquireSlot(w http.ResponseWriter, gone <-chan struct{}, slots chan struct{
 // for loading, decoding and evaluating, not for a client's reading.
 func (s *Server) inReadSlot(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		release, ok := acquireSlot(w, r.Context().Done(), s.readSlots, s.readQueueTimeout, "too many concurrent reads; retry shortly")
-		if !ok {
-			return
-		}
-		defer release()
-		resp := newHeldResponse()
-		h(resp, r)
-		s.send(w, resp, release)
+		s.heldIn(w, r, h, s.readSlots, s.readQueueTimeout, "too many concurrent reads; retry shortly")
 	}
+}
+
+// inFleetSlot runs h, a read of the whole fleet, in a fleet slot
+// (maxConcurrentFleetReads) with its response written to memory, and
+// sends it as send does.
+func (s *Server) inFleetSlot(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.heldIn(w, r, h, s.fleetSlots, s.fleetQueueTimeout, "too many concurrent fleet reads; retry shortly")
+	}
+}
+
+// heldIn runs h in one of slots (waiting up to timeout, then 503 with
+// busy) with its response written to memory, and sends it.
+func (s *Server) heldIn(w http.ResponseWriter, r *http.Request, h http.HandlerFunc, slots chan struct{}, timeout time.Duration, busy string) {
+	release, ok := acquireSlot(w, r.Context().Done(), slots, timeout, busy)
+	if !ok {
+		return
+	}
+	defer release()
+	resp := newHeldResponse()
+	h(resp, r)
+	s.send(w, resp, release)
 }
 
 // send sends resp, written in a slot that release gives back (see

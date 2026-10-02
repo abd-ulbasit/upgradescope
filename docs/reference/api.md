@@ -81,6 +81,7 @@ Auth: `readToken` (bearer).
 |---|---|---|---|
 | 200 | `text/plain` | string | Prometheus text format. |
 | 401 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads of the whole fleet (`/api/v1/clusters`, `/api/v1/fleet`, `/metrics`) run two at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the per-cluster reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next fleet read waits, and cut off if the client has not taken it within 20s. |
 
 ## ingest
 
@@ -152,6 +153,7 @@ Auth: `readToken` (bearer).
 | 200 | `application/json` | array of [ClusterSummary](#clustersummary) | The clusters, by id. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 500 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads of the whole fleet (`/api/v1/clusters`, `/api/v1/fleet`, `/metrics`) run two at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the per-cluster reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next fleet read waits, and cut off if the client has not taken it within 20s. |
 
 ### `GET /api/v1/clusters/{id}`
 
@@ -171,7 +173,7 @@ Auth: `readToken` (bearer).
 | 400 | `application/json` | [Error](#error) | An error. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
 ### `GET /api/v1/clusters/{id}/report`
 
@@ -194,7 +196,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
 ### `GET /api/v1/clusters/{id}/findings`
 
@@ -216,7 +218,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
 ### `GET /api/v1/clusters/{id}/history`
 
@@ -237,7 +239,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
 ### `GET /api/v1/clusters/{id}/teams`
 
@@ -259,7 +261,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
 ## fleet
 
@@ -284,6 +286,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
 | 500 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | Reads of the whole fleet (`/api/v1/clusters`, `/api/v1/fleet`, `/metrics`) run two at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the per-cluster reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next fleet read waits, and cut off if the client has not taken it within 20s. |
 
 ### `GET /api/v1/fleet/teams`
 
@@ -305,7 +308,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
 | 500 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
 ## gate
 
@@ -363,10 +366,11 @@ order mark is 422: send UTF-8.
 
 The answer is built before it is sent, with its `Content-Length`.
 Answers waiting for their clients share a budget of twice
-`--max-snapshot-bytes` with the per-cluster reads; an answer that
-does not fit what is left of it is 503 with `Retry-After`, and one
-larger than the whole budget is sent while the next request waits,
-and cut off if the client has not taken it within 20s.
+`--max-snapshot-bytes` with the per-cluster and fleet reads; an
+answer that does not fit what is left of it is 503 with
+`Retry-After`, and one larger than the whole budget is sent while
+the next request waits, and cut off if the client has not taken it
+within 20s.
 
 Auth: `readToken` (bearer).
 
@@ -427,7 +431,7 @@ Auth: `readToken` (bearer).
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
+| 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
 ## registry
 

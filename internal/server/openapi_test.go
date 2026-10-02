@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -360,9 +361,9 @@ func TestOpenAPIResponsesMatchSpec(t *testing.T) {
 }
 
 // TestOpenAPIReadBusyMatchesSpec: every read that waits for the read slot
-// answers 503 + Retry-After as the document says when it waits too long,
-// and so does every read and /gate when the responses held for their
-// clients leave no room for theirs.
+// or a fleet slot answers 503 + Retry-After as the document says when it
+// waits too long, and so does every read and /gate when the responses
+// held for their clients leave no room for theirs.
 func TestOpenAPIReadBusyMatchesSpec(t *testing.T) {
 	v := newSpecValidator(t)
 	s := newTestServer(t, newFakeStore())
@@ -392,6 +393,26 @@ func TestOpenAPIReadBusyMatchesSpec(t *testing.T) {
 	for range cap(s.readSlots) {
 		<-s.readSlots
 	}
+	fleetReads := map[string]string{
+		"/api/v1/clusters": "/api/v1/clusters",
+		"/api/v1/fleet":    "/api/v1/fleet",
+		"/metrics":         "/metrics",
+	}
+	s.fleetQueueTimeout = time.Millisecond
+	for range cap(s.fleetSlots) {
+		s.fleetSlots <- struct{}{}
+	}
+	for route, url := range fleetReads {
+		resp, body := getRaw(t, ts, url, "")
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("GET %s with the fleet slots busy = %d, want 503: %s", url, resp.StatusCode, body)
+		}
+		v.check(route+" busy", route, "get", resp, []byte(body))
+	}
+	for range cap(s.fleetSlots) {
+		<-s.fleetSlots
+	}
+	maps.Copy(reads, fleetReads)
 
 	if !s.heldResponses.charge(0, s.heldResponses.max-2) {
 		t.Fatal("could not fill the held-response budget")
