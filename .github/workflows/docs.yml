@@ -22,6 +22,7 @@ on:
       - "mkdocs.yml"
       - "hack/docs/**"
       - "CHANGELOG.md" # included by docs/changelog.md
+      - "ci/**" # templates included by docs/guides/other-ci.md
       - ".github/workflows/docs.yml"
   pull_request:
   workflow_dispatch:
