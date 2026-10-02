@@ -268,13 +268,14 @@ export function citationLabels(urls: string[]): string[] {
   });
 }
 
-// Citations renders a citation list as external links.
+// Citations renders a citation list as external links. Keyed by position:
+// a list may cite one URL twice.
 export function Citations({ urls }: { urls: string[] }) {
   const labels = citationLabels(urls);
   return (
     <p className="citations">
       {urls.map((url, i) => (
-        <a key={url} href={url} target="_blank" rel="noreferrer" title={url}>
+        <a key={i} href={url} target="_blank" rel="noreferrer" title={url}>
           {labels[i]}
         </a>
       ))}
