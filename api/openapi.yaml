@@ -778,6 +778,12 @@ components:
         verdict: {$ref: "#/components/schemas/Verdict"}
         notAssessed: {type: array, items: {$ref: "#/components/schemas/CapabilityGap"}}
         suppressed: {type: array, items: {$ref: "#/components/schemas/SuppressedFinding"}}
+        unrecognizedImages:
+          type: array
+          maxItems: 200
+          items: {type: string}
+          description: "Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200."
+        unrecognizedImagesOmitted: {type: integer, minimum: 1, description: Unrecognized image repositories beyond the 200 listed.}
     ReportMeta:
       type: object
       required: [evaluatedAt, snapshotId, source]
@@ -936,7 +942,8 @@ components:
         nodes: {type: array, items: {type: object}}
         controlPlane: {type: array, items: {type: object}}
         namespaces: {type: array, items: {type: object}}
-        unrecognizedImages: {type: array, items: {type: string}}
+        unrecognizedImages: {type: array, items: {type: string}, description: "Image repositories no add-on image matcher claims; sorted, deduplicated, at most 200."}
+        unrecognizedImagesOmitted: {type: integer, description: Unrecognized image repositories the cap dropped.}
     PushAccepted:
       type: object
       required: [snapshotId]

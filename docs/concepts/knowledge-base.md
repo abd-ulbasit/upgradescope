@@ -69,6 +69,7 @@ the horizon minor, until you upgrade to a release with a newer KB.
 
 - CRD versions served by your own or third-party CRDs (deprecated CRD
   versions and stale `status.storedVersions`) are not in the KB ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
-- Add-ons outside the registry are not judged: their images are counted as
-  `unrecognizedImages` in the inventory, and never become findings.
+- Add-ons outside the registry are not judged: their images are listed as
+  `unrecognizedImages` in the inventory and the report, and never become
+  findings.
 - Feature gates, flags and behaviour changes that are not API removals.

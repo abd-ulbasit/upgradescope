@@ -25,9 +25,15 @@ upgradescope scan --files rendered --target 1.37
 
 `--files` takes a directory (every `*.yaml`, `*.yml` and `*.json` under it)
 or one file, and decodes each document the way `kubectl apply -f` does.
-In files mode only API usage can be assessed; add-ons, version skew,
-deprecated-API requests and Helm releases are listed under `NOT ASSESSED`
-with the reason `files mode`, and do not count against the verdict.
+In files mode API usage and add-ons are assessed. Add-ons are found in the
+container and init-container images and the labels of Pod, Deployment,
+DaemonSet, StatefulSet, ReplicaSet, Job and CronJob pod templates (in
+`kind: List` items too), and in an Ingress NGINX `IngressClass`, matched as
+a live scan matches them. Images injected at admission time, such as a mesh
+sidecar, are not in the manifests, so they are not seen. Version skew,
+deprecated-API requests and Helm releases need a cluster: they are listed
+under `NOT ASSESSED` with the reason `files mode`, and do not count against
+the verdict.
 
 What you scan is what the renderer produced. Without a cluster,
 `helm template` fills `.Capabilities` with Helm's built-in defaults (its

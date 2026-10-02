@@ -56,7 +56,9 @@ In scope:
   grants the agent's ServiceAccount:
   - `get`/`list` on namespaces, nodes and pods, and on each group/resource
     the embedded knowledge base flags as deprecated or removed (generated
-    into `files/kb-rbac-rules.yaml`); no wildcards and no `watch`;
+    into `files/kb-rbac-rules.yaml`; its `networking.k8s.io` rule also
+    covers the `ingressclasses` list that add-on detection reads); no
+    wildcards and no `watch`;
   - `get` on the `/version` and `/metrics` endpoints;
   - with `rbac.helmSecrets=true` (the default), cluster-wide `get`/`list` on
     Secrets and ConfigMaps, for Helm release detection. RBAC cannot filter

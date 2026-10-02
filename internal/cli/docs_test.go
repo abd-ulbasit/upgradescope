@@ -157,7 +157,8 @@ func TestDocsRegistryCounts(t *testing.T) {
 
 // TestDocsAgentRBAC: what the docs say the agent may do matches the chart's
 // role since #16 and #113: get/list only, CRD writes only on its own CRD,
-// and the configmaps read that rbac.helmSecrets adds (#130 RB-01).
+// the configmaps read that rbac.helmSecrets adds (#130 RB-01), and the
+// ingressclasses list add-on detection reads (#18).
 func TestDocsAgentRBAC(t *testing.T) {
 	watch := regexp.MustCompile("`get`/`list`/`watch`|get/list/watch|`watch` on all")
 	for _, page := range []string{"README.md", "SECURITY.md", "docs/operations/security-model-and-rbac.md"} {
@@ -170,8 +171,12 @@ func TestDocsAgentRBAC(t *testing.T) {
 		}
 	}
 	for _, page := range []string{"SECURITY.md", "docs/operations/security-model-and-rbac.md"} {
-		if !strings.Contains(strings.ToLower(readDoc(t, page)), "configmaps") {
+		doc := strings.ToLower(readDoc(t, page))
+		if !strings.Contains(doc, "configmaps") {
 			t.Errorf("%s does not mention the ConfigMaps read that rbac.helmSecrets grants", page)
+		}
+		if !strings.Contains(doc, "ingressclasses") {
+			t.Errorf("%s does not mention the IngressClass list that add-on detection reads (#18)", page)
 		}
 	}
 }
@@ -362,14 +367,15 @@ func compileReportSchema(t *testing.T) (*jsonschema.Schema, any) {
 
 // TestJSONReportMatchesSchema: real `scan --output json` reports, with
 // findings (an unknown-api one included), suppressions, a baseline, gaps,
-// and a live cluster's serverVersion, kubeContext and apiServer, validate against
+// unrecognized images and a live cluster's serverVersion, kubeContext and apiServer, validate against
 // api/report.schema.json, and carry no field it does not list (#60).
 func TestJSONReportMatchesSchema(t *testing.T) {
 	sch, schemaDoc := compileReportSchema(t)
 
 	dir := writeFiles(t, map[string]string{
 		"rendered/all.yaml": removedAPIs + "---\napiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: pdb\n  namespace: shop\n" +
-			"---\napiVersion: apps/v1beta9\nkind: Deployment\nmetadata:\n  name: typo\n  namespace: shop\n",
+			"---\napiVersion: apps/v1beta9\nkind: Deployment\nmetadata:\n  name: typo\n  namespace: shop\n" +
+			"---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: shop\nspec:\n  template:\n    spec:\n      containers:\n        - name: api\n          image: registry.example.com/shop/api:1.2.3\n",
 		".upgradescope.yaml": "ignore:\n  - key: removed-api/batch/v1beta1/CronJob\n    reason: deleted next sprint\n    expires: 2099-01-01\n",
 	})
 	files := filepath.Join(dir, "rendered")
@@ -413,13 +419,15 @@ func TestJSONReportMatchesSchema(t *testing.T) {
 		t.Fatalf("live run against a fake API server: %v", err)
 	}
 	outs = append(outs, named)
-	live, _, err := execScanStderr(t, []string{"--target", "1.37", "--output", "json", "--fail-on", "never"}, evalStub(t, liveInventory("v1.36.4")))
+	liveInv := liveInventory("v1.36.4")
+	liveInv.UnrecognizedImages, liveInv.UnrecognizedImagesOmitted = []string{"registry.example.com/shop/api"}, 3
+	live, _, err := execScanStderr(t, []string{"--target", "1.37", "--output", "json", "--fail-on", "never"}, evalStub(t, liveInv))
 	if err != nil {
 		t.Fatalf("live run: %v", err)
 	}
 	outs = append(outs, live)
 	all := strings.Join(outs, "\n")
-	for _, want := range []string{`"category": "unknown-api"`, `"serverVersion": "v1.36.4"`, `"baselineState"`, `"suppressed"`, `"notAssessed"`, `"kubeContext": "test-ctx"`, `"apiServer"`} {
+	for _, want := range []string{`"category": "unknown-api"`, `"serverVersion": "v1.36.4"`, `"baselineState"`, `"suppressed"`, `"notAssessed"`, `"kubeContext": "test-ctx"`, `"apiServer"`, `"unrecognizedImages"`, `"unrecognizedImagesOmitted"`} {
 		if !strings.Contains(all, want) {
 			t.Errorf("no run produced %s; this test no longer covers it", want)
 		}

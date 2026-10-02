@@ -91,9 +91,10 @@ kb.Load()  ──►  collect.Collect(live clients)  or  collect.CollectFiles(di
           table / json / sarif writer   ──►  exit code from --fail-on
 ```
 
-`--target` is required. In `--files` mode only API usage can be assessed, so
-every other capability is reported as not assessed with the reason "files
-mode".
+`--target` is required. In `--files` mode API usage and add-ons are
+assessed, add-ons from the images and labels of workload pod templates and
+from IngressClasses; version skew, deprecated calls and Helm releases need a
+cluster and are reported as not assessed with the reason "files mode".
 
 ### `agent`
 
@@ -156,7 +157,7 @@ ones after it. client-go's `rest.Config.Timeout` (`--request-timeout`, default
 | `versions` | `/version`, nodes (kubelet versions), namespaces (team label), kube-system control-plane pods (image tags) | The cluster ID is the `kube-system` namespace UID. Managed control planes expose no control-plane pods, so that list is empty there. |
 | `helm` | Secrets of type `helm.sh/release.v1` | Decodes base64, gunzip and JSON into a minimal struct, keeping the latest revision per release. No Helm SDK. |
 | `deprecated-calls` | apiserver `/metrics`, `apiserver_requested_deprecated_apis` | The runtime-caller signal: which deprecated APIs some client requested since the apiserver started, which manifest scanners cannot see. It does not say which client (audit logs do). The gauge resets when the apiserver restarts, HA apiservers report independently, and managed planes often deny access. |
-| `addons` | pod container images, plus the Helm releases from the `helm` step | Matches registry matchers: image repository prefix, or exact chart name. Chart evidence wins over image evidence. Unmatched images go to `unrecognizedImages` and never become findings. |
+| `addons` | pod container and init-container images and labels, `networking.k8s.io/v1` IngressClasses, plus the Helm releases from the `helm` step | Matches registry matchers. An image matcher is a repository-path suffix on whole segments of the normalised reference, so mirrors and pull-through caches match; provider builds (GKE, AKS) match only entries written for them. A chart matcher names a Helm release's chart or a pod's `helm.sh/chart` label. A pod running an image no matcher claims, whose `app.kubernetes.io/name`, `helm.sh/chart` chart name or `app.kubernetes.io/part-of` names an add-on, is that add-on, at its `app.kubernetes.io/version` when the name label (or, without one, the chart label) named it. An IngressClass with controller `k8s.io/ingress-nginx` is ingress-nginx, without a version, unless ingress-nginx, a vendor build of it or Traefik (which can serve that class) was found otherwise. Each namespace is its own install: a Helm release's `appVersion` wins there, and otherwise the oldest version its image tags and labels give. Image repositories no image matcher claims go to `unrecognizedImages` and never become findings. In files mode the same matcher runs over manifest pod templates and IngressClasses. |
 | `api-usage` | discovery, then one **metadata-only, paged** list per resource that still serves a version the knowledge base flags, at a non-deprecated version | Detects *authorship*, not servability. See below. |
 
 Every cluster-wide list is paged (`limit=500`). The collectors are
@@ -246,11 +247,12 @@ store and the push protocol read it. It is JSON on the wire and at rest.
   "apiUsage":        [{ "group", "version", "kind", "count", "namespaces": {"ns": n} }],
   "deprecatedCalls": [{ "group", "version", "resource", "subresource", "removedRelease" }],
   "helmReleases":    [{ "name", "namespace", "chartName", "chartVersion", "appVersion", "status" }],
-  "addOns":          [{ "id", "version", "namespaces", "source": "image|chart" }],
+  "addOns":          [{ "id", "version", "namespaces", "source": "chart|image|labels|ingressclass" }],
   "nodes":           [{ "name", "kubeletVersion" }],
   "controlPlane":    [{ "component", "version" }],
   "namespaces":      [{ "name", "team" }],
-  "unrecognizedImages": ["…deduped, sorted, capped at 200"]
+  "unrecognizedImages": ["…deduped, sorted, capped at 200"],
+  "unrecognizedImagesOmitted": 0
 }
 ```
 
@@ -372,8 +374,8 @@ Several design rules apply throughout:
   `Collect` never returns an error. Reports surface these as "not assessed
   (reason)".
 - **Unknown is not a finding.** Images that match no registry entry are
-  counted in `unrecognizedImages`, which makes registry gaps visible without
-  producing findings.
+  listed in `unrecognizedImages`, in the inventory and the report, which
+  makes registry gaps visible without producing findings.
 - **A stale knowledge base is reported, not hidden.** See `kb-stale` above.
 - **The agent never dies on a tick error.** Errors are logged with a
   consecutive-failure count, and the next tick retries.
@@ -483,8 +485,11 @@ if it is deleted, and writes status with conflict retry.
 - **CI gate** (`POST /api/v1/gate`): the request body is a YAML manifest
   stream. With `?cluster=`, the cluster's latest stored inventory supplies
   the context (server version, nodes, add-ons, team labels), and only API
-  usage is replaced by the manifests. The question it answers is "would
-  these manifests block this cluster's upgrade?". The gate stores nothing
+  usage is replaced by the manifests: add-ons in the manifests are not
+  judged there yet ([#150](https://github.com/abd-ulbasit/upgradescope/issues/150)).
+  The question it answers is "would these manifests block this cluster's
+  upgrade?". Without `?cluster=`, the manifests are judged on their own,
+  add-ons included, as `scan --files` judges them. The gate stores nothing
   and can return SARIF.
 - **Notifications**: after each evaluation, the server diffs the new report
   against the previous one for that cluster and target, using finding keys.

@@ -261,7 +261,10 @@ func TestOpenAPIResponsesMatchSpec(t *testing.T) {
 		gzip                                         bool
 		status                                       int // what the call is there to exercise
 	}
-	pushBody := pushReqBody(t, testInventoryWithPSP())
+	inv := testInventoryWithPSP()
+	// The report responses then carry the unrecognized-image fields too.
+	inv.UnrecognizedImages, inv.UnrecognizedImagesOmitted = []string{"registry.example.com/shop/api"}, 3
+	pushBody := pushReqBody(t, inv)
 	calls := []call{
 		{name: "push accepted", method: "post", route: "/api/v1/snapshots", url: "/api/v1/snapshots", token: "ingest-tok", contentType: "application/json", body: pushBody, gzip: true, status: 202},
 		{name: "push duplicate", method: "post", route: "/api/v1/snapshots", url: "/api/v1/snapshots", token: "ingest-tok", contentType: "application/json", body: pushBody, status: 200},

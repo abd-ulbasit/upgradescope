@@ -8,8 +8,9 @@ pipelines and tools built on the scan.
 The schema is
 [`api/report.schema.json`](https://github.com/abd-ulbasit/upgradescope/blob/main/api/report.schema.json)
 (JSON Schema draft 2020-12). `TestJSONReportMatchesSchema` validates real
-scan output against it, with findings, suppressed findings, a baseline and
-not-assessed gaps, and fails on any field the schema does not list.
+scan output against it, with findings, suppressed findings, a baseline,
+not-assessed gaps and unrecognized images, and fails on any field the
+schema does not list.
 
 ## Versioning
 
@@ -54,7 +55,6 @@ the binary that wrote the report and carries no compatibility meaning.
     }
   ],
   "notAssessed": [
-    {"capability": "addons", "reason": "files mode"},
     {"capability": "deprecated-calls", "reason": "files mode"},
     {"capability": "helm", "reason": "files mode"},
     {"capability": "versions", "reason": "files mode"}
@@ -82,6 +82,8 @@ the binary that wrote the report and carries no compatibility meaning.
 | `findings[]` | Sorted by severity, then category, then title. Each has `category` ([list](../concepts/verdict-and-score.md#severity-by-category)), `severity`, `key` (stable across runs: baselines and notifications match on it), `title`, `detail`, and where they apply `teams`, `namespaces`, `remediation`, `citations`, `objects` (at most 100, with `objectsOmitted`) and `baselineState` (`new` or `unchanged`, with `--baseline`). |
 | `notAssessed[]` | What the scan could not see: `capability`, `reason`, and `required` when the gap makes the verdict unknown, `partial` and `skipped` when a capability read only part of what it covers. |
 | `suppressed[]` | Findings an ignore rule or annotation accepted, with `reason`, `source` and `expires`. Not in the score or verdict. |
+| `unrecognizedImages[]` | Image repositories (`host/path`, no tag) that no add-on image matcher recognised, sorted, at most 200. A gap in add-on detection, not a finding: not in the score or verdict, and an add-on running one may still have been found by its labels or Helm release. |
+| `unrecognizedImagesOmitted` | How many more unrecognized repositories there were beyond the 200 listed. |
 | `teams` | Per-team scores; findings without a team are under `unattributed`. A team's `ready` means no blocker among its own findings: it ignores the report's not-assessed gaps and other teams' blockers, so gate on `verdict`. |
 
 The server's report endpoint serves the same report fields (except
