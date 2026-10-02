@@ -39,6 +39,7 @@ func compileWebhookSchema(t *testing.T) (*jsonschema.Schema, any) {
 		t.Fatal(err)
 	}
 	c := jsonschema.NewCompiler()
+	c.AssertFormat()
 	if err := c.AddResource("webhook.schema.json", doc); err != nil {
 		t.Fatal(err)
 	}
@@ -178,4 +179,20 @@ func TestWebhookPayloadMatchesSchema(t *testing.T) {
 		t.Fatal("docs/reference/webhook.md has no ```json example")
 	}
 	checkWebhookPayload(t, sch, schemaDoc, "the docs/reference/webhook.md example", []byte(block))
+
+	// The schema's formats are asserted, not just annotations: a timestamp
+	// that is not RFC 3339 must fail, or the checks above prove less.
+	var bad map[string]any
+	if err := json.Unmarshal(example, &bad); err != nil {
+		t.Fatal(err)
+	}
+	bad["timestamp"] = "yesterday"
+	b, _ := json.Marshal(bad)
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sch.Validate(inst); err == nil {
+		t.Error(`a payload with "timestamp": "yesterday" validates; the schema's date-time format is not checked`)
+	}
 }
