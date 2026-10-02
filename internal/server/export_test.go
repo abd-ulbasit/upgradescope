@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite export golden files")
@@ -124,6 +126,24 @@ func TestExportCSVNotAssessedRows(t *testing.T) {
 	checkGolden(t, "export_not_assessed.csv", raw)
 	if !strings.Contains(string(raw), ",unknown,") || !strings.Contains(string(raw), "not-assessed,") {
 		t.Errorf("CSV lacks the unknown verdict or a not-assessed row:\n%s", raw)
+	}
+}
+
+// TestSparklineTimeProportional: points are placed by time, not index, so
+// a burst of changes and a quiet month do not look alike, and the SVG
+// labels the dates it spans.
+func TestSparklineTimeProportional(t *testing.T) {
+	t0 := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	d := exportData{History: []store.ScorePoint{
+		{At: t0, Score: 50}, {At: t0.Add(24 * time.Hour), Score: 60}, {At: t0.Add(240 * time.Hour), Score: 100},
+	}}
+	svg := string(d.Sparkline())
+	// width 260, pad 4: x = 4 + 252 * (t - t0) / 10d → 4.0, 29.2, 256.0
+	if !strings.Contains(svg, `points="4.0,`) || !strings.Contains(svg, " 29.2,") || !strings.Contains(svg, " 256.0,") {
+		t.Errorf("sparkline x positions are not time-proportional: %s", svg)
+	}
+	if !strings.Contains(svg, "2026-06-01 to 2026-06-11") {
+		t.Errorf("sparkline does not label its date range: %s", svg)
 	}
 }
 

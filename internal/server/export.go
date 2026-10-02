@@ -231,25 +231,33 @@ func (d exportData) ScoreClass() string {
 }
 
 // Sparkline renders the score history as an inline SVG polyline (no JS, no
-// CDN — the export must be a single self-contained file). Y maps score
-// 0–100 onto the viewbox; a single point renders as just the dot.
+// CDN — the export must be a single self-contained file). X is time, from
+// the first point to the last (points spaced by index made a burst of
+// changes look like months), Y maps score 0–100 onto the viewbox, and the
+// label names the dates spanned; a single point renders as just the dot.
 func (d exportData) Sparkline() template.HTML {
 	const width, height, pad = 260.0, 48.0, 4.0
 	n := len(d.History)
 	if n == 0 {
 		return ""
 	}
+	first, last := d.History[0].At, d.History[n-1].At
+	span := last.Sub(first)
 	x := func(i int) float64 {
-		if n == 1 {
-			return width / 2
+		if n == 1 || span <= 0 {
+			if n == 1 {
+				return width / 2
+			}
+			return pad + (width-2*pad)*float64(i)/float64(n-1) // no time spread: fall back to index
 		}
-		return pad + (width-2*pad)*float64(i)/float64(n-1)
+		return pad + (width-2*pad)*float64(d.History[i].At.Sub(first))/float64(span)
 	}
 	y := func(score int) float64 {
 		return pad + (height-2*pad)*(1-float64(score)/100)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg class="spark" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f" role="img" aria-label="score history">`, width, height, width, height)
+	fmt.Fprintf(&b, `<svg class="spark" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f" role="img" aria-label="score history, %s to %s">`,
+		width, height, width, height, first.UTC().Format("2006-01-02"), last.UTC().Format("2006-01-02"))
 	if n > 1 {
 		b.WriteString(`<polyline fill="none" stroke="#2563eb" stroke-width="2" points="`)
 		for i, p := range d.History {
@@ -260,10 +268,9 @@ func (d exportData) Sparkline() template.HTML {
 		}
 		b.WriteString(`"/>`)
 	}
-	last := d.History[n-1]
-	fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3" fill="#2563eb"/>`, x(n-1), y(last.Score))
+	fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3" fill="#2563eb"/>`, x(n-1), y(d.History[n-1].Score))
 	b.WriteString(`</svg>`)
-	return template.HTML(b.String()) // #nosec G203 — built from numbers only
+	return template.HTML(b.String()) // #nosec G203 — built from numbers and formatted dates only
 }
 
 var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
