@@ -32,7 +32,9 @@ spec:
             description: {{ `No blockers were found for target {{ $labels.target }}, but a required check was not assessed, so the cluster cannot be called ready. status.notAssessed on the ClusterReadiness object says which and why (usually missing RBAC).` | quote }}
         - alert: UpgradescopeAgentNotTicking
           # Two missed intervals plus the 5m tick deadline, or no agent
-          # being scraped at all.
+          # being scraped at all. The job label is the one the chart's
+          # ServiceMonitor produces: scraped any other way, give the job
+          # this name or the absent() arm fires forever.
           expr: |-
             time() - upgradescope_agent_last_success_timestamp_seconds{job="{{ $agentJob }}"}
               > 2 * upgradescope_agent_interval_seconds{job="{{ $agentJob }}"} + 300

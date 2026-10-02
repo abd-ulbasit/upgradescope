@@ -13,6 +13,13 @@ Grafana is off by default.
 | Metrics | `GET /metrics` on `--health-addr` | `GET /metrics` on the API port, behind the read token when one is set |
 | Logs | one line at startup, one per tick (`--log-format text\|json`, `--log-level`) | one line per notable event (unchanged) |
 
+`--health-addr` defaults to `:8081` on all interfaces, which is what a pod
+needs. Running `upgradescope agent` on a workstation, prefer
+`--health-addr 127.0.0.1:8081`, or another port if something already holds
+8081 (kubebuilder operators use it for their probes by default; a taken port
+stops the agent at startup with `health listener: address already in use`).
+`--health-addr ""` turns the listener off.
+
 ## Agent logs
 
 The agent writes a startup line (version, KB version and horizon, interval,
@@ -213,7 +220,7 @@ status. Then add this to `argocd-cm`:
 
 ```yaml
 data:
-  # The script needs the string and math libraries.
+  # The script needs the string, math and os (os.time) libraries.
   resource.customizations.useOpenLibs.upgradescope.dev_ClusterReadiness: "true"
   resource.customizations.health.upgradescope.dev_ClusterReadiness: |
     -- Treat a status older than this as stale: three default 10m intervals.
