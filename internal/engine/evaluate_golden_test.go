@@ -33,6 +33,13 @@ var goldenParams = map[string]struct{ target, now string }{
 	// one blocker carrying both; the PDB caller row has no objects and
 	// stays a standalone deprecated-api-in-use blocker.
 	"removed-api-with-callers": {"1.25", "2026-06-10T00:00:00Z"},
+	// The warning and info tiers: CronJobs written via batch/v1beta1
+	// (removed 1.25, one release after the target) are a removed-api
+	// warning that carries the matching caller row; PSP callers (removed
+	// 1.25) are a deprecated-api-in-use warning; FlowSchema callers
+	// (removed 1.29) and a row without a removal release are info; an
+	// unparseable kubelet version is a version-skew info.
+	"api-warning-tiers": {"1.24", "2026-06-10T00:00:00Z"},
 	// Release-line lifecycle: Istio 1.27 (ended) blocks; the containerd 1.7
 	// node is EOL but only warns (the node image carries it, and the
 	// kubelet keeps 1.x support through 1.37); a containerd 2.0 node is
