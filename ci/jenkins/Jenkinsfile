@@ -1,0 +1,37 @@
+// upgradescope upgrade-readiness gate for Jenkins (declarative pipeline).
+//
+// Copy the stage into your Jenkinsfile, or use this file as it is. The
+// agent needs sh, curl, tar, sha256sum and helm. The stage renders the
+// manifests, installs a pinned release verified against its checksums.txt,
+// and scans; the junit step publishes one test per finding, and the stage
+// fails when the gate does (exit 2).
+// Docs: https://abd-ulbasit.github.io/upgradescope/guides/other-ci/
+pipeline {
+  agent any
+  environment {
+    UPGRADESCOPE_VERSION = 'v0.2.0' // pins the binary and its knowledge base
+    UPGRADESCOPE_TARGET = '1.37'    // the Kubernetes minor you upgrade to
+  }
+  stages {
+    stage('Upgrade readiness') {
+      steps {
+        sh 'helm template my-release ./chart --output-dir rendered'
+        sh '''
+          base=https://github.com/abd-ulbasit/upgradescope/releases/download/$UPGRADESCOPE_VERSION
+          curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz"
+          curl -fsSLO "$base/checksums.txt"
+          grep ' upgradescope_linux_amd64.tar.gz$' checksums.txt > upgradescope.sha256
+          sha256sum -c upgradescope.sha256
+          tar -xzf upgradescope_linux_amd64.tar.gz upgradescope
+        '''
+        sh './upgradescope scan --files rendered --target "$UPGRADESCOPE_TARGET" --output junit > upgradescope-junit.xml'
+      }
+      post {
+        always {
+          junit testResults: 'upgradescope-junit.xml', allowEmptyResults: true
+          archiveArtifacts artifacts: 'upgradescope-junit.xml', allowEmptyArchive: true
+        }
+      }
+    }
+  }
+}

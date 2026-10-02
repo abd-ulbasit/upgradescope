@@ -1,0 +1,39 @@
+# upgradescope upgrade-readiness gate for Azure Pipelines.
+#
+# Copy the steps into your pipeline, or use this file as it is. They render
+# the manifests, install a pinned release verified against its
+# checksums.txt, and scan; PublishTestResults shows one test per finding
+# in the run's Tests tab, and the gate step fails when the gate does
+# (exit 2). Docs: https://abd-ulbasit.github.io/upgradescope/guides/other-ci/
+pool:
+  vmImage: ubuntu-latest   # has helm, curl, tar and sha256sum
+
+variables:
+  UPGRADESCOPE_VERSION: v0.2.0   # pins the binary and its knowledge base
+  UPGRADESCOPE_TARGET: "1.37"    # the Kubernetes minor you upgrade to
+
+steps:
+  - script: helm template my-release ./chart --output-dir rendered
+    displayName: Render manifests
+
+  - script: |
+      set -euo pipefail
+      base=https://github.com/abd-ulbasit/upgradescope/releases/download/$(UPGRADESCOPE_VERSION)
+      curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz"
+      curl -fsSLO "$base/checksums.txt"
+      grep ' upgradescope_linux_amd64.tar.gz$' checksums.txt > upgradescope.sha256
+      sha256sum -c upgradescope.sha256
+      tar -xzf upgradescope_linux_amd64.tar.gz upgradescope
+    displayName: Install upgradescope
+
+  - script: ./upgradescope scan --files rendered --target "$(UPGRADESCOPE_TARGET)" --output junit > upgradescope-junit.xml
+    displayName: Upgrade readiness gate
+
+  - task: PublishTestResults@2
+    displayName: Publish upgrade readiness
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: upgradescope-junit.xml
+      testRunTitle: upgradescope
+      failTaskOnFailedTests: false   # the gate step already fails the job

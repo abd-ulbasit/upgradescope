@@ -1,0 +1,36 @@
+# upgradescope upgrade-readiness gate for GitLab CI.
+#
+# Copy this job into .gitlab-ci.yml, or include this file at a release tag
+# and override what differs (variables, before_script):
+#
+#   include:
+#     - remote: https://raw.githubusercontent.com/abd-ulbasit/upgradescope/v0.2.0/ci/gitlab/upgradescope.gitlab-ci.yml
+#
+# The job renders the manifests, installs a pinned release verified against
+# its checksums.txt, and scans. Findings appear in the merge request's Code
+# Quality widget and its test report (JUnit); the job fails when the gate
+# does (exit 2). Docs: https://abd-ulbasit.github.io/upgradescope/guides/other-ci/
+upgrade-readiness:
+  image:
+    name: alpine/helm:3   # helm, curl, tar and bash; any image with those works
+    entrypoint: [""]      # its entrypoint is `helm`; GitLab needs a shell
+  variables:
+    UPGRADESCOPE_VERSION: v0.2.0   # pins the binary and its knowledge base
+    UPGRADESCOPE_TARGET: "1.37"    # the Kubernetes minor you upgrade to
+    UPGRADESCOPE_FILES: rendered   # where before_script renders the manifests
+  before_script:
+    - helm template my-release ./chart --output-dir "$UPGRADESCOPE_FILES"
+  script:
+    - base=https://github.com/abd-ulbasit/upgradescope/releases/download/$UPGRADESCOPE_VERSION
+    - curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz" && curl -fsSLO "$base/checksums.txt"
+    - grep ' upgradescope_linux_amd64.tar.gz$' checksums.txt > upgradescope.sha256 && sha256sum -c upgradescope.sha256
+    - tar -xzf upgradescope_linux_amd64.tar.gz upgradescope
+    - ./upgradescope scan --files "$UPGRADESCOPE_FILES" --target "$UPGRADESCOPE_TARGET" --output junit > upgradescope-junit.xml || true
+    - ./upgradescope scan --files "$UPGRADESCOPE_FILES" --target "$UPGRADESCOPE_TARGET" --output markdown > upgradescope.md || true
+    - ./upgradescope scan --files "$UPGRADESCOPE_FILES" --target "$UPGRADESCOPE_TARGET" --output gitlab-codequality > gl-code-quality-report.json
+  artifacts:
+    when: always
+    paths: [upgradescope.md, upgradescope-junit.xml, gl-code-quality-report.json]
+    reports:
+      codequality: gl-code-quality-report.json
+      junit: upgradescope-junit.xml
