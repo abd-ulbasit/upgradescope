@@ -113,6 +113,7 @@ jobs:
       - name: Approve the PR's CI runs
         if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
         timeout-minutes: 10 # the poll below is bounded at about five minutes
+        continue-on-error: true # a hung gh call must not fail the refresh; the PR still needs its runs approved by hand then
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -207,6 +208,7 @@ jobs:
       - name: Approve the PR's CI runs
         if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
         timeout-minutes: 10 # the poll below is bounded at about five minutes
+        continue-on-error: true # a hung gh call must not fail the refresh; the PR still needs its runs approved by hand then
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

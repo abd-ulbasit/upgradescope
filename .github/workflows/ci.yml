@@ -17,8 +17,9 @@ on:
   # A dispatched run's checks land on the commit but do not count on a PR
   # (its check rollup ignores a workflow_dispatch suite, so they cannot
   # satisfy the required ci-ok there). A kb-refresh bot PR's own
-  # pull_request runs are held for approval instead, and kb-refresh.yml
-  # approves them; dispatching on a bot branch only checks it by hand.
+  # pull_request runs are held for approval instead; kb-refresh.yml tries
+  # to approve them, and otherwise a maintainer does (CONTRIBUTING.md).
+  # Dispatching on a bot branch only checks it by hand.
   workflow_dispatch:
     inputs:
       full-matrix:
