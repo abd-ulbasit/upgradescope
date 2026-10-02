@@ -30,7 +30,9 @@ type CapabilityStatus struct {
 	//     deprecated version, "group/version resource", whose metric rows
 	//     cannot be told apart from its own requests;
 	//   - helm: storage drivers not read ("configmaps") and releases not
-	//     read or not decodable ("namespace/name").
+	//     read or not decodable ("namespace/name");
+	//   - addons: resources not read for add-on evidence,
+	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses").
 	// May be empty when nothing nameable was skipped (a discovery failure
 	// in a group without flagged APIs).
 	Skipped []string `json:"skipped,omitempty"`
@@ -148,13 +150,18 @@ type HelmRelease struct {
 type AddOnInstance struct {
 	ID string `json:"id"` // registry id, e.g. "ingress-nginx"
 	// Version is the app version (a Helm release's appVersion, else the
-	// image tag's version), normalised; may be "".
+	// image tag's or app.kubernetes.io/version label's), normalised; may be "".
 	Version string `json:"version"`
 	// ChartVersion is the Helm chart version, kept as evidence when the
 	// add-on was found through a release; registry data never uses it.
-	ChartVersion string   `json:"chartVersion,omitempty"`
-	Namespaces   []string `json:"namespaces"`
-	Source       string   `json:"source"` // "image" | "chart"
+	ChartVersion string `json:"chartVersion,omitempty"`
+	// Namespaces is empty for an install known only from a cluster-scoped
+	// IngressClass.
+	Namespaces []string `json:"namespaces"`
+	// Source is the strongest evidence found: "chart" (a Helm release),
+	// "image" (an image matcher), "labels" (pod labels naming the add-on)
+	// or "ingressclass" (an IngressClass controller; no version).
+	Source string `json:"source"`
 }
 
 // ComponentVersion is one observed control-plane component version,

@@ -61,7 +61,7 @@ func TestHelmInstallsJudgedByAppVersion(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			detected, _ := matchAddOns(tc.images, []inventory.HelmRelease{tc.release}, addons)
+			detected, _ := matchAddOns(addOnEvidence{images: tc.images, releases: []inventory.HelmRelease{tc.release}}, addons)
 			if len(detected) != 1 || detected[0].ID != tc.wantID || detected[0].Version != tc.wantVer ||
 				detected[0].ChartVersion != tc.release.ChartVersion || detected[0].Source != "chart" {
 				t.Fatalf("detected %+v, want %s app %s chart %s", detected, tc.wantID, tc.wantVer, tc.release.ChartVersion)
@@ -99,7 +99,7 @@ func TestImageOnlyIngressNginxVerdicts(t *testing.T) {
 		{"rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", false},
 	}
 	for _, tc := range cases {
-		detected, _ := matchAddOns([]nsImage{{"ingress", tc.image}}, nil, addons)
+		detected, _ := matchAddOns(addOnEvidence{images: []nsImage{{"ingress", tc.image}}}, addons)
 		rep := engine.Evaluate(inventory.Inventory{AddOns: detected}, k, inventory.Version{Major: 1, Minor: 35}, now)
 		got := slices.ContainsFunc(rep.Findings, func(f engine.Finding) bool { return f.Key == "eol-addon/ingress-nginx" })
 		if got != tc.wantBlocker {
@@ -132,7 +132,7 @@ func TestProviderBuildsGetNoUpstreamEOL(t *testing.T) {
 		{"quay.io/cilium/cilium:v1.15.10", true},
 	}
 	for _, tc := range cases {
-		detected, _ := matchAddOns([]nsImage{{"kube-system", tc.image}}, nil, addons)
+		detected, _ := matchAddOns(addOnEvidence{images: []nsImage{{"kube-system", tc.image}}}, addons)
 		rep := engine.Evaluate(inventory.Inventory{AddOns: detected}, k, inventory.Version{Major: 1, Minor: 36}, now)
 		got := slices.ContainsFunc(rep.Findings, func(f engine.Finding) bool { return f.Severity == engine.SevBlocker })
 		if got != tc.wantBlocker {

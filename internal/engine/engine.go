@@ -372,8 +372,8 @@ func kindMatchesResource(kind, resource string) bool {
 // installs) or one node's container runtime.
 type addOnInstall struct {
 	version string   // normalised app version; "" when unknown
-	via     string   // "image", "chart 1.14.5"; "" for a node runtime
-	where   []string // sorted namespaces, or the node's name
+	via     string   // "image", "labels", "ingressclass", "chart 1.14.5"; "" for a node runtime
+	where   []string // sorted namespaces (none for an IngressClass), or the node's name
 	teams   []string // of the namespaces
 }
 
@@ -494,12 +494,18 @@ func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addO
 		s.namespaces = append(s.namespaces, in.where...)
 		s.teams = append(s.teams, in.teams...)
 		same = same && in.version == ins[0].version && in.via == ins[0].via
-		for _, ns := range in.where {
+		where := in.where
+		if len(where) == 0 { // an IngressClass: cluster-scoped
+			where = []string{"cluster-scoped"}
+		}
+		for _, ns := range where {
 			parts = append(parts, fmt.Sprintf("%s (%s via %s)", ns, cmp.Or(in.version, "version unknown"), in.via))
 		}
 	}
 	s.namespaces, s.teams = sortedSet(s.namespaces), sortedSet(s.teams)
-	if same {
+	if same && len(s.namespaces) == 0 {
+		s.located = fmt.Sprintf("Detected %s version %s via %s (cluster-scoped).", name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via)
+	} else if same {
 		s.located = fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
 			name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via, located(s.namespaces))
 	} else {

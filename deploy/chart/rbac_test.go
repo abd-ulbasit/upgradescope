@@ -280,7 +280,11 @@ func collectorCalls(t *testing.T) []rbacv1.PolicyRule {
 		named(res("", "namespaces", "get"), "kube-system"), // cluster ID
 		res("", "namespaces", "list"),                      // team attribution
 		res("", "nodes", "list"),                           // kubelet versions
-		res("", "pods", "list"),                            // add-on images, control-plane pods
+		res("", "pods", "list"),                            // add-on images and labels, control-plane pods
+		// add-ons: IngressClass controllers. Granted by the KB rules
+		// (networking.k8s.io/v1beta1 IngressClass is removed), pinned here
+		// so a KB change cannot drop it unnoticed.
+		res("networking.k8s.io", "ingressclasses", "list"),
 		res("upgradescope.dev", "clusterreadinesses", "get", "create"),
 		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets
 		named(res("upgradescope.dev", "clusterreadinesses/status", "get", "update"), "cluster"),

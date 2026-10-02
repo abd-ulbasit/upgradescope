@@ -10,7 +10,8 @@ rules:
   # Reads are get/list only; the agent polls, it never watches.
   #
   # versions: kube-system UID (cluster ID), namespace labels (teams),
-  # kubelet versions, control-plane pods; add-ons: container images.
+  # kubelet versions, control-plane pods; add-ons: container images and
+  # labels (and IngressClass controllers, which the KB rules below grant).
   - apiGroups: [""]
     resources: ["namespaces", "nodes", "pods"]
     verbs: ["get", "list"]
