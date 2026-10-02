@@ -206,6 +206,16 @@ a CI gate.
 
 ### Changed
 
+- **Breaking for webhook receivers:** the generic webhook now sends one
+  JSON body per cluster and evaluation pass (`schemaVersion` 1, lowercase
+  keys: `deliveryId`, `type`, `timestamp`, `cluster`, `targets`, `changes`,
+  `omitted`) instead of one PascalCase event (`Cluster`, `Target`, `Kind`,
+  `Title`, `Detail`) per change and target. With `--webhook-secret` the body
+  is signed (`X-Upgradescope-Signature`, HMAC-SHA256). Delivery is at least
+  once: deduplicate on `deliveryId`. Update receivers; see
+  `docs/reference/webhook.md` and `api/webhook.schema.json`.
+- A Slack or webhook sink that answers 429 with `Retry-After` is not retried
+  before that delay (capped at an hour per attempt).
 - Inventories from collectors that predate this release report `crds` as
   not assessed. This includes the reports the server re-evaluates for
   existing v0.1 agents, and saved `--files` inventories. The gap is not
@@ -275,6 +285,11 @@ a CI gate.
 
 ### Fixed
 
+- Notifications after a cluster upgrade: a blocker that the cluster's new
+  default target adds (for example `networking.k8s.io/v1beta1` ServiceCIDR,
+  removed in 1.37, once the cluster runs 1.36) is notified instead of being
+  taken as a silent baseline. Blockers the cluster already had are not
+  announced again (#34).
 - `--output table` and `--output markdown` exit 1 when the report cannot
   be written, like JSON and SARIF.
 - Pre-GA kinds written only by control-plane components (for example

@@ -119,19 +119,51 @@ func TestUpgradeDoesNotReannounceKnownBlockers(t *testing.T) {
 
 // TestUpgradeAnnouncesOnlyNewBlockersInOnePass: the upgrade push itself
 // carries a blocker known at the old target and one the new target adds;
-// one notification lists only the new one.
+// one notification lists only the new one, and the next unchanged push
+// (now compared with 1.37's own evaluation) announces nothing again.
 func TestUpgradeAnnouncesOnlyNewBlockersInOnePass(t *testing.T) {
 	srv, rec := upgradeServer(t, openSQLite(t))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
+	ctx := context.Background()
 
 	pushInventory(t, ts.URL, "tok", atVersion("v1.35.3", podSecurityPolicy, serviceCIDRv1beta1))
 	pushInventory(t, ts.URL, "tok", atVersion("v1.36.1", podSecurityPolicy, serviceCIDRv1beta1))
-	srv.deliverOutbox(context.Background())
+	srv.deliverOutbox(ctx)
 
 	got := rec.notifications()
 	if len(got) != 1 || len(got[0].Changes) != 1 || got[0].Changes[0].Key != "removed-api/networking.k8s.io/v1beta1/ServiceCIDR" {
 		t.Fatalf("want one notification with only the ServiceCIDR blocker, got %+v", got)
+	}
+
+	again := atVersion("v1.36.1", podSecurityPolicy, serviceCIDRv1beta1)
+	again.CollectedAt = again.CollectedAt.Add(10 * time.Minute)
+	// A node at the apiserver's version changes the inventory (so it is
+	// evaluated, not skipped as a duplicate) without changing any finding.
+	again.Nodes = []inventory.NodeInfo{{Name: "node-b", KubeletVersion: "v1.36.1"}}
+	pushInventory(t, ts.URL, "tok", again)
+	srv.deliverOutbox(ctx)
+	if got := rec.notifications(); len(got) != 1 {
+		t.Fatalf("an unchanged push after the upgrade must not re-announce, got %+v", got)
+	}
+}
+
+// TestUpgradeFromBlockedToReady: a cluster blocked at its old default
+// target (PodSecurityPolicy) stops calling that API as it upgrades. The
+// new target's first evaluation is ready; compared with the old target's
+// blocked one, that is became-ready, not a silent baseline.
+func TestUpgradeFromBlockedToReady(t *testing.T) {
+	srv, rec := upgradeServer(t, openSQLite(t))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	pushInventory(t, ts.URL, "tok", atVersion("v1.35.3", podSecurityPolicy))
+	pushInventory(t, ts.URL, "tok", atVersion("v1.36.1"))
+	srv.deliverOutbox(context.Background())
+
+	evs := rec.all()
+	if len(evs) != 1 || evs[0].Kind != notify.KindBecameReady || evs[0].Target != "1.37" {
+		t.Fatalf("want became-ready for 1.37 after the upgrade, got %+v", evs)
 	}
 }
 

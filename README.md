@@ -15,7 +15,8 @@ answer is a verdict (`ready`, `blocked` or `unknown` when a required check
 could not run), a 0–100 score and cited findings, as a table, JSON, SARIF,
 Markdown, JUnit or GitLab Code Quality, an exit code for CI, and a
 `ClusterReadiness` object an in-cluster agent keeps current. A self-hosted server adds history, a fleet view, team
-rollups and auditor exports. One Apache-2.0 binary. `scan` only reads; the
+rollups, auditor exports and [Slack or signed webhook notifications](https://abd-ulbasit.github.io/upgradescope/operations/#notifications)
+when readiness changes. One Apache-2.0 binary. `scan` only reads; the
 agent writes nothing but its own `ClusterReadiness` object and that CRD's
 schema.
 

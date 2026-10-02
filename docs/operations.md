@@ -127,6 +127,14 @@ evaluation is compared with the previous default target's last decided one
 - if the old target was blocked and the new one is ready, the cluster gets
   `became-ready`.
 
+The same comparison applies when a newer server or knowledge base first
+decides a default target that it could not judge before (a cluster on the
+newest minor, whose next minor was past the knowledge base's horizon and
+so `unknown`). Every cluster on that minor then gets its first decided
+evaluation in the same pass, each compared with its own lower target, so
+each is notified once of the blockers that are new to it (at most one
+notification per cluster, its changes capped as usual).
+
 Delivery: notifications are committed to an outbox with the evaluations
 that produced them and delivered by a background worker, so a push never
 waits on a receiver and a restart loses nothing. A failed delivery (an
