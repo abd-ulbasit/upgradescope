@@ -65,7 +65,7 @@ check-toolchain:
 
 # Validates .goreleaser.yml with the GoReleaser release.yml pins, builds every
 # release archive (and per-arch image) into dist/ without publishing, checks
-# the archive names against action/action.yml, and that the binary serves the
+# the archive names against action/run.sh, and that the binary serves the
 # dashboard. No Docker engine? `make release-check GORELEASER_SKIP=publish,sign,sbom,docker`.
 #
 # `go run` builds GoReleaser with the repository's toolchain, so the pin must

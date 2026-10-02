@@ -45,16 +45,34 @@ else
   fail "action.yml and action/action.yml differ beyond the run.sh path" "$work/out"
 fi
 # On PRs and pushes, CI's action job runs only when the changes job's
-# release filter matches; each file the job tests must be in it.
-filter=$(awk '/^ *release:$/ { on = 1; next } on && !/^ *(- |#)/ { on = 0 } on' .github/workflows/ci.yml)
-for f in action.yml 'action/**' hack/action_test.sh internal/cli/scan.go internal/cli/output_json.go internal/cli/output_markdown.go internal/cli/output_sarif.go 'internal/sarif/**'; do
-  if grep -qxF "              - '$f'" <<<"$filter"; then
-    ok "ci.yml's release filter runs the action job on $f"
+# action filter matches; each file the job tests must be in it. The release
+# filter gates release-check (GoReleaser snapshot and multi-arch images, up
+# to 30 minutes), which tests none of the scan or report code, so the
+# action's files stay out of it.
+ci=.github/workflows/ci.yml
+filter() { awk -v name="$1" '$0 ~ "^ *" name ":$" { on = 1; next } on && !/^ *(- |#)/ { on = 0 } on' "$ci"; }
+job() { awk -v name="$1" '$0 == "  " name ":" { on = 1; next } on && /^  [^ ]/ { on = 0 } on' "$ci"; }
+action_filter=$(filter action) release_filter=$(filter release)
+for f in action.yml 'action/**' hack/action_test.sh 'internal/cli/**' 'internal/sarif/**' 'internal/suppress/**' "$ci" Makefile; do
+  if grep -qxF "              - '$f'" <<<"$action_filter"; then
+    ok "ci.yml's action filter runs the action job on $f"
   else
-    echo "add '$f' to the changes job's release filter in .github/workflows/ci.yml" >"$work/out"
-    fail "ci.yml's release filter runs the action job on $f" "$work/out"
+    echo "add '$f' to the changes job's action filter in $ci" >"$work/out"
+    fail "ci.yml's action filter runs the action job on $f" "$work/out"
   fi
 done
+if job changes | grep -qE '^      action: \$\{\{ steps\.[a-z]+\.outputs\.action \}\}$' &&
+  job action | grep -qF "needs.changes.outputs.action == 'true'"; then
+  ok "the action job runs on the changes job's action output"
+else
+  job action >"$work/out"
+  fail "the action job runs on the changes job's action output" "$work/out"
+fi
+if [ -n "$release_filter" ] && ! grep -E "internal/|'action\.yml'|'action/\*\*'|action_test" <<<"$release_filter" >"$work/out"; then
+  ok "ci.yml's release filter leaves the action's files to the action filter"
+else
+  fail "ci.yml's release filter leaves the action's files to the action filter" "$work/out"
+fi
 
 # --- stubs ----------------------------------------------------------------
 

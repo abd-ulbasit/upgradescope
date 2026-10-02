@@ -66,7 +66,8 @@ jobs:
       pull-requests: read # paths-filter lists PR files through the API
     outputs:
       e2e: ${{ steps.code.outputs.e2e }}
-      release: ${{ steps.release.outputs.release }}
+      release: ${{ steps.paths.outputs.release }}
+      action: ${{ steps.paths.outputs.action }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,7 +83,12 @@ jobs:
               - '**'
               - '!docs/**'
               - '!**/*.md'
-      - id: release
+      # Two filters, one per job they gate: release-check (GoReleaser
+      # snapshot and multi-arch images, the slowest PR job) runs only for
+      # packaging changes; the action job for the action and the scan code
+      # it drives. hack/action_test.sh (make action-test) keeps the
+      # action's files in the action filter and out of the release one.
+      - id: paths
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
@@ -91,20 +97,25 @@ jobs:
               - 'Dockerfile*'
               - '.github/workflows/release.yml'
               - '.github/workflows/ci.yml'
-              - 'action.yml'
-              - 'action/**'
-              - 'hack/action_test.sh'
-              # what run.sh relies on: scan's flags, --fail-on and exit
-              # codes, and the SARIF, JSON and Markdown reports
-              - 'internal/cli/scan.go'
-              - 'internal/cli/output_json.go'
-              - 'internal/cli/output_markdown.go'
-              - 'internal/cli/output_sarif.go'
-              - 'internal/sarif/**'
+              # its asset="..." line: release-check matches it against the
+              # archive names GoReleaser builds
+              - 'action/run.sh'
               - 'Makefile'
               - 'hack/release-check.sh'
               - 'go.mod'
               - 'deploy/chart/Chart.yaml'
+            action:
+              - 'action.yml'
+              - 'action/**'
+              - 'hack/action_test.sh'
+              - '.github/workflows/ci.yml'
+              - 'Makefile'
+              # what run.sh relies on: scan's flags, --fail-on, --config,
+              # --baseline and exit codes, the SARIF, JSON and Markdown
+              # reports, and the ignore rules and baselines it applies
+              - 'internal/cli/**'
+              - 'internal/sarif/**'
+              - 'internal/suppress/**'
 
   lint:
     if: github.event_name != 'schedule'
@@ -357,7 +368,7 @@ jobs:
       !cancelled() &&
       (github.event_name == 'schedule' ||
        (github.event_name == 'workflow_dispatch' && !inputs.release) ||
-       needs.changes.outputs.release == 'true')
+       needs.changes.outputs.action == 'true')
     strategy:
       fail-fast: false
       matrix:
