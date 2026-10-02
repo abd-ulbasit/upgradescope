@@ -17,5 +17,7 @@
     {"name": "ingress-nginx", "namespace": "ingress-nginx", "chartName": "ingress-nginx", "chartVersion": "4.7.1", "status": "deployed"}
   ],
   "nodes": [{"name": "node-a", "kubeletVersion": "v1.29.4"}],
-  "namespaces": [{"name": "ingress-nginx", "team": "platform"}]
+  "namespaces": [{"name": "ingress-nginx", "team": "platform"}],
+  "unrecognizedImages": ["corp.example/shop/api", "docker.io/library/redis"],
+  "unrecognizedImagesOmitted": 1
 }

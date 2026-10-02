@@ -65,8 +65,18 @@ type Inventory struct {
 	Nodes              []NodeInfo                      `json:"nodes,omitempty"`
 	ControlPlane       []ComponentVersion              `json:"controlPlane,omitempty"`
 	Namespaces         []NamespaceInfo                 `json:"namespaces,omitempty"`
-	UnrecognizedImages []string                        `json:"unrecognizedImages,omitempty"` // deduped, sorted, cap 200
+	UnrecognizedImages []string                        `json:"unrecognizedImages,omitempty"` // deduped, sorted, cap MaxUnrecognizedImages
+
+	// UnrecognizedImages are the image repositories ("host/path", no tag)
+	// no registry image matcher claims: add-on detection gaps, never
+	// findings. UnrecognizedImagesOmitted counts the ones the cap dropped.
+	UnrecognizedImagesOmitted int `json:"unrecognizedImagesOmitted,omitempty"`
 }
+
+// MaxUnrecognizedImages caps Inventory.UnrecognizedImages, so a cluster
+// running thousands of distinct images cannot bloat the inventory or the
+// report.
+const MaxUnrecognizedImages = 200
 
 type APIUsage struct {
 	Group      string         `json:"group"` // "" for core

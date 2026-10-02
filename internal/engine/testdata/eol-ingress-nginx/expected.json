@@ -24,5 +24,10 @@
   "score": 75,
   "serverVersion": "v1.29.4",
   "target": "1.30",
+  "unrecognizedImages": [
+    "corp.example/shop/api",
+    "docker.io/library/redis"
+  ],
+  "unrecognizedImagesOmitted": 1,
   "verdict": "blocked"
 }
