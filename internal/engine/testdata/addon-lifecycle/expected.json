@@ -76,11 +76,22 @@
         "platform"
       ],
       "title": "no lifecycle data for ExternalDNS 0.14.2"
+    },
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "The control plane is upgraded one minor version at a time. This report judges the cluster as it is against 1.36; add-ons, charts and nodes may need upgrading at each step in between.",
+      "key": "version-skew/upgrade-path",
+      "severity": "info",
+      "title": "upgrading from 1.33 to 1.36 takes 3 minor-version upgrades: 1.34, 1.35, 1.36"
     }
   ],
   "kbVersion": "test-kb-1",
   "ready": false,
   "score": 20,
+  "serverVersion": "v1.33.5",
   "target": "1.36",
   "verdict": "blocked"
 }

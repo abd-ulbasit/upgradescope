@@ -1025,14 +1025,50 @@ func evalKBStale(inv inventory.Inventory, k kb.KB, target inventory.Version) []F
 	}}
 }
 
+// upgradeFrom is the minor a live cluster upgrades from: its oldest
+// observed kube-apiserver (HA replicas mid-upgrade still need the newer
+// minor). ok is false in files mode or without a parseable version.
+func upgradeFrom(inv inventory.Inventory) (inventory.Version, bool) {
+	if inv.Source == inventory.SourceFiles {
+		return inventory.Version{}, false
+	}
+	apis := apiserverVersions(inv)
+	if len(apis) == 0 {
+		return inventory.Version{}, false
+	}
+	return apis[0], true
+}
+
+// evalUpgradePath: a target more than one minor ahead of the cluster is
+// several upgrades, since the control plane moves one minor at a time →
+// info naming each step.
+func evalUpgradePath(inv inventory.Inventory, target inventory.Version) []Finding {
+	from, ok := upgradeFrom(inv)
+	if !ok || target.Major != from.Major || target.Minor-from.Minor < 2 {
+		return nil
+	}
+	var steps []string
+	for v := from.Next(); v.Compare(target) <= 0; v = v.Next() {
+		steps = append(steps, v.String())
+	}
+	return []Finding{{
+		Category: CatVersionSkew, Severity: SevInfo,
+		Key:       string(CatVersionSkew) + "/upgrade-path",
+		Title:     fmt.Sprintf("upgrading from %s to %s takes %d minor-version upgrades: %s", from, target, len(steps), strings.Join(steps, ", ")),
+		Detail:    fmt.Sprintf("The control plane is upgraded one minor version at a time. This report judges the cluster as it is against %s; add-ons, charts and nodes may need upgrading at each step in between.", target),
+		Citations: []string{skewPolicyURL},
+	}}
+}
+
 // assessmentGaps lists what the evaluation could not assess, sorted by
 // capability: every unavailable or partial inventory capability, a
 // versions gap when the server version is missing or unparseable (unless
-// versions is already unavailable), and a kb-coverage gap when the target
-// is beyond the KB horizon. Required is set per the verdict rules on
-// CapabilityGap. A capability absent from inv.Capabilities is not a gap:
-// collectors always report all of theirs, so absence only occurs in
-// hand-built inventories.
+// versions is already unavailable), a kb-coverage gap when the target is
+// beyond the KB horizon, and a target gap when the target is not an
+// upgrade of the cluster (see upgradeFrom). Required is set per the
+// verdict rules on CapabilityGap. A capability absent from
+// inv.Capabilities is not a gap: collectors always report all of theirs,
+// so absence only occurs in hand-built inventories.
 func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
 	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
 	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
@@ -1068,6 +1104,10 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 	if target.Compare(k.MaxKnownK8s) > 0 {
 		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage, Required: true,
 			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed", k.MaxKnownK8s, target)})
+	}
+	if from, ok := upgradeFrom(inv); ok && target.Compare(from) <= 0 {
+		gaps = append(gaps, CapabilityGap{Capability: GapTarget, Required: true,
+			Reason: fmt.Sprintf("target %s is not an upgrade: kube-apiserver already runs %s, and every check judges a newer minor", target, from)})
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i].Capability < gaps[j].Capability })
 	return gaps
@@ -1300,19 +1340,21 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalSkew(inv, k, target)...)
 	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)
 	findings = append(findings, evalKBStale(inv, k, target)...)
+	findings = append(findings, evalUpgradePath(inv, target)...)
 	sortFindings(findings)
 	score, _ := Score(findings)
 	gaps := assessmentGaps(inv, k, target)
 	verdict := verdictFor(findings, gaps)
 
 	return Report{
-		ClusterID:   inv.ClusterID,
-		Target:      target,
-		KBVersion:   k.Version,
-		Score:       score,
-		Ready:       verdict == VerdictReady,
-		Verdict:     verdict,
-		Findings:    findings,
-		NotAssessed: gaps,
+		ClusterID:     inv.ClusterID,
+		Target:        target,
+		ServerVersion: inv.ServerVersion,
+		KBVersion:     k.Version,
+		Score:         score,
+		Ready:         verdict == VerdictReady,
+		Verdict:       verdict,
+		Findings:      findings,
+		NotAssessed:   gaps,
 	}
 }

@@ -54,8 +54,9 @@ func TestWhatIfEvaluatesLatestSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WhatIf 1.34: %v", err)
 	}
-	if rep34.Score != 95 || !rep34.Ready || len(rep34.Findings) != 1 || rep34.Findings[0].Severity != engine.SevWarning {
-		t.Fatalf("1.34 report = score %d ready %v findings %+v, want 95 true [1 warning]", rep34.Score, rep34.Ready, rep34.Findings)
+	// 1.34 is the cluster's own minor, not an upgrade: the verdict is unknown.
+	if rep34.Score != 95 || rep34.Verdict != engine.VerdictUnknown || len(rep34.Findings) != 1 || rep34.Findings[0].Severity != engine.SevWarning {
+		t.Fatalf("1.34 report = score %d verdict %s findings %+v, want 95 unknown [1 warning]", rep34.Score, rep34.Verdict, rep34.Findings)
 	}
 }
 

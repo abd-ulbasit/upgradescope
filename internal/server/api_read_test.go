@@ -220,8 +220,9 @@ func TestReport(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
 		}
-		if rep.KBVersion != "test-kb" || rep.Score != 75 || len(rep.Findings) != 1 {
-			t.Fatalf("what-if report = kb %q score %d findings %d, want test-kb 75 1", rep.KBVersion, rep.Score, len(rep.Findings))
+		// The PSP blocker, and an info naming the upgrades from 1.34 to 1.40.
+		if rep.KBVersion != "test-kb" || rep.Score != 75 || len(rep.Findings) != 2 {
+			t.Fatalf("what-if report = kb %q score %d findings %d, want test-kb 75 2", rep.KBVersion, rep.Score, len(rep.Findings))
 		}
 	})
 	t.Run("unparseable target is 422", func(t *testing.T) {

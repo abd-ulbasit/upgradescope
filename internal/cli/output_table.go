@@ -19,6 +19,9 @@ func WriteTable(out io.Writer, r engine.Report) error {
 	fmt.Fprintln(w, "upgradescope upgrade readiness report")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Cluster:  %s\n", r.ClusterID)
+	if r.ServerVersion != "" { // files mode has no cluster version
+		fmt.Fprintf(w, "Server:   %s\n", r.ServerVersion)
+	}
 	fmt.Fprintf(w, "Target:   %s\n", r.Target)
 	fmt.Fprintf(w, "KB:       %s\n", r.KBVersion)
 	fmt.Fprintln(w)

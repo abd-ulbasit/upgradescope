@@ -229,6 +229,40 @@ func TestBaselineSkewEscalationIsNew(t *testing.T) {
 	}
 }
 
+// --target is compared with the cluster: on a 1.37 cluster, 1.36 and the
+// typo 1.4 are not upgrades (unknown, exit 2, the gap named in the table)
+// and 1.40 is three upgrades (named in an info finding). The table header
+// shows the server version the target was judged against.
+func TestScanTargetNotAnUpgrade(t *testing.T) {
+	inv := liveInventory("v1.37.0")
+	for _, target := range []string{"1.36", "1.4", "1.37"} {
+		out, _, err := execScanStderr(t, []string{"--target", target}, evalStub(t, inv))
+		if !errors.Is(err, ErrIncomplete) || ExitCode(err) != 2 {
+			t.Errorf("--target %s: err = %v, want ErrIncomplete (exit 2)", target, err)
+		}
+		for _, want := range []string{
+			"Server:   v1.37.0",
+			"READY  unknown (required checks were not assessed)",
+			"target (required): target " + target + " is not an upgrade: kube-apiserver already runs 1.37",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("--target %s: table lacks %q:\n%s", target, want, out)
+			}
+		}
+	}
+	out, _, _ := execScanStderr(t, []string{"--target", "1.40", "--output", "json"}, evalStub(t, inv))
+	for _, want := range []string{`"serverVersion": "v1.37.0"`, `"key": "version-skew/upgrade-path"`,
+		`"title": "upgrading from 1.37 to 1.40 takes 3 minor-version upgrades: 1.38, 1.39, 1.40"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--target 1.40: JSON lacks %s:\n%s", want, out)
+		}
+	}
+	// One minor ahead (within the KB horizon) is a plain upgrade.
+	if out, _, err := execScanStderr(t, []string{"--target", "1.37"}, evalStub(t, liveInventory("v1.36.4"))); err != nil {
+		t.Errorf("1.36 → 1.37: err = %v, want a passing gate\n%s", err, out)
+	}
+}
+
 // failingWriter fails every write, like stdout on a full disk.
 type failingWriter struct{}
 

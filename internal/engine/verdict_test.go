@@ -128,11 +128,98 @@ func TestEvaluateVerdict(t *testing.T) {
 	}
 }
 
+// A target at or below the minor kube-apiserver already runs is not an
+// upgrade: every check asks what breaks at a newer minor, so judging it
+// says nothing (a typo "1.4" for "1.40" read READY 100/100). It is a
+// required gap; files mode has no cluster version and no such gap. With HA
+// replicas mid-upgrade the oldest one decides: it still needs the target.
+func TestEvaluateTargetNotAnUpgrade(t *testing.T) {
+	now := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	gap := func(target, server string) []CapabilityGap {
+		return []CapabilityGap{{Capability: GapTarget, Required: true,
+			Reason: "target " + target + " is not an upgrade: kube-apiserver already runs " + server + ", and every check judges a newer minor"}}
+	}
+	midUpgrade := clusterInv()
+	midUpgrade.ControlPlane = []inventory.ComponentVersion{
+		{Component: "kube-apiserver", Version: "v1.33.5"}, {Component: "kube-apiserver", Version: "v1.34.2"},
+	}
+	cases := []struct {
+		name    string
+		inv     inventory.Inventory
+		target  inventory.Version
+		verdict Verdict
+		gaps    []CapabilityGap
+	}{
+		{"same minor", clusterInv(), inventory.Version{Major: 1, Minor: 34}, VerdictUnknown, gap("1.34", "1.34")},
+		{"downgrade", clusterInv(), inventory.Version{Major: 1, Minor: 30}, VerdictUnknown, gap("1.30", "1.34")},
+		{"typo 1.4", clusterInv(), inventory.Version{Major: 1, Minor: 4}, VerdictUnknown, gap("1.4", "1.34")},
+		{"next minor", clusterInv(), inventory.Version{Major: 1, Minor: 35}, VerdictReady, nil},
+		{"HA replicas mid-upgrade", midUpgrade, inventory.Version{Major: 1, Minor: 34}, VerdictReady, nil},
+		{"files mode", filesInv(), inventory.Version{Major: 1, Minor: 4}, VerdictReady, []CapabilityGap{
+			{Capability: inventory.CapAddOns, Reason: "files mode"},
+			{Capability: inventory.CapDeprecatedCalls, Reason: "files mode"},
+			{Capability: inventory.CapHelm, Reason: "files mode"},
+			{Capability: inventory.CapVersions, Reason: "files mode"},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Evaluate(tc.inv, testKB(), tc.target, now)
+			if r.Verdict != tc.verdict || !reflect.DeepEqual(r.NotAssessed, tc.gaps) {
+				t.Errorf("verdict %q, gaps %+v\nwant %q, %+v", r.Verdict, r.NotAssessed, tc.verdict, tc.gaps)
+			}
+		})
+	}
+}
+
+// A target more than one minor ahead is several upgrades, which the
+// control plane takes one minor at a time: an info finding names them.
+func TestEvaluateUpgradeHops(t *testing.T) {
+	now := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	hops := func(r Report) []Finding {
+		var out []Finding
+		for _, f := range r.Findings {
+			if f.Key == "version-skew/upgrade-path" {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	if fs := hops(Evaluate(clusterInv(), testKB(), inventory.Version{Major: 1, Minor: 35}, now)); len(fs) != 0 {
+		t.Errorf("one minor ahead: want no upgrade-path finding, got %+v", fs)
+	}
+	fs := hops(Evaluate(clusterInv(), testKB(), inventory.Version{Major: 1, Minor: 36}, now))
+	want := []Finding{{
+		Category: CatVersionSkew, Severity: SevInfo, Key: "version-skew/upgrade-path",
+		Title:     "upgrading from 1.34 to 1.36 takes 2 minor-version upgrades: 1.35, 1.36",
+		Detail:    "The control plane is upgraded one minor version at a time. This report judges the cluster as it is against 1.36; add-ons, charts and nodes may need upgrading at each step in between.",
+		Citations: []string{skewPolicyURL},
+	}}
+	if !reflect.DeepEqual(fs, want) {
+		t.Errorf("two minors ahead:\n got %+v\nwant %+v", fs, want)
+	}
+}
+
+// The report names the server version the target was judged against, so a
+// reader can see a target that is not an upgrade.
+func TestReportIncludesServerVersion(t *testing.T) {
+	r := Evaluate(clusterInv(), testKB(), inventory.Version{Major: 1, Minor: 35}, time.Now())
+	if r.ServerVersion != "v1.34.2" {
+		t.Errorf("ServerVersion = %q, want v1.34.2", r.ServerVersion)
+	}
+	if r := Evaluate(filesInv(), testKB(), inventory.Version{Major: 1, Minor: 35}, time.Now()); r.ServerVersion != "" {
+		t.Errorf("files mode ServerVersion = %q, want empty", r.ServerVersion)
+	}
+}
+
 // The verdict never touches the score: an unknown verdict with no findings
 // still scores 100, and the kb-stale warning is kept alongside the
 // kb-coverage gap.
 func TestEvaluateUnknownKeepsScoreAndKBStaleWarning(t *testing.T) {
-	r := Evaluate(clusterInv(), testKB(), inventory.Version{Major: 1, Minor: 37}, time.Now())
+	inv := clusterInv() // one minor below the target: no upgrade-path info
+	inv.ServerVersion = "v1.36.1"
+	inv.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.36.1"}}
+	r := Evaluate(inv, testKB(), inventory.Version{Major: 1, Minor: 37}, time.Now())
 	if r.Score != 95 {
 		t.Errorf("Score = %d, want 95 (one kb-stale warning)", r.Score)
 	}
@@ -173,6 +260,9 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 	on124.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.24.17"}}
 	const pspForbidden = "list policy/v1beta1 podsecuritypolicies: forbidden"
 	pspSkipped := partially(on124, inventory.CapAPIUsage, pspForbidden, "policy/v1beta1 PodSecurityPolicy")
+	on123 := on124
+	on123.ServerVersion = "v1.23.17"
+	on123.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.23.17"}}
 	const helmReason = "helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip"
 
 	cases := []struct {
@@ -186,7 +276,8 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 		{"partial api-usage skipping an API removed at the target", pspSkipped, k, t125, VerdictUnknown,
 			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: pspForbidden, Partial: true,
 				Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}, Required: true}}},
-		{"partial api-usage skipping an API removed after the target", pspSkipped, k, t124, VerdictReady,
+		{"partial api-usage skipping an API removed after the target",
+			partially(on123, inventory.CapAPIUsage, pspForbidden, "policy/v1beta1 PodSecurityPolicy"), k, t124, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: pspForbidden, Partial: true,
 				Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}}},
 		{"partial api-usage skipping a never-removed API",
@@ -203,13 +294,14 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 		{"partial helm is an optional gap", partially(on124, inventory.CapHelm, helmReason, "a/b"), withRegistry, t125, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapHelm, Reason: helmReason, Partial: true, Skipped: []string{"a/b"}}}},
 		{"an informational reason is no gap", func() inventory.Inventory {
-			inv := clusterInv()
+			inv := on124
+			inv.Capabilities = allCaps() // on124 shares its map with other cases
 			inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true, Reason: "helm releases: 2 via secrets, 0 via configmaps"}
 			return inv
 		}(), withRegistry, t125, VerdictReady, nil},
-		{"addons missing in cluster mode with a registry", degrade(clusterInv(), inventory.CapAddOns, "list pods: forbidden"), withRegistry, t125, VerdictUnknown,
+		{"addons missing in cluster mode with a registry", degrade(on124, inventory.CapAddOns, "list pods: forbidden"), withRegistry, t125, VerdictUnknown,
 			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: "list pods: forbidden", Required: true}}},
-		{"addons missing with an empty registry", degrade(clusterInv(), inventory.CapAddOns, "list pods: forbidden"), k, t125, VerdictReady,
+		{"addons missing with an empty registry", degrade(on124, inventory.CapAddOns, "list pods: forbidden"), k, t125, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: "list pods: forbidden"}}},
 		{"addons missing in files mode", filesInv(), withRegistry, t125, VerdictReady,
 			[]CapabilityGap{

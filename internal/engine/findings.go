@@ -91,7 +91,10 @@ type SuppressedFinding struct {
 //     kubelet and control-plane skew rules then had no reference version;
 //   - capability "kb-coverage" (GapKBCoverage), when the target is newer
 //     than the knowledge base's MaxKnownK8s — removals in releases the KB
-//     does not know about cannot be found.
+//     does not know about cannot be found;
+//   - capability "target" (GapTarget), when a cluster inventory's oldest
+//     kube-apiserver already runs the target minor or a newer one — the
+//     target is not an upgrade, and every check judges a newer minor.
 //
 // A capability that is available but Partial (it could not read all it
 // covers) is a gap too, with Partial set and the capability's Skipped.
@@ -99,7 +102,7 @@ type SuppressedFinding struct {
 // Required marks gaps that make the verdict unknown, because a blocker may
 // be behind them:
 //
-//   - api-usage and kb-coverage, always;
+//   - api-usage, kb-coverage and target, always;
 //   - versions, for cluster inventories;
 //   - addons, for cluster inventories while the KB's add-on registry is
 //     not empty: the EOL add-on check is a headline check, and files mode
@@ -143,6 +146,10 @@ func (g CapabilityGap) Label() string {
 // beyond the knowledge base horizon. It is not a collector capability.
 const GapKBCoverage inventory.Capability = "kb-coverage"
 
+// GapTarget is the CapabilityGap capability recorded when the target is not
+// an upgrade of the cluster. It is not a collector capability.
+const GapTarget inventory.Capability = "target"
+
 // Verdict is the report's readiness answer.
 type Verdict string
 
@@ -159,8 +166,11 @@ const (
 type Report struct {
 	ClusterID string            `json:"clusterId"`
 	Target    inventory.Version `json:"target"`
-	KBVersion string            `json:"kbVersion"`
-	Score     int               `json:"score"` // from findings only; see Score
+	// ServerVersion is the inventory's raw kube-apiserver GitVersion, the
+	// version the target was judged against; empty in files mode.
+	ServerVersion string `json:"serverVersion,omitempty"`
+	KBVersion     string `json:"kbVersion"`
+	Score         int    `json:"score"` // from findings only; see Score
 	// Ready is Verdict == VerdictReady, kept for v0.1 consumers.
 	Ready       bool            `json:"ready"`
 	Verdict     Verdict         `json:"verdict"`
