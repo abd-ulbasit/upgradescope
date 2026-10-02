@@ -155,26 +155,14 @@ func TestDocsRegistryCounts(t *testing.T) {
 	}
 }
 
-// TestDocsAgentRBAC: what the docs say the agent may do matches the chart's
-// role since #16 and #113: get/list only, CRD writes only on its own CRD,
-// the configmaps read that rbac.helmSecrets adds (#130 RB-01), and the
-// ingressclasses list add-on detection reads (#18).
+// TestDocsAgentRBAC: the security pages name the ingressclasses list that
+// add-on detection reads (#18). That the README, SECURITY.md and the
+// security page grant no watch, keep the CRD writes by resourceNames and
+// name the ConfigMaps read (#130 RB-01) is deploy/chart's
+// TestRBACDocsMatchRole, next to the role it describes.
 func TestDocsAgentRBAC(t *testing.T) {
-	watch := regexp.MustCompile("`get`/`list`/`watch`|get/list/watch|`watch` on all")
-	for _, page := range []string{"README.md", "SECURITY.md", "docs/operations/security-model-and-rbac.md"} {
-		doc := readDoc(t, page)
-		if watch.MatchString(doc) {
-			t.Errorf("%s says the agent watches; it only gets and lists", page)
-		}
-		if strings.Contains(doc, "not restricted by `resourceNames`") || strings.Contains(doc, "not\n    restricted by `resourceNames`") {
-			t.Errorf("%s says the CRD grant is not restricted by resourceNames; it is", page)
-		}
-	}
 	for _, page := range []string{"SECURITY.md", "docs/operations/security-model-and-rbac.md"} {
 		doc := strings.ToLower(readDoc(t, page))
-		if !strings.Contains(doc, "configmaps") {
-			t.Errorf("%s does not mention the ConfigMaps read that rbac.helmSecrets grants", page)
-		}
 		if !strings.Contains(doc, "ingressclasses") {
 			t.Errorf("%s does not mention the IngressClass list that add-on detection reads (#18)", page)
 		}
