@@ -39,7 +39,9 @@ level=INFO msg="tick complete" duration=2.41s push=ok consecutiveFailures=0 capa
 | `targets.<minor>.verdict/score/blockers` | the evaluation per target |
 
 A tick **fails** when the agent could not evaluate and write the
-`ClusterReadiness` status. A failed push does not fail the tick: the CR
+`ClusterReadiness` status, including when it has no target to evaluate (no
+`spec.targets` and an unknown or unparseable server version; the CR then
+shows `Ready=Unknown` with the reason in `status.notAssessed`). A failed push does not fail the tick: the CR
 status was written, and the agent's local result never depends on the
 server. Push failures are logged at WARN and counted separately.
 

@@ -200,6 +200,9 @@ func (r *runner) tick(ctx context.Context) error {
 			AgentVersion:          AgentVersion,
 			NotAssessed:           append(notes, terr.Error()),
 		}
+		// Nothing was evaluated, so no verdict series exists for the
+		// unknown-verdict alert; failing the tick is what surfaces it.
+		errs = append(errs, terr)
 	} else {
 		reports := make([]engine.Report, 0, len(targets))
 		for _, target := range targets {

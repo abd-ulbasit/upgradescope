@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -277,6 +278,29 @@ func TestTickDuplicateSpecTargetsEvaluatedOnce(t *testing.T) {
 	o.record(r.last)
 	if code, body := serve(t, o.handler(), "/metrics"); code != http.StatusOK {
 		t.Fatalf("/metrics = %d, want 200\n%s", code, body)
+	}
+}
+
+// With no spec targets and no usable server version nothing is evaluated.
+// The CR still says why (Ready=Unknown, notAssessed), but the tick fails:
+// with no report there is no verdict series for the unknown-verdict alert,
+// so the failed-tick metrics and /readyz are what surface it.
+func TestTickWithoutTargetsFails(t *testing.T) {
+	dyn := fakeDyn()
+	cfg := Config{}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	r := newRunner(fakeClients(t, "garbage"), dyn, mustKB(t), cfg)
+	if err := r.tick(context.Background()); err == nil {
+		t.Fatal("tick with no resolvable target: want an error")
+	}
+	if r.last.err == nil || len(r.last.reports) != 0 {
+		t.Errorf("tick report = %+v, want a tick error and no reports", r.last)
+	}
+	st := readCRStatus(t, dyn, crd.DefaultName)
+	if len(st.Targets) != 0 || !slices.ContainsFunc(st.NotAssessed, func(s string) bool { return strings.Contains(s, "garbage") }) {
+		t.Errorf("status = %+v, want no targets and a notAssessed entry naming the server version", st)
 	}
 }
 
