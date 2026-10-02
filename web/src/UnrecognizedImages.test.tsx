@@ -17,7 +17,7 @@ describe("UnrecognizedImages", () => {
       .getAllByRole("listitem")
       .map((li) => li.textContent);
     expect(items).toEqual(["corp.example/edge/nginx-controller", "docker.io/library/redis"]);
-    expect(within(section).getByText(/lifecycle was not checked/)).toBeTruthy();
+    expect(within(section).getByText(/found only through its labels or Helm release/)).toBeTruthy();
     expect(within(section).getByText("…and 3 more, not listed.")).toBeTruthy();
   });
 
