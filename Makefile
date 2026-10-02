@@ -105,9 +105,18 @@ go-install-check:
 
 # Shell completions and man pages, rendered from the command tree into
 # packaging/generated (gitignored); GoReleaser runs the same before packaging.
-.PHONY: docs
-docs:
+.PHONY: completions
+completions:
 	go run ./tools/gen-docs -out packaging/generated
+
+# The docs site's generated references, committed under docs/reference:
+# CLI pages (cobra), the ClusterReadiness CRD (internal/crd/manifest.yaml)
+# and the REST API (api/openapi.yaml). Run after changing a command, flag,
+# CRD field or the OpenAPI document; TestReferenceIsFresh (go test) fails
+# on a stale copy.
+.PHONY: docs-gen
+docs-gen:
+	go run ./tools/gen-docs -reference docs/reference
 
 # Asserts the Dockerfile's golang base image matches go.mod's `go` directive,
 # that GoReleaser is pinned to one version here and in release.yml, and that
