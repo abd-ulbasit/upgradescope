@@ -146,7 +146,10 @@ helm-test:
 
 # The kube CI job on one Kubernetes minor (hack/kind-node-images.txt): kind
 # cluster on the pinned node image, the #3 zero-false-blocker regression,
-# scan + agent ITs, image build + kind load, chart install, ClusterReadiness
+# scan's behaviour (unreachable server exits 1, an object written through a
+# deprecated API is reported with its manager and not after a GA re-apply,
+# the EOL ingress-nginx blocks, a --keep-history uninstalled release does
+# not), scan + agent ITs, image build + kind load, chart install, ClusterReadiness
 # verdict, server ingest, agent.targets upgrade, clean uninstall, and the
 # API-server audit log checks (no deprecated-API requests, the agent writes
 # only its ClusterReadiness and CRD, Secrets only via Helm's selector). Needs

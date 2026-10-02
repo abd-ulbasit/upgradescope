@@ -592,7 +592,9 @@ jobs:
 
   # kind e2e per minor (make e2e, hack/e2e.sh): pinned node image, kind and
   # kubectl pinned and sha256-verified, the zero-false-blocker regression,
-  # scan + agent ITs, the chart from this tree's image, ClusterReadiness
+  # scan's live behaviour (unreachable server, deprecated-API authorship,
+  # EOL add-on, --keep-history release; hack/e2e/deprecated-api.txt picks
+  # the API per minor), scan + agent ITs, the chart from this tree's image, ClusterReadiness
   # verdict, server ingest, agent.targets upgrade, clean uninstall, then the
   # API server's audit log of the whole run (hack/e2e/audit-policy.yaml):
   # scan and the agent make no deprecated-API request outside

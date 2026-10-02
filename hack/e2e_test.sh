@@ -13,9 +13,12 @@ trap 'rm -rf "$work"' EXIT
 stubs="$work/stubs"
 mkdir -p "$stubs"
 
-# stub <name> <body>: an executable that logs "<name> <args>" then runs body.
+# stub <name> <body>: an executable that logs "<name> <args>" then runs body
+# (read from stdin when body is -).
 stub() {
-  printf '#!/usr/bin/env bash\necho "%s $*" >>"$STUB_LOG"\n%s\n' "$1" "$2" >"$stubs/$1"
+  local body=$2
+  [ "$body" != - ] || body=$(cat)
+  printf '#!/usr/bin/env bash\necho "%s $*" >>"$STUB_LOG"\n%s\n' "$1" "$body" >"$stubs/$1"
   chmod +x "$stubs/$1"
 }
 
@@ -30,15 +33,18 @@ case "$*" in
   *"get --raw /version"*) echo "{\"major\":\"1\",\"minor\":\"${STUB_SERVER_MINOR:-31}+\"}" ;;
   *"jsonpath={.status.targets[0].score}"*) echo 40 ;;
   *"get clusterreadiness cluster -o json"*)
-    echo "{\"spec\":{\"targets\":[\"1.32\"]},\"status\":{\"targets\":[{\"target\":\"1.32\",\"score\":40,\"verdict\":\"blocked\",\"ready\":false,\"topFindings\":[{\"category\":\"eol-addon\"}]}]}}" ;;
+    echo "{\"spec\":{\"targets\":[\"${STUB_NEXT:-1.32}\"]},\"status\":{\"targets\":[{\"target\":\"${STUB_NEXT:-1.32}\",\"score\":40,\"verdict\":\"blocked\",\"ready\":false,\"topFindings\":[{\"category\":\"eol-addon\"}]}]}}" ;;
   *"port-forward"*) exec sleep 30 ;;
   *"get clusterrole,clusterrolebinding -l"*) [ -n "${STUB_LEFTOVER:-}" ] && echo clusterrole/upgradescope-agent; exit 0 ;;
   *"get clusterrole upgradescope-agent"* | *"get clusterrolebinding upgradescope-agent"*) exit 1 ;;
+  *"api-versions"*) [ -n "${STUB_NOT_SERVED:-}" ] || printf "v1\\nflowcontrol.apiserver.k8s.io/v1beta3\\nresource.k8s.io/v1beta1\\n" ;;
+  *"apply --server-side"*) cat >"$STUB_STATE/applied.yaml" ;;
 esac
 exit 0'
 stub helm '
 case "$*" in
   *"agent.targets="*) [ -z "${STUB_TARGETS_FAIL:-}" ] || { echo "Error: ClusterReadiness \"cluster\" exists and cannot be imported" >&2; exit 1; } ;;
+  *" history "*) echo "[{\"revision\":1,\"status\":\"superseded\"},{\"revision\":2,\"status\":\"${STUB_HISTORY_STATUS:-uninstalled}\"}]" ;;
 esac
 exit 0'
 stub docker '
@@ -65,12 +71,37 @@ case "$*" in
   */api/v1/clusters*) echo "[{\"name\":\"kind\",\"score\":40}]" ;;
   */healthz*) echo "{\"status\":\"ok\"}" ;;
 esac'
-stub upgradescope '
-if [ -n "${STUB_REMOVED:-}" ]; then
-  echo "{\"findings\":[{\"category\":\"removed-api\",\"severity\":\"blocker\",\"title\":\"flowschemas v1beta3\"}]}"
-else
-  echo "{\"findings\":[{\"category\":\"eol-addon\",\"severity\":\"blocker\",\"title\":\"ingress-nginx\"}]}"
-fi'
+# The scanner: an unreachable --kubeconfig exits 1; otherwise the EOL
+# ingress-nginx blocker, plus the object the e2e last applied while it went
+# through a deprecated version (that apiVersion in the key, its manager),
+# and exit 2 on a blocker unless --fail-on never.
+stub upgradescope - <<'EOF'
+never="" unreachable=""
+for a; do
+  case "$a" in --kubeconfig) unreachable=1 ;; never) never=1 ;; esac
+done
+if [ -n "$unreachable" ]; then
+  [ -z "${STUB_UNREACHABLE_OK:-}" ] || { echo '{"findings":[]}'; exit 0; }
+  echo "Error: dial tcp 127.0.0.1:1: connect: connection refused" >&2
+  exit 1
+fi
+applied="" via=""
+if [ -f "$STUB_STATE/applied.yaml" ]; then
+  applied=$(sed -n 's/^apiVersion: //p' "$STUB_STATE/applied.yaml")
+  via=$(sed -n 's/^ *e2e.upgradescope.dev\/applied-via: //p' "$STUB_STATE/applied.yaml")
+fi
+[ "$via" != ga ] || [ -n "${STUB_GA_STILL_REPORTED:-}" ] || applied=""
+jq -n --arg removed "${STUB_REMOVED:-}" --arg noeol "${STUB_NO_EOL:-}" --arg kept "${STUB_KEPT_FINDING:-}" \
+  --arg applied "$applied" --arg manager "${STUB_MANAGER-upgradescope-e2e}" '{findings: (
+    (if $removed == "" then [] else [{category: "removed-api", severity: "blocker", title: "flowschemas v1beta3"}] end)
+    + (if $noeol != "" then [] else [{category: "eol-addon", severity: "blocker", key: "eol-addon/ingress-nginx",
+        title: "Ingress NGINX", namespaces: (["ingress-nginx"] + (if $kept == "" then [] else ["e2e-keep-history"] end))}] end)
+    + (if $applied == "" then [] else [{category: "removed-api", severity: "blocker", key: ("removed-api/" + $applied + "/Kind"),
+        title: ($applied + " removed"), objects: [{name: "upgradescope-e2e-deprecated", manager: $manager}]}] end))}' >"$STUB_STATE/report.json"
+cat "$STUB_STATE/report.json"
+[ -z "$never" ] || exit 0
+jq -e '[.findings[] | select(.severity == "blocker")] | length == 0' "$STUB_STATE/report.json" >/dev/null || exit 2
+EOF
 stub install-tool 'echo "'"$stubs"'/$1"'
 
 # The API server's audit log (one JSON event per line, Metadata level) as
@@ -122,7 +153,9 @@ run() {
   shift 2
   : >"$work/log"
   : >"$work/summary"
-  env PATH="$stubs:$PATH" KUBECONFIG="$work/no-kubeconfig" STUB_LOG="$work/log" \
+  rm -rf "$work/state" "$work/kind-config.yaml"
+  mkdir -p "$work/state"
+  env PATH="$stubs:$PATH" KUBECONFIG="$work/no-kubeconfig" STUB_LOG="$work/log" STUB_STATE="$work/state" \
     GITHUB_STEP_SUMMARY="$work/summary" E2E_MINOR=1.31 E2E_NAP=0 \
     STUB_AUDIT="$work/audit.jsonl" STUB_KIND_CONFIG="$work/kind-config.yaml" \
     E2E_INSTALL_TOOL="$stubs/install-tool" E2E_UPGRADESCOPE="$stubs/upgradescope" \
@@ -159,6 +192,14 @@ has "the agent write-set audit gate passes" "$work/summary" "- PASS — audit: t
 has "the Secrets audit gate passes" "$work/summary" "- PASS — audit: Secrets were read only through Helm's owner=helm list and release GETs"
 has "the scan-writes audit gate passes" "$work/summary" "- PASS — audit: scan wrote nothing"
 has "allowlisted requests are listed" "$work/out" "  v1 componentstatuses (scan)"
+has "the unreachable-server gate passes" "$work/summary" "- PASS — scan against an unreachable API server exits 1"
+has "the deprecated-object gate passes" "$work/summary" "- PASS — an object written through flowcontrol.apiserver.k8s.io/v1beta3 is reported with its manager; re-applied through flowcontrol.apiserver.k8s.io/v1 it is not"
+has "the EOL add-on gate passes" "$work/summary" "- PASS — scan reports the EOL ingress-nginx installed from the upstream chart as a blocker and exits 2"
+has "the keep-history gate passes" "$work/summary" "- PASS — a Helm release uninstalled with --keep-history yields no EOL finding"
+has "1.31's kind config serves flowcontrol v1beta3" "$work/kind-config.yaml" '"flowcontrol.apiserver.k8s.io/v1beta3": "true"'
+has "the object is applied server-side under a named manager" "$work/log" "kubectl --context kind-upgradescope-demo apply --server-side --field-manager=upgradescope-e2e -f -"
+has "the last apply went through the GA version" "$work/state/applied.yaml" "apiVersion: flowcontrol.apiserver.k8s.io/v1"
+has "the kept release is uninstalled with --keep-history" "$work/log" "helm --kube-context kind-upgradescope-demo uninstall e2e-eol-uninstalled --namespace e2e-keep-history --keep-history"
 # Every kubectl call names the kind context (kind-setup.sh's use-context is
 # the one documented exception), and so does every helm call on the release.
 if grep '^kubectl ' "$work/log" | grep -v '^kubectl config use-context kind-upgradescope-demo$' |
@@ -168,12 +209,12 @@ if grep '^kubectl ' "$work/log" | grep -v '^kubectl config use-context kind-upgr
 else
   echo "ok   every kubectl call names the kind context" | tee -a "$work/results"
 fi
-if grep -E '^helm (upgrade|uninstall) .*(deploy/chart|upgradescope --namespace)' "$work/log" |
+if grep -E '^helm ' "$work/log" | grep -v '^helm repo ' |
   grep -v -- '--kube-context kind-upgradescope-demo' >"$work/stray"; then
   echo "FAIL helm release calls without --kube-context:" >&2; sed 's/^/     /' "$work/stray" >&2
   echo "FAIL helm context" >>"$work/results"
 else
-  echo "ok   every helm call on the release names the kind context" | tee -a "$work/results"
+  echo "ok   every helm call outside helm repo names the kind context" | tee -a "$work/results"
 fi
 
 run "a removed-api blocker on a vanilla cluster fails the run (#3 is fixed; the check gates)" 1 STUB_REMOVED=1
@@ -185,6 +226,7 @@ run "a reused cluster still runs the gates" 0 STUB_KIND_EXISTS=1 STUB_REMOVED=1
 has "the reused cluster is not recreated" "$work/out" "kind cluster 'upgradescope-demo' already exists, reusing it"
 has "the #3 check is a SKIP in the summary, not a PASS" "$work/summary" "- SKIP — vanilla 1.31 cluster scanned at 1.32 has zero removed-api blockers (cluster reused, not vanilla; make demo-down first)"
 has "the skip is a warning" "$work/out" "::warning title=kind e2e 1.31: check skipped::"
+has "the deprecated-object check is a SKIP on a reused cluster" "$work/summary" "- SKIP — an object written through flowcontrol.apiserver.k8s.io/v1beta3"
 has "the audit gates are a SKIP on a reused cluster" "$work/summary" "- SKIP — audit: scan wrote nothing (cluster reused, its audit log is not this run's"
 if grep -q '^docker exec' "$work/log"; then
   echo "FAIL a reused cluster's audit log was still read" >&2
@@ -192,7 +234,9 @@ if grep -q '^docker exec' "$work/log"; then
 else
   echo "ok   a reused cluster's audit log is not read" | tee -a "$work/results"
 fi
-if grep -q '^upgradescope scan' "$work/log"; then
+# The vanilla scan is the one before the demo add-on goes in (kind-setup.sh's
+# use-context); the later ones (EOL add-on, kept release) still run.
+if sed '/^kubectl config use-context/q' "$work/log" | grep -q '^upgradescope scan --context'; then
   echo "FAIL a reused cluster was still scanned as vanilla" >&2
   echo "FAIL reused cluster scanned" >>"$work/results"
 else
@@ -256,6 +300,67 @@ has "the missing actor is named" "$work/out" "no request from agent in the audit
 : >"$work/empty.jsonl"
 run "an empty audit log fails the run" 1 STUB_AUDIT="$work/empty.jsonl"
 has "the empty log is explained" "$work/out" "audit log is empty"
+
+# The behaviour gates, each against the scanner getting it wrong.
+run "a scan that exits 0 against an unreachable API server fails the run" 1 STUB_UNREACHABLE_OK=1
+has "the exit code is named" "$work/out" "scan against an unreachable API server exited 0, want 1"
+
+run "a deprecated object reported without its manager fails the run" 1 STUB_MANAGER=
+has "the missing manager is explained" "$work/out" "no finding lists upgradescope-e2e-deprecated at flowcontrol.apiserver.k8s.io/v1beta3 with manager upgradescope-e2e"
+has "the deprecated-object gate is a FAIL in the summary" "$work/summary" "- **FAIL** — an object written through flowcontrol.apiserver.k8s.io/v1beta3"
+
+run "a deprecated object still reported after its GA re-apply fails the run" 1 STUB_GA_STILL_REPORTED=1
+has "the stale finding is explained" "$work/out" "re-applied through flowcontrol.apiserver.k8s.io/v1, is still reported"
+
+run "a deprecated group/version the cluster does not serve fails the run" 1 STUB_NOT_SERVED=1
+has "the missing runtimeConfig is explained" "$work/out" "flowcontrol.apiserver.k8s.io/v1beta3 is not served"
+
+run "a missing EOL ingress-nginx blocker fails the run" 1 STUB_NO_EOL=1
+has "the EOL gate is a FAIL in the summary" "$work/summary" "- **FAIL** — scan reports the EOL ingress-nginx installed from the upstream chart"
+
+run "an EOL finding for an uninstalled --keep-history release fails the run" 1 STUB_KEPT_FINDING=1
+has "the kept release's namespace is named" "$work/out" "eol-addon finding in e2e-keep-history"
+has "the keep-history gate is a FAIL in the summary" "$work/summary" "- **FAIL** — a Helm release uninstalled with --keep-history yields no EOL finding"
+
+run "a kept release that is not uninstalled fails the run" 1 STUB_HISTORY_STATUS=deployed
+has "the precondition is explained" "$work/out" "e2e-eol-uninstalled's last revision is deployed, not uninstalled"
+
+# 1.37's row: the DRA DeviceClass through resource.k8s.io/v1beta1.
+run "1.37 writes a DeviceClass through resource.k8s.io/v1beta1" 0 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38
+has "1.37's kind config serves resource.k8s.io/v1beta1" "$work/kind-config.yaml" '"resource.k8s.io/v1beta1": "true"'
+has "1.37 applies the DeviceClass fixture" "$work/state/applied.yaml" "kind: DeviceClass"
+
+printf '1.29 1.30 flowcontrol.apiserver.k8s.io/v1beta3 flowcontrol.apiserver.k8s.io/v1 flowschema.yaml\n' >"$work/short-table.txt"
+run "a minor without a deprecated-API row fails before anything runs" 1 E2E_DEPRECATED_TABLE="$work/short-table.txt"
+has "the missing row is named" "$work/out" "want exactly one row for 1.31"
+if [ -s "$work/log" ]; then
+  echo "FAIL a minor without a row still ran:" >&2; sed 's/^/     /' "$work/log" >&2
+  echo "FAIL missing row ran commands" >>"$work/results"
+else
+  echo "ok   a minor without a row runs no command at all" | tee -a "$work/results"
+fi
+
+# The real table: one row per minor the kube job runs, each manifest present
+# with both placeholders.
+while read -r minor _; do
+  case "$minor" in '' | '#'*) continue ;; esac
+  m=${minor#1.} n=0
+  while read -r from to dep ga manifest; do
+    case "$from" in '' | '#'*) continue ;; esac
+    if [ "$m" -ge "${from#1.}" ] && [ "$m" -le "${to#1.}" ]; then
+      n=$((n + 1))
+      f="hack/e2e/fixtures/$manifest"
+      { [ -f "$f" ] && grep -q '^apiVersion: __API_VERSION__$' "$f" && grep -q '__APPLIED_VIA__' "$f"; } ||
+        { echo "FAIL $f: missing, or without __API_VERSION__/__APPLIED_VIA__" >&2; echo "FAIL fixture $manifest" >>"$work/results"; }
+    fi
+  done <hack/e2e/deprecated-api.txt
+  if [ "$n" = 1 ]; then
+    echo "ok   hack/e2e/deprecated-api.txt has one row for $minor" | tee -a "$work/results"
+  else
+    echo "FAIL hack/e2e/deprecated-api.txt has $n rows for $minor, want 1" >&2
+    echo "FAIL deprecated-api rows for $minor" >>"$work/results"
+  fi
+done <hack/kind-node-images.txt
 
 run "a cluster on the wrong minor fails the run" 1 STUB_SERVER_MINOR=30
 has "the version mismatch is explained" "$work/out" "cluster runs Kubernetes 1.30, want 1.31"
