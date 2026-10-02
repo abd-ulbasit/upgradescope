@@ -435,14 +435,20 @@ a CI gate.
 - One Helm release object can no longer exhaust the agent's memory. A
   951 KB release Secret whose gzip held 700 MiB took a scan to 1.93 GB and
   OOM-killed the agent at its 256Mi limit; anyone who can create a Secret
-  or ConfigMap in one namespace could plant one. Each release payload is
-  now decoded within 4 MiB stored and 32 MiB decompressed (real releases
-  are a few MiB); one over either is skipped as `release payload too
-  large` on a partial `helm` capability, and the rest are still read
+  or ConfigMap in one namespace could plant one, and a valid release built
+  to amplify parsing (a 127 KiB Secret of tiny ConfigMaps took 564 MiB)
+  could too. Each release payload is now decoded within 4 MiB stored and
+  16 MiB decompressed (real releases decode to under 7 MiB), and its
+  manifest is parsed in runs of at most 1 MiB and 64Ki YAML nodes; a
+  single document over 2 MiB or 64Ki nodes is not parsed. The worst
+  releases now peak at 17–52 MiB of heap. A release over a bound is
+  skipped (`release payload too large`) or recorded without that document,
+  named on a partial `helm` capability, and the rest are still read
   (#168).
 - The security model documents that Helm release Secrets, pod images and
   labels are tenant-controlled evidence: findings are only as trustworthy
-  as namespace write access (#165).
+  as namespace write access, and a forged release in a namespace can still
+  hide an older image of its add-on there until #165 lands.
 
 ## [0.1.1] - 2026-07-27
 

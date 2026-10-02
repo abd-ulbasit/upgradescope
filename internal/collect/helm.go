@@ -390,10 +390,10 @@ func installedRevision(revs []helmRevision) (helmRevision, bool) {
 //
 // The manifest is parsed a run of documents at a time (see
 // splitManifest), each run's flagged objects counted before the next is
-// read, because parsing amplifies its input (#168): the parser indexes
-// every newline and keeps every object before the flagged ones are picked,
-// so a 32 MiB manifest of newlines or of tiny ConfigMaps peaked at 390 and
-// 564 MiB parsed whole, and one 1 MiB document of "- -" lines at 240 MiB.
+// read, because parsing amplifies its input (#168): the parser keeps every
+// object of a stream before the flagged ones are picked, and builds about
+// 550 bytes of heap per YAML node: parsed whole, a 32 MiB manifest of tiny
+// ConfigMaps took 564 MiB, and one 1 MiB document of "- -" lines 240 MiB.
 // A document over maxManifestDocBytes or maxManifestNodes is not parsed:
 // err (errManifestDocTooLarge) names the first, and the objects of the
 // other documents are still returned.
