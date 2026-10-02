@@ -105,6 +105,14 @@ under that name from another UID, or with none, is a 409.
 A per-cluster token may push only as its own cluster (403 before
 anything is written).
 
+Memory is bounded by the body's structure as well as its size:
+while the body is read, its JSON values are counted (each value 1,
+each object 8) against a budget of 1,000,000 units, and buffered
+bodies share a budget of twice the cap across requests. One push
+is decoded at a time; a push that waits more than 10s for its
+turn, or finds the body budget full, gets 503 with `Retry-After`.
+The agent retries 408 and 503.
+
 Auth: `ingestToken` (bearer).
 
 | Parameter | In | Type | Required | Description |
@@ -119,11 +127,14 @@ Request body (`application/json`): [PushRequest](#pushrequest)
 | 202 | `application/json` | [PushAccepted](#pushaccepted) | Stored and evaluated. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 403 | `application/json` | [Error](#error) | An error. |
+| 400 | `application/json` | [Error](#error) | The body ended early or could not be read. |
+| 408 | `application/json` | [Error](#error) | The body did not arrive within the server's read timeout (60s for `serve`). |
 | 409 | `application/json` | [Error](#error) | An error. |
-| 413 | `application/json` | [Error](#error) | An error. |
+| 413 | `application/json` | [Error](#error) | Over the byte cap (on the wire or after decompression) or over the node budget, before anything is decoded. |
 | 415 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, an envelope `schemaVersion` other than 1, no `clusterName`, a missing or `null` inventory, an inventory `schemaVersion` other than 1, or a `serverVersion` that is not a Kubernetes 1.x version. |
 | 500 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`. |
 
 ## clusters
 
@@ -334,9 +345,15 @@ the baseline (`source: cluster`), and manifest-level debt is
 accepted with `scan --baseline` or ignore rules.
 
 Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
-document, 20,000 documents. Evaluations run one at a time; a
-request that waits more than 30s for its turn, or finds the shared
-body budget full, gets 503 with `Retry-After`.
+document with its YAML aliases expanded, 20,000 documents, and a
+node budget of 400,000 units (each YAML node 1, each sequence
+entry 4, each alias what it names), counted from the raw bytes
+before anything is decoded; over any of them is 413. Buffered
+bodies share a budget of three times the cap. Measuring aliases,
+decoding and evaluating run one request at a time; a request that
+waits more than 30s for its turn, or finds the shared body budget
+full, gets 503 with `Retry-After`. A stream with a UTF-16 byte
+order mark is 422: send UTF-8.
 
 Auth: `readToken` (bearer).
 
@@ -358,14 +375,16 @@ Request body (`application/json`): string
 | 200 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) | The gate passed. |
 | 200 | `application/sarif+json` | [SARIF](#sarif) | The gate passed. |
 | 200 | `application/xml` | [JUnit](#junit) | The gate passed. |
-| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
-| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
-| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
+| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 400 | `application/json` | [Error](#error) | The body ended early or could not be read. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
-| 413 | `application/json` | [Error](#error) | An error. |
+| 408 | `application/json` | [Error](#error) | The body did not arrive within the server's read timeout (60s for `serve`). |
+| 413 | `application/json` | [Error](#error) | Over the byte cap, the per-document size (aliases expanded), the document count or the node budget; the message says which, and to split the stream. |
 | 415 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | An error. |
+| 503 | `application/json` | [Error](#error) | The shared body budget is full, or the request waited more than 30s for its turn; retry after `Retry-After`. |
 
 ## exports
 

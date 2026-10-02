@@ -653,3 +653,64 @@ func TestDocsContractsAreReleaseAssets(t *testing.T) {
 		}
 	}
 }
+
+// TestDocsTokenCommandsParse: every `tokens create|list|revoke` command the
+// hand-written docs show parses as the CLI defines it, arguments, flags and
+// flag groups included (#126: a README once showed `tokens revoke <cluster>`
+// without --id or --all, which the CLI refuses). A bare mention of a
+// subcommand by name is not a command and is skipped.
+func TestDocsTokenCommandsParse(t *testing.T) {
+	pages := []string{"README.md", "SECURITY.md", "deploy/chart/README.md"}
+	err := filepath.WalkDir(filepath.Join(repoRoot, "docs"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == "reference" {
+			return filepath.SkipDir // generated from the CLI itself
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".md") {
+			rel, err := filepath.Rel(repoRoot, path)
+			if err != nil {
+				return err
+			}
+			pages = append(pages, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A command runs to the end of its code span or line, before a shell
+	// comment, a line continuation or a table cell's end.
+	cmdRE := regexp.MustCompile("\\btokens (create|list|revoke)((?: [^`\\n#\\\\|]*)?)")
+	placeholder := strings.NewReplacer("<id>", "1", "<old id>", "1")
+	seen := 0
+	for _, page := range pages {
+		for _, m := range cmdRE.FindAllStringSubmatch(readDoc(t, page), -1) {
+			args := strings.Fields(placeholder.Replace(m[2]))
+			if len(args) == 0 {
+				continue
+			}
+			seen++
+			cmd, rest, err := Root().Find(append([]string{"tokens", m[1]}, args...))
+			if err == nil {
+				err = cmd.ParseFlags(rest)
+			}
+			if err == nil {
+				err = cmd.ValidateArgs(cmd.Flags().Args())
+			}
+			if err == nil {
+				err = cmd.ValidateRequiredFlags()
+			}
+			if err == nil {
+				err = cmd.ValidateFlagGroups()
+			}
+			if err != nil {
+				t.Errorf("%s: %q does not parse: %v", page, strings.TrimSpace(m[0]), err)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("found no tokens command in the docs; the pattern is stale")
+	}
+}

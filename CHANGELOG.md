@@ -210,6 +210,17 @@ a CI gate.
   minor still serves blocks at its removal minor. Only the live collector
   and engine are tested there (no nodes, agent or chart); the tested range
   is on the compatibility page. `make envtest` runs it locally (#135, #69).
+- Chart: HTTPS on the server's own port (`server.tls`), from an existing
+  certificate Secret or a cert-manager `Certificate` issued into
+  `<fullname>-server-https`. The in-chart agent then pushes over HTTPS and
+  trusts the Secret's CA (`server.tls.caKey`, empty for a publicly trusted
+  certificate); probes and the ServiceMonitor use HTTPS, and the chart's
+  Ingress is told the backend speaks HTTPS.
+- `GOMEMLIMIT` is set when unset: the chart sets 90% of each container's
+  memory limit, and `serve` and `agent` take 90% of the cgroup's memory
+  limit (v2 or v1) outside the chart. An explicit value wins.
+- Chart: `server.sharedIngestToken=false` drops the shared, any-cluster
+  ingest token, so only per-cluster tokens can push.
 
 ### Changed
 
@@ -298,8 +309,8 @@ a CI gate.
   the kubelet upper bound after the upgrade.
 - The knowledge base version label is derived from the embedded data:
   `k8s.io/api vX; lifecycle <digest>; registry <digest>`.
-- Server: open read access on a non-loopback `--listen` address is refused
-  unless you pass `--allow-anonymous-read`. Connections have read, write
+- Server: open read access is refused unless the address `serve` actually
+  binds is loopback or you pass `--allow-anonymous-read`. Connections have read, write
   and idle timeouts. Snapshot and gate bodies are capped
   (`--max-snapshot-bytes`, `--max-gate-bytes`). Responses carry CSP and
   other security headers. A push whose cluster ID differs from the ID
@@ -413,6 +424,19 @@ a CI gate.
   SLSA provenance and build attestations. A ruleset makes release tags
   immutable.
 - An OpenSSF Scorecard workflow publishes its results.
+- `/api/v1/gate` and snapshot ingest bound their memory by the input's
+  YAML or JSON structure and by concurrency budgets, not only by bytes.
+  Nodes are counted before anything is decoded. YAML aliases are charged
+  at their expanded size, and that is measured inside the single
+  evaluation slot. UTF-16 streams are refused. A body over a budget gets
+  413, and one too slow for the read timeout gets 408, before any 503
+  (#121, #100).
+- The CSV export guards every cell against formula injection, including
+  after leading white space. Anonymous read access is decided on the
+  resolved bind address. The `Bearer` scheme is case-insensitive. The
+  SQLite database and its WAL and SHM files are created 0600. The agent
+  warns when it would push its token over plain HTTP to a host that is
+  not loopback (#126).
 
 ## [0.1.1] - 2026-07-27
 

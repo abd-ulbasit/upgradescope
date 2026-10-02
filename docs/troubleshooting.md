@@ -105,6 +105,21 @@ To accept a finding for now, with a reason and an expiry, use an
   message spells out both.
 - **A push gets 401 or 403.** 401: the token is missing or unknown. 403: a
   per-cluster token pushing as another cluster name.
+- **A push or `/gate` gets 413 `... is too large to evaluate ...`.** The
+  body is within its byte cap but holds more JSON values or YAML nodes
+  than one request may decode (YAML aliases count at what they expand
+  to). Split the manifest stream, or a large List, into several requests;
+  for a push, check what the agent collects
+  ([Memory and request limits](operations.md#memory-and-request-limits)).
+- **A push or `/gate` gets 408 or 503.** 408: the body did not arrive
+  within the server's read timeout (60s); 503 with `Retry-After`: other
+  requests hold the shared body budget or the decode slot. The agent
+  retries both; a CI caller should retry too.
+- **`/gate` gets 422 `a UTF-16 byte order mark`.** Re-encode the manifests
+  as UTF-8 (`iconv -f UTF-16 -t UTF-8`).
+- **The agent warns `pushing snapshots to ... over plain http`.** Its
+  `--server-url` is `http://` to a host that is not loopback. Serve HTTPS
+  (`--tls-cert-file`, the chart's `server.tls`, or an Ingress).
 - **A cluster shows as stale.** Its agent has not pushed within
   `serve --stale-after` (2h). Check the agent's logs for `push=failed`.
 - **The dashboard says `dashboard not built`.** The binary was built with

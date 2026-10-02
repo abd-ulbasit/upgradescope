@@ -469,10 +469,13 @@ if it is deleted, and writes status with conflict retry.
 - **Ingest** (`POST /api/v1/snapshots`): bearer auth accepts the shared
   `--ingest-token`, or a per-cluster token from `upgradescope tokens create`.
   A per-cluster token may push only for its own cluster (otherwise 403).
-  Only sha256 hashes of tokens are stored. The body can be gzip or identity,
+  A per-cluster token is stored as its sha256 hash and its first 8
+  characters, never the token itself. The body can be gzip or identity,
   is capped at 20 MiB both on the wire and after decompression, and must use
   `schemaVersion` 1. Deduplication uses the hash of the canonical inventory
-  JSON.
+  JSON. Before it is decoded, the body's JSON values are counted against a
+  node budget, and buffered bodies share one memory budget across
+  requests ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **Store** (`store.Store`): SQLite by default (`--db`, WAL mode,
   pure-Go driver, so no cgo) or Postgres (`--db-url`). Tables are
   `clusters`, `snapshots`, `evaluations` (report JSON plus score, per
@@ -500,7 +503,10 @@ if it is deleted, and writes status with conflict retry.
   a `.upgradescope.yaml` sent in `?config=` are applied with `scan`'s code.
   The gate stores nothing; it answers JSON (leading with `schemaVersion`
   and `toolVersion`, like the server's other report responses), SARIF,
-  JUnit or GitLab Code Quality.
+  JUnit or GitLab Code Quality. The stream's YAML nodes, aliases at what
+  they expand to, are counted against a node budget before anything is
+  decoded, and one request at a time is decoded and evaluated
+  ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **Notifications**: after each evaluation, the server diffs the new report
   against the previous one for that cluster and target, using finding keys.
   It emits `new-blocker` (capped at 5, plus an "N more" summary),

@@ -60,3 +60,12 @@ who writes an API instead of what is served, which removes false blockers;
 and the server's gate endpoint fails on blockers by default. Read the
 **Changed** section before you upgrade a CI gate, and expect clusters that
 read `ready` under v0.1.x to read differently, in both directions.
+
+The server bounds its memory by the input's structure
+([Memory and request limits](../operations.md#memory-and-request-limits)):
+a `/gate` stream of more than about 4.4 MiB of typical kubectl YAML, or a
+document that YAML aliases expand past 4 MiB, gets 413 where v0.1.x decoded
+it, so split such streams. Snapshots a v0.1 server stored are decoded
+without a node count until their clusters push again. On its first start,
+`serve` tightens an existing SQLite database and its `-wal` and `-shm`
+files to 0600.

@@ -141,6 +141,14 @@ paths:
 
         A per-cluster token may push only as its own cluster (403 before
         anything is written).
+
+        Memory is bounded by the body's structure as well as its size:
+        while the body is read, its JSON values are counted (each value 1,
+        each object 8) against a budget of 1,000,000 units, and buffered
+        bodies share a budget of twice the cap across requests. One push
+        is decoded at a time; a push that waits more than 10s for its
+        turn, or finds the body budget full, gets 503 with `Retry-After`.
+        The agent retries 408 and 503.
       security:
         - ingestToken: []
       parameters:
@@ -166,8 +174,24 @@ paths:
               schema: {$ref: "#/components/schemas/PushAccepted"}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
+        "400":
+          description: The body ended early or could not be read.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "408":
+          description: The body did not arrive within the server's read timeout (60s for `serve`).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "409": {$ref: "#/components/responses/Error"}
-        "413": {$ref: "#/components/responses/Error"}
+        "413":
+          description: |
+            Over the byte cap (on the wire or after decompression) or over
+            the node budget, before anything is decoded.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "415": {$ref: "#/components/responses/Error"}
         "422":
           description: |
@@ -180,6 +204,13 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
         "500": {$ref: "#/components/responses/Error"}
+        "503":
+          description: The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`.
+          headers:
+            Retry-After: {$ref: "#/components/headers/RetryAfter"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
 
   /api/v1/clusters:
     get:
@@ -500,9 +531,15 @@ paths:
         accepted with `scan --baseline` or ignore rules.
 
         Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
-        document, 20,000 documents. Evaluations run one at a time; a
-        request that waits more than 30s for its turn, or finds the shared
-        body budget full, gets 503 with `Retry-After`.
+        document with its YAML aliases expanded, 20,000 documents, and a
+        node budget of 400,000 units (each YAML node 1, each sequence
+        entry 4, each alias what it names), counted from the raw bytes
+        before anything is decoded; over any of them is 413. Buffered
+        bodies share a budget of three times the cap. Measuring aliases,
+        decoding and evaluating run one request at a time; a request that
+        waits more than 30s for its turn, or finds the shared body budget
+        full, gets 503 with `Retry-After`. A stream with a UTF-16 byte
+        order mark is 422: send UTF-8.
       parameters:
         - name: target
           in: query
@@ -566,7 +603,8 @@ paths:
           description: |
             The gate failed (same body as 200), or the request is invalid
             (no or bad `target`, bad `format`, `fail-on`, `path` or
-            `config`, or an undecodable manifest stream: an Error body).
+            `config`, an invalid document separator, a UTF-16 stream, or an
+            undecodable manifest stream: an Error body).
           headers:
             X-Upgradescope-Verdict: {$ref: "#/components/headers/Verdict"}
           content:
@@ -580,11 +618,34 @@ paths:
               schema: {$ref: "#/components/schemas/SARIF"}
             application/xml:
               schema: {$ref: "#/components/schemas/JUnit"}
+        "400":
+          description: The body ended early or could not be read.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
-        "413": {$ref: "#/components/responses/Error"}
+        "408":
+          description: The body did not arrive within the server's read timeout (60s for `serve`).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "413":
+          description: |
+            Over the byte cap, the per-document size (aliases expanded),
+            the document count or the node budget; the message says which,
+            and to split the stream.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "415": {$ref: "#/components/responses/Error"}
-        "503": {$ref: "#/components/responses/Error"}
+        "503":
+          description: The shared body budget is full, or the request waited more than 30s for its turn; retry after `Retry-After`.
+          headers:
+            Retry-After: {$ref: "#/components/headers/RetryAfter"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
 
   /api/v1/registry:
     get:
@@ -632,6 +693,9 @@ components:
     Verdict:
       description: The gate's verdict.
       schema: {$ref: "#/components/schemas/Verdict"}
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema: {type: integer, minimum: 1}
 
   responses:
     Error:

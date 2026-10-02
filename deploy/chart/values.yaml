@@ -139,7 +139,7 @@ agent:
     readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
-  # The memory limit also sets GOMEMLIMIT to 90% of it (the Go runtime does
+  # -- The memory limit also sets GOMEMLIMIT to 90% of it (the Go runtime does
   # not read the container limit itself); set GOMEMLIMIT in extraEnv to
   # override. Without a memory limit, or with one the chart cannot read
   # (e.g. "100m"), the chart sets none; the binary then takes 90% of its
@@ -253,22 +253,21 @@ server:
       # issues via annotations). Default name: <fullname>-server-tls.
       enabled: true
       secretName: ""
-  # HTTPS on the server's own port. Without it the in-chart agent pushes its
-  # bearer token over plain HTTP inside the cluster (the agent logs a
-  # warning). The certificate must name the Service
-  # (<fullname>-server.<namespace>.svc); the in-chart agent then pushes to
-  # https:// and trusts the Secret's caKey, when it has one, on top of its
-  # image's roots. Probes and the ServiceMonitor switch to HTTPS. The
-  # Service port gets appProtocol https, and server.ingress gets
-  # nginx.ingress.kubernetes.io/backend-protocol: HTTPS unless its
-  # annotations set it; another controller may need its own annotation.
-  # serve reads the certificate at startup, so a renewal takes a pod
-  # restart.
   tls:
-    # -- An existing kubernetes.io/tls Secret (tls.crt, tls.key, optional
-    # ca.crt) for HTTPS on the server's own port; see the comment above.
+    # -- HTTPS on the server's own port, from an existing kubernetes.io/tls
+    # Secret (tls.crt, tls.key, optional CA). Without it the in-chart agent
+    # pushes its bearer token over plain HTTP inside the cluster (the agent
+    # logs a warning). The certificate must name the Service
+    # (<fullname>-server.<namespace>.svc); the in-chart agent then pushes to
+    # https:// and trusts the Secret's caKey, when it has one, on top of its
+    # image's roots. Probes and the ServiceMonitor switch to HTTPS. The
+    # Service port gets appProtocol https, and server.ingress gets
+    # nginx.ingress.kubernetes.io/backend-protocol: HTTPS unless its
+    # annotations set it; another controller may need its own annotation.
+    # serve reads the certificate at startup, so a renewal takes a pod
+    # restart.
     secretName: ""
-    # The key of the CA certificate in that Secret, which the ServiceMonitor
+    # -- The key of the CA certificate in that Secret, which the ServiceMonitor
     # and the in-chart agent trust (cert-manager CA and self-signed issuers
     # write ca.crt). Empty for a publicly trusted certificate whose Secret
     # has no CA: they then use their system roots.
@@ -322,7 +321,7 @@ server:
     readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
-  # Sets GOMEMLIMIT as agent.resources does. 512Mi holds one /gate decode
+  # -- Sets GOMEMLIMIT as agent.resources does. 512Mi holds one /gate decode
   # and one snapshot ingest at their worst (~155 MB and ~80 MB of heap) plus
   # their buffered bodies (30 and 40 MiB): see docs/operations.md.
   resources:
