@@ -28,9 +28,11 @@ type fleetCell struct {
 	SnapshotID  int64          `json:"snapshotId"`
 	Source      string         `json:"source"`
 	Outdated    bool           `json:"outdated,omitempty"` // evalSummary.Outdated
-	// NotAssessed is the stored report's: why a cell is unknown, or what a
-	// ready one did not cover.
-	NotAssessed []summaryGap `json:"notAssessed,omitempty"`
+	// NotAssessed is the stored report's, bounded (gapsOf): why a cell is
+	// unknown, or what a ready one did not cover. NotAssessedOmitted
+	// counts the gaps not listed.
+	NotAssessed        []summaryGap `json:"notAssessed,omitempty"`
+	NotAssessedOmitted int          `json:"notAssessedOmitted,omitempty"`
 }
 
 type fleetRow struct {
@@ -151,10 +153,11 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 			e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, t.String())
 			switch {
 			case err == nil:
+				gaps, omitted := gapsOf(e, fleetSummaryBytes)
 				row.Cells[t.String()] = &fleetCell{
 					Score: e.Score, Ready: e.Ready, Verdict: verdictOf(e), Blockers: e.Blockers,
 					EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID, Source: sourceStored, Outdated: s.outdated(e, now),
-					NotAssessed: gapsOf(e),
+					NotAssessed: gaps, NotAssessedOmitted: omitted,
 				}
 			case errors.Is(err, store.ErrNotFound):
 			default:

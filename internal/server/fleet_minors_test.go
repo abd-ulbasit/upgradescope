@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,4 +84,74 @@ func TestFleetDefaultColumnsAreMeasured(t *testing.T) {
 		t.Fatalf("the heap grew %d MiB, want at most %d MiB", grew>>20, maxFleetDefaultHeap>>20)
 	}
 	t.Logf("%d clusters at %d minors: /fleet took %v, grew the heap %.1f MiB, answered %d bytes with %d columns", fleetMinors, fleetMinors, took.Round(time.Millisecond), float64(grew)/(1<<20), size, columns)
+}
+
+// maxWideGapsFleetHeap is what one fleet-wide read of 500 clusters whose
+// evaluations carry the most gaps a push may name may add to the heap:
+// docs/operations.md counts two of them in the server's worst case.
+const maxWideGapsFleetHeap = 12 << 20 // measured 9.6 MiB for /fleet
+
+// What an evaluation could not assess is in every fleet-wide read, for
+// every cluster and target, and a push within the inventory limits may
+// name 32 capabilities, each 16 KiB long, with 64 KiB reasons and long
+// skipped lists. 50 such clusters made /fleet grow the heap 516 MiB and
+// answer 108 MB; the store's column now keeps each gap cut and the reads
+// list at most fleetSummaryBytes of them per evaluation. Each gap here,
+// cut, is just under that, so every summary lists one: the dearest
+// summaries. 500 such clusters, each evaluated at three targets, are read
+// within maxWideGapsFleetHeap by each of /clusters, /fleet and /metrics;
+// the test logs the figures docs/operations.md quotes.
+func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("seeds 500 clusters of 770 KB pushes; make test-heap runs it, without the race detector")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
+	st, err := store.Open(filepath.Join(t.TempDir(), "upgradescope.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", ExtraTargets: []string{"1.36", "1.37"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) }
+	caps := map[inventory.Capability]inventory.CapabilityStatus{}
+	for c := range inventory.MaxCapabilities {
+		var skipped []string
+		for k := range 10 {
+			skipped = append(skipped, fmt.Sprintf("%03d", k)+strings.Repeat("<", 600))
+		}
+		caps[inventory.Capability(fmt.Sprintf("%02d", c)+strings.Repeat("c", inventory.MaxStringBytes-2))] = inventory.CapabilityStatus{
+			Available: true, Partial: true, Reason: strings.Repeat("é", 1000), Skipped: skipped}
+	}
+	for i := range fleetMinors {
+		body, err := json.Marshal(map[string]any{
+			"schemaVersion": 1, "clusterName": fmt.Sprintf("cluster-%03d", i), "agentVersion": "test", "kbVersion": "agent-kb",
+			"inventory": inventory.Inventory{SchemaVersion: 1, ClusterID: fmt.Sprintf("uid-%d", i), ServerVersion: "v1.34.2", Capabilities: caps},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		serveIngest(s, rec, body, false)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("push %d: status = %d (%.300s)", i, rec.Code, rec.Body)
+		}
+	}
+	for _, path := range []string{"/api/v1/clusters", "/api/v1/fleet", "/metrics"} {
+		var size int
+		grew := heapPeak(func() {
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s: status = %d (%.300s)", path, rec.Code, rec.Body)
+			}
+			size = rec.Body.Len()
+		})
+		if grew > maxWideGapsFleetHeap {
+			t.Errorf("%s grew the heap %d MiB, want at most %d MiB", path, grew>>20, maxWideGapsFleetHeap>>20)
+		}
+		t.Logf("%d clusters of 31 gaps each: %s grew the heap %.1f MiB, answered %d bytes", fleetMinors, path, float64(grew)/(1<<20), size)
+	}
 }

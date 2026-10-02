@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 	"unicode/utf8"
@@ -197,17 +198,23 @@ type Evaluation struct {
 }
 
 // What the not_assessed column keeps of a gap. The fleet-wide reads load
-// it for every cluster and target, so it is bounded: a gap's reason (a
-// push may send 64 KiB) is cut to maxSummaryReasonBytes, and its skipped
-// list to its first maxSummarySkipped entries, each cut to
-// maxSummarySkippedBytes, with skippedOmitted counting the rest. With at
-// most inventory.MaxCapabilities gaps, an evaluation's column is at most
-// about 200 KB. A genuine reason or entry is shorter; the report keeps
-// every gap whole.
+// it for every cluster and target, so it is bounded: a gap's capability
+// name (a push may name one of 16 KiB) is cut to SummaryCapabilityBytes,
+// its reason (up to 64 KiB) to SummaryReasonBytes, and its skipped list
+// to its first SummarySkipped entries, each cut to SummarySkippedBytes,
+// with skippedOmitted counting the rest. A gap is then at most about
+// 900 bytes, and with at most inventory.MaxCapabilities gaps and the
+// engine's own an evaluation's column at most about 30 KB. (With names
+// whole, a 1 KiB reason and 10 entries of 512 bytes, the columns of 50
+// clusters made /fleet answer 108 MB and grow the heap 516 MiB; the reads
+// also list only part of a column: fleetSummaryBytes in the server.) A
+// genuine name, reason or entry is shorter; the report keeps every gap
+// whole.
 const (
-	maxSummaryReasonBytes  = 1 << 10
-	maxSummarySkipped      = 10
-	maxSummarySkippedBytes = 512
+	SummaryCapabilityBytes = 64
+	SummaryReasonBytes     = 256
+	SummarySkipped         = 3
+	SummarySkippedBytes    = 128
 )
 
 // notAssessedOf extracts a report's notAssessed array for its own column,
@@ -237,45 +244,85 @@ func notAssessedOf(report []byte) string {
 }
 
 // writeGapSummary writes one gap of a report's notAssessed to out, cut to
-// the column's bounds, with < > & as themselves (json.Marshal writes each
-// as six bytes).
+// the column's bounds, every field it does not cut as it was, with < > &
+// and U+2028/U+2029 as themselves (json.Marshal writes each as six bytes),
+// and no field the gap did not have.
 func writeGapSummary(out *bytes.Buffer, raw json.RawMessage) error {
 	var g struct {
-		Reason  string   `json:"reason"`
-		Skipped []string `json:"skipped"`
+		Capability string   `json:"capability"`
+		Reason     string   `json:"reason"`
+		Skipped    []string `json:"skipped"`
 	}
 	if err := json.Unmarshal(raw, &g); err != nil {
 		return err
 	}
-	if len(g.Reason) <= maxSummaryReasonBytes && len(g.Skipped) <= maxSummarySkipped &&
-		!slices.ContainsFunc(g.Skipped, func(s string) bool { return len(s) > maxSummarySkippedBytes }) {
+	if len(g.Capability) <= SummaryCapabilityBytes && len(g.Reason) <= SummaryReasonBytes && len(g.Skipped) <= SummarySkipped &&
+		!slices.ContainsFunc(g.Skipped, func(s string) bool { return len(s) > SummarySkippedBytes }) {
 		return json.Compact(out, raw)
 	}
-	var fields map[string]any
+	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
-	fields["reason"] = cutString(g.Reason, maxSummaryReasonBytes)
-	listed := make([]string, 0, min(len(g.Skipped), maxSummarySkipped))
-	for _, s := range g.Skipped[:min(len(g.Skipped), maxSummarySkipped)] {
-		listed = append(listed, cutString(s, maxSummarySkippedBytes))
+	if _, ok := fields["capability"]; ok {
+		fields["capability"] = jsonString(CutString(g.Capability, SummaryCapabilityBytes))
 	}
-	fields["skipped"] = listed
-	if n := len(g.Skipped) - maxSummarySkipped; n > 0 {
-		fields["skippedOmitted"] = n
+	if _, ok := fields["reason"]; ok {
+		fields["reason"] = jsonString(CutString(g.Reason, SummaryReasonBytes))
 	}
-	enc := json.NewEncoder(out)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(fields); err != nil {
-		return err
+	if n := len(g.Skipped) - SummarySkipped; n > 0 {
+		g.Skipped = g.Skipped[:SummarySkipped]
+		fields["skippedOmitted"] = json.RawMessage(fmt.Sprint(n))
 	}
-	out.Truncate(out.Len() - 1) // Encode's newline
+	if _, ok := fields["skipped"]; ok && g.Skipped != nil {
+		var list bytes.Buffer
+		list.WriteByte('[')
+		for i, s := range g.Skipped {
+			if i > 0 {
+				list.WriteByte(',')
+			}
+			list.Write(jsonString(CutString(s, SummarySkippedBytes)))
+		}
+		list.WriteByte(']')
+		fields["skipped"] = list.Bytes()
+	}
+	out.WriteByte('{')
+	for i, k := range slices.Sorted(maps.Keys(fields)) {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(jsonString(k))
+		out.WriteByte(':')
+		if err := json.Compact(out, fields[k]); err != nil {
+			return err
+		}
+	}
+	out.WriteByte('}')
 	return nil
 }
 
-// cutString is s cut to at most max bytes, at a UTF-8 boundary, marked
+// jsonString is s as a JSON string with only what JSON requires escaped:
+// '"', '\\' and control characters, so < > & and U+2028/U+2029 are
+// themselves.
+func jsonString(s string) json.RawMessage {
+	b := make([]byte, 0, len(s)+2)
+	b = append(b, '"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '"' || c == '\\':
+			b = append(b, '\\', c)
+		case c < 0x20:
+			b = fmt.Appendf(b, `\u%04x`, c)
+		default:
+			b = append(b, c)
+		}
+	}
+	return append(b, '"')
+}
+
+// CutString is s cut to at most max bytes, at a UTF-8 boundary, marked
 // with "…" when it is cut.
-func cutString(s string, max int) string {
+func CutString(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}

@@ -146,12 +146,17 @@ paths:
         apiserver accepts for what they name: namespaces RFC 1123 labels,
         object names at most 253 bytes without `/` or `%`, node and Helm
         release names RFC 1123 subdomains, team labels label values. Its
-        other values are within what any collector records: strings at most
-        16 KiB (a capability's reason 64 KiB, an object's field manager 128
-        printable bytes), at most 100 objects per API usage entry, each
-        group/version/kind once per list, at most 200 unrecognized images
-        and 32 capabilities. Anything else is 422, naming the field and
-        the rule, before anything is stored.
+        other values are within the limits collectors keep to: strings at
+        most 16 KiB (a capability's reason 64 KiB, an object's field
+        manager 128 printable bytes), at most 100 objects per API usage
+        entry, each group/version/kind once per list, at most 200
+        unrecognized images and 32 capabilities. Anything else is 422,
+        naming the field and the rule, before anything is stored. The free
+        text a collector copies whole from the cluster is cut to the
+        limits, not refused: a capability's reason and skipped entries,
+        and an object's `ignore` (to its whole tokens) and `ignoreReason`
+        (the upgradescope.dev/ignore annotations). The snapshot keeps the
+        push as sent.
 
         Each target's report is at most `--max-snapshot-bytes`: a push
         whose report for one would be larger is 413, and nothing is
@@ -218,7 +223,7 @@ paths:
             most 253 bytes, a missing or `null` inventory, an inventory
             `schemaVersion` other than 1, a `serverVersion` that is not
             a Kubernetes 1.x version, an identifier that is not valid for
-            what it names, or a value beyond what any collector records
+            what it names, or a value beyond the limits collectors keep to
             (see above). The message names the field and the rule.
           content:
             application/json:
@@ -857,9 +862,10 @@ components:
     SummaryGap:
       description: |
         A report's gap as an evaluation summary carries it, bounded: its
-        reason cut to 1 KiB and at most 10 of what it skipped, each cut to
-        512 bytes (a cut one ends in "…"), with `skippedOmitted` counting
-        the rest. The report lists every gap whole.
+        capability cut to 64 bytes, its reason to 256 and at most 3 of what
+        it skipped, each cut to 128 bytes (a cut one ends in "…"), with
+        `skippedOmitted` counting the rest. The report lists every gap
+        whole.
       allOf:
         - {$ref: "#/components/schemas/CapabilityGap"}
         - type: object
@@ -887,7 +893,14 @@ components:
         evaluatedAt: {type: string, format: date-time, description: When the result was last confirmed.}
         snapshotId: {type: integer, format: int64}
         outdated: {type: boolean, description: "Evaluated before today (UTC), or under another knowledge base or team map; the next pass replaces it."}
-        notAssessed: {type: array, items: {$ref: "#/components/schemas/SummaryGap"}}
+        notAssessed:
+          type: array
+          items: {$ref: "#/components/schemas/SummaryGap"}
+          description: |
+            The required gaps first, then the rest. A cluster's detail lists
+            every gap; `/clusters` lists at most 1 KiB of them (encoded) and
+            counts the rest in `notAssessedOmitted`.
+        notAssessedOmitted: {type: integer, minimum: 1, description: Gaps not listed (only in /clusters).}
     ClusterSummary:
       allOf:
         - {$ref: "#/components/schemas/ClusterFields"}
@@ -1058,7 +1071,11 @@ components:
         snapshotId: {type: integer, format: int64}
         source: {type: string, const: stored}
         outdated: {type: boolean}
-        notAssessed: {type: array, items: {$ref: "#/components/schemas/SummaryGap"}}
+        notAssessed:
+          type: array
+          items: {$ref: "#/components/schemas/SummaryGap"}
+          description: The required gaps first, then the rest, at most 1 KiB of them (encoded).
+        notAssessedOmitted: {type: integer, minimum: 1, description: Gaps not listed.}
     FleetRow:
       type: object
       required: [clusterId, name, lastSeen, stale, cells]

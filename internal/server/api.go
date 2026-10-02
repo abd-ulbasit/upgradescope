@@ -760,8 +760,9 @@ const supportedInventorySchema = 1
 // schemaVersion (which includes {} and a missing one), or a serverVersion
 // that is not a Kubernetes 1.x version, an identifier (a namespace,
 // object, node or Helm release name, a team label value) that is not
-// valid for what it names, or a value beyond what any collector records
-// (inventory.ValidateLimits). A degraded inventory with no
+// valid for what it names, or a value beyond the limits collectors keep
+// to (inventory.ValidateLimits), once the free text collectors copy whole
+// is cut to them (inventory.CutFreeText). A degraded inventory with no
 // serverVersion at all (the versions collector failed) is accepted and
 // judged at the cluster's last reported version (ingestSnapshot).
 func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
@@ -988,47 +989,98 @@ type evalSummary struct {
 	EvaluatedAt time.Time      `json:"evaluatedAt"` // last confirmed; a re-evaluation with an unchanged result moves it
 	SnapshotID  int64          `json:"snapshotId"`
 	Outdated    bool           `json:"outdated,omitempty"` // evaluated before today UTC or under another KB or team map; the next pass replaces it
-	// NotAssessed is the report's, each gap bounded (summaryGap): what
-	// the verdict could not cover.
-	NotAssessed []summaryGap `json:"notAssessed,omitempty"`
+	// NotAssessed is the report's, bounded (gapsOf): what the verdict
+	// could not cover. NotAssessedOmitted counts the gaps not listed.
+	NotAssessed        []summaryGap `json:"notAssessed,omitempty"`
+	NotAssessedOmitted int          `json:"notAssessedOmitted,omitempty"`
 }
 
-func (s *Server) summarize(e store.Evaluation, now time.Time) evalSummary {
+// summarize is e as the read API carries it, its notAssessed within budget
+// bytes (gapsOf; 0 = every gap, each cut).
+func (s *Server) summarize(e store.Evaluation, now time.Time, budget int) evalSummary {
+	gaps, omitted := gapsOf(e, budget)
 	return evalSummary{
-		Target:      e.Target,
-		Score:       e.Score,
-		Ready:       e.Ready,
-		Verdict:     verdictOf(e),
-		Blockers:    e.Blockers,
-		Warnings:    e.Warnings,
-		KBVersion:   e.KBVersion,
-		EvaluatedAt: e.EvaluatedAt,
-		SnapshotID:  e.SnapshotID,
-		Outdated:    s.outdated(e, now),
-		NotAssessed: gapsOf(e),
+		Target:             e.Target,
+		Score:              e.Score,
+		Ready:              e.Ready,
+		Verdict:            verdictOf(e),
+		Blockers:           e.Blockers,
+		Warnings:           e.Warnings,
+		KBVersion:          e.KBVersion,
+		EvaluatedAt:        e.EvaluatedAt,
+		SnapshotID:         e.SnapshotID,
+		Outdated:           s.outdated(e, now),
+		NotAssessed:        gaps,
+		NotAssessedOmitted: omitted,
 	}
 }
 
-// summaryGap is a report's gap as an evaluation summary carries it: its
-// reason cut to 1 KiB and at most 10 of what it skipped listed, each cut
-// to 512 bytes, with SkippedOmitted counting the rest (the store keeps
-// that much beside the report, since the fleet-wide reads carry it for
-// every cluster and target). The report has every gap whole.
+// summaryGap is a report's gap as an evaluation summary carries it (cut
+// by gapsOf), with SkippedOmitted counting the skipped entries it does
+// not list. The report has every gap whole.
 type summaryGap struct {
 	engine.CapabilityGap
 	SkippedOmitted int `json:"skippedOmitted,omitempty"`
 }
 
+// fleetSummaryBytes is how much of what an evaluation could not assess
+// the fleet-wide reads (/clusters, /fleet) list per evaluation, encoded.
+// They carry a summary for every cluster and target, and a push within
+// the inventory limits may name 32 capabilities: each gap cut to the
+// store column's bounds is up to ~900 bytes (more with escapes), so
+// listing them all made a 500-cluster /fleet of three targets a 10 MB
+// answer that grew the heap 45 MiB, 4.5 times the ~10 MiB the server's
+// worst case allows two fleet reads. A genuine gap is a few hundred
+// bytes, so a summary lists the one or two that make a verdict unknown;
+// the rest are counted, and a cluster's own detail and report list them
+// all.
+const fleetSummaryBytes = 1 << 10
+
 // gapsOf decodes the evaluation's notAssessed, which the store keeps beside
-// the report, so the summaries that carry a verdict also say what it could
-// not cover without loading the report. A report that does not decode has
+// the report, cut to its bounds, so the summaries that carry a verdict also
+// say what it could not cover without loading the report. It lists the
+// required gaps (those that make a verdict unknown) first, then the rest,
+// each in the report's order, and with budget > 0 stops before the gap
+// that would take the list past budget bytes encoded, returning how many
+// it left out. Each gap is cut to the column's bounds again, for a row an
+// earlier build wrote with wider ones. A report that does not decode has
 // none; the report endpoint says it is corrupt.
-func gapsOf(e store.Evaluation) []summaryGap {
-	var gaps []summaryGap
-	if json.Unmarshal(e.NotAssessed, &gaps) != nil {
-		return nil
+func gapsOf(e store.Evaluation, budget int) ([]summaryGap, int) {
+	var all []summaryGap
+	if json.Unmarshal(e.NotAssessed, &all) != nil || len(all) == 0 {
+		return nil, 0
 	}
-	return gaps
+	gaps := make([]summaryGap, 0, len(all))
+	size := len("[]")
+	full := false
+	for _, required := range []bool{true, false} {
+		for _, g := range all {
+			if g.Required != required || full {
+				continue
+			}
+			g.Capability = inventory.Capability(store.CutString(string(g.Capability), store.SummaryCapabilityBytes))
+			g.Reason = store.CutString(g.Reason, store.SummaryReasonBytes)
+			if n := len(g.Skipped) - store.SummarySkipped; n > 0 {
+				g.Skipped, g.SkippedOmitted = g.Skipped[:store.SummarySkipped], g.SkippedOmitted+n
+			}
+			for i, s := range g.Skipped {
+				g.Skipped[i] = store.CutString(s, store.SummarySkippedBytes)
+			}
+			if budget > 0 {
+				enc, err := marshalJSON(g)
+				if err != nil || size+len(enc)+1 > budget {
+					full = true
+					continue
+				}
+				size += len(enc) + 1
+			}
+			gaps = append(gaps, g)
+		}
+	}
+	if len(gaps) == 0 {
+		gaps = nil
+	}
+	return gaps, len(all) - len(gaps)
 }
 
 type clusterSummary struct {
@@ -1057,7 +1109,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 		if server, err := inventory.ParseVersion(c.version); c.hasSnapshot && err == nil {
 			target := server.Next()
 			if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, target.String()); err == nil {
-				sum := s.summarize(e, now)
+				sum := s.summarize(e, now, fleetSummaryBytes)
 				cs.Latest = &sum
 			}
 		}
@@ -1095,7 +1147,7 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, t := range targets {
 		if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, t.String()); err == nil {
-			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now))
+			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now, 0))
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)

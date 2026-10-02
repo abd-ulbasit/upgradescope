@@ -225,43 +225,50 @@ func TestEvaluationWrittenWithoutNotAssessedStaysReadable(t *testing.T) {
 
 // The column is a summary that the fleet-wide reads load for every
 // cluster and target, so it keeps at most a bounded part of each gap: its
-// reason cut to maxSummaryReasonBytes, the first maxSummarySkipped skipped
-// entries, each cut to maxSummarySkippedBytes, and how many more there
-// are. It writes < > & as themselves: json.Marshal wrote each as six
-// bytes, so a report of gaps whose reasons were mostly those stored a
-// column four times its size.
+// capability name cut to SummaryCapabilityBytes, its reason to
+// SummaryReasonBytes, the first SummarySkipped skipped entries, each cut
+// to SummarySkippedBytes, and how many more there are; every other field
+// as it was, and no field the gap did not have. It writes < > & and
+// U+2028 as themselves: json.Marshal wrote each as six bytes, so a report
+// of gaps whose reasons were mostly those stored a column four times its
+// size.
 func TestNotAssessedOfIsBounded(t *testing.T) {
 	var skipped []string
-	for i := range maxSummarySkipped + 5 {
+	for i := range SummarySkipped + 5 {
 		skipped = append(skipped, fmt.Sprintf("s%d", i))
 	}
-	skipped[0] = strings.Repeat("k", maxSummarySkippedBytes+10)
+	skipped[0] = strings.Repeat("k", SummarySkippedBytes+10)
 	gap := map[string]any{"capability": "api-usage", "partial": true, "required": true, "future": 1,
-		"reason": strings.Repeat("é", maxSummaryReasonBytes), "skipped": skipped}
-	small := map[string]any{"capability": "helm", "reason": "<forbidden> & 'denied'"}
-	var report strings.Builder // as the server writes reports: < > & as themselves
+		"reason": strings.Repeat("é", SummaryReasonBytes) + "\u2028<&>", "skipped": skipped}
+	small := map[string]any{"capability": "helm", "reason": "<forbidden> & 'denied'\u2028"}
+	named := map[string]any{"capability": strings.Repeat("c", 16<<10)} // no reason, no skipped
+	var report strings.Builder                                         // as the server writes reports: < > & as themselves (below)
 	enc := json.NewEncoder(&report)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(map[string]any{"notAssessed": []any{gap, small}}); err != nil {
+	if err := enc.Encode(map[string]any{"notAssessed": []any{gap, small, named}}); err != nil {
 		t.Fatal(err)
 	}
-	got := notAssessedOf([]byte(report.String()))
+	// The server writes line separators as themselves too; Encoder does not.
+	got := notAssessedOf([]byte(strings.ReplaceAll(report.String(), `\u2028`, "\u2028")))
 	var gaps []map[string]any
-	if err := json.Unmarshal([]byte(got), &gaps); err != nil || len(gaps) != 2 {
-		t.Fatalf("notAssessedOf = %.300q (%v), want two gaps", got, err)
+	if err := json.Unmarshal([]byte(got), &gaps); err != nil || len(gaps) != 3 {
+		t.Fatalf("notAssessedOf = %.300q (%v), want three gaps", got, err)
 	}
 	reason, _ := gaps[0]["reason"].(string)
 	listed, _ := gaps[0]["skipped"].([]any)
-	if len(reason) > maxSummaryReasonBytes+len("…") || !strings.HasSuffix(reason, "…") || !utf8.ValidString(reason) ||
-		len(listed) != maxSummarySkipped || len(listed[0].(string)) > maxSummarySkippedBytes+len("…") ||
+	if len(reason) > SummaryReasonBytes+len("…") || !strings.HasSuffix(reason, "…") || !utf8.ValidString(reason) ||
+		len(listed) != SummarySkipped || len(listed[0].(string)) > SummarySkippedBytes+len("…") ||
 		gaps[0]["skippedOmitted"] != float64(5) || gaps[0]["capability"] != "api-usage" || gaps[0]["required"] != true || gaps[0]["future"] != float64(1) {
 		t.Errorf("large gap = %.400v, want its reason and skipped cut, 5 more counted, the rest kept", gaps[0])
 	}
 	if !reflect.DeepEqual(gaps[1], small) {
 		t.Errorf("small gap = %v, want it whole", gaps[1])
 	}
-	if !strings.Contains(got, `"<forbidden> & 'denied'"`) {
-		t.Errorf("notAssessedOf = %.300q, want < > & written as themselves", got)
+	if c, _ := gaps[2]["capability"].(string); len(gaps[2]) != 1 || len(c) > SummaryCapabilityBytes+len("…") {
+		t.Errorf("long-named gap = %.200v, want only its capability, cut", gaps[2])
+	}
+	if !strings.Contains(got, "\"<forbidden> & 'denied'\u2028\"") || strings.Contains(got, `\u2028`) || strings.Contains(got, `\u003c`) {
+		t.Errorf("notAssessedOf = %.300q, want < > & and U+2028 written as themselves", got)
 	}
 }
 
