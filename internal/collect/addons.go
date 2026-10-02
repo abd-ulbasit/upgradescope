@@ -282,12 +282,24 @@ func labelAddOn(l appLabels, addons []registry.AddOn) (id, version string) {
 	return "", ""
 }
 
+// vendorBuilds maps an add-on to the registry entries for vendor builds of
+// it, which may keep its labels and controller name (RKE2's chart keeps
+// the controller name) but follow the vendor's lifecycle.
+var vendorBuilds = map[string][]string{
+	"ingress-nginx": {"rke2-ingress-nginx", "aks-app-routing-nginx"},
+}
+
 // ingressClassAddOns maps an IngressClass spec.controller to the add-on it
-// names, followed by the add-ons whose controllers also claim that
-// controller name (vendor builds keep upstream's: RKE2's chart does): the
-// IngressClass is evidence only when none of them was detected otherwise.
+// names, followed by the add-ons that can also serve a class of that
+// controller name: its vendor builds, and Traefik, whose Kubernetes Ingress
+// NGINX provider (v3.6.2+) serves k8s.io/ingress-nginx classes by default,
+// the migration path off the retired controller that keeps the class. The
+// IngressClass is evidence only when none of them was detected otherwise,
+// deliberately: with one of them running, the class most likely belongs to
+// it, and an upstream controller beside it that no matcher or label names
+// is missed (its image is still listed as unrecognized).
 var ingressClassAddOns = map[string][]string{
-	"k8s.io/ingress-nginx": {"ingress-nginx", "rke2-ingress-nginx", "aks-app-routing-nginx"},
+	"k8s.io/ingress-nginx": {"ingress-nginx", "rke2-ingress-nginx", "aks-app-routing-nginx", "traefik"},
 }
 
 // matchAddOns is pure: pod images and labels + helm releases + IngressClass
@@ -304,14 +316,16 @@ var ingressClassAddOns = map[string][]string{
 //     pod none of whose images that add-on's matchers claim but one of
 //     which no matcher claims at all: the container the labels are about
 //     (an injected sidecar matching another add-on does not stop it; a
-//     vendor build whose image matched its own entry does). A pod running
-//     a provider build (registry.IsProviderBuild) is never claimed through
+//     vendor build (vendorBuilds) whose image matched its own entry does,
+//     whatever unmatched sidecars run beside it). A pod running a
+//     provider build (registry.IsProviderBuild) is never claimed through
 //     its labels: its support follows the provider, not upstream (#110).
 //   - "ingressclass": an IngressClass whose controller names the add-on
-//     (ingressClassAddOns) when nothing else found it or a vendor build of
-//     it. It is cluster-scoped (no namespace) and has no version, so a
-//     product retired as a whole (ingress-nginx) is still end-of-life, and
-//     a per-release-line product gets no lifecycle verdict.
+//     (ingressClassAddOns) when nothing else found it nor another
+//     controller that can serve the class. It is cluster-scoped (no
+//     namespace) and has no version, so a product retired as a whole
+//     (ingress-nginx) is still end-of-life, and a per-release-line product
+//     gets no lifecycle verdict.
 //
 // Each namespace is its own install, judged at its own version: within
 // one, the oldest version wins, and a Helm release's appVersion over image
@@ -356,7 +370,8 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		for _, img := range p.Images {
 			ref := parseImage(img)
 			ids := imageAddOns(ref, addons)
-			claimed = claimed || slices.Contains(ids, id)
+			claimed = claimed || slices.Contains(ids, id) ||
+				slices.ContainsFunc(ids, func(v string) bool { return slices.Contains(vendorBuilds[id], v) })
 			unclaimed = unclaimed || len(ids) == 0
 			provider = provider || registry.IsProviderBuild(ref.host+"/"+ref.path)
 		}
