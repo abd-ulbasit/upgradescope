@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -256,10 +257,13 @@ func TestCollectHelmPeakHeapIsBoundedByOneRelease(t *testing.T) {
 // payload was decompressed whole before it was parsed. Decompression now
 // stops past maxReleaseJSONBytes: the release is skipped as too large, the
 // reason is on the helm capability, and the other releases are still read.
-// Measured on this harness with a 256 MiB bomb: 828 MiB peak before, 112
-// MiB after (the JSON decoder's buffer doubling up to the cap). Under the
-// race detector, which slows compressing the bomb about thirtyfold, the
-// bomb decodes to 48 MiB, still past the cap.
+// Measured on this harness with a 256 MiB bomb: 828 MiB peak before; 112
+// MiB stopped at a 32 MiB cap but read by a json.Decoder, whose buffer
+// doubles up to the cap; 17 MiB read into one buffer stopped at the 16 MiB
+// cap. ConfigMaps are flagged, so the release that is read has its
+// manifest parsed as in a real scan. Under the race detector, which slows
+// compressing the bomb about thirtyfold, the bomb decodes to 48 MiB, still
+// past the cap.
 func TestCollectHelmGzipBombIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compresses a 256 MiB release")
@@ -269,25 +273,95 @@ func TestCollectHelmGzipBombIsBounded(t *testing.T) {
 		decoded = 48 << 20
 	}
 	bomb := helmSecret(t, helmRev{ns: "a-bomb", release: "bomb", rev: 1, status: "deployed"})
-	bomb.Data["release"] = helmBomb(t, `{"chart":{"metadata":{"name":"ingress-nginx","version":"4.7.1","appVersion":"1.8.1"}},"manifest":"`, 'a', decoded, `"}`)
+	bomb.Data["release"] = helmBomb(t, `{"chart":{"metadata":{"name":"ingress-nginx","version":"4.7.1","appVersion":"1.8.1"}},"manifest":"`, "a", decoded, `"}`)
 	valid := helmSecret(t, helmRev{ns: "cert-manager", release: "cert-manager", rev: 1, status: "deployed", chart: "cert-manager", chartVersion: "v1.13.0", appVersion: "v1.13.0"})
 	kube, meta := helmClients(t, bomb, valid)
+	lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
 	var inv inventory.Inventory
 	var err error
-	peak := peakHeap(func() { err = collectHelm(context.Background(), kube, meta, nil, &inv) })
+	peak := peakHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
 	t.Logf("stored bomb %d KiB decoding to %d MiB; peak heap above baseline %.1f MiB", len(bomb.Data["release"])>>10, decoded>>20, float64(peak)/(1<<20))
 	var pe partialError
 	if !errors.As(err, &pe) {
 		t.Fatalf("a gzip bomb must not fail the capability: %v", err)
 	}
 	if !pe.incomplete || !slices.Equal(pe.skipped, []string{"a-bomb/bomb"}) ||
-		!strings.Contains(pe.msg, "1 release(s) not decodable, first a-bomb/bomb: release payload too large: over 32 MiB decompressed") {
+		!strings.Contains(pe.msg, "1 release(s) not decodable, first a-bomb/bomb: release payload too large: over 16 MiB decompressed") {
 		t.Errorf("partial = %v, skipped = %q, reason = %q; want incomplete, skipping a-bomb/bomb as too large", pe.incomplete, pe.skipped, pe.msg)
 	}
 	if len(inv.HelmReleases) != 1 || inv.HelmReleases[0].Name != "cert-manager" {
 		t.Errorf("releases = %+v, want cert-manager only", inv.HelmReleases)
 	}
-	if peak > 160<<20 {
-		t.Errorf("peak heap %.1f MiB, want ≤ 160 MiB (bounded by the decompression cap)", float64(peak)/(1<<20))
+	if peak > 48<<20 {
+		t.Errorf("peak heap %.1f MiB, want ≤ 48 MiB (bounded by the decompression cap)", float64(peak)/(1<<20))
+	}
+}
+
+// TestCollectHelmManifestParsingIsBounded guards the rest of #168: a
+// release under the decompression cap is still a bomb when its manifest
+// is, because parsing amplifies it. The --files parser indexes every
+// newline (8 bytes each) and keeps every object of the stream before the
+// flagged ones are picked, so a release that only just fit the cap
+// peaked at 390 MiB (a manifest of newlines, 42 KiB stored) and 564 MiB
+// (tiny ConfigMaps, 127 KiB stored) on this harness, and OOM-killed the
+// agent at its 256Mi limit; one 1 MiB document of "- -" lines alone
+// reached 240 MiB. Now the cap is 16 MiB, the manifest is parsed in runs
+// bounded in bytes and YAML nodes, and lines are counted without the
+// index: every case peaks at 32–55 MiB. Each case is a valid release whose
+// manifest, JSON-escaped, fills the cap, with ConfigMaps flagged as a real
+// KB flags some kinds, and every object a ConfigMap. Under the race
+// detector, which slows parsing about tenfold, the manifests are 4 MiB.
+func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("parses manifests of up to the decompression cap")
+	}
+	lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
+	const head, tail = `{"chart":{"metadata":{"name":"bomb","version":"1.0.0"}},"manifest":`, `}`
+	const object = "---\napiVersion: v1\nkind: ConfigMap\n"
+	fits := maxReleaseJSONBytes - len(head) - len(tail) - 2 // the manifest's quotes
+	if raceEnabled {
+		fits = 4 << 20
+	}
+	// A mapping at the node bound, two nodes a line: the keys repeat, as
+	// they must to compress into a Secret.
+	keys := object + "data:\n"
+	keys += strings.Repeat(" k: v\n", (maxManifestNodes-2-yamlNodeBound(keys))/2)
+	for _, tc := range []struct {
+		name, doc string
+		objects   bool // each doc is a ConfigMap
+	}{
+		{name: "newlines", doc: "\n"},
+		{name: "tiny flagged objects", doc: object, objects: true},
+		{name: "documents that are not objects", doc: "---\nx\n"},
+		{name: "objects of newlines at the size bound", doc: object + strings.Repeat("\n", min(maxManifestDocBytes, fits/4)-64), objects: true},
+		{name: "objects at the node bound", doc: keys, objects: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// JSON escapes each newline to two bytes; nothing else in doc
+			// is escaped.
+			n := fits / (len(tc.doc) + strings.Count(tc.doc, "\n"))
+			manifest, _ := json.Marshal(strings.Repeat(tc.doc, n))
+			s := helmSecret(t, helmRev{ns: "a-bomb", release: "bomb", rev: 1, status: "deployed"})
+			s.Data["release"] = helmBomb(t, head+string(manifest)+tail, "", 0, "")
+			kube, meta := helmClients(t, s)
+			manifest = nil
+			var inv inventory.Inventory
+			var err error
+			peak := peakHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
+			t.Logf("stored %d KiB decoding to %d MiB; peak heap above baseline %.1f MiB", len(s.Data["release"])>>10, fits>>20, float64(peak)/(1<<20))
+			if pe := (partialError{}); !errors.As(err, &pe) || pe.incomplete {
+				t.Fatalf("err = %v, want the release read whole", err)
+			}
+			if len(inv.HelmReleases) != 1 {
+				t.Fatalf("releases = %+v, want the one", inv.HelmReleases)
+			}
+			apis := inv.HelmReleases[0].ManifestAPIs
+			if !tc.objects && len(apis) != 0 || tc.objects && (len(apis) != 1 || apis[0].Count != n || len(apis[0].Objects) != min(n, inventory.MaxObjectRefs)) {
+				t.Errorf("manifest APIs = %+v, want %d flagged ConfigMaps", apis, n)
+			}
+			if peak > 80<<20 {
+				t.Errorf("peak heap %.1f MiB, want ≤ 80 MiB", float64(peak)/(1<<20))
+			}
+		})
 	}
 }

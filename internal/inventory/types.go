@@ -38,7 +38,8 @@ type CapabilityStatus struct {
 	//     deprecated version, "group/version resource", whose metric rows
 	//     cannot be told apart from its own requests;
 	//   - helm: storage drivers not read ("configmaps") and releases not
-	//     read or not decodable ("namespace/name");
+	//     read, not decodable or whose manifest was not fully parsed
+	//     ("namespace/name");
 	//   - versions: the control-plane components with a kube-system pod
 	//     whose version could not be read ("kube-proxy", "kube-scheduler");
 	//   - addons: resources not read for add-on evidence,

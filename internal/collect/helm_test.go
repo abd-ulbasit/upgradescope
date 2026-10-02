@@ -345,15 +345,15 @@ func TestDecodeHelmReleaseRejectsNonGzip(t *testing.T) {
 	}
 }
 
-// helmBomb is a Helm release payload, base64(gzip(prefix + n×fill +
-// suffix)), whose stored size is a tiny fraction of what it decodes to:
-// 700 MiB of whitespace fits a 951 KB Secret (#168).
-func helmBomb(t testing.TB, prefix string, fill byte, n int, suffix string) []byte {
+// helmBomb is a Helm release payload, base64(gzip(prefix + n bytes of fill
+// repeated + suffix)), whose stored size is a tiny fraction of what it
+// decodes to: 700 MiB of whitespace fits a 951 KB Secret (#168).
+func helmBomb(t testing.TB, prefix, fill string, n int, suffix string) []byte {
 	t.Helper()
 	var gz bytes.Buffer
 	zw := gzip.NewWriter(&gz)
 	zw.Write([]byte(prefix))
-	chunk := bytes.Repeat([]byte{fill}, 1<<20)
+	chunk := bytes.Repeat([]byte(fill), 1<<20/max(1, len(fill)))
 	for left := n; left > 0; left -= len(chunk) {
 		zw.Write(chunk[:min(left, len(chunk))])
 	}
@@ -374,15 +374,15 @@ func TestDecodeHelmReleaseBoundsDecompressedSize(t *testing.T) {
 		payload []byte
 		tooBig  bool
 	}{
-		"valid json at the cap":   {helmBomb(t, head, 'a', fits, tail), false},
-		"valid json over the cap": {helmBomb(t, head, 'a', fits+1, tail), true},
-		"whitespace over the cap": {helmBomb(t, "", ' ', maxReleaseJSONBytes+1, ""), true},
+		"valid json at the cap":   {helmBomb(t, head, "a", fits, tail), false},
+		"valid json over the cap": {helmBomb(t, head, "a", fits+1, tail), true},
+		"whitespace over the cap": {helmBomb(t, "", " ", maxReleaseJSONBytes+1, ""), true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			doc, err := decodeHelmRelease(tc.payload)
 			if tc.tooBig {
-				if !errors.Is(err, errReleaseTooLarge) || !strings.Contains(err.Error(), "release payload too large: over 32 MiB decompressed") {
-					t.Errorf("err = %v, want errReleaseTooLarge naming the 32 MiB cap", err)
+				if !errors.Is(err, errReleaseTooLarge) || !strings.Contains(err.Error(), "release payload too large: over 16 MiB decompressed") {
+					t.Errorf("err = %v, want errReleaseTooLarge naming the 16 MiB cap", err)
 				}
 				return
 			}
@@ -390,6 +390,44 @@ func TestDecodeHelmReleaseBoundsDecompressedSize(t *testing.T) {
 				t.Errorf("chart %q, manifest of %d bytes, err %v; want bomb, %d bytes, nil", doc.Chart.Metadata.Name, len(doc.Manifest), err, fits)
 			}
 		})
+	}
+}
+
+// The whole gzip stream is read and checked, not only the JSON value at
+// its start: a payload whose CRC or size trailer is wrong (corrupt, or a
+// size that lies about the buffer the JSON needs), or whose JSON is
+// followed by more, is not decodable, as when it was read with ReadAll.
+func TestDecodeHelmReleaseChecksTheWholeStream(t *testing.T) {
+	gz := func(s string) []byte {
+		var b bytes.Buffer
+		zw := gzip.NewWriter(&b)
+		zw.Write([]byte(s))
+		zw.Close()
+		return b.Bytes()
+	}
+	const doc = `{"chart":{"metadata":{"name":"x"}}}`
+	corrupt := func(at int) []byte { // flips a trailer byte: -8 CRC, -4 size
+		b := gz(doc)
+		b[len(b)+at] ^= 0xff
+		return b
+	}
+	for name, tc := range map[string]struct {
+		raw  []byte
+		want string
+	}{
+		"bad crc":       {corrupt(-8), "gunzip read: gzip: invalid checksum"},
+		"lying size":    {corrupt(-4), "gunzip read: gzip: invalid checksum"},
+		"trailing data": {gz(doc + `{"more":1}`), "release json: invalid character '{' after top-level value"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeHelmRelease([]byte(base64.StdEncoding.EncodeToString(tc.raw)))
+			if err == nil || err.Error() != tc.want {
+				t.Errorf("err = %v, want %s", err, tc.want)
+			}
+		})
+	}
+	if d, err := decodeHelmRelease([]byte(base64.StdEncoding.EncodeToString(gz(doc)))); err != nil || d.Chart.Metadata.Name != "x" {
+		t.Errorf("intact payload: %+v, %v", d, err)
 	}
 }
 
@@ -443,6 +481,84 @@ metadata:
 	}}
 	if !reflect.DeepEqual(inv.HelmReleases, want) {
 		t.Errorf("releases = %#v\nwant      %#v", inv.HelmReleases, want)
+	}
+}
+
+// A manifest parsed a run of documents at a time (#168) yields what it
+// yields parsed whole: the same objects, counts and manifest lines. The
+// manifests span several runs, one with a document larger than a run, one
+// that stops at an invalid separator as the parser does, and one in JSON,
+// which is not split.
+func TestManifestAPIsInRunsMatchesWholeParse(t *testing.T) {
+	flagged := map[gvk]bool{{"", "v1", "ConfigMap"}: true}
+	var b strings.Builder
+	for i := range 90 {
+		fmt.Fprintf(&b, "--- # Source: big/templates/cm-%d.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm-%d\n  namespace: ns-%d\n", i, i, i%3)
+		fmt.Fprintf(&b, "---\n# filler\napiVersion: v1\nkind: Secret\nmetadata:\n  name: s-%d\ndata:\n", i)
+		pad := 400 // lines of 60 bytes and 2 YAML nodes: 23 KiB
+		if i == 45 {
+			pad = 25000 // 1.4 MiB and 50,000 nodes: one document over a run
+		}
+		for j := range pad {
+			fmt.Fprintf(&b, "  k%06d: dmFsdWUgdmFsdWUgdmFsdWUgdmFsdWUgdmFsdWUgdmFsdWUK\n", j)
+		}
+	}
+	yamlManifest := b.String()
+	half := len(yamlManifest) / 2
+	cut := half + strings.Index(yamlManifest[half:], "\n---")
+	for name, manifest := range map[string]string{
+		"yaml":              yamlManifest,
+		"invalid separator": yamlManifest[:cut+1] + "--- not a separator\n" + yamlManifest[cut+1:],
+		"json":              `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"a"}}` + "\n" + `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"b"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			objs, _, _, _ := parseManifestStream(strings.NewReader(manifest))
+			counts := map[gvk]*inventory.APIUsage{}
+			accumulate(counts, slices.DeleteFunc(objs, func(o manifestObject) bool { return !flagged[gvk{o.group, o.version, o.kind}] }))
+			want := usageRows(counts)
+			runs := 0
+			splitManifest(manifest, func(string, int, bool) { runs++ })
+			got, err := manifestAPIs(manifest, flagged)
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Errorf("in %d runs: %+v, %v\nwhole:     %+v", runs, got, err, want)
+			}
+			if name != "json" && runs < 3 {
+				t.Errorf("%d runs, want several", runs)
+			}
+		})
+	}
+}
+
+// A document over maxManifestDocBytes or maxManifestNodes is not parsed,
+// whatever it holds (#168): the release is still recorded with the objects
+// of its other documents, and the capability is Partial, naming the
+// release and the first document's line.
+func TestCollectHelmManifestDocumentOverTheBoundsIsAGap(t *testing.T) {
+	const cm = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: %s\n"
+	manifest := fmt.Sprintf(cm, "first") +
+		fmt.Sprintf(cm, "too-long") + strings.Repeat("# comment\n", maxManifestDocBytes/10) +
+		fmt.Sprintf(cm, "too-many-nodes") + "data:\n" + strings.Repeat(" k: v\n", maxManifestNodes/2) +
+		fmt.Sprintf(cm, "last")
+	kube, meta := helmClients(t, helmSecret(t, helmRev{ns: "a-bomb", release: "bomb", rev: 1, status: "deployed", chart: "bomb", manifest: manifest}))
+	lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
+	var inv inventory.Inventory
+	err := collectHelm(context.Background(), kube, meta, lifecycle, &inv)
+	var pe partialError
+	if !errors.As(err, &pe) || !pe.incomplete || !slices.Equal(pe.skipped, []string{"a-bomb/bomb"}) ||
+		!strings.HasSuffix(pe.msg, "; 1 release manifest(s) not fully parsed, first a-bomb/bomb: manifest document too large: 2 document(s) over 2 MiB or 65536 YAML nodes not parsed, first at manifest line 6") {
+		t.Fatalf("err = %v (skipped %q), want incomplete, naming a-bomb/bomb and the documents not parsed", err, pe.skipped)
+	}
+	if len(inv.HelmReleases) != 1 {
+		t.Fatalf("releases = %+v, want bomb", inv.HelmReleases)
+	}
+	var names []string
+	for _, u := range inv.HelmReleases[0].ManifestAPIs {
+		for _, o := range u.Objects {
+			names = append(names, o.Name)
+		}
+	}
+	if !slices.Equal(names, []string{"first", "last"}) {
+		t.Errorf("objects = %q, want first and last: the documents around those not parsed", names)
 	}
 }
 
