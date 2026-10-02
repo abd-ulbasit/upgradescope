@@ -263,7 +263,9 @@ refs_to_object() {
 # through the deprecated version can tell; once its manager re-applies it
 # through GA, nothing is left to migrate.
 deprecated_object_reported() {
-  k api-versions | grep -qxF "$DEP_GV" ||
+  local served
+  served=$(k api-versions) || return 1 # not piped into grep -q: SIGPIPE under pipefail
+  grep -qxF "$DEP_GV" <<<"$served" ||
     { echo "$DEP_GV is not served: the runtimeConfig in hack/e2e/kind-config.yaml did not take" >&2; return 1; }
   apply_fixture "$DEP_GV" deprecated || return 1
   "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --output json --fail-on never >"$work/deprecated.json" ||
@@ -271,7 +273,7 @@ deprecated_object_reported() {
   local refs
   refs=$(refs_to_object "$work/deprecated.json") || return 1
   echo "after the $DEP_GV apply: ${refs:-no finding lists $DEP_OBJ}"
-  grep -qF "/$DEP_GV/" <<<"$(grep -F " $FIELD_MANAGER" <<<"$refs")" ||
+  awk -v gv="/$DEP_GV/" -v m="$FIELD_MANAGER" 'index($1, gv) && $2 == m { f = 1 } END { exit !f }' <<<"$refs" ||
     { echo "no finding lists $DEP_OBJ at $DEP_GV with manager $FIELD_MANAGER" >&2; return 1; }
   apply_fixture "$GA_GV" ga || return 1
   "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --output json --fail-on never >"$work/ga.json" ||
