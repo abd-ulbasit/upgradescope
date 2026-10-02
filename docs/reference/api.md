@@ -661,6 +661,8 @@ The engine's report, as `scan --output json` writes it.
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
 | `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
+| `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `findings` | array of [Finding](#finding) | yes | — |
 
 ### ReportBase
@@ -680,6 +682,8 @@ The report's fields other than its findings.
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
 | `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
+| `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 
 ### ReportMeta
 
@@ -707,6 +711,8 @@ The report's fields other than its findings.
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
 | `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
+| `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `findings` | array of [Finding](#finding) | yes | — |
 | `evaluatedAt` | string (date-time) | yes | — |
 | `snapshotId` | integer (int64) | yes | — |
@@ -843,6 +849,8 @@ The report's fields other than its findings.
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
 | `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
+| `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `findings` | array of [GateFinding](#gatefinding) | yes | — |
 | `teams` | [TeamScores](#teamscores) | no | — |
 | `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included. |
@@ -883,7 +891,8 @@ sent, unknown fields included, so a newer server can judge them.
 | `nodes` | array of object | no | — |
 | `controlPlane` | array of object | no | — |
 | `namespaces` | array of object | no | — |
-| `unrecognizedImages` | array of string | no | — |
+| `unrecognizedImages` | array of string | no | Image repositories no add-on image matcher claims; sorted, deduplicated, at most 200. |
+| `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories the cap dropped. |
 
 ### PushAccepted
 

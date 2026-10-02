@@ -28,7 +28,12 @@ the knowledge base lists as removed, api-usage is not assessed, so the verdict
 is at least unknown and the gate fails unless --allow-incomplete. VCS metadata,
 node_modules and Go vendor/ directories (with modules.txt) are not walked, nor
 are symlinked directories (kubectl apply -R does not follow them either); each
-of these but VCS metadata is a warning.
+of these but VCS metadata is a warning. Files mode assesses API usage and
+add-ons: the container and init-container images and labels of Pod, Deployment,
+DaemonSet, StatefulSet, ReplicaSet, Job and CronJob pod templates, and
+IngressClass controllers, matched as a live scan matches them. Images injected
+at admission (a mesh sidecar) are not in the manifests. Version skew, Helm
+releases and deprecated API callers need a cluster and are not assessed.
 
 Suppression: ignore rules in .upgradescope.yaml (found in the scan root,
 i.e. the --files directory or else the working directory, then at the git

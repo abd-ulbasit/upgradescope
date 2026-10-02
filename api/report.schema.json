@@ -21,6 +21,8 @@
     "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
     "notAssessed": {"type": "array", "items": {"$ref": "#/$defs/gap"}},
     "suppressed": {"type": "array", "items": {"$ref": "#/$defs/suppressed"}},
+    "unrecognizedImages": {"description": "Image repositories (host/path, no tag) that no add-on image matcher recognised: a gap in add-on detection, not a finding, so they change neither score nor verdict. An add-on running one is still found through its pod labels, IngressClass or Helm release. Sorted, deduplicated, at most 200.", "type": "array", "maxItems": 200, "items": {"type": "string"}},
+    "unrecognizedImagesOmitted": {"description": "Unrecognized image repositories beyond the 200 listed.", "type": "integer", "minimum": 1},
     "teams": {
       "description": "Per-team scores; findings with no team are under \"unattributed\". Present when there are findings.",
       "type": "object",
