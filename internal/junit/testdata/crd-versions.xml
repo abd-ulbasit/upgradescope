@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="7" failures="1" errors="0" time="0">
+  <testsuite name="deprecated-api-in-use" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="deprecated-api-in-use/cert-manager.io/v1alpha2/certificates" classname="upgradescope.deprecated-api-in-use" time="0">
+      <system-out>info: clients still requesting cert-manager.io/v1alpha2 certificates (deprecated).&#xA;apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; no removal release is recorded. The metric does not identify the client; apiserver audit logs do.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="crd-version" tests="5" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="crd-version/unserved/cert-manager.io/v1alpha3/Certificate" classname="upgradescope.crd-version" time="0">
+      <failure message="cert-manager.io/v1alpha3 Certificate is not served by its CRD (1 object)" type="blocker">cert-manager.io/v1alpha3 Certificate is not served by its CRD (1 object).&#xA;1 object(s) written through this version: shop (1). Written by: flux. CRD certificates.cert-manager.io marks v1alpha3 served: false (it serves v1alpha2, v1), so the apiserver rejects these objects at v1alpha3. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.&#xA;Objects:&#xA;- shop/legacy-tls&#xA;Teams: storefront&#xA;Fix: move these objects to cert-manager.io/v1; the apiserver rejects writes at v1alpha3. A named manager that no longer writes them keeps them listed through its managedFields entry until another manager takes over its fields or the entry is removed.&#xA;References:&#xA;- https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/</failure>
+    </testcase>
+    <testcase name="crd-version/stored-unserved/cert-manager.io/v1alpha3/Certificate" classname="upgradescope.crd-version" time="0">
+      <system-out>warning: CRD certificates.cert-manager.io lists unserved version v1alpha3 in status.storedVersions.&#xA;Objects may still be persisted at v1alpha3, which CRD certificates.cert-manager.io no longer serves (storage version: v1). A CRD update that drops v1alpha3 from spec.versions is rejected while status.storedVersions lists it, so the add-on upgrade that drops it fails. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.&#xA;Fix: migrate every stored Certificate to the storage version v1 (kube-storage-version-migrator, the add-on&#39;s own tool such as cert-manager&#39;s cmctl upgrade migrate-api-version, or a no-op update of each object), then remove v1alpha3 from status.storedVersions (kubectl patch crd certificates.cert-manager.io --subresource=status).&#xA;References:&#xA;- https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#upgrade-existing-objects-to-a-new-stored-version</system-out>
+    </testcase>
+    <testcase name="crd-version/deprecated/cert-manager.io/v1alpha2/Certificate" classname="upgradescope.crd-version" time="0">
+      <system-out>warning: cert-manager.io/v1alpha2 Certificate is a deprecated CRD version (2 objects).&#xA;2 object(s) written through this version: default (1), shop (1). Written by: argocd-controller, kubectl-client-side-apply. CRD certificates.cert-manager.io marks v1alpha2 deprecated. The CRD says: &#34;cert-manager.io/v1alpha2 Certificate is deprecated in v1.4+, unavailable in v1.6+; use cert-manager.io/v1 Certificate&#34;. Objects may still be stored at v1alpha2 (status.storedVersions). CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.&#xA;Objects:&#xA;- default/api-tls&#xA;- shop/web-tls&#xA;Teams: core, storefront&#xA;Fix: move these objects to cert-manager.io/v1 before an add-on upgrade stops serving v1alpha2.&#xA;References:&#xA;- https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#version-deprecation</system-out>
+    </testcase>
+    <testcase name="crd-version/deprecated/cert-manager.io/v1alpha2/Issuer" classname="upgradescope.crd-version" time="0">
+      <system-out>info: cert-manager.io/v1alpha2 Issuer is a deprecated CRD version.&#xA;No custom resource was found written through this version. CRD issuers.cert-manager.io marks v1alpha2 deprecated. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.&#xA;Fix: use cert-manager.io/v1; an add-on upgrade may stop serving v1alpha2.&#xA;References:&#xA;- https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#version-deprecation</system-out>
+    </testcase>
+    <testcase name="crd-version/deprecated/gateway.networking.k8s.io/v1beta1/HTTPRoute" classname="upgradescope.crd-version" time="0">
+      <system-out>info: gateway.networking.k8s.io/v1beta1 HTTPRoute is a deprecated CRD version.&#xA;Custom resources written through this version were not checked (see the crds gap). CRD httproutes.gateway.networking.k8s.io marks v1beta1 deprecated. The CRD says: &#34;The v1beta1 version of HTTPRoute has been deprecated and will be removed in a future release of the API. Please upgrade to v1&#34;. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.&#xA;Fix: use gateway.networking.k8s.io/v1; an add-on upgrade may stop serving v1beta1.&#xA;References:&#xA;- https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#version-deprecation</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="not-assessed" tests="1" failures="0" errors="0" skipped="1" time="0">
+    <testcase name="crds" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: crds (partial): list gateway.networking.k8s.io/v1 httproutes: forbidden (skipped: gateway.networking.k8s.io/v1beta1 HTTPRoute)"></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>
