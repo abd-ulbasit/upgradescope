@@ -9,18 +9,21 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	yaml "go.yaml.in/yaml/v3"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
 // streamResult reduces parseManifestStream's output to what the corpus
 // asserts: objects per "group/version/Kind", object lines in stream order,
-// the problems that left part of the stream unassessed, and the API names
-// those parts mention.
+// the problems that left part of the stream unassessed, and the problems
+// decoded anyway.
 type streamResult struct {
 	counts     map[string]int
 	lines      []int
 	unassessed []docError
 	warnings   []docError // decoded anyway (duplicate keys)
-	named      map[string]bool
 }
 
 func parseResult(t *testing.T, s string) streamResult {
@@ -29,7 +32,7 @@ func parseResult(t *testing.T, s string) streamResult {
 	if err != nil {
 		t.Fatalf("parseManifestStream: %v", err)
 	}
-	r := streamResult{counts: map[string]int{}, named: map[string]bool{}}
+	r := streamResult{counts: map[string]int{}}
 	for _, o := range objs {
 		r.counts[o.group+"/"+o.version+"/"+o.kind]++
 		r.lines = append(r.lines, o.ref.Line)
@@ -40,11 +43,26 @@ func parseResult(t *testing.T, s string) streamResult {
 			continue
 		}
 		r.unassessed = append(r.unassessed, b)
-		for _, g := range namedAPIs(b.unassessed) {
-			r.named[g.group+"/"+g.version+"/"+g.kind] = true
-		}
 	}
 	return r
+}
+
+// names reports whether an unassessed part names api ("group/version/Kind").
+func (r streamResult) names(api string) bool {
+	return unassessedNames(r.unassessed, api)
+}
+
+// unassessedNames reports whether a part of bad names api
+// ("group/version/Kind"), as CollectFiles looks for a removed API.
+func unassessedNames(bad []docError, api string) bool {
+	group, rest, _ := strings.Cut(api, "/")
+	version, kind, _ := strings.Cut(rest, "/")
+	for _, b := range bad {
+		if _, ok := b.names([]gvk{{group, version, kind}}); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // The regression corpus (testdata/adversarial): each red-team input with
@@ -96,6 +114,20 @@ func TestAdversarialCorpus(t *testing.T) {
 		"binary-kind.yaml":                   {counts: map[string]int{ingOld: 1}, lines: []int{1}},
 		"binary-key.yaml":                    {counts: map[string]int{ingOld: 1}, lines: []int{1}},
 		"typed-list-null-items.yaml":         {counts: map[string]int{ingOld: 2}, lines: []int{4, 5}},
+		// The walk refuses aliased items; kubectl's decoder names the
+		// apiVersion the text only holds as an alias.
+		"aliased-items-aliased-apiversion.yaml": {counts: map[string]int{}, named: []string{ingOld}},
+		// Valid JSON that YAML cannot read (a "\/" escape, a newline
+		// before a key's colon): kubectl's decoder counts it, at the
+		// value's first line, with a warning.
+		"json-solidus-escape.json":    {counts: map[string]int{cm: 1, ingOld: 1}, lines: []int{1, 2}, warnings: 2},
+		"json-key-newline-colon.json": {counts: map[string]int{ingOld: 1}, lines: []int{1}, warnings: 1},
+		// kubectl rejects a list nested in a list; the scan counts it,
+		// and says kubectl would not send it.
+		"nested-typed-list.yaml": {counts: map[string]int{ingOld: 1}, lines: []int{7}, warnings: 1},
+		// kubectl's decoder cannot convert a mapping key to JSON, so
+		// kubectl would fail; the object is counted, with a warning.
+		"unrendered-labels.yaml": {counts: map[string]int{ingOld: 1}, lines: []int{1}, warnings: 1},
 	}
 	files, err := filepath.Glob("testdata/adversarial/*")
 	if err != nil {
@@ -122,8 +154,8 @@ func TestAdversarialCorpus(t *testing.T) {
 				t.Errorf("lines = %v, want %v", got.lines, tc.lines)
 			}
 			for _, n := range tc.named {
-				if !got.named[n] {
-					t.Errorf("unassessed parts %+v name %v, want %s among them", got.unassessed, got.named, n)
+				if !got.names(n) {
+					t.Errorf("unassessed parts %+v, want %s named among them", got.unassessed, n)
 				}
 			}
 			if tc.named == nil && len(got.unassessed) > 0 {
@@ -134,11 +166,33 @@ func TestAdversarialCorpus(t *testing.T) {
 			}
 			kubectl, _ := kubectlObjects(string(raw))
 			for _, g := range kubectl {
-				if got.counts[g] == 0 && !got.named[g] {
+				if got.counts[g] == 0 && !got.names(g) {
 					t.Errorf("kubectl applies %s, which is neither counted nor named by an unassessed part", g)
 				}
 			}
 		})
+	}
+}
+
+// When reading the YAML finds less than kubectl's own decoder does in a
+// document, what kubectl sends is counted (at the document's first line,
+// with a warning), not what the YAML walk found. No known input makes the
+// walk miss an object, so the walk is handed another document's node.
+func TestDecoded_KubectlDecoderWins(t *testing.T) {
+	text := []byte("apiVersion: extensions/v1beta1\nkind: Ingress\nmetadata: {name: old, namespace: shop}\n")
+	var walked yaml.Node
+	if err := yaml.Unmarshal([]byte("apiVersion: v1\nkind: ConfigMap\n"), &walked); err != nil {
+		t.Fatal(err)
+	}
+	p := &streamParser{}
+	p.decoded(walked.Content[0], nil, text, 7, false, "chart/templates/ing.yaml")
+	want := []manifestObject{{group: "extensions", version: "v1beta1", kind: "Ingress",
+		ref: inventory.ObjectRef{Name: "old", Namespace: "shop", Line: 7, RenderedFrom: "chart/templates/ing.yaml"}}}
+	if !reflect.DeepEqual(p.objs, want) {
+		t.Errorf("objects = %+v, want kubectl's %+v", p.objs, want)
+	}
+	if len(p.bad) != 1 || p.bad[0].unassessed != nil || !strings.Contains(p.bad[0].err.Error(), "extensions/v1beta1 Ingress") {
+		t.Errorf("problems = %+v, want one warning naming the Ingress", p.bad)
 	}
 }
 
@@ -176,8 +230,8 @@ func TestParseManifestStream_YAMLTrailingNode(t *testing.T) {
 	if !reflect.DeepEqual(got.counts, map[string]int{"/v1/ConfigMap": 1}) {
 		t.Errorf("objects = %v, want the first node only", got.counts)
 	}
-	if len(got.unassessed) != 1 || got.unassessed[0].line != 4 || !got.named["extensions/v1beta1/Ingress"] {
-		t.Errorf("unassessed = %+v named %v, want the Ingress at line 4", got.unassessed, got.named)
+	if len(got.unassessed) != 1 || got.unassessed[0].line != 4 || !got.names("extensions/v1beta1/Ingress") {
+		t.Errorf("unassessed = %+v, want the Ingress at line 4 named", got.unassessed)
 	}
 }
 

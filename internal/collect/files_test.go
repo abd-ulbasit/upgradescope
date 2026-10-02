@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -209,6 +210,38 @@ func TestCollectFilesUnassessedRemovedAPI(t *testing.T) {
 	}
 	if len(inv.APIUsage) == 0 {
 		t.Error("the objects that were decoded must still be counted")
+	}
+}
+
+// An undecodable document's text is searched for each removed API, never
+// for every apiVersion paired with every kind: a crafted file holding
+// thousands of each costs no more than reading it. A typed list's kind
+// (CronJobList) names its item kind.
+func TestCollectFilesUnassessedManyNames(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	b.WriteString("kind: [unclosed\n")
+	for i := range 20000 {
+		fmt.Fprintf(&b, "apiVersion: g%d.example.com/v1\nkind: K%d\n", i, i)
+	}
+	b.WriteString("apiVersion: batch/v1beta1\nkind: CronJobList\n")
+	dir := writeTree(t, map[string]string{"crafted.yaml": b.String()})
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	inv, _, err := CollectFiles(dir, k.APILifecycle)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := inv.Capabilities[inventory.CapAPIUsage]; st.Available || !strings.Contains(st.Reason, "crafted.yaml:1 (batch/v1beta1 CronJob)") {
+		t.Errorf("api-usage = %+v, want not assessed, naming the CronJob", st)
+	}
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 256<<20 {
+		t.Errorf("allocated %d MiB reading a %d KiB file", alloc>>20, b.Len()>>10)
 	}
 }
 
@@ -621,16 +654,11 @@ func FuzzScanManifestStream(f *testing.F) {
 			}
 			seen[o.group+"/"+o.version+"/"+o.kind] = true
 		}
-		for _, b := range bad {
-			for _, g := range namedAPIs(b.unassessed) {
-				seen[g.group+"/"+g.version+"/"+g.kind] = true
-			}
-		}
 		kubectl, _ := kubectlObjects(s)
 		for _, g := range kubectl {
 			// Only names an API can have: the knowledge base flags no
 			// other, and text that did not decode is read for such names.
-			if !seen[g] && apiName.MatchString(g) {
+			if !seen[g] && apiName.MatchString(g) && !unassessedNames(bad, g) {
 				t.Fatalf("kubectl applies %s, which is neither counted nor named by an unassessed part (bad %+v)", g, bad)
 			}
 		}

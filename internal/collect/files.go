@@ -2,12 +2,14 @@ package collect
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +21,9 @@ import (
 	"unicode/utf8"
 
 	yaml "go.yaml.in/yaml/v3"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -35,12 +40,15 @@ type manifestObject struct {
 // docError is a problem with part of a manifest stream. unassessed is the
 // text that could not be decoded — a document, a JSON value, or the rest
 // of the stream after an error that ends it — so nothing in it was
-// counted (namedAPIs reads it). A document decoded the way kubectl decodes
-// it, with only a warning (a duplicate key), has no unassessed text.
+// counted (names reads it). named holds what kubectl's own decoder found
+// in that text, when it found anything. A document decoded the way
+// kubectl decodes it, with only a warning (a duplicate key), has no
+// unassessed text.
 type docError struct {
 	line       int // 1-based line where the problem starts
 	err        error
 	unassessed []byte
+	named      []gvk
 }
 
 // gvk keys the per-GVK residency accumulator shared by CollectFiles and
@@ -66,7 +74,9 @@ const jsonPeek = 4096
 // so "--- # comment" works where a plain `^---$` split would corrupt. Each
 // document and JSON value is parsed into yaml.v3 nodes, which carry line
 // numbers (JSON is a YAML subset), and lines are counted across the stream
-// so every object can be located.
+// so every object can be located. Each is also decoded by kubectl's own
+// decoder, which the yaml.v3 reading is checked against (see decoded):
+// what kubectl would send is never silently dropped.
 //
 // A document that is not a mapping with apiVersion and kind is not a
 // Kubernetes object (values.yaml, Chart.yaml, workflows, kustomize patches,
@@ -225,23 +235,183 @@ func (p *streamParser) document(start, end int, isJSON bool) {
 			p.bad = append(p.bad, docError{line: first + from - 1, err: errors.New(msg), unassessed: rest})
 			return
 		}
+		var root *yaml.Node
+		if err == nil {
+			if n.Kind != yaml.DocumentNode || len(n.Content) == 0 {
+				continue // comment-only document
+			}
+			root = n.Content[0]
+			last = lastLine(root)
+		}
+		p.decoded(root, err, text, first, isJSON, renderedFrom)
 		if err != nil {
-			p.bad = append(p.bad, docError{line: first, err: err, unassessed: text})
 			return
 		}
-		if n.Kind != yaml.DocumentNode || len(n.Content) == 0 {
-			continue // comment-only document
-		}
-		root := n.Content[0]
-		last = lastLine(root)
-		objs, warnings, oerr := readObjects(root, first-1, renderedFrom)
-		p.bad = append(p.bad, warnings...)
-		if oerr != nil {
-			p.bad = append(p.bad, docError{line: first, err: oerr, unassessed: text})
-			return
-		}
-		p.objs = append(p.objs, objs...)
 	}
+}
+
+// decoded settles what one document or JSON value holds. root is its
+// first node as yaml.v3 read it, or nil with the error that stopped it.
+// The yaml.v3 walk (readObjects) gives every object its own line;
+// kubectl's own decoder (kubectlDecode) is the truth it is checked
+// against, so YAML quirks the walk misreads cannot hide what kubectl
+// sends:
+//
+//   - When the walk finds all that kubectl does, its objects are counted;
+//     anything it counts beyond that is a warning (kubectl would reject or
+//     skip it, as it does a list nested in a list).
+//   - When it misses something, or yaml.v3 cannot read text that
+//     kubectl's decoder can (valid JSON with a "\/" escape or a newline
+//     before a key's colon), kubectl's objects are counted instead, at the
+//     document's first line, with a warning.
+//   - When the walk refuses the document (an unrendered template, items
+//     through an alias), or neither can read it, it is not assessed; what
+//     kubectl's decoder found in it is named with its text.
+func (p *streamParser) decoded(root *yaml.Node, yerr error, text []byte, first int, isJSON bool, renderedFrom string) {
+	kubectl, kerr := kubectlDecode(text, isJSON)
+	var named []gvk
+	for _, o := range kubectl {
+		named = append(named, gvk{o.group, o.version, o.kind})
+	}
+	var objs []manifestObject
+	var warnings []docError
+	err := yerr
+	if root != nil {
+		objs, warnings, err = readObjects(root, first-1, renderedFrom)
+	}
+	switch {
+	case root != nil && err != nil: // the walk refuses it
+		p.bad = append(p.bad, warnings...)
+		p.bad = append(p.bad, docError{line: first, err: err, unassessed: text, named: named})
+		return
+	case root == nil && kerr != nil: // neither reads it
+		p.bad = append(p.bad, docError{line: first, err: yerr, unassessed: text})
+		return
+	case root == nil: // only kubectl's decoder reads it
+		p.bad = append(p.bad, docError{line: first, err: fmt.Errorf(
+			"%w: what kubectl's decoder reads here is counted, located at the first line", yerr)})
+		p.useKubectl(kubectl, first, renderedFrom)
+		return
+	case kerr != nil: // kubectl would fail here; counting errs safe
+		if len(objs) > 0 {
+			p.bad = append(p.bad, docError{line: first, err: fmt.Errorf(
+				"kubectl's decoder cannot read this document (%v), so kubectl would fail here; its objects are counted as read", kerr)})
+		}
+		p.bad = append(p.bad, warnings...)
+		p.objs = append(p.objs, objs...)
+		return
+	}
+	if missing, extra := gvkDiff(named, objs); len(missing) > 0 {
+		p.bad = append(p.bad, docError{line: first, err: fmt.Errorf(
+			"kubectl's decoder finds %s here, which reading the YAML did not: counting what kubectl sends, at the first line", gvkList(missing))})
+		p.useKubectl(kubectl, first, renderedFrom)
+		return
+	} else if len(extra) > 0 {
+		p.bad = append(p.bad, docError{line: first, err: fmt.Errorf(
+			"counted %s, which kubectl's decoder does not send from here (it would reject or skip it)", gvkList(extra))})
+	}
+	p.bad = append(p.bad, warnings...)
+	p.objs = append(p.objs, objs...)
+}
+
+// useKubectl counts objects kubectl's decoder found, at line first.
+func (p *streamParser) useKubectl(objs []manifestObject, first int, renderedFrom string) {
+	for _, o := range objs {
+		o.ref.Line, o.ref.RenderedFrom = first, renderedFrom
+		p.objs = append(p.objs, o)
+	}
+}
+
+// kubectlDecode returns every object kubectl apply -f sends for one YAML
+// document or JSON value, without lines: decoded by apimachinery's
+// YAML-to-JSON decoder (go-yaml v2, which reads only the document's first
+// node) and the unstructured JSON scheme, lists flattened as
+// FlattenListVisitor does. A value that is not an object, or an object
+// without kind or version, yields nothing, as kubectl sends nothing for
+// it; err is set only when the YAML could not be decoded at all.
+func kubectlDecode(text []byte, isJSON bool) ([]manifestObject, error) {
+	raw := text
+	if !isJSON {
+		var ext runtime.RawExtension
+		if err := utilyaml.NewYAMLToJSONDecoder(bytes.NewReader(text)).Decode(&ext); err != nil {
+			return nil, err
+		}
+		raw = ext.Raw
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	obj, _, err := unstructured.UnstructuredJSONScheme.Decode(raw, nil, nil)
+	if err != nil {
+		return nil, nil // kubectl reports it and goes on
+	}
+	var out []manifestObject
+	for queue := []runtime.Object{obj}; len(queue) > 0; queue = queue[1:] {
+		o := queue[0]
+		if meta.IsListType(o) {
+			items, err := meta.ExtractList(o)
+			if err != nil {
+				return nil, nil // a list nested in a list: kubectl fails the whole list
+			}
+			queue = append(queue, items...)
+			continue
+		}
+		k := o.GetObjectKind().GroupVersionKind()
+		if k.Kind == "" || k.Version == "" || k.Kind == "List" {
+			continue // no resource to map it to: kubectl reports it
+		}
+		mo := manifestObject{group: k.Group, version: k.Version, kind: k.Kind}
+		if m, err := meta.Accessor(o); err == nil {
+			mo.ref.Name, mo.ref.Namespace = m.GetName(), m.GetNamespace()
+			mo.ref.Ignore, mo.ref.IgnoreReason = m.GetAnnotations()[IgnoreAnnotation], m.GetAnnotations()[IgnoreReasonAnnotation]
+		}
+		out = append(out, mo)
+	}
+	return out, nil
+}
+
+// gvkDiff compares, as multisets, what kubectl's decoder found with what
+// the walk counted: missing is kubectl's but not counted, extra is
+// counted but not kubectl's.
+func gvkDiff(kubectl []gvk, objs []manifestObject) (missing, extra []gvk) {
+	n := map[gvk]int{}
+	for _, g := range kubectl {
+		n[g]++
+	}
+	for _, o := range objs {
+		n[gvk{o.group, o.version, o.kind}]--
+	}
+	for _, g := range slices.SortedFunc(maps.Keys(n), compareGVK) {
+		for ; n[g] > 0; n[g]-- {
+			missing = append(missing, g)
+		}
+		for ; n[g] < 0; n[g]++ {
+			extra = append(extra, g)
+		}
+	}
+	return missing, extra
+}
+
+// gvkList formats GVKs for a warning: "extensions/v1beta1 Ingress, v1 ConfigMap".
+func gvkList(gs []gvk) string {
+	s := make([]string, len(gs))
+	for i, g := range gs {
+		s[i] = g.String()
+	}
+	return strings.Join(s, ", ")
+}
+
+// String is "group/version Kind", or "version Kind" for the core group.
+func (g gvk) String() string {
+	if g.group == "" {
+		return g.version + " " + g.kind
+	}
+	return g.group + "/" + g.version + " " + g.kind
+}
+
+func compareGVK(a, b gvk) int {
+	return cmp.Or(strings.Compare(a.group, b.group), strings.Compare(a.version, b.version), strings.Compare(a.kind, b.kind))
 }
 
 // lastLine returns the last line that any node under n starts on (aliases
@@ -284,7 +454,7 @@ func linesFrom(text []byte, n int) []byte {
 //     its kind minus "List" (an IngressList's untyped items are Ingresses;
 //     without an apiVersion they have no version, and are not sent). An
 //     item holding an items sequence is a list too, expanded without that
-//     inference (kubectl rejects such a list: counting it errs safe).
+//     inference (kubectl rejects such a list; parseManifestStream warns).
 //     kind: List without items counts nothing.
 //
 // It is an error, so the document is reported rather than counted:
@@ -564,36 +734,39 @@ var (
 	kindText       = regexp.MustCompile(`\bkind["']?\s*:\s*["']?([A-Za-z][A-Za-z0-9]*)`)
 )
 
-// namedAPIs returns, sorted, every group/version/kind that text could
-// name: each apiVersion value it holds paired with each kind value. It
-// reads text that could not be decoded, so it errs towards naming too
-// much.
-func namedAPIs(text []byte) []gvk {
-	var avs, kinds []string
-	for _, m := range apiVersionText.FindAllSubmatch(text, -1) {
-		if s := string(m[1]); !slices.Contains(avs, s) {
-			avs = append(avs, s)
+// names reports the first of apis (in order) that an unassessed part could
+// hold: one kubectl's decoder found in it, or one whose apiVersion and kind
+// values (a kind ending in "List" also as its item kind, FooList's Foo)
+// both appear in its text. It reads text that could not be decoded, so it
+// errs towards naming too much. Each of apis is looked up, rather than
+// every apiVersion in the text paired with every kind, so a crafted text
+// holding thousands of each costs no more than reading it.
+func (b docError) names(apis []gvk) (gvk, bool) {
+	for _, g := range apis {
+		if slices.Contains(b.named, g) {
+			return g, true
 		}
 	}
-	for _, m := range kindText.FindAllSubmatch(text, -1) {
-		if s := string(m[1]); !slices.Contains(kinds, s) {
-			kinds = append(kinds, s)
+	avs, kinds := map[string]bool{}, map[string]bool{}
+	for _, m := range apiVersionText.FindAllSubmatch(b.unassessed, -1) {
+		avs[string(m[1])] = true
+	}
+	for _, m := range kindText.FindAllSubmatch(b.unassessed, -1) {
+		kinds[string(m[1])] = true
+		if k, ok := strings.CutSuffix(string(m[1]), "List"); ok && k != "" {
+			kinds[k] = true
 		}
 	}
-	var out []gvk
-	for _, av := range avs {
-		group, version := "", av
-		if g, v, ok := strings.Cut(av, "/"); ok {
-			group, version = g, v
+	for _, g := range apis {
+		av := g.version
+		if g.group != "" {
+			av = g.group + "/" + av
 		}
-		for _, k := range kinds {
-			out = append(out, gvk{group, version, k})
+		if avs[av] && kinds[g.kind] {
+			return g, true
 		}
 	}
-	slices.SortFunc(out, func(a, b gvk) int {
-		return strings.Compare(a.group+"/"+a.version+"/"+a.kind, b.group+"/"+b.version+"/"+b.kind)
-	})
-	return out
+	return gvk{}, false
 }
 
 // helmSource returns the template path from helm template's
@@ -678,8 +851,9 @@ func usageRows(counts map[gvk]*inventory.APIUsage) []inventory.APIUsage {
 // CollectFiles, but a document that fails to decode is an error rather than
 // a warning: the stream is one deliberate request body, and an API response
 // has nowhere to put a warning, so silently dropping it would be a false
-// pass. Warnings about documents decoded anyway (duplicate keys) are
-// dropped. Object refs carry stream lines and no file.
+// pass. Warnings about documents decoded anyway (duplicate keys, objects
+// located by kubectl's decoder) are dropped. Object refs carry stream lines
+// and no file.
 func CollectManifests(r io.Reader) (inventory.Inventory, error) {
 	objs, bad, err := parseManifestStream(r)
 	if err != nil {
@@ -755,8 +929,8 @@ func skipDir(path, name string) (skip bool, why string) {
 // workflows, unrendered chart templates), so non-manifest documents are
 // skipped and documents that fail to decode become warnings in the summary,
 // never an error; the caller decides what to do when no object was found.
-// But a document that could not be decoded and whose text names an API
-// that lifecycle (the knowledge base) lists as removed may hide a blocker:
+// But a document that could not be decoded and whose text (or what
+// kubectl's decoder finds in it) names an API that lifecycle (the knowledge base) lists as removed may hide a blocker:
 // then api-usage is not available, its reason naming those documents, so
 // the engine's verdict is at least unknown.
 //
@@ -768,12 +942,13 @@ func skipDir(path, name string) (skip bool, why string) {
 // metadata is a warning. Symlinked files are read, as kubectl reads them.
 // Only I/O errors fail the walk.
 func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inventory, FilesSummary, error) {
-	removed := map[gvk]bool{}
+	var removed []gvk
 	for _, e := range lifecycle {
 		if e.Removed != nil {
-			removed[gvk{e.Group, e.Version, e.Kind}] = true
+			removed = append(removed, gvk{e.Group, e.Version, e.Kind})
 		}
 	}
+	slices.SortFunc(removed, compareGVK)
 	var hiding []string // "file:line (group/version Kind)" per unassessed part naming a removed API
 	counts := map[gvk]*inventory.APIUsage{}
 	var sum FilesSummary
@@ -833,14 +1008,8 @@ func CollectFiles(root string, lifecycle []kb.APILifecycleEntry) (inventory.Inve
 		}
 		for _, b := range bad {
 			sum.Warnings = append(sum.Warnings, FileWarning{File: rel, Line: b.line, Err: b.err, Unassessed: b.unassessed != nil})
-			named := namedAPIs(b.unassessed)
-			if i := slices.IndexFunc(named, func(g gvk) bool { return removed[g] }); i >= 0 {
-				g := named[i]
-				gv := g.version
-				if g.group != "" {
-					gv = g.group + "/" + gv
-				}
-				hiding = append(hiding, fmt.Sprintf("%s:%d (%s %s)", rel, b.line, gv, g.kind))
+			if g, ok := b.names(removed); ok {
+				hiding = append(hiding, fmt.Sprintf("%s:%d (%s)", rel, b.line, g))
 			}
 		}
 		if len(objs) == 0 {

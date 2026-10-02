@@ -342,7 +342,10 @@ Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
 or the one file named, is decoded as kubectl apply -f decodes it: each
 document of a YAML stream and each object of a JSON stream (NDJSON,
 pretty-printed or adjacent), List items expanded, a duplicate key taking its
-last value. Documents that are not Kubernetes objects are skipped. A document
+last value. Every document is also decoded by kubectl's own decoder: where it
+finds an object the scan's line-tracking YAML reading did not, kubectl's
+objects are counted (located at the document's first line), with a warning.
+Documents that are not Kubernetes objects are skipped. A document
 that cannot be decoded is skipped with a warning; when its text names an API
 the knowledge base lists as removed, api-usage is not assessed, so the verdict
 is at least unknown and the gate fails unless --allow-incomplete. VCS metadata,
