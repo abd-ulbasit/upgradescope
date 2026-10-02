@@ -20,7 +20,10 @@ cd "$(dirname "$0")/.."
 file=${CLAIMS_FILE:-docs/claims.md}
 [ -f "$file" ] || { echo "claims-check: no $file" >&2; exit 1; }
 
-go_tests=$(grep -rhoE '^func Test[A-Za-z0-9_]+\(' --include='*_test.go' . | sed 's/^func //; s/($//' | sort -u)
+# The repository's test files, tracked or new, as CI checks them out: not
+# node_modules, nor other branches' worktrees under .claude/.
+go_tests=$(git ls-files -z --cached --others --exclude-standard -- '*_test.go' |
+  xargs -0 grep -hoE '^func Test[A-Za-z0-9_]+\(' | sed 's/^func //; s/($//' | sort -u)
 ci_jobs=$(awk '/^jobs:/{j=1;next} j&&/^[^ #]/{j=0} j&&/^  [a-z0-9_-]+:[ ]*$/{sub(/^  /,"");sub(/:.*/,"");print}' .github/workflows/ci.yml)
 
 # ref_error <ref>: why a reference does not resolve (empty when it does).

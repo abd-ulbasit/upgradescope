@@ -55,6 +55,18 @@ expect "a ledger with no claim rows fails" 1 "no claim rows" "# Claims
 
 Nothing here."
 
+# A test that exists only in a git-ignored copy (node_modules, or another
+# branch's worktree under .claude/) is not in the repository: CI would not
+# find it either. The "_" directory keeps go ./... away from the fixture.
+stray=web/node_modules/_claims-check-fixture
+mkdir -p "$stray"
+trap 'rm -rf "$work" "$stray"; rmdir web/node_modules 2>/dev/null || true' EXIT
+printf 'package fixture\n\nimport "testing"\n\nfunc TestOnlyInAnIgnoredCopy(t *testing.T) {}\n' >"$stray/stray_test.go"
+expect "a test only in a git-ignored directory fails" 1 "XX-05: no Go test TestOnlyInAnIgnoredCopy" "$good
+| XX-05 | Lives elsewhere | \`TestOnlyInAnIgnoredCopy\` |"
+rm -rf "$stray"
+rmdir web/node_modules 2>/dev/null || true
+
 # The real ledger.
 got=0
 hack/claims-check.sh >"$work/out" 2>&1 || got=$?
