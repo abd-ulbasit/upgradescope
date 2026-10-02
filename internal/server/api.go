@@ -550,7 +550,7 @@ func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.
 // snapshot to derive one from). Writes the error response itself.
 func (s *Server) resolveTarget(w http.ResponseWriter, r *http.Request, clusterID int64) (inventory.Version, bool) {
 	if q := r.URL.Query().Get("target"); q != "" {
-		v, err := inventory.ParseVersion(q)
+		v, err := inventory.ParseTarget(q)
 		if err != nil {
 			errJSON(w, http.StatusUnprocessableEntity, "invalid target: "+err.Error())
 			return inventory.Version{}, false

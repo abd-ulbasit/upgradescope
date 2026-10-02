@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // database/sql driver, registered as "sqlite"
@@ -30,8 +31,11 @@ var _ Store = (*SQLite)(nil)
 // busy timeout and foreign-key enforcement via DSN pragmas.
 //
 // path must not contain '?' or '#' — it is interpolated into a SQLite URI,
-// where either character corrupts the path.
+// where either character corrupts the path — and is refused if it does.
 func Open(path string) (*SQLite, error) {
+	if strings.ContainsAny(path, "?#") {
+		return nil, fmt.Errorf("open sqlite %s: the path must not contain '?' or '#'", path)
+	}
 	// _txlock=immediate makes every transaction start as BEGIN IMMEDIATE,
 	// taking the write lock up front. Without it, a deferred transaction
 	// that reads before writing (InsertSnapshot: SELECT latest, then INSERT)

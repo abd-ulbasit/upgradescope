@@ -216,7 +216,7 @@ func validateServeOptions(opts *serveOptions) error {
 		return nil
 	}
 	for _, raw := range strings.Split(opts.targets, ",") {
-		v, err := inventory.ParseVersion(strings.TrimSpace(raw))
+		v, err := inventory.ParseTarget(strings.TrimSpace(raw))
 		if err != nil {
 			return fmt.Errorf("invalid --targets entry %q: %w", raw, err)
 		}

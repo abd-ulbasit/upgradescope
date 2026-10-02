@@ -50,9 +50,11 @@ func TestServeWithoutIngestToken(t *testing.T) {
 }
 
 func TestServeRejectsBadTargets(t *testing.T) {
-	err := execServe(t, []string{"--ingest-token", "t", "--targets", "1.37,banana"}, serveOK())
-	if err == nil || !strings.Contains(err.Error(), "--targets") {
-		t.Fatalf("want invalid --targets error, got %v", err)
+	for _, targets := range []string{"1.37,banana", "2.0"} {
+		err := execServe(t, []string{"--ingest-token", "t", "--targets", targets}, serveOK())
+		if err == nil || !strings.Contains(err.Error(), "--targets") {
+			t.Fatalf("--targets %s: want invalid --targets error, got %v", targets, err)
+		}
 	}
 }
 

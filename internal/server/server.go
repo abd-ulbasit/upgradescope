@@ -135,7 +135,7 @@ func New(cfg Config) (*Server, error) {
 	s.notifyTimeout = notifyTimeout
 	s.reevaluateInterval = reevaluateInterval
 	for _, t := range cfg.ExtraTargets {
-		v, err := inventory.ParseVersion(t)
+		v, err := inventory.ParseTarget(t)
 		if err != nil {
 			return nil, fmt.Errorf("server: bad extra target %q: %w", t, err)
 		}
@@ -199,7 +199,7 @@ var reservedPaths = []string{"/healthz", "/readyz", "/livez", "/metrics"}
 
 // isServerPath reports whether p is routed to the mux.
 func isServerPath(p string) bool {
-	if strings.HasPrefix(p, "/api/") {
+	if p == "/api" || strings.HasPrefix(p, "/api/") {
 		return true
 	}
 	for _, rp := range reservedPaths {

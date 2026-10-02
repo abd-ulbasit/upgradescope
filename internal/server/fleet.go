@@ -94,7 +94,7 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	var targets []inventory.Version
 	if q := r.URL.Query().Get("targets"); q != "" {
 		for _, raw := range strings.Split(q, ",") {
-			v, err := inventory.ParseVersion(strings.TrimSpace(raw))
+			v, err := inventory.ParseTarget(strings.TrimSpace(raw))
 			if err != nil {
 				errJSON(w, http.StatusUnprocessableEntity, "invalid targets entry "+raw+": "+err.Error())
 				return
@@ -216,7 +216,7 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, "target query parameter is required")
 		return
 	}
-	target, err := inventory.ParseVersion(q)
+	target, err := inventory.ParseTarget(q)
 	if err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid target: "+err.Error())
 		return
