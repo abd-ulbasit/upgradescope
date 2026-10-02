@@ -8,7 +8,10 @@
 #      the commit; on a tagged commit it must be that tag;
 #   2. `serve` serves the dashboard at / with every asset it references
 #      (internal/server/webdist is committed, so go install embeds it).
-# Needs Go, git, jq and curl.
+# Needs Go, git, jq and curl, in a normal clone: in a `git worktree` the
+# go command's VCS stamping does not find the worktree's repository (its
+# .git is a file), so it stamps an enclosing repository's HEAD or nothing,
+# and check 1 fails although the build is fine.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

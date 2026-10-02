@@ -8,7 +8,7 @@ workflow can do.
 | Channel | Built by | Verified by |
 | --- | --- | --- |
 | Archives, linux/darwin/windows × amd64/arm64 (binary, completions, man pages, LICENSE, NOTICE, THIRD_PARTY_NOTICES) | GoReleaser (`.goreleaser.yml`) | `checksums.txt` + keyless cosign bundle, SBOM per archive, GitHub build provenance |
-| deb / rpm / apk packages (linux amd64/arm64) | GoReleaser `nfpms` | covered by `checksums.txt` |
+| deb / rpm / apk packages (linux amd64/arm64) | GoReleaser `nfpms` | covered by `checksums.txt`; the packages themselves are unsigned, so Alpine needs `apk add --allow-untrusted ./upgradescope_*.apk` |
 | Image `ghcr.io/abd-ulbasit/upgradescope` (licenses in `/licenses/`) | GoReleaser `dockers_v2` | cosign on the index and every platform image, SBOM and provenance attestations |
 | Helm chart `oci://ghcr.io/abd-ulbasit/charts/upgradescope` (image pinned by digest) | release.yml `chart` job | cosign |
 | Homebrew `abd-ulbasit/tap/upgradescope` | the tap's own workflow ([homebrew-tap/](homebrew-tap/)) | the tap verifies `checksums.txt` with cosign before rendering |

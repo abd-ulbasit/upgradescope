@@ -291,7 +291,7 @@ release:
 
     - Homebrew: `brew install abd-ulbasit/tap/upgradescope`
     - krew: `kubectl krew install upgradescope` (once the plugin is in krew-index)
-    - Debian/Ubuntu, Fedora/RHEL, Alpine: the `.deb`, `.rpm` and `.apk` packages below
+    - Debian/Ubuntu, Fedora/RHEL, Alpine: the `.deb`, `.rpm` and `.apk` packages below. The packages themselves are unsigned (verify them with `checksums.txt`), so Alpine needs `apk add --allow-untrusted ./upgradescope_*.apk`.
     - Binary: download the archive for your platform below; it includes shell completions and man pages.
     - Image: `ghcr.io/abd-ulbasit/upgradescope:{{ .Version }}` (linux/amd64, linux/arm64)
     - Helm: `helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version {{ .Version }}`

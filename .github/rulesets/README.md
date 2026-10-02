@@ -45,5 +45,17 @@ What this means for maintainers:
 `v0` is the floating major tag that `uses: abd-ulbasit/upgradescope@v0`
 resolves to. The `major-tag` job of `.github/workflows/release.yml` moves it
 with the workflow's `GITHUB_TOKEN` once a stable release is verified. The
-only bypass actor is the GitHub Actions app (integration id 15368), so a
-person cannot move or delete `v0` by hand.
+only bypass actor is the GitHub Actions app (integration id 15368). A
+person cannot move or delete `v0` with their own credentials, but the
+bypass covers every workflow in this repository that runs with a
+`GITHUB_TOKEN` that can write contents, not only release.yml's
+`major-tag` job. So `v0` is as safe as the review of every workflow that
+gets `contents: write`, and a maintainer who can merge such a workflow can
+move it.
+
+## When v1 ships
+
+`v*` in `release-tags.json` also matches a future floating `v1`, which
+would then be locked like a release tag and the release workflow could not
+move it. Before the first v1 release, add `refs/tags/v1` to that file's
+`exclude` list and to `major-tag.json`'s `include` list, and re-apply both.
