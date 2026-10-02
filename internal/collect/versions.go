@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -76,8 +77,9 @@ func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kub
 }
 
 // controlPlaneComponents are the components detected from kube-system pods.
-// kubeadm static pods carry component=<name> labels; the pod-name prefix is
-// the fallback. kube-proxy runs as a DaemonSet and carries k8s-app=kube-proxy.
+// kubeadm static pods carry component=<name> labels, kOps and Talos ones
+// k8s-app=<name>; the pod-name prefix is the fallback. kube-proxy runs as a
+// DaemonSet and carries k8s-app=kube-proxy.
 var controlPlaneComponents = []string{
 	"kube-apiserver", "kube-controller-manager", "kube-scheduler", "kube-proxy",
 }
@@ -91,10 +93,11 @@ var controlPlaneComponents = []string{
 // A component pod whose version cannot be read is never dropped silently
 // (#169): its skew cannot be judged, so the capability is returned partial
 // (a partialError) naming the components, the number of such pods and the
-// first one by name, and the versions that were read are still recorded.
+// first one by name (the first of a Skipped component when there is one,
+// the pod to fix), and the versions that were read are still recorded.
 // That is a pod running the component's image under a tag that is not a
 // version (digest-only, "latest"), or a pod labelled as the component
-// (component=, k8s-app=kube-proxy) that runs a vendor image: none of the
+// (component= or k8s-app=<component>) that runs a vendor image: none of the
 // component's name or of every component (a wrapper image, OKE's
 // oke-public-kube-proxy). A pod only named like a component that runs
 // another image (kube-scheduler-extender) is not that component.
@@ -105,10 +108,10 @@ var controlPlaneComponents = []string{
 // kube-scheduler pod whose version is not read for any reason (a
 // self-hosted control plane runs upstream images; a vendor one there is a
 // deliberate replacement whose skew still matters). A kube-proxy pod on a
-// vendor image is named in the reason only: platforms ship it that way
-// (OKE pins oke-public-kube-proxy by digest), and the kubelet skew still
-// judges the nodes it follows. Partial with an empty Skipped is then an
-// optional, disclosed gap.
+// vendor image is named in the reason only: platforms ship it that way,
+// managing and upgrading it themselves (OKE pins oke-public-kube-proxy by
+// digest), and upstream's image would not have told its version either.
+// Partial with an empty Skipped is then an optional, disclosed gap.
 //
 // Managed control planes (EKS, GKE, AKS, ...) run the apiserver, controller
 // manager, and scheduler outside the cluster: no matching pods exist, which
@@ -119,6 +122,7 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 	unread := map[string]string{} // pod name → why its version was not read
 	unreadComps := map[string]bool{}
 	requiredComps := map[string]bool{} // the Skipped ones, see above
+	var requiredPods []string          // the unread pods of requiredComps
 	podOpts := metav1.ListOptions{Limit: listPageSize}
 	for {
 		pods, err := kube.CoreV1().Pods("kube-system").List(ctx, podOpts)
@@ -145,6 +149,7 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 				unreadComps[comp] = true
 				if required {
 					requiredComps[comp] = true
+					requiredPods = append(requiredPods, p.Name)
 				}
 			}
 		}
@@ -166,12 +171,17 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 	if len(unread) == 0 {
 		return nil
 	}
-	first := slices.Min(slices.Collect(maps.Keys(unread)))
-	comps := slices.Sorted(maps.Keys(unreadComps))
+	// Name the pod to fix: the first of a required component, else the
+	// first of all.
+	var first string
 	var skipped []string
-	if len(requiredComps) > 0 {
+	if len(requiredPods) > 0 {
+		first = slices.Min(requiredPods)
 		skipped = slices.Sorted(maps.Keys(requiredComps))
+	} else {
+		first = slices.Min(slices.Collect(maps.Keys(unread)))
 	}
+	comps := slices.Sorted(maps.Keys(unreadComps))
 	return partialError{
 		msg: fmt.Sprintf("version not read from %d control-plane pod(s) (%s), first kube-system/%s: %s; their skew was not evaluated",
 			len(unread), strings.Join(comps, ", "), first, unread[first]),
@@ -181,17 +191,15 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 }
 
 // classifyControlPlanePod maps a kube-system pod to a control-plane
-// component via the kubeadm component label, the kube-proxy DaemonSet's
-// k8s-app label, or the pod-name prefix; "" means not a control-plane pod.
-// labelled is true when a label, not only the name, said so.
+// component via the kubeadm component label, the k8s-app label (the
+// kube-proxy DaemonSet's, and kOps' and Talos' static pods'), or the
+// pod-name prefix; "" means not a control-plane pod. labelled is true when
+// a label, not only the name, said so.
 func classifyControlPlanePod(name string, labels map[string]string) (comp string, labelled bool) {
-	for _, comp := range controlPlaneComponents {
-		if labels["component"] == comp {
-			return comp, true
+	for _, key := range []string{"component", "k8s-app"} {
+		if slices.Contains(controlPlaneComponents, labels[key]) {
+			return labels[key], true
 		}
-	}
-	if labels["k8s-app"] == "kube-proxy" {
-		return "kube-proxy", true
 	}
 	for _, comp := range controlPlaneComponents {
 		if strings.HasPrefix(name, comp+"-") {
@@ -213,12 +221,39 @@ var componentArches = []string{"amd64", "arm64", "arm", "ppc64le", "s390x"}
 // (per-architecture too, "hyperkube-amd64").
 var allComponentsImages = []string{"hardened-kubernetes", "hyperkube"}
 
-// vendorComponentPaths are registry path elements under which an image
-// named like a component is another project's build of it, tagged with
-// that project's version: scheduler-plugins' kube-scheduler
-// ("registry.k8s.io/scheduler-plugins/kube-scheduler:v0.29.7") is not
-// Kubernetes v0.29.7, so its version is not read.
-var vendorComponentPaths = []string{"scheduler-plugins"}
+// schedulerPluginsPath is the registry path element under which
+// kubernetes-sigs/scheduler-plugins publishes its build of kube-scheduler
+// ("registry.k8s.io/scheduler-plugins/kube-scheduler:v0.29.7"), which its
+// documented single-scheduler install swaps into the kube-scheduler static
+// pod. The tag is that project's version, not Kubernetes': see
+// schedulerPluginsVersion.
+const schedulerPluginsPath = "scheduler-plugins"
+
+// schedulerPluginsVersion maps a scheduler-plugins tag, suffix stripped, to
+// the Kubernetes version it is compiled with: "the minor version of the
+// scheduler-plugins matches the minor version of the k8s client packages
+// that it is compiled with" (its README), and a one- or two-digit patch is
+// the Kubernetes patch (v0.29.7 is built on v1.29.7). A three-digit patch
+// (v0.18.800) changed plugin code only, so only the minor is known
+// (v1.18.0). ok is false for anything but v0.<minor>.<patch>.
+func schedulerPluginsVersion(tag string) (string, bool) {
+	parts := strings.Split(strings.TrimPrefix(tag, "v"), ".")
+	if len(parts) != 3 || parts[0] != "0" {
+		return "", false
+	}
+	n := make([]int, 2)
+	for i, p := range parts[1:] {
+		v, err := strconv.Atoi(p)
+		if err != nil || v < 0 || p != strconv.Itoa(v) {
+			return "", false
+		}
+		n[i] = v
+	}
+	if n[1] >= 100 {
+		n[1] = 0
+	}
+	return fmt.Sprintf("v1.%d.%d", n[0], n[1]), true
+}
 
 // imageOf reports whether an image repo basename is name or a
 // per-architecture build of it (name-<arch>).
@@ -231,8 +266,8 @@ func imageOf(base, name string) bool {
 // whose image repo basename is comp, comp-<arch> or an image of every
 // component (e.g. ".../eks/kube-proxy:v1.33.0",
 // "gke.gcr.io/kube-proxy-amd64:v1.32.0-gke.1000", RKE2's
-// "rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101"), unless it
-// sits under a vendorComponentPaths element.
+// "rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101"); one under
+// schedulerPluginsPath is read through schedulerPluginsVersion.
 // Build suffixes ("v1.33.0-eksbuild.1", "+fips", and VMware TKG's
 // "v1.28.7_vmware.1", where "_" stands for the "+" a tag cannot hold) are
 // stripped; the tag is returned only if inventory.ParseVersion accepts the
@@ -245,23 +280,30 @@ func componentImageTag(containers []corev1.Container, comp string) (tag, why str
 		path := strings.Split(repo, "/")
 		base := path[len(path)-1]
 		ofAll := slices.ContainsFunc(allComponentsImages, func(all string) bool { return imageOf(base, all) })
-		vendor := slices.ContainsFunc(path[:len(path)-1], func(el string) bool { return slices.Contains(vendorComponentPaths, el) })
-		if !imageOf(base, comp) && !ofAll || vendor {
+		if !imageOf(base, comp) && !ofAll {
 			continue
 		}
+		plugins := slices.Contains(path[:len(path)-1], schedulerPluginsPath)
 		v := t
 		if i := strings.IndexAny(v, "-+_"); i >= 0 {
 			v = v[:i]
 		}
-		if _, err := inventory.ParseVersion(v); err == nil {
+		if plugins {
+			if k, ok := schedulerPluginsVersion(v); ok {
+				return k, ""
+			}
+		} else if _, err := inventory.ParseVersion(v); err == nil {
 			return v, ""
 		}
 		if why != "" {
 			continue
 		}
-		if t == "" {
+		switch {
+		case t == "":
 			why = fmt.Sprintf("%s image %s has no version tag", comp, c.Image)
-		} else {
+		case plugins:
+			why = fmt.Sprintf("%s image %s has tag %q, not a scheduler-plugins version (v0.<minor>.<patch>)", comp, c.Image, t)
+		default:
 			why = fmt.Sprintf("%s image %s has tag %q, not a version", comp, c.Image, t)
 		}
 	}

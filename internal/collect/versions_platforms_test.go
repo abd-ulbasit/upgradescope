@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -128,8 +129,8 @@ func TestCollectVersionsPlatformImagesVerdict(t *testing.T) {
 			platformPod("etcd-cp2", L{"component": "etcd"}, "registry.k8s.io/etcd:latest"),
 		}, nil, false, nil},
 		// OKE runs kube-proxy from a digest-pinned vendor image of another
-		// name: its version is not read, disclosed, and optional — the
-		// kubelet skew still judges the nodes kube-proxy follows.
+		// name, managed and upgraded by the platform: its version is not
+		// read, disclosed, and optional.
 		{"OKE (digest-pinned oke-public-kube-proxy)", "v1.30.1", []*corev1.Pod{
 			platformPod("kube-proxy-abcde", L{"k8s-app": "kube-proxy"}, "iad.ocir.io/id9y6mi8tcky/oke-public-kube-proxy@sha256:175559244baa3cbee68adfc1357c18871406c7a2d49dd487d2f04e111e7931a0"),
 			platformPod("kube-proxy-fghij", L{"k8s-app": "kube-proxy"}, "ap-melbourne-1.ocir.io/axoxdievda5j/oke-public-kube-proxy:v1.30.1"),
@@ -147,12 +148,20 @@ func TestCollectVersionsPlatformImagesVerdict(t *testing.T) {
 		{"a labelled kube-controller-manager running a vendor image", "v1.31.2", []*corev1.Pod{
 			platformPod("kube-controller-manager-cp1", L{"component": "kube-controller-manager"}, "registry.example.com/platform/kcm:2.1"),
 		}, nil, true, []string{"kube-controller-manager"}},
-		// scheduler-plugins' kube-scheduler is tagged with its own
-		// version (v0.29.7), not Kubernetes': not read as the upstream
-		// scheduler, so no bogus skew finding; as the cluster's scheduler
-		// its skew is unjudged.
+		// kOps and Talos label their static pods k8s-app=<component>: one
+		// on a vendor image is the cluster's component all the same.
+		{"a kOps-labelled kube-controller-manager running a vendor image", "v1.31.2", []*corev1.Pod{
+			platformPod("kube-controller-manager-i-0123456789abcdef0", L{"k8s-app": "kube-controller-manager"}, "registry.example.com/platform/kcm:2.1"),
+		}, nil, true, []string{"kube-controller-manager"}},
+		// scheduler-plugins' kube-scheduler, installed as the cluster's
+		// scheduler, is tagged with its own version (v0.31.8), whose minor
+		// is the Kubernetes minor it is built on: read as v1.31.8, so its
+		// skew is judged rather than unknown.
 		{"scheduler-plugins as the cluster's kube-scheduler", "v1.31.2", []*corev1.Pod{
-			platformPod("kube-scheduler-cp1", L{"component": "kube-scheduler"}, "registry.k8s.io/scheduler-plugins/kube-scheduler:v0.29.7"),
+			platformPod("kube-scheduler-cp1", L{"component": "kube-scheduler"}, "registry.k8s.io/scheduler-plugins/kube-scheduler:v0.31.8"),
+		}, []string{"kube-scheduler=v1.31.8"}, false, nil},
+		{"scheduler-plugins, digest-pinned", "v1.31.2", []*corev1.Pod{
+			platformPod("kube-scheduler-cp1", L{"component": "kube-scheduler"}, "registry.k8s.io/scheduler-plugins/kube-scheduler@"+dg),
 		}, nil, true, []string{"kube-scheduler"}},
 	}
 
@@ -203,6 +212,31 @@ func TestCollectVersionsPlatformImagesVerdict(t *testing.T) {
 			}
 			if r.Verdict != want {
 				t.Errorf("verdict %s, want %s; findings %+v, gaps %+v", r.Verdict, want, r.Findings, r.NotAssessed)
+			}
+
+			// The disclosure itself: a versions gap exactly when partial,
+			// required exactly when a component is skipped, its reason
+			// naming one of the pods and that pod's image.
+			var gap *engine.CapabilityGap
+			for i := range r.NotAssessed {
+				if r.NotAssessed[i].Capability == inventory.CapVersions {
+					gap = &r.NotAssessed[i]
+				}
+			}
+			if !tc.partial {
+				if gap != nil {
+					t.Errorf("versions gap %+v, want none", *gap)
+				}
+				return
+			}
+			if gap == nil || !gap.Partial || gap.Required != (len(tc.skipped) > 0) || gap.Reason != st.Reason {
+				t.Fatalf("versions gap %+v; want partial, required %v, reason %q", gap, len(tc.skipped) > 0, st.Reason)
+			}
+			named := slices.ContainsFunc(tc.pods, func(p *corev1.Pod) bool {
+				return strings.Contains(gap.Reason, "kube-system/"+p.Name+": ") && strings.Contains(gap.Reason, p.Spec.Containers[0].Image)
+			})
+			if !named {
+				t.Errorf("versions gap reason %q names no pod with its image", gap.Reason)
 			}
 		})
 	}

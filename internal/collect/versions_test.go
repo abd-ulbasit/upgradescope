@@ -118,8 +118,9 @@ func TestCollectVersionsControlPlane(t *testing.T) {
 // components and the first such pod, rather than being dropped silently
 // (#169). Skipped names only the components whose skew upstream would have
 // told (the scheduler's latest and digest-only images), not kube-proxy's
-// vendor image, so only that part is a required gap. The versions that were
-// read are still recorded.
+// vendor image, so only that part is a required gap, and the reason names
+// the first pod of a required component. The versions that were read are
+// still recorded.
 func TestCollectVersionsUnreadableControlPlaneVersionIsPartial(t *testing.T) {
 	cs := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
@@ -139,8 +140,10 @@ func TestCollectVersionsUnreadableControlPlaneVersionIsPartial(t *testing.T) {
 	if !errors.As(err, &pe) {
 		t.Fatalf("err = %v, want a partialError", err)
 	}
-	const wantMsg = "version not read from 3 control-plane pod(s) (kube-proxy, kube-scheduler), first kube-system/kube-proxy-abc12: " +
-		"labelled kube-proxy but runs a vendor image whose version is not read (registry.example.com/platform/proxy-wrapper:2.1); their skew was not evaluated"
+	// The reason names the first pod of a required component, the one to
+	// fix, not the alphabetically earlier vendor kube-proxy.
+	const wantMsg = "version not read from 3 control-plane pod(s) (kube-proxy, kube-scheduler), first kube-system/kube-scheduler-cp1: " +
+		"kube-scheduler image registry.k8s.io/kube-scheduler@sha256:4f8bd1ec8bb2e6a5fcd4b4bbc6e4d5b0fdcb7f0f8a1c8c3f63b5f7f2b1a3c9d1 has no version tag; their skew was not evaluated"
 	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"kube-scheduler"}) || pe.msg != wantMsg {
 		t.Errorf("partial = %v, skipped = %q, reason =\n%q\nwant incomplete, [kube-scheduler],\n%q", pe.incomplete, pe.skipped, pe.msg, wantMsg)
 	}
@@ -202,9 +205,16 @@ func TestComponentImageTagUnreadableReasons(t *testing.T) {
 		{"example.com/kube-scheduler-mips:v1.0.0", "", ""},
 		{"k8s.gcr.io/hyperkube:v1.18.20", "v1.18.20", ""}, // pre-1.19: one image ran every component
 		{"gcr.io/google-containers/hyperkube-amd64:v1.15.12", "v1.15.12", ""},
-		// scheduler-plugins' kube-scheduler carries its own version, not Kubernetes'.
-		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v0.29.7", "", ""},
-		{"registry.k8s.io/scheduler-plugins/kube-scheduler@sha256:abc", "", ""},
+		// scheduler-plugins' kube-scheduler carries its own version, whose
+		// minor is the Kubernetes minor it is compiled with: v0.29.7 is
+		// built on v1.29.7, and a three-digit patch (v0.18.800) changed
+		// plugin code only, so only the minor is read.
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v0.29.7", "v1.29.7", ""},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v0.31.8-rc.1", "v1.31.8", ""},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v0.18.800", "v1.18.0", ""},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler@sha256:abc", "", "kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler@sha256:abc has no version tag"},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:latest", "", `kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler:latest has tag "latest", not a scheduler-plugins version (v0.<minor>.<patch>)`},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v1.0.0", "", `kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler:v1.0.0 has tag "v1.0.0", not a scheduler-plugins version (v0.<minor>.<patch>)`},
 	} {
 		tag, why := componentImageTag([]corev1.Container{{Image: tc.image}}, "kube-scheduler")
 		if tag != tc.tag || why != tc.why {
