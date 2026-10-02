@@ -153,42 +153,75 @@ func TestOutboxHoldDoesNotConsumeAttempts(t *testing.T) {
 }
 
 // TestOutboxHoldBoundsMessageLifetime: against a sink that is rate-limited
-// for good, every queued message is given up at the latest a poll after
-// outboxMaxAge since it was queued, however many are queued ahead of it.
-// Without the bound the hold lets one message per window be called and the
-// queue drains one message per hold.
+// for good, every queued message is given up shortly after outboxMaxAge
+// since that message was queued (not since the first or the last one), however
+// many are queued ahead of it. Without the bound the hold lets one message
+// per window be called and the queue drains one message per hold; without
+// expiryCap a message is picked up only when its hold ends, which for a
+// Retry-After that does not divide outboxMaxAge is well after its expiry.
+// CreatedAt is staggered, and not in ID order, so a message queued behind
+// older ones with a later expiry is covered.
 func TestOutboxHoldBoundsMessageLifetime(t *testing.T) {
-	st := newFakeStore()
-	limited := &rateLimitedNotifier{after: outboxMaxRetryAfter}
-	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
-	s := newTestServer(t, st, func(c *Config) { c.Notifier = limited })
-	s.now = clock.now
-	ts := httptest.NewServer(s.Handler())
-	defer ts.Close()
-	blockedThenClean(t, ts)
-	queueCopies(st, 9) // 10 messages
-	start := clock.now()
+	// Minutes each message was already queued when the passes start.
+	ages := []time.Duration{0, 300, 20, 180, 90, 420, 45, 240, 7, 150}
+	for _, tc := range []struct {
+		name  string
+		after time.Duration
+	}{
+		{"hold divides the lifetime", outboxMaxRetryAfter},
+		{"hold does not divide the lifetime", 50 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			limited := &rateLimitedNotifier{after: tc.after}
+			clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+			s := newTestServer(t, st, func(c *Config) { c.Notifier = limited })
+			s.now = clock.now
+			ts := httptest.NewServer(s.Handler())
+			defer ts.Close()
+			blockedThenClean(t, ts)
+			queueCopies(st, len(ages)-1)
+			start := clock.now()
+			created := map[int64]time.Time{}
+			queued := map[int64]time.Duration{} // how long before the start each was queued
+			st.mu.Lock()
+			for i := range st.outbox {
+				st.outbox[i].CreatedAt = start.Add(-ages[i] * time.Minute)
+				created[st.outbox[i].ID] = st.outbox[i].CreatedAt
+				queued[st.outbox[i].ID] = ages[i] * time.Minute
+			}
+			st.mu.Unlock()
 
-	// A pass every minute, so the bound is measured to within a minute.
-	step := time.Minute
-	gone := time.Duration(-1)
-	for clock.now().Sub(start) <= outboxMaxAge+3*time.Hour {
-		s.deliverOutbox(context.Background())
-		if len(st.outbox) == 0 {
-			gone = clock.now().Sub(start)
-			break
-		}
-		clock.set(clock.now().Add(step))
-	}
-	if gone < 0 {
-		t.Fatalf("%d messages still queued %v after they were queued, want none past outboxMaxAge (%v)",
-			len(st.outbox), outboxMaxAge+3*time.Hour, outboxMaxAge)
-	}
-	if gone < outboxMaxAge {
-		t.Errorf("messages gone after %v, before outboxMaxAge %v: given up too early", gone, outboxMaxAge)
-	}
-	if gone > outboxMaxAge+outboxPoll+step {
-		t.Errorf("messages gone after %v, want within %v of outboxMaxAge %v", gone, outboxPoll+step, outboxMaxAge)
+			// A pass every minute, so each bound is measured to within a minute.
+			step := time.Minute
+			for clock.now().Sub(start) <= outboxMaxAge+3*time.Hour && len(st.outbox) > 0 {
+				before := map[int64]int{}
+				for _, m := range st.outbox {
+					before[m.ID] = m.Attempts
+				}
+				s.deliverOutbox(context.Background())
+				for id, attempts := range before {
+					if slices.ContainsFunc(st.outbox, func(m store.OutboxMessage) bool { return m.ID == id }) {
+						continue
+					}
+					expiry := created[id].Add(outboxMaxAge)
+					now := clock.now()
+					if now.Before(expiry) && attempts != outboxMaxAttempts-1 {
+						// Only the attempt cap may end a message earlier.
+						t.Errorf("message %d gone %v before its expiry without reaching %d attempts", id, expiry.Sub(now), outboxMaxAttempts)
+					}
+					if late := now.Sub(expiry); late > outboxPoll+step {
+						t.Errorf("message %d gone %v after its expiry (queued %v before the start), want within %v",
+							id, late, queued[id], outboxPoll+step)
+					}
+				}
+				clock.set(clock.now().Add(step))
+			}
+			if n := len(st.outbox); n != 0 {
+				t.Fatalf("%d messages still queued %v after the start, want none past their outboxMaxAge (%v)",
+					n, clock.now().Sub(start), outboxMaxAge)
+			}
+		})
 	}
 }
 
