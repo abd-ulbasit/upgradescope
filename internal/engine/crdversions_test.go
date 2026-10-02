@@ -2,6 +2,7 @@ package engine
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -206,18 +207,27 @@ func TestEvalCRDVersionsUncheckedUsage(t *testing.T) {
 // An inventory from a collector that predates CRD checks does not report
 // the crds capability: the cluster's CRDs were not assessed, which is a
 // gap, though not a required one (CRD versions are the add-ons', not the
-// Kubernetes target's). Files inventories built in-process always report it.
+// Kubernetes target's). The same holds for a files inventory an older CLI
+// saved and `scan --inventory` re-evaluates.
 func TestEvaluateCRDsGap(t *testing.T) {
 	inv := clusterInv()
 	delete(inv.Capabilities, inventory.CapCRDs)
 	r := Evaluate(inv, testKB(), inventory.Version{Major: 1, Minor: 35}, testNow)
-	want := []CapabilityGap{{Capability: inventory.CapCRDs,
-		Reason: "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"}}
-	if !reflect.DeepEqual(r.NotAssessed, want) {
+	predates := CapabilityGap{Capability: inventory.CapCRDs,
+		Reason: "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"}
+	if want := []CapabilityGap{predates}; !reflect.DeepEqual(r.NotAssessed, want) {
 		t.Errorf("NotAssessed = %+v, want %+v", r.NotAssessed, want)
 	}
 	if r.Verdict != VerdictReady {
 		t.Errorf("Verdict = %s, want ready: the crds gap is not required", r.Verdict)
+	}
+
+	files := filesInv()
+	delete(files.Capabilities, inventory.CapCRDs)
+	files.APIUsage = []inventory.APIUsage{{Group: "cert-manager.io", Version: "v1alpha2", Kind: "Certificate", Count: 1}}
+	r = Evaluate(files, testKB(), inventory.Version{Major: 1, Minor: 35}, testNow)
+	if !slices.ContainsFunc(r.NotAssessed, func(g CapabilityGap) bool { return reflect.DeepEqual(g, predates) }) {
+		t.Errorf("files inventory without crds: NotAssessed = %+v, want it to include %+v", r.NotAssessed, predates)
 	}
 
 	// A blocker from a CRD version is a blocker like any other.

@@ -151,8 +151,9 @@ no CRD: a `Kustomization`, a `Kptfile`, and any group without a dot (such
 as `skaffold/v4beta6`), which no CRD can define.
 
 `crds` is never required: CRD versions do not decide whether Kubernetes can
-be upgraded. An inventory from an agent that predates the capability does
-not report it, and the report lists `crds` as not assessed.
+be upgraded. An inventory from an agent that predates the capability (or
+a files inventory an older CLI saved) does not report it, and the report
+lists `crds` as not assessed.
 
 ## Known limits
 

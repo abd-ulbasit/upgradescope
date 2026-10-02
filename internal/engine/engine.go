@@ -1250,9 +1250,9 @@ func evalUpgradePath(inv inventory.Inventory, target inventory.Version) []Findin
 // verdict rules on CapabilityGap. A capability absent from
 // inv.Capabilities is not a gap: collectors always report all of theirs,
 // so absence only occurs in hand-built inventories. The exception is crds,
-// which collectors older than it do not report: a cluster inventory
-// without it is a crds gap, so its CRD versions read as not assessed
-// rather than clean.
+// which collectors older than it do not report: an inventory without it
+// (an older agent's, or a files inventory an older CLI saved) is a crds
+// gap, so its CRD versions read as not assessed rather than clean.
 func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
 	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
 	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
@@ -1275,7 +1275,7 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 			gaps = append(gaps, g)
 		}
 	}
-	if _, ok := inv.Capabilities[inventory.CapCRDs]; !ok && inv.Source != inventory.SourceFiles {
+	if _, ok := inv.Capabilities[inventory.CapCRDs]; !ok {
 		gaps = append(gaps, CapabilityGap{Capability: inventory.CapCRDs,
 			Reason: "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"})
 	}

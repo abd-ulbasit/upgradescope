@@ -41,6 +41,7 @@ func filesInv() inventory.Inventory {
 			inventory.CapHelm:            {Available: false, Reason: reason},
 			inventory.CapAddOns:          {Available: false, Reason: reason},
 			inventory.CapVersions:        {Available: false, Reason: reason},
+			inventory.CapCRDs:            {Available: true},
 		},
 	}
 }
