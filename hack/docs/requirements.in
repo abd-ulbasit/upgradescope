@@ -1,0 +1,7 @@
+# The docs site toolchain (make docs, .github/workflows/docs.yml). Exact
+# pins; requirements.txt is the hashed lock compiled from this file:
+#   uv pip compile --generate-hashes --python-version 3.13 \
+#     hack/docs/requirements.in -o hack/docs/requirements.txt
+# MkDocs 2.0 is not compatible with Material, so the 1.x line is held.
+mkdocs==1.6.1
+mkdocs-material==9.7.7

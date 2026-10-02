@@ -1,12 +1,13 @@
-# Configuration
+# Suppressions and baselines
 
 This page covers what a team can configure about which findings count:
 ignore rules in `.upgradescope.yaml`, the `upgradescope.dev/ignore`
 object annotations, baselines for CI, and the agent's
-`ClusterReadiness` `spec.ignore`. Flags are listed in
-`upgradescope scan --help`. The GitHub Action passes them as its
-`config`, `baseline` and `write-baseline` inputs
-([action/README.md](../action/README.md#ignore-rules-and-baselines)).
+`ClusterReadiness` `spec.ignore`. The file format, field by field, is in the
+[configuration file reference](../reference/config.md); the flags in
+[`upgradescope scan`](../reference/cli/upgradescope_scan.md). The GitHub
+Action passes them as its `config`, `baseline` and `write-baseline` inputs
+([action/README.md](https://github.com/abd-ulbasit/upgradescope/blob/main/action/README.md#ignore-rules-and-baselines)).
 
 Contents:
 
@@ -50,15 +51,8 @@ ignore:
     reason: admin ingress is deleted in the next release
 ```
 
-| Field | Required | Meaning |
-|---|---|---|
-| `key` | one of `key`, `category` | Exact [finding key](#finding-keys). |
-| `category` | one of `key`, `category` | Every finding of this category: `removed-api`, `deprecated-api`, `deprecated-api-in-use`, `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`, `kb-stale`, `addon-no-data`, `unknown-api`. |
-| `namespace` | no | Glob (`*`, `?`, `[...]`) on the object's namespace. |
-| `name` | no | Glob on the object's name. |
-| `file` | no | Glob on the manifest path, relative to the directory that holds the config file; `**` spans directories. Never matches live objects. |
-| `reason` | **yes** | Why the finding is accepted. Shown wherever the finding is. |
-| `expires` | no | `YYYY-MM-DD`, the last day (UTC) the rule applies. |
+Every field, the categories a rule can name, and what makes a file
+invalid are in the [configuration file reference](../reference/config.md).
 
 **Which findings a rule takes.** A rule without `namespace`, `name` or
 `file` takes the whole finding, including objects beyond the 100 that a
@@ -74,16 +68,11 @@ Rules apply in order, and the first one that matches an object takes it.
 counts again, and the scan prints a warning naming the rule, so an
 acceptance cannot quietly outlive its reason.
 
-**Errors.** A missing reason, both or neither of `key` and `category`, an
-unknown category, a key that does not start with a category, a malformed
-date or glob, and any unknown field all make the scan exit 1 before it
-scans anything. A typo fails loudly instead of suppressing nothing.
-
-**Where the file is found.** `upgradescope scan` uses `--config <path>` when
-it is given. Otherwise it looks for `.upgradescope.yaml` in the scan root
-(the `--files` directory, or the working directory for a live scan), then at
-the root of the git repository that contains it. The first file found is
-used, and files are never merged.
+**Errors and discovery.** An invalid file makes the scan exit 1 before it
+scans anything, so a typo fails loudly instead of suppressing nothing.
+`--config <path>` names the file; otherwise `.upgradescope.yaml` is looked
+up in the scan root, then at the repository root
+([details](../reference/config.md#where-the-file-is-found)).
 
 ## Object annotations
 

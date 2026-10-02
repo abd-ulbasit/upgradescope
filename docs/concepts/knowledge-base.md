@@ -1,0 +1,74 @@
+# Knowledge base
+
+The knowledge base (KB) is what upgradescope knows about Kubernetes and the
+add-ons around it. It has three parts, all **compiled into the binary**:
+nothing is fetched at runtime, and a KB update reaches you only through a
+new release.
+
+| Part | Source | Maintained by |
+|---|---|---|
+| API lifecycle: for each group/version/kind, when it was introduced, deprecated and removed, and its replacement | generated from `k8s.io/api` source (`internal/kb/data/apilifecycle.json`), plus a short hand-written, cited supplement for types upstream already deleted from `k8s.io/api` | `tools/gen-kb` |
+| Add-on registry: end of life, release lines and Kubernetes compatibility of common add-ons | one YAML file per add-on in `registry/data/`, every claim cited | hand-curated, and synced with endoflife.date where it has the product ([Add-on registry](addon-registry.md)) |
+| Version-skew policy | the upstream [version skew policy](https://kubernetes.io/releases/version-skew-policy/) | `internal/kb/skew.go` ([Version skew](version-skew.md)) |
+
+`upgradescope version` prints what a binary carries:
+
+```console
+$ upgradescope version
+...
+  kb:            k8s.io/api v0.37.1; lifecycle 696a4b81; registry de96a5da
+  kb horizon:    Kubernetes 1.37
+  registry date: 2026-10-01
+```
+
+The KB version names the `k8s.io/api` release and a digest of each dataset,
+so two binaries with the same KB version judge identically. Reports carry it
+too (`kbVersion`). The registry date (the last change to the registry data)
+is stamped into release builds; a `go install` build prints `unknown`.
+
+## Generated, not copied
+
+`tools/gen-kb` imports every group/version package of `k8s.io/api` and asks
+each registered type for its generated `APILifecycleIntroduced`,
+`APILifecycleDeprecated`, `APILifecycleRemoved` and
+`APILifecycleReplacement` methods: the same source of truth the apiserver is
+built from, never a hand-copied table. That also covers removals scheduled
+further ahead than the human-written
+[deprecation guide](https://kubernetes.io/docs/reference/using-api/deprecation-guide/).
+CI regenerates the file on every change and fails when the committed copy
+differs, and checks that the generator imports every `k8s.io/api`
+group/version package. When the generated data and the supplement overlap,
+the generated entries win.
+
+## The horizon
+
+The newest minor the API dataset can describe is the newest one `k8s.io/api`
+has released, `maxKnownK8s` in the dataset, shown as `kb horizon` by
+`upgradescope version`. A target above it is allowed, but nothing can say
+what that release removes, so the report gets a `kb-stale` warning and a
+required `kb-coverage` gap, and the verdict is `unknown`
+([Verdict and score](verdict-and-score.md)). This is also what happens to
+the in-cluster agent's default target (the next minor) once a cluster runs
+the horizon minor, until you upgrade to a release with a newer KB.
+
+## How fresh it is
+
+- A weekly workflow (`kb-refresh`) bumps `k8s.io/api`, regenerates the
+  dataset, syncs the registry with endoflife.date and opens a pull request
+  for review. Nothing changes the datasets without review, and a failing
+  refresh opens an issue. It has failed for weeks at a time before ([#23](https://github.com/abd-ulbasit/upgradescope/issues/23)), so
+  it is a helper, not a guarantee.
+- A merged refresh changes nothing for users until it is released. There is
+  no fixed release schedule yet; the [changelog](../changelog.md) lists what
+  each release changed in the KB.
+- So the KB in your binary is as fresh as the release you run. Upgrading the
+  binary, image or chart is how you get new removals and EOL dates
+  ([Upgrade](../operations/upgrade.md)).
+
+## What it does not cover
+
+- CRD versions served by your own or third-party CRDs (deprecated CRD
+  versions and stale `status.storedVersions`) are not in the KB ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
+- Add-ons outside the registry are not judged: their images are counted as
+  `unrecognizedImages` in the inventory, and never become findings.
+- Feature gates, flags and behaviour changes that are not API removals.

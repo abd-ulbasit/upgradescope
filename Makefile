@@ -127,6 +127,30 @@ docs-gen: helm-docs
 helm-docs:
 	./hack/helm-docs.sh
 
+# The docs site (mkdocs.yml, docs/): `make docs` builds it into bin/site
+# with --strict, as .github/workflows/docs.yml does, so a broken link or
+# anchor, or a page missing from the nav, fails here first; `make
+# docs-serve` previews it on http://127.0.0.1:8000. Both install the
+# pinned, hash-locked toolchain (hack/docs/requirements.txt) into a
+# virtualenv under bin/ on first use. Needs Python 3.10 or newer.
+# `make docs-check` is the drift check for every generated reference
+# (CLI, CRD, REST API, Helm values); CI's docs workflow runs it.
+PYTHON ?= python3
+DOCS_VENV ?= bin/docs-venv
+$(DOCS_VENV)/.installed: hack/docs/requirements.txt
+	$(PYTHON) -m venv $(DOCS_VENV)
+	$(DOCS_VENV)/bin/pip install --quiet --require-hashes -r hack/docs/requirements.txt
+	touch $@
+
+.PHONY: docs docs-serve docs-check
+docs: $(DOCS_VENV)/.installed
+	$(DOCS_VENV)/bin/mkdocs build --strict --site-dir bin/site
+docs-serve: $(DOCS_VENV)/.installed
+	$(DOCS_VENV)/bin/mkdocs serve --strict
+docs-check:
+	go test ./tools/gen-docs -run TestReferenceIsFresh -count=1
+	./hack/helm-docs.sh --check
+
 # Asserts the Dockerfile's golang base image matches go.mod's `go` directive,
 # that GoReleaser is pinned to one version here and in release.yml, and that
 # the pin needs no newer Go than go.mod (this part reads the module proxy).

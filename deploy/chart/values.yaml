@@ -190,7 +190,7 @@ server:
   # never appears in the Deployment. Ignored when existingSecret is set.
   slackWebhook: ""
   # -- Optional generic webhook URL: POSTed one versioned JSON notification
-  # per cluster and evaluation pass (schema in docs/operations.md). Stored
+  # per cluster and evaluation pass (schema in docs/reference/webhook.md). Stored
   # like slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL.
   webhook: ""
   # -- Optional HMAC-SHA256 key: webhook requests then carry
@@ -235,7 +235,7 @@ server:
     # -- The render fails when the Ingress would publish a read API with no
     # read token. Set true only when an authenticating layer (oauth2-proxy
     # through ingress annotations, an identity-aware proxy) fronts it; see
-    # docs/operations.md.
+    # docs/operations/tenancy.md.
     allowAnonymousRead: false
     tls:
       # -- TLS for host, from a kubernetes.io/tls Secret (e.g. one cert-manager
@@ -308,7 +308,8 @@ networkPolicy:
 # -- Prometheus Operator and Grafana integration, all off by default. The
 # metrics themselves are always served: the agent's on agent.healthPort,
 # the server's on its Service port (behind the read token when one is
-# set). docs/observability.md lists every metric and alert.
+# set). docs/observability.md lists every metric; the alerts are in
+# docs/guides/prometheus-grafana.md.
 metrics:
   serviceMonitor:
     # -- Render monitoring.coreos.com/v1 ServiceMonitors for the agent (plus a

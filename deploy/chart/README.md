@@ -117,8 +117,9 @@ cluster (its history and tokens go too) with the admin token:
 
 The server prunes history older than `server.retention` (90 days) and
 marks clusters that stopped pushing stale after `server.staleAfter` (2h).
-docs/operations.md covers retention, sizing, webhooks and putting the
-dashboard behind an SSO proxy.
+The docs cover [retention, sizing and backups](https://abd-ulbasit.github.io/upgradescope/operations/retention-and-backup/),
+[webhooks](https://abd-ulbasit.github.io/upgradescope/reference/webhook/)
+and [putting the dashboard behind an SSO proxy](https://abd-ulbasit.github.io/upgradescope/operations/tenancy/).
 
 ## RBAC: what the agent can do, and why
 
@@ -299,7 +300,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `image.repository` | string | `"ghcr.io/abd-ulbasit/upgradescope"` | — |
 | `image.tag` | string | `""` | Empty = the chart's appVersion, i.e. the release this chart was published with. |
 | `imagePullSecrets` | list | `[]` | Pull secrets for a private registry or mirror, set on both pods, e.g. [{name: regcred}]. |
-| `metrics` | object | `{"grafanaDashboard":{"annotations":{},"enabled":false,"labels":{"grafana_dashboard":"1"}},"prometheusRule":{"clusterStaleAfterSeconds":7200,"enabled":false,"labels":{}},"serviceMonitor":{"enabled":false,"interval":"1m","labels":{}}}` | Prometheus Operator and Grafana integration, all off by default. The metrics themselves are always served: the agent's on agent.healthPort, the server's on its Service port (behind the read token when one is set). docs/observability.md lists every metric and alert. |
+| `metrics` | object | `{"grafanaDashboard":{"annotations":{},"enabled":false,"labels":{"grafana_dashboard":"1"}},"prometheusRule":{"clusterStaleAfterSeconds":7200,"enabled":false,"labels":{}},"serviceMonitor":{"enabled":false,"interval":"1m","labels":{}}}` | Prometheus Operator and Grafana integration, all off by default. The metrics themselves are always served: the agent's on agent.healthPort, the server's on its Service port (behind the read token when one is set). docs/observability.md lists every metric; the alerts are in docs/guides/prometheus-grafana.md. |
 | `metrics.grafanaDashboard.annotations` | object | `{}` | e.g. {grafana_folder: Kubernetes} for the sidecar's folder annotation. |
 | `metrics.grafanaDashboard.enabled` | bool | `false` | Ship deploy/grafana/upgradescope-dashboard.json as a ConfigMap for the Grafana sidecar, which loads ConfigMaps labeled grafana_dashboard: "1" by default. |
 | `metrics.prometheusRule.clusterStaleAfterSeconds` | int | `7200` | A cluster whose agent has not pushed for this long is stale. Agents push on every change and at least hourly (--force-sync-every), so keep it above that. |
@@ -322,7 +323,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.extraVolumeMounts` | list | `[]` | — |
 | `server.extraVolumes` | list | `[]` | — |
 | `server.ingestToken` | string | `""` | Shared bearer token agents must present on POST /api/v1/snapshots. Empty = the chart generates a random 40-character token into its Secret on first install and keeps it on upgrades (Helm lookup). NOTES.txt prints the command to read it back for agents in other clusters (Secret &lt;fullname&gt;-server-tokens, e.g. upgradescope-server-tokens). Renderers without cluster access (helm template, Argo CD) cannot look the old token up and generate a new one on every render: under GitOps set this or existingSecret. Ignored when existingSecret is set. |
-| `server.ingress.allowAnonymousRead` | bool | `false` | The render fails when the Ingress would publish a read API with no read token. Set true only when an authenticating layer (oauth2-proxy through ingress annotations, an identity-aware proxy) fronts it; see docs/operations.md. |
+| `server.ingress.allowAnonymousRead` | bool | `false` | The render fails when the Ingress would publish a read API with no read token. Set true only when an authenticating layer (oauth2-proxy through ingress annotations, an identity-aware proxy) fronts it; see docs/operations/tenancy.md. |
 | `server.ingress.annotations` | object | `{}` | — |
 | `server.ingress.className` | string | `""` | — |
 | `server.ingress.enabled` | bool | `false` | Expose the server (API, dashboard, snapshot ingest) through an Ingress. Set a read token first. Agents push to https://&lt;host&gt;. |
@@ -359,7 +360,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.targets` | list | `[]` | Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"]. |
 | `server.teamMap` | list | `[]` | Namespace→team overrides applied before every evaluation, rendered into a ConfigMap and passed as --team-map; the first matching glob wins, e.g. [{pattern: "payments-*", team: payments}]. |
 | `server.tolerations` | list | `[]` | — |
-| `server.webhook` | string | `""` | Optional generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in docs/operations.md). Stored like slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL. |
+| `server.webhook` | string | `""` | Optional generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in docs/reference/webhook.md). Stored like slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL. |
 | `server.webhookSecret` | string | `""` | Optional HMAC-SHA256 key: webhook requests then carry X-Upgradescope-Signature: sha256=&lt;hex&gt;. Stored like slackWebhook, as $UPGRADESCOPE_WEBHOOK_SECRET. |
 | `serviceAccount.create` | bool | `true` | Create the agent ServiceAccount. Set false to bring your own (set name). |
 | `serviceAccount.name` | string | `""` | — |
