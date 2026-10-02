@@ -1,0 +1,83 @@
+{{- /*
+krew plugin manifest TEMPLATE for `kubectl upgradescope`. Not a valid
+manifest as it stands: rajatjindal/krew-release-bot (release.yml's krew
+job, stable tags only) renders .TagName and each addURIAndSha (the
+archive's URL plus its sha256, computed from the download) and opens the
+version-bump PR against kubernetes-sigs/krew-index. The bot only updates a
+plugin krew-index already has: the first submission is a manual PR (see
+packaging/README.md). The archives are the release's version-independent
+ones (.goreleaser.yml); each carries LICENSE, which krew-index requires.
+packaging/krew/krew_test.go renders it offline the way the bot does.
+(This header is a template comment: it is not rendered into the manifest.)
+*/ -}}
+apiVersion: krew.googlecontainertools.github.com/v1alpha2
+kind: Plugin
+metadata:
+  name: upgradescope
+spec:
+  version: {{ .TagName }}
+  homepage: https://github.com/abd-ulbasit/upgradescope
+  shortDescription: Find what blocks your next Kubernetes upgrade
+  description: |
+    upgradescope checks a cluster's readiness for a Kubernetes minor upgrade
+    before you start it. It finds stored objects and live callers of
+    deprecated or removed APIs, end-of-life add-ons (from a cited,
+    regularly synced registry), version skew between the control plane and
+    the nodes, and Helm charts that do not support the target version. It
+    rolls them up into a readiness score and a verdict.
+
+      kubectl upgradescope scan --target 1.37
+      kubectl upgradescope scan --target 1.37 --output json
+      kubectl upgradescope scan --files rendered/ --target 1.37 --output sarif
+
+    It is read-only: it never changes the cluster. The same binary also runs
+    as an in-cluster agent and a fleet server (see the homepage).
+  caveats: |
+    upgradescope only reads. The scan needs these permissions in the current
+    context:
+      * get/list on namespaces, nodes and pods;
+      * get on the /version and /metrics non-resource URLs. /metrics is how
+        it finds live callers of deprecated APIs;
+      * get/list on the deprecated API resources it probes, and on
+        customresourcedefinitions;
+      * optionally get/list on secrets and configmaps, to read Helm releases.
+    A check it cannot run is reported as NOT ASSESSED, never as passing.
+    By default the verdict is then unknown and the gate fails (exit 2).
+    Pass --allow-incomplete to gate on findings alone.
+  platforms:
+    - selector:
+        matchLabels:
+          os: linux
+          arch: amd64
+      {{ addURIAndSha "https://github.com/abd-ulbasit/upgradescope/releases/download/{{ .TagName }}/upgradescope_linux_amd64.tar.gz" .TagName | indent 6 }}
+      bin: upgradescope
+    - selector:
+        matchLabels:
+          os: linux
+          arch: arm64
+      {{ addURIAndSha "https://github.com/abd-ulbasit/upgradescope/releases/download/{{ .TagName }}/upgradescope_linux_arm64.tar.gz" .TagName | indent 6 }}
+      bin: upgradescope
+    - selector:
+        matchLabels:
+          os: darwin
+          arch: amd64
+      {{ addURIAndSha "https://github.com/abd-ulbasit/upgradescope/releases/download/{{ .TagName }}/upgradescope_darwin_amd64.tar.gz" .TagName | indent 6 }}
+      bin: upgradescope
+    - selector:
+        matchLabels:
+          os: darwin
+          arch: arm64
+      {{ addURIAndSha "https://github.com/abd-ulbasit/upgradescope/releases/download/{{ .TagName }}/upgradescope_darwin_arm64.tar.gz" .TagName | indent 6 }}
+      bin: upgradescope
+    - selector:
+        matchLabels:
+          os: windows
+          arch: amd64
+      {{ addURIAndSha "https://github.com/abd-ulbasit/upgradescope/releases/download/{{ .TagName }}/upgradescope_windows_amd64.zip" .TagName | indent 6 }}
+      bin: upgradescope.exe
+    - selector:
+        matchLabels:
+          os: windows
+          arch: arm64
+      {{ addURIAndSha "https://github.com/abd-ulbasit/upgradescope/releases/download/{{ .TagName }}/upgradescope_windows_arm64.zip" .TagName | indent 6 }}
+      bin: upgradescope.exe
