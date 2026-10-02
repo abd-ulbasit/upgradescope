@@ -348,15 +348,26 @@ a CI gate.
   at a time and can answer `503` with `Retry-After` after waiting 30s for
   their turn; retry them as the agent retries pushes. `/api/v1/clusters`,
   `/api/v1/fleet` and `/metrics` read no snapshot inventory and no stored
-  report (#121).
+  report. When the responses those reads hold for slow clients fill their
+  budget, a response is sent while the read holds its turn, and a client
+  that has not taken it within 20s is disconnected (#121).
+- Server: `POST /api/v1/gate` answers `413` for a stream over its node
+  budget, which a realistic kubectl YAML stream reaches at about 4.4 MiB
+  (v0.1 decoded streams up to 20 MiB), or a document whose YAML
+  aliases expand past 4 MiB; split such streams. A UTF-16 stream gets
+  `422`. A `/gate` or snapshot body that does not arrive within the 60s
+  read timeout gets `408`, which the agent retries (#121, #100).
 - Server database: migration 0007 (SQLite and Postgres) adds
   `evaluations.not_assessed` and fills it from every stored report on the
   first start, so that start takes longer on a large database. A server
-  rolled back after it still runs; evaluations it writes show no
-  `notAssessed` in summaries until a newer server's pass refreshes them.
+  rolled back after it still runs, but summaries do not follow what it
+  writes: an evaluation it creates shows no `notAssessed`, and one it
+  refreshes keeps the `notAssessed` it had, until a newer server writes
+  that evaluation again.
 - Chart: the server's memory limit is 640Mi (was 512Mi), and its
   `GOMEMLIMIT` 576MiB: the worst case of one `/gate` request, one push,
-  one read and the re-evaluation pass, measured on SQLite, is ~515 MiB.
+  one read, the read responses held for their clients and the
+  re-evaluation pass, measured on SQLite, is ~555 MiB.
 
 ### Fixed
 
@@ -451,7 +462,11 @@ a CI gate.
   10 concurrent reads of it grow the heap ~400 MiB. The cluster list, the
   fleet matrix and `/metrics`, which take no slot, read evaluation
   summaries instead of whole reports: after one 17 MB push, 30
-  concurrent requests to them had grown the heap by up to 584 MiB (#121).
+  concurrent requests to them had grown the heap by up to 584 MiB. Read
+  responses waiting for their clients share a budget of twice
+  `--max-snapshot-bytes`, and one that does not fit is sent in the read
+  slot under a 20s write deadline: 20 clients that asked for a 17.5 MB
+  report and never read it had held 366 MiB (#121).
 - The CSV export guards every cell against formula injection, including
   after leading white space. Anonymous read access is decided on the
   resolved bind address. The `Bearer` scheme is case-insensitive. The

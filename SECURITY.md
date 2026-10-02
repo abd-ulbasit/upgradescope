@@ -92,17 +92,22 @@ In scope:
   request at a time per endpoint doing anything whose memory follows the
   input's structure (measuring what YAML aliases expand to, decoding,
   evaluating); the per-cluster reads, which load a stored snapshot and
-  may evaluate it, share one more such slot. The reads of the whole fleet
+  may evaluate it, share one more such slot. Their responses wait for
+  their clients in a budget of twice `--max-snapshot-bytes`; one that
+  does not fit is sent in the slot, and its client gets 20s to take it.
+  The reads of the whole fleet
   (`/clusters`, `/fleet`, `/metrics`) take no slot and load no snapshot
   inventory and no stored report. Any request that makes the
   server use memory beyond them is in scope, with or without credentials.
   What the budgets leave is known: a client that really sends three times
   `--max-gate-bytes` and then stalls makes other `/gate` requests `503`
-  until the 60s read timeout cuts it off, and one that keeps asking for
-  what-if reports keeps other per-cluster reads waiting, both without
-  credentials when the read API is open; a response is held until its
-  client has read it (a report can be about as large as the snapshot it
-  came from), for at most the 120s write timeout; and a snapshot a v0.1
+  until the 60s read timeout cuts it off; one that keeps asking for
+  what-if reports keeps other per-cluster reads waiting; and clients that
+  ask for large reports (one can be about as large as its snapshot) and
+  do not read them fill the response budget for up to the 120s write
+  timeout, after which each such request holds the read slot for 20s, so
+  other per-cluster reads wait or get `503`. All of these need no
+  credentials when the read API is open. And a snapshot a v0.1
   server stored before these budgets existed is decoded without a node
   count when `/gate?cluster=`, re-evaluation or a what-if read reads it,
   and, having no stored server version, is loaded whole by `/clusters`,

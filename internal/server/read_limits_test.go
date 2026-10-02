@@ -149,9 +149,10 @@ func (b *unreadResponse) Write(p []byte) (int, error) {
 	return b.ResponseRecorder.Write(p)
 }
 
-// A read's response is sent after the slot is released, so a client that
-// is slow to read it holds only its bytes, never the slot; the status and
-// headers the handler set reach the client unchanged.
+// A read's response that fits the held-response budget is sent after the
+// slot is released, so a client that is slow to read it holds only its
+// bytes, never the slot; the status and headers the handler set reach
+// the client unchanged.
 func TestReadSlotIsNotHeldWhileSending(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
 	h := s.inReadSlot(func(w http.ResponseWriter, _ *http.Request) {
