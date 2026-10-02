@@ -30,6 +30,7 @@ const (
 	msgStarting     = "agent starting"
 	msgTickComplete = "tick complete"
 	msgTickFailed   = "tick failed"
+	msgStopping     = "agent stopping"
 )
 
 // tickReport is one tick's outcome. A tick fails when anything but the

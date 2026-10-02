@@ -31,7 +31,7 @@ level=INFO msg="tick complete" duration=2.41s push=ok consecutiveFailures=0 capa
 
 | Field | Meaning |
 |---|---|
-| `msg` | `tick complete` (INFO, or WARN when only the push failed) or `tick failed` (ERROR, with `err`) |
+| `msg` | `tick complete` (INFO, or WARN when only the push failed) or `tick failed` (ERROR, with `err`); `agent stopping` (INFO) on a graceful stop |
 | `duration` | wall time of the tick |
 | `push` | `off` (CRD-only), `unchanged` (same inventory, hourly force-sync not due), `ok`, `failed` (with `pushError`) |
 | `consecutiveFailures` | failed ticks in a row; 0 after a success |
@@ -44,7 +44,9 @@ status was written, and the agent's local result never depends on the
 server. Push failures are logged at WARN and counted separately.
 
 Each tick runs under a deadline of half the interval, at most 5 minutes, so a
-wedged API call cannot stop the loop.
+wedged API call cannot stop the loop. A stop (SIGTERM) that lands mid-tick
+cancels the tick's calls; that tick is not counted or logged as failed, and
+the agent logs `agent stopping` with `interruptedTick=true`.
 
 ## Probes
 

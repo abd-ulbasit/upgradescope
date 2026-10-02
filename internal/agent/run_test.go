@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
@@ -150,5 +152,30 @@ func TestRunFirstTickThenGracefulStop(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after context cancel")
+	}
+}
+
+// A stop that lands mid-tick cancels the tick's calls. That is a graceful
+// stop, not a tick failure: no ERROR line, and one INFO line saying the
+// agent is stopping.
+func TestRunStopMidTickIsNotAFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dyn := fakeDyn().(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("*", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+		cancel() // the stop arrives while the tick talks to the apiserver
+		return true, nil, context.Canceled
+	})
+	logs := &syncBuffer{}
+	cfg := Config{Logger: slog.New(slog.NewJSONHandler(logs, nil))}
+	if err := Run(ctx, fakeClients(t, "v1.35.2"), dyn, fakeAPIExt(), mustKB(t), cfg); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	lines := logs.lines(t)
+	if failed := linesWithMsg(lines, msgTickFailed); len(failed) != 0 {
+		t.Errorf("tick failed lines = %v, want none on a graceful stop", failed)
+	}
+	if stopping := linesWithMsg(lines, msgStopping); len(stopping) != 1 || stopping[0]["level"] != "INFO" {
+		t.Errorf("stopping lines = %v, want one INFO line", stopping)
 	}
 }

@@ -348,11 +348,18 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	}
 	r := newRunner(clients, dyn, k, cfg)
 	for {
-		obs.record(r.runTick(ctx))
+		rep := r.runTick(ctx)
+		if ctx.Err() != nil && (rep.err != nil || rep.pushErr != nil) {
+			// A stop cancelled this tick's calls; that is no tick failure.
+			log.Info(msgStopping, "interruptedTick", true)
+			return nil
+		}
+		obs.record(rep)
 		timer := time.NewTimer(jitter(cfg.Interval))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			log.Info(msgStopping)
 			return nil
 		case <-timer.C:
 		}
