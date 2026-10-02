@@ -40,11 +40,13 @@ and `encoding/json`, so they cannot be talked down. A realistic ~4 MiB
 
 Worst case for the chart's 512Mi server: one gate decode (~155 MB) plus
 one ingest (~80 MB) plus both body budgets (70 MiB), about 310 MB, inside
-the 460 MiB `GOMEMLIMIT` the chart derives from the limit. Set
-`GOMEMLIMIT` (about 90% of the container limit) when you run `serve` or
-`agent` outside the chart: the Go runtime does not read the container
-limit, and without it the collector lets garbage grow to as much as the
-live heap again before it runs.
+the 460 MiB `GOMEMLIMIT` the chart derives from the limit. The Go runtime
+does not read the container's limit, and without a memory limit the
+collector lets garbage grow to as much as the live heap again before it
+runs, so a process whose live heap fits is OOM-killed anyway. Outside the
+chart (`docker run -m`, systemd, any cgroup), `serve` and `agent` set it
+themselves to 90% of the cgroup's memory limit (v2 `memory.max` or v1
+`memory.limit_in_bytes`) and log it; an explicit `GOMEMLIMIT` wins.
 
 What is left is availability: a client that really sends 3 × the gate
 cap and then stalls makes other `/gate` requests `503` until the read

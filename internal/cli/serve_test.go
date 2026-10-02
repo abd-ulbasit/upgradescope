@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -344,4 +346,62 @@ func TestRootRegistersServe(t *testing.T) {
 		}
 	}
 	t.Fatal("serve command not registered on root")
+}
+
+// Outside the chart (docker run -m, a plain cgroup), nothing sets
+// GOMEMLIMIT, and the Go runtime does not read the container's limit: the
+// red team's two concurrent /gate requests OOM-killed a 512m container on
+// garbage alone (#121). serve and agent set the limit to 90% of the
+// cgroup's memory limit, v2 or v1, unless GOMEMLIMIT is set, which wins.
+func TestMemoryLimitFromCgroup(t *testing.T) {
+	defer debug.SetMemoryLimit(debug.SetMemoryLimit(-1))
+	write := func(t *testing.T, root, rel, content string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	noEnv := func(string) string { return "" }
+	for _, tc := range []struct {
+		name, rel, content string
+		want               int64 // 0 = none applied
+	}{
+		{"cgroup v2", "memory.max", "536870912\n", 483183820},
+		{"cgroup v2, no limit", "memory.max", "max\n", 0},
+		{"cgroup v1", "memory/memory.limit_in_bytes", "268435456\n", 241591910},
+		{"cgroup v1, no limit", "memory/memory.limit_in_bytes", "9223372036854771712\n", 0},
+		{"no cgroup files", "", "", 0},
+		{"garbage", "memory.max", "lots\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tc.rel != "" {
+				write(t, root, tc.rel, tc.content)
+			}
+			debug.SetMemoryLimit(math.MaxInt64)
+			got, applied := applyMemoryLimit(noEnv, root)
+			if applied != (tc.want != 0) || got != tc.want {
+				t.Fatalf("applyMemoryLimit = %d, %v; want %d", got, applied, tc.want)
+			}
+			if now := debug.SetMemoryLimit(-1); tc.want != 0 && now != tc.want || tc.want == 0 && now != math.MaxInt64 {
+				t.Fatalf("runtime memory limit = %d, want %d", now, tc.want)
+			}
+		})
+	}
+	// An explicit GOMEMLIMIT wins: the runtime has applied it already.
+	root := t.TempDir()
+	write(t, root, "memory.max", "536870912\n")
+	debug.SetMemoryLimit(math.MaxInt64)
+	if _, applied := applyMemoryLimit(func(k string) string {
+		if k == "GOMEMLIMIT" {
+			return "100MiB"
+		}
+		return ""
+	}, root); applied || debug.SetMemoryLimit(-1) != math.MaxInt64 {
+		t.Fatal("applyMemoryLimit overrode an explicit GOMEMLIMIT")
+	}
 }

@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -59,6 +62,9 @@ type serveOptions struct {
 // ctx is cancelled, then graceful stop).
 // A package var so command tests can stub it, same seam as runScan.
 var runServe = func(ctx context.Context, opts serveOptions) error {
+	if limit, ok := applyMemoryLimit(os.Getenv, cgroupRoot); ok {
+		log.Printf("serve: GOMEMLIMIT unset: Go memory limit set to %d bytes, 90%% of the cgroup's memory limit", limit)
+	}
 	st, err := dbFlags{db: opts.db, dbURL: opts.dbURL}.openStore()
 	if err != nil {
 		return err
@@ -212,6 +218,47 @@ It listens on loopback by default. On any other address, the read API needs
 	cmd.Flags().StringVar(&opts.retention, "retention", "90d", "prune snapshots and evaluations older than this, in days (90d) or a Go duration (2160h), at startup and daily; each cluster's latest snapshot and its evaluations are always kept; 0 keeps everything")
 	cmd.MarkFlagsRequiredTogether("tls-cert-file", "tls-key-file")
 	return cmd
+}
+
+// cgroupRoot is where the container's own cgroup is mounted.
+const cgroupRoot = "/sys/fs/cgroup"
+
+// applyMemoryLimit sets the Go runtime's soft memory limit to 90% of the
+// cgroup's memory limit, unless GOMEMLIMIT is set (the runtime has applied
+// that already) or there is no limit. The runtime does not read the
+// container's limit itself: without one, the collector lets garbage grow
+// to as much as the live heap again, and a process whose live heap fits
+// is OOM-killed anyway. The chart sets GOMEMLIMIT; this covers docker run
+// -m and other cgroups. It returns the limit it set.
+func applyMemoryLimit(getenv func(string) string, root string) (int64, bool) {
+	if getenv("GOMEMLIMIT") != "" {
+		return 0, false
+	}
+	limit, ok := cgroupMemoryLimit(root)
+	if !ok {
+		return 0, false
+	}
+	soft := limit * 9 / 10
+	debug.SetMemoryLimit(soft)
+	return soft, true
+}
+
+// cgroupMemoryLimit reads the memory limit of the cgroup mounted at root:
+// memory.max (cgroup v2, "max" = none) or memory/memory.limit_in_bytes
+// (v1, which reports "none" as a value near 2^63).
+func cgroupMemoryLimit(root string) (int64, bool) {
+	for _, f := range []string{"memory.max", "memory/memory.limit_in_bytes"} {
+		raw, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+		if err != nil || n <= 0 || n >= 1<<60 {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
 }
 
 // exposedListen reports whether a --listen address is certainly not

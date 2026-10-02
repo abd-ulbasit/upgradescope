@@ -70,6 +70,9 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 	if msg := agent.CleartextPushWarning(opts.serverURL, opts.serverToken); msg != "" {
 		logger.Warn(msg)
 	}
+	if limit, ok := applyMemoryLimit(os.Getenv, cgroupRoot); ok {
+		logger.Info("GOMEMLIMIT unset: Go memory limit set to 90% of the cgroup's memory limit", "bytes", limit)
+	}
 	kbData, err := kb.Load()
 	if err != nil {
 		return fmt.Errorf("load knowledge base: %w", err)
