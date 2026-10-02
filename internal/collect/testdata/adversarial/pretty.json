@@ -1,0 +1,14 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "w"
+  }
+}
+{
+  "apiVersion": "extensions/v1beta1",
+  "kind": "Ingress",
+  "metadata": {
+    "name": "old"
+  }
+}

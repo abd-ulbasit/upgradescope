@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: List
+metadata:
+  annotations: &hidden
+    apiVersion: extensions/v1beta1
+    kind: Ingress
+items:
+- *hidden

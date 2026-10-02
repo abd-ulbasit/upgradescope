@@ -1,0 +1,6 @@
+metadata:
+  name: merged
+  labels: &gvk
+    apiVersion: extensions/v1beta1
+    kind: Ingress
+<<: *gvk

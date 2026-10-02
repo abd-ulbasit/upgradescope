@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -185,9 +186,9 @@ func TestCollectFilesInvalidSeparatorKeepsPrecedingDoc(t *testing.T) {
 	}
 }
 
-// kubectl rejects an object with a duplicated identity key, and which copy
-// wins is decoder-specific, so such a document is a warning rather than an
-// object counted under a guessed API version.
+// kubectl accepts an object with a duplicated identity key and sends the
+// last value (#119): the object is counted that way, with a warning on the
+// duplicate's line.
 func TestCollectFilesDuplicateKeys(t *testing.T) {
 	dir := writeTree(t, map[string]string{"dup.yaml": `apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -205,15 +206,21 @@ metadata:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := usageCounts(inv); !reflect.DeepEqual(got, map[string]int{"networking.k8s.io/v1beta1/Ingress": 1}) {
-		t.Errorf("usage = %v, want only the well-formed Ingress", got)
+	want := map[string]int{"extensions/v1beta1/Ingress": 1, "/v1/ConfigMap": 1, "networking.k8s.io/v1beta1/Ingress": 1}
+	if got := usageCounts(inv); !reflect.DeepEqual(got, want) {
+		t.Errorf("usage = %v, want %v (last values win)", got, want)
 	}
-	if len(sum.Warnings) != 2 || sum.Warnings[0].Line != 1 || sum.Warnings[1].Line != 6 {
-		t.Fatalf("warnings = %+v, want lines 1 and 6", sum.Warnings)
+	for _, u := range inv.APIUsage {
+		if u.Kind == "ConfigMap" && u.Objects[0].Name != "c" {
+			t.Errorf("ConfigMap = %+v, want the last name, c", u.Objects[0])
+		}
+	}
+	if len(sum.Warnings) != 2 || sum.Warnings[0].Line != 3 || sum.Warnings[1].Line != 10 {
+		t.Fatalf("warnings = %+v, want lines 3 and 10 (the duplicates)", sum.Warnings)
 	}
 	for _, w := range sum.Warnings {
-		if !strings.Contains(w.Err.Error(), "duplicate") {
-			t.Errorf("warning %v: want a duplicate-key error", w)
+		if !strings.Contains(w.Err.Error(), "duplicate") || w.Unassessed {
+			t.Errorf("warning %v: want a duplicate-key warning on a counted object", w)
 		}
 	}
 }
@@ -414,19 +421,15 @@ items:
 		{"JSON List", `{"apiVersion": "v1", "kind": "List", "items": [
   {"apiVersion": "policy/v1beta1", "kind": "PodSecurityPolicy", "metadata": {"name": "p"}}
 ]}`, map[string]int{"policy/v1beta1/PodSecurityPolicy": 1}},
-		{"CRD-like *List without typed items is an object, not a wrapper", `apiVersion: example.com/v1
+		// kubectl decodes any object with items as a list (#119; the
+		// trade-off of #13): a custom resource whose kind ends in List
+		// is expanded too, its untyped items inferred.
+		{"CRD-like *List with untyped items is a list, as kubectl decodes it", `apiVersion: example.com/v1
 kind: AllowList
 metadata: {name: office}
 items:
 - cidr: 10.0.0.0/8
-`, map[string]int{"example.com/v1/AllowList": 1}},
-		{"aliased List items are not expanded (alias-bomb guard)", `apiVersion: v1
-kind: List
-items:
-- &cm {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}
-- *cm
-- *cm
-`, map[string]int{"/v1/ConfigMap": 1}},
+`, map[string]int{"example.com/v1/Allow": 1}},
 		{"untyped List items are skipped", `apiVersion: v1
 kind: List
 items:
@@ -434,11 +437,11 @@ items:
 `, map[string]int{}},
 		{"List with null items is an empty wrapper", "apiVersion: v1\nkind: List\nitems:\n", map[string]int{}},
 		{"List without items is an empty wrapper", "apiVersion: v1\nkind: List\nmetadata: {}\n", map[string]int{}},
-		{"CRD-like *List with empty items is an object", `apiVersion: example.com/v1
+		{"CRD-like *List with empty items is an empty list", `apiVersion: example.com/v1
 kind: AllowList
 metadata: {name: none}
 items: []
-`, map[string]int{"example.com/v1/AllowList": 1}},
+`, map[string]int{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -453,9 +456,25 @@ items: []
 	}
 }
 
-// FuzzScanManifestStream: arbitrary input never panics, and every object
-// found carries a positive line.
+// apiName matches "group/version/Kind" values a Kubernetes API can have.
+var apiName = regexp.MustCompile(`^([a-z0-9][-a-z0-9.]*)?/[a-z0-9]+/[A-Za-z][A-Za-z0-9]*$`)
+
+// FuzzScanManifestStream: arbitrary input never panics, every object found
+// carries a positive line, and every object kubectl's own decoder would
+// apply (kubectlObjects) is counted or named by a part reported as not
+// assessed — the scan never silently drops what kubectl sends.
 func FuzzScanManifestStream(f *testing.F) {
+	corpus, err := filepath.Glob("testdata/adversarial/*")
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, name := range corpus {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(string(raw))
+	}
 	for _, seed := range []string{
 		ingressV1beta1,
 		"- a\n- b\n",
@@ -470,13 +489,28 @@ func FuzzScanManifestStream(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		objs, _, err := parseManifestStream(strings.NewReader(s))
+		objs, bad, err := parseManifestStream(strings.NewReader(s))
 		if err != nil {
 			t.Fatalf("in-memory reader cannot fail, got %v", err)
 		}
+		seen := map[string]bool{}
 		for _, o := range objs {
 			if o.ref.Line < 1 || o.kind == "" || o.version == "" {
 				t.Fatalf("object %+v: want kind, version and a positive line", o)
+			}
+			seen[o.group+"/"+o.version+"/"+o.kind] = true
+		}
+		for _, b := range bad {
+			for _, g := range namedAPIs(b.unassessed) {
+				seen[g.group+"/"+g.version+"/"+g.kind] = true
+			}
+		}
+		kubectl, _ := kubectlObjects(s)
+		for _, g := range kubectl {
+			// Only names an API can have: the knowledge base flags no
+			// other, and text that did not decode is read for such names.
+			if !seen[g] && apiName.MatchString(g) {
+				t.Fatalf("kubectl applies %s, which is neither counted nor named by an unassessed part (bad %+v)", g, bad)
 			}
 		}
 	})

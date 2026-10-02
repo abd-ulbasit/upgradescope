@@ -114,6 +114,29 @@ items:
 	}
 }
 
+// A concatenated JSON body (NDJSON, `jq '.items[]'`) is decoded object by
+// object, as kubectl decodes it (#119): a removed API after the first
+// object blocks.
+func TestGateConcatenatedJSON(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
+	defer ts.Close()
+
+	body := `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web"}}` + "\n" +
+		`{"apiVersion":"policy/v1beta1","kind":"PodSecurityPolicy","metadata":{"name":"restricted"}}` + "\n"
+	resp, raw := postGate(t, ts, "?target=1.35&fail-on=blocker", "", body, "application/json")
+	if resp.StatusCode != http.StatusUnprocessableEntity || resp.Header.Get("X-Upgradescope-Verdict") != "blocked" {
+		t.Fatalf("status = %d verdict %q, want 422 blocked (body %s)", resp.StatusCode, resp.Header.Get("X-Upgradescope-Verdict"), raw)
+	}
+	var rep engine.Report
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Findings) != 1 || rep.Findings[0].Key != "removed-api/policy/v1beta1/PodSecurityPolicy" ||
+		len(rep.Findings[0].Objects) != 1 || rep.Findings[0].Objects[0].Line != 2 {
+		t.Errorf("findings = %+v, want the PSP on stream line 2", rep.Findings)
+	}
+}
+
 func TestGateSARIF(t *testing.T) {
 	s := newTestServer(t, newFakeStore(), func(c *Config) { c.Version = "v-test" })
 	ts := httptest.NewServer(s.Handler())

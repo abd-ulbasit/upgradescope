@@ -91,7 +91,12 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 			stderr = io.Discard
 		}
 		for _, w := range sum.Warnings {
-			fmt.Fprintf(stderr, "warning: skipped %s:%d: %v\n", path.Join(opts.fileBase, w.File), w.Line, w.Err)
+			w.File = path.Join(opts.fileBase, w.File)
+			if w.Unassessed {
+				fmt.Fprintf(stderr, "warning: skipped %s\n", w)
+			} else {
+				fmt.Fprintf(stderr, "warning: %s\n", w)
+			}
 		}
 		// Nothing scanned is not "nothing to fix": an empty render, a wrong
 		// path or an unexpected extension must not report 100/100.
