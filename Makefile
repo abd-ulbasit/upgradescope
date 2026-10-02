@@ -91,9 +91,10 @@ check-toolchain:
 	./hack/check-toolchain.sh
 
 # Validates .goreleaser.yml with the GoReleaser release.yml pins, builds every
-# release archive (and per-arch image) into dist/ without publishing, checks
-# the archive names against action/run.sh, and that the binary serves the
-# dashboard. No Docker engine? `make release-check GORELEASER_SKIP=publish,sign,sbom,docker`.
+# release archive, deb/rpm/apk package (and per-arch image) into dist/
+# without publishing, checks the archive names against action/run.sh, that
+# archives, packages and images carry the licenses, completions and man
+# pages, and that the binary is stamped and serves the dashboard. No Docker engine? `make release-check GORELEASER_SKIP=publish,sign,sbom,docker`.
 #
 # `go run` builds GoReleaser with the repository's toolchain, so the pin must
 # not need a newer Go than go.mod: v2.17.1 needs Go 1.26.5; v2.18.0 and later
@@ -102,6 +103,13 @@ GORELEASER_VERSION ?= v2.17.1
 .PHONY: release-check
 release-check:
 	GORELEASER_VERSION=$(GORELEASER_VERSION) ./hack/release-check.sh
+
+# Builds the snapshot of HEAD twice from fresh clones and fails unless the
+# checksums (archives, packages) match; with GORELEASER_SKIP=publish,sign,sbom
+# (Docker needed) the per-platform image IDs must match too.
+.PHONY: release-repro
+release-repro:
+	GORELEASER_VERSION=$(GORELEASER_VERSION) ./hack/test-release-repro.sh
 
 # The Action's offline self-test (CI's action job): both action.yml files
 # keep inputs out of run: scripts and stay the same action; action/run.sh
