@@ -70,18 +70,19 @@ upgradescope scan [flags]
 ### Options
 
 ```
-      --allow-incomplete        with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed); a --target that is not an upgrade still fails
-      --baseline string         JSON report of an earlier scan (--output json or --write-baseline): the gate fails only on findings that are new since
-      --config string           config file with ignore rules (default: .upgradescope.yaml in the scan root, else at the git repository root)
-      --context string          kubeconfig context to use
-      --fail-on string          exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never (default "blocker")
-      --files string            scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster
-  -h, --help                    help for scan
-      --kubeconfig string       path to kubeconfig (default: standard loading rules)
-      --output string           output format: table|json|sarif|markdown (default "table")
-      --target string           target Kubernetes minor version, e.g. 1.36 (required)
-      --team-label string       namespace label used for team attribution (default "team")
-      --write-baseline string   also write this scan's JSON report to this path, for a later --baseline
+      --allow-incomplete           with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed); a --target that is not an upgrade still fails
+      --baseline string            JSON report of an earlier scan (--output json or --write-baseline): the gate fails only on findings that are new since
+      --config string              config file with ignore rules (default: .upgradescope.yaml in the scan root, else at the git repository root)
+      --context string             kubeconfig context to use
+      --fail-on string             exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never (default "blocker")
+      --files string               scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster
+  -h, --help                       help for scan
+      --kubeconfig string          path to kubeconfig (default: standard loading rules)
+      --output string              output format: table|json|sarif|markdown (default "table")
+      --request-timeout duration   give up on a single API request after this long (0 = no per-request limit) (default 30s)
+      --target string              target Kubernetes minor version, e.g. 1.36 (required)
+      --team-label string          namespace label used for team attribution (default "team")
+      --write-baseline string      also write this scan's JSON report to this path, for a later --baseline
 ```
 
 ### SEE ALSO

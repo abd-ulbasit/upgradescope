@@ -10,6 +10,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -359,8 +361,8 @@ func compileReportSchema(t *testing.T) (*jsonschema.Schema, any) {
 }
 
 // TestJSONReportMatchesSchema: real `scan --output json` reports, with
-// findings (an unknown-api one included), suppressions, a baseline, gaps
-// and a live cluster's serverVersion, validate against
+// findings (an unknown-api one included), suppressions, a baseline, gaps,
+// and a live cluster's serverVersion, kubeContext and apiServer, validate against
 // api/report.schema.json, and carry no field it does not list (#60).
 func TestJSONReportMatchesSchema(t *testing.T) {
 	sch, schemaDoc := compileReportSchema(t)
@@ -395,13 +397,29 @@ func TestJSONReportMatchesSchema(t *testing.T) {
 		}
 		outs = append(outs, out)
 	}
+	// A real live scan (before any stub replaces runScan), against a fake
+	// API server that answers only /metrics, names the cluster it read
+	// (kubeContext, apiServer).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			w.Header().Set("Content-Type", "text/plain")
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	named, err := execRealScan(t, []string{"--target", "1.37", "--kubeconfig", writeServerKubeconfig(t, srv.URL), "--output", "json", "--fail-on", "never"})
+	if err != nil {
+		t.Fatalf("live run against a fake API server: %v", err)
+	}
+	outs = append(outs, named)
 	live, _, err := execScanStderr(t, []string{"--target", "1.37", "--output", "json", "--fail-on", "never"}, evalStub(t, liveInventory("v1.36.4")))
 	if err != nil {
 		t.Fatalf("live run: %v", err)
 	}
 	outs = append(outs, live)
 	all := strings.Join(outs, "\n")
-	for _, want := range []string{`"category": "unknown-api"`, `"serverVersion": "v1.36.4"`, `"baselineState"`, `"suppressed"`, `"notAssessed"`} {
+	for _, want := range []string{`"category": "unknown-api"`, `"serverVersion": "v1.36.4"`, `"baselineState"`, `"suppressed"`, `"notAssessed"`, `"kubeContext": "test-ctx"`, `"apiServer"`} {
 		if !strings.Contains(all, want) {
 			t.Errorf("no run produced %s; this test no longer covers it", want)
 		}

@@ -12,6 +12,8 @@
     "clusterId": {"description": "The kube-system namespace UID, or \"files\" for a --files scan.", "type": "string"},
     "target": {"$ref": "#/$defs/minor"},
     "serverVersion": {"description": "Live scans: the kube-apiserver's raw gitVersion (e.g. v1.34.2-gke.100), the version the target was judged against. Absent in --files mode.", "type": "string"},
+    "kubeContext": {"description": "Live scans: the kubeconfig context the scan read. Absent in --files mode.", "type": "string"},
+    "apiServer": {"description": "Live scans: the API server the scan read, as scheme, host and port (e.g. https://10.0.0.1:6443); never the kubeconfig's credentials, path or query. Absent in --files mode.", "type": "string"},
     "kbVersion": {"description": "The knowledge base the report was judged with.", "type": "string"},
     "score": {"description": "max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings)); suppressed findings excluded.", "type": "integer", "minimum": 0, "maximum": 100},
     "ready": {"description": "verdict == ready. Kept for v0.1 readers; prefer verdict.", "type": "boolean"},

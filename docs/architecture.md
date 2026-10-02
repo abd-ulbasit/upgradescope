@@ -145,8 +145,11 @@ one target is logged and skipped, and never fails the ingest.
 
 ## Collectors
 
-`collect.Collect` runs five sub-collectors in a fixed order. Each one owns
-one **capability**:
+`collect.Collect` runs five sub-collectors in a fixed order, each under its
+own deadline: an equal share of the time left before the caller's deadline
+(the last step gets all that remains), so a stalled step cannot starve the
+ones after it. client-go's `rest.Config.Timeout` (`--request-timeout`, default
+30s) bounds each request. Each sub-collector owns one **capability**:
 
 | Capability | What it reads | Notes |
 |---|---|---|
@@ -363,7 +366,8 @@ Several design rules apply throughout:
 
 - **Collectors degrade independently.** A sub-collector error marks its
   capability `available: false` with the error as the reason, and collection
-  continues. A partial failure (one forbidden resource among many) keeps the
+  continues. A step that runs out of its share of the deadline fails the
+  same way, its reason naming the step deadline. A partial failure (one forbidden resource among many) keeps the
   capability available and records the skipped parts in the reason.
   `Collect` never returns an error. Reports surface these as "not assessed
   (reason)".
