@@ -2,7 +2,7 @@
 # Reproducibility of the release (make release-repro; #127): builds the
 # GoReleaser snapshot of HEAD twice, each from its own fresh clone (new
 # paths, new file mtimes), and asserts the two produce identical
-# checksums.txt (every archive and deb/rpm/apk package) and, when images are
+# checksums.txt (every archive, deb/rpm/apk package and api/ contract) and, when images are
 # built, identical per-platform image IDs. A difference means something
 # from the build machine or the clock leaked into an artifact, and the
 # published checksums could not be reproduced from the tag.

@@ -139,7 +139,8 @@ Archives are `.tar.gz`, `.zip` on Windows. The release check
 in the README differs from the build by more than 2%, so these are re-measured
 before a release ships a different size. On pull requests CI runs that
 check only when they touch release inputs, so a code change that grows the
-binary first fails the weekly run or the release: run `make release-check`
+binary first fails a dispatched CI run or the release's own
+release-check (scheduled runs skip it): run `make release-check`
 (no Docker engine: `GORELEASER_SKIP=publish,sign,sbom,docker`) before
 tagging, and update both pages when it fails.
 
