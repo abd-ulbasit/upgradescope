@@ -117,6 +117,10 @@ jobs:
               - 'Makefile'
               - 'hack/release-check.sh'
               - 'hack/dashboard-smoke.sh'
+              # the sizes release-check compares with the build
+              - 'hack/check-doc-sizes.sh'
+              - 'README.md'
+              - 'docs/operations/install.md'
               - 'go.mod'
               - 'deploy/chart/Chart.yaml'
               # what the archives, packages and images ship besides the binary

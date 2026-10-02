@@ -165,7 +165,9 @@ check-toolchain:
 # release archive, deb/rpm/apk package (and per-arch image) into dist/
 # without publishing, checks the archive names against action/run.sh, that
 # archives, packages and images carry the licenses, completions and man
-# pages, and that the binary is stamped and serves the dashboard. No Docker engine? `make release-check GORELEASER_SKIP=publish,sign,sbom,docker`.
+# pages, that the binary and archive sizes the README and Install page
+# state are within 2% of the build, and that the binary is stamped and
+# serves the dashboard. No Docker engine? `make release-check GORELEASER_SKIP=publish,sign,sbom,docker`.
 #
 # `go run` builds GoReleaser with the repository's toolchain, so the pin must
 # not need a newer Go than go.mod: v2.17.1 needs Go 1.26.5; v2.18.0 and later
@@ -275,6 +277,7 @@ hack-test:
 	./hack/kb-refresh-ci_test.sh
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh
+	./hack/check-doc-sizes_test.sh
 	./hack/chart-release-annotations_test.sh
 	./hack/vuln-latest-release_test.sh
 	./hack/vuln-latest-release-workflow_test.sh

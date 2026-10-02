@@ -275,7 +275,7 @@ audited") and names the issue that tracks it.
 | DO-07 | Golden files cover every finding category and the score formula. | `TestEvaluateGolden` |
 | DO-08 | `make lint` is CI's lint (pinned staticcheck), and gofmt covers every module. | `ci:lint` `hack/test.sh` |
 | CL-01 | Every test this ledger names exists. | `make claims-check` `hack/claims-check_test.sh` |
-| PF-01, PF-03, PF-04 | Every number in the README's Measured table says what, how, where and at which commit: `scan` against kind 1.37 from #130's audit at main `8a951dd` (median 0.49 s), `scan --files` and binary sizes re-measured at main `9d0b161`. No image size is given until a published v0.2.0 image can be measured. | not automated: #99 (measured by hand on 2026-10-02; Install's Sizes has every platform) |
+| PF-01, PF-03, PF-04 | Every number in the README's Measured table says what, how, where and at which commit: `scan` against kind 1.37 from #130's audit at main `8a951dd` (median 0.49 s), `scan --files` at main `9d0b161`, and the binary and archive sizes from a GoReleaser snapshot of main `2e497c1`. The sizes in the README and on the Install page (every platform) stay within 2% of the release build: the release check compares each with `dist/` and fails beyond that. No image size is given until a published v0.2.0 image can be measured. | `hack/check-doc-sizes.sh` `hack/check-doc-sizes_test.sh` `ci:release-check` (the timings are not automated: #99) |
 
 ## Docs, references and published schemas
 

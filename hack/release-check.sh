@@ -11,7 +11,9 @@
 #      apk packages install the binary, completions, man pages and license
 #      files at their standard paths; every image has /licenses/ and the
 #      full OCI labels;
-#   5. the binary for this machine is stamped (version, commit, commit date,
+#   5. the binary and archive sizes README.md and docs/operations/install.md
+#      state are within 2% of the ones just built (hack/check-doc-sizes.sh);
+#   6. the binary for this machine is stamped (version, commit, commit date,
 #      registry date) and serves the embedded dashboard at / with every
 #      asset it references (hack/dashboard-smoke.sh).
 #
@@ -116,6 +118,9 @@ case ",$SKIP," in
     done <"$tmp/images"
     ;;
 esac
+
+echo "== the sizes the docs state are the build's (within 2%)"
+DIST=dist hack/check-doc-sizes.sh
 
 echo "== the release binary for this machine is stamped and serves the dashboard at /"
 goos=$(go env GOOS)
