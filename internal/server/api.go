@@ -619,6 +619,7 @@ func summarize(e store.Evaluation) evalSummary {
 
 type clusterSummary struct {
 	store.Cluster
+	Stale  bool         `json:"stale"`            // no push within the server's --stale-after
 	Latest *evalSummary `json:"latest,omitempty"` // default-target evaluation, if any
 }
 
@@ -638,8 +639,9 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]clusterSummary, 0, len(clusters))
+	now := s.now()
 	for _, c := range clusters {
-		cs := clusterSummary{Cluster: c}
+		cs := clusterSummary{Cluster: c, Stale: s.clusterStale(c, now)}
 		if target, _, err := s.defaultTarget(ctx, c.ID); err == nil {
 			if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String()); err == nil {
 				sum := summarize(e)
@@ -653,6 +655,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 
 type clusterDetail struct {
 	store.Cluster
+	Stale         bool                                                `json:"stale"` // no push within the server's --stale-after
 	ServerVersion string                                              `json:"serverVersion,omitempty"`
 	Capabilities  map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities,omitempty"`
 	Evaluations   []evalSummary                                       `json:"evaluations"`
@@ -667,7 +670,7 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	detail := clusterDetail{Cluster: c, Evaluations: []evalSummary{}}
+	detail := clusterDetail{Cluster: c, Stale: s.clusterStale(c, s.now()), Evaluations: []evalSummary{}}
 	var targets []inventory.Version
 	if _, inv, err := s.latestInventory(ctx, c.ID); err == nil {
 		detail.ServerVersion = inv.ServerVersion

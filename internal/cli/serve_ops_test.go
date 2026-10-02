@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/server"
 )
 
 // The admin token is a secret like the others: flag, env or file.
@@ -28,6 +31,23 @@ func TestServeAdminToken(t *testing.T) {
 	}
 	if err := execServe(t, []string{"--admin-token-file", p}, capture); err != nil || got.adminToken != "file-admin" {
 		t.Fatalf("admin token from file = %q (err %v)", got.adminToken, err)
+	}
+}
+
+func TestServeStaleAfter(t *testing.T) {
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error {
+		got = opts
+		return nil
+	}
+	if err := execServe(t, nil, capture); err != nil || got.staleAfter != server.DefaultStaleAfter {
+		t.Fatalf("default --stale-after = %v (err %v), want %v", got.staleAfter, err, server.DefaultStaleAfter)
+	}
+	if err := execServe(t, []string{"--stale-after", "3h"}, capture); err != nil || got.staleAfter != 3*time.Hour {
+		t.Fatalf("--stale-after 3h = %v (err %v)", got.staleAfter, err)
+	}
+	if err := execServe(t, []string{"--stale-after", "0s"}, serveOK()); err == nil || !strings.Contains(err.Error(), "--stale-after") {
+		t.Errorf("--stale-after 0s: err = %v, want a refusal", err)
 	}
 }
 

@@ -51,6 +51,14 @@ type Config struct {
 	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
 	Version      string          // build version stamped into SARIF tool metadata ("" = omitted)
 
+	// StaleAfter marks a cluster stale when its agent has not pushed
+	// (duplicates included) for longer; 0 = DefaultStaleAfter.
+	StaleAfter time.Duration
+	// Retention prunes snapshots and evaluations older than this, except
+	// each cluster's latest snapshot and its evaluations, at startup and
+	// daily; 0 = keep everything.
+	Retention time.Duration
+
 	MaxSnapshotBytes int64 // POST /api/v1/snapshots body cap; 0 = DefaultMaxSnapshotBytes
 	MaxGateBytes     int64 // POST /api/v1/gate body cap; 0 = DefaultMaxGateBytes
 

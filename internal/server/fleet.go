@@ -31,6 +31,8 @@ type fleetCell struct {
 type fleetRow struct {
 	ClusterID     int64                 `json:"clusterId"`
 	Name          string                `json:"name"`
+	LastSeen      time.Time             `json:"lastSeen"`                // the agent's last push, duplicates included
+	Stale         bool                  `json:"stale"`                   // no push within --stale-after: the cells are that old
 	ServerVersion string                `json:"serverVersion,omitempty"` // of the latest snapshot
 	Cells         map[string]*fleetCell `json:"cells"`                   // target → cell; nil = no current evaluation (or not applicable)
 	NotApplicable []string              `json:"notApplicable,omitempty"` // requested targets at or below ServerVersion
@@ -108,8 +110,9 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows := make([]fleetRow, 0, len(states))
+	now := s.now()
 	for _, c := range states {
-		row := fleetRow{ClusterID: c.ID, Name: c.Name, Cells: map[string]*fleetCell{}}
+		row := fleetRow{ClusterID: c.ID, Name: c.Name, LastSeen: c.LastSeen, Stale: s.clusterStale(c.Cluster, now), Cells: map[string]*fleetCell{}}
 		if c.hasSnapshot {
 			row.ServerVersion = c.inv.ServerVersion
 		}
