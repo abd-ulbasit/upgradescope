@@ -321,6 +321,14 @@ a CI gate.
   runtime), citing that line and the product's lifecycle pages. Versions
   between tracked lines or newer than the newest, and products without
   release lines, stay `addon-no-data` (#165).
+- A Helm release no longer hides an older install of the same add-on in
+  its namespace. Its `appVersion` now stands only for image tags and
+  labels on its own release line; an image or label version on another
+  line is a second install there, judged at its own version. An istioctl
+  canary running `istio/pilot:1.28.10` beside an `istiod` 1.31.1 release
+  in `istio-system` read clean; it now gets the ended 1.28 line's
+  blocker. The manifest gate replaces every install of an add-on in a
+  namespace its manifests deploy it to (#165).
 - The same inventory gives the same report whatever the order of its rows:
   deprecated-API caller rows are sorted before they are judged and folded
   into usage findings, whose evidence sentence listed subresources in the

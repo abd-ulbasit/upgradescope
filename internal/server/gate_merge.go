@@ -108,7 +108,7 @@ func orphansReason(orphans []string) string {
 
 // upsertAddOns is the proposed state's add-ons: the cluster's, with each
 // install from the manifests upserted by add-on and namespaces — it
-// replaces the cluster's install of that add-on in exactly those
+// replaces the cluster's installs of that add-on in exactly those
 // namespaces (the manifests are what will run there), or is added. Like
 // upsertUsage, identity is exact: an install whose manifests leave the
 // namespace unset does not replace the cluster's namespaced install.
@@ -116,13 +116,30 @@ func upsertAddOns(cluster, manifests []inventory.AddOnInstance) []inventory.AddO
 	same := func(a, b inventory.AddOnInstance) bool {
 		return a.ID == b.ID && slices.Equal(slices.Sorted(slices.Values(a.Namespaces)), slices.Sorted(slices.Values(b.Namespaces)))
 	}
-	out := slices.Clone(cluster)
-	for _, m := range manifests {
-		if i := slices.IndexFunc(out[:len(cluster)], func(c inventory.AddOnInstance) bool { return same(c, m) }); i >= 0 {
-			out[i] = m
-			continue
+	// A namespace can hold several installs of an add-on (a release and
+	// an image on another release line): the manifests replace them all,
+	// at the first one's place.
+	out := make([]inventory.AddOnInstance, 0, len(cluster)+len(manifests))
+	placed := make([]bool, len(manifests))
+	for _, c := range cluster {
+		replaced := false
+		for i, m := range manifests {
+			if !same(c, m) {
+				continue
+			}
+			if !placed[i] {
+				out, placed[i] = append(out, m), true
+			}
+			replaced = true
 		}
-		out = append(out, m)
+		if !replaced {
+			out = append(out, c)
+		}
+	}
+	for i, m := range manifests {
+		if !placed[i] {
+			out = append(out, m)
+		}
 	}
 	return out
 }
