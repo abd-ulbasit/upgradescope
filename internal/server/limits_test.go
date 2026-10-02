@@ -271,8 +271,8 @@ const maxGateDecodeHeap = 200 << 20
 // decoded within maxGateDecodeHeap, and gives its body budget back either
 // way. Within the node budget everything is decoded.
 func TestGateDecodeHeapIsBounded(t *testing.T) {
-	if testing.Short() {
-		t.Skip("decodes several 4 MiB documents")
+	if testing.Short() || raceEnabled {
+		t.Skip("decodes several 4 MiB documents; heap figures under the race detector mean nothing")
 	}
 	// The chart runs the server with GOMEMLIMIT, under which the collector
 	// holds the heap near its live size as it nears the limit. A low GOGC

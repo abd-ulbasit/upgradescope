@@ -121,8 +121,8 @@ func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {
 // it is decoded, or decoded within maxIngestDecodeHeap; within the budget
 // everything is accepted, and the body budget is given back either way.
 func TestIngestDecodeHeapIsBounded(t *testing.T) {
-	if testing.Short() {
-		t.Skip("decodes several 20 MiB snapshots")
+	if testing.Short() || raceEnabled {
+		t.Skip("decodes several 20 MiB snapshots; heap figures under the race detector mean nothing")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // live heap, as under GOMEMLIMIT (see TestGateDecodeHeapIsBounded)
 	for name, shape := range ingestHeapShapes() {
