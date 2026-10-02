@@ -393,6 +393,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		// Two clusters reporting one name would interleave their snapshots
 		// in one history and flap every score and alert, so the second one
 		// is refused until an operator decides which cluster the name means.
+		// A push without a clusterId is refused the same way: it cannot
+		// show that it is the cluster the name is bound to.
+		if conflict.PushedUID == "" {
+			errJSON(w, http.StatusConflict, fmt.Sprintf(
+				"cluster name %q is registered to clusterId %s, but this push carries no clusterId "+
+					"(the agent could not read the kube-system namespace, which needs get on namespaces). "+
+					"Fix the agent's access, or give it a distinct --cluster-name if it is another cluster",
+				conflict.Name, conflict.StoredUID))
+			return
+		}
 		errJSON(w, http.StatusConflict, fmt.Sprintf(
 			"cluster name %q is registered to clusterId %s, but this push comes from clusterId %s. "+
 				"If this is a different cluster, give its agent a distinct --cluster-name (chart value clusterName). "+

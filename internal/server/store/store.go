@@ -48,7 +48,8 @@ type Store interface {
 	// UpsertCluster registers or touches a cluster by name and returns its
 	// id. A name is bound to the first non-empty ClusterUID pushed under
 	// it: a different non-empty UID fails with *ClusterUIDConflictError and
-	// writes nothing; an empty incoming UID keeps the stored one.
+	// writes nothing, and so does an empty UID once one is bound (a push that
+	// cannot say which cluster it is must not join a bound history).
 	UpsertCluster(ctx context.Context, c Cluster) (int64, error)
 	// DeleteCluster removes the named cluster with its snapshots and
 	// evaluations (ErrNotFound when unknown). Tokens are keyed by name and
@@ -212,7 +213,8 @@ type ScorePoint struct {
 // timeFormat is RFC 3339 with a fixed nine-digit fractional second so that
 // stored UTC strings sort lexicographically in instant order.
 // time.RFC3339Nano trims trailing zeros, which would make "…05Z" sort after
-// "…05.5Z"; the SQL ORDER BY clauses depend on string order being correct.
+// "…05.5Z"; retention compares stored times as strings, so string order must be
+// instant order. "Latest" and history order use ids, never these strings.
 const timeFormat = "2006-01-02T15:04:05.000000000Z07:00"
 
 // formatTime renders t for storage: UTC, RFC 3339, fixed width.

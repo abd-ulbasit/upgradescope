@@ -89,6 +89,59 @@ func testCurrentEvaluation(t *testing.T, s store.Store) {
 	}
 }
 
+// testCurrentEvaluationIgnoresCreatedAt pins that "current", "latest" and
+// history order are insertion order (id), never the stored timestamp. A
+// server whose clock stepped backwards stamps a newer row with an older
+// time; ordering by created_at kept serving the future-dated row as
+// current forever, and every pass inserted a row that never became
+// current. Times written in another zone or at sub-microsecond precision
+// (Postgres keeps microseconds) cannot reorder anything either.
+func testCurrentEvaluationIgnoresCreatedAt(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	cid := mustCluster(t, s, "prod")
+	sid := mustSnapshot(t, s, cid, "aaa", base)
+	future := mustEval(t, s, store.Evaluation{ClusterID: cid, SnapshotID: sid, Target: "1.36", Score: 75, Blockers: 1, CreatedAt: at(48)})
+	// The clock stepped back two days: the newer row is stamped earlier,
+	// in another zone, with a sub-microsecond remainder.
+	pkt := time.FixedZone("PKT", 5*3600)
+	newer := mustEval(t, s, store.Evaluation{ClusterID: cid, SnapshotID: sid, Target: "1.36", Score: 50, Blockers: 2,
+		CreatedAt: at(1).In(pkt).Add(500 * time.Nanosecond)})
+
+	for name, read := range map[string]func() (store.Evaluation, error){
+		"CurrentEvaluation":     func() (store.Evaluation, error) { return s.CurrentEvaluation(ctx, cid, "1.36") },
+		"LatestEvaluation":      func() (store.Evaluation, error) { return s.LatestEvaluation(ctx, cid, "1.36") },
+		"LatestKnownEvaluation": func() (store.Evaluation, error) { return s.LatestKnownEvaluation(ctx, cid, "1.36") },
+	} {
+		got, err := read()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.ID != newer || got.Score != 50 {
+			t.Errorf("%s = evaluation %d (score %d), want %d (inserted last), not the future-dated %d", name, got.ID, got.Score, newer, future)
+		}
+		if got.CreatedAt.Location() != time.UTC || got.CreatedAt.Sub(at(1)) < 0 || got.CreatedAt.Sub(at(1)) >= time.Microsecond {
+			t.Errorf("%s: CreatedAt = %v, want %v as UTC (to the microsecond)", name, got.CreatedAt, at(1))
+		}
+	}
+	hist, err := s.ScoreHistory(ctx, cid, "1.36", 0)
+	if err != nil || len(hist) != 2 || hist[0].Score != 75 || hist[1].Score != 50 {
+		t.Errorf("ScoreHistory = (%+v, %v), want [75 50] in insertion order", hist, err)
+	}
+	if last, err := s.ScoreHistory(ctx, cid, "1.36", 1); err != nil || len(last) != 1 || last[0].Score != 50 {
+		t.Errorf("ScoreHistory(limit 1) = (%+v, %v), want the last inserted point (50)", last, err)
+	}
+	// A pass that saw the newer row as current commits; one that saw the
+	// future-dated row is stale.
+	if _, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{ClusterID: cid, SnapshotID: sid,
+		Current: map[string]int64{"1.36": future}}); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("commit against the future-dated row: err = %v, want ErrConflict", err)
+	}
+	if _, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{ClusterID: cid, SnapshotID: sid,
+		Current: map[string]int64{"1.36": newer}}); err != nil {
+		t.Errorf("commit against the current row: %v", err)
+	}
+}
+
 // testLatestKnownEvaluation pins the notification baseline: an unknown
 // verdict (not ready, no blockers) is skipped.
 func testLatestKnownEvaluation(t *testing.T, s store.Store) {

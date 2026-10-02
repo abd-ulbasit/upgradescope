@@ -35,6 +35,7 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("UpsertClusterZeroTimesDefault", func(t *testing.T) { testZeroTimes(t, newStore(t)) })
 	t.Run("UpsertClusterRejectsUIDChange", func(t *testing.T) { testClusterUIDConflict(t, newStore(t)) })
 	t.Run("ClusterUIDAlternatingPushesNeverInterleave", func(t *testing.T) { testClusterUIDAlternating(t, newStore(t)) })
+	t.Run("EmptyUIDPushNeverInterleaves", func(t *testing.T) { testEmptyUIDNeverInterleaves(t, newStore(t)) })
 	t.Run("DeleteCluster", func(t *testing.T) { testDeleteCluster(t, newStore(t)) })
 	t.Run("SnapshotDedup", func(t *testing.T) { testSnapshotDedup(t, newStore(t)) })
 	t.Run("SnapshotDedupClusterScoped", func(t *testing.T) { testSnapshotDedupClusterScoped(t, newStore(t)) })
@@ -45,6 +46,7 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("ScoreHistoryOldestFirstLimitNewest", func(t *testing.T) { testScoreHistory(t, newStore(t)) })
 	t.Run("EvaluationFreshnessFields", func(t *testing.T) { testEvaluationFreshnessFields(t, newStore(t)) })
 	t.Run("CurrentEvaluationIsLatestSnapshotOnly", func(t *testing.T) { testCurrentEvaluation(t, newStore(t)) })
+	t.Run("CurrentEvaluationIgnoresCreatedAt", func(t *testing.T) { testCurrentEvaluationIgnoresCreatedAt(t, newStore(t)) })
 	t.Run("LatestKnownEvaluationSkipsUnknown", func(t *testing.T) { testLatestKnownEvaluation(t, newStore(t)) })
 	t.Run("CommitEvaluationsNewSnapshot", func(t *testing.T) { testCommitNewSnapshot(t, newStore(t)) })
 	t.Run("CommitEvaluationsIsAtomic", func(t *testing.T) { testCommitIsAtomic(t, newStore(t)) })
@@ -173,13 +175,15 @@ func testClusterUIDConflict(t *testing.T, s store.Store) {
 		t.Errorf("after refused upsert: uid %q last seen %v, want uid-a / %v (unchanged)", got.ClusterUID, got.LastSeen, base)
 	}
 
-	// An empty incoming UID (the agent could not read kube-system) keeps
-	// the stored identity.
-	if _, err := s.UpsertCluster(ctx, store.Cluster{Name: "prod", LastSeen: at(2)}); err != nil {
-		t.Fatalf("upsert with empty UID: %v", err)
+	// An empty incoming UID is no wildcard: a push that cannot say which
+	// cluster it is may come from another cluster entirely, so it is
+	// refused too (and changes nothing).
+	_, err = s.UpsertCluster(ctx, store.Cluster{Name: "prod", LastSeen: at(2)})
+	if !errors.As(err, &conflict) || conflict.StoredUID != "uid-a" || conflict.PushedUID != "" {
+		t.Fatalf("upsert with empty UID: err = %v, want a conflict naming uid-a and an empty pushed UID", err)
 	}
-	if got, _ := s.GetCluster(ctx, id); got.ClusterUID != "uid-a" || !got.LastSeen.Equal(at(2)) {
-		t.Errorf("after empty-UID upsert: uid %q last seen %v, want uid-a / %v", got.ClusterUID, got.LastSeen, at(2))
+	if got, _ := s.GetCluster(ctx, id); got.ClusterUID != "uid-a" || !got.LastSeen.Equal(base) {
+		t.Errorf("after empty-UID upsert: uid %q last seen %v, want uid-a / %v (unchanged)", got.ClusterUID, got.LastSeen, base)
 	}
 
 	// A cluster first registered without a UID adopts the first one pushed.
@@ -192,6 +196,50 @@ func testClusterUIDConflict(t *testing.T, s store.Store) {
 	}
 	if got, _ := s.GetCluster(ctx, anon); got.ClusterUID != "uid-c" {
 		t.Errorf("anon uid = %q, want uid-c (adopted)", got.ClusterUID)
+	}
+	// Until a UID is bound, UID-less pushes of one name are one cluster:
+	// nothing tells them apart.
+	if _, err := s.UpsertCluster(ctx, store.Cluster{Name: "nouid", LastSeen: base}); err != nil {
+		t.Fatalf("insert nouid: %v", err)
+	}
+	if _, err := s.UpsertCluster(ctx, store.Cluster{Name: "nouid", LastSeen: at(1)}); err != nil {
+		t.Errorf("second UID-less upsert of an unbound name: %v", err)
+	}
+}
+
+// testEmptyUIDNeverInterleaves replays a cluster that registered its name
+// with a UID and a second, UID-less pusher of the same name (an agent that
+// cannot read kube-system, or a misconfigured one). The UID-less pushes
+// are refused, so they never land in the bound cluster's history.
+func testEmptyUIDNeverInterleaves(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	var accepted, refused int
+	for i := range 6 {
+		uid, hash := "uid-x", fmt.Sprintf("x-%d", i)
+		if i%2 == 1 {
+			uid, hash = "", fmt.Sprintf("anon-%d", i)
+		}
+		cid, err := s.UpsertCluster(ctx, store.Cluster{Name: "prod", ClusterUID: uid, LastSeen: at(i)})
+		if errors.Is(err, store.ErrClusterUIDConflict) {
+			refused++
+			continue
+		}
+		if err != nil {
+			t.Fatalf("push %d: %v", i, err)
+		}
+		mustSnapshot(t, s, cid, hash, at(i))
+		accepted++
+	}
+	if accepted != 3 || refused != 3 {
+		t.Fatalf("accepted %d / refused %d pushes, want 3 / 3 (every UID-less push refused)", accepted, refused)
+	}
+	clusters, err := s.ListClusters(ctx)
+	if err != nil || len(clusters) != 1 {
+		t.Fatalf("ListClusters = (%+v, %v), want one cluster", clusters, err)
+	}
+	latest, err := s.LatestSnapshot(ctx, clusters[0].ID)
+	if err != nil || latest.Hash != "x-4" {
+		t.Errorf("latest snapshot = (%q, %v), want x-4 (UID-less pushes never write)", latest.Hash, err)
 	}
 }
 

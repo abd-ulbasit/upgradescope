@@ -55,7 +55,7 @@ func (f *fakeStore) UpsertCluster(_ context.Context, c store.Cluster) (int64, er
 	}
 	for id, existing := range f.clusters {
 		if existing.Name == c.Name {
-			if existing.ClusterUID != "" && c.ClusterUID != "" && existing.ClusterUID != c.ClusterUID {
+			if existing.ClusterUID != "" && existing.ClusterUID != c.ClusterUID {
 				return 0, &store.ClusterUIDConflictError{Name: c.Name, StoredUID: existing.ClusterUID, PushedUID: c.ClusterUID}
 			}
 			if c.ClusterUID != "" {

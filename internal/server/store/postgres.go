@@ -62,7 +62,8 @@ func (p *Postgres) Ping(ctx context.Context) error { return p.db.PingContext(ctx
 
 // UpsertCluster inserts the cluster or, if a row with the same name exists,
 // bumps last_seen (first_seen never moves) and adopts c.ClusterUID when the
-// stored one is empty. A different non-empty UID is refused: the guarded
+// stored one is empty. Once bound, any other UID is refused, an empty one
+// included (it is no wildcard: a UID-less push may be another cluster): the guarded
 // DO UPDATE matches no row, so RETURNING yields nothing and the stored UID
 // is read back for the *ClusterUIDConflictError. Zero FirstSeen/LastSeen
 // default to time.Now().UTC().
@@ -82,7 +83,7 @@ func (p *Postgres) UpsertCluster(ctx context.Context, c Cluster) (int64, error) 
 		ON CONFLICT (name) DO UPDATE SET
 			cluster_uid = CASE WHEN excluded.cluster_uid = '' THEN clusters.cluster_uid ELSE excluded.cluster_uid END,
 			last_seen   = excluded.last_seen
-		WHERE clusters.cluster_uid = '' OR excluded.cluster_uid = '' OR clusters.cluster_uid = excluded.cluster_uid
+		WHERE clusters.cluster_uid = '' OR clusters.cluster_uid = excluded.cluster_uid
 		RETURNING id`,
 		c.Name, c.ClusterUID, first, last).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -262,11 +263,12 @@ func (p *Postgres) queryEvaluation(ctx context.Context, what, query string, args
 }
 
 // LatestEvaluation returns the newest evaluation for (cluster, target) by
-// created_at (ties broken by id), or ErrNotFound.
+// insertion order (highest id; never created_at, which a clock step can
+// reorder), or ErrNotFound.
 func (p *Postgres) LatestEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
 	return p.queryEvaluation(ctx, fmt.Sprintf("latest evaluation for cluster %d target %s", clusterID, target), `
 		SELECT `+evaluationColumns+` FROM evaluations WHERE cluster_id = $1 AND target = $2
-		ORDER BY created_at DESC, id DESC LIMIT 1`, clusterID, target)
+		ORDER BY id DESC LIMIT 1`, clusterID, target)
 }
 
 // CurrentEvaluation returns the newest evaluation for target of the
@@ -275,7 +277,7 @@ func (p *Postgres) CurrentEvaluation(ctx context.Context, clusterID int64, targe
 	return p.queryEvaluation(ctx, fmt.Sprintf("current evaluation for cluster %d target %s", clusterID, target), `
 		SELECT `+evaluationColumns+` FROM evaluations
 		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = $1) AND target = $2
-		ORDER BY created_at DESC, id DESC LIMIT 1`, clusterID, target)
+		ORDER BY id DESC LIMIT 1`, clusterID, target)
 }
 
 // LatestKnownEvaluation returns the newest evaluation for (cluster, target)
@@ -284,7 +286,7 @@ func (p *Postgres) LatestKnownEvaluation(ctx context.Context, clusterID int64, t
 	return p.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target), `
 		SELECT `+evaluationColumns+` FROM evaluations
 		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
-		ORDER BY created_at DESC, id DESC LIMIT 1`, clusterID, target)
+		ORDER BY id DESC LIMIT 1`, clusterID, target)
 }
 
 // CommitEvaluations writes b in one transaction.
@@ -347,7 +349,7 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			var got int64
 			err := tx.QueryRowContext(ctx, `
 				SELECT id FROM evaluations WHERE snapshot_id = $1 AND target = $2
-				ORDER BY created_at DESC, id DESC LIMIT 1`, snapID, target).Scan(&got)
+				ORDER BY id DESC LIMIT 1`, snapID, target).Scan(&got)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return 0, false, fmt.Errorf("commit evaluations: current %s: %w", target, err)
 			}
@@ -542,7 +544,7 @@ func (p *Postgres) RevokeToken(ctx context.Context, clusterName string) error {
 }
 
 // ScoreHistory returns score points for (cluster, target), oldest-first
-// ascending by created_at. limit > 0 selects the most recent N rows (still
+// in insertion order (id). limit > 0 selects the most recent N rows (still
 // returned oldest-first); limit <= 0 returns all. An unknown cluster or
 // target yields an empty slice and nil error.
 func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target string, limit int) ([]ScorePoint, error) {
@@ -554,8 +556,8 @@ func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target str
 		SELECT created_at, score, ready FROM (
 			SELECT id, created_at, score, ready FROM evaluations
 			WHERE cluster_id = $1 AND target = $2
-			ORDER BY created_at DESC, id DESC LIMIT $3
-		) recent ORDER BY created_at ASC, id ASC`, clusterID, target, lim)
+			ORDER BY id DESC LIMIT $3
+		) recent ORDER BY id ASC`, clusterID, target, lim)
 	if err != nil {
 		return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 	}
