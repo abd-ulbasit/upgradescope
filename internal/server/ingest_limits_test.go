@@ -43,6 +43,12 @@ func ingestHeapShapes() map[string]func(size int) string {
 		"strings":         repeat(`"unrecognizedImages":[`, `""`, `]}}`),
 		"unique map keys": uniqueNamespaces,
 		"realistic":       realisticInventory,
+		// Every object a finding, named with characters encoding/json
+		// escapes as six bytes: its three stored reports were each six
+		// times the push (+323 MiB at the node budget).
+		"PSP usages, long names of <": func(size int) string {
+			return pspUsagesNamed(size, strings.Repeat("<", 190))
+		},
 	}
 }
 

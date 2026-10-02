@@ -64,14 +64,21 @@ func concurrentGets(t *testing.T, s *Server, path string, n int) (grew uint64, s
 const maxReevaluationHeap = 100 << 20
 
 // storedHeapShapes are the snapshots that cost the most once stored: the
-// dearest to decode at the node budget, and two whose every API-usage
+// dearest to decode at the node budget, and those whose every API-usage
 // entry is a finding, so each stored report is as large as the snapshot
-// (~4 MB, and 17 MB with long object names).
+// (~4 MB, and 17 MB with long object names), the long names also of
+// characters encoding/json escapes as six bytes (<, and U+2028, of three).
 func storedHeapShapes() map[string]func(int) string {
 	return map[string]func(int) string{
 		"ObjectRefs {}":          ingestHeapShapes()["ObjectRefs {}"],
 		"PSP usages":             pspUsages,
 		"PSP usages, long names": longPSPUsages,
+		"PSP usages, long names of <": func(size int) string {
+			return pspUsagesNamed(size, strings.Repeat("<", 190))
+		},
+		"PSP usages, long names of U+2028": func(size int) string {
+			return pspUsagesNamed(size, strings.Repeat(" ", 63))
+		},
 	}
 }
 

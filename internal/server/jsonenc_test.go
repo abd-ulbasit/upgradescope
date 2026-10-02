@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -113,5 +115,30 @@ func TestIngestRefusesInvalidUTF8(t *testing.T) {
 	}
 	if used := s.ingestBuffered.inUse(); used != 0 {
 		t.Fatalf("%d body bytes still charged", used)
+	}
+}
+
+// The dedup hash is json.Marshal's, byte for byte, so a push after an
+// upgrade is still a duplicate of the snapshot an older server hashed:
+// HTML characters, line separators, newlines and backslashes in strings,
+// and raw JSON included.
+func TestCanonicalHashIsJSONMarshals(t *testing.T) {
+	inv := testInventoryWithPSP()
+	inv.APIUsage[0].Objects = []inventory.ObjectRef{
+		{Namespace: "a<b>&c", Name: "line\nbreak    \"q\" \\ \u0001 é", Manager: "x"},
+		{Name: unicodeEscape(0x3c) + " already escaped"},
+	}
+	for _, v := range []any{inv, map[string]any{"raw": json.RawMessage(`{"k":"<&>"}`), "s": "<<>>&&"}, "plain"} {
+		want, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := canonicalHash(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum := sha256.Sum256(want); got != hex.EncodeToString(sum[:]) {
+			t.Errorf("canonicalHash(%T) = %s, want the SHA-256 of %s", v, got, want)
+		}
 	}
 }

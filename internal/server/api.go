@@ -5,7 +5,6 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -685,12 +684,11 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// differs only in those is a duplicate, since nothing judged changed.
 	hashed := inv
 	hashed.CollectedAt = time.Time{}
-	canonical, err := json.Marshal(hashed)
+	hash, err := canonicalHash(hashed)
 	if err != nil {
 		internalErr(w, "canonicalizing inventory", err)
 		return
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256(canonical))
 
 	ctx := r.Context()
 	now := s.now()
