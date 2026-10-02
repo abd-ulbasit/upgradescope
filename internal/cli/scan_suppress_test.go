@@ -232,6 +232,28 @@ func TestScanFilesSARIFSuppressedAndBaseline(t *testing.T) {
 	}
 }
 
+// The Markdown step summary carries suppressions (reason and config file)
+// and baseline states end to end, so a passing or failing gate explains
+// itself.
+func TestScanFilesMarkdownSuppressedAndBaseline(t *testing.T) {
+	cfg := writeConfig(t, "ignore:\n  - key: removed-api/batch/v1beta1/CronJob\n    reason: nightly job retires with 1.36\n")
+	out, _, err := execScanFiles(t, "--files", "testdata/baseline/manifests", "--config", cfg,
+		"--baseline", "testdata/baseline/baseline.json", "--output", "markdown")
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("err = %v, want ErrGateFailed (new Ingress and PDB)", err)
+	}
+	for _, want := range []string{
+		" · 1 suppressed · ",
+		"**Baseline:** 2 new, 0 unchanged.",
+		"| blocker | **new** | networking.k8s.io/v1beta1 Ingress removed in 1.22",
+		"| blocker | batch/v1beta1 CronJob removed in 1.25 (1 object) | `testdata/baseline/manifests/app.yaml:3` jobs/nightly | nightly job retires with 1.36 | " + mdCode(cfg) + " |",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestScanBaselineErrors(t *testing.T) {
 	notReport := filepath.Join(t.TempDir(), "x.json")
 	if err := os.WriteFile(notReport, []byte(`{"version": "2.1.0"}`), 0o644); err != nil {

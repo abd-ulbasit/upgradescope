@@ -128,16 +128,7 @@ func writeObjects(w io.Writer, f engine.Finding) {
 // writeBaselineSummary counts unchanged and new findings when the report
 // was compared with a baseline (any finding carries a state).
 func writeBaselineSummary(w io.Writer, r engine.Report) {
-	var unchanged, added int
-	for _, f := range r.Findings {
-		switch f.BaselineState {
-		case engine.BaselineUnchanged:
-			unchanged++
-		case engine.BaselineNew:
-			added++
-		}
-	}
-	if unchanged+added > 0 {
+	if added, unchanged := baselineCounts(r); unchanged+added > 0 {
 		fmt.Fprintf(w, "BASELINE  %d unchanged, %d new\n", unchanged, added)
 	}
 }
