@@ -31,7 +31,27 @@ const (
 	// helmObjectPrefix starts the name of every object Helm v3 stores a
 	// revision in: "sh.helm.release.v1.<release>.v<revision>".
 	helmObjectPrefix = "sh.helm.release.v1."
+
+	// maxStoredReleaseBytes bounds a stored payload before it is base64
+	// decoded. Kubernetes caps a Secret's or ConfigMap's data at 1 MiB, so
+	// only a misbehaving apiserver serves more.
+	maxStoredReleaseBytes = 4 << 20
+	// maxReleaseJSONBytes bounds one release's decompressed JSON (#168): a
+	// gzip of 700 MiB of whitespace fits a 951 KB Secret, and decompressing
+	// it whole took a scan to 1.93 GB and OOM-killed the agent. Real releases
+	// are a few MiB (measured with helm install --dry-run=client -o json:
+	// kube-prometheus-stack 91.9.0 2.6 MiB, base 1.30.5 2.0 MiB,
+	// cert-manager v1.21.2 1.7 MiB, istiod 1.30.5 0.4 MiB, each gzipping
+	// about 7–9×), and at that ratio the 768 KiB of gzip a 1 MiB Secret can
+	// hold decodes to under 7 MiB. 32 MiB leaves over 4× that headroom while
+	// keeping one release's decoding well inside the agent's 256Mi limit.
+	maxReleaseJSONBytes = 32 << 20
 )
+
+// errReleaseTooLarge marks a release payload over maxStoredReleaseBytes
+// stored or maxReleaseJSONBytes decompressed: not decodable, never read
+// whole.
+var errReleaseTooLarge = errors.New("release payload too large")
 
 // helmReleaseDoc is the minimal slice of Helm's release JSON we decode.
 // No Helm SDK dependency.
@@ -113,6 +133,10 @@ type helmRevision struct {
 // only that one object is fetched and decoded. Each release payload is a
 // gzipped JSON document that holds the whole chart, so decoding every
 // revision OOM-killed the agent on clusters with long histories (#24).
+// One release is bounded too: decodeHelmRelease stops decompressing past
+// maxReleaseJSONBytes, so a gzip bomb in a release Secret or ConfigMap —
+// anyone who can create either in one namespace can plant one — is a
+// release not decodable (payload too large), not an OOM-killed agent (#168).
 //
 // Drivers degrade independently for reads: a driver whose list fails is
 // skipped and named in the reason, and the releases the others hold are
@@ -345,13 +369,23 @@ func releaseRevision(secretName string) int {
 // decodeHelmRelease decodes a stored release payload: the Secret's
 // Data["release"] (client-go has already removed the Secret's own base64)
 // or the ConfigMap's Data["release"]. Either is a base64 string wrapping
-// gzip(JSON). Order: base64 → gzip magic check → gunzip → JSON.
+// gzip(JSON). Order: size check → base64 → gzip magic check → gunzip,
+// streamed into the JSON decoder and stopped past maxReleaseJSONBytes.
+// Every layer is bounded: the stored payload by maxStoredReleaseBytes, its
+// base64 decoding (which only shrinks it) by that, and the gzip, the one
+// layer that expands, by maxReleaseJSONBytes. An over-cap payload is
+// errReleaseTooLarge, which collectHelm counts as not decodable.
 func decodeHelmRelease(data []byte) (helmReleaseDoc, error) {
 	var doc helmReleaseDoc
-	raw, err := base64.StdEncoding.DecodeString(string(data))
+	if len(data) > maxStoredReleaseBytes {
+		return doc, fmt.Errorf("%w: over %d MiB stored", errReleaseTooLarge, maxStoredReleaseBytes>>20)
+	}
+	raw := make([]byte, base64.StdEncoding.DecodedLen(len(data)))
+	n, err := base64.StdEncoding.Decode(raw, data)
 	if err != nil {
 		return doc, fmt.Errorf("base64: %w", err)
 	}
+	raw = raw[:n]
 	if len(raw) < 3 || raw[0] != 0x1f || raw[1] != 0x8b || raw[2] != 0x08 {
 		return doc, fmt.Errorf("release payload is not gzip")
 	}
@@ -360,12 +394,45 @@ func decodeHelmRelease(data []byte) (helmReleaseDoc, error) {
 		return doc, fmt.Errorf("gunzip: %w", err)
 	}
 	defer zr.Close()
-	jsonBytes, err := io.ReadAll(zr)
-	if err != nil {
-		return doc, fmt.Errorf("gunzip read: %w", err)
-	}
-	if err := json.Unmarshal(jsonBytes, &doc); err != nil {
+	br := &boundedReader{r: zr, left: maxReleaseJSONBytes}
+	if err := json.NewDecoder(br).Decode(&doc); err != nil {
+		switch {
+		case errors.Is(err, errReleaseTooLarge):
+			return doc, fmt.Errorf("%w: over %d MiB decompressed", errReleaseTooLarge, maxReleaseJSONBytes>>20)
+		case br.err != nil:
+			return doc, fmt.Errorf("gunzip read: %w", br.err)
+		}
 		return doc, fmt.Errorf("release json: %w", err)
 	}
 	return doc, nil
+}
+
+// boundedReader reads at most left more bytes from r and fails with
+// errReleaseTooLarge, rather than ending as io.LimitReader does, when r
+// holds more: a truncated document must not pass for a whole one. It reads
+// one byte past the cap to tell the two apart, and keeps r's first error
+// other than io.EOF in err.
+type boundedReader struct {
+	r    io.Reader
+	left int64
+	err  error
+}
+
+func (b *boundedReader) Read(p []byte) (int, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
+	if int64(len(p)) > b.left+1 {
+		p = p[:b.left+1]
+	}
+	n, err := b.r.Read(p)
+	if int64(n) > b.left {
+		b.err = errReleaseTooLarge
+		return 0, b.err
+	}
+	b.left -= int64(n)
+	if err != nil && err != io.EOF {
+		b.err = err
+	}
+	return n, err
 }

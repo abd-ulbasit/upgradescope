@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"runtime/metrics"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -246,5 +247,47 @@ func TestCollectHelmPeakHeapIsBoundedByOneRelease(t *testing.T) {
 				t.Errorf("peak heap %.1f MiB, want ≤ %d MiB", float64(peak)/(1<<20), tc.maxPeakMiB)
 			}
 		})
+	}
+}
+
+// TestCollectHelmGzipBombIsBounded guards #168: one release Secret whose
+// gzip held 700 MiB of whitespace (951 KB stored) took a CLI scan to
+// 1.93 GB RSS and OOM-killed the agent at its 256Mi limit, because the
+// payload was decompressed whole before it was parsed. Decompression now
+// stops past maxReleaseJSONBytes: the release is skipped as too large, the
+// reason is on the helm capability, and the other releases are still read.
+// Measured on this harness with a 256 MiB bomb: 828 MiB peak before, 112
+// MiB after (the JSON decoder's buffer doubling up to the cap). Under the
+// race detector, which slows compressing the bomb about thirtyfold, the
+// bomb decodes to 48 MiB, still past the cap.
+func TestCollectHelmGzipBombIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compresses a 256 MiB release")
+	}
+	decoded := 256 << 20
+	if raceEnabled {
+		decoded = 48 << 20
+	}
+	bomb := helmSecret(t, helmRev{ns: "a-bomb", release: "bomb", rev: 1, status: "deployed"})
+	bomb.Data["release"] = helmBomb(t, `{"chart":{"metadata":{"name":"ingress-nginx","version":"4.7.1","appVersion":"1.8.1"}},"manifest":"`, 'a', decoded, `"}`)
+	valid := helmSecret(t, helmRev{ns: "cert-manager", release: "cert-manager", rev: 1, status: "deployed", chart: "cert-manager", chartVersion: "v1.13.0", appVersion: "v1.13.0"})
+	kube, meta := helmClients(t, bomb, valid)
+	var inv inventory.Inventory
+	var err error
+	peak := peakHeap(func() { err = collectHelm(context.Background(), kube, meta, nil, &inv) })
+	t.Logf("stored bomb %d KiB decoding to %d MiB; peak heap above baseline %.1f MiB", len(bomb.Data["release"])>>10, decoded>>20, float64(peak)/(1<<20))
+	var pe partialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("a gzip bomb must not fail the capability: %v", err)
+	}
+	if !pe.incomplete || !slices.Equal(pe.skipped, []string{"a-bomb/bomb"}) ||
+		!strings.Contains(pe.msg, "1 release(s) not decodable, first a-bomb/bomb: release payload too large: over 32 MiB decompressed") {
+		t.Errorf("partial = %v, skipped = %q, reason = %q; want incomplete, skipping a-bomb/bomb as too large", pe.incomplete, pe.skipped, pe.msg)
+	}
+	if len(inv.HelmReleases) != 1 || inv.HelmReleases[0].Name != "cert-manager" {
+		t.Errorf("releases = %+v, want cert-manager only", inv.HelmReleases)
+	}
+	if peak > 160<<20 {
+		t.Errorf("peak heap %.1f MiB, want ≤ 160 MiB (bounded by the decompression cap)", float64(peak)/(1<<20))
 	}
 }

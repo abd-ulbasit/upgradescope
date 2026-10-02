@@ -345,6 +345,64 @@ func TestDecodeHelmReleaseRejectsNonGzip(t *testing.T) {
 	}
 }
 
+// helmBomb is a Helm release payload, base64(gzip(prefix + n×fill +
+// suffix)), whose stored size is a tiny fraction of what it decodes to:
+// 700 MiB of whitespace fits a 951 KB Secret (#168).
+func helmBomb(t testing.TB, prefix string, fill byte, n int, suffix string) []byte {
+	t.Helper()
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write([]byte(prefix))
+	chunk := bytes.Repeat([]byte{fill}, 1<<20)
+	for left := n; left > 0; left -= len(chunk) {
+		zw.Write(chunk[:min(left, len(chunk))])
+	}
+	zw.Write([]byte(suffix))
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return []byte(base64.StdEncoding.EncodeToString(gz.Bytes()))
+}
+
+// A payload that decompresses past maxReleaseJSONBytes is refused as too
+// large, whether its JSON is valid (a release with a huge manifest) or not
+// (whitespace), and one that decodes to exactly the cap still decodes.
+func TestDecodeHelmReleaseBoundsDecompressedSize(t *testing.T) {
+	const head, tail = `{"chart":{"metadata":{"name":"bomb"}},"manifest":"`, `"}`
+	fits := maxReleaseJSONBytes - len(head) - len(tail)
+	for name, tc := range map[string]struct {
+		payload []byte
+		tooBig  bool
+	}{
+		"valid json at the cap":   {helmBomb(t, head, 'a', fits, tail), false},
+		"valid json over the cap": {helmBomb(t, head, 'a', fits+1, tail), true},
+		"whitespace over the cap": {helmBomb(t, "", ' ', maxReleaseJSONBytes+1, ""), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc, err := decodeHelmRelease(tc.payload)
+			if tc.tooBig {
+				if !errors.Is(err, errReleaseTooLarge) || !strings.Contains(err.Error(), "release payload too large: over 32 MiB decompressed") {
+					t.Errorf("err = %v, want errReleaseTooLarge naming the 32 MiB cap", err)
+				}
+				return
+			}
+			if err != nil || doc.Chart.Metadata.Name != "bomb" || len(doc.Manifest) != fits {
+				t.Errorf("chart %q, manifest of %d bytes, err %v; want bomb, %d bytes, nil", doc.Chart.Metadata.Name, len(doc.Manifest), err, fits)
+			}
+		})
+	}
+}
+
+// The stored payload is bounded before it is base64-decoded: nothing
+// larger fits a Secret or ConfigMap, so only a misbehaving apiserver could
+// serve one.
+func TestDecodeHelmReleaseBoundsStoredSize(t *testing.T) {
+	big := bytes.Repeat([]byte("A"), maxStoredReleaseBytes+4)
+	if _, err := decodeHelmRelease(big); !errors.Is(err, errReleaseTooLarge) || !strings.Contains(err.Error(), "over 4 MiB stored") {
+		t.Errorf("err = %v, want errReleaseTooLarge naming the 4 MiB stored cap", err)
+	}
+}
+
 // The chart's kubeVersion constraint is kept verbatim, and the stored
 // manifest is parsed with the --files parser: objects at APIs the KB flags
 // are kept per GVK with their name, manifest line and template; others are
