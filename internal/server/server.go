@@ -46,10 +46,13 @@ type Config struct {
 	ExtraTargets []string        // minors evaluated for every snapshot, e.g. ["1.37"]
 	Notifier     notify.Notifier // nil = notifications disabled
 	IngestToken  string          // optional shared bearer for POST /api/v1/snapshots (any cluster); "" = per-cluster tokens only
-	ReadToken    string          // optional bearer for the read API; "" = open (document loudly)
-	AdminToken   string          // bearer for cluster delete/rename (also accepted for reads); "" = both refused
-	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
-	Version      string          // build version: SARIF tool metadata ("" = omitted there) and toolVersion in report responses ("" when unset)
+	ReadToken    string          // optional bearer for the read API; "" = open on loopback only, unless AllowAnonymousRead
+	// AllowAnonymousRead serves an open read API (ReadToken "") on an
+	// address that is not loopback. Without it Start refuses one.
+	AllowAnonymousRead bool
+	AdminToken         string  // bearer for cluster delete/rename (also accepted for reads); "" = both refused
+	TeamMap            TeamMap // optional namespace→team override, applied before every Evaluate
+	Version            string  // build version: SARIF tool metadata ("" = omitted there) and toolVersion in report responses ("" when unset)
 
 	// StaleAfter marks a cluster stale when its agent has not pushed
 	// (duplicates included) for longer; 0 = DefaultStaleAfter.
@@ -129,7 +132,8 @@ type Server struct {
 	extraTargets []inventory.Version
 	mux          *http.ServeMux
 	httpSrv      *http.Server
-	now          func() time.Time // injected clock: EOL math + timestamps stay testable
+	now          func() time.Time                                    // injected clock: EOL math + timestamps stay testable
+	listen       func(network, address string) (net.Listener, error) // net.Listen; injected in tests
 
 	gateSlots        chan struct{} // semaphore: one token per running /gate evaluation
 	gateQueueTimeout time.Duration // how long a /gate request waits for a slot
@@ -165,6 +169,7 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		cfg:              cfg,
 		now:              time.Now,
+		listen:           net.Listen,
 		mux:              http.NewServeMux(),
 		gateSlots:        make(chan struct{}, maxConcurrentGates),
 		gateQueueTimeout: gateQueueTimeout,
@@ -340,9 +345,12 @@ const contentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
 	"object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
-// securityHeaders sets defense-in-depth headers on every response:
-// dashboard, assets, API and exports alike. X-Frame-Options backs up
-// frame-ancestors for browsers without CSP level 2.
+// securityHeaders sets defense-in-depth headers on every response the
+// handler writes: dashboard, assets, API, exports and their errors alike.
+// Responses net/http writes before any handler runs (431, a 400 for a
+// malformed request, 501 for an unknown Transfer-Encoding) carry none;
+// their bodies are fixed text. X-Frame-Options backs up frame-ancestors
+// for browsers without CSP level 2.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -381,10 +389,22 @@ func acquireSlot(w http.ResponseWriter, gone <-chan struct{}, slots chan struct{
 // Start binds Config.Listen and serves until Shutdown. It returns nil after
 // a clean Shutdown, otherwise the listen/serve error. Once Ready() is
 // closed, Addr() reports the bound address (Listen ":0" works in tests).
+//
+// Without a read token the read API is open, which Start allows only on
+// a loopback address unless AllowAnonymousRead says otherwise. It checks
+// the address it actually bound, after binding, so no name resolution
+// decides it: "localhost" mapped to a routable address in /etc/hosts, a
+// hostname, or ":8080" (every interface) is refused, and nothing is
+// served on it in between.
 func (s *Server) Start() error {
-	ln, err := net.Listen("tcp", s.cfg.Listen)
+	ln, err := s.listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.cfg.Listen, err)
+	}
+	if s.cfg.ReadToken == "" && !s.cfg.AllowAnonymousRead && !isLoopbackAddr(ln.Addr()) {
+		ln.Close()
+		return fmt.Errorf("server: refusing to serve the read API and /api/v1/gate without a read token on %s (from %q), "+
+			"which is not a loopback address: set a read token, listen on loopback, or allow anonymous reads", ln.Addr(), s.cfg.Listen)
 	}
 	// Background work: the notification worker, the re-evaluation ticker
 	// and, with a retention window, the pruner (the first passes of both
@@ -412,6 +432,13 @@ func (s *Server) Start() error {
 		return err
 	}
 	return nil
+}
+
+// isLoopbackAddr reports whether a bound address is a loopback IP (any of
+// 127.0.0.0/8, or ::1).
+func isLoopbackAddr(a net.Addr) bool {
+	tcp, ok := a.(*net.TCPAddr)
+	return ok && tcp.IP.IsLoopback()
 }
 
 // logStartup reports the bound address and warns about configurations an

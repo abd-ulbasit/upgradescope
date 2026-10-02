@@ -86,16 +86,17 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 	}
 
 	srv, err := server.New(server.Config{
-		Listen:       opts.listen,
-		Store:        st,
-		KB:           kbData,
-		Notifier:     notify.Multi(notifiers...), // zero notifiers → harmless no-op
-		IngestToken:  opts.ingestToken,
-		ReadToken:    opts.readToken,
-		AdminToken:   opts.adminToken,
-		ExtraTargets: extraTargets,
-		TeamMap:      opts.parsedTeamMap,
-		Version:      version,
+		Listen:             opts.listen,
+		Store:              st,
+		KB:                 kbData,
+		Notifier:           notify.Multi(notifiers...), // zero notifiers → harmless no-op
+		IngestToken:        opts.ingestToken,
+		ReadToken:          opts.readToken,
+		AdminToken:         opts.adminToken,
+		ExtraTargets:       extraTargets,
+		TeamMap:            opts.parsedTeamMap,
+		AllowAnonymousRead: opts.allowAnonymousRead,
+		Version:            version,
 
 		MaxSnapshotBytes: opts.maxSnapshotBytes,
 		MaxGateBytes:     opts.maxGateBytes,
@@ -213,19 +214,19 @@ It listens on loopback by default. On any other address, the read API needs
 	return cmd
 }
 
-// isLoopbackListen reports whether a --listen address binds only loopback:
-// "localhost" or a loopback IP. An empty host (":8080"), a wildcard IP and
-// any other hostname count as exposed — fail closed rather than resolve.
-func isLoopbackListen(listen string) bool {
+// exposedListen reports whether a --listen address is certainly not
+// loopback: an empty host (":8080", every interface) or an IP outside
+// 127.0.0.0/8 and ::1. That is refused here, with the flags to fix it. A
+// hostname, "localhost" included, is decided by the server on the address
+// it actually binds (server.Config.AllowAnonymousRead), so neither a
+// literal match nor /etc/hosts can open the read API by accident.
+func exposedListen(listen string) bool {
 	host, _, err := net.SplitHostPort(listen)
-	if err != nil {
-		return false
-	}
-	if host == "localhost" {
+	if err != nil || host == "" {
 		return true
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return ip != nil && !ip.IsLoopback()
 }
 
 // validateServeOptions parses --targets and loads --team-map once into
@@ -253,7 +254,7 @@ func validateServeOptions(opts *serveOptions) error {
 		return fmt.Errorf("--admin-token must differ from --read-token and --ingest-token: " +
 			"whoever holds those must not be able to delete or rename clusters")
 	}
-	if opts.readToken == "" && !opts.allowAnonymousRead && !isLoopbackListen(opts.listen) {
+	if opts.readToken == "" && !opts.allowAnonymousRead && exposedListen(opts.listen) {
 		return fmt.Errorf("refusing to serve the read API and /api/v1/gate without a token on %q: "+
 			"set --read-token, listen on loopback, or pass --allow-anonymous-read to accept open reads", opts.listen)
 	}

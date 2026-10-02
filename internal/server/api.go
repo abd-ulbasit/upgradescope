@@ -374,11 +374,12 @@ func internalErr(w http.ResponseWriter, what string, err error) {
 }
 
 // bearerToken extracts the raw "Authorization: Bearer <token>" value, ""
-// when the header is absent or malformed.
+// when the header is absent or malformed. The scheme is case-insensitive
+// (RFC 7235).
 func bearerToken(r *http.Request) string {
 	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
-	if len(h) <= len(prefix) || !strings.HasPrefix(h, prefix) {
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
 		return ""
 	}
 	return h[len(prefix):]

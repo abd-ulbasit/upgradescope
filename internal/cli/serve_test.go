@@ -158,7 +158,8 @@ func TestServeAnonymousReadGuard(t *testing.T) {
 		{"all interfaces", []string{"--listen", ":8080"}, true},
 		{"wildcard ip", []string{"--listen", "0.0.0.0:8080"}, true},
 		{"routable ip", []string{"--listen", "10.0.0.5:8080"}, true},
-		{"hostname", []string{"--listen", "uscope.internal:8080"}, true},
+		// A hostname is checked on the address serve binds (server.Start).
+		{"hostname", []string{"--listen", "uscope.internal:8080"}, false},
 		{"all interfaces with read token", []string{"--listen", ":8080", "--read-token", "r"}, false},
 		{"all interfaces, explicitly open", []string{"--listen", ":8080", "--allow-anonymous-read"}, false},
 	}
