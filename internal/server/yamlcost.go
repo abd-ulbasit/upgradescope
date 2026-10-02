@@ -20,11 +20,12 @@ import (
 type yamlCost struct {
 	nodes   int // scalars, collections and aliases (aliases are not expanded)
 	entries int // sequence entries: each may be a list item, i.e. an object
+	aliases int // of nodes, the aliases: kubectl's decoder expands them (aliasExpansion)
 }
 
 // add sums two costs.
 func (c yamlCost) add(o yamlCost) yamlCost {
-	return yamlCost{nodes: c.nodes + o.nodes, entries: c.entries + o.entries}
+	return yamlCost{nodes: c.nodes + o.nodes, entries: c.entries + o.entries, aliases: c.aliases + o.aliases}
 }
 
 // units weighs a cost against the node budget. A sequence entry counts
@@ -137,8 +138,11 @@ func measureYAML(doc []byte) yamlCost {
 // keys, and plain, quoted and block scalar rules — and counting the nodes
 // its parser builds from those tokens: every scalar, alias and collection,
 // and every empty (null) node an indicator implies (`a:`, `- `, `{a, b}`).
-// Aliases count once, as yaml.v3 builds them; what kubectl's decoder
-// builds by expanding them is measured apart (aliasExpansion). Where the scanner would stop with an error, this
+// Aliases count once, as yaml.v3 builds them, and in aliases too; what
+// kubectl's decoder builds by expanding them is measured apart
+// (aliasExpansion), and only when there are any: a '*' in a comment, a
+// quoted string or a block scalar is no alias token, and neither is one
+// inside a plain scalar (`a*b`). Where the scanner would stop with an error, this
 // goes on and counts the rest too, so the count is an upper bound for
 // valid and invalid documents alike; the remaining over-counting is small
 // (a property such as an anchor or tag counts inside a flow collection,
@@ -380,6 +384,7 @@ func (s *yamlScanner) token() {
 		}
 		if c == '*' {
 			s.node()
+			s.cost.aliases++
 		} else {
 			s.property()
 		}
@@ -710,10 +715,11 @@ func (c aliasCost) add(o aliasCost) aliasCost {
 // copies the node an alias names in full at every alias, a merge key's
 // included, and its excessive-aliasing check neither starts before 100
 // aliases nor counts the bytes a scalar holds: one 3.5 MiB scalar and 99
-// aliases of it decode to ~1.5 GiB. So a document that may hold aliases
-// is read into yaml.v3 nodes — no dearer than the measured count, which
-// is checked first — and every alias is charged what it names, with the
-// aliases inside that expanded too. extra is the nodes and entries this
+// aliases of it decode to ~1.5 GiB. So a document the meter found aliases
+// in is read into yaml.v3 nodes — no dearer than the measured count, which
+// is checked first, but about as dear as decoding it, so /gate does it in
+// the evaluation slot (checkAliases) — and every alias is charged what it
+// names, with the aliases inside that expanded too. extra is the nodes and entries this
 // adds to measureYAML's count and scalars the bytes it adds to the
 // document's. A document yaml.v3 cannot read, or an alias that names a
 // node containing it, is an error.
@@ -737,16 +743,21 @@ func aliasExpansion(doc []byte) (extra yamlCost, scalars int, err error) {
 	}
 }
 
-// expandedCost is n's cost with its aliases expanded, memoized per node.
+// expandedCost is n's cost with its aliases expanded, memoized per
+// anchored node: only an anchored node is reached twice (through an
+// alias), so the memo holds one entry per anchor, not per node.
 func expandedCost(n *yaml.Node, memo map[*yaml.Node]aliasCost, open map[*yaml.Node]bool) (aliasCost, error) {
-	if c, ok := memo[n]; ok {
-		return c, nil
+	anchored := n.Anchor != ""
+	if anchored {
+		if c, ok := memo[n]; ok {
+			return c, nil
+		}
+		if open[n] {
+			return aliasCost{}, fmt.Errorf("line %d: anchor %q names a node that contains this alias of it", n.Line, n.Anchor)
+		}
+		open[n] = true
+		defer delete(open, n)
 	}
-	if open[n] {
-		return aliasCost{}, fmt.Errorf("line %d: anchor %q names a node that contains this alias of it", n.Line, n.Anchor)
-	}
-	open[n] = true
-	defer delete(open, n)
 	var c aliasCost
 	switch n.Kind {
 	case yaml.AliasNode:
@@ -775,7 +786,9 @@ func expandedCost(n *yaml.Node, memo map[*yaml.Node]aliasCost, open map[*yaml.No
 			c = c.add(cc)
 		}
 	}
-	memo[n] = c
+	if anchored {
+		memo[n] = c
+	}
 	return c, nil
 }
 

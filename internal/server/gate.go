@@ -121,10 +121,12 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The body stays charged to the shared buffered-body budget until it is
-	// decoded, and the evaluation slot is held only for decoding and
-	// evaluation: a client that stops reading the response must not pin it.
-	// Both releases are idempotent; the defers cover the early returns.
-	body, releaseBody, ok := s.readManifestBody(w, r)
+	// decoded, and the evaluation slot is held only for measuring what its
+	// aliases expand to, decoding and evaluation, the steps whose memory
+	// follows the YAML's structure: a client that stops reading the
+	// response must not pin it. Both releases are idempotent; the defers
+	// cover the early returns.
+	body, shape, releaseBody, ok := s.readManifestBody(w, r)
 	if !ok {
 		return
 	}
@@ -134,6 +136,10 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseSlot()
+	if status, msg := shape.checkAliases(); status != 0 {
+		errJSON(w, status, msg)
+		return
+	}
 	manifests, err := collect.CollectManifests(body.reader(), s.cfg.KB.AddOns)
 	releaseBody()
 	if err != nil {

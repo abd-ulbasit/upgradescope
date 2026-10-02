@@ -19,8 +19,8 @@ import (
 )
 
 // decodedCost is what yaml.v3 really builds for a document: every node
-// (aliases not expanded) and every sequence entry. ok is false when
-// yaml.v3 cannot read it.
+// (aliases not expanded, and counted in aliases too) and every sequence
+// entry. ok is false when yaml.v3 cannot read it.
 func decodedCost(doc []byte) (c yamlCost, ok bool) {
 	dec := yaml.NewDecoder(bytes.NewReader(doc))
 	for {
@@ -38,6 +38,9 @@ func decodedCost(doc []byte) (c yamlCost, ok bool) {
 			}
 			if n.Kind == yaml.SequenceNode {
 				c.entries += len(n.Content)
+			}
+			if n.Kind == yaml.AliasNode {
+				c.aliases++
 			}
 			stack = append(stack, n.Content...)
 		}
@@ -77,13 +80,13 @@ func kubectlNodes(doc []byte) (n, scalars int, ok bool) {
 	}
 }
 
-// gateDocCost is what checkManifestStream charges a document: the nodes
-// measureYAML counts and, when it may hold aliases, what expanding them
-// adds; size is its bytes plus the scalar bytes that expansion adds. ok
+// gateDocCost is what /gate charges a document: the nodes measureYAML
+// counts and, when it counted aliases, what expanding them adds
+// (checkAliases); size is its bytes plus the scalar bytes that expansion adds. ok
 // is false when it is refused for aliases it cannot measure.
 func gateDocCost(doc []byte) (c yamlCost, size int, ok bool) {
 	c, size = measureYAML(doc), len(doc)
-	if bytes.IndexByte(doc, '*') >= 0 {
+	if c.aliases > 0 {
 		extra, scalars, err := aliasExpansion(doc)
 		if err != nil {
 			return c, size, false
@@ -93,8 +96,8 @@ func gateDocCost(doc []byte) (c yamlCost, size int, ok bool) {
 	return c, size, true
 }
 
-// checkNoUndercount fails when measureYAML counts fewer nodes or entries
-// than yaml.v3 builds for doc, or measures it differently when it arrives
+// checkNoUndercount fails when measureYAML counts fewer nodes, entries or
+// aliases than yaml.v3 builds for doc, or measures it differently when it arrives
 // in small chunks (unless it is UTF-16, which /gate refuses), or when what /gate charges it (gateDocCost) is less
 // than what kubectl's decoder builds from it with its aliases expanded:
 // fewer nodes, or fewer bytes than its strings and numbers hold. A scalar
@@ -107,7 +110,7 @@ func checkNoUndercount(t *testing.T, name string, doc []byte) {
 		return // read as UTF-16 by the decoders, and refused by /gate
 	}
 	got := measureYAML(doc)
-	if want, ok := decodedCost(doc); ok && (got.nodes < want.nodes || got.entries < want.entries) {
+	if want, ok := decodedCost(doc); ok && (got.nodes < want.nodes || got.entries < want.entries || got.aliases < want.aliases) {
 		t.Errorf("%s: measured %+v, yaml.v3 builds %+v\n%q", name, got, want, doc)
 	}
 	if charged, size, ok := gateDocCost(doc); ok {
@@ -188,6 +191,9 @@ var measureSeeds = []string{
 	// bytes become twenty-one.
 	"1e20\n",
 	"a: [1e20, -1E+20, 6.02e23, .5e-9, 1e300]\n",
+	// A '*' that is not an alias token.
+	"verbs: [\"*\"] # *\nhost: '*.example.com'\nglob: a*b\nmsg: |\n  *x\n",
+	"k: x\n  *y\n",
 }
 
 func TestMeasureYAMLNeverUndercounts(t *testing.T) {

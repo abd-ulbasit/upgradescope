@@ -36,7 +36,8 @@ const DefaultMaxSnapshotBytes = 20 << 20 // 20 MiB
 const DefaultMaxGateBytes = 10 << 20 // 10 MiB
 
 // Manifest stream shape limits for /gate, checked on the raw bytes before
-// any YAML is decoded (checkManifestStream).
+// the request waits for the evaluation slot (checkManifestStream), and
+// what aliases expand to in the slot, before decoding (checkAliases).
 //
 // Decoding costs memory per YAML node, not per byte: each document becomes
 // a yaml.v3 node tree and kubectl's generic tree, and list items become
@@ -266,52 +267,71 @@ func firstRead(declared int64) int64 {
 // When the budget has no room even for the first read, the request is
 // refused before reading any of its body: the first read would send a
 // client waiting on Expect: 100-continue the go-ahead for all of it. On
-// success the caller must call release once it no longer needs the body;
-// release is idempotent. On failure everything has already been given
-// back.
-func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body bufferedBody, release func(), ok bool) {
+// success the caller must run shape.checkAliases in the evaluation slot
+// before decoding the body, and call release once it no longer needs the
+// body; release is idempotent. On failure everything has already been
+// given back.
+func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body bufferedBody, shape *manifestShape, release func(), ok bool) {
 	const busy = "too many concurrent gate requests; retry shortly"
 	limit := s.maxGateBytes()
 	tooLarge := "manifest stream exceeds the " + sizeString(limit) + " limit"
 	if r.ContentLength > limit {
 		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	if r.ContentLength != 0 && !s.gateBuffered.fits(firstRead(r.ContentLength)) {
 		(&bodyError{http.StatusServiceUnavailable, busy}).write(w)
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	body, held, berr := readBody(http.MaxBytesReader(w, r.Body, limit), r.ContentLength, s.gateBuffered, busy, tooLarge, nil)
 	if berr != nil {
 		berr.write(w)
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	release = sync.OnceFunc(func() { s.gateBuffered.give(held) })
-	if status, msg := checkManifestStream(body); status != 0 {
+	shape, status, msg := checkManifestStream(body)
+	if status != 0 {
 		release()
 		errJSON(w, status, msg)
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
-	return body, release, true
+	return body, shape, release, true
+}
+
+// manifestShape is what checkManifestStream measured of a stream it let
+// through: the YAML nodes it holds, each alias counted once, and the
+// documents with aliases, whose expansion checkAliases measures.
+type manifestShape struct {
+	src     *byteSource
+	total   yamlCost
+	aliased []manifestDoc
+}
+
+// manifestDoc is the nth document of a stream, at src[start:end], which
+// the meter measured at cost.
+type manifestDoc struct {
+	n, start, end int
+	cost          yamlCost
 }
 
 // checkManifestStream splits a buffered manifest stream into documents as
 // kubectl does (a line starting with "---" ends one; only white space or a
 // comment may follow it) and checks it against the shape limits before
 // anything decodes it: the document count, each document's size, and the
-// YAML nodes the whole stream holds, each alias counted as what it names
-// (and its bytes against the document's size). It reads the body in
-// place, copying only a document that may hold aliases and spans chunks.
-// It returns the status and message to refuse it with, or 0.
-func checkManifestStream(body bufferedBody) (status int, msg string) {
+// YAML nodes the whole stream holds. It reads the body in place, in
+// memory that does not grow with it, so it runs before the request waits
+// for the evaluation slot; what aliases expand to is checked in the slot
+// (checkAliases). It returns the status and message to refuse the stream
+// with, or 0 and the stream's shape.
+func checkManifestStream(body bufferedBody) (shape *manifestShape, status int, msg string) {
 	src := newByteSource(body)
 	if off := src.utf16BOM(); off >= 0 {
 		// yaml.v3 and kubectl's decoder read a document that starts with
 		// one as UTF-16, which the meter, reading UTF-8, cannot measure.
-		return http.StatusUnprocessableEntity, fmt.Sprintf(
+		return nil, http.StatusUnprocessableEntity, fmt.Sprintf(
 			"invalid manifest stream: a UTF-16 byte order mark at byte %d; /gate reads UTF-8 only", off)
 	}
-	var total yamlCost
+	shape = &manifestShape{src: src}
 	n := 0
 	check := func(start, end int) (int, string) {
 		if start == end {
@@ -326,33 +346,10 @@ func checkManifestStream(body bufferedBody) (status int, msg string) {
 					n, end-start, sizeString(maxManifestDocBytes))
 		}
 		cost := measureYAMLRange(src, start, end)
-		if total.add(cost).units() <= maxManifestUnits && src.contains(start, end, '*') {
-			// It may hold aliases, which kubectl's decoder expands
-			// (aliasExpansion): charge them what they name.
-			extra, scalars, err := aliasExpansion(src.slice(start, end))
-			if err != nil {
-				return http.StatusUnprocessableEntity, fmt.Sprintf(
-					"invalid manifest document %d: %v (a document that may hold YAML aliases must parse, so that what they expand to can be measured)", n, err)
-			}
-			if size := end - start + scalars; size > maxManifestDocBytes {
-				return http.StatusRequestEntityTooLarge, fmt.Sprintf(
-					"manifest document %d is too large to evaluate in one request: its YAML aliases expand it to %d bytes, "+
-						"and every alias is decoded as a full copy of what it names; the per-document limit is %s "+
-						"(write the values out, or split it into smaller documents)", n, size, sizeString(maxManifestDocBytes))
-			}
-			cost = cost.add(extra)
+		if cost.aliases > 0 {
+			shape.aliased = append(shape.aliased, manifestDoc{n: n, start: start, end: end, cost: cost})
 		}
-		if total = total.add(cost); total.units() > maxManifestUnits {
-			what := "the manifest stream"
-			if cost.units() > maxManifestUnits {
-				what = fmt.Sprintf("manifest document %d", n)
-			}
-			return http.StatusRequestEntityTooLarge, fmt.Sprintf(
-				"%s is too large to evaluate in one request: decoding YAML costs memory per node, and the stream holds "+
-					"over %d node units (each node 1, each sequence entry 4, each alias what it names); split it into several requests "+
-					"(a large List into separate, smaller ones)", what, maxManifestUnits)
-		}
-		return 0, ""
+		return shape.charge(n, cost, cost)
 	}
 	docStart := 0
 	for off := 0; off < src.size; {
@@ -371,17 +368,65 @@ func checkManifestStream(body bufferedBody) (status int, msg string) {
 				i += size
 			}
 			if c := src.at(i); i < min(next, src.size) && c != '\n' && c != '#' {
-				return http.StatusUnprocessableEntity, fmt.Sprintf(
+				return nil, http.StatusUnprocessableEntity, fmt.Sprintf(
 					"invalid manifest stream: invalid YAML document separator at byte %d (only a comment may follow ---)", off)
 			}
 			if status, msg := check(docStart, off); status != 0 {
-				return status, msg
+				return nil, status, msg
 			}
 			docStart = min(next, src.size)
 		}
 		off = next
 	}
-	return check(docStart, src.size)
+	if status, msg := check(docStart, src.size); status != 0 {
+		return nil, status, msg
+	}
+	return shape, 0, ""
+}
+
+// charge adds what document n adds to the stream's cost, and refuses the
+// stream once it is over the node budget, naming the document when it is
+// over the budget alone at docCost.
+func (m *manifestShape) charge(n int, docCost, added yamlCost) (status int, msg string) {
+	if m.total = m.total.add(added); m.total.units() > maxManifestUnits {
+		what := "the manifest stream"
+		if docCost.units() > maxManifestUnits {
+			what = fmt.Sprintf("manifest document %d", n)
+		}
+		return http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"%s is too large to evaluate in one request: decoding YAML costs memory per node, and the stream holds "+
+				"over %d node units (each node 1, each sequence entry 4, each alias what it names); split it into several requests "+
+				"(a large List into separate, smaller ones)", what, maxManifestUnits)
+	}
+	return 0, ""
+}
+
+// checkAliases charges each document with aliases what kubectl's decoder
+// expands them to (aliasExpansion): their nodes against the stream's node
+// budget, and their bytes against the document's size. Measuring that
+// reads the document into yaml.v3 nodes, which costs about what decoding
+// it does (no more: the stream is within the node budget), so it runs in
+// the evaluation slot, one document at a time, and requests waiting for
+// the slot hold no node trees. It returns the status and message to
+// refuse the stream with, or 0.
+func (m *manifestShape) checkAliases() (status int, msg string) {
+	for _, d := range m.aliased {
+		extra, scalars, err := aliasExpansion(m.src.slice(d.start, d.end))
+		if err != nil {
+			return http.StatusUnprocessableEntity, fmt.Sprintf(
+				"invalid manifest document %d: %v (a document that holds YAML aliases must parse, so that what they expand to can be measured)", d.n, err)
+		}
+		if size := d.end - d.start + scalars; size > maxManifestDocBytes {
+			return http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"manifest document %d is too large to evaluate in one request: its YAML aliases expand it to %d bytes, "+
+					"and every alias is decoded as a full copy of what it names; the per-document limit is %s "+
+					"(write the values out, or split it into smaller documents)", d.n, size, sizeString(maxManifestDocBytes))
+		}
+		if status, msg := m.charge(d.n, d.cost.add(extra), extra); status != 0 {
+			return status, msg
+		}
+	}
+	return 0, ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
