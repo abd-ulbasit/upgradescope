@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 // `tokens create` refuses a cluster name the server would refuse pushes
@@ -45,5 +48,38 @@ func TestAgentRefusesInvalidNames(t *testing.T) {
 		if _, err := execAgent(t, args...); err != nil {
 			t.Errorf("agent %v: %v", args, err)
 		}
+	}
+}
+
+// `clusters rename --db` is the way off a name a v0.1 server registered
+// and pushes are now refused under ("Prod_EU"): it renames such a cluster
+// to a valid name, and refuses an invalid new name, as the server's
+// PATCH does.
+func TestClustersRenameTakesOnlyValidNewNames(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "clusters.db")
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := st.UpsertCluster(ctx, store.Cluster{Name: "Prod_EU", ClusterUID: "uid-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execClusters(t, "rename", "Prod_EU", "Prod-EU-1", "--db", db); err == nil || !strings.Contains(err.Error(), "RFC 1123 subdomain") {
+		t.Fatalf("rename to Prod-EU-1: err %v, want the rule", err)
+	}
+	if _, err := execClusters(t, "rename", "Prod_EU", "prod-eu", "--db", db); err != nil {
+		t.Fatalf("rename Prod_EU to prod-eu: %v", err)
+	}
+	st, err = store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.ClusterByName(ctx, "prod-eu"); err != nil {
+		t.Errorf("prod-eu after the rename: %v", err)
 	}
 }

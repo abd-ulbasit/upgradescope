@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -198,13 +199,22 @@ func newClustersRenameCmd() *cobra.Command {
 		Long: "Rename a cluster; its history and its per-cluster ingest tokens move to the new name.\n" +
 			"The agent sends its own --cluster-name with every push, so change that too (chart value\n" +
 			"agent.clusterName). Until then its pushes are refused when it uses a per-cluster token\n" +
-			"(now bound to the new name), or register the old name again when it uses the shared one.",
+			"(now bound to the new name), or register the old name again when it uses the shared one.\n" +
+			"The new name must be an RFC 1123 subdomain (lowercase alphanumerics, '-' and '.', at most\n" +
+			"253 bytes), as pushes require: renaming is how a cluster a v0.1 server registered under\n" +
+			"another name (Prod_EU) moves to one its agent can push under.",
 		Example:       "  upgradescope clusters rename prod-eu prod-eu-1 --server https://upgradescope.example.com",
 		Args:          cobra.ExactArgs(2),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cluster, newName := args[0], args[1]
+			// The server refuses pushes under any other name (and its
+			// PATCH refuses one); the old name may be one a v0.1 server
+			// registered, so only the new one is checked.
+			if err := inventory.ValidateClusterName(newName); err != nil {
+				return fmt.Errorf("new cluster name: %w", err)
+			}
 			admin, err := target.open(cmd)
 			if err != nil {
 				return err
