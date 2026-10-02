@@ -141,6 +141,27 @@ a CI gate.
   CRDs but no custom resources, so the agent reports `crds` as partial for a
   CRD with a deprecated or unserved version. These findings concern the
   add-on's CRDs, whatever the Kubernetes target.
+- `scan --output junit`: one test suite per finding category and one test
+  case per finding. The outcomes follow the gate (`--fail-on`,
+  `--allow-incomplete`, `--baseline`): a finding that fails the gate is a
+  failure, one below the threshold passes, a suppressed or
+  baseline-unchanged one is skipped with its reason, and a required check
+  that could not run is an error, so an `unknown` verdict fails the test
+  report too (#73).
+- `scan --output gitlab-codequality`: a GitLab Code Quality report for the
+  merge request widget. Severity maps blocker to critical, warning to
+  minor and info to info; each entry is anchored to the object's file and
+  line, and fingerprints hash the finding key and object identity (not
+  the line), so they are stable across runs. Findings without a file are
+  anchored to the virtual path `upgradescope/<key>`; suppressed findings
+  are left out (#73).
+- `/api/v1/gate?format=junit|gitlab-codequality`, with the same status
+  code and verdict header as `json` and `sarif` (#73).
+- CI templates for GitLab CI (`ci/gitlab/upgradescope.gitlab-ci.yml`, Code
+  Quality and JUnit reports), Jenkins (`ci/jenkins/Jenkinsfile`, the
+  `junit` step) and Azure Pipelines (`ci/azure/azure-pipelines.yml`,
+  `PublishTestResults@2`). Each installs a pinned, checksum-verified
+  release and keeps the report when the gate fails (#73).
 
 ### Changed
 
