@@ -139,15 +139,23 @@ const (
 // normal one takes milliseconds): a read waits up to readQueueTimeout for
 // the slot, then gets 503 + Retry-After. The handler writes its response
 // to memory in the slot, and it is sent after the slot is released, so a
-// slow client holds its response's bytes, never the slot. Reads of the
+// slow client holds its response's bytes, never the slot; those bytes are
+// charged to a budget of maxHeldReadResponses × --max-snapshot-bytes
+// (40 MiB by default) while the client reads them, for up to the 120s
+// write timeout. A response that does not fit is sent in the slot instead,
+// under slotWriteTimeout, so clients that never read hold at most the
+// budget: unbounded, 20 that asked for a 17.5 MB report and did not read
+// it held 366 MiB, and a 120s window holds ~100. Reads of the
 // whole fleet (/clusters, /fleet, /metrics) take no slot: they read each
 // cluster's snapshot head from one store query and each evaluation's
 // summary columns, so they load no inventory and no report. One read in
 // the slot costs up to ~90 MiB on SQLite at the snapshot node budget
 // (TestReadHeapIsBounded).
 const (
-	maxConcurrentReads = 1
-	readQueueTimeout   = 30 * time.Second
+	maxConcurrentReads   = 1
+	readQueueTimeout     = 30 * time.Second
+	maxHeldReadResponses = 2
+	slotWriteTimeout     = 20 * time.Second
 )
 
 // Server serves the ingest + read API. Construct with New; a Server is
@@ -170,6 +178,8 @@ type Server struct {
 
 	readSlots        chan struct{} // semaphore: one token per read that loads a snapshot
 	readQueueTimeout time.Duration // how long such a read waits for a slot
+	readHeld         *byteBudget   // response bytes held for clients after the read slot
+	slotWriteTimeout time.Duration // how long a response sent in the read slot may take
 
 	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
 	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
@@ -209,6 +219,8 @@ func New(cfg Config) (*Server, error) {
 	s.ingestBuffered = newByteBudget(maxBufferedSnapshotBodies * s.maxSnapshotBytes())
 	s.readSlots = make(chan struct{}, maxConcurrentReads)
 	s.readQueueTimeout = readQueueTimeout
+	s.readHeld = newByteBudget(maxHeldReadResponses * s.maxSnapshotBytes())
+	s.slotWriteTimeout = slotWriteTimeout
 	s.teamMapHash = hashTeamMap(cfg.TeamMap)
 	s.sinks = sinksOf(cfg.Notifier)
 	s.outboxKick = make(chan struct{}, 1)
@@ -417,20 +429,31 @@ func acquireSlot(w http.ResponseWriter, gone <-chan struct{}, slots chan struct{
 }
 
 // inReadSlot runs h in the read slot (maxConcurrentReads) with its
-// response written to memory, and sends that response once the slot is
-// released, so the slot is held for loading, decoding and evaluating, not
-// for a client's reading.
+// response written to memory. A response that fits the held-response
+// budget (readHeld) is sent once the slot is released, so the slot is
+// held for loading, decoding and evaluating, not for a client's reading;
+// its bytes go back to the budget when the write returns. One that does
+// not fit is sent in the slot, under slotWriteTimeout. Either way the
+// responses waiting for their clients take at most the budget plus the
+// one in the slot: a client that does not read cannot make the server
+// keep one more copy per request for the whole write timeout.
 func (s *Server) inReadSlot(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		release, ok := acquireSlot(w, r.Context().Done(), s.readSlots, s.readQueueTimeout, "too many concurrent reads; retry shortly")
 		if !ok {
 			return
 		}
+		defer release()
 		resp := &heldResponse{header: w.Header(), status: http.StatusOK}
-		func() {
-			defer release()
-			h(resp, r)
-		}()
+		h(resp, r)
+		if held := int64(resp.body.Cap()); s.readHeld.charge(0, held) {
+			defer s.readHeld.give(held)
+			release()
+		} else {
+			// The error is for a writer with no connection (a test
+			// recorder), which has nothing to wait for.
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.slotWriteTimeout))
+		}
 		w.WriteHeader(resp.status)
 		_, _ = w.Write(resp.body.Bytes())
 	}

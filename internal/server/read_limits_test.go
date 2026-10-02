@@ -41,12 +41,14 @@ func pspUsagesNamed(size int, suffix string) string {
 	return b.String()
 }
 
-// maxReadHeap is what any number of concurrent reads of one cluster may
-// add to the heap: one read in the slot (up to ~90 MiB on SQLite at the
-// snapshot node budget: a stored report as large as a 17 MB snapshot, read
-// through a driver that copies both) and what the one before it left: its
-// garbage, and its response, as large as that report, still being written
-// to its client (measured up to 107 MiB in all).
+// maxReadHeap is what concurrent reads of one cluster may add to the
+// heap while their clients take what they are sent, as the recorders here
+// do at once: one read in the slot (up to ~90 MiB on SQLite at the
+// snapshot node budget: a stored report as large as a 17 MB snapshot,
+// read through a driver that copies both) and what the one before it
+// left (measured up to 90 MiB in all, 10 at once). Clients that do not
+// read add at most the held-response budget, over real sockets
+// (TestUnreadResponsesAreBounded).
 const maxReadHeap = 128 << 20
 
 // The read API decoded a cluster's stored inventory on every request, with
@@ -172,5 +174,54 @@ func TestReadSlotIsNotHeldWhileSending(t *testing.T) {
 	<-done
 	if w.Code != http.StatusTeapot || w.Header().Get("Content-Type") != "text/csv" || w.Body.String() != "a,b\n" {
 		t.Fatalf("response = %d %q %q, want 418 text/csv \"a,b\\n\"", w.Code, w.Header().Get("Content-Type"), w.Body)
+	}
+}
+
+// A response that does not fit what is left of the held-response budget
+// is sent in the read slot, so the next read waits for its client rather
+// than the server keeping one more copy; the budget is untouched, and a
+// response held after the slot gives its bytes back once it is sent.
+func TestReadSlotSendsWhatTheHeldBudgetCannotTake(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	h := s.inReadSlot(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("report"))
+	})
+	send := func() (w *unreadResponse, done chan struct{}) {
+		w = &unreadResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+		done = make(chan struct{})
+		go func() {
+			defer close(done)
+			h(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		}()
+		<-w.writing
+		return w, done
+	}
+
+	full := s.readHeld.max - 2
+	if !s.readHeld.charge(0, full) {
+		t.Fatal("could not fill the held-response budget")
+	}
+	w, done := send()
+	if n := len(s.readSlots); n != 1 {
+		t.Fatalf("%d read slots held while a response the budget cannot take is sent, want 1", n)
+	}
+	if used := s.readHeld.inUse(); used != full {
+		t.Fatalf("held-response budget at %d while sending in the slot, want %d", used, full)
+	}
+	close(w.release)
+	<-done
+	if n := len(s.readSlots); n != 0 || w.Body.String() != "report" {
+		t.Fatalf("after sending: %d read slots held, body %q; want 0, \"report\"", n, w.Body)
+	}
+
+	s.readHeld.give(full)
+	w, done = send()
+	if used := s.readHeld.inUse(); used == 0 || len(s.readSlots) != 0 {
+		t.Fatalf("held after the slot: budget at %d, %d read slots; want the response charged and no slot", used, len(s.readSlots))
+	}
+	close(w.release)
+	<-done
+	if used := s.readHeld.inUse(); used != 0 {
+		t.Fatalf("held-response budget at %d after the response was sent, want 0", used)
 	}
 }
