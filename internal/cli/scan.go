@@ -34,12 +34,19 @@ var ErrGateFailed = errors.New("readiness gate failed: findings at or above --fa
 // opts out.
 var ErrIncomplete = errors.New("readiness gate failed: verdict unknown, required checks were not assessed (see NOT ASSESSED); pass --allow-incomplete to gate on findings alone")
 
+// ErrTargetNotUpgrade signals a --target at or below the minor the
+// cluster's kube-apiserver already runs (a downgrade, a no-op, or a typo
+// like 1.4). The verdict is unknown, and since this is a user error
+// rather than a coverage limit, --allow-incomplete does not excuse it.
+// Exit code 2 like ErrIncomplete.
+var ErrTargetNotUpgrade = errors.New("readiness gate failed: verdict unknown, --target is not an upgrade of this cluster")
+
 // ExitCode maps an Execute error to the process exit code.
 func ExitCode(err error) int {
 	switch {
 	case err == nil:
 		return 0
-	case errors.Is(err, ErrGateFailed), errors.Is(err, ErrIncomplete):
+	case errors.Is(err, ErrGateFailed), errors.Is(err, ErrIncomplete), errors.Is(err, ErrTargetNotUpgrade):
 		return 2
 	default:
 		return 1
@@ -264,7 +271,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never")
-	cmd.Flags().BoolVar(&opts.allowIncomplete, "allow-incomplete", false, "with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed)")
+	cmd.Flags().BoolVar(&opts.allowIncomplete, "allow-incomplete", false, "with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed); a --target that is not an upgrade still fails")
 	cmd.Flags().StringVar(&opts.configFile, "config", "", "config file with ignore rules (default: "+suppress.ConfigFile+" in the scan root, else at the git repository root)")
 	cmd.Flags().StringVar(&opts.baselineFile, "baseline", "", "JSON report of an earlier scan (--output json or --write-baseline): the gate fails only on findings that are new since")
 	cmd.Flags().StringVar(&opts.writeBaseline, "write-baseline", "", "also write this scan's JSON report to this path, for a later --baseline")
@@ -349,7 +356,8 @@ when the gate fails, which includes an unknown verdict.
 
 The gate (--fail-on) fails when a finding at or above the threshold remains,
 or (unless --allow-incomplete) when a required check was not assessed, so a
-blocker may have been missed.
+blocker may have been missed. A --target that is not an upgrade of the
+cluster (at or below the minor its kube-apiserver runs) always fails it.
 
 Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
 or the one file named, is decoded as kubectl apply -f decodes it: each
@@ -507,14 +515,21 @@ func writeReport(w io.Writer, format string, r engine.Report, filesBase *string)
 
 // gate applies --fail-on: ErrGateFailed when findings that are not in the
 // baseline reach the threshold, else ErrIncomplete when the assessment is
-// incomplete (unless allowIncomplete). "never" never fails. Suppressed
-// findings are no longer in r.Findings.
+// incomplete (unless allowIncomplete). A target that is not an upgrade is
+// a user error, not a coverage limit, so allowIncomplete does not excuse
+// it. "never" never fails. Suppressed findings are no longer in
+// r.Findings.
 func gate(r engine.Report, failOn string, allowIncomplete bool) error {
 	if failOn == "never" {
 		return nil
 	}
 	if findingsReach(r, failOn) {
 		return ErrGateFailed
+	}
+	for _, g := range r.NotAssessed {
+		if g.Capability == engine.GapTarget {
+			return fmt.Errorf("%w (%s)", ErrTargetNotUpgrade, g.Reason)
+		}
 	}
 	if incomplete(r) && !allowIncomplete {
 		return ErrIncomplete

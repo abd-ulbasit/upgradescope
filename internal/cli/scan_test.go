@@ -268,8 +268,8 @@ func TestScanTargetNotAnUpgrade(t *testing.T) {
 	inv := liveInventory("v1.37.0")
 	for _, target := range []string{"1.36", "1.4", "1.37"} {
 		out, _, err := execScanStderr(t, []string{"--target", target}, evalStub(t, inv))
-		if !errors.Is(err, ErrIncomplete) || ExitCode(err) != 2 {
-			t.Errorf("--target %s: err = %v, want ErrIncomplete (exit 2)", target, err)
+		if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 {
+			t.Errorf("--target %s: err = %v, want ErrTargetNotUpgrade (exit 2)", target, err)
 		}
 		for _, want := range []string{
 			"Server:   v1.37.0",
@@ -291,6 +291,15 @@ func TestScanTargetNotAnUpgrade(t *testing.T) {
 	// One minor ahead (within the KB horizon) is a plain upgrade.
 	if out, _, err := execScanStderr(t, []string{"--target", "1.37"}, evalStub(t, liveInventory("v1.36.4"))); err != nil {
 		t.Errorf("1.36 → 1.37: err = %v, want a passing gate\n%s", err, out)
+	}
+	// A target that is not an upgrade is a user error, not a coverage
+	// limit: --allow-incomplete does not let it pass; --fail-on never does.
+	_, _, err := execScanStderr(t, []string{"--target", "1.4", "--allow-incomplete"}, evalStub(t, inv))
+	if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 || !strings.Contains(err.Error(), "target 1.4 is not an upgrade") {
+		t.Errorf("--allow-incomplete --target 1.4: err = %v, want ErrTargetNotUpgrade naming the target (exit 2)", err)
+	}
+	if _, _, err := execScanStderr(t, []string{"--target", "1.4", "--fail-on", "never"}, evalStub(t, inv)); err != nil {
+		t.Errorf("--fail-on never --target 1.4: err = %v, want nil", err)
 	}
 }
 
