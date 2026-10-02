@@ -46,26 +46,26 @@ func TestGateREADMEExample(t *testing.T) {
 		t.Fatalf("seed push = %d %v", resp.StatusCode, out)
 	}
 
-	run := func(manifest string) (error, []byte) {
+	run := func(manifest string) ([]byte, error) {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "rendered.yaml"), []byte(manifest), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		cmd := exec.Command("sh", "-ec", command)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "SERVER="+ts.URL, "READ_TOKEN=read-tok")
+		cmd.Env = append(os.Environ(), "SERVER="+ts.URL, "READ_TOKEN=read-tok", "NO_PROXY=*", "no_proxy=*") // straight to the test server
 		out, err := cmd.CombinedOutput()
 		if err != nil && !errors.As(err, new(*exec.ExitError)) {
 			t.Fatalf("running the README command: %v\n%s", err, out)
 		}
 		sarifOut, _ := os.ReadFile(filepath.Join(dir, "results.sarif"))
-		return err, sarifOut
+		return sarifOut, err
 	}
 
-	if err, body := run(deploymentManifest); err != nil {
+	if body, err := run(deploymentManifest); err != nil {
 		t.Errorf("clean manifest: the README command failed: %v (%s)", err, body)
 	}
-	err, body := run(pspManifest)
+	body, err := run(pspManifest)
 	if err == nil {
 		t.Fatalf("README command passed a removed API:\n%s\n%s", command, body)
 	}
