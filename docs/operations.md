@@ -42,6 +42,48 @@ SQLite reuses the pages pruning frees, but the file does not shrink; run
 space. A large or busy fleet belongs on Postgres (`--db-url`, chart value
 `server.database.existingSecret`), which also allows several replicas.
 
+Fleet reads stay small as the fleet grows: `/api/v1/fleet` and the cluster
+list read each cluster's latest snapshot id and server version, never its
+inventory. `make bench-server` seeds 500 clusters with ~35 KiB inventories
+on SQLite and runs 10 concurrent `/fleet` readers; it fails above a 1s p95
+or a 512 MiB heap peak. On an arm64 Mac (October 2026): p95 about 0.5s,
+peak live heap 15 MiB (it was 1.1 GiB and 1.2s while every request
+decoded every inventory).
+
+## What a push is judged as
+
+- **Stored as sent.** A snapshot keeps the inventory bytes the agent pushed,
+  `collectedAt` and fields this server does not know included, so a newer
+  server can judge them. Deduplication hashes the fields this server knows,
+  without `collectedAt`: a push that differs only in unknown fields is a
+  duplicate (`200`), and the duplicate's `agentVersion` and `kbVersion` are
+  recorded on the latest snapshot.
+- **Refused before anything is written** (`422`): a missing or `null`
+  inventory, an inventory `schemaVersion` other than 1 (including `{}`), or
+  a `serverVersion` that is not a Kubernetes 1.x version.
+- **Degraded pushes** (no `serverVersion`: the agent could not read
+  `/version`) are judged at the version the cluster last reported, so its
+  fleet cells, default target and report stay. The versions capability is
+  required, so such a cell is `unknown` at best (`blocked` when the push
+  shows a blocker), and the report's `notAssessed` says why. A cluster's
+  very first push without a version is judged only at `--targets`.
+- **v0.1.x agents** (`agentVersion` 0.1.0, 0.1.1 or earlier, their
+  pre-releases and Go pseudo-versions) collected two signals with meanings
+  this server no longer judges: api-usage counted every object the
+  apiserver *serves* at a deprecated version (APF FlowSchemas became
+  removed-API blockers) and their own requests landed in the
+  deprecated-calls metric; a Helm-chart-found add-on's version was the
+  chart version. Their api-usage and deprecated-calls are reported as not
+  assessed, with the reason, and a chart version is kept as evidence only,
+  so such a cluster is `unknown` until its agent is upgraded. Builds from
+  later source (`dev`, a 0.1.2 pseudo-version or snapshot) are judged
+  normally.
+- **Outdated verdicts.** A stored verdict depends on the date (EOL windows),
+  the KB and the team map. The background pass re-evaluates hourly and just
+  after each UTC midnight; until it has, every read of a stored verdict
+  (fleet cells, cluster summaries, the report) carries `"outdated": true`
+  and starts the next pass early. Reads never recompute.
+
 ## Cluster lifecycle
 
 A cluster is registered by its first push, under the agent's
