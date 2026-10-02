@@ -115,6 +115,31 @@ describe("Cluster view", () => {
     expect(await screen.findByText("what-if (not stored, no history)")).toBeTruthy();
   });
 
+  it("draws no trend under a what-if, even when older snapshots had one", async () => {
+    // The latest snapshot has no stored evaluation for 1.35, so the report
+    // is a what-if, while earlier snapshots still have history points.
+    await openCluster("#/cluster/1?target=1.35", {
+      "api/v1/clusters/1/report?target=1.35": report("1.35", { source: "what-if" }),
+      "api/v1/clusters/1/history": [
+        { at: "2026-09-01T00:00:00Z", score: 50, ready: false },
+        { at: "2026-09-02T00:00:00Z", score: 55, ready: false },
+      ],
+    });
+    expect(screen.getByText("what-if (not stored, no history)")).toBeTruthy();
+    expect(screen.queryByRole("img", { name: /score trend/i })).toBeNull();
+    expect(screen.getByText(/what-ifs are computed on request/i)).toBeTruthy();
+  });
+
+  it("draws the trend of stored evaluations", async () => {
+    await openCluster("#/cluster/1?target=1.35", {
+      "api/v1/clusters/1/history": [
+        { at: "2026-09-01T00:00:00Z", score: 50, ready: false },
+        { at: "2026-09-02T00:00:00Z", score: 60, ready: false },
+      ],
+    });
+    expect(screen.getByRole("img", { name: /score trend/i })).toBeTruthy();
+  });
+
   it("rejects a target that is not a minor version", async () => {
     const fetchMock = await openCluster("#/cluster/1");
     const before = fetchMock.mock.calls.length;

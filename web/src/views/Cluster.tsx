@@ -168,7 +168,10 @@ export function Cluster({
                     )}
                   </div>
                 </div>
-                {history.length > 1 ? (
+                {/* History holds stored evaluations only; under a what-if
+                    label it would chart earlier snapshots as if they
+                    were this report's trend. */}
+                {!whatIf && history.length > 1 ? (
                   <Sparkline points={history} />
                 ) : (
                   <p className="muted">
