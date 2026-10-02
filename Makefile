@@ -105,9 +105,51 @@ go-install-check:
 
 # Shell completions and man pages, rendered from the command tree into
 # packaging/generated (gitignored); GoReleaser runs the same before packaging.
-.PHONY: docs
-docs:
+.PHONY: completions
+completions:
 	go run ./tools/gen-docs -out packaging/generated
+
+# The docs site's generated references, committed under docs/reference:
+# CLI pages (cobra), the ClusterReadiness CRD (internal/crd/manifest.yaml)
+# and the REST API (api/openapi.yaml). Run after changing a command, flag,
+# CRD field or the OpenAPI document; TestReferenceIsFresh (go test) fails
+# on a stale copy.
+.PHONY: docs-gen
+docs-gen: helm-docs
+	go run ./tools/gen-docs -reference docs/reference
+
+# The chart values tables, deploy/chart/README.md and
+# docs/reference/helm-values.md, rendered by helm-docs (pinned,
+# checksum-verified) from the `# --` comments in values.yaml. Edit the
+# comments or hack/docs/*.gotmpl, never the output. Needs network on the
+# first run (it installs helm-docs into bin/tools).
+.PHONY: helm-docs
+helm-docs:
+	./hack/helm-docs.sh
+
+# The docs site (mkdocs.yml, docs/): `make docs` builds it into bin/site
+# with --strict, as .github/workflows/docs.yml does, so a broken link or
+# anchor, or a page missing from the nav, fails here first; `make
+# docs-serve` previews it on http://127.0.0.1:8000. Both install the
+# pinned, hash-locked toolchain (hack/docs/requirements.txt) into a
+# virtualenv under bin/ on first use. Needs Python 3.10 or newer.
+# `make docs-check` is the drift check for every generated reference
+# (CLI, CRD, REST API, Helm values); CI's docs workflow runs it.
+PYTHON ?= python3
+DOCS_VENV ?= bin/docs-venv
+$(DOCS_VENV)/.installed: hack/docs/requirements.txt
+	$(PYTHON) -m venv $(DOCS_VENV)
+	$(DOCS_VENV)/bin/pip install --quiet --require-hashes -r hack/docs/requirements.txt
+	touch $@
+
+.PHONY: docs docs-serve docs-check
+docs: $(DOCS_VENV)/.installed
+	$(DOCS_VENV)/bin/mkdocs build --strict --site-dir bin/site
+docs-serve: $(DOCS_VENV)/.installed
+	$(DOCS_VENV)/bin/mkdocs serve --strict
+docs-check:
+	go test ./tools/gen-docs -run TestReferenceIsFresh -count=1
+	./hack/helm-docs.sh --check
 
 # Asserts the Dockerfile's golang base image matches go.mod's `go` directive,
 # that GoReleaser is pinned to one version here and in release.yml, and that

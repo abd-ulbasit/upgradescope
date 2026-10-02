@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/abd-ulbasit/upgradescope/main/api/webhook.schema.json",
+  "title": "upgradescope webhook notification, schemaVersion 1",
+  "description": "The JSON body `upgradescope serve --webhook` POSTs: every readiness change one evaluation pass found for one cluster. Fields may be added within schemaVersion 1, so the schema allows unknown fields: ignore them. A rename or removal bumps schemaVersion. internal/server/webhook_schema_test.go validates real deliveries against this file and fails on a field it does not list.",
+  "type": "object",
+  "required": ["schemaVersion", "deliveryId", "type", "timestamp", "cluster", "targets", "changes"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "deliveryId": {
+      "description": "The same on every retry and for every sink: deduplicate on it. 32 hex characters; outbox-<n> for a message a server older than this format queued.",
+      "type": "string",
+      "pattern": "^([0-9a-f]{32}|outbox-[0-9]+)$"
+    },
+    "type": {
+      "description": "The event type. The set is closed: a new type bumps schemaVersion (docs/compatibility-policy.md).",
+      "const": "readiness.changed"
+    },
+    "timestamp": {
+      "description": "When the evaluation pass ran, RFC 3339 UTC.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "cluster": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": {"description": "The API's cluster id.", "type": "integer"},
+        "name": {"type": "string"}
+      }
+    },
+    "targets": {
+      "description": "The verdict after the pass of every target with a change.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target", "verdict", "score", "blockers"],
+        "properties": {
+          "target": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+          "verdict": {"enum": ["ready", "blocked", "unknown"]},
+          "score": {"type": "integer", "minimum": 0, "maximum": 100},
+          "blockers": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "changes": {
+      "description": "The findings delta, ordered new-blocker, became-ready, eol-approaching. A change worded the same for several targets is one entry listing them.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "title", "targets"],
+        "properties": {
+          "kind": {"enum": ["new-blocker", "became-ready", "eol-approaching"]},
+          "key": {"description": "The finding's stable key; absent for became-ready.", "type": "string"},
+          "severity": {"enum": ["blocker", "warning"]},
+          "title": {"type": "string"},
+          "detail": {"type": "string"},
+          "targets": {"type": "array", "items": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"}}
+        }
+      }
+    },
+    "omitted": {
+      "description": "Changes left out by the per-kind cap (5), by kind. Absent when nothing was left out.",
+      "type": "object",
+      "propertyNames": {"enum": ["new-blocker", "became-ready", "eol-approaching"]},
+      "additionalProperties": {"type": "integer", "minimum": 1}
+    }
+  }
+}

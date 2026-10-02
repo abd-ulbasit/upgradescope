@@ -16,6 +16,13 @@
 // carry no timestamp.
 //
 //	go run ./tools/gen-docs -out packaging/generated -date 2026-10-01T12:00:00Z
+//
+// With -reference it writes the docs site's generated references instead
+// (reference.go): the CLI pages, the ClusterReadiness CRD and the REST API
+// rendered from api/openapi.yaml. They carry no date, so the committed
+// copies can be checked for drift (TestReferenceIsFresh, make docs-check):
+//
+//	go run ./tools/gen-docs -reference docs/reference
 package main
 
 import (
@@ -38,7 +45,16 @@ import (
 func main() {
 	out := flag.String("out", "packaging/generated", "output directory (completions/ and manpages/ are replaced)")
 	dateFlag := flag.String("date", "", "man page date, RFC 3339 (default: $SOURCE_DATE_EPOCH, else now)")
+	reference := flag.String("reference", "", "write the docs site references (cli/, crd.md, api.md) into this directory instead")
+	openapi := flag.String("openapi", "api/openapi.yaml", "OpenAPI document rendered into <reference>/api.md")
 	flag.Parse()
+	if *reference != "" {
+		if err := genReference(*reference, *openapi); err != nil {
+			fmt.Fprintln(os.Stderr, "gen-docs:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	when, err := parseDate(*dateFlag)
 	if err == nil {
 		err = generate(*out, when)

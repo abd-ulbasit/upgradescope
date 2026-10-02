@@ -2,8 +2,8 @@
 
 This guide is for contributors. It explains how upgradescope is put together,
 which contracts hold it together, and which design boundaries are
-deliberate. To *use* the tool, start with the [README](../README.md). To
-*change* it, read this first, then [CONTRIBUTING.md](../CONTRIBUTING.md).
+deliberate. To *use* the tool, start with [the docs home](index.md). To
+*change* it, read this first, then [CONTRIBUTING.md](https://github.com/abd-ulbasit/upgradescope/blob/main/CONTRIBUTING.md).
 
 Contents:
 
@@ -37,15 +37,15 @@ inventory (what is running)  +  knowledge base (what upstream says)  +  target v
        report: findings + score + ready + "not assessed" gaps
 ```
 
-One Go module produces one binary with three long-running modes and one
-admin command:
+One Go module produces one binary with three modes and two admin commands:
 
 | Command | Runs | Produces |
 |---|---|---|
-| `upgradescope scan` | once, from a laptop or CI | a table, JSON or SARIF report, and an exit code (0 gate passed, 2 gate failed, 1 error; the gate is `--fail-on`, default `blocker`, and `never` always passes) |
+| `upgradescope scan` | once, from a laptop or CI | a table, JSON, SARIF or Markdown report, and an exit code (0 gate passed, 2 gate failed, 1 error; the gate fails on a finding at or above `--fail-on`, default `blocker`, or on an `unknown` verdict unless `--allow-incomplete`; `never` always passes) |
 | `upgradescope agent` | continuously, in the cluster | `ClusterReadiness` status, plus snapshot pushes to a server (optional) |
 | `upgradescope serve` | continuously, anywhere | stored history, fleet rollups, what-if, CI gate, exports, notifications, dashboard |
-| `upgradescope tokens` | on demand, next to `serve` | creates and revokes per-cluster ingest tokens |
+| `upgradescope tokens` | on demand, next to `serve` | creates, lists and revokes per-cluster ingest tokens |
+| `upgradescope clusters` | on demand, against a server or its database | lists, deletes and renames clusters |
 
 The core idea is a **smart edge**. The evaluation engine is a pure function
 with no Kubernetes or network dependencies, embedded in all three modes. The
@@ -274,16 +274,22 @@ always give the same bytes out.
 |---|---|---|
 | `removed-api` | blocker | An object written through a group/version removed at or before the target (for a kind that goes away, any stored object). Matching `deprecated-calls` rows are folded in as evidence. |
 | `removed-api` | warning | Removed in the minor after the target. |
-| `deprecated-api` | info | Deprecated, with no removal within that window. |
+| `deprecated-api` | info | Deprecated, with no removal within that window (a deprecation after the target is titled as one). |
+| `deprecated-api` | warning | A Helm release's stored manifest uses a deprecated API that the target still serves. |
 | `deprecated-api-in-use` | blocker / warning / info | Requests seen in the apiserver metric for an API with no `removed-api` or `deprecated-api` finding. Otherwise they are evidence on that finding, unless the row is more severe than it (the apiserver reports a removal release the knowledge base does not have); then the row stays a finding of its own. Same window as above. Info when the removal release is missing. |
-| `eol-addon` | blocker | The registry status is `eol`, or the EOL date has passed. |
+| `eol-addon` | blocker | The product is retired (`support.status: eol`, or a past product EOL date), or the installed version's release line has ended. A node container runtime's ended line is a warning. |
 | `eol-approaching` | warning | The EOL date falls within the next 90 days. |
-| `chart-incompat` | blocker | The detected add-on version matches a compat range whose `k8s_max` is below the target. |
+| `chart-incompat` | blocker | The installed release line's, or the first matching compat row's, Kubernetes range excludes the target; a Helm release's chart `kubeVersion` excludes the target (info when it does not parse). |
+| `addon-no-data` | info | A detected add-on whose version has no lifecycle data. |
+| `unknown-api` | info | An object of a built-in API group (one the knowledge base has entries for, core included) at a version or kind the knowledge base does not know: whether the target serves it was not assessed. CRD groups produce nothing. |
 | `version-skew` | blocker / warning / info | Kubelets that would fall more than 3 minors behind after the upgrade (blocker), or are already behind (warning). Controller-manager or scheduler newer than the apiserver (blocker), or too far behind (warning). HA apiserver spread, and kube-proxy rules. Unparseable kubelet versions (info). |
 | `kb-stale` | warning | The cluster or the target is newer than the newest minor the knowledge base knows (`maxKnownK8s`). |
 
-Severity is always **relative to the target**. The same cluster can be ready
-for 1.34 and blocked for 1.35.
+API and skew severities depend on the target: the same cluster can be ready
+for 1.34 and blocked for 1.35. End of life does not: an EOL add-on blocks
+every target, the current minor included, and so does a controller-manager
+or scheduler newer than the apiserver. The per-category list is in
+[Verdict and score](concepts/verdict-and-score.md#severity-by-category).
 
 kubectl client skew is in the skew policy but is deliberately not evaluated:
 client versions appear only in apiserver audit logs, which no collector
@@ -299,9 +305,10 @@ the dashboard.
 {
   "clusterId": "…",
   "target": "1.35",
-  "kbVersion": "k8s-1.36+registry-2026-06-10",
+  "kbVersion": "k8s.io/api v0.37.1; lifecycle 696a4b81; registry de96a5da",
   "score": 70,
   "ready": false,
+  "verdict": "blocked",
   "findings": [{
     "category": "eol-addon",
     "severity": "blocker",
@@ -312,7 +319,7 @@ the dashboard.
     "remediation": "…",
     "citations": ["https://…"]
   }],
-  "notAssessed": [{ "capability": "deprecated-calls", "reason": "…" }]
+  "notAssessed": [{ "capability": "deprecated-calls", "reason": "…", "required": false }]
 }
 ```
 
@@ -323,20 +330,23 @@ the dashboard.
   change between snapshots ("3 objects" becomes "2 objects"). The key never
   does. Notification deltas diff on the key, so changing a key format causes
   alerts to fire again for existing findings.
-- `notAssessed` lists every unavailable capability with its reason. A report
-  with gaps is honest about what it could not see. It is never silently
-  green.
+- `notAssessed` lists every unavailable or partial capability with its
+  reason, and marks the ones the verdict requires. A report with a required
+  gap reads `unknown`, never `ready`.
+- `verdict` is `blocked` on any blocker, otherwise `unknown` on any required
+  gap, otherwise `ready`; `ready` is `verdict == "ready"`.
 
 ## Scoring
 
 ```
-score = max(0, 100 − min(75, 25 × blockers) − min(20, 5 × warnings))
-ready = (blockers == 0)
+score   = max(0, 100 − min(75, 25 × blockers) − min(20, 5 × warnings))
+verdict = blocked if blockers > 0, else unknown if a required gap, else ready
+ready   = (verdict == ready)
 ```
 
 Info findings are listed but never scored. The caps keep a cluster with many
-warnings distinguishable from a cluster with one blocker. `ready` is the
-boolean that CI gates on. The score is for trends and comparison.
+warnings distinguishable from a cluster with one blocker. CI gates on the
+verdict (and `--fail-on`); the score is for trends and comparison.
 
 Per-team scores (`engine.TeamScores`) apply the same formula to each team's
 subset of findings. Teams come from a namespace label (`--team-label`,
@@ -386,7 +396,7 @@ registry/data/*.yaml                 (hand-curated + endoflife.date-synced, cite
 skew policy                          (internal/kb/skew.go, from the upstream version-skew policy)
       │
       ▼
-kb.Load() ──► KB{Version: "k8s-<maxKnownK8s>+registry-<date>", …}
+kb.Load() ──► KB{Version: "k8s.io/api <v>; lifecycle <digest>; registry <digest>", …}
 ```
 
 1. **API lifecycle (generated).** `tools/gen-kb` is a separate module so the
@@ -403,15 +413,18 @@ kb.Load() ──► KB{Version: "k8s-<maxKnownK8s>+registry-<date>", …}
    generated entries win, so a stale supplement can never mask fresh
    upstream data.
 3. **Add-on registry.** One YAML file per add-on under `registry/data/`,
-   with schema version 1. `registry.Validate` enforces the schema, semver
+   with schema version 2. `registry.Validate` enforces the schema, semver
    ranges and **citations** (at least one upstream URL for any non-`unknown`
-   status and for every compat row). Entries with an `endoflife_product`
-   slug have `support.status` and `support.eol_date` owned by
-   `tools/eol-sync`, which reads `https://endoflife.date/api/<slug>.json`.
-   An add-on counts as EOL only when its *newest* release cycle is EOL. CI
-   runs `eol-sync -check` on pull requests that touch `registry/`. See
-   [`registry/CONTRIBUTING.md`](../registry/CONTRIBUTING.md) and
-   [`registry/DATA-LICENSE.md`](../registry/DATA-LICENSE.md).
+   status, every release line and every compat row). An entry's `cycles`
+   are its release lines, keyed on the app version, each with an EOL date
+   (or `true`/`false`) and an optional Kubernetes range; entries with an
+   `endoflife_product` slug have their cycles generated by `tools/eol-sync`
+   from `https://endoflife.date/api/<slug>.json`, and `support` stays
+   hand-curated for products retired as a whole. An add-on is judged at the
+   release line of the version installed, not by its newest line. CI runs
+   `eol-sync -check` on pull requests that touch `registry/`. See
+   [`registry/CONTRIBUTING.md`](https://github.com/abd-ulbasit/upgradescope/blob/main/registry/CONTRIBUTING.md) and
+   [`registry/DATA-LICENSE.md`](https://github.com/abd-ulbasit/upgradescope/blob/main/registry/DATA-LICENSE.md).
 4. **Skew policy.** A small table of minor-version distances from the
    upstream version-skew policy (`kb.DefaultSkewPolicy`).
 
@@ -517,4 +530,4 @@ first.
 | Chart | `helm lint` and assertions on rendered templates | `hack/test-chart.sh` |
 | End to end | A kind cluster with an EOL ingress-nginx: scan, agent, chart install, CRD and API asserts (`UPGRADESCOPE_IT=1`) | `internal/cli/*_integration_test.go`, `hack/demo/` |
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md#running-tests) for the commands.
+See [CONTRIBUTING.md](https://github.com/abd-ulbasit/upgradescope/blob/main/CONTRIBUTING.md#running-tests) for the commands.

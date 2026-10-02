@@ -1,42 +1,84 @@
-# Where the gap is — Kubernetes upgrade readiness (June 2026)
+# Background research (June 2026, corrected October 2026)
 
-Compiled 2026-06-10 from public sources. This is the evidence base for the
-problem upgradescope targets, and the record of which adjacent tools were
-checked first so as not to rebuild them. Every claim below is linked; nothing
-here is inferred from private or internal information.
+Compiled 2026-06-10 from public sources, as the record of the problem
+upgradescope set out to solve and of the adjacent tools checked first so as
+not to rebuild them. Corrected 2026-10-02 after an audit ([#23](https://github.com/abd-ulbasit/upgradescope/issues/23)) found that
+the first version understated pluto and kubent and made claims without
+sources. Every factual claim below links its source; the lines marked
+*opinion* are the author's reading, not facts. For the current, sourced
+tool-by-tool comparison, see [Comparison](comparison.md).
 
-## The gap in one paragraph
+## The gap, as it looked
 
-Open-source tooling for upgrade safety is **point-in-time and manifest-shaped**: pluto (Fairwinds) statically scans YAML/Helm in repos; kubent inspects a live cluster once and exits. Both only catch deprecated/removed APIs — nothing about add-on EOL, chart compatibility, or version skew — and both must be hand-wired into CI and re-run around upgrade windows. The *continuous* version — always-on scanning of what actually runs, fleet-wide, with curated risk knowledge ("this controller version is EOL", "this chart breaks on 1.34") — exists only as commercial products (chkk.io "Operational Safety", and partially Plural, Fairwinds Insights). Quote from the tooling guides: tools like Pluto and kubent "require manual setup and maintenance — look for tools that can continuously scan your entire Kubernetes ecosystem, both IaC repositories and live configurations."
+Open-source deprecation scanners are **point-in-time CLIs**. pluto checks
+manifests and Helm charts in repositories, Helm releases in a cluster, and
+in-cluster resources through their last-applied annotations
+([pluto quickstart](https://pluto.docs.fairwinds.com/quickstart/)); kubent
+checks a live cluster once through file, last-applied-annotation and Helm v3
+collectors ([kube-no-trouble](https://github.com/doitintl/kube-no-trouble));
+kubepug checks a live cluster or manifests against a target release's data
+([kubepug](https://github.com/kubepug/kubepug)). They cover deprecated and
+removed APIs, not add-on end of life or version skew. Continuous checks
+exist as commercial products ([Chkk](https://www.chkk.io/)) and as the cloud
+providers' own upgrade insights for their managed clusters
+([EKS](https://docs.aws.amazon.com/eks/latest/userguide/cluster-insights.html),
+[GKE](https://docs.cloud.google.com/kubernetes-engine/docs/deprecations),
+[AKS](https://learn.microsoft.com/en-us/azure/aks/stop-cluster-upgrade-api-breaking-changes)).
+*Opinion:* the open-source gap is a self-hosted tool that runs continuously
+on any cluster, covers add-on end of life with cited data, and rolls a fleet
+up for an auditor.
 
 ## Evidence
 
-### 1. The Ingress NGINX retirement proved "EOL add-on detection" is a real, urgent category
-- kubernetes/ingress-nginx — the most-deployed ingress controller — reached EOL **March 24, 2026**: no releases, no bugfixes, **no security fixes**. ([kubernetes.io blog, Nov 2025](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/))
-- Compliance impact: "EOL software in the L7 data path" triggers automatic findings in SOC 2, PCI-DSS, ISO 27001, HIPAA; compliance teams are blocking production promotions over it ([chkk.io blog on the deprecation](https://www.chkk.io/blog/ingress-nginx-deprecation)).
-- Migration tooling exists (ingress2gateway 1.0, March 2026) but *detection* — "you are running EOL software, here is the blast radius" — is exactly what no OSS tool does continuously.
+### 1. Add-on end of life is a real category
 
-### 2. OSS deprecation scanners are explicitly point-in-time
-- pluto: static analysis of manifests/Helm in repos; blind to anything deployed outside the scanned repo. ([Fairwinds pluto](https://github.com/FairwindsOps/pluto))
-- kubent (kube-no-trouble): one-shot live-cluster audit. ([doitintl/kube-no-trouble](https://github.com/doitintl/kube-no-trouble))
-- Standard practice per 2026 guides: "never open an upgrade change request without a passing pluto detect-files, pluto detect-helm, and kubent run" — i.e. humans gluing CLIs around change windows. ([Plural's tool guide](https://www.plural.sh/blog/kubernetes-api-deprecation-tool-guide/), [oneuptime guide](https://oneuptime.com/blog/post/2026-02-09-identify-deprecated-apis-upgrades/view))
-- Detection accuracy caveat that a live watcher solves: deprecated-API usage is best detected from **apiserver audit/applied state**, since `kubectl get` returns objects converted to the newest version — a known pluto/kubent blind spot when manifests aren't available.
+- Ingress NGINX, the most widely deployed ingress controller, was retired
+  in March 2026: no further releases, bug fixes or security fixes
+  ([kubernetes.io, November 2025](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/)).
+- Compliance frameworks treat end-of-life software in the data path as a
+  finding ([Chkk's write-up of the retirement](https://www.chkk.io/blog/ingress-nginx-deprecation)).
+- Migration tooling exists ([ingress2gateway](https://github.com/kubernetes-sigs/ingress2gateway));
+  *opinion:* detecting what still runs EOL software, continuously, is the
+  part left to each team.
 
-### 3. Fleet reality makes point-in-time scanning untenable
-- 2026 platform-engineering surveys: orgs run dozens of clusters with no complete inventory; "patching windows, certificate rotations, and incident response" dominate operational cost; >60% of Kubernetes incidents trace to misconfiguration. (platformengineering.org 2026 tooling report; Medium/F8010 "Don't waste 2026 on the wrong Kubernetes practices")
-- Multi-cluster config-drift tools (Argo/Flux/KubeFleet) reconcile *desired vs live* — none evaluate *live vs version-lifecycle knowledge*.
+### 2. Deprecated-API detection: what the open-source scanners read
 
-### 4. The commercial benchmark, and the disclosure that goes with it
-- chkk.io sells exactly this: Kubernetes "operational safety" — upgrade readiness, add-on EOL tracking ("Keep your Ingress NGINX safe" campaigns), curated risk signatures, preverified upgrade plans.
-- **Disclosure:** I interned at chkk.io. upgradescope is clean-room — no proprietary code, data, schemas, or internal documents were used or consulted. Every entry in the knowledge base is derived from upstream `k8s.io/api` source or carries a public citation URL, and both are machine-checked in CI.
-- What makes the commercial product commercial-grade is the **curated knowledge base** (risk signatures per add-on version) and the **collectors** (safe, read-only, fleet-scale). The open-source opening is the 80% case: API lifecycle data is machine-derivable from upstream Kubernetes, and add-on EOL data for the top ~30 add-ons is a maintainable curated registry.
+- pluto's `detect-files` and `detect-helm` read manifests and Helm releases;
+  `detect-api-resources` reads in-cluster resources
+  ([quickstart](https://pluto.docs.fairwinds.com/quickstart/)).
+- kubent's live-cluster collectors read the
+  `kubectl.kubernetes.io/last-applied-configuration` annotation and Helm v3
+  release objects ([kube-no-trouble](https://github.com/doitintl/kube-no-trouble)).
+- The last-applied annotation is written only by client-side `kubectl
+  apply`, so objects created by server-side apply or most controllers do
+  not carry it; and the apiserver serves every stored object at every
+  served version, so a list at a deprecated version does not show who uses
+  it ([Kubernetes: server-side apply](https://kubernetes.io/docs/reference/using-api/server-side-apply/),
+  [API versioning](https://kubernetes.io/docs/reference/using-api/#api-versioning)).
+  upgradescope reads `managedFields` instead
+  ([Deprecated-API detection](concepts/api-usage-detection.md)).
+- Practitioner guides recommend running several of these tools around
+  each upgrade ([Plural](https://www.plural.sh/blog/kubernetes-api-deprecation-tool-guide/),
+  [OneUptime](https://oneuptime.com/blog/post/2026-02-09-identify-deprecated-apis-upgrades/view)).
 
-## Adjacent tools (do not rebuild these)
-- **ingress2gateway** — migration executor; we detect and recommend, optionally link to it.
-- **Goldilocks/KRR** — rightsizing, different category.
-- **Trivy/kube-bench** — CVE/CIS scanning; same *shape* (scan + findings) but different knowledge domain; good architectural reference for an OSS scanner that won.
-- **Pluto/kubent** — subsume their checks as one detector among several; both are good references for the API-lifecycle dataset format.
+### 3. The commercial benchmark, and the disclosure that goes with it
 
-## Positioning one-liner
+- Chkk sells upgrade planning (Upgrade Copilot), a risk ledger of breaking
+  changes and incompatibilities, and a catalog of clusters and add-ons
+  ([chkk.io](https://www.chkk.io/)).
+- **Disclosure:** the author interned at chkk.io. upgradescope is
+  clean-room: no proprietary code, data, schemas or internal documents were
+  used or consulted. Every knowledge-base entry is generated from upstream
+  `k8s.io/api` source or carries a public citation URL, and CI checks both.
+- *Opinion:* most API lifecycle data is machine-derivable from upstream
+  Kubernetes, and end-of-life data for the most common add-ons is a
+  maintainable curated registry; that is the part an open-source tool can
+  do well.
 
-"pluto + kubent + an EOL registry, running continuously in your cluster, with a readiness score you can show your auditor — self-hosted and free."
+## Adjacent tools (not rebuilt)
+
+- **ingress2gateway**: migration; upgradescope detects and recommends.
+- **Goldilocks, KRR**: rightsizing, a different category.
+- **Trivy, kube-bench**: vulnerability and CIS scanning; the same shape
+  (scan, findings), a different knowledge domain.
+- **pluto, kubent, kubepug, Nova**: see [Comparison](comparison.md).

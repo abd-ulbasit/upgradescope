@@ -9,15 +9,17 @@ The ledger comes out of the October 2026 claims verification (#99): red-team
 missions attacked each claim on real clusters and integrations (results in
 #131 to #137). Each claim is in one of three places:
 
-- **the tables by area**: claims that held when audited, or the part of a
-  claim that held, with what proves it. A few are still checked by hand
-  only; those say "not automated" and name #99;
+- **the tables by area**: claims that held when audited, the part of a
+  claim that held, or claims that hold since their fix landed with a test,
+  with what proves it. A few are still checked by hand only; those say
+  "not automated" and name #99;
 - **[Under repair](#under-repair)**: claims that did not hold, with the issue
   that fixes them; they move up when the fix lands with a test;
 - **[Not yet audited](#not-yet-audited)**: claims the missions of round 2
   (#99) have not reached, with the tests that cover them so far.
 
-IDs are the audit's, so a row can be traced back to its mission.
+IDs are the audit's, so a row can be traced back to its mission; the
+`DS-` rows, for the documentation's own contracts, came after it.
 
 **How to read "Proven by".** Each reference is checked by
 `hack/claims-check.sh` (`make claims-check`, run by CI's test job), so a
@@ -41,7 +43,9 @@ audited") and names the issue that tracks it.
 | API-01c | When the kind itself goes away (no surviving version), every stored object counts. | `TestCollectAPIUsageTypeRemovedKindCountsEveryObject` `TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject` |
 | API-02 | `removed-api` is a blocker when the API is removed at or before the target and a warning when it is removed in the next minor. | `TestEvalAPIUsageRemovedAtTarget` `TestEvalAPIUsageRemovedAtTargetPlusOne` `TestEvaluateGolden` |
 | API-02b | A deprecation that takes effect after the target is titled as a future deprecation, and "(projected)" past the knowledge base's horizon, not as current. | `TestEvalAPIUsageFutureDeprecationTitle` |
-| API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one. On the e2e kind cluster, which serves one deprecated group/version on purpose, neither `scan` nor the agent calls a deprecated API (the e2e's own request through that version shows the audit log records them), apart from the self-LISTs in `hack/e2e/deprecated-request-allowlist.txt` (#123 removes them); a cluster that serves a kind only at deprecated versions still gets a LIST there (API-04c). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
+| API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one. On the e2e kind cluster, which serves one deprecated group/version on purpose, neither `scan` nor the agent calls a deprecated API (the e2e's own request through that version shows the audit log records them; `hack/e2e/deprecated-request-allowlist.txt` is empty since #139); a cluster that serves a kind only at deprecated versions still gets a LIST there (API-04c). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
+| API-04b | Repeat scans of an unchanged cluster give identical reports: the scanner's own deprecated-endpoint LISTs are never reported as callers, and kinds the knowledge base deprecates but never removes (core `v1` Endpoints, ComponentStatus) are not listed at all (#123). | `TestCollect_SelfFeedingDeprecatedCalls` `TestCollectAPIUsageReportsItsOwnDeprecatedLists` `TestCollectAPIUsageMakesNoDeprecatedRequestOn137` `e2e:audit_no_deprecated_requests` |
+| API-04c | A kind served only at a deprecated version that is being removed (`coordination.k8s.io/v1beta1` `leasecandidates`, `policy/v1beta1` `podsecuritypolicies` on 1.24) is still listed there, since its objects can block the upgrade. That LIST is not scored as a caller: the deprecated-calls capability comes back partial, naming those endpoints as skipped, because the metric cannot tell other clients from the scanner there (apiserver audit logs can). | `TestCollect_SelfFeedingDeprecatedCalls` `TestCollectAPIUsageReportsItsOwnDeprecatedLists` `TestCollectDeprecatedCallsMarksSelfListedResources` |
 | API-05 | A caller with no stored objects is a standalone `deprecated-api-in-use` finding; caller evidence otherwise merges onto the object finding. | `TestEvaluateCallerWithoutObjectsStaysStandalone` `TestEvaluateMergesCallersIntoAPIUsageFinding` `TestEvaluateMergesSubresourceCallers` `TestEvaluateMoreSevereCallerIsNotFolded` `TestEvaluateGolden` |
 | PF-02 | Every cluster-wide list is paged (500 objects a page); the api-usage and Helm lists are metadata-only, and object references are capped. | `TestCollectAPIUsageFollowsListPagination` `TestCollectAddOnsFollowsListPagination` `TestCollectVersionsFollowsListPagination` `TestCollectHelmFollowsListPagination` `TestCollectHelmFetchesOnlyTheChosenRevision` `TestCollectAPIUsageCapsObjectRefs` |
 
@@ -49,7 +53,7 @@ audited") and names the issue that tracks it.
 
 | ID | Claim | Proven by |
 |---|---|---|
-| DC-01 | Clients still calling deprecated APIs are found from the apiserver's `apiserver_requested_deprecated_apis` metric (which, until #123, also counts the scanner's own LISTs: API-04b). | `TestCollectDeprecatedCalls` `TestEvalDeprecatedCallsSubresource` |
+| DC-01 | Clients still calling deprecated APIs are found from the apiserver's `apiserver_requested_deprecated_apis` metric; the endpoints the scanner had to list itself are not reported as callers, and the capability names them as skipped (API-04c). | `TestCollectDeprecatedCalls` `TestEvalDeprecatedCallsSubresource` |
 | DC-02 | When `/metrics` is forbidden (401 or 403) or lacks the metric, the capability is reported as unavailable with the reason; the rest of the scan still runs. | `TestCollectDeprecatedCallsForbidden` `TestCollectDeprecatedCallsFamilyAbsent` `TestCollectDeprecatedCallsOtherErrorNotRewritten` |
 | DC-03 | `deprecated-api-in-use` severity follows the removal window, and is info when the removal release is unknown. | `TestEvalDeprecatedCallsSeverityVsTarget` `TestEvalDeprecatedCallsUnparseableReleaseIsInfo` `TestEvalDeprecatedCallsUnparseableIsInfo` |
 
@@ -90,12 +94,18 @@ audited") and names the issue that tracks it.
 |---|---|---|
 | VS-01 | `engine.Evaluate` is pure: the same inventory, knowledge base, target and time give the same bytes. | `TestEvaluateGolden` `TestScanBaselineGolden` |
 | VS-02 | `score = max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings))`; info findings are never scored. | `TestScore` `TestRescore` `TestEvaluateGolden` |
+| VS-03 | `ready` in every output is `verdict == "ready"`: `blocked` on any blocker, `unknown` when a required check was not assessed, `ready` otherwise. The README, the verdict page and the architecture never say `ready = (blockers == 0)`, and the README names `unknown` and `--allow-incomplete`. | `TestEvaluateVerdict` `TestTargetStatusFromReportVerdict` `TestScanGateOnUnknownVerdict` `TestDocsReadinessContract` |
+| VS-04 | Severity is set per category, as the verdict page's table says, and only some categories depend on the target: an add-on past end of life blocks whatever the target, a node runtime past end of life and `kb-stale` only warn, and a controller-manager or scheduler newer than the apiserver blocks whatever the target. Every category the engine defines has a row there. | `TestEvalAddOnsEOLBlocker` `TestEvalAddOnsNodeRuntimes` `TestEvalKBStale` `TestEvalControlPlaneSkewCtrlMgrNewerIsBlocker` `TestDocsListEveryCategory` |
 | VS-05 | Exit codes: 0 below the `--fail-on` threshold, 1 on a scan error (an unreachable or unreadable cluster included), 2 when the gate fails. | `TestScanFailOnExitCodeMapping` `TestScanPipelineErrorIsExitOne` `TestScanUnreadableClusterIsError` `e2e:unreachable_scan_exits_1` `e2e:eol_ingress_nginx_blocks` |
+| VS-05b | A report that cannot be written (stdout on a full disk) is an error, exit 1, in every output format, also when the gate would have failed. | `TestWriteReportPropagatesWriteErrors` |
 | VS-06 | `--fail-on blocker`, `warning` or `never`; an unknown verdict fails the gate unless `--allow-incomplete`, which never excuses a `--target` that is not an upgrade; an invalid value is an error. | `TestScanGateOnUnknownVerdict` `TestScanRejectsBadFailOn` `TestScanBaselineStillGatesIncomplete` `TestScanTargetNotAnUpgrade` |
+| VS-06b, VS-07, VS-08 | A 403, timeout or discovery gap on part of a capability is a *partial* gap, shown in every output (JSON, table, Markdown, SARIF, the ClusterReadiness status). It is required, so the verdict is `unknown` and never `ready`, when what it skipped includes an API removed at or before the target; add-on detection is required on a live cluster. A role narrower than the chart's (no pods, Secrets or ingresses) reads `unknown`, naming each gap, where the full role reads `blocked`. | `TestCollectNarrowRoleIsNeverReady` `TestCollectAPIUsageForbiddenIngressesIsPartialNamingIngressAPIs` `TestForbiddenPodSecurityPolicyListIsARequiredGapAtRemoval` `TestEvaluatePartialAndAddOnGaps` `TestWriteJSONPartialGap` `TestWriteTablePartialGaps` `TestWriteMarkdownPartialGaps` `TestWriteSARIFReportsGaps` `TestStatusFromReportsPartialGaps` |
 | VS-09 | A live scan in which every capability failed is an error, not "no findings"; `--context` is honoured. | `TestScanUnreadableClusterIsError` `e2e:unreachable_scan_exits_1` `TestScanIntegration_KindEOLIngressNginx` |
 | VS-10 | `--target` takes a minor such as 1.36; `2.0` and other typos are rejected. | `TestParseTarget` `TestScanRejectsBadTarget` `TestScanRejectsNonMajorOneTarget` `TestScanRequiresTarget` |
+| VS-10b | On a live cluster, a `--target` at or below the minor the oldest kube-apiserver runs (a downgrade, the same minor, or a typo such as `1.4`) is a required `target` gap: the verdict is `unknown` and `scan` exits 2, even with `--allow-incomplete`. Files mode has no cluster version, so no such gap. | `TestEvaluateTargetNotAnUpgrade` `TestScanTargetNotAnUpgrade` |
 | VS-11 | A target newer than the knowledge base is allowed and reported with a `kb-stale` warning (the verdict is then unknown). | `TestEvalKBStale` `TestEvaluateUnknownKeepsScoreAndKBStaleWarning` |
 | VS-12 | Findings are sorted by severity, then category, then title. | `TestSortFindings` `TestEvaluateGolden` |
+| VS-13 | Finding keys are unique within a report: control-plane skew is keyed `version-skew/<component>-newer` or `-behind`, so two skew findings never share a key, and a `--baseline` counts a finding whose severity rose as new. | `TestControlPlaneSkewKeysUnique` `TestEvaluateGolden` `TestBaselineSkewEscalationIsNew` `TestBaselineSeverityIncreaseIsNew` |
 
 ## Offline scans, SARIF, ignore rules and baselines
 
@@ -103,7 +113,10 @@ audited") and names the issue that tracks it.
 |---|---|---|
 | FS-01 | `scan --files` reads rendered manifests offline; only API usage is assessed there, and every other capability is reported as not assessed ("files mode"). | `TestCollectFiles` `TestManifestInventoriesAreFilesSource` `TestWriteTableFilesModeGolden` `TestScanFilesNoManifestsIsExitOne` |
 | FS-02 | `--files` reads `*.yaml`, `*.yml` and `*.json`, expands `kind: List`, and turns documents that do not parse into warnings, not errors. | `TestCollectFilesExpandsLists` `TestCollectFilesListVariants` `TestCollectFilesUnrenderedTemplateDoc` `TestScanFilesWarnsOnInvalidFiles` `TestCollectFilesSkipsVCSAndDependencyDirs` |
+| FS-02b | `--files` and `/gate` decode a stream as kubectl does: concatenated, pretty-printed and adjacent JSON objects, a YAML node after the first, a duplicated `apiVersion` or `kind` (the last value counts, with a warning), and typed Lists with untyped items; the two give the same findings. | `TestParseManifestStream_ConcatenatedJSON` `TestParseManifestStream_YAMLTrailingNode` `TestCollectFilesDuplicateKeys` `TestAdversarialCorpus` `TestGateParityWithScanFiles` |
 | FS-03 | `--output sarif` places each result on its file and line, and GitHub code scanning accepts it. | `TestWrite` `TestWriteGitHubAcceptable` `TestScanFilesSARIFLocations` `ci:action` |
+| FS-04 | The server gate example on the CI gate page, run as written, fails the step on a removed API and still writes the SARIF report: `/gate` defaults to `fail-on=blocker` (`never` always answers 200), and `?path=` gives the SARIF results a file location. | `TestGateDocsExample` `TestGateFailOn` `TestGateSARIFPath` |
+| FS-05 | The CLI page says what `helm template` renders without a cluster (Helm's built-in `.Capabilities`, not the cluster's or the target's), how to pin them (`--kube-version`, `--api-versions`), and where a release's installed manifests are (`helm get manifest`). | `TestDocsHelmCapabilities` |
 | FS-06 | A known finding can be accepted with an expiring, reasoned ignore rule or an object annotation, and `--baseline` gates only on new findings. | `TestApplyCategoryRule` `TestApplyAnnotations` `TestApplyExpiredRuleWarnsAndDoesNotSuppress` `TestBaselineMark` `TestScanWriteBaselineRoundTrip` `TestScanFilesSARIFSuppressedAndBaseline` `ci:action` |
 
 ## GitHub Action
@@ -138,6 +151,7 @@ audited") and names the issue that tracks it.
 
 | ID | Claim | Proven by |
 |---|---|---|
+| RB-01 | The README, `SECURITY.md` and the security page describe the agent's role as the chart renders it: `get` and `list`, never `watch`; writes only on its own ClusterReadiness, its status and the ClusterReadiness CRD, each by `resourceNames`; and the cluster-wide Secrets and ConfigMaps read that `rbac.helmSecrets` adds. | `TestDocsAgentRBAC` `TestRenderedRBACDefault` `TestRenderedRBACHelmSecretsOff` |
 | RB-02 | The agent writes only its own ClusterReadiness, that object's status, and (with `manageCRD`) the ClusterReadiness CRD; nothing else, ever. Measured from the API server's audit log of a real install. | `e2e:audit_agent_writes_only_its_cr` `TestRenderedRBACDefault` |
 | RB-03 | Write access is limited to the `agent.crName` object and the one CRD, with no delete. | `TestRenderedRBACDefault` `TestRenderedRBACCustomCRName` `TestRenderedRBACManageCRDOff` `hack/test-chart.sh` |
 | RB-04 | No webhooks, no finalizers, nothing in the cluster changes because of a finding: with an EOL blocker installed, the chart install adds no admission webhook, the ClusterReadiness carries no finalizer or owner reference, and the agent writes nothing but that object and its CRD. | `e2e:no_webhooks_or_finalizers` `e2e:audit_agent_writes_only_its_cr` `TestRenderedRBACDefault` |
@@ -158,14 +172,25 @@ audited") and names the issue that tracks it.
 | SV-01 | SQLite (WAL, no cgo) or Postgres, and both pass one conformance suite; Postgres 17 on every PR, 14 to 18 weekly. | `TestSQLiteConformance` `TestPostgresConformance` `TestOpenSetsPragmas` `ci:pg-conformance` |
 | SV-02 | Duplicate pushes are detected by the canonical inventory hash; key order and whitespace never change it. | `TestIngestDuplicateCanonicalHash` `TestInsertSnapshotDedup` `TestInsertSnapshotConcurrentIngest` |
 | SV-03 | Fleet, reports and exports serve stored evaluations, re-judged when the knowledge base or the team map changes, and after a date change on the next push or background re-evaluation (SV-03b). | `TestReadPathsUseLatestSnapshotOnly` `TestDuplicatePushReevaluatesAcrossEOLDate` `TestRestartWithNewKBReevaluatesOnDuplicatePush` `TestTeamMapChangeReevaluates` `TestStartRunsBackgroundPassAndDelivery` |
+| SV-03b | The background re-evaluation also runs just after each UTC midnight, when end-of-life dates move a day, and until a stored verdict is re-judged every read of it (fleet cells, cluster summaries, reports) is marked `outdated`. | `TestFleetReadAfterEOLCrossingIsFreshOrStale` `TestReevaluationWakesAtUTCMidnight` |
+| SV-04, SV-12 | Ingest refuses, with 422 and before anything is written, an inventory it cannot judge: null or empty, an unparseable server version, or a `schemaVersion` other than 1. A push that lacks the server version is judged at the cluster's last reported version, so a blocked cluster stays blocked. | `TestIngestRejectsMalformedInventory` `TestIngestStoreFailureLeavesNoClusterRow` `TestIngestDegradedPushKeepsFleetCell` |
+| SV-06 | With `?cluster=`, `/gate` judges manifests inside the cluster's stored inventory and blames only what they add, per object: a pull request that adds a removed-API object fails even when the cluster already runs that kind, and a harmless manifest is not blamed for the cluster's own deprecated calls. | `TestGateClusterNewObjectOfResidentGVK` `TestGateClusterBenignManifestKeepsFold` `TestGateClusterNumericName` |
+| SV-08 | An empty cluster UID is not a wildcard: a push that cannot say which cluster it is gets 409 once the name is bound to a UID, and never joins that cluster's history. | `TestIngestRejectsUIDLessPushToBoundName` `TestSQLiteConformance` |
 | SV-07 | The fleet matrix and per-team rollups (worst score, total blockers, affected clusters). | `TestFleetMatrixExplicitTargets` `TestFleetMatrixDefaultTargets` `TestFleetTeams` `TestTeamsEndpoint` `TestTeamMapApply` |
 | SV-09 | Auditor exports: one self-contained HTML report and a CSV per cluster and target. | `TestExportHTMLGolden` `TestExportCSVGolden` |
+| SV-10 | Targets, from `serve --targets` or a read's `target`/`targets` parameter, are Kubernetes 1.x minors: `2.0` is refused (422 on a read), as `scan` refuses it. | `TestServerRejectsNonV1Targets` |
 | SV-11 | Read and write timeouts carry the default 20 MiB snapshot over a link of about 350 KiB/s or faster (slower: SV-11b), and a stalled body cannot hold a connection. | `TestLargeSnapshotWithinDefaultTimeouts` `TestStalledBodyDisconnectedByReadTimeout` `TestShutdownWithStalledClient` |
-| SV-13 | Wrong methods get 405 with `Allow`; unknown paths under `/api/`, `/metrics/` and the probes get a JSON 404, not the dashboard (bare `/api` still gets it: SV-13b). | `TestMethodNotAllowed` `TestReservedPathsNeverServeDashboard` `TestStaticDoesNotShadowAPI` |
+| SV-13 | Wrong methods get 405 with `Allow`; unknown paths under `/api/`, `/metrics/` and the probes get a JSON 404, not the dashboard. | `TestMethodNotAllowed` `TestReservedPathsNeverServeDashboard` `TestStaticDoesNotShadowAPI` `TestOpenAPIUnknownPathIsJSONError` |
+| SV-13b | Bare `/api` is the API's too: a JSON 404, never the dashboard's `index.html`. | `TestComposedHandlerBareAPIIsJSON404` |
+| SV-14 | Fleet views read stored snapshot heads, not whole inventories: 500 clusters under 10 concurrent readers keep `/fleet` p95 under 1 s and the heap under 512 MiB, the chart's memory limit. | `make bench-server` `TestBenchServerFleet` (env-gated: run by hand, not in CI; ingest's memory under concurrent large pushes is PF-06, under repair) |
 | SV-15 | Stored times are fixed-width UTC, so they sort in instant order. | `TestTimeFormatFixedWidthUTC` `TestTimesStoredUTCFixedWidth` `TestParseStoredTimeRoundTrip` |
 | SV-16 | `--db` creates its parent directory and is mutually exclusive with `--db-url`. | `TestRunServeCreatesDBParentDir` `TestServeDBAndDBURLMutuallyExclusive` |
-| NT-01 | For one target, notifications fire on changes only: a new blocker, a warning entering its EOL window, a cluster turning ready (with several targets they repeat: NT-01b). | `TestComputeDelta` `TestIngestEmitsDeltaNotifications` |
+| SV-16b | A `--db` path with a SQLite URI metacharacter (`?` or `#`) is refused, instead of silently opening another file without the write-lock mode. | `TestOpenRejectsURIMetacharacters` |
+| KB-14 | A stored snapshot is kept as the agent pushed it, fields this server does not know included, so a newer server re-judges all of it; an inventory from a v0.1.1 agent or older is judged by what its collectors meant (its api-usage and deprecated calls not assessed, a chart-found add-on version kept as evidence only), so it is never `ready` on stale semantics. | `TestSnapshotRoundTripsUnknownFields` `TestLegacyResidencyFlagged` `TestLegacyChartSourcedAddOnNotReady` |
+| NT-01 | Notifications fire on changes only: a new blocker, a warning entering its EOL window, a cluster turning ready. | `TestComputeDelta` `TestIngestEmitsDeltaNotifications` |
+| NT-01b | With several targets, a pass sends one notification per cluster, a change merged across targets only when it reads the same for each; a backwards clock step replays nothing. | `TestOneNotificationPerPassAcrossTargets` `TestGroupedChangeKeepsPerTargetWording` `TestClockStepDoesNotReplayNotifications` |
 | NT-02 | Notifications are best-effort: a hung sink never blocks ingest, and a message is delivered once after retries. | `TestIngestDoesNotWaitForNotifiers` `TestOutboxRetriesThenDeliversOnce` `TestOutboxGivesUpAfterMaxAttempts` `TestSlackDefaultTimeoutIsTwoSeconds` |
+| NT-03 | A Slack or webhook endpoint that answers with a redirect has not received the message: the delivery fails, and the redirect is never followed. | `TestNotifierRedirectIsFailure` |
 | SV-05 | What-if and the gate store nothing. | not automated: #99 (verified by hand in #132) |
 
 ## Security
@@ -202,6 +227,7 @@ audited") and names the issue that tracks it.
 | KB-01b | Built-in APIs deleted from `k8s.io/api` (DRA v1alpha1 to v1alpha3, ClusterCIDR, ServiceCIDR and IPAddress v1alpha1, LeaseCandidate v1alpha1 and others since v0.17) are tombstones in the knowledge base, removed at the release that stopped serving them, so `--files` blocks them. | `TestKBCoversDeletedAlphaGVKs` `TestScanFilesDeletedAlphaAPI` `TestDeletedTypes` |
 | KB-01c | An object or API call at a version of a built-in group that the knowledge base does not know is an `unknown-api` info finding; CRD groups stay silent. | `TestEvalAPIUsageUnknownGVK` |
 | KB-02 | Generated entries win over the hand-written supplement; every supplement entry is cited. | `TestMergeEntries` `TestSupplement` |
+| KB-04 | The README hard-codes no knowledge-base horizon (`upgradescope version` prints it), and every example target in the README and on the CI gate page is one the embedded knowledge base can judge, so a copied example gives a verdict, not `unknown`. | `TestDocsKBHorizon` |
 | KB-05 | Every add-on EOL claim carries an upstream citation, enforced by `registry.Validate`. | `TestValidate` `TestEmbeddedEntriesProperties` |
 | KB-06 | `tools/eol-sync` reconciles registry entries with endoflife.date, and a PR touching `registry/` fails when they drift. | `TestRun` `TestComputeCycles` `ci:registry` |
 | KB-09 | The knowledge base and the add-on registry are compiled into the binary; nothing is fetched at runtime, so a KB update reaches users only through a release. | `TestLoad` `TestLoadFS`; no outbound connection: not automated, #99 (strace in #133 saw none for scan --files and serve) |
@@ -219,10 +245,34 @@ audited") and names the issue that tracks it.
 | IR-10 | Every package compiles for linux, darwin and windows on every PR, so a platform-only break fails its PR, not a tag. | `make cross-build` `hack/cross-build_test.sh` `ci:build` |
 | IR-16 | One required check, `ci-ok`, fails if any job failed or was cancelled. | `ci:ci-ok` `hack/ci-ok_test.sh` |
 | DO-03 | One binary runs `scan`, `agent` and `serve`. | `TestRootHasAgentSubcommand` `TestRootRegistersServe` `e2e:eol_ingress_nginx_blocks` |
+| DO-03b | The README no longer counts subcommands; the CLI reference has a page for every command the binary has (`scan`, `agent`, `serve`, `tokens`, `clusters`, `version`, `completion`) and every flag, rendered from its command tree, and CI fails when a page is stale. | `TestReferenceIsFresh` `TestGenReferenceCLI` `make docs-check` |
 | DO-04 | `engine`, `inventory`, `kb` and `registry` have no client-go dependency; the engine is a pure function with no Kubernetes or network dependency. | `TestEvaluateGolden`; the dependency set: not automated, #99 (verified by hand in #131: go list -deps and a wasm build) |
 | DO-07 | Golden files cover every finding category and the score formula. | `TestEvaluateGolden` |
 | DO-08 | `make lint` is CI's lint (pinned staticcheck), and gofmt covers every module. | `ci:lint` `hack/test.sh` |
 | CL-01 | Every test this ledger names exists. | `make claims-check` `hack/claims-check_test.sh` |
+| PF-01, PF-03, PF-04 | Every number in the README's Measured table says what, how, where and at which commit: `scan` against kind 1.37 from #130's audit at main `8a951dd` (median 0.49 s), `scan --files` and binary sizes re-measured at main `9d0b161`. No image size is given until a published v0.2.0 image can be measured. | not automated: #99 (measured by hand on 2026-10-02; Install's Sizes has every platform) |
+
+## Docs, references and published schemas
+
+The documentation site (`docs/`, built by `mkdocs build --strict` in
+`.github/workflows/docs.yml`) and the machine-readable contracts in `api/`.
+These are claims the docs make about themselves, kept true by tests that
+compare them with the code; the compatibility policy
+(`docs/compatibility-policy.md`) says what may change within a version.
+
+| ID | Claim | Proven by |
+|---|---|---|
+| DS-01 | `api/openapi.yaml` documents every route the server registers, and the responses real handlers give for every documented operation validate against it, carrying no field it does not list. Unknown paths answer with its JSON error. | `TestOpenAPICoversEveryRoute` `TestOpenAPIResponsesMatchSpec` `TestOpenAPIUnknownPathIsJSONError` `TestUnlistedFields` |
+| DS-02 | The published response schemas stay open (no `additionalProperties: false`), so a field added within a version, as the compatibility policy allows, does not fail a client that validates. | `TestOpenAPIResponseSchemasAreOpen` |
+| DS-03 | Real `scan --output json` reports (findings, suppressions, a baseline, gaps, a live cluster's `serverVersion`) validate against `api/report.schema.json` and carry no field it does not list. | `TestJSONReportMatchesSchema` |
+| DS-04 | Real webhook deliveries validate against `api/webhook.schema.json`, formats included. | `TestWebhookPayloadMatchesSchema` |
+| DS-05 | Every finding category the engine defines is described in both schemas, which do not close the list (a report with a category added later still validates), has a row on the verdict page and in the architecture, and is listed in, and accepted by, the config reference's ignore rules. | `TestDocsListEveryCategory` `TestDocsConfigReference` |
+| DS-06 | The generated references are fresh: the CLI, CRD and REST API pages match what `tools/gen-docs` renders from the code and `api/openapi.yaml`, and the Helm values tables match `helm-docs`; CI fails on drift. | `TestReferenceIsFresh` `TestGenAPIMarkdown` `TestGenCRDMarkdown` `make docs-check` `hack/helm-docs.sh` |
+| DS-07 | The metrics reference lists every Prometheus metric the agent and the server export. | `TestMetricsReferenceListsEveryAgentMetric` `TestMetricsReferenceListsEveryServerMetric` |
+| DS-08 | The add-on counts in the README and on the registry page match `registry/data`, and the registry page lists every entry. | `TestDocsRegistryCounts` |
+| DS-09 | The config reference lists every field an `.upgradescope.yaml` accepts, and its example loads. | `TestDocsConfigReference` |
+| DS-10 | The GitLab CI job on the other-CI page avoids each way it broke before: the image's entrypoint is cleared, no line needs GNU-only flags or a pipeline's exit status, and the last line, unpiped, is the gate. No GitLab runner executes it. | `TestDocsGitLabJob` |
+| DS-11 | The site builds with `mkdocs build --strict` (no broken link, anchor or page missing from the nav) on every pull request, from hash-pinned requirements. | `.github/workflows/docs.yml` `hack/docs/requirements.txt` |
 
 ## Under repair
 
@@ -232,37 +282,18 @@ lands with a test.
 
 | ID | What did not hold | Proven by |
 |---|---|---|
-| API-01d | An object created with no fields records no managedFields and goes undetected. | not true yet: #122 |
+| API-01d | An object created with no fields (a `DeviceClass` with `spec: {}`) records no managedFields and no last-applied annotation, so it goes undetected. | not true yet: #136 (the M08 finding; item 6 of #122, which closed without it) |
 | API-03 | Deprecated CRD versions and stale `status.storedVersions` are not reported. | not true yet: #48 |
-| API-04b | Repeat scans count the scanner's own deprecated-endpoint LISTs as callers. | not true yet: #123 |
-| API-04c | A cluster that serves `coordination.k8s.io/v1beta1` gets a LIST of `leasecandidates` there on every scan, which the engine then scores as a caller. | not true yet: #123 |
 | DC-02b | A `/metrics` that hangs spends the whole scan budget and starves the other collectors. | not true yet: #48 |
 | PF-02b | Add-on and version collection reads whole Pod, Node and Namespace objects, not metadata only. | not true yet: #121 |
-| VS-03 | README's `ready = (blockers == 0)`: ready now means verdict ready. | not true yet: #130 |
-| VS-04 | Severity tiers by target do not cover EOL add-ons, runtimes, kb-stale or current skew. | not true yet: #130 |
-| VS-05b | `--output table` to a full disk exits 0. | not true yet: #124 |
-| VS-06b, VS-07, VS-08 | A 403 on one resource or on pods/secrets hides blockers and is not surfaced as not assessed. | not true yet: #122 |
-| VS-10b | A target at or below the current version is accepted silently. | not true yet: #124 |
-| VS-13 | Two control-plane skew findings can share a key. | not true yet: #124 |
-| VS-14 | Team scores can read ready while the cluster verdict is unknown. | not true yet: #122 |
+| VS-14 | A team's `ready` counts only that team's findings: it ignores the cluster's not-assessed gaps and unattributed blockers, so a team can read ready while the cluster is `unknown` or `blocked`. The JSON report and REST API references say so. | not true yet: #132 (#122 closed without it) |
 | VS-15 | JSON contract changes since v0.1.1 are not in the changelog. | not true yet: #127 |
-| FS-02b, FS-05 | Concatenated JSON, duplicate keys and untyped Lists in `--files`; the `helm template` recipe. | not true yet: #119 |
-| FS-04, SV-06 | The `/gate` README example and `cluster=` gate pass a PR that adds a removed API. | not true yet: #120 |
-| SV-03b | After an EOL date passes, reads serve the previous verdict until the next push or background pass, up to an hour. | not true yet: #125 |
-| SV-13b | Bare `/api` serves the dashboard (200 `text/html`) instead of a JSON 404. | not true yet: #125 |
-| SV-16b | A `--db` path containing `?` silently opens another file and drops the SQLite write-lock mode, so concurrent writes get `SQLITE_BUSY`. | not true yet: #125 |
-| NT-01b | With several targets a change notifies once per target, and a backwards clock step replays events. | not true yet: #125 |
-| SV-04, SV-08, SV-10, SV-12, SV-14, NT-03 | Ingest validation, empty cluster IDs, `--targets` parsing, schemaVersion, fleet memory, webhook redirects. | not true yet: #125 |
 | PF-06, SE-05b, SV-11b | `/gate` stays under 512Mi with concurrent large documents; ingest has no shared memory budget for concurrent 20 MiB pushes; a slow push gets 422, not a retryable 408. | not true yet: #121 |
 | SE-01b | `--listen localhost:…` counts as loopback without resolving the name. | not true yet: #126 |
 | SE-03, SE-07b, SE-09 | Token prefix stored; CSV formula guard checks one byte; push is per-cluster and encrypted. | not true yet: #126 |
-| RB-01 | README and SECURITY.md describe the pre-#16 RBAC grant. | not true yet: #130 |
-| RB-07 | Losing status write access leaves the CR reading ready. | not true yet: #122 |
+| RB-07 | An agent that loses write access to its ClusterReadiness status leaves the last verdict and `Ready` condition in place; only its `/readyz`, metrics and alerts show the failure. | not true yet: #137 (#122 closed without it) |
 | RB-08, IR-01, IR-02, IR-06 to IR-09, IR-11 to IR-14, DB-08, SE-15 | The published release, image and chart predate the fixes; signing and publishing have never run end to end. | not true yet: #127 |
-| KB-14 | A stored snapshot re-judged by a newer knowledge base drops the fields it does not know, and v0.1.1 snapshots' residency rows become false APF blockers (verdicts otherwise re-judge correctly). | not true yet: #125 |
-| DB-09 | The README quickstart (`serve --ingest-token $TOKEN`) works on loopback, but creates the SQLite database and its `-wal` and `-shm` files 0644 under umask 022. | not true yet: #126 |
-| DO-03b | README's "three subcommands": the binary has five, `tokens` and `clusters` too. | not true yet: #130 |
-| KB-04, PF-01, PF-03, PF-04 | Stale numbers: KB horizon, scan time, binary and image sizes. | not true yet: #130 |
+| DB-09 | `serve` creates the SQLite database and its `-wal` and `-shm` files 0644 under umask 022; the fleet quickstart says so. | not true yet: #126 |
 
 ## Not yet audited
 
@@ -275,14 +306,14 @@ into a table above, or under repair, when its mission reports.
 | ID | Claim | Tests so far |
 |---|---|---|
 | AC-01 | The Action (composite, in `action/`) scans a directory of rendered manifests for removed and deprecated APIs and emits SARIF. | `ci:action` `hack/action_test.sh` `TestWriteGitHubAcceptable`; not audited: #99 |
-| AC-04 | The README's workflow (`security-events: write`, `abd-ulbasit/upgradescope/action@main`, `upload-sarif` with `if: always()`) works as written, from a fork PR too. | not audited: #99 |
+| AC-04 | The workflow in the README and on the CI gate page (`abd-ulbasit/upgradescope@v0.2.0`, `security-events: write`, `upload-sarif` when the step did not cancel and wrote a SARIF file) works as written, from a fork PR too. | not audited: #99 (it needs the v0.2.0 release, #127) |
 | AC-06 | The binary the Action downloads and runs can be trusted. | `hack/action_test.sh` (the archive is checked against the release's checksums.txt, AC-03); not audited: #99 |
 | AG-01 | The agent uses no controller-runtime, informer cache, leader election, webhooks, finalizers or owner references. | `e2e:no_webhooks_or_finalizers` `e2e:audit_agent_writes_only_its_cr`; the dependency set and watch/lease traffic: not audited, #99 |
 | AG-14 | The knowledge base moves only with the binary and the target only with a new upstream minor, with no Kubernetes event. | `TestResolveTargetsDefaultNextMinor` `TestDatasetVersion`; not audited: #99 |
 | AO-06 | Everything but control-plane skew works identically on managed and self-managed clusters (managed add-on images included). | `TestMatchAddOnsRealWorldImages` `TestCollectVersionsManagedClusterEmptyControlPlane`; not audited: #99 |
-| DO-01 | Every number in the README is dated and says how it was measured. | not audited: #99 (KB-04 and PF-01 to PF-04, under repair, are stale numbers) |
-| DO-02 | The comparison with pluto and kubent, and the evidence in `docs/research.md`. | not audited: #99 |
-| DO-05 | The README's note on `Co-authored-by: Claude` trailers. | not audited: #99 |
+| DO-01 | Every number in the README is dated and says how it was measured. | not audited: #99 (the Measured table, PF-01 to PF-04, says so since #130; the live-scan time is still the audit's, at main 8a951dd) |
+| DO-02 | The comparison with pluto, kubent, kubepug, Nova and the managed platforms' checks (`docs/comparison.md`), and the evidence in `docs/research.md`. | not audited: #99 |
+| DO-05 | The README's note that most of the code was written by coding agents from specs and plans the author wrote and reviewed. | not audited: #99 |
 | DO-06 | Apache-2.0; third-party licenses in `NOTICE`; endoflife.date data under MIT (`registry/DATA-LICENSE.md`). | not audited: #99 |
 | IR-15 | Every behaviour change is listed in the changelog, and 0.1.1 changed only packaging. | not audited: #99 (VS-15, under repair, is one such gap) |
 | KB-03 | CI reruns the API-lifecycle generator on every push and fails when the committed copy drifts; upstream drift is a warning. | `ci:kb-freshness` `TestDatasetSanity`; not audited: #99 |
@@ -294,4 +325,4 @@ into a table above, or under repair, when its mission reports.
 | PF-07 | Each tick issues bounded, paged lists, so the agent's cost is predictable, unlike an informer cache. | `TestCollectAPIUsageFollowsListPagination` `TestCollectHelmPeakHeapIsBoundedByOneRelease`; not audited: #99 |
 | SE-11 | CI jobs run with least privilege, actions are pinned by full commit SHA, and the release job uses no caches. | not audited: #99 |
 | SE-13 | Vulnerabilities can be reported privately through GitHub's private vulnerability reporting. | not audited: #99 |
-| SK-03 | kubectl version skew: the README both lists client skew among the questions answered and calls it out of scope. | not audited: #99 (the two statements contradict each other) |
+| SK-03 | kubectl client skew is out of scope: only audit logs reveal clients (README, version-skew page). | not audited: #99 (the README no longer also lists it among the questions answered) |

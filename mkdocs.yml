@@ -1,0 +1,128 @@
+# The upgradescope docs site. .github/workflows/docs.yml builds it with
+# --strict on every pull request (a broken link or anchor, or a page
+# missing from the nav, fails it) and publishes it to GitHub Pages from
+# main. Locally: `make docs` (build) or `make docs-serve` (live preview);
+# both install the pinned toolchain in hack/docs/requirements.txt into a
+# virtualenv under bin/.
+#
+# Generated pages (do not edit by hand): docs/reference/cli/, crd.md and
+# api.md (make docs-gen), helm-values.md (make helm-docs).
+site_name: upgradescope
+site_url: https://abd-ulbasit.github.io/upgradescope/
+site_description: "Kubernetes upgrade readiness: removed and deprecated APIs, end-of-life add-ons, version skew, as a verdict, a score, a CI gate and a ClusterReadiness object."
+repo_url: https://github.com/abd-ulbasit/upgradescope
+repo_name: abd-ulbasit/upgradescope
+edit_uri: edit/main/docs/
+copyright: Apache-2.0
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.tabs.link
+    - search.suggest
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - CLI in two minutes: getting-started/cli.md
+      - CI gate: getting-started/ci-gate.md
+      - In-cluster agent: getting-started/in-cluster.md
+      - Fleet server: getting-started/fleet.md
+  - Concepts:
+      - Verdict and score: concepts/verdict-and-score.md
+      - Knowledge base: concepts/knowledge-base.md
+      - Add-on registry: concepts/addon-registry.md
+      - Deprecated-API detection: concepts/api-usage-detection.md
+      - Version skew: concepts/version-skew.md
+  - Guides:
+      - Managed clusters: guides/managed-clusters.md
+      - GitOps with Argo CD and Flux: guides/gitops-argo-flux.md
+      - Prometheus and Grafana: guides/prometheus-grafana.md
+      - Suppressions and baselines: guides/suppressions-and-baselines.md
+      - Other CI systems: guides/other-ci.md
+  - Operations:
+      - Install: operations/install.md
+      - Upgrade: operations/upgrade.md
+      - Uninstall: operations/uninstall.md
+      - Security model and RBAC: operations/security-model-and-rbac.md
+      - Retention and backup: operations/retention-and-backup.md
+      - Tenancy and access control: operations/tenancy.md
+      - Running the server: operations.md
+  - Reference:
+      - CLI:
+          - upgradescope: reference/cli/upgradescope.md
+          - scan: reference/cli/upgradescope_scan.md
+          - agent: reference/cli/upgradescope_agent.md
+          - serve: reference/cli/upgradescope_serve.md
+          - clusters: reference/cli/upgradescope_clusters.md
+          - clusters list: reference/cli/upgradescope_clusters_list.md
+          - clusters delete: reference/cli/upgradescope_clusters_delete.md
+          - clusters rename: reference/cli/upgradescope_clusters_rename.md
+          - tokens: reference/cli/upgradescope_tokens.md
+          - tokens create: reference/cli/upgradescope_tokens_create.md
+          - tokens list: reference/cli/upgradescope_tokens_list.md
+          - tokens revoke: reference/cli/upgradescope_tokens_revoke.md
+          - version: reference/cli/upgradescope_version.md
+          - completion: reference/cli/upgradescope_completion.md
+          - completion bash: reference/cli/upgradescope_completion_bash.md
+          - completion fish: reference/cli/upgradescope_completion_fish.md
+          - completion powershell: reference/cli/upgradescope_completion_powershell.md
+          - completion zsh: reference/cli/upgradescope_completion_zsh.md
+      - Configuration file: reference/config.md
+      - JSON report: reference/json-report.md
+      - ClusterReadiness CRD: reference/crd.md
+      - REST API: reference/api.md
+      - Webhook payload: reference/webhook.md
+      - Helm values: reference/helm-values.md
+      - Metrics, logs and probes: observability.md
+  - Troubleshooting: troubleshooting.md
+  - FAQ: faq.md
+  - Comparison: comparison.md
+  - Claims ledger: claims.md
+  - Compatibility policy: compatibility-policy.md
+  - Contributing:
+      - How to contribute: contributing.md
+      - Architecture: architecture.md
+      - Background research (June 2026): research.md
+  - Changelog: changelog.md

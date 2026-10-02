@@ -1,0 +1,1009 @@
+openapi: 3.1.0
+# The upgradescope server's HTTP API. Hand-written; internal/server's
+# openapi_test.go keeps it honest: every route the server registers must be
+# an operation here (and every operation a registered route), and real
+# handler responses must validate against the schemas below and carry no
+# field they do not list. The response schemas themselves stay open (no
+# additionalProperties/unevaluatedProperties false; a test enforces it), so
+# clients validating against or generated from this document survive a field
+# added within v1; the no-unlisted-field rule lives in the test. Request
+# schemas may be closed where the handler rejects unknown fields
+# (RenameRequest). docs/reference/api.md is rendered from this file by
+# tools/gen-docs (make docs-gen).
+info:
+  title: upgradescope server API
+  version: v1
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  description: |
+    The REST API of `upgradescope serve`: snapshot ingest from agents, the
+    read API behind the dashboard, the CI gate, auditor exports and cluster
+    administration.
+
+    **Authentication.** Every credential is a bearer token
+    (`Authorization: Bearer <token>`). Reads and the gate take the read
+    token (`serve --read-token`; with none set, they are open), and the
+    admin token is accepted wherever the read token is. Pushes take the
+    shared ingest token (`--ingest-token`) or a per-cluster token from
+    `upgradescope tokens create`. Deleting and renaming clusters take the
+    admin token (`--admin-token`); without one the server refuses both.
+    `/healthz` and `/readyz` are never authenticated.
+
+    **Errors.** Every error a handler writes is JSON, `{"error": "..."}`,
+    with a 4xx or 5xx status. An unknown path under `/api/`, or below
+    `/healthz`, `/readyz`, `/livez` or `/metrics`, is a JSON 404 too. A
+    known path called with the wrong method gets ServeMux's 405 with an
+    `Allow` header and a plain-text body. 500 bodies never carry internal
+    detail: they read `{"error": "internal error"}` and the server logs the
+    cause.
+
+    **Targets** are Kubernetes minors written `MAJOR.MINOR` (`1.38`).
+    Where a target is optional, the default is the next minor above the
+    version the cluster's latest snapshot reports.
+
+    **Stability.** Paths under `/api/v1` keep their meaning within v1;
+    fields may be added to responses, so the response schemas here do not
+    forbid fields they do not list: ignore a field you do not know. See the
+    compatibility policy:
+    https://abd-ulbasit.github.io/upgradescope/compatibility-policy/
+servers:
+  - url: http://127.0.0.1:8080
+    description: "`upgradescope serve` with its default --listen"
+tags:
+  - name: probes
+    description: Liveness, readiness and Prometheus metrics.
+  - name: ingest
+    description: Snapshot pushes from in-cluster agents.
+  - name: clusters
+    description: Per-cluster state, reports, findings and history.
+  - name: fleet
+    description: Rollups across every cluster.
+  - name: gate
+    description: The CI gate for rendered manifests.
+  - name: exports
+    description: Auditor exports of a stored evaluation.
+  - name: registry
+    description: The add-on registry this binary judges against.
+  - name: admin
+    description: Cluster administration (admin token).
+
+security:
+  - readToken: []
+
+paths:
+  /healthz:
+    get:
+      tags: [probes]
+      operationId: healthz
+      summary: Liveness
+      description: 200 while the process serves; never touches the database.
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Status"}
+  /readyz:
+    get:
+      tags: [probes]
+      operationId: readyz
+      summary: Readiness
+      description: 200 when the database answers a ping within 2s, else 503.
+      security: []
+      responses:
+        "200":
+          description: The database answered.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Status"}
+        "503":
+          $ref: "#/components/responses/Error"
+  /metrics:
+    get:
+      tags: [probes]
+      operationId: metrics
+      summary: Prometheus metrics
+      description: |
+        Prometheus text exposition: HTTP traffic, ingest results, and per
+        cluster the score, verdict, blockers, push age and staleness of
+        its current evaluations. Behind the read token when one is set.
+        The metric names are listed in the observability reference.
+      responses:
+        "200":
+          description: Prometheus text format.
+          content:
+            text/plain:
+              schema: {type: string}
+        "401":
+          $ref: "#/components/responses/Error"
+
+  /api/v1/snapshots:
+    post:
+      tags: [ingest]
+      operationId: pushSnapshot
+      summary: Push an inventory snapshot
+      description: |
+        What the agent sends every time its cluster's inventory changes and
+        at least every `--force-sync-every` (1h). The body is JSON,
+        optionally gzipped (`Content-Encoding: gzip`), at most
+        `serve --max-snapshot-bytes` (20 MiB) on the wire and after
+        decompression.
+
+        The server stores the inventory as sent and evaluates it against
+        the cluster's next minor plus `serve --targets`, in one
+        transaction. A push whose inventory equals the latest stored one
+        (ignoring `collectedAt` and fields this server does not know) is a
+        duplicate: 200, nothing new stored. A cluster name is bound to the
+        `clusterId` (kube-system namespace UID) it first pushed; a push
+        under that name from another UID, or with none, is a 409.
+
+        A per-cluster token may push only as its own cluster (403 before
+        anything is written).
+      security:
+        - ingestToken: []
+      parameters:
+        - name: Content-Encoding
+          in: header
+          required: false
+          schema: {type: string, enum: [gzip, identity]}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PushRequest"}
+      responses:
+        "200":
+          description: A duplicate of the cluster's latest snapshot.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushDuplicate"}
+        "202":
+          description: Stored and evaluated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushAccepted"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "415": {$ref: "#/components/responses/Error"}
+        "422":
+          description: |
+            Not judgeable, refused before anything is written: invalid
+            JSON or gzip, an envelope `schemaVersion` other than 1, no
+            `clusterName`, a missing or `null` inventory, an inventory
+            `schemaVersion` other than 1, or a `serverVersion` that is not
+            a Kubernetes 1.x version.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+
+  /api/v1/clusters:
+    get:
+      tags: [clusters]
+      operationId: listClusters
+      summary: List clusters
+      description: |
+        Every cluster, with whether it is stale and the summary of its
+        current evaluation at its default target (absent until one exists).
+      responses:
+        "200":
+          description: The clusters, by id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/ClusterSummary"}
+        "401": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+
+  /api/v1/clusters/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ClusterID"
+    get:
+      tags: [clusters]
+      operationId: getCluster
+      summary: Get one cluster
+      description: |
+        The cluster, the version and capabilities of its latest snapshot,
+        and the summaries of its current evaluations: the default target
+        and every applicable `serve --targets` minor.
+      responses:
+        "200":
+          description: The cluster.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ClusterDetail"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [admin]
+      operationId: deleteCluster
+      summary: Delete a cluster
+      description: |
+        Removes the cluster with its snapshots, evaluations, queued
+        notifications and the per-cluster ingest tokens minted for its
+        name. An agent still pushing under the name registers it again.
+      security:
+        - adminToken: []
+      responses:
+        "204":
+          description: Deleted.
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403":
+          description: No admin token configured, or another token presented.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+    patch:
+      tags: [admin]
+      operationId: renameCluster
+      summary: Rename a cluster
+      description: |
+        Moves the cluster's history and per-cluster ingest tokens to the new
+        name. Change the agent's `--cluster-name` too: until then its pushes
+        under the old name are refused (per-cluster token) or register the
+        old name again (shared token).
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RenameRequest"}
+      responses:
+        "200":
+          description: The renamed cluster.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Cluster"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /api/v1/clusters/{id}/report:
+    parameters:
+      - $ref: "#/components/parameters/ClusterID"
+      - $ref: "#/components/parameters/Target"
+    get:
+      tags: [clusters]
+      operationId: getReport
+      summary: Readiness report
+      description: |
+        The full report for one target: the stored evaluation of the latest
+        snapshot when there is one (`source: stored`), otherwise a what-if
+        evaluated now from the latest snapshot and not stored
+        (`source: what-if`). `teams` holds per-team scores.
+      responses:
+        "200":
+          description: The report.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReportResponse"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /api/v1/clusters/{id}/findings:
+    parameters:
+      - $ref: "#/components/parameters/ClusterID"
+      - $ref: "#/components/parameters/Target"
+      - name: severity
+        in: query
+        description: Only findings of this severity. An unknown value matches nothing.
+        schema: {$ref: "#/components/schemas/Severity"}
+      - name: category
+        in: query
+        description: Only findings of this category. An unknown value matches nothing.
+        schema: {$ref: "#/components/schemas/Category"}
+    get:
+      tags: [clusters]
+      operationId: getFindings
+      summary: Findings, filtered
+      description: The report's findings (same source as the report), exact-match filtered.
+      responses:
+        "200":
+          description: The findings.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FindingsResponse"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /api/v1/clusters/{id}/history:
+    parameters:
+      - $ref: "#/components/parameters/ClusterID"
+      - $ref: "#/components/parameters/Target"
+      - name: limit
+        in: query
+        description: Most recent points to return.
+        schema: {type: integer, minimum: 1, default: 100}
+    get:
+      tags: [clusters]
+      operationId: getHistory
+      summary: Score history
+      description: Stored evaluations of the target, oldest first, within the retention window.
+      responses:
+        "200":
+          description: The score history.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/ScorePoint"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /api/v1/clusters/{id}/teams:
+    parameters:
+      - $ref: "#/components/parameters/ClusterID"
+      - $ref: "#/components/parameters/Target"
+    get:
+      tags: [clusters]
+      operationId: getTeams
+      summary: Per-team scores
+      description: |
+        The score formula applied to each team's findings, from the same
+        report the report endpoint serves. Findings with no team are under
+        `unattributed`.
+      responses:
+        "200":
+          description: Team scores.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TeamsResponse"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /api/v1/clusters/{id}/export:
+    parameters:
+      - $ref: "#/components/parameters/ClusterID"
+      - $ref: "#/components/parameters/Target"
+      - name: format
+        in: query
+        required: true
+        schema: {type: string, enum: [csv, html]}
+    get:
+      tags: [exports]
+      operationId: exportReport
+      summary: Auditor export
+      description: |
+        The stored evaluation of the latest snapshot as CSV (one summary
+        row, one row per finding, one per capability not assessed) or a
+        self-contained HTML report with the score history. Never a what-if:
+        404 when no stored evaluation exists for the target, or when the
+        cluster already runs it.
+      responses:
+        "200":
+          description: The export.
+          content:
+            text/csv:
+              schema: {type: string}
+            text/html:
+              schema: {type: string}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /api/v1/fleet:
+    get:
+      tags: [fleet]
+      operationId: getFleet
+      summary: Fleet score matrix
+      description: |
+        One row per cluster, one cell per target, from current stored
+        evaluations only (nothing is recomputed). A cell is `null` when the
+        cluster has no current evaluation for that target, or already runs
+        it (then the target is also in the row's `notApplicable`).
+      parameters:
+        - name: targets
+          in: query
+          description: |
+            Comma-separated minors. Default: every cluster's next minor
+            plus the `serve --targets` minors some cluster does not run yet.
+          schema: {type: string, example: "1.37,1.38"}
+      responses:
+        "200":
+          description: The matrix.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FleetResponse"}
+        "401": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+
+  /api/v1/fleet/teams:
+    get:
+      tags: [fleet]
+      operationId: getFleetTeams
+      summary: Per-team rollup across the fleet
+      description: |
+        For one target, each team's worst score, total blockers and the
+        clusters it has findings in. Each cluster contributes its stored
+        evaluation, else a what-if from its latest snapshot (`evaluated`
+        says which); clusters without a snapshot are `missing`, and
+        clusters that already run the target are `notApplicable`.
+      parameters:
+        - name: target
+          in: query
+          required: true
+          schema: {$ref: "#/components/schemas/Target"}
+      responses:
+        "200":
+          description: The rollup.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FleetTeamsResponse"}
+        "401": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+
+  /api/v1/gate:
+    post:
+      tags: [gate]
+      operationId: gate
+      summary: Gate rendered manifests
+      description: |
+        Evaluates a YAML (or JSON) manifest stream against a target and
+        stores nothing. Without `cluster`, the manifests are judged alone,
+        like `scan --files`. With `cluster`, they are judged inside that
+        cluster's latest stored inventory (its version, nodes, add-ons and
+        team labels), and the verdict counts only what the manifests
+        introduce (findings tagged `source: manifest`); findings the
+        cluster already has are tagged `source: cluster`.
+
+        `fail-on` works like `scan --fail-on` (default `blocker`): when an
+        introduced finding reaches it, or the verdict is `unknown`, the
+        status is 422 with the full body, so `curl --fail-with-body` fails
+        a CI step and keeps the report. `X-Upgradescope-Verdict` always
+        carries the verdict.
+
+        Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
+        document, 20,000 documents. Evaluations run one at a time; a
+        request that waits more than 30s for its turn, or finds the shared
+        body budget full, gets 503 with `Retry-After`.
+      parameters:
+        - name: target
+          in: query
+          required: true
+          schema: {$ref: "#/components/schemas/Target"}
+        - name: cluster
+          in: query
+          description: A cluster name or id whose stored context the manifests are judged in.
+          schema: {type: string}
+        - name: format
+          in: query
+          schema: {type: string, enum: [json, sarif], default: json}
+        - name: fail-on
+          in: query
+          schema: {type: string, enum: [blocker, warning, never], default: blocker}
+        - name: path
+          in: query
+          description: |
+            The repository-relative file the stream was rendered to
+            (`deploy/rendered.yaml`). Introduced findings are then located
+            in it in SARIF, so code scanning shows them on the pull request.
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/x-yaml:
+            schema: {type: string}
+          application/json:
+            schema: {type: string}
+      responses:
+        "200":
+          description: The gate passed.
+          headers:
+            X-Upgradescope-Verdict: {$ref: "#/components/headers/Verdict"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GateResponse"}
+            application/sarif+json:
+              schema: {$ref: "#/components/schemas/SARIF"}
+        "422":
+          description: |
+            The gate failed (same body as 200), or the request is invalid
+            (no or bad `target`, bad `format`, `fail-on` or `path`, or an
+            undecodable manifest stream: an Error body).
+          headers:
+            X-Upgradescope-Verdict: {$ref: "#/components/headers/Verdict"}
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - {$ref: "#/components/schemas/GateResponse"}
+                  - {$ref: "#/components/schemas/Error"}
+            application/sarif+json:
+              schema: {$ref: "#/components/schemas/SARIF"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "415": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+
+  /api/v1/registry:
+    get:
+      tags: [registry]
+      operationId: getRegistry
+      summary: The add-on registry
+      description: The add-on EOL and compatibility dataset compiled into this binary, sorted by id.
+      responses:
+        "200":
+          description: The registry.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Registry"}
+        "401": {$ref: "#/components/responses/Error"}
+
+components:
+  securitySchemes:
+    readToken:
+      type: http
+      scheme: bearer
+      description: "`serve --read-token` (or the admin token). Not required when the server runs without one."
+    ingestToken:
+      type: http
+      scheme: bearer
+      description: "`serve --ingest-token`, or a per-cluster token from `upgradescope tokens create`."
+    adminToken:
+      type: http
+      scheme: bearer
+      description: "`serve --admin-token`."
+
+  parameters:
+    ClusterID:
+      name: id
+      in: path
+      required: true
+      description: The cluster's numeric id (`id` in the cluster list). A non-integer is a 400.
+      schema: {type: integer, format: int64}
+    Target:
+      name: target
+      in: query
+      description: Target minor. Default, the next minor above the cluster's version.
+      schema: {$ref: "#/components/schemas/Target"}
+
+  headers:
+    Verdict:
+      description: The gate's verdict.
+      schema: {$ref: "#/components/schemas/Verdict"}
+
+  responses:
+    Error:
+      description: An error.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+
+  schemas:
+    Error:
+      type: object
+      description: Every error a handler writes.
+      required: [error]
+      properties:
+        error: {type: string}
+    Status:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, const: ok}
+    Target:
+      type: string
+      description: A Kubernetes minor, `MAJOR.MINOR`.
+      pattern: '^[0-9]+\.[0-9]+$'
+      example: "1.38"
+    Verdict:
+      type: string
+      enum: [ready, blocked, unknown]
+      description: |
+        `blocked`: at least one blocker. `unknown`: no blocker found, but a
+        required check was not assessed, so one may have been missed.
+        `ready`: neither.
+    Severity:
+      type: string
+      enum: [blocker, warning, info]
+    Category:
+      type: string
+      description: |
+        One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`,
+        `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`,
+        `kb-stale`, `addon-no-data`, `unknown-api`. A release may add
+        categories under `/api/v1`, so this is not an enum: treat one you do
+        not know by its severity.
+      example: removed-api
+
+    Cluster:
+      allOf:
+        - {$ref: "#/components/schemas/ClusterFields"}
+    ClusterFields:
+      type: object
+      required: [id, name, clusterUid, firstSeen, lastSeen]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string, description: "The agent's --cluster-name."}
+        clusterUid: {type: string, description: The kube-system namespace UID the name is bound to.}
+        firstSeen: {type: string, format: date-time}
+        lastSeen: {type: string, format: date-time, description: "The agent's last push, duplicates included."}
+    CapabilityGap:
+      type: object
+      description: Something the evaluation could not assess.
+      required: [capability, reason]
+      properties:
+        capability: {type: string, description: "A collector capability (api-usage, deprecated-calls, helm, addons, versions), kb-coverage, or target (the target is not an upgrade of the cluster)."}
+        reason: {type: string}
+        partial: {type: boolean, description: The capability ran but did not read everything.}
+        skipped: {type: array, items: {type: string}, description: What a partial capability did not read.}
+        required: {type: boolean, description: The gap makes the verdict unknown.}
+    CapabilityStatus:
+      type: object
+      required: [available]
+      properties:
+        available: {type: boolean}
+        reason: {type: string}
+        partial: {type: boolean}
+        skipped: {type: array, items: {type: string}}
+    EvalSummary:
+      type: object
+      required: [target, score, ready, verdict, blockers, warnings, kbVersion, evaluatedAt, snapshotId]
+      properties:
+        target: {$ref: "#/components/schemas/Target"}
+        score: {type: integer, minimum: 0, maximum: 100}
+        ready: {type: boolean, description: "verdict == ready (kept for v0.1 clients)."}
+        verdict: {$ref: "#/components/schemas/Verdict"}
+        blockers: {type: integer}
+        warnings: {type: integer}
+        kbVersion: {type: string}
+        evaluatedAt: {type: string, format: date-time, description: When the result was last confirmed.}
+        snapshotId: {type: integer, format: int64}
+        outdated: {type: boolean, description: "Evaluated before today (UTC), or under another knowledge base or team map; the next pass replaces it."}
+        notAssessed: {type: array, items: {$ref: "#/components/schemas/CapabilityGap"}}
+    ClusterSummary:
+      allOf:
+        - {$ref: "#/components/schemas/ClusterFields"}
+        - type: object
+          required: [stale]
+          properties:
+            stale: {type: boolean, description: "No push within serve --stale-after."}
+            latest: {$ref: "#/components/schemas/EvalSummary"}
+    ClusterDetail:
+      allOf:
+        - {$ref: "#/components/schemas/ClusterFields"}
+        - type: object
+          required: [stale, evaluations]
+          properties:
+            stale: {type: boolean}
+            serverVersion: {type: string, description: The version the latest snapshot is judged at.}
+            capabilities:
+              type: object
+              additionalProperties: {$ref: "#/components/schemas/CapabilityStatus"}
+            evaluations:
+              type: array
+              items: {$ref: "#/components/schemas/EvalSummary"}
+
+    ObjectRef:
+      type: object
+      properties:
+        namespace: {type: string}
+        name: {type: string}
+        file: {type: string, description: "Manifest path, relative to the scanned root (manifests only)."}
+        line: {type: integer, description: "1-based line of the object's apiVersion key (manifests only)."}
+        renderedFrom: {type: string, description: "The Helm template the object was rendered from."}
+        manager: {type: string, description: "The field manager that wrote a live object through the flagged API, or kubectl last-applied."}
+        ignore: {type: string}
+        ignoreReason: {type: string}
+    Finding:
+      allOf:
+        - {$ref: "#/components/schemas/FindingFields"}
+    FindingFields:
+      type: object
+      required: [category, severity, title, detail]
+      properties:
+        category: {$ref: "#/components/schemas/Category"}
+        severity: {$ref: "#/components/schemas/Severity"}
+        key: {type: string, description: "Stable, count-free identity: category/discriminator."}
+        title: {type: string}
+        detail: {type: string}
+        teams: {type: array, items: {type: string}}
+        namespaces: {type: array, items: {type: string}}
+        remediation: {type: string}
+        citations: {type: array, items: {type: string, format: uri}}
+        objects: {type: array, items: {$ref: "#/components/schemas/ObjectRef"}, maxItems: 100}
+        objectsOmitted: {type: integer, description: Affected objects not listed.}
+        baselineState: {type: string, enum: [new, unchanged]}
+    SuppressedFinding:
+      allOf:
+        - {$ref: "#/components/schemas/FindingFields"}
+        - type: object
+          required: [reason, source]
+          properties:
+            reason: {type: string, description: Why the finding is accepted.}
+            source: {type: string, description: "What suppressed it: the config file, annotation, or spec.ignore."}
+            expires: {type: string, description: "YYYY-MM-DD, as the rule gave it."}
+    TeamScore:
+      type: object
+      required: [score, ready, blockers, warnings]
+      properties:
+        score: {type: integer}
+        ready: {type: boolean, description: "No blocker among this team's findings. It counts only the team's findings: the cluster's not-assessed gaps and unattributed blockers do not lower it, so gate on the report's verdict, not on a team's ready."}
+        blockers: {type: integer}
+        warnings: {type: integer}
+    TeamScores:
+      type: object
+      description: Team name to score; findings with no team are under `unattributed`.
+      additionalProperties: {$ref: "#/components/schemas/TeamScore"}
+    ReportFields:
+      description: The engine's report, as `scan --output json` writes it.
+      allOf:
+        - {$ref: "#/components/schemas/ReportBase"}
+        - type: object
+          required: [findings]
+          properties:
+            findings: {type: array, items: {$ref: "#/components/schemas/Finding"}}
+    ReportBase:
+      type: object
+      description: The report's fields other than its findings.
+      required: [clusterId, target, kbVersion, score, ready, verdict]
+      properties:
+        clusterId: {type: string}
+        target: {$ref: "#/components/schemas/Target"}
+        serverVersion: {type: string, description: "The kube-apiserver gitVersion the target was judged against; absent for manifests."}
+        kbVersion: {type: string}
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: "max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings))"
+        ready: {type: boolean, description: "verdict == ready."}
+        verdict: {$ref: "#/components/schemas/Verdict"}
+        notAssessed: {type: array, items: {$ref: "#/components/schemas/CapabilityGap"}}
+        suppressed: {type: array, items: {$ref: "#/components/schemas/SuppressedFinding"}}
+    ReportMeta:
+      type: object
+      required: [evaluatedAt, snapshotId, source]
+      properties:
+        evaluatedAt: {type: string, format: date-time}
+        snapshotId: {type: integer, format: int64}
+        source: {type: string, enum: [stored, what-if]}
+        serverVersion: {type: string}
+        notApplicable: {type: boolean, description: The cluster already runs the target.}
+        outdated: {type: boolean}
+    ReportResponse:
+      allOf:
+        - {$ref: "#/components/schemas/ReportFields"}
+        - {$ref: "#/components/schemas/ReportMeta"}
+        - type: object
+          properties:
+            teams: {$ref: "#/components/schemas/TeamScores"}
+    FindingsResponse:
+      allOf:
+        - type: object
+          required: [target, findings]
+          properties:
+            target: {$ref: "#/components/schemas/Target"}
+            findings: {type: array, items: {$ref: "#/components/schemas/Finding"}}
+        - {$ref: "#/components/schemas/ReportMeta"}
+    TeamsResponse:
+      allOf:
+        - type: object
+          required: [target, teams]
+          properties:
+            target: {$ref: "#/components/schemas/Target"}
+            teams: {$ref: "#/components/schemas/TeamScores"}
+        - {$ref: "#/components/schemas/ReportMeta"}
+    ScorePoint:
+      type: object
+      required: [at, score, ready]
+      properties:
+        at: {type: string, format: date-time}
+        score: {type: integer}
+        ready: {type: boolean}
+
+    FleetCell:
+      type: object
+      required: [score, ready, verdict, blockers, evaluatedAt, snapshotId, source]
+      properties:
+        score: {type: integer}
+        ready: {type: boolean}
+        verdict: {$ref: "#/components/schemas/Verdict"}
+        blockers: {type: integer}
+        evaluatedAt: {type: string, format: date-time}
+        snapshotId: {type: integer, format: int64}
+        source: {type: string, const: stored}
+        outdated: {type: boolean}
+        notAssessed: {type: array, items: {$ref: "#/components/schemas/CapabilityGap"}}
+    FleetRow:
+      type: object
+      required: [clusterId, name, lastSeen, stale, cells]
+      properties:
+        clusterId: {type: integer, format: int64}
+        name: {type: string}
+        lastSeen: {type: string, format: date-time}
+        stale: {type: boolean}
+        serverVersion: {type: string}
+        cells:
+          type: object
+          description: Target to cell; null when there is no current evaluation or the target is not applicable.
+          additionalProperties:
+            anyOf:
+              - {$ref: "#/components/schemas/FleetCell"}
+              - {type: "null"}
+        notApplicable: {type: array, items: {$ref: "#/components/schemas/Target"}}
+    FleetResponse:
+      type: object
+      required: [targets, clusters]
+      properties:
+        targets: {type: array, items: {$ref: "#/components/schemas/Target"}}
+        clusters: {type: array, items: {$ref: "#/components/schemas/FleetRow"}}
+    FleetTeam:
+      type: object
+      required: [worstScore, blockers, clusters]
+      properties:
+        worstScore: {type: integer}
+        blockers: {type: integer}
+        clusters: {type: array, items: {type: string}}
+    FleetTeamsSource:
+      type: object
+      required: [name, clusterId, source, evaluatedAt, snapshotId]
+      properties:
+        name: {type: string}
+        clusterId: {type: integer, format: int64}
+        source: {type: string, enum: [stored, what-if]}
+        evaluatedAt: {type: string, format: date-time}
+        snapshotId: {type: integer, format: int64}
+    FleetTeamsResponse:
+      type: object
+      required: [target, teams, evaluated, missing, notApplicable]
+      properties:
+        target: {$ref: "#/components/schemas/Target"}
+        teams:
+          type: object
+          additionalProperties: {$ref: "#/components/schemas/FleetTeam"}
+        evaluated: {type: array, items: {$ref: "#/components/schemas/FleetTeamsSource"}}
+        missing: {type: array, items: {type: string}}
+        notApplicable: {type: array, items: {type: string}}
+
+    GateFinding:
+      allOf:
+        - {$ref: "#/components/schemas/FindingFields"}
+        - type: object
+          required: [source]
+          properties:
+            source: {type: string, enum: [manifest, cluster], description: "manifest: introduced by the posted manifests; cluster: the cluster already has it."}
+    GateResponse:
+      allOf:
+        - {$ref: "#/components/schemas/ReportBase"}
+        - type: object
+          required: [findings]
+          properties:
+            findings: {type: array, items: {$ref: "#/components/schemas/GateFinding"}}
+            teams: {$ref: "#/components/schemas/TeamScores"}
+            clusterVerdict:
+              $ref: "#/components/schemas/Verdict"
+              description: With `cluster`, the verdict of the cluster plus the manifests, existing findings included.
+    SARIF:
+      type: object
+      description: "A SARIF 2.1.0 log (https://json.schemastore.org/sarif-2.1.0.json) with one run, the report's findings as results."
+
+    PushRequest:
+      type: object
+      required: [schemaVersion, clusterName, inventory]
+      properties:
+        schemaVersion: {type: integer, const: 1, description: The push protocol version.}
+        clusterName: {type: string, minLength: 1}
+        agentVersion: {type: string}
+        kbVersion: {type: string}
+        inventory: {$ref: "#/components/schemas/Inventory"}
+    Inventory:
+      type: object
+      description: |
+        What the agent observed, never a verdict. The server stores it as
+        sent, unknown fields included, so a newer server can judge them.
+      required: [schemaVersion]
+      properties:
+        schemaVersion: {type: integer, const: 1}
+        clusterId: {type: string, description: The kube-system namespace UID.}
+        source: {type: string, enum: [cluster, files]}
+        collectedAt: {type: string, format: date-time}
+        serverVersion: {type: string, description: "The apiserver's gitVersion, e.g. v1.34.2-gke.100."}
+        capabilities:
+          type: object
+          additionalProperties: {$ref: "#/components/schemas/CapabilityStatus"}
+        apiUsage: {type: array, items: {type: object}}
+        deprecatedCalls: {type: array, items: {type: object}}
+        helmReleases: {type: array, items: {type: object}}
+        addOns: {type: array, items: {type: object}}
+        nodes: {type: array, items: {type: object}}
+        controlPlane: {type: array, items: {type: object}}
+        namespaces: {type: array, items: {type: object}}
+        unrecognizedImages: {type: array, items: {type: string}}
+    PushAccepted:
+      type: object
+      required: [snapshotId]
+      properties:
+        snapshotId: {type: integer, format: int64}
+    PushDuplicate:
+      type: object
+      required: [snapshotId, duplicate]
+      properties:
+        snapshotId: {type: integer, format: int64, description: The latest snapshot, which this push repeats.}
+        duplicate: {type: boolean, const: true}
+    RenameRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 253}
+
+    Registry:
+      type: object
+      required: [addons]
+      properties:
+        addons: {type: array, items: {$ref: "#/components/schemas/AddOn"}}
+    Citations:
+      type: [array, "null"]
+      items: {type: string, format: uri}
+    AddOn:
+      type: object
+      description: One add-on registry entry (registry/data/<id>.yaml).
+      required: [schema_version, id, display_name, matchers, support]
+      properties:
+        schema_version: {type: integer}
+        id: {type: string}
+        display_name: {type: string}
+        matchers:
+          type: object
+          properties:
+            images: {type: array, items: {type: string}}
+            charts: {type: array, items: {type: string}}
+            runtimes: {type: array, items: {type: string}}
+        support:
+          type: object
+          required: [status, citations]
+          properties:
+            status: {type: string, enum: [supported, eol, unknown]}
+            eol_date: {type: string, format: date}
+            citations: {$ref: "#/components/schemas/Citations"}
+        cycles:
+          type: array
+          items:
+            type: object
+            required: [cycle, eol, citations]
+            properties:
+              cycle: {type: string}
+              eol:
+                description: The end-of-life date, or true (ended, no date published) or false (no end announced).
+                type: [string, boolean]
+              k8s_min: {type: string}
+              k8s_max: {type: string}
+              citations: {$ref: "#/components/schemas/Citations"}
+        compat:
+          type: array
+          items:
+            type: object
+            required: [range, citations]
+            properties:
+              range: {type: string}
+              k8s_min: {type: string}
+              k8s_max: {type: string}
+              citations: {$ref: "#/components/schemas/Citations"}
+        recommendation: {type: string}
+        endoflife_product: {type: string}

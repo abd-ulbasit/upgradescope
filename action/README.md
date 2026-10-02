@@ -125,7 +125,7 @@ Two ways to adopt the gate on manifests that already have findings:
   or unchanged, and `new-blockers` counts what the gate counted.
 
 The rule format, how findings match a baseline, and finding keys are in
-[docs/configuration.md](../docs/configuration.md).
+[Suppressions and baselines](https://abd-ulbasit.github.io/upgradescope/guides/suppressions-and-baselines/).
 
 Write the baseline once, from manifests rendered to the same `path` that
 CI scans (object paths in the report are relative to it), and commit it:

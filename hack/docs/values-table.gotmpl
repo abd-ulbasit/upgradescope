@@ -1,0 +1,13 @@
+{{/*
+  The chart values table, shared by the chart README and the docs site's
+  Helm values reference (make helm-docs). helm-docs' own table writes the
+  `# --` comments from values.yaml verbatim, where a "|" ends a cell and
+  "<fullname>" is an HTML tag; this one escapes both.
+*/}}
+{{- define "upgradescope.valuesTable" -}}
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+| `{{ .Key }}` | {{ .Type }} | {{ if .Default }}{{ .Default | replace "|" "\\|" }}{{ else }}{{ .AutoDefault | replace "|" "\\|" }}{{ end }} | {{ $d := (.Description | default .AutoDescription) }}{{ if $d }}{{ $d | replace "|" "\\|" | replace "<" "&lt;" | replace ">" "&gt;" }}{{ else }}—{{ end }} |
+{{- end }}
+{{- end -}}

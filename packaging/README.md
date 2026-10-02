@@ -22,7 +22,7 @@ Local checks:
 make release-check   # snapshot of every archive, package and image, contents asserted
 make release-repro   # two snapshots from fresh clones must be byte-identical
 make notices-check   # THIRD_PARTY_NOTICES current, every dependency license allowed
-make docs            # completions and man pages into packaging/generated/
+make completions     # completions and man pages into packaging/generated/
 make hack-test       # offline tests of the scripts, the formula renderer included
 ```
 

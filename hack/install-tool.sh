@@ -6,7 +6,8 @@
 # Every tool is pinned to one release, and every platform to the sha256 its
 # upstream publishes for that release (kind: the .sha256sum assets;
 # kubectl: dl.k8s.io/.../kubectl.sha256; kubeconform: the release's
-# CHECKSUMS file; oras: the release's oras_<v>_checksums.txt), written down here so a tampered or substituted download
+# CHECKSUMS file; oras: the release's oras_<v>_checksums.txt; helm-docs: the
+# release's checksums.txt), written down here so a tampered or substituted download
 # fails instead of running — in CI, kind and kubectl run with root-equivalent
 # access to the runner's Docker. Bump version and every checksum together,
 # from the upstream release page, never from a download of your own.
@@ -30,6 +31,7 @@ KIND_VERSION=v0.33.0
 KUBECTL_VERSION=v1.37.1
 KUBECONFORM_VERSION=v0.8.0
 ORAS_VERSION=v1.3.4 # release.yml pushes the Artifact Hub metadata with it
+HELM_DOCS_VERSION=v1.14.2 # make helm-docs: the chart values tables
 
 # sha256 <tool> <os/arch>
 sha256_for() {
@@ -50,6 +52,10 @@ sha256_for() {
     "oras linux/arm64") echo 15702c6e3a4a56a8bd8ac5c17efdbcab56d9bada661ccbcf017f5b10c1d89399 ;;
     "oras darwin/amd64") echo 5e964f3d5a36eb9499a9d3e252a86b09e7adf3e6f6447eec56fd249c6702af7e ;;
     "oras darwin/arm64") echo 217761a9500242ff473de8656b5aca21136ff39e17e9e61fd8936bbfd902704c ;;
+    "helm-docs linux/amd64") echo a8cf72ada34fad93285ba2a452b38bdc5bd52cc9a571236244ec31022928d6cc ;;
+    "helm-docs linux/arm64") echo c3787212332386dcd122debef7848feb165aa701467ae3e3442df7638f3ac4e4 ;;
+    "helm-docs darwin/amd64") echo b2f1ffd0feef8dc0901a38a2053481d1d67b63ca30da4ac774166c6b52fa2245 ;;
+    "helm-docs darwin/arm64") echo 2d8399db5b33d240d5f8985241bcf5483563150b968e3229823822979f3e4b8b ;;
   esac
 }
 
@@ -62,7 +68,8 @@ case "$tool" in
   kubectl) version=$KUBECTL_VERSION ;;
   kubeconform) version=$KUBECONFORM_VERSION ;;
   oras) version=$ORAS_VERSION ;;
-  *) bad "unknown tool '$tool' (kind, kubectl, kubeconform, oras)" ;;
+  helm-docs) version=$HELM_DOCS_VERSION ;;
+  *) bad "unknown tool '$tool' (kind, kubectl, kubeconform, oras, helm-docs)" ;;
 esac
 
 platform=${UPGRADESCOPE_TOOL_PLATFORM:-$(uname -s | tr '[:upper:]' '[:lower:]')/$(uname -m)}
@@ -78,6 +85,12 @@ case "$tool" in
   kubectl) url="https://dl.k8s.io/release/$version/bin/$os/$arch/kubectl" ;;
   kubeconform) url="https://github.com/yannh/kubeconform/releases/download/$version/kubeconform-$os-$arch.tar.gz" ;;
   oras) url="https://github.com/oras-project/oras/releases/download/$version/oras_${version#v}_${os}_$arch.tar.gz" ;;
+  helm-docs)
+    # Asset names spell the platform Darwin_x86_64, Linux_arm64.
+    hd_os=$(printf '%s' "${os:0:1}" | tr '[:lower:]' '[:upper:]')${os:1}
+    hd_arch=${arch/amd64/x86_64}
+    url="https://github.com/norwoodj/helm-docs/releases/download/$version/helm-docs_${version#v}_${hd_os}_$hd_arch.tar.gz"
+    ;;
 esac
 url=${UPGRADESCOPE_TOOL_URL:-$url}
 
@@ -108,6 +121,10 @@ case "$tool" in
   oras)
     tar -xzf "$work/download" -C "$work" oras || die "no oras in the $version archive"
     mv "$work/oras" "$work/bin"
+    ;;
+  helm-docs)
+    tar -xzf "$work/download" -C "$work" helm-docs || die "no helm-docs in the $version archive"
+    mv "$work/helm-docs" "$work/bin"
     ;;
   *) mv "$work/download" "$work/bin" ;;
 esac

@@ -19,6 +19,15 @@ a CI gate.
 
 ### Added
 
+- Documentation site (MkDocs Material, published to GitHub Pages) with
+  getting-started guides, concepts, operations pages, and CLI, Helm values,
+  CRD, REST API, metrics and configuration references generated from the
+  code and checked for freshness in CI.
+- Published contracts: `api/openapi.yaml` (OpenAPI 3.1 for every server
+  route, tested against the real handlers), `api/report.schema.json` (the
+  JSON report) and `api/webhook.schema.json` (webhook payloads), plus a
+  compatibility policy (`docs/compatibility-policy.md`) that says which
+  changes a version may make.
 - Deleted built-in APIs are in the knowledge base. `tools/gen-kb` reads
   every `k8s.io/api` release since v0.17 and records each type a later
   release dropped, removed at the release that stopped serving it. These

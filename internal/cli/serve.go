@@ -193,7 +193,7 @@ It listens on loopback by default. On any other address, the read API needs
 		addSecretFlag(cmd, &opts.slackWebhook, "slack-webhook", "UPGRADESCOPE_SLACK_WEBHOOK",
 			"Slack incoming-webhook URL for delta notifications"),
 		addSecretFlag(cmd, &opts.webhook, "webhook", "UPGRADESCOPE_WEBHOOK_URL",
-			"generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in docs/operations.md)"),
+			"generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in api/webhook.schema.json)"),
 		addSecretFlag(cmd, &opts.webhookKey, "webhook-secret", "UPGRADESCOPE_WEBHOOK_SECRET",
 			"sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key>"),
 	}

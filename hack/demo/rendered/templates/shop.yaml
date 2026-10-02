@@ -1,0 +1,54 @@
+# Rendered manifests for the README demo (hack/demo/demo.tape), as
+# `helm template shop ./chart --output-dir rendered` would write them: a
+# current Deployment next to APIs that later Kubernetes minors removed.
+---
+# Source: shop/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: shop
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: web}
+  template:
+    metadata:
+      labels: {app: web}
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/example/shop-web:1.4.2
+---
+# Source: shop/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: web
+  namespace: shop
+spec:
+  backend:
+    serviceName: web
+    servicePort: 80
+---
+# Source: shop/templates/hpa.yaml
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web
+  namespace: shop
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: web}
+  minReplicas: 2
+  maxReplicas: 6
+---
+# Source: shop/templates/pdb.yaml
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: web
+  namespace: shop
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: web}
