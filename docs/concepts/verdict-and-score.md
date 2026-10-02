@@ -30,9 +30,13 @@ Required checks:
   required `target` gap, so the verdict is `unknown`, never `ready`: every
   check judges a newer minor.
 - **`versions`**, for live clusters: the server version (skew needs it).
-  A *partial* `versions` (a control-plane or kube-proxy pod whose version
-  could not be read) is required too: that component may be the one past
-  the skew policy.
+  A *partial* `versions` is required too when it names a component whose
+  version upstream would have told and was not read (a component image
+  with a digest or `latest` for a tag, or any unread kube-apiserver,
+  kube-controller-manager or kube-scheduler pod): that component may be
+  the one past the skew policy. A kube-proxy pod on a vendor image of
+  another name (Oracle OKE's) is an optional gap. See
+  [Version skew](version-skew.md).
 - **`addons`**, for live clusters: add-on detection from images, labels,
   IngressClasses and charts.
 

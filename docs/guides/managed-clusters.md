@@ -21,9 +21,12 @@ see.
   Kubelets are still checked against it, and so is kube-proxy wherever it
   runs as pods in `kube-system`, including GKE's per-architecture
   `gke.gcr.io/kube-proxy-amd64` image. A kube-proxy pod whose version
-  cannot be read from its image (digest-only, or a vendor image of another
-  name) makes the `versions` capability partial, naming the pod, rather
-  than passing silently ([Version skew](../concepts/version-skew.md)).
+  cannot be read from its image makes the `versions` capability partial,
+  naming the pod, rather than passing silently. On the `kube-proxy` image
+  under a digest or `latest`, that gap is required and the verdict is
+  `unknown` (pin a version tag, or gate with `--allow-incomplete`); on a
+  vendor image of another name (OKE's) it is optional and the verdict is
+  unaffected ([Version skew](../concepts/version-skew.md)).
 - **Provider version strings parse**: `v1.33.1-eks-…`, `v1.33.1-gke.…`,
   and the k3s, RKE2 and OpenShift suffixes (tested with observed git
   versions, `TestParseVersionObservedGitVersions`).
@@ -42,6 +45,7 @@ the `ClusterReadiness` status and server pushes, works the same way.
 | **EKS** | Expect `deprecated-calls` not assessed. Amazon's own [upgrade insights](https://docs.aws.amazon.com/eks/latest/userguide/cluster-insights.html) also flag deprecated API use; see [Comparison](../comparison.md). |
 | **GKE** | Expect `deprecated-calls` not assessed. GKE pauses automatic minor upgrades when it sees deprecated API calls ([Feature and API deprecations](https://docs.cloud.google.com/kubernetes-engine/docs/deprecations)). GKE's own Calico and Dataplane V2 Cilium images are provider builds and are not judged against upstream EOL. |
 | **AKS** | Expect `deprecated-calls` not assessed. AKS can stop a minor upgrade on recent deprecated API use ([docs](https://learn.microsoft.com/en-us/azure/aks/stop-cluster-upgrade-api-breaking-changes)). The registry has an entry for the application routing add-on's NGINX build (`aks-app-routing-nginx`), separate from upstream Ingress NGINX. |
+| **OKE** | kube-proxy runs from Oracle's digest-pinned vendor image (`<region>.ocir.io/…/oke-public-kube-proxy@sha256:…`), so its version is not read: kube-proxy skew is not evaluated, an optional `versions (partial)` gap names it, and the verdict is unaffected. The kubelet skew still judges the nodes kube-proxy follows. |
 | **k3s** | The control plane runs inside the k3s binary, not as pods: no controller-manager or scheduler skew. |
 | **RKE2** | The control plane runs as static pods in `kube-system`, so its skew is checked. RKE2's bundled ingress controller has its own registry entry (`rke2-ingress-nginx`). |
 | **OpenShift** | The chart pins user and group IDs 65532, which the `restricted-v2` SCC rejects. Unset them so the SCC assigns its own: `--set-json 'agent.podSecurityContext={"runAsUser":null,"runAsGroup":null}'` (and `server.podSecurityContext` with `fsGroup` too, when the server runs). `runAsNonRoot` and the `RuntimeDefault` seccomp profile stay. |

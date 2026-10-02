@@ -24,12 +24,26 @@ older kubeadm's `kube-scheduler-amd64`, `<name>-<arch>`, or RKE2's
 with the Kubernetes version; a build suffix (`-gke.1000`, `-eksbuild.1`,
 `-rke2r1-build…`, VMware TKG's `_vmware.1`) is dropped. A component pod whose version
 cannot be read — a digest-only image, a tag that is not a version
-(`latest`), or a labelled pod that runs no image of the component's name
-(a vendor image named otherwise) — is not skipped silently: the
-`versions` capability is reported partial, naming the components and the
-first such pod with its image, because its skew was not evaluated. That
-gap is required, so the verdict is `unknown`, not `ready`, unless
-`--allow-incomplete` is given.
+(`latest`), or a labelled pod that runs a vendor image (one not named
+like the component, or scheduler-plugins' `kube-scheduler`, which carries
+that project's version) — is not skipped silently: the `versions`
+capability is reported partial, naming the components and the first such
+pod with its image, because its skew was not evaluated.
+
+The gap is *required*, so the verdict is `unknown`, never `ready`, when
+upstream would have told the version and did not: a component image named
+like the component whose tag is not a version, or any unread
+kube-apiserver, kube-controller-manager or kube-scheduler pod. That
+component may be the one past the policy. `--allow-incomplete` lets the
+gate (the exit code, and the JUnit `not-assessed` case) pass on the
+findings alone; the verdict still reads `unknown`. Pin the component's
+image to a version tag to have its skew judged.
+
+A kube-proxy pod running a vendor image of another name is an *optional*
+gap: disclosed, verdict unaffected. Platforms ship kube-proxy that way
+(Oracle OKE runs `<region>.ocir.io/…/oke-public-kube-proxy@sha256:…`,
+pinned by digest), and kube-proxy there follows its node's version, which
+the kubelet skew still judges.
 
 `kubectl` client skew is in the policy but is not checked: client versions
 appear only in apiserver audit logs, which upgradescope does not read.
