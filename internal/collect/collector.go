@@ -122,7 +122,14 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 
 // NewClients builds the concrete client set from a rest.Config.
 // The sole construction point — everything else consumes the interfaces.
+//
+// API warning headers are discarded: client-go's default handler prints
+// each one to stderr as a klog line, above the report and in agent logs,
+// and the deprecations they announce are already findings. The caller's
+// cfg is not modified.
 func NewClients(cfg *rest.Config) (Clients, error) {
+	cfg = rest.CopyConfig(cfg)
+	cfg.WarningHandlerWithContext = rest.NoWarnings{}
 	kube, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return Clients{}, fmt.Errorf("build kubernetes client: %w", err)

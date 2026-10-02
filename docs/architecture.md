@@ -152,12 +152,80 @@ one **capability**:
 |---|---|---|
 | `versions` | `/version`, nodes (kubelet versions), namespaces (team label), kube-system control-plane pods (image tags) | The cluster ID is the `kube-system` namespace UID. Managed control planes expose no control-plane pods, so that list is empty there. |
 | `helm` | Secrets of type `helm.sh/release.v1` | Decodes base64, gunzip and JSON into a minimal struct, keeping the latest revision per release. No Helm SDK. |
-| `deprecated-calls` | apiserver `/metrics`, `apiserver_requested_deprecated_apis` | Finds *active callers*, which manifest scanners cannot see. The gauge resets when the apiserver restarts, HA apiservers report independently, and managed planes often deny access. |
+| `deprecated-calls` | apiserver `/metrics`, `apiserver_requested_deprecated_apis` | The runtime-caller signal: which deprecated APIs some client requested since the apiserver started, which manifest scanners cannot see. It does not say which client (audit logs do). The gauge resets when the apiserver restarts, HA apiservers report independently, and managed planes often deny access. |
 | `addons` | pod container images, plus the Helm releases from the `helm` step | Matches registry matchers: image repository prefix, or exact chart name. Chart evidence wins over image evidence. Unmatched images go to `unrecognizedImages` and never become findings. |
-| `api-usage` | discovery, then **metadata-only, paged** lists at each deprecated or removed group/version the knowledge base flags | Lists at the deprecated endpoint itself. A normal `get` converts objects to the preferred version and would hide that they are stored at the old one. |
+| `api-usage` | discovery, then one **metadata-only, paged** list per resource that still serves a version the knowledge base flags, at a non-deprecated version | Detects *authorship*, not servability. See below. |
 
 Every cluster-wide list is paged (`limit=500`). The collectors are
 read-only.
+
+### API usage: authorship, not residency
+
+The apiserver serves every stored object at every served version of its
+resource, converting on read. Listing a deprecated endpoint therefore
+returns every object of the kind, including objects the apiserver creates
+itself, and says nothing about who uses that version. It would also make
+the scanner a deprecated-API caller in `apiserver_requested_deprecated_apis`.
+
+So for each resource the cluster still serves at a flagged version, the
+collector lists once. Among the served versions it prefers one the
+knowledge base does not flag, then the group's preferred version, then the
+newest. When every version the resource's own group serves is flagged, it
+lists the same objects in the replacement's group instead, if that group
+serves the resource at an unflagged version (`extensions/v1beta1`
+ingresses are `networking.k8s.io/v1` ingresses on 1.19 to 1.21). Only when
+neither exists does it list a deprecated endpoint. That is unavoidable,
+and the scanner then appears in `apiserver_requested_deprecated_apis` for
+that resource. On 1.33 and later this happens on every cluster for core
+`v1` Endpoints and ComponentStatus, which only the deprecated `v1` serves.
+Then, per flagged group/version:
+
+- **The kind goes away** (the knowledge base entry has no replacement, the
+  knowledge base has no version of the kind that is neither deprecated nor
+  removed, and no non-deprecated version is served, e.g. `policy/v1beta1`
+  PodSecurityPolicy): every object counts.
+- **The kind continues** under another version: an object counts only when
+  some writer still writes it through the flagged group/version. The
+  `metadata.managedFields` entries are grouped by field manager (and
+  subresource), and the two operations are judged differently. A manager
+  has at most one server-side Apply entry, which each apply replaces,
+  apiVersion included, so it is the manager's current configuration: an
+  Apply entry for the flagged version counts. Update entries are keyed by
+  apiVersion as well as manager, so after a manager moves to `v1`, by
+  Update or by switching to server-side apply under the same name, its
+  old entry stays for every field it still co-owns, and nothing clears
+  it. An Update entry for the flagged version counts only when it is
+  newer than every entry the manager has for another version, its Apply
+  entry included. Equal or missing timestamps clear. When no manager's
+  entries are left to judge by, the apiVersion in the
+  `kubectl.kubernetes.io/last-applied-configuration` annotation decides.
+  Only kubectl client-side apply rewrites that annotation, so it may be
+  stale under any other writer. The finding names the field manager, or
+  `kubectl last-applied`.
+  Entries for the `status` subresource are ignored, and so are three
+  control-plane managers whose entries only record what was current when
+  that release wrote the object: `kube-apiserver`,
+  `kube-controller-manager` and `api-priority-and-fairness-config-producer-v1`.
+  APF objects with `apf.kubernetes.io/autoupdate-spec: "true"` are skipped,
+  because the apiserver maintains them.
+
+The trade-off: an object with no managedFields entry for that version (for
+example, created before field tracking existed, or with its managedFields
+cleared by a raw client) and no last-applied annotation goes undetected, and
+so do writes by the excluded control-plane managers. Each manager is judged
+on its own, so when an object moves from one tool to another (from
+`kubectl apply` to Helm, say), the old tool's entry keeps the finding open
+until that entry is gone, for example once the new tool owns those fields.
+A Helm upgrade that changes nothing but the apiVersion can leave Helm's
+old-version entry in place: Helm computes a patch against the live object,
+finds no change and skips the write, so no newer entry is recorded. The
+finding then stays until the object is next changed through the new
+version. The finding names at most `inventory.MaxObjectRefs` (100) objects,
+and its "written by" list comes from those. When objects were left out, the
+detail says so: "Written by (first 100 of 250 objects)".
+The `deprecated-calls` metric covers live callers. When both signals point at
+the same group/version/kind, the engine emits one finding that carries
+both pieces of evidence.
 
 ## The inventory contract
 
@@ -204,10 +272,10 @@ always give the same bytes out.
 
 | Category | Severity | Rule |
 |---|---|---|
-| `removed-api` | blocker | A stored object's group/version/kind is removed at or before the target. |
+| `removed-api` | blocker | An object written through a group/version removed at or before the target (for a kind that goes away, any stored object). Matching `deprecated-calls` rows are folded in as evidence. |
 | `removed-api` | warning | Removed in the minor after the target. |
 | `deprecated-api` | info | Deprecated, with no removal within that window. |
-| `deprecated-api-in-use` | blocker / warning / info | Active callers seen in the apiserver metric. Same window as above. Info when the removal release is missing. |
+| `deprecated-api-in-use` | blocker / warning / info | Requests seen in the apiserver metric for an API with no `removed-api` or `deprecated-api` finding. Otherwise they are evidence on that finding, unless the row is more severe than it (the apiserver reports a removal release the knowledge base does not have); then the row stays a finding of its own. Same window as above. Info when the removal release is missing. |
 | `eol-addon` | blocker | The registry status is `eol`, or the EOL date has passed. |
 | `eol-approaching` | warning | The EOL date falls within the next 90 days. |
 | `chart-incompat` | blocker | The detected add-on version matches a compat range whose `k8s_max` is below the target. |

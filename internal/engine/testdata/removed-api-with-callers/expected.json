@@ -1,0 +1,51 @@
+{
+  "clusterId": "99999999-9999-9999-9999-999999999999",
+  "findings": [
+    {
+      "category": "deprecated-api-in-use",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.",
+      "key": "deprecated-api-in-use/policy/v1beta1/poddisruptionbudgets",
+      "severity": "blocker",
+      "title": "clients still requesting policy/v1beta1 poddisruptionbudgets (removed in 1.25)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "2 object(s) written through this API version: default (1), shop (1). Written by: helm, kubectl last-applied. apiserver_requested_deprecated_apis also records requests to batch/v1beta1 cronjobs, cronjobs/status since the last apiserver restart; the metric does not identify the client.",
+      "key": "removed-api/batch/v1beta1/CronJob",
+      "namespaces": [
+        "default",
+        "shop"
+      ],
+      "objects": [
+        {
+          "manager": "helm",
+          "name": "nightly",
+          "namespace": "default"
+        },
+        {
+          "manager": "kubectl last-applied",
+          "name": "reports",
+          "namespace": "shop"
+        }
+      ],
+      "remediation": "migrate to batch/v1 CronJob",
+      "severity": "blocker",
+      "teams": [
+        "core",
+        "storefront"
+      ],
+      "title": "batch/v1beta1 CronJob removed in 1.25 (2 objects)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "ready": false,
+  "score": 50,
+  "target": "1.25",
+  "verdict": "blocked"
+}

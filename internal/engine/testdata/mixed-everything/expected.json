@@ -23,7 +23,7 @@
       "citations": [
         "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
       ],
-      "detail": "apiserver_requested_deprecated_apis reports active clients for this API since the last apiserver restart; it is removed in 1.25.",
+      "detail": "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.",
       "key": "deprecated-api-in-use/batch/v1beta1/cronjobs",
       "severity": "blocker",
       "title": "clients still requesting batch/v1beta1 cronjobs (removed in 1.25)"

@@ -133,8 +133,8 @@ create_cluster() {
   [ "$got" = "$MINOR" ] || { echo "cluster runs Kubernetes $got, want $MINOR (delete the old cluster: make demo-down)" >&2; return 1; }
 }
 
-# TODO(#3): make this gating once the api-usage collector stops counting
-# objects served at a deprecated version as removed-API users.
+# #3: gating since the api-usage collector judges authorship (managedFields,
+# last-applied) instead of counting every object a deprecated endpoint returns.
 no_removed_api_blockers() {
   "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --output json --fail-on never >"$work/vanilla.json" ||
     { echo "scan failed" >&2; return 1; }
@@ -256,7 +256,7 @@ vanilla="vanilla $MINOR cluster scanned at $NEXT has zero removed-api blockers"
 if [ -n "$reused" ]; then
   skip "$vanilla" "cluster reused, not vanilla; make demo-down first"
 else
-  best_effort "#3" "$vanilla" no_removed_api_blockers
+  gate "$vanilla" no_removed_api_blockers
 fi
 gate "EOL ingress-nginx demo add-on" env KIND_NODE_IMAGE="$NODE_IMAGE" hack/demo/kind-setup.sh
 gate "scan + agent integration tests" integration_tests
