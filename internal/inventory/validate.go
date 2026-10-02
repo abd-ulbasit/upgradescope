@@ -19,6 +19,12 @@ import (
 // An empty identifier is accepted everywhere: it means unset (a
 // cluster-scoped object's namespace, an object a collector could not
 // name).
+//
+// The rules come from k8s.io/apimachinery/pkg/api/validate/content, the
+// apiserver's own: in this apimachinery k8s.io/apimachinery/pkg/util/validation
+// marks its IsQualifiedName, IsValidLabelValue and the like deprecated in
+// favour of content's, and delegates to it, and IsPathSegmentName (the
+// rule RBAC names follow) is only in content.
 
 // Identifier rules, as the apiserver applies them.
 const (
