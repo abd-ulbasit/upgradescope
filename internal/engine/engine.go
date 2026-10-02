@@ -53,8 +53,25 @@ func keyGroup(group string) string {
 	return group
 }
 
-// namespaceBreakdown renders "ns (count)" parts sorted by namespace name and
-// returns the sorted namespace names. The empty key "" renders as
+// MaxFindingNamespaces caps the namespaces a finding lists, in Namespaces
+// (NamespacesOmitted counts the rest) and in an API usage finding's
+// evidence sentence, as inventory.MaxObjectRefs caps its objects: a
+// finding's size does not grow with how many namespaces it affects. Its
+// Teams still come from every affected namespace.
+const MaxFindingNamespaces = 100
+
+// capNamespaces lists at most MaxFindingNamespaces of f's sorted
+// namespaces, counting the rest in NamespacesOmitted.
+func capNamespaces(f *Finding) {
+	if n := len(f.Namespaces) - MaxFindingNamespaces; n > 0 {
+		f.Namespaces = f.Namespaces[:MaxFindingNamespaces:MaxFindingNamespaces]
+		f.NamespacesOmitted += n
+	}
+}
+
+// namespaceBreakdown renders "ns (count)" parts sorted by namespace name,
+// at most MaxFindingNamespaces named ones and then how many more, and
+// returns every sorted namespace name. The empty key "" renders as
 // emptyLabel in the detail and is excluded from the returned names.
 func namespaceBreakdown(counts map[string]int, emptyLabel string) (detail string, names []string) {
 	keys := make([]string, 0, len(counts))
@@ -62,17 +79,24 @@ func namespaceBreakdown(counts map[string]int, emptyLabel string) (detail string
 		keys = append(keys, ns)
 	}
 	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
+	parts := make([]string, 0, min(len(keys), MaxFindingNamespaces+1))
 	for _, ns := range keys {
 		label := ns
 		if ns == "" {
 			label = emptyLabel
 		} else {
 			names = append(names, ns)
+			if len(names) > MaxFindingNamespaces {
+				continue
+			}
 		}
 		parts = append(parts, fmt.Sprintf("%s (%d)", label, counts[ns]))
 	}
-	return strings.Join(parts, ", "), names
+	detail = strings.Join(parts, ", ")
+	if n := len(names) - MaxFindingNamespaces; n > 0 {
+		detail += fmt.Sprintf(", and %d more namespace(s)", n)
+	}
+	return detail, names
 }
 
 // teamsFor maps namespace names to teams via the inventory's namespace team
@@ -481,7 +505,8 @@ func groupInstalls(a registry.AddOn, ins []addOnInstall, node bool, now time.Tim
 // version where they differ. Node runtimes on one release line (line) are
 // named by the line's oldest version alone. The sentence lists at most
 // addOnLocatedLimit installs, so a mesh with sidecars in hundreds of
-// namespaces stays one bounded finding; Namespaces and Teams name them all.
+// namespaces stays one bounded finding; Teams name them all, Namespaces up to
+// MaxFindingNamespaces (Evaluate caps it).
 func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addOnSubject {
 	s := addOnSubject{installs: ins, node: node}
 	for _, in := range ins {
@@ -713,7 +738,8 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 // compatFor) and returns one chart-incompat blocker naming only the
 // installs that cannot run it, titled for the oldest of them; ok is false
 // when every install can. The detail lists at most addOnLocatedLimit of
-// them; Namespaces and Teams name them all. Key is left to the caller.
+// them; Teams name them all, Namespaces up to MaxFindingNamespaces
+// (Evaluate caps it). Key is left to the caller.
 func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version) (Finding, bool) {
 	f := Finding{Category: CatChartIncompat, Severity: SevBlocker, Remediation: a.Recommendation}
 	var named []string // "where (version)" of each install that cannot run target
@@ -1632,6 +1658,9 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalKBStale(inv, k, target)...)
 	findings = append(findings, evalUpgradePath(inv, target)...)
 	findings = append(findings, evalCRDVersions(inv, target)...)
+	for i := range findings {
+		capNamespaces(&findings[i])
+	}
 	sortFindings(findings)
 	score, _ := Score(findings)
 	gaps := assessmentGaps(inv, k, target)

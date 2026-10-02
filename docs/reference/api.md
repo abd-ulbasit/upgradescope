@@ -655,7 +655,8 @@ Something the evaluation could not assess.
 | `title` | string | yes | — |
 | `detail` | string | yes | — |
 | `teams` | array of string | no | — |
-| `namespaces` | array of string | no | — |
+| `namespaces` | array of string | no | Affected namespaces, sorted, at most 100. |
+| `namespacesOmitted` | integer | no | Affected namespaces not listed. |
 | `remediation` | string | no | — |
 | `citations` | array of string (uri) | no | — |
 | `objects` | array of [ObjectRef](#objectref) | no | — |
@@ -672,7 +673,8 @@ Something the evaluation could not assess.
 | `title` | string | yes | — |
 | `detail` | string | yes | — |
 | `teams` | array of string | no | — |
-| `namespaces` | array of string | no | — |
+| `namespaces` | array of string | no | Affected namespaces, sorted, at most 100. |
+| `namespacesOmitted` | integer | no | Affected namespaces not listed. |
 | `remediation` | string | no | — |
 | `citations` | array of string (uri) | no | — |
 | `objects` | array of [ObjectRef](#objectref) | no | — |
@@ -689,7 +691,8 @@ Something the evaluation could not assess.
 | `title` | string | yes | — |
 | `detail` | string | yes | — |
 | `teams` | array of string | no | — |
-| `namespaces` | array of string | no | — |
+| `namespaces` | array of string | no | Affected namespaces, sorted, at most 100. |
+| `namespacesOmitted` | integer | no | Affected namespaces not listed. |
 | `remediation` | string | no | — |
 | `citations` | array of string (uri) | no | — |
 | `objects` | array of [ObjectRef](#objectref) | no | — |
@@ -909,7 +912,8 @@ The report's fields other than its findings.
 | `title` | string | yes | — |
 | `detail` | string | yes | — |
 | `teams` | array of string | no | — |
-| `namespaces` | array of string | no | — |
+| `namespaces` | array of string | no | Affected namespaces, sorted, at most 100. |
+| `namespacesOmitted` | integer | no | Affected namespaces not listed. |
 | `remediation` | string | no | — |
 | `citations` | array of string (uri) | no | — |
 | `objects` | array of [ObjectRef](#objectref) | no | — |

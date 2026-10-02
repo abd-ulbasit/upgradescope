@@ -194,6 +194,20 @@ func TestExportHTMLPartialGap(t *testing.T) {
 	}
 }
 
+// A finding lists at most engine.MaxFindingNamespaces namespaces; the
+// auditor report says how many more it affects.
+func TestExportHTMLNamespacesOmitted(t *testing.T) {
+	var b bytes.Buffer
+	f := engine.Finding{Category: engine.CatRemovedAPI, Severity: engine.SevBlocker, Title: "t", Detail: "d",
+		Namespaces: []string{"a", "b"}, NamespacesOmitted: 7}
+	if err := writeExportHTML(&b, exportData{Report: engine.Report{Findings: []engine.Finding{f}}}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "<td>a, b and 7 more</td>"; !strings.Contains(b.String(), want) {
+		t.Errorf("HTML lacks %q:\n%s", want, b.String())
+	}
+}
+
 func TestExportErrors(t *testing.T) {
 	ts, done := exportFixture(t)
 	defer done()

@@ -387,7 +387,7 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
       {{if .Citations}}<div class="cites">{{range .Citations}}<a href="{{.}}">{{.}}</a> {{end}}</div>{{end}}
     </td>
     <td>{{range $i, $t := .Teams}}{{if $i}}, {{end}}{{$t}}{{end}}</td>
-    <td>{{range $i, $n := .Namespaces}}{{if $i}}, {{end}}{{$n}}{{end}}</td>
+    <td>{{range $i, $n := .Namespaces}}{{if $i}}, {{end}}{{$n}}{{end}}{{if .NamespacesOmitted}} and {{.NamespacesOmitted}} more{{end}}</td>
   </tr>
   {{end}}
 </table>

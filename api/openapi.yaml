@@ -893,7 +893,8 @@ components:
         title: {type: string}
         detail: {type: string}
         teams: {type: array, items: {type: string}}
-        namespaces: {type: array, items: {type: string}}
+        namespaces: {type: array, items: {type: string}, maxItems: 100, description: "Affected namespaces, sorted, at most 100."}
+        namespacesOmitted: {type: integer, description: Affected namespaces not listed.}
         remediation: {type: string}
         citations: {type: array, items: {type: string, format: uri}}
         objects: {type: array, items: {$ref: "#/components/schemas/ObjectRef"}, maxItems: 100}

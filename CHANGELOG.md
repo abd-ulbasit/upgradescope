@@ -335,6 +335,12 @@ a CI gate.
   only the affected namespaces and teams, and list at most 10 installs
   ("and N more"). A newer Helm release in one namespace no longer hides an
   older end-of-life install in another.
+- A finding lists at most 100 affected namespaces, in `namespaces` and
+  in its evidence sentence, sorted, and counts the rest in the new
+  `namespacesOmitted`, as `objects` and `objectsOmitted` do; `teams`
+  still names the teams of every affected namespace. A namespace-scoped
+  ignore rule suppresses such a finding only when it lists every
+  namespace (#121).
 - Version-skew finding keys: `version-skew/<component>` is split into
   `version-skew/<component>-newer` and `version-skew/<component>-behind`,
   and the upgrade-path finding is `version-skew/upgrade-path`. Baselines
