@@ -815,7 +815,9 @@ func TestGateChunkedOverflowIs413EvenWithoutBudget(t *testing.T) {
 }
 
 // A /gate body that does not arrive within ReadTimeout gets 408, naming no
-// socket addresses, and its bytes are given back.
+// socket addresses, and its bytes are given back. The handler cannot know
+// the ReadTimeout of the http.Server it runs in (an embedder's, here
+// 300ms), so the message names none.
 func TestGateBodyReadTimeoutIs408(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
 	ts := httptest.NewUnstartedServer(s.Handler())
@@ -826,6 +828,9 @@ func TestGateBodyReadTimeoutIs408(t *testing.T) {
 	code, body := readStatus(t, conn, 5*time.Second)
 	if code != http.StatusRequestTimeout || strings.Contains(body, "127.0.0.1") || strings.Contains(body, "tcp") {
 		t.Fatalf("status = %d (%s), want 408 naming no address", code, body)
+	}
+	if strings.Contains(body, readTimeout.String()) {
+		t.Fatalf("408 body %s names the default %s, not this server's read timeout", body, readTimeout)
 	}
 	waitBuffered(t, s, 0)
 }

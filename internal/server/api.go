@@ -239,13 +239,14 @@ func readBody(src io.Reader, declared int64, budget *byteBudget, busy, tooLarge 
 // readError says why reading a request body failed without echoing the
 // error, which names the connection's socket addresses. A body that did
 // not arrive within ReadTimeout is 408, which clients (the agent among
-// them) retry.
+// them) retry. Its message names no duration: the handler cannot see the
+// ReadTimeout of the http.Server it runs in, which an embedder sets.
 func readError(err error) *bodyError {
 	var corrupt flate.CorruptInputError
 	switch {
 	case errors.Is(err, os.ErrDeadlineExceeded):
-		return &bodyError{http.StatusRequestTimeout, fmt.Sprintf(
-			"the request body did not arrive within the server's %s read timeout; send it faster or make it smaller", readTimeout)}
+		return &bodyError{http.StatusRequestTimeout,
+			"the request body did not arrive within the server's read timeout; send it faster or make it smaller"}
 	case errors.Is(err, gzip.ErrHeader) || errors.Is(err, gzip.ErrChecksum) || errors.As(err, &corrupt):
 		return &bodyError{http.StatusUnprocessableEntity, "body is not valid gzip"}
 	}
