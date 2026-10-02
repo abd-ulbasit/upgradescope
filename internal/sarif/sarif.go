@@ -46,13 +46,17 @@ type sarifNotification struct {
 }
 
 // sarifRunProperties carries the verdict, so a consumer that cannot see
-// the omitted findings as results can still gate on the document.
+// the omitted findings as results can still gate on the document, and
+// what the scan could not assess (Report.NotAssessed), without which a
+// ready verdict cannot be taken at its word.
 type sarifRunProperties struct {
-	Ready           bool `json:"ready"`
-	Score           int  `json:"score"`
-	Findings        int  `json:"findings"`
-	OmittedFindings int  `json:"omittedFindings"`
-	Suppressed      int  `json:"suppressed,omitempty"` // len(Report.Suppressed)
+	Ready           bool                   `json:"ready"`
+	Verdict         engine.Verdict         `json:"verdict,omitempty"`
+	Score           int                    `json:"score"`
+	Findings        int                    `json:"findings"`
+	OmittedFindings int                    `json:"omittedFindings"`
+	Suppressed      int                    `json:"suppressed,omitempty"` // len(Report.Suppressed)
+	NotAssessed     []engine.CapabilityGap `json:"notAssessed,omitempty"`
 }
 
 type sarifTool struct {
@@ -196,9 +200,10 @@ func anchored(f engine.Finding) []inventory.ObjectRef {
 // Nothing is dropped silently: every unanchored finding is a tool
 // execution notification at its severity's level (a /gate stream has no
 // file names, so all of its findings land there), objects not listed as
-// results are counted in a note, and run.properties records ready, score
-// and the counts, so the document never reads as a clean pass that the
-// report is not.
+// results are counted in a note, required and partial assessment gaps are
+// notifications too, and run.properties records ready, the verdict, score,
+// the counts and every gap, so the document never reads as a clean pass
+// that the report is not.
 //
 // Suppressed findings (Report.Suppressed) follow: their located objects
 // are results carrying an external suppression whose justification is the
@@ -270,6 +275,28 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 		}
 	}
 
+	// What was not assessed follows (all of it is in run.properties): a
+	// required gap, which made the verdict unknown, is an error; a partial
+	// capability, which ran but skipped some of what it covers, a note. An
+	// optional capability that did not run at all (deprecated-calls on a
+	// managed control plane, everything but api-usage in files mode) is
+	// the expected shape of such a scan, and only in run.properties.
+	for _, g := range r.NotAssessed {
+		lvl := "note"
+		switch {
+		case g.Required:
+			lvl = "error"
+		case !g.Partial:
+			continue
+		}
+		msg := fmt.Sprintf("Not assessed: %s: %s", g.Label(), sentence(g.Reason))
+		if len(g.Skipped) > 0 {
+			msg += " Skipped: " + strings.Join(g.Skipped, ", ") + "."
+		}
+		notes = append(notes, sarifNotification{Level: lvl, Message: sarifText{Text: msg},
+			Properties: map[string]string{"capability": string(g.Capability)}})
+	}
+
 	log := sarifLog{
 		Schema:  "https://json.schemastore.org/sarif-2.1.0.json",
 		Version: "2.1.0",
@@ -283,7 +310,8 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 			Invocations: []sarifInvocation{{ExecutionSuccessful: true, ToolExecutionNotifications: notes}},
 			Results:     results,
 			Properties: &sarifRunProperties{
-				Ready: r.Ready, Score: r.Score, Findings: len(r.Findings), OmittedFindings: omitted, Suppressed: len(r.Suppressed),
+				Ready: r.Ready, Verdict: r.Verdict, Score: r.Score, Findings: len(r.Findings), OmittedFindings: omitted, Suppressed: len(r.Suppressed),
+				NotAssessed: r.NotAssessed,
 			},
 		}},
 	}

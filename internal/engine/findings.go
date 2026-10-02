@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
@@ -118,6 +120,23 @@ type CapabilityGap struct {
 	Partial  bool     `json:"partial,omitempty"`
 	Skipped  []string `json:"skipped,omitempty"`
 	Required bool     `json:"required,omitempty"`
+}
+
+// Label names the gap as every output renders it: the capability, with
+// "partial" and "required" in parentheses when they apply, e.g.
+// "api-usage (partial, required)".
+func (g CapabilityGap) Label() string {
+	var marks []string
+	if g.Partial {
+		marks = append(marks, "partial")
+	}
+	if g.Required {
+		marks = append(marks, "required")
+	}
+	if len(marks) == 0 {
+		return string(g.Capability)
+	}
+	return fmt.Sprintf("%s (%s)", g.Capability, strings.Join(marks, ", "))
 }
 
 // GapKBCoverage is the CapabilityGap capability recorded when the target is

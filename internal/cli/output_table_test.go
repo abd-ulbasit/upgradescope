@@ -192,3 +192,67 @@ No findings.
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
+
+// Issue #122: a partial capability is a gap like any other, marked
+// partial, with what it skipped; the required one is named under the
+// unknown verdict.
+func TestWriteTablePartialGaps(t *testing.T) {
+	r := engine.Report{
+		ClusterID: "c",
+		Target:    inventory.Version{Major: 1, Minor: 25},
+		KBVersion: "test-kb",
+		Score:     100,
+		Verdict:   engine.VerdictUnknown,
+		NotAssessed: []engine.CapabilityGap{
+			{Capability: inventory.CapAPIUsage, Reason: "list policy/v1beta1 podsecuritypolicies: forbidden", Partial: true, Required: true,
+				Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}},
+			{Capability: inventory.CapHelm, Reason: "helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip", Partial: true,
+				Skipped: []string{"a/b"}},
+		},
+	}
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	want := `upgradescope upgrade readiness report
+
+Cluster:  c
+Target:   1.25
+KB:       test-kb
+
+SCORE  100/100
+READY  unknown (required checks were not assessed)
+  api-usage (partial, required): list policy/v1beta1 podsecuritypolicies: forbidden
+
+No findings.
+
+NOT ASSESSED
+  api-usage (partial, required): list policy/v1beta1 podsecuritypolicies: forbidden
+      skipped: policy/v1beta1 PodSecurityPolicy
+  helm (partial): helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip
+      skipped: a/b
+`
+	if got := buf.String(); got != want {
+		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// A ready verdict with gaps says so next to the verdict, not only at the
+// end of the report.
+func TestWriteTableReadyNamesGaps(t *testing.T) {
+	r := engine.Report{
+		ClusterID: "c",
+		Target:    inventory.Version{Major: 1, Minor: 25},
+		Score:     100,
+		Ready:     true,
+		Verdict:   engine.VerdictReady,
+		NotAssessed: []engine.CapabilityGap{
+			{Capability: inventory.CapDeprecatedCalls, Reason: "upgradescope lists policy/v1beta1 podsecuritypolicies itself", Partial: true},
+			{Capability: inventory.CapHelm, Reason: "secrets list forbidden"},
+		},
+	}
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	const want = "READY  yes\n       not fully assessed: deprecated-calls (partial), helm (see NOT ASSESSED)\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("table lacks %q:\n%s", want, buf.String())
+	}
+}
