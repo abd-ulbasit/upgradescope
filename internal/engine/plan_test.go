@@ -133,6 +133,11 @@ func TestPlanOmitsUpgradePathInfo(t *testing.T) {
 				t.Errorf("hop %s lists %s", h.To, upgradePathKey)
 			}
 		}
+		for _, r := range append(slices.Clone(h.Changed), h.Carried...) {
+			if r.Key == upgradePathKey {
+				t.Errorf("hop %s refers to %s", h.To, upgradePathKey)
+			}
+		}
 	}
 }
 
