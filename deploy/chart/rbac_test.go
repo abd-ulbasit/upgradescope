@@ -35,7 +35,10 @@ const kbRulesFile = "files/kb-rbac-rules.yaml"
 // resources whose discovery entry has the list verb, so these never need a
 // rule. Keyed by "group/Kind".
 var notListable = map[string]bool{
+	"/EphemeralContainers":                          true,
 	"/PodStatusResult":                              true,
+	"batch/JobTemplate":                             true,
+	"extensions/ReplicationControllerDummy":         true,
 	"admission.k8s.io/AdmissionReview":              true,
 	"apidiscovery.k8s.io/APIGroupDiscovery":         true,
 	"apiextensions.k8s.io/ConversionReview":         true,
@@ -54,7 +57,9 @@ var notListable = map[string]bool{
 
 // irregularPlurals are kinds whose resource name is not the regular plural.
 var irregularPlurals = map[string]string{
-	"Endpoints": "endpoints",
+	"Endpoints":               "endpoints",
+	"ResourceClaimParameters": "resourceclaimparameters",
+	"ResourceClassParameters": "resourceclassparameters",
 }
 
 // resourceFor returns the REST resource name for a kind: lower-case
