@@ -11,19 +11,37 @@ name: kb-refresh
 # Each opens (or updates) its own PR; CI on the PR re-validates everything.
 # If either job fails, report-failure opens or comments on the
 # "kb-refresh is failing" issue, so a broken refresh is never silent.
+#
+# How the bot PRs get CI without a PAT or App secret: create-pull-request
+# pushes and opens the PR with this run's GITHUB_TOKEN, and GitHub starts no
+# workflow for events that token creates (no pull_request or push run, so
+# the PR showed zero checks, #11) except workflow_dispatch and
+# repository_dispatch. So when a job creates or updates its PR (the action's
+# pull-request-operation output; 'none' means the branch did not move), it
+# runs `gh workflow run ci.yml --ref <bot branch> -f full-matrix=false`,
+# which needs actions: write on that job only. The dispatched run builds the
+# branch tip, the commit create-pull-request just pushed, and its check runs
+# attach to that commit, so they show on the PR. In ci.yml a dispatched run
+# is not path-filtered (everything a PR can run, at the PR's Kubernetes and
+# Postgres sets), and its registry job diffs the branch against the default
+# branch. hack/kb-refresh-ci_test.sh (make hack-test) pins both halves.
 
 on:
   schedule:
     - cron: '17 6 * * 1' # Mondays 06:17 UTC
   workflow_dispatch:
 
+# Each job asks for what it writes.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   api-lifecycle:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the bot branch
+      pull-requests: write # open or update its PR
+      actions: write # dispatch ci.yml on it (see the top of this file)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -51,6 +69,7 @@ jobs:
           cd tools/gen-kb && go test ./...
 
       - name: Open PR if anything changed
+        id: pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: bot/kb-refresh-api
@@ -74,8 +93,24 @@ jobs:
           labels: kb-refresh
           delete-branch: true
 
+      # The PR's CI: see the top of this file.
+      - name: Run CI on the PR
+        if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.pr.outputs.pull-request-branch }}
+          HEAD_SHA: ${{ steps.pr.outputs.pull-request-head-sha }}
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH" -f full-matrix=false
+          echo "ci.yml dispatched on $BRANCH at $HEAD_SHA; its checks show on the PR"
+
   registry:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the bot branch
+      pull-requests: write # open or update its PR
+      actions: write # dispatch ci.yml on it (see the top of this file)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -87,6 +122,7 @@ jobs:
         run: make eol-sync
 
       - name: Open PR if anything changed
+        id: pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: bot/kb-refresh-registry
@@ -104,6 +140,18 @@ jobs:
             - [ ] Any `status: eol` flips are real (check the cited endoflife.date page)
           labels: kb-refresh
           delete-branch: true
+
+      # The PR's CI: see the top of this file.
+      - name: Run CI on the PR
+        if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.pr.outputs.pull-request-branch }}
+          HEAD_SHA: ${{ steps.pr.outputs.pull-request-head-sha }}
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH" -f full-matrix=false
+          echo "ci.yml dispatched on $BRANCH at $HEAD_SHA; its checks show on the PR"
 
   report-failure:
     needs: [api-lifecycle, registry]

@@ -40,7 +40,9 @@ render() {
 
 # The runs that matter. sha A is both main's head and the tagged commit (the
 # usual merge-then-tag flow); release.yml's workflow_call runs carry the
-# caller's event, so a tag run is event push on refs/tags/*.
+# caller's event, so a tag run is event push on refs/tags/*. kb-refresh.yml
+# dispatches ci.yml on its bot branches (botapi, botreg): their PRs, opened
+# with GITHUB_TOKEN, start no pull_request run.
 A=1111111111111111111111111111111111111111
 B=2222222222222222222222222222222222222222
 runs="pr7a     pull_request      refs/pull/7/merge   $A 7
@@ -50,6 +52,8 @@ mainA    push              refs/heads/main     $A
 mainB    push              refs/heads/main     $B
 sched    schedule          refs/heads/main     $A
 dispatch workflow_dispatch refs/heads/main     $A
+botapi   workflow_dispatch refs/heads/bot/kb-refresh-api $A
+botreg   workflow_dispatch refs/heads/bot/kb-refresh-registry $B
 rc1      push              refs/tags/v0.2.0-rc.1 $A
 final    push              refs/tags/v0.2.0    $A
 redo     workflow_dispatch refs/tags/v0.2.0    $A"
@@ -68,12 +72,12 @@ check() {
   # A PR's superseded run is cancelled; nothing else ever is.
   [ "$(G pr7a)" = "$(G pr7b)" ] || echo "a new push to PR 7 does not share its group ($(G pr7a) vs $(G pr7b))"
   [ "$(C pr7a)" = true ] || echo "a PR run is not cancel-in-progress ($(C pr7a))"
-  for n in mainA sched dispatch rc1 final redo; do
+  for n in mainA sched dispatch botapi botreg rc1 final redo; do
     [ "$(C "$n")" = false ] || echo "$n is cancel-in-progress ($(C "$n"))"
   done
   # No two of these may share a group: each would cancel the other while it
   # is pending. Above all, no tag run may share one with main or another tag.
-  local names=(pr7a pr8 mainA mainB sched dispatch rc1 final redo) i j
+  local names=(pr7a pr8 mainA mainB sched dispatch botapi botreg rc1 final redo) i j
   for ((i = 0; i < ${#names[@]}; i++)); do
     for ((j = i + 1; j < ${#names[@]}; j++)); do
       [ "$(G "${names[i]}")" != "$(G "${names[j]}")" ] ||
@@ -91,7 +95,7 @@ if [ -s "$work/out" ]; then
   sed 's/^/     /' "$work/out" >&2
   fails=1
 else
-  echo "ok   $ci concurrency: PR runs supersede; main, schedule, dispatch and tag runs never share a group"
+  echo "ok   $ci concurrency: PR runs supersede; main, schedule, dispatch (bot branches too) and tag runs never share a group"
 fi
 
 # The check itself must catch the regression it exists for: the event+sha
