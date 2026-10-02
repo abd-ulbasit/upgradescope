@@ -189,6 +189,11 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 	target := cur.Target.String()
 	prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, cluster.ID, target)
 	if errors.Is(err, store.ErrNotFound) {
+		// First decided evaluation of this target: after an upgrade, the
+		// previous default target's is the baseline (upgradeBaseline).
+		prev, err = s.upgradeBaseline(ctx, cluster.ID, cur)
+	}
+	if errors.Is(err, store.ErrNotFound) {
 		return d // first decided evaluation of this target: no delta
 	}
 	if err != nil {

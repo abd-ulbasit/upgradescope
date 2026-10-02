@@ -2,12 +2,15 @@ package server
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"slices"
 	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
@@ -88,6 +91,43 @@ func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Change {
 		}
 	}
 	return changes
+}
+
+// upgradeLookback is how many minors below a new default target
+// upgradeBaseline looks for the cluster's previous one: one for an
+// upgrade the agent pushed on both sides of, more when it missed a push
+// across several upgrades.
+const upgradeLookback = 3
+
+// upgradeBaseline is the notification baseline of a default target with
+// no decided evaluation yet, because the cluster upgraded (1.35 → 1.36
+// makes the default target 1.37): the latest decided evaluation of the
+// nearest lower target within upgradeLookback minors, which was the
+// default target before the upgrade. So a blocker the new target adds
+// (an API removed in 1.37) is announced, and blockers the cluster had
+// already been told about at the old target are not announced again.
+//
+// The other candidate, the previous snapshot evaluated at the new
+// target, would hide exactly the blockers that are news: the cluster
+// already used that API before the upgrade.
+//
+// Only the default target (the next minor above cur.ServerVersion) has
+// one. An extra target's first evaluation stays the silent baseline: a
+// target added to --targets is a new question, and announcing it would
+// page every cluster in the fleet on the restart. ErrNotFound when there
+// is no baseline.
+func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engine.Report) (store.Evaluation, error) {
+	server, err := inventory.ParseVersion(cur.ServerVersion)
+	if err != nil || server.Next() != cur.Target {
+		return store.Evaluation{}, store.ErrNotFound
+	}
+	for minor := cur.Target.Minor - 1; minor >= max(cur.Target.Minor-upgradeLookback, 0); minor-- {
+		prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, clusterID, inventory.Version{Major: cur.Target.Major, Minor: minor}.String())
+		if !errors.Is(err, store.ErrNotFound) {
+			return prev, err
+		}
+	}
+	return store.Evaluation{}, store.ErrNotFound
 }
 
 func change(kind string, f engine.Finding, targets []string) notify.Change {
