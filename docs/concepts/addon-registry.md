@@ -17,12 +17,31 @@ the dashboard.
 - **Helm releases.** A release whose chart name is in an entry's matchers is
   that add-on, at the release's `appVersion` (never the chart version).
   Chart evidence wins over image evidence.
+- **Pod labels**, for images no matcher knows (a rebuilt or renamed
+  controller image). A pod whose `app.kubernetes.io/name`, `helm.sh/chart`
+  chart name or `app.kubernetes.io/part-of` is an entry's ID or chart
+  matcher is that add-on; the version is `app.kubernetes.io/version` when
+  the name label (or, without one, the chart label) named it. Pods running
+  a provider build are never claimed through their labels.
+- **IngressClass.** An `IngressClass` whose `spec.controller` is
+  `k8s.io/ingress-nginx` is Ingress NGINX, without a version, when nothing
+  else found Ingress NGINX, its RKE2 or AKS builds, or Traefik (whose
+  Kubernetes Ingress NGINX provider serves that class). It is enough for a
+  blocker, because Ingress NGINX is retired as a whole.
 - **Node container runtimes.** `node.status.nodeInfo.containerRuntimeVersion`
   (`containerd://1.7.27`).
 
-Images that match no entry are listed in the inventory as
-`unrecognizedImages` and never become findings: an add-on the registry does
-not know is not judged.
+Rendered manifests (`scan --files`, and `/gate` without `?cluster=`) are
+matched the same way, from the images and labels of Pod, Deployment,
+DaemonSet, StatefulSet, ReplicaSet, Job and CronJob pod templates and from
+IngressClasses. Images injected at admission time are not in them.
+
+Image repositories that match no entry are listed as `unrecognizedImages`
+(at most 200) in the inventory and the report, in JSON, the table, Markdown
+and the dashboard's cluster view (not in SARIF), and never become
+findings: an add-on the registry does not know is not judged. An add-on
+running one of them may still have been found by its labels or Helm
+release.
 
 ## How it is judged
 

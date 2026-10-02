@@ -282,3 +282,38 @@ func TestMatchesRange(t *testing.T) {
 		}
 	}
 }
+
+// An IngressClass names an add-on cluster-wide, without a version (#18),
+// and a manifest object may leave its namespace unset (#47):
+// a product retired as a whole is still end-of-life, and the evidence
+// sentence says where the add-on was seen instead of an empty namespace
+// list.
+func TestEvalAddOnsWithoutNamespace(t *testing.T) {
+	inv := inventory.Inventory{AddOns: []inventory.AddOnInstance{{ID: "ingress-nginx", Source: "ingressclass"}}}
+	fs := evalAddOns(inv, testRegistryKB(), inventory.Version{Major: 1, Minor: 30}, testNow)
+	if len(fs) != 1 || fs[0].Key != "eol-addon/ingress-nginx" || fs[0].Severity != SevBlocker {
+		t.Fatalf("findings = %+v, want the EOL blocker alone", fs)
+	}
+	if want := "Detected ingress-nginx version (unknown) via ingressclass (cluster-scoped). Upstream support has ended."; fs[0].Detail != want {
+		t.Errorf("detail = %q\nwant     %q", fs[0].Detail, want)
+	}
+	if fs[0].Namespaces != nil || fs[0].Teams != nil {
+		t.Errorf("namespaces %v, teams %v; want none", fs[0].Namespaces, fs[0].Teams)
+	}
+
+	// Files mode: a manifest object without metadata.namespace.
+	inv.AddOns = []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.8.1", Namespaces: []string{""}, Source: "image"}}
+	fs = evalAddOns(inv, testRegistryKB(), inventory.Version{Major: 1, Minor: 30}, testNow)
+	if want := "Detected ingress-nginx version 1.8.1 via image in namespace(s): namespace unset. Upstream support has ended."; len(fs) != 1 || fs[0].Detail != want {
+		t.Errorf("findings = %+v\nwant detail %q", fs, want)
+	} else if fs[0].Namespaces != nil {
+		t.Errorf("namespaces = %q, want none", fs[0].Namespaces)
+	}
+
+	inv.AddOns = []inventory.AddOnInstance{{ID: "ingress-nginx", Source: "ingressclass"}}
+	inv.AddOns = append(inv.AddOns, inventory.AddOnInstance{ID: "ingress-nginx", Version: "1.11.2", Namespaces: []string{"edge"}, Source: "labels"})
+	fs = evalAddOns(inv, testRegistryKB(), inventory.Version{Major: 1, Minor: 30}, testNow)
+	if want := "Detected ingress-nginx in namespace(s): cluster-scoped (version unknown via ingressclass), edge (1.11.2 via labels). Upstream support has ended."; len(fs) == 0 || fs[0].Detail != want {
+		t.Errorf("findings = %+v\nwant first detail %q", fs, want)
+	}
+}

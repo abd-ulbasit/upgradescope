@@ -95,6 +95,10 @@ export interface Report {
   source?: ReportSource;
   serverVersion?: string;
   notApplicable?: boolean; // the cluster already runs the target
+  // newer servers: image repositories no add-on registry entry matches
+  // (sorted, at most 200), and how many more the cap dropped
+  unrecognizedImages?: string[];
+  unrecognizedImagesOmitted?: number;
 }
 
 export interface ScorePoint {

@@ -120,7 +120,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseSlot()
-	manifests, err := collect.CollectManifests(body.reader())
+	manifests, err := collect.CollectManifests(body.reader(), s.cfg.KB.AddOns)
 	releaseBody()
 	if err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())

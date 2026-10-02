@@ -95,7 +95,7 @@ func TestCollectDefaults(t *testing.T) {
 // Offline inventories must say so: the engine does not require the versions
 // capability for them.
 func TestManifestInventoriesAreFilesSource(t *testing.T) {
-	inv, err := CollectManifests(strings.NewReader("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"))
+	inv, err := CollectManifests(strings.NewReader("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

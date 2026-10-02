@@ -502,7 +502,8 @@ h1 .badge {
 }
 
 .not-assessed ul,
-.verdict-unknown-card ul {
+.verdict-unknown-card ul,
+.unrecognized-images ul {
   margin: 0;
   padding-left: 18px;
   color: var(--muted);

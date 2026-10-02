@@ -372,8 +372,8 @@ func kindMatchesResource(kind, resource string) bool {
 // installs) or one node's container runtime.
 type addOnInstall struct {
 	version string   // normalised app version; "" when unknown
-	via     string   // "image", "chart 1.14.5"; "" for a node runtime
-	where   []string // sorted namespaces, or the node's name
+	via     string   // "image", "labels", "ingressclass", "chart 1.14.5"; "" for a node runtime
+	where   []string // sorted namespaces (none for an IngressClass), or the node's name
 	teams   []string // of the namespaces
 }
 
@@ -494,19 +494,48 @@ func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addO
 		s.namespaces = append(s.namespaces, in.where...)
 		s.teams = append(s.teams, in.teams...)
 		same = same && in.version == ins[0].version && in.via == ins[0].via
-		for _, ns := range in.where {
-			parts = append(parts, fmt.Sprintf("%s (%s via %s)", ns, cmp.Or(in.version, "version unknown"), in.via))
+		where := in.where
+		if len(where) == 0 { // an IngressClass: cluster-scoped
+			where = []string{"cluster-scoped"}
+		}
+		for _, ns := range where {
+			parts = append(parts, fmt.Sprintf("%s (%s via %s)", nsLabel(ns), cmp.Or(in.version, "version unknown"), in.via))
 		}
 	}
 	s.namespaces, s.teams = sortedSet(s.namespaces), sortedSet(s.teams)
-	if same {
+	labels := make([]string, len(s.namespaces))
+	for i, ns := range s.namespaces {
+		labels[i] = nsLabel(ns)
+	}
+	if same && len(s.namespaces) == 0 {
+		s.located = fmt.Sprintf("Detected %s version %s via %s (cluster-scoped).", name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via)
+	} else if same {
 		s.located = fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
-			name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via, located(s.namespaces))
+			name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via, located(labels))
 	} else {
 		sort.Strings(parts)
 		s.located = fmt.Sprintf("Detected %s in namespace(s): %s.", name, located(parts))
 	}
+	s.namespaces = namedNamespaces(s.namespaces)
 	return s
+}
+
+// nsLabel names a namespace in an evidence sentence; "" is a manifest
+// object's unset metadata.namespace (files mode).
+func nsLabel(ns string) string {
+	return cmp.Or(ns, "namespace unset")
+}
+
+// namedNamespaces drops the unset namespace "" from a finding's sorted
+// namespaces: it names no namespace (and no team) to filter by.
+func namedNamespaces(ns []string) []string {
+	if len(ns) > 0 && ns[0] == "" {
+		ns = ns[1:]
+	}
+	if len(ns) == 0 {
+		return nil
+	}
+	return ns
 }
 
 // addOnLocatedLimit caps the installs an add-on finding's evidence
@@ -638,7 +667,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 		if !productDated && !inCycle {
 			ver, reason := s.version, " The registry has no release-line data for this version, so its end of life was not assessed."
 			if ver == "" {
-				ver, reason = "(version unknown)", " No version could be read from the image tag or chart, so its end of life and Kubernetes compatibility were not assessed."
+				ver, reason = "(version unknown)", " No version could be read from an image tag, chart appVersion or app.kubernetes.io/version label, so its end of life and Kubernetes compatibility were not assessed."
 			}
 			f := finding(s, CatAddOnNoData, SevInfo, string(CatAddOnNoData)+"/"+a.ID,
 				fmt.Sprintf("no lifecycle data for %s %s", a.DisplayName, ver), s.located+reason, a.Support.Citations)
@@ -668,7 +697,7 @@ func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version)
 			continue
 		}
 		for _, w := range in.where {
-			named = append(named, fmt.Sprintf("%s (%s)", w, in.version))
+			named = append(named, fmt.Sprintf("%s (%s)", nsLabel(w), in.version))
 		}
 		versions[in.version] = true
 		if !s.node {
@@ -683,7 +712,7 @@ func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version)
 	if oldest == "" {
 		return Finding{}, false
 	}
-	f.Namespaces, f.Teams = sortedSet(f.Namespaces), sortedSet(f.Teams)
+	f.Namespaces, f.Teams = namedNamespaces(sortedSet(f.Namespaces)), sortedSet(f.Teams)
 	if len(versions) > 1 {
 		sort.Strings(named)
 		f.Detail += " Incompatible installs: " + located(named) + "."
@@ -1489,6 +1518,12 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	score, _ := Score(findings)
 	gaps := assessmentGaps(inv, k, target)
 	verdict := verdictFor(findings, gaps)
+	// Inventories from other collectors may arrive unsorted or over the cap.
+	unrecognized := sortedSet(slices.Clone(inv.UnrecognizedImages))
+	omitted := inv.UnrecognizedImagesOmitted
+	if n := len(unrecognized) - inventory.MaxUnrecognizedImages; n > 0 {
+		unrecognized, omitted = unrecognized[:inventory.MaxUnrecognizedImages], omitted+n
+	}
 
 	return Report{
 		ClusterID:     inv.ClusterID,
@@ -1500,5 +1535,8 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 		Verdict:       verdict,
 		Findings:      findings,
 		NotAssessed:   gaps,
+
+		UnrecognizedImages:        unrecognized,
+		UnrecognizedImagesOmitted: omitted,
 	}
 }

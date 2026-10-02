@@ -61,6 +61,21 @@ a CI gate.
   keyed on the installed app version. Registry schema v2 adds
   `tools/eol-sync`-generated cycles, path-suffix image matchers and Helm
   `appVersion` matching.
+- Add-ons are also detected from `helm.sh/chart` and `app.kubernetes.io/*`
+  pod labels (the version from `app.kubernetes.io/version`) and from an
+  `IngressClass` whose controller is `k8s.io/ingress-nginx`, so Ingress
+  NGINX installs that run mirrored or rebuilt images are found (#18).
+- `scan --files`, and `/gate` without `?cluster=`, detect add-ons from the
+  container and init-container images and labels of workload pod templates
+  (Pod, Deployment, DaemonSet, StatefulSet, ReplicaSet, Job, CronJob), so a
+  CI gate catches an end-of-life add-on in a pull request (#47). Images
+  injected at admission time are not in the manifests; with `?cluster=`,
+  `/gate` does not judge the manifests' add-ons yet (#150).
+- The report lists the image repositories no add-on matcher recognised
+  (`unrecognizedImages`, at most 200, and `unrecognizedImagesOmitted`) in
+  JSON, the table, Markdown and the dashboard's cluster view (not in
+  SARIF). They are a gap in add-on detection, not findings, and change
+  neither score nor verdict.
 - The knowledge base covers Kubernetes 1.37 (`k8s.io/api` v0.37.1), and the
   weekly refresh regenerates it without hand edits.
 - Agent: `--targets` reconciles `spec.targets`; `--manage-crd` controls
@@ -109,6 +124,10 @@ a CI gate.
 - Chart: the agent can read the resources of the newly known deleted APIs
   (for example `auditsinks`, `clustercidrs`, `podpresets` and the DRA
   alpha kinds), so a cluster that still serves them is checked.
+- Chart: the agent's ClusterRole can list `ingressclasses`
+  (`networking.k8s.io`) for add-on detection; a test pins the grant.
+- `--files` reports no longer list `addons` under `notAssessed`: add-ons
+  are assessed from the manifests.
 - **The gate fails closed.** Under `--fail-on blocker|warning` (the
   default), a scan with verdict `unknown` exits 2. A required check that
   could not run gives `unknown`: for example, RBAC denied, the cluster was

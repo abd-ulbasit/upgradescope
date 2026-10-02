@@ -106,8 +106,13 @@ does not exist: build one from the clone and set `image.repository` and
   planes often forbid it; the report then says so.
 - **Add-ons past end of life** and their Kubernetes compatibility, from a
   registry of 20 add-ons in which every claim carries a citation (Ingress
-  NGINX, retired in March 2026, is a blocker). Add-ons outside it are not
-  judged. [Registry](https://abd-ulbasit.github.io/upgradescope/concepts/addon-registry/).
+  NGINX, retired in March 2026, is a blocker). An add-on is found by its
+  container images, its Helm release, its `helm.sh/chart` or
+  `app.kubernetes.io/*` pod labels, or an Ingress NGINX `IngressClass`; in
+  rendered manifests, by the images and labels of workload pod templates.
+  Add-ons outside the registry are not judged; the report lists the images
+  no matcher recognised.
+  [Registry](https://abd-ulbasit.github.io/upgradescope/concepts/addon-registry/).
 - **Version skew** of kubelets, kube-proxy, controller-manager, scheduler
   and HA apiservers; not `kubectl` clients, which only audit logs reveal.
 - **Helm charts** whose `kubeVersion` excludes the target, and stored

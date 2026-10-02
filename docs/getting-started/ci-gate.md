@@ -4,6 +4,13 @@ Three ways to fail a pull request that would break the upgrade: the GitHub
 Action, the CLI in any CI system, and the server's gate endpoint, which
 judges manifests inside a known cluster's context.
 
+A manifest gate sees what the render contains: removed and deprecated APIs,
+and add-ons named by the images and labels of workload pod templates, so a
+pull request that adds or keeps an end-of-life add-on (an Ingress NGINX
+controller, say) fails. It cannot see version skew, Helm releases, or
+images injected at admission time (a mesh sidecar); those need a
+cluster.
+
 ## GitHub Action
 
 The repository root is a composite action. It installs a release binary
@@ -80,7 +87,10 @@ question: *would these manifests block this cluster's upgrade?* The
 manifests are judged inside the cluster's latest stored inventory: its
 version, nodes, add-ons and team labels. Only what the manifests introduce
 counts toward the verdict, so a cluster's existing EOL add-on does not fail
-every pull request.
+every pull request. With `cluster`, only the manifests' API usage is judged
+so far: an add-on the manifests introduce is not
+([#150](https://github.com/abd-ulbasit/upgradescope/issues/150)); gate it
+without `cluster`, or with `scan --files`.
 
 ```sh
 curl -sS --fail-with-body -X POST \
@@ -96,7 +106,8 @@ curl -sS --fail-with-body -X POST \
 - `path` names the file the stream was rendered to, so code scanning places
   the findings on it.
 - Without `cluster`, the manifests are judged on their own, like
-  `scan --files`. `format=json` (the default) returns the full report.
+  `scan --files`, add-ons included. `format=json` (the default) returns
+  the full report.
 - The gate stores nothing. It needs the read token, when the server has
   one.
 

@@ -15,7 +15,7 @@ import (
 )
 
 func TestCollectFiles(t *testing.T) {
-	inv, sum, err := CollectFiles("testdata/files", nil)
+	inv, sum, err := CollectFiles("testdata/files", kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,11 +30,13 @@ func TestCollectFiles(t *testing.T) {
 		t.Error("CollectedAt must be set")
 	}
 
-	if got := inv.Capabilities[inventory.CapAPIUsage]; !got.Available {
-		t.Errorf("api-usage capability = %+v, want available", got)
+	for _, cap := range []inventory.Capability{inventory.CapAPIUsage, inventory.CapAddOns} { // #47: add-ons from pod templates
+		if got := inv.Capabilities[cap]; !got.Available {
+			t.Errorf("%s capability = %+v, want available", cap, got)
+		}
 	}
 	for _, cap := range []inventory.Capability{
-		inventory.CapDeprecatedCalls, inventory.CapHelm, inventory.CapAddOns, inventory.CapVersions,
+		inventory.CapDeprecatedCalls, inventory.CapHelm, inventory.CapVersions,
 	} {
 		if got := inv.Capabilities[cap]; got.Available || got.Reason != "files mode" {
 			t.Errorf("capability %s = %+v, want {false, \"files mode\"}", cap, got)
@@ -64,7 +66,7 @@ func TestCollectFiles(t *testing.T) {
 }
 
 func TestCollectFilesMissingDir(t *testing.T) {
-	if _, _, err := CollectFiles("testdata/does-not-exist", nil); err == nil {
+	if _, _, err := CollectFiles("testdata/does-not-exist", kb.KB{}); err == nil {
 		t.Fatal("want error for missing directory")
 	}
 }
@@ -111,7 +113,7 @@ func TestCollectFilesSkipsNonManifests(t *testing.T) {
 		"tsconfig.json":                  "/* compiler options */\n{\"compilerOptions\": {}}\n",
 	})
 
-	inv, sum, err := CollectFiles(dir, nil)
+	inv, sum, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
 		t.Fatalf("CollectFiles must not fail on non-manifest input: %v", err)
 	}
@@ -155,7 +157,7 @@ items:
     name: ok
     namespace: {{ .Release.Namespace }}
 `})
-	inv, sum, err := CollectFiles(dir, nil)
+	inv, sum, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +187,7 @@ func TestCollectFilesUnassessedRemovedAPI(t *testing.T) {
 		"rendered/configmaps.json":  `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n{",
 		"chart/templates/notes.txt": "apiVersion: policy/v1beta1\nkind: PodDisruptionBudget\n",
 	}
-	inv, sum, err := CollectFiles(writeTree(t, clean), k.APILifecycle)
+	inv, sum, err := CollectFiles(writeTree(t, clean), k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +197,7 @@ func TestCollectFilesUnassessedRemovedAPI(t *testing.T) {
 
 	clean["chart/templates/pdb.yaml"] = "apiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: {{ include \"chart.fullname\" . }}\n"
 	clean["rendered/all.json"] = `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n" + `{"apiVersion": "v1", "kind": "ConfigMap"}` + "\n" + `{"apiVersion": "batch/v1beta1", "kind": "CronJob",`
-	inv, _, err = CollectFiles(writeTree(t, clean), k.APILifecycle)
+	inv, _, err = CollectFiles(writeTree(t, clean), k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +234,7 @@ func TestCollectFilesUnassessedManyNames(t *testing.T) {
 
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	inv, _, err := CollectFiles(dir, k.APILifecycle)
+	inv, _, err := CollectFiles(dir, k)
 	runtime.ReadMemStats(&after)
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +253,7 @@ func TestCollectFilesUnassessedManyNames(t *testing.T) {
 // warning names only the separator line.
 func TestCollectFilesInvalidSeparatorKeepsPrecedingDoc(t *testing.T) {
 	dir := writeTree(t, map[string]string{"rendered.yaml": ingressV1beta1 + "----\napiVersion: v1\nkind: ConfigMap\n"})
-	inv, sum, err := CollectFiles(dir, nil)
+	inv, sum, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +284,7 @@ metadata:
   name: c
 ---
 ` + ingressV1beta1})
-	inv, sum, err := CollectFiles(dir, nil)
+	inv, sum, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +323,7 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 		"vendor/k8s.io/api/testdata/ing.yaml": ingressV1beta1,
 		"deploy/vendor/upstream/ing.yml":      ingressV1beta1,
 	})
-	inv, sum, err := CollectFiles(dir, nil)
+	inv, sum, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +336,7 @@ func TestCollectFilesSkipsVCSAndDependencyDirs(t *testing.T) {
 	if want := []string{"deploy/vendor/upstream/ing.yml", "rendered.yaml"}; !reflect.DeepEqual(files, want) || sum.Files != 2 || sum.Skipped != 0 {
 		t.Errorf("objects in %v, summary %+v; want %v walked", files, sum, want)
 	}
-	inv, _, err = CollectFiles(filepath.Join(dir, "vendor"), nil)
+	inv, _, err = CollectFiles(filepath.Join(dir, "vendor"), kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +355,7 @@ func TestCollectFiles_SkippedDirsReported(t *testing.T) {
 		"vendor/modules.txt":                  "# k8s.io/api v0.30.0\n",
 		"vendor/k8s.io/api/testdata/ing.yaml": ingressV1beta1,
 	})
-	_, sum, err := CollectFiles(dir, nil)
+	_, sum, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +386,7 @@ func TestCollectFiles_SymlinkedDirWarns(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "outside", "cron.yaml"), filepath.Join(dir, "real", "cron-link.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	inv, sum, err := CollectFiles(filepath.Join(dir, "real"), nil)
+	inv, sum, err := CollectFiles(filepath.Join(dir, "real"), kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +410,7 @@ func TestCollectFiles_SymlinkRoot(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "out"), link); err != nil {
 		t.Fatal(err)
 	}
-	inv, sum, err := CollectFiles(link, nil)
+	inv, sum, err := CollectFiles(link, kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +423,7 @@ func TestCollectFiles_SymlinkRoot(t *testing.T) {
 // (`kustomize build overlays/prod > rendered`).
 func TestCollectFilesSingleFileAnyExtension(t *testing.T) {
 	dir := writeTree(t, map[string]string{"rendered": ingressV1beta1})
-	inv, sum, err := CollectFiles(filepath.Join(dir, "rendered"), nil)
+	inv, sum, err := CollectFiles(filepath.Join(dir, "rendered"), kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +451,7 @@ kind: CronJob
 metadata:
   name: nightly
 `})
-	inv, _, err := CollectFiles(dir, nil)
+	inv, _, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +477,7 @@ func TestCollectFilesCapsObjectRefs(t *testing.T) {
 		fmt.Fprintf(&b, "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm-%d\n", i)
 	}
 	dir := writeTree(t, map[string]string{"many.yaml": b.String()})
-	inv, _, err := CollectFiles(dir, nil)
+	inv, _, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,11 +528,11 @@ items:
     name: restricted
 `
 	dir := writeTree(t, map[string]string{"stream/s.yaml": stream, "list/l.yaml": list})
-	want, _, err := CollectFiles(filepath.Join(dir, "stream"), nil)
+	want, _, err := CollectFiles(filepath.Join(dir, "stream"), kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := CollectFiles(filepath.Join(dir, "list"), nil)
+	got, _, err := CollectFiles(filepath.Join(dir, "list"), kb.KB{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +601,7 @@ items: []
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			inv, err := CollectManifests(strings.NewReader(tc.doc))
+			inv, err := CollectManifests(strings.NewReader(tc.doc), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -643,7 +645,7 @@ func FuzzScanManifestStream(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		objs, bad, err := parseManifestStream(strings.NewReader(s))
+		objs, _, bad, err := parseManifestStream(strings.NewReader(s))
 		if err != nil {
 			t.Fatalf("in-memory reader cannot fail, got %v", err)
 		}

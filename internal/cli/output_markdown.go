@@ -16,7 +16,8 @@ import (
 // read; against a baseline, how many findings are new; one table row
 // per finding (severity, baseline state when compared, title, objects as
 // file:line, remediation); the suppressed findings with the reason each
-// was accepted and what accepted it; then the NOT ASSESSED gaps. The
+// was accepted and what accepted it; then the NOT ASSESSED gaps and the
+// image repositories no add-on registry entry matches, folded. The
 // GitHub Action writes it to the job's step summary, where it has to say
 // why a gate passed: blockers suppressed, or all in the baseline. Object
 // names, file paths, titles and reasons can come from the scanned
@@ -100,6 +101,7 @@ func WriteMarkdown(w io.Writer, r engine.Report) {
 			fmt.Fprintf(w, "- %s: %s%s\n", g.Label(), mdText(g.Reason), skipped)
 		}
 	}
+	mdUnrecognizedImages(w, r)
 }
 
 // baselineCounts counts the findings marked new and unchanged; both are

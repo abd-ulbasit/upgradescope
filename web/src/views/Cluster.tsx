@@ -3,6 +3,7 @@ import { fetchExport, getCluster, getHistory, getReport, saveBlob } from "../api
 import type { ExportFormat } from "../api";
 import { useAsync } from "../hooks";
 import { Sparkline } from "../Sparkline";
+import { UnrecognizedImages } from "../UnrecognizedImages";
 import type {
   CapabilityGap,
   Finding,
@@ -267,6 +268,11 @@ export function Cluster({
                 clusterId={id}
                 target={report.target}
                 verdict={verdict}
+              />
+
+              <UnrecognizedImages
+                images={report.unrecognizedImages}
+                omitted={report.unrecognizedImagesOmitted}
               />
             </>
           );

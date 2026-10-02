@@ -65,9 +65,9 @@ $ echo $?
 ```
 
 Against a live cluster, drop `--files`: the same scan then also reads which
-objects were *written* through a deprecated API version, the add-ons it can
-identify from container images and Helm releases, the kubelet and
-control-plane versions, and the apiserver's own record of deprecated
+objects were *written* through a deprecated API version, the add-ons
+actually running (from pod images and labels, Helm releases and
+IngressClasses), the kubelet and control-plane versions, and the apiserver's own record of deprecated
 requests. [CLI in two minutes](getting-started/cli.md) walks through it.
 
 ## What it does not do
