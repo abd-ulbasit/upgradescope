@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -50,35 +49,6 @@ func compileWebhookSchema(t *testing.T) (*jsonschema.Schema, any) {
 	return sch, doc
 }
 
-// unlistedFields returns the paths of object fields in v that the schema
-// does not list under properties. The published schema allows unknown
-// fields, so consumers keep working when one is added; this check is what
-// makes adding one without documenting it fail.
-func unlistedFields(schema, v any, path string) []string {
-	s, _ := schema.(map[string]any)
-	var out []string
-	switch v := v.(type) {
-	case map[string]any:
-		props, _ := s["properties"].(map[string]any)
-		extra, _ := s["additionalProperties"].(map[string]any)
-		for k, child := range v {
-			if p, ok := props[k]; ok {
-				out = append(out, unlistedFields(p, child, path+"/"+k)...)
-			} else if extra != nil {
-				out = append(out, unlistedFields(extra, child, path+"/"+k)...)
-			} else {
-				out = append(out, path+"/"+k)
-			}
-		}
-	case []any:
-		for i, child := range v {
-			out = append(out, unlistedFields(s["items"], child, fmt.Sprintf("%s/%d", path, i))...)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 func checkWebhookPayload(t *testing.T, sch *jsonschema.Schema, schemaDoc any, name string, body []byte) {
 	t.Helper()
 	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(body))
@@ -88,7 +58,7 @@ func checkWebhookPayload(t *testing.T, sch *jsonschema.Schema, schemaDoc any, na
 	if err := sch.Validate(inst); err != nil {
 		t.Errorf("%s does not validate against api/webhook.schema.json: %v\n%s", name, err, body)
 	}
-	if extra := unlistedFields(schemaDoc, inst, ""); len(extra) > 0 {
+	if extra := unlistedFields(schemaDoc, schemaDoc, inst, ""); len(extra) > 0 {
 		t.Errorf("%s has fields api/webhook.schema.json does not list: %v", name, extra)
 	}
 }

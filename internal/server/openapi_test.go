@@ -25,8 +25,9 @@ import (
 // build on (#53, #117). These tests keep it from drifting: every route the
 // server registers is an operation in it and the other way round, and real
 // handler responses validate against the schemas it gives for their status
-// and content type. Its schemas reject fields they do not list, so a field
-// added to a response without the document fails here.
+// and content type. Its response schemas are open, as the compatibility
+// policy needs, so unlistedFields is what makes a field added to a
+// response without the document fail here.
 
 const openapiPath = "../../api/openapi.yaml"
 
@@ -141,6 +142,7 @@ func TestOpenAPICoversEveryRoute(t *testing.T) {
 type specValidator struct {
 	t    *testing.T
 	doc  openapiDoc
+	root any // the parsed document, for unlistedFields
 	comp *jsonschema.Compiler
 }
 
@@ -158,7 +160,7 @@ func newSpecValidator(t *testing.T) *specValidator {
 	if err := c.AddResource(openapiURL, parsed); err != nil {
 		t.Fatal(err)
 	}
-	return &specValidator{t: t, doc: doc, comp: c}
+	return &specValidator{t: t, doc: doc, root: parsed, comp: c}
 }
 
 // pointerEscape escapes one JSON pointer token.
@@ -222,6 +224,12 @@ func (v *specValidator) check(name, path, method string, resp *http.Response, bo
 	}
 	if err := sch.Validate(inst); err != nil {
 		t.Errorf("%s: %s %s %s does not match api/openapi.yaml:\n%v\nbody: %s", name, method, path, code, err, body)
+	}
+	// The schemas are open (TestOpenAPIResponseSchemasAreOpen), so this is
+	// what fails a field the document does not list.
+	schema := resolveRef(v.root, ptr+"/content/"+pointerEscape(mt)+"/schema")
+	if extra := unlistedFields(v.root, schema, inst, ""); len(extra) > 0 {
+		t.Errorf("%s: %s %s %s has fields api/openapi.yaml does not list: %v", name, method, path, code, extra)
 	}
 }
 
@@ -366,5 +374,76 @@ func TestOpenAPIUnknownPathIsJSONError(t *testing.T) {
 	}
 	if err := sch.Validate(inst); err != nil {
 		t.Errorf("404 body %s is not the Error schema: %v", body, err)
+	}
+	if extra := unlistedFields(v.root, resolveRef(v.root, "#/components/schemas/Error"), inst, ""); len(extra) > 0 {
+		t.Errorf("404 body %s has fields the Error schema does not list: %v", body, extra)
+	}
+}
+
+// TestOpenAPIResponseSchemasAreOpen: no schema a response uses closes
+// itself with additionalProperties or unevaluatedProperties false. The
+// compatibility policy lets a release add response fields within /api/v1,
+// and a closed schema would make every client that validates against the
+// document, or is generated from it, reject that addition. Undocumented
+// fields are caught by unlistedFields in check instead.
+func TestOpenAPIResponseSchemasAreOpen(t *testing.T) {
+	_, raw := loadOpenAPI(t)
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	var responses []string // JSON pointers to response objects
+	paths, _ := root["paths"].(map[string]any)
+	for p, item := range paths {
+		ops, _ := item.(map[string]any)
+		for m, op := range ops {
+			o, _ := op.(map[string]any)
+			rs, _ := o["responses"].(map[string]any)
+			for code := range rs {
+				responses = append(responses, "#/paths/"+pointerEscape(p)+"/"+m+"/responses/"+code)
+			}
+		}
+	}
+	comps, _ := root["components"].(map[string]any)
+	shared, _ := comps["responses"].(map[string]any)
+	for name := range shared {
+		responses = append(responses, "#/components/responses/"+name)
+	}
+	if len(responses) < 40 {
+		t.Fatalf("found %d responses in api/openapi.yaml; the walk is broken", len(responses))
+	}
+	seen := map[string]bool{}
+	var closed []string
+	var walk func(node any, at string)
+	walk = func(node any, at string) {
+		switch n := node.(type) {
+		case map[string]any:
+			for _, kw := range []string{"additionalProperties", "unevaluatedProperties"} {
+				if n[kw] == false {
+					closed = append(closed, at+" ("+kw+": false)")
+				}
+			}
+			if ref, ok := n["$ref"].(string); ok && !seen[ref] {
+				seen[ref] = true
+				walk(resolveRef(root, ref), ref)
+			}
+			for k, child := range n {
+				walk(child, at+"/"+pointerEscape(k))
+			}
+		case []any:
+			for i, child := range n {
+				walk(child, at+"/"+strconv.Itoa(i))
+			}
+		}
+	}
+	for _, r := range responses {
+		walk(resolveRef(root, r), r)
+	}
+	if !seen["#/components/schemas/Finding"] {
+		t.Fatal("the walk never reached the Finding schema; it is broken")
+	}
+	sort.Strings(closed)
+	for _, c := range closed {
+		t.Errorf("a response schema is closed at %s; responses may gain fields within /api/v1, so leave it open (the tests reject undocumented fields)", c)
 	}
 }

@@ -2,9 +2,14 @@ openapi: 3.1.0
 # The upgradescope server's HTTP API. Hand-written; internal/server's
 # openapi_test.go keeps it honest: every route the server registers must be
 # an operation here (and every operation a registered route), and real
-# handler responses must validate against the schemas below, which reject
-# fields they do not list. docs/reference/api.md is rendered from this file
-# by tools/gen-docs (make docs-gen).
+# handler responses must validate against the schemas below and carry no
+# field they do not list. The response schemas themselves stay open (no
+# additionalProperties/unevaluatedProperties false; a test enforces it), so
+# clients validating against or generated from this document survive a field
+# added within v1; the no-unlisted-field rule lives in the test. Request
+# schemas may be closed where the handler rejects unknown fields
+# (RenameRequest). docs/reference/api.md is rendered from this file by
+# tools/gen-docs (make docs-gen).
 info:
   title: upgradescope server API
   version: v1
@@ -38,7 +43,9 @@ info:
     version the cluster's latest snapshot reports.
 
     **Stability.** Paths under `/api/v1` keep their meaning within v1;
-    fields may be added to responses. See the compatibility policy:
+    fields may be added to responses, so the response schemas here do not
+    forbid fields they do not list: ignore a field you do not know. See the
+    compatibility policy:
     https://abd-ulbasit.github.io/upgradescope/compatibility-policy/
 servers:
   - url: http://127.0.0.1:8080
@@ -592,13 +599,11 @@ components:
       type: object
       description: Every error a handler writes.
       required: [error]
-      additionalProperties: false
       properties:
         error: {type: string}
     Status:
       type: object
       required: [status]
-      additionalProperties: false
       properties:
         status: {type: string, const: ok}
     Target:
@@ -629,7 +634,6 @@ components:
     Cluster:
       allOf:
         - {$ref: "#/components/schemas/ClusterFields"}
-      unevaluatedProperties: false
     ClusterFields:
       type: object
       required: [id, name, clusterUid, firstSeen, lastSeen]
@@ -643,7 +647,6 @@ components:
       type: object
       description: Something the evaluation could not assess.
       required: [capability, reason]
-      additionalProperties: false
       properties:
         capability: {type: string, description: "A collector capability (api-usage, deprecated-calls, helm, addons, versions), kb-coverage, or target (the target is not an upgrade of the cluster)."}
         reason: {type: string}
@@ -653,7 +656,6 @@ components:
     CapabilityStatus:
       type: object
       required: [available]
-      additionalProperties: false
       properties:
         available: {type: boolean}
         reason: {type: string}
@@ -662,7 +664,6 @@ components:
     EvalSummary:
       type: object
       required: [target, score, ready, verdict, blockers, warnings, kbVersion, evaluatedAt, snapshotId]
-      additionalProperties: false
       properties:
         target: {$ref: "#/components/schemas/Target"}
         score: {type: integer, minimum: 0, maximum: 100}
@@ -683,7 +684,6 @@ components:
           properties:
             stale: {type: boolean, description: "No push within serve --stale-after."}
             latest: {$ref: "#/components/schemas/EvalSummary"}
-      unevaluatedProperties: false
     ClusterDetail:
       allOf:
         - {$ref: "#/components/schemas/ClusterFields"}
@@ -698,11 +698,9 @@ components:
             evaluations:
               type: array
               items: {$ref: "#/components/schemas/EvalSummary"}
-      unevaluatedProperties: false
 
     ObjectRef:
       type: object
-      additionalProperties: false
       properties:
         namespace: {type: string}
         name: {type: string}
@@ -715,7 +713,6 @@ components:
     Finding:
       allOf:
         - {$ref: "#/components/schemas/FindingFields"}
-      unevaluatedProperties: false
     FindingFields:
       type: object
       required: [category, severity, title, detail]
@@ -741,11 +738,9 @@ components:
             reason: {type: string, description: Why the finding is accepted.}
             source: {type: string, description: "What suppressed it: the config file, annotation, or spec.ignore."}
             expires: {type: string, description: "YYYY-MM-DD, as the rule gave it."}
-      unevaluatedProperties: false
     TeamScore:
       type: object
       required: [score, ready, blockers, warnings]
-      additionalProperties: false
       properties:
         score: {type: integer}
         ready: {type: boolean}
@@ -798,7 +793,6 @@ components:
         - type: object
           properties:
             teams: {$ref: "#/components/schemas/TeamScores"}
-      unevaluatedProperties: false
     FindingsResponse:
       allOf:
         - type: object
@@ -807,7 +801,6 @@ components:
             target: {$ref: "#/components/schemas/Target"}
             findings: {type: array, items: {$ref: "#/components/schemas/Finding"}}
         - {$ref: "#/components/schemas/ReportMeta"}
-      unevaluatedProperties: false
     TeamsResponse:
       allOf:
         - type: object
@@ -816,11 +809,9 @@ components:
             target: {$ref: "#/components/schemas/Target"}
             teams: {$ref: "#/components/schemas/TeamScores"}
         - {$ref: "#/components/schemas/ReportMeta"}
-      unevaluatedProperties: false
     ScorePoint:
       type: object
       required: [at, score, ready]
-      additionalProperties: false
       properties:
         at: {type: string, format: date-time}
         score: {type: integer}
@@ -829,7 +820,6 @@ components:
     FleetCell:
       type: object
       required: [score, ready, verdict, blockers, evaluatedAt, snapshotId, source]
-      additionalProperties: false
       properties:
         score: {type: integer}
         ready: {type: boolean}
@@ -843,7 +833,6 @@ components:
     FleetRow:
       type: object
       required: [clusterId, name, lastSeen, stale, cells]
-      additionalProperties: false
       properties:
         clusterId: {type: integer, format: int64}
         name: {type: string}
@@ -861,14 +850,12 @@ components:
     FleetResponse:
       type: object
       required: [targets, clusters]
-      additionalProperties: false
       properties:
         targets: {type: array, items: {$ref: "#/components/schemas/Target"}}
         clusters: {type: array, items: {$ref: "#/components/schemas/FleetRow"}}
     FleetTeam:
       type: object
       required: [worstScore, blockers, clusters]
-      additionalProperties: false
       properties:
         worstScore: {type: integer}
         blockers: {type: integer}
@@ -876,7 +863,6 @@ components:
     FleetTeamsSource:
       type: object
       required: [name, clusterId, source, evaluatedAt, snapshotId]
-      additionalProperties: false
       properties:
         name: {type: string}
         clusterId: {type: integer, format: int64}
@@ -886,7 +872,6 @@ components:
     FleetTeamsResponse:
       type: object
       required: [target, teams, evaluated, missing, notApplicable]
-      additionalProperties: false
       properties:
         target: {$ref: "#/components/schemas/Target"}
         teams:
@@ -903,7 +888,6 @@ components:
           required: [source]
           properties:
             source: {type: string, enum: [manifest, cluster], description: "manifest: introduced by the posted manifests; cluster: the cluster already has it."}
-      unevaluatedProperties: false
     GateResponse:
       allOf:
         - {$ref: "#/components/schemas/ReportBase"}
@@ -915,7 +899,6 @@ components:
             clusterVerdict:
               $ref: "#/components/schemas/Verdict"
               description: With `cluster`, the verdict of the cluster plus the manifests, existing findings included.
-      unevaluatedProperties: false
     SARIF:
       type: object
       description: "A SARIF 2.1.0 log (https://json.schemastore.org/sarif-2.1.0.json) with one run, the report's findings as results."
@@ -955,13 +938,11 @@ components:
     PushAccepted:
       type: object
       required: [snapshotId]
-      additionalProperties: false
       properties:
         snapshotId: {type: integer, format: int64}
     PushDuplicate:
       type: object
       required: [snapshotId, duplicate]
-      additionalProperties: false
       properties:
         snapshotId: {type: integer, format: int64, description: The latest snapshot, which this push repeats.}
         duplicate: {type: boolean, const: true}
@@ -975,7 +956,6 @@ components:
     Registry:
       type: object
       required: [addons]
-      additionalProperties: false
       properties:
         addons: {type: array, items: {$ref: "#/components/schemas/AddOn"}}
     Citations:
@@ -985,14 +965,12 @@ components:
       type: object
       description: One add-on registry entry (registry/data/<id>.yaml).
       required: [schema_version, id, display_name, matchers, support]
-      additionalProperties: false
       properties:
         schema_version: {type: integer}
         id: {type: string}
         display_name: {type: string}
         matchers:
           type: object
-          additionalProperties: false
           properties:
             images: {type: array, items: {type: string}}
             charts: {type: array, items: {type: string}}
@@ -1000,7 +978,6 @@ components:
         support:
           type: object
           required: [status, citations]
-          additionalProperties: false
           properties:
             status: {type: string, enum: [supported, eol, unknown]}
             eol_date: {type: string, format: date}
@@ -1010,7 +987,6 @@ components:
           items:
             type: object
             required: [cycle, eol, citations]
-            additionalProperties: false
             properties:
               cycle: {type: string}
               eol:
@@ -1024,7 +1000,6 @@ components:
           items:
             type: object
             required: [range, citations]
-            additionalProperties: false
             properties:
               range: {type: string}
               k8s_min: {type: string}

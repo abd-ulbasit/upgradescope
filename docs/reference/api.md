@@ -30,7 +30,9 @@ Where a target is optional, the default is the next minor above the
 version the cluster's latest snapshot reports.
 
 **Stability.** Paths under `/api/v1` keep their meaning within v1;
-fields may be added to responses. See the compatibility policy:
+fields may be added to responses, so the response schemas here do not
+forbid fields they do not list: ignore a field you do not know. See the
+compatibility policy:
 https://abd-ulbasit.github.io/upgradescope/compatibility-policy/
 
 ## Authentication
