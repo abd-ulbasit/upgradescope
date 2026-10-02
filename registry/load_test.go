@@ -178,9 +178,6 @@ func TestCycleEOLRoundTrip(t *testing.T) {
 	}
 }
 
-// The embedded data files are checked by properties, not by a per-entry
-// table: adding a YAML entry needs no Go change, and an eol-sync run that
-// moves a date or ends a cycle cannot turn the weekly refresh PR red.
 // TestDataDirHoldsOnlyYAMLEntries: go:embed data/*.yaml never sees a .yml
 // (or a stray .yaml.bak, a README, a subdirectory), so such a file in the
 // source tree is an add-on or edit that CI passes and no binary carries.
@@ -191,11 +188,18 @@ func TestDataDirHoldsOnlyYAMLEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range files {
+		if f.Name() == ".DS_Store" { // macOS Finder litter, not a data file
+			continue
+		}
 		if f.IsDir() || !strings.HasSuffix(f.Name(), ".yaml") {
 			t.Errorf("registry/data/%s: only <id>.yaml files are embedded and loaded; rename it to .yaml or move it out of registry/data", f.Name())
 		}
 	}
 }
+
+// The embedded data files are checked by properties, not by a per-entry
+// table: adding a YAML entry needs no Go change, and an eol-sync run that
+// moves a date or ends a cycle cannot turn the weekly refresh PR red.
 
 func TestEmbeddedEntriesProperties(t *testing.T) {
 	addons, err := Load()

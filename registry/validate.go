@@ -212,8 +212,10 @@ func validateCitationURL(s string) error {
 
 // reservedHost reports a host no upstream page can live on: a placeholder
 // (the RFC 2606 example names and test, example, invalid TLDs), a local
-// name or an IP address. The template in registry/CONTRIBUTING.md uses one,
-// and a copy that keeps it would pass every other rule.
+// or private-network name (.local, .lan, .internal, ...) or an IP address,
+// including IPv4 shorthand such as 127.1. The template in
+// registry/CONTRIBUTING.md uses one, and a copy that keeps it would pass
+// every other rule.
 func reservedHost(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	if _, err := netip.ParseAddr(host); err == nil {
@@ -222,7 +224,10 @@ func reservedHost(host string) bool {
 	if !strings.Contains(host, ".") { // "localhost", "x"
 		return true
 	}
-	for _, tld := range []string{"test", "example", "invalid", "localhost", "local"} {
+	if last := host[strings.LastIndex(host, ".")+1:]; strings.Trim(last, "0123456789") == "" { // 127.1: a numeric TLD is an address shorthand
+		return true
+	}
+	for _, tld := range []string{"test", "example", "invalid", "localhost", "local", "internal", "lan", "localdomain", "home.arpa"} {
 		if strings.HasSuffix(host, "."+tld) {
 			return true
 		}
