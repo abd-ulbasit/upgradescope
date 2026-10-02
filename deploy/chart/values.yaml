@@ -40,6 +40,12 @@ rbac:
   helmSecrets: true
 
 agent:
+  # Run the agent in this cluster. false = server-only install (a fleet
+  # hub that agents in other clusters push to): no agent Deployment,
+  # ServiceAccount, RBAC, push-token Secret, metrics Service or agent
+  # alerts. The ClusterReadiness CRD in crds/ is still installed unless
+  # you pass --skip-crds.
+  enabled: true
   # Evaluation interval: a Go duration of at least 1m, e.g. 10m, 1h, 1m30s,
   # 300s or 1.5h.
   interval: 10m
@@ -149,23 +155,83 @@ server:
   # before exposing the Service in any way. With existingSecret the value
   # itself is not used; a non-empty one acts like readTokenFromSecret=true.
   readToken: ""
+  # Bearer token for cluster administration: deleting and renaming clusters
+  # (DELETE/PATCH /api/v1/clusters/{id}, `upgradescope clusters
+  # delete|rename --server`). Empty = both are refused. It must differ
+  # from the read and ingest tokens. Stored in the chart Secret; ignored
+  # when existingSecret is set (use adminTokenFromSecret).
+  adminToken: ""
   # Name of an existing Secret to use instead of the chart's. Keys:
-  #   ingestToken   required; the in-chart agent pushes with it too
-  #   readToken     read when readTokenFromSecret=true
-  #   slackWebhook  optional; Slack notifications when present
-  #   webhook       optional; generic webhook when present
+  #   ingestToken    the shared push token; the in-chart agent pushes with
+  #                  it. Required with the agent, optional without it (a
+  #                  fleet hub can accept per-cluster tokens only)
+  #   readToken      read when readTokenFromSecret=true
+  #   adminToken     read when adminTokenFromSecret=true
+  #   slackWebhook   optional; Slack notifications when present
+  #   webhook        optional; generic webhook when present
+  #   webhookSecret  optional; signs generic webhook requests when present
   existingSecret: ""
   # With existingSecret: protect the read API with its readToken key.
   readTokenFromSecret: false
+  # With existingSecret: enable cluster administration with its adminToken key.
+  adminTokenFromSecret: false
   # Optional Slack incoming-webhook URL for finding-delta notifications.
   # Stored in the chart Secret and passed as $UPGRADESCOPE_SLACK_WEBHOOK; it
   # never appears in the Deployment. Ignored when existingSecret is set.
   slackWebhook: ""
-  # Optional generic webhook URL (POSTs the Event JSON). Stored like
-  # slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL.
+  # Optional generic webhook URL: POSTed one versioned JSON notification
+  # per cluster and evaluation pass (schema in docs/operations.md). Stored
+  # like slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL.
   webhook: ""
+  # Optional HMAC-SHA256 key: webhook requests then carry
+  # X-Upgradescope-Signature: sha256=<hex>. Stored like slackWebhook, as
+  # $UPGRADESCOPE_WEBHOOK_SECRET.
+  webhookSecret: ""
   # Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"].
   targets: []
+  # History older than this is pruned at startup and daily, except each
+  # cluster's latest snapshot and its evaluations: whole days (90d) or a
+  # Go duration (2160h); "0" keeps everything.
+  retention: 90d
+  # A cluster whose agent has not pushed for this long is marked stale in
+  # the API, the dashboard data and /metrics. Agents push at least about
+  # every 70m by default.
+  staleAfter: 2h
+  # Server Pods. More than one needs a shared database (database below):
+  # SQLite on a ReadWriteOnce volume has a single writer.
+  replicas: 1
+  database:
+    # Name of an existing Secret holding a Postgres URL
+    # (postgres://user:pass@host:5432/db?sslmode=require). Set = Postgres:
+    # the URL reaches serve as $UPGRADESCOPE_DB_URL (never an argument), no
+    # PVC is rendered, and replicas may be more than 1. Empty = SQLite on
+    # the persistence volume.
+    existingSecret: ""
+    # Key of the URL in that Secret.
+    key: url
+  # Namespace→team overrides applied before every evaluation, rendered
+  # into a ConfigMap and passed as --team-map; the first matching glob
+  # wins, e.g. [{pattern: "payments-*", team: payments}].
+  teamMap: []
+  ingress:
+    # Expose the server (API, dashboard, snapshot ingest) through an
+    # Ingress. Set a read token first. Agents push to https://<host>.
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""
+    path: /
+    pathType: Prefix
+    # The render fails when the Ingress would publish a read API with no
+    # read token. Set true only when an authenticating layer (oauth2-proxy
+    # through ingress annotations, an identity-aware proxy) fronts it; see
+    # docs/operations.md.
+    allowAnonymousRead: false
+    tls:
+      # TLS for host, from a kubernetes.io/tls Secret (e.g. one cert-manager
+      # issues via annotations). Default name: <fullname>-server-tls.
+      enabled: true
+      secretName: ""
   serviceAccount:
     # The server never calls the Kubernetes API: it gets its own
     # ServiceAccount and its pod mounts no API token. create=false with an
@@ -177,13 +243,12 @@ server:
     type: ClusterIP
     port: 8080
   persistence:
-    # PVC for the SQLite database. false = emptyDir (history lost on
-    # pod restart — demo only).
+    # PVC for the SQLite database (unused with database.existingSecret).
+    # false = emptyDir (history lost on pod restart — demo only).
     enabled: true
     size: 1Gi
     storageClass: ""
-  # Extra `upgradescope serve` flags, e.g. ["--team-map=/etc/upgradescope/teams.yaml"]
-  # (mount the file with extraVolumes/extraVolumeMounts).
+  # Extra `upgradescope serve` flags, e.g. ["--max-snapshot-bytes=41943040"].
   extraArgs: []
   extraEnv: []
   extraVolumes: []

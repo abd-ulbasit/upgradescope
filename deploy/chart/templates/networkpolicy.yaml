@@ -1,4 +1,8 @@
 {{- if and .Values.networkPolicy.enabled .Values.server.enabled }}
+{{- if and (not .Values.agent.enabled) (not .Values.networkPolicy.serverIngressFrom) }}
+{{- /* A rule with no peers would admit every source. */}}
+{{- fail "networkPolicy.enabled with agent.enabled=false needs networkPolicy.serverIngressFrom: the peers allowed to reach the server (ingress controller, agents' egress, Prometheus)" }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -18,12 +22,14 @@ spec:
         - port: http
           protocol: TCP
       from:
+        {{- if .Values.agent.enabled }}
         # This release's agent (snapshot pushes).
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: {{ include "upgradescope.name" . }}
               app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: agent
+        {{- end }}
         {{- with .Values.networkPolicy.serverIngressFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

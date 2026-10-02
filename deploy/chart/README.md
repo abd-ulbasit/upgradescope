@@ -36,6 +36,78 @@ Agent pushing to an existing server elsewhere:
       --set agent.serverUrl=https://uscope.example.com \
       --set agent.existingSecret=my-push-token   # key: serverToken
 
+## Fleet hub (server only)
+
+A hub cluster runs the server alone; every other cluster runs the agent
+and pushes to it. Create the Secrets first (the chart only references
+them):
+
+    kubectl create namespace upgradescope
+    # Postgres URL; the server reads it as $UPGRADESCOPE_DB_URL, never argv.
+    kubectl -n upgradescope create secret generic upgradescope-db \
+      --from-literal=url='postgres://upgradescope:...@pg.example.internal:5432/upgradescope?sslmode=require'
+    # Read token (dashboard, API, CI gate) and admin token (cluster delete
+    # and rename); add webhookSecret to sign webhooks.
+    kubectl -n upgradescope create secret generic upgradescope-hub \
+      --from-literal=readToken="$(openssl rand -hex 32)" \
+      --from-literal=adminToken="$(openssl rand -hex 32)"
+
+    helm install upgradescope deploy/chart -n upgradescope --skip-crds -f hub.yaml
+
+with `hub.yaml`:
+
+    agent:
+      enabled: false          # no agent, ServiceAccount, RBAC or push-token Secret here
+    server:
+      enabled: true
+      existingSecret: upgradescope-hub
+      readTokenFromSecret: true
+      adminTokenFromSecret: true
+      database:
+        existingSecret: upgradescope-db
+        key: url
+      replicas: 2             # more than 1 only with Postgres
+      teamMap:
+        - {pattern: "payments-*", team: payments}
+      ingress:
+        enabled: true
+        className: nginx
+        host: upgradescope.example.com
+        annotations: {cert-manager.io/cluster-issuer: letsencrypt}
+        tls: {enabled: true}  # Secret upgradescope-server-tls unless tls.secretName
+
+`--skip-crds` leaves out the `ClusterReadiness` CRD, which only agents use.
+Without `database.existingSecret` the hub keeps SQLite on the PVC (one
+replica). With `agent.enabled=false` and `existingSecret`, the shared
+`ingestToken` key is optional: agents can use per-cluster tokens only, and
+each one can push only as its own cluster.
+
+Mint one token per cluster in the hub (printed once; only its hash is
+stored), then install each agent with it:
+
+    kubectl -n upgradescope exec deploy/upgradescope-server -- \
+      /upgradescope tokens create prod-eu-1                       # Postgres
+    kubectl -n upgradescope exec deploy/upgradescope-server -- \
+      /upgradescope tokens create prod-eu-1 --db /data/upgradescope.sqlite   # SQLite
+
+    # in cluster prod-eu-1
+    kubectl -n upgradescope create secret generic push-token --from-literal=serverToken=<token>
+    helm install upgradescope deploy/chart -n upgradescope --create-namespace \
+      --set agent.clusterName=prod-eu-1 \
+      --set agent.serverUrl=https://upgradescope.example.com \
+      --set agent.existingSecret=push-token
+
+`tokens list` and `tokens revoke` work the same way. Decommission a
+cluster (its history and tokens go too) with the admin token:
+
+    UPGRADESCOPE_ADMIN_TOKEN=... upgradescope clusters delete prod-eu-1 \
+      --server https://upgradescope.example.com
+
+The server prunes history older than `server.retention` (90 days) and
+marks clusters that stopped pushing stale after `server.staleAfter` (2h).
+docs/operations.md covers retention, sizing, webhooks and putting the
+dashboard behind an SSO proxy.
+
 ## RBAC: what the agent can do, and why
 
 The agent ClusterRole (`templates/rbac.yaml`) lists every resource it
@@ -111,10 +183,13 @@ from `secretKeyRef`, never as arguments, and never appear in a Deployment.
 
 | Env var | Secret key | Source |
 |---|---|---|
-| `UPGRADESCOPE_INGEST_TOKEN` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` |
+| `UPGRADESCOPE_INGEST_TOKEN` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` (optional key without the agent) |
 | `UPGRADESCOPE_READ_TOKEN` (server) | `readToken` | `server.readToken`, or `server.existingSecret` with `server.readTokenFromSecret=true` |
+| `UPGRADESCOPE_ADMIN_TOKEN` (server) | `adminToken` | `server.adminToken`, or `server.existingSecret` with `server.adminTokenFromSecret=true` |
+| `UPGRADESCOPE_DB_URL` (server) | `server.database.key` | `server.database.existingSecret` (Postgres) |
 | `UPGRADESCOPE_SLACK_WEBHOOK` (server) | `slackWebhook` | `server.slackWebhook`, or optional key of `server.existingSecret` |
 | `UPGRADESCOPE_WEBHOOK_URL` (server) | `webhook` | `server.webhook`, or optional key of `server.existingSecret` |
+| `UPGRADESCOPE_WEBHOOK_SECRET` (server) | `webhookSecret` | `server.webhookSecret`, or optional key of `server.existingSecret` |
 | `UPGRADESCOPE_SERVER_TOKEN` (agent) | `serverToken`, or the server's `ingestToken` | `agent.existingSecret`, `agent.serverToken`, else the in-chart server's Secret |
 
 `server.existingSecret` alone is enough for a combined install: the server
@@ -124,7 +199,10 @@ and the in-chart agent both use its `ingestToken` key.
 
 With `server.enabled=true` and no read token, the read API is
 **unauthenticated** behind the ClusterIP Service. Set `server.readToken`
-(or `readTokenFromSecret`) before exposing it via Ingress/LoadBalancer.
+(or `readTokenFromSecret`) before exposing it via Ingress/LoadBalancer;
+`server.ingress.enabled` refuses to render without one unless
+`server.ingress.allowAnonymousRead=true` says an authenticating layer
+(oauth2-proxy, an identity-aware proxy) fronts it.
 `networkPolicy.enabled=true` admits traffic to the server only from this
 release's agent and the peers in `networkPolicy.serverIngressFrom`.
 
