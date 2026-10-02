@@ -231,7 +231,9 @@ var storedBodies sync.Map
 
 // storedBody returns the largest push of shape the server stores: within
 // the snapshot budget (atSnapshotBudget) and with every target's report
-// within its limit, which a push of some shapes reaches first.
+// within its limit, which a push of some shapes reaches first. Every
+// target is the default and heapTargets (storedPush), the most a server
+// evaluates.
 func storedBody(name string, shape func(int) string) string {
 	if b, ok := storedBodies.Load(name); ok {
 		return b.(string)
@@ -252,9 +254,11 @@ func storedBody(name string, shape func(int) string) string {
 	return body
 }
 
-// storedPush reports whether a default server stores body.
+// storedPush reports whether a server at the extra-target cap
+// (atTargetCap) stores body: every one of its reports, at the default
+// target and at heapTargets, is within the report limit.
 func storedPush(body string) bool {
-	s, err := New(Config{Store: newFakeStore(), KB: testKB(), IngestToken: "ingest-tok"})
+	s, err := New(Config{Store: newFakeStore(), KB: testKB(), IngestToken: "ingest-tok", ExtraTargets: heapTargets})
 	if err != nil {
 		panic(err)
 	}

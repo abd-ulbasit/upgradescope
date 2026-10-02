@@ -14,17 +14,31 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
+// heapTargets are MaxExtraTargets extra targets above the 1.34 the heap
+// shapes run, so that, with the default 1.35, every push and every
+// re-evaluation of one builds and stores the most reports a server does:
+// each target adds one of up to --max-snapshot-bytes. The heap tests that
+// store snapshots run at them (atTargetCap), to guard the worst case.
+var heapTargets = []string{"1.36", "1.37", "1.38", "1.39"}
+
+// atTargetCap configures a test server with heapTargets.
+func atTargetCap(c *Config) { c.ExtraTargets = heapTargets }
+
 // newSQLiteTestServer is newTestServer on the SQLite store the server
 // ships with: memory figures that matter are the real driver's, which
 // copies what it reads, not the fake's, which hands out what it holds.
-func newSQLiteTestServer(t *testing.T) *Server {
+func newSQLiteTestServer(t *testing.T, opts ...func(*Config)) *Server {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "upgradescope.db"))
 	if err != nil {
 		t.Fatalf("open sqlite store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok"})
+	cfg := Config{Store: st, KB: testKB(), IngestToken: "ingest-tok"}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	s, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -62,9 +76,11 @@ func concurrentGets(t *testing.T, s *Server, path string, n int) (grew uint64, s
 // maxReevaluationHeap is what the background re-evaluation pass may add to
 // the heap: it takes clusters one at a time, and for each target loads the
 // current evaluation's report, evaluates, and holds the new report until
-// the cluster's commit. Measured up to ~108 MiB, for a 20 MB snapshot whose
-// reports are each about the report limit.
-const maxReevaluationHeap = 128 << 20
+// the cluster's commit. Measured up to ~189 MiB at the most targets a
+// server takes (atTargetCap), for a snapshot whose five reports are each
+// about the report limit: each extra target adds one, ~19-24 MiB, to the
+// ~81-117 MiB of a pass with one.
+const maxReevaluationHeap = 208 << 20
 
 // storedHeapShapes are the snapshots that cost the most once stored, each
 // pushed as storedBody stores it: the dearest to decode at the node
@@ -99,7 +115,8 @@ func storedHeapShapes() map[string]func(int) string {
 }
 
 // The steps that load what was stored, measured on the SQLite store, which
-// copies every snapshot and report it reads: one push and its evaluation
+// copies every snapshot and report it reads, on a server at the most
+// targets it takes (atTargetCap): one push and its five evaluations
 // within maxIngestDecodeHeap, the re-evaluation pass with every
 // evaluation outdated within maxReevaluationHeap, and the dearest /gate
 // stream with ?cluster= against the snapshot within maxGateDecodeHeap
@@ -113,7 +130,7 @@ func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 	gate := atNodeBudget(gateHeapShapes()["many keys and an alias"])
 	for name, shape := range storedHeapShapes() {
 		t.Run(name, func(t *testing.T) {
-			s := newSQLiteTestServer(t)
+			s := newSQLiteTestServer(t, atTargetCap)
 			body := []byte(storedBody(name, shape))
 			rec := httptest.NewRecorder()
 			grew := heapPeak(func() { serveIngest(s, rec, body, false) })
@@ -128,9 +145,11 @@ func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 			if grew > maxReevaluationHeap {
 				t.Errorf("re-evaluation pass: the heap grew %d MiB, want at most %d MiB", grew>>20, maxReevaluationHeap>>20)
 			}
-			e, err := s.cfg.Store.CurrentEvaluationSummary(context.Background(), 1, "1.35")
-			if err != nil || !e.EvaluatedAt.Equal(next) {
-				t.Fatalf("after the pass, 1.35 = (evaluated %v, %v), want re-evaluated at %v", e.EvaluatedAt, err, next)
+			for _, target := range append([]string{"1.35"}, heapTargets...) {
+				e, err := s.cfg.Store.CurrentEvaluationSummary(context.Background(), 1, target)
+				if err != nil || !e.EvaluatedAt.Equal(next) {
+					t.Fatalf("after the pass, %s = (evaluated %v, %v), want re-evaluated at %v", target, e.EvaluatedAt, err, next)
+				}
 			}
 			t.Logf("re-evaluation pass grew the heap %d MiB", grew>>20)
 

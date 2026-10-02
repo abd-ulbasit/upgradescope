@@ -89,7 +89,7 @@ func TestFleetDefaultColumnsAreMeasured(t *testing.T) {
 // maxWideGapsFleetHeap is what one fleet-wide read of 500 clusters whose
 // evaluations carry the most gaps a push may name may add to the heap:
 // docs/operations.md counts two of them in the server's worst case.
-const maxWideGapsFleetHeap = 12 << 20 // measured 9.6 MiB for /fleet
+const maxWideGapsFleetHeap = 20 << 20 // measured 16.4 MiB for /fleet, at five targets
 
 // What an evaluation could not assess is in every fleet-wide read, for
 // every cluster and target, and a push within the inventory limits may
@@ -98,9 +98,10 @@ const maxWideGapsFleetHeap = 12 << 20 // measured 9.6 MiB for /fleet
 // answer 108 MB; the store's column now keeps each gap cut and the reads
 // list at most fleetSummaryBytes of them per evaluation. Each gap here,
 // cut, is just under that, so every summary lists one: the dearest
-// summaries. 500 such clusters, each evaluated at three targets, are read
-// within maxWideGapsFleetHeap by each of /clusters, /fleet and /metrics;
-// the test logs the figures docs/operations.md quotes.
+// summaries. 500 such clusters, each evaluated at five targets (the
+// default and heapTargets, the most a server evaluates), are read within
+// maxWideGapsFleetHeap by each of /clusters, /fleet and /metrics; the
+// test logs the figures docs/operations.md quotes.
 func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 	if testing.Short() || raceEnabled || !heapRun {
 		t.Skip("seeds 500 clusters of 770 KB pushes; make test-heap runs it, without the race detector")
@@ -111,7 +112,7 @@ func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", ExtraTargets: []string{"1.36", "1.37"}})
+	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", ExtraTargets: heapTargets})
 	if err != nil {
 		t.Fatal(err)
 	}

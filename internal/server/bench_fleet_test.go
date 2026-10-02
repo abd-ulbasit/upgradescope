@@ -19,7 +19,7 @@ import (
 // Fleet-scale gate (#125 SV-14, `make bench-server`): 500 clusters with
 // realistic inventories on SQLite, 10 concurrent /fleet readers. Fails when
 // /fleet p95 is over 1s or the live heap peaks over 512MiB (inside the
-// chart's 768Mi default memory limit). Off by default: it seeds 500 pushes and runs for
+// chart's 1Gi default memory limit). Off by default: it seeds 500 pushes and runs for
 // tens of seconds.
 const (
 	benchClusters = 500

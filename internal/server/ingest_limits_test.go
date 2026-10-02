@@ -153,9 +153,13 @@ func atSnapshotBudget(shape func(size int) string) string {
 }
 
 // maxIngestDecodeHeap is what decoding, evaluating and storing one
-// snapshot push may add to the heap (#121): measured up to ~119 MiB, for
-// 1,000 namespace keys per API usage entry, which decode to many maps.
-const maxIngestDecodeHeap = 128 << 20
+// snapshot push may add to the heap (#121), on SQLite at the most targets
+// a server takes (atTargetCap): measured up to ~119 MiB to decode 1,000
+// namespace keys per API usage entry, which decode to many maps, and up
+// to ~202 MiB for a stored snapshot whose five reports are each about the
+// report limit (TestStoredSnapshotHeapIsBounded): each extra target adds
+// one, ~16-23 MiB, to the ~81-113 MiB a push with one report takes.
+const maxIngestDecodeHeap = 224 << 20
 
 // serveIngest runs one snapshot push straight through the handler.
 func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {
@@ -171,7 +175,8 @@ func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {
 // of `{}` ObjectRefs decoded to ~2.6 GB of heap, from any per-cluster
 // agent token (#121). Each shape at the size cap and at the largest size
 // within the node budget, plain and gzipped, is refused with 413 before
-// it is decoded, or decoded, checked and evaluated within
+// it is decoded, or decoded, checked, evaluated at the most targets a
+// server takes (atTargetCap) and stored on SQLite within
 // maxIngestDecodeHeap; within the budget it is accepted unless no
 // collector writes it (422) or its report would be over the report
 // limit (413, afterDecode), and the body budget is given back either way.
@@ -194,7 +199,7 @@ func TestIngestDecodeHeapIsBounded(t *testing.T) {
 					if gz {
 						payload = gzipBytes(t, payload)
 					}
-					s := newTestServer(t, newFakeStore())
+					s := newSQLiteTestServer(t, atTargetCap)
 					rec := httptest.NewRecorder()
 					grew := heapPeak(func() { serveIngest(s, rec, payload, gz) })
 					want := http.StatusRequestEntityTooLarge

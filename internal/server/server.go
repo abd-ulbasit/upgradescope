@@ -89,7 +89,7 @@ type Config struct {
 // memory, at a cost bounded by the node budget (maxManifestUnits): at most
 // ~165 MiB of heap for the worst stream that passes it, measured
 // (TestGateDecodeHeapIsBounded). Two at once would not fit the chart's
-// 768Mi limit, so evaluations run one at a time (a normal one takes
+// 1Gi limit, so evaluations run one at a time (a normal one takes
 // milliseconds), and the chart sets GOMEMLIMIT so the garbage one leaves
 // is collected before the next one's decode piles on top. A request asks
 // for the slot only once its whole body is in, so a slow uploader cannot
@@ -124,11 +124,11 @@ const (
 )
 
 // Snapshot ingest concurrency and memory, on the same model as /gate.
-// Decoding, evaluating and storing one push costs up to ~119 MiB of heap
-// on SQLite at the size and node caps (maxSnapshotUnits; its reports are
-// at most --max-snapshot-bytes each, maxReportBytes, and the evaluation
-// stops there), so pushes are ingested one
-// at a time (a normal one takes milliseconds; an agent's whole fleet
+// Decoding, evaluating and storing one push costs up to ~202 MiB of heap
+// on SQLite at the size and node caps (maxSnapshotUnits) and at
+// MaxExtraTargets (its five reports are at most --max-snapshot-bytes
+// each, maxReportBytes, and the evaluation stops there; each extra target
+// adds one), so pushes are ingested one at a time (a normal one takes milliseconds; an agent's whole fleet
 // pushing on one tick queues). A push asks for the slot once its body is
 // in and waits up to ingestQueueTimeout, under the agent's 30s request
 // timeout, then gets 503 + Retry-After, which the agent retries. Bodies
