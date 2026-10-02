@@ -414,6 +414,26 @@ func TestEvalAddOnsDetailBounded(t *testing.T) {
 		t.Errorf("nodes: got %+v, want one finding with detail prefix %q", fs, want)
 	}
 
+	// A release line that cannot run the target, on a different patch in
+	// each namespace: the incompatible installs are capped the same way.
+	var incompat *Finding
+	fs = evalAddOns(installs("istio", "image", mixed...), lifecycleKB(), inventory.Version{Major: 1, Minor: 36}, now)
+	for i := range fs {
+		if fs[i].Category == CatChartIncompat {
+			incompat = &fs[i]
+		}
+	}
+	if incompat == nil {
+		t.Fatalf("incompat: no chart-incompat finding in %q", whereSummary(fs))
+	}
+	want = " Incompatible installs: mesh-01 (1.29.1), mesh-02 (1.29.2), mesh-03 (1.29.3), mesh-04 (1.29.4), mesh-05 (1.29.5), mesh-06 (1.29.6), mesh-07 (1.29.7), mesh-08 (1.29.8), mesh-09 (1.29.9), mesh-10 (1.29.10), and 15 more."
+	if !strings.HasSuffix(incompat.Detail, want) {
+		t.Errorf("incompat: detail = %q, want suffix %q", incompat.Detail, want)
+	}
+	if len(incompat.Namespaces) != 25 || len(incompat.Teams) != 25 {
+		t.Errorf("incompat: %d namespaces, %d teams, want 25 each", len(incompat.Namespaces), len(incompat.Teams))
+	}
+
 	ten := strings.Split("a b c d e f g h i j", " ")
 	if got := located(ten); got != "a, b, c, d, e, f, g, h, i, j" {
 		t.Errorf("located(10) = %q, want all ten", got)

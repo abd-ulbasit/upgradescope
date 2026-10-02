@@ -635,7 +635,8 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 // evalAddOnCompat judges each install of a group against target (see
 // compatFor) and returns one chart-incompat blocker naming only the
 // installs that cannot run it, titled for the oldest of them; ok is false
-// when every install can. Key is left to the caller.
+// when every install can. The detail lists at most addOnLocatedLimit of
+// them; Namespaces and Teams name them all. Key is left to the caller.
 func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version) (Finding, bool) {
 	f := Finding{Category: CatChartIncompat, Severity: SevBlocker, Remediation: a.Recommendation}
 	var named []string // "where (version)" of each install that cannot run target
@@ -668,7 +669,7 @@ func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version)
 	f.Namespaces, f.Teams = sortedSet(f.Namespaces), sortedSet(f.Teams)
 	if len(versions) > 1 {
 		sort.Strings(named)
-		f.Detail += " Incompatible installs: " + strings.Join(named, ", ") + "."
+		f.Detail += " Incompatible installs: " + located(named) + "."
 	}
 	return f, true
 }
