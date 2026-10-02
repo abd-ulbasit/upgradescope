@@ -169,7 +169,11 @@ func TestOutboxRetriesThenDeliversOnce(t *testing.T) {
 	}
 }
 
-// TestOutboxGivesUpAfterMaxAttempts: retries are bounded.
+// TestOutboxGivesUpAfterMaxAttempts: retries are bounded by the attempt cap,
+// not by the message lifetime. The clock follows the backoff actually
+// scheduled, so all outboxMaxAttempts attempts fall in about an hour, far
+// inside outboxMaxAge; without the cap the message would be retried (at the
+// hour-long backoff) until the age check dropped it hours later.
 func TestOutboxGivesUpAfterMaxAttempts(t *testing.T) {
 	st := newFakeStore()
 	sink := &flakyNotifier{fails: 1000}
@@ -180,16 +184,26 @@ func TestOutboxGivesUpAfterMaxAttempts(t *testing.T) {
 	defer ts.Close()
 	blockedThenClean(t, ts)
 
-	for range outboxMaxAttempts + 2 {
+	start := clock.now()
+	var gaveUpAt time.Duration
+	for pass := 1; pass <= outboxMaxAttempts+2; pass++ {
 		s.deliverOutbox(context.Background())
-		// Steps beyond every backoff used, yet 10 of them fit in outboxMaxAge.
-		clock.set(clock.now().Add(outboxBackoff(outboxMaxAttempts) + time.Second))
+		if len(st.outbox) == 0 {
+			gaveUpAt = clock.now().Sub(start)
+			break
+		}
+		// Just past the backoff this failure scheduled.
+		clock.set(clock.now().Add(outboxBackoff(pass) + time.Second))
 	}
 	if n := len(st.outbox); n != 0 {
 		t.Fatalf("outbox holds %d messages after %d failed attempts, want 0 (given up)", n, outboxMaxAttempts)
 	}
-	if left := sink.fails; left != 1000-outboxMaxAttempts {
-		t.Errorf("attempts = %d, want %d", 1000-left, outboxMaxAttempts)
+	if calls := 1000 - sink.fails; calls != outboxMaxAttempts {
+		t.Errorf("attempts = %d, want %d", calls, outboxMaxAttempts)
+	}
+	if gaveUpAt <= 0 || gaveUpAt >= 2*time.Hour {
+		t.Errorf("gave up after %v, want within about an hour and far below outboxMaxAge (%v): the attempt cap, not the age limit, must end it",
+			gaveUpAt, outboxMaxAge)
 	}
 }
 
