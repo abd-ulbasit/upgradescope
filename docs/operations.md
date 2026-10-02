@@ -48,6 +48,21 @@ chart (`docker run -m`, systemd, any cgroup), `serve` and `agent` set it
 themselves to 90% of the cgroup's memory limit (v2 `memory.max` or v1
 `memory.limit_in_bytes`) and log it; an explicit `GOMEMLIMIT` wins.
 
+Peak RSS of a fresh `serve` process (macOS arm64, `/usr/bin/time -l`,
+SQLite, October 2026), `before` being v0.1.x without these limits:
+
+| request | before | now |
+|---|---|---|
+| 4 MiB YAML flow sequence `[1,1,…]`, ×1 / ×2 at once | 913 / 1074 MB, 200 | 45 / 49 MB, 413 |
+| 4 MiB List of null items | 2077 MB, 200 | 44 MB, 413 |
+| 4 MiB of short keys (block sequence alike) | 412 MB, 200 | 44 MB, 413 |
+| short keys at the node budget (2.3 MB), ×6 at once | 331 MB, 200 | 335 MB, 200 (298 MB with `GOMEMLIMIT=460MiB`) |
+| realistic 4 MiB List of 1,400 Deployments, ×6 at once | 253 MB, 200 | 279 MB, 200 (249 MB with `GOMEMLIMIT`) |
+| one 4 MiB string | 97 MB, 200 | 94 MB, 200 |
+| 20 MiB push of `{}` object refs | 3578 MB, 202 | 41 MB, 413 |
+| 4.9 MB push of unique map keys (at the budget) | 184 MB, 202 | 190 MB, 202 |
+| 30 concurrent 20 MiB pushes | 1681 MB, all accepted | 236 MB, 2 accepted, the rest 503 |
+
 What is left is availability: a client that really sends 3 × the gate
 cap and then stalls makes other `/gate` requests `503` until the read
 timeout cuts it off (about 0.5 MiB/s of its bandwidth for 60s), and with
