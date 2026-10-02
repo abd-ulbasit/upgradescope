@@ -114,15 +114,15 @@ and [Helm values](../reference/helm-values.md).
 
 ## Sizes
 
-Measured 2026-10-02 on an Apple M1 Pro with Go 1.26.8, at commit 6516b61
-(after v0.1.1), building as the release does (`CGO_ENABLED=0 -trimpath
--ldflags "-s -w"`):
+Measured 2026-10-02 on an Apple M1 Pro with Go 1.26.8, at main `9d0b161`
+(after v0.1.1), from a clean `git archive` of that commit, building as the
+release does (`CGO_ENABLED=0 -trimpath -ldflags "-s -w"`):
 
 | Binary | Stripped | Unstripped | gzip -9 |
 |---|---|---|---|
-| linux/amd64 | 57.3 MiB | 81.6 MiB | 16.8 MiB |
+| linux/amd64 | 57.4 MiB | 81.7 MiB | 16.8 MiB |
 | linux/arm64 | 53.9 MiB | 77.4 MiB | 15.0 MiB |
-| darwin/arm64 | 55.2 MiB | 80.4 MiB | 15.6 MiB |
+| darwin/arm64 | 55.3 MiB | 80.4 MiB | 15.6 MiB |
 
 The image adds the distroless base, whose layers are 0.7 MB compressed
 (`gcr.io/distroless/static-debian12:nonroot`, as pinned in
