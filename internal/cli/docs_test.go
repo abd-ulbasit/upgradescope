@@ -235,7 +235,7 @@ func TestJSONReportMatchesSchema(t *testing.T) {
 	}
 
 	dir := writeFiles(t, map[string]string{
-		"rendered/all.yaml": removedAPIs + "---\napiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: pdb\n  namespace: shop\n",
+		"rendered/all.yaml":  removedAPIs + "---\napiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: pdb\n  namespace: shop\n",
 		".upgradescope.yaml": "ignore:\n  - key: removed-api/batch/v1beta1/CronJob\n    reason: deleted next sprint\n    expires: 2099-01-01\n",
 	})
 	files := filepath.Join(dir, "rendered")
