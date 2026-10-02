@@ -51,6 +51,38 @@ func TestServeStaleAfter(t *testing.T) {
 	}
 }
 
+// --retention takes days ("90d") or a Go duration; 0 keeps everything.
+func TestServeRetention(t *testing.T) {
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error {
+		got = opts
+		return nil
+	}
+	for _, tc := range []struct {
+		arg  string
+		want time.Duration
+	}{
+		{"", 90 * 24 * time.Hour}, // default
+		{"30d", 30 * 24 * time.Hour},
+		{"720h", 720 * time.Hour},
+		{"0", 0},
+		{"0d", 0},
+	} {
+		args := []string{}
+		if tc.arg != "" {
+			args = []string{"--retention", tc.arg}
+		}
+		if err := execServe(t, args, capture); err != nil || got.parsedRetention != tc.want {
+			t.Errorf("--retention %q = %v (err %v), want %v", tc.arg, got.parsedRetention, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"-1d", "90", "ninety", "1.5d", "-5h", "30m"} {
+		if err := execServe(t, []string{"--retention", bad}, serveOK()); err == nil || !strings.Contains(err.Error(), "--retention") {
+			t.Errorf("--retention %q: err = %v, want a refusal", bad, err)
+		}
+	}
+}
+
 // Reusing the read or ingest token as the admin token would hand cluster
 // deletion to every dashboard user or agent.
 func TestServeRefusesSharedAdminToken(t *testing.T) {

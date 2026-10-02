@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -39,6 +41,10 @@ type serveOptions struct {
 	tlsCertFile        string
 	tlsKeyFile         string
 	staleAfter         time.Duration
+	retention          string
+
+	// parsedRetention is --retention parsed by validateServeOptions.
+	parsedRetention time.Duration
 
 	// parsedTargets is opts.targets parsed once by validateServeOptions;
 	// runServe consumes it instead of re-parsing the raw CSV.
@@ -93,6 +99,7 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		TLSCertFile:      opts.tlsCertFile,
 		TLSKeyFile:       opts.tlsKeyFile,
 		StaleAfter:       opts.staleAfter,
+		Retention:        opts.parsedRetention,
 	})
 	if err != nil {
 		return err
@@ -179,6 +186,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert-file", "", "PEM certificate (chain) to serve HTTPS directly; requires --tls-key-file (read at startup)")
 	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key-file", "", "PEM private key for --tls-cert-file")
 	cmd.Flags().DurationVar(&opts.staleAfter, "stale-after", server.DefaultStaleAfter, "mark a cluster stale (API, dashboard data, /metrics) when its agent has not pushed for this long; agents push at least about every 70m by default")
+	cmd.Flags().StringVar(&opts.retention, "retention", "90d", "prune snapshots and evaluations older than this, in days (90d) or a Go duration (2160h), at startup and daily; each cluster's latest snapshot and its evaluations are always kept; 0 keeps everything")
 	cmd.MarkFlagsRequiredTogether("tls-cert-file", "tls-key-file")
 	return cmd
 }
@@ -205,6 +213,11 @@ func validateServeOptions(opts *serveOptions) error {
 	if opts.maxSnapshotBytes <= 0 {
 		return fmt.Errorf("--max-snapshot-bytes must be positive, got %d", opts.maxSnapshotBytes)
 	}
+	r, err := parseRetention(opts.retention)
+	if err != nil {
+		return fmt.Errorf("invalid --retention %q: %w", opts.retention, err)
+	}
+	opts.parsedRetention = r
 	if opts.staleAfter <= 0 {
 		return fmt.Errorf("--stale-after must be positive, got %s", opts.staleAfter)
 	}
@@ -237,4 +250,31 @@ func validateServeOptions(opts *serveOptions) error {
 		opts.parsedTargets = append(opts.parsedTargets, v)
 	}
 	return nil
+}
+
+// minRetention is the shortest non-zero --retention: a window under a day
+// would prune the score history the dashboard and exports exist to show.
+const minRetention = 24 * time.Hour
+
+// parseRetention parses --retention: whole days ("90d") or a Go duration
+// ("2160h"); "0" (or "0d") keeps everything.
+func parseRetention(s string) (time.Duration, error) {
+	const want = "want whole days such as 90d, a duration such as 2160h, or 0"
+	var d time.Duration
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n < 0 {
+			return 0, errors.New(want)
+		}
+		d = time.Duration(n) * 24 * time.Hour
+	} else if s != "0" {
+		var err error
+		if d, err = time.ParseDuration(s); err != nil {
+			return 0, errors.New(want)
+		}
+	}
+	if d != 0 && d < minRetention {
+		return 0, fmt.Errorf("must be 0 (keep everything) or at least %s", minRetention)
+	}
+	return d, nil
 }

@@ -114,6 +114,7 @@ type Server struct {
 	outboxKick         chan struct{} // wakes the delivery worker after a commit
 	notifyTimeout      time.Duration // bounds one delivery attempt
 	reevaluateInterval time.Duration // background re-evaluation period
+	retentionInterval  time.Duration // pruning period after the startup pass
 	stopBackground     context.CancelFunc
 	backgroundDone     sync.WaitGroup
 
@@ -143,6 +144,7 @@ func New(cfg Config) (*Server, error) {
 	s.outboxKick = make(chan struct{}, 1)
 	s.notifyTimeout = notifyTimeout
 	s.reevaluateInterval = reevaluateInterval
+	s.retentionInterval = retentionInterval
 	for _, t := range cfg.ExtraTargets {
 		v, err := inventory.ParseTarget(t)
 		if err != nil {
@@ -346,8 +348,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.cfg.Listen, err)
 	}
-	// Background work: the notification worker and the re-evaluation
-	// ticker (whose first pass runs now). Stopped by Shutdown.
+	// Background work: the notification worker, the re-evaluation ticker
+	// and, with a retention window, the pruner (the first passes of both
+	// run now). Stopped by Shutdown.
 	bg, stop := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.addr = ln.Addr().String()
@@ -356,6 +359,10 @@ func (s *Server) Start() error {
 	s.backgroundDone.Add(2)
 	go func() { defer s.backgroundDone.Done(); s.runOutbox(bg) }()
 	go func() { defer s.backgroundDone.Done(); s.runReevaluation(bg) }()
+	if s.cfg.Retention > 0 {
+		s.backgroundDone.Add(1)
+		go func() { defer s.backgroundDone.Done(); s.runRetention(bg) }()
+	}
 	s.logStartup()
 	close(s.ready)
 	if s.httpSrv.TLSConfig != nil {
