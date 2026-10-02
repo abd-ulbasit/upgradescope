@@ -55,7 +55,9 @@ type step struct {
 
 // Collect builds an Inventory from a live cluster. It never returns an
 // error: each sub-collector failure becomes Capabilities[cap] =
-// {Available: false, Reason: err.Error()} and collection continues.
+// {Available: false, Reason: err.Error()} and collection continues. Each
+// sub-collector runs under its own share of ctx's deadline (see runSteps),
+// so one stalled step cannot starve the others.
 func Collect(ctx context.Context, c Clients, k kb.KB, opts Options) inventory.Inventory {
 	if opts.TeamLabel == "" {
 		opts.TeamLabel = "team"
@@ -85,20 +87,53 @@ type partialError struct {
 
 func (e partialError) Error() string { return e.msg }
 
+// runSteps runs ss in order, each under its own deadline: an equal share
+// of the time left before ctx's deadline (none when ctx has none), the
+// last step getting all that remains. A stalled step then leaves every
+// later step at least the scan budget divided by the number of steps, and
+// degrades only its own capability, its reason naming the step deadline.
 func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
-	for _, s := range ss {
-		err := s.run(ctx, inv)
+	for i, s := range ss {
+		sctx, cancel, share := stepContext(ctx, len(ss)-i)
+		err := s.run(sctx, inv)
+		var note string
+		if ctx.Err() == nil && errors.Is(sctx.Err(), context.DeadlineExceeded) {
+			note = fmt.Sprintf(" (step deadline: gave up after %s, this step's share of the scan's time)", roundShare(share))
+		}
+		cancel()
 		var pe partialError
 		switch {
 		case err == nil:
 			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true}
 		case errors.As(err, &pe):
-			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true, Reason: pe.Error(),
+			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true, Reason: pe.Error() + note,
 				Partial: pe.incomplete, Skipped: pe.skipped}
 		default:
-			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: false, Reason: err.Error()}
+			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: false, Reason: err.Error() + note}
 		}
 	}
+}
+
+// stepContext derives a step's context from the scan's: an equal share of
+// the time left before ctx's deadline among the left steps still to run,
+// this one included; no limit of its own when ctx has no deadline.
+func stepContext(ctx context.Context, left int) (context.Context, context.CancelFunc, time.Duration) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		sctx, cancel := context.WithCancel(ctx)
+		return sctx, cancel, 0
+	}
+	share := time.Until(deadline) / time.Duration(left)
+	sctx, cancel := context.WithTimeout(ctx, share)
+	return sctx, cancel, share
+}
+
+// roundShare rounds a step's share of the scan budget for its reason.
+func roundShare(d time.Duration) time.Duration {
+	if d >= time.Second {
+		return d.Round(time.Second)
+	}
+	return d.Round(time.Millisecond)
 }
 
 // steps lists the live sub-collectors in execution order: helm before

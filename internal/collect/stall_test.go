@@ -4,13 +4,16 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"k8s.io/client-go/rest"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 // stallingAPIServer is an API server that accepts every request and never
@@ -96,5 +99,174 @@ func TestCollectAPIUsageHonoursContextOnStalledDiscovery(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "discovery") {
 		t.Errorf("err = %v, want a discovery error", err)
+	}
+}
+
+// fakeAPIServer answers what the live sub-collectors ask with an empty
+// cluster: a version, the kube-system namespace, no other objects, an
+// API surface with nothing flagged, and an apiserver /metrics.
+func fakeAPIServer() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body := `{"metadata":{},"items":[]}` // a typed list; the client knows its kind
+		switch {
+		case r.URL.Path == "/version":
+			body = `{"major":"1","minor":"34","gitVersion":"v1.34.2"}`
+		case r.URL.Path == "/api":
+			body = `{"kind":"APIVersions","versions":["v1"]}`
+		case r.URL.Path == "/apis":
+			body = `{"kind":"APIGroupList","apiVersion":"v1","groups":[]}`
+		case r.URL.Path == "/api/v1":
+			body = `{"kind":"APIResourceList","groupVersion":"v1","resources":[]}`
+		case r.URL.Path == "/api/v1/namespaces/kube-system":
+			body = `{"metadata":{"name":"kube-system","uid":"uid-1"}}`
+		case r.URL.Path == "/metrics":
+			w.Header().Set("Content-Type", "text/plain")
+			body = "# TYPE apiserver_request_total counter\napiserver_request_total{code=\"200\",verb=\"LIST\"} 1\n" // no deprecated API requested
+		case strings.Contains(r.Header.Get("Accept"), "as=PartialObjectMetadataList"):
+			body = `{"kind":"PartialObjectMetadataList","apiVersion":"meta.k8s.io/v1","metadata":{},"items":[]}`
+		}
+		_, _ = w.Write([]byte(body))
+	})
+}
+
+// The live steps run in this order: helm before addons (which consumes
+// the releases), api-usage before deprecated-calls (which consumes its
+// own deprecated LISTs), and the /metrics scrape last.
+func TestStepOrder(t *testing.T) {
+	var got []inventory.Capability
+	for _, s := range steps(Clients{}, kb.KB{}, Options{}) {
+		got = append(got, s.cap)
+	}
+	want := []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapDeprecatedCalls}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("step order = %v, want %v", got, want)
+	}
+}
+
+// With nothing stalled, everything is assessed: the fixture is sound.
+func TestCollectFakeAPIServerAssessesEverything(t *testing.T) {
+	c := stallClients(t, stallingAPIServer(t, func(*http.Request) bool { return false }, fakeAPIServer()))
+	inv := Collect(context.Background(), c, loadKB(t), Options{})
+	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapDeprecatedCalls} {
+		if st := inv.Capabilities[cp]; !st.Available || st.Partial {
+			t.Errorf("%s = %+v, want available", cp, st)
+		}
+	}
+}
+
+// One stalled step gets its share of the time left and no more: it is not
+// assessed, naming the deadline, and every step after it still runs. With
+// no per-request timeout, only the step deadline stops it. The stalled
+// add-on LIST leaves a required check unassessed, so the verdict is
+// unknown, never ready.
+func TestCollectStalledStepDegradesOnlyItsCapability(t *testing.T) {
+	c := stallClients(t, stallingAPIServer(t, stallPaths("/api/v1/pods"), fakeAPIServer()))
+	k := loadKB(t)
+	const budget = 2 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	start := time.Now()
+	var inv inventory.Inventory
+	within(t, budget+3*time.Second, func() { inv = Collect(ctx, c, k, Options{}) })
+	if took := time.Since(start); took > budget+500*time.Millisecond {
+		t.Errorf("Collect took %v, want at most the %v budget", took, budget)
+	}
+	addons := inv.Capabilities[inventory.CapAddOns]
+	if addons.Available || !strings.Contains(addons.Reason, "step deadline") {
+		t.Errorf("addons = %+v, want not available, the reason naming the step deadline", addons)
+	}
+	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAPIUsage, inventory.CapDeprecatedCalls} {
+		if st := inv.Capabilities[cp]; !st.Available {
+			t.Errorf("%s = %+v, want available: only the stalled step degrades", cp, st)
+		}
+	}
+	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 35}, time.Now())
+	if rep.Verdict != engine.VerdictUnknown {
+		t.Errorf("verdict = %s (findings %+v), want unknown (add-ons not assessed)", rep.Verdict, rep.Findings)
+	}
+}
+
+// #94/DC-02: a /metrics that never answers held the scan for its whole
+// five-minute budget. The per-request timeout ends that request, and the
+// scan, long before the budget.
+func TestCollectStalledMetricsEndsAtRequestTimeout(t *testing.T) {
+	srv := stallingAPIServer(t, stallPaths("/metrics"), fakeAPIServer())
+	c, err := NewClients(&rest.Config{Host: srv.URL, Timeout: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	k := loadKB(t)
+	start := time.Now()
+	var inv inventory.Inventory
+	within(t, 10*time.Second, func() { inv = Collect(ctx, c, k, Options{}) })
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("Collect took %v, want about the 300ms request timeout", took)
+	}
+	if st := inv.Capabilities[inventory.CapDeprecatedCalls]; st.Available || !strings.Contains(st.Reason, "/metrics") {
+		t.Errorf("deprecated-calls = %+v, want not available, naming /metrics", st)
+	}
+	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage} {
+		if st := inv.Capabilities[cp]; !st.Available {
+			t.Errorf("%s = %+v, want available", cp, st)
+		}
+	}
+}
+
+// Each step gets an equal share of the time left before the deadline, so
+// a stalled step leaves every later one at least budget/steps; the last
+// step gets whatever is left. Without a deadline there is no step limit.
+func TestRunStepsSharesTheDeadline(t *testing.T) {
+	inv := inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+	var left []time.Duration
+	record := func(ctx context.Context, _ *inventory.Inventory) error {
+		d, ok := ctx.Deadline()
+		if !ok {
+			left = append(left, -1)
+			return nil
+		}
+		left = append(left, time.Until(d))
+		return nil
+	}
+	stall := func(ctx context.Context, inv *inventory.Inventory) error {
+		_ = record(ctx, inv)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+	runSteps(ctx, &inv, []step{
+		{cap: inventory.CapVersions, run: stall},
+		{cap: inventory.CapHelm, run: record},
+		{cap: inventory.CapAddOns, run: stall},
+		{cap: inventory.CapAPIUsage, run: record},
+	})
+	// 800ms over 4 steps: the first stall takes its 200ms; the next step
+	// gets a third of the 600ms left and returns at once, the second stall
+	// half of it, and the last step all that remains.
+	want := []time.Duration{200 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond, 300 * time.Millisecond}
+	if len(left) != len(want) {
+		t.Fatalf("steps saw %v, want 4 deadlines", left)
+	}
+	for i := range want {
+		if d := left[i] - want[i]; d > 0 || d < -150*time.Millisecond {
+			t.Errorf("step %d: deadline in %v, want about %v", i, left[i], want[i])
+		}
+	}
+	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapAddOns} {
+		if st := inv.Capabilities[cp]; st.Available || !strings.Contains(st.Reason, "step deadline") {
+			t.Errorf("%s = %+v, want not available, naming the step deadline", cp, st)
+		}
+	}
+	if st := inv.Capabilities[inventory.CapAPIUsage]; !st.Available {
+		t.Errorf("api-usage = %+v, want available after two stalled steps", st)
+	}
+
+	left = nil
+	runSteps(context.Background(), &inv, []step{{cap: inventory.CapVersions, run: record}})
+	if len(left) != 1 || left[0] != -1 {
+		t.Errorf("no scan deadline: step saw %v, want no deadline", left)
 	}
 }
