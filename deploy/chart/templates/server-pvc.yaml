@@ -1,4 +1,4 @@
-{{- if and .Values.server.enabled .Values.server.persistence.enabled }}
+{{- if and .Values.server.enabled .Values.server.persistence.enabled (not (include "upgradescope.postgres" .)) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

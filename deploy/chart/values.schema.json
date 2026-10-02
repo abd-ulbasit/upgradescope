@@ -58,6 +58,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "enabled": { "type": "boolean" },
         "interval": { "$ref": "#/definitions/duration" },
         "crName": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253 },
         "teamLabel": { "type": "string", "minLength": 1 },
@@ -94,9 +95,62 @@
         "readToken": { "type": "string" },
         "existingSecret": { "$ref": "#/definitions/secretName" },
         "readTokenFromSecret": { "type": "boolean" },
+        "adminToken": { "type": "string" },
+        "adminTokenFromSecret": { "type": "boolean" },
         "slackWebhook": { "type": "string", "pattern": "^(https?://.+)?$" },
         "webhook": { "type": "string", "pattern": "^(https?://.+)?$" },
+        "webhookSecret": { "type": "string" },
         "targets": { "$ref": "#/definitions/targets" },
+        "retention": {
+          "description": "Whole days (90d), a Go duration (2160h) of at least a day, or 0 to keep everything (`--set server.retention=0` passes the number 0); serve validates the value.",
+          "anyOf": [
+            { "type": "string", "pattern": "^(0|[0-9]+d|([0-9]+(\\.[0-9]*)?(h|m|s))+)$" },
+            { "type": "integer", "enum": [0] }
+          ]
+        },
+        "staleAfter": { "$ref": "#/definitions/duration" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "$ref": "#/definitions/secretName" },
+            "key": { "type": "string", "minLength": 1 }
+          }
+        },
+        "teamMap": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pattern", "team"],
+            "properties": {
+              "pattern": { "type": "string", "minLength": 1 },
+              "team": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "ingress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "className": { "type": "string" },
+            "annotations": { "$ref": "#/definitions/stringMap" },
+            "host": { "type": "string" },
+            "path": { "type": "string", "pattern": "^/" },
+            "pathType": { "enum": ["Prefix", "Exact", "ImplementationSpecific"] },
+            "allowAnonymousRead": { "type": "boolean" },
+            "tls": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "secretName": { "$ref": "#/definitions/secretName" }
+              }
+            }
+          }
+        },
         "serviceAccount": {
           "type": "object",
           "additionalProperties": false,

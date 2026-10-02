@@ -27,7 +27,7 @@ func WhatIf(ctx context.Context, st store.Store, k kb.KB, tm TeamMap, clusterID 
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
 		return engine.Report{}, fmt.Errorf("what-if for cluster %d: corrupt stored inventory (snapshot %d): %w", clusterID, snap.ID, err)
 	}
-	return evaluateWhatIf(inv, k, tm, target, now), nil
+	return evaluateWhatIf(legacyView(inv, snap.AgentVersion), k, tm, target, now), nil
 }
 
 // evaluateWhatIf evaluates an already-loaded inventory the way ingest

@@ -260,6 +260,124 @@ helm template upgradescope "$CHART" --namespace upgradescope \
 assert_no_line "$TMP/nopvc.yaml" 'kind: PersistentVolumeClaim' "no PVC when persistence disabled"
 assert_contains "$TMP/nopvc.yaml" 'emptyDir: {}' "emptyDir fallback"
 
+# --- FLEET HUB (#43) ---
+echo "== hub: retention and staleness reach serve"
+assert_contains "$TMP/server.yaml" '- "--retention=90d"'  "retention window passed to serve"
+assert_contains "$TMP/server.yaml" '- "--stale-after=2h"' "stale-after passed to serve"
+# The documented `--set server.retention=0` arrives as a number, not "0".
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t --set server.retention=0 > "$TMP/keep.yaml"
+assert_contains "$TMP/keep.yaml" '- "--retention=0"' "--set server.retention=0 keeps everything"
+
+echo "== hub: server-only mode (agent.enabled=false) renders no agent objects"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set agent.enabled=false --set server.enabled=true --set server.ingestToken=t > "$TMP/hub.yaml"
+assert_line "$TMP/hub.yaml" 'kind: Deployment'               "server Deployment rendered"
+assert_no_line "$TMP/hub.yaml" '  name: upgradescope-agent'  "no agent Deployment or ClusterRole"
+assert_no_line "$TMP/hub.yaml" '  name: upgradescope'        "no agent ServiceAccount"
+assert_no_line "$TMP/hub.yaml" 'kind: ClusterRole'           "no ClusterRole"
+assert_no_line "$TMP/hub.yaml" 'kind: ClusterRoleBinding'    "no ClusterRoleBinding"
+assert_not_contains "$TMP/hub.yaml" 'UPGRADESCOPE_SERVER_TOKEN' "no agent push token"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set agent.enabled=false --set server.enabled=true --set server.ingestToken=t \
+  --set agent.serverToken=x --set agent.serverUrl=https://x.example \
+  --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true \
+  --set networkPolicy.enabled=true \
+  --set-json 'networkPolicy.serverIngressFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress"}}}]' > "$TMP/hub-extras.yaml"
+assert_line "$TMP/hub-extras.yaml" 'kind: NetworkPolicy' "hub NetworkPolicy rendered with its peers"
+if helm template upgradescope "$CHART" --set agent.enabled=false --set server.enabled=true --set server.ingestToken=t \
+  --set networkPolicy.enabled=true >/dev/null 2>&1; then
+  fail "a hub NetworkPolicy without peers would admit every source; the render should fail"
+else
+  pass "hub NetworkPolicy needs networkPolicy.serverIngressFrom"
+fi
+assert_no_line "$TMP/hub-extras.yaml" '  name: upgradescope-agent-token'   "no agent token Secret"
+assert_no_line "$TMP/hub-extras.yaml" '  name: upgradescope-agent-metrics' "no agent metrics Service"
+assert_not_contains "$TMP/hub-extras.yaml" 'upgradescope-agent'          "no agent ServiceMonitor, rule group or NetworkPolicy peer"
+assert_contains "$TMP/hub-extras.yaml" 'UpgradescopeClusterStale'        "server rules still rendered"
+
+echo "== hub: Postgres via an existing Secret, no PVC, several replicas"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set agent.enabled=false --set server.enabled=true --set server.ingestToken=t \
+  --set server.database.existingSecret=pg-dsn --set server.database.key=url \
+  --set server.replicas=2 > "$TMP/hub-pg.yaml"
+assert_env_secret "$TMP/hub-pg.yaml" UPGRADESCOPE_DB_URL pg-dsn url "Postgres DSN from the Secret via env"
+assert_not_contains "$TMP/hub-pg.yaml" '--db=' "no SQLite --db"
+assert_not_contains "$TMP/hub-pg.yaml" '--db-url' "the DSN never reaches argv"
+assert_no_line "$TMP/hub-pg.yaml" 'kind: PersistentVolumeClaim' "no PVC with Postgres"
+assert_not_contains "$TMP/hub-pg.yaml" 'mountPath: /data' "no data volume with Postgres"
+assert_line "$TMP/hub-pg.yaml" '  replicas: 2' "replicas honoured with Postgres"
+assert_contains "$TMP/hub-pg.yaml" 'type: RollingUpdate' "rolling updates with Postgres"
+if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t --set server.replicas=2 >/dev/null 2>&1; then
+  fail "server.replicas=2 on SQLite should fail the render"
+else
+  pass "several replicas need server.database"
+fi
+
+echo "== hub: team map ConfigMap"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set-json 'server.teamMap=[{"pattern":"payments-*","team":"payments"}]' > "$TMP/hub-teams.yaml"
+assert_line "$TMP/hub-teams.yaml" 'kind: ConfigMap' "team map ConfigMap rendered"
+assert_contains "$TMP/hub-teams.yaml" 'pattern: payments-*' "team map rules in the ConfigMap"
+assert_contains "$TMP/hub-teams.yaml" '- "--team-map=/etc/upgradescope/team-map/team-map.yaml"' "--team-map points at the mount"
+assert_contains "$TMP/hub-teams.yaml" 'mountPath: /etc/upgradescope/team-map' "team map mounted"
+assert_contains "$TMP/hub-teams.yaml" 'checksum/team-map:' "pods roll when the team map changes"
+assert_no_line "$TMP/server.yaml" 'kind: ConfigMap' "no team map ConfigMap by default"
+
+echo "== hub: Ingress with TLS"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t --set server.readToken=r \
+  --set server.ingress.enabled=true --set server.ingress.host=uscope.example.com \
+  --set server.ingress.className=nginx > "$TMP/hub-ingress.yaml"
+assert_line "$TMP/hub-ingress.yaml" 'kind: Ingress' "Ingress rendered"
+assert_contains "$TMP/hub-ingress.yaml" 'host: uscope.example.com' "Ingress host"
+assert_contains "$TMP/hub-ingress.yaml" 'secretName: upgradescope-server-tls' "TLS block with the default Secret name"
+assert_contains "$TMP/hub-ingress.yaml" 'ingressClassName: nginx' "ingress class"
+assert_no_line "$TMP/server.yaml" 'kind: Ingress' "no Ingress by default"
+if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t --set server.readToken=r \
+  --set server.ingress.enabled=true >/dev/null 2>&1; then
+  fail "an Ingress without a host should fail the render"
+else
+  pass "Ingress needs server.ingress.host"
+fi
+if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t \
+  --set server.ingress.enabled=true --set server.ingress.host=u.example.com >/dev/null 2>&1; then
+  fail "an Ingress in front of an open read API should fail the render"
+else
+  pass "Ingress needs a read token (or allowAnonymousRead behind an auth layer)"
+fi
+helm template upgradescope "$CHART" --namespace upgradescope --set server.enabled=true --set server.ingestToken=t \
+  --set server.ingress.enabled=true --set server.ingress.host=u.example.com \
+  --set server.ingress.allowAnonymousRead=true > "$TMP/hub-ingress-proxy.yaml"
+assert_line "$TMP/hub-ingress-proxy.yaml" 'kind: Ingress' "Ingress with allowAnonymousRead behind an auth layer"
+
+echo "== hub: admin token and webhook secret, inline or from server.existingSecret"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set server.adminToken=adm --set server.webhookSecret=whk > "$TMP/hub-admin.yaml"
+assert_env_secret "$TMP/hub-admin.yaml" UPGRADESCOPE_ADMIN_TOKEN upgradescope-server-tokens adminToken "admin token from the chart Secret"
+assert_env_secret "$TMP/hub-admin.yaml" UPGRADESCOPE_WEBHOOK_SECRET upgradescope-server-tokens webhookSecret "webhook secret from the chart Secret"
+assert_contains "$TMP/hub-admin.yaml" 'adminToken: "adm"' "admin token stored in the Secret"
+assert_not_contains "$TMP/server.yaml" 'UPGRADESCOPE_ADMIN_TOKEN' "no admin token unless set"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set agent.enabled=false --set server.enabled=true --set server.existingSecret=hub \
+  --set server.readTokenFromSecret=true --set server.adminTokenFromSecret=true > "$TMP/hub-existing.yaml"
+assert_env_secret "$TMP/hub-existing.yaml" UPGRADESCOPE_ADMIN_TOKEN hub adminToken "admin token from existingSecret"
+assert_env_secret "$TMP/hub-existing.yaml" UPGRADESCOPE_READ_TOKEN hub readToken "read token from existingSecret"
+assert_env_secret "$TMP/hub-existing.yaml" UPGRADESCOPE_INGEST_TOKEN hub ingestToken "ingest token from existingSecret"
+assert_env_secret "$TMP/hub-existing.yaml" UPGRADESCOPE_WEBHOOK_SECRET hub webhookSecret "optional webhookSecret key"
+if grep -A6 -xE '[[:space:]]*- name: UPGRADESCOPE_INGEST_TOKEN' "$TMP/hub-existing.yaml" | grep -qxE '[[:space:]]*optional: true'; then
+  pass "a hub's shared ingest token is optional (per-cluster tokens suffice)"
+else
+  fail "the hub's ingestToken key should be optional without an in-chart agent"
+fi
+if helm template upgradescope "$CHART" --set server.enabled=true --set server.adminTokenFromSecret=true >/dev/null 2>&1; then
+  fail "adminTokenFromSecret without existingSecret should fail"
+else
+  pass "adminTokenFromSecret requires existingSecret"
+fi
+
 # --- PRODUCTION KNOBS (#42) ---
 echo "== knobs: pull secrets, scheduling, extra env/volumes/args render on both pods"
 cat > "$TMP/knobs-values.yaml" <<'EOF'

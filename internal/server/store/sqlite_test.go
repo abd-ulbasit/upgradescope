@@ -50,6 +50,20 @@ func mustSnapshot(t *testing.T, s *SQLite, clusterID int64, hash string, at time
 	return id
 }
 
+// TestOpenRejectsURIMetacharacters: the path is interpolated into a SQLite
+// URI, where '?' starts the query (`q/a?b.db` opened the file q/a and
+// dropped the _txlock pragma, so concurrent ingest failed with
+// SQLITE_BUSY) and '#' truncates the name. Refuse such paths outright.
+func TestOpenRejectsURIMetacharacters(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"q?b.db", "a#b.db"} {
+		if s, err := Open(filepath.Join(dir, name)); err == nil {
+			_ = s.Close()
+			t.Errorf("Open(%q) succeeded, want an error", name)
+		}
+	}
+}
+
 func TestOpenSetsPragmas(t *testing.T) {
 	s := newTestStore(t)
 	var mode string
@@ -106,8 +120,8 @@ func TestOpenIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if n != 4 {
-		t.Errorf("schema_migrations rows = %d, want 4 (0001-0004, each applied once)", n)
+	if n != 6 {
+		t.Errorf("schema_migrations rows = %d, want 6 (0001-0006, each applied once)", n)
 	}
 	for _, table := range []string{"clusters", "snapshots", "evaluations", "tokens", "outbox"} {
 		var name string

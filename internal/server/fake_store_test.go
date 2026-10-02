@@ -27,6 +27,8 @@ type fakeStore struct {
 
 	// errs injects failures by method name, e.g. errs["InsertSnapshot"].
 	errs map[string]error
+
+	pruneCalls []time.Time // cutoffs Prune was called with
 }
 
 var _ store.Store = (*fakeStore)(nil)
@@ -53,9 +55,13 @@ func (f *fakeStore) UpsertCluster(_ context.Context, c store.Cluster) (int64, er
 	if err := f.errs["UpsertCluster"]; err != nil {
 		return 0, err
 	}
+	return f.upsertClusterLocked(c)
+}
+
+func (f *fakeStore) upsertClusterLocked(c store.Cluster) (int64, error) {
 	for id, existing := range f.clusters {
 		if existing.Name == c.Name {
-			if existing.ClusterUID != "" && c.ClusterUID != "" && existing.ClusterUID != c.ClusterUID {
+			if existing.ClusterUID != "" && existing.ClusterUID != c.ClusterUID {
 				return 0, &store.ClusterUIDConflictError{Name: c.Name, StoredUID: existing.ClusterUID, PushedUID: c.ClusterUID}
 			}
 			if c.ClusterUID != "" {
@@ -86,9 +92,94 @@ func (f *fakeStore) DeleteCluster(_ context.Context, name string) error {
 		delete(f.clusters, id)
 		f.snapshots = slices.DeleteFunc(f.snapshots, func(s store.Snapshot) bool { return s.ClusterID == id })
 		f.evals = slices.DeleteFunc(f.evals, func(e store.Evaluation) bool { return e.ClusterID == id })
+		f.outbox = slices.DeleteFunc(f.outbox, func(m store.OutboxMessage) bool { return m.ClusterID == id })
+		for tok, tk := range f.tokens {
+			if tk.cluster == name {
+				delete(f.tokens, tok)
+			}
+		}
 		return nil
 	}
 	return store.ErrNotFound
+}
+
+func (f *fakeStore) ClusterByName(_ context.Context, name string) (store.Cluster, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["ClusterByName"]; err != nil {
+		return store.Cluster{}, err
+	}
+	for _, c := range f.clusters {
+		if c.Name == name {
+			return c, nil
+		}
+	}
+	return store.Cluster{}, store.ErrNotFound
+}
+
+func (f *fakeStore) RenameCluster(_ context.Context, name, newName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["RenameCluster"]; err != nil {
+		return err
+	}
+	found := int64(0)
+	for id, c := range f.clusters {
+		if c.Name == name {
+			found = id
+		}
+	}
+	for id, c := range f.clusters {
+		if c.Name == newName && id != found && found != 0 {
+			return store.ErrClusterNameTaken
+		}
+	}
+	if found == 0 {
+		return store.ErrNotFound
+	}
+	c := f.clusters[found]
+	c.Name = newName
+	f.clusters[found] = c
+	for _, tk := range f.tokens {
+		if tk.cluster == name {
+			tk.cluster = newName
+		}
+	}
+	return nil
+}
+
+// Prune mirrors the real stores: evaluations before cutoff, then
+// unreferenced snapshots before it, sparing each cluster's latest.
+func (f *fakeStore) Prune(_ context.Context, cutoff time.Time) (store.PruneResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pruneCalls = append(f.pruneCalls, cutoff)
+	if err := f.errs["Prune"]; err != nil {
+		return store.PruneResult{}, err
+	}
+	latest := map[int64]bool{}
+	for id := range f.clusters {
+		if sn, ok := f.latestSnapshotLocked(id); ok {
+			latest[sn.ID] = true
+		}
+	}
+	var res store.PruneResult
+	f.evals = slices.DeleteFunc(f.evals, func(e store.Evaluation) bool {
+		gone := e.CreatedAt.Before(cutoff) && !latest[e.SnapshotID]
+		if gone {
+			res.Evaluations++
+		}
+		return gone
+	})
+	f.snapshots = slices.DeleteFunc(f.snapshots, func(sn store.Snapshot) bool {
+		referenced := slices.ContainsFunc(f.evals, func(e store.Evaluation) bool { return e.SnapshotID == sn.ID })
+		gone := sn.ReceivedAt.Before(cutoff) && !latest[sn.ID] && !referenced
+		if gone {
+			res.Snapshots++
+		}
+		return gone
+	})
+	return res, nil
 }
 
 func (f *fakeStore) latestSnapshotLocked(clusterID int64) (store.Snapshot, bool) {
@@ -124,6 +215,20 @@ func (f *fakeStore) LatestSnapshot(_ context.Context, clusterID int64) (store.Sn
 		return sn, nil
 	}
 	return store.Snapshot{}, store.ErrNotFound
+}
+
+func (f *fakeStore) LatestSnapshotHeads(_ context.Context) (map[int64]store.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["LatestSnapshotHeads"]; err != nil {
+		return nil, err
+	}
+	out := map[int64]store.Snapshot{}
+	for _, sn := range f.snapshots { // ascending id: the last one wins
+		sn.Inventory = nil
+		out[sn.ClusterID] = sn
+	}
+	return out, nil
 }
 
 func (f *fakeStore) ListClusters(_ context.Context) ([]store.Cluster, error) {
@@ -232,10 +337,35 @@ func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBat
 	if err := f.errs["CommitEvaluations"]; err != nil {
 		return 0, false, err
 	}
+	if b.Cluster != nil {
+		// Check the UID rule before any write; the upsert itself happens
+		// with the other writes, so a failed commit registers nothing.
+		b.ClusterID = 0
+		for id, c := range f.clusters {
+			if c.Name != b.Cluster.Name {
+				continue
+			}
+			if c.ClusterUID != "" && c.ClusterUID != b.Cluster.ClusterUID {
+				return 0, false, &store.ClusterUIDConflictError{Name: c.Name, StoredUID: c.ClusterUID, PushedUID: b.Cluster.ClusterUID}
+			}
+			b.ClusterID = id
+		}
+	}
+	upsert := func() {
+		if b.Cluster != nil {
+			b.ClusterID, _ = f.upsertClusterLocked(*b.Cluster) // conflict ruled out above
+		}
+	}
 	latest, hasLatest := f.latestSnapshotLocked(b.ClusterID)
 	snapID := b.SnapshotID
 	if b.Snapshot != nil {
 		if hasLatest && latest.Hash == b.Snapshot.Hash {
+			upsert()
+			for i := range f.snapshots {
+				if f.snapshots[i].ID == latest.ID {
+					f.snapshots[i].KBVersion, f.snapshots[i].AgentVersion = b.Snapshot.KBVersion, b.Snapshot.AgentVersion
+				}
+			}
 			return latest.ID, true, nil
 		}
 	} else {
@@ -259,14 +389,15 @@ func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBat
 			return 0, false, store.ErrNotFound
 		}
 	}
+	upsert()
 	if b.Snapshot != nil {
 		sn := *b.Snapshot
-		sn.ID = f.id()
+		sn.ID, sn.ClusterID = f.id(), b.ClusterID
 		snapID = sn.ID
 		f.snapshots = append(f.snapshots, sn)
 	}
 	for _, e := range b.Insert {
-		e.SnapshotID = snapID
+		e.ClusterID, e.SnapshotID = b.ClusterID, snapID
 		f.insertEvalLocked(e)
 	}
 	for i, r := range b.Refresh {
@@ -275,7 +406,7 @@ func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBat
 		e.Blockers, e.Warnings, e.EvaluatedAt = r.Blockers, r.Warnings, r.EvaluatedAt
 	}
 	for _, m := range b.Outbox {
-		m.ID = f.id()
+		m.ID, m.ClusterID = f.id(), b.ClusterID
 		if m.NextAttemptAt.IsZero() {
 			m.NextAttemptAt = m.CreatedAt
 		}

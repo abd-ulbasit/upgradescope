@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver, registered as "pgx"
 )
 
@@ -62,32 +63,39 @@ func (p *Postgres) Ping(ctx context.Context) error { return p.db.PingContext(ctx
 
 // UpsertCluster inserts the cluster or, if a row with the same name exists,
 // bumps last_seen (first_seen never moves) and adopts c.ClusterUID when the
-// stored one is empty. A different non-empty UID is refused: the guarded
-// DO UPDATE matches no row, so RETURNING yields nothing and the stored UID
-// is read back for the *ClusterUIDConflictError. Zero FirstSeen/LastSeen
-// default to time.Now().UTC().
+// stored one is empty. Once bound, any other UID is refused, an empty one
+// included (no wildcard: a UID-less push may be another cluster). Zero
+// LastSeen defaults to time.Now().UTC(), zero FirstSeen to LastSeen.
 func (p *Postgres) UpsertCluster(ctx context.Context, c Cluster) (int64, error) {
+	return upsertClusterPg(ctx, p.db, c)
+}
+
+// upsertClusterPg is UpsertCluster on a pool or transaction. A refused UID
+// makes the guarded DO UPDATE match no row (it still locks it), so
+// RETURNING yields nothing and the stored UID is read back for the
+// *ClusterUIDConflictError.
+func upsertClusterPg(ctx context.Context, x sqlExecer, c Cluster) (int64, error) {
 	now := time.Now().UTC()
 	first, last := c.FirstSeen, c.LastSeen
-	if first.IsZero() {
-		first = now
-	}
 	if last.IsZero() {
 		last = now
 	}
+	if first.IsZero() {
+		first = last // a new cluster was first seen by this push
+	}
 	var id int64
-	err := p.db.QueryRowContext(ctx, `
+	err := x.QueryRowContext(ctx, `
 		INSERT INTO clusters (name, cluster_uid, first_seen, last_seen)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (name) DO UPDATE SET
 			cluster_uid = CASE WHEN excluded.cluster_uid = '' THEN clusters.cluster_uid ELSE excluded.cluster_uid END,
 			last_seen   = excluded.last_seen
-		WHERE clusters.cluster_uid = '' OR excluded.cluster_uid = '' OR clusters.cluster_uid = excluded.cluster_uid
+		WHERE clusters.cluster_uid = '' OR clusters.cluster_uid = excluded.cluster_uid
 		RETURNING id`,
 		c.Name, c.ClusterUID, first, last).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		var stored string
-		if err := p.db.QueryRowContext(ctx, `SELECT cluster_uid FROM clusters WHERE name = $1`, c.Name).Scan(&stored); err != nil {
+		if err := x.QueryRowContext(ctx, `SELECT cluster_uid FROM clusters WHERE name = $1`, c.Name).Scan(&stored); err != nil {
 			return 0, fmt.Errorf("upsert cluster %q: read stored uid: %w", c.Name, err)
 		}
 		return 0, &ClusterUIDConflictError{Name: c.Name, StoredUID: stored, PushedUID: c.ClusterUID}
@@ -98,10 +106,23 @@ func (p *Postgres) UpsertCluster(ctx context.Context, c Cluster) (int64, error) 
 	return id, nil
 }
 
-// DeleteCluster removes the named cluster, its evaluations and snapshots in
-// one transaction, or returns ErrNotFound. Tokens are keyed by name and
-// are left alone. The clusters row is locked first so a concurrent ingest
-// of the same cluster cannot add a snapshot between the deletes.
+// ClusterByName returns the cluster registered under name, or ErrNotFound.
+func (p *Postgres) ClusterByName(ctx context.Context, name string) (Cluster, error) {
+	c, err := scanClusterPg(p.db.QueryRowContext(ctx,
+		`SELECT id, name, cluster_uid, first_seen, last_seen FROM clusters WHERE name = $1`, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Cluster{}, fmt.Errorf("cluster %q: %w", name, ErrNotFound)
+	}
+	if err != nil {
+		return Cluster{}, fmt.Errorf("cluster %q: %w", name, err)
+	}
+	return c, nil
+}
+
+// DeleteCluster removes the named cluster, its evaluations, snapshots,
+// queued notifications and ingest tokens in one transaction, or returns
+// ErrNotFound. The clusters row is locked first so a concurrent ingest of
+// the same cluster cannot add a snapshot between the deletes.
 func (p *Postgres) DeleteCluster(ctx context.Context, name string) error {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -119,16 +140,98 @@ func (p *Postgres) DeleteCluster(ctx context.Context, name string) error {
 	for _, stmt := range []string{
 		`DELETE FROM evaluations WHERE cluster_id = $1`,
 		`DELETE FROM snapshots WHERE cluster_id = $1`,
+		`DELETE FROM outbox WHERE cluster_id = $1`,
 		`DELETE FROM clusters WHERE id = $1`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
 			return fmt.Errorf("delete cluster %q: %w", name, err)
 		}
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tokens WHERE cluster_name = $1`, name); err != nil {
+		return fmt.Errorf("delete cluster %q: tokens: %w", name, err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("delete cluster %q: commit: %w", name, err)
 	}
 	return nil
+}
+
+// pgUniqueViolation is SQLSTATE unique_violation.
+const pgUniqueViolation = "23505"
+
+// RenameCluster renames the cluster and re-binds its ingest tokens to the
+// new name in one transaction. The row is locked first; a taken name is
+// the clusters.name unique violation, which also covers a cluster
+// registering newName concurrently.
+func (p *Postgres) RenameCluster(ctx context.Context, name, newName string) error {
+	if newName == "" {
+		return fmt.Errorf("rename cluster %q: new name must be non-empty", name)
+	}
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("rename cluster %q: begin: %w", name, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	var id int64
+	err = tx.QueryRowContext(ctx, `SELECT id FROM clusters WHERE name = $1 FOR UPDATE`, name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("cluster %q: %w", name, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("rename cluster %q: %w", name, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE clusters SET name = $1 WHERE id = $2`, newName, id); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			return fmt.Errorf("rename cluster %q to %q: %w", name, newName, ErrClusterNameTaken)
+		}
+		return fmt.Errorf("rename cluster %q: %w", name, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE tokens SET cluster_name = $1 WHERE cluster_name = $2`, newName, name); err != nil {
+		return fmt.Errorf("rename cluster %q: tokens: %w", name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("rename cluster %q: commit: %w", name, err)
+	}
+	return nil
+}
+
+// Prune deletes evaluations created before cutoff, then the snapshots
+// received before it that no evaluation refers to any more, sparing each
+// cluster's latest snapshot and its evaluations, in one transaction. A
+// snapshot that becomes non-latest between the two statements keeps its
+// evaluations, so it stays until the next run.
+func (p *Postgres) Prune(ctx context.Context, cutoff time.Time) (PruneResult, error) {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PruneResult{}, fmt.Errorf("prune: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	at := cutoff.UTC()
+	var res PruneResult
+	evals, err := tx.ExecContext(ctx, `
+		DELETE FROM evaluations WHERE created_at < $1
+		AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)`, at)
+	if err != nil {
+		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
+	}
+	if res.Evaluations, err = evals.RowsAffected(); err != nil {
+		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
+	}
+	snaps, err := tx.ExecContext(ctx, `
+		DELETE FROM snapshots WHERE received_at < $1
+		AND id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+		AND NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.snapshot_id = snapshots.id)`, at)
+	if err != nil {
+		return PruneResult{}, fmt.Errorf("prune snapshots: %w", err)
+	}
+	if res.Snapshots, err = snaps.RowsAffected(); err != nil {
+		return PruneResult{}, fmt.Errorf("prune snapshots: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return PruneResult{}, fmt.Errorf("prune: commit: %w", err)
+	}
+	return res, nil
 }
 
 // scanClusterPg mirrors scanCluster for TIMESTAMPTZ columns: the driver
@@ -196,9 +299,9 @@ func (p *Postgres) InsertSnapshot(ctx context.Context, snap Snapshot) (int64, bo
 func (p *Postgres) LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error) {
 	var snap Snapshot
 	err := p.db.QueryRowContext(ctx, `
-		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, inventory
+		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, server_version, inventory
 		FROM snapshots WHERE cluster_id = $1 ORDER BY id DESC LIMIT 1`, clusterID).
-		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &snap.ReceivedAt, &snap.Inventory)
+		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &snap.ReceivedAt, &snap.ServerVersion, &snap.Inventory)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Snapshot{}, fmt.Errorf("latest snapshot for cluster %d: %w", clusterID, ErrNotFound)
 	}
@@ -207,6 +310,31 @@ func (p *Postgres) LatestSnapshot(ctx context.Context, clusterID int64) (Snapsho
 	}
 	snap.ReceivedAt = snap.ReceivedAt.UTC()
 	return snap, nil
+}
+
+// LatestSnapshotHeads returns every cluster's latest snapshot without its
+// inventory, in one query over idx_snapshots_cluster_id.
+func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (cluster_id) id, cluster_id, hash, kb_version, agent_version, received_at, server_version
+		FROM snapshots ORDER BY cluster_id, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("latest snapshot heads: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]Snapshot{}
+	for rows.Next() {
+		var snap Snapshot
+		if err := rows.Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &snap.ReceivedAt, &snap.ServerVersion); err != nil {
+			return nil, fmt.Errorf("latest snapshot heads: %w", err)
+		}
+		snap.ReceivedAt = snap.ReceivedAt.UTC()
+		out[snap.ClusterID] = snap
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("latest snapshot heads: %w", err)
+	}
+	return out, nil
 }
 
 // scanEvaluationPg mirrors scanEvaluation for TIMESTAMPTZ columns.
@@ -262,11 +390,12 @@ func (p *Postgres) queryEvaluation(ctx context.Context, what, query string, args
 }
 
 // LatestEvaluation returns the newest evaluation for (cluster, target) by
-// created_at (ties broken by id), or ErrNotFound.
+// insertion order (highest id; never created_at, which a clock step can
+// reorder), or ErrNotFound.
 func (p *Postgres) LatestEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
 	return p.queryEvaluation(ctx, fmt.Sprintf("latest evaluation for cluster %d target %s", clusterID, target), `
 		SELECT `+evaluationColumns+` FROM evaluations WHERE cluster_id = $1 AND target = $2
-		ORDER BY created_at DESC, id DESC LIMIT 1`, clusterID, target)
+		ORDER BY id DESC LIMIT 1`, clusterID, target)
 }
 
 // CurrentEvaluation returns the newest evaluation for target of the
@@ -275,7 +404,7 @@ func (p *Postgres) CurrentEvaluation(ctx context.Context, clusterID int64, targe
 	return p.queryEvaluation(ctx, fmt.Sprintf("current evaluation for cluster %d target %s", clusterID, target), `
 		SELECT `+evaluationColumns+` FROM evaluations
 		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = $1) AND target = $2
-		ORDER BY created_at DESC, id DESC LIMIT 1`, clusterID, target)
+		ORDER BY id DESC LIMIT 1`, clusterID, target)
 }
 
 // LatestKnownEvaluation returns the newest evaluation for (cluster, target)
@@ -284,7 +413,7 @@ func (p *Postgres) LatestKnownEvaluation(ctx context.Context, clusterID int64, t
 	return p.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target), `
 		SELECT `+evaluationColumns+` FROM evaluations
 		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
-		ORDER BY created_at DESC, id DESC LIMIT 1`, clusterID, target)
+		ORDER BY id DESC LIMIT 1`, clusterID, target)
 }
 
 // CommitEvaluations writes b in one transaction.
@@ -294,7 +423,9 @@ func (p *Postgres) LatestKnownEvaluation(ctx context.Context, clusterID int64, t
 // no such protection — two racing pushes of one hash would both miss the
 // duplicate, two racing passes would both insert. Locking the parent
 // clusters row FOR UPDATE first serializes writers of one cluster (across
-// replicas too) without blocking other clusters.
+// replicas too) without blocking other clusters. With b.Cluster set, the
+// upsert takes that row lock (ON CONFLICT locks the row even when its
+// guard refuses the update).
 func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int64, bool, error) {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -302,12 +433,18 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 
-	var lockID int64
-	err = tx.QueryRowContext(ctx,
-		`SELECT id FROM clusters WHERE id = $1 FOR UPDATE`, b.ClusterID).Scan(&lockID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		// Unknown cluster: fall through — the INSERT's FK reports it properly.
-		return 0, false, fmt.Errorf("commit evaluations: lock cluster: %w", err)
+	if b.Cluster != nil {
+		if b.ClusterID, err = upsertClusterPg(ctx, tx, *b.Cluster); err != nil {
+			return 0, false, fmt.Errorf("commit evaluations: %w", err)
+		}
+	} else {
+		var lockID int64
+		err = tx.QueryRowContext(ctx,
+			`SELECT id FROM clusters WHERE id = $1 FOR UPDATE`, b.ClusterID).Scan(&lockID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			// Unknown cluster: fall through — the INSERT's FK reports it properly.
+			return 0, false, fmt.Errorf("commit evaluations: lock cluster: %w", err)
+		}
 	}
 
 	var latestID int64
@@ -323,6 +460,18 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 	snapID := b.SnapshotID
 	if b.Snapshot != nil {
 		if !noSnapshot && latestHash == b.Snapshot.Hash {
+			// Same inventory: keep the envelope current (an upgraded agent
+			// or KB is news even when the cluster is not) and commit the
+			// cluster's last-seen bump.
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE snapshots SET kb_version = $1, agent_version = $2
+				WHERE id = $3 AND (kb_version <> $1 OR agent_version <> $2)`,
+				b.Snapshot.KBVersion, b.Snapshot.AgentVersion, latestID); err != nil {
+				return 0, false, fmt.Errorf("commit evaluations: record envelope: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return 0, false, fmt.Errorf("commit evaluations: commit: %w", err)
+			}
 			return latestID, true, nil
 		}
 		received := b.Snapshot.ReceivedAt
@@ -334,9 +483,9 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			inv = []byte{}
 		}
 		if err := tx.QueryRowContext(ctx, `
-			INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, inventory)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			b.ClusterID, b.Snapshot.Hash, b.Snapshot.KBVersion, b.Snapshot.AgentVersion, received, inv).Scan(&snapID); err != nil {
+			INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, server_version, inventory)
+			VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+			b.ClusterID, b.Snapshot.Hash, b.Snapshot.KBVersion, b.Snapshot.AgentVersion, received, b.Snapshot.ServerVersion, inv).Scan(&snapID); err != nil {
 			return 0, false, fmt.Errorf("commit evaluations: insert snapshot: %w", err)
 		}
 	} else {
@@ -347,7 +496,7 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			var got int64
 			err := tx.QueryRowContext(ctx, `
 				SELECT id FROM evaluations WHERE snapshot_id = $1 AND target = $2
-				ORDER BY created_at DESC, id DESC LIMIT 1`, snapID, target).Scan(&got)
+				ORDER BY id DESC LIMIT 1`, snapID, target).Scan(&got)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return 0, false, fmt.Errorf("commit evaluations: current %s: %w", target, err)
 			}
@@ -358,7 +507,7 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 	}
 
 	for _, e := range b.Insert {
-		e.SnapshotID = snapID
+		e.ClusterID, e.SnapshotID = b.ClusterID, snapID
 		if _, err := insertEvaluationPg(ctx, tx, e); err != nil {
 			return 0, false, fmt.Errorf("commit evaluations: %w", err)
 		}
@@ -385,8 +534,8 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			next = created
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO outbox (sink, payload, attempts, created_at, next_attempt_at) VALUES ($1, $2, 0, $3, $4)`,
-			m.Sink, m.Payload, created, next); err != nil {
+			INSERT INTO outbox (cluster_id, sink, payload, attempts, created_at, next_attempt_at) VALUES ($1, $2, $3, 0, $4, $5)`,
+			b.ClusterID, m.Sink, m.Payload, created, next); err != nil {
 			return 0, false, fmt.Errorf("commit evaluations: outbox: %w", err)
 		}
 	}
@@ -405,7 +554,7 @@ func (p *Postgres) ClaimOutbox(ctx context.Context, now time.Time, lease time.Du
 		WHERE id IN (
 			SELECT id FROM outbox WHERE next_attempt_at <= $2 ORDER BY id LIMIT $3 FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, sink, payload, attempts, created_at, next_attempt_at`,
+		RETURNING id, cluster_id, sink, payload, attempts, created_at, next_attempt_at`,
 		now.Add(lease).UTC(), now.UTC(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim outbox: %w", err)
@@ -414,7 +563,7 @@ func (p *Postgres) ClaimOutbox(ctx context.Context, now time.Time, lease time.Du
 	var out []OutboxMessage
 	for rows.Next() {
 		var m OutboxMessage
-		if err := rows.Scan(&m.ID, &m.Sink, &m.Payload, &m.Attempts, &m.CreatedAt, &m.NextAttemptAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ClusterID, &m.Sink, &m.Payload, &m.Attempts, &m.CreatedAt, &m.NextAttemptAt); err != nil {
 			return nil, fmt.Errorf("claim outbox: %w", err)
 		}
 		m.CreatedAt = m.CreatedAt.UTC()
@@ -542,7 +691,7 @@ func (p *Postgres) RevokeToken(ctx context.Context, clusterName string) error {
 }
 
 // ScoreHistory returns score points for (cluster, target), oldest-first
-// ascending by created_at. limit > 0 selects the most recent N rows (still
+// in insertion order (id). limit > 0 selects the most recent N rows (still
 // returned oldest-first); limit <= 0 returns all. An unknown cluster or
 // target yields an empty slice and nil error.
 func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target string, limit int) ([]ScorePoint, error) {
@@ -554,8 +703,8 @@ func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target str
 		SELECT created_at, score, ready FROM (
 			SELECT id, created_at, score, ready FROM evaluations
 			WHERE cluster_id = $1 AND target = $2
-			ORDER BY created_at DESC, id DESC LIMIT $3
-		) recent ORDER BY created_at ASC, id ASC`, clusterID, target, lim)
+			ORDER BY id DESC LIMIT $3
+		) recent ORDER BY id ASC`, clusterID, target, lim)
 	if err != nil {
 		return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 	}

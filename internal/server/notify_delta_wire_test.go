@@ -19,21 +19,41 @@ import (
 )
 
 type recordingNotifier struct {
-	mu     sync.Mutex
-	events []notify.Event
+	mu  sync.Mutex
+	got []notify.Notification
 }
 
-func (r *recordingNotifier) Notify(_ context.Context, ev notify.Event) error {
+func (r *recordingNotifier) Notify(_ context.Context, n notify.Notification) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.events = append(r.events, ev)
+	r.got = append(r.got, n)
 	return nil
 }
 
-func (r *recordingNotifier) all() []notify.Event {
+func (r *recordingNotifier) notifications() []notify.Notification {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]notify.Event(nil), r.events...)
+	return append([]notify.Notification(nil), r.got...)
+}
+
+// event is one change for one target of a delivered notification: the
+// shape most tests assert on.
+type event struct {
+	Cluster, Target, Kind, Title, Detail string
+}
+
+// all flattens every delivered notification into events, one per change
+// and target.
+func (r *recordingNotifier) all() []event {
+	var out []event
+	for _, n := range r.notifications() {
+		for _, c := range n.Changes {
+			for _, target := range c.Targets {
+				out = append(out, event{Cluster: n.Cluster.Name, Target: target, Kind: c.Kind, Title: c.Title, Detail: c.Detail})
+			}
+		}
+	}
+	return out
 }
 
 // pushInventory pushes one inventory through the real ingest endpoint

@@ -67,9 +67,9 @@ func TestReportStoreFailureIsNot200WhatIf(t *testing.T) {
 func TestInternalErrorsDoNotLeakDetail(t *testing.T) {
 	const secret = "pg down: secret-dsn"
 
-	t.Run("ingest upsert failure", func(t *testing.T) {
+	t.Run("ingest cluster lookup failure", func(t *testing.T) {
 		st := newFakeStore()
-		st.errs["UpsertCluster"] = errors.New(secret)
+		st.errs["ClusterByName"] = errors.New(secret)
 		s := newTestServer(t, st)
 		ts := httptest.NewServer(s.Handler())
 		defer ts.Close()

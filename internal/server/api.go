@@ -363,18 +363,23 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("token is not valid for cluster %q", req.ClusterName))
 		return
 	}
-	var inv inventory.Inventory
-	if err := json.Unmarshal(req.Inventory, &inv); err != nil {
-		errJSON(w, http.StatusUnprocessableEntity, "invalid inventory: "+err.Error())
+	inv, msg := decodePushedInventory(req.Inventory)
+	if msg != "" {
+		errJSON(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
-	// Canonical form: re-marshal the parsed inventory so wire key order and
-	// whitespace never change the dedup hash. Struct fields marshal in
-	// declared order; map keys marshal sorted. CollectedAt is zeroed to match
-	// the agent's snapshotHash canonical form (it changes every tick; hashing
-	// it would make force-sync pushes never dedup to 200 duplicate).
-	inv.CollectedAt = time.Time{}
-	canonical, err := json.Marshal(inv)
+	// The dedup hash is over a canonical form: the parsed inventory
+	// re-marshaled, so wire key order and whitespace never change it.
+	// Struct fields marshal in declared order; map keys marshal sorted.
+	// CollectedAt is zeroed to match the agent's snapshotHash canonical
+	// form (it changes every tick; hashing it would make force-sync pushes
+	// never dedup to 200 duplicate). The snapshot itself stores the
+	// inventory as pushed, so collectedAt and fields this server does not
+	// know (a newer agent's) are kept for a server that does; a push that
+	// differs only in those is a duplicate, since nothing judged changed.
+	hashed := inv
+	hashed.CollectedAt = time.Time{}
+	canonical, err := json.Marshal(hashed)
 	if err != nil {
 		internalErr(w, "canonicalizing inventory", err)
 		return
@@ -383,40 +388,41 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	now := s.now()
-	clusterID, err := s.cfg.Store.UpsertCluster(ctx, store.Cluster{
-		Name:       req.ClusterName,
-		ClusterUID: inv.ClusterID,
-		LastSeen:   now,
-	})
-	var conflict *store.ClusterUIDConflictError
-	if errors.As(err, &conflict) {
-		// Two clusters reporting one name would interleave their snapshots
-		// in one history and flap every score and alert, so the second one
-		// is refused until an operator decides which cluster the name means.
-		errJSON(w, http.StatusConflict, fmt.Sprintf(
-			"cluster name %q is registered to clusterId %s, but this push comes from clusterId %s. "+
-				"If this is a different cluster, give its agent a distinct --cluster-name (chart value clusterName). "+
-				"If the cluster was rebuilt, remove the old record (and its history) with "+
-				"'upgradescope clusters delete %s' against the server's database, then push again",
-			conflict.Name, conflict.StoredUID, conflict.PushedUID, conflict.Name))
+	// The cluster is registered (or touched) in the same transaction as the
+	// snapshot, so a push that fails to commit leaves no cluster row and no
+	// last-seen bump. The lookup here only decides early: a UID conflict
+	// needs no evaluation, and a known cluster's latest snapshot decides
+	// whether this push is a duplicate.
+	cluster := store.Cluster{Name: req.ClusterName, ClusterUID: inv.ClusterID, LastSeen: now}
+	existing, err := s.cfg.Store.ClusterByName(ctx, req.ClusterName)
+	switch {
+	case err == nil:
+		if existing.ClusterUID != "" && existing.ClusterUID != inv.ClusterID {
+			writeUIDConflict(w, &store.ClusterUIDConflictError{Name: req.ClusterName, StoredUID: existing.ClusterUID, PushedUID: inv.ClusterID})
+			return
+		}
+		cluster.ID = existing.ID
+	case !errors.Is(err, store.ErrNotFound):
+		internalErr(w, "loading cluster", err)
 		return
 	}
-	if err != nil {
-		internalErr(w, "storing cluster", err)
-		return
-	}
-	cluster := store.Cluster{ID: clusterID, Name: req.ClusterName, ClusterUID: inv.ClusterID}
 	// Detached from the request context: once the agent has sent the body,
 	// its disconnecting must not abort the commit (it would retry and get a
 	// duplicate); the transaction keeps the write all-or-nothing either way.
 	snapID, duplicate, err := s.ingestSnapshot(context.WithoutCancel(ctx), cluster, store.Snapshot{
-		ClusterID:    clusterID,
-		Hash:         hash,
-		KBVersion:    req.KBVersion,
-		AgentVersion: req.AgentVersion,
-		ReceivedAt:   now,
-		Inventory:    canonical,
-	}, inv)
+		ClusterID:     cluster.ID,
+		Hash:          hash,
+		KBVersion:     req.KBVersion,
+		AgentVersion:  req.AgentVersion,
+		ReceivedAt:    now,
+		ServerVersion: inv.ServerVersion, // "" (degraded): ingestSnapshot inherits the last one
+		Inventory:     req.Inventory,
+	}, legacyView(inv, req.AgentVersion))
+	var conflict *store.ClusterUIDConflictError
+	if errors.As(err, &conflict) { // another push bound the name meanwhile
+		writeUIDConflict(w, conflict)
+		return
+	}
 	if err != nil {
 		internalErr(w, "storing snapshot and evaluations", err)
 		return
@@ -428,13 +434,69 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"snapshotId": snapID})
 }
 
+// supportedInventorySchema is the inventory.schemaVersion this server
+// judges. Another version means fields this server would misread.
+const supportedInventorySchema = 1
+
+// decodePushedInventory parses and checks a pushed inventory, returning a
+// 422 message for one the server cannot judge: absent or null, another
+// schemaVersion (which includes {} and a missing one), or a serverVersion
+// that is not a Kubernetes 1.x version. A degraded inventory with no
+// serverVersion at all (the versions collector failed) is accepted and
+// judged at the cluster's last reported version (ingestSnapshot).
+func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
+	var inv inventory.Inventory
+	if t := bytes.TrimSpace(raw); len(t) == 0 || bytes.Equal(t, []byte("null")) {
+		return inv, "inventory is required"
+	}
+	if err := json.Unmarshal(raw, &inv); err != nil {
+		return inv, "invalid inventory: " + err.Error()
+	}
+	if inv.SchemaVersion != supportedInventorySchema {
+		return inv, fmt.Sprintf("unsupported inventory schemaVersion %d (want %d)", inv.SchemaVersion, supportedInventorySchema)
+	}
+	if inv.ServerVersion != "" {
+		if _, err := inventory.ParseTarget(inv.ServerVersion); err != nil {
+			return inv, "invalid inventory serverVersion: " + err.Error()
+		}
+	}
+	return inv, ""
+}
+
+// writeUIDConflict answers a push whose clusterId does not match the one
+// its cluster name is bound to.
+func writeUIDConflict(w http.ResponseWriter, conflict *store.ClusterUIDConflictError) {
+	// Two clusters reporting one name would interleave their snapshots in
+	// one history and flap every score and alert, so the second one is
+	// refused until an operator decides which cluster the name means. A
+	// push without a clusterId is refused the same way: it cannot show
+	// that it is the cluster the name is bound to.
+	if conflict.PushedUID == "" {
+		errJSON(w, http.StatusConflict, fmt.Sprintf(
+			"cluster name %q is registered to clusterId %s, but this push carries no clusterId "+
+				"(the agent could not read the kube-system namespace, which needs get on namespaces). "+
+				"Fix the agent's access, or give it a distinct --cluster-name if it is another cluster",
+			conflict.Name, conflict.StoredUID))
+		return
+	}
+	errJSON(w, http.StatusConflict, fmt.Sprintf(
+		"cluster name %q is registered to clusterId %s, but this push comes from clusterId %s. "+
+			"If this is a different cluster, give its agent a distinct --cluster-name (chart value clusterName). "+
+			"If the cluster was rebuilt, remove the old record (and its history) with "+
+			"'upgradescope clusters delete %s --server <this server>' (admin token), then push again; the delete also removes the name's "+
+			"per-cluster ingest tokens, so mint a new one with 'upgradescope tokens create %s' if the agent used one",
+		conflict.Name, conflict.StoredUID, conflict.PushedUID, conflict.Name, conflict.Name))
+}
+
 // ----- read API -----
 
 // readAuth gates a read handler behind Config.ReadToken when configured;
 // an empty ReadToken leaves the read API open (the CLI documents this loudly).
+// The admin token reads too, so one credential can list and then delete.
 func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.ReadToken != "" && !bearerOK(r, s.cfg.ReadToken) {
+		if s.cfg.ReadToken != "" && !bearerOK(r, s.cfg.ReadToken) &&
+			(s.cfg.AdminToken == "" || !bearerOK(r, s.cfg.AdminToken)) {
 			errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
 			return
 		}
@@ -477,15 +539,16 @@ func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.C
 }
 
 // defaultTarget computes a cluster's default evaluation target (next minor
-// above the latest snapshot's server version) and returns the parsed latest
-// inventory alongside so callers don't unmarshal twice. Errors:
-// store.ErrNotFound (no snapshots) or a corrupt/unparseable-version error.
+// above the version its latest snapshot is judged at — judgedVersion) and
+// returns the parsed latest inventory alongside so callers don't
+// unmarshal twice. Errors: store.ErrNotFound (no snapshots) or a
+// corrupt/unparseable-version error.
 func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.Version, inventory.Inventory, error) {
-	_, inv, err := s.latestInventory(ctx, clusterID)
+	snap, inv, err := s.latestInventory(ctx, clusterID)
 	if err != nil {
 		return inventory.Version{}, inventory.Inventory{}, err
 	}
-	server, err := inventory.ParseVersion(inv.ServerVersion)
+	server, err := inventory.ParseVersion(judgedAt(snap, inv))
 	if err != nil {
 		return inventory.Version{}, inv, fmt.Errorf("latest snapshot has no parseable server version: %w", err)
 	}
@@ -497,7 +560,7 @@ func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.
 // snapshot to derive one from). Writes the error response itself.
 func (s *Server) resolveTarget(w http.ResponseWriter, r *http.Request, clusterID int64) (inventory.Version, bool) {
 	if q := r.URL.Query().Get("target"); q != "" {
-		v, err := inventory.ParseVersion(q)
+		v, err := inventory.ParseTarget(q)
 		if err != nil {
 			errJSON(w, http.StatusUnprocessableEntity, "invalid target: "+err.Error())
 			return inventory.Version{}, false
@@ -520,7 +583,8 @@ func (s *Server) resolveTarget(w http.ResponseWriter, r *http.Request, clusterID
 // decode.
 var errCorruptInventory = errors.New("stored inventory is corrupt")
 
-// latestInventory loads and decodes the cluster's latest snapshot.
+// latestInventory loads and decodes the cluster's latest snapshot, as this
+// server judges it (legacyView of the pushing agent's version).
 // store.ErrNotFound means the cluster has no snapshots.
 func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Snapshot, inventory.Inventory, error) {
 	snap, err := s.cfg.Store.LatestSnapshot(ctx, clusterID)
@@ -531,7 +595,7 @@ func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Sn
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", clusterID, snap.ID, errCorruptInventory, err)
 	}
-	return snap, inv, nil
+	return snap, legacyView(inv, snap.AgentVersion), nil
 }
 
 // evalSummary is the read API's compact evaluation view. Evaluations are
@@ -546,11 +610,12 @@ type evalSummary struct {
 	KBVersion   string         `json:"kbVersion"`
 	EvaluatedAt time.Time      `json:"evaluatedAt"` // last confirmed; a re-evaluation with an unchanged result moves it
 	SnapshotID  int64          `json:"snapshotId"`
+	Outdated    bool           `json:"outdated,omitempty"` // evaluated before today UTC or under another KB or team map; the next pass replaces it
 	// NotAssessed is the report's: what the verdict could not cover.
 	NotAssessed []engine.CapabilityGap `json:"notAssessed,omitempty"`
 }
 
-func summarize(e store.Evaluation) evalSummary {
+func (s *Server) summarize(e store.Evaluation, now time.Time) evalSummary {
 	return evalSummary{
 		Target:      e.Target,
 		Score:       e.Score,
@@ -561,6 +626,7 @@ func summarize(e store.Evaluation) evalSummary {
 		KBVersion:   e.KBVersion,
 		EvaluatedAt: e.EvaluatedAt,
 		SnapshotID:  e.SnapshotID,
+		Outdated:    s.outdated(e, now),
 		NotAssessed: gapsOf(e),
 	}
 }
@@ -580,30 +646,29 @@ func gapsOf(e store.Evaluation) []engine.CapabilityGap {
 
 type clusterSummary struct {
 	store.Cluster
+	Stale  bool         `json:"stale"`            // no push within the server's --stale-after
 	Latest *evalSummary `json:"latest,omitempty"` // default-target evaluation, if any
 }
 
 // handleListClusters: GET /api/v1/clusters — every cluster plus its current
 // default-target score summary (omitted when no snapshot/evaluation exists).
-//
-// Known cost (P3/P4 optimization point, fine at current fleet sizes): this
-// is N+1 store round-trips — LatestSnapshot + CurrentEvaluation per
-// cluster — and defaultTarget unmarshals each cluster's full inventory blob
-// just to read ServerVersion. A latest-evals join or a denormalized
-// server-version column would fix both; no behavior change now.
+// Snapshot heads come from one store call (clusterStates), so no inventory
+// is decoded; the summaries are still one CurrentEvaluation per cluster.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	clusters, err := s.cfg.Store.ListClusters(ctx)
+	states, err := s.clusterStates(ctx)
 	if err != nil {
 		internalErr(w, "listing clusters", err)
 		return
 	}
-	out := make([]clusterSummary, 0, len(clusters))
-	for _, c := range clusters {
-		cs := clusterSummary{Cluster: c}
-		if target, _, err := s.defaultTarget(ctx, c.ID); err == nil {
+	out := make([]clusterSummary, 0, len(states))
+	now := s.now()
+	for _, c := range states {
+		cs := clusterSummary{Cluster: c.Cluster, Stale: s.clusterStale(c.Cluster, now)}
+		if server, err := inventory.ParseVersion(c.version); c.hasSnapshot && err == nil {
+			target := server.Next()
 			if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String()); err == nil {
-				sum := summarize(e)
+				sum := s.summarize(e, now)
 				cs.Latest = &sum
 			}
 		}
@@ -614,6 +679,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 
 type clusterDetail struct {
 	store.Cluster
+	Stale         bool                                                `json:"stale"` // no push within the server's --stale-after
 	ServerVersion string                                              `json:"serverVersion,omitempty"`
 	Capabilities  map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities,omitempty"`
 	Evaluations   []evalSummary                                       `json:"evaluations"`
@@ -628,18 +694,19 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	detail := clusterDetail{Cluster: c, Evaluations: []evalSummary{}}
+	now := s.now()
+	detail := clusterDetail{Cluster: c, Stale: s.clusterStale(c, now), Evaluations: []evalSummary{}}
 	var targets []inventory.Version
-	if _, inv, err := s.latestInventory(ctx, c.ID); err == nil {
-		detail.ServerVersion = inv.ServerVersion
+	if snap, inv, err := s.latestInventory(ctx, c.ID); err == nil {
+		detail.ServerVersion = judgedAt(snap, inv)
 		detail.Capabilities = inv.Capabilities
-		targets = s.evalTargets(inv)
+		targets = s.evalTargets(detail.ServerVersion)
 	} else {
 		targets = s.extraTargets
 	}
 	for _, t := range targets {
 		if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, t.String()); err == nil {
-			detail.Evaluations = append(detail.Evaluations, summarize(e))
+			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now))
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)
@@ -659,8 +726,9 @@ type reportMeta struct {
 	EvaluatedAt   time.Time `json:"evaluatedAt"`
 	SnapshotID    int64     `json:"snapshotId"`
 	Source        string    `json:"source"`                  // sourceStored | sourceWhatIf
-	ServerVersion string    `json:"serverVersion,omitempty"` // of the latest snapshot
+	ServerVersion string    `json:"serverVersion,omitempty"` // the version the latest snapshot is judged at (judgedVersion)
 	NotApplicable bool      `json:"notApplicable,omitempty"` // target at or below ServerVersion
+	Outdated      bool      `json:"outdated,omitempty"`      // a stored evaluation the next pass replaces (evalSummary.Outdated)
 }
 
 // loadOrComputeReport returns the current stored evaluation's report for
@@ -674,7 +742,8 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 	if err != nil {
 		return engine.Report{}, reportMeta{}, err
 	}
-	meta := reportMeta{ServerVersion: inv.ServerVersion, NotApplicable: notApplicable(inv, target)}
+	version := judgedAt(snap, inv)
+	meta := reportMeta{ServerVersion: version, NotApplicable: notApplicable(version, target)}
 	e, err := s.cfg.Store.CurrentEvaluation(ctx, clusterID, target.String())
 	switch {
 	case err == nil:
@@ -683,6 +752,7 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 			return engine.Report{}, reportMeta{}, fmt.Errorf("stored report for evaluation %d is corrupt: %w", e.ID, err)
 		}
 		meta.EvaluatedAt, meta.SnapshotID, meta.Source = e.EvaluatedAt, e.SnapshotID, sourceStored
+		meta.Outdated = s.outdated(e, s.now())
 		return rep, meta, nil
 	case errors.Is(err, store.ErrNotFound):
 		now := s.now()
