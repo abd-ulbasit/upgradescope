@@ -13,6 +13,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -390,4 +392,98 @@ func TestRenderedRBACCustomCRName(t *testing.T) {
 		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"),
 		named(res("upgradescope.dev", "clusterreadinesses/status", "update"), "cluster"),
 	)
+}
+
+// --- the prose that describes this role (#130 RB-01) ---
+
+// rbacDocs are the pages that tell users what the agent's ClusterRole
+// grants. They must say what TestRenderedRBACDefault proves.
+var rbacDocs = []string{"README.md", "SECURITY.md", "docs/operations/security-model-and-rbac.md"}
+
+var (
+	// A paragraph break, a table cell, or the end of a sentence or clause
+	// (a dot inside a name such as rbac.helmSecrets is not followed by a
+	// space).
+	clauseEnd = regexp.MustCompile(`\n\s*\n|\||[.;:](\s|$)`)
+	// watch, with the (at most two) words before it: "never `watch`",
+	// "and no `watch`", "never watches".
+	watchWord = regexp.MustCompile("(?i)((?:\\S+\\s+){0,2})`?\\bwatch(?:es|ed|ing)?\\b")
+	negation  = regexp.MustCompile(`(?i)\b(never|no|not|nor|without)\b`)
+	// "..., `watch`, and Secrets ... are denied": the clause denies a list.
+	deniedEnd = regexp.MustCompile(`(?i)\b(are|is) denied\s*$`)
+	// kubectl's --watch flag: what the reader runs, not what the role grants.
+	watchFlag = regexp.MustCompile(`--watch\b`)
+)
+
+// rbacDocProblems returns what a page describing the agent's role gets
+// wrong: a clause that grants watch (the role has get and list only: each
+// mention must be negated by one of the two words before it, or be in a
+// clause ending "are denied"), a CRD grant "not restricted by
+// resourceNames" (both CRD write rules are), or no mention of the
+// cluster-wide ConfigMaps read that rbac.helmSecrets adds. A --watch flag
+// (`kubectl get ... --watch`) is not a grant.
+func rbacDocProblems(doc string) []string {
+	var out []string
+	for _, clause := range clauseEnd.Split(watchFlag.ReplaceAllString(doc, ""), -1) {
+		if deniedEnd.MatchString(clause) {
+			continue
+		}
+		for _, m := range watchWord.FindAllStringSubmatch(clause, -1) {
+			if !negation.MatchString(m[1]) {
+				out = append(out, fmt.Sprintf("grants watch (the role has get and list only): %q", strings.Join(strings.Fields(clause), " ")))
+				break
+			}
+		}
+	}
+	flat := strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(doc, "`", "")), " "))
+	if strings.Contains(flat, "not restricted by resourcenames") || strings.Contains(flat, "not limited by resourcenames") {
+		out = append(out, "says a CRD grant is not restricted by resourceNames; every write on a CRD is")
+	}
+	if !strings.Contains(flat, "configmap") {
+		out = append(out, "does not mention the cluster-wide ConfigMaps get/list that rbac.helmSecrets grants")
+	}
+	return out
+}
+
+func TestRBACDocProblems(t *testing.T) {
+	const cm = " Helm needs ConfigMaps."
+	for _, tc := range []struct {
+		name, doc string
+		bad       bool
+	}{
+		{"get list only", "It reads with `get` and `list`, never `watch`." + cm, false},
+		{"never watches", "Reads are get and list only; the agent polls and never watches." + cm, false},
+		{"denied in the same sentence", "Other CRDs, `watch`, and Secrets with `rbac.helmSecrets=false` are denied." + cm, false},
+		{"no watch clause", "- `get`/`list` on pods; no wildcards and no `watch`;" + cm, false},
+		{"slash list", "The agent has get/list/watch on pods." + cm, true},
+		{"comma list", "It reads with `get`, `list` and `watch` on all resources." + cm, true},
+		{"watch in a table cell", "| `get`, `list`, `watch` on `pods` | no reason |" + cm, true},
+		{"negation in another sentence", "It never writes. It may watch pods." + cm, true},
+		{"negation of another item", "On pods; no wildcards, and `watch` on everything;" + cm, true},
+		{"watch then a negation", "It can `watch` pods, but not nodes." + cm, true},
+		{"not restricted", "CRD create/update/patch, not restricted by `resourceNames`." + cm, true},
+		{"not restricted across lines", "CRD writes, not\n    restricted by `resourceNames`." + cm, true},
+		{"no configmaps", "It reads with `get` and `list`, never `watch`, and Secrets.", true},
+		// kubectl's --watch flag is the reader's, not a grant to the agent.
+		{"kubectl --watch", "Follow it with `kubectl get clusterreadiness cluster --watch`." + cm, false},
+		{"--watch beside a grant", "Run it with --watch; the agent can watch pods." + cm, true},
+	} {
+		if got := rbacDocProblems(tc.doc); (len(got) > 0) != tc.bad {
+			t.Errorf("%s: problems = %q, want bad=%v", tc.name, got, tc.bad)
+		}
+	}
+}
+
+// TestRBACDocsMatchRole: README.md, SECURITY.md and the security page
+// describe the role this chart renders (#130 RB-01).
+func TestRBACDocsMatchRole(t *testing.T) {
+	for _, page := range rbacDocs {
+		b, err := os.ReadFile(filepath.Join("..", "..", page))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range rbacDocProblems(string(b)) {
+			t.Errorf("%s %s", page, p)
+		}
+	}
 }

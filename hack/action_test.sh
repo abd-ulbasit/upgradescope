@@ -9,8 +9,8 @@
 #     the release's checksums.txt (fail closed), the go install fallback
 #     only with a Go toolchain, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
-#     summary on action/testdata, the config, baseline and write-baseline
-#     inputs, and an injection payload as data.
+#     summary on action/testdata, the allow-incomplete, config, baseline
+#     and write-baseline inputs, and an injection payload as data.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -218,6 +218,11 @@ run install "$work/stub-curl:" INPUT_FAIL_ON=error
 expect "invalid fail-on is rejected" 1 "invalid fail-on 'error' (want blocker, warning or never)"
 run install "$work/stub-curl:" INPUT_TARGET=latest
 expect "invalid target is rejected" 1 "invalid target 'latest'"
+run install "$work/stub-curl:" INPUT_ALLOW_INCOMPLETE='true; touch pwned'
+expect "invalid allow-incomplete is rejected" 1 "invalid allow-incomplete 'true; touch pwned' (want true or false)"
+hasnt "invalid allow-incomplete downloads nothing" "$work/calls" curl
+run install "$work/stub-curl:" INPUT_ALLOW_INCOMPLETE=yes
+expect "allow-incomplete takes only true or false" 1 "invalid allow-incomplete 'yes' (want true or false)"
 run install "$work/stub-curl:" INPUT_PATH=does/not/exist
 expect "missing path is rejected" 1 "path 'does/not/exist' does not exist"
 run install "$work/stub-curl:" INPUT_PATH=
@@ -321,6 +326,36 @@ expect "fail-on never passes with blockers" 0 "### upgradescope: blocked"
 # ::error marks the findings that fail the gate; with fail-on never, none.
 has "fail-on never annotates a blocker as a warning" "$work/out" "::warning file=action/testdata/removed/all.yaml,line=2,title=upgradescope blocker (removed-api)::"
 if grep -q '^::error' "$work/out"; then fail "fail-on never emits no ::error" "$work/out"; else ok "fail-on never emits no ::error"; fi
+
+# --- allow-incomplete ---------------------------------------------------------
+
+# A target one minor past the knowledge base's horizon: no blocker, but
+# kb-coverage was not assessed, so the verdict is unknown and the gate
+# fails, unless allow-incomplete: true passes --allow-incomplete to the
+# gate pass (the JSON and Markdown passes run with --fail-on never, where
+# it changes nothing). A spy logs each upgradescope call into $work/calls.
+horizon=$("$work/real/upgradescope" version --output json | jq -r .kbHorizon)
+past="1.$((${horizon#1.} + 1))"
+mkdir -p "$work/spy"
+cat >"$work/spy/upgradescope" <<EOF
+#!/usr/bin/env bash
+echo "upgradescope \$*" >>"$work/calls"
+exec "$work/real/upgradescope" "\$@"
+EOF
+chmod +x "$work/spy/upgradescope"
+run scan "$work/spy:" INPUT_PATH=action/testdata/clean INPUT_TARGET="$past"
+expect "a target past the KB horizon ($past) fails the gate as unknown" 2 "### upgradescope: unknown"
+has "past the horizon sets verdict=unknown" "$rt/output" "verdict=unknown"
+hasnt "without allow-incomplete, --allow-incomplete is not passed" "$work/calls" "--allow-incomplete"
+run scan "$work/spy:" INPUT_PATH=action/testdata/clean INPUT_TARGET="$past" INPUT_ALLOW_INCOMPLETE=false
+expect "allow-incomplete: false still fails an unknown verdict" 2 "### upgradescope: unknown"
+hasnt "allow-incomplete: false passes no --allow-incomplete" "$work/calls" "--allow-incomplete"
+run scan "$work/spy:" INPUT_PATH=action/testdata/clean INPUT_TARGET="$past" INPUT_ALLOW_INCOMPLETE=true
+expect "allow-incomplete: true passes an unknown verdict" 0 "### upgradescope: unknown"
+has "allow-incomplete: true is passed through as --allow-incomplete" "$work/calls" "--output sarif --fail-on=blocker --allow-incomplete"
+has "allow-incomplete: true keeps verdict=unknown" "$rt/output" "verdict=unknown"
+run scan "$work/spy:" INPUT_ALLOW_INCOMPLETE=true
+expect "allow-incomplete: true still fails on blockers" 2 "readiness gate failed"
 
 # --- config, baseline and write-baseline -------------------------------------
 

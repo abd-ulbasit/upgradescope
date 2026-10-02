@@ -55,10 +55,11 @@ the action to `@vX.Y.Z` or its commit SHA, and `version` to the same
 release.
 
 **Targets past the horizon.** A `target` newer than the knowledge base's
-horizon makes the verdict `unknown`, which fails the gate. The action has no
-input for `scan --allow-incomplete` yet ([#130](https://github.com/abd-ulbasit/upgradescope/issues/130)), so target a minor the
-pinned release knows (`upgradescope version` prints the horizon), or use
-`fail-on: never` and read the outputs.
+horizon makes the verdict `unknown`, which fails the gate. Target a minor the
+pinned release knows (`upgradescope version` prints the horizon), or set
+`allow-incomplete: true` (the action's input for `scan --allow-incomplete`)
+to gate on findings alone: blockers still fail the step, and the `verdict`
+output still says `unknown`.
 
 Inputs, outputs, annotations, use without code scanning, and ignore rules
 and baselines in the action:

@@ -122,7 +122,7 @@ audited") and names the issue that tracks it.
 | VS-09c | A live scan's report names the kubeconfig context and the API server it read, in the table and markdown headers and as JSON `kubeContext` and `apiServer`; the server is reduced to scheme, host and port, so kubeconfig credentials, proxy paths and token queries never reach a report. | `TestScanNamesTheCluster` `TestAPIServerURL` `TestWriteTableNamesTheCluster` `TestWriteMarkdownNamesTheCluster` |
 | VS-10 | `--target` takes a minor such as 1.36; `2.0` and other typos are rejected. | `TestParseTarget` `TestScanRejectsBadTarget` `TestScanRejectsNonMajorOneTarget` `TestScanRequiresTarget` |
 | VS-10b | On a live cluster, a `--target` at or below the minor the oldest kube-apiserver runs (a downgrade, the same minor, or a typo such as `1.4`) is a required `target` gap: the verdict is `unknown` and `scan` exits 2, even with `--allow-incomplete`. Files mode has no cluster version, so no such gap. | `TestEvaluateTargetNotAnUpgrade` `TestScanTargetNotAnUpgrade` |
-| VS-11 | A target newer than the knowledge base is allowed and reported with a `kb-stale` warning (the verdict is then unknown). | `TestEvalKBStale` `TestEvaluateUnknownKeepsScoreAndKBStaleWarning` |
+| VS-11 | A target newer than the knowledge base is allowed and reported with a `kb-stale` warning and a required `kb-coverage` gap, so the verdict is unknown: on kind's newest minor, a vanilla cluster scanned at the next one exits 2, and 0 with `--allow-incomplete`, and the agent's default `ClusterReadiness` names the gap and, with no blocker, is `unknown` with `Ready` `Unknown`/`NotAssessed` (#130). | `TestEvalKBStale` `TestEvaluateUnknownKeepsScoreAndKBStaleWarning` `TestTickDefaultTargetPastKBHorizonIsUnknown` `e2e:past_horizon_is_unknown` `e2e:cr_reports_kb_coverage_gap` `e2e:cr_unknown_once_blockers_accepted` |
 | VS-12 | Findings are sorted by severity, then category, then title. | `TestSortFindings` `TestEvaluateGolden` |
 | VS-13 | Finding keys are unique within a report: control-plane skew is keyed `version-skew/<component>-newer` or `-behind`, so two skew findings never share a key, and a `--baseline` counts a finding whose severity rose as new. | `TestControlPlaneSkewKeysUnique` `TestEvaluateGolden` `TestBaselineSkewEscalationIsNew` `TestBaselineSeverityIncreaseIsNew` |
 
@@ -147,11 +147,12 @@ audited") and names the issue that tracks it.
 
 | ID | Claim | Proven by |
 |---|---|---|
-| AC-02 | Exit code 2 (findings at or above `fail-on`) fails the step. | `ci:action` `hack/action_test.sh` |
+| AC-02 | Exit code 2 (findings at or above `fail-on`, or an `unknown` verdict without `allow-incomplete`) fails the step. | `ci:action` `hack/action_test.sh` |
 | AC-03 | `version` installs a release archive verified against its `checksums.txt`, or `preinstalled` uses the binary on PATH. | `hack/action_test.sh` `ci:action` |
 | AC-05 | Inputs never reach a `run:` script unquoted, and are validated before use. | `hack/action_test.sh` |
 | AC-07 | Run as a consumer runs it, on Linux and macOS, the Action installs the latest release and fails on a fixture holding a removed API. | `ci:action` |
 | AC-08 | The Action sets `score`, `verdict`, `blockers` and the other outputs, annotations, and a job summary listing suppressed findings and the baseline diff. | `hack/action_test.sh` `ci:action` |
+| AC-09 | `allow-incomplete: true` passes `scan --allow-incomplete` to the gate (#130): a target past the knowledge base's horizon, with no blocker, passes with the `verdict` output still `unknown`, and blockers still fail; `false` or unset passes nothing, so the unknown verdict fails the step; any other value is refused before anything is downloaded. | `hack/action_test.sh` |
 
 ## Agent and ClusterReadiness CRD
 
@@ -175,7 +176,7 @@ audited") and names the issue that tracks it.
 
 | ID | Claim | Proven by |
 |---|---|---|
-| RB-01 | The README, `SECURITY.md` and the security page describe the agent's role as the chart renders it: `get` and `list`, never `watch`; writes only on its own ClusterReadiness, its status and the ClusterReadiness CRD, each by `resourceNames`; and the cluster-wide Secrets and ConfigMaps read that `rbac.helmSecrets` adds. `SECURITY.md` and the security page name the `ingressclasses` list that add-on detection reads, which the role grants. | `TestDocsAgentRBAC` `TestRenderedRBACDefault` `TestRenderedRBACHelmSecretsOff` |
+| RB-01 | The README, `SECURITY.md` and the security page describe the agent's role as the chart renders it: `get` and `list`, never `watch`; writes only on its own ClusterReadiness, its status and the ClusterReadiness CRD, each by `resourceNames`; and the cluster-wide Secrets and ConfigMaps read that `rbac.helmSecrets` adds. `SECURITY.md` and the security page name the `ingressclasses` list that add-on detection reads, which the role grants. | `TestRBACDocsMatchRole` `TestRBACDocProblems` `TestDocsAgentRBAC` `TestRenderedRBACDefault` `TestRenderedRBACHelmSecretsOff` |
 | RB-02 | The agent writes only its own ClusterReadiness, that object's status, and (with `manageCRD`) the ClusterReadiness CRD; nothing else, ever. Measured from the API server's audit log of a real install. | `e2e:audit_agent_writes_only_its_cr` `TestRenderedRBACDefault` |
 | RB-03 | Write access is limited to the `agent.crName` object and the one CRD, with no delete. | `TestRenderedRBACDefault` `TestRenderedRBACCustomCRName` `TestRenderedRBACManageCRDOff` `hack/test-chart.sh` |
 | RB-04 | No webhooks, no finalizers, nothing in the cluster changes because of a finding: with an EOL blocker installed, the chart install adds no admission webhook, the ClusterReadiness carries no finalizer or owner reference, and the agent writes nothing but that object and its CRD. | `e2e:no_webhooks_or_finalizers` `e2e:audit_agent_writes_only_its_cr` `TestRenderedRBACDefault` |
@@ -274,7 +275,7 @@ audited") and names the issue that tracks it.
 | DO-07 | Golden files cover every finding category and the score formula. | `TestEvaluateGolden` |
 | DO-08 | `make lint` is CI's lint (pinned staticcheck), and gofmt covers every module. | `ci:lint` `hack/test.sh` |
 | CL-01 | Every test this ledger names exists. | `make claims-check` `hack/claims-check_test.sh` |
-| PF-01, PF-03, PF-04 | Every number in the README's Measured table says what, how, where and at which commit: `scan` against kind 1.37 from #130's audit at main `8a951dd` (median 0.49 s), `scan --files` and binary sizes re-measured at main `9d0b161`. No image size is given until a published v0.2.0 image can be measured. | not automated: #99 (measured by hand on 2026-10-02; Install's Sizes has every platform) |
+| PF-01, PF-03, PF-04 | Every number in the README's Measured table says what, how, where and at which commit: `scan` against kind 1.37 from #130's audit at main `8a951dd` (median 0.49 s), `scan --files` at main `9d0b161`, and the binary and archive sizes from a GoReleaser snapshot of main `2e497c1`. The sizes in the README and on the Install page (every platform) stay within 2% of the release build: the release check compares each with `dist/` and fails beyond that. No image size is given until a published v0.2.0 image can be measured. | `hack/check-doc-sizes.sh` `hack/check-doc-sizes_test.sh` `ci:release-check` (the timings are not automated: #99) |
 
 ## Docs, references and published schemas
 
@@ -298,6 +299,7 @@ compare them with the code; the compatibility policy
 | DS-10 | The GitLab CI template (`ci/gitlab/upgradescope.gitlab-ci.yml`, included on the other-CI page) avoids each way the job broke before: the image's entrypoint is cleared, no line needs GNU-only flags or a pipeline's exit status, the archive is checked against `checksums.txt`, and the last line, unpiped, is the gate; its `artifacts:reports` name the Code Quality and JUnit files the scans write. No GitLab runner executes it. | `TestDocsGitLabJob` |
 | DS-11 | The site builds with `mkdocs build --strict` (no broken link, anchor or page missing from the nav) on every pull request, from hash-pinned requirements. | `.github/workflows/docs.yml` `hack/docs/requirements.txt` |
 | DS-12 | The Jenkins and Azure Pipelines templates (`ci/jenkins/Jenkinsfile`, `ci/azure/azure-pipelines.yml`) pin the release the docs install, check it against `checksums.txt`, run an unpiped gate that writes JUnit, and publish it in a step that runs when the gate fails. Neither CI system runs them. | `TestCITemplateJenkins` `TestCITemplateAzure` |
+| DS-13 | Each release attaches the published contracts, `report.schema.json`, `webhook.schema.json` and `openapi.yaml` (every file in `api/`), and lists them in its signed `checksums.txt`; the compatibility policy says where to download them (#60). | `TestDocsContractsAreReleaseAssets` `hack/release-check.sh` `ci:release-check` |
 
 ## Under repair
 

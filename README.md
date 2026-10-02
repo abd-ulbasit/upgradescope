@@ -57,8 +57,9 @@ upgradescope scan --target 1.37
 
 Exit code 0 means the gate passed, 2 that it failed (a blocker, or a verdict
 of `unknown`), 1 an error. `--fail-on warning|never` moves the threshold;
-`--allow-incomplete` gates on findings alone when a required check could not
-run, for example a target newer than the knowledge base knows.
+`--allow-incomplete` (the Action's `allow-incomplete: true`) gates on
+findings alone when a required check could not run, for example a target
+newer than the knowledge base knows.
 [CLI in two minutes](https://abd-ulbasit.github.io/upgradescope/getting-started/cli/).
 
 **Gate pull requests** with the GitHub Action (pin it to a release tag or
@@ -156,7 +157,7 @@ at the cost of Helm findings.
 |---|---|---|
 | `scan` against a live kind cluster (Kubernetes 1.37) | median 0.49 s, p90 0.52 s | 30 runs on a ThinkPad (Linux, amd64), October 2026 audit at main `8a951dd` (#130) |
 | `scan --files` on the demo's four rendered objects (`hack/demo/rendered`) | median 0.022 s, p90 0.022 s | 30 runs, Apple M1 Pro, main `9d0b161`, 2026-10-02 |
-| Binary, linux/amd64 (`-trimpath -ldflags "-s -w"`, as released) | 57.4 MiB (16.8 MiB gzipped) | Go 1.26.8, main `9d0b161`, 2026-10-02 |
+| Binary and archive, linux/amd64 (stripped binary, `.tar.gz` download) | 57.5 MiB binary, 17.4 MiB archive | GoReleaser v2.17.1 snapshot (`make release-check`) on an Apple M1 Pro, Go 1.26.8, main `2e497c1`, 2026-10-02; cross-compiled with `CGO_ENABLED=0`, so the build host does not change the size; the release check fails beyond 2% |
 
 More, with sizes per platform: [Install](https://abd-ulbasit.github.io/upgradescope/operations/install/#sizes).
 

@@ -32,9 +32,34 @@ stub kubectl '
 case "$*" in
   *"get --raw /version"*) echo "{\"major\":\"1\",\"minor\":\"${STUB_SERVER_MINOR:-31}+\"}" ;;
   *"jsonpath={.status.targets[0].score}"*) echo 40 ;;
+  *"jsonpath={.metadata.generation}"*) [ -f "$STUB_STATE/ignore.json" ] && echo 3 || echo 2 ;;
   *"get clusterreadiness cluster -o json"*)
     [ -z "${STUB_FINALIZER:-}" ] || meta="\"metadata\":{\"name\":\"cluster\",\"finalizers\":[\"upgradescope.dev/hold\"]},"
-    echo "{${meta:-}\"spec\":{\"targets\":[\"${STUB_NEXT:-1.32}\"]},\"status\":{\"targets\":[{\"target\":\"${STUB_NEXT:-1.32}\",\"score\":40,\"verdict\":\"blocked\",\"ready\":false,\"topFindings\":[{\"category\":\"eol-addon\"}]}]}}" ;;
+    # Past the horizon (STUB_HORIZON, default 1.37), the agent records the
+    # kb-coverage gap, unless STUB_CR_NO_KB_GAP. Once spec.ignore holds
+    # rules (a merge patch), the agent has evaluated generation 3 (unless
+    # STUB_CR_STALE) and accepted the blockers (unless STUB_CR_STILL_BLOCKED):
+    # the gap alone leaves the verdict unknown.
+    next=${STUB_NEXT:-1.32} horizon=${STUB_HORIZON:-1.37} gaps="" note=""
+    if [ "${next#1.}" -gt "${horizon#1.}" ] && [ -z "${STUB_CR_NO_KB_GAP:-}" ]; then
+      gaps=",\"notAssessed\":[\"kb-coverage: target $next is newer than the knowledge base (Kubernetes $horizon)\"]"
+      note="; not fully assessed: kb-coverage (required); see status.notAssessed"
+    fi
+    gen=2 target="{\"target\":\"$next\",\"score\":40,\"verdict\":\"blocked\",\"ready\":false,\"blockers\":2,\"topFindings\":[{\"category\":\"eol-addon\",\"severity\":\"blocker\"},{\"category\":\"chart-incompat\",\"severity\":\"blocker\"},{\"category\":\"eol-addon\",\"severity\":\"warning\"}]}"
+    ready="{\"type\":\"Ready\",\"status\":\"False\",\"reason\":\"Blocked\",\"message\":\"$next: 2 blocker(s) (score 40)$note\"}"
+    if [ -f "$STUB_STATE/ignore.json" ]; then
+      [ -n "${STUB_CR_STALE:-}" ] || gen=3
+      if [ -z "${STUB_CR_STILL_BLOCKED:-}" ]; then
+        target="{\"target\":\"$next\",\"score\":90,\"verdict\":\"unknown\",\"ready\":false,\"blockers\":0,\"suppressed\":2}"
+        ready="{\"type\":\"Ready\",\"status\":\"Unknown\",\"reason\":\"NotAssessed\",\"message\":\"$next: no blockers found, but a required check was not assessed: kb-coverage (required); see status.notAssessed (score 90)\"}"
+      fi
+    fi
+    echo "{${meta:-}\"spec\":{\"targets\":[\"$next\"]},\"status\":{\"observedGeneration\":$gen,\"targets\":[$target]$gaps,\"conditions\":[$ready]}}" ;;
+  *"patch clusterreadiness cluster --type merge -p "*)
+    for a; do [ "$p" != -p ] || printf "%s\n" "$a" >"$STUB_STATE/ignore.json"; p=$a; done ;;
+  *"patch clusterreadiness cluster --type json -p "*)
+    [ -z "${STUB_UNPATCH_FAIL:-}" ] || exit 1
+    rm -f "$STUB_STATE/ignore.json" ;;
   *"port-forward"*) exec sleep 30 ;;
   *"get validatingwebhookconfigurations,mutatingwebhookconfigurations -o name"*)
     echo validatingwebhookconfiguration.admissionregistration.k8s.io/ingress-nginx-admission
@@ -51,6 +76,7 @@ exit 0'
 stub helm '
 case "$*" in
   *"upgrade --install upgradescope deploy/chart"*) : >"$STUB_STATE/installed" ;;
+  *"upgrade --install ingress-nginx "*) : >"$STUB_STATE/ingress-nginx" ;;
   *"agent.targets="*) [ -z "${STUB_TARGETS_FAIL:-}" ] || { echo "Error: ClusterReadiness \"cluster\" exists and cannot be imported" >&2; exit 1; } ;;
   *" history "*) echo "[{\"revision\":1,\"status\":\"superseded\"},{\"revision\":2,\"status\":\"${STUB_HISTORY_STATUS:-uninstalled}\"}]" ;;
 esac
@@ -79,19 +105,33 @@ case "$*" in
   */api/v1/clusters*) echo "[{\"name\":\"kind\",\"score\":40}]" ;;
   */healthz*) echo "{\"status\":\"ok\"}" ;;
 esac'
-# The scanner: an unreachable --kubeconfig exits 1; otherwise the EOL
-# ingress-nginx blocker, plus the object the e2e last applied while it went
+# The scanner: `version --output json` reports the knowledge base horizon
+# STUB_HORIZON (default 1.37); an unreachable --kubeconfig exits 1;
+# otherwise the EOL ingress-nginx blocker once kind-setup.sh installed it,
+# plus the object the e2e last applied while it went
 # through a deprecated version (that apiVersion in the key, its manager),
 # plus, once hack/e2e/istio-teams.yaml is applied, Istio's findings per
 # release line (STUB_ISTIO=merged: each naming all three installs, as
 # before #129; no-team: right namespaces, no teams; no-eol: without the
-# 1.28 blocker) until it is deleted, and exit 2 on a blocker unless
-# --fail-on never.
+# 1.28 blocker) until it is deleted. A --target past the horizon adds a
+# required kb-coverage gap (unless STUB_IGNORE_HORIZON): the verdict is
+# then unknown without a blocker. Exit 2 on a blocker, or on an unknown
+# verdict without --allow-incomplete (STUB_ALLOW_IGNORED: with it too),
+# unless --fail-on never.
 stub upgradescope - <<'EOF'
-never="" unreachable=""
+if [ "$*" = "version --output json" ]; then
+  echo "{\"version\":\"0.0.0\",\"kbHorizon\":\"${STUB_HORIZON:-1.37}\"}"
+  exit 0
+fi
+never="" unreachable="" allow="" target="" prev=""
 for a; do
-  case "$a" in --kubeconfig) unreachable=1 ;; never) never=1 ;; esac
+  case "$a" in --kubeconfig) unreachable=1 ;; never) never=1 ;; --allow-incomplete) allow=1 ;; esac
+  [ "$prev" != --target ] || target=$a
+  prev=$a
 done
+[ -z "${STUB_ALLOW_IGNORED:-}" ] || allow=""
+horizon=${STUB_HORIZON:-1.37} past=""
+[ -z "$target" ] || [ -n "${STUB_IGNORE_HORIZON:-}" ] || [ "${target#1.}" -le "${horizon#1.}" ] || past=1
 if [ -n "$unreachable" ]; then
   [ -z "${STUB_UNREACHABLE_OK:-}" ] || { echo '{"findings":[]}'; exit 0; }
   echo "Error: dial tcp 127.0.0.1:1: connect: connection refused" >&2
@@ -105,8 +145,11 @@ fi
 [ "$via" != ga ] || [ -n "${STUB_GA_STILL_REPORTED:-}" ] || applied=""
 istio=""
 [ ! -f "$STUB_STATE/istio" ] || istio=${STUB_ISTIO:-per-line}
-jq -n --arg removed "${STUB_REMOVED:-}" --arg noeol "${STUB_NO_EOL:-}" --arg kept "${STUB_KEPT_FINDING:-}" \
-  --arg applied "$applied" --arg manager "${STUB_MANAGER-upgradescope-e2e}" --arg istio "$istio" '
+noeol=${STUB_NO_EOL:-}
+[ -f "$STUB_STATE/ingress-nginx" ] || noeol=1
+jq -n --arg removed "${STUB_REMOVED:-}" --arg noeol "$noeol" --arg kept "${STUB_KEPT_FINDING:-}" \
+  --arg applied "$applied" --arg manager "${STUB_MANAGER-upgradescope-e2e}" --arg istio "$istio" \
+  --arg past "$past" --arg target "$target" '
   def mesh($line): if $istio == "merged"
     then {namespaces: ["e2e-istio-mid", "e2e-istio-new", "e2e-istio-old"], teams: ["e2e-team-mid", "e2e-team-new", "e2e-team-old"]}
     elif $istio == "no-team" then {namespaces: ["e2e-istio-" + $line]}
@@ -121,10 +164,16 @@ jq -n --arg removed "${STUB_REMOVED:-}" --arg noeol "${STUB_NO_EOL:-}" --arg kep
         (if $istio == "no-eol" then [] else [{category: "eol-addon", severity: "blocker", key: "eol-addon/istio/1.28",
           title: "Istio"} + mesh("old")] end)
         + [{category: "chart-incompat", severity: "blocker", key: "chart-incompat/istio/1.28", title: "Istio"} + mesh("old"),
-           {category: "eol-approaching", severity: "warning", key: "eol-approaching/istio/1.30", title: "Istio"} + mesh("mid")] end))}' >"$STUB_STATE/report.json"
+           {category: "eol-approaching", severity: "warning", key: "eol-approaching/istio/1.30", title: "Istio"} + mesh("mid")] end))}
+  | .notAssessed = (if $past == "" then [] else [{capability: "kb-coverage", required: true,
+      reason: ("target " + $target + " is newer than the knowledge base")}] end)
+  | .verdict = (if any(.findings[]; .severity == "blocker") then "blocked"
+      elif .notAssessed != [] then "unknown" else "ready" end)
+  | .ready = (.verdict == "ready")' >"$STUB_STATE/report.json"
 cat "$STUB_STATE/report.json"
 [ -z "$never" ] || exit 0
 jq -e '[.findings[] | select(.severity == "blocker")] | length == 0' "$STUB_STATE/report.json" >/dev/null || exit 2
+[ -n "$allow" ] || jq -e '.verdict != "unknown"' "$STUB_STATE/report.json" >/dev/null || exit 2
 EOF
 stub install-tool 'echo "'"$stubs"'/$1"'
 
@@ -401,6 +450,104 @@ has "the failed delete is explained" "$work/out" "could not delete hack/e2e/isti
 run "1.37 writes a DeviceClass through resource.k8s.io/v1beta1" 0 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38
 has "1.37's kind config serves resource.k8s.io/v1beta1" "$work/kind-config.yaml" '"resource.k8s.io/v1beta1": "true"'
 has "1.37 applies the DeviceClass fixture" "$work/state/applied.yaml" "kind: DeviceClass"
+
+# VS-11 (#130): on the newest minor the next one is past the knowledge
+# base's horizon. The vanilla cluster scanned there is unknown (exit 2),
+# --allow-incomplete exits 0, and the agent's default ClusterReadiness
+# names the kb-coverage gap and, its blockers accepted, is unknown.
+horizon_gate="a vanilla cluster scanned past the KB horizon is unknown with a required kb-coverage gap (exit 2), and --allow-incomplete exits 0"
+cr_gap_gate="ClusterReadiness for the default target past the KB horizon names the required kb-coverage gap"
+cr_unknown_gate="ClusterReadiness for the default target past the KB horizon, its blockers accepted, is unknown with Ready Unknown/NotAssessed"
+has "the horizon is read from the binary under test" "$work/log" "upgradescope version --output json"
+has "1.37 at 1.38: the past-horizon scan gates and passes" "$work/summary" "- PASS — $horizon_gate"
+has "1.37 at 1.38: --allow-incomplete is scanned" "$work/log" "upgradescope scan --context kind-upgradescope-demo --target 1.38 --allow-incomplete --output json"
+has "1.37 at 1.38: the CR kb-coverage gate gates and passes" "$work/summary" "- PASS — $cr_gap_gate"
+has "1.37 at 1.38: the CR unknown gate gates and passes" "$work/summary" "- PASS — $cr_unknown_gate"
+has "the CR's blocker categories are accepted in ingress-nginx only, plus the run's own deprecated caller by key" "$work/log" \
+  'kubectl --context kind-upgradescope-demo patch clusterreadiness cluster --type merge -p {"spec":{"ignore":[{"category":"chart-incompat","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"category":"eol-addon","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"key":"deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses","reason":"e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}]}}'
+# The rules are removed again, before the later gates read the CR.
+accept_at=$(grep -n -- '--type merge' "$work/log" | head -1 | cut -d: -f1 || true)
+unaccept_at=$(grep -n -- 'patch clusterreadiness cluster --type json -p \[{"op":"remove","path":"/spec/ignore"}\]' "$work/log" | head -1 | cut -d: -f1 || true)
+server_at=$(grep -n -- 'port-forward' "$work/log" | head -1 | cut -d: -f1 || true)
+if [ -n "$accept_at" ] && [ -n "$unaccept_at" ] && [ -n "$server_at" ] && [ "$accept_at" -lt "$unaccept_at" ] &&
+  [ "$unaccept_at" -lt "$server_at" ] && [ ! -e "$work/state/ignore.json" ]; then
+  echo "ok   the spec.ignore rules are removed before the later gates" | tee -a "$work/results"
+else
+  echo "FAIL the spec.ignore rules outlive their gate (accepted at log line ${accept_at:-none}, removed ${unaccept_at:-none}, next gate ${server_at:-none})" >&2
+  echo "FAIL spec.ignore outlives its gate" >>"$work/results"
+fi
+# The past-horizon scan is of the vanilla cluster: before the deprecated
+# apply and the EOL add-on, either of which is a blocker at 1.38.
+allow_at=$(grep -n -- '--allow-incomplete' "$work/log" | head -1 | cut -d: -f1 || true)
+apply_at=$(grep -n -- 'apply --server-side' "$work/log" | head -1 | cut -d: -f1 || true)
+if [ -n "$allow_at" ] && [ -n "$apply_at" ] && [ "$allow_at" -lt "$apply_at" ]; then
+  echo "ok   the past-horizon scan runs on the vanilla cluster" | tee -a "$work/results"
+else
+  echo "FAIL the past-horizon scan is not before the deprecated apply (--allow-incomplete at ${allow_at:-none}, apply at ${apply_at:-none})" >&2
+  echo "FAIL past-horizon scan order" >>"$work/results"
+fi
+
+run "a scan past the KB horizon that is not unknown fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_IGNORE_HORIZON=1
+has "the exit code is named" "$work/out" "scan --target 1.38 (past the KB horizon 1.37) exited 0, want 2"
+has "the past-horizon gate is a FAIL in the summary" "$work/summary" "- **FAIL** — $horizon_gate"
+
+run "--allow-incomplete that still exits 2 past the KB horizon fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_ALLOW_IGNORED=1
+has "the --allow-incomplete exit code is named" "$work/out" "scan --target 1.38 --allow-incomplete exited 2, want 0"
+
+run "a ClusterReadiness past the KB horizon without the kb-coverage gap fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_CR_NO_KB_GAP=1
+has "the CR gap gate is a FAIL in the summary" "$work/summary" "- **FAIL** — $cr_gap_gate"
+
+run "a ClusterReadiness still blocked once its blockers are accepted fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_CR_STILL_BLOCKED=1
+has "the CR unknown gate is a FAIL in the summary" "$work/summary" "- **FAIL** — $cr_unknown_gate"
+has "what the CR reported is shown" "$work/out" '"verdict":"blocked"'
+if [ -e "$work/state/ignore.json" ]; then
+  echo "FAIL a failing CR unknown gate left its spec.ignore rules behind" >&2; echo "FAIL rules left behind" >>"$work/results"
+else
+  echo "ok   a failing CR unknown gate still removes its spec.ignore rules" | tee -a "$work/results"
+fi
+
+run "a ClusterReadiness whose agent never evaluates the accepted generation fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_CR_STALE=1
+has "the stale generation is shown" "$work/out" '"observedGeneration":2'
+has "the stale CR gate is a FAIL in the summary" "$work/summary" "- **FAIL** — $cr_unknown_gate"
+
+run "spec.ignore rules that cannot be removed fail the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_UNPATCH_FAIL=1
+has "the failed removal is explained" "$work/out" "could not remove the spec.ignore rules from clusterreadiness/cluster"
+
+run "a reused 1.37 cluster skips the vanilla past-horizon scan" 0 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_KIND_EXISTS=1
+has "the past-horizon scan is a SKIP on a reused cluster" "$work/summary" "- SKIP — $horizon_gate (cluster reused, not vanilla"
+
+# Below the newest minor the next one is within the horizon: not a check
+# that can mean anything there, and not a warning either.
+run "1.31 at 1.32 is within the KB horizon" 0
+has "the past-horizon scan is N/A within the horizon" "$work/summary" "- N/A — $horizon_gate (1.32 is within the KB horizon 1.37)"
+has "the CR gap check is N/A within the horizon" "$work/summary" "- N/A — $cr_gap_gate (1.32 is within the KB horizon 1.37)"
+has "the CR unknown check is N/A within the horizon" "$work/summary" "- N/A — $cr_unknown_gate (1.32 is within the KB horizon 1.37)"
+if grep -q -- 'patch clusterreadiness' "$work/log"; then
+  echo "FAIL 1.31 still patched the ClusterReadiness" >&2; echo "FAIL 1.31 CR patched" >>"$work/results"
+else
+  echo "ok   1.31 does not patch the ClusterReadiness" | tee -a "$work/results"
+fi
+if grep -q -- '--allow-incomplete' "$work/log"; then
+  echo "FAIL 1.31 still scanned past the horizon" >&2; echo "FAIL 1.31 past-horizon scan" >>"$work/results"
+else
+  echo "ok   1.31 runs no past-horizon scan" | tee -a "$work/results"
+fi
+if grep -q 'check skipped::a vanilla cluster scanned past the KB horizon' "$work/out"; then
+  echo "FAIL N/A is a warning" >&2; echo "FAIL N/A warns" >>"$work/results"
+else
+  echo "ok   N/A is not a warning" | tee -a "$work/results"
+fi
+
+# Once the KB horizon reaches the newest minor's next one, no minor of the
+# matrix runs the past-horizon checks: a warning on that minor, not N/A.
+newest=$(hack/kind-images.sh matrix all | jq -r 'max_by(ltrimstr("1.") | tonumber)')
+nextnext="1.$((${newest#1.} + 1))"
+run "the newest minor within the KB horizon still passes" 0 E2E_MINOR="$newest" STUB_SERVER_MINOR="${newest#1.}" \
+  STUB_NEXT="$nextnext" STUB_HORIZON="$nextnext"
+for g in "$horizon_gate" "$cr_gap_gate" "$cr_unknown_gate"; do
+  has "on the newest minor, a check within the horizon is a SKIP: $g" "$work/summary" "- SKIP — $g ($nextnext is within the KB horizon $nextnext on the newest minor of hack/kind-node-images.txt"
+done
+has "the newest minor within the horizon warns" "$work/out" "::warning title=kind e2e $newest: check skipped::a vanilla cluster scanned past the KB horizon"
 
 printf '1.29 1.30 flowcontrol.apiserver.k8s.io/v1beta3 flowcontrol.apiserver.k8s.io/v1 flowschema.yaml\n' >"$work/short-table.txt"
 run "a minor without a deprecated-API row fails before anything runs" 1 E2E_DEPRECATED_TABLE="$work/short-table.txt"

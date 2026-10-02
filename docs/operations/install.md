@@ -117,15 +117,32 @@ and [Helm values](../reference/helm-values.md).
 
 ## Sizes
 
-Measured 2026-10-02 on an Apple M1 Pro with Go 1.26.8, at main `9d0b161`
-(after v0.1.1), from a clean `git archive` of that commit, building as the
-release does (`CGO_ENABLED=0 -trimpath -ldflags "-s -w"`):
+What a release ships, from a GoReleaser v2.17.1 snapshot (`make
+release-check`, the build the release workflow runs) of main `2e497c1`,
+with Go 1.26.8, on 2026-10-02, on an Apple M1 Pro. The binary is stripped
+(`CGO_ENABLED=0 -trimpath -ldflags "-s -w"`); the archive is the download,
+with the licenses, README, completions and man pages beside the binary.
+Every platform is cross-compiled without cgo, so the build host does not
+change a size; the Go version and the commit do. 1 MiB is 1,048,576 bytes.
 
-| Binary | Stripped | Unstripped | gzip -9 |
-|---|---|---|---|
-| linux/amd64 | 57.4 MiB | 81.7 MiB | 16.8 MiB |
-| linux/arm64 | 53.9 MiB | 77.4 MiB | 15.0 MiB |
-| darwin/arm64 | 55.3 MiB | 80.4 MiB | 15.6 MiB |
+| Platform | Binary | Archive |
+|---|---|---|
+| linux/amd64 | 57.5 MiB | 17.4 MiB |
+| linux/arm64 | 54.1 MiB | 15.6 MiB |
+| darwin/amd64 | 58.5 MiB | 17.6 MiB |
+| darwin/arm64 | 55.4 MiB | 16.3 MiB |
+| windows/amd64 | 58.6 MiB | 17.7 MiB |
+| windows/arm64 | 54.3 MiB | 15.6 MiB |
+
+Archives are `.tar.gz`, `.zip` on Windows. The release check
+(`hack/check-doc-sizes.sh`, after the snapshot) fails when a size here or
+in the README differs from the build by more than 2%, so these are re-measured
+before a release ships a different size. On pull requests CI runs that
+check only when they touch release inputs, so a code change that grows the
+binary first fails a dispatched CI run or the release's own
+release-check (scheduled runs skip it): run `make release-check`
+(no Docker engine: `GORELEASER_SKIP=publish,sign,sbom,docker`) before
+tagging, and update both pages when it fails.
 
 The image adds the distroless base, whose layers are 0.7 MB compressed
 (`gcr.io/distroless/static-debian12:nonroot`, as pinned in

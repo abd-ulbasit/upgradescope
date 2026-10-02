@@ -12,7 +12,13 @@
 #      reused: it is no longer vanilla); then an object applied through that
 #      deprecated group/version (hack/e2e/deprecated-api.txt) is reported
 #      with its field manager, and once re-applied through the GA version it
-#      is not (skipped on a reused cluster too);
+#      is not (skipped on a reused cluster too); on the newest minor, whose
+#      next one is past the knowledge base's horizon (`upgradescope version`),
+#      the vanilla cluster scanned there is unknown with a required
+#      kb-coverage gap and exits 2, and exits 0 with --allow-incomplete
+#      (N/A on other minors, but a warning on the newest minor of
+#      hack/kind-node-images.txt when its next one is within the horizon:
+#      then no minor runs it; skipped on a reused cluster);
 #   3. the EOL ingress-nginx demo add-on (hack/demo/kind-setup.sh), which
 #      scan reports as a blocker (exit 2); a second release of that chart,
 #      uninstalled with --keep-history, yields no EOL finding; Istio pods on
@@ -25,7 +31,10 @@
 #   4. the image built from this tree, kind-loaded, and the chart installed
 #      from deploy/chart with the server enabled, --wait;
 #   5. the agent's ClusterReadiness gets a score and a verdict for the next
-#      minor (blocked, with the ingress-nginx eol-addon finding);
+#      minor (blocked, with the ingress-nginx eol-addon finding), and on the
+#      newest minor names the required kb-coverage gap of that target and,
+#      once spec.ignore accepts the demo add-on's blockers, is unknown with
+#      Ready Unknown/NotAssessed (the rules are removed again);
 #      the install added no admission webhook, and the CR carries no
 #      finalizer or owner reference;
 #   6. the server ingested the agent's snapshot (GET /api/v1/clusters);
@@ -194,6 +203,13 @@ skip() {
   echo "::warning title=kind e2e $MINOR: check skipped::$1 — $2"
 }
 
+# not_applicable <name> <why>: a check for another minor (no warning: every
+# run of this minor is like this one).
+not_applicable() {
+  results+=("- N/A — $1 ($2)")
+  echo "== $1: N/A ($2)"
+}
+
 reused=""
 create_cluster() {
   if grep -qx "$CLUSTER" <<<"$(kind get clusters 2>/dev/null)"; then
@@ -223,6 +239,56 @@ no_removed_api_blockers() {
     jq -r '.findings[] | select(.category == "removed-api" and .severity == "blocker") | "  - \(.title)"' "$work/vanilla.json" >&2
     return 1
   fi
+}
+
+# The knowledge base's horizon, from the binary under test: the newest
+# minor it knows. A target past it cannot be fully judged.
+HORIZON=""
+read_kb_horizon() {
+  HORIZON=$("$UPGRADESCOPE" version --output json | jq -r .kbHorizon) || return 1
+  [[ $HORIZON =~ ^1\.[0-9]+$ ]] || { echo "upgradescope version --output json reports kbHorizon '$HORIZON'" >&2; return 1; }
+  echo "knowledge base horizon $HORIZON; this run's next minor $NEXT"
+}
+past_horizon() { [ "${NEXT#1.}" -gt "${HORIZON#1.}" ]; }
+# within_horizon <name>: a past-horizon check this run cannot exercise. N/A
+# below the matrix's newest minor; on the newest one a warning, since then
+# no minor of hack/kind-node-images.txt runs it (the KB horizon caught up
+# with kind: add the next minor's node image).
+within_horizon() {
+  local newest
+  newest=$(hack/kind-images.sh matrix all | jq -r 'max_by(ltrimstr("1.") | tonumber)') || return 1
+  if [ "$MINOR" = "$newest" ]; then
+    skip "$1" "$NEXT is within the KB horizon $HORIZON on the newest minor of hack/kind-node-images.txt, so no minor runs this check; add a kind node image for $NEXT"
+  else
+    not_applicable "$1" "$NEXT is within the KB horizon $HORIZON"
+  fi
+}
+
+# VS-11 (#130): on the newest minor, the next one is past the horizon. The
+# vanilla cluster has no blocker there, but kb-coverage, a required check,
+# cannot be assessed: the verdict is unknown and the gate exits 2, while
+# --allow-incomplete gates on findings alone and exits 0. Runs before the
+# deprecated-API apply and the EOL add-on, which are blockers at that target.
+past_horizon_is_unknown() {
+  local rc=0
+  "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --output json >"$work/horizon.json" || rc=$?
+  [ "$rc" = 2 ] || {
+    echo "scan --target $NEXT (past the KB horizon $HORIZON) exited $rc, want 2 (verdict unknown)" >&2
+    return 1
+  }
+  jq -e '.verdict == "unknown" and .ready == false
+      and ([.findings[] | select(.severity == "blocker")] | length == 0)
+      and any((.notAssessed // [])[]; .capability == "kb-coverage" and .required == true)' "$work/horizon.json" >/dev/null || {
+    echo "scan --target $NEXT: want verdict unknown, no blocker and a required kb-coverage gap; got:" >&2
+    jq -c '{verdict, ready, blockers: [.findings[] | select(.severity == "blocker") | .title], notAssessed}' "$work/horizon.json" >&2
+    return 1
+  }
+  rc=0
+  "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --allow-incomplete --output json >"$work/horizon-allow.json" || rc=$?
+  [ "$rc" = 0 ] || {
+    echo "scan --target $NEXT --allow-incomplete exited $rc, want 0 (no blocker; the gap is accepted)" >&2
+    return 1
+  }
 }
 
 # The ITs skip rather than fail when their guard refuses a context, and
@@ -431,6 +497,73 @@ cr_has_verdict() {
   grep -q '"eol-addon"' "$work/cr.json" || { echo "no eol-addon finding in the CR status" >&2; return 1; }
 }
 
+# VS-11 (#130): the agent's default target is the next minor, so on the
+# newest minor its ClusterReadiness is judged past the horizon and says so:
+# a kb-coverage entry in status.notAssessed, named required in the Ready
+# condition. Its verdict is blocked, not unknown (cr_has_verdict): the EOL
+# ingress-nginx is a blocker here, and a blocker outranks a gap;
+# cr_unknown_once_blockers_accepted shows the same CR unknown without one.
+cr_reports_kb_coverage_gap() {
+  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  jq -e --arg t "$NEXT" '.status.targets[0].target == $t
+      and any((.status.notAssessed // [])[]; startswith("kb-coverage: "))
+      and any((.status.conditions // [])[]; .type == "Ready" and (.message | contains("kb-coverage (required)")))' \
+    "$work/cr.json" >/dev/null || {
+    echo "clusterreadiness/$CR for $NEXT (past the KB horizon $HORIZON) does not name a required kb-coverage gap:" >&2
+    jq -c '.status | {target: .targets[0].target, notAssessed, conditions}' "$work/cr.json" >&2
+    return 1
+  }
+}
+
+# VS-11 (#130): with nothing blocking, the default ClusterReadiness past the
+# horizon is unknown. Its blockers here are the demo add-on's, in
+# $ACCEPTED_NS (EOL, and a chart judged at a minor past the horizon), so
+# spec.ignore accepts each blocker category it lists, narrowed to that
+# namespace; the agent applies the rules on its next tick, leaving the
+# kb-coverage gap alone: verdict unknown, no blocker, Ready
+# Unknown/NotAssessed naming it. The one cluster-scoped blocker this run
+# causes itself is accepted by its exact key: the deprecated-api step
+# server-side-applies a DeviceClass through resource.k8s.io/v1beta1 (on
+# 1.37), which the apiserver rightly counts as a caller of an API removed
+# in 1.38. Any other blocker is not accepted and fails the gate. The rules
+# are removed again before the gate judges, so the later gates see the CR
+# as the install left it.
+ACCEPTED_NS=ingress-nginx
+ACCEPTED_KEYS='["deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses"]'
+cr_unknown_once_blockers_accepted() {
+  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  local cats patch gen i
+  cats=$(jq -c '[.status.targets[0].topFindings[]? | select(.severity == "blocker") | .category] | unique' "$work/cr.json") ||
+    return 1
+  [ "$cats" != "[]" ] || { echo "clusterreadiness/$CR lists no blocker to accept (cr_has_verdict saw it blocked)" >&2; return 1; }
+  patch=$(jq -c --arg ns "$ACCEPTED_NS" --argjson keys "$ACCEPTED_KEYS" '{spec: {ignore: ([.[] | {category: ., namespace: $ns,
+      reason: "e2e: accepted to observe the kb-coverage gap alone"}] + [$keys[] | {key: .,
+      reason: "e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}])}}' <<<"$cats") || return 1
+  echo "accepting blocker categories $cats in namespace $ACCEPTED_NS, and keys $ACCEPTED_KEYS"
+  k patch clusterreadiness "$CR" --type merge -p "$patch" || return 1
+  gen=$(k get clusterreadiness "$CR" -o jsonpath='{.metadata.generation}') || return 1
+  [[ $gen =~ ^[0-9]+$ ]] || { echo "clusterreadiness/$CR metadata.generation is '$gen'" >&2; return 1; }
+  # agent.interval=1m: the next tick evaluates the new generation.
+  for i in $(seq 1 36); do
+    k get clusterreadiness "$CR" -o json >"$work/cr-accepted.json" || return 1
+    jq -e --argjson g "$gen" '(.status.observedGeneration // 0) >= $g' "$work/cr-accepted.json" >/dev/null && break
+    nap 5
+  done
+  k patch clusterreadiness "$CR" --type json -p '[{"op":"remove","path":"/spec/ignore"}]' ||
+    { echo "could not remove the spec.ignore rules from clusterreadiness/$CR" >&2; return 1; }
+  jq -e --argjson g "$gen" --arg t "$NEXT" '.status as $s | $s.targets[0] as $t0
+      | ($s.observedGeneration // 0) >= $g
+      and $t0.target == $t and $t0.verdict == "unknown" and $t0.ready == false
+      and $t0.blockers == 0 and ($t0.suppressed // 0) > 0
+      and any(($s.notAssessed // [])[]; startswith("kb-coverage: "))
+      and any(($s.conditions // [])[]; .type == "Ready" and .status == "Unknown" and .reason == "NotAssessed"
+        and (.message | contains("kb-coverage (required)")))' "$work/cr-accepted.json" >/dev/null || {
+    echo "clusterreadiness/$CR for $NEXT, its blockers in $ACCEPTED_NS accepted (generation $gen): want verdict unknown, no blocker and Ready Unknown/NotAssessed naming kb-coverage (required); got:" >&2
+    jq -c '.status | {observedGeneration, target: .targets[0], notAssessed, conditions}' "$work/cr-accepted.json" >&2
+    return 1
+  }
+}
+
 # RB-04: nothing in the cluster changes because of a finding. With the EOL
 # blocker installed and the agent ticking, the install added no admission
 # webhook, and the agent's ClusterReadiness holds nothing up on deletion
@@ -612,6 +745,7 @@ audit_scan_writes_nothing() {
 
 gate "kind cluster on Kubernetes $MINOR" create_cluster
 gate "build bin/upgradescope" make build
+gate "the binary under test reports its knowledge base horizon" read_kb_horizon
 gate "scan against an unreachable API server exits 1" unreachable_scan_exits_1
 # A reused cluster (a local re-run) already has the demo add-on, the CRD and
 # whatever the last run left, so it is not the vanilla cluster this guards.
@@ -620,6 +754,14 @@ if [ -n "$reused" ]; then
   skip "$vanilla" "cluster reused, not vanilla; make demo-down first"
 else
   gate "$vanilla" no_removed_api_blockers
+fi
+horizon_gate="a vanilla cluster scanned past the KB horizon is unknown with a required kb-coverage gap (exit 2), and --allow-incomplete exits 0"
+if ! past_horizon; then
+  within_horizon "$horizon_gate"
+elif [ -n "$reused" ]; then
+  skip "$horizon_gate" "cluster reused, not vanilla; make demo-down first"
+else
+  gate "$horizon_gate" past_horizon_is_unknown
 fi
 deprecated="an object written through $DEP_GV is reported with its manager; re-applied through $GA_GV it is not"
 if [ -n "$reused" ]; then
@@ -635,6 +777,15 @@ gate "scan + agent integration tests" integration_tests
 gate "image built from this tree, kind-loaded" load_image
 gate "helm install deploy/chart (server enabled) --wait" install_chart
 gate "ClusterReadiness has a score and a blocked verdict for $NEXT" cr_has_verdict
+cr_gap_gate="ClusterReadiness for the default target past the KB horizon names the required kb-coverage gap"
+cr_unknown_gate="ClusterReadiness for the default target past the KB horizon, its blockers accepted, is unknown with Ready Unknown/NotAssessed"
+if past_horizon; then
+  gate "$cr_gap_gate" cr_reports_kb_coverage_gap
+  gate "$cr_unknown_gate" cr_unknown_once_blockers_accepted
+else
+  within_horizon "$cr_gap_gate"
+  within_horizon "$cr_unknown_gate"
+fi
 gate "the install added no webhook configuration; ClusterReadiness/$CR has no finalizer or owner reference" no_webhooks_or_finalizers
 gate "server ingested the agent's snapshot" server_ingested
 gate "helm upgrade --set agent.targets={$NEXT}" upgrade_with_targets
