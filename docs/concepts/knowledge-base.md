@@ -7,7 +7,7 @@ new release.
 
 | Part | Source | Maintained by |
 |---|---|---|
-| API lifecycle: for each group/version/kind, when it was introduced, deprecated and removed, and its replacement | generated from `k8s.io/api` source (`internal/kb/data/apilifecycle.json`), plus a short hand-written, cited supplement for types upstream already deleted from `k8s.io/api` | `tools/gen-kb` |
+| API lifecycle: for each group/version/kind, when it was introduced, deprecated and removed, and its replacement | generated from `k8s.io/api` source (`internal/kb/data/apilifecycle.json`), and nothing else: no hand-written overlay. The few facts the source lacks are fixups in the generator, each with a citation | `tools/gen-kb` |
 | Add-on registry: end of life, release lines and Kubernetes compatibility of common add-ons | one YAML file per add-on in `registry/data/`, every claim cited | hand-curated, and synced with endoflife.date where it has the product ([Add-on registry](addon-registry.md)) |
 | Version-skew policy | the upstream [version skew policy](https://kubernetes.io/releases/version-skew-policy/) | `internal/kb/skew.go` ([Version skew](version-skew.md)) |
 
@@ -37,8 +37,26 @@ further ahead than the human-written
 [deprecation guide](https://kubernetes.io/docs/reference/using-api/deprecation-guide/).
 CI regenerates the file on every change and fails when the committed copy
 differs, and checks that the generator imports every `k8s.io/api`
-group/version package. When the generated data and the supplement overlap,
-the generated entries win.
+group/version package.
+
+Three things the generator adds to what the source says, each in
+`tools/gen-kb/fixups.go` and tested:
+
+- **Tombstones.** A type `k8s.io/api` deleted stays in the data, removed in
+  the release that stopped serving it, so a manifest still using it blocks.
+  The generator reads every `k8s.io/api` release since v0.17 for this.
+- **Untagged types.** Some registered types carry no lifecycle markers, so
+  the source says nothing about them. `rbac.authorization.k8s.io/v1alpha1`
+  (removed in 1.23) and `node.k8s.io/v1alpha1` RuntimeClass (1.24) get their
+  lifecycle from the Kubernetes release notes, cited in the generator. A
+  test fails once upstream tags the type, so the entry cannot go stale
+  quietly.
+- **Non-resources.** Wrapper and subresource types such as `PodStatusResult`
+  were never stored or served by kube-apiserver, so they are left out
+  instead of reading as a removal.
+
+Every other fact is `k8s.io/api`'s own. There is no separate hand-written
+dataset; a test fails if one is added.
 
 ## The horizon
 
@@ -67,6 +85,11 @@ the horizon minor, until you upgrade to a release with a newer KB.
 
 ## What it does not cover
 
+- Registered types with no lifecycle markers and no release-note source are
+  not judged: an object of one is an `unknown-api` info, never a blocker.
+  Today these are the `scheduling.k8s.io/v1alpha3` Workload, PodGroup and
+  CompositePodGroup (still served at 1.37), `imagepolicy.k8s.io/v1alpha1`
+  ImageReview and `internal.apiserver.k8s.io/v1alpha1` StorageVersion.
 - CRD versions served by your own or third-party CRDs (deprecated CRD
   versions and stale `status.storedVersions`) are not in the KB ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
 - Add-ons outside the registry are not judged: their images are listed as

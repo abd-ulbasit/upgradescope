@@ -14,15 +14,6 @@ import (
 //go:embed data/apilifecycle.json
 var apilifecycleJSON []byte
 
-// supplementJSON holds hand-curated lifecycle entries for types the
-// deprecation guide documents but current k8s.io/api has deleted (so
-// tools/gen-kb cannot extract them), e.g. policy/v1beta1 PodSecurityPolicy.
-// Same file shape as apilifecycle.json; its maxKnownK8s is informational
-// only — Load() takes MaxKnownK8s from the generated dataset.
-//
-//go:embed data/supplement.json
-var supplementJSON []byte
-
 type KB struct {
 	// Version labels the dataset in reports, the CRD status and auditor
 	// exports. It is derived from the embedded data (see datasetVersion),
@@ -56,10 +47,6 @@ func Load() (KB, error) {
 	if err != nil {
 		return KB{}, err
 	}
-	sup, err := parseLifecycle(supplementJSON)
-	if err != nil {
-		return KB{}, fmt.Errorf("kb: parsing supplement: %w", err)
-	}
 	maxKnown, err := inventory.ParseVersion(f.MaxKnownK8s)
 	if err != nil {
 		return KB{}, fmt.Errorf("kb: bad maxKnownK8s %q: %w", f.MaxKnownK8s, err)
@@ -68,14 +55,13 @@ func Load() (KB, error) {
 	if err != nil {
 		return KB{}, fmt.Errorf("kb: loading add-on registry: %w", err)
 	}
-	entries := mergeEntries(f.Entries, sup.Entries)
-	version, err := datasetVersion(f.GeneratedFrom, entries, addons)
+	version, err := datasetVersion(f.GeneratedFrom, f.Entries, addons)
 	if err != nil {
 		return KB{}, err
 	}
 	return KB{
 		Version:      version,
-		APILifecycle: entries,
+		APILifecycle: f.Entries,
 		AddOns:       addons,
 		Skew:         DefaultSkewPolicy(),
 		MaxKnownK8s:  maxKnown,
@@ -89,9 +75,9 @@ func Load() (KB, error) {
 //
 // generatedFrom names the upstream release ("k8s.io/api v0.37.1"); each
 // digest is the first 8 hex digits of the SHA-256 of the canonical JSON of
-// the merged lifecycle entries or the parsed add-on registry. Any change to
-// either dataset (an eol-sync date flip, a regenerated or hand-curated
-// entry) changes the label; YAML comments and formatting do not.
+// the lifecycle entries or the parsed add-on registry. Any change to
+// either dataset (an eol-sync date flip, a regenerated entry) changes the
+// label; YAML comments and formatting do not.
 func datasetVersion(generatedFrom string, entries []APILifecycleEntry, addons []registry.AddOn) (string, error) {
 	lifecycle, err := digest(entries)
 	if err != nil {
@@ -111,21 +97,4 @@ func digest(v any) (string, error) {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:4]), nil
-}
-
-// mergeEntries appends supplement entries to the generated ones, skipping
-// any GVK the generator already covers — generated data always wins so a
-// stale supplement can never mask fresher upstream lifecycle data.
-func mergeEntries(generated, supplement []APILifecycleEntry) []APILifecycleEntry {
-	seen := make(map[GVK]struct{}, len(generated))
-	for _, e := range generated {
-		seen[GVK{Group: e.Group, Version: e.Version, Kind: e.Kind}] = struct{}{}
-	}
-	out := generated
-	for _, e := range supplement {
-		if _, dup := seen[GVK{Group: e.Group, Version: e.Version, Kind: e.Kind}]; !dup {
-			out = append(out, e)
-		}
-	}
-	return out
 }

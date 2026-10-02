@@ -401,7 +401,6 @@ k8s.io/api (pinned in tools/gen-kb/go.mod)
       │  APILifecycleIntroduced/Deprecated/Removed/Replacement methods
       ▼
 internal/kb/data/apilifecycle.json   (generated, never hand-edited)
-internal/kb/data/supplement.json     (hand-curated: types upstream already deleted)
 registry/data/*.yaml                 (hand-curated + endoflife.date-synced, cited)
 skew policy                          (internal/kb/skew.go, from the upstream version-skew policy)
       │
@@ -416,12 +415,13 @@ kb.Load() ──► KB{Version: "k8s.io/api <v>; lifecycle <digest>; registry <d
    deprecation guide. CI regenerates the file and fails on any difference.
    It also checks that the generator's import list covers every
    `k8s.io/api` group/version package.
-2. **Supplement (hand-curated).** Some types, such as
-   `policy/v1beta1 PodSecurityPolicy`, are documented as removed but have
-   been deleted from current `k8s.io/api`, so the generator cannot see them.
-   They live in `supplement.json`. When the two datasets overlap, the
-   generated entries win, so a stale supplement can never mask fresh
-   upstream data.
+2. **Tombstones and fixups (in the generator).** Types such as
+   `policy/v1beta1 PodSecurityPolicy` were deleted from current `k8s.io/api`;
+   the generator recovers them from older releases. A registered type with no
+   lifecycle markers (`rbac.authorization.k8s.io/v1alpha1`) gets its removal
+   from the Kubernetes release notes, cited in `tools/gen-kb/fixups.go`, and
+   kinds kube-apiserver never served are left out. There is no hand-written
+   dataset beside the generated file.
 3. **Add-on registry.** One YAML file per add-on under `registry/data/`,
    with schema version 2. `registry.Validate` enforces the schema, semver
    ranges and **citations** (at least one upstream URL for any non-`unknown`
