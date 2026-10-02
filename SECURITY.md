@@ -109,7 +109,13 @@ In scope:
   evaluates, stores or exports is at most `--max-snapshot-bytes`, since a
   report repeats what its inventory names: a push, a what-if or a
   `/gate?cluster=` over it is `413`, and so is an export (HTML writes
-  `'` `"` `&` as five bytes). Stored reports and JSON responses carry a
+  `'` `"` `&` as five bytes). A push is evaluated, and re-evaluated, at
+  its default target and every `serve --targets` minor, and each extra
+  target adds about one report of up to `--max-snapshot-bytes` to an
+  ingest and one to the re-evaluation pass (16-24 MiB each at the
+  default 20 MiB, measured), so `serve` refuses more than 4 of them and
+  the bounds are measured, and the chart's memory limit is sized, at 4.
+  Stored reports and JSON responses carry a
   snapshot's strings as long as they were pushed (no HTML or
   line-separator escapes; a push that is not UTF-8 is `422`), and the
   evaluation summaries the fleet reads carry keep a bounded part of what

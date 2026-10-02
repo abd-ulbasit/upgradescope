@@ -426,11 +426,19 @@ a CI gate.
   writes: an evaluation it creates shows no `notAssessed`, and one it
   refreshes keeps the `notAssessed` it had, until a newer server writes
   that evaluation again.
-- Chart: the server's memory limit is 768Mi (was 512Mi), and its
-  `GOMEMLIMIT` 691MiB: the worst case of one `/gate` request, one push,
+- Chart: the server's memory limit is 1Gi (was 512Mi), and its
+  `GOMEMLIMIT` ~921MiB: the worst case of one `/gate` request, one push,
   one read, two reads of a 500-cluster fleet, the responses held for
-  their clients and the re-evaluation pass, measured on SQLite, is
-  ~665 MiB.
+  their clients and the re-evaluation pass, measured on SQLite with four
+  `server.targets`, is ~842 MiB. Each extra target adds about one report
+  of up to `--max-snapshot-bytes` to every push and one to the
+  re-evaluation pass (16-24 MiB each at the default 20 MiB, ~45 MiB of
+  that sum); without `server.targets` it is about 660 MiB, which 768Mi
+  holds.
+- `serve --targets` and the chart's `server.targets` take at most 4
+  distinct minors; more is refused at startup (and by the chart's schema)
+  with a message saying why. The server's memory bounds are measured at
+  that many (#121).
 
 ### Fixed
 

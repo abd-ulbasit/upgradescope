@@ -61,6 +61,25 @@ and the server's gate endpoint fails on blockers by default. Read the
 **Changed** section before you upgrade a CI gate, and expect clusters that
 read `ready` under v0.1.x to read differently, in both directions.
 
+**Cluster names.** A v0.1 server registered clusters under any name, and
+v0.1 agents sent `--cluster-name` (chart `agent.clusterName`) unchecked.
+The server now refuses every push whose cluster name is not a lowercase
+RFC 1123 subdomain of at most 253 bytes (`Prod_EU`, `prod eu`) with
+`422`, and an upgraded agent refuses to start with one. Before you
+upgrade the agents, run `upgradescope clusters list`, and for each name
+that is not valid, rename the cluster (its history and per-cluster
+tokens move with it), then set the agent's name to match:
+
+```sh
+upgradescope clusters rename Prod_EU prod-eu --server https://upgradescope.example.com
+helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope -n upgradescope \
+  --reuse-values --set agent.clusterName=prod-eu
+```
+
+Until an agent's name is changed its pushes are refused; nothing stored
+is lost, only the cycles it could not push
+([Cluster lifecycle](../operations.md#cluster-lifecycle)).
+
 The server bounds its memory by the input's structure
 ([Memory and request limits](../operations.md#memory-and-request-limits)):
 a `/gate` stream of more than about 4.4 MiB of typical kubectl YAML, or a
@@ -73,7 +92,10 @@ again. On its first start,
 files to 0600, and its migration copies what each stored evaluation could
 not assess out of the report into a column of its own, reading every
 stored report once, so that first start takes longer on a large
-database. The chart's server memory limit is 768Mi, up from 512Mi, which
+database. The chart's server memory limit is 1Gi, up from 512Mi, which
 the worst case measured on SQLite no longer fit; if you set
 `server.resources` yourself, see
 [Memory and request limits](../operations.md#memory-and-request-limits).
+`serve --targets` (chart `server.targets`) takes at most 4 minors now,
+the count that worst case is measured at: a server started with more
+refuses to start, so trim the list before you upgrade.

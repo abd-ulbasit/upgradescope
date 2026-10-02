@@ -29,8 +29,8 @@ request is measured before it is decoded:
 | node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4, an alias what it names | 1M units: a JSON value 1, an object 8 |
 | answer | at most `--max-gate-bytes`, bounded before it is encoded; `?path=` at most 512 bytes | — |
 | what it may carry | — | identifiers valid for what they name, values within limits no genuine inventory reaches (`422`); free text a collector copies whole is cut to them |
-| reports | — | each at most `--max-snapshot-bytes`; the evaluation stops there (`413`) |
-| worst live heap within the budget (measured on SQLite) | ~176 MiB, with `?cluster=` too, the answer included | ~119 MiB, the body's copy and the reports it stores included |
+| reports | — | one per target, the default and at most 4 `--targets`; each at most `--max-snapshot-bytes`, the evaluation stops there (`413`) |
+| worst live heap within the budget (measured on SQLite) | ~176 MiB, with `?cluster=` too, the answer included | ~202 MiB with four `--targets`, the most `serve` takes (five reports at the limit; ~119 MiB with none), the body's copy and the reports it stores included |
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
 | measured for aliases, decoded and evaluated at once | 1, others wait up to 30s holding only their bodies | 1, others wait up to 10s |
 
@@ -114,9 +114,12 @@ A push is checked before it is evaluated, since its reports repeat what
 it names. Its identifiers must be what the apiserver accepts for what
 they name: the cluster name an RFC 1123 subdomain of at most 253 bytes
 (as in `tokens create`, a rename and the agent's `--cluster-name`),
-namespaces RFC 1123 labels, object names at most 253 bytes without `/`
-or `%` (the most any kind accepts: RBAC names take `:`), node and Helm
-release names RFC 1123 subdomains, team labels label values. Its other
+namespaces RFC 1123 labels, object names without `/` or `%` (the most
+permissive rule any kind has: RBAC names take `:`) and at most 253 bytes,
+node and Helm release names RFC 1123 subdomains, team labels label
+values. The 253-byte cap on object names is this server's choice, not
+the apiserver's: most kinds' names are RFC 1123 subdomains, which it caps
+there, but it caps no RBAC object's name. A push's other
 values must be within limits that collectors keep to or that no genuine
 value comes near: strings of at most 16 KiB (a capability's reason
 64 KiB, an object's field manager the apiserver's 128 printable bytes),
@@ -222,13 +225,14 @@ keeps every gap whole. A push within the limits may name 32 capabilities
 of 16 KiB with 64 KiB reasons and long skipped lists: with the gaps
 listed whole but for 1 KiB reasons and 10 skipped entries of 512 bytes,
 50 such clusters made `/fleet` answer 108 MB and grow the heap 516 MiB;
-now 500 of them, each evaluated at three targets, grow it 9.6 MiB for
-`/fleet` (a 1.5 MB answer), 3.9 for `/clusters` and 5.6 for `/metrics`
+now 500 of them, each evaluated at five targets (the default and four
+`--targets`, the most a server takes), grow it 16.4 MiB for `/fleet` (a
+2.5 MB answer), 3.8 for `/clusters` and 9.4 for `/metrics`
 (`TestFleetReadsOfTheWidestGapsAreBounded`). Their responses do
 grow with the fleet: at 500 clusters `/clusters` is ~230 KB, `/fleet`
 ~480 KB (~590 KB with 16 `?targets=`) and `/metrics` ~740 KB, and
 building one adds up to ~5 MiB to the heap (`/metrics` the most, about
-five times its response; ~10 MiB for the `/fleet` of the widest gaps
+five times its response; ~16 MiB for the `/fleet` of the widest gaps
 above); at 2000 clusters with 200-byte names, with two
 `--targets`, they are 1.3, 2.3 (2.7 with 16 `?targets=`) and 9 MB, and
 `/metrics` adds ~47 MiB. `/fleet?targets=` takes at most 16 distinct
@@ -256,11 +260,13 @@ builds in their slots (`TestUnreadFleetResponsesAreBounded`). A
 Prometheus scrape or a dashboard poll that gets `503` is retried at its
 next interval.
 
-Worst case for the chart's 768Mi server, each part measured on SQLite
+Worst case for the chart's 1Gi server, each part measured on SQLite
 against the dearest snapshot the server stores, at its node budget or
-with reports at the report limit, of every string class above
+with reports at the report limit, of every string class above, and with
+four `--targets`, the most `serve` takes
 (`TestGateDecodeHeapIsBounded`,
-`TestStoredSnapshotHeapIsBounded`, `TestReadHeapIsBounded`,
+`TestStoredSnapshotHeapIsBounded`, `TestIngestDecodeHeapIsBounded`,
+`TestReadHeapIsBounded`,
 `TestGateAnswerHeapIsBounded`, `TestUnreadResponsesAreBounded`,
 `TestUnreadGateResponsesAreBounded`,
 `TestUnreadFleetResponsesAreBounded`,
@@ -268,23 +274,36 @@ with reports at the report limit, of every string class above
 one `/gate` request in the evaluation slot (~176 MiB, with `?cluster=`
 too, since the cluster's inventory is decoded once the manifests' node
 trees are garbage, its answer included: answers big enough to cost more
-to encode are cheap to decode) plus one ingest (~119 MiB, for 20 MB of
-namespace keys, 1,000 per API usage entry, its copy of the body and
+to encode are cheap to decode) plus one ingest (~202 MiB, for a
+snapshot whose five reports, at the default target and the four
+`--targets`, are each about the report limit, its copy of the body and
 the reports it stores included) plus one read in the read slot
 (~132 MiB, the HTML export of a report at the report limit, its
 response included) plus two reads of the whole fleet in their slots
-(up to ~10 MiB each for 500 clusters, a `/fleet` of evaluations that
+(up to ~16 MiB each for 500 clusters, a `/fleet` of evaluations that
 list the most of what they could not assess) plus the read, fleet read
 and `/gate` responses held for their clients (the one 40 MiB budget) plus the
 background re-evaluation pass, which takes clusters one at a time
-(~108 MiB for a 20 MB snapshot whose three reports are each about the
-report limit) plus both body budgets (70 MiB; an ingest gives its share
-back once it holds that copy, so another push can wait in it): about
-665 MiB for a 500-cluster fleet, inside the 691 MiB `GOMEMLIMIT` the
-chart derives from the limit. Below about 739Mi, that sum no longer
-fits under `GOMEMLIMIT`. (Each figure is
+(~189 MiB for such a snapshot, its five reports again) plus both body
+budgets (70 MiB; an ingest gives its share back once it holds that copy,
+so another push can wait in it): about 842 MiB for a 500-cluster fleet,
+inside the 921 MiB `GOMEMLIMIT` the chart derives from the limit. Below
+about 936Mi, that sum no longer fits under `GOMEMLIMIT`. (Each figure is
 a peak with its garbage, measured with the collector held near the live
 heap; runs differ by a few MiB.)
+
+`serve --targets` takes at most 4 distinct minors (more is refused at
+startup, and the chart's schema refuses more `server.targets`), because each one is
+evaluated for every push and every re-evaluation: **each extra target
+adds about one report of up to `--max-snapshot-bytes` to an ingest and
+one to the re-evaluation pass**, measured at 16-24 MiB each with the
+default 20 MiB, and ~3 MiB to each fleet read, so about 45 MiB to the sum
+above (one push with a single report takes ~81-119 MiB, a pass with one
+~81-117 MiB). With fewer `--targets` the server needs that much less per
+target it does not have (with none, about 660 MiB, which a 768Mi limit
+holds). These figures are at the default
+`--max-snapshot-bytes`; each target's share grows with it, by about two
+reports of the new limit.
 
 What is outside these bounds, and what it costs:
 
