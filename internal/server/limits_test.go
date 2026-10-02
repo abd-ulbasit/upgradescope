@@ -164,7 +164,7 @@ func checkStream(body bufferedBody) (status int, msg string) {
 	if status != 0 {
 		return status, msg
 	}
-	return shape.checkAliases()
+	return shape.checkAliases(DefaultMaxGateBytes)
 }
 
 // withinBudget reports whether /gate's checks let doc be decoded.
@@ -289,6 +289,40 @@ func TestGateChargesAliasesAtTheirExpandedSize(t *testing.T) {
 	}
 	if code, _, raw := gateStatus(t, s, aliasedScalar(head, 1<<10, 99)); code != http.StatusOK {
 		t.Fatalf("small scalar: status = %d (%.300s), want 200", code, raw)
+	}
+}
+
+// aliasedNames is a stream of docs Lists of 100 PodSecurityPolicies, one
+// per document, whose names are all one size-byte anchored scalar: each
+// document is ~size bytes and expands to ~100 x size.
+func aliasedNames(docs, size int) string {
+	var b strings.Builder
+	for d := range docs {
+		if d > 0 {
+			b.WriteString("---\n")
+		}
+		fmt.Fprintf(&b, "apiVersion: policy/v1beta1\nkind: PodSecurityPolicyList\nitems:\n- metadata: {name: &a %s}\n",
+			strings.Repeat("x", size))
+		b.WriteString(strings.Repeat("- metadata: {name: *a}\n", 99))
+	}
+	return b.String()
+}
+
+// Each document's aliases may expand it to 4 MiB, but across documents
+// nothing capped what they added: 136 documents of 40 KB, each naming 100
+// objects of a deprecated GVK after one anchor, were a 5.8 MB stream whose
+// answer was 532 MB and whose evaluation took 1.8 GiB of heap. The stream
+// with its aliases expanded must fit the body cap, as the stream itself
+// does, or it is 413 before anything decodes it.
+func TestGateChargesAliasesAgainstTheStreamCap(t *testing.T) {
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxGateBytes = 8 << 20 })
+	const size = 39 << 10 // a document expands to ~3.9 MiB, within the 4 MiB per document
+	if code, _, raw := gateStatus(t, s, aliasedNames(2, size)); code != http.StatusOK {
+		t.Fatalf("2 documents (~7.8 MiB expanded): status = %d (%.300s), want 200", code, raw)
+	}
+	code, _, raw := gateStatus(t, s, aliasedNames(3, size))
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "alias") || !strings.Contains(string(raw), "8MiB") {
+		t.Fatalf("3 documents (~11.7 MiB expanded): status = %d (%.300s), want 413 naming the aliases and the 8MiB cap", code, raw)
 	}
 }
 

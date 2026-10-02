@@ -405,13 +405,18 @@ func (m *manifestShape) charge(n int, docCost, added yamlCost) (status int, msg 
 
 // checkAliases charges each document with aliases what kubectl's decoder
 // expands them to (aliasExpansion): their nodes against the stream's node
-// budget, and their bytes against the document's size. Measuring that
+// budget, and their bytes against the document's size and against
+// maxStreamBytes (the body cap), which the stream with every alias
+// expanded must fit as the stream itself does. Without the stream's
+// charge, documents each within 4 MiB added up: 136 of 40 KB that named
+// 100 objects each after one anchor answered 532 MB. Measuring that
 // reads the document into yaml.v3 nodes, which costs about what decoding
 // it does (no more: the stream is within the node budget), so it runs in
 // the evaluation slot, one document at a time, and requests waiting for
 // the slot hold no node trees. It returns the status and message to
 // refuse the stream with, or 0.
-func (m *manifestShape) checkAliases() (status int, msg string) {
+func (m *manifestShape) checkAliases(maxStreamBytes int64) (status int, msg string) {
+	stream := int64(m.src.size)
 	for _, d := range m.aliased {
 		extra, scalars, err := aliasExpansion(m.src.slice(d.start, d.end))
 		if err != nil {
@@ -423,6 +428,12 @@ func (m *manifestShape) checkAliases() (status int, msg string) {
 				"manifest document %d is too large to evaluate in one request: its YAML aliases expand it to %d bytes, "+
 					"and every alias is decoded as a full copy of what it names; the per-document limit is %s "+
 					"(write the values out, or split it into smaller documents)", d.n, size, sizeString(maxManifestDocBytes))
+		}
+		if stream += int64(scalars); stream > maxStreamBytes {
+			return http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"the manifest stream is too large to evaluate in one request: its YAML aliases expand it past the %s limit "+
+					"(by document %d), and every alias is decoded as a full copy of what it names "+
+					"(write the values out, or split the stream into several requests)", sizeString(maxStreamBytes), d.n)
 		}
 		if status, msg := m.charge(d.n, d.cost.add(extra), extra); status != 0 {
 			return status, msg

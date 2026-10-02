@@ -169,7 +169,7 @@ type gateRequest struct {
 // writes the answer to w. What it builds the answer from is garbage once
 // it returns.
 func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequest) {
-	if status, msg := g.shape.checkAliases(); status != 0 {
+	if status, msg := g.shape.checkAliases(s.maxGateBytes()); status != 0 {
 		errJSON(w, status, msg)
 		return
 	}
