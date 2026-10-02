@@ -15,7 +15,12 @@
 #      is not (skipped on a reused cluster too);
 #   3. the EOL ingress-nginx demo add-on (hack/demo/kind-setup.sh), which
 #      scan reports as a blocker (exit 2); a second release of that chart,
-#      uninstalled with --keep-history, yields no EOL finding; and the
+#      uninstalled with --keep-history, yields no EOL finding; Istio pods on
+#      three release lines in three teams' namespaces
+#      (hack/e2e/istio-teams.yaml) get findings that each name only their
+#      own line's namespace and team, and EOL 1.28 blocks (#129), after
+#      which they are deleted, so the later ingress-nginx checks see only
+#      ingress-nginx; and the
 #      scan + agent integration tests (UPGRADESCOPE_IT=1);
 #   4. the image built from this tree, kind-loaded, and the chart installed
 #      from deploy/chart with the server enabled, --wait;
@@ -324,6 +329,49 @@ keep_history_not_reported() {
     "$work/kept.json" >/dev/null || { echo "eol-addon finding in $KEPT_NS, whose release is uninstalled" >&2; return 1; }
 }
 
+# #129: each install of an add-on is judged on its own. hack/e2e/istio-teams.yaml
+# runs one Istio pod per release line, each in a namespace labelled for a
+# team of its own: "<cycle> <namespace> <team>". Every <category>/istio/<cycle>
+# finding must name only that line's namespace and team, and 1.28 (EOL
+# since 2026-07-01) must block. What 1.30 and 1.31 report depends on the
+# date (EOL approaching or not), so only where they point is checked.
+ISTIO_LINES='1.28 e2e-istio-old e2e-team-old
+1.30 e2e-istio-mid e2e-team-mid
+1.31 e2e-istio-new e2e-team-new'
+istio_lines_judged_per_install() {
+  # A pod in a namespace created by the same apply can be refused until the
+  # namespace's default ServiceAccount exists; apply is idempotent, so retry.
+  local i
+  for i in $(seq 1 15); do
+    k apply -f hack/e2e/istio-teams.yaml && break
+    [ "$i" -lt 15 ] || { echo "kubectl apply -f hack/e2e/istio-teams.yaml failed 15 times" >&2; return 1; }
+    nap 2
+  done
+  "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --output json --fail-on never >"$work/istio.json" ||
+    { echo "scan failed" >&2; return 1; }
+  local want bad
+  want=$(jq -Rn '[inputs | split(" ") | {key: .[0], value: {namespaces: [.[1]], teams: [.[2]]}}] | from_entries' \
+    <<<"$ISTIO_LINES") || return 1
+  jq -r '.findings[] | select((.key // "") | test("^[^/]+/istio/")) |
+    "  \(.severity) \(.key) ns=\(.namespaces // [] | tojson) teams=\(.teams // [] | tojson)"' "$work/istio.json" || return 1
+  bad=$(jq -r --argjson want "$want" '.findings[] | select((.key // "") | test("^[^/]+/istio/[^/]+$"))
+      | (.key | split("/")[2]) as $c
+      | select({namespaces: (.namespaces // []), teams: (.teams // [])} != $want[$c])
+      | "\(.key) ns=\(.namespaces // [] | tojson) teams=\(.teams // [] | tojson)"' "$work/istio.json") || return 1
+  [ -z "$bad" ] || {
+    echo "Istio findings that do not name exactly their own release line's namespace and team:" >&2
+    echo "$bad" | sed 's/^/  /' >&2
+    return 1
+  }
+  jq -e --argjson want "$want" '[.findings[] | select(.key == "eol-addon/istio/1.28" and .severity == "blocker"
+      and {namespaces, teams} == $want["1.28"])] | length == 1' "$work/istio.json" >/dev/null ||
+    { echo "no eol-addon/istio/1.28 blocker naming only e2e-istio-old and e2e-team-old" >&2; return 1; }
+  # Later gates (the CR verdict, the agent IT) prove ingress-nginx is found
+  # on the agent's path by its eol-addon blocker; 1.28's would satisfy them.
+  k delete -f hack/e2e/istio-teams.yaml --ignore-not-found --wait --timeout 2m ||
+    { echo "could not delete hack/e2e/istio-teams.yaml; later gates would see its Istio blockers" >&2; return 1; }
+}
+
 integration_tests() {
   UPGRADESCOPE_IT=1 UPGRADESCOPE_IT_CONTEXT="$CTX" go test ./internal/cli/ -run Integration -count=1 -v | tee "$work/it.log" ||
     return 1
@@ -582,6 +630,7 @@ fi
 gate "EOL ingress-nginx demo add-on" env KIND_NODE_IMAGE="$NODE_IMAGE" hack/demo/kind-setup.sh
 gate "scan reports the EOL ingress-nginx installed from the upstream chart as a blocker and exits 2" eol_ingress_nginx_blocks
 gate "a Helm release uninstalled with --keep-history yields no EOL finding" keep_history_not_reported
+gate "Istio on three release lines in three teams' namespaces: each finding names only its own line's; 1.28 blocks" istio_lines_judged_per_install
 gate "scan + agent integration tests" integration_tests
 gate "image built from this tree, kind-loaded" load_image
 gate "helm install deploy/chart (server enabled) --wait" install_chart
