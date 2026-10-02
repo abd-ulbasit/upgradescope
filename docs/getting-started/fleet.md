@@ -29,6 +29,12 @@ $ upgradescope serve --listen :8080
 refusing to serve the read API and /api/v1/gate without a token on ":8080": set --read-token, listen on loopback, or pass --allow-anonymous-read to accept open reads
 ```
 
+Without `--read-token`, the read API, the dashboard's data and
+`/api/v1/gate` answer anyone who can reach the address. On loopback that is
+every user and process on the machine; the first command above is meant
+for a single-user workstation. Add `--read-token` (and send it as
+`Authorization: Bearer <token>`) wherever that is not acceptable.
+
 In a cluster, the chart runs it next to the agent
 (`--set server.enabled=true`) or alone as a fleet hub with Postgres, an
 Ingress and TLS; the [chart README](https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/chart/README.md#fleet-hub-server-only)
