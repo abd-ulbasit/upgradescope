@@ -174,6 +174,20 @@ func TestUpsertAddOns(t *testing.T) {
 	if cluster[0].Version != "1.11.0" {
 		t.Error("the cluster's add-ons must not be modified")
 	}
+
+	// A namespace can hold two installs of an add-on (a Helm release and
+	// an image on another release line, #165): the manifests replace both.
+	cluster = []inventory.AddOnInstance{
+		{ID: "istio", Version: "1.28.10", Namespaces: []string{"istio-system"}, Source: "image"},
+		{ID: "istio", Version: "1.31.1", ChartVersion: "1.31.1", Namespaces: []string{"istio-system"}, Source: "chart"},
+		{ID: "istio", Version: "1.30.5", Namespaces: []string{"mesh"}, Source: "image"},
+	}
+	manifests = []inventory.AddOnInstance{{ID: "istio", Version: "1.32.0", Namespaces: []string{"istio-system"}, Source: "image"}}
+	got = upsertAddOns(cluster, manifests)
+	want = []inventory.AddOnInstance{manifests[0], cluster[2]}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("upsertAddOns = %+v\nwant %+v", got, want)
+	}
 }
 
 // #150: what the cluster already has stays the cluster's: live custom

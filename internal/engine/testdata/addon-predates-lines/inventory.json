@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "16516516-5165-1651-6516-516516516516",
+  "collectedAt": "2026-10-02T00:00:00Z",
+  "serverVersion": "v1.33.5",
+  "capabilities": {
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "addOns": [
+    {"id": "istio", "version": "1.5.2", "namespaces": ["mesh-ancient"], "source": "image"},
+    {"id": "istio", "version": "1.29.4", "namespaces": ["mesh-gap"], "source": "image"},
+    {"id": "istio", "version": "1.33.0", "namespaces": ["mesh-next"], "source": "image"},
+    {"id": "external-dns", "version": "0.18.0", "namespaces": ["dns"], "source": "image"}
+  ],
+  "nodes": [
+    {"name": "node-a", "kubeletVersion": "v1.33.5", "containerRuntime": "containerd://1.6.20"},
+    {"name": "node-b", "kubeletVersion": "v1.33.5", "containerRuntime": "containerd://2.0.5"}
+  ],
+  "namespaces": [
+    {"name": "dns", "team": "platform"},
+    {"name": "mesh-ancient", "team": "legacy"},
+    {"name": "mesh-gap", "team": "beta"},
+    {"name": "mesh-next", "team": "canary"}
+  ]
+}

@@ -416,7 +416,7 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 	var out []Finding
 	for _, id := range ids {
 		a := byID[id]
-		all, groups := groupInstalls(a, installs[id], false)
+		all, groups := groupInstalls(a, installs[id], false, now)
 		out = append(out, evalAddOn(a, all, groups, target, now)...)
 	}
 	return append(out, evalNodeRuntimes(inv, k.AddOns, target, now)...)
@@ -443,23 +443,32 @@ func evalNodeRuntimes(inv inventory.Inventory, addons []registry.AddOn, target i
 		if len(ins) == 0 {
 			continue
 		}
-		all, groups := groupInstalls(a, ins, true)
+		all, groups := groupInstalls(a, ins, true, now)
 		out = append(out, evalAddOn(a, all, groups, target, now)...)
 	}
 	return out
 }
 
-// groupInstalls groups an add-on's installs by release line (cycleFor);
-// installs whose version maps to no cycle, or is unknown, form one group,
-// sorted first. all covers every install, for product-level findings.
-func groupInstalls(a registry.AddOn, ins []addOnInstall, node bool) (all addOnSubject, groups []addOnSubject) {
+// groupInstalls groups an add-on's installs by release line (cycleFor).
+// Installs older than every tracked line whose oldest line has ended by
+// now (predatesCycles) form one group, keyed "below-<oldest line>"; the
+// other installs whose version maps to no cycle, or is unknown, form one
+// group, sorted first. all covers every install, for product-level
+// findings.
+func groupInstalls(a registry.AddOn, ins []addOnInstall, node bool, now time.Time) (all addOnSubject, groups []addOnSubject) {
 	byCycle := map[string][]addOnInstall{} // "" = no cycle
 	for _, in := range ins {
-		c, _ := cycleFor(in.version, a.Cycles)
-		byCycle[c.Cycle] = append(byCycle[c.Cycle], in)
+		key := ""
+		if c, ok := cycleFor(in.version, a.Cycles); ok {
+			key = c.Cycle
+		} else if oldest, ok := predatesCycles(in.version, a.Cycles, now); ok {
+			key = belowPrefix + oldest.Cycle
+		}
+		byCycle[key] = append(byCycle[key], in)
 	}
 	for _, key := range slices.Sorted(maps.Keys(byCycle)) {
-		groups = append(groups, newAddOnSubject(a.DisplayName, byCycle[key], key != "", node))
+		line := key != "" && !strings.HasPrefix(key, belowPrefix) // one release line
+		groups = append(groups, newAddOnSubject(a.DisplayName, byCycle[key], line, node))
 	}
 	if len(groups) == 1 {
 		return groups[0], groups
@@ -595,16 +604,20 @@ type addOnSubject struct {
 //   - release line (cycles), unless the product carries a date or EOL
 //     status: the group's cycle has ended → blocker, eol-addon (warning
 //     for a node runtime); it ends in (now, now+90d] → warning,
-//     eol-approaching.
+//     eol-approaching. Versions older than every tracked line, when the
+//     oldest has ended (predatesCycles), are past end of life too →
+//     blocker, eol-addon (warning for a node runtime).
 //   - an install whose version's cycle range [k8s_min, k8s_max], or else
 //     the first compat row whose range matches the version, excludes the
 //     target → blocker, chart-incompat, naming only such installs of the
 //     group.
-//   - no product date and no cycle for the version, or no version at all
-//     → info, addon-no-data: missing data must neither block nor read as
-//     "checked, fine".
+//   - no product date and no cycle for the version (between tracked lines,
+//     newer than all of them, a product without lines), or no version at
+//     all → info, addon-no-data: missing data must neither block nor read
+//     as "checked, fine".
 //
-// Findings about a release line are keyed category/id/cycle, others
+// Findings about a release line are keyed category/id/cycle, about
+// versions older than every line category/id/below-<oldest line>, others
 // category/id, so each key is one finding. A group is judged at its oldest
 // version; an install without a detected version matches no compat row.
 func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target inventory.Version, now time.Time) []Finding {
@@ -649,14 +662,24 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 
 	for _, s := range groups {
 		cycle, inCycle := cycleFor(s.version, a.Cycles)
+		oldest, below := predatesCycles(s.version, a.Cycles, now)
 		key := func(cat Category) string {
-			if inCycle {
+			switch {
+			case inCycle:
 				return string(cat) + "/" + a.ID + "/" + cycle.Cycle
+			case below:
+				return string(cat) + "/" + a.ID + "/" + belowPrefix + oldest.Cycle
 			}
 			return string(cat) + "/" + a.ID
 		}
-		if inCycle && !productDated {
-			if f, ok := cycleEOL(a, cycle, s, now, window); ok {
+		if (inCycle || below) && !productDated {
+			f, ok := Finding{}, false
+			if inCycle {
+				f, ok = cycleEOL(a, cycle, s, now, window)
+			} else {
+				f, ok = predatesEOL(a, oldest, s, now), true
+			}
+			if ok {
 				f.Key = key(f.Category)
 				f.Teams, f.Namespaces = s.teams, s.namespaces
 				if s.node && f.Severity == SevBlocker {
@@ -672,7 +695,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 			out = append(out, f)
 		}
 
-		if !productDated && !inCycle {
+		if !productDated && !inCycle && !below {
 			ver, reason := s.version, " The registry has no release-line data for this version, so its end of life was not assessed."
 			if ver == "" {
 				ver, reason = "(version unknown)", " No version could be read from an image tag, chart appVersion or app.kubernetes.io/version label, so its end of life and Kubernetes compatibility were not assessed."
@@ -767,12 +790,7 @@ func cycleEOL(a registry.AddOn, c registry.Cycle, s addOnSubject, now, window ti
 	if c.EOL == nil {
 		return Finding{}, false // registry validation requires eol; defensive
 	}
-	f := Finding{Remediation: a.Recommendation}
-	for _, u := range append(slices.Clone(c.Citations), a.Support.Citations...) {
-		if !slices.Contains(f.Citations, u) {
-			f.Citations = append(f.Citations, u)
-		}
-	}
+	f := lineFinding(a, c, now)
 	d, err := time.Parse("2006-01-02", c.EOL.Date)
 	switch {
 	case c.EOL.Date == "" && c.EOL.Ended:
@@ -792,10 +810,85 @@ func cycleEOL(a registry.AddOn, c registry.Cycle, s addOnSubject, now, window ti
 	default:
 		return Finding{}, false
 	}
+	return f, true
+}
+
+// lineFinding starts a finding about release line c: its citations and
+// the product's, and the registry's recommendation, else an upgrade to the
+// newest supported line.
+func lineFinding(a registry.AddOn, c registry.Cycle, now time.Time) Finding {
+	f := Finding{Remediation: a.Recommendation}
+	for _, u := range append(slices.Clone(c.Citations), a.Support.Citations...) {
+		if !slices.Contains(f.Citations, u) {
+			f.Citations = append(f.Citations, u)
+		}
+	}
 	if newest := newestSupportedCycle(a.Cycles, now); f.Remediation == "" && newest != "" {
 		f.Remediation = fmt.Sprintf("Upgrade %s to a supported release line (newest: %s).", a.DisplayName, newest)
 	}
-	return f, true
+	return f
+}
+
+// belowPrefix marks the group, and the key, of installs older than every
+// tracked release line: "eol-addon/cert-manager/below-1.10".
+const belowPrefix = "below-"
+
+// predatesCycles reports whether version is older than every release line
+// in cycles, comparing the version's leading components with each line's,
+// and the oldest line has ended by now; it returns that line. Upstream
+// lifecycle data (endoflife.date) stops at some old line, and a line older
+// than an ended one has ended too: cert-manager 1.5 is past end of life
+// though the registry's oldest line is 1.10. While the oldest line is
+// supported, an older version may be a line the data never had, so it is
+// not judged. Neither is a version with fewer components than the oldest
+// line ("1" against "1.10"), nor an unparseable one.
+func predatesCycles(version string, cycles []registry.Cycle, now time.Time) (registry.Cycle, bool) {
+	v, ok := versionParts(version)
+	if !ok {
+		return registry.Cycle{}, false
+	}
+	oldest, oldestParts := -1, []int(nil)
+	for i, c := range cycles {
+		if p, ok := versionParts(c.Cycle); ok && (oldest < 0 || slices.Compare(p, oldestParts) < 0) {
+			oldest, oldestParts = i, p
+		}
+	}
+	if oldest < 0 || len(v) < len(oldestParts) || slices.Compare(v[:len(oldestParts)], oldestParts) >= 0 {
+		return registry.Cycle{}, false
+	}
+	c := cycles[oldest]
+	if !cycleEnded(c, now) {
+		return registry.Cycle{}, false
+	}
+	return c, true
+}
+
+// cycleEnded reports whether release line c has ended by now: eol true, or
+// a date not after now.
+func cycleEnded(c registry.Cycle, now time.Time) bool {
+	if c.EOL == nil {
+		return false
+	}
+	if c.EOL.Date == "" {
+		return c.EOL.Ended
+	}
+	d, err := time.Parse("2006-01-02", c.EOL.Date)
+	return err == nil && !d.After(now)
+}
+
+// predatesEOL is the end-of-life blocker for installs older than every
+// tracked release line (predatesCycles), citing the oldest line, which
+// has ended. Key, Teams and Namespaces are left to the caller.
+func predatesEOL(a registry.AddOn, oldest registry.Cycle, s addOnSubject, now time.Time) Finding {
+	f := lineFinding(a, oldest, now)
+	f.Category, f.Severity = CatEOLAddon, SevBlocker
+	f.Title = fmt.Sprintf("%s %s is end-of-life (older than the %s release line)", a.DisplayName, s.version, oldest.Cycle)
+	ended := fmt.Sprintf("support for %s has ended", oldest.Cycle)
+	if oldest.EOL.Date != "" {
+		ended = fmt.Sprintf("support for %s ended on %s", oldest.Cycle, oldest.EOL.Date)
+	}
+	f.Detail = s.located + fmt.Sprintf(" Versions older than the %s release line, the oldest one upstream still documents, are past end of life: %s.", oldest.Cycle, ended)
+	return f
 }
 
 // cycleFor maps a version to the most specific cycle whose dotted
@@ -1518,9 +1611,18 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 
 // Evaluate is the pure evaluation entrypoint: no I/O, no clock reads — now is
 // injected for EOL-window math. Output is fully deterministic for a given
-// (inventory, kb, target, now).
+// (inventory, kb, target, now), whatever the order of the inventory's slices.
 func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) Report {
-	inv.DeprecatedCalls = otherCallers(inv)
+	// Caller rows are judged, and folded into usage findings as evidence,
+	// in this order, so the same rows in another order (a pusher that
+	// sorts differently) give the same report. A clone: otherCallers may
+	// return the caller's own slice.
+	inv.DeprecatedCalls = slices.Clone(otherCallers(inv))
+	slices.SortFunc(inv.DeprecatedCalls, func(a, b inventory.DeprecatedCall) int {
+		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Version, b.Version),
+			cmp.Compare(a.Resource, b.Resource), cmp.Compare(a.Subresource, b.Subresource),
+			cmp.Compare(a.RemovedRelease, b.RemovedRelease))
+	})
 	findings := []Finding{} // non-nil so JSON renders "findings": []
 	findings = append(findings, foldDeprecatedCalls(inv, evalAPIUsage(inv, k, target), evalDeprecatedCalls(inv, target))...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)

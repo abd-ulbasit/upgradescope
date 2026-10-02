@@ -216,8 +216,9 @@ type HelmRelease struct {
 }
 
 // AddOnInstance is one install of a registry add-on. Collectors emit one
-// per add-on and namespace, so an ID can appear several times, each with
-// its own version; inventories from agents that predate that carry one
+// per add-on and namespace (two where a Helm release's pods run images on
+// another release line than its appVersion), so an ID can appear several
+// times, each with its own version; inventories from agents that predate that carry one
 // merged entry per ID (the oldest version, every namespace).
 type AddOnInstance struct {
 	ID string `json:"id"` // registry id, e.g. "ingress-nginx"

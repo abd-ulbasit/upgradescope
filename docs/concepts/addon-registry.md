@@ -16,7 +16,15 @@ the dashboard.
   provider's support policy and only match entries written for them.
 - **Helm releases.** A release whose chart name is in an entry's matchers is
   that add-on, at the release's `appVersion` (never the chart version).
-  Chart evidence wins over image evidence.
+  In the release's namespace, the `appVersion` wins over image tags and
+  labels on the same release line (major.minor): a pod a patch behind the
+  release, or one without a version tag, is the release. An image or label
+  version on another line is a second install in that namespace, judged
+  at its own version: an istioctl canary revision running
+  `istio/pilot:1.28.10` beside an `istiod` release at 1.31.1 in
+  `istio-system` gets the 1.28 line's findings, and so does an image tag
+  overridden in the release's values onto another line than the chart's
+  `appVersion`.
 - **Pod labels**, for images no matcher knows (a rebuilt or renamed
   controller image). A pod whose `app.kubernetes.io/name`, `helm.sh/chart`
   chart name or `app.kubernetes.io/part-of` is an entry's ID or chart
@@ -50,20 +58,38 @@ At the installed version, independent of the target unless noted:
 
 - the product is retired as a whole (`support.status: eol`, Ingress NGINX),
   or its installed release line has ended → `eol-addon` blocker;
+- the installed version is older than the oldest release line the entry
+  tracks, and that line has ended (cert-manager 1.5, whose oldest tracked
+  line is 1.10; Istio 1.5, oldest 1.7) → `eol-addon` blocker keyed
+  `eol-addon/<id>/below-<oldest line>`, citing that line and the product's
+  lifecycle pages. endoflife.date stops at some old line, and anything
+  older than an ended line has ended too;
 - the end of life is within 90 days → `eol-approaching` warning;
 - the release line's, or a compatibility row's, Kubernetes range excludes
   the **target** → `chart-incompat` blocker;
-- a node runtime's ended release line → warning only, naming the nodes
-  (the runtime comes with the node image, not with Kubernetes);
-- no lifecycle data for the installed version, or no version readable →
-  `addon-no-data` info, never a blocker.
+- a node runtime's ended release line, or a runtime older than the oldest
+  tracked line → warning only, naming the nodes (the runtime comes with
+  the node image, not with Kubernetes);
+- no lifecycle data for the installed version (a version between two
+  tracked lines, one newer than the newest tracked line, which means the
+  registry is behind upstream, or a product without release lines), or no
+  version readable → `addon-no-data` info, never a blocker.
 
-Each install (one per namespace, or one per node for a runtime) is judged on
-its own, grouped by release line: with Istio 1.28 in one team's namespace
-and 1.29 in another's, the ended 1.28 line is a finding keyed
+Each install (one per namespace, two where a Helm release and images on
+another release line share one, or one per node for a runtime) is judged
+on its own, grouped by release line: with Istio 1.28 in one team's
+namespace and 1.29 in another's, the ended 1.28 line is a finding keyed
 `eol-addon/istio/1.28` that names only the namespaces and teams running
 1.28, so a newer install neither hides an older one nor shares its blame. A product retired as a
 whole is one finding naming every install.
+
+Within one namespace, pods without a Helm release behind them (or off its
+release line) are one install at their oldest version: a namespace running
+Istio 1.28 and 1.29 images and no release is judged on the 1.28 line, and
+the 1.29 line, being newer, is not judged separately there. Data-plane pods
+that lag the control plane by a release line in the release's namespace
+(an ingress gateway still on 1.28 beside `istiod` 1.31) are judged on
+their own line too: that is the version running.
 
 ## What is in it
 

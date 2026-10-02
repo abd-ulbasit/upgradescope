@@ -78,6 +78,40 @@ func TestHelmInstallsJudgedByAppVersion(t *testing.T) {
 	}
 }
 
+// #165, end to end against the embedded registry: an istiod Helm release
+// (appVersion 1.31.1) and an istioctl canary revision running
+// istio/pilot:1.28.10 in istio-system. The release's appVersion hid the
+// canary, so the namespace read clean although Istio 1.28 ended on
+// 2026-07-01; the canary's line is now judged and names istio-system.
+func TestHelmReleaseDoesNotHideAnOlderRevision(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 99}}
+	ev := addOnEvidence{
+		images: []nsImage{
+			{"istio-system", "docker.io/istio/pilot:1.31.1"},
+			{"istio-system", "docker.io/istio/pilot:1.28.10"},
+		},
+		releases: []inventory.HelmRelease{{Name: "istiod", Namespace: "istio-system", ChartName: "istiod", ChartVersion: "1.31.1", AppVersion: "1.31.1", Status: "deployed"}},
+	}
+	detected, _ := matchAddOns(ev, addons)
+	rep := engine.Evaluate(inventory.Inventory{AddOns: detected}, k, inventory.Version{Major: 1, Minor: 32}, time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC))
+	i := slices.IndexFunc(rep.Findings, func(f engine.Finding) bool { return f.Key == "eol-addon/istio/1.28" })
+	if i < 0 {
+		t.Fatalf("no eol-addon/istio/1.28 for the canary revision; findings %+v", rep.Findings)
+	}
+	if f := rep.Findings[i]; f.Severity != engine.SevBlocker || !slices.Equal(f.Namespaces, []string{"istio-system"}) {
+		t.Errorf("eol-addon/istio/1.28 = %+v, want a blocker naming istio-system", f)
+	}
+	for _, f := range rep.Findings {
+		if f.Key == "eol-addon/istio/1.31" || f.Key == "eol-approaching/istio/1.31" {
+			t.Errorf("the 1.31 release is supported until 2027-02-28: %+v", f)
+		}
+	}
+}
+
 // Image-only installs (kubectl apply, kustomize, Argo CD's helm template:
 // no release secret) end to end: a mirrored upstream ingress-nginx gets the
 // EOL blocker, while the vendor-supported AKS and RKE2 builds do not.
@@ -130,6 +164,12 @@ func TestProviderBuildsGetNoUpstreamEOL(t *testing.T) {
 		{"mcr.microsoft.com/oss/istio/pilot:1.24.3-distroless", false},
 		{"quay.io/calico/node:v3.26.3", true},
 		{"quay.io/cilium/cilium:v1.15.10", true},
+		// Older than the oldest line the registry tracks (#165): past end
+		// of life upstream, still the provider's to support.
+		{"gke.gcr.io/calico/node:v3.24.5-gke.1", false},
+		{"mcr.microsoft.com/oss/cilium/cilium:1.12.10", false},
+		{"quay.io/calico/node:v3.24.5", true},
+		{"quay.io/cilium/cilium:v1.12.0", true},
 	}
 	for _, tc := range cases {
 		detected, _ := matchAddOns(addOnEvidence{images: []nsImage{{"kube-system", tc.image}}}, addons)

@@ -133,12 +133,23 @@ func TestMatchAddOnsFromLabelsAndIngressClass(t *testing.T) {
 				"app.kubernetes.io/name": "cilium", "app.kubernetes.io/version": "1.13.0"}, "mcr.microsoft.com/oss/cilium/cilium:1.13.0")}},
 		},
 		{
-			name: "a Helm release's appVersion wins over labels in its namespace",
+			name: "a Helm release's appVersion wins over labels on its release line",
+			ev: addOnEvidence{
+				labelled: []labelledPod{labelledPodOf("edge", nginxLabels, unmatchedNginx)},
+				releases: []inventory.HelmRelease{{Name: "edge", Namespace: "edge", ChartName: "ingress-nginx", ChartVersion: "4.11.3", AppVersion: "1.11.3"}},
+			},
+			want: []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.11.3", ChartVersion: "4.11.3", Namespaces: []string{"edge"}, Source: "chart"}},
+		},
+		{
+			name: "labels on another release line than the Helm release are their own install (#165)",
 			ev: addOnEvidence{
 				labelled: []labelledPod{labelledPodOf("edge", nginxLabels, unmatchedNginx)},
 				releases: []inventory.HelmRelease{{Name: "edge", Namespace: "edge", ChartName: "ingress-nginx", ChartVersion: "4.10.0", AppVersion: "1.10.0"}},
 			},
-			want: []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.10.0", ChartVersion: "4.10.0", Namespaces: []string{"edge"}, Source: "chart"}},
+			want: []inventory.AddOnInstance{
+				{ID: "ingress-nginx", Version: "1.10.0", ChartVersion: "4.10.0", Namespaces: []string{"edge"}, Source: "chart"},
+				{ID: "ingress-nginx", Version: "1.11.2", Namespaces: []string{"edge"}, Source: "labels"},
+			},
 		},
 		{
 			name: "labels that name no add-on",

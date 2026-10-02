@@ -217,6 +217,15 @@ func versionLess(a, b string) bool {
 	return a < b
 }
 
+// releaseLine is a detected version's release line, its first two
+// components: "1.31.1" → "1.31". versionFromTag guarantees there are two.
+func releaseLine(v string) string {
+	major, rest, _ := strings.Cut(v, ".")
+	minor, _, _ := strings.Cut(rest, ".")
+	minor, _, _ = strings.Cut(minor, "-")
+	return major + "." + minor
+}
+
 // olderVersion returns the older of two versions, ignoring "": the
 // conservative pick when the pods or releases of one install disagree.
 func olderVersion(cur, v string) string {
@@ -304,7 +313,8 @@ var ingressClassAddOns = map[string][]string{
 
 // matchAddOns is pure: pod images and labels + helm releases + IngressClass
 // controllers + registry → detected add-on instances, one per add-on and
-// namespace, sorted by ID then namespace, and the deduped, sorted
+// namespace (two where pods are off a Helm release's release line, see
+// below), sorted by ID, namespace and version, and the deduped, sorted
 // list of image repos no image matcher claims (registry gap visibility —
 // never findings, spec §9; an add-on found from labels may still run one).
 //
@@ -328,13 +338,15 @@ var ingressClassAddOns = map[string][]string{
 //     gets no lifecycle verdict.
 //
 // Each namespace is its own install, judged at its own version: within
-// one, the oldest version wins, and a Helm release's appVersion over image
-// tags and labels (sidecars and stale pods lag the release). Neither
-// crosses namespaces, so a mesh mid-upgrade or a newer release elsewhere
-// cannot hide an older install, nor lend its version to one. The limit is
-// within a namespace: an istioctl canary revision running an older
-// istio/pilot beside a newer istiod Helm release in istio-system is
-// reported at the release's version, and the older revision is not judged.
+// one, the oldest version wins, and a Helm release's appVersion over the
+// image tags and labels on its release line (releaseLine: pods a patch
+// behind the release, or without a version, are the release's). Image
+// tags and labels on another line are a second install in the namespace,
+// judged like a namespace without a release at their oldest version, so an
+// istioctl canary revision running an older istio/pilot beside a newer
+// istiod Helm release in istio-system is judged on its own line (#165).
+// Neither crosses namespaces, so a mesh mid-upgrade or a newer release
+// elsewhere cannot hide an older install, nor lend its version to one.
 // Across namespaces the other way round: a release whose pods run in
 // another namespace (a chart with a namespace override) is reported twice,
 // the release's namespace at its appVersion and the pods' namespace at
@@ -412,8 +424,7 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 	}
 
 	strength := map[string]int{"ingressclass": 1, "labels": 2, "image": 3, "chart": 4}
-	var out []inventory.AddOnInstance
-	for in, evs := range byInstall {
+	instance := func(in install, evs []evidence) inventory.AddOnInstance {
 		inst := inventory.AddOnInstance{ID: in.id}
 		var podVersion, appVersion string
 		for _, e := range evs {
@@ -434,10 +445,34 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		// A release's appVersion is authoritative; a chart without one
 		// falls back to the image tag or labels, never to the chart version.
 		inst.Version = cmp.Or(appVersion, podVersion)
-		out = append(out, inst)
+		return inst
+	}
+	var out []inventory.AddOnInstance
+	for in, evs := range byInstall {
+		// The releases' appVersions speak for the pods on their release
+		// lines; a pod version on another line is a second install here.
+		lines := map[string]bool{}
+		for _, e := range evs {
+			if e.source == "chart" && e.version != "" {
+				lines[releaseLine(e.version)] = true
+			}
+		}
+		var agree, other []evidence
+		for _, e := range evs {
+			if len(lines) > 0 && e.source != "chart" && e.version != "" && !lines[releaseLine(e.version)] {
+				other = append(other, e)
+			} else {
+				agree = append(agree, e)
+			}
+		}
+		out = append(out, instance(in, agree))
+		if len(other) > 0 {
+			out = append(out, instance(in, other))
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return cmp.Or(cmp.Compare(out[i].ID, out[j].ID), slices.Compare(out[i].Namespaces, out[j].Namespaces)) < 0
+		return cmp.Or(cmp.Compare(out[i].ID, out[j].ID), slices.Compare(out[i].Namespaces, out[j].Namespaces),
+			cmp.Compare(out[i].Version, out[j].Version), cmp.Compare(out[i].Source, out[j].Source)) < 0
 	})
 
 	return out, slices.Sorted(maps.Keys(unmatched))

@@ -63,7 +63,7 @@ func TestMatchAddOns(t *testing.T) {
 		{
 			// The registry speaks app versions; the chart version is evidence only.
 			name:     "chart evidence: version is the release's appVersion, chart version kept, v-prefixes stripped",
-			images:   []nsImage{{"ingress-nginx", "registry.k8s.io/ingress-nginx/controller:v1.9.4"}},
+			images:   []nsImage{{"ingress-nginx", "registry.k8s.io/ingress-nginx/controller:v1.8.0"}},
 			releases: []inventory.HelmRelease{{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "v4.7.1", AppVersion: "v1.8.1", Status: "deployed"}},
 			want:     []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.8.1", ChartVersion: "4.7.1", Namespaces: []string{"ingress-nginx"}, Source: "chart"}},
 		},
@@ -127,13 +127,61 @@ func TestMatchAddOns(t *testing.T) {
 			},
 		},
 		{
-			name: "Helm appVersion wins over a stale image tag in the release's namespace",
+			// Images on the release's own line agree with it: the
+			// appVersion stands for them (a patch-lagging pod is not
+			// another install).
+			name: "Helm appVersion wins over image tags on its release line",
 			images: []nsImage{
 				{"istio-system", "istio/pilot:1.31.1"},
-				{"istio-system", "istio/proxyv2:1.28.10"},
+				{"istio-system", "istio/proxyv2:1.31.0"},
+				{"istio-system", "istio/proxyv2@sha256:0123abcd"},
 			},
 			releases: []inventory.HelmRelease{{Name: "istiod", Namespace: "istio-system", ChartName: "istiod", ChartVersion: "1.31.1", AppVersion: "1.31.1", Status: "deployed"}},
 			want:     []inventory.AddOnInstance{{ID: "istio", Version: "1.31.1", ChartVersion: "1.31.1", Namespaces: []string{"istio-system"}, Source: "chart"}},
+		},
+		{
+			// #165: an istioctl canary revision on an older line beside a
+			// newer istiod release was hidden by the appVersion. An image
+			// on another release line is its own install in the namespace.
+			name: "an image on another release line than the Helm release is its own install",
+			images: []nsImage{
+				{"istio-system", "istio/pilot:1.31.1"},
+				{"istio-system", "docker.io/istio/pilot:1.28.10"},
+			},
+			releases: []inventory.HelmRelease{{Name: "istiod", Namespace: "istio-system", ChartName: "istiod", ChartVersion: "1.31.1", AppVersion: "1.31.1", Status: "deployed"}},
+			want: []inventory.AddOnInstance{
+				{ID: "istio", Version: "1.28.10", Namespaces: []string{"istio-system"}, Source: "image"},
+				{ID: "istio", Version: "1.31.1", ChartVersion: "1.31.1", Namespaces: []string{"istio-system"}, Source: "chart"},
+			},
+		},
+		{
+			// Both ways: an image tag overridden in the release's values
+			// onto a newer line than the chart's appVersion is what runs,
+			// so it is judged too; the release keeps its appVersion.
+			name: "an image on a newer release line than the Helm release is its own install too",
+			images: []nsImage{
+				{"ingress-nginx", "registry.k8s.io/ingress-nginx/controller:v1.9.4"},
+			},
+			releases: []inventory.HelmRelease{{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", AppVersion: "1.8.1", Status: "deployed"}},
+			want: []inventory.AddOnInstance{
+				{ID: "ingress-nginx", Version: "1.8.1", ChartVersion: "4.7.1", Namespaces: []string{"ingress-nginx"}, Source: "chart"},
+				{ID: "ingress-nginx", Version: "1.9.4", Namespaces: []string{"ingress-nginx"}, Source: "image"},
+			},
+		},
+		{
+			// The images off the release's lines are judged like a
+			// namespace without a release: at their oldest version.
+			name: "images off the release's lines form one install at their oldest version",
+			images: []nsImage{
+				{"istio-system", "istio/pilot:1.29.3"},
+				{"istio-system", "istio/proxyv2:1.28.10"},
+				{"istio-system", "istio/proxyv2:1.31.1"},
+			},
+			releases: []inventory.HelmRelease{{Name: "istiod", Namespace: "istio-system", ChartName: "istiod", ChartVersion: "1.31.1", AppVersion: "1.31.1", Status: "deployed"}},
+			want: []inventory.AddOnInstance{
+				{ID: "istio", Version: "1.28.10", Namespaces: []string{"istio-system"}, Source: "image"},
+				{ID: "istio", Version: "1.31.1", ChartVersion: "1.31.1", Namespaces: []string{"istio-system"}, Source: "chart"},
+			},
 		},
 		{
 			name: "oldest version wins semver-aware, not lexicographically",
@@ -325,7 +373,7 @@ func TestCollectAddOnsUsesPodImagesAndHelmReleases(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "controller-abc", Namespace: "ingress-nginx"},
 		Spec: corev1.PodSpec{
 			InitContainers: []corev1.Container{{Name: "init", Image: "docker.io/library/busybox:1.36"}},
-			Containers:     []corev1.Container{{Name: "controller", Image: "registry.k8s.io/ingress-nginx/controller:v1.9.4"}},
+			Containers:     []corev1.Container{{Name: "controller", Image: "registry.k8s.io/ingress-nginx/controller:v1.8.0"}},
 		},
 	})
 	inv := inventory.Inventory{HelmReleases: []inventory.HelmRelease{
