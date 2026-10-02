@@ -4,7 +4,9 @@ This page covers what a team can configure about which findings count:
 ignore rules in `.upgradescope.yaml`, the `upgradescope.dev/ignore`
 object annotations, baselines for CI, and the agent's
 `ClusterReadiness` `spec.ignore`. Flags are listed in
-`upgradescope scan --help`.
+`upgradescope scan --help`. The GitHub Action passes them as its
+`config`, `baseline` and `write-baseline` inputs
+([action/README.md](../action/README.md#ignore-rules-and-baselines)).
 
 Contents:
 
