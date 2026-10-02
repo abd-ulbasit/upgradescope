@@ -332,6 +332,27 @@ func TestEvalAddOnsGroupsByReleaseLine(t *testing.T) {
 	}
 }
 
+// The same mesh against the embedded registry (the #129 reproduction):
+// istio 1.28 is past end of life and supports at most Kubernetes 1.34,
+// 1.30 ends on 2026-12-31 (90 days out), and 1.31 is fine at 1.36.
+func TestEvalAddOnsGroupsByReleaseLineRealKB(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := installs("istio", "image", "mesh-new=1.31.1", "mesh-mid=1.30.5", "mesh-old=1.28.10")
+	fs := evalAddOns(inv, k, inventory.Version{Major: 1, Minor: 36}, day("2026-10-02"))
+	sortFindings(fs)
+	want := []string{
+		"blocker chart-incompat/istio/1.28 ns=[mesh-old] teams=[oldteam]",
+		"blocker eol-addon/istio/1.28 ns=[mesh-old] teams=[oldteam]",
+		"warning eol-approaching/istio/1.30 ns=[mesh-mid] teams=[midteam]",
+	}
+	if got := whereSummary(fs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
 // Two installs on one release line make one finding naming both, judged at
 // the older one, and the detail names each namespace's version.
 func TestEvalAddOnsReleaseLineNamesEachVersion(t *testing.T) {
