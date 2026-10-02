@@ -347,7 +347,7 @@ Auth: `readToken` (bearer).
 | `format` | query | `json` \| `sarif` \| `junit` \| `gitlab-codequality` | no | — |
 | `fail-on` | query | `blocker` \| `warning` \| `never` | no | — |
 | `path` | query | string | no | The repository-relative file the stream was rendered to (`deploy/rendered.yaml`). Introduced findings are then located in it in SARIF and Code Quality, so code scanning or the merge request widget shows them on the change. |
-| `config` | query | string | no | A `.upgradescope.yaml` (its text, URL-encoded): ignore rules applied as `scan --config` applies them, `file` globs matched against `path`. An invalid config, one over 32 KiB, or `config` given more than once is a 422. The request line, and so this parameter, also counts toward the server's 64 KiB request-header limit. |
+| `config` | query | string | no | A `.upgradescope.yaml` (its text, URL-encoded): ignore rules applied as `scan --config` applies them, `file` globs matched against `path`. An invalid config, one over 32 KiB, or `config` given more than once is a 422. The request line, and so this parameter, also counts toward the server's 64 KiB request-header limit: URL-encoding expands YAML, so a config under 32 KiB can exceed it, and the server then answers 431 with a plain-text body. A reverse proxy in front of the server may refuse a long request line sooner (ingress-nginx's default answers 414 above 8 KiB). |
 
 Request body (`application/x-yaml`): string
 

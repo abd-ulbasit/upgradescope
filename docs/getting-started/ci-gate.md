@@ -92,7 +92,10 @@ every pull request. The manifests' API usage, add-ons and CRDs are merged
 into the cluster's: an EOL add-on the manifests deploy, or a custom
 resource at a version the cluster's CRD (or a CRD in the manifests) does not
 serve, is the manifests' finding, also when the cluster already has the
-same.
+same. One case is not seen: the cluster lists its custom resources only at
+versions its own CRDs deprecate or do not serve, so live custom resources
+at a version that a posted CRD newly deprecates or stops serving are not
+judged.
 
 ```sh
 curl -sS --fail-with-body -X POST \

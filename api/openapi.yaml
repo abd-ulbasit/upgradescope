@@ -534,7 +534,11 @@ paths:
             against `path`. An invalid config, one over 32 KiB, or
             `config` given more than once is a 422. The request line,
             and so this parameter, also counts toward the server's 64 KiB
-            request-header limit.
+            request-header limit: URL-encoding expands YAML, so a config
+            under 32 KiB can exceed it, and the server then answers 431
+            with a plain-text body. A reverse proxy in front of the server
+            may refuse a long request line sooner (ingress-nginx's
+            default answers 414 above 8 KiB).
           schema: {type: string}
       requestBody:
         required: true

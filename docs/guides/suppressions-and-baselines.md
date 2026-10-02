@@ -166,11 +166,22 @@ curl -sS --fail-with-body -X POST \
 globs match the `path` parameter. The config is parsed and validated by
 the same code as `scan --config`: an invalid config (an unknown field, a
 rule without a `reason`, an `expires` that is not a date), one over 32 KiB,
-or `config` given twice is refused with 422 before anything is judged. The
-parameter also counts toward the server's 64 KiB limit on the request line
-and headers; 32 KiB is a few hundred rules.
+or `config` given twice is refused with 422 before anything is judged.
+32 KiB is a few hundred rules.
 
-Suppressed findings count toward neither the verdict nor `fail-on`. The
+The parameter travels in the URL, so two limits come first for a large
+config. URL-encoding expands YAML (a colon or a line break becomes three
+bytes, and so may each space of indentation), so a config under 32 KiB can exceed the server's
+64 KiB limit on the request line and headers once encoded; Go's HTTP
+server then answers 431 with a plain-text body, not the JSON 422. A
+reverse proxy in front of `serve` usually allows far less: ingress-nginx's
+default `large-client-header-buffers` (8 KiB) answers 414 for a request
+line longer than that. Keep the config small, or raise the proxy's limit.
+
+Suppressed findings count toward neither the verdict nor `fail-on`. With
+`?cluster=`, what the manifests introduce is decided after suppression: a
+finding whose posted objects are all suppressed is not the pull request's,
+and objects the cluster already has at that key stay the cluster's. The
 JSON answer lists them in `suppressed` with a `suppressedCount`, and names
 expired rules and annotations without a reason in `warnings`. SARIF carries
 them as results with an external suppression, JUnit as skipped test cases,
