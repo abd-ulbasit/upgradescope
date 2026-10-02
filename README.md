@@ -12,9 +12,9 @@ deprecated at the target (found by who still writes them, and by what the
 apiserver is still asked for), add-ons past end of life, version skew
 outside the upstream policy, and Helm charts that exclude the target. The
 answer is a verdict (`ready`, `blocked` or `unknown` when a required check
-could not run), a 0–100 score and cited findings, as a table, JSON, SARIF or
-Markdown, an exit code for CI, and a `ClusterReadiness` object an in-cluster
-agent keeps current. A self-hosted server adds history, a fleet view, team
+could not run), a 0–100 score and cited findings, as a table, JSON, SARIF,
+Markdown, JUnit or GitLab Code Quality, an exit code for CI, and a
+`ClusterReadiness` object an in-cluster agent keeps current. A self-hosted server adds history, a fleet view, team
 rollups and auditor exports. One Apache-2.0 binary. `scan` only reads; the
 agent writes nothing but its own `ClusterReadiness` object and that CRD's
 schema.
@@ -75,7 +75,10 @@ its SHA; the floating `v0` tag moves with every release):
 ```
 
 [CI gate](https://abd-ulbasit.github.io/upgradescope/getting-started/ci-gate/)
-also covers other CI systems and the server's gate endpoint.
+also covers the server's gate endpoint. GitLab CI, Jenkins and Azure
+Pipelines have templates in [`ci/`](ci/) that publish JUnit and GitLab Code
+Quality reports (`--output junit|gitlab-codequality`): see
+[Other CI systems](https://abd-ulbasit.github.io/upgradescope/guides/other-ci/).
 
 **Run it in the cluster**:
 
