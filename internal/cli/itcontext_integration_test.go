@@ -21,7 +21,7 @@ const itContextEnv = "UPGRADESCOPE_IT_CONTEXT"
 // The agent IT installs a cluster-scoped CRD, so a shell whose context has
 // drifted to a real cluster must never be used: an explicit context (from
 // UPGRADESCOPE_IT_CONTEXT) must exist, and otherwise the current context must
-// be a kind cluster: named kind-* and serving on loopback, as kind writes
+// be a kind cluster: named kind-* and serving on this machine, as kind writes
 // every context it creates (a name alone is a renamed or hand-written
 // context away from a real cluster). A non-empty skip is the reason to
 // refuse.
@@ -51,7 +51,8 @@ func itKubeContext(cfg clientcmdapi.Config, explicit string) (name, skip string,
 	return cur, "", nil
 }
 
-// loopbackServer reports whether a kubeconfig server URL is on this machine.
+// loopbackServer reports whether a kubeconfig server URL is on this machine:
+// loopback, or the unspecified address (0.0.0.0, ::), which dials it too.
 func loopbackServer(server string) bool {
 	u, err := url.Parse(server)
 	if err != nil {
@@ -59,7 +60,7 @@ func loopbackServer(server string) bool {
 	}
 	h := u.Hostname()
 	ip := net.ParseIP(h)
-	return h == "localhost" || (ip != nil && ip.IsLoopback())
+	return h == "localhost" || (ip != nil && (ip.IsLoopback() || ip.IsUnspecified()))
 }
 
 // itRESTConfig gates an integration test (UPGRADESCOPE_IT=1 plus the context
@@ -141,6 +142,10 @@ func TestITKubeContext(t *testing.T) {
 		{name: "kind-* refusal names the override", cfg: serving(kubeconfig("kind-prod", "kind-prod"), "kind-prod", "https://prod.example.com"), skip: "UPGRADESCOPE_IT_CONTEXT"},
 		{name: "kind-* on localhost qualifies", cfg: serving(kubeconfig(demo, demo), demo, "https://localhost:6443"), want: demo},
 		{name: "kind-* on IPv6 loopback qualifies", cfg: serving(kubeconfig(demo, demo), demo, "https://[::1]:6443"), want: demo},
+		// networking.apiServerAddress: 0.0.0.0 makes kind write the
+		// unspecified address, which only ever dials this machine.
+		{name: "kind-* on the unspecified address qualifies", cfg: serving(kubeconfig(demo, demo), demo, "https://0.0.0.0:41235"), want: demo},
+		{name: "kind-* on IPv6 unspecified qualifies", cfg: serving(kubeconfig(demo, demo), demo, "https://[::]:6443"), want: demo},
 		{name: "kind-* whose context names no known cluster is refused", cfg: kubeconfig(demo), skip: demo},
 		{name: "explicit context on a remote server is allowed", cfg: kubeconfig(demo, demo, gke), explicit: gke, want: gke},
 	}
