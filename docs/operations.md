@@ -25,9 +25,10 @@ request is measured before it is decoded:
 | | `POST /api/v1/gate` | `POST /api/v1/snapshots` |
 |---|---|---|
 | body cap (wire, and decompressed) | `--max-gate-bytes`, 10 MiB | `--max-snapshot-bytes`, 20 MiB |
-| per document | 4 MiB with its aliases expanded, 20,000 documents | — |
+| with aliases expanded | the whole stream within the body cap, each document within 4 MiB; 20,000 documents | — |
 | node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4, an alias what it names | 1M units: a JSON value 1, an object 8 |
-| worst live heap within the budget (measured on SQLite) | ~155 MiB, with `?cluster=` too | ~115 MiB, the body's copy and the reports it stores included |
+| answer | at most `--max-gate-bytes`, bounded before it is encoded; `?path=` at most 512 bytes | — |
+| worst live heap within the budget (measured on SQLite) | ~165 MiB, with `?cluster=` too, the answer included | ~120 MiB, the body's copy and the reports it stores included |
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
 | measured for aliases, decoded and evaluated at once | 1, others wait up to 30s holding only their bodies | 1, others wait up to 10s |
 
@@ -42,7 +43,11 @@ yaml.v3, kubectl's decoder and `encoding/json` build. YAML aliases are
 charged what they name: kubectl's decoder copies the aliased node at
 every alias (merge keys included), and go-yaml v2's excessive-aliasing
 check neither starts before 100 aliases nor counts a scalar's bytes, so
-one 3.5 MiB anchored string and 99 aliases of it decoded to ~2 GB. A
+one 3.5 MiB anchored string and 99 aliases of it decoded to ~2 GB.
+What the aliases add counts against the document's 4 MiB and against
+the body cap for the whole stream: 136 documents of 40 KB, each within
+its 4 MiB, named 100 objects each after one anchored 40 KB string, and
+that 5.8 MB stream answered 532 MB and took 1.8 GiB of heap. A
 document in which the meter finds an alias (a `*` token: not one in a
 string, a comment or a glob such as `get*`) is read into yaml.v3 nodes
 before it is decoded, and what its aliases expand to is added to the
@@ -55,6 +60,29 @@ meter as UTF-8. A realistic ~4 MiB `kubectl get -o yaml` List of
 Deployments is ~360k units and fits; typical kubectl YAML is ~90k units
 per MiB, so the node budget, not the 10 MiB body cap, is what limits a
 realistic stream, at about 4.4 MiB.
+
+The answer is bounded too. Its size follows the strings the stream (and,
+with `?cluster=`, the cluster) put in it, times how the format escapes
+and repeats them: every listed object carries its name, its namespace
+and `?path=`, SARIF and Code Quality write a result per object with its
+finding's title and fix, and the encoders hold several copies of what
+they write. Unbounded, a 1.2 MB stream naming 100 objects of each of the
+KB's 136 deprecated or removed GVKs, with a 60 KB `?path=`, answered
+817 MB and took a fresh server to 2.4 GB; with 650-byte names of `<` and
+a 512-byte path, 9 MB answered 72 MB of SARIF and took 347 MiB of heap.
+So `?path=` is at most 512 bytes (`422`), and after the evaluation, and
+before anything is encoded, the server bounds the answer in the asked
+format (every string at its dearest escape, each value with room for its
+punctuation and indentation, what each format repeats), and an answer
+whose bound is over `--max-gate-bytes` is `413`, saying to split the
+stream. With `?cluster=`, the cluster's own findings and the objects
+they list count too, so a cluster whose report lists thousands of
+objects with long names can make its `?cluster=` answers `413` (raise
+`--max-gate-bytes` for it). `TestGateAnswerBoundHolds` checks the bound
+against every format, with and without `?path=` and `?cluster=`, for
+every character class an escape lengthens; the largest answers within
+it (up to ~7 MB) take at most ~33 MiB of heap to build
+(`TestGateAnswerHeapIsBounded`).
 
 Reads cost what was stored, so they are bounded too. A read of one
 cluster (its detail, report, findings, teams, history or export) and the
@@ -72,11 +100,24 @@ rest. One read costs what it loads: on SQLite, whose driver holds a copy
 of every snapshot and report it reads beside the one it returns, a
 report or its findings from a stored evaluation of a 17 MB snapshot (at
 the node budget, every API-usage entry a finding, so the 17.5 MB report
-is as large) grew the heap ~90 MiB, a what-if of it ~88 MiB. Since they
-run one at a time, 10 concurrent requests to any of these endpoints
-whose clients take their responses at once add only the garbage of the
-read before: up to 90 MiB in all (`TestReadHeapIsBounded`, on SQLite at
-the snapshot node budget, fails above 128 MiB).
+is as large) grew the heap ~90 MiB, a what-if of it ~88 MiB, and the
+same with object names of U+2028 up to ~97 MiB. Since they run one at a
+time, 10 concurrent requests to any of these endpoints whose clients
+take their responses at once add only the garbage of the read before:
+up to ~97 MiB in all (`TestReadHeapIsBounded`, on SQLite at the
+snapshot node budget, fails above 128 MiB).
+
+A snapshot's strings are stored and served no longer than they were
+pushed. `encoding/json` writes `<`, `>` and `&` as six-byte escapes
+(and U+2028 and U+2029 always), so the same 17 MB push with object
+names of `<` stored three 80 MB reports, grew the ingest heap 323 MiB
+and the report read 170 MiB. The server writes its stored reports and
+every JSON response without those escapes (the responses are
+`application/json` with `nosniff`), hashes a push for deduplication
+without holding the escaped copy (the hash is unchanged), and refuses a
+push that is not valid UTF-8 with `422` (`encoding/json` would decode
+each invalid byte to three). The heap tests store snapshots of `x`, `<`
+and U+2028 names alike, and their figures here are the dearest of them.
 
 A response is written to memory in the slot and sent after it, so a
 client that is slow to read holds its response, not the slot. `/gate`
@@ -96,12 +137,16 @@ that 17.5 MB report and never read it grew the live heap 366 MiB with
 the slot free, 10 that sent `/gate?cluster=` against that cluster and
 never read the answer grew it 320 MiB (~32 MiB each: the report, the
 answer and its encoding), and a 120s window holds about 100 of either.
-Now 8 or 20 such readers, or 10 such `/gate` clients, over real sockets,
-leave 33 MiB live (two responses held, the rest answered `503`), and the
-heap peaks 122-124 MiB above idle with the request in its slot
+Now 8 or 20 such readers over real sockets leave 33 MiB live (two
+responses held, the rest answered `503`) and the heap peaks 124 MiB
+above idle with the request in its slot, and 10 `/gate?cluster=`
+clients whose 4.5 MB answers are among the largest the answer bound
+lets through leave 39 MiB live, at a 61 MiB peak
 (`TestUnreadResponsesAreBounded` and `TestUnreadGateResponsesAreBounded`,
 which fail above the budget for what stays live, and at the peak above
-168 MiB for reads and 240 MiB for `/gate`).
+168 MiB for reads and 240 MiB for `/gate`). A `/gate` answer is at most
+`--max-gate-bytes`, under the budget, so it is never sent in its slot
+unless `--max-gate-bytes` is set over twice `--max-snapshot-bytes`.
 
 The reads of the whole fleet, `/clusters`, `/fleet` and `/metrics`, cost
 about their response whatever was stored: they read each cluster's
@@ -111,40 +156,52 @@ its own columns, never the stored report. Before that, one 17 MB push
 made 30 concurrent requests to any of them grow the heap by 285-584 MiB;
 now by at most 2 MiB (`TestFleetReadsLoadNoReport`). Their responses do
 grow with the fleet: at 500 clusters `/clusters` is ~230 KB, `/fleet`
-~480 KB and `/metrics` ~740 KB, and building one adds up to ~5 MiB to the
-heap (`/metrics` the most, about five times its response); at 2000
-clusters with 200-byte names, with two `--targets`, they are 1.3, 2.3 and
-9 MB, and `/metrics` adds ~47 MiB. They run two at a time in fleet slots
-of their own (others wait up to 30s, then get `503` with `Retry-After`),
-and their responses wait for their clients in the budget above. Written
+~480 KB (~590 KB with 16 `?targets=`) and `/metrics` ~740 KB, and
+building one adds up to ~5 MiB to the heap (`/metrics` the most, about
+five times its response); at 2000 clusters with 200-byte names, with two
+`--targets`, they are 1.3, 2.3 (2.7 with 16 `?targets=`) and 9 MB, and
+`/metrics` adds ~47 MiB. `/fleet?targets=` takes at most 16 distinct
+minors (`422` above): each is a column and a store query per cluster,
+and unbounded but for the 64 KiB URL, 8,718 of them against 500 clusters
+held a fleet slot for 2m13s, grew the heap 418 MiB and answered 57 MiB.
+They run two at a time in fleet slots of their own (the dashboard's
+reads wait up to 30s, a `/metrics` scrape up to 5s, within Prometheus'
+default 10s scrape timeout, then get `503` with `Retry-After`), and
+their responses wait for their clients in the budget above. Written
 straight to their clients, with nothing capping how many, 100 clients
 that never read held 201 MiB of `/clusters` and 251 MiB of `/fleet` of
 that 2000-cluster fleet, and 30 held 433 MiB of `/metrics`, whose handler
 keeps the gathered metric families until its write returns; now 100 of
-any of them leave at most the 40 MiB budget live, and the heap peaks at
-most 168 MiB above idle with the two builds in their slots
-(`TestUnreadFleetResponsesAreBounded`). A Prometheus scrape or a
-dashboard poll that gets `503` is retried at its next interval.
+any of them, a 16-target `/fleet` included, leave at most the 40 MiB
+budget live, and the heap peaks at most 168 MiB above idle with the two
+builds in their slots (`TestUnreadFleetResponsesAreBounded`). A
+Prometheus scrape or a dashboard poll that gets `503` is retried at its
+next interval.
 
-Worst case for the chart's 640Mi server, each part measured on SQLite
-against the dearest snapshot at its node budget
-(`TestStoredSnapshotHeapIsBounded`, `TestReadHeapIsBounded`,
-`TestUnreadResponsesAreBounded`, `TestUnreadGateResponsesAreBounded`,
+Worst case for the chart's 768Mi server, each part measured on SQLite
+against the dearest snapshot at its node budget, names of `x`, `<` and
+U+2028 alike (`TestGateDecodeHeapIsBounded`,
+`TestStoredSnapshotHeapIsBounded`, `TestReadHeapIsBounded`,
+`TestGateAnswerHeapIsBounded`, `TestUnreadResponsesAreBounded`,
+`TestUnreadGateResponsesAreBounded`,
 `TestUnreadFleetResponsesAreBounded`):
-one `/gate` request in the evaluation slot (~155 MiB, with `?cluster=`
+one `/gate` request in the evaluation slot (~165 MiB, with `?cluster=`
 too, since the cluster's inventory is decoded once the manifests' node
-trees are garbage, its encoded answer included) plus one ingest
-(~115 MiB for the 17 MB push whose three stored reports are each as
-large, its copy of the body included) plus one read in the read slot
-(~90 MiB, its response included) plus two reads of the whole fleet in
-their slots (up to ~10 MiB for 500 clusters) plus the read, fleet read
-and `/gate` responses held for their clients (the one 40 MiB budget)
-plus the background re-evaluation pass, which takes clusters one at a
-time (~85 MiB for that snapshot and three targets) plus both body
-budgets (70 MiB; an ingest gives its share back once it holds that copy,
-so another push can wait in it): about 565 MiB for a 500-cluster fleet,
-inside the 576 MiB `GOMEMLIMIT` the chart derives from the limit. Below
-about 630Mi, that sum no longer fits under `GOMEMLIMIT`.
+trees are garbage, its answer included: answers big enough to cost more
+to encode are cheap to decode) plus one ingest (~120 MiB for the 17 MB
+push whose three stored reports are each as large, its copy of the body
+included) plus one read in the read slot (~97 MiB, its response
+included) plus two reads of the whole fleet in their slots (up to
+~10 MiB for 500 clusters) plus the read, fleet read and `/gate`
+responses held for their clients (the one 40 MiB budget) plus the
+background re-evaluation pass, which takes clusters one at a time
+(~92 MiB for that snapshot and three targets) plus both body budgets
+(70 MiB; an ingest gives its share back once it holds that copy, so
+another push can wait in it): about 595 MiB for a 500-cluster fleet,
+inside the 691 MiB `GOMEMLIMIT` the chart derives from the limit. Below
+about 665Mi, that sum no longer fits under `GOMEMLIMIT`. (Each figure is
+a peak with its garbage, measured with the collector held near the live
+heap; runs differ by a few MiB.)
 
 What is outside these bounds, and what it costs:
 
@@ -171,7 +228,9 @@ What is outside these bounds, and what it costs:
   with each new name it pushes. What a fleet read costs grows with the
   fleet (above): about 5 MiB for 500 clusters, ~47 MiB for a `/metrics`
   of 2000 clusters with 200-byte names, twice that with both fleet slots
-  busy.
+  busy. Without `?targets=`, `/fleet` has a column for every minor some
+  cluster runs the next of, so clusters pushed at many minors widen it
+  too.
 - **Snapshots stored by v0.1.** A snapshot a v0.1 server stored before
   the budgets existed (up to 20 MiB of any shape) is decoded without a
   node count when `/gate?cluster=`, the re-evaluation pass or a what-if
@@ -187,9 +246,9 @@ What is outside these bounds, and what it costs:
 
 The held-response budget bounds memory, not who gets it. Any answer
 larger than what is left of it gets `503`, so clients that ask for large
-answers (a report, a `/gate?cluster=` answer, or a fleet read of a large
-fleet) and do not read them can keep the budget full for up to the 120s
-write timeout, and ask again: meanwhile per-cluster reads, fleet reads
+answers (a report, a `/gate` answer of up to `--max-gate-bytes`, or a
+fleet read of a large fleet) and do not read them can keep the budget
+full for up to the 120s write timeout, and ask again: meanwhile per-cluster reads, fleet reads
 (a Prometheus scrape and the dashboard's polls included) and `/gate`
 answers that do not fit get `503`. When the read API is open, that
 needs no credentials.

@@ -125,13 +125,20 @@ To accept a finding for now, with a reason and an expiry, use an
   ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **The cluster list, the fleet matrix or a `/metrics` scrape gets 503.**
   Reads of the whole fleet run two at a time, and this one waited more
-  than 30s for its turn, or the responses still waiting for slow clients
-  leave no room for this one. The dashboard and Prometheus try again at
+  than 30s for its turn (5s for a scrape), or the responses still waiting
+  for slow clients leave no room for this one. The dashboard and Prometheus try again at
   their next poll or scrape; if it persists, look for clients that ask
   for large reports or fleet reads and do not read them (the server's
   `upgradescope_http_requests_total` by route and code shows the 503s).
 - **`/gate` gets 422 `a UTF-16 byte order mark`.** Re-encode the manifests
   as UTF-8 (`iconv -f UTF-16 -t UTF-8`).
+- **`/gate` gets 413 `the answer to this stream could take up to`.** The
+  answer would list more objects, with longer names, namespaces and
+  `?path=`, than `--max-gate-bytes` allows (with `?cluster=`, the
+  cluster's own findings count too). Split the stream into several
+  requests, or raise `--max-gate-bytes`, which raises the body cap too.
+- **`/fleet` gets 422 `targets lists more than 16 distinct minors`.** Ask
+  for at most 16 targets at a time.
 - **The agent warns `pushing snapshots to ... over plain http`.** Its
   `--server-url` is `http://` to a host that is not loopback. Serve HTTPS
   (`--tls-cert-file`, the chart's `server.tls`, or an Ingress).

@@ -86,8 +86,9 @@ cannot read is reported as not assessed.
   nodes (aliases at what they expand to) are counted against a budget
   before anything is decoded, buffered bodies share a budget, and one
   request per endpoint decodes at a time, as does one read of a stored
-  snapshot (two reads of the whole fleet). Responses waiting for slow
-  clients share one budget. Over a budget is `413`, a body too slow for
+  snapshot (two reads of the whole fleet). A `/gate` answer is bounded
+  before it is encoded, within `--max-gate-bytes`. Responses waiting for
+  slow clients share one budget. Over a budget is `413`, a body too slow for
   the read timeout `408`, a full queue or response budget `503`
   ([Memory and request limits](../operations.md#memory-and-request-limits),
   which lists what is outside these bounds). Connections have read,

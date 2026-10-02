@@ -88,17 +88,25 @@ In scope:
   The server's memory is bounded by the request budgets in
   [docs/operations.md](docs/operations.md#memory-and-request-limits): body
   caps, node budgets counted before anything is decoded (YAML aliases at
-  what they expand to), a shared budget for buffered bodies, and one
-  request at a time per endpoint doing anything whose memory follows the
-  input's structure (measuring what YAML aliases expand to, decoding,
+  what they expand to, and the stream with its aliases expanded within
+  the body cap), a shared budget for buffered bodies, and one request at
+  a time per endpoint doing anything whose memory follows the input's
+  structure (measuring what YAML aliases expand to, decoding,
   evaluating); the per-cluster reads, which load a stored snapshot and
   may evaluate it, share one more such slot, and the reads of the whole
   fleet (`/clusters`, `/fleet`, `/metrics`), which load no snapshot
-  inventory and no stored report, two slots of their own. Every read's
-  response and every `/gate` answer is built in its slot and waits for
-  its client in one budget of twice `--max-snapshot-bytes`; one larger
-  than what is left of that budget gets `503`, and one larger than the
-  whole budget is sent in its slot, whose client gets 20s to take it.
+  inventory and no stored report, two slots of their own (`/fleet`
+  takes at most 16 `?targets=`). A `/gate` answer is bounded, in its
+  format, before it is encoded, and one that could be over
+  `--max-gate-bytes` is `413` (`?path=` is at most 512 bytes). Stored
+  reports and JSON responses carry a snapshot's strings no longer than
+  they were pushed (no HTML or line-separator escapes; a push that is
+  not UTF-8 is `422`). Every read's response and every `/gate` answer is
+  built in its slot and waits for its client in one budget of twice
+  `--max-snapshot-bytes`; one larger than what is left of that budget
+  gets `503`, and one larger than the whole budget (never a `/gate`
+  answer, unless `--max-gate-bytes` is over twice `--max-snapshot-bytes`)
+  is sent in its slot, whose client gets 20s to take it.
   Any request that makes the server use memory beyond them is in scope,
   with or without credentials, except what is listed as outside them
   below.
@@ -124,9 +132,9 @@ In scope:
   `503` until the 60s read timeout cuts it off; one that keeps asking for
   what-if reports keeps other per-cluster reads waiting; and because any
   answer larger than what is left of the response budget gets `503`, a
-  client that chooses large answers (a report, a `/gate?cluster=` answer,
-  which can be about as large as its snapshot, or a fleet read of a large
-  fleet) and does not read them can keep that budget full for up to the
+  client that chooses large answers (a report, a `/gate` answer of up to
+  `--max-gate-bytes`, or a fleet read of a large fleet) and does not
+  read them can keep that budget full for up to the
   120s write timeout, and again after it, starving per-cluster reads,
   fleet reads (Prometheus scrapes and the dashboard included) and `/gate`
   of every answer that does not fit. All of these need no credentials

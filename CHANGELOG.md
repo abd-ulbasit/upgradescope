@@ -348,14 +348,24 @@ a CI gate.
   at a time and can answer `503` with `Retry-After` after waiting 30s for
   their turn; retry them as the agent retries pushes. `/api/v1/clusters`,
   `/api/v1/fleet` and `/metrics` read no snapshot inventory and no stored
-  report. When the responses those reads hold for slow clients fill their
-  budget, a response is sent while the read holds its turn, and a client
-  that has not taken it within 20s is disconnected (#121).
+  report; a `/metrics` scrape waits at most 5s for its turn. When the
+  responses those reads hold for slow clients fill their budget, a
+  response is sent while the read holds its turn, and a client that has
+  not taken it within 20s is disconnected (#121).
+- Server: `/api/v1/fleet?targets=` takes at most 16 distinct minors, and
+  `/api/v1/clusters/{id}/history?limit=` at most 1000; more is `422`. A
+  snapshot push that is not valid UTF-8 is `422` (#121).
+- Server: JSON responses and stored reports write `<`, `>`, `&`, U+2028
+  and U+2029 as themselves, not as `\u` escapes (#121).
 - Server: `POST /api/v1/gate` answers `413` for a stream over its node
   budget, which a realistic kubectl YAML stream reaches at about 4.4 MiB
   (v0.1 decoded streams up to 20 MiB), or a document whose YAML
-  aliases expand past 4 MiB; split such streams. A UTF-16 stream gets
-  `422`. A `/gate` or snapshot body that does not arrive within the 60s
+  aliases expand past 4 MiB, or a stream they expand past
+  `--max-gate-bytes`; split such streams. It answers `413` too when its
+  answer could be larger than `--max-gate-bytes` (it lists every object
+  the findings name, with `?path=`; with `?cluster=`, the cluster's
+  findings count too), and `422` for a `?path=` over 512 bytes or not
+  UTF-8. A UTF-16 stream gets `422`. A `/gate` or snapshot body that does not arrive within the 60s
   read timeout gets `408`, which the agent retries (#121, #100).
 - Server database: migration 0007 (SQLite and Postgres) adds
   `evaluations.not_assessed` and fills it from every stored report on the
@@ -364,11 +374,11 @@ a CI gate.
   writes: an evaluation it creates shows no `notAssessed`, and one it
   refreshes keeps the `notAssessed` it had, until a newer server writes
   that evaluation again.
-- Chart: the server's memory limit is 640Mi (was 512Mi), and its
-  `GOMEMLIMIT` 576MiB: the worst case of one `/gate` request, one push,
+- Chart: the server's memory limit is 768Mi (was 512Mi), and its
+  `GOMEMLIMIT` 691MiB: the worst case of one `/gate` request, one push,
   one read, two reads of a 500-cluster fleet, the responses held for
   their clients and the re-evaluation pass, measured on SQLite, is
-  ~565 MiB.
+  ~595 MiB.
 
 ### Fixed
 
@@ -471,6 +481,12 @@ a CI gate.
   slot under a 20s write deadline. Unbounded, 20 clients that asked for a
   17.5 MB report and never read it had held 366 MiB, and 100 that asked
   for a 2000-cluster fleet's `/fleet` 251 MiB (#121).
+- A `/gate` answer is bounded before it is encoded: a 60 KB `?path=` had
+  made a 1.2 MB stream answer 817 MB, YAML aliases across 136 documents
+  532 MB, and names of `<` 72 MB of SARIF. `/fleet?targets=` with 8,718
+  minors had held a fleet slot for over two minutes. Object names of `<`
+  had made a push store reports six times its size (a 323 MiB ingest);
+  stored reports and responses no longer escape them (#121).
 - The CSV export guards every cell against formula injection, including
   after leading white space. Anonymous read access is decided on the
   resolved bind address. The `Bearer` scheme is case-insensitive. The
