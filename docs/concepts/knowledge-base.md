@@ -106,7 +106,8 @@ the horizon minor, until you upgrade to a release with a newer KB.
   finding at all.
 - CRD versions served by your own or third-party CRDs (deprecated CRD
   versions and stale `status.storedVersions`) are not in the KB: they are
-  judged from the CRDs themselves, live or in `--files`
+  judged from the CRDs themselves, deprecated and unserved versions live or
+  in `--files`, stale `status.storedVersions` live only
   ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
 - Add-ons outside the registry are not judged: their images are listed as
   `unrecognizedImages` in the inventory and the report, and never become
