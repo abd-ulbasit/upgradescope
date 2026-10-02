@@ -49,7 +49,7 @@ archives:
     # which only resolves when the asset filename is version-independent.
     # The version still lives in the tag, the release title, and the binary's
     # -X ...cli.version stamp. ci.yml's release-check job fails if these
-    # names drift from what action/action.yml downloads.
+    # names drift from what action/run.sh downloads.
     name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
     files:
       - LICENSE

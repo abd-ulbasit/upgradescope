@@ -75,7 +75,14 @@ ci=.github/workflows/ci.yml
 filter() { awk -v name="$1" '$0 ~ "^ *" name ":$" { on = 1; next } on && !/^ *(- |#)/ { on = 0 } on' "$ci"; }
 job() { awk -v name="$1" '$0 == "  " name ":" { on = 1; next } on && /^  [^ ]/ { on = 0 } on' "$ci"; }
 action_filter=$(filter action) release_filter=$(filter release)
-for f in action.yml 'action/**' hack/action_test.sh 'internal/cli/**' 'internal/sarif/**' 'internal/suppress/**' "$ci" Makefile; do
+# The binary's own inputs come from the package graph, not a hand copy: a
+# change in any package it links (or the data embedded in one) changes what
+# the action job checks.
+mod=$(go list -m)
+built_from=$(go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/upgradescope |
+  sed -n "s|^$mod/||p" | cut -d/ -f1 | sort -u | sed 's|$|/**|')
+set -f # the patterns are literal filter entries, not globs to expand
+for f in action.yml 'action/**' hack/action_test.sh "$ci" Makefile go.mod go.sum $built_from; do
   if grep -qxF "              - '$f'" <<<"$action_filter"; then
     ok "ci.yml's action filter runs the action job on $f"
   else
@@ -83,6 +90,7 @@ for f in action.yml 'action/**' hack/action_test.sh 'internal/cli/**' 'internal/
     fail "ci.yml's action filter runs the action job on $f" "$work/out"
   fi
 done
+set +f
 if job changes | grep -qE '^      action: \$\{\{ steps\.[a-z]+\.outputs\.action \}\}$' &&
   job action | grep -qF "needs.changes.outputs.action == 'true'"; then
   ok "the action job runs on the changes job's action output"

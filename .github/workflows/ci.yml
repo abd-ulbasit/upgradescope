@@ -110,12 +110,15 @@ jobs:
               - 'hack/action_test.sh'
               - '.github/workflows/ci.yml'
               - 'Makefile'
-              # what run.sh relies on: scan's flags, --fail-on, --config,
-              # --baseline and exit codes, the SARIF, JSON and Markdown
-              # reports, and the ignore rules and baselines it applies
-              - 'internal/cli/**'
-              - 'internal/sarif/**'
-              - 'internal/suppress/**'
+              # run.sh drives the whole binary, so anything it is built from:
+              # every package it links, the KB and registry data embedded in
+              # it, and the module graph. hack/action_test.sh checks this
+              # list against `go list -deps ./cmd/upgradescope`.
+              - 'cmd/**'
+              - 'internal/**'
+              - 'registry/**'
+              - 'go.mod'
+              - 'go.sum'
 
   lint:
     if: github.event_name != 'schedule'
