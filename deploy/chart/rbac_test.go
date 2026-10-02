@@ -285,6 +285,12 @@ func collectorCalls(t *testing.T) []rbacv1.PolicyRule {
 		// (networking.k8s.io/v1beta1 IngressClass is removed), pinned here
 		// so a KB change cannot drop it unnoticed.
 		res("networking.k8s.io", "ingressclasses", "list"),
+		// crds: CRD versions and status.storedVersions. Granted by the KB
+		// rules (apiextensions.k8s.io/v1beta1 is removed), pinned here so
+		// a KB change cannot drop it unnoticed. Custom resources are not
+		// granted (no wildcards): the agent reports crds partial for CRDs
+		// with a deprecated or unserved version.
+		res("apiextensions.k8s.io", "customresourcedefinitions", "list"),
 		res("upgradescope.dev", "clusterreadinesses", "get", "create"),
 		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets
 		named(res("upgradescope.dev", "clusterreadinesses/status", "get", "update"), "cluster"),

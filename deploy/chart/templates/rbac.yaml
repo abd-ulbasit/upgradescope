@@ -11,7 +11,10 @@ rules:
   #
   # versions: kube-system UID (cluster ID), namespace labels (teams),
   # kubelet versions, control-plane pods; add-ons: container images and
-  # labels (and IngressClass controllers, which the KB rules below grant).
+  # labels (and IngressClass controllers, which the KB rules below grant);
+  # crds: CustomResourceDefinitions, also granted by the KB rules. No custom
+  # resource is granted, so the agent cannot check which ones use a
+  # deprecated or unserved CRD version, and reports crds as partial then.
   - apiGroups: [""]
     resources: ["namespaces", "nodes", "pods"]
     verbs: ["get", "list"]

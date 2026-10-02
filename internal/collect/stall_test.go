@@ -132,13 +132,14 @@ func fakeAPIServer() http.Handler {
 
 // The live steps run in this order: helm before addons (which consumes
 // the releases), api-usage before deprecated-calls (which consumes its
-// own deprecated LISTs), and the /metrics scrape last.
+// own deprecated LISTs), crds (which lists no deprecated version), and
+// the /metrics scrape last.
 func TestStepOrder(t *testing.T) {
 	var got []inventory.Capability
 	for _, s := range steps(Clients{}, kb.KB{}, Options{}) {
 		got = append(got, s.cap)
 	}
-	want := []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapDeprecatedCalls}
+	want := []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapCRDs, inventory.CapDeprecatedCalls}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("step order = %v, want %v", got, want)
 	}
@@ -148,7 +149,7 @@ func TestStepOrder(t *testing.T) {
 func TestCollectFakeAPIServerAssessesEverything(t *testing.T) {
 	c := stallClients(t, stallingAPIServer(t, func(*http.Request) bool { return false }, fakeAPIServer()))
 	inv := Collect(context.Background(), c, loadKB(t), Options{})
-	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapDeprecatedCalls} {
+	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapCRDs, inventory.CapDeprecatedCalls} {
 		if st := inv.Capabilities[cp]; !st.Available || st.Partial {
 			t.Errorf("%s = %+v, want available", cp, st)
 		}

@@ -110,7 +110,7 @@ func TestNewClients(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClients: %v", err)
 	}
-	if c.Kube == nil || c.Metadata == nil || c.Discovery == nil || c.RESTClient == nil {
+	if c.Kube == nil || c.Metadata == nil || c.Discovery == nil || c.RESTClient == nil || c.APIExtensions == nil {
 		t.Errorf("NewClients left a nil client: %+v", c)
 	}
 }

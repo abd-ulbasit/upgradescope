@@ -1053,7 +1053,7 @@ func TestForbiddenPodSecurityPolicyListIsARequiredGapAtRemoval(t *testing.T) {
 	k := loadKB(t)
 
 	inv := inventory.Inventory{Source: inventory.SourceCluster, ServerVersion: "v1.24.17",
-		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{inventory.CapVersions: {Available: true}}}
+		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{inventory.CapVersions: {Available: true}, inventory.CapCRDs: {Available: true}}}
 	runSteps(context.Background(), &inv, []step{{cap: inventory.CapAPIUsage, run: func(ctx context.Context, inv *inventory.Inventory) error {
 		_, err := collectAPIUsage(ctx, disc, meta, k.APILifecycle, inv)
 		return err

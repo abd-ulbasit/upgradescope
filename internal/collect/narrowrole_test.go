@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -63,7 +64,7 @@ func TestCollectNarrowRoleIsNeverReady(t *testing.T) {
 			meta.PrependReactor("list", "secrets", forbidden("secrets"))
 			meta.PrependReactor("list", "ingresses", forbidden("ingresses"))
 		}
-		return Clients{Kube: cs, Metadata: meta, Discovery: disc, RESTClient: metricsRESTClient(t, "")}
+		return Clients{Kube: cs, Metadata: meta, Discovery: disc, RESTClient: metricsRESTClient(t, ""), APIExtensions: apiextensionsfake.NewClientset()}
 	}
 	k := loadKB(t)
 	target := inventory.Version{Major: 1, Minor: 34}
