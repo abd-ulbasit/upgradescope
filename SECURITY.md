@@ -92,7 +92,9 @@ In scope:
   request at a time per endpoint doing anything whose memory follows the
   input's structure (measuring what YAML aliases expand to, decoding,
   evaluating); the per-cluster reads, which load a stored snapshot and
-  may evaluate it, share one more such slot. Any request that makes the
+  may evaluate it, share one more such slot. The reads of the whole fleet
+  (`/clusters`, `/fleet`, `/metrics`) take no slot and load no snapshot
+  inventory and no stored report. Any request that makes the
   server use memory beyond them is in scope, with or without credentials.
   What the budgets leave is known: a client that really sends three times
   `--max-gate-bytes` and then stalls makes other `/gate` requests `503`
@@ -102,7 +104,9 @@ In scope:
   client has read it (a report can be about as large as the snapshot it
   came from), for at most the 120s write timeout; and a snapshot a v0.1
   server stored before these budgets existed is decoded without a node
-  count when `/gate?cluster=`, re-evaluation or a what-if read reads it.
+  count when `/gate?cluster=`, re-evaluation or a what-if read reads it,
+  and, having no stored server version, is loaded whole by `/clusters`,
+  `/fleet` and `/metrics` to read it.
 - **Supply chain.** This covers release archives and `checksums.txt`, the
   container image, the GitHub Action in `action/` (how it downloads and runs
   the binary), the CI workflows (for example, pull request workflows that can

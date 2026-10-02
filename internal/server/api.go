@@ -503,8 +503,9 @@ func (s *Server) authIngest(w http.ResponseWriter, r *http.Request) (boundCluste
 // jsonCost units. Decoding costs memory per JSON value, not per byte:
 // measured heap per unit is at most ~66 bytes (a map of unique keys; a
 // list of `{}` structs is ~50 per unit), so the worst push within it
-// decodes, evaluates and stores in ~80 MB of live heap at the 20 MiB
-// size cap (TestIngestDecodeHeapIsBounded), where 20 MiB of `{}`
+// decodes, evaluates and stores in ~115 MiB of live heap on SQLite at the
+// 20 MiB size cap (TestIngestDecodeHeapIsBounded,
+// TestStoredSnapshotHeapIsBounded), where 20 MiB of `{}`
 // ObjectRefs used to take ~2.6 GB. A real agent's inventory is far below
 // it: API usage covers only the APIs the knowledge base flags, with at
 // most 100 object refs each (~1,200 units), so even 5,000 nodes (~55k)
@@ -618,7 +619,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	// One push is decoded, evaluated and stored at a time: each costs up
-	// to ~80 MB of heap at the size and node caps. Waiting pushes hold
+	// to ~115 MiB of heap at the size and node caps. Waiting pushes hold
 	// only their bodies, which the budget bounds.
 	releaseSlot, ok := acquireSlot(w, nil, s.ingestSlots, s.ingestQueueTimeout, "too many concurrent snapshot pushes; retry shortly")
 	if !ok {

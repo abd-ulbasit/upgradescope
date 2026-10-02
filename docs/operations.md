@@ -25,7 +25,7 @@ request is measured before it is decoded:
 | body cap (wire, and decompressed) | `--max-gate-bytes`, 10 MiB | `--max-snapshot-bytes`, 20 MiB |
 | per document | 4 MiB with its aliases expanded, 20,000 documents | — |
 | node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4, an alias what it names | 1M units: a JSON value 1, an object 8 |
-| worst live heap within the budget (measured) | ~155 MB, with `?cluster=` too | ~80 MB, the body's copy included |
+| worst live heap within the budget (measured on SQLite) | ~155 MiB, with `?cluster=` too | ~115 MiB, the body's copy and the reports it stores included |
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
 | measured for aliases, decoded and evaluated at once | 1, others wait up to 30s holding only their bodies | 1, others wait up to 10s |
 
@@ -67,24 +67,37 @@ own, so they never wait on pushes or `/gate`; others wait up to 30s, then
 get `503` with `Retry-After`. Only a what-if decodes the whole inventory;
 the other reads decode its server version and capabilities and skip the
 rest. A response is written to memory in the slot and sent after it, so
-a client that is slow to read holds its response, not the slot. With 10
-concurrent requests to each of these endpoints, against the snapshot
-dearest to decode and against one whose stored report is as large as its
-inventory, the heap grew at most 50 MiB. `/clusters`, `/fleet` and
-`/metrics` take no slot: they read each cluster's server version from
-one query over the snapshot heads and load no inventory.
+a client that is slow to read holds its response, not the slot. One read
+costs what it loads: on SQLite, whose driver holds a copy of every
+snapshot and report it reads beside the one it returns, a report or its
+findings from a stored evaluation of a 17 MB snapshot (at the node
+budget, every API-usage entry a finding, so the report is as large)
+grew the heap ~90 MiB, a what-if of it ~88 MiB, and 10 concurrent
+requests to any of these endpoints at most as much, since they run one
+at a time (`TestReadHeapIsBounded`, on SQLite at the snapshot node
+budget, fails above 100 MiB).
 
-Worst case for the chart's 512Mi server: one `/gate` request in the
-evaluation slot (~155 MB; with `?cluster=` as well, against a snapshot at
-its node budget, since the cluster's inventory is decoded once the
-manifests' node trees are garbage) plus one ingest (~80 MB, its copy of
-the body included) plus one read in the read slot (~50 MiB: a what-if at
-the snapshot node budget, or a 20 MiB snapshot loaded from SQLite) plus
-the background re-evaluation pass, which takes clusters one at a time
-(~60 MiB for a snapshot at its node budget and three targets), plus both
-body budgets (70 MiB; an ingest gives its share back once it holds that
-copy, so another push can wait in it): about 425 MB, inside the 460 MiB
-(482 MB) `GOMEMLIMIT` the chart derives from the limit.
+`/clusters`, `/fleet` and `/metrics` take no slot, so they must cost
+about their response whatever was stored: they read each cluster's
+server version from one query over the snapshot heads, and each
+evaluation's score, verdict, counts and what it could not assess from
+its own columns, never the stored report. Before that, one 17 MB push
+made 30 concurrent requests to any of them grow the heap by 285-584 MiB;
+now by at most 2 MiB (`TestFleetReadsLoadNoReport`).
+
+Worst case for the chart's 640Mi server, each part measured on SQLite
+against the dearest snapshot at its node budget
+(`TestStoredSnapshotHeapIsBounded`, `TestReadHeapIsBounded`): one
+`/gate` request in the evaluation slot (~155 MiB, with `?cluster=` too,
+since the cluster's inventory is decoded once the manifests' node trees
+are garbage) plus one ingest (~115 MiB for the 17 MB push whose three
+stored reports are each as large, its copy of the body included) plus
+one read in the read slot (~90 MiB) plus the background re-evaluation
+pass, which takes clusters one at a time (~85 MiB for that snapshot and
+three targets) plus both body budgets (70 MiB; an ingest gives its share
+back once it holds that copy, so another push can wait in it): about
+515 MiB, inside the 576 MiB `GOMEMLIMIT` the chart derives from the
+limit. Below about 580Mi, that sum no longer fits under `GOMEMLIMIT`.
 
 Two things are outside these bounds. A response is held until its client
 has read it, for at most the 120s write timeout. A realistic report is a
@@ -98,7 +111,9 @@ no stored evaluation, or the fleet teams rollup), until that cluster's
 agent pushes again. Those decodes take their slots, but one 20 MiB
 snapshot of `{}` object refs decodes to ~2.6 GB. Such a row also has no
 stored server version, so `/clusters`, `/fleet` and `/metrics` load it,
-up to 20 MiB, outside the read slot, to read its version. The Go runtime
+up to 20 MiB, outside the read slot, to read its version. (Evaluations
+stored before the `not_assessed` column are backfilled from their
+reports when the database is migrated, so no report is read for them.) The Go runtime
 does not read the container's limit, and without a memory limit the
 collector lets garbage grow to as much as the live heap again before it
 runs, so a process whose live heap fits is OOM-killed anyway. Outside the

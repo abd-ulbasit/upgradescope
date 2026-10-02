@@ -478,8 +478,9 @@ if it is deleted, and writes status with conflict retry.
   requests ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **Store** (`store.Store`): SQLite by default (`--db`, WAL mode,
   pure-Go driver, so no cgo) or Postgres (`--db-url`). Tables are
-  `clusters`, `snapshots`, `evaluations` (report JSON plus score, per
-  target) and `tokens`. Both backends must pass one shared conformance suite
+  `clusters`, `snapshots`, `evaluations` (report JSON plus score, counts
+  and the report's `notAssessed`, per target, so summaries never read the
+  report) and `tokens`. Both backends must pass one shared conformance suite
   (`store/storetest`).
 - **Read API** (`GET /api/v1/...`): clusters, the latest report for a
   target (`?target=`; the stored evaluation for that target when one exists,
@@ -489,7 +490,10 @@ if it is deleted, and writes status with conflict retry.
   matrices, the registry, and CSV or HTML exports. Exports are built from
   the *stored* evaluation, so an audit artifact reflects what was recorded.
   Reads that load a cluster's stored snapshot run one at a time, and only
-  a what-if decodes the whole inventory
+  a what-if decodes the whole inventory. The cluster list, the fleet
+  matrix and `/metrics` read snapshot heads and each evaluation's summary
+  columns (score, verdict, counts, `notAssessed`), never an inventory or a
+  stored report
   ([Memory and request limits](operations.md#memory-and-request-limits)).
   The read token is optional. Without one, the read API is open.
 - **CI gate** (`POST /api/v1/gate`): the request body is a YAML manifest

@@ -343,6 +343,20 @@ a CI gate.
   risen since the baseline.
 - Deprecations that take effect after the target are titled as future
   deprecations, with "(projected)" beyond the knowledge base's horizon.
+- Server: `GET /api/v1/clusters/{id}` and its `report`, `findings`,
+  `teams`, `history` and `export`, and `GET /api/v1/fleet/teams`, run one
+  at a time and can answer `503` with `Retry-After` after waiting 30s for
+  their turn; retry them as the agent retries pushes. `/api/v1/clusters`,
+  `/api/v1/fleet` and `/metrics` read no snapshot inventory and no stored
+  report (#121).
+- Server database: migration 0007 (SQLite and Postgres) adds
+  `evaluations.not_assessed` and fills it from every stored report on the
+  first start, so that start takes longer on a large database. A server
+  rolled back after it still runs; evaluations it writes show no
+  `notAssessed` in summaries until a newer server's pass refreshes them.
+- Chart: the server's memory limit is 640Mi (was 512Mi), and its
+  `GOMEMLIMIT` 576MiB: the worst case of one `/gate` request, one push,
+  one read and the re-evaluation pass, measured on SQLite, is ~515 MiB.
 
 ### Fixed
 
@@ -431,6 +445,13 @@ a CI gate.
   evaluation slot. UTF-16 streams are refused. A body over a budget gets
   413, and one too slow for the read timeout gets 408, before any 503
   (#121, #100).
+- Reads of stored data are bounded too. Reads that load a cluster's
+  snapshot run in a read slot of their own, and only a what-if decodes
+  the whole inventory: one 370 KB push, from any ingest token, had made
+  10 concurrent reads of it grow the heap ~400 MiB. The cluster list, the
+  fleet matrix and `/metrics`, which take no slot, read evaluation
+  summaries instead of whole reports: after one 17 MB push, 30
+  concurrent requests to them had grown the heap by up to 584 MiB (#121).
 - The CSV export guards every cell against formula injection, including
   after leading white space. Anonymous read access is decided on the
   resolved bind address. The `Bearer` scheme is case-insensitive. The

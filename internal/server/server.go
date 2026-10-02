@@ -76,7 +76,7 @@ type Config struct {
 // memory, at a cost bounded by the node budget (maxManifestUnits): at most
 // ~160 MB of live heap for the worst stream that passes it, measured
 // (TestGateDecodeHeapIsBounded). Two at once would not fit the chart's
-// 512Mi limit, so evaluations run one at a time (a normal one takes
+// 640Mi limit, so evaluations run one at a time (a normal one takes
 // milliseconds), and the chart sets GOMEMLIMIT so the garbage one leaves
 // is collected before the next one's decode piles on top. A request asks
 // for the slot only once its whole body is in, so a slow uploader cannot
@@ -110,8 +110,9 @@ const (
 )
 
 // Snapshot ingest concurrency and memory, on the same model as /gate.
-// Decoding, evaluating and storing one push costs up to ~80 MB of heap
-// at the size and node caps (maxSnapshotUnits), so pushes are ingested one
+// Decoding, evaluating and storing one push costs up to ~115 MiB of heap
+// on SQLite at the size and node caps (maxSnapshotUnits; a 17 MB push whose
+// three stored reports are each as large), so pushes are ingested one
 // at a time (a normal one takes milliseconds; an agent's whole fleet
 // pushing on one tick queues). A push asks for the slot once its body is
 // in and waits up to ingestQueueTimeout, under the agent's 30s request
@@ -132,14 +133,18 @@ const (
 // twice; one that computes a report on request (a what-if: a target with
 // no stored evaluation, here or in the fleet teams rollup) also decodes
 // and evaluates the whole inventory, which a snapshot at its node budget
-// takes ~45 MB of heap for. Unbounded, 10 such reads at once grew the heap
+// takes ~45 MiB of heap for (~88 MiB for a 17 MB one on SQLite, the
+// response included). Unbounded, 10 such reads at once grew the heap
 // ~400 MiB, so these reads run one at a time, on the /gate model (a
 // normal one takes milliseconds): a read waits up to readQueueTimeout for
 // the slot, then gets 503 + Retry-After. The handler writes its response
 // to memory in the slot, and it is sent after the slot is released, so a
 // slow client holds its response's bytes, never the slot. Reads of the
 // whole fleet (/clusters, /fleet, /metrics) take no slot: they read each
-// cluster's snapshot head from one store query and load no inventory.
+// cluster's snapshot head from one store query and each evaluation's
+// summary columns, so they load no inventory and no report. One read in
+// the slot costs up to ~90 MiB on SQLite at the snapshot node budget
+// (TestReadHeapIsBounded).
 const (
 	maxConcurrentReads = 1
 	readQueueTimeout   = 30 * time.Second
