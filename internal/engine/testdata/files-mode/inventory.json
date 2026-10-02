@@ -7,10 +7,12 @@
     "api-usage": {"available": true},
     "deprecated-calls": {"available": false, "reason": "files mode"},
     "helm": {"available": false, "reason": "files mode"},
-    "addons": {"available": false, "reason": "files mode"},
+    "addons": {"available": true},
     "versions": {"available": false, "reason": "files mode"}
   },
   "apiUsage": [
+    {"group": "apps", "version": "v1", "kind": "Deployment", "count": 1, "namespaces": {"ingress-nginx": 1},
+     "objects": [{"namespace": "ingress-nginx", "name": "ingress-nginx-controller", "file": "rendered/all.yaml", "line": 30, "renderedFrom": "ingress-nginx/templates/controller-deployment.yaml"}]},
     {"group": "batch", "version": "v1beta1", "kind": "CronJob", "count": 1, "namespaces": {"": 1},
      "objects": [{"name": "nightly", "file": "rendered/all.yaml", "line": 14, "renderedFrom": "shop/templates/cronjob.yaml"}]},
     {"group": "extensions", "version": "v1beta1", "kind": "Ingress", "count": 3, "namespaces": {"": 1, "shop": 2},
@@ -19,5 +21,9 @@
        {"name": "admin", "file": "legacy/ingress.yaml", "line": 1}
      ],
      "objectsOmitted": 1}
-  ]
+  ],
+  "addOns": [
+    {"id": "ingress-nginx", "version": "1.8.1", "namespaces": ["ingress-nginx"], "source": "image"}
+  ],
+  "unrecognizedImages": ["docker.io/library/busybox"]
 }

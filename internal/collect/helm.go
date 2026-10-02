@@ -322,7 +322,7 @@ func manifestAPIs(manifest string, flagged map[gvk]bool) []inventory.APIUsage {
 	if len(flagged) == 0 || manifest == "" {
 		return nil
 	}
-	objs, _, _ := parseManifestStream(strings.NewReader(manifest)) // a strings.Reader never fails
+	objs, _, _, _ := parseManifestStream(strings.NewReader(manifest)) // a strings.Reader never fails
 	objs = slices.DeleteFunc(objs, func(o manifestObject) bool { return !flagged[gvk{o.group, o.version, o.kind}] })
 	counts := map[gvk]*inventory.APIUsage{}
 	accumulate(counts, objs)

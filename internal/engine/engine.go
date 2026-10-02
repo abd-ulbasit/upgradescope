@@ -499,20 +499,43 @@ func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addO
 			where = []string{"cluster-scoped"}
 		}
 		for _, ns := range where {
-			parts = append(parts, fmt.Sprintf("%s (%s via %s)", ns, cmp.Or(in.version, "version unknown"), in.via))
+			parts = append(parts, fmt.Sprintf("%s (%s via %s)", nsLabel(ns), cmp.Or(in.version, "version unknown"), in.via))
 		}
 	}
 	s.namespaces, s.teams = sortedSet(s.namespaces), sortedSet(s.teams)
+	labels := make([]string, len(s.namespaces))
+	for i, ns := range s.namespaces {
+		labels[i] = nsLabel(ns)
+	}
 	if same && len(s.namespaces) == 0 {
 		s.located = fmt.Sprintf("Detected %s version %s via %s (cluster-scoped).", name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via)
 	} else if same {
 		s.located = fmt.Sprintf("Detected %s version %s via %s in namespace(s): %s.",
-			name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via, located(s.namespaces))
+			name, cmp.Or(ins[0].version, "(unknown)"), ins[0].via, located(labels))
 	} else {
 		sort.Strings(parts)
 		s.located = fmt.Sprintf("Detected %s in namespace(s): %s.", name, located(parts))
 	}
+	s.namespaces = namedNamespaces(s.namespaces)
 	return s
+}
+
+// nsLabel names a namespace in an evidence sentence; "" is a manifest
+// object's unset metadata.namespace (files mode).
+func nsLabel(ns string) string {
+	return cmp.Or(ns, "namespace unset")
+}
+
+// namedNamespaces drops the unset namespace "" from a finding's sorted
+// namespaces: it names no namespace (and no team) to filter by.
+func namedNamespaces(ns []string) []string {
+	if len(ns) > 0 && ns[0] == "" {
+		ns = ns[1:]
+	}
+	if len(ns) == 0 {
+		return nil
+	}
+	return ns
 }
 
 // addOnLocatedLimit caps the installs an add-on finding's evidence
@@ -674,7 +697,7 @@ func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version)
 			continue
 		}
 		for _, w := range in.where {
-			named = append(named, fmt.Sprintf("%s (%s)", w, in.version))
+			named = append(named, fmt.Sprintf("%s (%s)", nsLabel(w), in.version))
 		}
 		versions[in.version] = true
 		if !s.node {
@@ -689,7 +712,7 @@ func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version)
 	if oldest == "" {
 		return Finding{}, false
 	}
-	f.Namespaces, f.Teams = sortedSet(f.Namespaces), sortedSet(f.Teams)
+	f.Namespaces, f.Teams = namedNamespaces(sortedSet(f.Namespaces)), sortedSet(f.Teams)
 	if len(versions) > 1 {
 		sort.Strings(named)
 		f.Detail += " Incompatible installs: " + located(named) + "."
