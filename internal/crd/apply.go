@@ -16,6 +16,7 @@ import (
 	apiextensionsv1typed "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -134,28 +135,31 @@ func createCRD(ctx context.Context, crds apiextensionsv1typed.CustomResourceDefi
 	return waitEstablished(ctx, crds, want.Name)
 }
 
-// ReadSpec returns the ClusterReadiness spec. found=false (with nil error)
-// means the object does not exist; callers typically EnsureObject then.
-func ReadSpec(ctx context.Context, dyn dynamic.Interface, name string) (Spec, bool, error) {
+// ReadSpec returns the ClusterReadiness spec and the metadata.generation it
+// was read at, for WriteStatus to stamp as observed. found=false (with nil
+// error) means the object does not exist; callers typically EnsureObject
+// then.
+func ReadSpec(ctx context.Context, dyn dynamic.Interface, name string) (spec Spec, generation int64, found bool, err error) {
 	obj, err := dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return Spec{}, false, nil
+		return Spec{}, 0, false, nil
 	}
 	if err != nil {
-		return Spec{}, false, fmt.Errorf("get clusterreadiness %q: %w", name, err)
+		return Spec{}, 0, false, fmt.Errorf("get clusterreadiness %q: %w", name, err)
 	}
+	gen := obj.GetGeneration()
 	raw, found, err := unstructured.NestedMap(obj.Object, "spec")
 	if err != nil {
-		return Spec{}, true, fmt.Errorf("read spec of clusterreadiness %q: %w", name, err)
+		return Spec{}, gen, true, fmt.Errorf("read spec of clusterreadiness %q: %w", name, err)
 	}
 	if !found {
-		return Spec{}, true, nil
+		return Spec{}, gen, true, nil
 	}
 	var s Spec
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &s); err != nil {
-		return Spec{}, true, fmt.Errorf("decode spec of clusterreadiness %q: %w", name, err)
+		return Spec{}, gen, true, fmt.Errorf("decode spec of clusterreadiness %q: %w", name, err)
 	}
-	return s, true, nil
+	return s, gen, true, nil
 }
 
 // EnsureObject creates the ClusterReadiness CR if absent, with spec.targets
@@ -185,18 +189,20 @@ func EnsureObject(ctx context.Context, dyn dynamic.Interface, name string, targe
 }
 
 // SetTargets replaces spec.targets of an existing ClusterReadiness with a
-// merge patch, leaving the rest of the object alone.
-func SetTargets(ctx context.Context, dyn dynamic.Interface, name string, targets []string) error {
+// merge patch, leaving the rest of the object alone. It returns the patched
+// object's generation.
+func SetTargets(ctx context.Context, dyn dynamic.Interface, name string, targets []string) (int64, error) {
 	body, err := json.Marshal(map[string]interface{}{
 		"spec": map[string]interface{}{"targets": targets},
 	})
 	if err != nil {
-		return fmt.Errorf("encode targets patch: %w", err)
+		return 0, fmt.Errorf("encode targets patch: %w", err)
 	}
-	if _, err := dyn.Resource(GVR()).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("set clusterreadiness %q spec.targets: %w", name, err)
+	obj, err := dyn.Resource(GVR()).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("set clusterreadiness %q spec.targets: %w", name, err)
 	}
-	return nil
+	return obj.GetGeneration(), nil
 }
 
 // stringsToInterfaces converts for unstructured content, which only holds
@@ -210,16 +216,28 @@ func stringsToInterfaces(ss []string) []interface{} {
 }
 
 // WriteStatus replaces the status subresource, retrying on conflict with a
-// fresh read each attempt.
+// fresh read each attempt. st.ObservedGeneration should be the generation
+// whose spec was evaluated (from ReadSpec or SetTargets), so a spec edited
+// since is not claimed as observed; zero stamps the generation of the
+// object being written. It sets the Ready condition from st, keeping the
+// stored condition's lastTransitionTime while its status is unchanged.
 func WriteStatus(ctx context.Context, dyn dynamic.Interface, name string, st Status) error {
-	stMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&st)
-	if err != nil {
-		return fmt.Errorf("convert status: %w", err)
-	}
-	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		obj, gerr := dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
 		if gerr != nil {
 			return gerr
+		}
+		out := st
+		if out.ObservedGeneration == 0 {
+			out.ObservedGeneration = obj.GetGeneration()
+		}
+		out.Conditions = storedConditions(obj)
+		ready := ReadyCondition(st)
+		ready.ObservedGeneration = out.ObservedGeneration
+		meta.SetStatusCondition(&out.Conditions, ready)
+		stMap, cerr := runtime.DefaultUnstructuredConverter.ToUnstructured(&out)
+		if cerr != nil {
+			return fmt.Errorf("convert status: %w", cerr)
 		}
 		obj.Object["status"] = stMap
 		_, uerr := dyn.Resource(GVR()).UpdateStatus(ctx, obj, metav1.UpdateOptions{})
@@ -229,4 +247,19 @@ func WriteStatus(ctx context.Context, dyn dynamic.Interface, name string, st Sta
 		return fmt.Errorf("update clusterreadiness %q status: %w", name, err)
 	}
 	return nil
+}
+
+// storedConditions returns the object's current status.conditions. An
+// absent or undecodable status yields none: the write then starts the
+// list afresh.
+func storedConditions(obj *unstructured.Unstructured) []metav1.Condition {
+	raw, found, err := unstructured.NestedMap(obj.Object, "status")
+	if err != nil || !found {
+		return nil
+	}
+	var st Status
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &st); err != nil {
+		return nil
+	}
+	return st.Conditions
 }

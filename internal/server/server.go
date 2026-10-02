@@ -108,6 +108,8 @@ type Server struct {
 	stopBackground     context.CancelFunc
 	backgroundDone     sync.WaitGroup
 
+	metrics *serverMetrics
+
 	ready chan struct{} // closed once the listener is bound
 	mu    sync.Mutex
 	addr  string
@@ -139,6 +141,7 @@ func New(cfg Config) (*Server, error) {
 		}
 		s.extraTargets = append(s.extraTargets, v)
 	}
+	s.metrics = newServerMetrics(s)
 	s.routes()
 	s.httpSrv = &http.Server{
 		Addr:              cfg.Listen,
@@ -170,6 +173,10 @@ func New(cfg Config) (*Server, error) {
 // emits 405 + Allow for wrong methods on registered paths).
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
+	// Per-cluster scores are what the read token protects, so /metrics
+	// takes it too (the chart's ServiceMonitor sends it).
+	s.mux.HandleFunc("GET /metrics", s.readAuth(s.metrics.handler().ServeHTTP))
 	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
 	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.handleListClusters))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.handleGetCluster))
@@ -184,22 +191,94 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/registry", s.readAuth(s.handleRegistry))
 }
 
-// handler is the served root: /healthz and /api/* go to the mux, everything
-// else is the embedded dashboard. Routing by prefix — not a "GET /"
-// catch-all route, and not mux.Handler() no-match detection — keeps the
-// mux's wrong-method semantics intact: a DELETE on a GET-only API path must
-// stay 405 + Allow, and both alternatives turn it into the SPA (mux.Handler
-// returns an empty pattern on method mismatch). Static assets are
-// unauthenticated — the SPA itself sends the read token with every API call.
+// reservedPaths are the operational endpoints. They, any path below them
+// and everything under /api/ belong to the mux and never reach the
+// dashboard: a probe or scrape aimed at one the server lacks (/livez) gets
+// a JSON 404, not index.html with 200.
+var reservedPaths = []string{"/healthz", "/readyz", "/livez", "/metrics"}
+
+// isServerPath reports whether p is routed to the mux.
+func isServerPath(p string) bool {
+	if strings.HasPrefix(p, "/api/") {
+		return true
+	}
+	for _, rp := range reservedPaths {
+		if p == rp || strings.HasPrefix(p, rp+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// handler is the served root: reserved paths and /api/* go to the mux,
+// everything else is the embedded dashboard. Routing by prefix — not a
+// "GET /" catch-all route — keeps the mux's wrong-method semantics intact:
+// a DELETE on a GET-only API path must stay 405 + Allow, and a catch-all
+// would match it instead. Static assets are unauthenticated — the SPA
+// itself sends the read token with every API call.
 func (s *Server) handler() http.Handler {
 	spa := spaHandler(distFS())
-	return securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/api/") {
-			s.mux.ServeHTTP(w, r)
+	return securityHeaders(s.metrics.instrument(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isServerPath(r.URL.Path) {
+			s.serveMux(w, r)
 			return
 		}
 		spa.ServeHTTP(w, r)
-	}))
+	})))
+}
+
+// serveMux routes to the mux, answering an unregistered path with the
+// API's JSON 404 instead of ServeMux's plain-text one. mux.Handler returns
+// an empty pattern for both a missing route and a wrong method, so only
+// the 404 is rewritten; a 405 passes through with its Allow header.
+func (s *Server) serveMux(w http.ResponseWriter, r *http.Request) {
+	if _, pattern := s.mux.Handler(r); pattern == "" {
+		w = &jsonNotFound{ResponseWriter: w}
+	}
+	s.mux.ServeHTTP(w, r)
+}
+
+// jsonNotFound replaces a 404 written by ServeMux's NotFound handler with
+// errJSON's body and drops the plain-text one.
+type jsonNotFound struct {
+	http.ResponseWriter
+	replaced bool
+}
+
+func (w *jsonNotFound) WriteHeader(code int) {
+	if code == http.StatusNotFound {
+		w.replaced = true
+		errJSON(w.ResponseWriter, http.StatusNotFound, "unknown path")
+		return
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *jsonNotFound) Write(b []byte) (int, error) {
+	if w.replaced {
+		return len(b), nil
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// handleReadyz: GET /readyz — 200 when the store answers a ping within 2s,
+// else 503. The chart's readinessProbe uses it, so a server whose database
+// is unreachable leaves the Service; /healthz (liveness) never touches the
+// store, so the outage does not restart it.
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.cfg.Store.(interface{ Ping(context.Context) error })
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := p.Ping(ctx); err != nil {
+		log.Printf("server: readyz: store ping: %v", err)
+		errJSON(w, http.StatusServiceUnavailable, "store unreachable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // contentSecurityPolicy fits the built dashboard: one module script and one

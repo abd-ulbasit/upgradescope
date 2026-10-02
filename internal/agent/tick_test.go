@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +26,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 	"k8s.io/kube-openapi/pkg/validation/strfmt"
 	"k8s.io/kube-openapi/pkg/validation/validate"
@@ -251,10 +254,95 @@ func TestTickHonorsSpecTargets(t *testing.T) {
 	}
 }
 
+// A CR listing the same target twice gets one evaluation, one status row,
+// and a /metrics endpoint that still serves.
+func TestTickDuplicateSpecTargetsEvaluatedOnce(t *testing.T) {
+	cr := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": crd.Group + "/" + crd.Version,
+		"kind":       crd.Kind,
+		"metadata":   map[string]interface{}{"name": crd.DefaultName},
+		"spec":       map[string]interface{}{"targets": []interface{}{"1.36", "1.36"}},
+	}}
+	dyn := fakeDyn(cr)
+	r := testRunner(t, dyn, "") // CRD-only mode
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.last.reports) != 1 {
+		t.Errorf("reports = %d, want 1", len(r.last.reports))
+	}
+	if st := readCRStatus(t, dyn, crd.DefaultName); len(st.Targets) != 1 || st.Targets[0].Target != "1.36" {
+		t.Errorf("status targets = %+v, want one row for 1.36", st.Targets)
+	}
+
+	o := newObserver(slog.New(slog.NewTextHandler(io.Discard, nil)), mustKB(t), 10*time.Minute)
+	o.record(r.last)
+	if code, body := serve(t, o.handler(), "/metrics"); code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200\n%s", code, body)
+	}
+}
+
+// With no spec targets and no usable server version nothing is evaluated.
+// The CR still says why (Ready=Unknown, notAssessed), but the tick fails:
+// with no report there is no verdict series for the unknown-verdict alert,
+// so the failed-tick metrics and /readyz are what surface it.
+func TestTickWithoutTargetsFails(t *testing.T) {
+	dyn := fakeDyn()
+	cfg := Config{}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	r := newRunner(fakeClients(t, "garbage"), dyn, mustKB(t), cfg)
+	if err := r.tick(context.Background()); err == nil {
+		t.Fatal("tick with no resolvable target: want an error")
+	}
+	if r.last.err == nil || len(r.last.reports) != 0 {
+		t.Errorf("tick report = %+v, want a tick error and no reports", r.last)
+	}
+	st := readCRStatus(t, dyn, crd.DefaultName)
+	if len(st.Targets) != 0 || !slices.ContainsFunc(st.NotAssessed, func(s string) bool { return strings.Contains(s, "garbage") }) {
+		t.Errorf("status = %+v, want no targets and a notAssessed entry naming the server version", st)
+	}
+}
+
+// A spec edit that lands after the tick read the spec must not be claimed
+// as observed: the status says the generation that was evaluated, so Argo
+// CD keeps waiting for the next tick.
+func TestTickStampsTheGenerationItEvaluated(t *testing.T) {
+	cr := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": crd.Group + "/" + crd.Version,
+		"kind":       crd.Kind,
+		"metadata":   map[string]interface{}{"name": crd.DefaultName, "generation": int64(4)},
+		"spec":       map[string]interface{}{"targets": []interface{}{"1.36"}},
+	}}
+	dyn := fakeDyn(cr).(*dynamicfake.FakeDynamicClient)
+	gets := 0
+	dyn.PrependReactor("get", crd.Plural, func(k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 2 { // the status write's read: someone edited the spec since
+			edited := cr.DeepCopy()
+			edited.SetGeneration(5)
+			_ = unstructured.SetNestedStringSlice(edited.Object, []string{"1.37"}, "spec", "targets")
+			if err := dyn.Tracker().Update(crd.GVR(), edited, ""); err != nil {
+				t.Errorf("simulate the edit: %v", err)
+			}
+		}
+		return false, nil, nil
+	})
+	r := testRunner(t, dyn, "")
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st := readCRStatus(t, dyn, crd.DefaultName)
+	if st.ObservedGeneration != 4 || len(st.Targets) != 1 || st.Targets[0].Target != "1.36" {
+		t.Errorf("status observedGeneration=%d targets=%+v, want 4 and the evaluated 1.36", st.ObservedGeneration, st.Targets)
+	}
+}
+
 // readCRSpecTargets returns spec.targets of the named CR.
 func readCRSpecTargets(t *testing.T, dyn dynamic.Interface, name string) []string {
 	t.Helper()
-	spec, found, err := crd.ReadSpec(context.Background(), dyn, name)
+	spec, _, found, err := crd.ReadSpec(context.Background(), dyn, name)
 	if err != nil || !found {
 		t.Fatalf("read spec of %q: found=%v err=%v", name, found, err)
 	}

@@ -1,0 +1,73 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+# Headless Service for the agent's metrics port: ServiceMonitors select
+# Services, and the agent has no other reason to have one.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "upgradescope.fullname" . }}-agent-metrics
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  clusterIP: None
+  ports:
+    - name: http
+      port: {{ .Values.agent.healthPort }}
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: agent
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "upgradescope.fullname" . }}-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: agent
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+{{- if .Values.server.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "upgradescope.serverFullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: server
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      {{- if include "upgradescope.readTokenEnabled" . }}
+      # The read token guards /metrics too (per-cluster scores).
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "upgradescope.serverSecretName" . }}
+          key: readToken
+      {{- end }}
+{{- end }}
+{{- end }}
