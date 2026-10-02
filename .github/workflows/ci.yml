@@ -11,7 +11,15 @@ on:
   # Postgres (14-18) matrices, the Action check and KB freshness.
   schedule:
     - cron: '41 5 * * 1' # Mondays 05:41 UTC
+  # On demand, from any branch: `gh workflow run ci.yml --ref <branch>`
+  # proves the weekly matrices before the schedule does (a new kind node
+  # image, a change to hack/e2e.sh); -f full-matrix=false runs the PR sets.
   workflow_dispatch:
+    inputs:
+      full-matrix:
+        description: 'Every Kubernetes minor in hack/kind-node-images.txt (1.29-1.37) and Postgres 14-18; false runs the PR sets'
+        type: boolean
+        default: true
   # release.yml calls this workflow for every v* tag, so a release is gated on
   # the whole suite, vuln gate and kind e2e included, at the tagged commit.
   workflow_call:
@@ -306,7 +314,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release)) && '["14","15","16","17","18"]' || '["17"]') }}
+        pg: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release && inputs.full-matrix != false)) && '["14","15","16","17","18"]' || '["17"]') }}
     services:
       postgres:
         image: postgres:${{ matrix.pg }}
@@ -559,7 +567,9 @@ jobs:
   # The Kubernetes minors the kube job runs on, from
   # hack/kind-node-images.txt: the `pr` rows (1.31, the oldest with the
   # flowcontrol v1beta3 window, and 1.37, the newest) on PRs, pushes and
-  # releases; every minor 1.29-1.37 on the schedule and on demand.
+  # releases; every minor 1.29-1.37 on the schedule and on demand
+  # (workflow_dispatch, unless full-matrix=false). hack/kind-images.sh set
+  # makes that choice; hack/kind-images_test.sh covers each kind of run.
   kube-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -573,9 +583,9 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           RELEASE: ${{ inputs.release == true }}
+          FULL_MATRIX: ${{ inputs.full-matrix }}
         run: |
-          set=pr
-          case "$EVENT/$RELEASE" in schedule/* | workflow_dispatch/false) set=all ;; esac
+          set="$(hack/kind-images.sh set "$EVENT" "$RELEASE" "$FULL_MATRIX")"
           minors="$(hack/kind-images.sh matrix "$set")"
           echo "Kubernetes minors ($set): $minors"
           echo "minors=$minors" >> "$GITHUB_OUTPUT"
