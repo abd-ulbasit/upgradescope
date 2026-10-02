@@ -3,5 +3,7 @@
 package server
 
 // raceEnabled: the race detector instruments every allocation, which makes
-// the heap-bound tests slow (minutes) and their heap figures meaningless.
+// the heap-bound tests slow (minutes) and their heap figures meaningless,
+// so they skip under it. make test-heap (CI's test-heap job) runs every
+// test that reads raceEnabled without -race.
 const raceEnabled = true

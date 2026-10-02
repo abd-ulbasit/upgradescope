@@ -40,6 +40,14 @@ web-test:
 # module and every tools/ module. Needs only Go.
 test:
 	./hack/test.sh
+
+# The heap-bound tests (the proofs of the server's and the Helm collector's
+# memory bounds), without the race detector, under which they skip or
+# shrink; CI's test job runs this after `make test`. Needs only Go.
+.PHONY: test-heap
+test-heap:
+	./hack/test-heap.sh
+
 # it writes to a cluster (the agent IT installs a CRD), so the tests refuse
 # any context that is not a kind-* context on a loopback API server; set
 # UPGRADESCOPE_IT_CONTEXT=<context> to use a different disposable cluster.
@@ -283,6 +291,7 @@ claims-check:
 .PHONY: hack-test
 hack-test:
 	./hack/claims-check_test.sh
+	./hack/test-heap_test.sh
 	./hack/cross-build_test.sh
 	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh
