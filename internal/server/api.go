@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -17,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -36,15 +33,28 @@ const DefaultMaxSnapshotBytes = 20 << 20 // 20 MiB
 const DefaultMaxGateBytes = 10 << 20 // 10 MiB
 
 // Manifest stream shape limits for /gate, checked on the raw bytes before
-// any YAML is decoded. Decoding a document builds a generic tree and then
-// JSON — measured at 25-50x the document's size in heap — so the
-// per-document cap, not the body cap, is what bounds one request's memory.
-// 4 MiB fits any single Kubernetes object (etcd stores at most ~1.5 MiB)
-// and a multi-MiB `kubectl get -o yaml` List. The document count bounds
-// CPU on streams of many tiny documents.
+// any YAML is decoded (checkManifestStream).
+//
+// Decoding costs memory per YAML node, not per byte: each document becomes
+// a yaml.v3 node tree and kubectl's generic tree, and list items become
+// objects. Measured live heap (4 MiB documents) runs from ~9 bytes per
+// input byte for one big string to ~170 for a flow sequence `[1,1,…]` and
+// ~330 for a List of empty items; the flow sequence peaked at ~900 MB of
+// heap with garbage. Per node it is at most ~390 bytes, and a sequence
+// entry (a possible list item) costs about four nodes. So the whole
+// stream's node count (yamlCost.units) is capped at maxManifestUnits:
+// the worst stream within it decodes in ~155 MB of live heap
+// (TestGateDecodeHeapIsBounded), and a realistic ~4 MiB `kubectl get -o
+// yaml` List of Deployments is ~360k units and fits. A larger one is
+// refused with 413 asking to split it.
+//
+// 4 MiB per document fits any single Kubernetes object (etcd stores at
+// most ~1.5 MiB) and caps the cheapest shape, one big value, at ~40 MB.
+// The document count bounds CPU on streams of many tiny documents.
 const (
 	maxManifestDocBytes = 4 << 20
 	maxManifestDocs     = 20000
+	maxManifestUnits    = 400_000
 )
 
 // sizeString renders a byte limit for error messages: "20MiB" when it is
@@ -193,32 +203,73 @@ func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body 
 		}
 	}
 
-	docs := utilyaml.NewYAMLReader(bufio.NewReader(body.reader()))
-	for n := 1; ; n++ {
-		doc, err := docs.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			release()
-			errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
-			return nil, nil, false
-		}
-		if n > maxManifestDocs {
-			release()
-			errJSON(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("manifest stream has more than %d documents", maxManifestDocs))
-			return nil, nil, false
-		}
-		if len(doc) > maxManifestDocBytes {
-			release()
-			errJSON(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("manifest document %d is %d bytes, over the %s per-document limit (split large Lists into separate documents)",
-					n, len(doc), sizeString(maxManifestDocBytes)))
-			return nil, nil, false
-		}
+	if status, msg := checkManifestStream(body); status != 0 {
+		release()
+		errJSON(w, status, msg)
+		return nil, nil, false
 	}
 	return body, release, true
+}
+
+// checkManifestStream splits a buffered manifest stream into documents as
+// kubectl does (a line starting with "---" ends one; only spaces or a
+// comment may follow it) and checks it against the shape limits before
+// anything decodes it: the document count, each document's size, and the
+// YAML nodes the whole stream holds. It reads the body in place, copying
+// nothing. It returns the status and message to refuse it with, or 0.
+func checkManifestStream(body gateBody) (status int, msg string) {
+	src := newByteSource(body)
+	var total yamlCost
+	n := 0
+	check := func(start, end int) (int, string) {
+		if start == end {
+			return 0, ""
+		}
+		if n++; n > maxManifestDocs {
+			return http.StatusRequestEntityTooLarge, fmt.Sprintf("manifest stream has more than %d documents", maxManifestDocs)
+		}
+		if end-start > maxManifestDocBytes {
+			return http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("manifest document %d is %d bytes, over the %s per-document limit (split large Lists into separate documents)",
+					n, end-start, sizeString(maxManifestDocBytes))
+		}
+		cost := measureYAMLRange(src, start, end)
+		if total = total.add(cost); total.units() > maxManifestUnits {
+			what := "the manifest stream"
+			if cost.units() > maxManifestUnits {
+				what = fmt.Sprintf("manifest document %d", n)
+			}
+			return http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"%s is too large to evaluate in one request: decoding YAML costs memory per node, and the stream holds "+
+					"over %d node units (each node 1, each sequence entry 4); split it into several requests "+
+					"(a large List into separate, smaller ones)", what, maxManifestUnits)
+		}
+		return 0, ""
+	}
+	docStart := 0
+	for off := 0; off < src.size; {
+		next := off
+		for next < src.size && src.at(next) != '\n' {
+			next++
+		}
+		next++ // past the newline
+		if src.at(off) == '-' && src.at(off+1) == '-' && src.at(off+2) == '-' {
+			i := off + 3
+			for i < next && (src.at(i) == ' ' || src.at(i) == '\t' || src.at(i) == '\r') {
+				i++
+			}
+			if c := src.at(i); i < min(next, src.size) && c != '\n' && c != '#' {
+				return http.StatusUnprocessableEntity, fmt.Sprintf(
+					"invalid manifest stream: invalid YAML document separator at byte %d (only a comment may follow ---)", off)
+			}
+			if status, msg := check(docStart, off); status != 0 {
+				return status, msg
+			}
+			docStart = min(next, src.size)
+		}
+		off = next
+	}
+	return check(docStart, src.size)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,6 +58,81 @@ func deploymentList(n int) string {
 		for k := range 25 {
 			fmt.Fprintf(&b, "          - {name: VAR_%d, value: \"value-%d-%s\"}\n", k, k, strings.Repeat("y", 40))
 		}
+	}
+	return b.String()
+}
+
+// gateHeapShapes builds single documents of about size bytes in every
+// shape the red team used against /gate (#121), from cheapest to dearest
+// per byte to decode: one big value, a realistic List, many keys, a flow
+// mapping of bare keys, block and flow sequences, Lists of empty items
+// (each an object; in the last, every object a finding), and aliases.
+func gateHeapShapes() map[string]func(size int) string {
+	const head = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+	repeat := func(start, unit, end string) func(int) string {
+		return func(size int) string {
+			var b strings.Builder
+			b.WriteString(start)
+			for b.Len() < size-len(unit)-len(end) {
+				b.WriteString(unit)
+			}
+			b.WriteString(end)
+			return b.String()
+		}
+	}
+	return map[string]func(int) string{
+		"one big value": func(size int) string {
+			return head + "data:\n  k: " + strings.Repeat("x", max(size-len(head)-12, 0)) + "\n"
+		},
+		"kind List": func(size int) string { return deploymentList(max(size/len(deploymentList(1)), 1)) },
+		"many keys": bigConfigMap,
+		"flow mapping": func(size int) string {
+			var b strings.Builder
+			b.WriteString(head + "data: {")
+			for i := 0; b.Len() < size-16; i++ {
+				fmt.Fprintf(&b, "%x,", i)
+			}
+			b.WriteString("z}\n")
+			return b.String()
+		},
+		"block sequence":            repeat(head+"data:\n  k:\n", "  - 1\n", ""),
+		"flow sequence":             repeat(head+"data: {k: [1", ",1", "]}\n"),
+		"List of null items":        repeat("apiVersion: v1\nkind: ConfigMapList\nitems:\n", "- \n", ""),
+		"List of {} items":          repeat("apiVersion: v1\nkind: ConfigMapList\nitems: [{}", ",{}", "]\n"),
+		"List of removed-API items": repeat("apiVersion: policy/v1beta1\nkind: PodSecurityPolicyList\nitems:\n", "- {}\n", ""),
+		"nested aliases":            func(int) string { return nestedAliases(20, 5) },
+		"wide aliases": func(size int) string {
+			return head + "a: &a [" + strings.Repeat("1,", size/4) + "1]\n" +
+				"b: [" + strings.Repeat("*a,", min(size/8, 1000)) + "*a]\n"
+		},
+	}
+}
+
+// atNodeBudget returns the largest document shape builds (up to the
+// per-document size cap) that is still within the node budget.
+func atNodeBudget(shape func(size int) string) string {
+	lo, hi := 0, maxManifestDocBytes-64
+	if doc := shape(hi); measureYAML([]byte(doc)).units() <= maxManifestUnits {
+		return doc
+	}
+	for hi-lo > 1024 {
+		if mid := (lo + hi) / 2; measureYAML([]byte(shape(mid))).units() <= maxManifestUnits {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return shape(lo)
+}
+
+// nestedAliases is a billion-laughs document: fan aliases per level, over
+// levels levels.
+func nestedAliases(fan, levels int) string {
+	var b strings.Builder
+	b.WriteString("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: bomb}\n")
+	b.WriteString("l0: &l0 [" + strings.TrimSuffix(strings.Repeat("lol,", fan), ",") + "]\n")
+	for i := 1; i <= levels; i++ {
+		fmt.Fprintf(&b, "l%d: &l%d [%s]\n", i, i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), fan), ","))
 	}
 	return b.String()
 }
@@ -149,6 +226,146 @@ func TestGateAcceptsLargeList(t *testing.T) {
 	}
 	if rep.ClusterID != "manifests" {
 		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// heapPeak runs f while sampling the heap and returns how far HeapInuse
+// rose above where it was before f, garbage included: the process's
+// footprint, not just its live data.
+func heapPeak(f func()) uint64 {
+	runtime.GC()
+	var base runtime.MemStats
+	runtime.ReadMemStats(&base)
+	var peak atomic.Uint64
+	stop := make(chan struct{})
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		var m runtime.MemStats
+		for {
+			runtime.ReadMemStats(&m)
+			peak.Store(max(peak.Load(), m.HeapInuse))
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
+	f()
+	close(stop)
+	<-sampled
+	return max(peak.Load(), base.HeapInuse) - base.HeapInuse
+}
+
+// maxGateDecodeHeap is what decoding and evaluating one /gate request may
+// add to the heap, garbage included (#121).
+const maxGateDecodeHeap = 200 << 20
+
+// /gate decode cost follows a document's YAML structure, not its size: a
+// 4 MiB flow sequence decoded to ~900 MB of heap, and two at once OOM-killed
+// a 512Mi server (#121). Every shape the red team used, sent once and then
+// twice at once, at the per-document size cap and at the largest size
+// within the node budget, is refused with 413 before it is decoded or
+// decoded within maxGateDecodeHeap, and gives its body budget back either
+// way. Within the node budget everything is decoded.
+func TestGateDecodeHeapIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("decodes several 4 MiB documents")
+	}
+	// The chart runs the server with GOMEMLIMIT, under which the collector
+	// holds the heap near its live size as it nears the limit. A low GOGC
+	// does the same here, so what is measured is the live heap the
+	// requests need, not how much garbage GOGC=100 lets pile up (up to as
+	// much again) before the next collection.
+	defer debug.SetGCPercent(debug.SetGCPercent(10))
+	for name, shape := range gateHeapShapes() {
+		t.Run(name, func(t *testing.T) {
+			full := shape(maxManifestDocBytes - 64)
+			fits := atNodeBudget(shape)
+			bodies := []string{full}
+			if fits != full {
+				bodies = append(bodies, fits)
+			}
+			for _, body := range bodies {
+				checkGateHeap(t, body, len(body) < len(full) || measureYAML([]byte(full)).units() <= maxManifestUnits)
+			}
+		})
+	}
+	// A realistic ~4 MiB List fits.
+	if units := measureYAML([]byte(gateHeapShapes()["kind List"](maxManifestDocBytes - 64))).units(); units > maxManifestUnits {
+		t.Fatalf("a 4 MiB List of Deployments is %d units, over the %d budget", units, maxManifestUnits)
+	}
+}
+
+// checkGateHeap sends body once and then twice at once, and checks the
+// heap stays within maxGateDecodeHeap, the body budget is given back, and
+// a body within the node budget is decoded (any other is refused with
+// 413).
+func checkGateHeap(t *testing.T, body string, decode bool) {
+	t.Helper()
+	for _, n := range []int{1, 2} {
+		s := newTestServer(t, newFakeStore())
+		codes := make([]int, n)
+		msgs := make([]string, n)
+		grew := heapPeak(func() {
+			var wg sync.WaitGroup
+			for i := range n {
+				wg.Go(func() {
+					rec := httptest.NewRecorder()
+					serveGate(s, rec, body)
+					codes[i], msgs[i] = rec.Code, rec.Body.String()
+				})
+			}
+			wg.Wait()
+		})
+		for i, code := range codes {
+			refused := code == http.StatusRequestEntityTooLarge
+			if code >= 500 || decode == refused || refused && !strings.Contains(msgs[i], "split") {
+				t.Fatalf("%d bytes x%d: status = %d (%.300s)", len(body), n, code, msgs[i])
+			}
+		}
+		if grew > maxGateDecodeHeap {
+			t.Fatalf("%d bytes x%d: statuses %v; the heap grew %d MiB, want at most %d MiB",
+				len(body), n, codes, grew>>20, maxGateDecodeHeap>>20)
+		}
+		if used := s.gateBuffered.inUse(); used != 0 {
+			t.Fatalf("%d bytes x%d: %d body bytes still charged", len(body), n, used)
+		}
+		t.Logf("%d bytes (%d units) x%d: statuses %v, heap grew %d MiB",
+			len(body), measureYAML([]byte(body)).units(), n, codes, grew>>20)
+	}
+}
+
+// The node budget is per request: documents that each fit it are refused
+// together when the stream does not, and the message says which.
+func TestGateNodeBudgetCoversTheStream(t *testing.T) {
+	half := atNodeBudget(gateHeapShapes()["flow sequence"])
+	half = half[:len(half)/2] + "]}\n"
+	if u := measureYAML([]byte(half)).units(); u > maxManifestUnits || 3*u <= maxManifestUnits {
+		t.Fatalf("fixture is %d units, want a third to a whole of the %d budget", u, maxManifestUnits)
+	}
+	s := newTestServer(t, newFakeStore())
+	code, _, raw := gateStatus(t, s, half+"---\n"+half+"---\n"+half)
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "the manifest stream is too large") {
+		t.Fatalf("three documents within the budget each: status = %d (%s), want 413 about the stream", code, raw)
+	}
+	code, _, raw = gateStatus(t, s, pspManifest+"---\n"+gateHeapShapes()["flow sequence"](1<<20))
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "manifest document 2 is too large") {
+		t.Fatalf("one document over the budget: status = %d (%s), want 413 naming document 2", code, raw)
+	}
+}
+
+func TestGateRejectsInvalidSeparator(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	code, _, raw := gateStatus(t, s, pspManifest+"--- kind: oops\n"+pspManifest)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "separator") {
+		t.Fatalf("status = %d (%s), want 422 about the separator", code, raw)
+	}
+	// A comment may follow it, and a trailing CR.
+	if code, _, raw := gateStatus(t, s, pspManifest+"--- # next\r\n"+pspManifest+"---\r\n"); code != http.StatusOK && code != http.StatusUnprocessableEntity ||
+		strings.Contains(string(raw), "separator") {
+		t.Fatalf("status = %d (%s), want the stream evaluated", code, raw)
 	}
 }
 
