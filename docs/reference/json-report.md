@@ -88,6 +88,6 @@ the binary that wrote the report and carries no compatibility meaning.
 | `teams` | Per-team scores; findings without a team are under `unattributed`. A team's `ready` means no blocker among its own findings: it ignores the report's not-assessed gaps and other teams' blockers, so gate on `verdict`. |
 
 The server's report endpoint serves the same report fields (except
-`kubeContext` and `apiServer`, which only `scan` sets), plus where the
+`kubeContext`, `apiServer` and `hops`, which only `scan` sets), plus where the
 report came from ([`GET /api/v1/clusters/{id}/report`](api.md#clusters));
 the SARIF output carries the same findings as results, keyed by `key`.
