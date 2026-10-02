@@ -32,16 +32,16 @@ tracks it.
 | API-01b | A freshly created cluster, scanned at its next minor, has no removed-API blocker (#3). | `e2e:no_removed_api_blockers` |
 | API-01c | When the kind itself goes away (no surviving version), every stored object counts. | `TestCollectAPIUsageTypeRemovedKindCountsEveryObject` `TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject` |
 | API-02 | `removed-api` is a blocker when the API is removed at or before the target and a warning when it is removed in the next minor. | `TestEvalAPIUsageRemovedAtTarget` `TestEvalAPIUsageRemovedAtTargetPlusOne` `TestEvaluateGolden` |
-| API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one, so neither `scan` nor the agent calls a deprecated API, apart from the self-LISTs in `hack/e2e/deprecated-request-allowlist.txt` (#123 removes them). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
+| API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one. On a default kind cluster neither `scan` nor the agent calls a deprecated API, apart from the self-LISTs in `hack/e2e/deprecated-request-allowlist.txt` (#123 removes them); a cluster that serves a kind only at deprecated versions still gets a LIST there (API-04c). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
 | API-05 | A caller with no stored objects is a standalone `deprecated-api-in-use` finding; caller evidence otherwise merges onto the object finding. | `TestEvaluateCallerWithoutObjectsStaysStandalone` `TestEvaluateMergesCallersIntoAPIUsageFinding` `TestEvaluateMergesSubresourceCallers` `TestEvaluateMoreSevereCallerIsNotFolded` `TestEvaluateGolden` |
-| PF-02 | Every cluster-wide list is paged and metadata-only, and object references are capped. | `TestCollectAPIUsageFollowsListPagination` `TestCollectAPIUsageCapsObjectRefs` `TestCollectAddOnsFollowsListPagination` |
+| PF-02 | Every cluster-wide list is paged (500 objects a page); the api-usage and Helm lists are metadata-only, and object references are capped. | `TestCollectAPIUsageFollowsListPagination` `TestCollectAddOnsFollowsListPagination` `TestCollectVersionsFollowsListPagination` `TestCollectHelmFollowsListPagination` `TestCollectHelmFetchesOnlyTheChosenRevision` `TestCollectAPIUsageCapsObjectRefs` |
 
 ## Deprecated-API callers
 
 | ID | Claim | Proven by |
 |---|---|---|
-| DC-01 | Clients still calling deprecated APIs are found from the apiserver's `apiserver_requested_deprecated_apis` metric. | `TestCollectDeprecatedCalls` `TestEvalDeprecatedCallsSubresource` |
-| DC-02 | When `/metrics` is forbidden or absent, the capability is reported as unavailable with the reason; the rest of the scan still runs. | `TestCollectDeprecatedCallsForbidden` `TestCollectDeprecatedCallsFamilyAbsent` `TestCollectDeprecatedCallsOtherErrorNotRewritten` |
+| DC-01 | Clients still calling deprecated APIs are found from the apiserver's `apiserver_requested_deprecated_apis` metric (which, until #123, also counts the scanner's own LISTs: API-04b). | `TestCollectDeprecatedCalls` `TestEvalDeprecatedCallsSubresource` |
+| DC-02 | When `/metrics` is forbidden (401 or 403) or lacks the metric, the capability is reported as unavailable with the reason; the rest of the scan still runs. | `TestCollectDeprecatedCallsForbidden` `TestCollectDeprecatedCallsFamilyAbsent` `TestCollectDeprecatedCallsOtherErrorNotRewritten` |
 | DC-03 | `deprecated-api-in-use` severity follows the removal window, and is info when the removal release is unknown. | `TestEvalDeprecatedCallsSeverityVsTarget` `TestEvalDeprecatedCallsUnparseableReleaseIsInfo` `TestEvalDeprecatedCallsUnparseableIsInfo` |
 
 ## Add-ons past end of life
@@ -131,7 +131,7 @@ tracks it.
 | RB-02 | The agent writes only its own ClusterReadiness, that object's status, and (with `manageCRD`) the ClusterReadiness CRD; nothing else, ever. Measured from the API server's audit log of a real install. | `e2e:audit_agent_writes_only_its_cr` `TestRenderedRBACDefault` |
 | RB-03 | Write access is limited to the `agent.crName` object and the one CRD, with no delete. | `TestRenderedRBACDefault` `TestRenderedRBACCustomCRName` `TestRenderedRBACManageCRDOff` `hack/test-chart.sh` |
 | RB-05 | Helm detection reads Secrets only as `owner=helm` lists and GETs of Helm release Secrets; `rbac.helmSecrets=false` removes the grant. | `e2e:audit_secrets_helm_only` `TestCollectHelmFetchesOnlyTheChosenRevision` `TestRenderedRBACHelmSecretsOff` |
-| RB-06 | The only non-resource URLs read are `/version` and `/metrics`. | `TestRenderedRBACDefault` |
+| RB-06 | The chart grants no non-resource URL but `/version` and `/metrics` (discovery, `/api` and `/apis`, comes from Kubernetes' default `system:discovery` role). | `TestRenderedRBACNonResourceURLs` `TestRenderedRBACDefault` |
 | RB-09 | Token wiring: `existingSecret`, the in-chart ingest token, `readToken`, and a token required with `serverUrl`. | `hack/test-chart.sh` |
 | RB-10 | `agent.interval` is at least 1m and targets are MAJOR.MINOR strings, enforced by the values schema. | `hack/test-chart.sh` `TestConfigIntervalMinimum` |
 | RB-11 | Pods run as non-root 65532 with a read-only root, no privilege escalation, RuntimeDefault seccomp and all capabilities dropped. | `hack/test-chart.sh` |
@@ -145,14 +145,14 @@ tracks it.
 |---|---|---|
 | SV-01 | SQLite (WAL, no cgo) or Postgres, and both pass one conformance suite; Postgres 17 on every PR, 14 to 18 weekly. | `TestSQLiteConformance` `TestPostgresConformance` `TestOpenSetsPragmas` `ci:pg-conformance` |
 | SV-02 | Duplicate pushes are detected by the canonical inventory hash; key order and whitespace never change it. | `TestIngestDuplicateCanonicalHash` `TestInsertSnapshotDedup` `TestInsertSnapshotConcurrentIngest` |
-| SV-03 | Fleet, reports and exports serve stored evaluations, re-judged when the knowledge base, the team map or the date changes. | `TestReadPathsUseLatestSnapshotOnly` `TestDuplicatePushReevaluatesAcrossEOLDate` `TestRestartWithNewKBReevaluatesOnDuplicatePush` `TestTeamMapChangeReevaluates` |
+| SV-03 | Fleet, reports and exports serve stored evaluations, re-judged when the knowledge base or the team map changes, and after a date change on the next push or background re-evaluation (SV-03b). | `TestReadPathsUseLatestSnapshotOnly` `TestDuplicatePushReevaluatesAcrossEOLDate` `TestRestartWithNewKBReevaluatesOnDuplicatePush` `TestTeamMapChangeReevaluates` `TestStartRunsBackgroundPassAndDelivery` |
 | SV-07 | The fleet matrix and per-team rollups (worst score, total blockers, affected clusters). | `TestFleetMatrixExplicitTargets` `TestFleetMatrixDefaultTargets` `TestFleetTeams` `TestTeamsEndpoint` `TestTeamMapApply` |
 | SV-09 | Auditor exports: one self-contained HTML report and a CSV per cluster and target. | `TestExportHTMLGolden` `TestExportCSVGolden` |
-| SV-11 | Read and write timeouts carry the default 20 MiB snapshot, and a stalled body cannot hold a connection. | `TestLargeSnapshotWithinDefaultTimeouts` `TestStalledBodyDisconnectedByReadTimeout` `TestShutdownWithStalledClient` |
-| SV-13 | Wrong methods get 405 with `Allow`; reserved paths never serve the dashboard. | `TestMethodNotAllowed` `TestReservedPathsNeverServeDashboard` `TestStaticDoesNotShadowAPI` |
+| SV-11 | Read and write timeouts carry the default 20 MiB snapshot over a link of about 350 KiB/s or faster (slower: SV-11b), and a stalled body cannot hold a connection. | `TestLargeSnapshotWithinDefaultTimeouts` `TestStalledBodyDisconnectedByReadTimeout` `TestShutdownWithStalledClient` |
+| SV-13 | Wrong methods get 405 with `Allow`; unknown paths under `/api/`, `/metrics/` and the probes get a JSON 404, not the dashboard (bare `/api` still gets it: SV-13b). | `TestMethodNotAllowed` `TestReservedPathsNeverServeDashboard` `TestStaticDoesNotShadowAPI` |
 | SV-15 | Stored times are fixed-width UTC, so they sort in instant order. | `TestTimeFormatFixedWidthUTC` `TestTimesStoredUTCFixedWidth` `TestParseStoredTimeRoundTrip` |
 | SV-16 | `--db` creates its parent directory and is mutually exclusive with `--db-url`. | `TestRunServeCreatesDBParentDir` `TestServeDBAndDBURLMutuallyExclusive` |
-| NT-01 | Notifications fire on changes only: a new blocker, a warning entering its EOL window, a cluster turning ready. | `TestComputeDelta` `TestIngestEmitsDeltaNotifications` |
+| NT-01 | For one target, notifications fire on changes only: a new blocker, a warning entering its EOL window, a cluster turning ready (with several targets they repeat: NT-01b). | `TestComputeDelta` `TestIngestEmitsDeltaNotifications` |
 | NT-02 | Notifications are best-effort: a hung sink never blocks ingest, and a message is delivered once after retries. | `TestIngestDoesNotWaitForNotifiers` `TestOutboxRetriesThenDeliversOnce` `TestOutboxGivesUpAfterMaxAttempts` `TestSlackDefaultTimeoutIsTwoSeconds` |
 | SV-05 | What-if and the gate store nothing. | not automated: #99 (verified by hand in #132) |
 
@@ -160,7 +160,7 @@ tracks it.
 
 | ID | Claim | Proven by |
 |---|---|---|
-| SE-01 | Ingest and reads take bearer tokens; with no read token, a non-loopback `--listen` is refused unless `--allow-anonymous-read`. | `TestIngestAuth` `TestReadAuth` `TestServeAnonymousReadGuard` `TestFleetReadAuth` |
+| SE-01 | Ingest and reads take bearer tokens; with no read token, a non-loopback `--listen` address is refused unless `--allow-anonymous-read` (a host name is not resolved: SE-01b). | `TestIngestAuth` `TestReadAuth` `TestServeAnonymousReadGuard` `TestFleetReadAuth` |
 | SE-02 | A per-cluster token writes only its own cluster (403 before anything is written) and can be revoked. | `TestIngestPerClusterTokens` `TestIngestMismatchedTokenWritesNothing` `TestTokensRevoke` `TestTokensRevokeByID` |
 | SE-04 | Tokens and the database URL can come from the environment or a file instead of argv. | `TestSecretFlagPrecedence` `TestServeSecretsFromEnvAndFiles` `TestAgentServerTokenSources` |
 | SE-05 | Snapshot bodies are capped at 20 MiB on the wire and after gunzip, and nothing is read before auth. | `TestIngestBodyLimits` `TestSnapshotBodyCapIsConfigurable` `TestIngestEncodingErrors` |
@@ -201,7 +201,7 @@ tracks it.
 | IR-05 | A new push supersedes a PR's run; main, schedule, dispatch and tag runs never cancel each other. | `hack/ci-concurrency_test.sh` |
 | IR-10 | Every package compiles for linux, darwin and windows on every PR, so a platform-only break fails its PR, not a tag. | `make cross-build` `hack/cross-build_test.sh` `ci:build` |
 | IR-16 | One required check, `ci-ok`, fails if any job failed or was cancelled. | `ci:ci-ok` `hack/ci-ok_test.sh` |
-| DO-03 | One binary, three subcommands. | `TestRootHasAgentSubcommand` `TestRootRegistersServe` |
+| DO-03 | One binary runs `scan`, `agent` and `serve`. | `TestRootHasAgentSubcommand` `TestRootRegistersServe` `e2e:eol_ingress_nginx_blocks` |
 | DO-07 | Golden files cover every finding category and the score formula. | `TestEvaluateGolden` |
 | DO-08 | `make lint` is CI's lint (pinned staticcheck), and gofmt covers every module. | `ci:lint` `hack/test.sh` |
 | CL-01 | Every test this ledger names exists. | `make claims-check` `hack/claims-check_test.sh` |
@@ -215,8 +215,13 @@ lands with a test.
 | ID | What did not hold | Proven by |
 |---|---|---|
 | API-01d | An object created with no fields records no managedFields and goes undetected. | not true yet: #122 |
+| API-02b | `deprecated-api` info also fires for deprecations after the target ("deprecated since 1.40" at 1.37). | not true yet: #124 |
 | API-03 | Deprecated CRD versions and stale `status.storedVersions` are not reported. | not true yet: #48 |
 | API-04b | Repeat scans count the scanner's own deprecated-endpoint LISTs as callers. | not true yet: #123 |
+| API-04c | A cluster that serves `coordination.k8s.io/v1beta1` gets a LIST of `leasecandidates` there on every scan, which the engine then scores as a caller. | not true yet: #123 |
+| DC-02b | A `/metrics` that hangs spends the whole scan budget and starves the other collectors. | not true yet: #48 |
+| KB-01b | Alpha kinds deleted from `k8s.io/api` (DRA v1alpha1 to v1alpha3, ClusterCIDR, ServiceCIDR and IPAddress v1alpha1, LeaseCandidate v1alpha1) are missing from the knowledge base, so `--files` passes them. | not true yet: #124 |
+| PF-02b | Add-on and version collection reads whole Pod, Node and Namespace objects, not metadata only. | not true yet: #121 |
 | VS-03 | README's `ready = (blockers == 0)`: ready now means verdict ready. | not true yet: #130 |
 | VS-04 | Severity tiers by target do not cover EOL add-ons, runtimes, kb-stale or current skew. | not true yet: #130 |
 | VS-05b | `--output table` to a full disk exits 0. | not true yet: #124 |
@@ -227,11 +232,17 @@ lands with a test.
 | VS-15 | JSON contract changes since v0.1.1 are not in the changelog. | not true yet: #127 |
 | FS-02b, FS-05 | Concatenated JSON, duplicate keys and untyped Lists in `--files`; the `helm template` recipe. | not true yet: #119 |
 | FS-04, SV-06 | The `/gate` README example and `cluster=` gate pass a PR that adds a removed API. | not true yet: #120 |
+| SV-03b | After an EOL date passes, reads serve the previous verdict until the next push or background pass, up to an hour. | not true yet: #125 |
+| SV-13b | Bare `/api` serves the dashboard (200 `text/html`) instead of a JSON 404. | not true yet: #125 |
+| SV-16b | A `--db` path containing `?` silently opens another file and drops the SQLite write-lock mode, so concurrent writes get `SQLITE_BUSY`. | not true yet: #125 |
+| NT-01b | With several targets a change notifies once per target, and a backwards clock step replays events. | not true yet: #125 |
 | SV-04, SV-08, SV-10, SV-12, SV-14, NT-03 | Ingest validation, empty cluster IDs, `--targets` parsing, schemaVersion, fleet memory, webhook redirects. | not true yet: #125 |
-| PF-06 | `/gate` stays under 512Mi with concurrent large documents. | not true yet: #121 |
+| PF-06, SE-05b, SV-11b | `/gate` stays under 512Mi with concurrent large documents; ingest has no shared memory budget for concurrent 20 MiB pushes; a slow push gets 422, not a retryable 408. | not true yet: #121 |
+| SE-01b | `--listen localhost:…` counts as loopback without resolving the name. | not true yet: #126 |
 | SE-03, SE-07b, SE-09 | Token prefix stored; CSV formula guard checks one byte; push is per-cluster and encrypted. | not true yet: #126 |
 | RB-01 | README and SECURITY.md describe the pre-#16 RBAC grant. | not true yet: #130 |
 | RB-07 | Losing status write access leaves the CR reading ready. | not true yet: #122 |
-| RB-08, IR-01, IR-02, IR-06 to IR-14, DB-08, SE-15 | The published release, image and chart predate the fixes; signing and publishing have never run end to end. | not true yet: #127 |
+| RB-08, IR-01, IR-02, IR-06 to IR-09, IR-11 to IR-14, DB-08, SE-15 | The published release, image and chart predate the fixes; signing and publishing have never run end to end. | not true yet: #127 |
 | AO-01b | Several installs of one add-on merge into the oldest. | not true yet: #129 |
+| DO-03b | README's "three subcommands": the binary has five, `tokens` and `clusters` too. | not true yet: #130 |
 | KB-04, PF-01, PF-03, PF-04 | Stale numbers: KB horizon, scan time, binary and image sizes. | not true yet: #130 |
