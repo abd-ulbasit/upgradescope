@@ -57,6 +57,30 @@ var removalFixes = map[gvkOut]version{
 	{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClass"}: {Major: 1, Minor: 23},
 }
 
+// nonPersisted are kinds k8s.io/api registers (or registered) that are
+// wrappers or subresource bodies, not resources: kube-apiserver never
+// stored or served them, so no manifest or live object can be one and a
+// removal for them is meaningless. Without this, a deleted one became a
+// removed-api blocker through deletedTypes's inferred removal (#166). Each
+// value is the evidence, from the k8s.io/api source that registers the type.
+var nonPersisted = map[gvkOut]string{
+	// core/v1 types.go: "PodStatusResult is a wrapper for PodStatus returned
+	// by kubelet that can be encode/decoded". It has no storage under
+	// pkg/registry/core, and v0.37 stopped registering it.
+	{Group: "", Version: "v1", Kind: "PodStatusResult"}: "kubelet wrapper for PodStatus",
+	// core/v1 types.go (v0.21): "A list of ephemeral containers used with
+	// the Pod ephemeralcontainers subresource": the body of a subresource.
+	{Group: "", Version: "v1", Kind: "EphemeralContainers"}: "body of the pods/ephemeralcontainers subresource",
+	// extensions/v1beta1 types.go (v0.17): "Dummy definition", kept for
+	// the API documentation only.
+	{Group: "extensions", Version: "v1beta1", Kind: "ReplicationControllerDummy"}: "documentation placeholder",
+}
+
+func isNonPersisted(g gvkOut) bool {
+	_, ok := nonPersisted[g]
+	return ok
+}
+
 // fixRemoval applies removalFixes to e: an override earlier than e's
 // removal, or e without one, sets the removal, marked inferred since it is
 // no upstream tag.

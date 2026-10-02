@@ -36,14 +36,6 @@
     {
       "group": "",
       "version": "v1",
-      "kind": "EphemeralContainers",
-      "introduced": "1.17",
-      "removed": "1.22",
-      "removedInferred": true
-    },
-    {
-      "group": "",
-      "version": "v1",
       "kind": "Event",
       "introduced": "1.0"
     },
@@ -82,14 +74,6 @@
       "version": "v1",
       "kind": "Pod",
       "introduced": "1.0"
-    },
-    {
-      "group": "",
-      "version": "v1",
-      "kind": "PodStatusResult",
-      "introduced": "1.0",
-      "removed": "1.37",
-      "removedInferred": true
     },
     {
       "group": "",
@@ -1006,14 +990,6 @@
         "version": "v1",
         "kind": "ReplicaSet"
       }
-    },
-    {
-      "group": "extensions",
-      "version": "v1beta1",
-      "kind": "ReplicationControllerDummy",
-      "introduced": "1.17",
-      "removed": "1.18",
-      "removedInferred": true
     },
     {
       "group": "extensions",

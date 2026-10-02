@@ -238,6 +238,9 @@ func skipKind(k schema.GroupVersionKind) bool {
 	if k.Version == runtime.APIVersionInternal {
 		return true
 	}
+	if isNonPersisted(gvkOut{Group: k.Group, Version: k.Version, Kind: k.Kind}) {
+		return true
+	}
 	if strings.HasSuffix(k.Kind, "List") || strings.HasSuffix(k.Kind, "Options") {
 		return true
 	}

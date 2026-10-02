@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestFixReplacement(t *testing.T) {
@@ -95,5 +96,47 @@ func TestRemovalFixesAreDeletedTypes(t *testing.T) {
 		if upstream[k] {
 			t.Errorf("removalFixes has %s/%s %s, which k8s.io/api still registers", k.Group, k.Version, k.Kind)
 		}
+	}
+}
+
+// nonPersisted kinds are wrappers and subresource bodies no manifest or
+// stored object can be: the KB must not record them, however the history
+// reads (#166).
+func TestNonPersistedKindsAreNotRecorded(t *testing.T) {
+	gvk := func(group, ver, kind string) schema.GroupVersionKind {
+		return schema.GroupVersionKind{Group: group, Version: ver, Kind: kind}
+	}
+	for _, k := range []schema.GroupVersionKind{
+		gvk("", "v1", "PodStatusResult"),
+		gvk("", "v1", "EphemeralContainers"),
+		gvk("extensions", "v1beta1", "ReplicationControllerDummy"),
+	} {
+		if !skipKind(k) {
+			t.Errorf("skipKind(%s) = false, want true: not a persisted resource", k)
+		}
+	}
+	// The exclusion is per GVK: a same-named kind elsewhere is a real type.
+	if skipKind(gvk("example.k8s.io", "v1", "PodStatusResult")) {
+		t.Error("skipKind(example.k8s.io/v1 PodStatusResult) = true, want false")
+	}
+	if len(nonPersisted) != 3 {
+		t.Errorf("nonPersisted has %d entries; extend this test with the new kind", len(nonPersisted))
+	}
+	for k, why := range nonPersisted {
+		if why == "" {
+			t.Errorf("nonPersisted[%s/%s %s] has no reason", k.Group, k.Version, k.Kind)
+		}
+	}
+
+	// A dataset written before the exclusion existed loses the entries on
+	// the next run instead of carrying them forward as tombstones.
+	prev := []entry{
+		{Group: "", Version: "v1", Kind: "PodStatusResult", Introduced: *v(1, 0), Removed: v(1, 37), RemovedInferred: true},
+		{Group: "", Version: "v1", Kind: "Pod", Introduced: *v(1, 0)},
+	}
+	gen := []entry{{Group: "", Version: "v1", Kind: "Pod", Introduced: *v(1, 0)}}
+	got, tombstoned := carryForward(prev, gen, map[gvkOut]bool{{Version: "v1", Kind: "Pod"}: true}, version{Major: 1, Minor: 37})
+	if !reflect.DeepEqual(got, gen) || len(tombstoned) != 0 {
+		t.Errorf("carryForward kept a non-persisted kind: got %+v, tombstoned %+v", got, tombstoned)
 	}
 }
