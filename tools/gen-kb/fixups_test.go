@@ -1,7 +1,9 @@
 package main
 
 import (
+	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -195,6 +197,8 @@ func TestNonPersistedKindsAreNotRecorded(t *testing.T) {
 		gvk("extensions", "v1beta1", "DeploymentRollback"),
 		gvk("admission.k8s.io", "v1beta1", "AdmissionReview"),
 		gvk("apiextensions.k8s.io", "v1beta1", "ConversionReview"),
+		gvk("policy", "v1beta1", "Eviction"),
+		gvk("apidiscovery.k8s.io", "v2beta1", "APIGroupDiscovery"),
 	} {
 		if !skipKind(k) {
 			t.Errorf("skipKind(%s) = false, want true: not a persisted resource", k)
@@ -204,7 +208,7 @@ func TestNonPersistedKindsAreNotRecorded(t *testing.T) {
 	if skipKind(gvk("example.k8s.io", "v1", "PodStatusResult")) {
 		t.Error("skipKind(example.k8s.io/v1 PodStatusResult) = true, want false")
 	}
-	if len(nonPersisted) != 12 {
+	if len(nonPersisted) != 14 {
 		t.Errorf("nonPersisted has %d entries; extend this test with the new kind", len(nonPersisted))
 	}
 	for k, why := range nonPersisted {
@@ -223,5 +227,52 @@ func TestNonPersistedKindsAreNotRecorded(t *testing.T) {
 	got, tombstoned := carryForward(prev, gen, map[gvkOut]bool{{Version: "v1", Kind: "Pod"}: true}, version{Major: 1, Minor: 37})
 	if !reflect.DeepEqual(got, gen) || len(tombstoned) != 0 {
 		t.Errorf("carryForward kept a non-persisted kind: got %+v, tombstoned %+v", got, tombstoned)
+	}
+}
+
+// A registered type with no lifecycle source is reported by extract and
+// left out of the dataset, so a manifest of one is an unknown-api info. The
+// set must match what docs/concepts/knowledge-base.md ("What it does not
+// cover") tells users, or a new untagged type is only a log line and the
+// docs drift.
+func TestNoLifecycleSetMatchesDocs(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range addToSchemes {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, noLifecycle := extract(scheme)
+	sort.Strings(noLifecycle)
+	want := []string{
+		"imagepolicy.k8s.io/v1alpha1 ImageReview",
+		"internal.apiserver.k8s.io/v1alpha1 StorageVersion",
+		"scheduling.k8s.io/v1alpha3 CompositePodGroup",
+		"scheduling.k8s.io/v1alpha3 PodGroup",
+		"scheduling.k8s.io/v1alpha3 Workload",
+	}
+	if !reflect.DeepEqual(noLifecycle, want) {
+		t.Errorf("registered types with no lifecycle = %q, want %q: add a cited untaggedLifecycles entry, or list the type under \"What it does not cover\" in docs/concepts/knowledge-base.md and here", noLifecycle, want)
+	}
+
+	doc, err := os.ReadFile("../../docs/concepts/knowledge-base.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := string(doc)
+	i := strings.Index(section, "## What it does not cover")
+	if i < 0 {
+		t.Fatal("docs/concepts/knowledge-base.md has no \"What it does not cover\" section")
+	}
+	section = section[i+1:]
+	if j := strings.Index(section, "\n## "); j >= 0 {
+		section = section[:j]
+	}
+	section = strings.Join(strings.Fields(section), " ") // undo the line wrapping
+	for _, s := range noLifecycle {
+		gv, kind, _ := strings.Cut(s, " ")
+		if !strings.Contains(section, "`"+gv+"`") || !strings.Contains(section, kind) {
+			t.Errorf("%s is registered without lifecycle markers but \"What it does not cover\" does not name %s and %s", s, gv, kind)
+		}
 	}
 }

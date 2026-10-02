@@ -20,11 +20,12 @@ type APILifecycleEntry struct {
 	Deprecated  *inventory.Version `json:"deprecated,omitempty"`
 	Removed     *inventory.Version `json:"removed,omitempty"`
 	Replacement *GVK               `json:"replacement,omitempty"`
-	// RemovedInferred marks a tombstone for a type upstream deleted whose
-	// Removed is no upstream lifecycle tag: tools/gen-kb set it to the
-	// k8s.io/api minor the type disappeared in (when untagged, or tagged
-	// for a later removal), or to the earlier release kube-apiserver
-	// stopped serving it in (its removalFixes).
+	// RemovedInferred marks an entry whose Removed is no upstream lifecycle
+	// tag: tools/gen-kb set it to the k8s.io/api minor a deleted type
+	// disappeared in (when untagged, or tagged for a later removal), to the
+	// earlier release kube-apiserver stopped serving it in (its
+	// removalFixes), or to the release the Kubernetes changelog states for a
+	// type upstream still registers but never tagged (its untaggedLifecycles).
 	RemovedInferred bool `json:"removedInferred,omitempty"`
 }
 
@@ -57,7 +58,7 @@ func parseLifecycle(data []byte) (lifecycleFile, error) {
 }
 
 // The smallest dataset Load accepts. The shipped one has well over 200
-// entries, over 130 of them with a removal, and a refresh only adds (gen-kb
+// entries, over 120 of them with a removal, and a refresh only adds (gen-kb
 // carries deleted types forward as tombstones), so a file under these
 // floors is not an old dataset but a damaged or gutted one: valid JSON that
 // would let every removed API scan as ready. (TestDatasetSanity checks the

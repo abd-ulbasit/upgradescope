@@ -7,7 +7,7 @@ import (
 )
 
 // TestNonResourceKindsAreNotInTheKB: wrappers and subresource bodies that
-// kube-apiserver never served (tools/gen-kb nonPersisted) have no lifecycle
+// kube-apiserver never stored (tools/gen-kb nonPersisted) have no lifecycle
 // to judge. PodStatusResult used to be "removed 1.37" by inference, a
 // removed-api blocker for a manifest no cluster could have (#166).
 func TestNonResourceKindsAreNotInTheKB(t *testing.T) {
@@ -29,6 +29,8 @@ func TestNonResourceKindsAreNotInTheKB(t *testing.T) {
 		{"extensions", "v1beta1", "DeploymentRollback"},
 		{"admission.k8s.io", "v1beta1", "AdmissionReview"},
 		{"apiextensions.k8s.io", "v1beta1", "ConversionReview"},
+		{"policy", "v1beta1", "Eviction"},
+		{"apidiscovery.k8s.io", "v2beta1", "APIGroupDiscovery"},
 	} {
 		if e, ok := idx.Lookup(c.group, c.version, c.kind); ok {
 			t.Errorf("dataset has %s/%s %s (%+v), want none: it is not a persisted resource", c.group, c.version, c.kind, e)

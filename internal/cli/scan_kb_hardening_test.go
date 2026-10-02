@@ -7,8 +7,9 @@ import (
 )
 
 // #166 KB-01, end to end with the embedded KB. A kind no cluster serves
-// (PodStatusResult, a kubelet wrapper; batch/v2alpha1 JobTemplate, which was
-// never stored) was a removed-api blocker at 1.37 and 1.22; it is an
+// (PodStatusResult, a kubelet wrapper; policy/v1beta1 Eviction, a
+// subresource body; apidiscovery v2beta1 APIGroupDiscovery, a discovery
+// payload; batch/v2alpha1 JobTemplate, which was never stored) was a removed-api blocker at 1.37 and 1.22; it is an
 // unknown-api info now. rbac.authorization.k8s.io/v1alpha1, gone in
 // 1.23, scanned as ready at 1.23 with an unknown-api info; it blocks now and
 // warns one release before.
@@ -23,6 +24,16 @@ kind: JobTemplate
 metadata:
   name: t
 ---
+apiVersion: policy/v1beta1
+kind: Eviction
+metadata:
+  name: e
+---
+apiVersion: apidiscovery.k8s.io/v2beta1
+kind: APIGroupDiscovery
+metadata:
+  name: d
+---
 apiVersion: rbac.authorization.k8s.io/v1alpha1
 kind: ClusterRole
 metadata:
@@ -36,17 +47,23 @@ metadata:
 	}{
 		{"1.23", "blocked", 2, []finding{
 			{"blocker", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/apidiscovery.k8s.io/v2beta1/APIGroupDiscovery"},
 			{"info", "unknown-api/batch/v2alpha1/JobTemplate"},
+			{"info", "unknown-api/policy/v1beta1/Eviction"},
 			{"info", "unknown-api/core/v1/PodStatusResult"},
 		}},
 		{"1.22", "ready", 0, []finding{
 			{"warning", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/apidiscovery.k8s.io/v2beta1/APIGroupDiscovery"},
 			{"info", "unknown-api/batch/v2alpha1/JobTemplate"},
+			{"info", "unknown-api/policy/v1beta1/Eviction"},
 			{"info", "unknown-api/core/v1/PodStatusResult"},
 		}},
 		{"1.37", "blocked", 2, []finding{
 			{"blocker", "removed-api/rbac.authorization.k8s.io/v1alpha1/ClusterRole"},
+			{"info", "unknown-api/apidiscovery.k8s.io/v2beta1/APIGroupDiscovery"},
 			{"info", "unknown-api/batch/v2alpha1/JobTemplate"},
+			{"info", "unknown-api/policy/v1beta1/Eviction"},
 			{"info", "unknown-api/core/v1/PodStatusResult"},
 		}},
 	}

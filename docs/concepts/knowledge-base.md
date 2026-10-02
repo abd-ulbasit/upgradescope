@@ -52,12 +52,16 @@ Three things the generator adds to what the source says, each in
   test fails once upstream tags the type, so the entry cannot go stale
   quietly.
 - **Non-resources.** An explicit list in the generator, each kind cited,
-  leaves out wrapper, subresource-body and webhook-payload types that
-  kube-apiserver never stored or served: `PodStatusResult`,
-  `EphemeralContainers`, `ReplicationControllerDummy`, `JobTemplate`
-  (`batch/v1beta1`, `batch/v2alpha1`), the `Scale` and `DeploymentRollback`
-  bodies of the removed `apps` and `extensions` versions, and the v1beta1
-  `AdmissionReview` and `ConversionReview`. A manifest of one is an
+  leaves out wrapper, subresource-body and payload types that
+  kube-apiserver never stored as resources and that no manifest can create:
+  `PodStatusResult`, `EphemeralContainers`, `ReplicationControllerDummy`,
+  `JobTemplate` (`batch/v1beta1`, `batch/v2alpha1`), the `Scale` and
+  `DeploymentRollback` bodies of the removed `apps` and `extensions`
+  versions, the v1beta1 `AdmissionReview` and `ConversionReview`, the
+  `policy/v1beta1` `Eviction` (the body of `pods/eviction`) and the
+  `apidiscovery.k8s.io/v2beta1` `APIGroupDiscovery` (a discovery response
+  format). The list is exactly these 14 kinds; any other kind
+  `k8s.io/api` registers and tags is treated as a resource. A manifest of one is an
   `unknown-api` info, not a removal. The list is explicit rather than
   derived, because `k8s.io/api` registers these like any resource. A test
   checks every inferred removal left in the data against a list of types

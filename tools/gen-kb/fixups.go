@@ -125,7 +125,7 @@ var untaggedLifecycles = map[gvkOut]untaggedLifecycle{
 
 // nonPersisted are kinds k8s.io/api registers (or registered) that are
 // wrappers or subresource bodies, not resources: kube-apiserver never
-// stored or served them, so no manifest or live object can be one and a
+// stored them as resources, so no manifest or live object can be one and a
 // removal for them is meaningless. Without this, a deleted one became a
 // removed-api blocker through deletedTypes's inferred removal (#166). Each
 // value is the evidence, from the k8s.io/api source that registers the type.
@@ -165,6 +165,16 @@ var nonPersisted = map[gvkOut]string{
 	// webhook, never an object a manifest or a cluster holds.
 	{Group: "admission.k8s.io", Version: "v1beta1", Kind: "AdmissionReview"}:      "admission webhook payload",
 	{Group: "apiextensions.k8s.io", Version: "v1beta1", Kind: "ConversionReview"}: "conversion webhook payload",
+	// Eviction: the body of the pods/eviction subresource. k8s.io/api says
+	// "This is a subresource of Pod"; kube-apiserver's
+	// pkg/registry/policy/rest maps only poddisruptionbudgets (and, before
+	// 1.25, podsecuritypolicies) under v1beta1. policy/v1 Eviction stays, as
+	// the other current-version siblings do. lifecycle.k8s.io/v1alpha1
+	// Eviction is not this: it is a new resource with its own storage.
+	{Group: "policy", Version: "v1beta1", Kind: "Eviction"}: "body of the pods/eviction subresource",
+	// APIGroupDiscovery: the aggregated discovery response format
+	// (/api and /apis with an Accept header), never a stored resource.
+	{Group: "apidiscovery.k8s.io", Version: "v2beta1", Kind: "APIGroupDiscovery"}: "aggregated discovery response payload",
 }
 
 func isNonPersisted(g gvkOut) bool {

@@ -200,7 +200,6 @@ func TestDataDirHoldsOnlyYAMLEntries(t *testing.T) {
 // The embedded data files are checked by properties, not by a per-entry
 // table: adding a YAML entry needs no Go change, and an eol-sync run that
 // moves a date or ends a cycle cannot turn the weekly refresh PR red.
-
 func TestEmbeddedEntriesProperties(t *testing.T) {
 	addons, err := Load()
 	if err != nil {
