@@ -184,8 +184,12 @@ finding whose posted objects are all suppressed is not the pull request's,
 and objects the cluster already has at that key stay the cluster's. The
 JSON answer lists them in `suppressed` with a `suppressedCount`, and names
 expired rules and annotations without a reason in `warnings`. SARIF carries
-them as results with an external suppression, JUnit as skipped test cases,
-and GitLab Code Quality leaves them out, as `scan` does.
+the manifests' suppressed findings as results with an external suppression,
+JUnit as skipped test cases, and GitLab Code Quality leaves them out, as
+`scan` does. With `?cluster=`, a suppressed finding that is the pull
+request's only because the gate fails closed (for example a posted CRD
+that drops a stored version) is in the JSON `suppressed` list but not in
+the SARIF or JUnit answer.
 
 The server gate has no baseline input. With `?cluster=`, the cluster's
 stored state is its baseline: findings the cluster already has are tagged

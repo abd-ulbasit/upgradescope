@@ -88,7 +88,7 @@ a CI gate.
   parameter (at most 32 KiB; an invalid config is a 422). Suppressed
   findings count toward neither the verdict nor `fail-on`; the JSON
   answer lists them in `suppressed` with `suppressedCount` and names
-  expired rules in `warnings`; SARIF marks them suppressed, JUnit skips
+  expired rules and annotations without a reason in `warnings`; SARIF marks them suppressed, JUnit skips
   them and Code Quality leaves them out. The gate has no baseline input:
   with `?cluster=` the cluster is its baseline (#44).
 - The server's report-shaped responses, a cluster's report and the gate's
