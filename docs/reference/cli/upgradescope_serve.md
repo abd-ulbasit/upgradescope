@@ -53,7 +53,7 @@ upgradescope serve [flags]
       --team-map string              YAML file of {pattern, team} namespace globs overriding team labels (first match wins)
       --tls-cert-file string         PEM certificate (chain) to serve HTTPS directly; requires --tls-key-file (read at startup)
       --tls-key-file string          PEM private key for --tls-cert-file
-      --webhook string               generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in docs/operations.md) (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_URL or --webhook-file)
+      --webhook string               generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in api/webhook.schema.json) (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_URL or --webhook-file)
       --webhook-file string          read --webhook from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
       --webhook-secret string        sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key> (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_SECRET or --webhook-secret-file)
       --webhook-secret-file string   read --webhook-secret from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)

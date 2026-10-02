@@ -33,8 +33,8 @@ annotation), and both of the latter at once (`detect-all-in-cluster`)
 ([quickstart](https://pluto.docs.fairwinds.com/quickstart/)). It has CI exit
 codes and a GitHub Action.
 
-- **pluto, not upgradescope:** a lighter single-purpose binary; Helm 2
-  releases; a long record in CI pipelines.
+- **pluto, not upgradescope:** a lighter single-purpose binary; a long
+  record in CI pipelines.
 - **upgradescope, not pluto:** judges live objects by their
   `managedFields` writers, not only by the last-applied annotation (which
   server-side apply and many GitOps tools do not write); reads the

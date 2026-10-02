@@ -32,7 +32,8 @@ const TypeReadinessChanged = "readiness.changed"
 
 // Notification is one delivery: every change one evaluation pass found
 // for one cluster, across all of its targets. It is the generic webhook's
-// JSON body, documented in docs/operations.md.
+// JSON body: api/webhook.schema.json, documented in
+// docs/reference/webhook.md.
 type Notification struct {
 	SchemaVersion int       `json:"schemaVersion"`
 	DeliveryID    string    `json:"deliveryId"` // stable across retries: deduplicate on it

@@ -45,8 +45,9 @@ ingest token id 1 (prefix ee2b2560) for cluster "prod-eu-1" created — shown on
 that cluster:
 
 ```sh
+kubectl create namespace upgradescope
 kubectl -n upgradescope create secret generic push-token --from-literal=serverToken=<token>
-helm install upgradescope deploy/chart -n upgradescope --create-namespace \
+helm install upgradescope deploy/chart -n upgradescope \
   --set agent.clusterName=prod-eu-1 \
   --set agent.serverUrl=https://upgradescope.example.com \
   --set agent.existingSecret=push-token

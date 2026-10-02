@@ -15,8 +15,9 @@ answer is a verdict (`ready`, `blocked` or `unknown` when a required check
 could not run), a 0–100 score and cited findings, as a table, JSON, SARIF or
 Markdown, an exit code for CI, and a `ClusterReadiness` object an in-cluster
 agent keeps current. A self-hosted server adds history, a fleet view, team
-rollups and auditor exports. One Apache-2.0 binary; nothing in your cluster
-changes because of it.
+rollups and auditor exports. One Apache-2.0 binary. `scan` only reads; the
+agent writes nothing but its own `ClusterReadiness` object and that CRD's
+schema.
 
 **Documentation: https://abd-ulbasit.github.io/upgradescope/** ·
 every public claim, with the test that proves it: [claims ledger](docs/claims.md)
@@ -143,7 +144,7 @@ at the cost of Helm findings.
 
 | What | Measured | How |
 |---|---|---|
-| `scan` against a live kind cluster (Kubernetes 1.37) | median 0.49 s, p90 0.52 s | 30 runs on a ThinkPad (Linux, amd64), October 2026 audit (#130) |
+| `scan` against a live kind cluster (Kubernetes 1.37) | median 0.49 s, p90 0.52 s | 30 runs on a ThinkPad (Linux, amd64), October 2026 audit at main `8a951dd` (#130) |
 | `scan --files` on a two-object manifest | median 0.030 s | 30 runs, Apple M1 Pro, 2026-10-02 |
 | Binary, linux/amd64 (`-trimpath -ldflags "-s -w"`, as released) | 57.3 MiB (16.8 MiB gzipped) | Go 1.26.8, commit 6516b61, 2026-10-02 |
 
