@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -206,7 +207,7 @@ It listens on loopback by default. On any other address, the read API needs
 			"sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key>"),
 	}
 	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
-	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
+	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression); "+
 		"the body must arrive within the 60s read timeout (~350 KiB/s at the 20 MiB default) or the push gets 408, and a push that decodes to too many JSON values gets 413 whatever its size; "+
@@ -322,7 +323,13 @@ func validateServeOptions(opts *serveOptions) error {
 		if err != nil {
 			return fmt.Errorf("invalid --targets entry %q: %w", raw, err)
 		}
-		opts.parsedTargets = append(opts.parsedTargets, v)
+		if !slices.Contains(opts.parsedTargets, v) {
+			opts.parsedTargets = append(opts.parsedTargets, v)
+		}
+	}
+	if n := len(opts.parsedTargets); n > server.MaxExtraTargets {
+		return fmt.Errorf("--targets lists %d distinct minors, at most %d are allowed: %s",
+			n, server.MaxExtraTargets, server.ExtraTargetsCost)
 	}
 	return nil
 }

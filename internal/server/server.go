@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,17 @@ const (
 	idleTimeout       = 120 * time.Second
 	maxHeaderBytes    = 64 << 10 // a bearer token needs <1 KiB; Go's default is 1 MiB
 )
+
+// MaxExtraTargets is how many distinct Config.ExtraTargets (serve
+// --targets) New accepts. Each one adds a report of up to
+// --max-snapshot-bytes to every ingest and to the re-evaluation pass, so
+// the server's memory bound (docs/operations.md, make test-heap) is
+// measured at this many.
+const MaxExtraTargets = 4
+
+// ExtraTargetsCost says why MaxExtraTargets exists, for its refusals.
+const ExtraTargetsCost = "each one adds a report of up to --max-snapshot-bytes to every push and to the re-evaluation pass, " +
+	"and the server's memory bound is measured at that many (see Memory and request limits in the operations guide)"
 
 // Config wires a Server.
 type Config struct {
@@ -274,7 +286,12 @@ func New(cfg Config) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("server: bad extra target %q: %w", t, err)
 		}
-		s.extraTargets = append(s.extraTargets, v)
+		if !slices.Contains(s.extraTargets, v) {
+			s.extraTargets = append(s.extraTargets, v)
+		}
+	}
+	if len(s.extraTargets) > MaxExtraTargets {
+		return nil, fmt.Errorf("server: %d distinct extra targets, want at most %d: %s", len(s.extraTargets), MaxExtraTargets, ExtraTargetsCost)
 	}
 	s.metrics = newServerMetrics(s)
 	s.routes()

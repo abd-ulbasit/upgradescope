@@ -60,6 +60,20 @@ func TestServeRejectsBadTargets(t *testing.T) {
 	}
 }
 
+// --targets takes at most server.MaxExtraTargets distinct minors, the
+// count the server's memory bound is measured at; one given twice counts
+// once.
+func TestServeCapsTargets(t *testing.T) {
+	if err := execServe(t, []string{"--ingest-token", "t", "--targets", "1.36,1.37,1.38,1.39,v1.39"}, serveOK()); err != nil {
+		t.Fatalf("--targets of 4 distinct minors: %v", err)
+	}
+	err := execServe(t, []string{"--ingest-token", "t", "--targets", "1.36,1.37,1.38,1.39,1.40"}, serveOK())
+	if err == nil || !strings.Contains(err.Error(), "--targets") || !strings.Contains(err.Error(), "at most 4") ||
+		!strings.Contains(err.Error(), "--max-snapshot-bytes") {
+		t.Fatalf("--targets of 5 minors: want a refusal naming --targets, the limit of 4 and why, got %v", err)
+	}
+}
+
 // --targets is parsed exactly once, in validateServeOptions; runServe
 // receives []inventory.Version, never the raw CSV.
 func TestServePassesParsedTargets(t *testing.T) {
