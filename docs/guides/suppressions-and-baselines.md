@@ -185,6 +185,7 @@ becomes "2 objects"). Examples:
 | EOL add-on | `eol-addon/ingress-nginx`, or `eol-addon/<id>/<cycle>` for a release line |
 | Version skew | `version-skew/kubelet-post-upgrade`, `version-skew/<component>-newer` or `-behind`, `version-skew/upgrade-path` |
 | Unknown built-in API | `unknown-api/<group>/<version>/<kind>` |
+| CRD version | `crd-version/unserved/<group>/<version>/<kind>`, `crd-version/deprecated/…`, `crd-version/stored-unserved/…` |
 | Knowledge base behind the target | `kb-stale` |
 
 `--output json` shows the key of every finding, and the SARIF output uses

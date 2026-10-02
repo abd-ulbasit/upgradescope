@@ -159,6 +159,7 @@ ones after it. client-go's `rest.Config.Timeout` (`--request-timeout`, default
 | `deprecated-calls` | apiserver `/metrics`, `apiserver_requested_deprecated_apis` | The runtime-caller signal: which deprecated APIs some client requested since the apiserver started, which manifest scanners cannot see. It does not say which client (audit logs do). The gauge resets when the apiserver restarts, HA apiservers report independently, and managed planes often deny access. |
 | `addons` | pod container and init-container images and labels, `networking.k8s.io/v1` IngressClasses, plus the Helm releases from the `helm` step | Matches registry matchers. An image matcher is a repository-path suffix on whole segments of the normalised reference, so mirrors and pull-through caches match; provider builds (GKE, AKS) match only entries written for them. A chart matcher names a Helm release's chart or a pod's `helm.sh/chart` label. A pod running an image no matcher claims, whose `app.kubernetes.io/name`, `helm.sh/chart` chart name or `app.kubernetes.io/part-of` names an add-on, is that add-on, at its `app.kubernetes.io/version` when the name label (or, without one, the chart label) named it. An IngressClass with controller `k8s.io/ingress-nginx` is ingress-nginx, without a version, unless ingress-nginx, a vendor build of it or Traefik (which can serve that class) was found otherwise. Each namespace is its own install: a Helm release's `appVersion` wins there, and otherwise the oldest version its image tags and labels give. Image repositories no image matcher claims go to `unrecognizedImages` and never become findings. In files mode the same matcher runs over manifest pod templates and IngressClasses. |
 | `api-usage` | discovery, then one **metadata-only, paged** list per resource that still serves a version the knowledge base flags, at a non-deprecated version | Detects *authorship*, not servability. See below. |
+| `crds` | `apiextensions.k8s.io/v1` CustomResourceDefinitions, then, for each CRD with a deprecated or unserved version, one **metadata-only, paged** list of its custom resources at a served version that is not deprecated | Records `spec.versions` and `status.storedVersions`, and the custom resources a field manager still writes through a deprecated or unserved version (the same authorship rules as `api-usage`). A forbidden custom-resource list (the agent is granted none) makes it partial. In files mode, CRD manifests give the versions and every custom resource in the files counts; one without its CRD in the files makes it partial. See [CRD versions](concepts/api-usage-detection.md#crd-versions). |
 
 Every cluster-wide list is paged (`limit=500`). The collectors are
 read-only.
@@ -252,7 +253,9 @@ store and the push protocol read it. It is JSON on the wire and at rest.
   "controlPlane":    [{ "component", "version" }],
   "namespaces":      [{ "name", "team" }],
   "unrecognizedImages": ["…deduped, sorted, capped at 200"],
-  "unrecognizedImagesOmitted": 0
+  "unrecognizedImagesOmitted": 0,
+  "crds":            [{ "group", "kind", "plural", "versions": [{ "name", "served", "storage", "deprecated", "deprecationWarning" }],
+                        "storedVersions", "usage": [/* as apiUsage, per deprecated or unserved version */] }]
 }
 ```
 

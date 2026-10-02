@@ -648,7 +648,7 @@ components:
       description: Something the evaluation could not assess.
       required: [capability, reason]
       properties:
-        capability: {type: string, description: "A collector capability (api-usage, deprecated-calls, helm, addons, versions), kb-coverage, or target (the target is not an upgrade of the cluster)."}
+        capability: {type: string, description: "A collector capability (api-usage, deprecated-calls, helm, addons, versions, crds), kb-coverage, or target (the target is not an upgrade of the cluster)."}
         reason: {type: string}
         partial: {type: boolean, description: The capability ran but did not read everything.}
         skipped: {type: array, items: {type: string}, description: What a partial capability did not read.}
@@ -944,6 +944,7 @@ components:
         namespaces: {type: array, items: {type: object}}
         unrecognizedImages: {type: array, items: {type: string}, description: "Image repositories no add-on image matcher claims; sorted, deduplicated, at most 200."}
         unrecognizedImagesOmitted: {type: integer, description: Unrecognized image repositories the cap dropped.}
+        crds: {type: array, items: {type: object}, description: "CustomResourceDefinitions: versions, status.storedVersions, and the custom resources at a deprecated or unserved version."}
     PushAccepted:
       type: object
       required: [snapshotId]
