@@ -313,6 +313,64 @@ func testCommitExistingSnapshot(t *testing.T, s store.Store) {
 	}
 }
 
+// testOutboxDefer pins DeferOutbox: a claimed message goes back due at the
+// given time with the claim's attempt given back (so a held sink does not
+// burn the message's attempts), its last error untouched, and never below
+// zero attempts.
+func testOutboxDefer(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	cid := mustCluster(t, s, "prod")
+	if _, _, err := s.CommitEvaluations(ctx, store.EvaluationBatch{
+		ClusterID: cid,
+		Snapshot:  &store.Snapshot{ClusterID: cid, Hash: "aaa", ReceivedAt: base, Inventory: []byte(`{}`)},
+		Outbox:    []store.OutboxMessage{outboxMsg("slack", `{"n":1}`, base)},
+	}); err != nil {
+		t.Fatalf("CommitEvaluations: %v", err)
+	}
+	first, err := s.ClaimOutbox(ctx, base, time.Minute, 10)
+	if err != nil || len(first) != 1 || first[0].Attempts != 1 {
+		t.Fatalf("claim = (%+v, %v), want one message with attempts 1", first, err)
+	}
+	id := first[0].ID
+	if err := s.RescheduleOutbox(ctx, id, at(1), "status 503"); err != nil {
+		t.Fatalf("RescheduleOutbox: %v", err)
+	}
+	second, err := s.ClaimOutbox(ctx, at(1), time.Minute, 10)
+	if err != nil || len(second) != 1 || second[0].Attempts != 2 {
+		t.Fatalf("claim at +1h = (%+v, %v), want attempts 2", second, err)
+	}
+	if err := s.DeferOutbox(ctx, id, at(3)); err != nil {
+		t.Fatalf("DeferOutbox: %v", err)
+	}
+	if got, _ := s.ClaimOutbox(ctx, at(2), time.Minute, 10); len(got) != 0 {
+		t.Errorf("claim at +2h = %+v, want none (deferred to +3h)", got)
+	}
+	again, err := s.ClaimOutbox(ctx, at(3), time.Minute, 10)
+	if err != nil || len(again) != 1 || again[0].ID != id || again[0].Attempts != 2 {
+		t.Fatalf("claim at +3h = (%+v, %v), want the message with attempts 2 (the deferred claim was given back)", again, err)
+	}
+	// Never below zero, even when the claim's attempt was already given back.
+	if err := s.DeferOutbox(ctx, id, at(4)); err != nil {
+		t.Fatalf("DeferOutbox: %v", err)
+	}
+	if err := s.DeferOutbox(ctx, id, at(4)); err != nil {
+		t.Fatalf("DeferOutbox: %v", err)
+	}
+	if err := s.DeferOutbox(ctx, id, at(4)); err != nil {
+		t.Fatalf("DeferOutbox: %v", err)
+	}
+	last, err := s.ClaimOutbox(ctx, at(4), time.Minute, 10)
+	if err != nil || len(last) != 1 || last[0].Attempts != 1 {
+		t.Fatalf("claim after repeated defers = (%+v, %v), want attempts 1 (floor 0, then this claim)", last, err)
+	}
+	if err := s.DeleteOutbox(ctx, id); err != nil {
+		t.Fatalf("DeleteOutbox: %v", err)
+	}
+	if err := s.DeferOutbox(ctx, id, at(5)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("DeferOutbox(gone) err = %v, want ErrNotFound", err)
+	}
+}
+
 // testOutbox pins the delivery queue: due messages are claimed oldest
 // first and leased; a leased message is not re-claimed until the lease
 // ends; Reschedule and Delete act by id.

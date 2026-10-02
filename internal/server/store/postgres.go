@@ -589,6 +589,13 @@ func (p *Postgres) RescheduleOutbox(ctx context.Context, id int64, next time.Tim
 		`UPDATE outbox SET next_attempt_at = $1, last_error = $2 WHERE id = $3`, next.UTC(), lastErr, id)
 }
 
+// DeferOutbox puts a claimed message back for later without counting the
+// claim as an attempt, or returns ErrNotFound.
+func (p *Postgres) DeferOutbox(ctx context.Context, id int64, next time.Time) error {
+	return execOne(ctx, p.db, fmt.Sprintf("defer outbox message %d", id),
+		`UPDATE outbox SET next_attempt_at = $1, attempts = GREATEST(attempts - 1, 0) WHERE id = $2`, next.UTC(), id)
+}
+
 // CreateToken stores a new active ingest token for clusterName and returns
 // its id; only the sha256 of token (plus TokenPrefix) is persisted. Fails
 // if the token is already issued.

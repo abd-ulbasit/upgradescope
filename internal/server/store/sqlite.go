@@ -622,6 +622,13 @@ func (s *SQLite) RescheduleOutbox(ctx context.Context, id int64, next time.Time,
 		`UPDATE outbox SET next_attempt_at = ?, last_error = ? WHERE id = ?`, formatTime(next), lastErr, id)
 }
 
+// DeferOutbox puts a claimed message back for later without counting the
+// claim as an attempt, or returns ErrNotFound.
+func (s *SQLite) DeferOutbox(ctx context.Context, id int64, next time.Time) error {
+	return execOne(ctx, s.db, fmt.Sprintf("defer outbox message %d", id),
+		`UPDATE outbox SET next_attempt_at = ?, attempts = MAX(attempts - 1, 0) WHERE id = ?`, formatTime(next), id)
+}
+
 // execOne runs a statement that must affect a row; none is ErrNotFound.
 // Shared by both backends (the query carries the dialect's placeholders).
 func execOne(ctx context.Context, x sqlExecer, what, query string, args ...any) error {

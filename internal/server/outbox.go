@@ -134,12 +134,22 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
+	// A sink that asked to be left alone (Retry-After) is not called for any
+	// of its messages: they wait out the hold, and the claim that brought
+	// this one here is not an attempt.
+	if until, held := s.holds.heldUntil(m.Sink, s.now()); held {
+		settle(s.cfg.Store.DeferOutbox(ctx, m.ID, until))
+		return
+	}
 	nctx, cancel := context.WithTimeout(ctx, s.notifyTimeout)
 	err = target.Notify(nctx, n)
 	cancel()
 	if err == nil {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
+	}
+	if hold := retryAfterHold(err); hold > 0 {
+		s.holds.hold(m.Sink, s.now().Add(hold))
 	}
 	if m.Attempts >= outboxMaxAttempts {
 		log.Printf("server: giving up on notification %s (cluster %s, sink %s) after %d attempts: %v",

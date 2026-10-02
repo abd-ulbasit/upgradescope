@@ -459,6 +459,18 @@ func (f *fakeStore) RescheduleOutbox(_ context.Context, id int64, next time.Time
 	return nil
 }
 
+func (f *fakeStore) DeferOutbox(_ context.Context, id int64, next time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.outbox, func(m store.OutboxMessage) bool { return m.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	f.outbox[i].NextAttemptAt = next
+	f.outbox[i].Attempts = max(f.outbox[i].Attempts-1, 0)
+	return nil
+}
+
 func (f *fakeStore) LatestEvaluation(ctx context.Context, clusterID int64, target string) (store.Evaluation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
