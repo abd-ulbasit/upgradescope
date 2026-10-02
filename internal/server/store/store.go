@@ -6,7 +6,9 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -88,6 +90,11 @@ type Store interface {
 	// cluster's LATEST snapshot, or ErrNotFound — an evaluation of an
 	// older snapshot describes an inventory the cluster no longer has.
 	CurrentEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error)
+	// CurrentEvaluationSummary is CurrentEvaluation without the report
+	// (Report nil): the columns and NotAssessed. The read API's summaries
+	// of every cluster (cluster list, fleet matrix, metrics) use it, so
+	// their cost never depends on how large a report is.
+	CurrentEvaluationSummary(ctx context.Context, clusterID int64, target string) (Evaluation, error)
 	// LatestKnownEvaluation is the newest evaluation for (cluster, target)
 	// whose verdict was decided — ready, or at least one blocker — skipping
 	// "unknown" ones (no blockers but required checks not assessed).
@@ -160,17 +167,22 @@ type Snapshot struct {
 }
 
 type Evaluation struct {
-	ID         int64     `json:"id"`
-	ClusterID  int64     `json:"clusterId"`
-	SnapshotID int64     `json:"snapshotId"`
-	Target     string    `json:"target"`
-	KBVersion  string    `json:"kbVersion"`
-	Score      int       `json:"score"`
-	Ready      bool      `json:"ready"`
-	Blockers   int       `json:"blockers"`
-	Warnings   int       `json:"warnings"`
-	Report     []byte    `json:"-"` // full engine.Report JSON
-	CreatedAt  time.Time `json:"createdAt"`
+	ID         int64  `json:"id"`
+	ClusterID  int64  `json:"clusterId"`
+	SnapshotID int64  `json:"snapshotId"`
+	Target     string `json:"target"`
+	KBVersion  string `json:"kbVersion"`
+	Score      int    `json:"score"`
+	Ready      bool   `json:"ready"`
+	Blockers   int    `json:"blockers"`
+	Warnings   int    `json:"warnings"`
+	Report     []byte `json:"-"` // full engine.Report JSON
+	// NotAssessed is the report's notAssessed array as JSON, nil when it
+	// is absent or empty. Written by the store, never by the caller: every
+	// write that stores a Report stores this beside it (notAssessedOf), so
+	// a summary that says what a verdict could not cover reads no report.
+	NotAssessed []byte    `json:"-"`
+	CreatedAt   time.Time `json:"createdAt"`
 	// EvaluatedAt is when this result was last confirmed: a re-evaluation
 	// with the same verdict, score and finding keys refreshes the row
 	// instead of adding a history point. Zero on insert defaults to
@@ -179,6 +191,34 @@ type Evaluation struct {
 	// TeamMapHash identifies the server --team-map the report was computed
 	// with ("" = none), so a changed map triggers a re-evaluation.
 	TeamMapHash string `json:"teamMapHash,omitempty"`
+}
+
+// notAssessedOf extracts a report's notAssessed array for its own column:
+// "" when the report has none, an empty one, or does not decode (the
+// report endpoint then says it is corrupt). Skipped fields allocate
+// nothing, so this costs a scan of the report, not a copy of it.
+func notAssessedOf(report []byte) string {
+	var r struct {
+		NotAssessed []json.RawMessage `json:"notAssessed"`
+	}
+	if len(report) == 0 || json.Unmarshal(report, &r) != nil || len(r.NotAssessed) == 0 {
+		return ""
+	}
+	out, err := json.Marshal(r.NotAssessed)
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// notAssessedBytes is the read side of the not_assessed column: NULL (a
+// row written by a binary that predates migration 0007) and "" both read
+// as none.
+func notAssessedBytes(v sql.NullString) []byte {
+	if !v.Valid || v.String == "" {
+		return nil
+	}
+	return []byte(v.String)
 }
 
 // ErrConflict is returned by CommitEvaluations when the batch was computed

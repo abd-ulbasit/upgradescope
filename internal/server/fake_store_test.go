@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"sort"
 	"sync"
@@ -293,12 +294,24 @@ func (f *fakeStore) currentEvalLocked(snapshotID int64, target string) (store.Ev
 }
 
 func (f *fakeStore) CurrentEvaluation(ctx context.Context, clusterID int64, target string) (store.Evaluation, error) {
+	return f.current(ctx, "CurrentEvaluation", clusterID, target)
+}
+
+// CurrentEvaluationSummary is CurrentEvaluation without the report; its
+// injected error is errs["CurrentEvaluationSummary"].
+func (f *fakeStore) CurrentEvaluationSummary(ctx context.Context, clusterID int64, target string) (store.Evaluation, error) {
+	e, err := f.current(ctx, "CurrentEvaluationSummary", clusterID, target)
+	e.Report = nil
+	return e, err
+}
+
+func (f *fakeStore) current(ctx context.Context, method string, clusterID int64, target string) (store.Evaluation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return store.Evaluation{}, err
 	}
-	if err := f.errs["CurrentEvaluation"]; err != nil {
+	if err := f.errs[method]; err != nil {
 		return store.Evaluation{}, err
 	}
 	snap, ok := f.latestSnapshotLocked(clusterID)
@@ -306,9 +319,23 @@ func (f *fakeStore) CurrentEvaluation(ctx context.Context, clusterID int64, targ
 		return store.Evaluation{}, store.ErrNotFound
 	}
 	if e, ok := f.currentEvalLocked(snap.ID, target); ok {
+		e.NotAssessed = fakeNotAssessed(e.Report)
 		return e, nil
 	}
 	return store.Evaluation{}, store.ErrNotFound
+}
+
+// fakeNotAssessed derives NotAssessed from a report as the real stores do
+// on write: the notAssessed array, nil when absent or empty.
+func fakeNotAssessed(report []byte) []byte {
+	var r struct {
+		NotAssessed []json.RawMessage `json:"notAssessed"`
+	}
+	if json.Unmarshal(report, &r) != nil || len(r.NotAssessed) == 0 {
+		return nil
+	}
+	out, _ := json.Marshal(r.NotAssessed)
+	return out
 }
 
 func (f *fakeStore) LatestKnownEvaluation(_ context.Context, clusterID int64, target string) (store.Evaluation, error) {

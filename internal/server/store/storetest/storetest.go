@@ -54,6 +54,7 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("ScoreHistoryOldestFirstLimitNewest", func(t *testing.T) { testScoreHistory(t, newStore(t)) })
 	t.Run("EvaluationFreshnessFields", func(t *testing.T) { testEvaluationFreshnessFields(t, newStore(t)) })
 	t.Run("CurrentEvaluationIsLatestSnapshotOnly", func(t *testing.T) { testCurrentEvaluation(t, newStore(t)) })
+	t.Run("CurrentEvaluationSummary", func(t *testing.T) { testEvaluationSummary(t, newStore(t)) })
 	t.Run("CurrentEvaluationIgnoresCreatedAt", func(t *testing.T) { testCurrentEvaluationIgnoresCreatedAt(t, newStore(t)) })
 	t.Run("LatestKnownEvaluationSkipsUnknown", func(t *testing.T) { testLatestKnownEvaluation(t, newStore(t)) })
 	t.Run("CommitEvaluationsNewSnapshot", func(t *testing.T) { testCommitNewSnapshot(t, newStore(t)) })
