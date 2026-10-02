@@ -12,7 +12,6 @@ import (
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/metadata"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -76,7 +75,7 @@ func collectCRDs(ctx context.Context, ext apiextensionsclient.Interface, meta me
 				unchecked[apiName(c.Group+"/"+v, c.Kind)] = true
 			}
 		}
-		at := crdListVersion(*c)
+		at := c.PreferredVersion()
 		if at == "" {
 			failures = append(failures, fmt.Sprintf("%s.%s serves no version that is not deprecated, so its custom resources were not listed", c.Plural, c.Group))
 			skip()
@@ -112,25 +111,6 @@ func crdOf(o *apiextensionsv1.CustomResourceDefinition) inventory.CRD {
 		c.Versions = append(c.Versions, cv)
 	}
 	return c
-}
-
-// crdListVersion picks the version to list a CRD's custom resources at:
-// the storage version when it is served and not deprecated, else the
-// highest-priority such version; "" when there is none.
-func crdListVersion(c inventory.CRD) string {
-	best := ""
-	for _, v := range c.Versions {
-		if !v.Served || v.Deprecated {
-			continue
-		}
-		if v.Storage {
-			return v.Name
-		}
-		if best == "" || version.CompareKubeAwareVersionStrings(v.Name, best) > 0 {
-			best = v.Name
-		}
-	}
-	return best
 }
 
 // listCRDUsage pages through one CRD's custom resources, metadata-only,

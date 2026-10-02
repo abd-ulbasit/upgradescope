@@ -5,8 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/version"
-
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
@@ -64,7 +62,7 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version) []Findin
 				used[u.Version] = u
 			}
 		}
-		to := crdMigrationTarget(c)
+		to := c.PreferredVersion()
 
 		for _, v := range c.Versions {
 			if !v.Served || !v.Deprecated {
@@ -175,23 +173,4 @@ func crdUsage(f *Finding, u inventory.APIUsage, nsInfo []inventory.NamespaceInfo
 		detail = fmt.Sprintf(detail+": %s.", u.Count, nsDetail)
 	}
 	return detail + writtenBy(u)
-}
-
-// crdMigrationTarget is the version to move a CRD's custom resources to:
-// the storage version when it is served and not deprecated, else the
-// highest-priority such version; "" when there is none.
-func crdMigrationTarget(c inventory.CRD) string {
-	best := ""
-	for _, v := range c.Versions {
-		if !v.Served || v.Deprecated {
-			continue
-		}
-		if v.Storage {
-			return v.Name
-		}
-		if best == "" || version.CompareKubeAwareVersionStrings(v.Name, best) > 0 {
-			best = v.Name
-		}
-	}
-	return best
 }

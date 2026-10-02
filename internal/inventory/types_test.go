@@ -280,3 +280,27 @@ func TestInventoryWireFormat(t *testing.T) {
 		t.Errorf("Inventory wire format drifted — this is the agent->server contract.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestCRDPreferredVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		versions []CRDVersion
+		want     string
+	}{
+		{"served storage version", []CRDVersion{{Name: "v1beta1", Served: true}, {Name: "v1", Served: true, Storage: true}}, "v1"},
+		{"deprecated storage: highest-priority other", []CRDVersion{
+			{Name: "v1alpha1", Served: true}, {Name: "v1beta1", Served: true, Storage: true, Deprecated: true}, {Name: "v1beta2", Served: true},
+		}, "v1beta2"},
+		{"unserved storage: kube-aware order, not lexical", []CRDVersion{
+			{Name: "v1", Storage: true}, {Name: "v2alpha1", Served: true}, {Name: "v1beta1", Served: true},
+		}, "v1beta1"},
+		{"none served and not deprecated", []CRDVersion{{Name: "v1", Served: true, Deprecated: true}, {Name: "v2"}}, ""},
+		{"no versions", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (CRD{Versions: tc.versions}).PreferredVersion(); got != tc.want {
+				t.Errorf("PreferredVersion() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

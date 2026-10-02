@@ -1,6 +1,10 @@
 package inventory
 
-import "time"
+import (
+	"time"
+
+	"k8s.io/apimachinery/pkg/version"
+)
 
 type Capability string
 
@@ -99,6 +103,27 @@ type CRD struct {
 	// live objects some manager still writes through it (ObjectRef.Manager
 	// names it), manifest objects at it. Sorted by Version.
 	Usage []APIUsage `json:"usage,omitempty"`
+}
+
+// PreferredVersion is the version to read and write a CRD's custom
+// resources at: the storage version when it is served and not deprecated,
+// else the highest-priority such version; "" when there is none. The
+// collector lists custom resources at it, and the engine names it as the
+// version to move them to.
+func (c CRD) PreferredVersion() string {
+	best := ""
+	for _, v := range c.Versions {
+		if !v.Served || v.Deprecated {
+			continue
+		}
+		if v.Storage {
+			return v.Name
+		}
+		if best == "" || version.CompareKubeAwareVersionStrings(v.Name, best) > 0 {
+			best = v.Name
+		}
+	}
+	return best
 }
 
 // CRDVersion is one entry of a CRD's spec.versions.
