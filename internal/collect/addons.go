@@ -161,7 +161,10 @@ func olderVersion(cur, v string) string {
 // one, the oldest version wins, and a Helm release's appVersion over image
 // tags (sidecars and stale pods lag the release). Neither crosses
 // namespaces, so a mesh mid-upgrade or a newer release elsewhere cannot
-// hide an older install, nor lend its version to one.
+// hide an older install, nor lend its version to one. The limit is within
+// a namespace: an istioctl canary revision running an older istio/pilot
+// beside a newer istiod Helm release in istio-system is reported at the
+// release's version, and the older revision is not judged.
 func matchAddOns(images []nsImage, releases []inventory.HelmRelease, addons []registry.AddOn) ([]inventory.AddOnInstance, []string) {
 	type evidence struct {
 		source  string // "image" | "chart"

@@ -45,7 +45,10 @@ const (
 // and go stale across upgrades without anyone writing the old version
 // again. No user manifest is behind them. kube-controller-manager and
 // kube-scheduler also write their own LeaseCandidates (coordinated leader
-// election).
+// election). A custom scheduler built on the kube-scheduler framework may
+// report the field manager "kube-scheduler" too, so its writes through a
+// deprecated version are not counted either. Schedulers mostly write
+// bindings, Events and Leases through GA versions, so the gap is narrow.
 var internalManagers = map[string]bool{
 	"kube-apiserver":                               true,
 	"kube-controller-manager":                      true,

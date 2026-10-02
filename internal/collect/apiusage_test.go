@@ -867,7 +867,7 @@ func TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(inv.APIUsage) != 1 || inv.APIUsage[0].Kind != "PodSecurityPolicy" || inv.APIUsage[0].Count != 3 {
-		t.Fatalf("api usage = %#v, want all 3 PodSecurityPolicies", inv.APIUsage)
+		t.Fatalf("api usage = %#v, want 3 of the 4 PodSecurityPolicies (the controller-only one skipped)", inv.APIUsage)
 	}
 	rep := evaluateAt(inv, k, "v1.24.17", inventory.Version{Major: 1, Minor: 25})
 	if fs := removedAPIFindings(rep); len(fs) != 1 || fs[0].Severity != engine.SevBlocker {
