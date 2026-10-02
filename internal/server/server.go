@@ -154,10 +154,15 @@ const (
 // and 251 MiB (/fleet) of a 2000-cluster fleet's, and 30 held 433 MiB
 // of /metrics, whose handler keeps the gathered metric families until
 // its write returns (TestUnreadFleetResponsesAreBounded).
+//
+// A Prometheus scrape waits for a fleet slot only metricsQueueTimeout,
+// within Prometheus' default 10s scrape_timeout, so a busy server answers
+// it 503 (an up of 0 for that scrape) rather than leaving it to time out.
 const (
 	maxConcurrentReads      = 1
 	maxConcurrentFleetReads = 2
 	readQueueTimeout        = 30 * time.Second
+	metricsQueueTimeout     = 5 * time.Second
 )
 
 // Responses held for their clients. Every read (per-cluster or of the
@@ -202,8 +207,9 @@ type Server struct {
 	readSlots        chan struct{} // semaphore: one token per read that loads a snapshot
 	readQueueTimeout time.Duration // how long such a read waits for a slot
 
-	fleetSlots        chan struct{} // semaphore: one token per read of the whole fleet being built
-	fleetQueueTimeout time.Duration // how long such a read waits for a slot
+	fleetSlots          chan struct{} // semaphore: one token per read of the whole fleet being built
+	fleetQueueTimeout   time.Duration // how long such a read waits for a slot
+	metricsQueueTimeout time.Duration // how long a /metrics scrape waits for one
 
 	heldResponses    *byteBudget   // read, fleet read and /gate response bytes held for clients after their slot
 	slotWriteTimeout time.Duration // how long a response sent in its slot may take
@@ -251,6 +257,7 @@ func New(cfg Config) (*Server, error) {
 	s.readQueueTimeout = readQueueTimeout
 	s.fleetSlots = make(chan struct{}, maxConcurrentFleetReads)
 	s.fleetQueueTimeout = readQueueTimeout
+	s.metricsQueueTimeout = metricsQueueTimeout
 	s.heldResponses = newByteBudget(maxHeldResponses * s.maxSnapshotBytes())
 	s.slotWriteTimeout = slotWriteTimeout
 	s.teamMapHash = hashTeamMap(cfg.TeamMap)
@@ -302,7 +309,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	// Per-cluster scores are what the read token protects, so /metrics
 	// takes it too (the chart's ServiceMonitor sends it).
-	s.mux.HandleFunc("GET /metrics", s.readAuth(s.inFleetSlot(s.metrics.handler().ServeHTTP)))
+	s.mux.HandleFunc("GET /metrics", s.readAuth(s.inMetricsSlot(s.metrics.handler().ServeHTTP)))
 	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
 	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.inFleetSlot(s.handleListClusters)))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.inReadSlot(s.handleGetCluster)))
@@ -475,6 +482,14 @@ func (s *Server) inReadSlot(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) inFleetSlot(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.heldIn(w, r, h, s.fleetSlots, s.fleetQueueTimeout, "too many concurrent fleet reads; retry shortly")
+	}
+}
+
+// inMetricsSlot is inFleetSlot for a Prometheus scrape, which waits for
+// the slot only metricsQueueTimeout.
+func (s *Server) inMetricsSlot(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.heldIn(w, r, h, s.fleetSlots, s.metricsQueueTimeout, "too many concurrent fleet reads; retry shortly")
 	}
 }
 

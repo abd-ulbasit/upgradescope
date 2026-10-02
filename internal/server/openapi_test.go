@@ -398,7 +398,7 @@ func TestOpenAPIReadBusyMatchesSpec(t *testing.T) {
 		"/api/v1/fleet":    "/api/v1/fleet",
 		"/metrics":         "/metrics",
 	}
-	s.fleetQueueTimeout = time.Millisecond
+	s.fleetQueueTimeout, s.metricsQueueTimeout = time.Millisecond, time.Millisecond
 	for range cap(s.fleetSlots) {
 		s.fleetSlots <- struct{}{}
 	}

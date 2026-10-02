@@ -116,7 +116,8 @@ func TestReadConcurrencyLimit(t *testing.T) {
 			t.Fatalf("%s: status = %d (%s), Retry-After %q; want 503 with Retry-After", path, resp.StatusCode, body, resp.Header.Get("Retry-After"))
 		}
 	}
-	// Reads of the whole fleet load no inventory and take no slot.
+	// Reads of the whole fleet load no inventory and take a fleet slot,
+	// not the read slot.
 	for _, path := range []string{"/api/v1/clusters", "/api/v1/fleet", "/metrics"} {
 		if resp, body := getRaw(t, ts, path, ""); resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s with the read slot busy: status = %d (%s), want 200", path, resp.StatusCode, body)
@@ -253,5 +254,36 @@ func TestReadSlotSendsWhatTheHeldBudgetCannotTake(t *testing.T) {
 	<-done
 	if n := len(s.readSlots); n != 0 || w.Body.String() != "report" {
 		t.Fatalf("after sending: %d read slots held, body %q; want 0, \"report\"", n, w.Body)
+	}
+}
+
+// /metrics waited for a fleet slot as long as the dashboard's reads, 30s,
+// three times Prometheus' default 10s scrape_timeout: a busy server showed
+// as scrape timeouts. A scrape now waits metricsQueueTimeout, within it,
+// and gets 503 + Retry-After; the other fleet reads still wait longer.
+func TestMetricsWaitsLessThanAScrapeTimeout(t *testing.T) {
+	if metricsQueueTimeout >= 10*time.Second {
+		t.Fatalf("metricsQueueTimeout = %s, want under Prometheus' default 10s scrape_timeout", metricsQueueTimeout)
+	}
+	s := newTestServer(t, newFakeStore())
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	s.metricsQueueTimeout = 50 * time.Millisecond
+	for range cap(s.fleetSlots) {
+		s.fleetSlots <- struct{}{}
+	}
+	began := time.Now()
+	resp, body := getRaw(t, ts, "/metrics", "")
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" || time.Since(began) > 5*time.Second {
+		t.Fatalf("/metrics with the fleet slots busy: status %d (%s) after %s; want 503 with Retry-After at once", resp.StatusCode, body, time.Since(began))
+	}
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		for range cap(s.fleetSlots) {
+			<-s.fleetSlots
+		}
+	}()
+	if resp, body := getRaw(t, ts, "/api/v1/fleet", ""); resp.StatusCode != http.StatusOK { // waits fleetQueueTimeout
+		t.Fatalf("queued fleet read: status %d (%s), want 200", resp.StatusCode, body)
 	}
 }
