@@ -7,11 +7,13 @@ Scan a cluster (or rendered manifests) for upgrade readiness
 Scan a cluster (or rendered manifests) for upgrade readiness.
 
 Exit codes: 0 when the gate passes; 1 on an operational error, including an
-invalid config file or baseline; 2 when the gate fails.
+invalid config file or baseline and a report that could not be written; 2
+when the gate fails, which includes an unknown verdict.
 
 The gate (--fail-on) fails when a finding at or above the threshold remains,
 or (unless --allow-incomplete) when a required check was not assessed, so a
-blocker may have been missed.
+blocker may have been missed. A --target that is not an upgrade of the
+cluster (at or below the minor its kube-apiserver runs) always fails it.
 
 Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
 or the one file named, is decoded as kubectl apply -f decodes it: each
@@ -68,7 +70,7 @@ upgradescope scan [flags]
 ### Options
 
 ```
-      --allow-incomplete        with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed)
+      --allow-incomplete        with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed); a --target that is not an upgrade still fails
       --baseline string         JSON report of an earlier scan (--output json or --write-baseline): the gate fails only on findings that are new since
       --config string           config file with ignore rules (default: .upgradescope.yaml in the scan root, else at the git repository root)
       --context string          kubeconfig context to use

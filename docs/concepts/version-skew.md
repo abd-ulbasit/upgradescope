@@ -24,12 +24,27 @@ appear only in apiserver audit logs, which upgradescope does not read.
 |---|---|
 | `version-skew/kubelet-post-upgrade`: kubelets that would be more than 3 minors behind once the control plane is at the target | blocker |
 | `version-skew/kube-proxy-post-upgrade`: the same for kube-proxy | blocker |
-| `version-skew/kube-controller-manager`, `version-skew/kube-scheduler`: newer than the oldest apiserver, whatever the target | blocker |
+| `version-skew/kube-controller-manager-newer`, `version-skew/kube-scheduler-newer`: newer than the oldest apiserver, whatever the target | blocker |
 | `version-skew/kubelet-current`: kubelets too far behind today | warning |
 | `version-skew/kubelet-newer-than-apiserver` | warning |
+| `version-skew/kube-proxy-newer`: kube-proxy newer than the oldest apiserver | warning |
 | `version-skew/apiserver-ha-spread` | warning |
-| controller-manager or scheduler more than 1 minor behind; kube-proxy too far behind or newer than the apiserver | warning |
+| `version-skew/kube-controller-manager-behind`, `version-skew/kube-scheduler-behind` (more than 1 minor behind the newest apiserver), `version-skew/kube-proxy-behind` | warning |
 | `version-skew/kubelet-unparseable` | info |
+| `version-skew/upgrade-path`: the target is more than one minor ahead of the oldest apiserver; names each minor the control plane passes through | info |
+
+One component can be both newer and behind at once (HA replicas
+mid-upgrade), so each direction has its own key.
+
+## A target that is not an upgrade
+
+The control plane is upgraded one minor at a time, and every check judges a
+newer minor. On a live cluster, a `--target` at or below the minor the
+oldest kube-apiserver runs (a downgrade, the same minor, or a typo such as
+`1.4` for `1.40`) is reported as a required `target` gap: the verdict is
+`unknown` and `scan` exits 2, even with `--allow-incomplete`. The table and
+the JSON report show the server version the target was judged against
+(`serverVersion`).
 
 Each finding names the nodes or versions, and cites the policy.
 

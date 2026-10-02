@@ -38,6 +38,13 @@ At the installed version, independent of the target unless noted:
 - no lifecycle data for the installed version, or no version readable →
   `addon-no-data` info, never a blocker.
 
+Each install (one per namespace, or one per node for a runtime) is judged on
+its own, grouped by release line: with Istio 1.28 in one team's namespace
+and 1.29 in another's, the ended 1.28 line is a finding keyed
+`eol-addon/istio/1.28` that names only the namespaces and teams running
+1.28, so a newer install neither hides an older one nor shares its blame. A product retired as a
+whole is one finding naming every install.
+
 ## What is in it
 
 20 add-ons today:
