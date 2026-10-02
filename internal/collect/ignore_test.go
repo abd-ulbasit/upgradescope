@@ -30,7 +30,7 @@ metadata:
     other: x
     upgradescope.dev/ignore: [not, a, string]
 `})
-	inv, _, err := CollectFiles(dir)
+	inv, _, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestCollectAPIUsageRecordsIgnoreAnnotations(t *testing.T) {
 	}
 
 	var inv inventory.Inventory
-	if err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
+	if _, err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.ObjectRef{{Name: "accepted", Manager: "kubectl-client-side-apply", Ignore: "removed-api", IgnoreReason: "owned by vendor"}}

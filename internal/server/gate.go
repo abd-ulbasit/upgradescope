@@ -7,7 +7,11 @@ import (
 	"maps"
 	"mime"
 	"net/http"
+	"path"
+	"slices"
 	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -34,21 +38,32 @@ var yamlContentTypes = map[string]bool{
 // Nothing is persisted. Auth: read token (the gate reads cluster context;
 // it never writes).
 //
-// With ?cluster=<id|name>, the cluster's latest inventory provides the
+// With ?cluster=<name|id>, the cluster's latest inventory provides the
 // evaluation context (server version, nodes, add-ons, deprecated calls,
-// namespace team labels) and only APIUsage is replaced by the manifests —
-// "would THESE manifests block THIS cluster's upgrade". The cluster as it is
-// is evaluated too (the baseline): findings it already has are tagged
-// source "cluster" and kept for context, and the verdict judges only the
-// findings the manifests introduce (source "manifest"), so a cluster's
-// existing EOL add-on does not fail every PR. Without it, the manifests
-// are evaluated standalone (api-usage only, like scan --files).
+// namespace team labels) and the manifest objects are upserted into its
+// API usage — "would THESE manifests block THIS cluster's upgrade". The
+// cluster as it is is evaluated too (the baseline): findings it already has
+// are tagged source "cluster" and kept for context, and the verdict judges
+// only the findings the manifests introduce (source "manifest"), so a
+// cluster's existing EOL add-on does not fail every PR. A removed or
+// deprecated API that a manifest object uses is always introduced, even
+// when the cluster already has objects at that API (see gateResult).
+// Without it, the manifests are evaluated standalone (api-usage only, like
+// scan --files).
 //
-// ?fail-on=blocker|warning makes the gate fail like `scan --fail-on`: an
-// introduced finding at or above the threshold, or an unknown verdict,
-// answers 422 with the full body, so `curl -f` fails the CI step. Without
-// it the status stays 200 (the v0.1 contract). X-Upgradescope-Verdict
-// always carries the verdict (ready | blocked | unknown).
+// ?fail-on=blocker|warning|never makes the gate fail like `scan --fail-on`,
+// whose default it shares (blocker): an introduced finding at or above the
+// threshold, or an unknown verdict, answers 422 with the full body, so
+// `curl --fail-with-body` fails the CI step and keeps the report. never
+// always answers 200 (the v0.1 contract, which no longer is the default:
+// a bare request must be able to fail CI). X-Upgradescope-Verdict always
+// carries the verdict (ready | blocked | unknown).
+//
+// ?path=<file> names the repository file the stream was rendered to (e.g.
+// deploy/rendered.yaml): manifest objects carry it with their stream line,
+// so format=sarif places introduced findings there and code scanning shows
+// them on the PR. Without it a posted stream has no file, and SARIF lists
+// its findings as tool execution notifications only.
 func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mt, _, err := mime.ParseMediaType(ct)
@@ -77,9 +92,17 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	}
 	failOn := r.URL.Query().Get("fail-on")
 	switch failOn {
-	case "", "blocker", "warning":
+	case "":
+		failOn = "blocker"
+	case "blocker", "warning", "never":
 	default:
-		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid fail-on %q (want blocker or warning)", failOn))
+		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid fail-on %q (want blocker, warning or never)", failOn))
+		return
+	}
+	artifact := r.URL.Query().Get("path")
+	if artifact != "" && !repoPath(artifact) {
+		errJSON(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("invalid path %q (want the repository-relative file the stream was rendered to, e.g. deploy/rendered.yaml)", artifact))
 		return
 	}
 
@@ -103,9 +126,15 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
 		return
 	}
+	for _, u := range manifests.APIUsage { // refs carry stream lines; ?path= names their file
+		for i := range u.Objects {
+			u.Objects[i].File = artifact
+		}
+	}
 
 	inv := manifests
 	var baseline *engine.Report
+	var introduced map[string]bool
 	if ref := r.URL.Query().Get("cluster"); ref != "" {
 		clusterInv, ok := s.gateClusterContext(w, r, ref)
 		if !ok {
@@ -116,12 +145,16 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		// not blamed on the PR.
 		base := engine.Evaluate(clusterInv, s.cfg.KB, target, s.now())
 		baseline = &base
-		// Merge: cluster context + manifest API usage. The manifests are the
-		// proposed state, so they fully replace APIUsage — including the
-		// cluster's existing residencies — while every other signal (server
-		// version, nodes, add-ons, deprecated calls, namespaces) stays.
+		// The findings the manifests' own objects produce: a removed or
+		// deprecated API a manifest object uses is introduced by the PR,
+		// even when the cluster already has objects at that API.
+		introduced = usageKeys(engine.Evaluate(manifests, s.cfg.KB, target, s.now()))
+		// Merge: cluster context + manifest API usage. The manifest objects
+		// are upserted into the cluster's API usage (see upsertUsage), and
+		// every other signal (server version, nodes, add-ons, deprecated
+		// calls, namespaces) stays.
 		inv = clusterInv
-		inv.APIUsage = manifests.APIUsage
+		inv.APIUsage = upsertUsage(clusterInv.APIUsage, manifests.APIUsage)
 		inv.Capabilities = maps.Clone(clusterInv.Capabilities)
 		if inv.Capabilities == nil {
 			inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{}
@@ -133,7 +166,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 
 	rep := engine.Evaluate(inv, s.cfg.KB, target, s.now())
 	releaseSlot()
-	resp := gateResult(rep, baseline)
+	resp := gateResult(rep, baseline, introduced)
 	w.Header().Set("X-Upgradescope-Verdict", string(resp.Verdict))
 	status := http.StatusOK
 	if gateFails(resp, failOn) {
@@ -175,11 +208,15 @@ type gateResponse struct {
 
 // gateResult tags every finding of rep with its source and computes the
 // verdict of the introduced ones. Without a baseline (no ?cluster=) every
-// finding comes from the manifests. A finding is the cluster's when the
-// baseline already has its key. The verdict is blocked on an introduced
-// blocker, else unknown when the proposed state has a required gap (a
-// blocker may have gone unseen), else ready.
-func gateResult(rep engine.Report, baseline *engine.Report) gateResponse {
+// finding comes from the manifests. With one, attribution is per object: a
+// finding the manifests' own objects produce (introduced, by key) is the
+// manifests', whatever the cluster already has at that API. Of the rest,
+// deprecated-api-in-use is the cluster's (only the cluster's apiserver
+// metrics supply caller rows), as is any finding whose key the baseline
+// has; anything else is the manifests' (fail closed). The verdict is
+// blocked on an introduced blocker, else unknown when the proposed state
+// has a required gap (a blocker may have gone unseen), else ready.
+func gateResult(rep engine.Report, baseline *engine.Report, introduced map[string]bool) gateResponse {
 	existing := map[string]bool{}
 	if baseline != nil {
 		existing = keySet(baseline.Findings, func(engine.Finding) bool { return true })
@@ -187,7 +224,7 @@ func gateResult(rep engine.Report, baseline *engine.Report) gateResponse {
 	resp := gateResponse{reportWithTeams: withTeams(rep), Findings: []gateFinding{}, Verdict: engine.VerdictReady}
 	for _, f := range rep.Findings {
 		src := sourceManifest
-		if existing[findingKey(f)] {
+		if baseline != nil && !introduced[findingKey(f)] && (f.Category == engine.CatDeprecatedAPIInUse || existing[findingKey(f)]) {
 			src = sourceCluster
 		}
 		resp.Findings = append(resp.Findings, gateFinding{Finding: f, Source: src})
@@ -225,12 +262,87 @@ func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
 	return out
 }
 
-// gateFails applies ?fail-on: "" never fails (the v0.1 always-200
+// repoPath reports whether p can name a file in the repository: relative,
+// slash-separated, clean, inside the repository, without control
+// characters.
+func repoPath(p string) bool {
+	return !strings.HasPrefix(p, "/") && !strings.Contains(p, `\`) && path.Clean(p) == p &&
+		p != "." && p != ".." && !strings.HasPrefix(p, "../") && !strings.ContainsFunc(p, unicode.IsControl)
+}
+
+// usageKeys returns the keys of the API-usage findings (removed or
+// deprecated API) in rep.
+func usageKeys(rep engine.Report) map[string]bool {
+	return keySet(rep.Findings, func(f engine.Finding) bool {
+		return f.Category == engine.CatRemovedAPI || f.Category == engine.CatDeprecatedAPI
+	})
+}
+
+// upsertUsage is the proposed state's API usage: the cluster's, with each
+// manifest object upserted by group/version/kind and namespace/name — it
+// replaces the cluster's listed object of that identity, or is added. The
+// cluster's rows keep their order and new GVKs come after them, so a row
+// the engine folds apiserver caller evidence into is the same row in the
+// baseline and the proposed state: the fold is identical on both sides,
+// and caller evidence never resurfaces as standalone findings blamed on
+// the PR. Manifest refs keep their place under the MaxObjectRefs cap
+// (cluster refs are dropped first), so SARIF can still place them. What
+// the manifests delete or move to another API stays invisible: a stream
+// says what it applies, not what it removes. Identity is the exact
+// namespace and name, so a rendered manifest without a namespace (applied
+// to kubectl's default) does not replace its namespaced twin in the
+// cluster and is counted beside it: Count and Namespaces overstate by one.
+func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
+	type gvk struct{ group, version, kind string }
+	out := make([]inventory.APIUsage, 0, len(cluster)+len(manifests))
+	at := map[gvk]int{}
+	for _, u := range cluster {
+		u.Objects, u.Namespaces = slices.Clone(u.Objects), maps.Clone(u.Namespaces)
+		at[gvk{u.Group, u.Version, u.Kind}] = len(out)
+		out = append(out, u)
+	}
+	for _, m := range manifests {
+		i, ok := at[gvk{m.Group, m.Version, m.Kind}]
+		if !ok {
+			at[gvk{m.Group, m.Version, m.Kind}] = len(out)
+			out = append(out, m)
+			continue
+		}
+		u := &out[i]
+		if u.Namespaces == nil {
+			u.Namespaces = map[string]int{}
+		}
+		var kept []inventory.ObjectRef
+		for _, o := range u.Objects {
+			if o.Name != "" && slices.ContainsFunc(m.Objects, func(n inventory.ObjectRef) bool { return n.Name == o.Name && n.Namespace == o.Namespace }) {
+				u.Count--
+				if u.Namespaces[o.Namespace]--; u.Namespaces[o.Namespace] <= 0 {
+					delete(u.Namespaces, o.Namespace)
+				}
+				continue
+			}
+			kept = append(kept, o)
+		}
+		u.Count += m.Count
+		for ns, n := range m.Namespaces {
+			u.Namespaces[ns] += n
+		}
+		if room := max(0, inventory.MaxObjectRefs-len(m.Objects)); len(kept) > room {
+			u.ObjectsOmitted += len(kept) - room
+			kept = kept[:room]
+		}
+		u.Objects = append(kept, m.Objects...)
+		u.ObjectsOmitted += m.ObjectsOmitted
+	}
+	return out
+}
+
+// gateFails applies ?fail-on: never never fails (the v0.1 always-200
 // contract); blocker fails on an introduced blocker, warning on an
 // introduced blocker or warning; both fail when the verdict is unknown,
 // like `scan --fail-on`.
 func gateFails(resp gateResponse, failOn string) bool {
-	if failOn == "" {
+	if failOn == "never" {
 		return false
 	}
 	if resp.Verdict != engine.VerdictReady {
@@ -246,14 +358,13 @@ func gateFails(resp gateResponse, failOn string) bool {
 	return false
 }
 
-// gateClusterContext resolves ?cluster=<id|name> to the cluster's latest
+// gateClusterContext resolves ?cluster=<name|id> to the cluster's latest
 // stored inventory, writing the error response (404/500) itself on failure.
+// A name wins over an id, so a cluster named "1" is never mistaken for
+// cluster id 1.
 func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref string) (inventory.Inventory, bool) {
 	ctx := r.Context()
 	cluster, err := func() (store.Cluster, error) {
-		if id, perr := strconv.ParseInt(ref, 10, 64); perr == nil {
-			return s.cfg.Store.GetCluster(ctx, id)
-		}
 		clusters, lerr := s.cfg.Store.ListClusters(ctx)
 		if lerr != nil {
 			return store.Cluster{}, lerr
@@ -262,6 +373,9 @@ func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref 
 			if c.Name == ref {
 				return c, nil
 			}
+		}
+		if id, perr := strconv.ParseInt(ref, 10, 64); perr == nil {
+			return s.cfg.Store.GetCluster(ctx, id)
 		}
 		return store.Cluster{}, store.ErrNotFound
 	}()

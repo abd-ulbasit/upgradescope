@@ -374,7 +374,7 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
 {{if .Report.NotAssessed}}
 <h2>not assessed</h2>
 <ul class="gaps">
-{{range .Report.NotAssessed}}<li>{{.Capability}}: {{.Reason}}</li>
+{{range .Report.NotAssessed}}<li>{{.Label}}: {{.Reason}}{{if .Skipped}} (skipped: {{range $i, $s := .Skipped}}{{if $i}}, {{end}}{{$s}}{{end}}){{end}}</li>
 {{end}}</ul>
 {{end}}
 </body>

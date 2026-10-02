@@ -31,3 +31,20 @@ func TestSortFindings(t *testing.T) {
 		t.Fatalf("order mismatch:\n got %v\nwant %v", got, want)
 	}
 }
+
+func TestCapabilityGapLabel(t *testing.T) {
+	cases := []struct {
+		gap  CapabilityGap
+		want string
+	}{
+		{CapabilityGap{Capability: "helm"}, "helm"},
+		{CapabilityGap{Capability: "versions", Required: true}, "versions (required)"},
+		{CapabilityGap{Capability: "helm", Partial: true}, "helm (partial)"},
+		{CapabilityGap{Capability: "api-usage", Partial: true, Required: true}, "api-usage (partial, required)"},
+	}
+	for _, tc := range cases {
+		if got := tc.gap.Label(); got != tc.want {
+			t.Errorf("%+v.Label() = %q, want %q", tc.gap, got, tc.want)
+		}
+	}
+}

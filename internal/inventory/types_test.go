@@ -100,7 +100,7 @@ func TestInventoryWireFormat(t *testing.T) {
 		CollectedAt:   time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
 		ServerVersion: "v1.34.2",
 		Capabilities: map[Capability]CapabilityStatus{
-			CapAPIUsage: {Available: true},
+			CapAPIUsage: {Available: true, Partial: true, Reason: "list networking.k8s.io/v1 ingresses: forbidden", Skipped: []string{"networking.k8s.io/v1beta1 Ingress"}},
 			CapHelm:     {Available: false, Reason: "secrets list forbidden"},
 		},
 		APIUsage: []APIUsage{{
@@ -136,7 +136,12 @@ func TestInventoryWireFormat(t *testing.T) {
   "serverVersion": "v1.34.2",
   "capabilities": {
     "api-usage": {
-      "available": true
+      "available": true,
+      "reason": "list networking.k8s.io/v1 ingresses: forbidden",
+      "partial": true,
+      "skipped": [
+        "networking.k8s.io/v1beta1 Ingress"
+      ]
     },
     "helm": {
       "available": false,

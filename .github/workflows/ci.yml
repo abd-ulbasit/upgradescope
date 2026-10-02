@@ -11,7 +11,15 @@ on:
   # Postgres (14-18) matrices, the Action check and KB freshness.
   schedule:
     - cron: '41 5 * * 1' # Mondays 05:41 UTC
+  # On demand, from any branch: `gh workflow run ci.yml --ref <branch>`
+  # proves the weekly matrices before the schedule does (a new kind node
+  # image, a change to hack/e2e.sh); -f full-matrix=false runs the PR sets.
   workflow_dispatch:
+    inputs:
+      full-matrix:
+        description: 'Every Kubernetes minor in hack/kind-node-images.txt (1.29-1.37) and Postgres 14-18; false runs the PR sets'
+        type: boolean
+        default: true
   # release.yml calls this workflow for every v* tag, so a release is gated on
   # the whole suite, vuln gate and kind e2e included, at the tagged commit.
   workflow_call:
@@ -102,6 +110,7 @@ jobs:
               - 'action/run.sh'
               - 'Makefile'
               - 'hack/release-check.sh'
+              - 'hack/dashboard-smoke.sh'
               - 'go.mod'
               - 'deploy/chart/Chart.yaml'
             action:
@@ -161,11 +170,19 @@ jobs:
       # The hack/ scripts every other job runs, driven offline through their
       # pass, fail and fail-closed paths with stubs and fixtures.
       - run: make hack-test
+      # docs/claims.md maps each public claim to its tests; a renamed or
+      # deleted test, e2e gate or job it names fails here.
+      - name: every test the claims ledger names exists
+        run: make claims-check
 
+  # The binary and the dashboard it embeds, then every package (tests
+  # included) compiled and vetted for each platform the release ships: lint
+  # and test run on linux only, and a windows- or darwin-only break would
+  # otherwise first fail in a tag's CI (#128), long after its PR merged.
   build:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -174,6 +191,13 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make build
+      # The real go:embed bundle through Server's routing: GET / and every
+      # asset index.html references, each 200 with its content type. A 200
+      # index.html whose JS and CSS 404 is a blank dashboard (#128).
+      - name: the binary serves the dashboard and every asset it references
+        run: make dashboard-smoke
+      - name: compile for linux, darwin and windows (amd64, arm64)
+        run: make cross-build
 
   # Reachable vulnerabilities in the shipped binary. Weekly too, because new
   # advisories land without any commit here.
@@ -294,7 +318,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release)) && '["14","15","16","17","18"]' || '["17"]') }}
+        pg: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release && inputs.full-matrix != false)) && '["14","15","16","17","18"]' || '["17"]') }}
     services:
       postgres:
         image: postgres:${{ matrix.pg }}
@@ -331,10 +355,12 @@ jobs:
         env:
           UPGRADESCOPE_PG_TEST_DSN: postgres://postgres:ci-test@127.0.0.1:5432/upgradescope?sslmode=disable
 
-  # Prove the release pipeline before a tag does: config valid for the
-  # pinned GoReleaser, every archive and per-arch image builds, archive names
-  # still match what the Action downloads, and the binary serves the
-  # dashboard. Publishes and signs nothing.
+  # Prove the packaging before a tag does, on packaging changes: config
+  # valid for the pinned GoReleaser, every archive and per-arch image builds,
+  # archive names still match what the Action downloads, and the binary
+  # serves the dashboard and its assets. Publishes and signs nothing. Code
+  # changes get the cross-platform compile and dashboard check in the build
+  # job instead.
   release-check:
     needs: changes
     if: >-
@@ -545,7 +571,9 @@ jobs:
   # The Kubernetes minors the kube job runs on, from
   # hack/kind-node-images.txt: the `pr` rows (1.31, the oldest with the
   # flowcontrol v1beta3 window, and 1.37, the newest) on PRs, pushes and
-  # releases; every minor 1.29-1.37 on the schedule and on demand.
+  # releases; every minor 1.29-1.37 on the schedule and on demand
+  # (workflow_dispatch, unless full-matrix=false). hack/kind-images.sh set
+  # makes that choice; hack/kind-images_test.sh covers each kind of run.
   kube-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -559,19 +587,26 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           RELEASE: ${{ inputs.release == true }}
+          FULL_MATRIX: ${{ inputs.full-matrix }}
         run: |
-          set=pr
-          case "$EVENT/$RELEASE" in schedule/* | workflow_dispatch/false) set=all ;; esac
+          set="$(hack/kind-images.sh set "$EVENT" "$RELEASE" "$FULL_MATRIX")"
           minors="$(hack/kind-images.sh matrix "$set")"
           echo "Kubernetes minors ($set): $minors"
           echo "minors=$minors" >> "$GITHUB_OUTPUT"
 
   # kind e2e per minor (make e2e, hack/e2e.sh): pinned node image, kind and
   # kubectl pinned and sha256-verified, the zero-false-blocker regression,
-  # scan + agent ITs, the chart from this tree's image, ClusterReadiness
-  # verdict, server ingest, agent.targets upgrade, clean uninstall. Checks
-  # that guard a fix not on main yet are best-effort and reported PASS/FAIL
-  # in the job summary rather than silently ignored.
+  # scan's live behaviour (unreachable server, deprecated-API authorship,
+  # EOL add-on, --keep-history release; hack/e2e/deprecated-api.txt picks
+  # the API per minor), scan + agent ITs, the chart from this tree's image,
+  # ClusterReadiness verdict, server ingest, agent.targets upgrade, clean
+  # uninstall, then the API server's audit log of the whole run
+  # (hack/e2e/audit-policy.yaml): scan and the agent make no deprecated-API
+  # request outside hack/e2e/deprecated-request-allowlist.txt, the agent
+  # writes only its ClusterReadiness (+ CRD), Secrets are read only through
+  # Helm's selector, and scan writes nothing (#99). Checks that guard a fix
+  # not on main yet are best-effort and reported PASS/FAIL in the job
+  # summary rather than silently ignored.
   kube:
     name: kube (kind e2e, Kubernetes ${{ matrix.minor }})
     needs: [changes, kube-matrix]

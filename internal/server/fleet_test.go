@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
@@ -125,6 +126,60 @@ func TestFleetMatrixBadTargets(t *testing.T) {
 	defer done()
 	if resp := getJSON(t, ts, "/api/v1/fleet?targets=banana", "", nil); resp.StatusCode != 422 {
 		t.Fatalf("bad targets status = %d, want 422", resp.StatusCode)
+	}
+}
+
+// Issue #122: what an evaluation could not assess reaches the fleet
+// matrix and the cluster views, not only the full report, so an unknown
+// (or a qualified ready) cell says why.
+func TestFleetAndClusterViewsCarryGaps(t *testing.T) {
+	ts, done := fleetFixture(t)
+	defer done()
+	charlie := testInventory()
+	charlie.ClusterID = "uid-charlie"
+	charlie.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
+		inventory.CapVersions: {Available: true},
+		inventory.CapAPIUsage: {Available: true, Partial: true, Reason: "list policy/v1beta1 podsecuritypolicies: forbidden",
+			Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}},
+	}
+	pushCluster(t, ts, "charlie", charlie)
+	want := []engine.CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: "list policy/v1beta1 podsecuritypolicies: forbidden",
+		Partial: true, Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}, Required: true}}
+
+	var fleet struct {
+		Clusters []struct {
+			Name  string `json:"name"`
+			Cells map[string]*struct {
+				Verdict     engine.Verdict         `json:"verdict"`
+				NotAssessed []engine.CapabilityGap `json:"notAssessed"`
+			} `json:"cells"`
+		} `json:"clusters"`
+	}
+	getJSON(t, ts, "/api/v1/fleet", "", &fleet)
+	for _, c := range fleet.Clusters {
+		cell := c.Cells["1.35"]
+		switch {
+		case cell == nil:
+			t.Errorf("%s: no 1.35 cell", c.Name)
+		case c.Name == "charlie" && (cell.Verdict != engine.VerdictUnknown || !reflect.DeepEqual(cell.NotAssessed, want)):
+			t.Errorf("charlie cell = %+v, want unknown with the partial gap", cell)
+		case c.Name != "charlie" && len(cell.NotAssessed) != 0:
+			t.Errorf("%s cell gaps = %+v, want none", c.Name, cell.NotAssessed)
+		}
+	}
+
+	var clusters []struct {
+		ID     int64  `json:"id"`
+		Name   string `json:"name"`
+		Latest *struct {
+			NotAssessed []engine.CapabilityGap `json:"notAssessed"`
+		} `json:"latest"`
+	}
+	getJSON(t, ts, "/api/v1/clusters", "", &clusters)
+	for _, c := range clusters {
+		if c.Name == "charlie" && (c.Latest == nil || !reflect.DeepEqual(c.Latest.NotAssessed, want)) {
+			t.Errorf("GET /clusters charlie latest = %+v, want the partial gap", c.Latest)
+		}
 	}
 }
 

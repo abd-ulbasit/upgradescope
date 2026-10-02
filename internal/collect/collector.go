@@ -70,10 +70,18 @@ func Collect(ctx context.Context, c Clients, k kb.KB, opts Options) inventory.In
 	return inv
 }
 
-// partialError marks a step that produced usable data but not all of it
-// (e.g. one forbidden resource among many). runSteps keeps the capability
-// available and surfaces the message as the Reason.
-type partialError struct{ msg string }
+// partialError is the outcome of a step that produced usable data and has
+// something to say about it. runSteps keeps the capability available and
+// surfaces msg as the Reason. With incomplete set, some of what the step
+// covers was not read (one forbidden resource among many): the capability
+// is marked Partial, and skipped names what went unread (see
+// inventory.CapabilityStatus.Skipped). Without it the reason is
+// informational and the data complete (helm's per-driver release counts).
+type partialError struct {
+	msg        string
+	incomplete bool
+	skipped    []string
+}
 
 func (e partialError) Error() string { return e.msg }
 
@@ -85,17 +93,20 @@ func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
 		case err == nil:
 			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true}
 		case errors.As(err, &pe):
-			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true, Reason: pe.Error()}
+			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: true, Reason: pe.Error(),
+				Partial: pe.incomplete, Skipped: pe.skipped}
 		default:
 			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: false, Reason: err.Error()}
 		}
 	}
 }
 
-// steps lists the live sub-collectors in execution order (helm must run
-// before addons: the add-on matcher consumes inv.HelmReleases).
-// Tasks C2–C6 append one entry each as the sub-collectors land.
+// steps lists the live sub-collectors in execution order: helm before
+// addons (the add-on matcher consumes inv.HelmReleases), api-usage before
+// deprecated-calls (which needs the deprecated endpoints api-usage listed
+// itself, and must see their metric rows on every scan alike).
 func steps(c Clients, k kb.KB, opts Options) []step {
+	var selfListed []string // api-usage's own deprecated LISTs
 	return []step{
 		{cap: inventory.CapVersions, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Kube == nil || c.Discovery == nil {
@@ -109,12 +120,6 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			}
 			return collectHelm(ctx, c.Kube, c.Metadata, k.APILifecycle, inv)
 		}},
-		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error {
-			if c.RESTClient == nil {
-				return errors.New("rest client not configured")
-			}
-			return collectDeprecatedCalls(ctx, c.RESTClient, inv)
-		}},
 		{cap: inventory.CapAddOns, run: func(ctx context.Context, inv *inventory.Inventory) error { // after helm: consumes inv.HelmReleases
 			if c.Kube == nil {
 				return errors.New("kubernetes client not configured")
@@ -125,7 +130,15 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Discovery == nil || c.Metadata == nil {
 				return errors.New("discovery/metadata client not configured")
 			}
-			return collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
+			var err error
+			selfListed, err = collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
+			return err
+		}},
+		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error { // after api-usage: consumes selfListed
+			if c.RESTClient == nil {
+				return errors.New("rest client not configured")
+			}
+			return collectDeprecatedCalls(ctx, c.RESTClient, selfListed, inv)
 		}},
 	}
 }

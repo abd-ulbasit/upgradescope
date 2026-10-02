@@ -80,14 +80,14 @@ KB:       test-kb
 
 SCORE  95/100
 READY  unknown (required checks were not assessed)
-  kb-coverage: knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed
+  kb-coverage (required): knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed
 
 WARNING (1)
   [kb-stale] knowledge base does not cover Kubernetes 1.38 (newest known: 1.37)
 
 NOT ASSESSED
   helm: secrets list forbidden
-  kb-coverage: knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed
+  kb-coverage (required): knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed
 `
 	if got := buf.String(); got != want {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)

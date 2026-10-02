@@ -72,6 +72,32 @@ func TestWriteJSONSchemaAndToolVersion(t *testing.T) {
 	}
 }
 
+// A partial gap carries its partial flag and what it skipped (issue #122).
+func TestWriteJSONPartialGap(t *testing.T) {
+	var buf bytes.Buffer
+	r := engine.Report{Target: inventory.Version{Major: 1, Minor: 25}, Verdict: engine.VerdictUnknown, NotAssessed: []engine.CapabilityGap{{
+		Capability: inventory.CapAPIUsage, Reason: "list policy/v1beta1 podsecuritypolicies: forbidden",
+		Partial: true, Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}, Required: true,
+	}}}
+	if err := WriteJSON(&buf, r); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	const want = `"notAssessed": [
+    {
+      "capability": "api-usage",
+      "reason": "list policy/v1beta1 podsecuritypolicies: forbidden",
+      "partial": true,
+      "skipped": [
+        "policy/v1beta1 PodSecurityPolicy"
+      ],
+      "required": true
+    }
+  ]`
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("JSON lacks the partial gap:\n%s", buf.String())
+	}
+}
+
 // A report with no findings emits no teams key at all (omitempty).
 func TestWriteJSONNoFindingsOmitsTeams(t *testing.T) {
 	var buf bytes.Buffer

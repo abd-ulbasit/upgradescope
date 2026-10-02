@@ -82,7 +82,7 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 	var inv inventory.Inventory
 	if opts.filesDir != "" {
 		var sum collect.FilesSummary
-		inv, sum, err = collect.CollectFiles(opts.filesDir)
+		inv, sum, err = collect.CollectFiles(opts.filesDir, kbData.APILifecycle)
 		if err != nil {
 			return engine.Report{}, fmt.Errorf("collect inventory: %w", err)
 		}
@@ -91,7 +91,12 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 			stderr = io.Discard
 		}
 		for _, w := range sum.Warnings {
-			fmt.Fprintf(stderr, "warning: skipped %s:%d: %v\n", path.Join(opts.fileBase, w.File), w.Line, w.Err)
+			w.File = path.Join(opts.fileBase, w.File)
+			if w.Unassessed {
+				fmt.Fprintf(stderr, "warning: skipped %s\n", w)
+			} else {
+				fmt.Fprintf(stderr, "warning: %s\n", w)
+			}
 		}
 		// Nothing scanned is not "nothing to fix": an empty render, a wrong
 		// path or an unexpected extension must not report 100/100.
@@ -322,8 +327,8 @@ func withFileBase(r engine.Report, base string) engine.Report {
 	return r
 }
 
-// scanLong is scan's --help text: the gate's exit codes and how
-// suppression and baselines change what it counts.
+// scanLong is scan's --help text: the gate's exit codes, how --files reads
+// manifests, and how suppression and baselines change what it counts.
 const scanLong = `Scan a cluster (or rendered manifests) for upgrade readiness.
 
 Exit codes: 0 when the gate passes; 1 on an operational error, including an
@@ -332,6 +337,21 @@ invalid config file or baseline; 2 when the gate fails.
 The gate (--fail-on) fails when a finding at or above the threshold remains,
 or (unless --allow-incomplete) when a required check was not assessed, so a
 blocker may have been missed.
+
+Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
+or the one file named, is decoded as kubectl apply -f decodes it: each
+document of a YAML stream and each object of a JSON stream (NDJSON,
+pretty-printed or adjacent), List items expanded, a duplicate key taking its
+last value. Every document is also decoded by kubectl's own decoder: where it
+finds an object the scan's line-tracking YAML reading did not, kubectl's
+objects are counted (located at the document's first line), with a warning.
+Documents that are not Kubernetes objects are skipped. A document
+that cannot be decoded is skipped with a warning; when its text names an API
+the knowledge base lists as removed, api-usage is not assessed, so the verdict
+is at least unknown and the gate fails unless --allow-incomplete. VCS metadata,
+node_modules and Go vendor/ directories (with modules.txt) are not walked, nor
+are symlinked directories (kubectl apply -R does not follow them either); each
+of these but VCS metadata is a warning.
 
 Suppression: ignore rules in ` + suppress.ConfigFile + ` (found in the scan root,
 i.e. the --files directory or else the working directory, then at the git
