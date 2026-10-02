@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -218,6 +220,27 @@ func (d exportData) Groups() []severityGroup {
 	return out
 }
 
+// teamRow is one team's score in the HTML report.
+type teamRow struct {
+	Team string
+	engine.TeamScore
+}
+
+// Teams returns per-team scores (the report endpoint's `teams`), worst
+// score first, then by name; empty when no finding is attributed to a
+// team.
+func (d exportData) Teams() []teamRow {
+	scores := renderTeamScores(engine.TeamScores(d.Report))
+	out := make([]teamRow, 0, len(scores))
+	for team, ts := range scores {
+		out = append(out, teamRow{Team: team, TeamScore: ts})
+	}
+	slices.SortFunc(out, func(a, b teamRow) int {
+		return cmp.Or(cmp.Compare(a.Score, b.Score), cmp.Compare(a.Team, b.Team))
+	})
+	return out
+}
+
 // ScoreClass picks the badge color bucket: ok ≥90, warn ≥70, else bad.
 func (d exportData) ScoreClass() string {
 	switch {
@@ -318,6 +341,14 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
   {{if .Report.Ready}}<span class="badge ok">ready</span>{{else}}<span class="badge bad">not ready</span>{{end}}
   {{.Sparkline}}
 </p>
+{{with .Teams}}
+<h2>team scores</h2>
+<table>
+  <tr><th>team</th><th>score</th><th>verdict</th><th>blockers</th><th>warnings</th></tr>
+  {{range .}}<tr><td>{{.Team}}</td><td>{{.Score}}/100</td><td>{{if .Ready}}ready{{else}}not ready{{end}}</td><td>{{.Blockers}}</td><td>{{.Warnings}}</td></tr>
+  {{end}}
+</table>
+{{end}}
 {{range .Groups}}
 <h2>{{.Severity}} ({{len .Findings}})</h2>
 <table>
