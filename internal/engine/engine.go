@@ -1368,8 +1368,13 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason, Required: required[c]})
 		case st.Partial:
 			g := CapabilityGap{Capability: c, Reason: st.Reason, Partial: true, Skipped: st.Skipped}
-			if c == inventory.CapAPIUsage {
+			switch c {
+			case inventory.CapAPIUsage:
 				g.Required = slices.ContainsFunc(st.Skipped, func(api string) bool { return removedBy(idx, api, target) })
+			case inventory.CapVersions:
+				// A component whose version could not be read (#169) may
+				// be the one past the skew policy: never READY on that.
+				g.Required = required[c]
 			}
 			gaps = append(gaps, g)
 		}

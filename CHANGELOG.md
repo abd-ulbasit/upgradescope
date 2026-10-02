@@ -344,6 +344,9 @@ a CI gate.
 
 ### Fixed
 
+- A control-plane or kube-proxy pod whose version cannot be read makes
+  the verdict `unknown`, not `ready`: its skew was not evaluated, and it
+  may be the component past the policy (#169).
 - Notifications after a cluster upgrade: a blocker that the cluster's new
   default target adds (for example `networking.k8s.io/v1beta1` ServiceCIDR,
   removed in 1.37, once the cluster runs 1.36) is notified instead of being

@@ -30,6 +30,9 @@ Required checks:
   required `target` gap, so the verdict is `unknown`, never `ready`: every
   check judges a newer minor.
 - **`versions`**, for live clusters: the server version (skew needs it).
+  A *partial* `versions` (a control-plane or kube-proxy pod whose version
+  could not be read) is required too: that component may be the one past
+  the skew policy.
 - **`addons`**, for live clusters: add-on detection from images, labels,
   IngressClasses and charts.
 

@@ -266,6 +266,7 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 	on123.ServerVersion = "v1.23.17"
 	on123.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.23.17"}}
 	const helmReason = "helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip"
+	const unreadProxy = "version not read from 1 control-plane pod(s) (kube-proxy), first kube-system/kube-proxy-x: tag latest; their skew was not evaluated"
 
 	cases := []struct {
 		name    string
@@ -293,6 +294,10 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 		{"partial api-usage skipping nothing flagged",
 			partially(on124, inventory.CapAPIUsage, "discovery: groups metrics.k8s.io/v1beta1 skipped"), k, t125, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: "discovery: groups metrics.k8s.io/v1beta1 skipped", Partial: true}}},
+		{"partial versions is a required gap: an unread kube-proxy may hide a skew blocker", // #169
+			partially(on124, inventory.CapVersions, unreadProxy, "kube-proxy"), k, t125, VerdictUnknown,
+			[]CapabilityGap{{Capability: inventory.CapVersions, Reason: unreadProxy, Partial: true,
+				Skipped: []string{"kube-proxy"}, Required: true}}},
 		{"partial helm is an optional gap", partially(on124, inventory.CapHelm, helmReason, "a/b"), withRegistry, t125, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapHelm, Reason: helmReason, Partial: true, Skipped: []string{"a/b"}}}},
 		{"an informational reason is no gap", func() inventory.Inventory {

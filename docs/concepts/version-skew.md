@@ -27,7 +27,9 @@ cannot be read — a digest-only image, a tag that is not a version
 (`latest`), or a labelled pod that runs no image of the component's name
 (a vendor image named otherwise) — is not skipped silently: the
 `versions` capability is reported partial, naming the components and the
-first such pod with its image, because its skew was not evaluated.
+first such pod with its image, because its skew was not evaluated. That
+gap is required, so the verdict is `unknown`, not `ready`, unless
+`--allow-incomplete` is given.
 
 `kubectl` client skew is in the policy but is not checked: client versions
 appear only in apiserver audit logs, which upgradescope does not read.
