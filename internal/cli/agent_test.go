@@ -132,7 +132,7 @@ func TestAgentCmdFlagsParsed(t *testing.T) {
 		interval: 5 * time.Minute, serverURL: "http://scope:8080", serverToken: "tok",
 		clusterName: "prod-eu-1", crName: "main", teamLabel: "squad",
 		forceSyncEvery: 30 * time.Minute, kubeconfig: "/tmp/kc", kubecontext: "ctx1",
-		manageCRD: true, healthAddr: ":8081", logFormat: "text", logLevel: "info",
+		manageCRD: true, healthAddr: ":8081", logFormat: "text", logLevel: "info", requestTimeout: 30 * time.Second,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("opts = %+v, want %+v", got, want)
@@ -168,7 +168,7 @@ func TestRootHasAgentSubcommand(t *testing.T) {
 }
 
 func TestBuildAgentRESTConfigExplicitKubeconfig(t *testing.T) {
-	cfg, err := buildAgentRESTConfig(writeKubeconfig(t), "")
+	cfg, err := buildAgentRESTConfig(writeKubeconfig(t), "", 0)
 	if err != nil {
 		t.Fatalf("buildAgentRESTConfig: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestBuildAgentRESTConfigFallsBackFromInCluster(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
 	t.Setenv("KUBECONFIG", writeKubeconfig(t))
-	cfg, err := buildAgentRESTConfig("", "")
+	cfg, err := buildAgentRESTConfig("", "", 0)
 	if err != nil {
 		t.Fatalf("fallback failed: %v", err)
 	}

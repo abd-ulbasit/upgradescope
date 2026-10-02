@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
@@ -64,6 +65,10 @@ type scanOptions struct {
 
 	allowIncomplete bool
 
+	// requestTimeout bounds each API request of a live scan
+	// (rest.Config.Timeout); 0 = no per-request bound.
+	requestTimeout time.Duration
+
 	configFile    string // --config; "" = discover (suppress.FindConfig)
 	baselineFile  string
 	writeBaseline string
@@ -111,7 +116,7 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 			return engine.Report{}, fmt.Errorf("no Kubernetes manifests found under %s (%d files skipped)", opts.filesDir, sum.Skipped)
 		}
 	} else {
-		clients, where, cerr := buildClients(opts.kubeconfig, opts.kubecontext)
+		clients, where, cerr := buildClients(opts.kubeconfig, opts.kubecontext, opts.requestTimeout)
 		if cerr != nil {
 			return engine.Report{}, cerr
 		}
@@ -126,11 +131,13 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 	return engine.Evaluate(inv, kbData, opts.targetVersion, time.Now()), nil
 }
 
-// buildClients uses clientcmd's standard loading rules ($KUBECONFIG, ~/.kube/config)
-// with optional explicit path and context override. It also returns where
-// the clients point (`context "x" (server https://...)`) for error messages.
-// collect.NewClients(cfg) comes from the COLLECT section; this is its only call site.
-func buildClients(kubeconfig, kubecontext string) (collect.Clients, string, error) {
+// scanRESTConfig loads the rest.Config of a live scan by clientcmd's
+// standard loading rules ($KUBECONFIG, ~/.kube/config), with optional
+// explicit path and context override, and returns the name of the context
+// it resolved to. requestTimeout becomes rest.Config.Timeout: client-go
+// gives up on any single request after it, so an API server that accepts
+// a request and never answers fails that request instead of the scan.
+func scanRESTConfig(kubeconfig, kubecontext string, requestTimeout time.Duration) (*rest.Config, string, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
 		rules.ExplicitPath = kubeconfig
@@ -139,13 +146,26 @@ func buildClients(kubeconfig, kubecontext string) (collect.Clients, string, erro
 	loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
 	cfg, err := loader.ClientConfig()
 	if err != nil {
-		return collect.Clients{}, "", fmt.Errorf("load kubeconfig: %w", err)
+		return nil, "", fmt.Errorf("load kubeconfig: %w", err)
 	}
+	cfg.Timeout = requestTimeout
 	ctxName := kubecontext
 	if ctxName == "" {
 		if raw, rerr := loader.RawConfig(); rerr == nil {
 			ctxName = raw.CurrentContext
 		}
+	}
+	return cfg, ctxName, nil
+}
+
+// buildClients builds the live-scan clients from scanRESTConfig. It also
+// returns where the clients point (`context "x" (server https://...)`)
+// for error messages.
+// collect.NewClients(cfg) comes from the COLLECT section; this is its only call site.
+func buildClients(kubeconfig, kubecontext string, requestTimeout time.Duration) (collect.Clients, string, error) {
+	cfg, ctxName, err := scanRESTConfig(kubeconfig, kubecontext, requestTimeout)
+	if err != nil {
+		return collect.Clients{}, "", err
 	}
 	clients, err := collect.NewClients(cfg)
 	return clients, fmt.Sprintf("context %q (server %s)", ctxName, cfg.Host), err
@@ -267,6 +287,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "target Kubernetes minor version, e.g. 1.36 (required)")
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
+	cmd.Flags().DurationVar(&opts.requestTimeout, "request-timeout", defaultRequestTimeout, "give up on a single API request after this long (0 = no per-request limit)")
 	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
 	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
@@ -279,6 +300,7 @@ func newScanCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("files", "kubeconfig")
 	cmd.MarkFlagsMutuallyExclusive("files", "context")
 	cmd.MarkFlagsMutuallyExclusive("files", "team-label")
+	cmd.MarkFlagsMutuallyExclusive("files", "request-timeout")
 
 	return cmd
 }
@@ -491,6 +513,18 @@ func validateScanOptions(opts *scanOptions) error {
 	case "blocker", "warning", "never":
 	default:
 		return fmt.Errorf("invalid --fail-on %q (want blocker, warning, or never)", opts.failOn)
+	}
+	return validRequestTimeout(opts.requestTimeout)
+}
+
+// defaultRequestTimeout is the --request-timeout of scan and agent: long
+// enough for a page of a large list or the apiserver's /metrics, short
+// enough that a stalled request leaves the rest of the scan its budget.
+const defaultRequestTimeout = 30 * time.Second
+
+func validRequestTimeout(d time.Duration) error {
+	if d < 0 {
+		return fmt.Errorf("invalid --request-timeout %s (want 0 or more; 0 = no per-request limit)", d)
 	}
 	return nil
 }
