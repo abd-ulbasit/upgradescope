@@ -34,8 +34,8 @@ const fleet: FleetResponse = {
   ],
 };
 
-async function renderFleet() {
-  mockApi({ "api/v1/fleet": fleet });
+async function renderFleet(data: FleetResponse = fleet) {
+  mockApi({ "api/v1/fleet": data });
   render(<Fleet />);
   await screen.findByRole("heading", { level: 1, name: "Fleet" });
 }
@@ -69,5 +69,15 @@ describe("Fleet view", () => {
     expect(within(row("prod-eu")).getByText("stale")).toBeTruthy();
     expect(within(row("prod-us")).queryByText("stale")).toBeNull();
     expect(within(row("prod-us")).getByText(/seen/)).toBeTruthy();
+  });
+
+  it("says how many default targets the server left out", async () => {
+    await renderFleet({ ...fleet, targetsOmitted: 3 });
+    expect(screen.getByRole("note").textContent).toMatch(/3 more targets not\s+shown/);
+  });
+
+  it("says nothing of omitted targets when there are none", async () => {
+    await renderFleet();
+    expect(screen.queryByRole("note")).toBeNull();
   });
 });

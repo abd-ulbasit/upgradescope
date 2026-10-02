@@ -127,6 +127,8 @@ export interface FleetRow {
 
 export interface FleetResponse {
   targets: string[];
+  // Default columns left out past the server's 16; absent when none are.
+  targetsOmitted?: number;
   clusters: FleetRow[];
 }
 

@@ -485,7 +485,9 @@ paths:
           description: |
             Comma-separated minors, at most 16 distinct (more is 422).
             Default: every cluster's next minor plus the `serve --targets`
-            minors some cluster does not run yet.
+            minors some cluster does not run yet, at most 16 of them: those
+            with the most clusters to fill them (the older minor on a tie),
+            the rest counted in `targetsOmitted`.
           schema: {type: string, example: "1.37,1.38"}
       responses:
         "200":
@@ -1079,6 +1081,12 @@ components:
       required: [targets, clusters]
       properties:
         targets: {type: array, items: {$ref: "#/components/schemas/Target"}}
+        targetsOmitted:
+          type: integer
+          minimum: 1
+          description: |
+            Default columns left out past the 16 (absent with `?targets=`
+            and when none are); ask for them with `?targets=`.
         clusters: {type: array, items: {$ref: "#/components/schemas/FleetRow"}}
     FleetTeam:
       type: object

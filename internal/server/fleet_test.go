@@ -322,3 +322,51 @@ func TestFleetReadAuth(t *testing.T) {
 		}
 	}
 }
+
+// Without ?targets=, /fleet opens at most maxFleetTargets columns, the
+// minors with the most clusters to fill them (the older on a tie), and
+// counts the rest in targetsOmitted: a holder of the ingest token who
+// pushes clusters at 500 minors widens it no further than ?targets= can.
+func TestFleetDefaultColumnsAreCapped(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore(), func(c *Config) { c.ExtraTargets = []string{"1.40"} }).Handler())
+	defer ts.Close()
+	push := func(name string, minor int) {
+		inv := testInventory()
+		inv.ClusterID = "uid-" + name
+		inv.ServerVersion = fmt.Sprintf("v1.%d.0", minor)
+		pushCluster(t, ts, name, inv)
+	}
+	// One cluster at each of 1.10-1.29 (next minors 1.11-1.30), and a
+	// second at 1.28 and 1.29: twenty next minors plus the extra target.
+	for m := 10; m < 30; m++ {
+		push(fmt.Sprintf("c-%d", m), m)
+	}
+	push("c-28b", 28)
+	push("c-29b", 29)
+
+	var got struct {
+		Targets        []string `json:"targets"`
+		TargetsOmitted int      `json:"targetsOmitted"`
+	}
+	if resp := getJSON(t, ts, "/api/v1/fleet", "", &got); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	// 1.40 (every cluster's), 1.29 and 1.30 (two clusters each), then the
+	// older minors of one cluster each: 1.11-1.23.
+	var want []string
+	for m := 11; m <= 23; m++ {
+		want = append(want, fmt.Sprintf("1.%d", m))
+	}
+	want = append(want, "1.29", "1.30", "1.40")
+	if !reflect.DeepEqual(got.Targets, want) || got.TargetsOmitted != 5 {
+		t.Errorf("targets = %v (omitted %d), want %v (omitted 5)", got.Targets, got.TargetsOmitted, want)
+	}
+
+	// Within the cap nothing is omitted, and the field is left out.
+	ts2, done := fleetFixture(t)
+	defer done()
+	resp, body := getRaw(t, ts2, "/api/v1/fleet", "")
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, "targetsOmitted") {
+		t.Errorf("a two-cluster fleet: status %d, body %s; want 200 without targetsOmitted", resp.StatusCode, body)
+	}
+}
