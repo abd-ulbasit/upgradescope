@@ -14,7 +14,7 @@ const unrecognizedLimit = 10
 
 // unrecognizedNote says what an unrecognized image is (#18): a gap in
 // add-on detection, not a finding.
-const unrecognizedNote = "No add-on registry entry matches these image repositories, so their lifecycle was not checked"
+const unrecognizedNote = "No add-on image matcher claims these repositories, so an add-on running one is found only through its labels or Helm release"
 
 // unrecognizedShown returns the repositories to list and how many more
 // there are, the cap's omissions included.
@@ -26,8 +26,8 @@ func unrecognizedShown(r engine.Report) (shown []string, more int) {
 	return shown, len(r.UnrecognizedImages) - len(shown) + r.UnrecognizedImagesOmitted
 }
 
-// writeUnrecognizedImages lists the image repositories no registry entry
-// matches, with their total count, after the rest of the table report.
+// writeUnrecognizedImages lists the image repositories no image matcher
+// claims, with their total count, after the rest of the table report.
 func writeUnrecognizedImages(w io.Writer, r engine.Report) {
 	total := len(r.UnrecognizedImages) + r.UnrecognizedImagesOmitted
 	if total == 0 {

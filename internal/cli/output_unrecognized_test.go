@@ -41,7 +41,7 @@ func TestWriteTableUnrecognizedImages(t *testing.T) {
 No findings.
 
 UNRECOGNIZED IMAGES (12)
-  No add-on registry entry matches these image repositories, so their lifecycle was not checked:
+  No add-on image matcher claims these repositories, so an add-on running one is found only through its labels or Helm release:
   - corp.example/app-00
   - corp.example/app-01
   - corp.example/app-02
@@ -64,7 +64,7 @@ UNRECOGNIZED IMAGES (12)
 	if err := WriteTable(&buf, r); err != nil {
 		t.Fatal(err)
 	}
-	if want := "UNRECOGNIZED IMAGES (1)\n  No add-on registry entry matches these image repositories, so their lifecycle was not checked:\n  - corp.example/app-00\n"; !strings.HasSuffix(buf.String(), want) {
+	if want := "UNRECOGNIZED IMAGES (1)\n  No add-on image matcher claims these repositories, so an add-on running one is found only through its labels or Helm release:\n  - corp.example/app-00\n"; !strings.HasSuffix(buf.String(), want) {
 		t.Errorf("table lacks %q:\n%s", want, buf.String())
 	}
 
@@ -89,7 +89,7 @@ func TestWriteMarkdownUnrecognizedImages(t *testing.T) {
 	}
 	want := "\n<details><summary>Unrecognized images (12)</summary>\n" +
 		"\n" +
-		"No add-on registry entry matches these image repositories, so their lifecycle was not checked.\n" +
+		"No add-on image matcher claims these repositories, so an add-on running one is found only through its labels or Helm release.\n" +
 		"\n" +
 		items.String() +
 		"- …and 2 more (`--output json` lists up to 200)\n" +
