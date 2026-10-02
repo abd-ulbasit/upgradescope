@@ -12,7 +12,11 @@
 #      reused: it is no longer vanilla); then an object applied through that
 #      deprecated group/version (hack/e2e/deprecated-api.txt) is reported
 #      with its field manager, and once re-applied through the GA version it
-#      is not (skipped on a reused cluster too);
+#      is not (skipped on a reused cluster too); on the newest minor, whose
+#      next one is past the knowledge base's horizon (`upgradescope version`),
+#      the vanilla cluster scanned there is unknown with a required
+#      kb-coverage gap and exits 2, and exits 0 with --allow-incomplete
+#      (N/A on other minors; skipped on a reused cluster);
 #   3. the EOL ingress-nginx demo add-on (hack/demo/kind-setup.sh), which
 #      scan reports as a blocker (exit 2); a second release of that chart,
 #      uninstalled with --keep-history, yields no EOL finding; Istio pods on
@@ -25,7 +29,8 @@
 #   4. the image built from this tree, kind-loaded, and the chart installed
 #      from deploy/chart with the server enabled, --wait;
 #   5. the agent's ClusterReadiness gets a score and a verdict for the next
-#      minor (blocked, with the ingress-nginx eol-addon finding);
+#      minor (blocked, with the ingress-nginx eol-addon finding), and on the
+#      newest minor names the required kb-coverage gap of that target;
 #      the install added no admission webhook, and the CR carries no
 #      finalizer or owner reference;
 #   6. the server ingested the agent's snapshot (GET /api/v1/clusters);
@@ -194,6 +199,13 @@ skip() {
   echo "::warning title=kind e2e $MINOR: check skipped::$1 — $2"
 }
 
+# not_applicable <name> <why>: a check for another minor (no warning: every
+# run of this minor is like this one).
+not_applicable() {
+  results+=("- N/A — $1 ($2)")
+  echo "== $1: N/A ($2)"
+}
+
 reused=""
 create_cluster() {
   if grep -qx "$CLUSTER" <<<"$(kind get clusters 2>/dev/null)"; then
@@ -223,6 +235,43 @@ no_removed_api_blockers() {
     jq -r '.findings[] | select(.category == "removed-api" and .severity == "blocker") | "  - \(.title)"' "$work/vanilla.json" >&2
     return 1
   fi
+}
+
+# The knowledge base's horizon, from the binary under test: the newest
+# minor it knows. A target past it cannot be fully judged.
+HORIZON=""
+read_kb_horizon() {
+  HORIZON=$("$UPGRADESCOPE" version --output json | jq -r .kbHorizon) || return 1
+  [[ $HORIZON =~ ^1\.[0-9]+$ ]] || { echo "upgradescope version --output json reports kbHorizon '$HORIZON'" >&2; return 1; }
+  echo "knowledge base horizon $HORIZON; this run's next minor $NEXT"
+}
+past_horizon() { [ "${NEXT#1.}" -gt "${HORIZON#1.}" ]; }
+
+# VS-11 (#130): on the newest minor, the next one is past the horizon. The
+# vanilla cluster has no blocker there, but kb-coverage, a required check,
+# cannot be assessed: the verdict is unknown and the gate exits 2, while
+# --allow-incomplete gates on findings alone and exits 0. Runs before the
+# deprecated-API apply and the EOL add-on, which are blockers at that target.
+past_horizon_is_unknown() {
+  local rc=0
+  "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --output json >"$work/horizon.json" || rc=$?
+  [ "$rc" = 2 ] || {
+    echo "scan --target $NEXT (past the KB horizon $HORIZON) exited $rc, want 2 (verdict unknown)" >&2
+    return 1
+  }
+  jq -e '.verdict == "unknown" and .ready == false
+      and ([.findings[] | select(.severity == "blocker")] | length == 0)
+      and any((.notAssessed // [])[]; .capability == "kb-coverage" and .required == true)' "$work/horizon.json" >/dev/null || {
+    echo "scan --target $NEXT: want verdict unknown, no blocker and a required kb-coverage gap; got:" >&2
+    jq -c '{verdict, ready, blockers: [.findings[] | select(.severity == "blocker") | .title], notAssessed}' "$work/horizon.json" >&2
+    return 1
+  }
+  rc=0
+  "$UPGRADESCOPE" scan --context "$CTX" --target "$NEXT" --allow-incomplete --output json >"$work/horizon-allow.json" || rc=$?
+  [ "$rc" = 0 ] || {
+    echo "scan --target $NEXT --allow-incomplete exited $rc, want 0 (no blocker; the gap is accepted)" >&2
+    return 1
+  }
 }
 
 # The ITs skip rather than fail when their guard refuses a context, and
@@ -431,6 +480,24 @@ cr_has_verdict() {
   grep -q '"eol-addon"' "$work/cr.json" || { echo "no eol-addon finding in the CR status" >&2; return 1; }
 }
 
+# VS-11 (#130): the agent's default target is the next minor, so on the
+# newest minor its ClusterReadiness is judged past the horizon and says so:
+# a kb-coverage entry in status.notAssessed, named required in the Ready
+# condition. Its verdict is blocked, not unknown (cr_has_verdict): the EOL
+# ingress-nginx is a blocker here, and a blocker outranks a gap;
+# past_horizon_is_unknown shows unknown on the cluster without one.
+cr_reports_kb_coverage_gap() {
+  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  jq -e --arg t "$NEXT" '.status.targets[0].target == $t
+      and any((.status.notAssessed // [])[]; startswith("kb-coverage: "))
+      and any((.status.conditions // [])[]; .type == "Ready" and (.message | contains("kb-coverage (required)")))' \
+    "$work/cr.json" >/dev/null || {
+    echo "clusterreadiness/$CR for $NEXT (past the KB horizon $HORIZON) does not name a required kb-coverage gap:" >&2
+    jq -c '.status | {target: .targets[0].target, notAssessed, conditions}' "$work/cr.json" >&2
+    return 1
+  }
+}
+
 # RB-04: nothing in the cluster changes because of a finding. With the EOL
 # blocker installed and the agent ticking, the install added no admission
 # webhook, and the agent's ClusterReadiness holds nothing up on deletion
@@ -612,6 +679,7 @@ audit_scan_writes_nothing() {
 
 gate "kind cluster on Kubernetes $MINOR" create_cluster
 gate "build bin/upgradescope" make build
+gate "the binary under test reports its knowledge base horizon" read_kb_horizon
 gate "scan against an unreachable API server exits 1" unreachable_scan_exits_1
 # A reused cluster (a local re-run) already has the demo add-on, the CRD and
 # whatever the last run left, so it is not the vanilla cluster this guards.
@@ -620,6 +688,14 @@ if [ -n "$reused" ]; then
   skip "$vanilla" "cluster reused, not vanilla; make demo-down first"
 else
   gate "$vanilla" no_removed_api_blockers
+fi
+horizon_gate="a vanilla cluster scanned past the KB horizon is unknown with a required kb-coverage gap (exit 2), and --allow-incomplete exits 0"
+if ! past_horizon; then
+  not_applicable "$horizon_gate" "$NEXT is within the KB horizon $HORIZON"
+elif [ -n "$reused" ]; then
+  skip "$horizon_gate" "cluster reused, not vanilla; make demo-down first"
+else
+  gate "$horizon_gate" past_horizon_is_unknown
 fi
 deprecated="an object written through $DEP_GV is reported with its manager; re-applied through $GA_GV it is not"
 if [ -n "$reused" ]; then
@@ -635,6 +711,12 @@ gate "scan + agent integration tests" integration_tests
 gate "image built from this tree, kind-loaded" load_image
 gate "helm install deploy/chart (server enabled) --wait" install_chart
 gate "ClusterReadiness has a score and a blocked verdict for $NEXT" cr_has_verdict
+cr_gap_gate="ClusterReadiness for the default target past the KB horizon names the required kb-coverage gap"
+if past_horizon; then
+  gate "$cr_gap_gate" cr_reports_kb_coverage_gap
+else
+  not_applicable "$cr_gap_gate" "$NEXT is within the KB horizon $HORIZON"
+fi
 gate "the install added no webhook configuration; ClusterReadiness/$CR has no finalizer or owner reference" no_webhooks_or_finalizers
 gate "server ingested the agent's snapshot" server_ingested
 gate "helm upgrade --set agent.targets={$NEXT}" upgrade_with_targets
