@@ -284,6 +284,12 @@ a CI gate.
   unreadable, or the target is beyond the knowledge base. v0.1.1 reported
   such scans as `ready: true` and exited 0. Pass `--allow-incomplete` to
   gate on findings alone.
+- **The server gate fails closed too.** `POST /api/v1/gate` defaults to
+  `fail-on=blocker`: a blocker or an `unknown` verdict answers 422 with
+  the full report body, and `fail-on=never` keeps 200. v0.1.1 always
+  answered 200. Use `curl --fail-with-body` to fail the CI step and keep
+  the SARIF; `?path=` gives SARIF results file locations, and with
+  `?cluster=` only what the manifests introduce counts (#120).
 - A scan of a cluster that could not be read at all exits 1, and so does a
   `--files` scan that found no Kubernetes objects. Neither reports
   100/100 any more.
