@@ -1,0 +1,26 @@
+[
+  {
+    "description": "clients still requesting policy/v1beta1 poddisruptionbudgets (removed in 1.25). apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.",
+    "check_name": "deprecated-api-in-use/policy/v1beta1/poddisruptionbudgets",
+    "fingerprint": "6f7c3bdc821bc82e34e21e291136b238aa582b608d72f9f359addf377339b6a4",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/deprecated-api-in-use/policy/v1beta1/poddisruptionbudgets",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "batch/v1beta1 CronJob removed in 1.25 (2 objects). 2 object(s) written through this API version: default (1), shop (1). Written by: helm, kubectl last-applied. apiserver_requested_deprecated_apis also records requests to batch/v1beta1 cronjobs, cronjobs/status since the last apiserver restart; the metric does not identify the client. Objects: default/nightly, shop/reports. Fix: migrate to batch/v1 CronJob.",
+    "check_name": "removed-api/batch/v1beta1/CronJob",
+    "fingerprint": "21a40d52b7c795ed8872d69cc78f17d38936d3c7160f5d4a84dd0160b56645d7",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/removed-api/batch/v1beta1/CronJob",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

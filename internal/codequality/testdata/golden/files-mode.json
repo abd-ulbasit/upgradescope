@@ -1,0 +1,62 @@
+[
+  {
+    "description": "ingress-nginx is end-of-life since 2026-03-26. Detected ingress-nginx version 1.8.1 via image in namespace(s): ingress-nginx. Upstream support has ended. Fix: migrate to Gateway API (ingress2gateway) or another maintained ingress controller.",
+    "check_name": "eol-addon/ingress-nginx",
+    "fingerprint": "1b8ed14c6d69b2c619d0f4d66192abd9fac48ae5cb6db8831ef77181a0f74ad3",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/eol-addon/ingress-nginx",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "batch/v1beta1 CronJob removed in 1.25 (1 object): nightly (rendered from shop/templates/cronjob.yaml). Fix: migrate to batch/v1 CronJob.",
+    "check_name": "removed-api/batch/v1beta1/CronJob",
+    "fingerprint": "1d2b44a847e6e4c2a017f315f07677959af8529644271930c83421ec9cdf51ad",
+    "severity": "critical",
+    "location": {
+      "path": "rendered/all.yaml",
+      "lines": {
+        "begin": 14
+      }
+    }
+  },
+  {
+    "description": "extensions/v1beta1 Ingress removed in 1.22 (3 objects): admin. Fix: migrate to networking.k8s.io/v1 Ingress.",
+    "check_name": "removed-api/extensions/v1beta1/Ingress",
+    "fingerprint": "a5d940a38ca21746508c43676da6a4de864607b47dcb36b2cc53a5f71d9efead",
+    "severity": "critical",
+    "location": {
+      "path": "legacy/ingress.yaml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "extensions/v1beta1 Ingress removed in 1.22 (3 objects): shop/web (rendered from shop/templates/ingress.yaml). Fix: migrate to networking.k8s.io/v1 Ingress.",
+    "check_name": "removed-api/extensions/v1beta1/Ingress",
+    "fingerprint": "0f1b58d907f5268ed86690984ab4e2d75ebeccfce121262c725a47fcb380e2c3",
+    "severity": "critical",
+    "location": {
+      "path": "rendered/all.yaml",
+      "lines": {
+        "begin": 3
+      }
+    }
+  },
+  {
+    "description": "extensions/v1beta1 Ingress removed in 1.22 (3 objects): 1 more affected object(s) are not listed with a file and line (at most 100 objects are recorded per finding).",
+    "check_name": "removed-api/extensions/v1beta1/Ingress",
+    "fingerprint": "960a1836421b3b95a10595b04dc72133b84d3d46f371fc758f1cdc4caf66b040",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/removed-api/extensions/v1beta1/Ingress",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

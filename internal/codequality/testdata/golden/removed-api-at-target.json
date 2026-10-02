@@ -1,0 +1,26 @@
+[
+  {
+    "description": "extensions/v1beta1 Ingress removed in 1.22 (3 objects). 3 object(s) still stored/served at this version: default (2), shop (1). Fix: migrate to networking.k8s.io/v1 Ingress.",
+    "check_name": "removed-api/extensions/v1beta1/Ingress",
+    "fingerprint": "960a1836421b3b95a10595b04dc72133b84d3d46f371fc758f1cdc4caf66b040",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/removed-api/extensions/v1beta1/Ingress",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "batch/v1beta1 CronJob deprecated since 1.21 (1 object). 1 object(s) still stored/served at this version: default (1). Fix: migrate to batch/v1 CronJob.",
+    "check_name": "deprecated-api/batch/v1beta1/CronJob",
+    "fingerprint": "85c232e8b849621cd057d3fc8cdd0ba80d8b36485266a8649590c05cbd585390",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/deprecated-api/batch/v1beta1/CronJob",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

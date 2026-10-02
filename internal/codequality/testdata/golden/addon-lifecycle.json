@@ -1,0 +1,74 @@
+[
+  {
+    "description": "ExternalDNS 0.14.2 supports Kubernetes up to 1.32 (target 1.36). Installed version 0.14.2 matches compatibility range \"\u003e=0.10.0 \u003c0.18.0\", which supports Kubernetes 1.19 through 1.32.",
+    "check_name": "chart-incompat/external-dns",
+    "fingerprint": "78ad28de8960469aac6e64af1cdccf7bb5845d0cd7daea61803b99b67869b5fb",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/chart-incompat/external-dns",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Istio 1.27.3 supports Kubernetes up to 1.33 (target 1.36). Installed version 1.27.3 is in the 1.27 release line, which supports Kubernetes 1.29 through 1.33.",
+    "check_name": "chart-incompat/istio/1.27",
+    "fingerprint": "90c27c0ea11dc1b91e1f7f428c4a5a99452131e6d67bef07af7ef8344dd2abb5",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/chart-incompat/istio/1.27",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Istio 1.27 is end-of-life since 2026-04-07. Detected Istio version 1.27.3 via image in namespace(s): istio-system. Upstream support for the 1.27 release line ended on 2026-04-07. Fix: Upgrade Istio to a supported release line (newest: 1.31).",
+    "check_name": "eol-addon/istio/1.27",
+    "fingerprint": "19c92fc15786454c307128141fcae6217a54fb4276033a02b293095d27799e1b",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/eol-addon/istio/1.27",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "containerd 1.7 is end-of-life since 2026-09-01. Detected containerd version 1.7.27 on node(s): node-a. Upstream support for the 1.7 release line ended on 2026-09-01. The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself. Fix: Upgrade containerd to a supported release line (newest: 2.0).",
+    "check_name": "eol-addon/containerd/1.7",
+    "fingerprint": "e1249854384f951188ac4c8abb80698a1eabbde2bc9fb02208d6f1ac01c101cf",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/eol-addon/containerd/1.7",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "no lifecycle data for ExternalDNS 0.14.2. Detected ExternalDNS version 0.14.2 via chart 1.14.5 in namespace(s): dns. The registry has no release-line data for this version, so its end of life was not assessed.",
+    "check_name": "addon-no-data/external-dns",
+    "fingerprint": "d37d89d36a564fa0a0c3b269bab08aa59945172e2c1383b65f1be3aca318a988",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/addon-no-data/external-dns",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "upgrading from 1.33 to 1.36 takes 3 minor-version upgrades: 1.34, 1.35, 1.36. The control plane is upgraded one minor version at a time. This report judges the cluster as it is against 1.36; add-ons, charts and nodes may need upgrading at each step in between.",
+    "check_name": "version-skew/upgrade-path",
+    "fingerprint": "f342b588ef0a3345a295795e576fad9da8bdd1cfd9e4022323b6e4e7cb49c7d3",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/version-skew/upgrade-path",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

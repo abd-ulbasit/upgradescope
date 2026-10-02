@@ -1,0 +1,14 @@
+[
+  {
+    "description": "Not assessed: api-usage (required): discover server resources: Unauthorized. The verdict is unknown: a blocker may have been missed.",
+    "check_name": "not-assessed/api-usage",
+    "fingerprint": "8db300522f363b3ee09888ff2887214901a35e2708acad7badc3a4d45749d8b1",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/not-assessed/api-usage",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

@@ -1,0 +1,62 @@
+[
+  {
+    "description": "clients still requesting policy/v1beta1 podsecuritypolicies (removed in 1.25). apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.",
+    "check_name": "deprecated-api-in-use/policy/v1beta1/podsecuritypolicies",
+    "fingerprint": "6b97614368b516868c6141d72a2b80288b48a33fa6945c00b0303b4a70b577ef",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/deprecated-api-in-use/policy/v1beta1/podsecuritypolicies",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "batch/v1beta1 CronJob removed in 1.25 (2 objects). 2 object(s) written through this API version: jobs (2). Written by: helm. apiserver_requested_deprecated_apis also records requests to batch/v1beta1 cronjobs since the last apiserver restart; the metric does not identify the client. Objects: jobs/nightly, jobs/weekly. Fix: migrate to batch/v1 CronJob.",
+    "check_name": "removed-api/batch/v1beta1/CronJob",
+    "fingerprint": "21a40d52b7c795ed8872d69cc78f17d38936d3c7160f5d4a84dd0160b56645d7",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/removed-api/batch/v1beta1/CronJob",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "clients still requesting example.dev/v1alpha1 widgets/status (deprecated). apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; no removal release is recorded. The metric does not identify the client; apiserver audit logs do.",
+    "check_name": "deprecated-api-in-use/example.dev/v1alpha1/widgets/status",
+    "fingerprint": "98bfe991a6381a3084b979d35a45ba30490c9cb73414894e3fff9918cc831676",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/deprecated-api-in-use/example.dev/v1alpha1/widgets/status",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "clients still requesting flowcontrol.apiserver.k8s.io/v1beta2 flowschemas (removed in 1.29). apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.29. The metric does not identify the client; apiserver audit logs do.",
+    "check_name": "deprecated-api-in-use/flowcontrol.apiserver.k8s.io/v1beta2/flowschemas",
+    "fingerprint": "0c92fd301df08a0d0196e1a016a427777e2c8efc6f72456c5a6ac6eb02392e17",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/deprecated-api-in-use/flowcontrol.apiserver.k8s.io/v1beta2/flowschemas",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "1 node(s) have unparseable kubelet versions. These nodes could not be evaluated against the kubelet skew policy: node-edge (\"custom-build\").",
+    "check_name": "version-skew/kubelet-unparseable",
+    "fingerprint": "9d938e4f287125f7307a862f8196bd53bbc28e0bfc4afc2e48b358880c52dad3",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/version-skew/kubelet-unparseable",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

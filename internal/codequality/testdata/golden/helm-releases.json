@@ -1,0 +1,62 @@
+[
+  {
+    "description": "Helm release shop/web: chart web 2.0.0 requires Kubernetes \"\u003e=1.19.0-0 \u003c1.25.0-0\" (target 1.25). Chart web 2.0.0 (revision 12 of Helm release shop/web) declares kubeVersion \"\u003e=1.19.0-0 \u003c1.25.0-0\" in Chart.yaml, which Kubernetes 1.25 does not satisfy. Helm refuses to install or upgrade a chart whose kubeVersion excludes the cluster version, so once the cluster runs 1.25 every helm upgrade of this release fails until it moves to a chart version that supports 1.25. Fix: upgrade the release to a chart version whose kubeVersion includes 1.25 before upgrading the cluster.",
+    "check_name": "chart-incompat/helm-release/shop/web",
+    "fingerprint": "79c78ef1ce4bd0b45928876e93972efa6c68256f675e66fec827fdcd6d2a14fe",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/chart-incompat/helm-release/shop/web",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "batch/v1beta1 CronJob removed in 1.25 (1 object). 1 object(s) written through this API version: batch (1). Written by: helm. Objects: batch/nightly. Fix: migrate to batch/v1 CronJob.",
+    "check_name": "removed-api/batch/v1beta1/CronJob",
+    "fingerprint": "21a40d52b7c795ed8872d69cc78f17d38936d3c7160f5d4a84dd0160b56645d7",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/removed-api/batch/v1beta1/CronJob",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "helm upgrade of release batch/jobs will fail: its manifest uses batch/v1beta1 CronJob. Revision 7 of Helm release batch/jobs (chart jobs 1.4.0) stores a manifest with 1 object at APIs Kubernetes 1.25 does not serve: batch/v1beta1 CronJob (removed in 1.25; 1 object). Helm refuses to upgrade a release whose stored manifest uses APIs the cluster no longer serves. Objects: weekly (line 31). Fix: upgrade the release to a chart version that renders supported APIs (batch/v1 CronJob) before upgrading the cluster; if the cluster already stopped serving them, rewrite the stored manifest with the helm-mapkubeapis plugin first.",
+    "check_name": "removed-api/helm-release/batch/jobs",
+    "fingerprint": "ed66556dbd651e4bfeb8c2001e295cf054c835026e783967bd3ecb0c19a9d0fb",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/removed-api/helm-release/batch/jobs",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Helm release ops/status-page manifest uses deprecated v1 ComponentStatus. Revision 3 of Helm release ops/status-page (chart status-page 0.9.1) stores a manifest with 1 object at deprecated APIs: v1 ComponentStatus (deprecated in 1.19; 1 object). Objects: etcd-0 (line 12). Fix: upgrade the release to a chart version that renders supported APIs.",
+    "check_name": "deprecated-api/helm-release/ops/status-page",
+    "fingerprint": "675ee8cca4cba5886b69767e4211fa3d12d6fcb960190af235d6f1ab118aa137",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/deprecated-api/helm-release/ops/status-page",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Helm release shop/legacy-web: chart kubeVersion \"\u003e=1.21.0-0 \u003c\u003c1.30\" could not be parsed. Chart legacy-web 0.1.0 (revision 2 of Helm release shop/legacy-web) declares kubeVersion \"\u003e=1.21.0-0 \u003c\u003c1.30\" in Chart.yaml, which is not a valid semver constraint, so the chart's Kubernetes compatibility was not assessed.",
+    "check_name": "chart-incompat/helm-release/shop/legacy-web",
+    "fingerprint": "0e45d1d5c7bbfe1684a080a7a4ba307c21399b3b82e7caf77c7afad7aa4ad7ef",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/chart-incompat/helm-release/shop/legacy-web",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

@@ -1,0 +1,206 @@
+[
+  {
+    "description": "ingress-nginx 4.7.1 supports Kubernetes up to 1.33 (target 1.38). Installed version 4.7.1 matches compatibility range \"\u003e=4.0.0\", which supports Kubernetes 1.21 through 1.33. Fix: migrate to Gateway API (ingress2gateway) or another maintained ingress controller.",
+    "check_name": "chart-incompat/ingress-nginx",
+    "fingerprint": "694e9b61ae4decdf2573a38738e6446424a7deeb071425e22142d55a4ceee93c",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/chart-incompat/ingress-nginx",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "clients still requesting batch/v1beta1 cronjobs (removed in 1.25). apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.",
+    "check_name": "deprecated-api-in-use/batch/v1beta1/cronjobs",
+    "fingerprint": "bd94c65326d9b380f687ea8e5aebb2ab7b4454a5369d11e82682d6a281e4e9e7",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/deprecated-api-in-use/batch/v1beta1/cronjobs",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "ingress-nginx is end-of-life since 2026-03-26. Detected ingress-nginx version 4.7.1 via chart in namespace(s): ingress-nginx. Upstream support has ended. Fix: migrate to Gateway API (ingress2gateway) or another maintained ingress controller.",
+    "check_name": "eol-addon/ingress-nginx",
+    "fingerprint": "1b8ed14c6d69b2c619d0f4d66192abd9fac48ae5cb6db8831ef77181a0f74ad3",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/eol-addon/ingress-nginx",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "extensions/v1beta1 Ingress removed in 1.22 (2 objects). 2 object(s) still stored/served at this version: shop (2). Fix: migrate to networking.k8s.io/v1 Ingress.",
+    "check_name": "removed-api/extensions/v1beta1/Ingress",
+    "fingerprint": "960a1836421b3b95a10595b04dc72133b84d3d46f371fc758f1cdc4caf66b040",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/removed-api/extensions/v1beta1/Ingress",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "1 node(s) would exceed kubelet version skew after upgrading to 1.38. After upgrading the control plane to 1.38 these nodes would be more than 3 minor versions behind: node-b (v1.33.0).",
+    "check_name": "version-skew/kubelet-post-upgrade",
+    "fingerprint": "21f7ec7f932f3da2a76f760fe02de9f49a0b0cad4c173ed9b5cde021551c0217",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/version-skew/kubelet-post-upgrade",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "kube-proxy would exceed version skew after upgrading to 1.38. After upgrading the control plane to 1.38, kube-proxy 1.33 would be more than 3 minor versions behind kube-apiserver; upgrade kube-proxy first.",
+    "check_name": "version-skew/kube-proxy-post-upgrade",
+    "fingerprint": "ad3e92b1531a1b32d36375ad0c47de5716cc3ea7475c9cc7a60e71eb571895ad",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/version-skew/kube-proxy-post-upgrade",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "kube-scheduler is newer than kube-apiserver. kube-scheduler 1.37 is newer than the oldest kube-apiserver (1.35); control-plane components must not be newer than the apiservers they talk to.",
+    "check_name": "version-skew/kube-scheduler-newer",
+    "fingerprint": "b0d3ebc233ae6e5b79e39ee66d919457467b1b2ea5283deb5502499d16a7946a",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/version-skew/kube-scheduler-newer",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Legacy Mesh reaches end-of-life on 2026-08-15. Detected Legacy Mesh version 1.2.0 via image in namespace(s): mesh. Upstream support ends on 2026-08-15.",
+    "check_name": "eol-approaching/legacy-mesh",
+    "fingerprint": "0cc980116db4cccf4a93b4e771c63cc9cd8976a65db9c45962114e86eda97653",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/eol-approaching/legacy-mesh",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "knowledge base does not cover Kubernetes 1.38 (newest known: 1.36). Findings may be incomplete; regenerate the knowledge base (kb version test-kb-1).",
+    "check_name": "kb-stale",
+    "fingerprint": "37c75cb4eb8abf585f404472e6c9ebb95b7b47c95a998ef91afb8610e4f62b90",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/kb-stale",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "1 node(s) exceed kubelet version skew vs control plane 1.37. Nodes more than 3 minor versions behind: node-b (v1.33.0).",
+    "check_name": "version-skew/kubelet-current",
+    "fingerprint": "0183bca3d10fdd32e448e84fa6e605f9d99685fa588577e920a833cb225f8e11",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/version-skew/kubelet-current",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "1 node(s) run a kubelet newer than kube-apiserver 1.35. kubelet must not be newer than kube-apiserver; when kube-apiserver versions differ, the oldest one (1.35) bounds the allowed kubelet versions. Newer nodes: node-a (v1.37.0).",
+    "check_name": "version-skew/kubelet-newer-than-apiserver",
+    "fingerprint": "acf4928d17614066c0de2304390ea89bb0f51ececc81419fe610b84156a033a2",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/version-skew/kubelet-newer-than-apiserver",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "HA kube-apiserver replicas span 2 minor versions. Observed kube-apiserver versions: 1.35, 1.37. The version-skew policy requires HA kube-apiserver instances to be within 1 minor version of each other.",
+    "check_name": "version-skew/apiserver-ha-spread",
+    "fingerprint": "4f04d41621e77a648af2d636a55516e581113706ba01928c7f966884d06d26ef",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/version-skew/apiserver-ha-spread",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "kube-controller-manager exceeds version skew vs kube-apiserver. kube-controller-manager 1.35 is more than 1 minor version(s) behind the newest kube-apiserver (1.37).",
+    "check_name": "version-skew/kube-controller-manager-behind",
+    "fingerprint": "539841f5ad4610cb60891b3c51a8fed02656ecf844687577ce8fb4b683dd2e05",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/version-skew/kube-controller-manager-behind",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "kube-proxy exceeds version skew vs kube-apiserver. kube-proxy 1.33 is more than 3 minor version(s) behind the newest kube-apiserver (1.37).",
+    "check_name": "version-skew/kube-proxy-behind",
+    "fingerprint": "e8f4ad62523b40280ba32f195211868629ce6764d03b036752739ba7266719c4",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/version-skew/kube-proxy-behind",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "v1 ComponentStatus deprecated since 1.19 (1 object). 1 object(s) still stored/served at this version: cluster-scoped (1).",
+    "check_name": "deprecated-api/core/v1/ComponentStatus",
+    "fingerprint": "46e8f5cf336f8d05bdbe463595024ad9f2ab29b4eb8e35fbaa82394b02d7a317",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/deprecated-api/core/v1/ComponentStatus",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "upgrading from 1.35 to 1.38 takes 3 minor-version upgrades: 1.36, 1.37, 1.38. The control plane is upgraded one minor version at a time. This report judges the cluster as it is against 1.38; add-ons, charts and nodes may need upgrading at each step in between.",
+    "check_name": "version-skew/upgrade-path",
+    "fingerprint": "f342b588ef0a3345a295795e576fad9da8bdd1cfd9e4022323b6e4e7cb49c7d3",
+    "severity": "info",
+    "location": {
+      "path": "upgradescope/version-skew/upgrade-path",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Not assessed: kb-coverage (required): knowledge base covers Kubernetes up to 1.36; target 1.38 cannot be assessed. The verdict is unknown: a blocker may have been missed.",
+    "check_name": "not-assessed/kb-coverage",
+    "fingerprint": "21ff8b73ded6d4ac93b8e36cf784cb04806611d3e2b45fd5401bd6d9594d4a92",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/not-assessed/kb-coverage",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]
