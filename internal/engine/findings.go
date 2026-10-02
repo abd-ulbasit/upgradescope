@@ -220,7 +220,8 @@ func (r *Report) Rescore() {
 var severityRank = map[Severity]int{SevBlocker: 0, SevWarning: 1, SevInfo: 2}
 
 // sortFindings orders findings deterministically: severity (blocker > warning
-// > info), then category (lexical), then title (lexical).
+// > info), then category, title and key (lexical), so two findings with one
+// title keep their order whatever order they were found in.
 func sortFindings(fs []Finding) {
 	sort.SliceStable(fs, func(i, j int) bool {
 		if severityRank[fs[i].Severity] != severityRank[fs[j].Severity] {
@@ -229,6 +230,9 @@ func sortFindings(fs []Finding) {
 		if fs[i].Category != fs[j].Category {
 			return fs[i].Category < fs[j].Category
 		}
-		return fs[i].Title < fs[j].Title
+		if fs[i].Title != fs[j].Title {
+			return fs[i].Title < fs[j].Title
+		}
+		return fs[i].Key < fs[j].Key
 	})
 }

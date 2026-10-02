@@ -313,6 +313,10 @@ a CI gate.
   `/version` and discovery honour the scan's deadline, and each collector
   step has its own share of the 5-minute budget, so one stalled step
   degrades only its own capability (#94).
+- The same inventory gives the same report whatever the order of its rows:
+  deprecated-API caller rows are sorted before they are judged and folded
+  into usage findings, whose evidence sentence listed subresources in the
+  order the rows arrived (#165).
 
 ### Security
 

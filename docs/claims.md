@@ -110,7 +110,7 @@ audited") and names the issue that tracks it.
 
 | ID | Claim | Proven by |
 |---|---|---|
-| VS-01 | `engine.Evaluate` is pure: the same inventory, knowledge base, target and time give the same bytes. | `TestEvaluateGolden` `TestScanBaselineGolden` |
+| VS-01 | `engine.Evaluate` is pure: the same inventory, knowledge base, target and time give the same bytes, whatever the order of the inventory's rows (#165). | `TestEvaluateGolden` `TestEvaluateOrderInvariant` `TestScanBaselineGolden` |
 | VS-02 | `score = max(0, 100 - min(75, 25 x blockers) - min(20, 5 x warnings))`; info findings are never scored. | `TestScore` `TestRescore` `TestEvaluateGolden` |
 | VS-03 | `ready` in every output is `verdict == "ready"`: `blocked` on any blocker, `unknown` when a required check was not assessed, `ready` otherwise. The README, the verdict page and the architecture never say `ready = (blockers == 0)`, and the README names `unknown` and `--allow-incomplete`. | `TestEvaluateVerdict` `TestTargetStatusFromReportVerdict` `TestScanGateOnUnknownVerdict` `TestDocsReadinessContract` |
 | VS-04 | Severity is set per category, as the verdict page's table says, and only some categories depend on the target: an add-on past end of life blocks whatever the target, a node runtime past end of life and `kb-stale` only warn, and a controller-manager or scheduler newer than the apiserver blocks whatever the target. Every category the engine defines has a row there. | `TestEvalAddOnsEOLBlocker` `TestEvalAddOnsNodeRuntimes` `TestEvalKBStale` `TestEvalControlPlaneSkewCtrlMgrNewerIsBlocker` `TestDocsListEveryCategory` |

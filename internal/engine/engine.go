@@ -1518,9 +1518,18 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 
 // Evaluate is the pure evaluation entrypoint: no I/O, no clock reads — now is
 // injected for EOL-window math. Output is fully deterministic for a given
-// (inventory, kb, target, now).
+// (inventory, kb, target, now), whatever the order of the inventory's slices.
 func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) Report {
-	inv.DeprecatedCalls = otherCallers(inv)
+	// Caller rows are judged, and folded into usage findings as evidence,
+	// in this order, so the same rows in another order (a pusher that
+	// sorts differently) give the same report. A clone: otherCallers may
+	// return the caller's own slice.
+	inv.DeprecatedCalls = slices.Clone(otherCallers(inv))
+	slices.SortFunc(inv.DeprecatedCalls, func(a, b inventory.DeprecatedCall) int {
+		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Version, b.Version),
+			cmp.Compare(a.Resource, b.Resource), cmp.Compare(a.Subresource, b.Subresource),
+			cmp.Compare(a.RemovedRelease, b.RemovedRelease))
+	})
 	findings := []Finding{} // non-nil so JSON renders "findings": []
 	findings = append(findings, foldDeprecatedCalls(inv, evalAPIUsage(inv, k, target), evalDeprecatedCalls(inv, target))...)
 	findings = append(findings, evalAddOns(inv, k, target, now)...)
