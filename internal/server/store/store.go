@@ -116,6 +116,11 @@ type Store interface {
 	ClaimOutbox(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]OutboxMessage, error)
 	DeleteOutbox(ctx context.Context, id int64) error                                     // delivered or given up; ErrNotFound when gone
 	RescheduleOutbox(ctx context.Context, id int64, next time.Time, lastErr string) error // failed attempt; ErrNotFound when gone
+	// DeferOutbox puts a claimed message back, due at next, for a delivery
+	// that was never tried: the attempt the claim counted is given back
+	// (attempts-1, never below 0) and last_error is left alone. ErrNotFound
+	// when gone.
+	DeferOutbox(ctx context.Context, id int64, next time.Time) error
 
 	// Per-cluster ingest tokens (P3, spec §8). Tokens are keyed by cluster
 	// NAME (not id): a token may be minted before the cluster's first push

@@ -60,6 +60,7 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("CommitEvaluationsIsAtomic", func(t *testing.T) { testCommitIsAtomic(t, newStore(t)) })
 	t.Run("CommitEvaluationsExistingSnapshot", func(t *testing.T) { testCommitExistingSnapshot(t, newStore(t)) })
 	t.Run("Outbox", func(t *testing.T) { testOutbox(t, newStore(t)) })
+	t.Run("OutboxDefer", func(t *testing.T) { testOutboxDefer(t, newStore(t)) })
 	t.Run("NotFound", func(t *testing.T) { testNotFound(t, newStore(t)) })
 	t.Run("TokensCreateValidateRevoke", func(t *testing.T) { testTokens(t, newStore(t)) })
 	t.Run("TokensMultiplePerCluster", func(t *testing.T) { testTokensMultiplePerCluster(t, newStore(t)) })

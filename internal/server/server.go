@@ -112,6 +112,7 @@ type Server struct {
 	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
 	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
 	outboxKick         chan struct{} // wakes the delivery worker after a commit
+	holds              sinkHolds     // sinks that asked to be left alone (Retry-After), in memory
 	notifyTimeout      time.Duration // bounds one delivery attempt
 	reevaluateInterval time.Duration // background re-evaluation period
 	reevaluateKick     chan struct{} // starts the next re-evaluation pass early

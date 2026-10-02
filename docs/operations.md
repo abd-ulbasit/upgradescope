@@ -103,16 +103,78 @@ describe it as it was at `lastSeen`.
 With `--slack-webhook` or `--webhook`, the server sends a notification when
 an evaluation pass changes a cluster's readiness: a new blocker, all
 blockers resolved (became ready), or an add-on entering its end-of-life
-window. A cluster's first evaluation of a target is the baseline and sends
-nothing; neither does a pass whose verdict is unknown.
+window. Each pass is compared with the target's last evaluation that had
+a decided verdict (ready or blocked). A pass whose verdict is unknown sends
+nothing and is not a baseline either: what it could not see is not news.
+
+A new cluster's first evaluation of a target is the baseline and sends
+nothing, and so does the first evaluation of a target added to
+`--targets` later, so that restarting the server with a new target does
+not notify every cluster at once.
+
+**After a cluster upgrade.** When a cluster upgrades, its default target
+moves up one minor: a cluster on 1.35 is judged against 1.36; after its
+upgrade to 1.36, against 1.37. The new default target's first decided
+evaluation is compared with the previous default target's last decided one
+(the nearest lower target that has one, up to 3 minors below). So:
+
+- a blocker that the new target adds is a `new-blocker`. For example, a
+  cluster that still calls `networking.k8s.io/v1beta1` ServiceCIDR, removed
+  in 1.37, is notified when it reaches 1.36;
+- a blocker the cluster already had at the old target (an EOL add-on, an
+  API removed long ago) is not announced again. There is no separate
+  "target changed" event;
+- if the old target was blocked and the new one is ready, the cluster gets
+  `became-ready`.
+
+The same comparison applies when a newer server or knowledge base first
+decides a default target that it could not judge before (a cluster on the
+newest minor, whose next minor was past the knowledge base's horizon and
+so `unknown`). Every cluster on that minor then gets its first decided
+evaluation in the same pass. Each one that has a stored decided
+evaluation of a lower target (within three minors below) is compared with
+it and notified once of the blockers that are new to it (at most one
+notification per cluster, its changes capped as usual). A cluster without
+one, because it was first seen on the newest minor or because its
+lower-target evaluations were pruned, has nothing to compare with, and
+its first decided evaluation is a silent baseline.
+
+This differs from a target added to `--targets`, which stays silent: adding
+a target asks a new question about a cluster that has not changed, and
+every blocker it finds was already there. A default target that was
+unknown until a knowledge-base update is the cluster's real next upgrade,
+and the update is the first time anyone could say what blocks it, so those
+blockers are genuinely new to each cluster and are announced, once.
+
+Retention edge: the old target's evaluation is the baseline only while it
+is stored. If a new default target stays `unknown` for longer than
+`--retention` after the upgrade (no knowledge base for it that long), the
+old target's evaluations are pruned (see [Retention and
+backup](operations/retention-and-backup.md)), and the first decided
+evaluation of the new target is then a silent baseline.
 
 Delivery: notifications are committed to an outbox with the evaluations
 that produced them and delivered by a background worker, so a push never
-waits on a receiver and a restart loses nothing. A failed delivery (an
-error, a timeout of 2s, any non-2xx status, **including redirects**, which
-are not followed) is retried with exponential backoff from 30s, up to 8
-attempts (about an hour), separately per sink. Delivery is at least once:
-deduplicate on `deliveryId`.
+waits on a receiver and a restart does not lose queued messages (unless the
+server was down so long that they have passed the 8 hour limit below, when
+they are dropped unsent). A failed delivery (an error, a timeout of 2s, any
+non-2xx status, **including redirects**, which are not followed) is retried with exponential backoff from 30s, up to 8
+attempts (about an hour), separately per sink. A receiver that answers
+`429` or `503` with a `Retry-After` header (seconds or an HTTP date) is
+left alone for that delay, capped at an hour: the sink is not called for
+that message or for any other message queued for it (which are put back
+without counting an attempt), so a burst after a fleet-wide pass does not
+hammer a rate-limited receiver or use up its messages' attempts. The wait
+replaces a shorter backoff, so the attempts of one message may span several
+hours. Because a held sink is called only once per hold, the messages queued
+behind it would otherwise drain one per hold: so a message is **given up
+(logged, not sent) once it has been queued for 8 hours**, whatever its
+attempts, and that holds for every queued message. A receiver limited for
+good therefore loses notifications older than 8 hours, not the newest. The
+hold is kept in memory: a restart, or another replica, forgets it and finds
+out with the next call. Delivery is **at least once**:
+the same notification may arrive more than once, so deduplicate on
+`deliveryId`, which is the same on every retry and for every sink.
 
 There is **one notification per cluster per evaluation pass**, grouping all
 targets: a change found for several targets with the same title and detail
@@ -124,8 +186,20 @@ new blockers and 5 eol-approaching changes; the rest are counted in
 
 ### Webhook payload
 
-The generic webhook's JSON body, its headers, how to verify the
-signature, and the JSON Schema it validates against are in the
+The generic webhook sends a versioned JSON body, `schemaVersion` 1, with
+lowercase keys: `deliveryId`, `type` (`readiness.changed`), `timestamp`,
+`cluster`, the verdict of every changed target in `targets`, the
+`changes` and, when the per-kind cap dropped some, `omitted`. Servers
+before schemaVersion 1 sent one PascalCase event per change and target
+(`Cluster`, `Target`, `Kind`, `Title`, `Detail`); receivers written for
+that shape must be updated.
+
+With `--webhook-secret` (`$UPGRADESCOPE_WEBHOOK_SECRET`,
+`--webhook-secret-file`), every delivery carries
+`X-Upgradescope-Signature: sha256=<hex HMAC-SHA256(secret, raw body)>`.
+
+Every field, the headers, how to verify the signature, and the JSON
+Schema the body validates against are in the
 [webhook reference](reference/webhook.md).
 
 ### Slack
