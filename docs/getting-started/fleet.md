@@ -57,6 +57,11 @@ helm install upgradescope deploy/chart -n upgradescope \
   --set agent.existingSecret=push-token
 ```
 
+Until v0.2.0 is published, a chart from a clone needs an image you build and
+push yourself: add `--set image.repository=... --set image.tag=...`
+([In-cluster](in-cluster.md) shows how; the default `v0.1.1` image was never
+published, [#127](https://github.com/abd-ulbasit/upgradescope/issues/127)).
+
 The agent pushes its inventory when it changes and at least hourly
 (`--force-sync-every`), retrying transient failures. The server evaluates
 each new snapshot against the cluster's next minor and every
