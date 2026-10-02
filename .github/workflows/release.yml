@@ -343,4 +343,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The SHA pins the action definition only: its action.yml runs
+      # docker://ghcr.io/rajatjindal/krew-release-bot:v0.0.50 by tag, so the
+      # code it runs is that image tag's, not frozen by this pin; the job's
+      # token is read-only, which bounds what a changed image could do here.
       - uses: rajatjindal/krew-release-bot@c970b8a8f6dbc2f2285a26e3ae160903b87002c3 # v0.0.51

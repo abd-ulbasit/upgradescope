@@ -311,4 +311,4 @@ release:
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     ```
 
-    `--recursive` on the image also verifies each platform image. Each archive has an SPDX SBOM (`<archive>.sbom.json`); archives, packages and the image carry LICENSE, NOTICE and THIRD_PARTY_NOTICES (in the image under `/licenses/`).
+    Each platform image is signed too and verifies on its own: `cosign verify ghcr.io/abd-ulbasit/upgradescope@<platform digest>` with the same flags. Each archive has an SPDX SBOM (`<archive>.sbom.json`); archives, packages and the image carry LICENSE, NOTICE and THIRD_PARTY_NOTICES (in the image under `/licenses/`).
