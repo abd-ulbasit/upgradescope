@@ -91,7 +91,8 @@ reading it costs is bounded, not only its size. Its payload is decoded
 within fixed bounds (4 MiB stored, 16 MiB of JSON once decompressed; real
 releases decode to under 7 MiB). A release over them, such as a gzip bomb
 that decompresses to hundreds of MiB, is skipped as `release payload too
-large`. The stored manifest of a release within them is parsed a run of
+large`; one that is not a single gzip member, or that decompresses past
+its gzip size trailer, is not decodable either. The stored manifest of a release within them is parsed a run of
 documents at a time, each run at most 1 MiB and 64Ki YAML nodes, because
 parsing amplifies its input: a manifest of tiny objects or of newlines
 that fits the cap took 390–564 MiB parsed whole. A single document over 2
@@ -100,9 +101,10 @@ MiB or 64Ki nodes (the largest real one found, kyverno's policies CRD, is
 with what its other documents hold, and named. Either way the `helm`
 capability becomes partial and names the release; the others are still
 read. Measured on the test harness, above the collector's baseline: the
-gzip bomb peaks at 17 MiB of heap (`TestCollectHelmGzipBombIsBounded`;
+gzip bomb peaks at 17 MiB of heap, also when its size trailer lies or a
+second gzip member follows (`TestCollectHelmGzipBombIsBounded`;
 its test process at 71 MB resident), and the worst manifests that fit
-the cap at 36–52 MiB (`TestCollectHelmManifestParsingIsBounded`: all
+the cap at up to about 70 MiB (`TestCollectHelmManifestParsingIsBounded`: all
 newlines, tiny objects, documents that are not objects, documents at the
 size and at the node bound). Before the bounds, a 951 KB Secret that
 decompressed to 700 MiB took a scan to 1.93 GB and OOM-killed the agent at

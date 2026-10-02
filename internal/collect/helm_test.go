@@ -395,8 +395,9 @@ func TestDecodeHelmReleaseBoundsDecompressedSize(t *testing.T) {
 
 // The whole gzip stream is read and checked, not only the JSON value at
 // its start: a payload whose CRC or size trailer is wrong (corrupt, or a
-// size that lies about the buffer the JSON needs), or whose JSON is
-// followed by more, is not decodable, as when it was read with ReadAll.
+// size that lies about the buffer the JSON needs), whose JSON is followed
+// by more, or that holds more than one gzip member (Helm writes one) or
+// bytes after it, is not decodable, as when it was read with ReadAll.
 func TestDecodeHelmReleaseChecksTheWholeStream(t *testing.T) {
 	gz := func(s string) []byte {
 		var b bytes.Buffer
@@ -415,9 +416,11 @@ func TestDecodeHelmReleaseChecksTheWholeStream(t *testing.T) {
 		raw  []byte
 		want string
 	}{
-		"bad crc":       {corrupt(-8), "gunzip read: gzip: invalid checksum"},
-		"lying size":    {corrupt(-4), "gunzip read: gzip: invalid checksum"},
-		"trailing data": {gz(doc + `{"more":1}`), "release json: invalid character '{' after top-level value"},
+		"bad crc":        {corrupt(-8), "gunzip read: gzip: invalid checksum"},
+		"lying size":     {corrupt(-4), "gunzip read: gzip: invalid checksum"},
+		"trailing data":  {gz(doc + `{"more":1}`), "release json: invalid character '{' after top-level value"},
+		"second member":  {append(gz(doc), gz("")...), "gunzip: decompresses past its size trailer"},
+		"trailing bytes": {append(gz(doc), 0xff, 0xff, 0xff, 0), "gunzip: data after the gzip stream"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := decodeHelmRelease([]byte(base64.StdEncoding.EncodeToString(tc.raw)))

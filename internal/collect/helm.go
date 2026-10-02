@@ -529,9 +529,15 @@ func releaseRevision(secretName string) int {
 // The JSON is read whole into one buffer sized by the gzip trailer's
 // decompressed size, then unmarshalled: a json.Decoder buffers a value
 // whole too, doubling its buffer to get there, which took decoding a 32
-// MiB release to over 100 MiB of heap. The trailer is only a size hint —
-// the gzip reader checks it, with the CRC, at the end of the stream, which
-// is always read — so a lie is an error, and an over-cap one is clipped.
+// MiB release to over 100 MiB of heap. The buffer never grows, so the
+// trailer is trusted only as far as it can be checked. Helm writes one
+// gzip member, and only one member's trailer is the payload's last 4
+// bytes, so the reader stops after the first member and anything after it
+// is an error. Decompression stops past what the trailer says, so a
+// trailer that understates the size (forged, or an empty second member's)
+// is an error before it costs more than the buffer. One that overstates it
+// costs a buffer of at most maxReleaseJSONBytes, and the gzip reader then
+// fails it with the CRC at the end of the stream, which is always read.
 func decodeHelmRelease(data []byte) (helmReleaseDoc, error) {
 	var doc helmReleaseDoc
 	if len(data) > maxStoredReleaseBytes {
@@ -546,18 +552,26 @@ func decodeHelmRelease(data []byte) (helmReleaseDoc, error) {
 	if len(raw) < 3 || raw[0] != 0x1f || raw[1] != 0x8b || raw[2] != 0x08 {
 		return doc, fmt.Errorf("release payload is not gzip")
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	br := bytes.NewReader(raw)
+	zr, err := gzip.NewReader(br)
 	if err != nil {
 		return doc, fmt.Errorf("gunzip: %w", err)
 	}
 	defer zr.Close()
-	size := int(binary.LittleEndian.Uint32(raw[len(raw)-4:])) // ISIZE: gzip's last 4 bytes
-	buf := bytes.NewBuffer(make([]byte, 0, min(size, maxReleaseJSONBytes)+bytes.MinRead))
-	if _, err := buf.ReadFrom(&boundedReader{r: zr, left: maxReleaseJSONBytes}); err != nil {
-		if errors.Is(err, errReleaseTooLarge) {
+	zr.Multistream(false)
+	size := min(int(binary.LittleEndian.Uint32(raw[len(raw)-4:])), maxReleaseJSONBytes) // ISIZE: gzip's last 4 bytes
+	buf := bytes.NewBuffer(make([]byte, 0, size+bytes.MinRead))
+	if _, err := buf.ReadFrom(&boundedReader{r: zr, left: int64(size)}); err != nil {
+		switch {
+		case errors.Is(err, errReleaseTooLarge) && size == maxReleaseJSONBytes:
 			return doc, fmt.Errorf("%w: over %d MiB decompressed", errReleaseTooLarge, maxReleaseJSONBytes>>20)
+		case errors.Is(err, errReleaseTooLarge):
+			return doc, errors.New("gunzip: decompresses past its size trailer")
 		}
 		return doc, fmt.Errorf("gunzip read: %w", err)
+	}
+	if br.Len() > 0 { // gzip reads its flate.Reader byte by byte, never past the member
+		return doc, errors.New("gunzip: data after the gzip stream")
 	}
 	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
 		return doc, fmt.Errorf("release json: %w", err)
