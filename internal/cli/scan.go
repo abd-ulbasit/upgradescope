@@ -158,21 +158,33 @@ func evaluateScan(inv inventory.Inventory, k kb.KB, opts scanOptions, now time.T
 // from the cluster's oldest kube-apiserver (engine.PlanFrom). Each hop's
 // report goes through the scan's ignore rules first, so a suppressed
 // finding is in no hop, as it is not in the report. Nil, with a warning,
-// when the cluster's version is unknown.
+// when the cluster's version is unknown or the target is not an upgrade
+// of it.
 func planHops(inv inventory.Inventory, k kb.KB, opts scanOptions, now time.Time) []engine.Hop {
+	warn := func(msg string) {
+		if opts.stderr != nil {
+			fmt.Fprintf(opts.stderr, "warning: --plan: %s, so there is no upgrade plan; the report judges the target alone\n", msg)
+		}
+	}
 	from := opts.fromVersion
 	if opts.filesDir == "" {
 		v, ok := engine.PlanFrom(inv)
 		if !ok {
-			if opts.stderr != nil {
-				fmt.Fprintln(opts.stderr, "warning: --plan: the cluster's kube-apiserver version is unknown, so there is no upgrade plan; the report judges the target alone")
-			}
+			warn("the cluster's kube-apiserver version is unknown")
 			return nil
 		}
 		from = v
 	}
 	targets := engine.HopTargets(k, from, opts.targetVersion)
+	if len(targets) == 0 {
+		// --files plans check --from against --target up front.
+		warn(fmt.Sprintf("--target %s is not an upgrade of the cluster's %s", opts.targetVersion, from))
+		return nil
+	}
 	reports := make([]engine.Report, len(targets))
+	// suppress.Apply's warnings (expired rules, annotations without a
+	// reason) are dropped here: the scan applies the same rules to the
+	// report and prints them once from there.
 	for i, t := range targets {
 		reports[i], _ = suppress.Apply(engine.Evaluate(inv, k, t, now), opts.ignore.rules,
 			suppress.Options{Now: now, Source: opts.ignore.source, FileBase: opts.ignore.fileBase})

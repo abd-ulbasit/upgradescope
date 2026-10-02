@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -225,5 +226,106 @@ func TestScanPlanUnknownServerVersion(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "warning: --plan: the cluster's kube-apiserver version is unknown, so there is no upgrade plan") {
 		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+// A --target that is not an upgrade of the live cluster has no plan
+// either: the scan says so rather than printing nothing.
+func TestScanPlanTargetNotAnUpgrade(t *testing.T) {
+	out, stderr, err := execScanStderr(t, []string{"--target", "1.35", "--plan", "--output", "json", "--fail-on", "never"}, planStub(t, liveInventory("v1.36.2")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "warning: --plan: --target 1.35 is not an upgrade of the cluster's 1.36, so there is no upgrade plan") {
+		t.Errorf("stderr = %q", stderr)
+	}
+	if strings.Contains(out, `"hops"`) {
+		t.Errorf("the report has hops:\n%s", out)
+	}
+}
+
+// The guide's promise: the plan's last upgrade has the report's findings
+// at the same severities, and the same blockers and verdict, with ignore
+// rules and annotations active (the scan applies them to the report and
+// to each hop separately).
+func TestScanPlanLastHopIsTheReport(t *testing.T) {
+	const cronJob = "removed-api/batch/v1beta1/CronJob"
+	inv := planInventory()
+	accepted := inventory.ObjectRef{Name: "fpga.example.com", Ignore: "deprecated-api, removed-api", IgnoreReason: "deleted with the FPGA pool"}
+	inv.APIUsage[0].Count = 2
+	inv.APIUsage[0].Namespaces = map[string]int{"": 2}
+	inv.APIUsage[0].Objects = append(inv.APIUsage[0].Objects, accepted)
+	inv.APIUsage = append(inv.APIUsage, inventory.APIUsage{
+		Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 1, Namespaces: map[string]int{"jobs": 1},
+		Objects: []inventory.ObjectRef{{Namespace: "jobs", Name: "nightly"}},
+	})
+	dir := writeFiles(t, map[string]string{".upgradescope.yaml": "ignore:\n  - key: " + cronJob + "\n    reason: deleted next sprint\n    expires: \"2099-01-01\"\n"})
+	out, err := execScan(t, []string{"--target", "1.36", "--plan", "--output", "json", "--fail-on", "never",
+		"--config", filepath.Join(dir, ".upgradescope.yaml")}, planStub(t, inv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		engine.Report
+		Hops []engine.Hop `json:"hops"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Hops) != 5 {
+		t.Fatalf("%d hops, want 5\n%s", len(got.Hops), out)
+	}
+	suppressed := map[string]bool{}
+	for _, s := range got.Suppressed {
+		suppressed[s.Key] = true
+	}
+	if !suppressed[cronJob] || !suppressed["removed-api/resource.k8s.io/v1alpha3/DeviceClass"] {
+		t.Fatalf("suppressed = %v, want the CronJob (config rule) and a DeviceClass object (annotation)", suppressed)
+	}
+
+	want := map[string]engine.Severity{}
+	blockers := 0
+	for _, f := range got.Findings {
+		if f.Key != "version-skew/upgrade-path" {
+			want[f.Key] = f.Severity
+		}
+		if f.Severity == engine.SevBlocker {
+			blockers++
+		}
+	}
+	last := got.Hops[len(got.Hops)-1]
+	have := map[string]engine.Severity{}
+	for _, f := range last.Findings {
+		have[f.Key] = f.Severity
+	}
+	for _, r := range append(last.Changed, last.Carried...) {
+		have[r.Key] = r.Severity
+	}
+	if !maps.Equal(have, want) {
+		t.Errorf("last hop's findings = %v, want the report's %v", have, want)
+	}
+	if last.Count(engine.SevBlocker) != blockers || blockers == 0 || last.Verdict != got.Verdict || last.Score != got.Score {
+		t.Errorf("last hop: %d blockers, %s, score %d; report: %d blockers, %s, score %d",
+			last.Count(engine.SevBlocker), last.Verdict, last.Score, blockers, got.Verdict, got.Score)
+	}
+
+	// The CronJob is in no hop, and neither is the annotated DeviceClass
+	// object.
+	for _, h := range got.Hops {
+		for _, f := range h.Findings {
+			if f.Key == cronJob {
+				t.Errorf("hop %s lists the suppressed CronJob finding", h.To)
+			}
+			for _, o := range f.Objects {
+				if o.Name == accepted.Name {
+					t.Errorf("hop %s lists the annotated %s in %s", h.To, o.Name, f.Key)
+				}
+			}
+		}
+		for _, r := range append(h.Changed, h.Carried...) {
+			if r.Key == cronJob {
+				t.Errorf("hop %s references the suppressed CronJob finding", h.To)
+			}
+		}
 	}
 }

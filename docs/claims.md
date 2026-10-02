@@ -102,7 +102,7 @@ audited") and names the issue that tracks it.
 |---|---|---|
 | UP-01 | `scan --plan` judges the cluster at every minor from the one it runs (a live scan's oldest kube-apiserver, or `--from` with `--files`) to `--target`, and lists each finding in full at the first upgrade it affects, with the upgrade where its severity changes (a warning at one upgrade and a blocker at a later one shows both); a 1.31 to 1.36 plan is five upgrades. | `TestPlanGolden` `TestPlanSeverityTransitions` `TestScanPlanTable` `TestScanPlanMarkdown` `TestScanPlanJSON` `TestScanPlanFiles` |
 | UP-02 | Hops are one minor each unless the knowledge base has a cited upgrade step that skips minors; it ships none. | `TestHopTargetsDefault` `TestHopTargetsCustomPath` |
-| UP-03 | `--plan` never changes the verdict, score or exit code: the plan's last upgrade has the blockers, score and verdict of the report at `--target`, over hundreds of random inventories; ignore rules apply to every upgrade. | `TestPlanFinalHopMatchesEvaluate` `TestScanPlanTable` `TestScanPlanFiles` |
+| UP-03 | `--plan` never changes the verdict, score or exit code: the plan's last upgrade has the blockers, score and verdict of the report at `--target`, over hundreds of random inventories; ignore rules apply to every upgrade. | `TestPlanFinalHopMatchesEvaluate` `TestScanPlanLastHopIsTheReport` `TestScanPlanTable` `TestScanPlanFiles` |
 | UP-04 | The upgrade-plan guide's table and JSON examples are real `scan --plan` output. | `TestDocsUpgradePlanExample` |
 
 ## Verdict, score and exit codes

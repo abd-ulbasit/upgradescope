@@ -120,8 +120,10 @@ outside `hops` is the report at `--target`, exactly as without `--plan`.
   the report.
 - `--plan` never changes the exit code. The verdict, the score and the
   `--fail-on` gate are those of `--target`, and the plan's last upgrade
-  always has the same blockers as the report. A property test checks this
-  over hundreds of random inventories (`TestPlanFinalHopMatchesEvaluate`).
+  always has the same findings, blockers and verdict as the report. A
+  property test checks this over hundreds of random inventories
+  (`TestPlanFinalHopMatchesEvaluate`), and a scan test checks it with
+  ignore rules and annotations active (`TestScanPlanLastHopIsTheReport`).
 - `--baseline` marks the report's findings, not the plan's.
 
 ## What the plan assumes
@@ -137,8 +139,9 @@ outside `hops` is the report at `--target`, exactly as without `--plan`.
   verified, so no provider-specific path is included. To add one, open a
   pull request with the citation ([contributing](../contributing.md)).
 - **A live cluster's version comes from the cluster.** When the scan
-  cannot read a kube-apiserver version, it prints a warning and reports
-  the target alone, without a plan.
+  cannot read a kube-apiserver version, or `--target` is not newer than
+  the version it runs, it prints a warning and reports the target alone,
+  without a plan.
 
 The dashboard, the agent and the `ClusterReadiness` status do not show
 plans yet; `scan --plan` is the only way to get one.
