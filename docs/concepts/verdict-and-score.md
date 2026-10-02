@@ -37,9 +37,11 @@ Not required, because a blocker cannot hide behind them, or because managed
 platforms routinely deny them: `deprecated-calls` (the apiserver's
 `/metrics`, whether it is denied or does not answer in time) and `helm`
 (Secrets are often forbidden; the objects themselves are still checked by
-api-usage, and add-ons by their images and labels). In files mode `api-usage` and `kb-coverage` are required and add-ons are assessed from the manifests without being required (an image injected at
-admission is not in them); `versions`, `deprecated-calls` and `helm` are
-reported with the reason `files mode`.
+api-usage, and add-ons by their images and labels). In files mode
+`api-usage` and `kb-coverage` are required and add-ons are assessed from
+the manifests without being required (an image injected at admission is
+not in them); `versions`, `deprecated-calls` and `helm` are reported with
+the reason `files mode`.
 
 ## Severity, by category
 
