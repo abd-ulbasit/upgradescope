@@ -98,10 +98,20 @@ In scope:
   inventory and no stored report, two slots of their own (`/fleet`
   takes at most 16 `?targets=`). A `/gate` answer is bounded, in its
   format, before it is encoded, and one that could be over
-  `--max-gate-bytes` is `413` (`?path=` is at most 512 bytes). Stored
-  reports and JSON responses carry a snapshot's strings no longer than
-  they were pushed (no HTML or line-separator escapes; a push that is
-  not UTF-8 is `422`). Every read's response and every `/gate` answer is
+  `--max-gate-bytes` is `413` (`?path=` is at most 512 bytes). A push
+  whose identifiers are not valid for what they name (the cluster name
+  an RFC 1123 subdomain, namespaces RFC 1123 labels, and so on), or that
+  carries more than any collector records (a string over 16 KiB, more
+  than 100 objects per API usage entry, a group/version/kind listed
+  twice), is `422` before anything is stored. Every report the server
+  evaluates, stores or exports is at most `--max-snapshot-bytes`, since a
+  report repeats what its inventory names: a push, a what-if or a
+  `/gate?cluster=` over it is `413`, and so is an export (HTML writes
+  `'` `"` `&` as five bytes). Stored reports and JSON responses carry a
+  snapshot's strings as long as they were pushed (no HTML or
+  line-separator escapes; a push that is not UTF-8 is `422`), and the
+  evaluation summaries the fleet reads carry keep a bounded part of what
+  each evaluation could not assess. Every read's response and every `/gate` answer is
   built in its slot and waits for its client in one budget of twice
   `--max-snapshot-bytes`; one larger than what is left of that budget
   gets `503`, and one larger than the whole budget (never a `/gate`

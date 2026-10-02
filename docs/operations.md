@@ -28,7 +28,9 @@ request is measured before it is decoded:
 | with aliases expanded | the whole stream within the body cap, each document within 4 MiB; 20,000 documents | — |
 | node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4, an alias what it names | 1M units: a JSON value 1, an object 8 |
 | answer | at most `--max-gate-bytes`, bounded before it is encoded; `?path=` at most 512 bytes | — |
-| worst live heap within the budget (measured on SQLite) | ~165 MiB, with `?cluster=` too, the answer included | ~120 MiB, the body's copy and the reports it stores included |
+| what it may carry | — | identifiers valid for what they name, values within what any collector records (`422`) |
+| reports | — | each at most `--max-snapshot-bytes`; the evaluation stops there (`413`) |
+| worst live heap within the budget (measured on SQLite) | ~176 MiB, with `?cluster=` too, the answer included | ~119 MiB, the body's copy and the reports it stores included |
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
 | measured for aliases, decoded and evaluated at once | 1, others wait up to 30s holding only their bodies | 1, others wait up to 10s |
 
@@ -99,18 +101,56 @@ get `503` with `Retry-After`. Only a what-if decodes the whole inventory;
 the other reads decode its server version and capabilities and skip the
 rest. One read costs what it loads: on SQLite, whose driver holds a copy
 of every snapshot and report it reads beside the one it returns, a
-report or its findings from a stored evaluation of a 17 MB snapshot (at
-the node budget, every API-usage entry a finding, so the 17.5 MB report
-is as large) grew the heap ~90 MiB, a what-if of it ~88 MiB, and the
-same with object names of U+2028 up to ~97 MiB. Since they run one at a
-time, 10 concurrent requests to any of these endpoints whose clients
-take their responses at once add only the garbage of the read before:
-up to ~97 MiB in all (`TestReadHeapIsBounded`, on SQLite at the
-snapshot node budget, fails above 128 MiB).
+report from a stored evaluation about the report limit (below) grew the
+heap up to ~109 MiB, a what-if of one ~95 MiB, and the HTML export of
+one whose findings name 547,000 teams, which decode to as many small
+strings, ~129 MiB. Since they run one at a time, 10 concurrent requests
+to any of these endpoints whose clients take their responses at once
+add only the garbage of the read before: up to ~132 MiB in all
+(`TestReadHeapIsBounded`, on SQLite, against every snapshot the heap
+tests store, fails above 160 MiB).
 
-A snapshot's strings are stored and served no longer than they were
+A push is checked before it is evaluated, since its reports repeat what
+it names. Its identifiers must be what the apiserver accepts for what
+they name: the cluster name an RFC 1123 subdomain of at most 253 bytes
+(as in `tokens create`, a rename and the agent's `--cluster-name`),
+namespaces RFC 1123 labels, object names at most 253 bytes without `/`
+or `%` (the most any kind accepts: RBAC names take `:`), node and Helm
+release names RFC 1123 subdomains, team labels label values. Its other
+values must be within what any collector records: strings of at most
+16 KiB (a capability's reason 64 KiB, an object's field manager the
+apiserver's 128 printable bytes), at most 100 objects per API usage
+entry, each group/version/kind once per list, at most 200 unrecognized
+images and 32 capabilities. Anything else is `422`, naming the field
+and the rule, before anything is stored. Before that, namespace "names"
+of 190 apostrophes, written twice in each finding (in its namespaces and
+its evidence), made a 21 MB push three 42 MB reports and a 200 MB HTML
+export, and a `kubeVersion` of 20 MB of quotes three 84 MB reports.
+
+Within those limits the engine still repeats what a push names: a
+finding lists at most 100 namespaces (and counts the rest), but a team
+appears in every finding of its namespaces, a Helm release in the text
+of each of its findings, a node in up to three skew findings (each
+names at most 100). 5 MB of Helm releases whose `kubeVersion` excludes
+the target built three 41 MB reports, and 2.4 MB of usages in
+namespaces with 63-byte team labels three 21 MB ones. So a report is at
+most `--max-snapshot-bytes`: the engine charges each finding as it
+builds it and stops once the charge is over the limit, so an
+evaluation holds at most that and one input element's findings, and
+the encoded report is checked too. A push whose report for any target
+would be larger is `413`, and nothing is stored; no genuine inventory's
+report comes near it (reports name only what is flagged). A what-if
+report and `/gate?cluster=` are `413` the same way, the fleet teams
+rollup lists such a cluster under `missing`, and the re-evaluation pass
+keeps what is stored (a snapshot stored before the limit, or one a newer
+knowledge base flags more of). An export is at most the limit too:
+HTML writes `'`, `"` and `&` as five bytes and `<` and `>` as four, and
+CSV doubles quotes, so an export of a report within the limit can be
+over it; that export is `413`, saying to read the JSON report.
+
+The strings themselves are stored and served as long as they were
 pushed. `encoding/json` writes `<`, `>` and `&` as six-byte escapes
-(and U+2028 and U+2029 always), so the same 17 MB push with object
+(and U+2028 and U+2029 always), so a 17 MB push of usages with object
 names of `<` stored three 80 MB reports, grew the ingest heap 323 MiB
 and the report read 170 MiB. The server writes its stored reports and
 every JSON response without those escapes (the responses are
@@ -118,7 +158,11 @@ every JSON response without those escapes (the responses are
 without holding the escaped copy (the hash is unchanged), and refuses a
 push that is not valid UTF-8 with `422` (`encoding/json` would decode
 each invalid byte to three). The heap tests store snapshots of `x`, `<`
-and U+2028 names alike, and their figures here are the dearest of them.
+and U+2028 names alike, and of the characters the exports lengthen in
+every string a push can put in an export (Helm chart names, versions and
+`kubeVersion` constraints, field managers, deprecated-API callers,
+capability reasons and skipped entries; namespaces and team labels
+cannot carry them), and their figures here are the dearest of them.
 
 A response is written to memory in the slot and sent after it, so a
 client that is slow to read holds its response, not the slot. `/gate`
@@ -138,14 +182,15 @@ that 17.5 MB report and never read it grew the live heap 366 MiB with
 the slot free, 10 that sent `/gate?cluster=` against that cluster and
 never read the answer grew it 320 MiB (~32 MiB each: the report, the
 answer and its encoding), and a 120s window holds about 100 of either.
-Now 8 or 20 such readers over real sockets leave 33 MiB live (two
-responses held, the rest answered `503`) and the heap peaks 124 MiB
-above idle with the request in its slot, and 10 `/gate?cluster=`
-clients whose 4.5 MB answers are among the largest the answer bound
-lets through leave 39 MiB live, at a 61 MiB peak
-(`TestUnreadResponsesAreBounded` and `TestUnreadGateResponsesAreBounded`,
-which fail above the budget for what stays live, and at the peak above
-168 MiB for reads and 240 MiB for `/gate`). A `/gate` answer is at most
+Now 8 or 20 such readers of the largest report a push stores (~20.9 MB)
+over real sockets leave 40 MiB live (the budget full, the rest answered
+`503`) and the heap peaks 142 MiB above idle with the request in its
+slot, and 10 `/gate?cluster=` clients whose 4.6 MB answers are among the
+largest the answer bound lets through leave 39 MiB live, at a 69 MiB
+peak (`TestUnreadResponsesAreBounded` and
+`TestUnreadGateResponsesAreBounded`, which fail above the budget for
+what stays live, and at the peak above 200 MiB for reads and 240 MiB
+for `/gate`). A `/gate` answer is at most
 `--max-gate-bytes`, under the budget, so it is never sent in its slot
 unless `--max-gate-bytes` is set over twice `--max-snapshot-bytes`.
 
@@ -155,7 +200,13 @@ server version from one query over the snapshot heads, and each
 evaluation's score, verdict, counts and what it could not assess from
 its own columns, never the stored report. Before that, one 17 MB push
 made 30 concurrent requests to any of them grow the heap by 285-584 MiB;
-now by at most 2 MiB (`TestFleetReadsLoadNoReport`). Their responses do
+now by at most 9 MiB (`TestFleetReadsLoadNoReport`). What an evaluation
+could not assess is in those columns as a summary: each gap's reason
+cut to 1 KiB and its first 10 skipped entries, each cut to 512 bytes,
+with `skippedOmitted` counting the rest, so with at most 32 capabilities
+an evaluation's is at most about 200 KB (a push of 31 capabilities with
+64 KiB reasons and 20 MB of skipped entries answers `/clusters` in
+76 KB); the report keeps every gap whole. Their responses do
 grow with the fleet: at 500 clusters `/clusters` is ~230 KB, `/fleet`
 ~480 KB (~590 KB with 16 `?targets=`) and `/metrics` ~740 KB, and
 building one adds up to ~5 MiB to the heap (`/metrics` the most, about
@@ -180,27 +231,30 @@ Prometheus scrape or a dashboard poll that gets `503` is retried at its
 next interval.
 
 Worst case for the chart's 768Mi server, each part measured on SQLite
-against the dearest snapshot at its node budget, names of `x`, `<` and
-U+2028 alike (`TestGateDecodeHeapIsBounded`,
+against the dearest snapshot the server stores, at its node budget or
+with reports at the report limit, of every string class above
+(`TestGateDecodeHeapIsBounded`,
 `TestStoredSnapshotHeapIsBounded`, `TestReadHeapIsBounded`,
 `TestGateAnswerHeapIsBounded`, `TestUnreadResponsesAreBounded`,
 `TestUnreadGateResponsesAreBounded`,
 `TestUnreadFleetResponsesAreBounded`):
-one `/gate` request in the evaluation slot (~165 MiB, with `?cluster=`
+one `/gate` request in the evaluation slot (~176 MiB, with `?cluster=`
 too, since the cluster's inventory is decoded once the manifests' node
 trees are garbage, its answer included: answers big enough to cost more
-to encode are cheap to decode) plus one ingest (~120 MiB for the 17 MB
-push whose three stored reports are each as large, its copy of the body
-included) plus one read in the read slot (~97 MiB, its response
-included) plus two reads of the whole fleet in their slots (up to
-~10 MiB for 500 clusters) plus the read, fleet read and `/gate`
+to encode are cheap to decode) plus one ingest (~119 MiB, for 20 MB of
+namespace keys, 1,000 per API usage entry, its copy of the body and
+the reports it stores included) plus one read in the read slot
+(~132 MiB, the HTML export of a report at the report limit, its
+response included) plus two reads of the whole fleet in their slots
+(up to ~10 MiB for 500 clusters) plus the read, fleet read and `/gate`
 responses held for their clients (the one 40 MiB budget) plus the
 background re-evaluation pass, which takes clusters one at a time
-(~92 MiB for that snapshot and three targets) plus both body budgets
-(70 MiB; an ingest gives its share back once it holds that copy, so
-another push can wait in it): about 595 MiB for a 500-cluster fleet,
-inside the 691 MiB `GOMEMLIMIT` the chart derives from the limit. Below
-about 665Mi, that sum no longer fits under `GOMEMLIMIT`. (Each figure is
+(~108 MiB for a 20 MB snapshot whose three reports are each about the
+report limit) plus both body budgets (70 MiB; an ingest gives its share
+back once it holds that copy, so another push can wait in it): about
+655 MiB for a 500-cluster fleet, inside the 691 MiB `GOMEMLIMIT` the
+chart derives from the limit. Below about 728Mi, that sum no longer
+fits under `GOMEMLIMIT`. (Each figure is
 a peak with its garbage, measured with the collector held near the live
 heap; runs differ by a few MiB.)
 
@@ -231,7 +285,9 @@ What is outside these bounds, and what it costs:
   of 2000 clusters with 200-byte names, twice that with both fleet slots
   busy. Without `?targets=`, `/fleet` has a column for every minor some
   cluster runs the next of, so clusters pushed at many minors widen it
-  too.
+  too, at a store query per column and cluster: 500 clusters at 500
+  minors took ~5s on SQLite, grew the heap 36 MiB and answered 4.4 MB
+  (`TestFleetDefaultColumnsAreMeasured`).
 - **Snapshots stored by v0.1.** A snapshot a v0.1 server stored before
   the budgets existed (up to 20 MiB of any shape) is decoded without a
   node count when `/gate?cluster=`, the re-evaluation pass or a what-if
@@ -329,7 +385,10 @@ tokens.
 
 A cluster is registered by its first push, under the agent's
 `--cluster-name`, and bound to the cluster UID (the `kube-system`
-namespace UID) it pushed. A push under that name from another UID, or with
+namespace UID) it pushed. A cluster name is an RFC 1123 subdomain of at
+most 253 bytes (lowercase letters, digits, `-` and `.`): a push under
+any other is `422` and registers nothing, and `tokens create`, a rename
+and the agent (at startup) refuse one too (#37). A push under that name from another UID, or with
 no UID at all, is refused with 409, so two clusters never interleave in one
 history.
 

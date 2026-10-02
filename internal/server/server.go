@@ -112,9 +112,10 @@ const (
 )
 
 // Snapshot ingest concurrency and memory, on the same model as /gate.
-// Decoding, evaluating and storing one push costs up to ~115 MiB of heap
-// on SQLite at the size and node caps (maxSnapshotUnits; a 17 MB push whose
-// three stored reports are each as large), so pushes are ingested one
+// Decoding, evaluating and storing one push costs up to ~119 MiB of heap
+// on SQLite at the size and node caps (maxSnapshotUnits; its reports are
+// at most --max-snapshot-bytes each, maxReportBytes, and the evaluation
+// stops there), so pushes are ingested one
 // at a time (a normal one takes milliseconds; an agent's whole fleet
 // pushing on one tick queues). A push asks for the slot once its body is
 // in and waits up to ingestQueueTimeout, under the agent's 30s request
@@ -135,12 +136,13 @@ const (
 // twice; one that computes a report on request (a what-if: a target with
 // no stored evaluation, here or in the fleet teams rollup) also decodes
 // and evaluates the whole inventory, which a snapshot at its node budget
-// takes ~45 MiB of heap for (~88 MiB for a 17 MB one on SQLite, the
-// response included). Unbounded, 10 such reads at once grew the heap
-// ~400 MiB, so these reads run one at a time, on the /gate model (a
-// normal one takes milliseconds): a read waits up to readQueueTimeout for
-// the slot, then gets 503 + Retry-After. One read in the slot costs up
-// to ~90 MiB on SQLite at the snapshot node budget (TestReadHeapIsBounded).
+// takes ~45 MiB of heap for (~95 MiB on SQLite for one whose report is
+// about the report limit, the response included). Unbounded, 10 such
+// reads at once grew the heap ~400 MiB, so these reads run one at a
+// time, on the /gate model (a normal one takes milliseconds): a read
+// waits up to readQueueTimeout for the slot, then gets 503 + Retry-After.
+// One read in the slot costs up to ~130 MiB on SQLite, the HTML export of
+// a report at the report limit (TestReadHeapIsBounded).
 //
 // Reads of the whole fleet (/clusters, /fleet, /metrics) load no inventory
 // and no report: they read each cluster's snapshot head from one store

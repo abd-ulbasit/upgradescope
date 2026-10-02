@@ -199,7 +199,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().StringVar(&opts.serverURL, "server-url", "", "upgradescope server base URL (empty = CRD-only mode)")
 	serverToken = addSecretFlag(cmd, &opts.serverToken, "server-token", "UPGRADESCOPE_SERVER_TOKEN",
 		"bearer token for snapshot pushes (required with --server-url)")
-	cmd.Flags().StringVar(&opts.clusterName, "cluster-name", "", "cluster label sent to the server (default: cluster UID)")
+	cmd.Flags().StringVar(&opts.clusterName, "cluster-name", "", "cluster label sent to the server, an RFC 1123 subdomain of at most 253 bytes (default: cluster UID)")
 	cmd.Flags().StringVar(&opts.crName, "cr-name", "cluster", "ClusterReadiness object name")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour, "push a snapshot even if unchanged after this long")

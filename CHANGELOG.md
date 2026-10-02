@@ -363,6 +363,32 @@ a CI gate.
   snapshot push that is not valid UTF-8 is `422` (#121).
 - Server: JSON responses and stored reports write `<`, `>`, `&`, U+2028
   and U+2029 as themselves, not as `\u` escapes (#121).
+- Server: `POST /api/v1/snapshots` answers `422`, naming the field and
+  the rule, for an inventory no collector writes, before anything is
+  stored: a `clusterName` that is not an RFC 1123 subdomain of at most
+  253 bytes (#37); a namespace that is not an RFC 1123 label, an object
+  name over 253 bytes or with `/` or `%`, a node or Helm release name
+  that is not an RFC 1123 subdomain, a team label that is not a label
+  value; a string over 16 KiB (a capability reason over 64 KiB, an
+  object's field manager over the apiserver's 128 bytes or not
+  printable), more than 100 objects in an API usage entry, a
+  group/version/kind listed twice in one list, more than 200
+  unrecognized images or more than 32 capabilities. v0.1 agents' pushes
+  are within all of them. `tokens create`, cluster rename and the agent's
+  `--cluster-name` (checked at startup, with `--team-label`) take the
+  same cluster names (#121, #37).
+- Server: a report is at most `--max-snapshot-bytes`. A push whose report
+  for a target would be larger is `413` and stores nothing; a what-if
+  report is `413` (the fleet teams rollup lists such a cluster as
+  `missing`); `/gate?cluster=` is `413`; the re-evaluation pass keeps
+  what is stored. An export larger than the limit is `413`, saying to
+  read the JSON report (#121).
+- Server: the evaluation summaries that `/clusters`, `/fleet` and a
+  cluster's detail carry list each gap's reason cut to 1 KiB and at most
+  10 skipped entries, with a new `skippedOmitted` count; the report keeps
+  every gap whole (#121).
+- The kubelet skew findings name at most 100 nodes, and count the rest
+  ("and N more"); their titles count every node.
 - Server: `POST /api/v1/gate` answers `413` for a stream over its node
   budget, which a realistic kubectl YAML stream reaches at about 4.4 MiB
   (v0.1 decoded streams up to 20 MiB), or a document whose YAML
@@ -384,7 +410,7 @@ a CI gate.
   `GOMEMLIMIT` 691MiB: the worst case of one `/gate` request, one push,
   one read, two reads of a 500-cluster fleet, the responses held for
   their clients and the re-evaluation pass, measured on SQLite, is
-  ~595 MiB.
+  ~655 MiB.
 
 ### Fixed
 

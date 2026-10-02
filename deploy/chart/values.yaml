@@ -323,10 +323,11 @@ server:
       drop: ["ALL"]
   # -- Sets GOMEMLIMIT as agent.resources does (691MiB for 768Mi). 768Mi
   # holds one /gate request, one snapshot ingest, one cluster read and the
-  # re-evaluation pass at their worst, measured on SQLite (~165, ~120, ~97
-  # and ~92 MiB of heap), two reads of a 500-cluster fleet (~10 MiB), plus
-  # the buffered /gate and snapshot bodies (30 and 40 MiB) and the
-  # responses held for their clients (one 40 MiB budget): ~595 MiB of
+  # re-evaluation pass at their worst, measured on SQLite (~176, ~119,
+  # ~132 and ~108 MiB of heap, with every report at most
+  # --max-snapshot-bytes), two reads of a 500-cluster fleet (~10 MiB),
+  # plus the buffered /gate and snapshot bodies (30 and 40 MiB) and the
+  # responses held for their clients (one 40 MiB budget): ~655 MiB of
   # heap. Open connections (uncapped, ~18 KiB each), kernel socket
   # buffers, larger fleets and snapshots a v0.1 server stored are outside
   # it: see docs/operations.md.

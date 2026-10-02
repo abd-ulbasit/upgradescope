@@ -141,7 +141,21 @@ paths:
         under that name from another UID, or with none, is a 409.
 
         A per-cluster token may push only as its own cluster (403 before
-        anything is written).
+        anything is written). `clusterName` is an RFC 1123 subdomain of at
+        most 253 bytes, and the inventory's identifiers are what the
+        apiserver accepts for what they name: namespaces RFC 1123 labels,
+        object names at most 253 bytes without `/` or `%`, node and Helm
+        release names RFC 1123 subdomains, team labels label values. Its
+        other values are within what any collector records: strings at most
+        16 KiB (a capability's reason 64 KiB, an object's field manager 128
+        printable bytes), at most 100 objects per API usage entry, each
+        group/version/kind once per list, at most 200 unrecognized images
+        and 32 capabilities. Anything else is 422, naming the field and
+        the rule, before anything is stored.
+
+        Each target's report is at most `--max-snapshot-bytes`: a push
+        whose report for one would be larger is 413, and nothing is
+        stored. No genuine inventory's report comes near it.
 
         Memory is bounded by the body's structure as well as its size:
         while the body is read, its JSON values are counted (each value 1,
@@ -189,7 +203,9 @@ paths:
         "413":
           description: |
             Over the byte cap (on the wire or after decompression) or over
-            the node budget, before anything is decoded.
+            the node budget, before anything is decoded; or, once decoded,
+            a report for one of the targets would be over
+            `--max-snapshot-bytes`, and nothing is stored.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
@@ -198,9 +214,12 @@ paths:
           description: |
             Not judgeable, refused before anything is written: invalid
             JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no
-            `clusterName`, a missing or `null` inventory, an inventory
-            `schemaVersion` other than 1, or a `serverVersion` that is not
-            a Kubernetes 1.x version.
+            `clusterName` or one that is not an RFC 1123 subdomain of at
+            most 253 bytes, a missing or `null` inventory, an inventory
+            `schemaVersion` other than 1, a `serverVersion` that is not
+            a Kubernetes 1.x version, an identifier that is not valid for
+            what it names, or a value beyond what any collector records
+            (see above). The message names the field and the rule.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
@@ -317,7 +336,8 @@ paths:
         The full report for one target: the stored evaluation of the latest
         snapshot when there is one (`source: stored`), otherwise a what-if
         evaluated now from the latest snapshot and not stored
-        (`source: what-if`). `teams` holds per-team scores.
+        (`source: what-if`), 413 when its report would be over
+        `--max-snapshot-bytes`. `teams` holds per-team scores.
       responses:
         "200":
           description: The report.
@@ -327,6 +347,7 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/ReadBusy"}
 
@@ -356,6 +377,7 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/ReadBusy"}
 
@@ -407,6 +429,7 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/ReadBusy"}
 
@@ -427,7 +450,10 @@ paths:
         row, one row per finding, one per capability not assessed) or a
         self-contained HTML report with the score history. Never a what-if:
         404 when no stored evaluation exists for the target, or when the
-        cluster already runs it.
+        cluster already runs it. An export is at most
+        `--max-snapshot-bytes`, as the report it renders is (HTML writes
+        `'` `"` `&` as five bytes and `<` `>` as four): 413 above, saying to
+        read the JSON report.
       responses:
         "200":
           description: The export.
@@ -439,6 +465,7 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "503": {$ref: "#/components/responses/ReadBusy"}
 
@@ -480,8 +507,9 @@ paths:
         For one target, each team's worst score, total blockers and the
         clusters it has findings in. Each cluster contributes its stored
         evaluation, else a what-if from its latest snapshot (`evaluated`
-        says which); clusters without a snapshot are `missing`, and
-        clusters that already run the target are `notApplicable`.
+        says which); clusters without a snapshot, or whose what-if report
+        would be over `--max-snapshot-bytes`, are `missing`, and clusters
+        that already run the target are `notApplicable`.
       parameters:
         - name: target
           in: query
@@ -662,7 +690,8 @@ paths:
           description: |
             Over the byte cap (for the body, or for the stream with its
             aliases expanded), the per-document size (aliases expanded),
-            the document count, the node budget, or the answer's bound;
+            the document count, the node budget, or the answer's bound,
+            or, with `?cluster=`, a report over `--max-snapshot-bytes`;
             the message says which, and to split the stream.
           content:
             application/json:
@@ -823,6 +852,17 @@ components:
         partial: {type: boolean, description: The capability ran but did not read everything.}
         skipped: {type: array, items: {type: string}, description: What a partial capability did not read.}
         required: {type: boolean, description: The gap makes the verdict unknown.}
+    SummaryGap:
+      description: |
+        A report's gap as an evaluation summary carries it, bounded: its
+        reason cut to 1 KiB and at most 10 of what it skipped, each cut to
+        512 bytes (a cut one ends in "…"), with `skippedOmitted` counting
+        the rest. The report lists every gap whole.
+      allOf:
+        - {$ref: "#/components/schemas/CapabilityGap"}
+        - type: object
+          properties:
+            skippedOmitted: {type: integer, minimum: 1, description: Skipped entries not listed.}
     CapabilityStatus:
       type: object
       required: [available]
@@ -845,7 +885,7 @@ components:
         evaluatedAt: {type: string, format: date-time, description: When the result was last confirmed.}
         snapshotId: {type: integer, format: int64}
         outdated: {type: boolean, description: "Evaluated before today (UTC), or under another knowledge base or team map; the next pass replaces it."}
-        notAssessed: {type: array, items: {$ref: "#/components/schemas/CapabilityGap"}}
+        notAssessed: {type: array, items: {$ref: "#/components/schemas/SummaryGap"}}
     ClusterSummary:
       allOf:
         - {$ref: "#/components/schemas/ClusterFields"}
@@ -1016,7 +1056,7 @@ components:
         snapshotId: {type: integer, format: int64}
         source: {type: string, const: stored}
         outdated: {type: boolean}
-        notAssessed: {type: array, items: {$ref: "#/components/schemas/CapabilityGap"}}
+        notAssessed: {type: array, items: {$ref: "#/components/schemas/SummaryGap"}}
     FleetRow:
       type: object
       required: [clusterId, name, lastSeen, stale, cells]

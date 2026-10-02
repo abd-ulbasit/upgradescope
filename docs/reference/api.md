@@ -104,7 +104,21 @@ duplicate: 200, nothing new stored. A cluster name is bound to the
 under that name from another UID, or with none, is a 409.
 
 A per-cluster token may push only as its own cluster (403 before
-anything is written).
+anything is written). `clusterName` is an RFC 1123 subdomain of at
+most 253 bytes, and the inventory's identifiers are what the
+apiserver accepts for what they name: namespaces RFC 1123 labels,
+object names at most 253 bytes without `/` or `%`, node and Helm
+release names RFC 1123 subdomains, team labels label values. Its
+other values are within what any collector records: strings at most
+16 KiB (a capability's reason 64 KiB, an object's field manager 128
+printable bytes), at most 100 objects per API usage entry, each
+group/version/kind once per list, at most 200 unrecognized images
+and 32 capabilities. Anything else is 422, naming the field and
+the rule, before anything is stored.
+
+Each target's report is at most `--max-snapshot-bytes`: a push
+whose report for one would be larger is 413, and nothing is
+stored. No genuine inventory's report comes near it.
 
 Memory is bounded by the body's structure as well as its size:
 while the body is read, its JSON values are counted (each value 1,
@@ -131,9 +145,9 @@ Request body (`application/json`): [PushRequest](#pushrequest)
 | 400 | `application/json` | [Error](#error) | The body ended early or could not be read. |
 | 408 | `application/json` | [Error](#error) | The body did not arrive within the server's read timeout (60s for `serve`). |
 | 409 | `application/json` | [Error](#error) | An error. |
-| 413 | `application/json` | [Error](#error) | Over the byte cap (on the wire or after decompression) or over the node budget, before anything is decoded. |
+| 413 | `application/json` | [Error](#error) | Over the byte cap (on the wire or after decompression) or over the node budget, before anything is decoded; or, once decoded, a report for one of the targets would be over `--max-snapshot-bytes`, and nothing is stored. |
 | 415 | `application/json` | [Error](#error) | An error. |
-| 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no `clusterName`, a missing or `null` inventory, an inventory `schemaVersion` other than 1, or a `serverVersion` that is not a Kubernetes 1.x version. |
+| 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no `clusterName` or one that is not an RFC 1123 subdomain of at most 253 bytes, a missing or `null` inventory, an inventory `schemaVersion` other than 1, a `serverVersion` that is not a Kubernetes 1.x version, an identifier that is not valid for what it names, or a value beyond what any collector records (see above). The message names the field and the rule. |
 | 500 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`. |
 
@@ -180,7 +194,8 @@ Auth: `readToken` (bearer).
 **Readiness report.** The full report for one target: the stored evaluation of the latest
 snapshot when there is one (`source: stored`), otherwise a what-if
 evaluated now from the latest snapshot and not stored
-(`source: what-if`). `teams` holds per-team scores.
+(`source: what-if`), 413 when its report would be over
+`--max-snapshot-bytes`. `teams` holds per-team scores.
 
 Auth: `readToken` (bearer).
 
@@ -195,6 +210,7 @@ Auth: `readToken` (bearer).
 | 400 | `application/json` | [Error](#error) | An error. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
+| 413 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
@@ -217,6 +233,7 @@ Auth: `readToken` (bearer).
 | 400 | `application/json` | [Error](#error) | An error. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
+| 413 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
@@ -260,6 +277,7 @@ Auth: `readToken` (bearer).
 | 400 | `application/json` | [Error](#error) | An error. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
+| 413 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
@@ -293,8 +311,9 @@ Auth: `readToken` (bearer).
 **Per-team rollup across the fleet.** For one target, each team's worst score, total blockers and the
 clusters it has findings in. Each cluster contributes its stored
 evaluation, else a what-if from its latest snapshot (`evaluated`
-says which); clusters without a snapshot are `missing`, and
-clusters that already run the target are `notApplicable`.
+says which); clusters without a snapshot, or whose what-if report
+would be over `--max-snapshot-bytes`, are `missing`, and clusters
+that already run the target are `notApplicable`.
 
 Auth: `readToken` (bearer).
 
@@ -406,7 +425,7 @@ Request body (`application/json`): string
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 408 | `application/json` | [Error](#error) | The body did not arrive within the server's read timeout (60s for `serve`). |
-| 413 | `application/json` | [Error](#error) | Over the byte cap (for the body, or for the stream with its aliases expanded), the per-document size (aliases expanded), the document count, the node budget, or the answer's bound; the message says which, and to split the stream. |
+| 413 | `application/json` | [Error](#error) | Over the byte cap (for the body, or for the stream with its aliases expanded), the per-document size (aliases expanded), the document count, the node budget, or the answer's bound, or, with `?cluster=`, a report over `--max-snapshot-bytes`; the message says which, and to split the stream. |
 | 415 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | The shared body budget is full, the request waited more than 30s for its turn, or the answers waiting for their clients leave no room for this one; retry after `Retry-After`. |
 
@@ -420,7 +439,10 @@ Auditor exports of a stored evaluation.
 row, one row per finding, one per capability not assessed) or a
 self-contained HTML report with the score history. Never a what-if:
 404 when no stored evaluation exists for the target, or when the
-cluster already runs it.
+cluster already runs it. An export is at most
+`--max-snapshot-bytes`, as the report it renders is (HTML writes
+`'` `"` `&` as five bytes and `<` `>` as four): 413 above, saying to
+read the JSON report.
 
 Auth: `readToken` (bearer).
 
@@ -437,6 +459,7 @@ Auth: `readToken` (bearer).
 | 400 | `application/json` | [Error](#error) | An error. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
+| 413 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | Reads that load a cluster's snapshot run one at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the fleet reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next read waits, and cut off if the client has not taken it within 20s. |
 
@@ -581,6 +604,22 @@ Something the evaluation could not assess.
 | `skipped` | array of string | no | What a partial capability did not read. |
 | `required` | boolean | no | The gap makes the verdict unknown. |
 
+### SummaryGap
+
+A report's gap as an evaluation summary carries it, bounded: its
+reason cut to 1 KiB and at most 10 of what it skipped, each cut to
+512 bytes (a cut one ends in "…"), with `skippedOmitted` counting
+the rest. The report lists every gap whole.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions, crds), kb-coverage, or target (the target is not an upgrade of the cluster). |
+| `reason` | string | yes | — |
+| `partial` | boolean | no | The capability ran but did not read everything. |
+| `skipped` | array of string | no | What a partial capability did not read. |
+| `required` | boolean | no | The gap makes the verdict unknown. |
+| `skippedOmitted` | integer | no | Skipped entries not listed. |
+
 ### CapabilityStatus
 
 | Field | Type | Required | Description |
@@ -604,7 +643,7 @@ Something the evaluation could not assess.
 | `evaluatedAt` | string (date-time) | yes | When the result was last confirmed. |
 | `snapshotId` | integer (int64) | yes | — |
 | `outdated` | boolean | no | Evaluated before today (UTC), or under another knowledge base or team map; the next pass replaces it. |
-| `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
+| `notAssessed` | array of [SummaryGap](#summarygap) | no | — |
 
 ### ClusterSummary
 
@@ -853,7 +892,7 @@ The report's fields other than its findings.
 | `snapshotId` | integer (int64) | yes | — |
 | `source` | `stored` | yes | — |
 | `outdated` | boolean | no | — |
-| `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
+| `notAssessed` | array of [SummaryGap](#summarygap) | no | — |
 
 ### FleetRow
 

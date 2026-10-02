@@ -209,7 +209,8 @@ It listens on loopback by default. On any other address, the read API needs
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression); "+
-		"the body must arrive within the 60s read timeout (~350 KiB/s at the 20 MiB default) or the push gets 408, and a push that decodes to too many JSON values gets 413 whatever its size")
+		"the body must arrive within the 60s read timeout (~350 KiB/s at the 20 MiB default) or the push gets 408, and a push that decodes to too many JSON values gets 413 whatever its size; "+
+		"it also caps every report the server evaluates, stores or exports (a push whose report would be larger gets 413)")
 	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes; "+
 		"the body must arrive within the 60s read timeout or the request gets 408, and a stream of too many YAML nodes gets 413 whatever its size "+
 		"(the 400k-node budget is about 4.4 MiB of typical kubectl YAML, so it, not this cap, limits a realistic stream)")

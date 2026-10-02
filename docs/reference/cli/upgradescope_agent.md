@@ -31,7 +31,7 @@ upgradescope agent [flags]
 ### Options
 
 ```
-      --cluster-name string         cluster label sent to the server (default: cluster UID)
+      --cluster-name string         cluster label sent to the server, an RFC 1123 subdomain of at most 253 bytes (default: cluster UID)
       --context string              kubeconfig context to use
       --cr-name string              ClusterReadiness object name (default "cluster")
       --force-sync-every duration   push a snapshot even if unchanged after this long (default 1h0m0s)
