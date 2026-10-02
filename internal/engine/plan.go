@@ -86,6 +86,13 @@ func Plan(inv inventory.Inventory, k kb.KB, from, to inventory.Version, now time
 	return PlanReports(from, reports)
 }
 
+// PlanFrom is the minor a live cluster's plan starts from: its oldest
+// kube-apiserver, the version Evaluate judges an upgrade from. ok is
+// false in files mode or without a parseable version.
+func PlanFrom(inv inventory.Inventory) (inventory.Version, bool) {
+	return upgradeFrom(inv)
+}
+
 // HopTargets is the minor the control plane reaches at each hop from from
 // to to: from each version, the farthest k.UpgradeSteps step that does not
 // pass to, else the next minor. Empty when to is not newer than from (or

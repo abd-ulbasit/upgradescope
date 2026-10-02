@@ -66,6 +66,12 @@ type scanOptions struct {
 
 	allowIncomplete bool
 
+	// plan (--plan) adds the upgrade plan up to the target; from (--from)
+	// is where a --files plan starts, parsed into fromVersion.
+	plan        bool
+	from        string
+	fromVersion inventory.Version
+
 	// requestTimeout bounds each API request of a live scan
 	// (rest.Config.Timeout); 0 = no per-request bound.
 	requestTimeout time.Duration
@@ -80,8 +86,11 @@ type scanOptions struct {
 	// fileBase is the directory files-mode object paths are relative to,
 	// as seen from the working directory (see manifestBase).
 	fileBase string
-	// stderr receives files-mode warnings; nil discards them.
+	// stderr receives files-mode and --plan warnings; nil discards them.
 	stderr io.Writer
+	// ignore holds the ignore rules: RunE applies them to the report,
+	// runScan to each hop of a --plan.
+	ignore ignoreConfig
 }
 
 // runScan is the real I/O pipeline: kb.Load → collect (cluster or files) →
@@ -127,12 +136,48 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 		if err := unreadableCluster(inv, cluster.String()); err != nil {
 			return engine.Report{}, err
 		}
-		r := engine.Evaluate(inv, kbData, opts.targetVersion, time.Now())
+		r := evaluateScan(inv, kbData, opts, time.Now())
 		r.KubeContext, r.APIServer = cluster.context, cluster.server
 		return r, nil
 	}
 
-	return engine.Evaluate(inv, kbData, opts.targetVersion, time.Now()), nil
+	return evaluateScan(inv, kbData, opts, time.Now()), nil
+}
+
+// evaluateScan judges inv at the target and, with --plan, adds the
+// upgrade plan (planHops).
+func evaluateScan(inv inventory.Inventory, k kb.KB, opts scanOptions, now time.Time) engine.Report {
+	r := engine.Evaluate(inv, k, opts.targetVersion, now)
+	if opts.plan {
+		r.Hops = planHops(inv, k, opts, now)
+	}
+	return r
+}
+
+// planHops is the --plan upgrade plan, from --from in files mode, else
+// from the cluster's oldest kube-apiserver (engine.PlanFrom). Each hop's
+// report goes through the scan's ignore rules first, so a suppressed
+// finding is in no hop, as it is not in the report. Nil, with a warning,
+// when the cluster's version is unknown.
+func planHops(inv inventory.Inventory, k kb.KB, opts scanOptions, now time.Time) []engine.Hop {
+	from := opts.fromVersion
+	if opts.filesDir == "" {
+		v, ok := engine.PlanFrom(inv)
+		if !ok {
+			if opts.stderr != nil {
+				fmt.Fprintln(opts.stderr, "warning: --plan: the cluster's kube-apiserver version is unknown, so there is no upgrade plan; the report judges the target alone")
+			}
+			return nil
+		}
+		from = v
+	}
+	targets := engine.HopTargets(k, from, opts.targetVersion)
+	reports := make([]engine.Report, len(targets))
+	for i, t := range targets {
+		reports[i], _ = suppress.Apply(engine.Evaluate(inv, k, t, now), opts.ignore.rules,
+			suppress.Options{Now: now, Source: opts.ignore.source, FileBase: opts.ignore.fileBase})
+	}
+	return engine.PlanReports(from, reports)
 }
 
 // liveCluster names the cluster a live scan reads: the kubeconfig context
@@ -237,6 +282,9 @@ func newScanCmd() *cobra.Command {
   # Another context, as JSON
   upgradescope scan --context prod --target 1.37 --output json
 
+  # What each control-plane upgrade on the way to 1.37 needs fixed first
+  upgradescope scan --target 1.37 --plan
+
   # Rendered manifests in CI: SARIF for code scanning, exit 2 on a blocker
   upgradescope scan --files rendered/ --target 1.37 --output sarif > upgradescope.sarif
 
@@ -264,6 +312,7 @@ func newScanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			opts.ignore = ignore
 			var baseline *suppress.Baseline
 			if opts.baselineFile != "" {
 				b, err := readBaseline(opts.baselineFile)
@@ -327,6 +376,8 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.configFile, "config", "", "config file with ignore rules (default: "+suppress.ConfigFile+" in the scan root, else at the git repository root)")
 	cmd.Flags().StringVar(&opts.baselineFile, "baseline", "", "JSON report of an earlier scan (--output json or --write-baseline): the gate fails only on findings that are new since")
 	cmd.Flags().StringVar(&opts.writeBaseline, "write-baseline", "", "also write this scan's JSON report to this path, for a later --baseline")
+	cmd.Flags().BoolVar(&opts.plan, "plan", false, "also judge each control-plane upgrade on the way to --target, one minor at a time, listing each finding at the first upgrade it affects (table, markdown, json)")
+	cmd.Flags().StringVar(&opts.from, "from", "", "with --plan and --files: the minor the cluster runs now, where the plan starts (a live scan reads it from the cluster)")
 	_ = cmd.MarkFlagRequired("target")
 	cmd.MarkFlagsMutuallyExclusive("files", "kubeconfig")
 	cmd.MarkFlagsMutuallyExclusive("files", "context")
@@ -422,6 +473,14 @@ report: an entry per finding and file location (blocker critical, warning
 minor, info info) with a fingerprint that survives line moves; a finding
 without a file is placed on the virtual path upgradescope/<finding key>, and
 suppressed findings are left out.
+
+Upgrade plan (--plan): the control plane is upgraded one minor at a time, so
+--plan also judges the cluster at each minor between the one it runs (a live
+scan's oldest kube-apiserver; --from with --files) and --target, and lists
+each finding at the first upgrade it affects, with the upgrade where its
+severity changes. Table and markdown show the plan before the findings; JSON
+adds hops. Ignore rules apply to every upgrade. The rest of the report, and
+the gate, judge --target alone.
 
 Files mode (--files): every *.yaml, *.yml and *.json file under the directory,
 or the one file named, is decoded as kubectl apply -f decodes it: each
@@ -561,7 +620,38 @@ func validateScanOptions(opts *scanOptions) error {
 	default:
 		return fmt.Errorf("invalid --fail-on %q (want blocker, warning, or never)", opts.failOn)
 	}
+	if err := validatePlanOptions(opts); err != nil {
+		return err
+	}
 	return validRequestTimeout(opts.requestTimeout)
+}
+
+// validatePlanOptions checks --plan and --from and stores the parsed
+// --from into opts.fromVersion.
+func validatePlanOptions(opts *scanOptions) error {
+	switch {
+	case opts.from != "" && !opts.plan:
+		return errors.New("--from needs --plan")
+	case !opts.plan:
+		return nil
+	case opts.output == "sarif" || opts.output == "junit" || opts.output == "gitlab-codequality":
+		return fmt.Errorf("--plan renders in table, markdown and json; %s has no place for upgrade steps, so run the %s scan without --plan", opts.output, opts.output)
+	case opts.filesDir == "" && opts.from != "":
+		return errors.New("--from is for --files scans; a live scan plans from the version its kube-apiserver runs")
+	case opts.filesDir == "":
+		return nil
+	case opts.from == "":
+		return errors.New("--plan with --files needs --from, the minor the cluster runs now")
+	}
+	from, err := inventory.ParseTarget(opts.from)
+	if err != nil {
+		return fmt.Errorf("invalid --from %q: %w", opts.from, err)
+	}
+	if from.Compare(opts.targetVersion) >= 0 {
+		return fmt.Errorf("--from %s must be older than --target %s", from, opts.targetVersion)
+	}
+	opts.fromVersion = from
+	return nil
 }
 
 // defaultRequestTimeout is the --request-timeout of scan and agent: long
