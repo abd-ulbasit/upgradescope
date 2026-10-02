@@ -16,7 +16,9 @@
 #      next one is past the knowledge base's horizon (`upgradescope version`),
 #      the vanilla cluster scanned there is unknown with a required
 #      kb-coverage gap and exits 2, and exits 0 with --allow-incomplete
-#      (N/A on other minors; skipped on a reused cluster);
+#      (N/A on other minors, but a warning on the newest minor of
+#      hack/kind-node-images.txt when its next one is within the horizon:
+#      then no minor runs it; skipped on a reused cluster);
 #   3. the EOL ingress-nginx demo add-on (hack/demo/kind-setup.sh), which
 #      scan reports as a blocker (exit 2); a second release of that chart,
 #      uninstalled with --keep-history, yields no EOL finding; Istio pods on
@@ -248,6 +250,19 @@ read_kb_horizon() {
   echo "knowledge base horizon $HORIZON; this run's next minor $NEXT"
 }
 past_horizon() { [ "${NEXT#1.}" -gt "${HORIZON#1.}" ]; }
+# within_horizon <name>: a past-horizon check this run cannot exercise. N/A
+# below the matrix's newest minor; on the newest one a warning, since then
+# no minor of hack/kind-node-images.txt runs it (the KB horizon caught up
+# with kind: add the next minor's node image).
+within_horizon() {
+  local newest
+  newest=$(hack/kind-images.sh matrix all | jq -r 'max_by(ltrimstr("1.") | tonumber)') || return 1
+  if [ "$MINOR" = "$newest" ]; then
+    skip "$1" "$NEXT is within the KB horizon $HORIZON on the newest minor of hack/kind-node-images.txt, so no minor runs this check; add a kind node image for $NEXT"
+  else
+    not_applicable "$1" "$NEXT is within the KB horizon $HORIZON"
+  fi
+}
 
 # VS-11 (#130): on the newest minor, the next one is past the horizon. The
 # vanilla cluster has no blocker there, but kb-coverage, a required check,
@@ -736,7 +751,7 @@ else
 fi
 horizon_gate="a vanilla cluster scanned past the KB horizon is unknown with a required kb-coverage gap (exit 2), and --allow-incomplete exits 0"
 if ! past_horizon; then
-  not_applicable "$horizon_gate" "$NEXT is within the KB horizon $HORIZON"
+  within_horizon "$horizon_gate"
 elif [ -n "$reused" ]; then
   skip "$horizon_gate" "cluster reused, not vanilla; make demo-down first"
 else
@@ -762,8 +777,8 @@ if past_horizon; then
   gate "$cr_gap_gate" cr_reports_kb_coverage_gap
   gate "$cr_unknown_gate" cr_unknown_once_blockers_accepted
 else
-  not_applicable "$cr_gap_gate" "$NEXT is within the KB horizon $HORIZON"
-  not_applicable "$cr_unknown_gate" "$NEXT is within the KB horizon $HORIZON"
+  within_horizon "$cr_gap_gate"
+  within_horizon "$cr_unknown_gate"
 fi
 gate "the install added no webhook configuration; ClusterReadiness/$CR has no finalizer or owner reference" no_webhooks_or_finalizers
 gate "server ingested the agent's snapshot" server_ingested

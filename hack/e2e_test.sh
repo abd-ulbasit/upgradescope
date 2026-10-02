@@ -538,6 +538,17 @@ else
   echo "ok   N/A is not a warning" | tee -a "$work/results"
 fi
 
+# Once the KB horizon reaches the newest minor's next one, no minor of the
+# matrix runs the past-horizon checks: a warning on that minor, not N/A.
+newest=$(hack/kind-images.sh matrix all | jq -r 'max_by(ltrimstr("1.") | tonumber)')
+nextnext="1.$((${newest#1.} + 1))"
+run "the newest minor within the KB horizon still passes" 0 E2E_MINOR="$newest" STUB_SERVER_MINOR="${newest#1.}" \
+  STUB_NEXT="$nextnext" STUB_HORIZON="$nextnext"
+for g in "$horizon_gate" "$cr_gap_gate" "$cr_unknown_gate"; do
+  has "on the newest minor, a check within the horizon is a SKIP: $g" "$work/summary" "- SKIP — $g ($nextnext is within the KB horizon $nextnext on the newest minor of hack/kind-node-images.txt"
+done
+has "the newest minor within the horizon warns" "$work/out" "::warning title=kind e2e $newest: check skipped::a vanilla cluster scanned past the KB horizon"
+
 printf '1.29 1.30 flowcontrol.apiserver.k8s.io/v1beta3 flowcontrol.apiserver.k8s.io/v1 flowschema.yaml\n' >"$work/short-table.txt"
 run "a minor without a deprecated-API row fails before anything runs" 1 E2E_DEPRECATED_TABLE="$work/short-table.txt"
 has "the missing row is named" "$work/out" "want exactly one row for 1.31"
