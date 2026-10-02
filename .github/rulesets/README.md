@@ -40,22 +40,34 @@ What this means for maintainers:
   assets of a published release, but it stops a half-failed release from
   being re-run in place. Make that trade-off before enabling it.
 
-## `major-tag.json`: `v0` moves only through the release workflow
+## `major-tag.json`: not applied (needs an organization-owned repository)
 
 `v0` is the floating major tag that `uses: abd-ulbasit/upgradescope@v0`
 resolves to. The `major-tag` job of `.github/workflows/release.yml` moves it
-with the workflow's `GITHUB_TOKEN` once a stable release is verified. The
-only bypass actor is the GitHub Actions app (integration id 15368). A
-person cannot move or delete `v0` with their own credentials, but the
-bypass covers every workflow in this repository that runs with a
-`GITHUB_TOKEN` that can write contents, not only release.yml's
-`major-tag` job. So `v0` is as safe as the review of every workflow that
-gets `contents: write`, and a maintainer who can merge such a workflow can
-move it.
+with the workflow's `GITHUB_TOKEN` once a stable release is verified.
+
+`major-tag.json` would let only the GitHub Actions app (integration id
+15368) move or delete `v0`. GitHub accepts an integration as a bypass actor
+only on a repository owned by an organization. On this personal-account
+repository the API refuses the ruleset (422, "Actor GitHub Actions
+integration must be part of the ruleset source or owner organization").
+A ruleset on `v0` with no bypass would stop the release workflow too, so
+none is applied.
+
+What this means today: `v0` is excluded from `release-tags.json`, and
+anyone with write access can move or delete it, as can any workflow here
+that runs with `contents: write`. Pin the Action to a release tag
+(`@v0.2.0`, immutable) or to a commit SHA rather than `@v0` when that
+matters to you. When the repository moves to an organization, apply
+`major-tag.json` with the command above. A person then cannot move `v0`
+with their own credentials. The bypass still covers every workflow in the
+repository that gets `contents: write`, so `v0` is then as safe as the
+review of those workflows.
 
 ## When v1 ships
 
 `v*` in `release-tags.json` also matches a future floating `v1`, which
 would then be locked like a release tag and the release workflow could not
 move it. Before the first v1 release, add `refs/tags/v1` to that file's
-`exclude` list and to `major-tag.json`'s `include` list, and re-apply both.
+`exclude` list, and to `major-tag.json`'s `include` list once that ruleset
+can be applied, and re-apply them.

@@ -39,8 +39,8 @@ name: release
 # The Homebrew tap (abd-ulbasit/homebrew-tap) is not pushed from here: it
 # pulls each stable release on a schedule and verifies checksums.txt against
 # this workflow's signature (packaging/homebrew-tap). Tags v* are protected
-# by .github/rulesets/release-tags.json; only this workflow's major-tag job
-# may move v0.
+# by .github/rulesets/release-tags.json. v0 is excluded so that the major-tag job
+# can move it; .github/rulesets/README.md says why v0 itself has no ruleset yet.
 #
 # Dry run: ci.yml's release-check job (make release-check) builds the same
 # snapshot on any PR that touches the release inputs, or on workflow_dispatch.
