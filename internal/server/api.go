@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,8 +82,9 @@ func (s *Server) maxGateBytes() int64 {
 	return DefaultMaxGateBytes
 }
 
-// byteBudget caps the /gate body bytes held in memory across all requests.
-// It never blocks: a charge either fits now or is refused.
+// byteBudget caps the request body bytes held in memory across all
+// requests of one kind (/gate manifest streams, snapshot pushes). It never
+// blocks: a charge either fits now or is refused.
 type byteBudget struct {
 	mu   sync.Mutex
 	used int64
@@ -118,20 +121,28 @@ func (b *byteBudget) inUse() int64 {
 	return b.used
 }
 
-// /gate bodies are read into chunks: the first is minGateChunk bytes and
+// fits reports whether n more bytes would fit now.
+func (b *byteBudget) fits(n int64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used+n <= b.max
+}
+
+// Request bodies are read into chunks: the first is minBodyChunk bytes and
 // each next one is as large as everything received so far, up to
-// maxGateChunk. A client that declares a large Content-Length and then
+// maxBodyChunk. A client that declares a large Content-Length and then
 // sends little has little allocated, and a large body costs no copying.
 const (
-	minGateChunk = 512
-	maxGateChunk = 64 << 10
+	minBodyChunk = 512
+	maxBodyChunk = 64 << 10
 )
 
-// gateBody is a buffered /gate request body, in the chunks it was read in.
-type gateBody [][]byte
+// bufferedBody is a request body held in memory, in the chunks it was
+// read in.
+type bufferedBody [][]byte
 
 // reader returns a fresh reader over the whole body.
-func (b gateBody) reader() io.Reader {
+func (b bufferedBody) reader() io.Reader {
 	rs := make([]io.Reader, len(b))
 	for i, c := range b {
 		rs[i] = bytes.NewReader(c)
@@ -139,38 +150,51 @@ func (b gateBody) reader() io.Reader {
 	return io.MultiReader(rs...)
 }
 
-// readManifestBody reads a /gate manifest stream under the body cap and the
-// shared buffered-body budget, then splits it (the same kubectl-compatible
-// splitter collect uses) to check the document count and each document's
-// size before anything decodes it. It writes the 413/422/503 itself.
-//
-// Each read is charged to the budget for exactly the bytes it returned,
-// as they arrive. A declared Content-Length reserves nothing (it only
-// bounds the reads, and one over the cap is refused before any are made),
-// so a client that stalls mid-upload holds only what it has sent, until
-// ReadTimeout ends its request. When a charge does not fit, the request
-// gives back everything it holds, in the same step, and gets 503 +
-// Retry-After immediately. Nothing waits for budget, let alone while
-// holding some, so concurrent uploads cannot deadlock or queue behind a
-// stalled one. On success the caller must call release once it no longer
-// needs the body; release is idempotent. On failure everything has
-// already been given back.
-func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body gateBody, release func(), ok bool) {
-	limit := s.maxGateBytes()
-	tooLarge := "manifest stream exceeds the " + sizeString(limit) + " limit"
-	if r.ContentLength > limit {
-		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
-		return nil, nil, false
+// bytes returns the body as one slice: its only chunk, or a copy.
+func (b bufferedBody) bytes() []byte {
+	if len(b) == 1 {
+		return b[0]
 	}
+	return bytes.Join(b, nil)
+}
 
-	var held int64 // bytes received and charged so far
-	release = sync.OnceFunc(func() { s.gateBuffered.give(held) })
-	src := http.MaxBytesReader(w, r.Body, limit)
+// bodyError is why a request body was refused: the status and message to
+// answer with.
+type bodyError struct {
+	status int
+	msg    string
+}
+
+func (e *bodyError) write(w http.ResponseWriter) {
+	if e.status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", "10")
+	}
+	errJSON(w, e.status, e.msg)
+}
+
+// errBodyTooLarge ends a stream that grew past its cap after decoding (a
+// decompressed snapshot); readBody answers it like *http.MaxBytesError.
+var errBodyTooLarge = errors.New("body too large")
+
+// readBody reads src into memory under a shared budget. Each read is
+// charged for exactly the bytes it returned, as they arrive. declared (the
+// Content-Length, or -1) only sizes the reads, so it reserves nothing: a
+// client that stalls mid-upload holds only what it has sent, until
+// ReadTimeout ends its request. When a charge does not fit, the request
+// gives back everything it holds, in the same step, and is refused with
+// 503 (busy) at once. Nothing waits for budget, let alone while holding
+// some, so concurrent uploads cannot deadlock or queue behind a stalled
+// one. A body over its cap is refused with 413 (tooLarge) whether or not
+// its last bytes fit the budget, and one whose body does not arrive within
+// ReadTimeout with 408. feed, when not nil, sees each piece as it is read
+// and may refuse the body. On success the caller gives back held when it
+// no longer needs the body; on failure everything is given back already.
+func readBody(src io.Reader, declared int64, budget *byteBudget, busy, tooLarge string, feed func([]byte) *bodyError) (body bufferedBody, held int64, berr *bodyError) {
 	for {
 		if len(body) == 0 || len(body[len(body)-1]) == cap(body[len(body)-1]) {
-			size := min(max(held, minGateChunk), maxGateChunk)
-			if r.ContentLength >= 0 {
-				size = min(size, r.ContentLength-held)
+			size := min(max(held, minBodyChunk), maxBodyChunk)
+			if declared >= 0 {
+				size = min(size, declared-held)
 			}
 			if size == 0 {
 				break // the whole declared Content-Length is in
@@ -179,30 +203,89 @@ func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body 
 		}
 		chunk := body[len(body)-1]
 		n, err := src.Read(chunk[len(chunk):cap(chunk)])
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) || errors.Is(err, errBodyTooLarge) {
+			// The read that crosses the cap returns the last bytes under
+			// it: the request is too large whether or not they would fit.
+			budget.give(held)
+			return nil, 0, &bodyError{http.StatusRequestEntityTooLarge, tooLarge}
+		}
 		if n > 0 {
-			if !s.gateBuffered.charge(held, int64(n)) { // gives back held too
-				w.Header().Set("Retry-After", "10")
-				errJSON(w, http.StatusServiceUnavailable, "too many concurrent gate requests; retry shortly")
-				return nil, nil, false
+			if !budget.charge(held, int64(n)) { // gives back held too
+				return nil, 0, &bodyError{http.StatusServiceUnavailable, busy}
 			}
 			held += int64(n)
 			body[len(body)-1] = chunk[:len(chunk)+n]
+			if feed != nil {
+				if berr := feed(chunk[len(chunk) : len(chunk)+n]); berr != nil {
+					budget.give(held)
+					return nil, 0, berr
+				}
+			}
 		}
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			release()
-			var mbe *http.MaxBytesError
-			if errors.As(err, &mbe) {
-				errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
-				return nil, nil, false
-			}
-			errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
-			return nil, nil, false
+			budget.give(held)
+			return nil, 0, readError(err)
 		}
 	}
+	return body, held, nil
+}
 
+// readError says why reading a request body failed without echoing the
+// error, which names the connection's socket addresses. A body that did
+// not arrive within ReadTimeout is 408, which clients (the agent among
+// them) retry.
+func readError(err error) *bodyError {
+	var corrupt flate.CorruptInputError
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return &bodyError{http.StatusRequestTimeout, fmt.Sprintf(
+			"the request body did not arrive within the server's %s read timeout; send it faster or make it smaller", readTimeout)}
+	case errors.Is(err, gzip.ErrHeader) || errors.Is(err, gzip.ErrChecksum) || errors.As(err, &corrupt):
+		return &bodyError{http.StatusUnprocessableEntity, "body is not valid gzip"}
+	}
+	return &bodyError{http.StatusBadRequest, "the request body ended early or could not be read"}
+}
+
+// firstRead is how many bytes a body's first read can return: the first
+// chunk, or less when the body is declared smaller.
+func firstRead(declared int64) int64 {
+	if declared >= 0 {
+		return min(declared, minBodyChunk)
+	}
+	return minBodyChunk
+}
+
+// readManifestBody reads a /gate manifest stream under the body cap and the
+// shared buffered-body budget (see readBody), then checks its shape before
+// anything decodes it (checkManifestStream). It writes the error itself.
+// When the budget has no room even for the first read, the request is
+// refused before reading any of its body: the first read would send a
+// client waiting on Expect: 100-continue the go-ahead for all of it. On
+// success the caller must call release once it no longer needs the body;
+// release is idempotent. On failure everything has already been given
+// back.
+func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body bufferedBody, release func(), ok bool) {
+	const busy = "too many concurrent gate requests; retry shortly"
+	limit := s.maxGateBytes()
+	tooLarge := "manifest stream exceeds the " + sizeString(limit) + " limit"
+	if r.ContentLength > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+		return nil, nil, false
+	}
+	if r.ContentLength != 0 && !s.gateBuffered.fits(firstRead(r.ContentLength)) {
+		(&bodyError{http.StatusServiceUnavailable, busy}).write(w)
+		return nil, nil, false
+	}
+	body, held, berr := readBody(http.MaxBytesReader(w, r.Body, limit), r.ContentLength, s.gateBuffered, busy, tooLarge, nil)
+	if berr != nil {
+		berr.write(w)
+		return nil, nil, false
+	}
+	release = sync.OnceFunc(func() { s.gateBuffered.give(held) })
 	if status, msg := checkManifestStream(body); status != 0 {
 		release()
 		errJSON(w, status, msg)
@@ -217,7 +300,7 @@ func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body 
 // anything decodes it: the document count, each document's size, and the
 // YAML nodes the whole stream holds. It reads the body in place, copying
 // nothing. It returns the status and message to refuse it with, or 0.
-func checkManifestStream(body gateBody) (status int, msg string) {
+func checkManifestStream(body bufferedBody) (status int, msg string) {
 	src := newByteSource(body)
 	var total yamlCost
 	n := 0
@@ -340,6 +423,99 @@ func (s *Server) authIngest(w http.ResponseWriter, r *http.Request) (boundCluste
 	return name, true
 }
 
+// maxSnapshotUnits caps what decoding one snapshot push may build, in
+// jsonCost units. Decoding costs memory per JSON value, not per byte:
+// measured heap per unit is at most ~66 bytes (a map of unique keys; a
+// list of `{}` structs is ~50 per unit), so the worst push within it
+// decodes, evaluates and stores in ~80 MB of live heap at the 20 MiB
+// size cap (TestIngestDecodeHeapIsBounded), where 20 MiB of `{}`
+// ObjectRefs used to take ~2.6 GB. A real agent's inventory is far below
+// it: API usage covers only the APIs the knowledge base flags, with at
+// most 100 object refs each (~1,200 units), so even 5,000 nodes (~55k)
+// and a few hundred flagged kinds fit.
+const maxSnapshotUnits = 1_000_000
+
+// readSnapshotBody reads a snapshot push, decompressing gzip, under the
+// snapshot cap (on the wire and decompressed: a tiny gzip bomb must not
+// bypass it), the shared buffered-body budget (see readBody, which
+// charges the decompressed bytes) and the node budget, which it checks as
+// the bytes arrive, so a push over it is refused without reading the
+// rest. It writes the error itself; on success the caller must call
+// release (idempotent) once it no longer needs the body.
+func (s *Server) readSnapshotBody(w http.ResponseWriter, r *http.Request) (body bufferedBody, release func(), ok bool) {
+	const busy = "too many concurrent snapshot pushes; retry shortly"
+	limit := s.maxSnapshotBytes()
+	tooLarge := "snapshot exceeds the " + sizeString(limit) + " limit (on the wire and after decompression)"
+	if r.ContentLength > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+		return nil, nil, false
+	}
+	enc := r.Header.Get("Content-Encoding")
+	if enc != "" && enc != "identity" && enc != "gzip" {
+		errJSON(w, http.StatusUnsupportedMediaType, fmt.Sprintf("unsupported Content-Encoding %q (use gzip or identity)", enc))
+		return nil, nil, false
+	}
+	if r.ContentLength != 0 && !s.ingestBuffered.fits(firstRead(r.ContentLength)) {
+		(&bodyError{http.StatusServiceUnavailable, busy}).write(w)
+		return nil, nil, false
+	}
+	var src io.Reader = http.MaxBytesReader(w, r.Body, limit)
+	declared := r.ContentLength
+	if enc == "gzip" {
+		gz, err := gzip.NewReader(src)
+		if err != nil {
+			var mbe *http.MaxBytesError
+			switch berr := readError(err); {
+			case errors.As(err, &mbe):
+				errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+			case berr.status == http.StatusRequestTimeout:
+				berr.write(w)
+			default:
+				errJSON(w, http.StatusUnprocessableEntity, "body is not valid gzip")
+			}
+			return nil, nil, false
+		}
+		defer gz.Close()
+		src, declared = &capReader{r: gz, left: limit}, -1
+	}
+	var meter jsonMeter
+	feed := func(p []byte) *bodyError {
+		if meter.feed(p); meter.cost.units() > maxSnapshotUnits {
+			return &bodyError{http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"snapshot is too large to evaluate: decoding JSON costs memory per value, and it holds over %d units "+
+					"(each value 1, each object 8)", maxSnapshotUnits)}
+		}
+		return nil
+	}
+	body, held, berr := readBody(src, declared, s.ingestBuffered, busy, tooLarge, feed)
+	if berr != nil {
+		berr.write(w)
+		return nil, nil, false
+	}
+	return body, sync.OnceFunc(func() { s.ingestBuffered.give(held) }), true
+}
+
+// capReader passes at most left bytes through and then fails with
+// errBodyTooLarge if there are more.
+type capReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		var one [1]byte
+		n, err := c.r.Read(one[:])
+		if n > 0 {
+			return 0, errBodyTooLarge
+		}
+		return 0, err
+	}
+	n, err := c.r.Read(p[:min(int64(len(p)), c.left)])
+	c.left -= int64(n)
+	return n, err
+}
+
 // pushRequest is the snapshot push protocol body (schemaVersion 1).
 type pushRequest struct {
 	SchemaVersion int             `json:"schemaVersion"`
@@ -350,7 +526,8 @@ type pushRequest struct {
 }
 
 // handleIngest implements POST /api/v1/snapshots: bearer auth, gzip or
-// identity body, schema validation, cluster upsert (409 on a cluster UID
+// identity body under the size, node and buffered-body budgets
+// (readSnapshotBody), the ingest slot, schema validation, cluster upsert (409 on a cluster UID
 // conflict), then ingestSnapshot: every target evaluated and committed
 // with the snapshot in one transaction (202), or — for a duplicate of the
 // latest snapshot — stale evaluations refreshed (200 duplicate).
@@ -359,40 +536,21 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := s.maxSnapshotBytes()
-	body := http.MaxBytesReader(w, r.Body, limit)
-	var reader io.Reader = body
-	switch enc := r.Header.Get("Content-Encoding"); enc {
-	case "", "identity":
-	case "gzip":
-		gz, err := gzip.NewReader(body)
-		if err != nil {
-			errJSON(w, http.StatusUnprocessableEntity, "body is not valid gzip")
-			return
-		}
-		defer gz.Close()
-		// Cap the decompressed stream too: a tiny gzip bomb must not bypass
-		// the wire-byte limit. Read one byte past the cap so overflow is
-		// detectable below.
-		reader = io.LimitReader(gz, limit+1)
-	default:
-		errJSON(w, http.StatusUnsupportedMediaType, fmt.Sprintf("unsupported Content-Encoding %q (use gzip or identity)", enc))
+	body, release, ok := s.readSnapshotBody(w, r)
+	if !ok {
 		return
 	}
-	raw, err := io.ReadAll(reader)
-	if err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the "+sizeString(limit)+" limit")
-			return
-		}
-		errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
+	defer release()
+	// One push is decoded, evaluated and stored at a time: each costs up
+	// to ~80 MB of heap at the size and node caps. Waiting pushes hold
+	// only their bodies, which the budget bounds.
+	releaseSlot, ok := acquireSlot(w, nil, s.ingestSlots, s.ingestQueueTimeout, "too many concurrent snapshot pushes; retry shortly")
+	if !ok {
 		return
 	}
-	if int64(len(raw)) > limit {
-		errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the "+sizeString(limit)+" limit after decompression")
-		return
-	}
+	defer releaseSlot()
+	raw := body.bytes()
+	release() // the copy in raw is the slot's to hold now
 	var req pushRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid JSON: "+err.Error())

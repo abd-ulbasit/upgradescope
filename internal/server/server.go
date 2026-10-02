@@ -93,10 +93,33 @@ type Config struct {
 // 64 KiB, uncharged), until ReadTimeout ends its request — and never the
 // evaluation slot. Without the cap, 30 concurrent 9.5 MiB streams of small
 // documents — each under every per-request cap — buffered ~800 MB.
+//
+// The residual cost is availability, not memory: a client that really
+// sends 3 × --max-gate-bytes (30 MiB) and then stalls makes every other
+// /gate request 503 until ReadTimeout (60s) cuts it off, for about 0.5
+// MiB/s of its bandwidth and, when reads are anonymous, no credentials.
+// SECURITY.md documents it; a read token closes it to outsiders.
 const (
 	maxConcurrentGates    = 1
 	gateQueueTimeout      = 30 * time.Second
 	maxBufferedGateBodies = 3
+)
+
+// Snapshot ingest concurrency and memory, on the same model as /gate.
+// Decoding, evaluating and storing one push costs up to ~80 MB of heap
+// at the size and node caps (maxSnapshotUnits), so pushes are ingested one
+// at a time (a normal one takes milliseconds; an agent's whole fleet
+// pushing on one tick queues). A push asks for the slot once its body is
+// in and waits up to ingestQueueTimeout, under the agent's 30s request
+// timeout, then gets 503 + Retry-After, which the agent retries. Bodies
+// waiting are capped at maxBufferedSnapshotBodies × --max-snapshot-bytes
+// (40 MiB by default) of decompressed bytes, charged as they arrive.
+// Before this, 30 concurrent 20 MiB pushes from any agent token held
+// 1.1 GB and 60 gzip bombs 1.9 GB.
+const (
+	maxConcurrentIngests      = 1
+	ingestQueueTimeout        = 10 * time.Second
+	maxBufferedSnapshotBodies = 2
 )
 
 // Server serves the ingest + read API. Construct with New; a Server is
@@ -111,6 +134,10 @@ type Server struct {
 	gateSlots        chan struct{} // semaphore: one token per running /gate evaluation
 	gateQueueTimeout time.Duration // how long a /gate request waits for a slot
 	gateBuffered     *byteBudget   // /gate body bytes held across requests
+
+	ingestSlots        chan struct{} // semaphore: one token per snapshot push being ingested
+	ingestQueueTimeout time.Duration // how long a push waits for a slot
+	ingestBuffered     *byteBudget   // snapshot body bytes (decompressed) held across pushes
 
 	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
 	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
@@ -144,6 +171,9 @@ func New(cfg Config) (*Server, error) {
 		ready:            make(chan struct{}),
 	}
 	s.gateBuffered = newByteBudget(maxBufferedGateBodies * s.maxGateBytes())
+	s.ingestSlots = make(chan struct{}, maxConcurrentIngests)
+	s.ingestQueueTimeout = ingestQueueTimeout
+	s.ingestBuffered = newByteBudget(maxBufferedSnapshotBodies * s.maxSnapshotBytes())
 	s.teamMapHash = hashTeamMap(cfg.TeamMap)
 	s.sinks = sinksOf(cfg.Notifier)
 	s.outboxKick = make(chan struct{}, 1)
@@ -328,20 +358,22 @@ func securityHeaders(next http.Handler) http.Handler {
 // httptest and embedding.
 func (s *Server) Handler() http.Handler { return s.handler() }
 
-// acquireGateSlot waits for a /gate evaluation slot. On success the caller
-// must call release (idempotent); otherwise the 503 (or nothing, for a
-// client that went away) has been written.
-func (s *Server) acquireGateSlot(w http.ResponseWriter, r *http.Request) (release func(), ok bool) {
-	timer := time.NewTimer(s.gateQueueTimeout)
+// acquireSlot waits up to timeout for one of slots (a /gate evaluation, a
+// snapshot ingest), or until gone is closed (the client went away; nil
+// waits regardless, for work that outlives its client). On success the
+// caller must call release (idempotent); otherwise the 503 + Retry-After
+// with busy (or nothing, once gone is closed) has been written.
+func acquireSlot(w http.ResponseWriter, gone <-chan struct{}, slots chan struct{}, timeout time.Duration, busy string) (release func(), ok bool) {
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case s.gateSlots <- struct{}{}:
-		return sync.OnceFunc(func() { <-s.gateSlots }), true
-	case <-r.Context().Done():
+	case slots <- struct{}{}:
+		return sync.OnceFunc(func() { <-slots }), true
+	case <-gone:
 		return nil, false
 	case <-timer.C:
 		w.Header().Set("Retry-After", "10")
-		errJSON(w, http.StatusServiceUnavailable, "too many concurrent gate evaluations; retry shortly")
+		errJSON(w, http.StatusServiceUnavailable, busy)
 		return nil, false
 	}
 }

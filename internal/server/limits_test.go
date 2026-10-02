@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -504,8 +505,9 @@ func TestGateBufferedBodiesAreBounded(t *testing.T) {
 }
 
 // With the budget full, a request is refused with 503 + Retry-After at
-// once — not after the queue timeout — having read no more than its first
-// chunk, and gets in as soon as there is room.
+// once — not after the queue timeout — having read none of its body (the
+// first read would send a client waiting on Expect: 100-continue the
+// go-ahead for all of it), and gets in as soon as there is room.
 func TestGateBodyBudgetFull(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
 	s.gateQueueTimeout = time.Minute
@@ -521,9 +523,9 @@ func TestGateBodyBudgetFull(t *testing.T) {
 	began := time.Now()
 	s.Handler().ServeHTTP(rec, req)
 	if took := time.Since(began); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" ||
-		rd.n > minGateChunk || took > 10*time.Second {
-		t.Fatalf("status = %d (%s), Retry-After %q, %d body bytes read, after %s; want 503 with Retry-After at once, at most %d bytes read",
-			rec.Code, rec.Body, rec.Header().Get("Retry-After"), rd.n, took.Round(time.Millisecond), minGateChunk)
+		rd.n > 0 || took > 10*time.Second {
+		t.Fatalf("status = %d (%s), Retry-After %q, %d body bytes read, after %s; want 503 with Retry-After at once, nothing read",
+			rec.Code, rec.Body, rec.Header().Get("Retry-After"), rd.n, took.Round(time.Millisecond))
 	}
 	if used := s.gateBuffered.inUse(); used != s.gateBuffered.max {
 		t.Fatalf("refused request left %d bytes charged, want the %d it found", used, s.gateBuffered.max)
@@ -534,6 +536,122 @@ func TestGateBodyBudgetFull(t *testing.T) {
 	}
 	if used := s.gateBuffered.inUse(); used != 0 {
 		t.Fatalf("%d body bytes still charged after the request finished", used)
+	}
+}
+
+// readStatus reads the response on conn, failing after within.
+func readStatus(t *testing.T, conn net.Conn, within time.Duration) (int, string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(within))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("reading the response: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
+
+// Over a real connection: with the budget full, a client that asks
+// Expect: 100-continue gets the 503 as its first response, not a 100
+// Continue that would make it send the whole body.
+func TestGateBodyBudgetFullSendsNo100Continue(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	s.gateBuffered.charge(0, s.gateBuffered.max)
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: gate\r\nContent-Type: application/x-yaml\r\n"+
+		"Expect: 100-continue\r\nContent-Length: 4096\r\n\r\n")
+	if code, body := readStatus(t, conn, 5*time.Second); code != http.StatusServiceUnavailable {
+		t.Fatalf("first response = %d (%s), want 503", code, body)
+	}
+}
+
+// On a chunked body, the read that crosses --max-gate-bytes returns the
+// last bytes under the cap together with the overflow error. The request
+// is too large whether or not those bytes fit the budget: 413, not a
+// retryable 503 (#100).
+func TestGateChunkedOverflowIs413EvenWithoutBudget(t *testing.T) {
+	const limit = 50000 // not a multiple of the read chunk sizes, so the crossing read returns bytes
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxGateBytes = limit })
+	s.gateBuffered.charge(0, s.gateBuffered.max-40000) // room for the first 32 KiB of reads, not the cap
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate?target=1.35", strings.NewReader(strings.Repeat("#", limit+1000)))
+	req.ContentLength = -1 // chunked
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d (%s), want 413", rec.Code, rec.Body)
+	}
+	if used := s.gateBuffered.inUse(); used != s.gateBuffered.max-40000 {
+		t.Fatalf("%d bytes charged after the refusal, want the %d it found", used, s.gateBuffered.max-40000)
+	}
+}
+
+// A /gate body that does not arrive within ReadTimeout gets 408, naming no
+// socket addresses, and its bytes are given back.
+func TestGateBodyReadTimeoutIs408(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	ts := httptest.NewUnstartedServer(s.Handler())
+	ts.Config.ReadTimeout = 300 * time.Millisecond
+	ts.Start()
+	t.Cleanup(ts.Close)
+	conn := stallUpload(t, ts, 100000, 1000)
+	code, body := readStatus(t, conn, 5*time.Second)
+	if code != http.StatusRequestTimeout || strings.Contains(body, "127.0.0.1") || strings.Contains(body, "tcp") {
+		t.Fatalf("status = %d (%s), want 408 naming no address", code, body)
+	}
+	waitBuffered(t, s, 0)
+}
+
+// Every way a /gate request can fail gives its body budget back (#100).
+func TestGateBudgetReturnsToZeroOnEveryError(t *testing.T) {
+	big := atNodeBudget(gateHeapShapes()["flow sequence"])
+	for _, tc := range []struct {
+		name    string
+		body    string
+		chunked bool
+		limit   int64
+		want    int
+	}{
+		{"over the cap, declared", strings.Repeat("#", 2000), false, 1000, http.StatusRequestEntityTooLarge},
+		{"over the cap, chunked", strings.Repeat("#", 50000), true, 30000, http.StatusRequestEntityTooLarge},
+		{"invalid separator", pspManifest + "--- x\n", false, 0, http.StatusUnprocessableEntity},
+		{"too many documents", strings.Repeat("---\na: 1\n", maxManifestDocs+1), false, 0, http.StatusRequestEntityTooLarge},
+		{"oversized document", bigConfigMap(maxManifestDocBytes + 1), false, 0, http.StatusRequestEntityTooLarge},
+		{"over the node budget", big + "---\n" + big, false, 0, http.StatusRequestEntityTooLarge},
+		{"undecodable", "a: [\n", false, 0, http.StatusUnprocessableEntity},
+		{"ok", pspManifest, false, 0, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxGateBytes = tc.limit })
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/gate?target=1.35&fail-on=never", strings.NewReader(tc.body))
+			if tc.chunked {
+				req.ContentLength = -1
+			}
+			req.Header.Set("Content-Type", "application/x-yaml")
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d (%.200s), want %d", rec.Code, rec.Body, tc.want)
+			}
+			if used := s.gateBuffered.inUse(); used != 0 {
+				t.Fatalf("%d body bytes still charged", used)
+			}
+		})
+	}
+	// Refused for a full budget: what it found is still charged, nothing more.
+	s := newTestServer(t, newFakeStore())
+	s.gateBuffered.charge(0, s.gateBuffered.max-100)
+	rec := httptest.NewRecorder()
+	serveGate(s, rec, smallConfigMaps(64<<10))
+	if rec.Code != http.StatusServiceUnavailable || s.gateBuffered.inUse() != s.gateBuffered.max-100 {
+		t.Fatalf("status = %d, %d bytes charged; want 503 and the %d it found", rec.Code, s.gateBuffered.inUse(), s.gateBuffered.max-100)
 	}
 }
 

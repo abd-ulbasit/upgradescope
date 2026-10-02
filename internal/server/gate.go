@@ -129,7 +129,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseBody()
-	releaseSlot, ok := s.acquireGateSlot(w, r)
+	releaseSlot, ok := acquireSlot(w, r.Context().Done(), s.gateSlots, s.gateQueueTimeout, "too many concurrent gate evaluations; retry shortly")
 	if !ok {
 		return
 	}
