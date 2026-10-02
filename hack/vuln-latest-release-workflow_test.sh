@@ -42,17 +42,21 @@ cat >"$work/repo/hack/vuln-latest-release.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'v9.9.9\n' >"$UPGRADESCOPE_RELEASE_TAG_FILE"
 echo "vuln-latest-release: stub (exit $STUB_CODE)"
-[ "$STUB_CODE" = 0 ] || echo "::error::vulncheck: GO-2026-0001 is reachable"
+[ "$STUB_CODE" = 0 ] || echo "::error::vulncheck: ${STUB_FINDING:-GO-2026-0001} is reachable"
 exit "$STUB_CODE"
 EOF
 chmod +x "$work/repo/hack/vuln-latest-release.sh"
 
-# gh: `issue list` prints $STUB_OPEN (the open tracking issue, if any);
-# every call is logged, and a --body-file's content with it.
+# gh: `issue list` prints $STUB_OPEN (the open tracking issue, if any),
+# `issue view` $STUB_SEEN (what that issue already says); every call is
+# logged, and a --body-file's content with it.
 cat >"$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 echo "gh $*" >>"$GH_LOG"
-case "$1 $2" in "issue list") [ -z "${STUB_OPEN:-}" ] || echo "$STUB_OPEN" ;; esac
+case "$1 $2" in
+  "issue list") [ -z "${STUB_OPEN:-}" ] || echo "$STUB_OPEN" ;;
+  "issue view") printf '%s\n' "${STUB_SEEN:-}" ;;
+esac
 while [ $# -gt 0 ]; do
   [ "$1" = --body-file ] && { cat "$2" >>"$GH_LOG"; shift; }
   shift
@@ -72,7 +76,7 @@ run_case() {
   grep -qx "code=$want_code" "$rt/out" || { fail "$name: scan step recorded $(grep '^code=' "$rt/out") (want code=$want_code)"; return; }
   grep -qx "tag=v9.9.9" "$rt/out" || { fail "$name: scan step did not record the tag"; return; }
   (cd "$work/repo" && PATH="$work/bin:$PATH" RUNNER_TEMP="$rt" GITHUB_STEP_SUMMARY="$rt/summary" GH_LOG="$rt/gh.log" \
-    CODE="$want_code" TAG=v9.9.9 STUB_OPEN="$open" RUN_URL=https://example.invalid/run/1 \
+    CODE="$want_code" TAG="${TAG:-v9.9.9}" STUB_OPEN="$open" STUB_SEEN="${SEEN:-}" RUN_URL=https://example.invalid/run/1 \
     bash --noprofile --norc -eo pipefail "$work/issue.sh" >/dev/null 2>&1) || got=$?
   [ "$got" = "$want_exit" ] || { fail "$name: issue step exited $got (want $want_exit)"; return; }
   local needle
@@ -91,6 +95,17 @@ run_case "findings (exit 1) open an issue worded as findings" 1 "" 1 1 \
   "GO-2026-0001 is reachable" "!could not run"
 run_case "findings with an open issue comment on it" 1 42 1 1 \
   "gh issue comment 42 --body-file" "govulncheck finds reachable advisories" "!gh issue create"
+# The issue already carries that run's report: the same findings on the
+# same tag add no comment (the job still fails); new findings or a new tag
+# do.
+SEEN=$(cat "$work/rt-1-42/gh.log")
+run_case "unchanged findings on the same tag do not comment again" 1 42 1 1 \
+  "!gh issue comment" "!gh issue create"
+STUB_FINDING=GO-2026-0002 run_case "a changed finding set comments again" 1 42 1 1 \
+  "gh issue comment 42 --body-file" "GO-2026-0002 is reachable"
+TAG=v9.9.10 run_case "the same findings on a new tag comment again" 1 42 1 1 \
+  "gh issue comment 42 --body-file" "published binary of v9.9.10"
+SEEN=
 run_case "a broken scan (exit 2) is worded as could not run" 2 "" 2 1 \
   "the scan of the latest release (v9.9.9) could not run" "!finds reachable advisories"
 run_case "a clean scan closes the open issue" 0 42 0 0 \

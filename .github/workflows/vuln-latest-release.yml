@@ -4,7 +4,10 @@ name: vuln-latest-release
 # covers main). Daily: advisories land without any commit here, and only a
 # new release fixes a published binary. Findings open (or update) one
 # tracking issue, so a vulnerable latest release is never silent; a clean
-# scan closes it. The scan itself is hack/vuln-latest-release.sh
+# scan closes it. A new release is picked up by the next daily run, or
+# dispatch this workflow by hand: GoReleaser publishes with GITHUB_TOKEN,
+# whose events start no workflow, so a `release: published` trigger here
+# would never fire. The scan itself is hack/vuln-latest-release.sh
 # (also make vuln-latest): the latest release's linux/amd64 archive,
 # sha256-checked and signature-verified, through hack/vulncheck.sh's
 # binary-mode gate and allowlist.
@@ -12,9 +15,6 @@ on:
   schedule:
     - cron: '47 6 * * *' # daily 06:47 UTC
   workflow_dispatch:
-  # A release that just published is scanned right away.
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -77,15 +77,25 @@ jobs:
             1) what="govulncheck finds reachable advisories in the published binary of ${TAG}" ;;
             *) what="the scan of the latest release (${TAG:-unknown tag}) could not run" ;;
           esac
+          { grep -E '::error::|::warning::|^allowed:|^vuln' "$RUNNER_TEMP/report.txt" || true; } \
+            | sed 's/^::[a-z]*:://' | head -60 >"$RUNNER_TEMP/findings.txt"
+          # The daily run comments only when the tag or the findings changed
+          # since the issue last heard: the marker fingerprints both.
+          marker="<!-- vuln-latest-release: $(printf '%s %s\n' "$CODE" "$TAG" | cat - "$RUNNER_TEMP/findings.txt" | cksum | tr ' ' -) -->"
           {
             printf '%s (linux/amd64 archive, binary mode): %s\n\n' "$what" "$RUN_URL"
             printf 'Only a new release fixes a published binary: bump the dependency or Go patch on main, then tag a patch release.\n\n'
             printf '```\n'
-            grep -E '::error::|::warning::|^allowed:|^vuln' "$RUNNER_TEMP/report.txt" | sed 's/^::[a-z]*:://' | head -60
-            printf '```\n'
+            cat "$RUNNER_TEMP/findings.txt"
+            printf '```\n\n%s\n' "$marker"
           } >"$RUNNER_TEMP/body.md"
           if [ -n "$number" ]; then
-            gh issue comment "$number" --body-file "$RUNNER_TEMP/body.md"
+            seen="$(gh issue view "$number" --json body,comments --jq '.body, .comments[].body' || true)"
+            if grep -qF -- "$marker" <<<"$seen"; then
+              echo "::notice::#$number already reports these findings on ${TAG:-this tag}; not commenting again"
+            else
+              gh issue comment "$number" --body-file "$RUNNER_TEMP/body.md"
+            fi
           else
             gh issue create --title "$title" --label security --body-file "$RUNNER_TEMP/body.md"
           fi
