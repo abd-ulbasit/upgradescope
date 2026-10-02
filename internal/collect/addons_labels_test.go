@@ -45,6 +45,8 @@ func labelledPodOf(ns string, labels map[string]string, images ...string) labell
 func TestMatchAddOnsFromLabelsAndIngressClass(t *testing.T) {
 	addons := append(testRegistry(), registry.AddOn{ID: "rke2-ingress-nginx", Matchers: registry.Matchers{
 		Images: []string{"rancher/nginx-ingress-controller"}, Charts: []string{"rke2-ingress-nginx"},
+	}}, registry.AddOn{ID: "traefik", Matchers: registry.Matchers{
+		Images: []string{"library/traefik"}, Charts: []string{"traefik"},
 	}})
 	cases := []struct {
 		name string
@@ -103,6 +105,17 @@ func TestMatchAddOnsFromLabelsAndIngressClass(t *testing.T) {
 			want: []inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.9.4", Namespaces: []string{"kube-system"}, Source: "image"}},
 		},
 		{
+			// A nameOverride or relabel can leave upstream's labels on a
+			// vendor build; an unmatched sidecar is not the controller.
+			name: "a vendor build with an unmatched sidecar: labels naming upstream add nothing",
+			ev: addOnEvidence{
+				images: []nsImage{{"kube-system", "rancher/nginx-ingress-controller:nginx-1.9.4-hardened1"}, {"kube-system", "corp.example/log-shipper:2.1"}},
+				labelled: []labelledPod{labelledPodOf("kube-system", nginxLabels,
+					"rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", "corp.example/log-shipper:2.1")},
+			},
+			want: []inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.9.4", Namespaces: []string{"kube-system"}, Source: "image"}},
+		},
+		{
 			name: "an injected sidecar does not hide the labelled controller",
 			ev: addOnEvidence{
 				images:   []nsImage{{"edge", unmatchedNginx}, {"edge", "istio/proxyv2:1.31.1"}},
@@ -153,6 +166,17 @@ func TestMatchAddOnsFromLabelsAndIngressClass(t *testing.T) {
 				ingressControllers: []string{"k8s.io/ingress-nginx"},
 			},
 			want: []inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.9.4", Namespaces: []string{"kube-system"}, Source: "image"}},
+		},
+		{
+			// Traefik's Kubernetes Ingress NGINX provider (v3.6.2+) serves
+			// IngressClasses of controller k8s.io/ingress-nginx by default:
+			// the migration off the retired controller keeps the class.
+			name: "IngressClass adds nothing when Traefik, which can serve it, runs",
+			ev: addOnEvidence{
+				images:             []nsImage{{"traefik", "traefik:v3.6.2"}},
+				ingressControllers: []string{"k8s.io/ingress-nginx"},
+			},
+			want: []inventory.AddOnInstance{{ID: "traefik", Version: "3.6.2", Namespaces: []string{"traefik"}, Source: "image"}},
 		},
 		{
 			name: "other ingress controllers name no add-on",
@@ -211,6 +235,9 @@ func TestLabelAndIngressClassDetectionVerdicts(t *testing.T) {
 			"eol-addon/ingress-nginx", true},
 		{"ingress-nginx from IngressClass alone", addOnEvidence{ingressControllers: []string{"k8s.io/ingress-nginx"}},
 			"eol-addon/ingress-nginx", true},
+		{"Traefik serving the retained ingress-nginx IngressClass: no ingress-nginx finding",
+			addOnEvidence{images: []nsImage{{"traefik", "traefik:v3.7.1"}}, ingressControllers: []string{"k8s.io/ingress-nginx"}},
+			"", false},
 		{"Istio 1.27 from labels: its ended release line blocks",
 			addOnEvidence{labelled: []labelledPod{labelledPodOf("istio-system", istio("1.27.3"), "corp.example/mesh/istiod-fips:1.27.3")}},
 			"eol-addon/istio/1.27", true},
