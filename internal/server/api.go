@@ -1176,8 +1176,13 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	}{rep.Target.String(), findings, meta})
 }
 
+// maxHistoryLimit caps /history's ?limit=, so the response does not grow
+// with how long the server has kept evaluations.
+const maxHistoryLimit = 1000
+
 // handleHistory: GET /api/v1/clusters/{id}/history?target=&limit= —
-// []store.ScorePoint, oldest first, default limit 100.
+// []store.ScorePoint, oldest first, default limit 100, at most
+// maxHistoryLimit.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.requireCluster(w, r)
 	if !ok {
@@ -1190,8 +1195,8 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if q := r.URL.Query().Get("limit"); q != "" {
 		n, err := strconv.Atoi(q)
-		if err != nil || n < 1 {
-			errJSON(w, http.StatusUnprocessableEntity, "limit must be a positive integer")
+		if err != nil || n < 1 || n > maxHistoryLimit {
+			errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("limit must be an integer from 1 to %d", maxHistoryLimit))
 			return
 		}
 		limit = n

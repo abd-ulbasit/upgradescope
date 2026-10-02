@@ -197,7 +197,7 @@ paths:
         "422":
           description: |
             Not judgeable, refused before anything is written: invalid
-            JSON or gzip, an envelope `schemaVersion` other than 1, no
+            JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no
             `clusterName`, a missing or `null` inventory, an inventory
             `schemaVersion` other than 1, or a `serverVersion` that is not
             a Kubernetes 1.x version.
@@ -365,8 +365,8 @@ paths:
       - $ref: "#/components/parameters/Target"
       - name: limit
         in: query
-        description: Most recent points to return.
-        schema: {type: integer, minimum: 1, default: 100}
+        description: Most recent points to return, at most 1000.
+        schema: {type: integer, minimum: 1, maximum: 1000, default: 100}
     get:
       tags: [clusters]
       operationId: getHistory
@@ -456,8 +456,9 @@ paths:
         - name: targets
           in: query
           description: |
-            Comma-separated minors. Default: every cluster's next minor
-            plus the `serve --targets` minors some cluster does not run yet.
+            Comma-separated minors, at most 16 distinct (more is 422).
+            Default: every cluster's next minor plus the `serve --targets`
+            minors some cluster does not run yet.
           schema: {type: string, example: "1.37,1.38"}
       responses:
         "200":
@@ -540,24 +541,31 @@ paths:
         the baseline (`source: cluster`), and manifest-level debt is
         accepted with `scan --baseline` or ignore rules.
 
-        Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
-        document with its YAML aliases expanded, 20,000 documents, and a
-        node budget of 400,000 units (each YAML node 1, each sequence
-        entry 4, each alias what it names), counted from the raw bytes
-        before anything is decoded; over any of them is 413. Buffered
-        bodies share a budget of three times the cap. Measuring aliases,
-        decoding and evaluating run one request at a time; a request that
-        waits more than 30s for its turn, or finds the shared body budget
-        full, gets 503 with `Retry-After`. A stream with a UTF-16 byte
-        order mark is 422: send UTF-8.
+        Limits: `serve --max-gate-bytes` (10 MiB) per body, and for the
+        stream with its YAML aliases expanded; 4 MiB per document with its
+        aliases expanded, 20,000 documents, and a node budget of 400,000
+        units (each YAML node 1, each sequence entry 4, each alias what it
+        names), counted from the raw bytes before anything is decoded;
+        over any of them is 413. Buffered bodies share a budget of three
+        times the cap. Measuring aliases, decoding and evaluating run one
+        request at a time; a request that waits more than 30s for its
+        turn, or finds the shared body budget full, gets 503 with
+        `Retry-After`. A stream with a UTF-16 byte order mark is 422: send
+        UTF-8.
 
-        The answer is built before it is sent, with its `Content-Length`.
-        Answers waiting for their clients share a budget of twice
-        `--max-snapshot-bytes` with the per-cluster and fleet reads; an
-        answer that does not fit what is left of it is 503 with
-        `Retry-After`, and one larger than the whole budget is sent while
-        the next request waits, and cut off if the client has not taken it
-        within 20s.
+        The answer may take at most `--max-gate-bytes` too: an upper bound
+        on it, in the asked format (every string at its dearest escape),
+        is computed after the evaluation and before anything is encoded,
+        and over the cap is 413, saying to split the stream. With
+        `cluster`, the cluster's own findings and the objects they list
+        count toward it. The answer is built before it is sent, with its
+        `Content-Length`. Answers waiting for their clients share a budget
+        of twice `--max-snapshot-bytes` with the per-cluster and fleet
+        reads; an answer that does not fit what is left of it is 503 with
+        `Retry-After`. (One larger than that whole budget, possible only
+        when `--max-gate-bytes` is over twice `--max-snapshot-bytes`, is
+        sent while the next request waits, and cut off if the client has
+        not taken it within 20s.)
       parameters:
         - name: target
           in: query
@@ -577,10 +585,12 @@ paths:
           in: query
           description: |
             The repository-relative file the stream was rendered to
-            (`deploy/rendered.yaml`). Introduced findings are then located
-            in it in SARIF and Code Quality, so code scanning or the merge
-            request widget shows them on the change.
-          schema: {type: string}
+            (`deploy/rendered.yaml`): clean, relative, valid UTF-8 without
+            control characters, at most 512 bytes (every listed object
+            carries it); otherwise 422. Introduced findings are then
+            located in it in SARIF and Code Quality, so code scanning or
+            the merge request widget shows them on the change.
+          schema: {type: string, maxLength: 512}
         - name: config
           in: query
           description: |
@@ -650,9 +660,10 @@ paths:
               schema: {$ref: "#/components/schemas/Error"}
         "413":
           description: |
-            Over the byte cap, the per-document size (aliases expanded),
-            the document count or the node budget; the message says which,
-            and to split the stream.
+            Over the byte cap (for the body, or for the stream with its
+            aliases expanded), the per-document size (aliases expanded),
+            the document count, the node budget, or the answer's bound;
+            the message says which, and to split the stream.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}

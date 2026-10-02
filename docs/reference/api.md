@@ -133,7 +133,7 @@ Request body (`application/json`): [PushRequest](#pushrequest)
 | 409 | `application/json` | [Error](#error) | An error. |
 | 413 | `application/json` | [Error](#error) | Over the byte cap (on the wire or after decompression) or over the node budget, before anything is decoded. |
 | 415 | `application/json` | [Error](#error) | An error. |
-| 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, an envelope `schemaVersion` other than 1, no `clusterName`, a missing or `null` inventory, an inventory `schemaVersion` other than 1, or a `serverVersion` that is not a Kubernetes 1.x version. |
+| 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no `clusterName`, a missing or `null` inventory, an inventory `schemaVersion` other than 1, or a `serverVersion` that is not a Kubernetes 1.x version. |
 | 500 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`. |
 
@@ -230,7 +230,7 @@ Auth: `readToken` (bearer).
 |---|---|---|---|---|
 | `id` | path | integer (int64) | yes | The cluster's numeric id (`id` in the cluster list). A non-integer is a 400. |
 | `target` | query | [Target](#target) | no | Target minor. Default, the next minor above the cluster's version. |
-| `limit` | query | integer | no | Most recent points to return. |
+| `limit` | query | integer | no | Most recent points to return, at most 1000. |
 
 | Status | Content type | Schema | Description |
 |---|---|---|---|
@@ -278,7 +278,7 @@ Auth: `readToken` (bearer).
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
-| `targets` | query | string | no | Comma-separated minors. Default: every cluster's next minor plus the `serve --targets` minors some cluster does not run yet. |
+| `targets` | query | string | no | Comma-separated minors, at most 16 distinct (more is 422). Default: every cluster's next minor plus the `serve --targets` minors some cluster does not run yet. |
 
 | Status | Content type | Schema | Description |
 |---|---|---|---|
@@ -353,24 +353,31 @@ no baseline input: with `cluster`, the cluster's own findings are
 the baseline (`source: cluster`), and manifest-level debt is
 accepted with `scan --baseline` or ignore rules.
 
-Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
-document with its YAML aliases expanded, 20,000 documents, and a
-node budget of 400,000 units (each YAML node 1, each sequence
-entry 4, each alias what it names), counted from the raw bytes
-before anything is decoded; over any of them is 413. Buffered
-bodies share a budget of three times the cap. Measuring aliases,
-decoding and evaluating run one request at a time; a request that
-waits more than 30s for its turn, or finds the shared body budget
-full, gets 503 with `Retry-After`. A stream with a UTF-16 byte
-order mark is 422: send UTF-8.
+Limits: `serve --max-gate-bytes` (10 MiB) per body, and for the
+stream with its YAML aliases expanded; 4 MiB per document with its
+aliases expanded, 20,000 documents, and a node budget of 400,000
+units (each YAML node 1, each sequence entry 4, each alias what it
+names), counted from the raw bytes before anything is decoded;
+over any of them is 413. Buffered bodies share a budget of three
+times the cap. Measuring aliases, decoding and evaluating run one
+request at a time; a request that waits more than 30s for its
+turn, or finds the shared body budget full, gets 503 with
+`Retry-After`. A stream with a UTF-16 byte order mark is 422: send
+UTF-8.
 
-The answer is built before it is sent, with its `Content-Length`.
-Answers waiting for their clients share a budget of twice
-`--max-snapshot-bytes` with the per-cluster and fleet reads; an
-answer that does not fit what is left of it is 503 with
-`Retry-After`, and one larger than the whole budget is sent while
-the next request waits, and cut off if the client has not taken it
-within 20s.
+The answer may take at most `--max-gate-bytes` too: an upper bound
+on it, in the asked format (every string at its dearest escape),
+is computed after the evaluation and before anything is encoded,
+and over the cap is 413, saying to split the stream. With
+`cluster`, the cluster's own findings and the objects they list
+count toward it. The answer is built before it is sent, with its
+`Content-Length`. Answers waiting for their clients share a budget
+of twice `--max-snapshot-bytes` with the per-cluster and fleet
+reads; an answer that does not fit what is left of it is 503 with
+`Retry-After`. (One larger than that whole budget, possible only
+when `--max-gate-bytes` is over twice `--max-snapshot-bytes`, is
+sent while the next request waits, and cut off if the client has
+not taken it within 20s.)
 
 Auth: `readToken` (bearer).
 
@@ -380,7 +387,7 @@ Auth: `readToken` (bearer).
 | `cluster` | query | string | no | A cluster name or id whose stored context the manifests are judged in. |
 | `format` | query | `json` \| `sarif` \| `junit` \| `gitlab-codequality` | no | — |
 | `fail-on` | query | `blocker` \| `warning` \| `never` | no | — |
-| `path` | query | string | no | The repository-relative file the stream was rendered to (`deploy/rendered.yaml`). Introduced findings are then located in it in SARIF and Code Quality, so code scanning or the merge request widget shows them on the change. |
+| `path` | query | string | no | The repository-relative file the stream was rendered to (`deploy/rendered.yaml`): clean, relative, valid UTF-8 without control characters, at most 512 bytes (every listed object carries it); otherwise 422. Introduced findings are then located in it in SARIF and Code Quality, so code scanning or the merge request widget shows them on the change. |
 | `config` | query | string | no | A `.upgradescope.yaml` (its text, URL-encoded): ignore rules applied as `scan --config` applies them, `file` globs matched against `path`. An invalid config, one over 32 KiB, or `config` given more than once is a 422. The request line, and so this parameter, also counts toward the server's 64 KiB request-header limit: URL-encoding expands YAML, so a config under 32 KiB can exceed it, and the server then answers 431 with a plain-text body. A reverse proxy in front of the server may refuse a long request line sooner (ingress-nginx's default answers 414 above 8 KiB). |
 
 Request body (`application/x-yaml`): string
@@ -399,7 +406,7 @@ Request body (`application/json`): string
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 408 | `application/json` | [Error](#error) | The body did not arrive within the server's read timeout (60s for `serve`). |
-| 413 | `application/json` | [Error](#error) | Over the byte cap, the per-document size (aliases expanded), the document count or the node budget; the message says which, and to split the stream. |
+| 413 | `application/json` | [Error](#error) | Over the byte cap (for the body, or for the stream with its aliases expanded), the per-document size (aliases expanded), the document count, the node budget, or the answer's bound; the message says which, and to split the stream. |
 | 415 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | The shared body budget is full, the request waited more than 30s for its turn, or the answers waiting for their clients leave no room for this one; retry after `Retry-After`. |
 

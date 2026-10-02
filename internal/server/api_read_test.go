@@ -334,7 +334,7 @@ func TestHistory(t *testing.T) {
 		}
 	})
 	t.Run("bad limit is 422", func(t *testing.T) {
-		for _, bad := range []string{"abc", "0", "-3"} {
+		for _, bad := range []string{"abc", "0", "-3", "1001"} { // at most maxHistoryLimit
 			var out map[string]string
 			resp := getJSON(t, ts, "/api/v1/clusters/1/history?target=1.35&limit="+bad, "", &out)
 			if resp.StatusCode != http.StatusUnprocessableEntity {
