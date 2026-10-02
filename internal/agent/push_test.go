@@ -305,6 +305,7 @@ func TestCleartextPushWarning(t *testing.T) {
 		{"http://127.1.2.3:8080", "tok", false},
 		{"http://[::1]:8080", "tok", false},
 		{"http://localhost:8080", "tok", false},
+		{"http://LocalHost:8080", "tok", false},
 		{"http://hub.example.com", "", false},
 		{"", "tok", false},
 	} {

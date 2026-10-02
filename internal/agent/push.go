@@ -61,7 +61,7 @@ func CleartextPushWarning(serverURL, token string) string {
 		return ""
 	}
 	host := u.Hostname()
-	if ip := net.ParseIP(host); host == "localhost" || ip != nil && ip.IsLoopback() {
+	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback() {
 		return ""
 	}
 	return fmt.Sprintf("pushing snapshots to %s over plain http: the bearer token crosses the network unencrypted, "+
