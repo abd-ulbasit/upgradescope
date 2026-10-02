@@ -115,8 +115,17 @@ completions:
 # CRD field or the OpenAPI document; TestReferenceIsFresh (go test) fails
 # on a stale copy.
 .PHONY: docs-gen
-docs-gen:
+docs-gen: helm-docs
 	go run ./tools/gen-docs -reference docs/reference
+
+# The chart values tables, deploy/chart/README.md and
+# docs/reference/helm-values.md, rendered by helm-docs (pinned,
+# checksum-verified) from the `# --` comments in values.yaml. Edit the
+# comments or hack/docs/*.gotmpl, never the output. Needs network on the
+# first run (it installs helm-docs into bin/tools).
+.PHONY: helm-docs
+helm-docs:
+	./hack/helm-docs.sh
 
 # Asserts the Dockerfile's golang base image matches go.mod's `go` directive,
 # that GoReleaser is pinned to one version here and in release.yml, and that

@@ -1,0 +1,269 @@
+{{/*
+  The chart README. Edit hack/docs/chart-README.md.gotmpl, not
+  deploy/chart/README.md: `make helm-docs` renders it with helm-docs, and
+  the Values table comes from the `# --` comments in values.yaml.
+*/ -}}
+# upgradescope Helm chart
+
+Installs the upgradescope agent (continuous upgrade-readiness scanning,
+results in a `ClusterReadiness` custom resource) and, optionally, the
+upgradescope server (snapshot history, what-if API, notifications,
+dashboard).
+
+Full documentation: https://abd-ulbasit.github.io/upgradescope/
+
+## Install
+
+From v0.2.0 the chart is published, signed with cosign, as an OCI artifact:
+
+    helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
+      --version 0.2.0 -n upgradescope --create-namespace
+
+Before that release, or to run unreleased changes, install from a clone
+of the repository with `deploy/chart` in place of the OCI reference. The
+examples below use the clone path.
+
+Agent only (CRD-only mode — no server, results via `kubectl`):
+
+    helm install upgradescope deploy/chart -n upgradescope --create-namespace
+    kubectl get clusterreadiness cluster
+
+Agent + server in one cluster:
+
+    helm install upgradescope deploy/chart -n upgradescope --create-namespace \
+      --set server.enabled=true
+
+With no `server.ingestToken`, the chart generates a random token into the
+`<fullname>-server-tokens` Secret, keeps it on `helm upgrade` (it looks the
+live Secret up), and points the in-chart agent at it. The install notes
+print the command that reads it back for agents in other clusters. Tools
+that render without cluster access (`helm template`, Argo CD) cannot look
+it up and would generate a new token on every render, so there set
+`server.ingestToken` or `server.existingSecret`.
+
+Reach the server, which has a ClusterIP Service only:
+
+    kubectl -n upgradescope port-forward svc/upgradescope-server 8080:8080
+    SERVER=http://127.0.0.1:8080
+    curl $SERVER/api/v1/clusters
+
+Agent pushing to an existing server elsewhere:
+
+    helm install upgradescope deploy/chart -n upgradescope --create-namespace \
+      --set agent.serverUrl=https://uscope.example.com \
+      --set agent.existingSecret=my-push-token   # key: serverToken
+
+## Fleet hub (server only)
+
+A hub cluster runs the server alone; every other cluster runs the agent
+and pushes to it. Create the Secrets first (the chart only references
+them):
+
+    kubectl create namespace upgradescope
+    # Postgres URL; the server reads it as $UPGRADESCOPE_DB_URL, never argv.
+    kubectl -n upgradescope create secret generic upgradescope-db \
+      --from-literal=url='postgres://upgradescope:...@pg.example.internal:5432/upgradescope?sslmode=require'
+    # Read token (dashboard, API, CI gate) and admin token (cluster delete
+    # and rename); add webhookSecret to sign webhooks.
+    kubectl -n upgradescope create secret generic upgradescope-hub \
+      --from-literal=readToken="$(openssl rand -hex 32)" \
+      --from-literal=adminToken="$(openssl rand -hex 32)"
+
+    helm install upgradescope deploy/chart -n upgradescope --skip-crds -f hub.yaml
+
+with `hub.yaml`:
+
+    agent:
+      enabled: false          # no agent, ServiceAccount, RBAC or push-token Secret here
+    server:
+      enabled: true
+      existingSecret: upgradescope-hub
+      readTokenFromSecret: true
+      adminTokenFromSecret: true
+      database:
+        existingSecret: upgradescope-db
+        key: url
+      replicas: 2             # more than 1 only with Postgres
+      teamMap:
+        - {pattern: "payments-*", team: payments}
+      ingress:
+        enabled: true
+        className: nginx
+        host: upgradescope.example.com
+        annotations: {cert-manager.io/cluster-issuer: letsencrypt}
+        tls: {enabled: true}  # Secret upgradescope-server-tls unless tls.secretName
+
+`--skip-crds` leaves out the `ClusterReadiness` CRD, which only agents use.
+Without `database.existingSecret` the hub keeps SQLite on the PVC (one
+replica). With `agent.enabled=false` and `existingSecret`, the shared
+`ingestToken` key is optional: agents can use per-cluster tokens only, and
+each one can push only as its own cluster.
+
+Mint one token per cluster in the hub (printed once; only its hash is
+stored), then install each agent with it:
+
+    kubectl -n upgradescope exec deploy/upgradescope-server -- \
+      /upgradescope tokens create prod-eu-1                       # Postgres
+    kubectl -n upgradescope exec deploy/upgradescope-server -- \
+      /upgradescope tokens create prod-eu-1 --db /data/upgradescope.sqlite   # SQLite
+
+    # in cluster prod-eu-1
+    kubectl -n upgradescope create secret generic push-token --from-literal=serverToken=<token>
+    helm install upgradescope deploy/chart -n upgradescope --create-namespace \
+      --set agent.clusterName=prod-eu-1 \
+      --set agent.serverUrl=https://upgradescope.example.com \
+      --set agent.existingSecret=push-token
+
+`tokens list` and `tokens revoke` work the same way. Decommission a
+cluster (its history and tokens go too) with the admin token:
+
+    UPGRADESCOPE_ADMIN_TOKEN=... upgradescope clusters delete prod-eu-1 \
+      --server https://upgradescope.example.com
+
+The server prunes history older than `server.retention` (90 days) and
+marks clusters that stopped pushing stale after `server.staleAfter` (2h).
+docs/operations.md covers retention, sizing, webhooks and putting the
+dashboard behind an SSO proxy.
+
+## RBAC: what the agent can do, and why
+
+The agent ClusterRole (`templates/rbac.yaml`) lists every resource it
+covers. It has no wildcard groups, resources or verbs, so it never covers
+subresources such as `nodes/proxy` (kubelet exec), `pods/log` or
+`pods/exec`. Reads are `get`/`list` only; the agent polls and never
+watches.
+
+| Rule | Why |
+|---|---|
+| `get`/`list` namespaces, nodes, pods | Cluster ID (kube-system UID), team labels, kubelet versions, control-plane pods, add-on images |
+| `get` `/version`, `/metrics` | Server version; `apiserver_requested_deprecated_apis` (who still calls deprecated APIs) |
+| `get`/`list` on each group/resource the KB flags as deprecated or removed | Counting objects still stored at deprecated APIs. Generated into `files/kb-rbac-rules.yaml`; `rbac_test.go` fails when it drifts from the embedded KB |
+| `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
+| `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.dev` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
+| `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
+
+`rbac.helmSecrets=false` removes the Secret and ConfigMap rules. The Helm
+capability is then not assessed, with the forbidden lists as the reason,
+and the report has no Helm chart findings; everything else works. Releases
+kept by Helm's sql driver, and charts that GitOps tools render with
+`helm template` (Argo CD), have no release object in the cluster, so Helm
+chart checks never see them; add-on detection from container images still
+does. `rbac.create=false` lets you bind a
+role of your own; collectors without access degrade the same way.
+
+The agent cannot create CRDs: `crds/` installs the `ClusterReadiness` CRD.
+With `agent.manageCRD=true` (the default), a missing CRD makes the agent
+exit at startup with an error that says so. With `agent.manageCRD=false`
+the agent never reads or writes the CRD itself, so a missing CRD shows up
+as a "CRD not installed" error on every tick instead.
+
+`agent.manageCRD=false` drops the CRD write permissions (`get`/`update`/
+`patch` on `clusterreadinesses.upgradescope.dev`), e.g. when GitOps manages
+the CRD. It does not remove all CRD access: the KB-derived read rule still
+grants `get`/`list` on every CRD, because the KB flags
+`apiextensions.k8s.io/v1beta1` and the api-usage collector counts CRDs.
+With `agent.manageCRD=true`, the agent applies only the fields it owns, so
+labels and annotations that Argo CD, Flux or `kubectl apply` set on the
+CRD survive restarts.
+
+`deploy/chart/rbac_test.go` renders this role and checks it with the
+upstream RBAC rule matcher: every call the collectors make is allowed, and
+`nodes/proxy`, `pods/log`, `pods/exec`, other CRDs, other ClusterReadiness
+objects, `watch`, and Secrets with the toggle off are denied.
+
+## Target versions
+
+The chart never renders the `ClusterReadiness` object; the agent creates
+it. `agent.targets` is passed to the agent as `--targets`, and while it is
+non-empty the agent resets `spec.targets` to it every tick, so the Helm
+value wins over `kubectl edit`. Values are `MAJOR.MINOR` (`1.37`), the
+format the CRD accepts; the schema rejects `v1.37` and `1.37.2`. Changing
+it with `helm upgrade` touches only the agent Deployment. With
+`agent.targets` empty, set targets on the object directly:
+
+    kubectl patch ucr cluster --type merge -p '{"spec":{"targets":["1.37"]}}'
+
+Emptying `agent.targets` after it was set leaves `spec.targets` at the last
+list (an empty flag means "leave the object alone"). To return to the
+default next minor, clear it with the same command and `"targets":[]`.
+
+Upgrading from a chart version that rendered the object (agent.targets
+was set): Helm deletes it as no longer part of the release, and the agent
+recreates it with the same targets on a later tick. That can take up to
+`agent.interval` (10m by default) when the new agent pod ticks before Helm
+deletes the old object.
+
+## Secrets
+
+Tokens and webhook URLs reach the containers only as environment variables
+from `secretKeyRef`, never as arguments, and never appear in a Deployment.
+
+| Env var | Secret key | Source |
+|---|---|---|
+| `UPGRADESCOPE_INGEST_TOKEN` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` (optional key without the agent) |
+| `UPGRADESCOPE_READ_TOKEN` (server) | `readToken` | `server.readToken`, or `server.existingSecret` with `server.readTokenFromSecret=true` |
+| `UPGRADESCOPE_ADMIN_TOKEN` (server) | `adminToken` | `server.adminToken`, or `server.existingSecret` with `server.adminTokenFromSecret=true` |
+| `UPGRADESCOPE_DB_URL` (server) | `server.database.key` | `server.database.existingSecret` (Postgres) |
+| `UPGRADESCOPE_SLACK_WEBHOOK` (server) | `slackWebhook` | `server.slackWebhook`, or optional key of `server.existingSecret` |
+| `UPGRADESCOPE_WEBHOOK_URL` (server) | `webhook` | `server.webhook`, or optional key of `server.existingSecret` |
+| `UPGRADESCOPE_WEBHOOK_SECRET` (server) | `webhookSecret` | `server.webhookSecret`, or optional key of `server.existingSecret` |
+| `UPGRADESCOPE_SERVER_TOKEN` (agent) | `serverToken`, or the server's `ingestToken` | `agent.existingSecret`, `agent.serverToken`, else the in-chart server's Secret |
+
+`server.existingSecret` alone is enough for a combined install: the server
+and the in-chart agent both use its `ingestToken` key.
+
+## Read API exposure
+
+With `server.enabled=true` and no read token, the read API is
+**unauthenticated** behind the ClusterIP Service. Set `server.readToken`
+(or `readTokenFromSecret`) before exposing it via Ingress/LoadBalancer;
+`server.ingress.enabled` refuses to render without one unless
+`server.ingress.allowAnonymousRead=true` says an authenticating layer
+(oauth2-proxy, an identity-aware proxy) fronts it.
+`networkPolicy.enabled=true` admits traffic to the server only from this
+release's agent and the peers in `networkPolicy.serverIngressFrom`.
+
+The server also serves the web dashboard at `/` (images built from the
+repo Dockerfile embed it). Static assets are unauthenticated; every API
+call the dashboard makes carries the read token you set in its header
+settings, so the read token still protects all data.
+
+## Production settings
+
+- Private registry: `imagePullSecrets: [{name: regcred}]`.
+- Scheduling, per component (`agent.*`, `server.*`): `nodeSelector`,
+  `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`,
+  `podLabels`, `resources`.
+- Extra flags, env and mounts: `extraArgs`, `extraEnv`, `extraVolumes`,
+  `extraVolumeMounts`.
+- Server behind a private CA: mount the CA bundle into the agent and set
+  `SSL_CERT_DIR` to its directory; Go adds those certificates to the
+  image's system roots (example in `values.yaml`).
+- OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
+  them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`
+  and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.
+  `runAsNonRoot` and the `RuntimeDefault` seccomp profile stay.
+- The server runs under its own ServiceAccount and mounts no API token.
+- `values.schema.json` rejects unknown keys, intervals under one minute
+  (`agent.interval` takes any Go duration of at least `1m`: `10m`, `90s`,
+  `1.5h`) and malformed targets (`agent.targets` must be `MAJOR.MINOR`) at
+  render time.
+
+## Uninstall
+
+    helm -n upgradescope uninstall upgradescope
+
+Helm leaves CRDs in place by design (`crds/` semantics), and the
+`ClusterReadiness` object the agent created stays too. Full removal:
+
+    kubectl delete crd clusterreadinesses.upgradescope.dev
+
+That deletes the CRD and any `ClusterReadiness` objects. Everything else
+(Deployments, RBAC, Secrets, Service, PVC) is removed by `helm uninstall`;
+the server PVC is deleted with the release because it is chart-managed.
+
+## Values
+
+Generated from the comments in `values.yaml` (`make helm-docs`).
+
+{{ template "upgradescope.valuesTable" . }}

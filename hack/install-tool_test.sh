@@ -41,6 +41,8 @@ expect "tarball checksum mismatch fails" 1 "sha256 mismatch for kubeconform" kub
   UPGRADESCOPE_TOOL_URL="file://$work/junk"
 expect "oras tarball checksum mismatch fails" 1 "sha256 mismatch for oras" oras \
   UPGRADESCOPE_TOOL_URL="file://$work/junk"
+expect "helm-docs tarball checksum mismatch fails" 1 "sha256 mismatch for helm-docs" helm-docs \
+  UPGRADESCOPE_TOOL_URL="file://$work/junk"
 
 
 # The printed path must work from any directory: release.yml cds into
