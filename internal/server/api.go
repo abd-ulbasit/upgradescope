@@ -801,7 +801,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, reportResponse{withTeams(rep), meta})
+	writeJSON(w, http.StatusOK, reportResponse{s.versioned(withTeams(rep)), meta})
 }
 
 // handleFindings: GET /api/v1/clusters/{id}/findings?target=&severity=&category=

@@ -185,6 +185,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	rep, warnings := s.suppressGate(engine.Evaluate(inv, s.cfg.KB, target, s.now()), rules)
 	releaseSlot()
 	resp := gateResult(rep, baseline, introduced)
+	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings
 	w.Header().Set("X-Upgradescope-Verdict", string(resp.Verdict))
 	status := http.StatusOK

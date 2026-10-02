@@ -670,12 +670,23 @@ Team name to score; findings with no team are under `unattributed`.
 
 Type: map of [TeamScore](#teamscore).
 
+### ReportEnvelope
+
+The first two fields of every report-shaped response (a cluster's report and the gate's JSON answer), as of `scan --output json`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `schemaVersion` | `1` | yes | The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy). |
+| `toolVersion` | string | yes | The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning. |
+
 ### ReportFields
 
 The engine's report, as `scan --output json` writes it.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `schemaVersion` | `1` | yes | The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy). |
+| `toolVersion` | string | yes | The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning. |
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |
@@ -726,6 +737,8 @@ The report's fields other than its findings.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `schemaVersion` | `1` | yes | The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy). |
+| `toolVersion` | string | yes | The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning. |
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | — |
@@ -864,6 +877,8 @@ The report's fields other than its findings.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `schemaVersion` | `1` | yes | The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy). |
+| `toolVersion` | string | yes | The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning. |
 | `clusterId` | string | yes | — |
 | `target` | [Target](#target) | yes | — |
 | `serverVersion` | string | no | The kube-apiserver gitVersion the target was judged against; absent for manifests. |

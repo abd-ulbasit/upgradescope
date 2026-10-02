@@ -792,9 +792,17 @@ components:
       type: object
       description: Team name to score; findings with no team are under `unattributed`.
       additionalProperties: {$ref: "#/components/schemas/TeamScore"}
+    ReportEnvelope:
+      type: object
+      description: "The first two fields of every report-shaped response (a cluster's report and the gate's JSON answer), as of `scan --output json`."
+      required: [schemaVersion, toolVersion]
+      properties:
+        schemaVersion: {type: integer, const: 1, description: "The version of the report's shape. Within it fields are only added, never renamed, removed, retyped or given a new meaning; a breaking change bumps it (see the compatibility policy)."}
+        toolVersion: {type: string, description: "The server build that wrote the response, also for a stored evaluation. Informational, no compatibility meaning."}
     ReportFields:
       description: The engine's report, as `scan --output json` writes it.
       allOf:
+        - {$ref: "#/components/schemas/ReportEnvelope"}
         - {$ref: "#/components/schemas/ReportBase"}
         - type: object
           required: [findings]
@@ -940,6 +948,7 @@ components:
             source: {type: string, enum: [manifest, cluster], description: "manifest: introduced by the posted manifests; cluster: the cluster already has it."}
     GateResponse:
       allOf:
+        - {$ref: "#/components/schemas/ReportEnvelope"}
         - {$ref: "#/components/schemas/ReportBase"}
         - type: object
           required: [findings, suppressedCount]
