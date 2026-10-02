@@ -107,6 +107,28 @@ func TestNewClients(t *testing.T) {
 	}
 }
 
+// client-go's default client-side limit (5 QPS, burst 10) would make the
+// Helm collector's one GET per release take a minute on a cluster with
+// 300 releases. A limit the caller sets is kept.
+func TestNewClientsRaisesDefaultRateLimit(t *testing.T) {
+	c, err := NewClients(&rest.Config{Host: "https://127.0.0.1:6443"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, rc := range map[string]rest.Interface{"core": c.Kube.CoreV1().RESTClient(), "rest": c.RESTClient} {
+		if qps := rc.GetRateLimiter().QPS(); qps != clientQPS {
+			t.Errorf("%s client QPS = %v, want %v", name, qps, clientQPS)
+		}
+	}
+	cfg := &rest.Config{Host: "https://127.0.0.1:6443", QPS: 7, Burst: 9}
+	if c, err = NewClients(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if qps := c.Kube.CoreV1().RESTClient().GetRateLimiter().QPS(); qps != 7 || cfg.QPS != 7 {
+		t.Errorf("QPS = %v (caller's cfg %v), want the caller's 7 kept and cfg untouched", qps, cfg.QPS)
+	}
+}
+
 // recordWarnings stands in for client-go's default warning handler, which
 // prints every apiserver Warning header to stderr as a klog line.
 type recordWarnings struct{ got *[]string }

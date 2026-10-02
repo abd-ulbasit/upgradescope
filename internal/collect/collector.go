@@ -37,6 +37,16 @@ type Options struct {
 // never be read in one unbounded request.
 const listPageSize = 500
 
+// clientQPS and clientBurst replace client-go's client-side rate limit
+// (5 QPS, burst 10) when the caller sets none: the Helm collector makes
+// one GET per release, which at 5 QPS adds a minute for 300 releases.
+// These are kubectl's defaults; apiserver priority and fairness still
+// protects the server.
+const (
+	clientQPS   = 50
+	clientBurst = 300
+)
+
 // step is one independently-degradable sub-collector bound to a capability.
 type step struct {
 	cap inventory.Capability
@@ -94,10 +104,10 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			return collectVersions(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv)
 		}},
 		{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
-			if c.Kube == nil {
-				return errors.New("kubernetes client not configured")
+			if c.Kube == nil || c.Metadata == nil {
+				return errors.New("kubernetes/metadata client not configured")
 			}
-			return collectHelm(ctx, c.Kube, inv)
+			return collectHelm(ctx, c.Kube, c.Metadata, k.APILifecycle, inv)
 		}},
 		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.RESTClient == nil {
@@ -125,11 +135,15 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 //
 // API warning headers are discarded: client-go's default handler prints
 // each one to stderr as a klog line, above the report and in agent logs,
-// and the deprecations they announce are already findings. The caller's
-// cfg is not modified.
+// and the deprecations they announce are already findings. Without a
+// caller-set rate limit, clientQPS/clientBurst apply. The caller's cfg is
+// not modified.
 func NewClients(cfg *rest.Config) (Clients, error) {
 	cfg = rest.CopyConfig(cfg)
 	cfg.WarningHandlerWithContext = rest.NoWarnings{}
+	if cfg.QPS == 0 && cfg.RateLimiter == nil {
+		cfg.QPS, cfg.Burst = clientQPS, clientBurst
+	}
 	kube, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return Clients{}, fmt.Errorf("build kubernetes client: %w", err)

@@ -49,13 +49,17 @@ watches.
 | `get`/`list` namespaces, nodes, pods | Cluster ID (kube-system UID), team labels, kubelet versions, control-plane pods, add-on images |
 | `get` `/version`, `/metrics` | Server version; `apiserver_requested_deprecated_apis` (who still calls deprecated APIs) |
 | `get`/`list` on each group/resource the KB flags as deprecated or removed | Counting objects still stored at deprecated APIs. Generated into `files/kb-rbac-rules.yaml`; `rbac_test.go` fails when it drifts from the embedded KB |
-| `get`/`list` Secrets (only with `rbac.helmSecrets=true`, the default) | Helm release detection reads Secrets of type `helm.sh/release.v1`. RBAC cannot filter by type, so **this lets the agent read every Secret in the cluster** |
+| `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
 | `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.dev` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
 | `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
 
-`rbac.helmSecrets=false` removes the Secret rule. The Helm capability is
-then not assessed, with the forbidden Secret list as the reason, and the
-report has no Helm chart findings; everything else works. `rbac.create=false` lets you bind a
+`rbac.helmSecrets=false` removes the Secret and ConfigMap rules. The Helm
+capability is then not assessed, with the forbidden lists as the reason,
+and the report has no Helm chart findings; everything else works. Releases
+kept by Helm's sql driver, and charts that GitOps tools render with
+`helm template` (Argo CD), have no release object in the cluster, so Helm
+chart checks never see them; add-on detection from container images still
+does. `rbac.create=false` lets you bind a
 role of your own; collectors without access degrade the same way.
 
 The agent cannot create CRDs: `crds/` installs the `ClusterReadiness` CRD.

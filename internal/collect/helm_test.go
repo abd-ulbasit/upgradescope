@@ -5,86 +5,284 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	metadatafake "k8s.io/client-go/metadata/fake"
+	clienttesting "k8s.io/client-go/testing"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/internal/sarif"
+	"github.com/abd-ulbasit/upgradescope/registry"
 )
 
-// helmSecret builds a Secret exactly as Helm v3 stores releases: the
-// "release" key holds base64(gzip(JSON)) — client-go strips the outer
-// Secret base64, leaving this inner base64 string.
-func helmSecret(t *testing.T, ns, release string, rev int, chartName, chartVersion, appVersion, status string) *corev1.Secret {
+// helmRev is one stored Helm release revision.
+type helmRev struct {
+	ns, release  string
+	rev          int
+	status       string
+	chart        string
+	chartVersion string
+	appVersion   string
+	kubeVersion  string
+	manifest     string
+}
+
+// payload encodes the revision exactly as Helm v3 stores it:
+// base64(gzip(JSON)). client-go strips a Secret's outer base64, leaving
+// this inner base64 string; a ConfigMap stores it as is.
+func (r helmRev) payload(t *testing.T) []byte {
 	t.Helper()
-	payload := fmt.Sprintf(
-		`{"name":%q,"info":{"status":%q},"chart":{"metadata":{"name":%q,"version":%q,"appVersion":%q}}}`,
-		release, status, chartName, chartVersion, appVersion)
+	doc, err := json.Marshal(map[string]any{
+		"name": r.release, "version": r.rev, "namespace": r.ns,
+		"info": map[string]any{"status": r.status},
+		"chart": map[string]any{"metadata": map[string]any{
+			"name": r.chart, "version": r.chartVersion, "appVersion": r.appVersion, "kubeVersion": r.kubeVersion,
+		}},
+		"manifest": r.manifest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var gz bytes.Buffer
 	zw := gzip.NewWriter(&gz)
-	if _, err := zw.Write([]byte(payload)); err != nil {
+	if _, err := zw.Write(doc); err != nil {
 		t.Fatal(err)
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("sh.helm.release.v1.%s.v%d", release, rev),
-			Namespace: ns,
+	return []byte(base64.StdEncoding.EncodeToString(gz.Bytes()))
+}
+
+// objectMeta is the storage object's metadata as Helm's secrets and
+// configmaps drivers write it.
+func (r helmRev) objectMeta() metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Name:      fmt.Sprintf("sh.helm.release.v1.%s.v%d", r.release, r.rev),
+		Namespace: r.ns,
+		Labels: map[string]string{
+			"owner": "helm", "name": r.release, "status": r.status, "version": fmt.Sprint(r.rev),
+			"modifiedAt": "1700000000",
 		},
-		Type: "helm.sh/release.v1",
-		Data: map[string][]byte{"release": []byte(base64.StdEncoding.EncodeToString(gz.Bytes()))},
 	}
 }
 
+func helmSecret(t *testing.T, r helmRev) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: r.objectMeta(),
+		Type:       "helm.sh/release.v1",
+		Data:       map[string][]byte{"release": r.payload(t)},
+	}
+}
+
+func helmConfigMap(t *testing.T, r helmRev) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: r.objectMeta(),
+		Data:       map[string]string{"release": string(r.payload(t))},
+	}
+}
+
+// helmClients serves objs from a typed fake (GETs) and their metadata from
+// a metadata fake (the metadata-only lists), as one apiserver would.
+func helmClients(t *testing.T, objs ...runtime.Object) (*kubefake.Clientset, *metadatafake.FakeMetadataClient) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	utilruntime.Must(metav1.AddMetaToScheme(scheme))
+	var metas []runtime.Object
+	for _, o := range objs {
+		var tm metav1.TypeMeta
+		var om metav1.ObjectMeta
+		switch v := o.(type) {
+		case *corev1.Secret:
+			tm, om = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}, v.ObjectMeta
+		case *corev1.ConfigMap:
+			tm, om = metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, v.ObjectMeta
+		default:
+			t.Fatalf("unsupported object %T", o)
+		}
+		metas = append(metas, &metav1.PartialObjectMetadata{TypeMeta: tm, ObjectMeta: om})
+	}
+	return kubefake.NewClientset(objs...), metadatafake.NewSimpleMetadataClient(scheme, metas...)
+}
+
+// collectHelmFrom runs collectHelm against objs with no KB lifecycle data.
+func collectHelmFrom(t *testing.T, objs ...runtime.Object) (inventory.Inventory, error) {
+	t.Helper()
+	kube, meta := helmClients(t, objs...)
+	var inv inventory.Inventory
+	err := collectHelm(context.Background(), kube, meta, nil, &inv)
+	return inv, err
+}
+
 func TestCollectHelmLatestRevisionPerRelease(t *testing.T) {
-	cs := kubefake.NewClientset(
-		helmSecret(t, "ingress-nginx", "ingress-nginx", 1, "ingress-nginx", "4.7.0", "1.8.1", "superseded"),
-		helmSecret(t, "ingress-nginx", "ingress-nginx", 2, "ingress-nginx", "4.7.1", "1.8.4", "deployed"),
-		helmSecret(t, "cert-manager", "cert-manager", 1, "cert-manager", "v1.13.0", "v1.13.0", "deployed"),
+	inv, err := collectHelmFrom(t,
+		helmSecret(t, helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: 1, status: "superseded", chart: "ingress-nginx", chartVersion: "4.7.0", appVersion: "1.8.1"}),
+		helmSecret(t, helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: 2, status: "deployed", chart: "ingress-nginx", chartVersion: "4.7.1", appVersion: "1.8.4"}),
+		helmSecret(t, helmRev{ns: "cert-manager", release: "cert-manager", rev: 1, status: "deployed", chart: "cert-manager", chartVersion: "v1.13.0", appVersion: "v1.13.0"}),
 		&corev1.Secret{ // not a helm secret: must be ignored
 			ObjectMeta: metav1.ObjectMeta{Name: "db-creds", Namespace: "shop"},
 			Type:       corev1.SecretTypeOpaque,
 			Data:       map[string][]byte{"password": []byte("hunter2")},
 		},
 	)
-
-	var inv inventory.Inventory
-	if err := collectHelm(context.Background(), cs, &inv); err != nil {
+	if err != nil && !errors.As(err, new(partialError)) {
 		t.Fatal(err)
 	}
 	want := []inventory.HelmRelease{
-		{Name: "cert-manager", Namespace: "cert-manager", ChartName: "cert-manager", ChartVersion: "v1.13.0", AppVersion: "v1.13.0", Status: "deployed"},
-		{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", AppVersion: "1.8.4", Status: "deployed"},
+		{Name: "cert-manager", Namespace: "cert-manager", ChartName: "cert-manager", ChartVersion: "v1.13.0", AppVersion: "v1.13.0", Status: "deployed", Revision: 1},
+		{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", AppVersion: "1.8.4", Status: "deployed", Revision: 2},
 	}
 	if !reflect.DeepEqual(inv.HelmReleases, want) {
 		t.Errorf("releases = %#v\nwant      %#v", inv.HelmReleases, want)
 	}
 }
 
-func TestCollectHelmSkipsCorruptSecretKeepsValid(t *testing.T) {
-	cs := kubefake.NewClientset(
-		helmSecret(t, "cert-manager", "cert-manager", 1, "cert-manager", "v1.13.0", "v1.13.0", "deployed"),
-		&corev1.Secret{ // helm-typed but corrupt payload: skipped, not fatal
-			ObjectMeta: metav1.ObjectMeta{Name: "sh.helm.release.v1.broken.v1", Namespace: "shop"},
-			Type:       "helm.sh/release.v1",
-			Data:       map[string][]byte{"release": []byte("%%% not base64 %%%")},
-		},
-		helmSecret(t, "ingress-nginx", "ingress-nginx", 1, "ingress-nginx", "4.7.1", "1.8.4", "deployed"),
-	)
-
+// #24: listing is metadata-only and only the chosen revision's Secret is
+// fetched and decoded, so memory no longer grows with release history.
+func TestCollectHelmFetchesOnlyTheChosenRevision(t *testing.T) {
+	var objs []runtime.Object
+	for rev := 1; rev <= 10; rev++ {
+		status := "superseded"
+		if rev == 10 {
+			status = "deployed"
+		}
+		for _, rel := range []string{"a", "b"} {
+			objs = append(objs, helmSecret(t, helmRev{ns: "apps", release: rel, rev: rev, status: status, chart: rel, chartVersion: fmt.Sprintf("1.0.%d", rev)}))
+		}
+	}
+	kube, meta := helmClients(t, objs...)
 	var inv inventory.Inventory
-	if err := collectHelm(context.Background(), cs, &inv); err != nil {
+	if err := collectHelm(context.Background(), kube, meta, nil, &inv); err != nil && !errors.As(err, new(partialError)) {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, a := range kube.Actions() {
+		switch a := a.(type) {
+		case clienttesting.GetAction:
+			got = append(got, a.GetVerb()+" "+a.GetResource().Resource+" "+a.GetName())
+		default:
+			got = append(got, a.GetVerb()+" "+a.GetResource().Resource)
+		}
+	}
+	slices.Sort(got)
+	want := []string{"get secrets sh.helm.release.v1.a.v10", "get secrets sh.helm.release.v1.b.v10"}
+	if !slices.Equal(got, want) {
+		t.Errorf("typed-client requests = %v\nwant %v (lists must be metadata-only)", got, want)
+	}
+	if len(inv.HelmReleases) != 2 || inv.HelmReleases[0].ChartVersion != "1.0.10" || inv.HelmReleases[1].ChartVersion != "1.0.10" {
+		t.Errorf("releases = %+v, want a and b at chart 1.0.10", inv.HelmReleases)
+	}
+	var listed []string
+	for _, a := range meta.Actions() {
+		if l, ok := a.(clienttesting.ListAction); ok {
+			listed = append(listed, a.GetResource().Resource+"?"+l.GetListRestrictions().Labels.String())
+		}
+	}
+	slices.Sort(listed)
+	if want := []string{"configmaps?owner=helm", "secrets?owner=helm"}; !slices.Equal(listed, want) {
+		t.Errorf("metadata lists = %v, want %v", listed, want)
+	}
+}
+
+// #25: which revision, if any, is installed. helm uninstall --keep-history
+// marks the newest revision uninstalled and keeps the Secrets; a failed
+// upgrade leaves the previous successful revision's resources running.
+func TestCollectHelmInstalledRevision(t *testing.T) {
+	rev := func(n int, status, chartVersion string) helmRev {
+		return helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: n, status: status, chart: "ingress-nginx", chartVersion: chartVersion, appVersion: chartVersion}
+	}
+	cases := []struct {
+		name string
+		revs []helmRev
+		want string // chart version of the release reported; "" = not installed
+	}{
+		{"newest uninstalled (--keep-history)", []helmRev{rev(3, "superseded", "4.7.0"), rev(4, "uninstalled", "4.8.0")}, ""},
+		{"newest uninstalling", []helmRev{rev(3, "superseded", "4.7.0"), rev(4, "uninstalling", "4.8.0")}, ""},
+		{"newest failed, earlier deployed", []helmRev{rev(1, "superseded", "4.6.0"), rev(2, "deployed", "4.7.0"), rev(3, "failed", "4.8.0")}, "4.7.0"},
+		{"newest failed, earlier superseded", []helmRev{rev(1, "superseded", "4.6.0"), rev(2, "failed", "4.7.0"), rev(3, "failed", "4.8.0")}, "4.6.0"},
+		{"failed install, nothing earlier", []helmRev{rev(1, "failed", "4.8.0")}, ""},
+		{"newest pending-upgrade is present", []helmRev{rev(1, "deployed", "4.7.0"), rev(2, "pending-upgrade", "4.8.0")}, "4.8.0"},
+		{"newest pending-install is present", []helmRev{rev(1, "pending-install", "4.8.0")}, "4.8.0"},
+		{"newest pending-rollback is present", []helmRev{rev(1, "superseded", "4.7.0"), rev(2, "superseded", "4.8.0"), rev(3, "pending-rollback", "4.7.0")}, "4.7.0"},
+		{"revision 10 is newer than revision 9", []helmRev{rev(9, "superseded", "4.7.0"), rev(10, "deployed", "4.8.0")}, "4.8.0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var objs []runtime.Object
+			for _, r := range tc.revs {
+				objs = append(objs, helmSecret(t, r))
+			}
+			inv, err := collectHelmFrom(t, objs...)
+			if err != nil && !errors.As(err, new(partialError)) {
+				t.Fatal(err)
+			}
+			switch {
+			case tc.want == "" && len(inv.HelmReleases) != 0:
+				t.Errorf("releases = %+v, want none: nothing is installed", inv.HelmReleases)
+			case tc.want != "" && (len(inv.HelmReleases) != 1 || inv.HelmReleases[0].ChartVersion != tc.want):
+				t.Errorf("releases = %+v, want one at chart %s", inv.HelmReleases, tc.want)
+			}
+		})
+	}
+}
+
+// #25 end to end: ingress-nginx removed with --keep-history leaves no
+// add-on and no EOL blocker.
+func TestUninstalledHelmReleaseRaisesNoEOLBlocker(t *testing.T) {
+	inv, err := collectHelmFrom(t,
+		helmSecret(t, helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: 3, status: "superseded", chart: "ingress-nginx", chartVersion: "4.11.3", appVersion: "1.11.3"}),
+		helmSecret(t, helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: 4, status: "uninstalled", chart: "ingress-nginx", chartVersion: "4.11.3", appVersion: "1.11.3"}),
+	)
+	if err != nil && !errors.As(err, new(partialError)) {
+		t.Fatal(err)
+	}
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv.AddOns, _ = matchAddOns(nil, inv.HelmReleases, addons)
+	inv.ServerVersion = "v1.33.1"
+	inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
+		inventory.CapVersions: {Available: true}, inventory.CapAPIUsage: {Available: true},
+		inventory.CapHelm: {Available: true}, inventory.CapAddOns: {Available: true},
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 99}}
+	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 34}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	if len(inv.AddOns) != 0 || len(rep.Findings) != 0 || !rep.Ready {
+		t.Errorf("add-ons %+v, findings %+v, ready %v; want none, none, true", inv.AddOns, rep.Findings, rep.Ready)
+	}
+}
+
+func TestCollectHelmSkipsCorruptSecretKeepsValid(t *testing.T) {
+	corrupt := helmSecret(t, helmRev{ns: "shop", release: "broken", rev: 1, status: "deployed"})
+	corrupt.Data["release"] = []byte("%%% not base64 %%%") // helm-labelled but corrupt payload: skipped, not fatal
+	inv, err := collectHelmFrom(t,
+		helmSecret(t, helmRev{ns: "cert-manager", release: "cert-manager", rev: 1, status: "deployed", chart: "cert-manager", chartVersion: "v1.13.0", appVersion: "v1.13.0"}),
+		corrupt,
+		helmSecret(t, helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: 1, status: "deployed", chart: "ingress-nginx", chartVersion: "4.7.1", appVersion: "1.8.4"}),
+	)
+	if err != nil && !errors.As(err, new(partialError)) {
 		t.Fatalf("one corrupt secret must not fail the capability: %v", err)
 	}
 	want := []inventory.HelmRelease{
-		{Name: "cert-manager", Namespace: "cert-manager", ChartName: "cert-manager", ChartVersion: "v1.13.0", AppVersion: "v1.13.0", Status: "deployed"},
-		{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", AppVersion: "1.8.4", Status: "deployed"},
+		{Name: "cert-manager", Namespace: "cert-manager", ChartName: "cert-manager", ChartVersion: "v1.13.0", AppVersion: "v1.13.0", Status: "deployed", Revision: 1},
+		{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx", ChartVersion: "4.7.1", AppVersion: "1.8.4", Status: "deployed", Revision: 1},
 	}
 	if !reflect.DeepEqual(inv.HelmReleases, want) {
 		t.Errorf("releases = %#v\nwant      %#v (valid secrets must survive the corrupt one)", inv.HelmReleases, want)
@@ -94,5 +292,216 @@ func TestCollectHelmSkipsCorruptSecretKeepsValid(t *testing.T) {
 func TestDecodeHelmReleaseRejectsNonGzip(t *testing.T) {
 	if _, err := decodeHelmRelease([]byte(base64.StdEncoding.EncodeToString([]byte("plain")))); err == nil {
 		t.Fatal("want error for payload without gzip magic bytes")
+	}
+}
+
+// The chart's kubeVersion constraint is kept verbatim, and the stored
+// manifest is parsed with the --files parser: objects at APIs the KB flags
+// are kept per GVK with their name, manifest line and template; others are
+// dropped.
+func TestCollectHelmChartKubeVersionAndManifestAPIs(t *testing.T) {
+	manifest := `---
+# Source: apf/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: settings
+---
+# Source: apf/templates/flowschema.yaml
+apiVersion: flowcontrol.apiserver.k8s.io/v1beta3
+kind: FlowSchema
+metadata:
+  name: batch-jobs
+`
+	kube, meta := helmClients(t, helmSecret(t, helmRev{ns: "platform", release: "apf", rev: 2, status: "deployed",
+		chart: "apf", chartVersion: "0.3.0", kubeVersion: ">=1.21.0-0 <1.33.0-0", manifest: manifest}))
+	v := func(m int) *inventory.Version { return &inventory.Version{Major: 1, Minor: m} }
+	lifecycle := []kb.APILifecycleEntry{
+		{Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3", Kind: "FlowSchema", Introduced: *v(26), Deprecated: v(29), Removed: v(32)},
+		{Group: "flowcontrol.apiserver.k8s.io", Version: "v1", Kind: "FlowSchema", Introduced: *v(29)},
+	}
+	var inv inventory.Inventory
+	if err := collectHelm(context.Background(), kube, meta, lifecycle, &inv); err != nil && !errors.As(err, new(partialError)) {
+		t.Fatal(err)
+	}
+	want := []inventory.HelmRelease{{
+		Name: "apf", Namespace: "platform", ChartName: "apf", ChartVersion: "0.3.0",
+		KubeVersion: ">=1.21.0-0 <1.33.0-0", Status: "deployed", Revision: 2,
+		ManifestAPIs: []inventory.APIUsage{{
+			Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3", Kind: "FlowSchema", Count: 1,
+			Namespaces: map[string]int{"": 1},
+			Objects:    []inventory.ObjectRef{{Name: "batch-jobs", Line: 9, RenderedFrom: "apf/templates/flowschema.yaml"}},
+		}},
+	}}
+	if !reflect.DeepEqual(inv.HelmReleases, want) {
+		t.Errorf("releases = %#v\nwant      %#v", inv.HelmReleases, want)
+	}
+}
+
+// #26 end to end, with the embedded KB: on a cluster that no longer serves
+// flowcontrol v1beta3 (so the live scan sees nothing), a release whose
+// stored manifest holds a v1beta3 FlowSchema blocks, and the report names
+// the release.
+func TestHelmManifestWithRemovedAPIBlocksEndToEnd(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kube, meta := helmClients(t, helmSecret(t, helmRev{ns: "platform", release: "apf", rev: 4, status: "deployed", chart: "apf", chartVersion: "0.3.0",
+		manifest: "# Source: apf/templates/fs.yaml\napiVersion: flowcontrol.apiserver.k8s.io/v1beta3\nkind: FlowSchema\nmetadata:\n  name: batch-jobs\n"}))
+	inv := inventory.Inventory{ServerVersion: "v1.32.4", Capabilities: map[inventory.Capability]inventory.CapabilityStatus{
+		inventory.CapVersions: {Available: true}, inventory.CapAPIUsage: {Available: true},
+	}}
+	if err := collectHelm(context.Background(), kube, meta, k.APILifecycle, &inv); err != nil && !errors.As(err, new(partialError)) {
+		t.Fatal(err)
+	}
+	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 33}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	if rep.Ready || len(rep.Findings) != 1 || rep.Findings[0].Severity != engine.SevBlocker {
+		t.Fatalf("ready %v, findings %+v; want one blocker", rep.Ready, rep.Findings)
+	}
+	out, err := json.Marshal(rep.Findings[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"key":"removed-api/helm-release/platform/apf"`, "release platform/apf", `"name":"batch-jobs"`, "flowcontrol.apiserver.k8s.io/v1beta3 FlowSchema"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("finding JSON %s\nmissing %s", out, want)
+		}
+	}
+	// SARIF has no file to anchor it to, so it is a notification that
+	// still names the release.
+	var doc bytes.Buffer
+	if err := sarif.Write(&doc, rep, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"findingKey": "removed-api/helm-release/platform/apf"`, "helm upgrade of release platform/apf will fail"} {
+		if !strings.Contains(doc.String(), want) {
+			t.Errorf("SARIF %s\nmissing %s", doc.String(), want)
+		}
+	}
+}
+
+// #70: releases stored by Helm's configmap driver (HELM_DRIVER=configmap)
+// are read too, and the capability reason says how many came from where.
+func TestCollectHelmReadsConfigMapDriver(t *testing.T) {
+	inv, err := collectHelmFrom(t,
+		helmSecret(t, helmRev{ns: "a", release: "from-secret", rev: 1, status: "deployed", chart: "x", chartVersion: "1.0.0"}),
+		helmConfigMap(t, helmRev{ns: "b", release: "from-cm", rev: 1, status: "superseded", chart: "y", chartVersion: "2.0.0"}),
+		helmConfigMap(t, helmRev{ns: "b", release: "from-cm", rev: 2, status: "deployed", chart: "y", chartVersion: "2.1.0"}),
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "kube-root-ca.crt", Namespace: "b"}, Data: map[string]string{"ca.crt": "x"}},
+	)
+	var pe partialError
+	if !errors.As(err, &pe) || pe.Error() != "helm releases: 1 via secrets, 1 via configmaps" {
+		t.Errorf("err = %v, want partialError %q", err, "helm releases: 1 via secrets, 1 via configmaps")
+	}
+	want := []inventory.HelmRelease{
+		{Name: "from-secret", Namespace: "a", ChartName: "x", ChartVersion: "1.0.0", Status: "deployed", Revision: 1},
+		{Name: "from-cm", Namespace: "b", ChartName: "y", ChartVersion: "2.1.0", Status: "deployed", Revision: 2},
+	}
+	if !reflect.DeepEqual(inv.HelmReleases, want) {
+		t.Errorf("releases = %#v\nwant      %#v", inv.HelmReleases, want)
+	}
+}
+
+// A release with history in both drivers (HELM_DRIVER changed between
+// installs) is read from the secrets driver, Helm's default, even when the
+// configmaps history is newer by number: revision numbers of two separate
+// histories are not comparable, and a stale higher one would otherwise win.
+func TestCollectHelmPrefersSecretsDriver(t *testing.T) {
+	inv, err := collectHelmFrom(t,
+		helmSecret(t, helmRev{ns: "a", release: "r", rev: 2, status: "deployed", chart: "x", chartVersion: "2.0.0"}),
+		helmConfigMap(t, helmRev{ns: "a", release: "r", rev: 7, status: "deployed", chart: "x", chartVersion: "1.0.0"}),
+		helmConfigMap(t, helmRev{ns: "a", release: "r", rev: 2, status: "superseded", chart: "x", chartVersion: "0.9.0"}),
+	)
+	var pe partialError
+	if !errors.As(err, &pe) || pe.Error() != "helm releases: 1 via secrets, 0 via configmaps" {
+		t.Errorf("err = %v, want partialError %q", err, "helm releases: 1 via secrets, 0 via configmaps")
+	}
+	want := []inventory.HelmRelease{{Name: "r", Namespace: "a", ChartName: "x", ChartVersion: "2.0.0", Status: "deployed", Revision: 2}}
+	if !reflect.DeepEqual(inv.HelmReleases, want) {
+		t.Errorf("releases = %#v\nwant      %#v", inv.HelmReleases, want)
+	}
+}
+
+// Each storage driver degrades on its own: a forbidden ConfigMap list
+// (a role that grants only Secrets) keeps the Secret releases; only when
+// every driver fails is the capability unavailable.
+func TestCollectHelmDegradesPerDriver(t *testing.T) {
+	forbid := func(meta *metadatafake.FakeMetadataClient, resource string) {
+		meta.PrependReactor("list", resource, func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: resource}, "", errors.New("RBAC"))
+		})
+	}
+	secret := helmSecret(t, helmRev{ns: "a", release: "r", rev: 1, status: "deployed", chart: "x", chartVersion: "1.0.0"})
+
+	kube, meta := helmClients(t, secret)
+	forbid(meta, "configmaps")
+	var inv inventory.Inventory
+	err := collectHelm(context.Background(), kube, meta, nil, &inv)
+	var pe partialError
+	if !errors.As(err, &pe) || !strings.HasPrefix(pe.Error(), "helm releases: 1 via secrets; configmaps not read: ") || !strings.Contains(pe.Error(), "forbidden") {
+		t.Errorf("err = %v, want a partialError counting the Secret release and naming the forbidden ConfigMap list", err)
+	}
+	if len(inv.HelmReleases) != 1 {
+		t.Errorf("releases = %+v, want the Secret release", inv.HelmReleases)
+	}
+
+	kube, meta = helmClients(t, secret)
+	forbid(meta, "configmaps")
+	forbid(meta, "secrets")
+	inv = inventory.Inventory{}
+	err = collectHelm(context.Background(), kube, meta, nil, &inv)
+	if err == nil || errors.As(err, &pe) || !strings.Contains(err.Error(), "secrets") || !strings.Contains(err.Error(), "configmaps") {
+		t.Errorf("err = %v, want a full failure naming both drivers", err)
+	}
+
+	// Secrets (Helm's default driver) forbidden, ConfigMaps readable but
+	// empty — the built-in view ClusterRole. Zero releases here says nothing
+	// about the cluster, so the capability must be unavailable (a gap in the
+	// report), not available with an unrendered reason.
+	kube, meta = helmClients(t)
+	forbid(meta, "secrets")
+	inv = inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+	runSteps(context.Background(), &inv, []step{{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
+		return collectHelm(ctx, kube, meta, nil, inv)
+	}}})
+	if st := inv.Capabilities[inventory.CapHelm]; st.Available || !strings.Contains(st.Reason, "0 via configmaps") || !strings.Contains(st.Reason, "secrets not read: ") {
+		t.Errorf("helm capability = %+v, want unavailable, naming both drivers", st)
+	}
+
+	// Secrets forbidden, a ConfigMap release readable: the release is kept
+	// (reads degrade per driver), but the default driver went unread, so
+	// the capability is still a gap.
+	cmRelease := helmConfigMap(t, helmRev{ns: "b", release: "c", rev: 1, status: "deployed", chart: "y", chartVersion: "2.0.0"})
+	kube, meta = helmClients(t, cmRelease)
+	forbid(meta, "secrets")
+	inv = inventory.Inventory{}
+	err = collectHelm(context.Background(), kube, meta, nil, &inv)
+	if err == nil || errors.As(err, &pe) || !strings.Contains(err.Error(), "1 via configmaps") || !strings.Contains(err.Error(), "secrets not read: ") {
+		t.Errorf("err = %v, want a full failure naming both drivers", err)
+	}
+	if len(inv.HelmReleases) != 1 || inv.HelmReleases[0].Name != "c" {
+		t.Errorf("releases = %+v, want the ConfigMap release kept", inv.HelmReleases)
+	}
+
+	// ConfigMaps forbidden and no Secret releases: nothing read while a
+	// driver failed is not "no releases".
+	kube, meta = helmClients(t)
+	forbid(meta, "configmaps")
+	inv = inventory.Inventory{}
+	err = collectHelm(context.Background(), kube, meta, nil, &inv)
+	if err == nil || errors.As(err, &pe) || !strings.Contains(err.Error(), "0 via secrets") || !strings.Contains(err.Error(), "configmaps not read: ") {
+		t.Errorf("err = %v, want a full failure naming both drivers", err)
+	}
+
+	// A role with list but not get: releases are seen but none can be read.
+	kube, meta = helmClients(t, secret)
+	kube.PrependReactor("get", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "sh.helm.release.v1.r.v1", errors.New("RBAC"))
+	})
+	inv = inventory.Inventory{}
+	err = collectHelm(context.Background(), kube, meta, nil, &inv)
+	if err == nil || errors.As(err, &pe) || !strings.Contains(err.Error(), "1 release(s) not read, first a/r: ") {
+		t.Errorf("err = %v, want a full failure: no listed release could be read", err)
 	}
 }

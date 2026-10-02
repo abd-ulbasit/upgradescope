@@ -297,7 +297,7 @@ var neverAllowed = []rbacv1.PolicyRule{
 	res("", "pods/attach", "get", "create"),
 	res("", "pods/portforward", "get", "create"),
 	res("", "serviceaccounts/token", "create"),
-	res("", "configmaps", "get", "list", "create"),
+	res("", "configmaps", "create", "update", "patch", "delete", "watch"),
 	res("", "pods", "watch", "create", "delete", "patch"),
 	res("apiextensions.k8s.io", "customresourcedefinitions", "create", "delete"),
 	named(res("apiextensions.k8s.io", "customresourcedefinitions", "update", "patch"), "certificates.cert-manager.io"),
@@ -329,7 +329,8 @@ func TestRenderedRBACDefault(t *testing.T) {
 	assertNoWildcards(t, rules)
 	assertAllowed(t, rules, collectorCalls(t)...)
 	assertAllowed(t, rules,
-		res("", "secrets", "get", "list"), // rbac.helmSecrets defaults on
+		res("", "secrets", "get", "list"),    // rbac.helmSecrets defaults on: Helm secrets driver
+		res("", "configmaps", "get", "list"), // and configmaps driver
 		named(res("apiextensions.k8s.io", "customresourcedefinitions", "get", "update", "patch"), ourCRD),
 	)
 	assertDenied(t, rules, neverAllowed...)
@@ -340,7 +341,7 @@ func TestRenderedRBACHelmSecretsOff(t *testing.T) {
 	rules := renderClusterRole(t, "rbac.helmSecrets=false")
 	assertNoWildcards(t, rules)
 	assertAllowed(t, rules, collectorCalls(t)...)
-	assertDenied(t, rules, res("", "secrets", "get", "list"))
+	assertDenied(t, rules, res("", "secrets", "get", "list"), res("", "configmaps", "get", "list"))
 	assertDenied(t, rules, neverAllowed...)
 }
 
