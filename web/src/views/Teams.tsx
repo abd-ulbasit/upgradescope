@@ -86,7 +86,10 @@ function defaultTarget({ targets, clusters }: FleetResponse): string | undefined
 }
 
 function TeamsTable({ data }: { data: FleetTeamsResponse }) {
-  const ids = new Map(data.evaluated.map((e) => [e.name, e.clusterId]));
+  // The rollup names clusters, but clusters are identified by UID and two
+  // can share a name: such a name gets no link rather than a wrong one.
+  const ids = new Map<string, number[]>();
+  for (const e of data.evaluated) ids.set(e.name, [...(ids.get(e.name) ?? []), e.clusterId]);
   const entries = Object.entries(data.teams).sort(
     ([an, a], [bn, b]) => a.worstScore - b.worstScore || an.localeCompare(bn),
   );
@@ -122,16 +125,25 @@ function TeamsTable({ data }: { data: FleetTeamsResponse }) {
                   </td>
                   <td className="cluster-links">
                     {agg.clusters.map((name) => {
-                      const id = ids.get(name);
-                      return id === undefined ? (
-                        <span key={name}>{name}</span>
-                      ) : (
+                      const matches = ids.get(name) ?? [];
+                      return matches.length === 1 ? (
                         <a
                           key={name}
-                          href={`#/cluster/${id}?target=${data.target}&team=${encodeURIComponent(team)}`}
+                          href={`#/cluster/${matches[0]}?target=${data.target}&team=${encodeURIComponent(team)}`}
                         >
                           {name}
                         </a>
+                      ) : (
+                        <span
+                          key={name}
+                          title={
+                            matches.length > 1
+                              ? `${matches.length} clusters are named ${name}; open them from the fleet view.`
+                              : undefined
+                          }
+                        >
+                          {name}
+                        </span>
                       );
                     })}
                   </td>

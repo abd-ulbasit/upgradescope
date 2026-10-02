@@ -12,9 +12,10 @@ const fleet: FleetResponse = {
 
 const teams: FleetTeamsResponse = {
   target: "1.35",
+  // Better team first, so the worst-first order below comes from the sort.
   teams: {
-    payments: { worstScore: 40, blockers: 3, clusters: ["prod-eu", "prod-us"] },
     platform: { worstScore: 90, blockers: 0, clusters: ["prod-eu"] },
+    payments: { worstScore: 40, blockers: 3, clusters: ["prod-eu", "prod-us"] },
   },
   evaluated: [
     { name: "prod-eu", clusterId: 1, source: "stored", evaluatedAt: "2026-10-01T12:00:00Z", snapshotId: 4 },
@@ -43,6 +44,29 @@ describe("Teams view", () => {
     expect(screen.getByText(/1 cluster computed as a what-if/)).toBeTruthy();
     expect(screen.getByText(/staging/)).toBeTruthy();
     expect(fetchedUrls(fetchMock)).toContain("api/v1/fleet/teams?target=1.35");
+  });
+
+  it("does not link a cluster name that more than one cluster shares", async () => {
+    mockApi({
+      "api/v1/fleet": fleet,
+      "api/v1/fleet/teams?target=1.35": {
+        ...teams,
+        evaluated: [
+          ...teams.evaluated,
+          { name: "prod-eu", clusterId: 7, source: "stored", evaluatedAt: "2026-10-01T12:00:00Z", snapshotId: 11 },
+        ],
+      },
+    });
+    render(<Teams />);
+    const payments = await screen.findByRole("row", { name: /payments/ });
+    // Clusters are identified by UID; a shared name cannot pick one.
+    expect(within(payments).queryByRole("link", { name: "prod-eu" })).toBeNull();
+    expect(within(payments).getByText("prod-eu").getAttribute("title")).toMatch(
+      /2 clusters are named prod-eu/,
+    );
+    expect(
+      within(payments).getByRole("link", { name: "prod-us" }).getAttribute("href"),
+    ).toBe("#/cluster/2?target=1.35&team=payments");
   });
 
   it("rolls up any target typed into the picker", async () => {
