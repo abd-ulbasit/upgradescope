@@ -155,11 +155,40 @@ func TestServerTLSFromCertManager(t *testing.T) {
 	secret, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
 	issuer, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name")
 	names, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
-	if secret != "upgradescope-server-tls" || issuer != "ca-issuer" || !slices.Contains(names, "upgradescope-server.upgradescope.svc") {
+	if secret != "upgradescope-server-https" || issuer != "ca-issuer" || !slices.Contains(names, "upgradescope-server.upgradescope.svc") {
 		t.Errorf("Certificate secretName %q issuer %q dnsNames %v", secret, issuer, names)
 	}
 	if !slices.Contains(args(container(t, objs, "upgradescope-server")), "--tls-cert-file=/etc/upgradescope/tls/tls.crt") {
 		t.Error("server does not serve the cert-manager certificate")
+	}
+}
+
+// The Ingress's TLS Secret (by default <fullname>-server-tls, which
+// operators fill through cert-manager's ingress annotations) and the
+// server's own certificate are different certificates: the public host's
+// and the Service's, from different issuers. Sharing one Secret made two
+// Certificates own it, or the Ingress serve the cluster-CA certificate.
+func TestServerTLSSecretIsNotTheIngressSecret(t *testing.T) {
+	objs := render(t, "server.enabled=true", "server.ingestToken=t", "server.readToken=r",
+		"server.ingress.enabled=true", "server.ingress.host=upgradescope.example.com",
+		"server.tls.certManager.issuerRef.name=ca-issuer")
+	cert := find(objs, "Certificate", "upgradescope-server")
+	ing := find(objs, "Ingress", "upgradescope-server")
+	if cert == nil || ing == nil {
+		t.Fatalf("want a Certificate and an Ingress, have %v", kinds(objs))
+	}
+	certSecret, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+	tls, _, _ := unstructured.NestedSlice(ing.Object, "spec", "tls")
+	ingSecret, _ := tls[0].(map[string]any)["secretName"].(string)
+	if certSecret == "" || certSecret == ingSecret {
+		t.Errorf("Certificate secretName %q, Ingress tls secretName %q: want two different Secrets", certSecret, ingSecret)
+	}
+	vols, _, _ := unstructured.NestedSlice(find(objs, "Deployment", "upgradescope-server").Object, "spec", "template", "spec", "volumes")
+	if !hasSecretVolume(vols, certSecret) || hasSecretVolume(vols, ingSecret) {
+		t.Errorf("server volumes %v: want the Certificate's Secret %q, not the Ingress's %q", vols, certSecret, ingSecret)
+	}
+	if names, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames"); slices.Contains(names, "upgradescope.example.com") {
+		t.Errorf("Certificate dnsNames %v name the Ingress host, which the Ingress's own certificate serves", names)
 	}
 }
 

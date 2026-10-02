@@ -103,12 +103,13 @@ over HTTPS when it serves TLS. */}}
 
 {{/* kubernetes.io/tls Secret the server serves HTTPS with, "" = plain
 HTTP: server.tls.secretName, or the one the cert-manager Certificate
-issues into. */}}
+issues into, <fullname>-server-https: not <fullname>-server-tls, the
+Ingress's default, which holds the public host's certificate. */}}
 {{- define "upgradescope.serverTLSSecret" -}}
 {{- if .Values.server.tls.secretName -}}
 {{- .Values.server.tls.secretName -}}
 {{- else if .Values.server.tls.certManager.issuerRef.name -}}
-{{- printf "%s-tls" (include "upgradescope.serverFullname" .) -}}
+{{- printf "%s-https" (include "upgradescope.serverFullname" .) -}}
 {{- end -}}
 {{- end -}}
 

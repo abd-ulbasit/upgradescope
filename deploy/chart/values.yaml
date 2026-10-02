@@ -267,9 +267,10 @@ server:
     # ca.crt) for HTTPS on the server's own port; see the comment above.
     secretName: ""
     certManager:
-      # -- Or have cert-manager issue one for the Service names (and
-      # ingress.host) into <fullname>-server-tls, e.g.
-      # {name: cluster-ca, kind: ClusterIssuer}. Needs the cert-manager CRDs.
+      # -- Or have cert-manager issue one for the Service names into
+      # <fullname>-server-https (not the Ingress's <fullname>-server-tls),
+      # e.g. {name: cluster-ca, kind: ClusterIssuer}. Needs the
+      # cert-manager CRDs.
       issuerRef: {}
   serviceAccount:
     # -- The server never calls the Kubernetes API: it gets its own

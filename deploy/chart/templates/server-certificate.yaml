@@ -2,7 +2,8 @@
 {{- $svc := include "upgradescope.serverFullname" . }}
 # The server's HTTPS certificate, issued by cert-manager into the Secret
 # the server serves (server.tls). With a CA or self-signed issuer, the
-# Secret's ca.crt is what the in-chart agent trusts.
+# Secret's ca.crt is what the in-chart agent trusts. It names the Service
+# only: an Ingress serves the public host with its own Secret.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -17,8 +18,5 @@ spec:
     - {{ printf "%s.%s" $svc .Release.Namespace }}
     - {{ printf "%s.%s.svc" $svc .Release.Namespace }}
     - {{ printf "%s.%s.svc.cluster.local" $svc .Release.Namespace }}
-    {{- with .Values.server.ingress.host }}
-    - {{ . }}
-    {{- end }}
   issuerRef: {{- toYaml .Values.server.tls.certManager.issuerRef | nindent 4 }}
 {{- end }}

@@ -240,7 +240,8 @@ settings, so the read token still protects all data.
   image's system roots (example in `values.yaml`).
 - HTTPS for the in-chart server: `server.tls.secretName` (an existing
   `kubernetes.io/tls` Secret) or `server.tls.certManager.issuerRef` (the
-  chart renders a cert-manager `Certificate` for the Service names). The
+  chart renders a cert-manager `Certificate` for the Service names into
+  `<fullname>-server-https`, apart from the Ingress's `-server-tls`). The
   in-chart agent then pushes to `https://` and trusts the Secret's
   `ca.crt`; probes and the ServiceMonitor use HTTPS. Without it the agent
   sends its bearer token over plain HTTP inside the cluster and logs a
