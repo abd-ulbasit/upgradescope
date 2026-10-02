@@ -146,8 +146,9 @@ export type ExportFormat = "csv" | "html";
 // fetchExport downloads the auditor export of a stored evaluation. It goes
 // through fetch rather than a plain link so the bearer token is sent: with
 // serve --read-token a bare <a href> would get 401.
-// The server names CSV downloads; for the HTML report (served inline) the
-// name follows the same upgradescope-<cluster>-<target> pattern.
+// The server names CSV downloads (quoted with Go's %q); for the HTML report
+// (served inline) the name follows the same upgradescope-<cluster>-<target>
+// pattern. Cluster names are free text, so either name is sanitized.
 export async function fetchExport(
   id: number,
   target: string,
@@ -158,12 +159,21 @@ export async function fetchExport(
     `api/v1/clusters/${id}/export${query({ target, format })}`,
   );
   const disposition = res.headers.get("Content-Disposition") ?? "";
-  const named = /filename="([^"]+)"/.exec(disposition)?.[1];
+  const quoted = /filename="((?:[^"\\]|\\.)+)"/.exec(disposition)?.[1];
+  const named = quoted?.replace(/\\(.)/g, "$1");
   return {
     blob: await res.blob(),
-    filename:
+    filename: safeFilename(
       named ?? `upgradescope-${clusterName ?? `cluster-${id}`}-${target}.${format}`,
+    ),
   };
+}
+
+// safeFilename replaces each run of anything but letters, digits, dot,
+// dash and underscore, so a cluster name cannot put path separators,
+// spaces or quotes into a download name.
+function safeFilename(name: string): string {
+  return name.replace(/[^A-Za-z0-9._-]+/g, "_");
 }
 
 // saveBlob hands a fetched file to the browser's download flow.

@@ -163,10 +163,31 @@ describe("fetchExport", () => {
     expect(await out.blob.text()).toBe("cluster,target\n");
   });
 
+  it("reads a quoted server file name with escapes, and sanitizes it", async () => {
+    // The server quotes with Go's %q, so a quote in the name arrives as \".
+    fetchMock.mockResolvedValueOnce(
+      new Response("x", {
+        status: 200,
+        headers: {
+          "Content-Disposition": 'attachment; filename="upgradescope-a\\"b/c-1.38.csv"',
+        },
+      }),
+    );
+    expect((await fetchExport(3, "1.38", "csv")).filename).toBe(
+      "upgradescope-a_b_c-1.38.csv",
+    );
+  });
+
   it("falls back to a generated file name and surfaces server errors", async () => {
     fetchMock.mockResolvedValueOnce(new Response("<html>", { status: 200 }));
     expect((await fetchExport(3, "1.38", "html", "prod")).filename).toBe(
       "upgradescope-prod-1.38.html",
+    );
+
+    // Cluster names are free text: no path separators or spaces in the name.
+    fetchMock.mockResolvedValueOnce(new Response("<html>", { status: 200 }));
+    expect((await fetchExport(3, "1.38", "html", "team/prod eu")).filename).toBe(
+      "upgradescope-team_prod_eu-1.38.html",
     );
 
     fetchMock.mockResolvedValueOnce(
