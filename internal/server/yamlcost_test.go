@@ -97,9 +97,10 @@ func gateDocCost(doc []byte) (c yamlCost, size int, ok bool) {
 // than yaml.v3 builds for doc, or measures it differently when it arrives
 // in small chunks (unless it is UTF-16, which /gate refuses), or when what /gate charges it (gateDocCost) is less
 // than what kubectl's decoder builds from it with its aliases expanded:
-// fewer nodes, or fewer bytes than its strings and numbers hold (a
-// scalar may grow a few bytes in conversion, `y` to `true`, `1e3` to
-// `1000`, so each node is allowed eight).
+// fewer nodes, or fewer bytes than its strings and numbers hold. A scalar
+// may grow in conversion, `y` to `true`, and most of all a YAML 1.1
+// float, which JSON writes out in full below 1e21: `1e20` is 21 digits,
+// `-1e20` 22, 17 more than in the source. So each node is allowed 24.
 func checkNoUndercount(t *testing.T, name string, doc []byte) {
 	t.Helper()
 	if newByteSource([][]byte{doc}).utf16BOM() >= 0 {
@@ -110,7 +111,7 @@ func checkNoUndercount(t *testing.T, name string, doc []byte) {
 		t.Errorf("%s: measured %+v, yaml.v3 builds %+v\n%q", name, got, want, doc)
 	}
 	if charged, size, ok := gateDocCost(doc); ok {
-		if want, scalars, ok := kubectlNodes(doc); ok && (charged.nodes < want || size+8*charged.nodes < scalars) {
+		if want, scalars, ok := kubectlNodes(doc); ok && (charged.nodes < want || size+24*charged.nodes < scalars) {
 			t.Errorf("%s: charged %+v and %d bytes, kubectl's decoder builds %d nodes holding %d bytes\n%q",
 				name, charged, size, want, scalars, doc)
 		}
@@ -183,6 +184,10 @@ var measureSeeds = []string{
 	"- &a x\n- *a\n- {*a : *a}\n",
 	"a: &a [*a]\n",
 	"\xff\xfea\x00:\x00 \x00[\x001\x00]\x00\n\x00",
+	// go-yaml v2 resolves YAML 1.1 floats, which JSON spells out: four
+	// bytes become twenty-one.
+	"1e20\n",
+	"a: [1e20, -1E+20, 6.02e23, .5e-9, 1e300]\n",
 }
 
 func TestMeasureYAMLNeverUndercounts(t *testing.T) {
