@@ -1,0 +1,6 @@
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "w"}}
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: nightly

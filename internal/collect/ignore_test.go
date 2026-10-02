@@ -30,7 +30,7 @@ metadata:
     other: x
     upgradescope.dev/ignore: [not, a, string]
 `})
-	inv, _, err := CollectFiles(dir)
+	inv, _, err := CollectFiles(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

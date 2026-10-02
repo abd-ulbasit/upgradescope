@@ -1,0 +1,4 @@
+!!binary YXBpVmVyc2lvbg==: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: old
