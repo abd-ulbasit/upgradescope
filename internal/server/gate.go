@@ -7,8 +7,11 @@ import (
 	"maps"
 	"mime"
 	"net/http"
+	"path"
 	"slices"
 	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -55,6 +58,12 @@ var yamlContentTypes = map[string]bool{
 // always answers 200 (the v0.1 contract, which no longer is the default:
 // a bare request must be able to fail CI). X-Upgradescope-Verdict always
 // carries the verdict (ready | blocked | unknown).
+//
+// ?path=<file> names the repository file the stream was rendered to (e.g.
+// deploy/rendered.yaml): manifest objects carry it with their stream line,
+// so format=sarif places introduced findings there and code scanning shows
+// them on the PR. Without it a posted stream has no file, and SARIF lists
+// its findings as tool execution notifications only.
 func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mt, _, err := mime.ParseMediaType(ct)
@@ -90,6 +99,12 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid fail-on %q (want blocker, warning or never)", failOn))
 		return
 	}
+	artifact := r.URL.Query().Get("path")
+	if artifact != "" && !repoPath(artifact) {
+		errJSON(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("invalid path %q (want the repository-relative file the stream was rendered to, e.g. deploy/rendered.yaml)", artifact))
+		return
+	}
 
 	// The body stays charged to the shared buffered-body budget until it is
 	// decoded, and the evaluation slot is held only for decoding and
@@ -110,6 +125,11 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
 		return
+	}
+	for _, u := range manifests.APIUsage { // refs carry stream lines; ?path= names their file
+		for i := range u.Objects {
+			u.Objects[i].File = artifact
+		}
 	}
 
 	inv := manifests
@@ -240,6 +260,14 @@ func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
 	}
 	out.Verdict, out.Ready = resp.Verdict, resp.Ready
 	return out
+}
+
+// repoPath reports whether p can name a file in the repository: relative,
+// slash-separated, clean, inside the repository, without control
+// characters.
+func repoPath(p string) bool {
+	return !strings.HasPrefix(p, "/") && !strings.Contains(p, `\`) && path.Clean(p) == p &&
+		p != "." && p != ".." && !strings.HasPrefix(p, "../") && !strings.ContainsFunc(p, unicode.IsControl)
 }
 
 // usageKeys returns the keys of the API-usage findings (removed or
