@@ -120,7 +120,8 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		// never waits on a notifier. Notifications are delivered after
 		// commit by the server's outbox worker, which Shutdown stops once
 		// the drain ends: an undelivered or mid-delivery notification stays
-		// in the outbox and is delivered after the next start.
+		// in the outbox and is delivered after the next start, if that start
+		// comes before the message has been queued for 8 hours.
 		shCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shCtx); err != nil {

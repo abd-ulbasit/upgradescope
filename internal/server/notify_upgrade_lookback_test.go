@@ -36,6 +36,26 @@ func TestUpgradeBaselineSpansASkippedMinor(t *testing.T) {
 	}
 }
 
+// TestUpgradeBaselineSpansTwoSkippedMinors: 1.33 → 1.36 skips two minors.
+// The only decided evaluation below the new default target 1.37 is 1.34's,
+// three minors down, at the edge of upgradeLookback; the ServiceCIDR
+// blocker new at 1.37 is announced against it.
+func TestUpgradeBaselineSpansTwoSkippedMinors(t *testing.T) {
+	srv, rec := upgradeServer(t, openSQLite(t))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	pushInventory(t, ts.URL, "tok", atVersion("v1.33.5", serviceCIDRv1beta1))
+	pushInventory(t, ts.URL, "tok", atVersion("v1.36.1", serviceCIDRv1beta1))
+	srv.deliverOutbox(context.Background())
+
+	evs := rec.all()
+	if len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker || evs[0].Target != "1.37" ||
+		!strings.Contains(evs[0].Title, "ServiceCIDR") {
+		t.Fatalf("want the ServiceCIDR new-blocker for 1.37 against 1.34, three minors down, got %+v", evs)
+	}
+}
+
 // TestUpgradeBaselineIsTheNearestLowerTarget: 1.33 (clean) → 1.34 (PSP) →
 // 1.36 (PSP). Below 1.37 the cluster has decided evaluations for 1.34
 // (clean, from the 1.33 push) and 1.35 (PSP, from the 1.34 push). The
