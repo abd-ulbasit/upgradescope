@@ -953,17 +953,16 @@ func (s *Server) summarize(e store.Evaluation, now time.Time) evalSummary {
 	}
 }
 
-// gapsOf reads the stored report's notAssessed, so the summaries that
-// carry a verdict also say what it could not cover. A report that does not
-// decode yields none here; the report endpoint says it is corrupt.
+// gapsOf decodes the evaluation's notAssessed, which the store keeps beside
+// the report, so the summaries that carry a verdict also say what it could
+// not cover without loading the report. A report that does not decode has
+// none; the report endpoint says it is corrupt.
 func gapsOf(e store.Evaluation) []engine.CapabilityGap {
-	var rep struct {
-		NotAssessed []engine.CapabilityGap `json:"notAssessed"`
-	}
-	if json.Unmarshal(e.Report, &rep) != nil {
+	var gaps []engine.CapabilityGap
+	if json.Unmarshal(e.NotAssessed, &gaps) != nil {
 		return nil
 	}
-	return rep.NotAssessed
+	return gaps
 }
 
 type clusterSummary struct {
@@ -975,7 +974,9 @@ type clusterSummary struct {
 // handleListClusters: GET /api/v1/clusters — every cluster plus its current
 // default-target score summary (omitted when no snapshot/evaluation exists).
 // Snapshot heads come from one store call (clusterStates), so no inventory
-// is decoded; the summaries are still one CurrentEvaluation per cluster.
+// is decoded, and each summary is one CurrentEvaluationSummary, which
+// loads no report: the request costs about its response, whatever the
+// fleet pushed.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	states, err := s.clusterStates(ctx)
@@ -989,7 +990,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 		cs := clusterSummary{Cluster: c.Cluster, Stale: s.clusterStale(c.Cluster, now)}
 		if server, err := inventory.ParseVersion(c.version); c.hasSnapshot && err == nil {
 			target := server.Next()
-			if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String()); err == nil {
+			if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, target.String()); err == nil {
 				sum := s.summarize(e, now)
 				cs.Latest = &sum
 			}
@@ -1027,7 +1028,7 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 		targets = s.extraTargets
 	}
 	for _, t := range targets {
-		if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, t.String()); err == nil {
+		if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, t.String()); err == nil {
 			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now))
 		}
 	}

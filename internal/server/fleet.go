@@ -94,7 +94,9 @@ func (s *Server) clusterStates(ctx context.Context) ([]clusterState, error) {
 // union of every cluster's default next-minor target plus the server's
 // extra targets). A cluster without a current evaluation for a column gets
 // a null cell; nothing is recomputed. A column at or below a cluster's
-// version is null too and listed in the row's notApplicable.
+// version is null too and listed in the row's notApplicable. Cells are
+// read with CurrentEvaluationSummary, so no report is loaded: the matrix
+// takes no read slot and costs about its response.
 func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	states, err := s.clusterStates(ctx)
@@ -132,7 +134,7 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 				row.NotApplicable = append(row.NotApplicable, t.String())
 				continue
 			}
-			e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, t.String())
+			e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, t.String())
 			switch {
 			case err == nil:
 				row.Cells[t.String()] = &fleetCell{

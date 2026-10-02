@@ -62,6 +62,22 @@ func TestReportStoreFailureIsNot200WhatIf(t *testing.T) {
 	}
 }
 
+// The fleet matrix reads summaries; a failing read is a 500, never a
+// matrix of empty cells.
+func TestFleetSummaryStoreFailureIs500(t *testing.T) {
+	st := newFakeStore()
+	s := newTestServer(t, st)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	seedViaPush(t, ts)
+
+	st.errs["CurrentEvaluationSummary"] = errors.New("disk wedge: /var/lib/upgradescope")
+	var body map[string]string
+	if resp := getJSON(t, ts, "/api/v1/fleet", "", &body); resp.StatusCode != http.StatusInternalServerError || body["error"] != "internal error" {
+		t.Fatalf("fleet = %d %q, want 500 %q", resp.StatusCode, body["error"], "internal error")
+	}
+}
+
 // TestInternalErrorsDoNotLeakDetail: 500 bodies carry a fixed message; the
 // store's error text (which may include DSNs, paths, SQL) is logged only.
 func TestInternalErrorsDoNotLeakDetail(t *testing.T) {

@@ -168,7 +168,8 @@ func (c clusterCollector) Collect(ch chan<- prometheus.Metric) {
 	defer cancel()
 	s := c.s
 	// Only the server version decides the targets, and clusterStates reads
-	// it from the snapshot heads, so a scrape loads no inventory.
+	// it from the snapshot heads, and the series come from evaluation
+	// summaries, so a scrape loads no inventory and no report.
 	states, err := s.clusterStates(ctx)
 	if err != nil {
 		ch <- prometheus.NewInvalidMetric(descClusterScore, err)
@@ -190,7 +191,7 @@ func (c clusterCollector) Collect(ch chan<- prometheus.Metric) {
 		// A corrupt inventory without the server-version column leaves
 		// the extra targets.
 		for _, t := range s.evalTargets(state.version) {
-			e, err := s.cfg.Store.CurrentEvaluation(ctx, cl.ID, t.String())
+			e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, cl.ID, t.String())
 			if errors.Is(err, store.ErrNotFound) {
 				continue
 			}

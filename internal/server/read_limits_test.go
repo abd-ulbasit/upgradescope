@@ -15,7 +15,14 @@ import (
 // PodSecurityPolicy (removed in testKB's 1.35) in its own namespace, with
 // the most objects a usage lists: one finding per entry, so the stored
 // report is about as large as the inventory.
-func pspUsages(size int) string {
+func pspUsages(size int) string { return pspUsagesNamed(size, "") }
+
+// longPSPUsages is pspUsages with 200-character object names: the same
+// findings in about four times the bytes, so the push at the node budget
+// is ~18 MB rather than ~4 MB, and so are its stored reports.
+func longPSPUsages(size int) string { return pspUsagesNamed(size, strings.Repeat("x", 190)) }
+
+func pspUsagesNamed(size int, suffix string) string {
 	var b strings.Builder
 	b.WriteString(pushHead + `"apiUsage":[`)
 	for i := 0; b.Len() < size-12000; i++ {
@@ -27,7 +34,7 @@ func pspUsages(size int) string {
 			if j > 0 {
 				b.WriteString(",")
 			}
-			fmt.Fprintf(&b, `{"namespace":"team-%d","name":"o-%d-%d","manager":"m"}`, i, i, j)
+			fmt.Fprintf(&b, `{"namespace":"team-%d","name":"o-%d-%d%s","manager":"m"}`, i, i, j, suffix)
 		}
 		b.WriteString("]}")
 	}
