@@ -846,12 +846,14 @@ func TestCollectAPIUsageVAPWrittenViaBetaIsNotAlphaUsage(t *testing.T) {
 }
 
 // policy/v1beta1 PodSecurityPolicy has no surviving version in the KB:
-// the type goes away in 1.25, so every stored PSP blocks, however (or by
-// whom) it was written.
+// the type goes away in 1.25, so every stored PSP blocks, however it was
+// written (through which version, or with no trace at all), unless only
+// the control plane ever wrote it.
 func TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject(t *testing.T) {
 	meta := metaClient(servedAt("PodSecurityPolicy", []string{"policy/v1beta1"},
 		obj{name: "restricted", managed: []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", "policy/v1beta1")}},
 		obj{name: "privileged"},
+		obj{name: "co-owned", managed: []metav1.ManagedFieldsEntry{wrote("kube-controller-manager", "policy/v1beta1"), wrote("helm", "extensions/v1beta1")}},
 		obj{name: "from-controller", managed: []metav1.ManagedFieldsEntry{wrote("kube-controller-manager", "policy/v1beta1")}},
 	))
 	disc := fakeDiscovery(
@@ -870,6 +872,44 @@ func TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject(t *testing.T) {
 	rep := evaluateAt(inv, k, "v1.24.17", inventory.Version{Major: 1, Minor: 25})
 	if fs := removedAPIFindings(rep); len(fs) != 1 || fs[0].Severity != engine.SevBlocker {
 		t.Errorf("1.24 → 1.25: removed-api findings %+v, want one PodSecurityPolicy blocker", fs)
+	}
+}
+
+// A 1.36 cluster serves LeaseCandidate only at coordination.k8s.io/v1beta1,
+// which the KB removes in 1.39. Upstream has shipped LeaseCandidate only
+// as alpha and beta, so the KB records no version that continues and
+// every object would count as the type going away. But kube-controller-
+// manager and kube-scheduler write their own candidates for coordinated
+// leader election and rewrite them after an upgrade: only a candidate
+// someone else wrote is a removed-api blocker (#108).
+func TestCollectAPIUsagePreGAKindSkipsControlPlaneObjects(t *testing.T) {
+	const beta = "coordination.k8s.io/v1beta1"
+	meta := metaClient(servedAt("LeaseCandidate", []string{beta},
+		obj{namespace: "kube-system", name: "kube-controller-manager-cp1", managed: []metav1.ManagedFieldsEntry{wrote("kube-controller-manager", beta)}},
+		obj{namespace: "kube-system", name: "kube-scheduler-cp1", managed: []metav1.ManagedFieldsEntry{wrote("kube-scheduler", beta)}},
+		obj{namespace: "apps", name: "my-operator", managed: []metav1.ManagedFieldsEntry{wrote("my-operator", beta)}},
+	))
+	disc := fakeDiscovery(
+		resources("coordination.k8s.io/v1", metav1.APIResource{Name: "leases", Kind: "Lease", Namespaced: true, Verbs: metav1.Verbs{"list"}}),
+		resources(beta, metav1.APIResource{Name: "leasecandidates", Kind: "LeaseCandidate", Namespaced: true, Verbs: metav1.Verbs{"list"}}),
+	)
+	k := loadKB(t)
+
+	var inv inventory.Inventory
+	if _, err := collectAPIUsage(context.Background(), disc, meta, k.APILifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.APIUsage{{
+		Group: "coordination.k8s.io", Version: "v1beta1", Kind: "LeaseCandidate", Count: 1,
+		Namespaces: map[string]int{"apps": 1},
+		Objects:    []inventory.ObjectRef{{Namespace: "apps", Name: "my-operator"}},
+	}}
+	if !reflect.DeepEqual(inv.APIUsage, want) {
+		t.Errorf("api usage = %#v\nwant       %#v", inv.APIUsage, want)
+	}
+	rep := evaluateAt(inv, k, "v1.36.2", inventory.Version{Major: 1, Minor: 39})
+	if fs := removedAPIFindings(rep); len(fs) != 1 || fs[0].Severity != engine.SevBlocker || !reflect.DeepEqual(fs[0].Namespaces, []string{"apps"}) {
+		t.Errorf("1.36 → 1.39: removed-api findings %+v, want one blocker for the apps candidate", fs)
 	}
 }
 

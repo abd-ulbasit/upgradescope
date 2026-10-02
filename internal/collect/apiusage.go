@@ -43,11 +43,29 @@ const (
 // control-plane release wrote the object (the apiserver's default
 // ServiceCIDR, IPAddresses and APF objects; controller-written objects),
 // and go stale across upgrades without anyone writing the old version
-// again. No user manifest is behind them.
+// again. No user manifest is behind them. kube-controller-manager and
+// kube-scheduler also write their own LeaseCandidates (coordinated leader
+// election).
 var internalManagers = map[string]bool{
 	"kube-apiserver":                               true,
 	"kube-controller-manager":                      true,
+	"kube-scheduler":                               true,
 	"api-priority-and-fairness-config-producer-v1": true,
+}
+
+// controlPlaneOwned reports whether only internal managers ever wrote m:
+// it has managedFields entries and every one names an internal manager.
+// The control plane rewrites such objects itself after an upgrade.
+func controlPlaneOwned(m *metav1.PartialObjectMetadata) bool {
+	if len(m.ManagedFields) == 0 {
+		return false
+	}
+	for _, f := range m.ManagedFields {
+		if !internalManagers[f.Manager] {
+			return false
+		}
+	}
+	return true
 }
 
 // collectAPIUsage finds objects that someone still writes through a
@@ -77,7 +95,11 @@ var internalManagers = map[string]bool{
 //   - the KB entry has no replacement, the KB records no version of the
 //     kind that is neither deprecated nor removed, and no non-deprecated
 //     version of the resource is served: the type itself goes away, so
-//     every object counts;
+//     every object counts, except objects only internal managers ever
+//     wrote (controlPlaneOwned). For a kind upstream has shipped only as
+//     alpha or beta (LeaseCandidate), "no surviving version" may just mean
+//     the KB does not know its GA yet, and the control plane replaces its
+//     own objects across an upgrade either way;
 //   - otherwise only objects authored via the flagged group/version count:
 //     some manager's newest managedFields entry (not an internal manager,
 //     not the status subresource) names it, or, for an object with no such
@@ -372,6 +394,9 @@ func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVer
 			for j := range targets {
 				t := &targets[j]
 				manager := "" // a type that goes away counts objects, not authors
+				if t.allObjects && controlPlaneOwned(m) {
+					continue // ...except the control plane's own, which it replaces
+				}
 				if !t.allObjects {
 					if manager = authoringManager(m, t.gv); manager == "" {
 						continue
