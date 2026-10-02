@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="2" failures="1" errors="0" skipped="0" time="0">
+  <testsuite name="removed-api" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="removed-api/extensions/v1beta1/Ingress" classname="upgradescope.removed-api" time="0">
+      <failure message="extensions/v1beta1 Ingress removed in 1.22 (3 objects)" type="blocker">extensions/v1beta1 Ingress removed in 1.22 (3 objects).&#xA;3 object(s) still stored/served at this version: default (2), shop (1).&#xA;Teams: core, storefront&#xA;Fix: migrate to networking.k8s.io/v1 Ingress.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="deprecated-api" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="deprecated-api/batch/v1beta1/CronJob" classname="upgradescope.deprecated-api" time="0">
+      <system-out>info: batch/v1beta1 CronJob deprecated since 1.21 (1 object).&#xA;1 object(s) still stored/served at this version: default (1).&#xA;Teams: core&#xA;Fix: migrate to batch/v1 CronJob.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

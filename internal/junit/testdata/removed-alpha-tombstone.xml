@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="5" failures="1" errors="0" skipped="4" time="0">
+  <testsuite name="removed-api" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="removed-api/resource.k8s.io/v1alpha3/DeviceClass" classname="upgradescope.removed-api" time="0">
+      <failure message="resource.k8s.io/v1alpha3 DeviceClass removed in 1.34 (1 object)" type="blocker">resource.k8s.io/v1alpha3 DeviceClass removed in 1.34 (1 object).&#xA;1 manifest object(s) use this API: namespace unset (1).&#xA;Objects:&#xA;- gpu.example.com (dra/deviceclass.yaml:1)&#xA;Fix: migrate to resource.k8s.io/v1 DeviceClass.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="not-assessed" tests="4" failures="0" errors="0" skipped="4" time="0">
+    <testcase name="addons" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: addons: files mode"></skipped>
+    </testcase>
+    <testcase name="deprecated-calls" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: deprecated-calls: files mode"></skipped>
+    </testcase>
+    <testcase name="helm" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: helm: files mode"></skipped>
+    </testcase>
+    <testcase name="versions" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: versions: files mode"></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>

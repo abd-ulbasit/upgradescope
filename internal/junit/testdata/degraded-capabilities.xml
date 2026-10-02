@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="2" failures="0" errors="0" skipped="2" time="0">
+  <testsuite name="not-assessed" tests="2" failures="0" errors="0" skipped="2" time="0">
+    <testcase name="deprecated-calls" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: deprecated-calls: GET /metrics forbidden"></skipped>
+    </testcase>
+    <testcase name="helm" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: helm: secrets list forbidden in namespace kube-system"></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>

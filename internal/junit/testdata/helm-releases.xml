@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="5" failures="3" errors="0" skipped="0" time="0">
+  <testsuite name="removed-api" tests="2" failures="2" errors="0" skipped="0" time="0">
+    <testcase name="removed-api/batch/v1beta1/CronJob" classname="upgradescope.removed-api" time="0">
+      <failure message="batch/v1beta1 CronJob removed in 1.25 (1 object)" type="blocker">batch/v1beta1 CronJob removed in 1.25 (1 object).&#xA;1 object(s) written through this API version: batch (1). Written by: helm.&#xA;Objects:&#xA;- batch/nightly&#xA;Teams: data&#xA;Fix: migrate to batch/v1 CronJob.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+    <testcase name="removed-api/helm-release/batch/jobs" classname="upgradescope.removed-api" time="0">
+      <failure message="helm upgrade of release batch/jobs will fail: its manifest uses batch/v1beta1 CronJob" type="blocker">helm upgrade of release batch/jobs will fail: its manifest uses batch/v1beta1 CronJob.&#xA;Revision 7 of Helm release batch/jobs (chart jobs 1.4.0) stores a manifest with 1 object at APIs Kubernetes 1.25 does not serve: batch/v1beta1 CronJob (removed in 1.25; 1 object). Helm refuses to upgrade a release whose stored manifest uses APIs the cluster no longer serves.&#xA;Objects:&#xA;- weekly (line 31), rendered from jobs/templates/weekly.yaml&#xA;Teams: data&#xA;Fix: upgrade the release to a chart version that renders supported APIs (batch/v1 CronJob) before upgrading the cluster; if the cluster already stopped serving them, rewrite the stored manifest with the helm-mapkubeapis plugin first.&#xA;References:&#xA;- https://helm.sh/docs/topics/kubernetes_apis/&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="deprecated-api" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="deprecated-api/helm-release/ops/status-page" classname="upgradescope.deprecated-api" time="0">
+      <system-out>warning: Helm release ops/status-page manifest uses deprecated v1 ComponentStatus.&#xA;Revision 3 of Helm release ops/status-page (chart status-page 0.9.1) stores a manifest with 1 object at deprecated APIs: v1 ComponentStatus (deprecated in 1.19; 1 object).&#xA;Objects:&#xA;- etcd-0 (line 12), rendered from status-page/templates/cs.yaml&#xA;Fix: upgrade the release to a chart version that renders supported APIs.&#xA;References:&#xA;- https://helm.sh/docs/topics/kubernetes_apis/&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="chart-incompat" tests="2" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="chart-incompat/helm-release/shop/web" classname="upgradescope.chart-incompat" time="0">
+      <failure message="Helm release shop/web: chart web 2.0.0 requires Kubernetes &#34;&gt;=1.19.0-0 &lt;1.25.0-0&#34; (target 1.25)" type="blocker">Helm release shop/web: chart web 2.0.0 requires Kubernetes &#34;&gt;=1.19.0-0 &lt;1.25.0-0&#34; (target 1.25).&#xA;Chart web 2.0.0 (revision 12 of Helm release shop/web) declares kubeVersion &#34;&gt;=1.19.0-0 &lt;1.25.0-0&#34; in Chart.yaml, which Kubernetes 1.25 does not satisfy. Helm refuses to install or upgrade a chart whose kubeVersion excludes the cluster version, so once the cluster runs 1.25 every helm upgrade of this release fails until it moves to a chart version that supports 1.25.&#xA;Teams: storefront&#xA;Fix: upgrade the release to a chart version whose kubeVersion includes 1.25 before upgrading the cluster.&#xA;References:&#xA;- https://helm.sh/docs/topics/charts/#the-chartyaml-file</failure>
+    </testcase>
+    <testcase name="chart-incompat/helm-release/shop/legacy-web" classname="upgradescope.chart-incompat" time="0">
+      <system-out>info: Helm release shop/legacy-web: chart kubeVersion &#34;&gt;=1.21.0-0 &lt;&lt;1.30&#34; could not be parsed.&#xA;Chart legacy-web 0.1.0 (revision 2 of Helm release shop/legacy-web) declares kubeVersion &#34;&gt;=1.21.0-0 &lt;&lt;1.30&#34; in Chart.yaml, which is not a valid semver constraint, so the chart&#39;s Kubernetes compatibility was not assessed.&#xA;Teams: storefront&#xA;References:&#xA;- https://helm.sh/docs/topics/charts/#the-chartyaml-file</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

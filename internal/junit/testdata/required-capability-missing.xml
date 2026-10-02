@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="1" failures="0" errors="1" skipped="0" time="0">
+  <testsuite name="not-assessed" tests="1" failures="0" errors="1" skipped="0" time="0">
+    <testcase name="api-usage" classname="upgradescope.not-assessed" time="0">
+      <error message="not assessed: api-usage (required): discover server resources: Unauthorized" type="not-assessed">The verdict is unknown: a required check did not run, so a blocker may have been missed.</error>
+    </testcase>
+  </testsuite>
+</testsuites>

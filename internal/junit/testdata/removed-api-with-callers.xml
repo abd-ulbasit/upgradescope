@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="2" failures="2" errors="0" skipped="0" time="0">
+  <testsuite name="removed-api" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="removed-api/batch/v1beta1/CronJob" classname="upgradescope.removed-api" time="0">
+      <failure message="batch/v1beta1 CronJob removed in 1.25 (2 objects)" type="blocker">batch/v1beta1 CronJob removed in 1.25 (2 objects).&#xA;2 object(s) written through this API version: default (1), shop (1). Written by: helm, kubectl last-applied. apiserver_requested_deprecated_apis also records requests to batch/v1beta1 cronjobs, cronjobs/status since the last apiserver restart; the metric does not identify the client.&#xA;Objects:&#xA;- default/nightly&#xA;- shop/reports&#xA;Teams: core, storefront&#xA;Fix: migrate to batch/v1 CronJob.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="deprecated-api-in-use" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="deprecated-api-in-use/policy/v1beta1/poddisruptionbudgets" classname="upgradescope.deprecated-api-in-use" time="0">
+      <failure message="clients still requesting policy/v1beta1 poddisruptionbudgets (removed in 1.25)" type="blocker">clients still requesting policy/v1beta1 poddisruptionbudgets (removed in 1.25).&#xA;apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+  </testsuite>
+</testsuites>

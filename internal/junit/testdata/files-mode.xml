@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="6" failures="3" errors="0" skipped="3" time="0">
+  <testsuite name="removed-api" tests="2" failures="2" errors="0" skipped="0" time="0">
+    <testcase name="removed-api/batch/v1beta1/CronJob" classname="upgradescope.removed-api" time="0">
+      <failure message="batch/v1beta1 CronJob removed in 1.25 (1 object)" type="blocker">batch/v1beta1 CronJob removed in 1.25 (1 object).&#xA;1 manifest object(s) use this API: namespace unset (1).&#xA;Objects:&#xA;- nightly (rendered/all.yaml:14), rendered from shop/templates/cronjob.yaml&#xA;Fix: migrate to batch/v1 CronJob.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+    <testcase name="removed-api/extensions/v1beta1/Ingress" classname="upgradescope.removed-api" time="0">
+      <failure message="extensions/v1beta1 Ingress removed in 1.22 (3 objects)" type="blocker">extensions/v1beta1 Ingress removed in 1.22 (3 objects).&#xA;3 manifest object(s) use this API: namespace unset (1), shop (2).&#xA;Objects:&#xA;- admin (legacy/ingress.yaml:1)&#xA;- shop/web (rendered/all.yaml:3), rendered from shop/templates/ingress.yaml&#xA;- and 1 more (at most 100 objects are recorded per finding)&#xA;Fix: migrate to networking.k8s.io/v1 Ingress.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="eol-addon" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="eol-addon/ingress-nginx" classname="upgradescope.eol-addon" time="0">
+      <failure message="ingress-nginx is end-of-life since 2026-03-26" type="blocker">ingress-nginx is end-of-life since 2026-03-26.&#xA;Detected ingress-nginx version 1.8.1 via image in namespace(s): ingress-nginx. Upstream support has ended.&#xA;Fix: migrate to Gateway API (ingress2gateway) or another maintained ingress controller.&#xA;References:&#xA;- https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="not-assessed" tests="3" failures="0" errors="0" skipped="3" time="0">
+    <testcase name="deprecated-calls" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: deprecated-calls: files mode"></skipped>
+    </testcase>
+    <testcase name="helm" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: helm: files mode"></skipped>
+    </testcase>
+    <testcase name="versions" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: versions: files mode"></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>
