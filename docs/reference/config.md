@@ -1,7 +1,8 @@
 # Configuration file
 
-`.upgradescope.yaml` holds ignore rules for `upgradescope scan`: findings a
-team has accepted, each with a reason and, optionally, an expiry date. It is
+`.upgradescope.yaml` holds ignore rules for `upgradescope scan` (and for
+the [server gate](#in-the-server-gate)): findings a team has accepted, each
+with a reason and, optionally, an expiry date. It is
 the only file `scan` reads besides the manifests and a `--baseline`. How
 suppression interacts with the score, the verdict, baselines and SARIF is in
 [Suppressions and baselines](../guides/suppressions-and-baselines.md).
@@ -92,3 +93,12 @@ no expiry:
 The agent takes the same rules from its `ClusterReadiness` object's
 `spec.ignore` ([CRD reference](crd.md)); the CRD schema requires `reason` and
 validates `expires`.
+
+## In the server gate
+
+`POST /api/v1/gate` takes the file's text, URL-encoded, in its `config`
+query parameter and applies it as `scan` does, with the object
+annotations. `file` globs match the gate's `path` parameter. Each error
+above is a 422 there, before anything is judged; expired rules are named in
+the answer's `warnings`
+([The server gate](../guides/suppressions-and-baselines.md#the-server-gate)).

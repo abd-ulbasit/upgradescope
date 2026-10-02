@@ -112,6 +112,10 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("invalid path %q (want the repository-relative file the stream was rendered to, e.g. deploy/rendered.yaml)", artifact))
 		return
 	}
+	rules, ok := gateIgnoreRules(w, r)
+	if !ok {
+		return
+	}
 
 	// The body stays charged to the shared buffered-body budget until it is
 	// decoded, and the evaluation slot is held only for decoding and
@@ -171,9 +175,10 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	}
 
-	rep := engine.Evaluate(inv, s.cfg.KB, target, s.now())
+	rep, warnings := s.suppressGate(engine.Evaluate(inv, s.cfg.KB, target, s.now()), rules)
 	releaseSlot()
 	resp := gateResult(rep, baseline, introduced)
+	resp.Warnings = warnings
 	w.Header().Set("X-Upgradescope-Verdict", string(resp.Verdict))
 	status := http.StatusOK
 	if gateFails(resp, failOn) {
@@ -216,13 +221,21 @@ type gateFinding struct {
 // verdict judges only what the manifests introduce: Verdict and Ready
 // shadow the report's, and ClusterVerdict keeps the whole proposed state's.
 // Score stays the whole proposed state's, cluster findings included: gate
-// on verdict (or fail-on), not on score.
+// on verdict (or fail-on), not on score. Suppressed findings (the report's
+// suppressed, counted in SuppressedCount) count toward none of them.
 type gateResponse struct {
 	reportWithTeams
-	Findings       []gateFinding  `json:"findings"`
-	Verdict        engine.Verdict `json:"verdict"`
-	Ready          bool           `json:"ready"`
-	ClusterVerdict engine.Verdict `json:"clusterVerdict,omitempty"` // with ?cluster= only
+	Findings        []gateFinding  `json:"findings"`
+	Verdict         engine.Verdict `json:"verdict"`
+	Ready           bool           `json:"ready"`
+	ClusterVerdict  engine.Verdict `json:"clusterVerdict,omitempty"` // with ?cluster= only
+	SuppressedCount int            `json:"suppressedCount"`          // len(Suppressed)
+	// Warnings are suppression's (see suppressGate): scan prints them on
+	// stderr, the gate's JSON answer carries them.
+	Warnings []string `json:"warnings,omitempty"`
+	// introducedSuppressed are the suppressed findings attributed to the
+	// manifests, for the formats that hold only what they introduce.
+	introducedSuppressed []engine.SuppressedFinding
 }
 
 // gateResult tags every finding of rep with its source and computes the
@@ -240,12 +253,20 @@ func gateResult(rep engine.Report, baseline *engine.Report, introduced map[strin
 	if baseline != nil {
 		existing = keySet(baseline.Findings, func(engine.Finding) bool { return true })
 	}
-	resp := gateResponse{reportWithTeams: withTeams(rep), Findings: []gateFinding{}, Verdict: engine.VerdictReady}
-	for _, f := range rep.Findings {
-		src := sourceManifest
+	source := func(f engine.Finding) string {
 		if baseline != nil && !introduced[findingKey(f)] && (f.Category == engine.CatDeprecatedAPIInUse || existing[findingKey(f)]) {
-			src = sourceCluster
+			return sourceCluster
 		}
+		return sourceManifest
+	}
+	resp := gateResponse{reportWithTeams: withTeams(rep), Findings: []gateFinding{}, Verdict: engine.VerdictReady, SuppressedCount: len(rep.Suppressed)}
+	for _, s := range rep.Suppressed {
+		if source(s.Finding) == sourceManifest {
+			resp.introducedSuppressed = append(resp.introducedSuppressed, s)
+		}
+	}
+	for _, f := range rep.Findings {
+		src := source(f)
 		resp.Findings = append(resp.Findings, gateFinding{Finding: f, Source: src})
 		if src == sourceManifest && f.Severity == engine.SevBlocker {
 			resp.Verdict = engine.VerdictBlocked
@@ -270,8 +291,10 @@ func gateResult(rep engine.Report, baseline *engine.Report, introduced map[strin
 // with the gate's verdict; findings the cluster already has stay in the
 // JSON answer, tagged source cluster. Score stays the proposed state's.
 // The JUnit and Code Quality answers, which land on the PR too, carry it.
+// Suppressed findings are kept on the same terms: the manifests' only.
 func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
 	out := rep
+	out.Suppressed = resp.introducedSuppressed
 	out.Findings = []engine.Finding{}
 	for _, f := range resp.Findings {
 		if f.Source == sourceManifest {

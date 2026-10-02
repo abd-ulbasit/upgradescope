@@ -109,6 +109,9 @@ curl -sS --fail-with-body -X POST \
 - Without `cluster`, the manifests are judged on their own, like
   `scan --files`, add-ons included. `format=json` (the default) returns
   the full report.
+- `upgradescope.dev/ignore` annotations are applied, and so are the ignore
+  rules of a `.upgradescope.yaml` sent in `config`
+  ([The server gate](../guides/suppressions-and-baselines.md#the-server-gate)).
 - The gate stores nothing. It needs the read token, when the server has
   one.
 

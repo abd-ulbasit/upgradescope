@@ -2,7 +2,7 @@
 
 This page covers what a team can configure about which findings count:
 ignore rules in `.upgradescope.yaml`, the `upgradescope.dev/ignore`
-object annotations, baselines for CI, and the agent's
+object annotations, baselines for CI, the server's gate, and the agent's
 `ClusterReadiness` `spec.ignore`. The file format, field by field, is in the
 [configuration file reference](../reference/config.md); the flags in
 [`upgradescope scan`](../reference/cli/upgradescope_scan.md). The GitHub
@@ -15,8 +15,9 @@ Contents:
 2. [Object annotations](#object-annotations)
 3. [Baselines](#baselines)
 4. [How the gate decides](#how-the-gate-decides)
-5. [The agent: `spec.ignore`](#the-agent-specignore)
-6. [Finding keys](#finding-keys)
+5. [The server gate](#the-server-gate)
+6. [The agent: `spec.ignore`](#the-agent-specignore)
+7. [Finding keys](#finding-keys)
 
 ## Ignore rules (`.upgradescope.yaml`)
 
@@ -143,6 +144,42 @@ Score and verdict exclude suppressed findings, but they include baseline
 findings. A baseline only changes what fails the gate. It does not change
 how ready the cluster is.
 
+## The server gate
+
+`POST /api/v1/gate` on `upgradescope serve` suppresses as `scan` does,
+with the same code. It applies the `upgradescope.dev/ignore` annotations of
+the posted objects (and, with `?cluster=`, of the cluster's stored
+objects), and the ignore rules of a `.upgradescope.yaml` sent, URL-encoded,
+in the `config` query parameter:
+
+```sh
+curl -sS --fail-with-body -X POST \
+  "$SERVER/api/v1/gate?target=1.37&cluster=prod-eu-1&path=rendered.yaml" \
+  --url-query "config@.upgradescope.yaml" \
+  -H "Authorization: Bearer $READ_TOKEN" \
+  -H "Content-Type: application/x-yaml" \
+  --data-binary @rendered.yaml
+```
+
+`--url-query` needs curl 7.87 or later; with an older curl, append
+`&config=` and the file's URL-encoded text to the URL yourself. Rule `file`
+globs match the `path` parameter. An invalid config is refused with 422
+before anything is judged. The parameter counts toward the server's 64 KiB
+limit on the request line and headers, which is ample for ignore rules.
+
+Suppressed findings count toward neither the verdict nor `fail-on`. The
+JSON answer lists them in `suppressed` with a `suppressedCount`, and names
+expired rules and annotations without a reason in `warnings`. SARIF carries
+them as results with an external suppression, JUnit as skipped test cases,
+and GitLab Code Quality leaves them out, as `scan` does.
+
+The server gate has no baseline input. With `?cluster=`, the cluster's
+stored state is its baseline: findings the cluster already has are tagged
+`source: cluster` and do not fail the gate, and only what the manifests
+introduce counts. Debt in the manifests themselves (a removed API that every
+render still contains) is accepted with `scan --files --baseline` (the
+GitHub Action's `baseline` input) or with ignore rules.
+
 ## The agent: `spec.ignore`
 
 The in-cluster agent reads the same rules from its `ClusterReadiness`
@@ -169,7 +206,9 @@ agent catches the rest (for example, both `key` and `category`). `file`
 never matches live objects.
 
 The agent still pushes the raw inventory to the server. The server's
-dashboard and gate do not apply `spec.ignore`.
+dashboard does not apply `spec.ignore`, and neither does its gate, which
+applies the rules sent with each request instead
+([The server gate](#the-server-gate)).
 
 ## Finding keys
 

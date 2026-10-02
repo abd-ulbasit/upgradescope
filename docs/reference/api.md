@@ -316,6 +316,19 @@ Quality report. SARIF, JUnit and Code Quality hold only the
 findings the manifests introduce; the status and verdict header
 are the same in every format.
 
+Suppression works as in `scan`: the `upgradescope.dev/ignore` and
+`upgradescope.dev/ignore-reason` annotations of posted (and, with
+`cluster`, stored) objects, and the ignore rules of a
+`.upgradescope.yaml` sent in `config`. Suppressed findings count
+toward neither the verdict nor `fail-on`; the JSON answer lists
+them in `suppressed` with `suppressedCount`, SARIF as results with
+an external suppression, JUnit as skipped test cases, and Code
+Quality leaves them out. An expired rule no longer applies; it and
+an annotation without a reason are named in `warnings`. There is
+no baseline input: with `cluster`, the cluster's own findings are
+the baseline (`source: cluster`), and manifest-level debt is
+accepted with `scan --baseline` or ignore rules.
+
 Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
 document, 20,000 documents. Evaluations run one at a time; a
 request that waits more than 30s for its turn, or finds the shared
@@ -330,6 +343,7 @@ Auth: `readToken` (bearer).
 | `format` | query | `json` \| `sarif` \| `junit` \| `gitlab-codequality` | no | — |
 | `fail-on` | query | `blocker` \| `warning` \| `never` | no | — |
 | `path` | query | string | no | The repository-relative file the stream was rendered to (`deploy/rendered.yaml`). Introduced findings are then located in it in SARIF and Code Quality, so code scanning or the merge request widget shows them on the change. |
+| `config` | query | string | no | A `.upgradescope.yaml` (its text, URL-encoded): ignore rules applied as `scan --config` applies them, `file` globs matched against `path`. An invalid config is a 422. The request line, and so this parameter, counts toward the server's 64 KiB request-header limit. |
 
 Request body (`application/x-yaml`): string
 
@@ -340,9 +354,9 @@ Request body (`application/json`): string
 | 200 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) | The gate passed. |
 | 200 | `application/sarif+json` | [SARIF](#sarif) | The gate passed. |
 | 200 | `application/xml` | [JUnit](#junit) | The gate passed. |
-| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on` or `path`, or an undecodable manifest stream: an Error body). |
-| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on` or `path`, or an undecodable manifest stream: an Error body). |
-| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on` or `path`, or an undecodable manifest stream: an Error body). |
+| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
+| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
+| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, or an undecodable manifest stream: an Error body). |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 413 | `application/json` | [Error](#error) | An error. |
@@ -862,6 +876,8 @@ The report's fields other than its findings.
 | `findings` | array of [GateFinding](#gatefinding) | yes | — |
 | `teams` | [TeamScores](#teamscores) | no | — |
 | `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included. |
+| `suppressedCount` | integer | yes | The number of `suppressed` entries. |
+| `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply) or are invalid, and `upgradescope.dev/ignore` annotations without a reason (not applied). |
 
 ### SARIF
 

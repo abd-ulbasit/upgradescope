@@ -482,6 +482,19 @@ paths:
         findings the manifests introduce; the status and verdict header
         are the same in every format.
 
+        Suppression works as in `scan`: the `upgradescope.dev/ignore` and
+        `upgradescope.dev/ignore-reason` annotations of posted (and, with
+        `cluster`, stored) objects, and the ignore rules of a
+        `.upgradescope.yaml` sent in `config`. Suppressed findings count
+        toward neither the verdict nor `fail-on`; the JSON answer lists
+        them in `suppressed` with `suppressedCount`, SARIF as results with
+        an external suppression, JUnit as skipped test cases, and Code
+        Quality leaves them out. An expired rule no longer applies; it and
+        an annotation without a reason are named in `warnings`. There is
+        no baseline input: with `cluster`, the cluster's own findings are
+        the baseline (`source: cluster`), and manifest-level debt is
+        accepted with `scan --baseline` or ignore rules.
+
         Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
         document, 20,000 documents. Evaluations run one at a time; a
         request that waits more than 30s for its turn, or finds the shared
@@ -509,6 +522,15 @@ paths:
             in it in SARIF and Code Quality, so code scanning or the merge
             request widget shows them on the change.
           schema: {type: string}
+        - name: config
+          in: query
+          description: |
+            A `.upgradescope.yaml` (its text, URL-encoded): ignore rules
+            applied as `scan --config` applies them, `file` globs matched
+            against `path`. An invalid config is a 422. The request line,
+            and so this parameter, counts toward the server's 64 KiB
+            request-header limit.
+          schema: {type: string}
       requestBody:
         required: true
         content:
@@ -534,8 +556,8 @@ paths:
         "422":
           description: |
             The gate failed (same body as 200), or the request is invalid
-            (no or bad `target`, bad `format`, `fail-on` or `path`, or an
-            undecodable manifest stream: an Error body).
+            (no or bad `target`, bad `format`, `fail-on`, `path` or
+            `config`, or an undecodable manifest stream: an Error body).
           headers:
             X-Upgradescope-Verdict: {$ref: "#/components/headers/Verdict"}
           content:
@@ -915,13 +937,18 @@ components:
       allOf:
         - {$ref: "#/components/schemas/ReportBase"}
         - type: object
-          required: [findings]
+          required: [findings, suppressedCount]
           properties:
             findings: {type: array, items: {$ref: "#/components/schemas/GateFinding"}}
             teams: {$ref: "#/components/schemas/TeamScores"}
             clusterVerdict:
               $ref: "#/components/schemas/Verdict"
               description: With `cluster`, the verdict of the cluster plus the manifests, existing findings included.
+            suppressedCount: {type: integer, minimum: 0, description: "The number of `suppressed` entries."}
+            warnings:
+              type: array
+              items: {type: string}
+              description: "Suppression warnings: rules in `config` that expired (they no longer apply) or are invalid, and `upgradescope.dev/ignore` annotations without a reason (not applied)."
     SARIF:
       type: object
       description: "A SARIF 2.1.0 log (https://json.schemastore.org/sarif-2.1.0.json) with one run, the report's findings as results."
