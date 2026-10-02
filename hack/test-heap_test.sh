@@ -19,6 +19,8 @@ for want in \
   "internal/server TestUnreadResponsesAreBounded" \
   "internal/server TestUnreadGateResponsesAreBounded" \
   "internal/server TestUnreadFleetResponsesAreBounded" \
+  "internal/server TestFleetDefaultColumnsAreMeasured" \
+  "internal/server TestFleetReadsOfTheWidestGapsAreBounded" \
   "internal/collect TestCollectHelmPeakHeapIsBoundedByOneRelease"; do
   if grep -qxF "$want" <<<"$listed"; then
     echo "ok   lists $want"
