@@ -84,7 +84,7 @@ func TestUnreadFleetResponsesAreBounded(t *testing.T) {
 	s := pushedFleet(t, unreadFleetSize, unreadFleetNameLen)
 	s.slotWriteTimeout = time.Second
 	s.fleetQueueTimeout = 5 * time.Minute // every request is served, none is turned away
-	var minors []string // the most ?targets= takes: maxFleetTargets columns
+	var minors []string                   // the most ?targets= takes: maxFleetTargets columns
 	for i := range maxFleetTargets {
 		minors = append(minors, fmt.Sprintf("1.%d", 30+i))
 	}

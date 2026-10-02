@@ -17,7 +17,7 @@ import (
 // YAML refuses in one.
 func commentSafe(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == ' ' || r == ' ' || r == '\u0085' {
+		if r < 0x20 || r == '\u2028' || r == '\u2029' || r == '\u0085' {
 			return -1
 		}
 		return r
@@ -34,7 +34,7 @@ func yamlQuoted(s string) string {
 			b.WriteString(`\` + string(r))
 		case r < 0x20 || r == 0x7f:
 			fmt.Fprintf(&b, `\x%02X`, r)
-		case r == ' ':
+		case r == '\u2028':
 			b.WriteString(`\L`)
 		default:
 			b.WriteRune(r)
@@ -107,12 +107,12 @@ func TestGateAnswerBoundHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	classes := map[string]string{
-		"letters":  strings.Repeat("abc", 20),
-		"punct":    strings.Repeat("-. %#?/", 10),
-		"html":     strings.Repeat("<>&'", 15),
-		"quote":    strings.Repeat(`"\`, 30),
-		"control":  strings.Repeat("\x00\x01\t\n", 15),
-		"unicode":  strings.Repeat("é✓ ", 15),
+		"letters":   strings.Repeat("abc", 20),
+		"punct":     strings.Repeat("-. %#?/", 10),
+		"html":      strings.Repeat("<>&'", 15),
+		"quote":     strings.Repeat(`"\`, 30),
+		"control":   strings.Repeat("\x00\x01\t\n", 15),
+		"unicode":   strings.Repeat("é✓"+lineSeparator, 15),
 		"realistic": "web-frontend-7d9f",
 	}
 	paths := []string{"", "deploy/rendered.yaml", strings.Repeat(`"/`, 100) + "a b%.yaml", strings.Repeat("é/", 100) + "x.yaml"}

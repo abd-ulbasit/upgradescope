@@ -125,7 +125,7 @@ func TestIngestRefusesInvalidUTF8(t *testing.T) {
 func TestCanonicalHashIsJSONMarshals(t *testing.T) {
 	inv := testInventoryWithPSP()
 	inv.APIUsage[0].Objects = []inventory.ObjectRef{
-		{Namespace: "a<b>&c", Name: "line\nbreak    \"q\" \\ \u0001 é", Manager: "x"},
+		{Namespace: "a<b>&c", Name: "line\nbreak \u2028\u2029 \"q\" \\ \u0001 é", Manager: "x"},
 		{Name: unicodeEscape(0x3c) + " already escaped"},
 	}
 	for _, v := range []any{inv, map[string]any{"raw": json.RawMessage(`{"k":"<&>"}`), "s": "<<>>&&"}, "plain"} {

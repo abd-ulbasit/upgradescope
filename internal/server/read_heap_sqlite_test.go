@@ -77,7 +77,7 @@ func storedHeapShapes() map[string]func(int) string {
 			return pspUsagesNamed(size, strings.Repeat("<", 190))
 		},
 		"PSP usages, long names of U+2028": func(size int) string {
-			return pspUsagesNamed(size, strings.Repeat(" ", 63))
+			return pspUsagesNamed(size, strings.Repeat("\u2028", 63))
 		},
 	}
 }
