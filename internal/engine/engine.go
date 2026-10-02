@@ -99,7 +99,9 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 // manifest objects in files mode),
 //   - removed at ≤ target          → blocker, removed-api
 //   - removed exactly at target+1  → warning, removed-api
-//   - deprecated, removal beyond the window or unset → info, deprecated-api
+//   - deprecated, removal beyond the window or unset → info, deprecated-api;
+//     a deprecation after the target is titled as such, and "projected"
+//     past the KB horizon
 func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
 	idx := kb.NewIndex(k.APILifecycle)
 	var out []Finding
@@ -142,6 +144,13 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 			f.Category = CatDeprecatedAPI
 			f.Severity = SevInfo
 			f.Title = fmt.Sprintf("%s %s deprecated since %s (%s)", gv, u.Kind, e.Deprecated, pluralObjects(u.Count))
+			if e.Deprecated.Compare(target) > 0 {
+				when := e.Deprecated.String()
+				if e.Deprecated.Compare(k.MaxKnownK8s) > 0 {
+					when += " (projected)" // k8s.io/api's lifecycle markers, not a release
+				}
+				f.Title = fmt.Sprintf("%s %s deprecated in %s, after target %s (%s)", gv, u.Kind, when, target, pluralObjects(u.Count))
+			}
 		default:
 			continue // KB entry exists but is neither deprecated nor removed
 		}
