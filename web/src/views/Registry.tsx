@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { getRegistry } from "../api";
 import { useAsync } from "../hooks";
 import type { AddOn } from "../types";
-import { Empty, ErrorState, Loading } from "../ui";
+import { Citations, Empty, ErrorState, Loading } from "../ui";
 
 // Registry: browse the add-on EOL/compat dataset embedded in this server
 // binary (GET /api/v1/registry) — exactly what evaluations run against.
@@ -108,21 +108,7 @@ function AddOnCard({ a }: { a: AddOn }) {
         </div>
       )}
       {a.recommendation && <p className="remediation">{a.recommendation}</p>}
-      <p className="citations">
-        {a.support.citations.map((url) => (
-          <a key={url} href={url} target="_blank" rel="noreferrer">
-            {hostOf(url)}
-          </a>
-        ))}
-      </p>
+      <Citations urls={a.support.citations} />
     </article>
   );
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }
