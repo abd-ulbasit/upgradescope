@@ -109,6 +109,7 @@ stub install-tool 'echo "'"$stubs"'/$1"'
 # <apiVersion> <resource> <name> <requestURI> [deprecated] [subresource].
 SCAN_UA="upgradescope/v0.0.0 (linux/amd64) kubernetes/\$Format"
 AGENT=system:serviceaccount:upgradescope:upgradescope
+KUBECTL_UA="kubectl/v1.37.1 (linux/amd64) kubernetes/abc"
 ev() {
   jq -nc --arg user "$1" --arg ua "$2" --arg verb "$3" --arg group "$4" --arg version "$5" \
     --arg resource "$6" --arg name "$7" --arg uri "$8" --arg dep "${9:-}" --arg sub "${10:-}" '{
@@ -132,9 +133,11 @@ ev() {
   ev "$AGENT" "$SCAN_UA" patch apiextensions.k8s.io v1 customresourcedefinitions clusterreadinesses.upgradescope.dev "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterreadinesses.upgradescope.dev?fieldManager=upgradescope-agent"
   ev "$AGENT" "$SCAN_UA" create upgradescope.dev v1alpha1 clusterreadinesses cluster "/apis/upgradescope.dev/v1alpha1/clusterreadinesses"
   ev "$AGENT" "$SCAN_UA" update upgradescope.dev v1alpha1 clusterreadinesses cluster "/apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster/status" "" status
-  # Not upgradescope: kubectl through a deprecated API, the in-process ITs
+  # Not upgradescope: kubectl applying the deprecated-API fixture (1.31's and
+  # 1.37's row; the audit gates' positive control), the in-process ITs
   # writing their own CRD and CR, a controller writing a Secret.
-  ev kubernetes-admin "kubectl/v1.37.1 (linux/amd64) kubernetes/abc" patch flowcontrol.apiserver.k8s.io v1beta3 flowschemas e2e "/apis/flowcontrol.apiserver.k8s.io/v1beta3/flowschemas/e2e" deprecated
+  ev kubernetes-admin "$KUBECTL_UA" patch flowcontrol.apiserver.k8s.io v1beta3 flowschemas upgradescope-e2e-deprecated "/apis/flowcontrol.apiserver.k8s.io/v1beta3/flowschemas/upgradescope-e2e-deprecated?fieldManager=upgradescope-e2e" deprecated
+  ev kubernetes-admin "$KUBECTL_UA" patch resource.k8s.io v1beta1 deviceclasses upgradescope-e2e-deprecated "/apis/resource.k8s.io/v1beta1/deviceclasses/upgradescope-e2e-deprecated?fieldManager=upgradescope-e2e" deprecated
   ev kubernetes-admin "cli.test/v0.0.0 (linux/amd64) kubernetes/\$Format" create upgradescope.dev v1alpha1 clusterreadinesses it-agent "/apis/upgradescope.dev/v1alpha1/clusterreadinesses"
   ev system:serviceaccount:kube-system:token-cleaner kube-controller-manager update "" v1 secrets bootstrap-token-abcdef "/api/v1/namespaces/kube-system/secrets/bootstrap-token-abcdef"
 } >"$work/audit.jsonl"
@@ -192,6 +195,7 @@ has "the agent write-set audit gate passes" "$work/summary" "- PASS — audit: t
 has "the Secrets audit gate passes" "$work/summary" "- PASS — audit: Secrets were read only through Helm's owner=helm list and release GETs"
 has "the scan-writes audit gate passes" "$work/summary" "- PASS — audit: scan wrote nothing"
 has "allowlisted requests are listed" "$work/out" "  v1 componentstatuses (scan)"
+has "the positive control is reported" "$work/out" "positive control: 1 request(s) through flowcontrol.apiserver.k8s.io/v1beta3 annotated k8s.io/deprecated"
 has "the unreachable-server gate passes" "$work/summary" "- PASS — scan against an unreachable API server exits 1"
 has "the deprecated-object gate passes" "$work/summary" "- PASS — an object written through flowcontrol.apiserver.k8s.io/v1beta3 is reported with its manager; re-applied through flowcontrol.apiserver.k8s.io/v1 it is not"
 has "the EOL add-on gate passes" "$work/summary" "- PASS — scan reports the EOL ingress-nginx installed from the upstream chart as a blocker and exits 2"
@@ -261,6 +265,13 @@ audit_with dep.jsonl "$(ev kubernetes-admin "$SCAN_UA" list coordination.k8s.io 
 run "a deprecated-API request from scan outside the allowlist fails the run" 1 STUB_AUDIT="$work/dep.jsonl"
 has "the request is named" "$work/out" "coordination.k8s.io/v1beta1 leasecandidates scan list"
 has "the deprecated-request gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: scan and the agent made no deprecated-API request"
+
+# The positive control: with the apiserver no longer annotating the e2e's
+# own deprecated apply, a zero count proves nothing and must not pass.
+grep -v "$KUBECTL_UA" "$work/audit.jsonl" >"$work/nocontrol.jsonl"
+run "a log in which the e2e's own deprecated apply is not annotated fails the run" 1 STUB_AUDIT="$work/nocontrol.jsonl"
+has "the missing control is explained" "$work/out" "the flowcontrol.apiserver.k8s.io/v1beta3 apply of upgradescope-e2e-deprecated is not annotated k8s.io/deprecated"
+has "the control failure is the deprecated-request gate's" "$work/summary" "- **FAIL** — audit: scan and the agent made no deprecated-API request"
 
 printf '# nothing allowed\n' >"$work/empty-allowlist.txt"
 run "an emptied allowlist makes today's self-requests fail" 1 E2E_DEPRECATED_ALLOWLIST="$work/empty-allowlist.txt"

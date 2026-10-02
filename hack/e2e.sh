@@ -30,7 +30,9 @@
 #   9. from the API server's audit log (hack/e2e/audit-policy.yaml, Metadata
 #      level, over the whole run): `upgradescope scan` and the agent's
 #      ServiceAccount made no deprecated-API request (k8s.io/deprecated)
-#      outside hack/e2e/deprecated-request-allowlist.txt; the agent wrote
+#      outside hack/e2e/deprecated-request-allowlist.txt, while step 2's
+#      apply through the deprecated group/version is annotated (the
+#      positive control: the annotation is being recorded); the agent wrote
 #      only its ClusterReadiness (+ status) and the ClusterReadiness CRD;
 #      Secrets were read only through Helm's owner=helm list and GETs of
 #      Helm release Secrets; scan wrote nothing. Skipped on a reused
@@ -49,10 +51,11 @@
 # inspection; `make demo-down` deletes it.
 #
 # Needs Docker, helm, go, jq and curl; installs kind and kubectl itself.
-# Docker must be this machine's engine: kind mounts the audit policy from
-# this checkout's path, and the integration tests trust a kind-* context only
-# when its API server is on loopback. With a remote engine, run the e2e on
-# that machine.
+# Docker must be this machine's engine: the audit policy is an extraMount of
+# this checkout's path, which the engine's host resolves; kubectl, scan and
+# the integration tests dial the 127.0.0.1:<port> kind writes into the
+# kubeconfig, which is the engine's host too. With a remote engine, run the
+# e2e on that machine.
 #
 # Knobs: E2E_MINOR (default 1.37). For hack/e2e_test.sh, which runs this
 # against stubs: E2E_INSTALL_TOOL, E2E_UPGRADESCOPE (the binary `make build`
@@ -442,14 +445,15 @@ JQ_ACTORS='
   def show: "\(actor) \(.verb) \(.requestURI) -> \(.responseStatus.code // "?")";
 '
 # audit <jq filter>: the filter over every event of this run's audit log,
-# with JQ_ACTORS and $sa, $cr and $crd bound.
+# with JQ_ACTORS and $sa, $cr, $crd, $dep and $obj bound.
 audit() {
   if [ ! -s "$work/audit.log" ]; then
     docker exec "$CLUSTER-control-plane" sh -c "cat $AUDIT_LOGS/audit*.log" >"$work/audit.log" || return 1
     [ -s "$work/audit.log" ] || { echo "the API server's audit log is empty (hack/e2e/kind-config.yaml not applied?)" >&2; return 1; }
     echo "audit log: $(wc -l <"$work/audit.log" | tr -d ' ') events" >&2
   fi
-  jq -r --arg sa "$AGENT_SA" --arg cr "$CR" --arg crd "$CRD" "$JQ_ACTORS $1" "$work/audit.log"
+  jq -r --arg sa "$AGENT_SA" --arg cr "$CR" --arg crd "$CRD" --arg dep "$DEP_GV" --arg obj "$DEP_OBJ" \
+    "$JQ_ACTORS $1" "$work/audit.log"
 }
 
 # count <jq filter>: how many events it selects.
@@ -472,6 +476,17 @@ audit_saw_both() {
 
 audit_no_deprecated_requests() {
   audit_saw_both || return 1
+  # The positive control: deprecated_object_reported applied the fixture
+  # through $DEP_GV, so the log must carry that request annotated. If the
+  # API server stopped recording k8s.io/deprecated (policy level, renamed
+  # annotation), zero deprecated requests below would prove nothing.
+  local n
+  n=$(count 'select(gv == $dep and .objectRef.name == $obj and .annotations["k8s.io/deprecated"] == "true")') || return 1
+  [ "$n" -gt 0 ] || {
+    echo "the $DEP_GV apply of $DEP_OBJ is not annotated k8s.io/deprecated in the audit log: a clean result would be vacuous" >&2
+    return 1
+  }
+  echo "positive control: $n request(s) through $DEP_GV annotated k8s.io/deprecated"
   local got
   got=$(audit 'select(.annotations["k8s.io/deprecated"] == "true") | select(actor) | "\(gv) \(.objectRef.resource) \(actor) \(.verb) \(.requestURI)"' |
     sort -u) || return 1
