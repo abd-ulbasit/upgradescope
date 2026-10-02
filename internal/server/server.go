@@ -47,6 +47,7 @@ type Config struct {
 	Notifier     notify.Notifier // nil = notifications disabled
 	IngestToken  string          // optional shared bearer for POST /api/v1/snapshots (any cluster); "" = per-cluster tokens only
 	ReadToken    string          // optional bearer for the read API; "" = open (document loudly)
+	AdminToken   string          // bearer for cluster delete/rename (also accepted for reads); "" = both refused
 	TeamMap      TeamMap         // optional namespace→team override, applied before every Evaluate
 	Version      string          // build version stamped into SARIF tool metadata ("" = omitted)
 
@@ -180,6 +181,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
 	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.handleListClusters))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.handleGetCluster))
+	s.mux.HandleFunc("DELETE /api/v1/clusters/{id}", s.adminAuth(s.handleDeleteCluster))
+	s.mux.HandleFunc("PATCH /api/v1/clusters/{id}", s.adminAuth(s.handleRenameCluster))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/report", s.readAuth(s.handleReport))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/findings", s.readAuth(s.handleFindings))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/history", s.readAuth(s.handleHistory))
@@ -369,6 +372,9 @@ func (s *Server) logStartup() {
 	log.Printf("server: listening on %s://%s", scheme, s.Addr())
 	if s.cfg.ReadToken == "" {
 		log.Printf("WARN server: no read token: the read API, dashboard data and /api/v1/gate are open to anyone who can reach %s", s.Addr())
+	}
+	if s.cfg.AdminToken == "" {
+		log.Printf("server: no admin token: cluster delete and rename (DELETE/PATCH /api/v1/clusters/{id}) are refused")
 	}
 	if s.cfg.IngestToken == "" {
 		log.Printf("server: no shared ingest token: snapshot pushes need a per-cluster token ('upgradescope tokens create')")

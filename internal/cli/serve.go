@@ -27,6 +27,7 @@ type serveOptions struct {
 	dbURL        string
 	ingestToken  string
 	readToken    string
+	adminToken   string
 	slackWebhook string
 	webhook      string
 	targets      string
@@ -81,6 +82,7 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		Notifier:     notify.Multi(notifiers...), // zero notifiers → harmless no-op
 		IngestToken:  opts.ingestToken,
 		ReadToken:    opts.readToken,
+		AdminToken:   opts.adminToken,
 		ExtraTargets: extraTargets,
 		TeamMap:      opts.parsedTeamMap,
 		Version:      version,
@@ -160,6 +162,8 @@ func newServeCmd() *cobra.Command {
 			"optional shared bearer token that may push snapshots as ANY cluster; omit it to accept only per-cluster tokens from 'upgradescope tokens create' (serve warns at startup, not later, when both are in use)"),
 		addSecretFlag(cmd, &opts.readToken, "read-token", "UPGRADESCOPE_READ_TOKEN",
 			"bearer token for the read API and /api/v1/gate (empty = OPEN read access; refused on non-loopback --listen without --allow-anonymous-read)"),
+		addSecretFlag(cmd, &opts.adminToken, "admin-token", "UPGRADESCOPE_ADMIN_TOKEN",
+			"bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server'; it also reads (empty = administration refused)"),
 		addSecretFlag(cmd, &opts.slackWebhook, "slack-webhook", "UPGRADESCOPE_SLACK_WEBHOOK",
 			"Slack incoming-webhook URL for delta notifications"),
 		addSecretFlag(cmd, &opts.webhook, "webhook", "UPGRADESCOPE_WEBHOOK_URL",
@@ -200,6 +204,10 @@ func validateServeOptions(opts *serveOptions) error {
 	}
 	if opts.maxGateBytes <= 0 {
 		return fmt.Errorf("--max-gate-bytes must be positive, got %d", opts.maxGateBytes)
+	}
+	if opts.adminToken != "" && (opts.adminToken == opts.readToken || opts.adminToken == opts.ingestToken) {
+		return fmt.Errorf("--admin-token must differ from --read-token and --ingest-token: " +
+			"whoever holds those must not be able to delete or rename clusters")
 	}
 	if opts.readToken == "" && !opts.allowAnonymousRead && !isLoopbackListen(opts.listen) {
 		return fmt.Errorf("refusing to serve the read API and /api/v1/gate without a token on %q: "+

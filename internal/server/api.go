@@ -485,9 +485,11 @@ func writeUIDConflict(w http.ResponseWriter, conflict *store.ClusterUIDConflictE
 
 // readAuth gates a read handler behind Config.ReadToken when configured;
 // an empty ReadToken leaves the read API open (the CLI documents this loudly).
+// The admin token reads too, so one credential can list and then delete.
 func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.ReadToken != "" && !bearerOK(r, s.cfg.ReadToken) {
+		if s.cfg.ReadToken != "" && !bearerOK(r, s.cfg.ReadToken) &&
+			(s.cfg.AdminToken == "" || !bearerOK(r, s.cfg.AdminToken)) {
 			errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
 			return
 		}

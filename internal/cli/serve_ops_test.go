@@ -1,0 +1,46 @@
+package cli
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// The admin token is a secret like the others: flag, env or file.
+func TestServeAdminToken(t *testing.T) {
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error {
+		got = opts
+		return nil
+	}
+	if err := execServe(t, nil, capture); err != nil || got.adminToken != "" {
+		t.Fatalf("default admin token = %q (err %v), want empty: administration off", got.adminToken, err)
+	}
+	t.Setenv("UPGRADESCOPE_ADMIN_TOKEN", "env-admin")
+	if err := execServe(t, nil, capture); err != nil || got.adminToken != "env-admin" {
+		t.Fatalf("admin token from env = %q (err %v)", got.adminToken, err)
+	}
+	p := filepath.Join(t.TempDir(), "admin")
+	if err := os.WriteFile(p, []byte("file-admin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := execServe(t, []string{"--admin-token-file", p}, capture); err != nil || got.adminToken != "file-admin" {
+		t.Fatalf("admin token from file = %q (err %v)", got.adminToken, err)
+	}
+}
+
+// Reusing the read or ingest token as the admin token would hand cluster
+// deletion to every dashboard user or agent.
+func TestServeRefusesSharedAdminToken(t *testing.T) {
+	for _, args := range [][]string{
+		{"--read-token", "same", "--admin-token", "same"},
+		{"--ingest-token", "same", "--admin-token", "same"},
+	} {
+		err := execServe(t, args, serveOK())
+		if err == nil || !strings.Contains(err.Error(), "--admin-token") {
+			t.Errorf("serve %v: err = %v, want a refusal naming --admin-token", args, err)
+		}
+	}
+}
