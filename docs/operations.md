@@ -112,8 +112,10 @@ attempts (about an hour), separately per sink. Delivery is at least once:
 deduplicate on `deliveryId`.
 
 There is **one notification per cluster per evaluation pass**, grouping all
-targets: a change found for several targets (an EOL add-on is a blocker for
-every target) is one entry listing them. Each notification lists at most 5
+targets: a change found for several targets with the same title and detail
+(an EOL add-on is a blocker for every target) is one entry listing them; a
+finding whose wording names the target keeps one entry per target, each in
+its own words. Each notification lists at most 5
 new blockers and 5 eol-approaching changes; the rest are counted in
 `omitted`.
 

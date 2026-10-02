@@ -119,3 +119,45 @@ func TestLegacyOutboxPayloadStillDelivers(t *testing.T) {
 		t.Errorf("legacy message delivered as %+v", got)
 	}
 }
+
+// TestGroupedChangeKeepsPerTargetWording: one finding key across targets
+// merges into one change only when its title and detail read the same for
+// each; when they mention the target (a skew finding names the target
+// version), each target keeps its own wording instead of the first
+// target's title listing every target.
+func TestGroupedChangeKeepsPerTargetWording(t *testing.T) {
+	change := func(target, title, detail string) notify.Change {
+		return notify.Change{Kind: notify.KindNewBlocker, Key: "skew/kubelet", Severity: "blocker", Title: title, Detail: detail, Targets: []string{target}}
+	}
+	deltas := []targetDelta{
+		{target: notify.Target{Target: "1.35"}, changes: []notify.Change{
+			change("1.35", "kubelets 3 minors behind 1.35", "upgrade nodes first"),
+			{Kind: notify.KindNewBlocker, Key: "psp", Severity: "blocker", Title: "PSP removed in 1.35", Targets: []string{"1.35"}},
+		}},
+		{target: notify.Target{Target: "1.36"}, changes: []notify.Change{
+			change("1.36", "kubelets 4 minors behind 1.36", "upgrade nodes first"),
+			{Kind: notify.KindNewBlocker, Key: "psp", Severity: "blocker", Title: "PSP removed in 1.35", Targets: []string{"1.36"}},
+		}},
+	}
+	n, ok := buildNotification(store.Cluster{ID: 1, Name: "prod"}, deltas, time.Now(), "id")
+	if !ok {
+		t.Fatal("no notification")
+	}
+	got := map[string][]string{}
+	for _, c := range n.Changes {
+		got[c.Title] = c.Targets
+	}
+	want := map[string][]string{
+		"kubelets 3 minors behind 1.35": {"1.35"},
+		"kubelets 4 minors behind 1.36": {"1.36"},
+		"PSP removed in 1.35":           {"1.35", "1.36"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("changes = %+v, want %v", n.Changes, want)
+	}
+	for title, targets := range want {
+		if !slices.Equal(got[title], targets) {
+			t.Errorf("change %q targets = %v, want %v", title, got[title], targets)
+		}
+	}
+}

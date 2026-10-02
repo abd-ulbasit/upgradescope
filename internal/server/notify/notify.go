@@ -41,9 +41,10 @@ type Notification struct {
 	Cluster       Cluster   `json:"cluster"`
 	// Targets is the verdict after the pass for every target with a change.
 	Targets []Target `json:"targets"`
-	// Changes is the findings delta. A change found for several targets
-	// (an EOL add-on is a blocker for every target) is one entry listing
-	// them all.
+	// Changes is the findings delta. A change found for several targets,
+	// worded the same for each (an EOL add-on is a blocker for every
+	// target), is one entry listing them all; wording that names the
+	// target keeps an entry per target.
 	Changes []Change `json:"changes"`
 	// Omitted counts changes left out by the per-kind cap, by kind.
 	Omitted map[string]int `json:"omitted,omitempty"`

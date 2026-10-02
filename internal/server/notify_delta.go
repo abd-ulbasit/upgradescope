@@ -107,8 +107,9 @@ var kindRank = map[string]int{notify.KindNewBlocker: 0, notify.KindBecameReady: 
 var kindCap = map[string]int{notify.KindNewBlocker: maxBlockerChanges, notify.KindEOLApproaching: maxEOLChanges}
 
 // buildNotification groups one pass's deltas for one cluster into a single
-// notification: a change found for several targets (an EOL add-on is a
-// blocker for each of them) becomes one change listing them all, then
+// notification: a change found for several targets with the same wording
+// (an EOL add-on is a blocker for each of them) becomes one change listing
+// them all, then
 // new-blocker and eol-approaching changes are capped, the rest counted in
 // Omitted. ok is false when the pass changed nothing.
 func buildNotification(cluster store.Cluster, deltas []targetDelta, now time.Time, deliveryID string) (n notify.Notification, ok bool) {
@@ -126,10 +127,10 @@ func buildNotification(cluster store.Cluster, deltas []targetDelta, now time.Tim
 		}
 		n.Targets = append(n.Targets, d.target)
 		for _, c := range d.changes {
-			id := c.Kind + "\x00" + c.Key
-			if c.Key == "" {
-				id += "\x00" + c.Title
-			}
+			// Same finding, same wording: one change for all its targets.
+			// A title or detail that names the target keeps a change per
+			// target, so no target is described in another's words.
+			id := c.Kind + "\x00" + c.Key + "\x00" + c.Title + "\x00" + c.Detail
 			if i, seen := merged[id]; seen {
 				n.Changes[i].Targets = append(n.Changes[i].Targets, c.Targets...)
 				continue
