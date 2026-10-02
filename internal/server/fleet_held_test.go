@@ -84,7 +84,11 @@ func TestUnreadFleetResponsesAreBounded(t *testing.T) {
 	s := pushedFleet(t, unreadFleetSize, unreadFleetNameLen)
 	s.slotWriteTimeout = time.Second
 	s.fleetQueueTimeout = 5 * time.Minute // every request is served, none is turned away
-	for _, path := range []string{"/api/v1/clusters", "/api/v1/fleet", "/metrics"} {
+	var minors []string // the most ?targets= takes: maxFleetTargets columns
+	for i := range maxFleetTargets {
+		minors = append(minors, fmt.Sprintf("1.%d", 30+i))
+	}
+	for _, path := range []string{"/api/v1/clusters", "/api/v1/fleet", "/api/v1/fleet?targets=" + strings.Join(minors, ","), "/metrics"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))

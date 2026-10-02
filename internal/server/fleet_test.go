@@ -2,8 +2,11 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -126,6 +129,32 @@ func TestFleetMatrixBadTargets(t *testing.T) {
 	defer done()
 	if resp := getJSON(t, ts, "/api/v1/fleet?targets=banana", "", nil); resp.StatusCode != 422 {
 		t.Fatalf("bad targets status = %d, want 422", resp.StatusCode)
+	}
+}
+
+// ?targets= took any number of distinct minors, bounded only by the 64 KiB
+// URL: 8,718 of them against a 500-cluster fleet held a fleet slot for
+// 2m13s (a store query per cell), grew the heap 418 MiB and answered
+// 57 MiB. At most maxFleetTargets distinct minors are taken (a repeat
+// does not count); more is 422 before any cell is read.
+func TestFleetTargetsAreCapped(t *testing.T) {
+	ts, done := fleetFixture(t)
+	defer done()
+	minors := func(n int) string {
+		var out []string
+		for i := range n {
+			out = append(out, fmt.Sprintf("1.%d", 30+i))
+		}
+		return strings.Join(out, ",")
+	}
+	var got fleetMatrix
+	if resp := getJSON(t, ts, "/api/v1/fleet?targets="+minors(maxFleetTargets)+",1.30", "", &got); resp.StatusCode != http.StatusOK ||
+		len(got.Targets) != maxFleetTargets {
+		t.Fatalf("%d distinct targets and a repeat: status %d, %d targets; want 200 with %d", maxFleetTargets, resp.StatusCode, len(got.Targets), maxFleetTargets)
+	}
+	resp, body := getRaw(t, ts, "/api/v1/fleet?targets="+minors(maxFleetTargets+1), "")
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, fmt.Sprint(maxFleetTargets)) {
+		t.Fatalf("%d distinct targets: status %d (%s), want 422 naming the limit", maxFleetTargets+1, resp.StatusCode, body)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -96,7 +97,9 @@ func (s *Server) clusterStates(ctx context.Context) ([]clusterState, error) {
 // a null cell; nothing is recomputed. A column at or below a cluster's
 // version is null too and listed in the row's notApplicable. Cells are
 // read with CurrentEvaluationSummary, so no report is loaded: the matrix
-// takes no read slot and costs about its response.
+// runs in a fleet slot, not the read slot, and costs about its response,
+// which is clusters x targets cells. ?targets= takes at most
+// maxFleetTargets distinct minors (422 above it).
 func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	states, err := s.clusterStates(ctx)
@@ -114,6 +117,11 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !containsVersion(targets, v) {
+				if len(targets) == maxFleetTargets {
+					errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+						"targets lists more than %d distinct minors; ask for at most %d at a time", maxFleetTargets, maxFleetTargets))
+					return
+				}
 				targets = append(targets, v)
 			}
 		}
@@ -156,6 +164,13 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, fleetResponse{Targets: names, Clusters: rows})
 }
+
+// maxFleetTargets caps the distinct minors ?targets= may ask the fleet
+// matrix for. Each is a column, a store query per cluster: unbounded but
+// for the 64 KiB URL, 8,718 of them against 500 clusters held a fleet
+// slot for 2m13s, grew the heap 418 MiB and answered 57 MiB. Sixteen
+// minors is four years of Kubernetes releases.
+const maxFleetTargets = 16
 
 func containsVersion(vs []inventory.Version, v inventory.Version) bool {
 	for _, x := range vs {
