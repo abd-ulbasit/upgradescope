@@ -77,19 +77,28 @@ read before: up to 90 MiB in all (`TestReadHeapIsBounded`, on SQLite at
 the snapshot node budget, fails above 128 MiB).
 
 A response is written to memory in the slot and sent after it, so a
-client that is slow to read holds its response, not the slot. Those
-responses share a budget of twice `--max-snapshot-bytes` (40 MiB) while
-their clients read them, for up to the 120s write timeout; one that does
-not fit is sent in the slot instead, and a client that has not taken it
-within 20s is cut off, so the next read waits for it, not for memory.
-Before the budget, nothing capped how many responses were held: 20
-clients that asked for that 17.5 MB report and never read it grew the
-live heap 366 MiB with the slot free, and a 120s window holds about 100.
-Now 8 or 20 such clients, over real sockets, leave 33 MiB live (two
-reports held, the rest sent in the slot and cut off), and the heap
-peaks 124-141 MiB above idle with the read in the slot
-(`TestUnreadResponsesAreBounded`, which fails above the budget for what
-stays live and above 168 MiB at the peak).
+client that is slow to read holds its response, not the slot. `/gate`
+does the same with its answer: it is encoded in the evaluation slot,
+after which the reports it was built from are garbage. These responses,
+the reads' and `/gate`'s, share one budget of twice
+`--max-snapshot-bytes` (40 MiB) while their clients read them, for up to
+the 120s write timeout. One that does not fit what is left of the budget
+gets `503` with `Retry-After` instead (its work is lost, but no slot
+waits on a client); one larger than the whole budget, which could never
+fit, is sent in its slot, and a client that has not taken it within 20s
+is cut off. Every such response carries its `Content-Length`, so a
+client can tell a cut-off body from a whole one. Before the budget,
+nothing capped how many responses were held: 20 clients that asked for
+that 17.5 MB report and never read it grew the live heap 366 MiB with
+the slot free, 10 that sent `/gate?cluster=` against that cluster and
+never read the answer grew it 320 MiB (~32 MiB each: the report, the
+answer and its encoding), and a 120s window holds about 100 of either.
+Now 8 or 20 such readers, or 10 such `/gate` clients, over real sockets,
+leave 33 MiB live (two responses held, the rest answered `503`), and the
+heap peaks 122-124 MiB above idle with the request in its slot
+(`TestUnreadResponsesAreBounded` and `TestUnreadGateResponsesAreBounded`,
+which fail above the budget for what stays live, and at the peak above
+168 MiB for reads and 240 MiB for `/gate`).
 
 `/clusters`, `/fleet` and `/metrics` take no slot, so they must cost
 about their response whatever was stored: they read each cluster's
@@ -102,13 +111,14 @@ now by at most 2 MiB (`TestFleetReadsLoadNoReport`).
 Worst case for the chart's 640Mi server, each part measured on SQLite
 against the dearest snapshot at its node budget
 (`TestStoredSnapshotHeapIsBounded`, `TestReadHeapIsBounded`,
-`TestUnreadResponsesAreBounded`): one
-`/gate` request in the evaluation slot (~155 MiB, with `?cluster=` too,
-since the cluster's inventory is decoded once the manifests' node trees
-are garbage) plus one ingest (~115 MiB for the 17 MB push whose three
-stored reports are each as large, its copy of the body included) plus
-one read in the read slot (~90 MiB, its response included) plus the
-responses held for their clients (the 40 MiB budget) plus the background
+`TestUnreadResponsesAreBounded`, `TestUnreadGateResponsesAreBounded`):
+one `/gate` request in the evaluation slot (~155 MiB, with `?cluster=`
+too, since the cluster's inventory is decoded once the manifests' node
+trees are garbage, its encoded answer included) plus one ingest
+(~115 MiB for the 17 MB push whose three stored reports are each as
+large, its copy of the body included) plus one read in the read slot
+(~90 MiB, its response included) plus the read and `/gate` responses
+held for their clients (the one 40 MiB budget) plus the background
 re-evaluation pass, which takes clusters one at a time (~85 MiB for that
 snapshot and three targets) plus both body budgets (70 MiB; an ingest
 gives its share back once it holds that copy, so another push can wait
@@ -116,7 +126,15 @@ in it): about 555 MiB, inside the 576 MiB `GOMEMLIMIT` the chart derives
 from the limit. Below about 620Mi, that sum no longer fits under
 `GOMEMLIMIT`.
 
-One thing is outside these bounds: a snapshot a v0.1 server stored
+Two things are outside these bounds. These are Go heap figures, and the
+kernel's socket buffers are not in them: Linux grows each connection's
+send buffer up to `net.ipv4.tcp_wmem`'s maximum (4 MiB by default), and
+on cgroup v2 that memory is charged to the pod's limit, outside
+`GOMEMLIMIT`. Nothing in the server caps how many connections a client
+opens, so many that do not read can hold up to that much each, until a
+write deadline or the write timeout closes them and the kernel gives up
+on what they left unsent. The tests above shrink the server's buffers to
+4 KiB, so they measure the heap alone. And a snapshot a v0.1 server stored
 before the budgets existed (up to 20 MiB of any shape) is decoded
 without a node count when `/gate?cluster=`, the re-evaluation pass or a
 what-if read reads it (a report, its findings or teams for a target with

@@ -92,10 +92,11 @@ In scope:
   request at a time per endpoint doing anything whose memory follows the
   input's structure (measuring what YAML aliases expand to, decoding,
   evaluating); the per-cluster reads, which load a stored snapshot and
-  may evaluate it, share one more such slot. Their responses wait for
-  their clients in a budget of twice `--max-snapshot-bytes`; one that
-  does not fit is sent in the slot, and its client gets 20s to take it.
-  The reads of the whole fleet
+  may evaluate it, share one more such slot. Their responses and
+  `/gate`'s answers are built in the slot and wait for their clients in
+  one budget of twice `--max-snapshot-bytes`; one that does not fit what
+  is left of it is `503`, and one larger than the whole budget is sent in
+  its slot, whose client gets 20s to take it. The reads of the whole fleet
   (`/clusters`, `/fleet`, `/metrics`) take no slot and load no snapshot
   inventory and no stored report. Any request that makes the
   server use memory beyond them is in scope, with or without credentials.
@@ -103,11 +104,15 @@ In scope:
   `--max-gate-bytes` and then stalls makes other `/gate` requests `503`
   until the 60s read timeout cuts it off; one that keeps asking for
   what-if reports keeps other per-cluster reads waiting; and clients that
-  ask for large reports (one can be about as large as its snapshot) and
-  do not read them fill the response budget for up to the 120s write
-  timeout, after which each such request holds the read slot for 20s, so
-  other per-cluster reads wait or get `503`. All of these need no
-  credentials when the read API is open. And a snapshot a v0.1
+  ask for large reports or `/gate?cluster=` answers (one can be about as
+  large as its snapshot) and do not read them fill the response budget
+  for up to the 120s write timeout, during which other large reads and
+  `/gate` answers get `503`. All of these need no credentials when the
+  read API is open. The kernel's socket buffers are outside the budgets:
+  each connection that does not read can hold up to the host's TCP send
+  buffer maximum (4 MiB by default on Linux) of the pod's memory until a
+  write deadline closes it, and the server does not cap connections. And
+  a snapshot a v0.1
   server stored before these budgets existed is decoded without a node
   count when `/gate?cluster=`, re-evaluation or a what-if read reads it,
   and, having no stored server version, is loaded whole by `/clusters`,

@@ -325,9 +325,9 @@ server:
   # holds one /gate decode, one snapshot ingest, one cluster read and the
   # re-evaluation pass at their worst, measured on SQLite (~155, ~115, ~90
   # and ~85 MiB of heap), plus the buffered /gate and snapshot bodies (30
-  # and 40 MiB) and the read responses held for their clients (40 MiB):
-  # ~555 MiB. Snapshots a v0.1 server stored are outside it: see
-  # docs/operations.md.
+  # and 40 MiB) and the read and /gate responses held for their clients
+  # (one 40 MiB budget): ~555 MiB of heap. Kernel socket buffers and
+  # snapshots a v0.1 server stored are outside it: see docs/operations.md.
   resources:
     requests:
       cpu: 100m

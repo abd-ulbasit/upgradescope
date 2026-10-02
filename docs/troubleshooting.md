@@ -113,13 +113,15 @@ To accept a finding for now, with a reason and an expiry, use an
   ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **A push or `/gate` gets 408 or 503.** 408: the body did not arrive
   within the server's read timeout (60s); 503 with `Retry-After`: other
-  requests hold the shared body budget or the decode slot. The agent
-  retries both; a CI caller should retry too.
+  requests hold the shared body budget or the decode slot, or, for
+  `/gate`, responses still waiting for their clients leave no room for
+  this answer. The agent retries both; a CI caller should retry too.
 - **A cluster's page, report, findings, teams, history or export, or the
   fleet teams rollup, gets 503.** Reads that load a stored snapshot run
-  one at a time, and this one waited more than 30s for its turn: other
-  reads, usually what-if reports of a large cluster, held it. Retry after
-  `Retry-After` seconds
+  one at a time, and this one waited more than 30s for its turn (other
+  reads, usually what-if reports of a large cluster, held it), or the
+  responses still waiting for slow clients leave no room for this one.
+  Retry after `Retry-After` seconds
   ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **`/gate` gets 422 `a UTF-16 byte order mark`.** Re-encode the manifests
   as UTF-8 (`iconv -f UTF-16 -t UTF-8`).

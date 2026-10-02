@@ -263,7 +263,8 @@ settings, so the read token still protects all data.
   instead. The server's 640Mi holds its worst case, measured on SQLite:
   one `/gate` decode, one snapshot ingest, one cluster read and the
   re-evaluation pass at their node budgets, plus their buffered bodies
-  and the read responses held for their clients
+  and the read and `/gate` responses held for their clients (kernel
+  socket buffers are not in that figure)
   ([memory and request limits](https://abd-ulbasit.github.io/upgradescope/operations/#memory-and-request-limits)).
   Below about 620Mi, that worst case no longer fits under `GOMEMLIMIT`.
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
