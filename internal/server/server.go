@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -81,7 +82,8 @@ type Config struct {
 // is collected before the next one's decode piles on top. A request asks
 // for the slot only once its whole body is in, so a slow uploader cannot
 // hold it; it waits up to gateQueueTimeout for the slot, then gets 503 +
-// Retry-After.
+// Retry-After. Its answer is encoded in the slot too, and a client that
+// does not read it holds only those bytes (maxHeldResponses).
 //
 // Bodies sit in memory while they arrive and while they wait for the
 // slot, so the bytes held across all /gate requests are capped at
@@ -137,25 +139,35 @@ const (
 // response included). Unbounded, 10 such reads at once grew the heap
 // ~400 MiB, so these reads run one at a time, on the /gate model (a
 // normal one takes milliseconds): a read waits up to readQueueTimeout for
-// the slot, then gets 503 + Retry-After. The handler writes its response
-// to memory in the slot, and it is sent after the slot is released, so a
-// slow client holds its response's bytes, never the slot; those bytes are
-// charged to a budget of maxHeldReadResponses × --max-snapshot-bytes
-// (40 MiB by default) while the client reads them, for up to the 120s
-// write timeout. A response that does not fit is sent in the slot instead,
-// under slotWriteTimeout, so clients that never read hold at most the
-// budget: unbounded, 20 that asked for a 17.5 MB report and did not read
-// it held 366 MiB, and a 120s window holds ~100. Reads of the
-// whole fleet (/clusters, /fleet, /metrics) take no slot: they read each
-// cluster's snapshot head from one store query and each evaluation's
-// summary columns, so they load no inventory and no report. One read in
-// the slot costs up to ~90 MiB on SQLite at the snapshot node budget
+// the slot, then gets 503 + Retry-After. Reads of the whole fleet
+// (/clusters, /fleet, /metrics) take no slot: they read each cluster's
+// snapshot head from one store query and each evaluation's summary
+// columns, so they load no inventory and no report. One read in the slot
+// costs up to ~90 MiB on SQLite at the snapshot node budget
 // (TestReadHeapIsBounded).
 const (
-	maxConcurrentReads   = 1
-	readQueueTimeout     = 30 * time.Second
-	maxHeldReadResponses = 2
-	slotWriteTimeout     = 20 * time.Second
+	maxConcurrentReads = 1
+	readQueueTimeout   = 30 * time.Second
+)
+
+// Responses held for their clients. A per-cluster read and /gate write
+// their response to memory in their slot (heldResponse), so what a
+// response is built from (a stored report, the gate's evaluations) is
+// garbage before the slot is released, and send gives the slot back
+// before a slow client reads a byte. Those held bytes are charged to one
+// budget, maxHeldResponses × --max-snapshot-bytes (40 MiB by default), for
+// as long as their client takes, up to the 120s write timeout. A response
+// that does not fit what is left of it gets 503 + Retry-After, and the
+// slot goes to the next request; one larger than the whole budget, which
+// could never fit, is sent in the slot under slotWriteTimeout. So clients
+// that never read hold at most the budget, plus one response in each
+// slot, and they never keep a slot past slotWriteTimeout. Unbounded,
+// 20 that asked for a 17.5 MB report and did not read it held 366 MiB,
+// and 10 that sent /gate?cluster= against it 320 MiB; a 120s window
+// holds ~100 of either.
+const (
+	maxHeldResponses = 2
+	slotWriteTimeout = 20 * time.Second
 )
 
 // Server serves the ingest + read API. Construct with New; a Server is
@@ -178,8 +190,9 @@ type Server struct {
 
 	readSlots        chan struct{} // semaphore: one token per read that loads a snapshot
 	readQueueTimeout time.Duration // how long such a read waits for a slot
-	readHeld         *byteBudget   // response bytes held for clients after the read slot
-	slotWriteTimeout time.Duration // how long a response sent in the read slot may take
+
+	heldResponses    *byteBudget   // read and /gate response bytes held for clients after their slot
+	slotWriteTimeout time.Duration // how long a response sent in its slot may take
 
 	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
 	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
@@ -219,7 +232,7 @@ func New(cfg Config) (*Server, error) {
 	s.ingestBuffered = newByteBudget(maxBufferedSnapshotBodies * s.maxSnapshotBytes())
 	s.readSlots = make(chan struct{}, maxConcurrentReads)
 	s.readQueueTimeout = readQueueTimeout
-	s.readHeld = newByteBudget(maxHeldReadResponses * s.maxSnapshotBytes())
+	s.heldResponses = newByteBudget(maxHeldResponses * s.maxSnapshotBytes())
 	s.slotWriteTimeout = slotWriteTimeout
 	s.teamMapHash = hashTeamMap(cfg.TeamMap)
 	s.sinks = sinksOf(cfg.Notifier)
@@ -429,14 +442,8 @@ func acquireSlot(w http.ResponseWriter, gone <-chan struct{}, slots chan struct{
 }
 
 // inReadSlot runs h in the read slot (maxConcurrentReads) with its
-// response written to memory. A response that fits the held-response
-// budget (readHeld) is sent once the slot is released, so the slot is
-// held for loading, decoding and evaluating, not for a client's reading;
-// its bytes go back to the budget when the write returns. One that does
-// not fit is sent in the slot, under slotWriteTimeout. Either way the
-// responses waiting for their clients take at most the budget plus the
-// one in the slot: a client that does not read cannot make the server
-// keep one more copy per request for the whole write timeout.
+// response written to memory, and sends it as send does: the slot is held
+// for loading, decoding and evaluating, not for a client's reading.
 func (s *Server) inReadSlot(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		release, ok := acquireSlot(w, r.Context().Done(), s.readSlots, s.readQueueTimeout, "too many concurrent reads; retry shortly")
@@ -444,29 +451,58 @@ func (s *Server) inReadSlot(h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		defer release()
-		resp := &heldResponse{header: w.Header(), status: http.StatusOK}
+		resp := newHeldResponse()
 		h(resp, r)
-		if held := int64(resp.body.Cap()); s.readHeld.charge(0, held) {
-			defer s.readHeld.give(held)
-			release()
-		} else {
-			// The error is for a writer with no connection (a test
-			// recorder), which has nothing to wait for.
-			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.slotWriteTimeout))
-		}
-		w.WriteHeader(resp.status)
-		_, _ = w.Write(resp.body.Bytes())
+		s.send(w, resp, release)
 	}
 }
 
-// heldResponse is an http.ResponseWriter that keeps the response in
-// memory (inReadSlot). Headers go straight to the real writer's map,
-// which is not sent before its WriteHeader.
+// send sends resp, written in a slot that release gives back (see
+// maxHeldResponses). A response that fits the held-response budget is
+// charged to it until its write returns, and the slot is released first.
+// One that does not fit what is left of the budget is answered 503 +
+// Retry-After instead, and one larger than the whole budget is sent in
+// the slot, under slotWriteTimeout. Its Content-Length lets a client tell
+// a response cut off by a write deadline from a whole one.
+func (s *Server) send(w http.ResponseWriter, resp *heldResponse, release func()) {
+	size := int64(resp.body.Cap())
+	switch {
+	case s.heldResponses.charge(0, size):
+		defer s.heldResponses.give(size)
+		release()
+	case size <= s.heldResponses.max:
+		release()
+		w.Header().Set("Retry-After", "10")
+		errJSON(w, http.StatusServiceUnavailable, "too many responses waiting for their clients; retry shortly")
+		return
+	default:
+		// The error is for a writer with no connection (a test
+		// recorder), which has nothing to wait for.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.slotWriteTimeout))
+	}
+	h := w.Header()
+	for k, v := range resp.header {
+		h[k] = v
+	}
+	if resp.body.Len() > 0 {
+		h.Set("Content-Length", strconv.Itoa(resp.body.Len()))
+	}
+	w.WriteHeader(resp.status)
+	_, _ = w.Write(resp.body.Bytes())
+}
+
+// heldResponse is an http.ResponseWriter that keeps the response, headers
+// included, in memory until send copies it to the real writer: a 503 from
+// send carries none of the handler's headers.
 type heldResponse struct {
 	header  http.Header
 	status  int
 	written bool
 	body    bytes.Buffer
+}
+
+func newHeldResponse() *heldResponse {
+	return &heldResponse{header: http.Header{}, status: http.StatusOK}
 }
 
 func (h *heldResponse) Header() http.Header { return h.header }

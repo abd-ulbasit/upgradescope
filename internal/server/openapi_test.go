@@ -360,18 +360,16 @@ func TestOpenAPIResponsesMatchSpec(t *testing.T) {
 }
 
 // TestOpenAPIReadBusyMatchesSpec: every read that waits for the read slot
-// answers 503 + Retry-After as the document says when it waits too long.
+// answers 503 + Retry-After as the document says when it waits too long,
+// and so does every read and /gate when the responses held for their
+// clients leave no room for theirs.
 func TestOpenAPIReadBusyMatchesSpec(t *testing.T) {
 	v := newSpecValidator(t)
 	s := newTestServer(t, newFakeStore())
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 	seedViaPush(t, ts)
-	s.readQueueTimeout = time.Millisecond
-	for range cap(s.readSlots) {
-		s.readSlots <- struct{}{}
-	}
-	for route, url := range map[string]string{
+	reads := map[string]string{
 		"/api/v1/clusters/{id}":          "/api/v1/clusters/1",
 		"/api/v1/clusters/{id}/report":   "/api/v1/clusters/1/report",
 		"/api/v1/clusters/{id}/findings": "/api/v1/clusters/1/findings",
@@ -379,13 +377,37 @@ func TestOpenAPIReadBusyMatchesSpec(t *testing.T) {
 		"/api/v1/clusters/{id}/teams":    "/api/v1/clusters/1/teams",
 		"/api/v1/clusters/{id}/export":   "/api/v1/clusters/1/export?format=csv",
 		"/api/v1/fleet/teams":            "/api/v1/fleet/teams?target=1.35",
-	} {
+	}
+	s.readQueueTimeout = time.Millisecond
+	for range cap(s.readSlots) {
+		s.readSlots <- struct{}{}
+	}
+	for route, url := range reads {
 		resp, body := getRaw(t, ts, url, "")
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			t.Errorf("GET %s with the read slot busy = %d, want 503: %s", url, resp.StatusCode, body)
 		}
 		v.check(route+" busy", route, "get", resp, []byte(body))
 	}
+	for range cap(s.readSlots) {
+		<-s.readSlots
+	}
+
+	if !s.heldResponses.charge(0, s.heldResponses.max-2) {
+		t.Fatal("could not fill the held-response budget")
+	}
+	for route, url := range reads {
+		resp, body := getRaw(t, ts, url, "")
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("GET %s with the held-response budget busy = %d, want 503: %s", url, resp.StatusCode, body)
+		}
+		v.check(route+" held budget busy", route, "get", resp, []byte(body))
+	}
+	resp, body := postGate(t, ts, "?target=1.35", "", deploymentManifest, "application/x-yaml")
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("POST /api/v1/gate with the held-response budget busy = %d, want 503: %s", resp.StatusCode, body)
+	}
+	v.check("gate held budget busy", "/api/v1/gate", "post", resp, body)
 }
 
 // TestOpenAPIUnknownPathIsJSONError: the error envelope the document

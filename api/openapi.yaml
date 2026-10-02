@@ -547,6 +547,13 @@ paths:
         waits more than 30s for its turn, or finds the shared body budget
         full, gets 503 with `Retry-After`. A stream with a UTF-16 byte
         order mark is 422: send UTF-8.
+
+        The answer is built before it is sent, with its `Content-Length`.
+        Answers waiting for their clients share a budget of twice
+        `--max-snapshot-bytes` with the per-cluster reads; an answer that
+        does not fit what is left of it is 503 with `Retry-After`, and one
+        larger than the whole budget is sent while the next request waits,
+        and cut off if the client has not taken it within 20s.
       parameters:
         - name: target
           in: query
@@ -647,7 +654,7 @@ paths:
               schema: {$ref: "#/components/schemas/Error"}
         "415": {$ref: "#/components/responses/Error"}
         "503":
-          description: The shared body budget is full, or the request waited more than 30s for its turn; retry after `Retry-After`.
+          description: The shared body budget is full, the request waited more than 30s for its turn, or the answers waiting for their clients leave no room for this one; retry after `Retry-After`.
           headers:
             Retry-After: {$ref: "#/components/headers/RetryAfter"}
           content:
@@ -713,7 +720,12 @@ components:
     ReadBusy:
       description: |
         Reads that load a cluster's snapshot run one at a time, and this
-        one waited more than 30s for its turn; retry after `Retry-After`.
+        one waited more than 30s for its turn, or the responses waiting for
+        their clients leave no room for this one (they share a budget of
+        twice `--max-snapshot-bytes` with `/gate`); retry after
+        `Retry-After`. A response is sent with its `Content-Length`; one
+        larger than that whole budget is sent while the next read waits,
+        and cut off if the client has not taken it within 20s.
       headers:
         Retry-After: {$ref: "#/components/headers/RetryAfter"}
       content:

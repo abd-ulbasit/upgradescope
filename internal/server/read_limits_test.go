@@ -178,51 +178,80 @@ func TestReadSlotIsNotHeldWhileSending(t *testing.T) {
 	}
 }
 
-// A response that does not fit what is left of the held-response budget
-// is sent in the read slot, so the next read waits for its client rather
-// than the server keeping one more copy; the budget is untouched, and a
-// response held after the slot gives its bytes back once it is sent.
+// A response that does not fit what is left of the held-response budget,
+// but would fit it whole, is answered 503 + Retry-After, without the
+// handler's headers, and the slot is released: a client that does not
+// read can make a large read wait for memory, but it cannot hold the
+// slot. The budget is untouched, and a response held after the slot gives
+// its bytes back once it is sent, with its Content-Length.
+func TestHeldBudgetBusyAnswers503(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	h := s.inReadSlot(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/csv")
+		_, _ = w.Write([]byte("report"))
+	})
+	full := s.heldResponses.max - 2
+	if !s.heldResponses.charge(0, full) {
+		t.Fatal("could not fill the held-response budget")
+	}
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" ||
+		rec.Header().Get("Content-Type") != "application/json" || !strings.Contains(rec.Body.String(), "retry") {
+		t.Fatalf("with the budget busy: %d %q, Retry-After %q, body %s; want a JSON 503 with Retry-After",
+			rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("Retry-After"), rec.Body)
+	}
+	if n, used := len(s.readSlots), s.heldResponses.inUse(); n != 0 || used != full {
+		t.Fatalf("after the 503: %d read slots held, budget at %d; want 0, %d", n, used, full)
+	}
+
+	s.heldResponses.give(full)
+	w := &unreadResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	}()
+	<-w.writing
+	if used := s.heldResponses.inUse(); used == 0 || len(s.readSlots) != 0 {
+		t.Fatalf("held after the slot: budget at %d, %d read slots; want the response charged and no slot", used, len(s.readSlots))
+	}
+	close(w.release)
+	<-done
+	if used := s.heldResponses.inUse(); used != 0 {
+		t.Fatalf("held-response budget at %d after the response was sent, want 0", used)
+	}
+	if w.Body.String() != "report" || w.Header().Get("Content-Length") != "6" {
+		t.Fatalf("response %q, Content-Length %q; want \"report\", 6", w.Body, w.Header().Get("Content-Length"))
+	}
+}
+
+// A response larger than the whole held-response budget could never be
+// held, so it is sent in the read slot, under the slot write deadline:
+// the next read waits for its client rather than the server keeping one
+// more copy. The budget is untouched.
 func TestReadSlotSendsWhatTheHeldBudgetCannotTake(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
+	s.heldResponses = newByteBudget(8)
 	h := s.inReadSlot(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("report"))
 	})
-	send := func() (w *unreadResponse, done chan struct{}) {
-		w = &unreadResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
-		done = make(chan struct{})
-		go func() {
-			defer close(done)
-			h(w, httptest.NewRequest(http.MethodGet, "/", nil))
-		}()
-		<-w.writing
-		return w, done
-	}
-
-	full := s.readHeld.max - 2
-	if !s.readHeld.charge(0, full) {
-		t.Fatal("could not fill the held-response budget")
-	}
-	w, done := send()
+	w := &unreadResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	}()
+	<-w.writing
 	if n := len(s.readSlots); n != 1 {
 		t.Fatalf("%d read slots held while a response the budget cannot take is sent, want 1", n)
 	}
-	if used := s.readHeld.inUse(); used != full {
-		t.Fatalf("held-response budget at %d while sending in the slot, want %d", used, full)
+	if used := s.heldResponses.inUse(); used != 0 {
+		t.Fatalf("held-response budget at %d while sending in the slot, want 0", used)
 	}
 	close(w.release)
 	<-done
 	if n := len(s.readSlots); n != 0 || w.Body.String() != "report" {
 		t.Fatalf("after sending: %d read slots held, body %q; want 0, \"report\"", n, w.Body)
-	}
-
-	s.readHeld.give(full)
-	w, done = send()
-	if used := s.readHeld.inUse(); used == 0 || len(s.readSlots) != 0 {
-		t.Fatalf("held after the slot: budget at %d, %d read slots; want the response charged and no slot", used, len(s.readSlots))
-	}
-	close(w.release)
-	<-done
-	if used := s.readHeld.inUse(); used != 0 {
-		t.Fatalf("held-response budget at %d after the response was sent, want 0", used)
 	}
 }

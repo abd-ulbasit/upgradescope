@@ -20,6 +20,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/junit"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // yamlContentTypes are the media types the gate accepts for a manifest
@@ -121,10 +122,13 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The body stays charged to the shared buffered-body budget until it is
-	// decoded, and the evaluation slot is held only for measuring what its
-	// aliases expand to, decoding and evaluation, the steps whose memory
-	// follows the YAML's structure: a client that stops reading the
-	// response must not pin it. Both releases are idempotent; the defers
+	// decoded, and the evaluation slot is held for measuring what its
+	// aliases expand to, decoding, evaluation and encoding the response,
+	// the steps whose memory follows the YAML's structure and the cluster's
+	// stored inventory. The response is written to memory in the slot and
+	// sent as a read's is (send): a client that stops reading holds only
+	// its bytes, under the held-response budget, never the slot nor the
+	// reports it was built from. Both releases are idempotent; the defers
 	// cover the early returns.
 	body, shape, releaseBody, ok := s.readManifestBody(w, r)
 	if !ok {
@@ -136,22 +140,46 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseSlot()
-	if status, msg := shape.checkAliases(); status != 0 {
+	resp := newHeldResponse()
+	s.evaluateGate(resp, r, gateRequest{body: body, shape: shape, releaseBody: releaseBody,
+		target: target, format: format, failOn: failOn, artifact: artifact, rules: rules})
+	s.send(w, resp, releaseSlot)
+}
+
+// gateRequest is a /gate request whose parameters are checked and whose
+// body is read.
+type gateRequest struct {
+	body        bufferedBody
+	shape       *manifestShape
+	releaseBody func()
+	target      inventory.Version
+	format      string
+	failOn      string
+	artifact    string
+	rules       []suppress.Rule // ?config='s ignore rules
+}
+
+// evaluateGate decodes and evaluates g, in the evaluation slot, and
+// writes the answer to w. What it builds the answer from is garbage once
+// it returns.
+func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequest) {
+	if status, msg := g.shape.checkAliases(); status != 0 {
 		errJSON(w, status, msg)
 		return
 	}
-	manifests, err := collect.CollectManifests(body.reader(), s.cfg.KB.AddOns)
-	releaseBody()
+	manifests, err := collect.CollectManifests(g.body.reader(), s.cfg.KB.AddOns)
+	g.releaseBody()
 	if err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
 		return
 	}
 	for _, u := range manifests.APIUsage { // refs carry stream lines; ?path= names their file
 		for i := range u.Objects {
-			u.Objects[i].File = artifact
+			u.Objects[i].File = g.artifact
 		}
 	}
 
+	target := g.target
 	inv := manifests
 	var baseline *engine.Report
 	var introduced gateSide
@@ -180,34 +208,33 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		// and the findings the manifests' own content produces, once
 		// suppressed, are introduced by the PR (suppressSide).
 		side := mergeManifests(&inv, manifests)
-		introduced = s.suppressSide(engine.Evaluate(side, s.cfg.KB, target, s.now()), rules)
+		introduced = s.suppressSide(engine.Evaluate(side, s.cfg.KB, target, s.now()), g.rules)
 	} else {
 		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	}
 
-	rep, warnings := s.suppressGate(engine.Evaluate(inv, s.cfg.KB, target, s.now()), rules)
-	releaseSlot()
+	rep, warnings := s.suppressGate(engine.Evaluate(inv, s.cfg.KB, target, s.now()), g.rules)
 	resp := gateResult(rep, baseline, introduced)
 	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings
 	w.Header().Set("X-Upgradescope-Verdict", string(resp.Verdict))
 	status := http.StatusOK
-	if gateFails(resp, failOn) {
+	if gateFails(resp, g.failOn) {
 		status = http.StatusUnprocessableEntity
 	}
-	if format == "sarif" {
+	if g.format == "sarif" {
 		w.Header().Set("Content-Type", "application/sarif+json")
 		w.WriteHeader(status)
 		_ = sarif.Write(w, sarifReport(rep, resp), s.cfg.Version)
 		return
 	}
-	if format == "junit" {
+	if g.format == "junit" {
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(status)
-		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: failOn})
+		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: g.failOn})
 		return
 	}
-	if format == "gitlab-codequality" {
+	if g.format == "gitlab-codequality" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = codequality.Write(w, sarifReport(rep, resp))
