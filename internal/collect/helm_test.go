@@ -300,7 +300,7 @@ func TestUninstalledHelmReleaseRaisesNoEOLBlocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inv.AddOns, _ = matchAddOns(nil, inv.HelmReleases, addons)
+	inv.AddOns, _ = matchAddOns(addOnEvidence{releases: inv.HelmReleases}, addons)
 	inv.ServerVersion = "v1.33.1"
 	inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
 		inventory.CapVersions: {Available: true}, inventory.CapAPIUsage: {Available: true},

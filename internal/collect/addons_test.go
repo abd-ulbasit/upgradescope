@@ -165,7 +165,7 @@ func TestMatchAddOns(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, unrec := matchAddOns(tc.images, tc.releases, testRegistry())
+			got, unrec := matchAddOns(addOnEvidence{images: tc.images, releases: tc.releases}, testRegistry())
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("addons = %#v\nwant   %#v", got, tc.want)
 			}
@@ -291,7 +291,7 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"ghcr.io/fluxcd/source-controller:v1.4.1", "", ""}, // controller versions are not Flux versions
 	}
 	for _, tc := range cases {
-		got, unrec := matchAddOns([]nsImage{{"ns", tc.image}}, nil, addons)
+		got, unrec := matchAddOns(addOnEvidence{images: []nsImage{{"ns", tc.image}}}, addons)
 		if tc.wantID == "" {
 			if len(got) != 0 || len(unrec) != 1 {
 				t.Errorf("%s: want unrecognized, got addons=%+v unrecognized=%v", tc.image, got, unrec)
@@ -309,7 +309,7 @@ func TestMatchAddOnsUnrecognizedCap(t *testing.T) {
 	for i := 0; i < 250; i++ {
 		images = append(images, nsImage{Namespace: "ns", Image: fmt.Sprintf("example.com/app-%03d:1.0", i)})
 	}
-	_, unrec := matchAddOns(images, nil, nil)
+	_, unrec := matchAddOns(addOnEvidence{images: images}, nil)
 	if len(unrec) != 200 {
 		t.Fatalf("len(unrecognized) = %d, want capped at 200", len(unrec))
 	}
