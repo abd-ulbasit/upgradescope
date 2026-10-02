@@ -2,8 +2,11 @@ package crd
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -112,6 +115,40 @@ func TestTargetStatusFromReportVerdict(t *testing.T) {
 		if ts.Verdict != string(v) || ts.Ready != (v == engine.VerdictReady) {
 			t.Errorf("verdict %q: TargetStatus verdict/ready = %q/%v", v, ts.Verdict, ts.Ready)
 		}
+	}
+}
+
+// Issue #122: a partial capability reaches status.notAssessed marked
+// partial, with what it skipped, and the Ready condition message names
+// the first target's gaps, required ones included, whatever the verdict.
+func TestStatusFromReportsPartialGaps(t *testing.T) {
+	partial := engine.CapabilityGap{Capability: inventory.CapAPIUsage, Reason: "list policy/v1beta1 podsecuritypolicies: forbidden",
+		Partial: true, Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}
+	required := partial
+	required.Required = true
+	calls := engine.CapabilityGap{Capability: inventory.CapDeprecatedCalls, Reason: "GET /metrics forbidden"}
+	st := StatusFromReports([]engine.Report{
+		{Target: inventory.Version{Major: 1, Minor: 25}, Score: 100, Verdict: engine.VerdictUnknown, NotAssessed: []engine.CapabilityGap{required, calls}},
+		{Target: inventory.Version{Major: 1, Minor: 24}, Score: 100, Verdict: engine.VerdictReady, Ready: true, NotAssessed: []engine.CapabilityGap{partial, calls}},
+	}, "v1.24.17", "v0.2.0", time.Now())
+	want := []string{ // one entry per gap: required-ness is per target, the condition says it
+		"api-usage (partial): list policy/v1beta1 podsecuritypolicies: forbidden; skipped: policy/v1beta1 PodSecurityPolicy",
+		"deprecated-calls: GET /metrics forbidden",
+	}
+	if !reflect.DeepEqual(st.NotAssessed, want) {
+		t.Errorf("NotAssessed = %q\nwant          %q", st.NotAssessed, want)
+	}
+	c := ReadyCondition(st)
+	const msg = "1.25: no blockers found, but a required check was not assessed: api-usage (partial, required), deprecated-calls; see status.notAssessed (score 100)"
+	if c.Status != metav1.ConditionUnknown || c.Message != msg {
+		t.Errorf("condition = %s %q\nwant Unknown %q", c.Status, c.Message, msg)
+	}
+
+	st = StatusFromReports([]engine.Report{
+		{Target: inventory.Version{Major: 1, Minor: 24}, Score: 100, Verdict: engine.VerdictReady, Ready: true, NotAssessed: []engine.CapabilityGap{partial}},
+	}, "v1.23.17", "v0.2.0", time.Now())
+	if c := ReadyCondition(st); c.Status != metav1.ConditionTrue || c.Message != "1.24: ready (score 100); not fully assessed: api-usage (partial); see status.notAssessed" {
+		t.Errorf("condition = %s %q, want True, naming the partial gap", c.Status, c.Message)
 	}
 }
 

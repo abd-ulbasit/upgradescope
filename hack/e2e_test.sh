@@ -130,10 +130,8 @@ ev() {
 }
 {
   ev kubernetes-admin "$SCAN_UA" list flowcontrol.apiserver.k8s.io v1 flowschemas "" "/apis/flowcontrol.apiserver.k8s.io/v1/flowschemas?limit=500"
-  ev kubernetes-admin "$SCAN_UA" list "" v1 componentstatuses "" "/api/v1/componentstatuses?limit=500" deprecated
   ev kubernetes-admin "$SCAN_UA" list "" v1 secrets "" "/api/v1/secrets?labelSelector=owner%3Dhelm&limit=500"
   ev kubernetes-admin "$SCAN_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
-  ev "$AGENT" "$SCAN_UA" list "" v1 endpoints "" "/api/v1/endpoints?limit=500" deprecated
   ev "$AGENT" "$SCAN_UA" list "" v1 secrets "" "/api/v1/secrets?labelSelector=owner%3Dhelm&limit=500"
   ev "$AGENT" "$SCAN_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
   ev "$AGENT" "$SCAN_UA" patch apiextensions.k8s.io v1 customresourcedefinitions clusterreadinesses.upgradescope.dev "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterreadinesses.upgradescope.dev?fieldManager=upgradescope-agent"
@@ -200,7 +198,6 @@ has "the deprecated-request audit gate passes" "$work/summary" "- PASS — audit
 has "the agent write-set audit gate passes" "$work/summary" "- PASS — audit: the agent wrote only ClusterReadiness/cluster (+ status) and the clusterreadinesses.upgradescope.dev CRD"
 has "the Secrets audit gate passes" "$work/summary" "- PASS — audit: Secrets were read only through Helm's owner=helm list and release GETs"
 has "the scan-writes audit gate passes" "$work/summary" "- PASS — audit: scan wrote nothing"
-has "allowlisted requests are listed" "$work/out" "  v1 componentstatuses (scan)"
 has "the positive control is reported" "$work/out" "positive control: 1 request(s) through flowcontrol.apiserver.k8s.io/v1beta3 annotated k8s.io/deprecated"
 has "the webhook/finalizer gate passes" "$work/summary" "- PASS — the install added no webhook configuration; ClusterReadiness/cluster has no finalizer or owner reference"
 has "the unreachable-server gate passes" "$work/summary" "- PASS — scan against an unreachable API server exits 1"
@@ -289,8 +286,7 @@ has "the missing control is explained" "$work/out" "the flowcontrol.apiserver.k8
 has "the control failure is the deprecated-request gate's" "$work/summary" "- **FAIL** — audit: scan and the agent made no deprecated-API request"
 
 printf '# nothing allowed\n' >"$work/empty-allowlist.txt"
-run "an emptied allowlist makes today's self-requests fail" 1 E2E_DEPRECATED_ALLOWLIST="$work/empty-allowlist.txt"
-has "the agent's endpoints LIST is named" "$work/out" "v1 endpoints agent list"
+run "an empty allowlist passes: scan and the agent make no deprecated request (#123)" 0 E2E_DEPRECATED_ALLOWLIST="$work/empty-allowlist.txt"
 
 printf 'v1 componentstatuses no issue number here\n' >"$work/bad-allowlist.txt"
 run "a malformed allowlist line fails before anything runs" 1 E2E_DEPRECATED_ALLOWLIST="$work/bad-allowlist.txt"

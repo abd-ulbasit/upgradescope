@@ -7,5 +7,3 @@
 #
 # Delete a line when its issue lands; the gate then fails if the request
 # comes back.
-v1 componentstatuses #123 api-usage LISTs ComponentStatus at v1, its only version (deprecated since 1.19, no replacement), to count the objects
-v1 endpoints #123 api-usage LISTs Endpoints at v1, deprecated since 1.33: its replacement EndpointSlice is another resource, so no other version lists them

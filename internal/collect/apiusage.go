@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -60,7 +61,18 @@ var internalManagers = map[string]bool{
 // flagged version that the cluster still serves is listed once,
 // metadata-only and paged, at a version that is not deprecated (see
 // listVersion and replacementList; resources that share storage across
-// groups share the LIST), and each object is attributed per flagged entry:
+// groups share the LIST). When every version the cluster serves is
+// deprecated, the resource is listed there only if the KB schedules a
+// removal for it: a kind that is deprecated but never removed (core v1
+// Endpoints, ComponentStatus) can only ever yield info findings, which do
+// not justify a deprecated request. Those deprecated LISTs that remain
+// (policy/v1beta1 PodSecurityPolicy on 1.24) are returned as selfListed,
+// "group/version resource", sorted: the scanner's own entries in
+// apiserver_requested_deprecated_apis, which the deprecated-calls step
+// marks so the engine does not report the scanner as a caller. Discovery
+// and the KB alone decide them, so they are the same on every scan.
+//
+// Each object is attributed per flagged entry:
 //
 //   - the KB entry has no replacement, the KB records no version of the
 //     kind that is neither deprecated nor removed, and no non-deprecated
@@ -77,10 +89,13 @@ var internalManagers = map[string]bool{
 //
 // Failures are per-resource: a forbidden or broken endpoint is recorded
 // and the remaining resources still run. If at least one resource (or
-// none was flagged) succeeded, the aggregate comes back as a partialError
-// so the capability stays available with the failures as Reason; if every
-// flagged resource failed, the capability degrades fully.
-func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
+// none was flagged) succeeded, the aggregate comes back as an incomplete
+// partialError, so the capability stays available but Partial, with the
+// failures as Reason and, as Skipped, every flagged API a failed LIST or
+// a failed group discovery left unchecked (the engine decides from them
+// whether the gap can hide a blocker); if every flagged resource failed,
+// the capability degrades fully.
+func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) (selfListed []string, err error) {
 	flagged := map[kb.GVK]kb.APILifecycleEntry{}
 	// continues holds the kinds the KB records a version of that is neither
 	// deprecated nor removed. They outlive their flagged versions even when
@@ -96,19 +111,26 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 	}
 
 	var failures []string
+	unchecked := map[string]bool{} // flagged APIs not checked, "group/version Kind"
 
 	groups, lists, err := disc.ServerGroupsAndResources()
 	if err != nil {
 		// Partial discovery failure (one broken aggregated API) must not
 		// kill the capability; total failure does. Skipped groups are
-		// surfaced in the capability reason, never silently dropped.
+		// surfaced in the capability reason, never silently dropped, and
+		// any flagged API the KB records at one went unchecked.
 		var gde *discovery.ErrGroupDiscoveryFailed
 		if !errors.As(err, &gde) || lists == nil {
-			return fmt.Errorf("discovery: %w", err)
+			return nil, fmt.Errorf("discovery: %w", err)
 		}
 		skipped := make([]string, 0, len(gde.Groups))
 		for gv := range gde.Groups {
 			skipped = append(skipped, gv.String())
+			for k := range flagged {
+				if k.Group == gv.Group && k.Version == gv.Version {
+					unchecked[apiName(gv.String(), k.Kind)] = true
+				}
+			}
 		}
 		sort.Strings(skipped)
 		failures = append(failures, fmt.Sprintf("discovery: groups %s skipped", strings.Join(skipped, ",")))
@@ -155,17 +177,32 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 			continue
 		}
 		gvr := schema.GroupVersionResource{Group: gr.Group, Version: listV.version, Resource: gr.Resource}
+		deprecatedList := listV.flagged
 		if listV.flagged {
 			for _, s := range served {
 				e := flagged[kb.GVK{Group: gr.Group, Version: s.version, Kind: s.kind}]
 				if r, ok := replacementList(gr.Resource, e.Replacement, byResource, preferred); ok {
-					gvr = r
+					gvr, deprecatedList = r, false
 					break
 				}
 			}
 		}
+		if deprecatedList {
+			// Listing here is itself a deprecated request. Worth it only
+			// for a kind with a removal scheduled, whose objects can block
+			// an upgrade; one that is never removed (core v1 Endpoints,
+			// ComponentStatus) could only ever yield info findings.
+			if !slices.ContainsFunc(served, func(s servedVersion) bool {
+				return s.flagged && flagged[kb.GVK{Group: gr.Group, Version: s.version, Kind: s.kind}].Removed != nil
+			}) {
+				continue
+			}
+		}
 		if _, seen := targetsOf[gvr]; !seen {
 			toList = append(toList, gvr)
+			if deprecatedList {
+				selfListed = append(selfListed, gvr.GroupVersion().String()+" "+gvr.Resource)
+			}
 		}
 		for _, s := range served {
 			if !s.flagged {
@@ -184,6 +221,8 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 		}
 	}
 
+	slices.Sort(selfListed)
+
 	attempted, succeeded := 0, 0
 	var usages []inventory.APIUsage
 	for _, gvr := range toList {
@@ -191,6 +230,9 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 		attempted++
 		if err := listUsage(ctx, meta, gvr, targets); err != nil {
 			failures = append(failures, fmt.Sprintf("list %s %s: %v", gvr.GroupVersion(), gvr.Resource, err))
+			for _, t := range targets {
+				unchecked[apiName(t.gv, t.usage.Kind)] = true
+			}
 			continue
 		}
 		succeeded++
@@ -214,13 +256,19 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 	inv.APIUsage = usages
 
 	if len(failures) == 0 {
-		return nil
+		return selfListed, nil
 	}
 	msg := strings.Join(failures, "; ")
 	if attempted > 0 && succeeded == 0 {
-		return errors.New(msg) // nothing usable — degrade the capability
+		return selfListed, errors.New(msg) // nothing usable — degrade the capability
 	}
-	return partialError{msg: "partial: " + msg}
+	return selfListed, partialError{msg: msg, incomplete: true, skipped: slices.Sorted(maps.Keys(unchecked))}
+}
+
+// apiName renders a flagged API as CapabilityStatus.Skipped names it:
+// "group/version Kind", core as "v1 Kind".
+func apiName(gv, kind string) string {
+	return gv + " " + kind
 }
 
 // servedVersion is one version the cluster serves a resource at.
@@ -252,10 +300,10 @@ func listVersion(served []servedVersion, preferred string) (servedVersion, bool)
 
 // bestListable picks among the listable served versions: unflagged before
 // flagged, then the group's preferred version, then the newest. A flagged
-// version comes back only when every listable version is flagged, and
-// listing it is unavoidable: the scanner then shows up in
-// apiserver_requested_deprecated_apis for that resource (on 1.33+, every
-// cluster does for core v1 endpoints and componentstatuses).
+// version comes back only when every listable version is flagged; listing
+// it makes the scanner show up in apiserver_requested_deprecated_apis for
+// that resource, so collectAPIUsage does that only for kinds being removed
+// and reports each such LIST.
 func bestListable(served []servedVersion, preferred string) (servedVersion, bool) {
 	var listable []servedVersion
 	for _, s := range served {

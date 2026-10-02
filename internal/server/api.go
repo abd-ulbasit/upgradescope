@@ -546,6 +546,8 @@ type evalSummary struct {
 	KBVersion   string         `json:"kbVersion"`
 	EvaluatedAt time.Time      `json:"evaluatedAt"` // last confirmed; a re-evaluation with an unchanged result moves it
 	SnapshotID  int64          `json:"snapshotId"`
+	// NotAssessed is the report's: what the verdict could not cover.
+	NotAssessed []engine.CapabilityGap `json:"notAssessed,omitempty"`
 }
 
 func summarize(e store.Evaluation) evalSummary {
@@ -559,7 +561,21 @@ func summarize(e store.Evaluation) evalSummary {
 		KBVersion:   e.KBVersion,
 		EvaluatedAt: e.EvaluatedAt,
 		SnapshotID:  e.SnapshotID,
+		NotAssessed: gapsOf(e),
 	}
+}
+
+// gapsOf reads the stored report's notAssessed, so the summaries that
+// carry a verdict also say what it could not cover. A report that does not
+// decode yields none here; the report endpoint says it is corrupt.
+func gapsOf(e store.Evaluation) []engine.CapabilityGap {
+	var rep struct {
+		NotAssessed []engine.CapabilityGap `json:"notAssessed"`
+	}
+	if json.Unmarshal(e.Report, &rep) != nil {
+		return nil
+	}
+	return rep.NotAssessed
 }
 
 type clusterSummary struct {

@@ -82,11 +82,11 @@ func WriteMarkdown(w io.Writer, r engine.Report) {
 	if len(r.NotAssessed) > 0 {
 		fmt.Fprintf(w, "\n**Not assessed**\n\n")
 		for _, g := range r.NotAssessed {
-			req := ""
-			if g.Required {
-				req = " (required)"
+			skipped := ""
+			if len(g.Skipped) > 0 {
+				skipped = ". Skipped: " + mdText(strings.Join(g.Skipped, ", "))
 			}
-			fmt.Fprintf(w, "- %s%s: %s\n", g.Capability, req, mdText(g.Reason))
+			fmt.Fprintf(w, "- %s: %s%s\n", g.Label(), mdText(g.Reason), skipped)
 		}
 	}
 }

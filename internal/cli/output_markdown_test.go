@@ -114,6 +114,25 @@ func TestWriteMarkdownUnknownVerdictMarksRequiredGaps(t *testing.T) {
 	}
 }
 
+// Issue #122: partial gaps are marked partial and name what they skipped.
+func TestWriteMarkdownPartialGaps(t *testing.T) {
+	r := engine.Report{
+		Target:  inventory.Version{Major: 1, Minor: 25},
+		Score:   100,
+		Verdict: engine.VerdictUnknown,
+		NotAssessed: []engine.CapabilityGap{
+			{Capability: inventory.CapAPIUsage, Reason: "list policy/v1beta1 podsecuritypolicies: forbidden", Partial: true, Required: true,
+				Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}},
+		},
+	}
+	var buf bytes.Buffer
+	WriteMarkdown(&buf, r)
+	const want = "- api-usage (partial, required): list policy/v1beta1 podsecuritypolicies: forbidden. Skipped: policy/v1beta1 PodSecurityPolicy\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("markdown lacks %q:\n%s", want, buf.String())
+	}
+}
+
 // Manifest-controlled strings (object names, file paths, rendered-from
 // templates) cannot break the table or inject markup into the summary.
 func TestWriteMarkdownEscapes(t *testing.T) {

@@ -610,8 +610,8 @@ items: []
 	}
 }
 
-// apiName matches "group/version/Kind" values a Kubernetes API can have.
-var apiName = regexp.MustCompile(`^([a-z0-9][-a-z0-9.]*)?/[a-z0-9]+/[A-Za-z][A-Za-z0-9]*$`)
+// apiNameRE matches "group/version/Kind" values a Kubernetes API can have.
+var apiNameRE = regexp.MustCompile(`^([a-z0-9][-a-z0-9.]*)?/[a-z0-9]+/[A-Za-z][A-Za-z0-9]*$`)
 
 // FuzzScanManifestStream: arbitrary input never panics, every object found
 // carries a positive line, and every object kubectl's own decoder would
@@ -658,7 +658,7 @@ func FuzzScanManifestStream(f *testing.F) {
 		for _, g := range kubectl {
 			// Only names an API can have: the knowledge base flags no
 			// other, and text that did not decode is read for such names.
-			if !seen[g] && apiName.MatchString(g) && !unassessedNames(bad, g) {
+			if !seen[g] && apiNameRE.MatchString(g) && !unassessedNames(bad, g) {
 				t.Fatalf("kubectl applies %s, which is neither counted nor named by an unassessed part (bad %+v)", g, bad)
 			}
 		}

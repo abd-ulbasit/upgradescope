@@ -321,8 +321,14 @@ func TestCollectHelmSkipsCorruptSecretKeepsValid(t *testing.T) {
 		corrupt,
 		helmSecret(t, helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: 1, status: "deployed", chart: "ingress-nginx", chartVersion: "4.7.1", appVersion: "1.8.4"}),
 	)
-	if err != nil && !errors.As(err, new(partialError)) {
+	var pe partialError
+	if !errors.As(err, &pe) {
 		t.Fatalf("one corrupt secret must not fail the capability: %v", err)
+	}
+	// Skipped, but counted: an undecodable release may be the EOL add-on.
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"shop/broken"}) ||
+		!strings.Contains(pe.msg, "1 release(s) not decodable, first shop/broken: ") {
+		t.Errorf("partial = %v, skipped = %q, reason = %q; want incomplete, skipping and counting shop/broken", pe.incomplete, pe.skipped, pe.msg)
 	}
 	want := []inventory.HelmRelease{
 		{Name: "cert-manager", Namespace: "cert-manager", ChartName: "cert-manager", ChartVersion: "v1.13.0", AppVersion: "v1.13.0", Status: "deployed", Revision: 1},
@@ -435,8 +441,8 @@ func TestCollectHelmReadsConfigMapDriver(t *testing.T) {
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "kube-root-ca.crt", Namespace: "b"}, Data: map[string]string{"ca.crt": "x"}},
 	)
 	var pe partialError
-	if !errors.As(err, &pe) || pe.Error() != "helm releases: 1 via secrets, 1 via configmaps" {
-		t.Errorf("err = %v, want partialError %q", err, "helm releases: 1 via secrets, 1 via configmaps")
+	if !errors.As(err, &pe) || pe.Error() != "helm releases: 1 via secrets, 1 via configmaps" || pe.incomplete {
+		t.Errorf("err = %#v, want a complete (informational) partialError %q", err, "helm releases: 1 via secrets, 1 via configmaps")
 	}
 	want := []inventory.HelmRelease{
 		{Name: "from-secret", Namespace: "a", ChartName: "x", ChartVersion: "1.0.0", Status: "deployed", Revision: 1},
@@ -485,6 +491,9 @@ func TestCollectHelmDegradesPerDriver(t *testing.T) {
 	var pe partialError
 	if !errors.As(err, &pe) || !strings.HasPrefix(pe.Error(), "helm releases: 1 via secrets; configmaps not read: ") || !strings.Contains(pe.Error(), "forbidden") {
 		t.Errorf("err = %v, want a partialError counting the Secret release and naming the forbidden ConfigMap list", err)
+	}
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"configmaps"}) {
+		t.Errorf("partial = %v, skipped = %q; want incomplete, skipping the configmaps driver", pe.incomplete, pe.skipped)
 	}
 	if len(inv.HelmReleases) != 1 {
 		t.Errorf("releases = %+v, want the Secret release", inv.HelmReleases)

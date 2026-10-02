@@ -129,14 +129,17 @@ type helmRevision struct {
 // on a partialError, so one is returned whenever the capability is
 // available). A release whose object cannot be fetched is skipped and
 // counted in the reason, and when none can be (list but no get), the
-// capability is unavailable; a corrupt payload is skipped silently — one
-// corrupt release must not fail the capability.
+// capability is unavailable; a release whose payload cannot be decoded is
+// skipped and counted too — one corrupt release must not fail the
+// capability. Any of these failures leaves an available capability
+// Partial, naming the drivers and releases it skipped.
 func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
 	type releaseKey struct{ namespace, name string }
 	drivers := helmDrivers(kube)
 	revisions := map[releaseKey][]helmRevision{}
 	listErrs := make([]error, len(drivers))
-	var failed []string // "<what> not read: <err>", drivers first
+	var failed []string  // "<what> not read: <err>", drivers first
+	var skipped []string // drivers, then releases ("namespace/name"), not read
 	for d, drv := range drivers {
 		err := listMetadata(ctx, meta, drv.gvr, metav1.ListOptions{LabelSelector: "owner=helm"}, func(m metav1.PartialObjectMetadata) {
 			name, rev, ok := helmRevisionOf(m)
@@ -149,6 +152,7 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 		if err != nil {
 			listErrs[d] = err
 			failed = append(failed, fmt.Sprintf("%s not read: %v", drv.name, err))
+			skipped = append(skipped, drv.name)
 		}
 	}
 	if len(failed) == len(drivers) {
@@ -167,6 +171,8 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 	perDriver := make([]int, len(drivers))
 	var rels []inventory.HelmRelease
 	unread, firstUnread := 0, ""
+	undecodable, firstUndecodable := 0, ""
+	var skippedReleases []string
 	for _, k := range keys {
 		// One driver's history per release: revision numbers of two
 		// histories (HELM_DRIVER changed) are not comparable, so the first
@@ -185,11 +191,16 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 			if unread++; unread == 1 {
 				firstUnread = fmt.Sprintf("%s/%s: %v", k.namespace, k.name, err)
 			}
+			skippedReleases = append(skippedReleases, k.namespace+"/"+k.name)
 			continue
 		}
 		doc, err := decodeHelmRelease(data)
-		if err != nil {
-			continue // one corrupt release must not fail the capability
+		if err != nil { // one corrupt release must not fail the capability
+			if undecodable++; undecodable == 1 {
+				firstUndecodable = fmt.Sprintf("%s/%s: %v", k.namespace, k.name, err)
+			}
+			skippedReleases = append(skippedReleases, k.namespace+"/"+k.name)
+			continue
 		}
 		status := r.status
 		if status == "" {
@@ -214,6 +225,10 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 			return errors.New(strings.Join(failed, "; "))
 		}
 	}
+	if undecodable > 0 {
+		failed = append(failed, fmt.Sprintf("%d release(s) not decodable, first %s", undecodable, firstUndecodable))
+	}
+	skipped = append(skipped, skippedReleases...) // keys are sorted
 	if len(rels) > 0 {
 		inv.HelmReleases = rels
 	}
@@ -228,7 +243,7 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 	if listErrs[0] != nil || (len(rels) == 0 && len(failed) > 0) {
 		return errors.New(msg) // secrets unread, or nothing read and a driver failed: not assessed
 	}
-	return partialError{msg: msg}
+	return partialError{msg: msg, incomplete: len(failed) > 0, skipped: skipped}
 }
 
 // listMetadata lists one resource cluster-wide, metadata-only and paged,

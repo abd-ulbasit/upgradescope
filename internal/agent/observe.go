@@ -229,6 +229,8 @@ var (
 		"Findings per target, severity and category, from the last successful tick.", []string{"target", "severity", "category"}, nil)
 	descCapability = prometheus.NewDesc("upgradescope_capability_available",
 		"1 when the collector capability was available on the last successful tick.", []string{"capability"}, nil)
+	descCapabilityPartial = prometheus.NewDesc("upgradescope_capability_partial",
+		"1 when the collector capability was available but could not read all it covers (status.notAssessed marks it partial) on the last successful tick.", []string{"capability"}, nil)
 	descKBInfo = prometheus.NewDesc("upgradescope_kb_info",
 		"Embedded knowledge base: dataset version and newest Kubernetes minor it covers.", []string{"kb_version", "max_known_k8s"}, nil)
 )
@@ -237,7 +239,7 @@ var verdicts = []engine.Verdict{engine.VerdictReady, engine.VerdictBlocked, engi
 
 // Describe implements prometheus.Collector for the state gauges.
 func (o *observer) Describe(ch chan<- *prometheus.Desc) {
-	for _, d := range []*prometheus.Desc{descLastSuccess, descInterval, descScore, descVerdict, descFindings, descCapability, descKBInfo} {
+	for _, d := range []*prometheus.Desc{descLastSuccess, descInterval, descScore, descVerdict, descFindings, descCapability, descCapabilityPartial, descKBInfo} {
 		ch <- d
 	}
 }
@@ -260,6 +262,7 @@ func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(descKBInfo, prometheus.GaugeValue, 1, o.kb.Version, o.kb.MaxKnownK8s.String())
 	for c, st := range good.caps {
 		ch <- prometheus.MustNewConstMetric(descCapability, prometheus.GaugeValue, boolValue(st.Available), string(c))
+		ch <- prometheus.MustNewConstMetric(descCapabilityPartial, prometheus.GaugeValue, boolValue(st.Partial), string(c))
 	}
 	seen := map[string]bool{}
 	for _, r := range good.reports {
