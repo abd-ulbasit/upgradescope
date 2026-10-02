@@ -5,7 +5,7 @@ name: vuln-latest-release
 # new release fixes a published binary. Findings open (or update) one
 # tracking issue, so a vulnerable latest release is never silent; a clean
 # scan closes it. The scan itself is hack/vuln-latest-release.sh
-# (make vuln-latest): the latest release's linux/amd64 archive,
+# (also make vuln-latest): the latest release's linux/amd64 archive,
 # sha256-checked and signature-verified, through hack/vulncheck.sh's
 # binary-mode gate and allowlist.
 on:
@@ -46,8 +46,12 @@ jobs:
       - name: govulncheck (binary mode) on the latest release
         id: scan
         run: |
+          # The script itself, not make vuln-latest: a failing recipe makes
+          # make exit 2 whatever the script returned, and the issue below is
+          # worded by the script's own 0/1/2 status
+          # (hack/vuln-latest-release-workflow_test.sh).
           set +e
-          UPGRADESCOPE_RELEASE_TAG_FILE="$RUNNER_TEMP/tag" make vuln-latest 2>&1 | tee "$RUNNER_TEMP/report.txt"
+          UPGRADESCOPE_RELEASE_TAG_FILE="$RUNNER_TEMP/tag" ./hack/vuln-latest-release.sh 2>&1 | tee "$RUNNER_TEMP/report.txt"
           code=${PIPESTATUS[0]}
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "tag=$(cat "$RUNNER_TEMP/tag" 2>/dev/null)" >> "$GITHUB_OUTPUT"

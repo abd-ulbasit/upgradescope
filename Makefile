@@ -197,6 +197,7 @@ hack-test:
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh
 	./hack/chart-release-annotations_test.sh
+	./hack/vuln-latest-release-workflow_test.sh
 	./packaging/homebrew-tap/script/render-formula_test.sh
 
 .PHONY: demo-up demo-down
