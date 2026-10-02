@@ -111,6 +111,12 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	artifact := r.URL.Query().Get("path")
+	if len(artifact) > maxArtifactPathBytes {
+		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+			"path is %d bytes, over the %d bytes a repository path may have here (every object in the answer carries it)",
+			len(artifact), maxArtifactPathBytes))
+		return
+	}
 	if artifact != "" && !repoPath(artifact) {
 		errJSON(w, http.StatusUnprocessableEntity,
 			fmt.Sprintf("invalid path %q (want the repository-relative file the stream was rendered to, e.g. deploy/rendered.yaml)", artifact))
@@ -343,6 +349,13 @@ func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
 	out.Verdict, out.Ready = resp.Verdict, resp.Ready
 	return out
 }
+
+// maxArtifactPathBytes caps ?path=. Every object ref in the answer carries
+// the path, up to inventory.MaxObjectRefs per finding, so its length
+// multiplies the answer's: unbounded, a 60 KB path and a 1.2 MB stream
+// (the KB's 136 deprecated or removed GVKs, 100 objects each) made an
+// 817 MB answer. Repository paths are rarely over 200 bytes.
+const maxArtifactPathBytes = 512
 
 // repoPath reports whether p can name a file in the repository: relative,
 // slash-separated, clean, inside the repository, without control

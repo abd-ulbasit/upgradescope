@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
@@ -73,5 +74,26 @@ func TestGateSARIFPath(t *testing.T) {
 		if resp.StatusCode != http.StatusUnprocessableEntity || !json.Valid(raw) || resp.Header.Get("X-Upgradescope-Verdict") != "" {
 			t.Errorf("path=%q: status %d (%s), want a 422 JSON error", bad, resp.StatusCode, raw)
 		}
+	}
+}
+
+// Every object ref in the answer carries ?path=, so its length multiplied
+// the answer: with the KB's 136 deprecated or removed GVKs at 100 refs
+// each, a 60 KB path made a 1.2 MB stream an 817 MB answer and a 2.4 GB
+// server. A path is at most maxArtifactPathBytes, or 422 before the body
+// is read.
+func TestGatePathLengthIsCapped(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
+	defer ts.Close()
+	longest := strings.Repeat("d/", maxArtifactPathBytes/2-3) + "x.yaml"
+	if len(longest) != maxArtifactPathBytes {
+		t.Fatalf("test path is %d bytes, want %d", len(longest), maxArtifactPathBytes)
+	}
+	if resp, raw := postGate(t, ts, "?target=1.35&fail-on=never&path="+url.QueryEscape(longest), "", pspManifest, "application/x-yaml"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("a %d-byte path: status %d (%s), want 200", len(longest), resp.StatusCode, raw)
+	}
+	resp, raw := postGate(t, ts, "?target=1.35&path="+url.QueryEscape("d/"+longest), "", pspManifest, "application/x-yaml")
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "512 bytes") {
+		t.Fatalf("a %d-byte path: status %d (%s), want 422 naming the limit", len(longest)+2, resp.StatusCode, raw)
 	}
 }
