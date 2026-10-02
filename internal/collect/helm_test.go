@@ -403,6 +403,26 @@ func TestCollectHelmReadsConfigMapDriver(t *testing.T) {
 	}
 }
 
+// A release with history in both drivers (HELM_DRIVER changed between
+// installs) is read from the secrets driver, Helm's default, even when the
+// configmaps history is newer by number: revision numbers of two separate
+// histories are not comparable, and a stale higher one would otherwise win.
+func TestCollectHelmPrefersSecretsDriver(t *testing.T) {
+	inv, err := collectHelmFrom(t,
+		helmSecret(t, helmRev{ns: "a", release: "r", rev: 2, status: "deployed", chart: "x", chartVersion: "2.0.0"}),
+		helmConfigMap(t, helmRev{ns: "a", release: "r", rev: 7, status: "deployed", chart: "x", chartVersion: "1.0.0"}),
+		helmConfigMap(t, helmRev{ns: "a", release: "r", rev: 2, status: "superseded", chart: "x", chartVersion: "0.9.0"}),
+	)
+	var pe partialError
+	if !errors.As(err, &pe) || pe.Error() != "helm releases: 1 via secrets, 0 via configmaps" {
+		t.Errorf("err = %v, want partialError %q", err, "helm releases: 1 via secrets, 0 via configmaps")
+	}
+	want := []inventory.HelmRelease{{Name: "r", Namespace: "a", ChartName: "x", ChartVersion: "2.0.0", Status: "deployed", Revision: 2}}
+	if !reflect.DeepEqual(inv.HelmReleases, want) {
+		t.Errorf("releases = %#v\nwant      %#v", inv.HelmReleases, want)
+	}
+}
+
 // Each storage driver degrades on its own: a forbidden ConfigMap list
 // (a role that grants only Secrets) keeps the Secret releases; only when
 // every driver fails is the capability unavailable.

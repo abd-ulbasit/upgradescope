@@ -168,7 +168,12 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 	var rels []inventory.HelmRelease
 	unread, firstUnread := 0, ""
 	for _, k := range keys {
-		r, ok := installedRevision(revisions[k])
+		// One driver's history per release: revision numbers of two
+		// histories (HELM_DRIVER changed) are not comparable, so the first
+		// driver holding the release — secrets, Helm's default — wins.
+		revs := revisions[k]
+		first := slices.MinFunc(revs, func(a, b helmRevision) int { return a.driver - b.driver }).driver
+		r, ok := installedRevision(slices.DeleteFunc(revs, func(r helmRevision) bool { return r.driver != first }))
 		if !ok {
 			continue
 		}
