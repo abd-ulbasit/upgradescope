@@ -667,7 +667,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 		if !productDated && !inCycle {
 			ver, reason := s.version, " The registry has no release-line data for this version, so its end of life was not assessed."
 			if ver == "" {
-				ver, reason = "(version unknown)", " No version could be read from the image tag or chart, so its end of life and Kubernetes compatibility were not assessed."
+				ver, reason = "(version unknown)", " No version could be read from an image tag, chart appVersion or app.kubernetes.io/version label, so its end of life and Kubernetes compatibility were not assessed."
 			}
 			f := finding(s, CatAddOnNoData, SevInfo, string(CatAddOnNoData)+"/"+a.ID,
 				fmt.Sprintf("no lifecycle data for %s %s", a.DisplayName, ver), s.located+reason, a.Support.Citations)
