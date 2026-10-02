@@ -24,11 +24,11 @@ is measured before it is decoded:
 | body cap (wire, and decompressed) | `--max-gate-bytes`, 10 MiB | `--max-snapshot-bytes`, 20 MiB |
 | per document | 4 MiB with its aliases expanded, 20,000 documents | — |
 | node budget, counted from the raw bytes | 400k units: a YAML node 1, a sequence entry 4, an alias what it names | 1M units: a JSON value 1, an object 8 |
-| worst live heap within the budget (measured) | ~155 MB | ~80 MB |
+| worst live heap within the budget (measured) | ~155 MB, with `?cluster=` too | ~80 MB, the body's copy included |
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
-| decoded at once | 1, others wait up to 30s | 1, others wait up to 10s |
+| measured for aliases, decoded and evaluated at once | 1, others wait up to 30s holding only their bodies | 1, others wait up to 10s |
 
-Over a cap or a budget is `413`, before anything is decoded; the message
+Over a cap or a budget is `413`, before the body is decoded; the message
 says to split the stream or List. A body that does not fit the shared
 buffer budget, or a request that waits too long for its turn, gets `503`
 with `Retry-After` (the agent retries it). A body must arrive within the
@@ -40,18 +40,30 @@ charged what they name: kubectl's decoder copies the aliased node at
 every alias (merge keys included), and go-yaml v2's excessive-aliasing
 check neither starts before 100 aliases nor counts a scalar's bytes, so
 one 3.5 MiB anchored string and 99 aliases of it decoded to ~2 GB. A
-document that may hold aliases is read into yaml.v3 nodes first (no
-dearer than the node count already checked), and what its aliases expand
-to is added to the node count and to the document's size. A stream with
+document in which the meter finds an alias (a `*` token: not one in a
+string, a comment or a glob such as `get*`) is read into yaml.v3 nodes
+before it is decoded, and what its aliases expand to is added to the
+node count and to the document's size. That read costs about what
+decoding does (no more: the node count is checked first), so it waits
+for the evaluation slot too; measured before it, 13 requests of 2.3 MB
+at the node budget, all the body budget holds, took ~2.2 GB. A stream with
 a UTF-16 byte order mark is `422`: the decoders read it as UTF-16, the
 meter as UTF-8. A realistic ~4 MiB `kubectl get -o yaml` List of
 Deployments is ~360k units and fits; typical kubectl YAML is ~90k units
 per MiB, so the node budget, not the 10 MiB body cap, is what limits a
 realistic stream, at about 4.4 MiB.
 
-Worst case for the chart's 512Mi server: one gate decode (~155 MB) plus
-one ingest (~80 MB) plus both body budgets (70 MiB), about 310 MB, inside
-the 460 MiB `GOMEMLIMIT` the chart derives from the limit. The Go runtime
+Worst case for the chart's 512Mi server: one `/gate` request in the
+evaluation slot (~155 MB; with `?cluster=` as well, against a snapshot at
+its node budget, since the cluster's inventory is decoded once the
+manifests' node trees are garbage) plus one ingest (~80 MB, its copy of
+the body included) plus both body budgets (70 MiB; an ingest gives its
+share back once it holds that copy, so another push can wait in it),
+about 310 MB, inside the 460 MiB `GOMEMLIMIT` the chart derives from the
+limit. One input is outside these budgets: a snapshot a v0.1 server
+stored before they existed (up to 20 MiB of any shape) is decoded without
+a node count when `/gate?cluster=` or the re-evaluation pass reads it,
+until that cluster's agent pushes again. The Go runtime
 does not read the container's limit, and without a memory limit the
 collector lets garbage grow to as much as the live heap again before it
 runs, so a process whose live heap fits is OOM-killed anyway. Outside the
@@ -68,6 +80,7 @@ SQLite, October 2026), `before` being v0.1.x without these limits:
 | 4 MiB List of null items | 2077 MB, 200 | 44 MB, 413 |
 | 4 MiB of short keys (block sequence alike) | 412 MB, 200 | 44 MB, 413 |
 | short keys at the node budget (2.3 MB), ×6 at once | 331 MB, 200 | 335 MB, 200 (298 MB with `GOMEMLIMIT=460MiB`) |
+| the same with a `# *` comment / with one alias, ×13 at once (all the body budget holds) | — | 368 / 349 MB, 200 |
 | realistic 4 MiB List of 1,400 Deployments, ×6 at once | 253 MB, 200 | 279 MB, 200 (249 MB with `GOMEMLIMIT`) |
 | one 4 MiB string | 97 MB, 200 | 94 MB, 200 |
 | 3.5 MiB string anchored, 99 aliases of it (3.6 MB) | 2024 MB, 200 | 65 MB, 413 |

@@ -88,13 +88,16 @@ In scope:
   The server's memory is bounded by the request budgets in
   [docs/operations.md](docs/operations.md#memory-and-request-limits): body
   caps, node budgets counted before anything is decoded (YAML aliases at
-  what they expand to), a shared budget for
-  buffered bodies, and one decode at a time per endpoint. Any request that
-  makes the server use memory beyond them is in scope, with or without
-  credentials. What the budgets leave is known: a client that really sends
-  three times `--max-gate-bytes` and then stalls makes other `/gate` requests
-  `503` until the 60s read timeout cuts it off, without credentials when the
-  read API is open.
+  what they expand to), a shared budget for buffered bodies, and one
+  request at a time per endpoint doing anything whose memory follows the
+  input's structure (measuring what YAML aliases expand to, decoding,
+  evaluating). Any request that makes the server use memory beyond them is
+  in scope, with or without credentials. What the budgets leave is known:
+  a client that really sends three times `--max-gate-bytes` and then
+  stalls makes other `/gate` requests `503` until the 60s read timeout cuts
+  it off, without credentials when the read API is open; and a snapshot a
+  v0.1 server stored before these budgets existed is decoded without a
+  node count when `/gate?cluster=` or re-evaluation reads it.
 - **Supply chain.** This covers release archives and `checksums.txt`, the
   container image, the GitHub Action in `action/` (how it downloads and runs
   the binary), the CI workflows (for example, pull request workflows that can
