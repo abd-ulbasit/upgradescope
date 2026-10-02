@@ -1,0 +1,83 @@
+name: update formula
+
+# Keeps Formula/upgradescope.rb on the latest stable upgradescope release
+# without any cross-repository secret: upgradescope's release workflow does
+# not push here. This workflow pulls instead, every 6 hours and on demand,
+# verifies the release's checksums.txt against the keyless cosign signature
+# made by upgradescope's release workflow for that tag, re-renders the
+# formula from it, and commits with this repository's own GITHUB_TOKEN only
+# when the formula changed.
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to render (default the latest stable release)
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-formula
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # commit the re-rendered formula
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: renderer self-test (v0.1.1 checksums fixture, offline)
+        run: script/render-formula_test.sh
+      - name: verify the latest release and render the formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPGRADESCOPE_TAG: ${{ inputs.tag }}
+        run: |
+          [ -n "$UPGRADESCOPE_TAG" ] || unset UPGRADESCOPE_TAG
+          script/update.sh
+      - name: commit when the formula changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- Formula/upgradescope.rb; then
+            echo "Formula/upgradescope.rb is current" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          version="$(sed -n 's#.*/releases/download/v\([^/]*\)/.*#\1#p' Formula/upgradescope.rb | head -1)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/upgradescope.rb
+          git commit -m "upgradescope $version"
+          # The checkout keeps no token; push with this run's token only here.
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
+          echo "Formula/upgradescope.rb -> $version" >> "$GITHUB_STEP_SUMMARY"
+
+  # The formula installs and its test passes on both platforms Homebrew
+  # supports, after every change.
+  test:
+    needs: update
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: Homebrew/actions/setup-homebrew@e99025eb970cfa124b8284a35463d87426917478 # main, 2026-09-25 (Homebrew/actions publishes no tags)
+      - name: brew install and test the tap's formula
+        env:
+          TAP: ${{ github.repository }}
+        run: |
+          brew tap "${TAP%%/homebrew-*}/${TAP##*/homebrew-}" "https://github.com/${TAP}"
+          brew install "${TAP%%/homebrew-*}/${TAP##*/homebrew-}/upgradescope"
+          brew test "${TAP%%/homebrew-*}/${TAP##*/homebrew-}/upgradescope"
+          upgradescope version
