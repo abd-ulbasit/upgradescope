@@ -10,6 +10,18 @@ declare they do not support the target. The answer is a verdict (`ready`,
 as a table, JSON, SARIF or Markdown, an exit code for CI, and a
 `ClusterReadiness` object in the cluster.
 
+!!! note "These docs describe v0.2.0"
+    The site follows `main`, which ships as v0.2.0, the first release CI
+    builds, signs and publishes. Until v0.2.0 is tagged, what pins it (the
+    GitHub Action `@v0.2.0`, release downloads, the container image and the
+    OCI chart) does not resolve yet. To try what these pages describe,
+    build `main`
+    (`go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@main`);
+    the chart in a clone needs an image you build from it, since its
+    default image was never published
+    ([#127](https://github.com/abd-ulbasit/upgradescope/issues/127)).
+    [Install](operations/install.md) says what v0.1.x lacks.
+
 It is one Apache-2.0 binary with three modes:
 
 | Mode | Runs | You get |

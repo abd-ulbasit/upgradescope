@@ -86,7 +86,9 @@ kubectl get ucr        # NAME  TARGET  SCORE  READY  LASTEVALUATED  AGE
 
 The agent re-evaluates every 10 minutes and writes a `ClusterReadiness`
 object with a standard `Ready` condition, for `kubectl wait`, alerts and
-GitOps health checks.
+GitOps health checks. Until v0.2.0 is published, the chart's default image
+does not exist: build one from the clone and set `image.repository` and
+`image.tag` ([#127](https://github.com/abd-ulbasit/upgradescope/issues/127)).
 [In-cluster agent](https://abd-ulbasit.github.io/upgradescope/getting-started/in-cluster/) ·
 [Fleet server](https://abd-ulbasit.github.io/upgradescope/getting-started/fleet/).
 
