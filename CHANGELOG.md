@@ -118,9 +118,30 @@ a CI gate.
 - `go.mod` requires Go 1.26.8.
 - Release notes keep breaking changes in housekeeping commits
   (`chore!:`, `docs!:`).
+- A `--target` that is not an upgrade of the cluster (a downgrade, the
+  same minor, or a typo) gives verdict `unknown` with a required `target`
+  gap. The gate exits 2 even with `--allow-incomplete`. The JSON report
+  has a new `serverVersion` field, and the table header shows it.
+- Add-on findings describe each install. Every namespace that runs an
+  add-on is its own instance. Findings are grouped by release line, name
+  only the affected namespaces and teams, and list at most 10 installs
+  ("and N more"). A newer Helm release in one namespace no longer hides an
+  older end-of-life install in another.
+- Version-skew finding keys: `version-skew/<component>` is split into
+  `version-skew/<component>-newer` and `version-skew/<component>-behind`,
+  and the upgrade-path finding is `version-skew/upgrade-path`. Baselines
+  and notifications see these findings as new once.
+- A baseline marks a finding `unchanged` only if its severity has not
+  risen since the baseline.
+- Deprecations that take effect after the target are titled as future
+  deprecations, with "(projected)" beyond the knowledge base's horizon.
 
 ### Fixed
 
+- `--output table` and `--output markdown` exit 1 when the report cannot
+  be written, like JSON and SARIF.
+- Pre-GA kinds written only by control-plane components (for example
+  `LeaseCandidate`) are no longer counted as removed-API blockers (#108).
 - Istio's end-of-life date. Pre-1.0 ingress-nginx images, and the
   ingress-nginx builds of AKS and RKE2, are now detected. GKE and AKS
   builds of an add-on are no longer judged by upstream's lifecycle.

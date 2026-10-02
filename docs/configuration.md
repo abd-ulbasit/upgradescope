@@ -125,8 +125,9 @@ finding is then marked:
 
 - `unchanged` if the baseline has a finding with the same key, every object
   the current finding lists appears in it (matched by namespace, name and
-  file, not line, so edits around an object do not matter), and the finding
-  has no more objects in total than the baseline had;
+  file, not line, so edits around an object do not matter), the finding
+  has no more objects in total than the baseline had, and its severity has
+  not risen since the baseline;
 - `new` otherwise.
 
 The mark is `baselineState` in JSON and SARIF, `(in baseline)` after the
@@ -143,8 +144,10 @@ versions (see [Finding keys](#finding-keys)).
 above the threshold remains that is not `unchanged` against the baseline.
 If none does, it still exits 2 when a required check was not assessed,
 unless `--allow-incomplete` is given: a new blocker could be hiding behind
-the gap, even when every known blocker is in the baseline. `--fail-on
-never` always exits 0. Operational errors, including an invalid config file
+the gap, even when every known blocker is in the baseline. A `--target`
+that is not an upgrade of the cluster (a downgrade, the same minor, or a
+typo) exits 2 even with `--allow-incomplete`. `--fail-on never` always
+exits 0. Operational errors, including an invalid config file
 or baseline, exit 1.
 
 Score and verdict exclude suppressed findings, but they include baseline
@@ -191,7 +194,7 @@ becomes "2 objects"). Examples:
 | Removed or deprecated API | `removed-api/networking.k8s.io/v1beta1/Ingress`, `deprecated-api/core/v1/ComponentStatus` (the core group is `core`) |
 | Deprecated API still requested | `deprecated-api-in-use/<group>/<version>/<resource>` |
 | EOL add-on | `eol-addon/ingress-nginx`, or `eol-addon/<id>/<cycle>` for a release line |
-| Version skew | `version-skew/kubelet-post-upgrade` |
+| Version skew | `version-skew/kubelet-post-upgrade`, `version-skew/<component>-newer` or `-behind`, `version-skew/upgrade-path` |
 | Knowledge base behind the target | `kb-stale` |
 
 `--output json` shows the key of every finding, and the SARIF output uses
