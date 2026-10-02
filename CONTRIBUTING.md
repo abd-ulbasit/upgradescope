@@ -163,6 +163,15 @@ docs.
   `endoflife_product` with the endoflife.date API. Both need network access.
 - A weekly workflow (`kb-refresh.yml`) runs both and opens a pull request. You
   rarely need to bump `k8s.io/api` yourself.
+- That pull request comes from `github-actions[bot]`, so GitHub holds its CI
+  runs until someone approves them. The workflow tries to approve them
+  itself; when it cannot, its run shows a warning. **Maintainers: if a bot
+  PR shows no checks, approve its held runs** with *Approve and run* on the
+  PR, or `gh run list --branch <bot branch> --event pull_request --status
+  action_required` and then `gh api -X POST
+  repos/abd-ulbasit/upgradescope/actions/runs/<id>/approve` for each run.
+  Dispatching `ci.yml` on the branch does not help: those checks do not
+  count on the PR.
 
 ## What CI runs and how to reproduce each job locally
 

@@ -12,19 +12,34 @@ name: kb-refresh
 # If either job fails, report-failure opens or comments on the
 # "kb-refresh is failing" issue, so a broken refresh is never silent.
 #
-# How the bot PRs get CI without a PAT or App secret: create-pull-request
-# pushes and opens the PR with this run's GITHUB_TOKEN, and GitHub starts no
-# workflow for events that token creates (no pull_request or push run, so
-# the PR showed zero checks, #11) except workflow_dispatch and
-# repository_dispatch. So when a job creates or updates its PR (the action's
-# pull-request-operation output; 'none' means the branch did not move), it
-# runs `gh workflow run ci.yml --ref <bot branch> -f full-matrix=false`,
-# which needs actions: write on that job only. The dispatched run builds the
-# branch tip, the commit create-pull-request just pushed, and its check runs
-# attach to that commit, so they show on the PR. In ci.yml a dispatched run
-# is not path-filtered (everything a PR can run, at the PR's Kubernetes and
-# Postgres sets), and its registry job diffs the branch against the default
-# branch. hack/kb-refresh-ci_test.sh (make hack-test) pins both halves.
+# How the bot PRs get CI without a PAT or App secret (#11).
+# create-pull-request pushes the bot branch and opens the PR with this run's
+# GITHUB_TOKEN, so the PR comes from github-actions[bot]. GitHub does create
+# the PR's pull_request runs (ci, docs), but holds them for a maintainer's
+# approval: status completed, conclusion action_required, no checks on the
+# PR, so the ruleset's required ci-ok never reports and the PR stays BLOCKED
+# (why #97 looked like "zero checks"). #151 dispatched ci.yml on the bot
+# branch instead; that run passed and put its check runs, ci-ok included, on
+# the head commit, but a PR's check rollup ignores a workflow_dispatch check
+# suite, so PR #152 stayed BLOCKED (kb-refresh run 36987833658, dispatched
+# ci.yml run 36987887553). What worked: POST
+# repos/<repo>/actions/runs/<id>/approve on the held runs (ci 36987887798,
+# docs 36987887811) with a maintainer's token; they then ran as ordinary
+# pull_request runs and reported on the PR.
+#
+# So when a job creates or updates its PR (the action's
+# pull-request-operation output; 'none' means the branch did not move), its
+# "Approve the PR's CI runs" step polls the head commit's pull_request runs
+# for up to about five minutes and approves each held one (conclusion or
+# status action_required), with this job's GITHUB_TOKEN and actions: write
+# on that job only. Whether GitHub lets GITHUB_TOKEN approve runs its own
+# bot triggered is not documented, so the step is fail-soft: no runs, a
+# failed listing or a refused approval is a ::warning:: and a job-summary
+# line with the maintainer's commands (`gh run list --branch <bot branch>
+# --status action_required`, then `gh api -X POST
+# repos/<repo>/actions/runs/<id>/approve`, or "Approve and run" on the PR),
+# never a failed refresh. hack/kb-refresh-ci_test.sh (make hack-test) runs
+# the step against a stub gh.
 
 on:
   schedule:
@@ -41,7 +56,7 @@ jobs:
     permissions:
       contents: write # push the bot branch
       pull-requests: write # open or update its PR
-      actions: write # dispatch ci.yml on it (see the top of this file)
+      actions: write # approve its PR's held CI runs (see the top of this file)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -93,24 +108,71 @@ jobs:
           labels: kb-refresh
           delete-branch: true
 
-      # The PR's CI: see the top of this file.
-      - name: Run CI on the PR
+      # The PR's CI: see the top of this file. Fail-soft: a problem here is a
+      # warning with the maintainer's commands, never a failed refresh.
+      - name: Approve the PR's CI runs
         if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        timeout-minutes: 10 # the poll below is bounded at about five minutes
+        continue-on-error: true # a hung gh call must not fail the refresh; the PR still needs its runs approved by hand then
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ steps.pr.outputs.pull-request-branch }}
           HEAD_SHA: ${{ steps.pr.outputs.pull-request-head-sha }}
         run: |
-          gh workflow run ci.yml --ref "$BRANCH" -f full-matrix=false
-          echo "ci.yml dispatched on $BRANCH at $HEAD_SHA; its checks show on the PR"
+          runs="repos/$GH_REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100"
+          # One line per run: id, held or not, name. A held run is completed
+          # with conclusion action_required; status action_required counts
+          # too. ('waiting' is an environment's deployment review, which this
+          # endpoint does not approve.)
+          filter='.workflow_runs[] | [.id, (if .conclusion == "action_required" or .status == "action_required" then "held" else "not-held" end), .name] | @tsv'
+          list_cmd="gh run list --branch $BRANCH --commit $HEAD_SHA --event pull_request --status action_required"
+          manual() {
+            echo "::warning::$1 The PR's checks (and the required ci-ok) stay pending until a maintainer approves its held runs: $list_cmd, then $2 (or 'Approve and run' on the PR)."
+            echo "- $1 Approve the PR's held CI runs: \`$list_cmd\`, then \`$2\` (or *Approve and run* on the PR)." >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+          }
+          approved='' refused='' seen=''
+          for attempt in $(seq 30); do
+            [ "$attempt" = 1 ] || sleep 10
+            list=$(gh api "$runs" --jq "$filter") || { echo "listing the PR's runs failed (attempt $attempt)"; continue; }
+            waiting=''
+            while IFS=$'\t' read -r id state name; do
+              [ -n "$id" ] || continue
+              seen=1
+              [ "$state" = held ] || continue
+              case " $approved " in *" $id "*) continue ;; esac
+              waiting=1
+              if gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null </dev/null; then
+                echo "approved run $id ($name)"
+                approved="$approved $id"
+              else
+                refused="$refused $id"
+              fi
+            done <<<"$list"
+            # Done once runs exist and none is left waiting; a refusal will
+            # not change on retry.
+            [ -z "$refused" ] || break
+            [ -z "$seen" ] || [ -n "$waiting" ] || break
+          done
+          if [ -n "$refused" ]; then
+            cmds=''
+            for id in $refused; do cmds="${cmds:+$cmds; }gh api -X POST repos/$GH_REPO/actions/runs/$id/approve"; done
+            manual "GITHUB_TOKEN could not approve the held run(s)$refused on $BRANCH (approved:${approved:- none})." "$cmds"
+          elif [ -n "$approved" ]; then
+            echo "approved the PR's held CI runs:$approved"
+            echo "- Approved the PR's held CI runs on \`$BRANCH\`:$approved" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+          elif [ -n "$seen" ]; then
+            echo "the PR's pull_request runs at $HEAD_SHA are not awaiting approval; nothing to approve"
+          else
+            manual "No pull_request run for $BRANCH at $HEAD_SHA could be listed within five minutes." "gh api -X POST repos/$GH_REPO/actions/runs/<id>/approve for each"
+          fi
 
   registry:
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the bot branch
       pull-requests: write # open or update its PR
-      actions: write # dispatch ci.yml on it (see the top of this file)
+      actions: write # approve its PR's held CI runs (see the top of this file)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -141,17 +203,64 @@ jobs:
           labels: kb-refresh
           delete-branch: true
 
-      # The PR's CI: see the top of this file.
-      - name: Run CI on the PR
+      # The PR's CI: see the top of this file. Fail-soft: a problem here is a
+      # warning with the maintainer's commands, never a failed refresh.
+      - name: Approve the PR's CI runs
         if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        timeout-minutes: 10 # the poll below is bounded at about five minutes
+        continue-on-error: true # a hung gh call must not fail the refresh; the PR still needs its runs approved by hand then
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ steps.pr.outputs.pull-request-branch }}
           HEAD_SHA: ${{ steps.pr.outputs.pull-request-head-sha }}
         run: |
-          gh workflow run ci.yml --ref "$BRANCH" -f full-matrix=false
-          echo "ci.yml dispatched on $BRANCH at $HEAD_SHA; its checks show on the PR"
+          runs="repos/$GH_REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100"
+          # One line per run: id, held or not, name. A held run is completed
+          # with conclusion action_required; status action_required counts
+          # too. ('waiting' is an environment's deployment review, which this
+          # endpoint does not approve.)
+          filter='.workflow_runs[] | [.id, (if .conclusion == "action_required" or .status == "action_required" then "held" else "not-held" end), .name] | @tsv'
+          list_cmd="gh run list --branch $BRANCH --commit $HEAD_SHA --event pull_request --status action_required"
+          manual() {
+            echo "::warning::$1 The PR's checks (and the required ci-ok) stay pending until a maintainer approves its held runs: $list_cmd, then $2 (or 'Approve and run' on the PR)."
+            echo "- $1 Approve the PR's held CI runs: \`$list_cmd\`, then \`$2\` (or *Approve and run* on the PR)." >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+          }
+          approved='' refused='' seen=''
+          for attempt in $(seq 30); do
+            [ "$attempt" = 1 ] || sleep 10
+            list=$(gh api "$runs" --jq "$filter") || { echo "listing the PR's runs failed (attempt $attempt)"; continue; }
+            waiting=''
+            while IFS=$'\t' read -r id state name; do
+              [ -n "$id" ] || continue
+              seen=1
+              [ "$state" = held ] || continue
+              case " $approved " in *" $id "*) continue ;; esac
+              waiting=1
+              if gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null </dev/null; then
+                echo "approved run $id ($name)"
+                approved="$approved $id"
+              else
+                refused="$refused $id"
+              fi
+            done <<<"$list"
+            # Done once runs exist and none is left waiting; a refusal will
+            # not change on retry.
+            [ -z "$refused" ] || break
+            [ -z "$seen" ] || [ -n "$waiting" ] || break
+          done
+          if [ -n "$refused" ]; then
+            cmds=''
+            for id in $refused; do cmds="${cmds:+$cmds; }gh api -X POST repos/$GH_REPO/actions/runs/$id/approve"; done
+            manual "GITHUB_TOKEN could not approve the held run(s)$refused on $BRANCH (approved:${approved:- none})." "$cmds"
+          elif [ -n "$approved" ]; then
+            echo "approved the PR's held CI runs:$approved"
+            echo "- Approved the PR's held CI runs on \`$BRANCH\`:$approved" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+          elif [ -n "$seen" ]; then
+            echo "the PR's pull_request runs at $HEAD_SHA are not awaiting approval; nothing to approve"
+          else
+            manual "No pull_request run for $BRANCH at $HEAD_SHA could be listed within five minutes." "gh api -X POST repos/$GH_REPO/actions/runs/<id>/approve for each"
+          fi
 
   report-failure:
     needs: [api-lifecycle, registry]

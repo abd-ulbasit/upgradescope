@@ -40,9 +40,8 @@ render() {
 
 # The runs that matter. sha A is both main's head and the tagged commit (the
 # usual merge-then-tag flow); release.yml's workflow_call runs carry the
-# caller's event, so a tag run is event push on refs/tags/*. kb-refresh.yml
-# dispatches ci.yml on its bot branches (botapi, botreg): their PRs, opened
-# with GITHUB_TOKEN, start no pull_request run.
+# caller's event, so a tag run is event push on refs/tags/*. botapi and
+# botreg are ci.yml dispatched by hand on kb-refresh's bot branches.
 A=1111111111111111111111111111111111111111
 B=2222222222222222222222222222222222222222
 runs="pr7a     pull_request      refs/pull/7/merge   $A 7
