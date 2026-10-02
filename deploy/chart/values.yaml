@@ -191,7 +191,7 @@ server:
   targets: []
   # History older than this is pruned at startup and daily, except each
   # cluster's latest snapshot and its evaluations: whole days (90d) or a
-  # Go duration (2160h); "0" keeps everything.
+  # Go duration (2160h); 0 keeps everything (as "0" or --set ...retention=0).
   retention: 90d
   # A cluster whose agent has not pushed for this long is marked stale in
   # the API, the dashboard data and /metrics. Agents push at least about

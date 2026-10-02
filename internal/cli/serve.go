@@ -264,6 +264,15 @@ func validateServeOptions(opts *serveOptions) error {
 // would prune the score history the dashboard and exports exist to show.
 const minRetention = 24 * time.Hour
 
+// maxRetentionDays (100 years) bounds --retention well below
+// time.Duration's ~292 years, so a large "Nd" cannot wrap to a short or
+// negative window. The day count is clamped before it is multiplied; 0
+// keeps everything.
+const (
+	maxRetentionDays = 36500
+	maxRetention     = maxRetentionDays * 24 * time.Hour
+)
+
 // parseRetention parses --retention: whole days ("90d") or a Go duration
 // ("2160h"); "0" (or "0d") keeps everything.
 func parseRetention(s string) (time.Duration, error) {
@@ -274,12 +283,15 @@ func parseRetention(s string) (time.Duration, error) {
 		if err != nil || n < 0 {
 			return 0, errors.New(want)
 		}
-		d = time.Duration(n) * 24 * time.Hour
+		d = time.Duration(min(n, maxRetentionDays+1)) * 24 * time.Hour // over the cap: refused below
 	} else if s != "0" {
 		var err error
 		if d, err = time.ParseDuration(s); err != nil {
 			return 0, errors.New(want)
 		}
+	}
+	if d > maxRetention {
+		return 0, fmt.Errorf("must be at most %dd (use 0 to keep everything)", maxRetentionDays)
 	}
 	if d != 0 && d < minRetention {
 		return 0, fmt.Errorf("must be 0 (keep everything) or at least %s", minRetention)

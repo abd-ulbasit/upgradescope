@@ -71,7 +71,7 @@ spec:
             {{- with .Values.server.targets }}
             - {{ printf "--targets=%s" (join "," .) | quote }}
             {{- end }}
-            - {{ printf "--retention=%s" .Values.server.retention | quote }}
+            - {{ printf "--retention=%v" .Values.server.retention | quote }}
             - {{ printf "--stale-after=%s" .Values.server.staleAfter | quote }}
             {{- if .Values.server.teamMap }}
             - "--team-map=/etc/upgradescope/team-map/team-map.yaml"

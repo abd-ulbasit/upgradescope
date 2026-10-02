@@ -67,6 +67,7 @@ func TestServeRetention(t *testing.T) {
 		{"720h", 720 * time.Hour},
 		{"0", 0},
 		{"0d", 0},
+		{"36500d", 36500 * 24 * time.Hour}, // the cap: 100 years
 	} {
 		args := []string{}
 		if tc.arg != "" {
@@ -76,7 +77,8 @@ func TestServeRetention(t *testing.T) {
 			t.Errorf("--retention %q = %v (err %v), want %v", tc.arg, got.parsedRetention, err, tc.want)
 		}
 	}
-	for _, bad := range []string{"-1d", "90", "ninety", "1.5d", "-5h", "30m"} {
+	// 106752d overflows time.Duration (it wrapped to a negative window).
+	for _, bad := range []string{"-1d", "90", "ninety", "1.5d", "-5h", "30m", "106752d", "99999999999d", "36501d"} {
 		if err := execServe(t, []string{"--retention", bad}, serveOK()); err == nil || !strings.Contains(err.Error(), "--retention") {
 			t.Errorf("--retention %q: err = %v, want a refusal", bad, err)
 		}

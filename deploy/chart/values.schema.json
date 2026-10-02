@@ -102,9 +102,11 @@
         "webhookSecret": { "type": "string" },
         "targets": { "$ref": "#/definitions/targets" },
         "retention": {
-          "description": "Whole days (90d), a Go duration (2160h) of at least a day, or 0 to keep everything; serve validates the value.",
-          "type": "string",
-          "pattern": "^(0|[0-9]+d|([0-9]+(\\.[0-9]*)?(h|m|s))+)$"
+          "description": "Whole days (90d), a Go duration (2160h) of at least a day, or 0 to keep everything (`--set server.retention=0` passes the number 0); serve validates the value.",
+          "anyOf": [
+            { "type": "string", "pattern": "^(0|[0-9]+d|([0-9]+(\\.[0-9]*)?(h|m|s))+)$" },
+            { "type": "integer", "enum": [0] }
+          ]
         },
         "staleAfter": { "$ref": "#/definitions/duration" },
         "replicas": { "type": "integer", "minimum": 1 },

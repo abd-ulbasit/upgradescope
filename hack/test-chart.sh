@@ -264,6 +264,10 @@ assert_contains "$TMP/nopvc.yaml" 'emptyDir: {}' "emptyDir fallback"
 echo "== hub: retention and staleness reach serve"
 assert_contains "$TMP/server.yaml" '- "--retention=90d"'  "retention window passed to serve"
 assert_contains "$TMP/server.yaml" '- "--stale-after=2h"' "stale-after passed to serve"
+# The documented `--set server.retention=0` arrives as a number, not "0".
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t --set server.retention=0 > "$TMP/keep.yaml"
+assert_contains "$TMP/keep.yaml" '- "--retention=0"' "--set server.retention=0 keeps everything"
 
 echo "== hub: server-only mode (agent.enabled=false) renders no agent objects"
 helm template upgradescope "$CHART" --namespace upgradescope \
