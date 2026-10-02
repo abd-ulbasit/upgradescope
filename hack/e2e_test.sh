@@ -37,7 +37,17 @@ case "$*" in
 esac
 exit 0'
 stub docker 'case "$1" in version) echo linux/amd64 ;; save) for a; do [ "$p" = -o ] && : >"$a"; p=$a; done ;; esac; exit 0'
-stub go 'exit 0'
+stub go '
+case "$1" in
+  test)
+    if [ -n "${STUB_IT_SKIP:-}" ]; then
+      echo "--- SKIP: TestScanIntegration_KindEOLIngressNginx (0.00s)"
+    else
+      echo "--- PASS: TestScanIntegration_KindEOLIngressNginx (4.10s)"
+    fi
+    echo "--- PASS: TestAgentIntegration_CRDStatusOnKind (6.20s)"
+    echo "ok  	github.com/abd-ulbasit/upgradescope/internal/cli	10.4s" ;;
+esac'
 stub make 'exit 0'
 stub curl '
 case "$*" in
@@ -128,6 +138,12 @@ has "the upgrade gate is a FAIL in the summary" "$work/summary" "- **FAIL** — 
 run "a ClusterRole left after uninstall fails the run" 1 STUB_LEFTOVER=1
 has "the leftover is named" "$work/out" "clusterrole/upgradescope-agent"
 has "the uninstall gate is a FAIL in the summary" "$work/summary" "- **FAIL** — helm uninstall leaves no ClusterRole/ClusterRoleBinding"
+
+# The ITs skip, not fail, when the context guard refuses, and go test is
+# green then: the gate must see each one PASS by name.
+run "a skipped integration test fails the run" 1 STUB_IT_SKIP=1
+has "the skipped IT is named" "$work/out" "TestScanIntegration_KindEOLIngressNginx did not PASS"
+has "the IT gate is a FAIL in the summary" "$work/summary" "- **FAIL** — scan + agent integration tests"
 
 run "a cluster on the wrong minor fails the run" 1 STUB_SERVER_MINOR=30
 has "the version mismatch is explained" "$work/out" "cluster runs Kubernetes 1.30, want 1.31"

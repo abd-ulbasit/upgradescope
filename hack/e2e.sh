@@ -148,8 +148,19 @@ no_removed_api_blockers() {
   fi
 }
 
+# The ITs skip rather than fail when their guard refuses a context, and
+# `-run Integration` matching nothing (a renamed test) passes too: a green
+# `go test` alone proves nothing, so every IT must report PASS by name.
+ITS="TestScanIntegration_KindEOLIngressNginx TestAgentIntegration_CRDStatusOnKind"
 integration_tests() {
-  UPGRADESCOPE_IT=1 UPGRADESCOPE_IT_CONTEXT="$CTX" go test ./internal/cli/ -run Integration -count=1 -v
+  UPGRADESCOPE_IT=1 UPGRADESCOPE_IT_CONTEXT="$CTX" go test ./internal/cli/ -run Integration -count=1 -v | tee "$work/it.log" ||
+    return 1
+  local t ok=0
+  for t in $ITS; do
+    grep -q -- "^--- PASS: $t " "$work/it.log" || { echo "$t did not PASS (skipped, renamed or not run)" >&2; ok=1; }
+  done
+  ! grep -- "^--- SKIP: " "$work/it.log" >&2 || { echo "an integration test skipped" >&2; ok=1; }
+  return "$ok"
 }
 
 load_image() {

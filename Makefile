@@ -26,8 +26,8 @@ web-test:
 test:
 	./hack/test.sh
 # it writes to a cluster (the agent IT installs a CRD), so the tests refuse
-# any context that is not kind-*; set UPGRADESCOPE_IT_CONTEXT=<context> to
-# use a different disposable cluster.
+# any context that is not a kind-* context on a loopback API server; set
+# UPGRADESCOPE_IT_CONTEXT=<context> to use a different disposable cluster.
 it:
 	UPGRADESCOPE_IT=1 go test ./... -run Integration -v
 # CI's lint job runs exactly this. golangci-lint-action lags Go releases (its
