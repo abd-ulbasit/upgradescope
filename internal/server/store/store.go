@@ -4,6 +4,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -11,7 +12,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
+	"unicode/utf8"
 )
 
 // HashToken is the storage form of an ingest token: lowercase hex sha256.
@@ -193,10 +196,25 @@ type Evaluation struct {
 	TeamMapHash string `json:"teamMapHash,omitempty"`
 }
 
-// notAssessedOf extracts a report's notAssessed array for its own column:
-// "" when the report has none, an empty one, or does not decode (the
-// report endpoint then says it is corrupt). Skipped fields allocate
-// nothing, so this costs a scan of the report, not a copy of it.
+// What the not_assessed column keeps of a gap. The fleet-wide reads load
+// it for every cluster and target, so it is bounded: a gap's reason (a
+// push may send 64 KiB) is cut to maxSummaryReasonBytes, and its skipped
+// list to its first maxSummarySkipped entries, each cut to
+// maxSummarySkippedBytes, with skippedOmitted counting the rest. With at
+// most inventory.MaxCapabilities gaps, an evaluation's column is at most
+// about 200 KB. A genuine reason or entry is shorter; the report keeps
+// every gap whole.
+const (
+	maxSummaryReasonBytes  = 1 << 10
+	maxSummarySkipped      = 10
+	maxSummarySkippedBytes = 512
+)
+
+// notAssessedOf extracts a report's notAssessed array for its own column,
+// each gap bounded as above: "" when the report has none, an empty one,
+// or does not decode (the report endpoint then says it is corrupt).
+// Skipped fields allocate nothing, so this costs a scan of the report, not
+// a copy of it.
 func notAssessedOf(report []byte) string {
 	var r struct {
 		NotAssessed []json.RawMessage `json:"notAssessed"`
@@ -204,11 +222,68 @@ func notAssessedOf(report []byte) string {
 	if len(report) == 0 || json.Unmarshal(report, &r) != nil || len(r.NotAssessed) == 0 {
 		return ""
 	}
-	out, err := json.Marshal(r.NotAssessed)
-	if err != nil {
-		return ""
+	var out bytes.Buffer
+	out.WriteByte('[')
+	for i, raw := range r.NotAssessed {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		if writeGapSummary(&out, raw) != nil {
+			return ""
+		}
 	}
-	return string(out)
+	out.WriteByte(']')
+	return out.String()
+}
+
+// writeGapSummary writes one gap of a report's notAssessed to out, cut to
+// the column's bounds, with < > & as themselves (json.Marshal writes each
+// as six bytes).
+func writeGapSummary(out *bytes.Buffer, raw json.RawMessage) error {
+	var g struct {
+		Reason  string   `json:"reason"`
+		Skipped []string `json:"skipped"`
+	}
+	if err := json.Unmarshal(raw, &g); err != nil {
+		return err
+	}
+	if len(g.Reason) <= maxSummaryReasonBytes && len(g.Skipped) <= maxSummarySkipped &&
+		!slices.ContainsFunc(g.Skipped, func(s string) bool { return len(s) > maxSummarySkippedBytes }) {
+		return json.Compact(out, raw)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	fields["reason"] = cutString(g.Reason, maxSummaryReasonBytes)
+	listed := make([]string, 0, min(len(g.Skipped), maxSummarySkipped))
+	for _, s := range g.Skipped[:min(len(g.Skipped), maxSummarySkipped)] {
+		listed = append(listed, cutString(s, maxSummarySkippedBytes))
+	}
+	fields["skipped"] = listed
+	if n := len(g.Skipped) - maxSummarySkipped; n > 0 {
+		fields["skippedOmitted"] = n
+	}
+	enc := json.NewEncoder(out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(fields); err != nil {
+		return err
+	}
+	out.Truncate(out.Len() - 1) // Encode's newline
+	return nil
+}
+
+// cutString is s cut to at most max bytes, at a UTF-8 boundary, marked
+// with "…" when it is cut.
+func cutString(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // notAssessedBytes is the read side of the not_assessed column: NULL (a

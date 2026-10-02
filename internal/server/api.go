@@ -972,8 +972,9 @@ type evalSummary struct {
 	EvaluatedAt time.Time      `json:"evaluatedAt"` // last confirmed; a re-evaluation with an unchanged result moves it
 	SnapshotID  int64          `json:"snapshotId"`
 	Outdated    bool           `json:"outdated,omitempty"` // evaluated before today UTC or under another KB or team map; the next pass replaces it
-	// NotAssessed is the report's: what the verdict could not cover.
-	NotAssessed []engine.CapabilityGap `json:"notAssessed,omitempty"`
+	// NotAssessed is the report's, each gap bounded (summaryGap): what
+	// the verdict could not cover.
+	NotAssessed []summaryGap `json:"notAssessed,omitempty"`
 }
 
 func (s *Server) summarize(e store.Evaluation, now time.Time) evalSummary {
@@ -992,12 +993,22 @@ func (s *Server) summarize(e store.Evaluation, now time.Time) evalSummary {
 	}
 }
 
+// summaryGap is a report's gap as an evaluation summary carries it: its
+// reason cut to 1 KiB and at most 10 of what it skipped listed, each cut
+// to 512 bytes, with SkippedOmitted counting the rest (the store keeps
+// that much beside the report, since the fleet-wide reads carry it for
+// every cluster and target). The report has every gap whole.
+type summaryGap struct {
+	engine.CapabilityGap
+	SkippedOmitted int `json:"skippedOmitted,omitempty"`
+}
+
 // gapsOf decodes the evaluation's notAssessed, which the store keeps beside
 // the report, so the summaries that carry a verdict also say what it could
 // not cover without loading the report. A report that does not decode has
 // none; the report endpoint says it is corrupt.
-func gapsOf(e store.Evaluation) []engine.CapabilityGap {
-	var gaps []engine.CapabilityGap
+func gapsOf(e store.Evaluation) []summaryGap {
+	var gaps []summaryGap
 	if json.Unmarshal(e.NotAssessed, &gaps) != nil {
 		return nil
 	}

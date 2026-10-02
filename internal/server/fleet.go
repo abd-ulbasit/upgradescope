@@ -30,7 +30,7 @@ type fleetCell struct {
 	Outdated    bool           `json:"outdated,omitempty"` // evalSummary.Outdated
 	// NotAssessed is the stored report's: why a cell is unknown, or what a
 	// ready one did not cover.
-	NotAssessed []engine.CapabilityGap `json:"notAssessed,omitempty"`
+	NotAssessed []summaryGap `json:"notAssessed,omitempty"`
 }
 
 type fleetRow struct {
