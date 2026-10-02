@@ -52,7 +52,9 @@ const (
 
 // Write renders the report as a GitLab Code Quality report: a JSON array
 // with one entry per (finding, object located in a file) — check_name the
-// finding's key, location the object's file and line, as in SARIF — and,
+// finding's key, location the object's file and line as in SARIF, or line
+// 1 when only the file is known (SARIF leaves such an object unlocated;
+// GitLab can still link the file) — and,
 // since GitLab requires a location, one entry anchored to the virtual
 // path upgradescope/<key>, line 1, per finding with no located object
 // (live-cluster findings, add-ons, skew, a /gate stream posted without
@@ -93,12 +95,12 @@ func Write(w io.Writer, r engine.Report) error {
 		var loose []inventory.ObjectRef
 		located := 0
 		for _, o := range f.Objects {
-			if o.File == "" || o.Line < 1 {
+			if o.File == "" {
 				loose = append(loose, o)
 				continue
 			}
 			located++
-			add(check, sev, objectMessage(f, o), o.File, o.Line, o.Namespace, o.Name)
+			add(check, sev, objectMessage(f, o), o.File, max(o.Line, 1), o.Namespace, o.Name)
 		}
 		switch {
 		case located == 0:

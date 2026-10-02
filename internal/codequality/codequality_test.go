@@ -201,6 +201,25 @@ func TestFingerprintsStable(t *testing.T) {
 	}
 }
 
+// An object whose file is known but not its line is on that file, line 1,
+// not on the virtual path: GitLab can still link the real file.
+func TestWriteFileWithoutLine(t *testing.T) {
+	r := engine.Report{Findings: []engine.Finding{{
+		Category: engine.CatRemovedAPI, Severity: engine.SevBlocker, Key: "removed-api/x/v1/K", Title: "x/v1 K removed",
+		Objects: []inventory.ObjectRef{{Name: "a", File: "rendered/all.yaml"}},
+	}}}
+	issues := codequalitytest.AssertGitLabAcceptable(t, write(t, r))
+	if len(issues) != 1 || issues[0].Location.Path != "rendered/all.yaml" || issues[0].Location.Lines.Begin != 1 {
+		t.Fatalf("entries = %+v, want one on rendered/all.yaml:1", issues)
+	}
+	moved := r
+	moved.Findings = []engine.Finding{r.Findings[0]}
+	moved.Findings[0].Objects = []inventory.ObjectRef{{Name: "a", File: "rendered/all.yaml", Line: 7}}
+	if got := codequalitytest.AssertGitLabAcceptable(t, write(t, moved)); got[0].Fingerprint != issues[0].Fingerprint {
+		t.Errorf("fingerprint changed once the line is known: %s, was %s", got[0].Fingerprint, issues[0].Fingerprint)
+	}
+}
+
 // Objects that share an identity (unnamed, or one name twice in a file)
 // still get distinct fingerprints, the first one's unchanged.
 func TestFingerprintsDistinctForRepeatedIdentity(t *testing.T) {
