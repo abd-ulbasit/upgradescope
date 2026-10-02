@@ -51,15 +51,18 @@ assets=$(grep -oE '(src|href)="/assets/[^"]+"' "$tmp/index.html" | sed -E 's/^(s
 [ -n "$assets" ] || die "index.html references no /assets/ file; the bundle is not the Vite build"
 for a in $assets; do
   got=$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$base$a")
+  # Go's mime table gives text/javascript, unless the host's mime.types
+  # says application/javascript: browsers run a module script under either.
   case "$a" in
-    *.js) want='200 text/javascript' ;;
+    *.js) want='200 (text|application)/javascript' ;;
     *.css) want='200 text/css' ;;
     *) want='200 ' ;;
   esac
-  case "$got" in
-    "$want"*) echo "ok: GET $a -> $got" ;;
-    *) die "GET $a -> '$got', want '$want...' (index.html references it; the dashboard would render blank)" ;;
-  esac
+  if [[ "$got" =~ ^$want ]]; then
+    echo "ok: GET $a -> $got"
+  else
+    die "GET $a -> '$got', want '$want...' (index.html references it; the dashboard would render blank)"
+  fi
 done
 alive "while serving the dashboard; another process answered"
 echo "dashboard-smoke: OK ($(echo "$assets" | wc -l | tr -d ' ') assets)"

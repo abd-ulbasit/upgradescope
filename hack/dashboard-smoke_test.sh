@@ -16,12 +16,14 @@ mkdir -p "$work/stub" "$work/dist/assets"
 cat >"$work/stub/main.go" <<'EOF'
 // A stand-in for `upgradescope serve --listen ADDR ...`: serves $STUB_DIST
 // like the embedded dashboard, /healthz like the server, or exits at once
-// when STUB_EXIT is set.
+// when STUB_EXIT is set. STUB_JS_TYPE overrides the .js Content-Type, as a
+// host's /etc/mime.types can for Go's mime table.
 package main
 
 import (
 	"net/http"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -39,7 +41,13 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.Handle("/", http.FileServer(http.Dir(os.Getenv("STUB_DIST"))))
+	files := http.FileServer(http.Dir(os.Getenv("STUB_DIST")))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if t := os.Getenv("STUB_JS_TYPE"); t != "" && strings.HasSuffix(r.URL.Path, ".js") {
+			w.Header().Set("Content-Type", t)
+		}
+		files.ServeHTTP(w, r)
+	})
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		os.Exit(1)
 	}
@@ -77,6 +85,12 @@ expect() {
 
 expect "a good bundle passes" 0 "ok: GET /assets/index-def456.css -> 200 text/css"
 expect "every referenced asset is fetched" 0 "ok: GET /assets/index-abc123.js -> 200 text/javascript"
+
+# Both registered JavaScript types load a module script; anything else
+# (text/plain from a bare mime table) is blocked by the browser.
+expect "application/javascript passes" 0 "ok: GET /assets/index-abc123.js -> 200 application/javascript" \
+  STUB_JS_TYPE="application/javascript; charset=utf-8"
+expect "a .js served as text/plain fails" 1 "GET /assets/index-abc123.js -> '200 text/plain" STUB_JS_TYPE=text/plain
 
 mv "$work/dist/assets/index-def456.css" "$work/css.bak"
 expect "a missing referenced asset fails" 1 "GET /assets/index-def456.css -> '404"
