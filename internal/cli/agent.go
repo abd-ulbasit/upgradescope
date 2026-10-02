@@ -67,6 +67,9 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 	// Code that logs through slog's package-level functions shares the
 	// format and level.
 	slog.SetDefault(logger)
+	if msg := agent.CleartextPushWarning(opts.serverURL, opts.serverToken); msg != "" {
+		logger.Warn(msg)
+	}
 	kbData, err := kb.Load()
 	if err != nil {
 		return fmt.Errorf("load knowledge base: %w", err)
