@@ -123,6 +123,13 @@ To accept a finding for now, with a reason and an expiry, use an
   responses still waiting for slow clients leave no room for this one.
   Retry after `Retry-After` seconds
   ([Memory and request limits](operations.md#memory-and-request-limits)).
+- **The cluster list, the fleet matrix or a `/metrics` scrape gets 503.**
+  Reads of the whole fleet run two at a time, and this one waited more
+  than 30s for its turn, or the responses still waiting for slow clients
+  leave no room for this one. The dashboard and Prometheus try again at
+  their next poll or scrape; if it persists, look for clients that ask
+  for large reports or fleet reads and do not read them (the server's
+  `upgradescope_http_requests_total` by route and code shows the 503s).
 - **`/gate` gets 422 `a UTF-16 byte order mark`.** Re-encode the manifests
   as UTF-8 (`iconv -f UTF-16 -t UTF-8`).
 - **The agent warns `pushing snapshots to ... over plain http`.** Its

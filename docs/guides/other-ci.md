@@ -195,7 +195,7 @@ It answers in the same formats (`format=junit` or
 introduce, with the same status code whatever the format:
 
 ```sh
-curl -sS --fail-with-body -X POST \
+curl -sS --fail-with-body --retry 5 -X POST \
   "$SERVER/api/v1/gate?target=1.37&cluster=prod-eu-1&format=gitlab-codequality&path=rendered.yaml" \
   -H "Authorization: Bearer $READ_TOKEN" \
   -H "Content-Type: application/x-yaml" \

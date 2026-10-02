@@ -86,10 +86,12 @@ cannot read is reported as not assessed.
   nodes (aliases at what they expand to) are counted against a budget
   before anything is decoded, buffered bodies share a budget, and one
   request per endpoint decodes at a time, as does one read of a stored
-  snapshot. Over a budget is `413`, a body too slow for the read timeout
-  `408`, a full queue `503`
-  ([Memory and request limits](../operations.md#memory-and-request-limits)).
-  Connections have read, write and idle timeouts.
+  snapshot (two reads of the whole fleet). Responses waiting for slow
+  clients share one budget. Over a budget is `413`, a body too slow for
+  the read timeout `408`, a full queue or response budget `503`
+  ([Memory and request limits](../operations.md#memory-and-request-limits),
+  which lists what is outside these bounds). Connections have read,
+  write and idle timeouts; their number is not capped.
 - **Data at rest.** The SQLite database and its `-wal` and `-shm` files
   are created 0600 (an existing one is tightened on open).
 - **CSV exports** guard every place a spreadsheet could start a cell

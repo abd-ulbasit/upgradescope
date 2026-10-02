@@ -98,7 +98,7 @@ at a version that a posted CRD newly deprecates or stops serving are not
 judged.
 
 ```sh
-curl -sS --fail-with-body -X POST \
+curl -sS --fail-with-body --retry 5 -X POST \
   "$SERVER/api/v1/gate?target=1.37&cluster=prod-eu-1&format=sarif&path=rendered.yaml" \
   -H "Authorization: Bearer $READ_TOKEN" \
   -H "Content-Type: application/x-yaml" \
@@ -108,6 +108,10 @@ curl -sS --fail-with-body -X POST \
 - The gate fails like `scan --fail-on` (default `blocker`, `&fail-on=`
   to change it) with status 422 and the full report in the body, so
   `--fail-with-body` fails the step and still writes the SARIF file.
+- `--retry 5` retries a `503`, after the `Retry-After` it carries: the
+  server answers `503` when other gate requests hold its turn or its
+  buffers, or when answers still waiting for slow clients leave no room
+  for this one. A `422` is not retried.
 - `path` names the file the stream was rendered to, so code scanning places
   the findings on it.
 - Without `cluster`, the manifests are judged on their own, like

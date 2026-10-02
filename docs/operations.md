@@ -13,9 +13,11 @@ Elsewhere:
 
 ## Memory and request limits
 
-The server's memory is bounded by construction, not by hoping requests
-are small; what is outside the bounds is listed after the worst case
-below. Decoding is what costs memory, and it costs per node, not
+The server bounds the memory each request can make it use, rather than
+hoping requests are small: by its size and structure, by how many run
+at once, and by how much of their answers may wait for slow clients.
+Those bounds do not cover everything: what is outside them, with what it
+costs, is listed after the worst case below. Decoding is what costs memory, and it costs per node, not
 per byte: a 4 MiB YAML flow sequence `[1,1,…]` decoded to ~900 MB of
 heap, and 20 MiB of `{}` object refs in a snapshot to ~2.6 GB. So each
 request is measured before it is decoded:
@@ -79,8 +81,9 @@ the snapshot node budget, fails above 128 MiB).
 A response is written to memory in the slot and sent after it, so a
 client that is slow to read holds its response, not the slot. `/gate`
 does the same with its answer: it is encoded in the evaluation slot,
-after which the reports it was built from are garbage. These responses,
-the reads' and `/gate`'s, share one budget of twice
+after which the reports it was built from are garbage. So do the reads
+of the whole fleet (below). These responses, the reads', the fleet
+reads' and `/gate`'s, share one budget of twice
 `--max-snapshot-bytes` (40 MiB) while their clients read them, for up to
 the 120s write timeout. One that does not fit what is left of the budget
 gets `503` with `Retry-After` instead (its work is lost, but no slot
@@ -100,51 +103,96 @@ heap peaks 122-124 MiB above idle with the request in its slot
 which fail above the budget for what stays live, and at the peak above
 168 MiB for reads and 240 MiB for `/gate`).
 
-`/clusters`, `/fleet` and `/metrics` take no slot, so they must cost
+The reads of the whole fleet, `/clusters`, `/fleet` and `/metrics`, cost
 about their response whatever was stored: they read each cluster's
 server version from one query over the snapshot heads, and each
 evaluation's score, verdict, counts and what it could not assess from
 its own columns, never the stored report. Before that, one 17 MB push
 made 30 concurrent requests to any of them grow the heap by 285-584 MiB;
-now by at most 2 MiB (`TestFleetReadsLoadNoReport`).
+now by at most 2 MiB (`TestFleetReadsLoadNoReport`). Their responses do
+grow with the fleet: at 500 clusters `/clusters` is ~230 KB, `/fleet`
+~480 KB and `/metrics` ~740 KB, and building one adds up to ~5 MiB to the
+heap (`/metrics` the most, about five times its response); at 2000
+clusters with 200-byte names, with two `--targets`, they are 1.3, 2.3 and
+9 MB, and `/metrics` adds ~47 MiB. They run two at a time in fleet slots
+of their own (others wait up to 30s, then get `503` with `Retry-After`),
+and their responses wait for their clients in the budget above. Written
+straight to their clients, with nothing capping how many, 100 clients
+that never read held 201 MiB of `/clusters` and 251 MiB of `/fleet` of
+that 2000-cluster fleet, and 30 held 433 MiB of `/metrics`, whose handler
+keeps the gathered metric families until its write returns; now 100 of
+any of them leave at most the 40 MiB budget live, and the heap peaks at
+most 168 MiB above idle with the two builds in their slots
+(`TestUnreadFleetResponsesAreBounded`). A Prometheus scrape or a
+dashboard poll that gets `503` is retried at its next interval.
 
 Worst case for the chart's 640Mi server, each part measured on SQLite
 against the dearest snapshot at its node budget
 (`TestStoredSnapshotHeapIsBounded`, `TestReadHeapIsBounded`,
-`TestUnreadResponsesAreBounded`, `TestUnreadGateResponsesAreBounded`):
+`TestUnreadResponsesAreBounded`, `TestUnreadGateResponsesAreBounded`,
+`TestUnreadFleetResponsesAreBounded`):
 one `/gate` request in the evaluation slot (~155 MiB, with `?cluster=`
 too, since the cluster's inventory is decoded once the manifests' node
 trees are garbage, its encoded answer included) plus one ingest
 (~115 MiB for the 17 MB push whose three stored reports are each as
 large, its copy of the body included) plus one read in the read slot
-(~90 MiB, its response included) plus the read and `/gate` responses
-held for their clients (the one 40 MiB budget) plus the background
-re-evaluation pass, which takes clusters one at a time (~85 MiB for that
-snapshot and three targets) plus both body budgets (70 MiB; an ingest
-gives its share back once it holds that copy, so another push can wait
-in it): about 555 MiB, inside the 576 MiB `GOMEMLIMIT` the chart derives
-from the limit. Below about 620Mi, that sum no longer fits under
-`GOMEMLIMIT`.
+(~90 MiB, its response included) plus two reads of the whole fleet in
+their slots (up to ~10 MiB for 500 clusters) plus the read, fleet read
+and `/gate` responses held for their clients (the one 40 MiB budget)
+plus the background re-evaluation pass, which takes clusters one at a
+time (~85 MiB for that snapshot and three targets) plus both body
+budgets (70 MiB; an ingest gives its share back once it holds that copy,
+so another push can wait in it): about 565 MiB for a 500-cluster fleet,
+inside the 576 MiB `GOMEMLIMIT` the chart derives from the limit. Below
+about 630Mi, that sum no longer fits under `GOMEMLIMIT`.
 
-Two things are outside these bounds. These are Go heap figures, and the
-kernel's socket buffers are not in them: Linux grows each connection's
-send buffer up to `net.ipv4.tcp_wmem`'s maximum (4 MiB by default), and
-on cgroup v2 that memory is charged to the pod's limit, outside
-`GOMEMLIMIT`. Nothing in the server caps how many connections a client
-opens, so many that do not read can hold up to that much each, until a
-write deadline or the write timeout closes them and the kernel gives up
-on what they left unsent. The tests above shrink the server's buffers to
-4 KiB, so they measure the heap alone. And a snapshot a v0.1 server stored
-before the budgets existed (up to 20 MiB of any shape) is decoded
-without a node count when `/gate?cluster=`, the re-evaluation pass or a
-what-if read reads it (a report, its findings or teams for a target with
-no stored evaluation, or the fleet teams rollup), until that cluster's
-agent pushes again. Those decodes take their slots, but one 20 MiB
-snapshot of `{}` object refs decodes to ~2.6 GB. Such a row also has no
-stored server version, so `/clusters`, `/fleet` and `/metrics` load it,
-up to 20 MiB, outside the read slot, to read its version. (Evaluations
-stored before the `not_assessed` column are backfilled from their
-reports when the database is migrated, so no report is read for them.)
+What is outside these bounds, and what it costs:
+
+- **Connections.** Nothing in the server caps how many connections a
+  client opens. Each costs ~10 KiB of heap and an 8 KiB goroutine stack
+  while it is open (measured with 1,000 clients that sent a request and
+  did not read the answer), more while its request headers, up to
+  64 KiB, are read: 10,000 open connections hold ~180 MiB. An idle
+  connection is closed after 120s, one whose headers have not arrived
+  after 10s, one whose body has not after 60s, and one whose response
+  has not been taken after the 120s write timeout (20s for a response
+  sent in its slot); a client can open new ones as fast as old ones
+  close.
+- **Socket buffers.** These are Go heap figures, and the kernel's socket
+  buffers are not in them: Linux grows each connection's send buffer up
+  to `net.ipv4.tcp_wmem`'s maximum (4 MiB by default), and on cgroup v2
+  that memory is charged to the pod's limit, outside `GOMEMLIMIT`, so
+  many connections that do not read can hold up to that much each, until
+  a write deadline or the write timeout closes them and the kernel gives
+  up on what they left unsent. The tests above shrink the server's
+  buffers to 4 KiB, so they measure the heap alone.
+- **The fleet's size.** Nothing caps how many clusters the server
+  holds, and a holder of the shared ingest token registers a new one
+  with each new name it pushes. What a fleet read costs grows with the
+  fleet (above): about 5 MiB for 500 clusters, ~47 MiB for a `/metrics`
+  of 2000 clusters with 200-byte names, twice that with both fleet slots
+  busy.
+- **Snapshots stored by v0.1.** A snapshot a v0.1 server stored before
+  the budgets existed (up to 20 MiB of any shape) is decoded without a
+  node count when `/gate?cluster=`, the re-evaluation pass or a what-if
+  read reads it (a report, its findings or teams for a target with no
+  stored evaluation, or the fleet teams rollup), until that cluster's
+  agent pushes again. Those decodes take their slots, but one 20 MiB
+  snapshot of `{}` object refs decodes to ~2.6 GB. Such a row also has
+  no stored server version, so `/clusters`, `/fleet` and `/metrics` load
+  it, up to 20 MiB, in their fleet slots, to read its version.
+  (Evaluations stored before the `not_assessed` column are backfilled
+  from their reports when the database is migrated, so no report is
+  read for them.)
+
+The held-response budget bounds memory, not who gets it. Any answer
+larger than what is left of it gets `503`, so clients that ask for large
+answers (a report, a `/gate?cluster=` answer, or a fleet read of a large
+fleet) and do not read them can keep the budget full for up to the 120s
+write timeout, and ask again: meanwhile per-cluster reads, fleet reads
+(a Prometheus scrape and the dashboard's polls included) and `/gate`
+answers that do not fit get `503`. When the read API is open, that
+needs no credentials.
 
 The Go runtime does not read the container's limit, and without a
 memory limit the collector lets garbage grow to as much as the live heap

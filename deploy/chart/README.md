@@ -257,11 +257,12 @@ settings, so the read token still protects all data.
   quantity up to `E`/`Ei`; `extraEnv` can set it
   instead. The server's 640Mi holds its worst case, measured on SQLite:
   one `/gate` decode, one snapshot ingest, one cluster read and the
-  re-evaluation pass at their node budgets, plus their buffered bodies
-  and the read and `/gate` responses held for their clients (kernel
-  socket buffers are not in that figure)
+  re-evaluation pass at their node budgets, two reads of a 500-cluster
+  fleet, plus their buffered bodies and the responses held for their
+  clients. Open connections, kernel socket buffers and larger fleets are
+  not in that figure
   ([memory and request limits](https://abd-ulbasit.github.io/upgradescope/operations/#memory-and-request-limits)).
-  Below about 620Mi, that worst case no longer fits under `GOMEMLIMIT`.
+  Below about 630Mi, that worst case no longer fits under `GOMEMLIMIT`.
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
   them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.
@@ -367,7 +368,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.readToken` | string | `""` | Optional bearer token for the read API. EMPTY = READ API IS OPEN — acceptable behind a ClusterIP Service on a private cluster, but set one before exposing the Service in any way. With existingSecret the value itself is not used; a non-empty one acts like readTokenFromSecret=true. |
 | `server.readTokenFromSecret` | bool | `false` | With existingSecret: protect the read API with its readToken key. |
 | `server.replicas` | int | `1` | Server Pods. More than one needs a shared database (database below): SQLite on a ReadWriteOnce volume has a single writer. |
-| `server.resources` | object | `{"limits":{"cpu":"500m","memory":"640Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Sets GOMEMLIMIT as agent.resources does (576MiB for 640Mi). 640Mi holds one /gate decode, one snapshot ingest, one cluster read and the re-evaluation pass at their worst, measured on SQLite (~155, ~115, ~90 and ~85 MiB of heap), plus the buffered /gate and snapshot bodies (30 and 40 MiB) and the read and /gate responses held for their clients (one 40 MiB budget): ~555 MiB of heap. Kernel socket buffers and snapshots a v0.1 server stored are outside it: see docs/operations.md. |
+| `server.resources` | object | `{"limits":{"cpu":"500m","memory":"640Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Sets GOMEMLIMIT as agent.resources does (576MiB for 640Mi). 640Mi holds one /gate decode, one snapshot ingest, one cluster read and the re-evaluation pass at their worst, measured on SQLite (~155, ~115, ~90 and ~85 MiB of heap), two reads of a 500-cluster fleet (~10 MiB), plus the buffered /gate and snapshot bodies (30 and 40 MiB) and the responses held for their clients (one 40 MiB budget): ~565 MiB of heap. Open connections (uncapped, ~18 KiB each), kernel socket buffers, larger fleets and snapshots a v0.1 server stored are outside it: see docs/operations.md. |
 | `server.retention` | string | `"90d"` | History older than this is pruned at startup and daily, except each cluster's latest snapshot and its evaluations: whole days (90d) or a Go duration (2160h); 0 keeps everything (as "0" or --set ...retention=0). |
 | `server.securityContext.allowPrivilegeEscalation` | bool | `false` | — |
 | `server.securityContext.capabilities.drop[0]` | string | `"ALL"` | — |

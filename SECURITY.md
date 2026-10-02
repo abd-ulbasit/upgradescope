@@ -92,31 +92,45 @@ In scope:
   request at a time per endpoint doing anything whose memory follows the
   input's structure (measuring what YAML aliases expand to, decoding,
   evaluating); the per-cluster reads, which load a stored snapshot and
-  may evaluate it, share one more such slot. Their responses and
-  `/gate`'s answers are built in the slot and wait for their clients in
-  one budget of twice `--max-snapshot-bytes`; one that does not fit what
-  is left of it is `503`, and one larger than the whole budget is sent in
-  its slot, whose client gets 20s to take it. The reads of the whole fleet
-  (`/clusters`, `/fleet`, `/metrics`) take no slot and load no snapshot
-  inventory and no stored report. Any request that makes the
-  server use memory beyond them is in scope, with or without credentials.
-  What the budgets leave is known: a client that really sends three times
-  `--max-gate-bytes` and then stalls makes other `/gate` requests `503`
-  until the 60s read timeout cuts it off; one that keeps asking for
-  what-if reports keeps other per-cluster reads waiting; and clients that
-  ask for large reports or `/gate?cluster=` answers (one can be about as
-  large as its snapshot) and do not read them fill the response budget
-  for up to the 120s write timeout, during which other large reads and
-  `/gate` answers get `503`. All of these need no credentials when the
-  read API is open. The kernel's socket buffers are outside the budgets:
-  each connection that does not read can hold up to the host's TCP send
-  buffer maximum (4 MiB by default on Linux) of the pod's memory until a
-  write deadline closes it, and the server does not cap connections. And
-  a snapshot a v0.1
-  server stored before these budgets existed is decoded without a node
-  count when `/gate?cluster=`, re-evaluation or a what-if read reads it,
-  and, having no stored server version, is loaded whole by `/clusters`,
-  `/fleet` and `/metrics` to read it.
+  may evaluate it, share one more such slot, and the reads of the whole
+  fleet (`/clusters`, `/fleet`, `/metrics`), which load no snapshot
+  inventory and no stored report, two slots of their own. Every read's
+  response and every `/gate` answer is built in its slot and waits for
+  its client in one budget of twice `--max-snapshot-bytes`; one larger
+  than what is left of that budget gets `503`, and one larger than the
+  whole budget is sent in its slot, whose client gets 20s to take it.
+  Any request that makes the server use memory beyond them is in scope,
+  with or without credentials, except what is listed as outside them
+  below.
+
+  What the budgets leave is known, and documented with its measured
+  cost in docs/operations.md. Memory outside them: nothing caps how many
+  connections a client opens, and each costs ~10 KiB of heap and an
+  8 KiB goroutine stack while open (more while up to 64 KiB of headers
+  arrive), until the idle (120s), header (10s), read (60s) or write
+  (120s) timeout closes it; the kernel's socket buffers are not in the
+  heap figures either, and each connection that does not read can hold
+  up to the host's TCP send buffer maximum (4 MiB by default on Linux)
+  of the pod's memory until a write deadline closes it; nothing caps how
+  many clusters the server holds (a shared ingest token registers one
+  per new name), and a fleet read costs more as the fleet grows (~5 MiB
+  for 500 clusters, ~47 MiB for `/metrics` of 2000 clusters with
+  200-byte names); and a snapshot a v0.1 server stored before these
+  budgets existed is decoded without a node count when `/gate?cluster=`,
+  re-evaluation or a what-if read reads it, and, having no stored server
+  version, is loaded whole by `/clusters`, `/fleet` and `/metrics` to
+  read it. Availability within them: a client that really sends three
+  times `--max-gate-bytes` and then stalls makes other `/gate` requests
+  `503` until the 60s read timeout cuts it off; one that keeps asking for
+  what-if reports keeps other per-cluster reads waiting; and because any
+  answer larger than what is left of the response budget gets `503`, a
+  client that chooses large answers (a report, a `/gate?cluster=` answer,
+  which can be about as large as its snapshot, or a fleet read of a large
+  fleet) and does not read them can keep that budget full for up to the
+  120s write timeout, and again after it, starving per-cluster reads,
+  fleet reads (Prometheus scrapes and the dashboard included) and `/gate`
+  of every answer that does not fit. All of these need no credentials
+  when the read API is open.
 - **Supply chain.** This covers release archives and `checksums.txt`, the
   container image, the GitHub Action in `action/` (how it downloads and runs
   the binary), the CI workflows (for example, pull request workflows that can

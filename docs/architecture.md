@@ -493,7 +493,8 @@ if it is deleted, and writes status with conflict retry.
   a what-if decodes the whole inventory. The cluster list, the fleet
   matrix and `/metrics` read snapshot heads and each evaluation's summary
   columns (score, verdict, counts, `notAssessed`), never an inventory or a
-  stored report
+  stored report, and run two at a time. Every read's response is built
+  in its slot and waits for its client in one budget shared with `/gate`
   ([Memory and request limits](operations.md#memory-and-request-limits)).
   The read token is optional. Without one, the read API is open.
 - **CI gate** (`POST /api/v1/gate`): the request body is a YAML manifest

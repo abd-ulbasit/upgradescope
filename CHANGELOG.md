@@ -366,8 +366,9 @@ a CI gate.
   that evaluation again.
 - Chart: the server's memory limit is 640Mi (was 512Mi), and its
   `GOMEMLIMIT` 576MiB: the worst case of one `/gate` request, one push,
-  one read, the read responses held for their clients and the
-  re-evaluation pass, measured on SQLite, is ~555 MiB.
+  one read, two reads of a 500-cluster fleet, the responses held for
+  their clients and the re-evaluation pass, measured on SQLite, is
+  ~565 MiB.
 
 ### Fixed
 
@@ -460,13 +461,16 @@ a CI gate.
   snapshot run in a read slot of their own, and only a what-if decodes
   the whole inventory: one 370 KB push, from any ingest token, had made
   10 concurrent reads of it grow the heap ~400 MiB. The cluster list, the
-  fleet matrix and `/metrics`, which take no slot, read evaluation
-  summaries instead of whole reports: after one 17 MB push, 30
-  concurrent requests to them had grown the heap by up to 584 MiB. Read
-  responses waiting for their clients share a budget of twice
-  `--max-snapshot-bytes`, and one that does not fit is sent in the read
-  slot under a 20s write deadline: 20 clients that asked for a 17.5 MB
-  report and never read it had held 366 MiB (#121).
+  fleet matrix and `/metrics` read evaluation summaries instead of whole
+  reports (after one 17 MB push, 30 concurrent requests to them had
+  grown the heap by up to 584 MiB), and run two at a time in fleet slots
+  of their own. Every read's response and every `/gate` answer is built
+  in its slot and waits for its client in one budget of twice
+  `--max-snapshot-bytes`; one that does not fit what is left gets 503
+  with `Retry-After`, and one larger than the whole budget is sent in its
+  slot under a 20s write deadline. Unbounded, 20 clients that asked for a
+  17.5 MB report and never read it had held 366 MiB, and 100 that asked
+  for a 2000-cluster fleet's `/fleet` 251 MiB (#121).
 - The CSV export guards every cell against formula injection, including
   after leading white space. Anonymous read access is decided on the
   resolved bind address. The `Bearer` scheme is case-insensitive. The
