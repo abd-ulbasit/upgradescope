@@ -3,18 +3,24 @@ package inventory
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Limits on what an inventory carries beyond its identifiers
-// (ValidateIdentifiers). Every collector stays within them: they are what
-// a collector records, or far above any genuine value. The server refuses
-// an inventory beyond one (422) before evaluating it, because the engine
-// repeats these values in the findings it builds: a kubeVersion of 20 MB
-// of quotes was a 84 MB report, a release per finding with a short one
-// eight times its push.
+// (ValidateIdentifiers). They are what a collector records (the object
+// and image caps, one entry per group/version/kind), or far above any
+// genuine value; the free text a collector copies whole from what it
+// reads, which Kubernetes lets be longer (a capability's reason and
+// skipped entries, the ignore annotations), it cuts to them
+// (CutFreeText), and so does the server, for agents that did not. The
+// server refuses an inventory beyond one (422) before evaluating it,
+// because the engine repeats these values in the findings it builds: a
+// kubeVersion of 20 MB of quotes was a 84 MB report, a release per
+// finding with a short one eight times its push.
 const (
 	// MaxStringBytes caps every string in an inventory but the few below
 	// (versions, chart names, image repositories, kubeVersion
@@ -77,6 +83,101 @@ func (inv Inventory) ValidateLimits() error {
 	}
 	var w stringWalker
 	return w.walk(reflect.ValueOf(inv), MaxStringBytes)
+}
+
+// cutMark ends a reason or an ignore-reason that CutFreeText cut.
+const cutMark = " …(cut)"
+
+// CutFreeText cuts the free text a collector copies whole from what it
+// reads, and that Kubernetes lets be longer than the limits, to them, and
+// reports whether it cut anything. None of it is needed whole:
+//
+//   - a capability's Reason (one error per resource it could not read: a
+//     CRD collector without RBAC for custom resources adds ~200 bytes per
+//     CRD at a deprecated version) to MaxReasonBytes, and each Skipped
+//     entry to MaxStringBytes, ending in cutMark;
+//   - an object's Ignore and IgnoreReason, the upgradescope.dev/ignore
+//     and ignore-reason annotations (up to 256 KiB), to MaxStringBytes:
+//     Ignore to the comma-separated tokens that fit whole, IgnoreReason
+//     ending in cutMark.
+//
+// Each cut keeps whole UTF-8 characters. Collect calls it, and the server
+// calls it on every push before ValidateLimits, so older agents' pushes
+// are cut rather than refused.
+func (inv *Inventory) CutFreeText() bool {
+	cut := false
+	for c, st := range inv.Capabilities {
+		changed := false
+		if r, ok := cutText(st.Reason, MaxReasonBytes); ok {
+			st.Reason, changed = r, true
+		}
+		for i, s := range st.Skipped {
+			if r, ok := cutText(s, MaxStringBytes); ok {
+				if !changed {
+					st.Skipped = slices.Clone(st.Skipped)
+				}
+				st.Skipped[i], changed = r, true
+			}
+		}
+		if changed {
+			inv.Capabilities[c], cut = st, true
+		}
+	}
+	refs := func(us []APIUsage) {
+		for i := range us {
+			for k := range us[i].Objects {
+				o := &us[i].Objects[k]
+				if s, ok := cutTokens(o.Ignore, MaxStringBytes); ok {
+					o.Ignore, cut = s, true
+				}
+				if s, ok := cutText(o.IgnoreReason, MaxStringBytes); ok {
+					o.IgnoreReason, cut = s, true
+				}
+			}
+		}
+	}
+	refs(inv.APIUsage)
+	for i := range inv.HelmReleases {
+		refs(inv.HelmReleases[i].ManifestAPIs)
+	}
+	for i := range inv.CRDs {
+		refs(inv.CRDs[i].Usage)
+	}
+	return cut
+}
+
+// cutText cuts s to at most max bytes ending in cutMark, at a character
+// boundary; ok is false when s fits.
+func cutText(s string, max int) (string, bool) {
+	if len(s) <= max {
+		return "", false
+	}
+	return utf8Prefix(s, max-len(cutMark)) + cutMark, true
+}
+
+// cutTokens cuts a comma-separated list to the tokens that fit whole in
+// max bytes; ok is false when s fits.
+func cutTokens(s string, max int) (string, bool) {
+	if len(s) <= max {
+		return "", false
+	}
+	i := strings.LastIndexByte(s[:max+1], ',')
+	if i < 0 {
+		return "", true
+	}
+	return strings.TrimRight(s[:i], ", "), true
+}
+
+// utf8Prefix is the longest prefix of s of at most n bytes that ends at a
+// character boundary.
+func utf8Prefix(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // validateUsages checks one list of API usage entries; at names it.

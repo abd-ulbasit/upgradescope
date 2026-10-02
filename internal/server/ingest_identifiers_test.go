@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -133,9 +134,44 @@ func TestIngestRefusesValuesBeyondLimits(t *testing.T) {
 	}
 }
 
+// What a collector copies whole and the server does not need whole is cut,
+// not refused: an agent that predates CutFreeText, without RBAC for custom
+// resources, reports a ~200-byte forbidden list per CRD at a deprecated
+// version, past the reason limit at ~320 of them, and copies the ignore
+// annotations, up to 256 KiB, verbatim. Refused, every push it made would
+// be 422, for good. The push is accepted and judged cut; the snapshot
+// keeps it as pushed, and is read back cut too.
+func TestIngestCutsTheFreeTextOfOlderAgents(t *testing.T) {
+	st := newFakeStore()
+	s := newTestServer(t, st)
+	inv := testInventoryWithPSP()
+	var failures []string
+	for i := range 500 {
+		failures = append(failures, fmt.Sprintf(`list example%03d.io/v1beta1 widgets: widgets.example%03d.io is forbidden: User "system:serviceaccount:upgradescope:upgradescope-agent" cannot list resource "widgets" in API group "example%03d.io" at the cluster scope`, i, i, i))
+	}
+	inv.Capabilities[inventory.CapCRDs] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: strings.Join(failures, "; ")}
+	inv.APIUsage[0].Objects = []inventory.ObjectRef{{Name: "psp", Ignore: "deprecated-api", IgnoreReason: strings.Repeat("because ", 32<<10)}}
+	rec := httptest.NewRecorder()
+	serveIngest(s, rec, pushReqBody(t, inv), false)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d (%.400s), want 202", rec.Code, rec.Body)
+	}
+	stored, err := decodeInventory(st.snapshots[len(st.snapshots)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stored.ValidateLimits(); err != nil {
+		t.Fatalf("the stored inventory is beyond the limits: %v", err)
+	}
+	if r := stored.Capabilities[inventory.CapCRDs].Reason; !strings.HasPrefix(r, failures[0]) || len(r) > inventory.MaxReasonBytes {
+		t.Errorf("stored reason is %d bytes starting %.60q, want at most %d starting with the first failure", len(r), r, inventory.MaxReasonBytes)
+	}
+}
+
 // Every inventory the engine's golden tests judge, which the collectors'
-// own tests produce the shapes of, is accepted: the identifier rules and
-// the limits refuse nothing a cluster can hold.
+// own tests produce the shapes of, is accepted by the identifier rules and
+// the limits. (Collectors stay within the limits by construction or by
+// CutFreeText; the values they copy unbounded are only those it cuts.)
 func TestIngestAcceptsTheGoldenInventories(t *testing.T) {
 	paths, err := filepath.Glob("../engine/testdata/*/inventory.json")
 	if err != nil || len(paths) < 10 {

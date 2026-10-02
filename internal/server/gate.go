@@ -527,5 +527,6 @@ func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref 
 		internalErr(w, "decoding gate cluster inventory", fmt.Errorf("snapshot %d: %w", snap.ID, err))
 		return inventory.Inventory{}, false
 	}
+	inv.CutFreeText() // as ingest judged it (decodeInventory)
 	return inv, true
 }

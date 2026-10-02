@@ -789,7 +789,12 @@ func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
 	}
 	// So are values beyond what any collector records (a string over
 	// 16 KiB, an object list over 100, a group/version/kind counted
-	// twice): the engine repeats them in what it builds.
+	// twice): the engine repeats them in what it builds. The free text a
+	// collector copies whole, which Kubernetes lets be longer (capability
+	// reasons, the ignore annotations), is cut to the limits first, as
+	// collectors since CutFreeText do themselves: an older agent's push
+	// is not refused for it.
+	inv.CutFreeText()
 	if err := inv.ValidateLimits(); err != nil {
 		return inv, "invalid inventory: inventory." + err.Error()
 	}
@@ -931,7 +936,9 @@ func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Sn
 }
 
 // decodeInventory decodes a stored snapshot's whole inventory, as this
-// server judges it (legacyView). Its cost follows the inventory's
+// server judges it (legacyView), its free text cut as ingest cuts it
+// (inventory.CutFreeText): the snapshot keeps the inventory as pushed,
+// an older agent's longer reasons and ignore annotations included. Its cost follows the inventory's
 // structure (~45 MB of heap for a snapshot at its node budget), so a
 // request handler calls it only in the read slot (inReadSlot).
 func decodeInventory(snap store.Snapshot) (inventory.Inventory, error) {
@@ -939,6 +946,7 @@ func decodeInventory(snap store.Snapshot) (inventory.Inventory, error) {
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
 		return inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", snap.ClusterID, snap.ID, errCorruptInventory, err)
 	}
+	inv.CutFreeText()
 	return legacyView(inv, snap.AgentVersion), nil
 }
 
@@ -963,6 +971,7 @@ func (s *Server) latestHead(ctx context.Context, clusterID int64) (store.Snapsho
 		return store.Snapshot{}, inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", clusterID, snap.ID, errCorruptInventory, err)
 	}
 	inv := inventory.Inventory{ServerVersion: head.ServerVersion, Capabilities: head.Capabilities}
+	inv.CutFreeText()
 	return snap, legacyView(inv, snap.AgentVersion), nil
 }
 
