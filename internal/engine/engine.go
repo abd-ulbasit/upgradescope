@@ -1125,6 +1125,10 @@ func evalChartKubeVersion(rel inventory.HelmRelease, target inventory.Version) (
 		f.Detail = declares + ", which is not a valid semver constraint, so the chart's Kubernetes compatibility was not assessed."
 		return f, true
 	}
+	// Only <target>.0 is checked: a bound with a patch level inside the
+	// target minor ("<1.33.5", ">=1.33.2") is judged at its first patch,
+	// so it may pass for a later patch it excludes, or block although later
+	// patches satisfy it. Chart bounds are usually whole minors ("<1.33.0-0").
 	if c.Check(semver.New(uint64(target.Major), uint64(target.Minor), 0, "", "")) {
 		return Finding{}, false
 	}
