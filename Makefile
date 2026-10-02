@@ -9,6 +9,14 @@ build:
 cross-build:
 	./hack/cross-build.sh
 
+# bin/upgradescope serves the embedded dashboard: index.html at / and every
+# /assets/ file it references, 200 with a JS/CSS content type, from a serve
+# on a free port (CI's build job; release-check runs it on the release
+# binary). Needs Go and curl.
+.PHONY: dashboard-smoke
+dashboard-smoke: build
+	./hack/dashboard-smoke.sh bin/upgradescope
+
 # web rebuilds the dashboard and stages it for go:embed. The staged bundle
 # in internal/server/webdist is committed (the Vite build is byte-for-byte
 # reproducible from package-lock.json), so plain `go build`/`go install`
@@ -153,6 +161,7 @@ agent-e2e: e2e
 .PHONY: hack-test
 hack-test:
 	./hack/cross-build_test.sh
+	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh
 	./hack/check-toolchain_test.sh
 	./hack/install-tool_test.sh

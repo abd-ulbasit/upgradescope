@@ -102,6 +102,7 @@ jobs:
               - 'action/run.sh'
               - 'Makefile'
               - 'hack/release-check.sh'
+              - 'hack/dashboard-smoke.sh'
               - 'go.mod'
               - 'deploy/chart/Chart.yaml'
             action:
@@ -162,10 +163,10 @@ jobs:
       # pass, fail and fail-closed paths with stubs and fixtures.
       - run: make hack-test
 
-  # The binary, then every package (tests included) compiled and vetted for
-  # each platform the release ships: lint and test run on linux only, and a
-  # windows- or darwin-only break would otherwise first fail in a tag's CI
-  # (#128), long after its PR merged.
+  # The binary and the dashboard it embeds, then every package (tests
+  # included) compiled and vetted for each platform the release ships: lint
+  # and test run on linux only, and a windows- or darwin-only break would
+  # otherwise first fail in a tag's CI (#128), long after its PR merged.
   build:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
@@ -178,6 +179,11 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make build
+      # The real go:embed bundle through Server's routing: GET / and every
+      # asset index.html references, each 200 with its content type. A 200
+      # index.html whose JS and CSS 404 is a blank dashboard (#128).
+      - name: the binary serves the dashboard and every asset it references
+        run: make dashboard-smoke
       - name: compile for linux, darwin and windows (amd64, arm64)
         run: make cross-build
 
@@ -337,10 +343,12 @@ jobs:
         env:
           UPGRADESCOPE_PG_TEST_DSN: postgres://postgres:ci-test@127.0.0.1:5432/upgradescope?sslmode=disable
 
-  # Prove the release pipeline before a tag does: config valid for the
-  # pinned GoReleaser, every archive and per-arch image builds, archive names
-  # still match what the Action downloads, and the binary serves the
-  # dashboard. Publishes and signs nothing.
+  # Prove the packaging before a tag does, on packaging changes: config
+  # valid for the pinned GoReleaser, every archive and per-arch image builds,
+  # archive names still match what the Action downloads, and the binary
+  # serves the dashboard and its assets. Publishes and signs nothing. Code
+  # changes get the cross-platform compile and dashboard check in the build
+  # job instead.
   release-check:
     needs: changes
     if: >-
