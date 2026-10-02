@@ -41,8 +41,8 @@ matchers:                          # at least one image, chart or runtime
     - containerd                   # node container runtime name
 support:
   status: supported                # supported | eol | unknown
-  eol_date: "2027-01-31"           # optional, YYYY-MM-DD: whole-product EOL only
-  citations:                       # ≥1 http(s) URL unless status is unknown
+  eol_date: "2027-01-31"           # optional, YYYY-MM-DD: whole-product EOL only; not with unknown
+  citations:                       # ≥1 http(s) URL unless status is unknown; replace the example.com placeholders (rejected)
     - https://example.com/lifecycle
 cycles:                            # release lines of the APP version
   - {cycle: "2.1", eol: "2027-06-30", k8s_min: "1.30", k8s_max: "1.34", citations: ["https://example.com/lifecycle"]}
@@ -113,6 +113,14 @@ per-version lifecycle source.
 
 - Every `support` (unless `status: unknown`), every cycle and every `compat`
   row needs at least one resolving `http(s)` URL.
+- `registry.Validate` rejects a citation on a placeholder or local host
+  (`example.com`, `example.org`, `example.net`, `*.test`, `*.invalid`,
+  `localhost`, a single-label host, any IP address). It cannot tell a wrong
+  real URL from a right one: CI does not fetch citations, so the checklist
+  below is yours.
+- A date is a claim, so `eol_date` needs `status: supported` or `eol`;
+  `status: unknown` (which needs no citation) with a date is rejected, since
+  it would print an uncited end-of-life blocker.
 - Prefer primary sources: upstream release/support-policy docs, compatibility
   matrices, official blog announcements. endoflife.date product pages are
   fine *in addition* for synced entries.
@@ -126,8 +134,9 @@ per-version lifecycle source.
 
 ## Adding an add-on, step by step
 
-1. Create `registry/data/<id>.yaml` (file name = `id`, `.yaml` extension —
-   `.yml` is rejected).
+1. Create `registry/data/<id>.yaml` (file name = `id`, `.yaml` extension;
+   `go test ./registry/...` fails on a `.yml` or any other file in
+   `registry/data`, which the embed would skip).
 2. Fill in the template above; check whether endoflife.date tracks it.
 3. If synced: run `make eol-sync` to let the tool write `cycles`.
 4. Validate: `go test ./registry/...`. The tests check every data file

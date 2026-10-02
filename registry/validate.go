@@ -4,6 +4,7 @@ package registry
 import (
 	"cmp"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -69,6 +70,11 @@ func Validate(a AddOn) []error {
 	}
 	if a.EndoflifeProduct != "" && !eolSlugPattern.MatchString(a.EndoflifeProduct) {
 		errs = append(errs, fmt.Errorf("%s: endoflife_product %q must be a lowercase endoflife.date slug (e.g. \"argo-cd\")", a.ID, a.EndoflifeProduct))
+	}
+	if a.Support.EOLDate != "" && a.Support.Status == "unknown" {
+		// Citations are optional for unknown, so a date here would be an
+		// uncited claim, yet the engine turns it into an end-of-life blocker.
+		errs = append(errs, fmt.Errorf("%s: support.eol_date requires support.status supported or eol (a date is a claim, and unknown carries no citation)", a.ID))
 	}
 	if a.Support.EOLDate != "" {
 		if _, err := time.Parse("2006-01-02", a.Support.EOLDate); err != nil {
@@ -198,5 +204,33 @@ func validateCitationURL(s string) error {
 	if u.Host == "" {
 		return fmt.Errorf("citation URL must have a host")
 	}
+	if host := u.Hostname(); reservedHost(host) {
+		return fmt.Errorf("citation host %q is a reserved or local host, not a source: cite the upstream page that states the fact", host)
+	}
 	return nil
+}
+
+// reservedHost reports a host no upstream page can live on: a placeholder
+// (the RFC 2606 example names and test, example, invalid TLDs), a local
+// name or an IP address. The template in registry/CONTRIBUTING.md uses one,
+// and a copy that keeps it would pass every other rule.
+func reservedHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
+	}
+	if !strings.Contains(host, ".") { // "localhost", "x"
+		return true
+	}
+	for _, tld := range []string{"test", "example", "invalid", "localhost", "local"} {
+		if strings.HasSuffix(host, "."+tld) {
+			return true
+		}
+	}
+	for _, name := range []string{"example.com", "example.org", "example.net"} {
+		if host == name || strings.HasSuffix(host, "."+name) {
+			return true
+		}
+	}
+	return false
 }

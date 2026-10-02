@@ -3,6 +3,7 @@ package registry
 
 import (
 	"io/fs"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -22,7 +23,7 @@ matchers:
 support:
   status: supported
   citations:
-    - https://example.com/releases
+    - https://vendor.dev/releases
 `
 }
 
@@ -85,7 +86,7 @@ func TestLoadFS(t *testing.T) {
 		{
 			name: "cycle eol must be a date or boolean",
 			files: map[string]string{
-				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: [1], citations: [\"https://example.com/\"]}\n",
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: [1], citations: [\"https://vendor.dev/\"]}\n",
 			},
 			wantErr: "eol must be a YYYY-MM-DD date, true or false",
 		},
@@ -93,7 +94,7 @@ func TestLoadFS(t *testing.T) {
 			// An empty string would otherwise read as "no end announced".
 			name: "cycle eol empty string rejected",
 			files: map[string]string{
-				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: \"\", citations: [\"https://example.com/\"]}\n",
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: \"\", citations: [\"https://vendor.dev/\"]}\n",
 			},
 			wantErr: "eol must be a YYYY-MM-DD date, true or false",
 		},
@@ -101,21 +102,21 @@ func TestLoadFS(t *testing.T) {
 			// Unquoted, YAML reads 1.10 as the number 1.1: the wrong cycle.
 			name: "unquoted cycle rejected",
 			files: map[string]string{
-				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: 1.10, eol: false, citations: [\"https://example.com/\"]}\n",
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: 1.10, eol: false, citations: [\"https://vendor.dev/\"]}\n",
 			},
 			wantErr: `quote versions`,
 		},
 		{
 			name: "unquoted cycle k8s_max rejected",
 			files: map[string]string{
-				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: false, k8s_max: 1.30, citations: [\"https://example.com/\"]}\n",
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: false, k8s_max: 1.30, citations: [\"https://vendor.dev/\"]}\n",
 			},
 			wantErr: `quote versions`,
 		},
 		{
 			name: "unknown cycle field rejected (strict mode)",
 			files: map[string]string{
-				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: false, lts: true, citations: [\"https://example.com/\"]}\n",
+				"addon-a.yaml": validYAML("addon-a") + "cycles:\n  - {cycle: \"1.0\", eol: false, lts: true, citations: [\"https://vendor.dev/\"]}\n",
 			},
 			wantErr: "unknown field",
 		},
@@ -180,6 +181,22 @@ func TestCycleEOLRoundTrip(t *testing.T) {
 // The embedded data files are checked by properties, not by a per-entry
 // table: adding a YAML entry needs no Go change, and an eol-sync run that
 // moves a date or ends a cycle cannot turn the weekly refresh PR red.
+// TestDataDirHoldsOnlyYAMLEntries: go:embed data/*.yaml never sees a .yml
+// (or a stray .yaml.bak, a README, a subdirectory), so such a file in the
+// source tree is an add-on or edit that CI passes and no binary carries.
+// loadFS rejects .yml only in a synthetic filesystem (#166 KB-05).
+func TestDataDirHoldsOnlyYAMLEntries(t *testing.T) {
+	files, err := os.ReadDir("data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".yaml") {
+			t.Errorf("registry/data/%s: only <id>.yaml files are embedded and loaded; rename it to .yaml or move it out of registry/data", f.Name())
+		}
+	}
+}
+
 func TestEmbeddedEntriesProperties(t *testing.T) {
 	addons, err := Load()
 	if err != nil {
