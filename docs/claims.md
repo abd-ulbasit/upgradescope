@@ -41,7 +41,9 @@ audited") and names the issue that tracks it.
 | API-01c | When the kind itself goes away (no surviving version), every stored object counts. | `TestCollectAPIUsageTypeRemovedKindCountsEveryObject` `TestCollectAPIUsageRealKBPodSecurityPolicyCountsEveryObject` |
 | API-02 | `removed-api` is a blocker when the API is removed at or before the target and a warning when it is removed in the next minor. | `TestEvalAPIUsageRemovedAtTarget` `TestEvalAPIUsageRemovedAtTargetPlusOne` `TestEvaluateGolden` |
 | API-02b | A deprecation that takes effect after the target is titled as a future deprecation, and "(projected)" past the knowledge base's horizon, not as current. | `TestEvalAPIUsageFutureDeprecationTitle` |
-| API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one. On the e2e kind cluster, which serves one deprecated group/version on purpose, neither `scan` nor the agent calls a deprecated API (the e2e's own request through that version shows the audit log records them), apart from the self-LISTs in `hack/e2e/deprecated-request-allowlist.txt` (#123 removes them); a cluster that serves a kind only at deprecated versions still gets a LIST there (API-04c). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
+| API-04 | The scanner lists every resource at a version that is not deprecated whenever the cluster serves one. On the e2e kind cluster, which serves one deprecated group/version on purpose, neither `scan` nor the agent calls a deprecated API (the e2e's own request through that version shows the audit log records them; `hack/e2e/deprecated-request-allowlist.txt` is empty since #139); a cluster that serves a kind only at deprecated versions still gets a LIST there (API-04c). | `TestCollectAPIUsageNeverListsDeprecatedVersionWhenAnotherIsServed` `TestCollectAPIUsageListsAtReplacementGroupWhenOwnGroupIsAllDeprecated` `e2e:audit_no_deprecated_requests` |
+| API-04b | Repeat scans of an unchanged cluster give identical reports: the scanner's own deprecated-endpoint LISTs are never reported as callers, and kinds the knowledge base deprecates but never removes (core `v1` Endpoints, ComponentStatus) are not listed at all (#123). | `TestCollect_SelfFeedingDeprecatedCalls` `TestCollectAPIUsageReportsItsOwnDeprecatedLists` `TestCollectAPIUsageMakesNoDeprecatedRequestOn137` `e2e:audit_no_deprecated_requests` |
+| API-04c | A kind served only at a deprecated version that is being removed (`coordination.k8s.io/v1beta1` `leasecandidates`, `policy/v1beta1` `podsecuritypolicies` on 1.24) is still listed there, since its objects can block the upgrade. That LIST is not scored as a caller: the deprecated-calls capability comes back partial, naming those endpoints as skipped, because the metric cannot tell other clients from the scanner there (apiserver audit logs can). | `TestCollect_SelfFeedingDeprecatedCalls` `TestCollectAPIUsageReportsItsOwnDeprecatedLists` `TestCollectDeprecatedCallsMarksSelfListedResources` |
 | API-05 | A caller with no stored objects is a standalone `deprecated-api-in-use` finding; caller evidence otherwise merges onto the object finding. | `TestEvaluateCallerWithoutObjectsStaysStandalone` `TestEvaluateMergesCallersIntoAPIUsageFinding` `TestEvaluateMergesSubresourceCallers` `TestEvaluateMoreSevereCallerIsNotFolded` `TestEvaluateGolden` |
 | PF-02 | Every cluster-wide list is paged (500 objects a page); the api-usage and Helm lists are metadata-only, and object references are capped. | `TestCollectAPIUsageFollowsListPagination` `TestCollectAddOnsFollowsListPagination` `TestCollectVersionsFollowsListPagination` `TestCollectHelmFollowsListPagination` `TestCollectHelmFetchesOnlyTheChosenRevision` `TestCollectAPIUsageCapsObjectRefs` |
 
@@ -49,7 +51,7 @@ audited") and names the issue that tracks it.
 
 | ID | Claim | Proven by |
 |---|---|---|
-| DC-01 | Clients still calling deprecated APIs are found from the apiserver's `apiserver_requested_deprecated_apis` metric (which, until #123, also counts the scanner's own LISTs: API-04b). | `TestCollectDeprecatedCalls` `TestEvalDeprecatedCallsSubresource` |
+| DC-01 | Clients still calling deprecated APIs are found from the apiserver's `apiserver_requested_deprecated_apis` metric; the endpoints the scanner had to list itself are not reported as callers, and the capability names them as skipped (API-04c). | `TestCollectDeprecatedCalls` `TestEvalDeprecatedCallsSubresource` |
 | DC-02 | When `/metrics` is forbidden (401 or 403) or lacks the metric, the capability is reported as unavailable with the reason; the rest of the scan still runs. | `TestCollectDeprecatedCallsForbidden` `TestCollectDeprecatedCallsFamilyAbsent` `TestCollectDeprecatedCallsOtherErrorNotRewritten` |
 | DC-03 | `deprecated-api-in-use` severity follows the removal window, and is info when the removal release is unknown. | `TestEvalDeprecatedCallsSeverityVsTarget` `TestEvalDeprecatedCallsUnparseableReleaseIsInfo` `TestEvalDeprecatedCallsUnparseableIsInfo` |
 
@@ -232,10 +234,8 @@ lands with a test.
 
 | ID | What did not hold | Proven by |
 |---|---|---|
-| API-01d | An object created with no fields records no managedFields and goes undetected. | not true yet: #122 |
+| API-01d | An object created with no fields (a `DeviceClass` with `spec: {}`) records no managedFields and no last-applied annotation, so it goes undetected. | not true yet: #136 (the M08 finding; item 6 of #122, which closed without it) |
 | API-03 | Deprecated CRD versions and stale `status.storedVersions` are not reported. | not true yet: #48 |
-| API-04b | Repeat scans count the scanner's own deprecated-endpoint LISTs as callers. | not true yet: #123 |
-| API-04c | A cluster that serves `coordination.k8s.io/v1beta1` gets a LIST of `leasecandidates` there on every scan, which the engine then scores as a caller. | not true yet: #123 |
 | DC-02b | A `/metrics` that hangs spends the whole scan budget and starves the other collectors. | not true yet: #48 |
 | PF-02b | Add-on and version collection reads whole Pod, Node and Namespace objects, not metadata only. | not true yet: #121 |
 | VS-03 | README's `ready = (blockers == 0)`: ready now means verdict ready. | not true yet: #130 |
