@@ -35,6 +35,32 @@ cat >"$work/CHANGELOG.md" <<'EOF'
 - Older entry that must not appear.
 EOF
 
+# 0.4.0 has a Security block and a bullet under a heading Keep a Changelog
+# does not define; 0.5.0 has bullets under no ### heading at all.
+cat >"$work/CHANGELOG-more.md" <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+## [0.5.0] - 2026-12-01
+
+- A bullet under no heading.
+
+## [0.4.0] - 2026-11-01
+
+### Notes
+
+- Under a heading Artifact Hub has no kind for.
+
+### Security
+
+- Built with a patched Go.
+
+### Fixed
+
+- A fix.
+EOF
+
 : >"$work/results"
 ok() { echo "ok   $1" | tee -a "$work/results"; }
 bad() { echo "FAIL $1" >&2; echo "FAIL $1" >>"$work/results"; }
@@ -77,6 +103,19 @@ stamp baddigest v0.2.0 sha256:abc || true
 check "a malformed digest fails" "grep -qF 'is not a sha256:<64 hex> digest' '$work/baddigest.out'"
 stamp badtag 0.2.0 || true
 check "a tag without v fails" "grep -qF \"'0.2.0' is not a vX.Y.Z[-pre] tag\" '$work/badtag.out'"
+
+check "stable: no security changes, no containsSecurityUpdates" "grep -qxF '  artifacthub.io/containsSecurityUpdates: \"false\"' '$c/Chart.yaml'"
+
+cp -R deploy/chart "$work/sec"
+hack/chart-release-annotations.sh "$work/sec" v0.4.0 "$DIGEST" "$work/CHANGELOG-more.md" >"$work/sec.out" 2>&1 || true
+check "a Security change sets containsSecurityUpdates" "grep -qxF '  artifacthub.io/containsSecurityUpdates: \"true\"' '$work/sec/Chart.yaml'"
+check "a Security change is kind security" "grep -A1 -F -- '- kind: security' '$work/sec/Chart.yaml' | grep -qF 'Built with a patched Go.'"
+check "a bullet under an unknown heading is dropped with a warning" \
+  "! grep -qF 'Artifact Hub has no kind' '$work/sec/Chart.yaml' && grep -qF '::warning::chart-release-annotations: dropped from artifacthub.io/changes (not under a Keep a Changelog heading): Under a heading Artifact Hub has no kind for.' '$work/sec.out'"
+cp -R deploy/chart "$work/noheading"
+hack/chart-release-annotations.sh "$work/noheading" v0.5.0 "$DIGEST" "$work/CHANGELOG-more.md" >"$work/noheading.out" 2>&1 || true
+check "bullets under no ### heading fail with the intended message" \
+  "grep -qF 'no ### Added/Changed/Fixed/... bullets for v0.5.0 in $work/CHANGELOG-more.md' '$work/noheading.out'"
 
 cp -R deploy/chart "$work/pinned"
 sed -i.bak 's/^  digest: ""$/  digest: "sha256:'"$(printf '%064d' 1)"'"/' "$work/pinned/values.yaml" && rm -f "$work/pinned/values.yaml.bak"

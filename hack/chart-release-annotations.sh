@@ -10,7 +10,10 @@
 #                and artifacthub.io/changes lists the release's CHANGELOG.md
 #                entries (the section hack/check-changelog.sh resolves; one per
 #                bullet under ### Added/Changed/Deprecated/Removed/Fixed/Security)
-#                for Artifact Hub's changelog view.
+#                for Artifact Hub's changelog view (a bullet under any other
+#                heading is dropped with a warning), and
+#                artifacthub.io/containsSecurityUpdates is "true" when one of
+#                them is a ### Security entry.
 #
 # Usage: hack/chart-release-annotations.sh <chart-dir> <tag> <sha256:digest> [changelog]
 # Edits <chart-dir> in place: pass a copy, never deploy/chart itself.
@@ -55,7 +58,11 @@ sed "s|^  artifacthub.io/prerelease: .*\$|  artifacthub.io/prerelease: \"$pre\"|
 
 # One change per top-level bullet; indented lines continue it.
 awk '
-  function flush() { if (desc != "" && kind != "") printf "%s\t%s\n", kind, desc; desc = "" }
+  function flush() {
+    if (desc != "" && kind != "") printf "%s\t%s\n", kind, desc
+    else if (desc != "") printf "::warning::chart-release-annotations: dropped from artifacthub.io/changes (not under a Keep a Changelog heading): %s\n", desc >"/dev/stderr"
+    desc = ""
+  }
   /^### / {
     flush()
     k = tolower(substr($0, 5)); gsub(/[^a-z]/, "", k)
@@ -68,7 +75,14 @@ awk '
   END { flush() }
 ' "$chart/.changes.md" >"$chart/.changes.tsv"
 rm -f "$chart/.changes.md"
-[ -s "$chart/.changes.tsv" ] || { rm -f "$chart/.changes.tsv"; die "no ### Added/Changed/Fixed/... bullets under '## [$version]' in $changelog"; }
+[ -s "$chart/.changes.tsv" ] || { rm -f "$chart/.changes.tsv"; die "no ### Added/Changed/Fixed/... bullets for $tag in $changelog"; }
+
+# Artifact Hub flags a release that fixes vulnerabilities: a ### Security
+# entry says this one does.
+if grep -q '^security	' "$chart/.changes.tsv"; then
+  edit "$chartyaml" 's|^  artifacthub.io/containsSecurityUpdates: "false"$|  artifacthub.io/containsSecurityUpdates: "true"|' \
+    "artifacthub.io/containsSecurityUpdates"
+fi
 
 # annotations is the last block of Chart.yaml (the file says so); append.
 grep -q '^annotations:' "$chartyaml" || die "$chartyaml has no annotations block"
