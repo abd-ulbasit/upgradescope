@@ -20,10 +20,11 @@ import (
 // Evaluation passes. A verdict depends on more than the inventory: on the
 // KB, on the server's --targets and --team-map, and on the date (EOL
 // windows). So a stored evaluation goes stale without any new snapshot,
-// and is re-evaluated — on a duplicate push and by the hourly ticker —
-// when its KB version or team-map hash differs from the server's, when it
-// was evaluated before the current UTC day (EOL math is day-granular), or
-// when a configured target has none.
+// and is re-evaluated — on a duplicate push and by the background pass
+// (hourly and at UTC midnight) — when its KB version or team-map hash
+// differs from the server's, when it was evaluated before the current UTC
+// day (EOL math is day-granular), or when a configured target has none.
+// Until then, reads serve the stored row marked outdated.
 //
 // A re-evaluation with an unchanged result (verdict, score, finding keys)
 // refreshes the stored row's evaluatedAt instead of adding history; a
@@ -378,20 +379,55 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 	}
 }
 
-// runReevaluation is the background ticker: one pass at startup (a new KB
-// or config takes effect without waiting for pushes), then every
-// reevaluateInterval, until ctx ends.
+// runReevaluation is the background pass: one at startup (a new KB or
+// config takes effect without waiting for pushes), then every
+// reevaluateInterval and at each UTC midnight (nextPassIn), until ctx
+// ends. A read that served an outdated verdict (kickReevaluation) starts
+// the next pass early.
 func (s *Server) runReevaluation(ctx context.Context) {
-	tick := time.NewTicker(s.reevaluateInterval)
-	defer tick.Stop()
 	for {
 		s.reevaluateAll(ctx)
+		timer := time.NewTimer(nextPassIn(s.now(), s.reevaluateInterval))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-tick.C:
+		case <-timer.C:
+		case <-s.reevaluateKick:
+			timer.Stop()
 		}
 	}
+}
+
+// nextPassIn is how long after now the next background pass runs: after
+// interval, or just past the next UTC midnight when that comes first. EOL
+// math is day-granular, so midnight is when stored verdicts go out of
+// date with no push.
+func nextPassIn(now time.Time, interval time.Duration) time.Duration {
+	midnight := now.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+	return min(interval, midnight.Sub(now)+time.Second)
+}
+
+// kickReevaluation starts the next background pass now, unless one is
+// already queued. Reads call it when they serve an outdated verdict.
+func (s *Server) kickReevaluation() {
+	select {
+	case s.reevaluateKick <- struct{}{}:
+	default:
+	}
+}
+
+// outdated reports whether a stored evaluation served by a read is out of
+// date (stale: evaluated before today UTC, in the future, or under another
+// KB or team map), and if so starts the next pass early. The read still
+// serves it — recomputing on a GET would let read traffic drive writes and
+// notifications — but says so.
+func (s *Server) outdated(e store.Evaluation, now time.Time) bool {
+	if !s.stale(e, now) {
+		return false
+	}
+	s.kickReevaluation()
+	return true
 }
 
 // notificationOf decodes an outbox message's payload. A message queued by

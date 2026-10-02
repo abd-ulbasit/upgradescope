@@ -26,6 +26,7 @@ type fleetCell struct {
 	EvaluatedAt time.Time      `json:"evaluatedAt"`
 	SnapshotID  int64          `json:"snapshotId"`
 	Source      string         `json:"source"`
+	Outdated    bool           `json:"outdated,omitempty"` // evalSummary.Outdated
 }
 
 type fleetRow struct {
@@ -128,7 +129,7 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 			case err == nil:
 				row.Cells[t.String()] = &fleetCell{
 					Score: e.Score, Ready: e.Ready, Verdict: verdictOf(e), Blockers: e.Blockers,
-					EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID, Source: sourceStored,
+					EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID, Source: sourceStored, Outdated: s.outdated(e, now),
 				}
 			case errors.Is(err, store.ErrNotFound):
 			default:

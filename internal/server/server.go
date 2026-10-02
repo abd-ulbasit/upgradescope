@@ -114,6 +114,7 @@ type Server struct {
 	outboxKick         chan struct{} // wakes the delivery worker after a commit
 	notifyTimeout      time.Duration // bounds one delivery attempt
 	reevaluateInterval time.Duration // background re-evaluation period
+	reevaluateKick     chan struct{} // starts the next re-evaluation pass early
 	retentionInterval  time.Duration // pruning period after the startup pass
 	stopBackground     context.CancelFunc
 	backgroundDone     sync.WaitGroup
@@ -142,6 +143,7 @@ func New(cfg Config) (*Server, error) {
 	s.teamMapHash = hashTeamMap(cfg.TeamMap)
 	s.sinks = sinksOf(cfg.Notifier)
 	s.outboxKick = make(chan struct{}, 1)
+	s.reevaluateKick = make(chan struct{}, 1)
 	s.notifyTimeout = notifyTimeout
 	s.reevaluateInterval = reevaluateInterval
 	s.retentionInterval = retentionInterval

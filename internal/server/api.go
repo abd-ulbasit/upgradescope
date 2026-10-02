@@ -610,9 +610,10 @@ type evalSummary struct {
 	KBVersion   string         `json:"kbVersion"`
 	EvaluatedAt time.Time      `json:"evaluatedAt"` // last confirmed; a re-evaluation with an unchanged result moves it
 	SnapshotID  int64          `json:"snapshotId"`
+	Outdated    bool           `json:"outdated,omitempty"` // evaluated before today UTC or under another KB or team map; the next pass replaces it
 }
 
-func summarize(e store.Evaluation) evalSummary {
+func (s *Server) summarize(e store.Evaluation, now time.Time) evalSummary {
 	return evalSummary{
 		Target:      e.Target,
 		Score:       e.Score,
@@ -623,6 +624,7 @@ func summarize(e store.Evaluation) evalSummary {
 		KBVersion:   e.KBVersion,
 		EvaluatedAt: e.EvaluatedAt,
 		SnapshotID:  e.SnapshotID,
+		Outdated:    s.outdated(e, now),
 	}
 }
 
@@ -653,7 +655,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 		cs := clusterSummary{Cluster: c, Stale: s.clusterStale(c, now)}
 		if target, _, err := s.defaultTarget(ctx, c.ID); err == nil {
 			if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String()); err == nil {
-				sum := summarize(e)
+				sum := s.summarize(e, now)
 				cs.Latest = &sum
 			}
 		}
@@ -679,7 +681,8 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	detail := clusterDetail{Cluster: c, Stale: s.clusterStale(c, s.now()), Evaluations: []evalSummary{}}
+	now := s.now()
+	detail := clusterDetail{Cluster: c, Stale: s.clusterStale(c, now), Evaluations: []evalSummary{}}
 	var targets []inventory.Version
 	if snap, inv, err := s.latestInventory(ctx, c.ID); err == nil {
 		detail.ServerVersion = judgedAt(snap, inv)
@@ -690,7 +693,7 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, t := range targets {
 		if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, t.String()); err == nil {
-			detail.Evaluations = append(detail.Evaluations, summarize(e))
+			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now))
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)
@@ -712,6 +715,7 @@ type reportMeta struct {
 	Source        string    `json:"source"`                  // sourceStored | sourceWhatIf
 	ServerVersion string    `json:"serverVersion,omitempty"` // the version the latest snapshot is judged at (judgedVersion)
 	NotApplicable bool      `json:"notApplicable,omitempty"` // target at or below ServerVersion
+	Outdated      bool      `json:"outdated,omitempty"`      // a stored evaluation the next pass replaces (evalSummary.Outdated)
 }
 
 // loadOrComputeReport returns the current stored evaluation's report for
@@ -735,6 +739,7 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 			return engine.Report{}, reportMeta{}, fmt.Errorf("stored report for evaluation %d is corrupt: %w", e.ID, err)
 		}
 		meta.EvaluatedAt, meta.SnapshotID, meta.Source = e.EvaluatedAt, e.SnapshotID, sourceStored
+		meta.Outdated = s.outdated(e, s.now())
 		return rep, meta, nil
 	case errors.Is(err, store.ErrNotFound):
 		now := s.now()
