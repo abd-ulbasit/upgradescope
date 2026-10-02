@@ -118,8 +118,36 @@ a CI gate.
   JSON `kubeContext` and `apiServer` (scheme, host and port only, never
   credentials), a `Context:` line in the table header, and `Context ... ·
   API server ...` in the markdown summary.
+- CRD versions are judged (#48). A new `crds` capability (the inventory's
+  `crds` field) records each CustomResourceDefinition's versions (served,
+  storage, deprecated and the deprecation warning) and its
+  `status.storedVersions`. A new `crd-version` finding category has three
+  keys:
+  - `unserved`: a blocker for custom resources at a version the CRD does
+    not serve (or, in files mode, does not list). It can make the verdict
+    `blocked`.
+  - `deprecated`: a warning, which quotes the CRD's `deprecationWarning`,
+    when custom resources use a version the CRD deprecates. It is info when
+    nothing uses that version.
+  - `stored-unserved`: a warning when `status.storedVersions` lists a
+    version the CRD no longer serves. Its remediation describes the storage
+    version migration.
+
+  Live scans read CRDs through the apiextensions client. They list custom
+  resources metadata-only, at a served version that is not deprecated, and
+  judge them by managedFields authorship. `--files` scans take the served
+  versions from the CRD manifests in the files. A custom resource whose CRD
+  is not in the files makes `crds` partial. The agent's chart role can read
+  CRDs but no custom resources, so the agent reports `crds` as partial for a
+  CRD with a deprecated or unserved version. These findings concern the
+  add-on's CRDs, whatever the Kubernetes target.
 
 ### Changed
+
+- Inventories from collectors that predate this release report `crds` as
+  not assessed. This includes the reports the server re-evaluates for
+  existing v0.1 agents, and saved `--files` inventories. The gap is not
+  required, so the verdict and the score are unchanged.
 
 - Chart: the agent can read the resources of the newly known deleted APIs
   (for example `auditsinks`, `clustercidrs`, `podpresets` and the DRA

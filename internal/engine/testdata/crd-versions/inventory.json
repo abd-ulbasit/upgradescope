@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "22222222-2222-2222-2222-222222222222",
+  "source": "cluster",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "serverVersion": "v1.34.2",
+  "capabilities": {
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true},
+    "crds": {"available": true, "partial": true,
+             "reason": "list gateway.networking.k8s.io/v1 httproutes: forbidden",
+             "skipped": ["gateway.networking.k8s.io/v1beta1 HTTPRoute"]}
+  },
+  "deprecatedCalls": [
+    {"group": "cert-manager.io", "version": "v1alpha2", "resource": "certificates"}
+  ],
+  "crds": [
+    {
+      "group": "cert-manager.io", "kind": "Certificate", "plural": "certificates",
+      "versions": [
+        {"name": "v1alpha2", "served": true, "storage": false, "deprecated": true,
+         "deprecationWarning": "cert-manager.io/v1alpha2 Certificate is deprecated in v1.4+, unavailable in v1.6+; use cert-manager.io/v1 Certificate"},
+        {"name": "v1alpha3", "served": false, "storage": false},
+        {"name": "v1", "served": true, "storage": true}
+      ],
+      "storedVersions": ["v1alpha2", "v1alpha3", "v1"],
+      "usage": [
+        {"group": "cert-manager.io", "version": "v1alpha2", "kind": "Certificate", "count": 2,
+         "namespaces": {"shop": 1, "default": 1},
+         "objects": [
+           {"namespace": "shop", "name": "web-tls", "manager": "argocd-controller"},
+           {"namespace": "default", "name": "api-tls", "manager": "kubectl-client-side-apply"}
+         ]},
+        {"group": "cert-manager.io", "version": "v1alpha3", "kind": "Certificate", "count": 1,
+         "namespaces": {"shop": 1},
+         "objects": [{"namespace": "shop", "name": "legacy-tls", "manager": "flux"}]}
+      ]
+    },
+    {
+      "group": "cert-manager.io", "kind": "Issuer", "plural": "issuers",
+      "versions": [
+        {"name": "v1alpha2", "served": true, "storage": false, "deprecated": true},
+        {"name": "v1", "served": true, "storage": true}
+      ],
+      "storedVersions": ["v1"]
+    },
+    {
+      "group": "example.com", "kind": "Widget", "plural": "widgets",
+      "versions": [
+        {"name": "v1beta1", "served": true, "storage": false},
+        {"name": "v1", "served": true, "storage": true}
+      ],
+      "storedVersions": ["v1beta1", "v1"]
+    },
+    {
+      "group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "plural": "httproutes",
+      "versions": [
+        {"name": "v1beta1", "served": true, "storage": false, "deprecated": true,
+         "deprecationWarning": "The v1beta1 version of HTTPRoute has been deprecated and will be removed in a future release of the API. Please upgrade to v1."},
+        {"name": "v1", "served": true, "storage": true}
+      ],
+      "storedVersions": ["v1"]
+    }
+  ],
+  "nodes": [{"name": "node-a", "kubeletVersion": "v1.34.2"}],
+  "namespaces": [{"name": "default", "team": "core"}, {"name": "shop", "team": "storefront"}]
+}

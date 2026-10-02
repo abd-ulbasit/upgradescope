@@ -473,7 +473,7 @@ Type: `blocker`, `warning`, `info`.
 
 One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`,
 `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`,
-`kb-stale`, `addon-no-data`, `unknown-api`. A release may add
+`kb-stale`, `addon-no-data`, `unknown-api`, `crd-version`. A release may add
 categories under `/api/v1`, so this is not an enum: treat one you do
 not know by its severity.
 
@@ -505,7 +505,7 @@ Something the evaluation could not assess.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions), kb-coverage, or target (the target is not an upgrade of the cluster). |
+| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions, crds), kb-coverage, or target (the target is not an upgrade of the cluster). |
 | `reason` | string | yes | — |
 | `partial` | boolean | no | The capability ran but did not read everything. |
 | `skipped` | array of string | no | What a partial capability did not read. |
@@ -893,6 +893,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `namespaces` | array of object | no | — |
 | `unrecognizedImages` | array of string | no | Image repositories no add-on image matcher claims; sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories the cap dropped. |
+| `crds` | array of object | no | CustomResourceDefinitions: versions, status.storedVersions, and the custom resources at a deprecated or unserved version. |
 
 ### PushAccepted
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
@@ -26,6 +27,8 @@ type Clients struct {
 	Metadata   metadata.Interface
 	Discovery  discovery.DiscoveryInterface
 	RESTClient rest.Interface
+	// APIExtensions reads CustomResourceDefinitions (the crds capability).
+	APIExtensions apiextensionsclient.Interface
 }
 
 // Options tunes collection behavior.
@@ -139,7 +142,9 @@ func roundShare(d time.Duration) time.Duration {
 // steps lists the live sub-collectors in execution order: helm before
 // addons (the add-on matcher consumes inv.HelmReleases), api-usage before
 // deprecated-calls (which needs the deprecated endpoints api-usage listed
-// itself, and must see their metric rows on every scan alike).
+// itself, and must see their metric rows on every scan alike). crds lists
+// custom resources only at versions that are not deprecated, so it adds
+// no metric rows; the /metrics scrape stays last.
 func steps(c Clients, k kb.KB, opts Options) []step {
 	var selfListed []string // api-usage's own deprecated LISTs
 	return []step{
@@ -168,6 +173,12 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			var err error
 			selfListed, err = collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
 			return err
+		}},
+		{cap: inventory.CapCRDs, run: func(ctx context.Context, inv *inventory.Inventory) error {
+			if c.APIExtensions == nil || c.Metadata == nil {
+				return errors.New("apiextensions/metadata client not configured")
+			}
+			return collectCRDs(ctx, c.APIExtensions, c.Metadata, inv)
 		}},
 		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error { // after api-usage: consumes selfListed
 			if c.RESTClient == nil {
@@ -200,10 +211,15 @@ func NewClients(cfg *rest.Config) (Clients, error) {
 	if err != nil {
 		return Clients{}, fmt.Errorf("build metadata client: %w", err)
 	}
+	ext, err := apiextensionsclient.NewForConfig(cfg)
+	if err != nil {
+		return Clients{}, fmt.Errorf("build apiextensions client: %w", err)
+	}
 	return Clients{
-		Kube:       kube,
-		Metadata:   md,
-		Discovery:  kube.Discovery(),
-		RESTClient: kube.CoreV1().RESTClient(),
+		Kube:          kube,
+		Metadata:      md,
+		Discovery:     kube.Discovery(),
+		RESTClient:    kube.CoreV1().RESTClient(),
+		APIExtensions: ext,
 	}, nil
 }

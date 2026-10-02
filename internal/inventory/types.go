@@ -1,6 +1,10 @@
 package inventory
 
-import "time"
+import (
+	"time"
+
+	"k8s.io/apimachinery/pkg/version"
+)
 
 type Capability string
 
@@ -10,6 +14,10 @@ const (
 	CapHelm            Capability = "helm"
 	CapAddOns          Capability = "addons"
 	CapVersions        Capability = "versions"
+	// CapCRDs: CustomResourceDefinitions' versions, and the custom
+	// resources that use one the CRD deprecates or does not serve.
+	// Inventories from collectors that predate it do not report it.
+	CapCRDs Capability = "crds"
 )
 
 type CapabilityStatus struct {
@@ -32,7 +40,10 @@ type CapabilityStatus struct {
 	//   - helm: storage drivers not read ("configmaps") and releases not
 	//     read or not decodable ("namespace/name");
 	//   - addons: resources not read for add-on evidence,
-	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses").
+	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses");
+	//   - crds: the custom resources not checked for use of a deprecated
+	//     or unserved CRD version, "group/version Kind"
+	//     ("cert-manager.io/v1alpha2 Certificate").
 	// May be empty when nothing nameable was skipped (a discovery failure
 	// in a group without flagged APIs).
 	Skipped []string `json:"skipped,omitempty"`
@@ -70,6 +81,58 @@ type Inventory struct {
 	// UnrecognizedImagesOmitted counts the UnrecognizedImages the cap
 	// dropped. Both are add-on detection gaps, never findings.
 	UnrecognizedImagesOmitted int `json:"unrecognizedImagesOmitted,omitempty"`
+
+	CRDs []CRD `json:"crds,omitempty"` // sorted by Group, then Kind
+}
+
+// CRD is one CustomResourceDefinition (apiextensions.k8s.io/v1): the
+// versions it serves and stores, and the custom resources that use a
+// version it deprecates, does not serve, or no longer lists.
+type CRD struct {
+	Group    string       `json:"group"`
+	Kind     string       `json:"kind"`
+	Plural   string       `json:"plural"`
+	Versions []CRDVersion `json:"versions"` // spec.versions, in spec order
+	// StoredVersions is status.storedVersions: every version objects may
+	// have been persisted at since the CRD was created. Empty in files
+	// mode, where a manifest's status says nothing about a cluster.
+	StoredVersions []string `json:"storedVersions,omitempty"`
+	// Usage counts, per version and as Inventory.APIUsage does per GVK
+	// (with this CRD's Group and Kind), the custom resources that use a
+	// version that is deprecated, not served, or missing from Versions:
+	// live objects some manager still writes through it (ObjectRef.Manager
+	// names it), manifest objects at it. Sorted by Version.
+	Usage []APIUsage `json:"usage,omitempty"`
+}
+
+// PreferredVersion is the version to read and write a CRD's custom
+// resources at: the storage version when it is served and not deprecated,
+// else the highest-priority such version; "" when there is none. The
+// collector lists custom resources at it, and the engine names it as the
+// version to move them to.
+func (c CRD) PreferredVersion() string {
+	best := ""
+	for _, v := range c.Versions {
+		if !v.Served || v.Deprecated {
+			continue
+		}
+		if v.Storage {
+			return v.Name
+		}
+		if best == "" || version.CompareKubeAwareVersionStrings(v.Name, best) > 0 {
+			best = v.Name
+		}
+	}
+	return best
+}
+
+// CRDVersion is one entry of a CRD's spec.versions.
+type CRDVersion struct {
+	Name               string `json:"name"`
+	Served             bool   `json:"served"`
+	Storage            bool   `json:"storage"`
+	Deprecated         bool   `json:"deprecated,omitempty"`
+	DeprecationWarning string `json:"deprecationWarning,omitempty"`
 }
 
 // MaxUnrecognizedImages caps Inventory.UnrecognizedImages, so a cluster

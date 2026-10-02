@@ -98,7 +98,62 @@ uses the API version it is written in, so every flagged object counts and is
 reported with its file and line. An object of a built-in API group at a
 version or kind the knowledge base does not know (a typo such as
 `apps/v1beta9`) is an `unknown-api` info finding, so it is not passed in
-silence; groups that belong to CRDs produce nothing.
+silence; groups that belong to CRDs produce nothing. Their versions are
+judged against their CRDs instead (next section).
+
+## CRD versions
+
+Custom resources have no entry in the knowledge base: their versions are
+whatever the add-on that ships the CRD declares. A Kubernetes upgrade
+usually needs add-on upgrades, and those break on CRD versions, so the
+`crds` capability reads each CustomResourceDefinition's `spec.versions`
+(`served`, `storage`, `deprecated`, `deprecationWarning`) and
+`status.storedVersions`, and reports `crd-version` findings:
+
+| Key | Severity | When |
+|---|---|---|
+| `crd-version/unserved/<group>/<version>/<kind>` | blocker | Custom resources use a version the CRD does not serve (`served: false`, or, in files mode, not listed at all). The apiserver rejects them. |
+| `crd-version/deprecated/<group>/<version>/<kind>` | warning | Custom resources are written through a version the CRD marks `deprecated: true`. The finding quotes the CRD's `deprecationWarning`. Info when nothing was found using it. |
+| `crd-version/stored-unserved/<group>/<version>/<kind>` | warning | `status.storedVersions` lists a version the CRD no longer serves (live only). Objects may still be stored there, and the CRD update that drops the version is rejected until it is gone from `status.storedVersions`. |
+
+These findings are about the add-on's CRD, not the Kubernetes target, and
+say so; their severity does not depend on the target. A blocker is still a
+blocker, so it makes the verdict `blocked`.
+
+**Live.** Custom resources are judged like built-in objects: a CRD with a
+deprecated or unserved version has its custom resources listed once,
+metadata only, at a served version that is not deprecated (listing the
+deprecated one would make the scanner a caller), and an object counts when
+a field manager still writes it through that version, by the same
+managedFields rules as above. The finding names the managers. A manager
+that has stopped writing (or was removed) leaves its entry behind, so its
+objects stay listed until another manager takes over its fields or the
+entry is removed; the remediation says so. The remedy
+for a stale stored version is a storage version migration: rewrite every
+object at the storage version (the
+[kube-storage-version-migrator](https://github.com/kubernetes-sigs/kube-storage-version-migrator),
+the add-on's own tool such as cert-manager's `cmctl upgrade
+migrate-api-version`, or a no-op update of each object), then remove the
+version from `status.storedVersions` (`kubectl patch crd <name>
+--subresource=status`); see the
+[Kubernetes docs](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#upgrade-existing-objects-to-a-new-stored-version).
+
+**Files mode.** `apiextensions.k8s.io/v1` CustomResourceDefinition
+manifests in the scanned files give the versions, and every custom resource
+in the files at a deprecated, unserved or unlisted version counts, with its
+file and line. A cert-manager 1.6 CRD (v1alpha2 no longer served) next to a
+`cert-manager.io/v1alpha2` Certificate is a blocker. A manifest's `status`
+is ignored. A custom resource whose CRD is not in the files cannot be
+judged: `crds` is then partial, naming it, so it reads as not assessed, not
+as fine. Render charts with `helm template --include-crds` to include
+their CRDs. Tool configuration that is never applied to a cluster needs
+no CRD: a `Kustomization`, a `Kptfile`, and any group without a dot (such
+as `skaffold/v4beta6`), which no CRD can define.
+
+`crds` is never required: CRD versions do not decide whether Kubernetes can
+be upgraded. An inventory from an agent that predates the capability (or
+a files inventory an older CLI saved) does not report it, and the report
+lists `crds` as not assessed.
 
 ## Known limits
 
@@ -133,8 +188,17 @@ silence; groups that belong to CRDs produce nothing.
   them.
 - **Object references are capped** at 100 per API; the finding says how
   many more there are, and the managers it names come from the listed ones.
-- **CRD versions are not covered**: deprecated versions of custom resources
-  and stale `status.storedVersions` ([#48](https://github.com/abd-ulbasit/upgradescope/issues/48)).
+- **The agent cannot read custom resources.** The chart grants reading
+  CRDs but no custom resource (it grants no wildcards), so for a CRD with a
+  deprecated or unserved version the agent reports `crds` as partial,
+  naming the versions it could not check; a deprecated version is then
+  info, not a warning. `scan` with credentials that can list them checks
+  them.
+- **CRD versions dropped from `spec.versions`** are not looked for in a
+  live cluster: nothing in the CRD names them. Files mode reports custom
+  resources at a version the CRD does not list.
+- **A CRD whose every served version is deprecated** is not listed (that
+  would be a deprecated request), and `crds` is partial, naming it.
 - **Partial access.** A resource the credentials cannot list makes the
   capability partial; the verdict becomes `unknown` only if the skipped
   resource has an API removed at or before the target.

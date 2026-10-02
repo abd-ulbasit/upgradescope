@@ -5,6 +5,7 @@
   "collectedAt": "2026-06-10T00:00:00Z",
   "serverVersion": "v1.33.2",
   "capabilities": {
+    "crds": {"available": true},
     "api-usage": {"available": false, "reason": "discover server resources: Unauthorized"},
     "deprecated-calls": {"available": true},
     "helm": {"available": true},

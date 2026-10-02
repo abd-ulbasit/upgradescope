@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -132,13 +133,14 @@ func fakeAPIServer() http.Handler {
 
 // The live steps run in this order: helm before addons (which consumes
 // the releases), api-usage before deprecated-calls (which consumes its
-// own deprecated LISTs), and the /metrics scrape last.
+// own deprecated LISTs), crds (which lists no deprecated version), and
+// the /metrics scrape last.
 func TestStepOrder(t *testing.T) {
 	var got []inventory.Capability
 	for _, s := range steps(Clients{}, kb.KB{}, Options{}) {
 		got = append(got, s.cap)
 	}
-	want := []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapDeprecatedCalls}
+	want := []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapCRDs, inventory.CapDeprecatedCalls}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("step order = %v, want %v", got, want)
 	}
@@ -148,7 +150,7 @@ func TestStepOrder(t *testing.T) {
 func TestCollectFakeAPIServerAssessesEverything(t *testing.T) {
 	c := stallClients(t, stallingAPIServer(t, func(*http.Request) bool { return false }, fakeAPIServer()))
 	inv := Collect(context.Background(), c, loadKB(t), Options{})
-	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapDeprecatedCalls} {
+	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapCRDs, inventory.CapDeprecatedCalls} {
 		if st := inv.Capabilities[cp]; !st.Available || st.Partial {
 			t.Errorf("%s = %+v, want available", cp, st)
 		}
@@ -176,7 +178,7 @@ func TestCollectStalledStepDegradesOnlyItsCapability(t *testing.T) {
 	if addons.Available || !strings.Contains(addons.Reason, "step deadline") {
 		t.Errorf("addons = %+v, want not available, the reason naming the step deadline", addons)
 	}
-	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAPIUsage, inventory.CapDeprecatedCalls} {
+	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAPIUsage, inventory.CapCRDs, inventory.CapDeprecatedCalls} {
 		if st := inv.Capabilities[cp]; !st.Available {
 			t.Errorf("%s = %+v, want available: only the stalled step degrades", cp, st)
 		}
@@ -184,6 +186,36 @@ func TestCollectStalledStepDegradesOnlyItsCapability(t *testing.T) {
 	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 35}, time.Now())
 	if rep.Verdict != engine.VerdictUnknown {
 		t.Errorf("verdict = %s (findings %+v), want unknown (add-ons not assessed)", rep.Verdict, rep.Findings)
+	}
+}
+
+// The crds step follows the same per-step deadline: a CRD LIST that never
+// answers costs crds its assessment and nothing else. crds is not a
+// required check, so the scan of the otherwise empty cluster stays ready,
+// with crds named as not assessed.
+func TestCollectStalledCRDListDegradesOnlyCRDs(t *testing.T) {
+	c := stallClients(t, stallingAPIServer(t, stallPaths("/apis/apiextensions.k8s.io/v1/customresourcedefinitions"), fakeAPIServer()))
+	k := loadKB(t)
+	const budget = 2 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	var inv inventory.Inventory
+	within(t, budget+3*time.Second, func() { inv = Collect(ctx, c, k, Options{}) })
+	crds := inv.Capabilities[inventory.CapCRDs]
+	if crds.Available || !strings.Contains(crds.Reason, "step deadline") {
+		t.Errorf("crds = %+v, want not available, the reason naming the step deadline", crds)
+	}
+	for _, cp := range []inventory.Capability{inventory.CapVersions, inventory.CapHelm, inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapDeprecatedCalls} {
+		if st := inv.Capabilities[cp]; !st.Available {
+			t.Errorf("%s = %+v, want available: only the stalled step degrades", cp, st)
+		}
+	}
+	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 35}, time.Now())
+	if rep.Verdict != engine.VerdictReady {
+		t.Errorf("verdict = %s (findings %+v, gaps %+v), want ready: crds is not required", rep.Verdict, rep.Findings, rep.NotAssessed)
+	}
+	if i := slices.IndexFunc(rep.NotAssessed, func(g engine.CapabilityGap) bool { return g.Capability == inventory.CapCRDs }); i < 0 || rep.NotAssessed[i].Required {
+		t.Errorf("notAssessed = %+v, want a crds gap that is not required", rep.NotAssessed)
 	}
 }
 

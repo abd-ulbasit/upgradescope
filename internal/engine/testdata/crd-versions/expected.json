@@ -1,0 +1,119 @@
+{
+  "clusterId": "22222222-2222-2222-2222-222222222222",
+  "findings": [
+    {
+      "category": "crd-version",
+      "citations": [
+        "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/"
+      ],
+      "detail": "1 object(s) written through this version: shop (1). Written by: flux. CRD certificates.cert-manager.io marks v1alpha3 served: false (it serves v1alpha2, v1), so the apiserver rejects these objects at v1alpha3. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.",
+      "key": "crd-version/unserved/cert-manager.io/v1alpha3/Certificate",
+      "namespaces": [
+        "shop"
+      ],
+      "objects": [
+        {
+          "manager": "flux",
+          "name": "legacy-tls",
+          "namespace": "shop"
+        }
+      ],
+      "remediation": "move these objects to cert-manager.io/v1; the apiserver rejects writes at v1alpha3. A named manager that no longer writes them keeps them listed through its managedFields entry until another manager takes over its fields or the entry is removed",
+      "severity": "blocker",
+      "teams": [
+        "storefront"
+      ],
+      "title": "cert-manager.io/v1alpha3 Certificate is not served by its CRD (1 object)"
+    },
+    {
+      "category": "crd-version",
+      "citations": [
+        "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#upgrade-existing-objects-to-a-new-stored-version"
+      ],
+      "detail": "Objects may still be persisted at v1alpha3, which CRD certificates.cert-manager.io no longer serves (storage version: v1). A CRD update that drops v1alpha3 from spec.versions is rejected while status.storedVersions lists it, so the add-on upgrade that drops it fails. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.",
+      "key": "crd-version/stored-unserved/cert-manager.io/v1alpha3/Certificate",
+      "remediation": "migrate every stored Certificate to the storage version v1 (kube-storage-version-migrator, the add-on's own tool such as cert-manager's cmctl upgrade migrate-api-version, or a no-op update of each object), then remove v1alpha3 from status.storedVersions (kubectl patch crd certificates.cert-manager.io --subresource=status)",
+      "severity": "warning",
+      "title": "CRD certificates.cert-manager.io lists unserved version v1alpha3 in status.storedVersions"
+    },
+    {
+      "category": "crd-version",
+      "citations": [
+        "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#version-deprecation"
+      ],
+      "detail": "2 object(s) written through this version: default (1), shop (1). Written by: argocd-controller, kubectl-client-side-apply. CRD certificates.cert-manager.io marks v1alpha2 deprecated. The CRD says: \"cert-manager.io/v1alpha2 Certificate is deprecated in v1.4+, unavailable in v1.6+; use cert-manager.io/v1 Certificate\". Objects may still be stored at v1alpha2 (status.storedVersions). CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.",
+      "key": "crd-version/deprecated/cert-manager.io/v1alpha2/Certificate",
+      "namespaces": [
+        "default",
+        "shop"
+      ],
+      "objects": [
+        {
+          "manager": "kubectl-client-side-apply",
+          "name": "api-tls",
+          "namespace": "default"
+        },
+        {
+          "manager": "argocd-controller",
+          "name": "web-tls",
+          "namespace": "shop"
+        }
+      ],
+      "remediation": "move these objects to cert-manager.io/v1 before an add-on upgrade stops serving v1alpha2",
+      "severity": "warning",
+      "teams": [
+        "core",
+        "storefront"
+      ],
+      "title": "cert-manager.io/v1alpha2 Certificate is a deprecated CRD version (2 objects)"
+    },
+    {
+      "category": "crd-version",
+      "citations": [
+        "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#version-deprecation"
+      ],
+      "detail": "No custom resource was found written through this version. CRD issuers.cert-manager.io marks v1alpha2 deprecated. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.",
+      "key": "crd-version/deprecated/cert-manager.io/v1alpha2/Issuer",
+      "remediation": "use cert-manager.io/v1; an add-on upgrade may stop serving v1alpha2",
+      "severity": "info",
+      "title": "cert-manager.io/v1alpha2 Issuer is a deprecated CRD version"
+    },
+    {
+      "category": "crd-version",
+      "citations": [
+        "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#version-deprecation"
+      ],
+      "detail": "Custom resources written through this version were not checked (see the crds gap). CRD httproutes.gateway.networking.k8s.io marks v1beta1 deprecated. The CRD says: \"The v1beta1 version of HTTPRoute has been deprecated and will be removed in a future release of the API. Please upgrade to v1\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.",
+      "key": "crd-version/deprecated/gateway.networking.k8s.io/v1beta1/HTTPRoute",
+      "remediation": "use gateway.networking.k8s.io/v1; an add-on upgrade may stop serving v1beta1",
+      "severity": "info",
+      "title": "gateway.networking.k8s.io/v1beta1 HTTPRoute is a deprecated CRD version"
+    },
+    {
+      "category": "deprecated-api-in-use",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; no removal release is recorded. The metric does not identify the client; apiserver audit logs do.",
+      "key": "deprecated-api-in-use/cert-manager.io/v1alpha2/certificates",
+      "severity": "info",
+      "title": "clients still requesting cert-manager.io/v1alpha2 certificates (deprecated)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "crds",
+      "partial": true,
+      "reason": "list gateway.networking.k8s.io/v1 httproutes: forbidden",
+      "skipped": [
+        "gateway.networking.k8s.io/v1beta1 HTTPRoute"
+      ]
+    }
+  ],
+  "ready": false,
+  "score": 65,
+  "serverVersion": "v1.34.2",
+  "target": "1.35",
+  "verdict": "blocked"
+}

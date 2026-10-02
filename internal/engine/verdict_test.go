@@ -18,6 +18,7 @@ func allCaps() map[inventory.Capability]inventory.CapabilityStatus {
 		inventory.CapHelm:            {Available: true},
 		inventory.CapAddOns:          {Available: true},
 		inventory.CapVersions:        {Available: true},
+		inventory.CapCRDs:            {Available: true},
 	}
 }
 
@@ -40,6 +41,7 @@ func filesInv() inventory.Inventory {
 			inventory.CapHelm:            {Available: false, Reason: reason},
 			inventory.CapAddOns:          {Available: false, Reason: reason},
 			inventory.CapVersions:        {Available: false, Reason: reason},
+			inventory.CapCRDs:            {Available: true},
 		},
 	}
 }

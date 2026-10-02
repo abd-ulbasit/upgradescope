@@ -185,21 +185,29 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 		} else {
 			f.Detail = fmt.Sprintf(detail+": %s.", u.Count, nsDetail)
 		}
-		if len(managers) > 0 {
-			// Refs are capped (inventory.MaxObjectRefs): name the subset the
-			// managers come from when some were dropped.
-			by := " Written by: "
-			if u.ObjectsOmitted > 0 {
-				by = fmt.Sprintf(" Written by (first %d of %d objects): ", len(u.Objects), len(u.Objects)+u.ObjectsOmitted)
-			}
-			f.Detail += by + strings.Join(managers, ", ") + "."
-		}
+		f.Detail += writtenBy(u)
 		if !known {
 			f.Detail += fmt.Sprintf(" The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes %s serves it.", target)
 		}
 		out = append(out, f)
 	}
 	return out
+}
+
+// writtenBy renders the managers of u's objects as a detail sentence with
+// a leading space, or "" when no object names one. Refs are capped
+// (inventory.MaxObjectRefs): it names the subset the managers come from
+// when some were dropped.
+func writtenBy(u inventory.APIUsage) string {
+	managers := objectManagers(u.Objects)
+	if len(managers) == 0 {
+		return ""
+	}
+	by := " Written by: "
+	if u.ObjectsOmitted > 0 {
+		by = fmt.Sprintf(" Written by (first %d of %d objects): ", len(u.Objects), len(u.Objects)+u.ObjectsOmitted)
+	}
+	return by + strings.Join(managers, ", ") + "."
 }
 
 // apiKey renders the group/version/kind tail of an API finding's Key.
@@ -1241,7 +1249,10 @@ func evalUpgradePath(inv inventory.Inventory, target inventory.Version) []Findin
 // upgrade of the cluster (see upgradeFrom). Required is set per the
 // verdict rules on CapabilityGap. A capability absent from
 // inv.Capabilities is not a gap: collectors always report all of theirs,
-// so absence only occurs in hand-built inventories.
+// so absence only occurs in hand-built inventories. The exception is crds,
+// which collectors older than it do not report: an inventory without it
+// (an older agent's, or a files inventory an older CLI saved) is a crds
+// gap, so its CRD versions read as not assessed rather than clean.
 func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
 	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
 	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
@@ -1263,6 +1274,10 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 			}
 			gaps = append(gaps, g)
 		}
+	}
+	if _, ok := inv.Capabilities[inventory.CapCRDs]; !ok {
+		gaps = append(gaps, CapabilityGap{Capability: inventory.CapCRDs,
+			Reason: "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"})
 	}
 	if st, ok := inv.Capabilities[inventory.CapVersions]; !ok || st.Available {
 		const notEvaluated = "kubelet and control-plane skew were not evaluated"
@@ -1514,6 +1529,7 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)
 	findings = append(findings, evalKBStale(inv, k, target)...)
 	findings = append(findings, evalUpgradePath(inv, target)...)
+	findings = append(findings, evalCRDVersions(inv, target)...)
 	sortFindings(findings)
 	score, _ := Score(findings)
 	gaps := assessmentGaps(inv, k, target)
