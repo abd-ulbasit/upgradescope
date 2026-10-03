@@ -149,9 +149,12 @@ from signals only the provider produces, and never guesses:
 A node's `providerID` scheme (`aws://`, `gce://`, `azure://`) is never a
 claim, because kubeadm on EC2 or on Azure VMs has the same: it can only
 contradict one (a `-gke.` version on vSphere nodes is GKE on-prem, not GKE).
-A node with no `providerID` at all contradicts nothing, so a `-gke.` version
-on nodes that carry none (some Google Distributed Cloud bare-metal clusters)
-is claimed as GKE. Two providers' claims, a contradiction, or no claim at
+A node with no `providerID` at all contradicts nothing by scheme, so a
+`-gke.` version on nodes that carry none is claimed as GKE, unless a node
+carries a label only Google Distributed Cloud on bare metal sets
+(`baremetal.cluster.gke.io/*`), which contradicts it. A Google Distributed
+Cloud cluster whose nodes carry neither is still claimed as GKE, with GKE's
+dates and cost line. Two providers' claims, a contradiction, or no claim at
 all give `other`. When the nodes could not be listed, or the list failed
 partway (the pages read are not evidence), an EKS or GKE version suffix
 still names the provider, and a cluster the version does not name is left

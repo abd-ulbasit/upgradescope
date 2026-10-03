@@ -23,6 +23,13 @@ type providerRule struct {
 	version  *regexp.Regexp // matched against the raw server GitVersion; nil: the service adds no suffix
 	labels   []string       // node label keys
 	schemes  []string       // providerID schemes of the service's nodes
+	// notLabels are node label key prefixes that only a product sold apart
+	// from the managed service puts on its nodes. A node carrying one
+	// contradicts the claim, as a foreign providerID scheme does, for the
+	// nodes with no providerID that a scheme cannot contradict: Google
+	// Distributed Cloud on bare metal carries the GKE version suffix and
+	// is not billed as GKE.
+	notLabels []string
 }
 
 var providerRules = []providerRule{
@@ -39,6 +46,9 @@ var providerRules = []providerRule{
 		version:  regexp.MustCompile(`^v\d+\.\d+\.\d+-gke\.\d+$`),
 		labels:   []string{"cloud.google.com/gke-nodepool"},
 		schemes:  []string{"gce"},
+		// Google Distributed Cloud (bare metal) labels its nodes
+		// baremetal.cluster.gke.io/*.
+		notLabels: []string{"baremetal.cluster.gke.io/"},
 	},
 	{
 		provider: inventory.ProviderAKS,
@@ -54,6 +64,7 @@ var providerRules = []providerRule{
 // without keeping the nodes.
 type providerEvidence struct {
 	labelled  map[inventory.Provider]bool // a node carries this service's label
+	notLabel  map[inventory.Provider]bool // a node carries a label that contradicts this service's claim
 	schemes   map[string]bool             // providerID schemes seen
 	nodesRead bool                        // the node list completed
 }
@@ -66,6 +77,14 @@ func (e *providerEvidence) addNode(n *corev1.Node) {
 			}
 			e.labelled[r.provider] = true
 		}
+		for k := range n.Labels {
+			if slices.ContainsFunc(r.notLabels, func(p string) bool { return strings.HasPrefix(k, p) }) {
+				if e.notLabel == nil {
+					e.notLabel = map[inventory.Provider]bool{}
+				}
+				e.notLabel[r.provider] = true
+			}
+		}
 	}
 	if scheme, _, ok := strings.Cut(n.Spec.ProviderID, "://"); ok && scheme != "" {
 		if e.schemes == nil {
@@ -77,8 +96,8 @@ func (e *providerEvidence) addNode(n *corev1.Node) {
 
 // provider infers the managed service from the server version and the
 // nodes read. Exactly one service must claim the cluster and none of the
-// nodes' providerID schemes may contradict it; two claims, or a
-// contradiction, are other. A cluster nothing claims is other too, but only
+// nodes' providerID schemes, or a label of a product sold apart from it,
+// may contradict it; two claims, or a contradiction, are other. A cluster nothing claims is other too, but only
 // when its nodes were read: without them an AKS cluster, which has no
 // version suffix, cannot be told from a vanilla one, so it is left
 // undetermined (""). When the node list failed partway the pages read are
@@ -102,6 +121,9 @@ func (e providerEvidence) provider(serverVersion string) inventory.Provider {
 		if !e.nodesRead {
 			return ""
 		}
+		return inventory.ProviderOther
+	}
+	if e.notLabel[claimed[0].provider] {
 		return inventory.ProviderOther
 	}
 	for scheme := range e.schemes {

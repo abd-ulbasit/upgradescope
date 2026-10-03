@@ -64,6 +64,9 @@ func TestCollectVersionsProvider(t *testing.T) {
 		{"GKE version on nodes with no providerID (some bare-metal clusters): nothing contradicts it, so it is GKE", "v1.34.2-gke.1234000", []*corev1.Node{
 			providerNode("n1", "", nil),
 		}, false, inventory.ProviderGKE},
+		{"GKE version on providerID-less bare-metal nodes that carry a Google Distributed Cloud label is not GKE", "v1.34.2-gke.1234000", []*corev1.Node{
+			providerNode("n1", "", L{"baremetal.cluster.gke.io/node-pool": "node-pool-1"}),
+		}, false, inventory.ProviderOther},
 		{"GKE-versioned cluster whose nodes run on vSphere is not GKE", "v1.30.2-gke.100", []*corev1.Node{
 			providerNode("n1", "vsphere://4237", nil),
 		}, false, inventory.ProviderOther},
