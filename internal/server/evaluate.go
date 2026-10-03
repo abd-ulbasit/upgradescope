@@ -345,6 +345,11 @@ func apiServerStart(inv inventory.Inventory) (time.Time, bool) {
 // did not report its start time (an agent that predates the field),
 // holds nothing new, as before.
 //
+// A caller of an API that apiserver no longer serves is not held: the
+// restart that emptied the gauge was an upgrade past the API's removal,
+// and nothing can request the API again, so no later scrape would ever
+// count it (gone).
+//
 // The hold's end is a recorded instant, compared only with scrape times,
 // never with this server's clock or with when an evaluation was made:
 // the carried caller keeps it (findingHead.HoldUntil), and every pass
@@ -357,16 +362,32 @@ func apiServerStart(inv inventory.Inventory) (time.Time, bool) {
 // (holdChanged reads the recorded end, not EvaluatedAt). The bound is
 // deprecatedCallsHold after the last apiserver start the agent scraped,
 // plus the time to the agent's next push; an end recorded by a clock that
-// was ahead is bounded by the later scrapes too (until).
+// was ahead is bounded by the later pushes too (until).
+//
+// A scrape without a collectedAt (every real agent sets it) has nothing to
+// judge a hold by: it holds nothing, and ends the holds it meets.
 type callsHold struct {
 	scraped time.Time // the inventory's collectedAt
 	young   time.Time // its apiserver's start + deprecatedCallsHold, when after scraped; else zero
+	pushed  bool      // scraped is a push's own, not a stored snapshot's
+	// gone reports a deprecated caller (a finding's key) of an API that
+	// the scraped apiserver's version no longer serves; nil: none is known.
+	gone func(key string) bool
 }
 
-func callsHoldOf(inv inventory.Inventory) callsHold {
-	h := callsHold{scraped: inv.CollectedAt}
+// callsHoldOf is the hold for inv, a pass at serverVersion (the
+// snapshot's): pushed when inv is a push's own, not a stored snapshot's.
+func (s *Server) callsHoldOf(inv inventory.Inventory, serverVersion string, pushed bool) callsHold {
+	h := callsHold{scraped: inv.CollectedAt, pushed: pushed}
 	if start, ok := apiServerStart(inv); ok && inv.CollectedAt.Before(start.Add(deprecatedCallsHold)) {
 		h.young = start.Add(deprecatedCallsHold)
+	}
+	if running, err := inventory.ParseVersion(serverVersion); err == nil {
+		k := s.cfg.KB
+		h.gone = func(key string) bool {
+			removed, ok := engine.RemovalOfCall(k, key)
+			return ok && removed.Compare(running) <= 0
+		}
 	}
 	return h
 }
@@ -374,22 +395,32 @@ func callsHoldOf(inv inventory.Inventory) callsHold {
 // until is when the hold on f, a baseline finding missing from the pass,
 // ends: the later of the end f carries and this scrape's own, or zero
 // when f is not a deprecated caller, when the hold ended at or before
-// this scrape, or when the scrape has no time to judge it by.
+// this scrape, when the scrape has no time to judge it by, or when f's
+// API is no longer served at the scraped version.
 //
-// The end f carries is dropped when it is more than deprecatedCallsHold
-// plus startTimeTolerance after this scrape: no scrape at or before this
-// one could have recorded it. It came from a clock that was ahead, such
-// as a single-node cluster booted with its clock years ahead, whose
-// collectedAt and apiserver start agree and so pass apiServerStart; kept,
-// it would hold the caller until that clock's future once the clock is
-// corrected. Dropped, the hold is this scrape's own, so it ends at most
-// that bound after the first corrected scrape.
+// In a push, the end f carries is dropped when it is more than
+// deprecatedCallsHold plus startTimeTolerance after the push's scrape: no
+// scrape at or before it could have recorded it. It came from a clock that
+// was ahead, such as a single-node cluster booted with its clock years
+// ahead, whose collectedAt and apiserver start agree and so pass
+// apiServerStart; kept, it would hold the caller until that clock's future
+// once the clock is corrected. Dropped, the hold is this scrape's own, so
+// it ends at most that bound after the first corrected scrape.
+//
+// A background pass judges the stored snapshot, whose scrape is older than
+// the pushes that may have recorded the end (duplicate pushes move it and
+// store no snapshot): it keeps the end, and the next push drops it if it
+// is out of reach. Dropping it there would stamp an older end back that
+// the next push moves forward again, a write at every pass.
 func (c callsHold) until(f findingHead) time.Time {
 	if f.Category != engine.CatDeprecatedAPIInUse || c.scraped.IsZero() {
 		return time.Time{}
 	}
+	if c.gone != nil && c.gone(f.Key) {
+		return time.Time{}
+	}
 	end := f.HoldUntil
-	if end.After(c.scraped.Add(deprecatedCallsHold + startTimeTolerance)) {
+	if c.pushed && end.After(c.scraped.Add(deprecatedCallsHold+startTimeTolerance)) {
 		end = time.Time{}
 	}
 	if c.young.After(end) {
@@ -514,7 +545,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			// Not a duplicate after all (another push moved the cluster on
 			// meanwhile): the snapshot is stored without evaluations, and
 			// reevaluate fills in every target.
-			return snapID, dup, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv)
+			return snapID, dup, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
 		}
 	}
 
@@ -524,7 +555,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
-	hold := callsHoldOf(inv)
+	hold := s.callsHoldOf(inv, snap.ServerVersion, true)
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap}
 	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(snap.ServerVersion) {
@@ -550,7 +581,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			}
 			cluster.ID = c.ID
 		}
-		return snapID, true, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv)
+		return snapID, true, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
 	}
 	if len(batch.Outbox) > 0 {
 		s.kickOutbox()
@@ -562,15 +593,15 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 // with no evaluation, or a stale one, or one whose restart hold inv's
 // scrape ends or moves (holdChanged), are recomputed; unchanged results
 // are refreshed in place, changed ones inserted with their notifications.
-// inv is the snapshot's inventory: on a duplicate push the pushed one,
-// whose collectedAt is the new scrape's. A concurrent writer that got
+// inv is the snapshot's inventory: on a duplicate push (pushed) the pushed
+// one, whose collectedAt is the new scrape's. A concurrent writer that got
 // there first (store.ErrConflict) has done the same work, so the pass is
 // dropped.
-func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory) error {
+func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory, pushed bool) error {
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
-	hold := callsHoldOf(inv)
+	hold := s.callsHoldOf(inv, serverVersion, pushed)
 	batch := store.EvaluationBatch{ClusterID: cluster.ID, SnapshotID: snapID, Current: map[string]int64{}}
 	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(serverVersion) {
@@ -665,7 +696,7 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 			log.Printf("server: re-evaluation: latest snapshot of cluster %d: %v", c.ID, err)
 			continue
 		}
-		if err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv); err != nil {
+		if err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv, false); err != nil {
 			log.Printf("server: re-evaluation of cluster %d: %v", c.ID, err)
 		}
 	}
