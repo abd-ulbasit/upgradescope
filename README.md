@@ -103,8 +103,9 @@ clone and set `image.repository` and `image.tag`.
   objects count when someone still *writes* them through the deprecated
   version (from `managedFields`, then the last-applied annotation), not
   merely because the apiserver still serves that version, which would flag
-  every cluster. Objects with neither record are missed.
-  [How](https://abd-ulbasit.github.io/upgradescope/concepts/api-usage-detection/).
+  every cluster. An object with neither record cannot be attributed: it is
+  an info finding, "authorship unknown", which never changes the verdict or
+  score. [How](https://abd-ulbasit.github.io/upgradescope/concepts/api-usage-detection/).
 - **Deprecated API requests**, from the apiserver's
   `apiserver_requested_deprecated_apis` metric: that a client asked, not
   which client, and only for the replica that answered. Managed control
