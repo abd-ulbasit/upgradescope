@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
@@ -156,6 +157,8 @@ type helmRevision struct {
 	object   string // Secret or ConfigMap name
 	revision int
 	status   string
+	uid      types.UID // with resourceVersion, identifies what the object held when listed
+	rv       string
 }
 
 // collectHelm reads Helm v3 releases from the secrets and configmaps
@@ -201,6 +204,12 @@ type helmRevision struct {
 // leaves an available capability Partial, naming the drivers and releases
 // it skipped.
 func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
+	return collectHelmWith(ctx, kube, meta, lifecycle, nil, inv)
+}
+
+// collectHelmWith is collectHelm with a cache of what earlier calls decoded
+// (nil reads every release, as a one-shot scan does).
+func collectHelmWith(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, cache *HelmCache, inv *inventory.Inventory) error {
 	type releaseKey struct{ namespace, name string }
 	drivers := helmDrivers(kube)
 	revisions := map[releaseKey][]helmRevision{}
@@ -214,7 +223,7 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 				return
 			}
 			k := releaseKey{m.Namespace, name}
-			revisions[k] = append(revisions[k], helmRevision{driver: d, object: m.Name, revision: rev, status: m.Labels["status"]})
+			revisions[k] = append(revisions[k], helmRevision{driver: d, object: m.Name, revision: rev, status: m.Labels["status"], uid: m.UID, rv: m.ResourceVersion})
 		})
 		if err != nil {
 			listErrs[d] = err
@@ -235,6 +244,8 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 	keys := slices.SortedFunc(maps.Keys(revisions), func(a, b releaseKey) int {
 		return cmp.Or(cmp.Compare(a.namespace, b.namespace), cmp.Compare(a.name, b.name))
 	})
+	cache.begin(flaggedFingerprint(flagged))
+	seen := map[helmCacheKey]bool{}
 	perDriver := make([]int, len(drivers))
 	var rels []inventory.HelmRelease
 	unread, firstUnread := 0, ""
@@ -251,33 +262,39 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 		if !ok {
 			continue
 		}
-		data, err := drivers[r.driver].payload(ctx, k.namespace, r.object)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				continue // deleted since the list: Helm pruned history
+		ck := helmCacheKey{driver: r.driver, namespace: k.namespace, object: r.object, uid: r.uid, rv: r.rv}
+		seen[ck] = true
+		entry, hit := cache.get(ck)
+		if !hit {
+			data, err := drivers[r.driver].payload(ctx, k.namespace, r.object)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					continue // deleted since the list: Helm pruned history
+				}
+				if unread++; unread == 1 {
+					firstUnread = fmt.Sprintf("%s/%s: %v", k.namespace, k.name, err)
+				}
+				skippedReleases = append(skippedReleases, k.namespace+"/"+k.name)
+				delete(seen, ck) // nothing known about it: keep nothing
+				continue
 			}
-			if unread++; unread == 1 {
-				firstUnread = fmt.Sprintf("%s/%s: %v", k.namespace, k.name, err)
-			}
-			skippedReleases = append(skippedReleases, k.namespace+"/"+k.name)
-			continue
+			entry = decodeHelmEntry(data, flagged)
+			cache.put(ck, entry)
 		}
-		doc, err := decodeHelmRelease(data)
-		if err != nil { // one corrupt release must not fail the capability
+		if entry.decodeErr != "" { // one corrupt release must not fail the capability
 			if undecodable++; undecodable == 1 {
-				firstUndecodable = fmt.Sprintf("%s/%s: %v", k.namespace, k.name, err)
+				firstUndecodable = fmt.Sprintf("%s/%s: %s", k.namespace, k.name, entry.decodeErr)
 			}
 			skippedReleases = append(skippedReleases, k.namespace+"/"+k.name)
 			continue
 		}
 		status := r.status
 		if status == "" {
-			status = doc.Info.Status
+			status = entry.status
 		}
-		apis, err := manifestAPIs(doc.Manifest, flagged)
-		if err != nil { // recorded with what the rest of its manifest holds
+		if entry.parseErr != "" { // recorded with what the rest of its manifest holds
 			if unparsed++; unparsed == 1 {
-				firstUnparsed = fmt.Sprintf("%s/%s: %v", k.namespace, k.name, err)
+				firstUnparsed = fmt.Sprintf("%s/%s: %s", k.namespace, k.name, entry.parseErr)
 			}
 			skippedReleases = append(skippedReleases, k.namespace+"/"+k.name)
 		}
@@ -285,15 +302,16 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 		rels = append(rels, inventory.HelmRelease{
 			Name:         k.name,
 			Namespace:    k.namespace,
-			ChartName:    doc.Chart.Metadata.Name,
-			ChartVersion: doc.Chart.Metadata.Version,
-			AppVersion:   doc.Chart.Metadata.AppVersion,
-			KubeVersion:  doc.Chart.Metadata.KubeVersion,
+			ChartName:    entry.chartName,
+			ChartVersion: entry.chartVersion,
+			AppVersion:   entry.appVersion,
+			KubeVersion:  entry.kubeVersion,
 			Status:       status,
 			Revision:     r.revision,
-			ManifestAPIs: apis,
+			ManifestAPIs: cloneAPIUsage(entry.apis),
 		})
 	}
+	cache.prune(seen, func(driver int) bool { return listErrs[driver] == nil })
 	if unread > 0 {
 		failed = append(failed, fmt.Sprintf("%d release(s) not read, first %s", unread, firstUnread))
 		if len(rels) == 0 { // listed but none readable (e.g. list without get)

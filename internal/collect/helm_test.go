@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
@@ -41,6 +42,7 @@ type helmRev struct {
 	appVersion   string
 	kubeVersion  string
 	manifest     string
+	uid, rv      string // the object's UID and resourceVersion; empty unless a test sets them
 }
 
 // payload encodes the revision exactly as Helm v3 stores it:
@@ -74,8 +76,10 @@ func (r helmRev) payload(t *testing.T) []byte {
 // configmaps drivers write it.
 func (r helmRev) objectMeta() metav1.ObjectMeta {
 	return metav1.ObjectMeta{
-		Name:      fmt.Sprintf("sh.helm.release.v1.%s.v%d", r.release, r.rev),
-		Namespace: r.ns,
+		Name:            fmt.Sprintf("sh.helm.release.v1.%s.v%d", r.release, r.rev),
+		Namespace:       r.ns,
+		UID:             types.UID(r.uid),
+		ResourceVersion: r.rv,
 		Labels: map[string]string{
 			"owner": "helm", "name": r.release, "status": r.status, "version": fmt.Sprint(r.rev),
 			"modifiedAt": "1700000000",

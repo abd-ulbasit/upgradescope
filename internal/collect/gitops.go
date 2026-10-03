@@ -149,12 +149,12 @@ func (s gitopsToolState) present() (evidence string, ok bool) {
 }
 
 // collectHelmStep is the helm step: the Helm release storage drivers
-// (collectHelm), then the charts GitOps tools deploy (collectGitOps). The
+// (collectHelmWith, which reuses cache when it is not nil), then the charts GitOps tools deploy (collectGitOps). The
 // release storage decides the capability's availability, as before; what
 // the tools add (their charts, and notes on what is not assessed) only
 // ever makes an available capability partial, never unavailable.
-func collectHelmStep(ctx context.Context, c Clients, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
-	err := collectHelm(ctx, c.Kube, c.Metadata, lifecycle, inv)
+func collectHelmStep(ctx context.Context, c Clients, lifecycle []kb.APILifecycleEntry, cache *HelmCache, inv *inventory.Inventory) error {
+	err := collectHelmWith(ctx, c.Kube, c.Metadata, lifecycle, cache, inv)
 	var pe partialError
 	available := errors.As(err, &pe)
 	states := collectGitOps(ctx, c, available && len(inv.HelmReleases) == 0, inv)
