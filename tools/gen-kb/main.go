@@ -4,6 +4,10 @@
 // interfaces — the same pattern the apiserver's
 // k8s.io/apiserver/pkg/endpoints/deprecation package uses.
 //
+// It also records every registered group, with or without lifecycle
+// entries (builtinGroups), so the engine can tell a built-in API it has no
+// data for from a CRD.
+//
 // Output JSON mirrors internal/kb's lifecycleFile / APILifecycleEntry shape
 // (this module cannot import internal/kb; the sanity test in internal/kb
 // and the CI freshness check keep the shapes in sync).
