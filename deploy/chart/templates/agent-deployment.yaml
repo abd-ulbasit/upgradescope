@@ -127,7 +127,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- if .Values.agent.extraRegistry }}
-            - name: registry
+            - name: extra-registry
               mountPath: /etc/upgradescope/registry
               readOnly: true
             {{- end }}
@@ -162,7 +162,7 @@ spec:
               - {key: {{ .Values.server.tls.caKey | quote }}, path: ca.crt}
         {{- end }}
         {{- if .Values.agent.extraRegistry }}
-        - name: registry
+        - name: extra-registry
           configMap:
             name: {{ include "upgradescope.fullname" . }}-agent-registry
         {{- end }}
