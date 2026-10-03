@@ -63,8 +63,9 @@ type Config struct {
 	// the call or went away). Required.
 	Scan func(ctx context.Context, req ScanRequest) ([]json.RawMessage, error)
 	// Inventory judges an inventory file (the JSON an agent pushes) at a
-	// target and returns the report document. Required.
-	Inventory func(path, target string) (json.RawMessage, error)
+	// target and returns the report document, giving up when ctx ends.
+	// Required.
+	Inventory func(ctx context.Context, path, target string) (json.RawMessage, error)
 	// Fleet, when set, is the serve instance get_report and list_findings
 	// read from (with cluster) and fleet_summary summarises.
 	Fleet *Fleet

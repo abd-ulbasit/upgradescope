@@ -89,7 +89,7 @@ func localConfig() Config {
 		Scan: func(context.Context, ScanRequest) ([]json.RawMessage, error) {
 			return nil, errors.New("no scans in this test")
 		},
-		Inventory: func(string, string) (json.RawMessage, error) {
+		Inventory: func(context.Context, string, string) (json.RawMessage, error) {
 			return nil, errors.New("no inventories in this test")
 		},
 	}
@@ -300,7 +300,7 @@ func TestInventoryFileIsJudgedAtTheTarget(t *testing.T) {
 	_, doc := goldenReport(t, "clean-cluster")
 	var gotPath, gotTarget string
 	cfg := localConfig()
-	cfg.Inventory = func(path, target string) (json.RawMessage, error) {
+	cfg.Inventory = func(_ context.Context, path, target string) (json.RawMessage, error) {
 		gotPath, gotTarget = path, target
 		return doc, nil
 	}

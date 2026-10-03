@@ -297,7 +297,7 @@ func (s *server) report(ctx context.Context, in sourceInput) (json.RawMessage, s
 	}
 	switch {
 	case in.ReportFile != "":
-		doc, err := readReportFile(in.ReportFile)
+		doc, err := readReportFile(ctx, in.ReportFile)
 		if err != nil {
 			return nil, "", err
 		}
@@ -309,7 +309,7 @@ func (s *server) report(ctx context.Context, in sourceInput) (json.RawMessage, s
 		if in.Target == "" {
 			return nil, "", errors.New("inventory_file needs target, the minor to judge it at")
 		}
-		doc, err := s.cfg.Inventory(in.InventoryFile, in.Target)
+		doc, err := s.cfg.Inventory(ctx, in.InventoryFile, in.Target)
 		return doc, "", err
 	case in.Cluster != "":
 		if s.cfg.Fleet == nil {
@@ -373,8 +373,8 @@ func reportTarget(doc json.RawMessage) string {
 // readReportFile reads a JSON report and refuses a file that is not one
 // api/report.schema.json accepts, with the reason, in place of the SDK's
 // output check, whose failure is a protocol error.
-func readReportFile(path string) (json.RawMessage, error) {
-	raw, err := ReadFile(path, MaxReportBytes)
+func readReportFile(ctx context.Context, path string) (json.RawMessage, error) {
+	raw, err := ReadFile(ctx, path, MaxReportBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -16,7 +17,36 @@ import (
 // bound is opened, without blocking where the platform allows it, and the
 // opened file is checked again to be that same regular file before it is
 // read, through the bound. The error never quotes the file's contents.
-func ReadFile(path string, max int64) ([]byte, error) {
+//
+// A regular file whose read blocks (one on a stalled NFS or FUSE mount; on
+// Linux, /proc/kmsg, readable only by root) has no deadline the platform
+// honours, so ReadFile returns when ctx ends, and the read itself goes on in
+// the background until the file answers.
+func ReadFile(ctx context.Context, path string, max int64) ([]byte, error) {
+	return readUnder(ctx, path, func() ([]byte, error) { return readFile(path, max) })
+}
+
+// readUnder runs read and returns what it returns, or gives up when ctx
+// ends first.
+func readUnder(ctx context.Context, path string, read func() ([]byte, error)) ([]byte, error) {
+	type result struct {
+		raw []byte
+		err error
+	}
+	done := make(chan result, 1) // the read never blocks on sending its result
+	go func() {
+		raw, err := read()
+		done <- result{raw, err}
+	}()
+	select {
+	case r := <-done:
+		return r.raw, r.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("reading %s: %w", path, ctx.Err())
+	}
+}
+
+func readFile(path string, max int64) ([]byte, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err

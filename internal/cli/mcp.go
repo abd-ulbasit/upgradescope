@@ -387,12 +387,12 @@ var runMCPScan = func(ctx context.Context, opts []scanOptions) ([]engine.Report,
 
 // mcpInventory judges an inventory file (the JSON an agent pushes to a
 // server) at target, as the server would for a what-if target.
-func mcpInventory(path, target string) (json.RawMessage, error) {
+func mcpInventory(ctx context.Context, path, target string) (json.RawMessage, error) {
 	tv, err := inventory.ParseTarget(target)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target %q: %w", target, err)
 	}
-	raw, err := mcp.ReadFile(path, maxInventoryFileBytes)
+	raw, err := mcp.ReadFile(ctx, path, maxInventoryFileBytes)
 	if err != nil {
 		return nil, err
 	}
