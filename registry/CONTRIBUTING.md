@@ -144,6 +144,26 @@ per-version lifecycle source.
    synced entries); no Go change is needed for a new entry.
 5. Run `make eol-check` — must report `in sync` / drift 0.
 
+## Covering add-ons only you run: `--registry-dir`
+
+An add-on the registry lacks (an in-house controller, a product too niche
+to ship) does not need a pull request to be judged in your fleet.
+`upgradescope scan`, `agent` and `serve` take `--registry-dir <path>`, a
+single `<id>.yaml` file or a directory of them, in the schema above.
+
+- Extra entries pass the same validator as the embedded ones (schema,
+  citations, id = file name): an invalid file stops the command at start
+  with an error naming the file, and a path with no `*.yaml` entry is an
+  error too, so an unmounted ConfigMap cannot silently leave add-ons unjudged.
+- An extra entry whose `id` is an embedded entry's **replaces** it entirely,
+  nothing is merged field by field: copy the embedded file and edit it to
+  correct a date for your fleet or add a mirror's image path. Any other id
+  adds an add-on.
+- The entries are part of the knowledge base version a report carries.
+- `serve` judges what agents push and what `/gate` is posted against its
+  own registry: give it the same `--registry-dir` as the agents. In the
+  Helm chart, `agent.extraRegistry` renders the ConfigMap and the flag.
+
 ## PR checklist
 
 - [ ] `id` is kebab-case and matches the file name

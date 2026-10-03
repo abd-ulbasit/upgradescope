@@ -185,10 +185,18 @@ date for your fleet or add a mirror's image path); any other `id` adds an
 add-on. The extra entries are part of the knowledge base version, so a
 report says which registry judged it.
 
-`serve` needs the flag too when agents push add-ons the extra entries
-cover: it judges stored inventories against its own registry, and an add-on
-it has no entry for is not judged. In the Helm chart, `agent.extraRegistry`
-and `server.extraRegistry` mount entries from a ConfigMap.
+`serve` takes the flag too, and needs it when agents push add-ons the extra
+entries cover: it judges stored inventories, and what `/gate` finds in
+posted manifests, against its own registry, so an add-on it has no entry
+for is not judged, whatever the agent detected. Give the server and the
+agents the same entries. `GET /api/v1/registry` and the dashboard's
+registry view list the embedded registry only.
+
+In the Helm chart, `agent.extraRegistry` maps `<id>.yaml` file names to
+entries and mounts them from a ConfigMap as `--registry-dir`. The server
+has no such option: pass `--registry-dir` through `server.extraArgs` and
+mount the entries with `server.extraVolumes` and
+`server.extraVolumeMounts`.
 
 ## Citations are enforced
 
