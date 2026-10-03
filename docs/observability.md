@@ -102,7 +102,13 @@ categories, capabilities, route patterns, and on the server cluster names
 
 Score, verdict, findings and capability gauges describe the last
 **successful** tick. A failed tick leaves them as they were, and
-`upgradescope_agent_last_success_timestamp_seconds` shows how old they are.
+`upgradescope_agent_last_success_timestamp_seconds` shows how old they are,
+until 3 ticks in a row have failed: the agent then stops exporting those
+gauges, since a verdict that old is not current (the ClusterReadiness it
+could not update carries the `upgradescope.dev/status-error` annotation). The
+first successful tick brings them back. An alert on `blocked` or `unknown`
+therefore resolves while the agent is failing; the
+`UpgradescopeAgentNotTicking` alert is the one that fires.
 A target removed from `spec.targets` drops its series at the next tick.
 
 Go runtime and process metrics (`go_*`, `process_*`) are included.

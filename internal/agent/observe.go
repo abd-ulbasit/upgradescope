@@ -53,10 +53,19 @@ func tickTimeout(interval time.Duration) time.Duration {
 	return min(interval/2, 5*time.Minute)
 }
 
+// staleAfterFailedTicks is how many ticks in a row may fail before the
+// verdict, score, findings and capability gauges stop being exported: the
+// last successful tick's verdict is then too old to stand as current (the
+// ClusterReadiness status it was written to is stale too, and marked so,
+// #199). One or two failures are blips; three are a persistent fault, at
+// the default 10m interval half an hour in.
+const staleAfterFailedTicks = 3
+
 // observer turns tick reports into one log line per tick, the /readyz
 // verdict and Prometheus metrics. Gauges describe the last successful
 // tick; a failed tick leaves them as they were (the last-success timestamp
-// shows how old they are).
+// shows how old they are) until staleAfterFailedTicks have failed in a row,
+// when the verdict gauges are withdrawn.
 type observer struct {
 	log      *slog.Logger
 	kb       kb.KB
@@ -250,7 +259,7 @@ func (o *observer) Describe(ch chan<- *prometheus.Desc) {
 // severities, categories and capabilities: all small fixed sets.
 func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	o.mu.Lock()
-	last, good := o.lastSuccess, o.good
+	last, good, failures := o.lastSuccess, o.good, o.failures
 	o.mu.Unlock()
 
 	ts := 0.0
@@ -260,6 +269,9 @@ func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(descLastSuccess, prometheus.GaugeValue, ts)
 	ch <- prometheus.MustNewConstMetric(descInterval, prometheus.GaugeValue, o.interval.Seconds())
 	ch <- prometheus.MustNewConstMetric(descKBInfo, prometheus.GaugeValue, 1, o.kb.Version, o.kb.MaxKnownK8s.String())
+	if failures >= staleAfterFailedTicks {
+		return // the last good verdict is not current any more
+	}
 	for c, st := range good.caps {
 		ch <- prometheus.MustNewConstMetric(descCapability, prometheus.GaugeValue, boolValue(st.Available), string(c))
 		ch <- prometheus.MustNewConstMetric(descCapabilityPartial, prometheus.GaugeValue, boolValue(st.Partial), string(c))

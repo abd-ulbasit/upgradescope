@@ -93,6 +93,14 @@ To accept a finding for now, with a reason and an expiry, use an
 - **`LASTEVALUATED` is old** (more than about two intervals): the agent is
   not ticking. Check the pod; the `UpgradescopeAgentNotTicking` alert fires
   on this ([Prometheus and Grafana](guides/prometheus-grafana.md)).
+- **The ClusterReadiness has an `upgradescope.dev/status-error`
+  annotation.** The agent could not write the status, at the time and for the
+  reason the annotation gives, so the verdict shown is the last one it could
+  write: stale. The usual cause is a role without `update` on
+  `clusterreadinesses/status` (a hand-written role, `rbac.create=false`); the
+  next successful write removes the annotation. If the role also lacks
+  `patch` on the object itself, there is no annotation, and the signals are
+  `/readyz`, the agent's logs (`tick failed`) and the alert above.
 
 ## The server
 

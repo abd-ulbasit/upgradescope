@@ -173,6 +173,7 @@ audited") and names the issue that tracks it.
 | AG-11 | `ClusterReadiness` is cluster-scoped, `upgradescope.dev/v1alpha1`, short name `ucr`, and serves `kubectl get ucr` and Argo CD health checks. Policy engines as consumers: no example policy yet (#79). | `TestManifestShape` `TestConstantsMatchManifest` `TestArgoHealthScriptAgainstWrittenStatus` (the guide's Lua under gopher-lua, not in a live Argo CD); policy engines: not tested, #79 |
 | AG-12 | Installed from the chart on a real cluster, the agent keeps a ClusterReadiness with a score and verdict, and `agent.targets` reaches `spec.targets`. | `e2e:cr_has_verdict` `e2e:upgrade_with_targets` `TestAgentIntegration_CRDStatusOnKind` |
 | AG-15 | `--cr-name` (chart `agent.crName`) names the object, and the write rule follows it. | `TestAgentCmdFlagDefaults` `TestAgentRefusesInvalidNames` `TestRenderedRBACCustomCRName` |
+| RB-07 | An agent that cannot write its ClusterReadiness status does not leave the object showing a stale verdict unmarked: it patches the annotation `upgradescope.dev/status-error` (the time and a short reason of the failure; the chart already grants `patch` on the object) and clears it with the next successful status write; and after 3 failed ticks in a row its verdict, score, findings and capability gauges are withdrawn, while the last-success timestamp stays. If `patch` on the object is revoked too, no marker can be written and `/readyz`, the metrics and the `UpgradescopeAgentNotTicking` alert are the only signals (#199). | `TestMarkStatusErrorAndWriteStatusClearsIt` `TestMarkStatusErrorForbidden` `TestWriteStatusPatchesNothingWhenNotMarked` `TestTickMarksTheCRWhenTheStatusWriteFails` `TestObserverDropsStaleVerdictGaugesAfterFailedTicks` |
 | AG-13 | A passing EOL date reaches the ClusterReadiness within one interval, with no Kubernetes event. | not automated: #99 (the clock-shifted run did not finish) |
 
 ## Chart, RBAC and what the agent touches
@@ -332,7 +333,6 @@ lands with a test.
 | VS-15 | JSON contract changes since v0.1.1 are not in the changelog. | not true yet: #127 |
 | PF-06b | The server's RSS under adversarial `/gate` and ingest load was re-measured by hand on macOS (the table in Running the server), not in the chart's server pod on kind. | not automated yet: #121 |
 | SE-09b | The chart's server TLS (agent pushing over HTTPS with the Secret's CA, probes and ServiceMonitor over HTTPS, a cert-manager-issued certificate) is proven by rendered-template tests only, not on a kind cluster. | not automated yet: #126 |
-| RB-07 | An agent that loses write access to its ClusterReadiness status leaves the last verdict and `Ready` condition in place; only its `/readyz`, metrics and alerts show the failure. | not true yet: #137 (#122 closed without it) |
 | RB-08, IR-01, IR-02, IR-06 to IR-09, IR-11 to IR-14, DB-08, SE-15 | The published release, image and chart predate the fixes; signing and publishing have never run end to end. | not true yet: #127 |
 
 ## Not yet audited
