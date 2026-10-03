@@ -352,6 +352,32 @@ func withEmptyGzipMember(t testing.TB, payload []byte) []byte {
 	return []byte(base64.StdEncoding.EncodeToString(append(raw, gz.Bytes()...)))
 }
 
+// maxManifestHeap is what parsing one worst-case manifest may add to the
+// heap: TestCollectHelmManifestParsingIsBounded enforces it, and holds the
+// heap to it with limitMemory.
+const maxManifestHeap = 64 << 20
+
+// limitMemory models the agent's GOMEMLIMIT: for the rest of t it sets the
+// soft memory limit to what the runtime holds now (after a GC, with the
+// free memory returned to the OS) plus bound. Near the limit the runtime
+// makes every allocating goroutine do GC work (assists), so the heap stays
+// near its live size however far the GC's own workers fall behind, as on a
+// starved CPU. A low GOGC only makes collections frequent, not forced: at
+// GOGC=10 the collector fell behind the allocations on a loaded machine and
+// a case that is 44 MiB live read 97 MiB (#213). GOGC stays at its default,
+// as the chart leaves it. The limit is soft: a live heap above it still
+// grows past it, so an input that needs more than bound still fails the
+// test's own check.
+func limitMemory(t *testing.T, bound uint64) {
+	t.Helper()
+	debug.FreeOSMemory()
+	sample := []metrics.Sample{{Name: "/memory/classes/total:bytes"}, {Name: "/memory/classes/heap/released:bytes"}}
+	metrics.Read(sample)
+	held := sample[0].Value.Uint64() - sample[1].Value.Uint64() // what the limit counts
+	prev := debug.SetMemoryLimit(int64(held + bound))
+	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+}
+
 // TestCollectHelmManifestParsingIsBounded guards the rest of #168: a
 // release under the decompression cap is still a bomb when its manifest
 // is, because parsing amplifies it. The --files parser indexes every
@@ -363,7 +389,7 @@ func withEmptyGzipMember(t testing.TB, payload []byte) []byte {
 // reached 240 MiB. Now the cap is 16 MiB, the manifest is parsed in runs
 // bounded in bytes and YAML nodes, and lines are counted without the
 // index: every case peaks at 40–47 MiB of live heap, the same on every
-// run (24–93 MiB at GOGC=100, varying with GC timing). Each case is a
+// run (24–93 MiB at GOGC=100 with no limit, varying with GC timing). Each case is a
 // valid release whose manifest, JSON-escaped, fills the cap, with ConfigMaps flagged as a real
 // KB flags some kinds, and every object a ConfigMap. Under the race
 // detector, which slows parsing about tenfold, the manifests are 4 MiB.
@@ -371,14 +397,6 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("parses manifests of up to the decompression cap")
 	}
-	// The chart runs the agent with GOMEMLIMIT, under which the collector
-	// holds the heap near its live size as it nears the limit. A low GOGC
-	// does the same here, so what is measured is the live heap parsing
-	// needs, not the garbage GOGC=100 lets pile up before the next
-	// collection, which varies with GC timing (CI once read 93 MiB of a
-	// case that peaks at 46 MiB live).
-	gogc := debug.SetGCPercent(10)
-	t.Cleanup(func() { debug.SetGCPercent(gogc) })
 	lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
 	const head, tail = `{"chart":{"metadata":{"name":"bomb","version":"1.0.0"}},"manifest":`, `}`
 	const object = "---\napiVersion: v1\nkind: ConfigMap\n"
@@ -411,6 +429,7 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 			manifest = nil
 			var inv inventory.Inventory
 			var err error
+			limitMemory(t, maxManifestHeap) // with the release built: the limit adds the bound to it
 			peak := peakHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
 			t.Logf("stored %d KiB decoding to %d MiB; peak heap above baseline %.1f MiB", len(s.Data["release"])>>10, fits>>20, float64(peak)/(1<<20))
 			if pe := (partialError{}); !errors.As(err, &pe) || pe.incomplete {
@@ -423,8 +442,8 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 			if !tc.objects && len(apis) != 0 || tc.objects && (len(apis) != 1 || apis[0].Count != n || len(apis[0].Objects) != min(n, inventory.MaxObjectRefs)) {
 				t.Errorf("manifest APIs = %+v, want %d flagged ConfigMaps", apis, n)
 			}
-			if peak > 64<<20 {
-				t.Errorf("peak heap %.1f MiB, want ≤ 64 MiB", float64(peak)/(1<<20))
+			if peak > maxManifestHeap {
+				t.Errorf("peak heap %.1f MiB, want ≤ %d MiB", float64(peak)/(1<<20), maxManifestHeap>>20)
 			}
 		})
 	}
