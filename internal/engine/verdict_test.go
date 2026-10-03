@@ -297,6 +297,7 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 	on123 := on124
 	on123.ServerVersion = "v1.23.17"
 	on123.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.23.17"}}
+	const noPods = "list pods: forbidden; add-ons were detected from Helm releases and IngressClasses only"
 	const helmReason = "helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip"
 	const unreadProxy = "version not read from 1 control-plane pod(s) (kube-proxy), first kube-system/kube-proxy-x: tag latest; their skew was not evaluated"
 	const vendorProxy = "version not read from 1 control-plane pod(s) (kube-proxy), first kube-system/kube-proxy-x: labelled kube-proxy but runs a vendor image whose version is not read (iad.ocir.io/ns/oke-public-kube-proxy@sha256:1755); their skew was not evaluated"
@@ -342,6 +343,30 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 			inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true, Reason: "helm releases: 2 via secrets, 0 via configmaps"}
 			return inv
 		}(), withRegistry, t125, VerdictReady, nil},
+		{"partial addons without pods is a required gap: an add-on installed any other way goes undetected", // #199
+			partially(on124, inventory.CapAddOns, noPods, inventory.SkippedPods), withRegistry, t125, VerdictUnknown,
+			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: noPods, Partial: true,
+				Skipped: []string{inventory.SkippedPods}, Required: true}}},
+		{"partial addons without pods, with an empty registry, is optional",
+			partially(on124, inventory.CapAddOns, noPods, inventory.SkippedPods), k, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: noPods, Partial: true,
+				Skipped: []string{inventory.SkippedPods}}}},
+		{"partial addons without pods in files mode is optional",
+			func() inventory.Inventory {
+				inv := filesInv()
+				inv.Capabilities[inventory.CapAddOns] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: noPods, Skipped: []string{inventory.SkippedPods}}
+				return inv
+			}(), withRegistry, t125, VerdictReady,
+			[]CapabilityGap{
+				{Capability: inventory.CapAddOns, Reason: noPods, Partial: true, Skipped: []string{inventory.SkippedPods}},
+				{Capability: inventory.CapDeprecatedCalls, Reason: "files mode"},
+				{Capability: inventory.CapHelm, Reason: "files mode"},
+				{Capability: inventory.CapVersions, Reason: "files mode"},
+			}},
+		{"partial addons with only IngressClasses unread is optional: they add evidence only",
+			partially(on124, inventory.CapAddOns, "list ingressclasses: forbidden", "networking.k8s.io/v1 ingressclasses"), withRegistry, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: "list ingressclasses: forbidden", Partial: true,
+				Skipped: []string{"networking.k8s.io/v1 ingressclasses"}}}},
 		{"addons missing in cluster mode with a registry", degrade(on124, inventory.CapAddOns, "list pods: forbidden"), withRegistry, t125, VerdictUnknown,
 			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: "list pods: forbidden", Required: true}}},
 		{"addons missing with an empty registry", degrade(on124, inventory.CapAddOns, "list pods: forbidden"), k, t125, VerdictReady,

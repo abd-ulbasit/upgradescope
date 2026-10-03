@@ -144,16 +144,19 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 	if len(failures) == 0 {
 		return nil
 	}
-	from := "pods and Helm releases"
-	switch {
-	case len(failures) == 2:
-		from = "Helm releases"
-	case slices.Contains(skipped, inventory.SkippedPods):
-		from = "Helm releases and IngressClasses"
+	var read []string // what the add-ons were detected from
+	if podErr == nil {
+		read = append(read, "pods")
+	}
+	if len(ev.releases) > 0 || inv.Capabilities[inventory.CapHelm].Available {
+		read = append(read, "Helm releases")
+	}
+	if classesRead {
+		read = append(read, "IngressClasses")
 	}
 	slices.Sort(skipped)
 	return partialError{incomplete: true, skipped: skipped,
-		msg: fmt.Sprintf("%s; add-ons were detected from %s only", strings.Join(failures, "; "), from)}
+		msg: fmt.Sprintf("%s; add-ons were detected from %s only", strings.Join(failures, "; "), strings.Join(read, " and "))}
 }
 
 // splitImage strips digest then tag:

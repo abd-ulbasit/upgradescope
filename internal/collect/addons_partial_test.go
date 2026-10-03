@@ -81,6 +81,18 @@ func TestCollectAddOnsPodsForbiddenStillMatchesHelmReleasesAndIngressClasses(t *
 			t.Errorf("verdict %s, findings %+v, want blocked by eol-addon/ingress-nginx", rep.Verdict, rep.Findings)
 		}
 	})
+	t.Run("the reason names only what was read", func(t *testing.T) {
+		// run sets no Helm capability, as when Helm could not be read: the
+		// IngressClass alone is the evidence.
+		inv, _ := run(noPods(class))
+		if r := inv.Capabilities[inventory.CapAddOns].Reason; !strings.HasSuffix(r, "add-ons were detected from IngressClasses only") {
+			t.Errorf("reason = %q, want add-ons detected from IngressClasses only, no Helm releases having been read", r)
+		}
+		inv, _ = run(noPods(), release)
+		if r := inv.Capabilities[inventory.CapAddOns].Reason; !strings.HasSuffix(r, "add-ons were detected from Helm releases and IngressClasses only") {
+			t.Errorf("reason = %q, want add-ons detected from Helm releases and IngressClasses only", r)
+		}
+	})
 	t.Run("ingressclass", func(t *testing.T) {
 		inv, _ := run(noPods(class))
 		if len(inv.AddOns) != 1 || inv.AddOns[0].ID != "ingress-nginx" || inv.AddOns[0].Source != "ingressclass" {
