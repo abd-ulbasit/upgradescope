@@ -405,8 +405,13 @@ tokens.
 The bounds above are on memory; fleet read latency is bound by CPU. `make
 bench-server` (500 clusters of ~35 KiB inventories on SQLite, 10
 concurrent `/fleet` readers) passes its 1 s p95 with at least one full
-core of an Apple M1 Pro-class CPU: in October 2026, p95 0.33 s
-unconstrained (8 cores) and 0.56 s with `GOMAXPROCS=1`. It does not hold
+core of an Apple M1 Pro-class CPU: in October 2026, p95 0.33 to 0.36 s
+unconstrained (8 cores) and 0.56 to 0.68 s with `GOMAXPROCS=1`, across
+runs. `GOMAXPROCS=1` caps the Go scheduler at one thread; it is not a
+cgroup CPU quota, which also throttles the garbage collector and the
+runtime's other threads, and ran about 1.26 times slower than
+`GOMAXPROCS=1` on the red-team's host (`--cpus 1`, #196); 0.68 s scaled
+so is about 0.86 s, still under 1 s, but with less margin. It does not hold
 at the chart's default `server.resources.limits.cpu` of 500m: the
 red-team round 2 measured p95 3.9 s at `--cpus 0.5` on a 2017 dual-core
 i3, about twice its single-core figure on the same host, which would put

@@ -1041,7 +1041,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `schemaVersion` | `1` | yes | — |
 | `clusterId` | string | no | The kube-system namespace UID. |
 | `collectorSchema` | integer | no | The generation of field meanings the collector filled this inventory with (1 from v0.2.0). Absent from inventories of collectors before it — v0.1.x and v0.2.0's release candidates — which are judged by the push's agentVersion: one that is not a release at or after 0.2.0-0 (including "dev" and empty) is a v0.1.x agent, whose api-usage and deprecated-calls are not assessed and whose chart-found add-on version is evidence only. A later generation, whose meanings this server would misread, is 422. |
-| `source` | `cluster` | no | Absent from v0.1.x agents' inventories, which are cluster ones too. A files inventory (`scan --files`) is judged without versions or add-ons, so a push claiming one is 422: only the agent pushes, and it collects from a cluster. |
+| `source` | `cluster` | no | Absent from v0.1.x agents' inventories, which are cluster ones too. A files inventory (`scan --files`) is judged without versions or add-ons, so a push claiming one is 422: only the agent pushes, and it collects from a cluster. A files snapshot stored before ingest refused them is judged as a cluster one. |
 | `collectedAt` | string (date-time) | no | — |
 | `serverVersion` | string | no | The apiserver's gitVersion, e.g. v1.34.2-gke.100. |
 | `capabilities` | map of [CapabilityStatus](#capabilitystatus) | no | Every capability the collector has, by name. One the verdict requires and the map does not report — api-usage, versions, and addons when the knowledge base has add-ons — is a required not-assessed gap, so an inventory without this map is never ready. |

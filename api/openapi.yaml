@@ -1246,7 +1246,8 @@ components:
             Absent from v0.1.x agents' inventories, which are cluster ones
             too. A files inventory (`scan --files`) is judged without
             versions or add-ons, so a push claiming one is 422: only the
-            agent pushes, and it collects from a cluster.
+            agent pushes, and it collects from a cluster. A files snapshot
+            stored before ingest refused them is judged as a cluster one.
         collectedAt: {type: string, format: date-time}
         serverVersion: {type: string, description: "The apiserver's gitVersion, e.g. v1.34.2-gke.100."}
         capabilities:
