@@ -100,7 +100,7 @@ func TestDocsMCPPageSaysWhatTheClusterChooses(t *testing.T) {
 	page := strings.Join(strings.Fields(readDoc(t, mcpPage)), " ")
 	for _, want := range []string{
 		"`objects[].ignore` and `objects[].ignoreReason`",
-		"`upgradescope.dev/ignore-reason`",
+		"`upgradescope.basit.engineer/ignore-reason`",
 		"listed even when they suppress nothing",
 		"`suppressed[].reason`",
 		"`notAssessed[].reason`",

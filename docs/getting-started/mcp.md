@@ -81,7 +81,7 @@ a directory of manifests, so it cannot point the
 scanner at a credential file or an exec plugin of its choosing. No ignore
 file (`.upgradescope.yaml`) is looked up, since the working directory is the
 client's; suppressions written on the objects themselves (the
-`upgradescope.dev/ignore` annotation) apply as they do in a scan.
+`upgradescope.basit.engineer/ignore` annotation) apply as they do in a scan.
 
 A scan needs the same read access as `upgradescope scan`
 (see [Security model and RBAC](../operations/security-model-and-rbac.md)),
@@ -264,8 +264,8 @@ address `--allow-remote` opens gets no such check.
   objects, Helm releases and charts, images, CRD groups, nodes, teams, field
   managers), the finding titles, details, remediation and keys that quote
   them, and free text copied from objects: `objects[].ignore` and
-  `objects[].ignoreReason` (the `upgradescope.dev/ignore` and
-  `upgradescope.dev/ignore-reason` annotations, kept up to 16 KiB and listed
+  `objects[].ignoreReason` (the `upgradescope.basit.engineer/ignore` and
+  `upgradescope.basit.engineer/ignore-reason` annotations, kept up to 16 KiB and listed
   even when they suppress nothing), `suppressed[].reason` (the reason of an
   annotation that did suppress a finding) and `notAssessed[].reason` (what
   the API server answered). In `--files` mode the manifests' authors choose
@@ -289,7 +289,7 @@ address `--allow-remote` opens gets no such check.
   as JSON pointers through the report's own field names (e.g.
   `/findings/0/objects/0/ignoreReason`), never through a team's name or
   another key the document chose. The result's `_meta` carries the same,
-  structured, under `upgradescope.dev/clusterSupplied`. Each outside string,
+  structured, under `upgradescope.basit.engineer/clusterSupplied`. Each outside string,
   and each object key, longer than 2 KiB is cut, ending in `…(cut by
   upgradescope mcp)`, so `get_report` can differ there from the report file
   it read. A cut key that would equal another key of its object is numbered

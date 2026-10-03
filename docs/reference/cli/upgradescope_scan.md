@@ -67,7 +67,7 @@ i.e. the --files directory or else the working directory, then at the git
 repository root; or named with --config) accept findings by key or category,
 optionally only for objects matching namespace/name/file globs, with a
 required reason and an optional expires date. Objects can opt out with the
-upgradescope.dev/ignore and upgradescope.dev/ignore-reason annotations.
+upgradescope.basit.engineer/ignore and upgradescope.basit.engineer/ignore-reason annotations.
 Suppressed findings do not count toward score, verdict or gate, and every
 output lists them with their reason. An expired rule stops applying and
 prints a warning.

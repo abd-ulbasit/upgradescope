@@ -79,7 +79,7 @@ A tick also fails, and writes no status, when the agent could not read
 the `ClusterReadiness` spec (or decode it), or could not set
 `spec.targets` to `--targets`: a status for targets it did not read would
 carry the current `observedGeneration` and pass for current. The object
-keeps its last status, marked with the `upgradescope.dev/status-error`
+keeps its last status, marked with the `upgradescope.basit.engineer/status-error`
 annotation, and the next tick reads the spec again.
 
 Each tick runs under a deadline of half the interval, at most 5 minutes, so a
@@ -95,7 +95,7 @@ tick retries (the one at startup having failed) by three quarters of it,
 so that a hung check, or the wait for a deleted CRD it creates again to be
 Established, leaves the spec read and the status write at least a
 quarter; the
-`upgradescope.dev/status-error` marker then gets a quarter of the reserve
+`upgradescope.basit.engineer/status-error` marker then gets a quarter of the reserve
 of its own; the push runs until the deadline, so it has at least a quarter
 of the reserve. Within a tick, each API request is
 given up after `--request-timeout` (default 30s; in the chart, set it
@@ -151,7 +151,7 @@ Score, verdict, findings and capability gauges describe the last
 until the verdict is too old to stand as current: at least 3 ticks in a row
 have failed **and** the last success is more than `2 × interval + 12m` old.
 The agent then stops exporting those gauges (the ClusterReadiness it could
-not update carries the `upgradescope.dev/status-error` annotation). The
+not update carries the `upgradescope.basit.engineer/status-error` annotation). The
 first successful tick brings them back. An alert on `blocked` or `unknown`
 therefore resolves while the agent is failing; the
 `UpgradescopeAgentNotTicking` alert is the one that fires. It fires

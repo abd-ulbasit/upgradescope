@@ -200,7 +200,7 @@ To accept a finding for now, with a reason and an expiry, use an
 - **`LASTEVALUATED` is old** (more than about two intervals): the agent is
   not ticking. Check the pod; the `UpgradescopeAgentNotTicking` alert fires
   on this ([Prometheus and Grafana](guides/prometheus-grafana.md)).
-- **The ClusterReadiness has an `upgradescope.dev/status-error`
+- **The ClusterReadiness has an `upgradescope.basit.engineer/status-error`
   annotation.** The agent could not write the status, at the time and for the
   reason the annotation gives, so the verdict shown is the last one it could
   write: stale. The usual cause is a role without `update` on

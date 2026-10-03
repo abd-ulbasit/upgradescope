@@ -54,8 +54,8 @@ kind: PodSecurityPolicy
 metadata:
   name: restricted
   annotations:
-    upgradescope.dev/ignore: removed-api
-    upgradescope.dev/ignore-reason: deleted before the upgrade
+    upgradescope.basit.engineer/ignore: removed-api
+    upgradescope.basit.engineer/ignore-reason: deleted before the upgrade
 ---
 apiVersion: extensions/v1beta1
 kind: Ingress

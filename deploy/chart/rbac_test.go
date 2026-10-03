@@ -272,7 +272,7 @@ func assertDenied(t *testing.T, rules []rbacv1.PolicyRule, deny ...rbacv1.Policy
 	}
 }
 
-const ourCRD = "clusterreadinesses.upgradescope.dev"
+const ourCRD = "clusterreadinesses.upgradescope.basit.engineer"
 
 // collectorCalls are the requests the agent's collectors and CR writer make.
 func collectorCalls(t *testing.T) []rbacv1.PolicyRule {
@@ -293,9 +293,9 @@ func collectorCalls(t *testing.T) []rbacv1.PolicyRule {
 		// granted (no wildcards): the agent reports crds partial for CRDs
 		// with a deprecated or unserved version.
 		res("apiextensions.k8s.io", "customresourcedefinitions", "list"),
-		res("upgradescope.dev", "clusterreadinesses", "get", "create"),
-		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets, and the status-error annotation
-		named(res("upgradescope.dev", "clusterreadinesses/status", "get", "update"), "cluster"),
+		res("upgradescope.basit.engineer", "clusterreadinesses", "get", "create"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets, and the status-error annotation
+		named(res("upgradescope.basit.engineer", "clusterreadinesses/status", "get", "update"), "cluster"),
 	}
 	for g, rs := range kbGroupResources(t) {
 		for _, r := range rs {
@@ -318,8 +318,8 @@ var neverAllowed = []rbacv1.PolicyRule{
 	res("", "pods", "watch", "create", "delete", "patch"),
 	res("apiextensions.k8s.io", "customresourcedefinitions", "create", "delete"),
 	named(res("apiextensions.k8s.io", "customresourcedefinitions", "update", "patch"), "certificates.cert-manager.io"),
-	named(res("upgradescope.dev", "clusterreadinesses", "update", "patch", "delete"), "someone-else"),
-	res("upgradescope.dev", "clusterreadinesses", "delete", "deletecollection", "watch"),
+	named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch", "delete"), "someone-else"),
+	res("upgradescope.basit.engineer", "clusterreadinesses", "delete", "deletecollection", "watch"),
 	res("rbac.authorization.k8s.io", "clusterroles", "escalate", "bind", "create"),
 	url("/logs"),
 	url("/debug/pprof"),
@@ -434,12 +434,12 @@ func TestRenderedRBACManageCRDOff(t *testing.T) {
 func TestRenderedRBACCustomCRName(t *testing.T) {
 	rules := renderClusterRole(t, "agent.crName=prod")
 	assertAllowed(t, rules,
-		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "prod"),
-		named(res("upgradescope.dev", "clusterreadinesses/status", "get", "update", "patch"), "prod"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch"), "prod"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses/status", "get", "update", "patch"), "prod"),
 	)
 	assertDenied(t, rules,
-		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"),
-		named(res("upgradescope.dev", "clusterreadinesses/status", "update"), "cluster"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch"), "cluster"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses/status", "update"), "cluster"),
 	)
 }
 

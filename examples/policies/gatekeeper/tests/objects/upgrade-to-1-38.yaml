@@ -4,7 +4,7 @@ metadata:
   name: upgrade-to-1-38
   namespace: default
   annotations:
-    upgradescope.dev/upgrade-target: "1.38"
+    upgradescope.basit.engineer/upgrade-target: "1.38"
 spec:
   replicas: 1
   selector:

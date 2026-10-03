@@ -148,7 +148,7 @@ naming the field and the rule, before anything is stored. The free
 text a collector copies whole from the cluster is cut to the
 limits, not refused: a capability's reason and skipped entries,
 and an object's `ignore` (to its whole tokens) and `ignoreReason`
-(the upgradescope.dev/ignore annotations). The snapshot keeps the
+(the upgradescope.basit.engineer/ignore annotations). The snapshot keeps the
 push as sent.
 
 Each target's report is at most `--max-snapshot-bytes`: a push
@@ -435,8 +435,8 @@ Quality report. SARIF, JUnit and Code Quality hold only the
 findings the manifests introduce; the status and verdict header
 are the same in every format.
 
-Suppression works as in `scan`: the `upgradescope.dev/ignore` and
-`upgradescope.dev/ignore-reason` annotations of posted (and, with
+Suppression works as in `scan`: the `upgradescope.basit.engineer/ignore` and
+`upgradescope.basit.engineer/ignore-reason` annotations of posted (and, with
 `cluster`, stored) objects, and the ignore rules of a
 `.upgradescope.yaml` sent in `config`. Suppressed findings count
 toward neither the verdict nor `fail-on`; the JSON answer lists
@@ -1130,7 +1130,7 @@ are not known. The same for every target.
 | `teams` | [TeamScores](#teamscores) | no | — |
 | `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included; with a team-scoped credential, of the scope's share of the cluster plus the manifests. |
 | `suppressedCount` | integer | yes | The number of `suppressed` entries. |
-| `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply), and `upgradescope.dev/ignore` annotations without a reason (not applied). |
+| `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply), and `upgradescope.basit.engineer/ignore` annotations without a reason (not applied). |
 
 ### SARIF
 

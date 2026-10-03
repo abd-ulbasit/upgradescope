@@ -282,8 +282,8 @@ const MaxObjectRefs = 100
 // written through the deprecated group/version: the metadata.managedFields
 // manager that wrote it, or "kubectl last-applied" when only the
 // kubectl.kubernetes.io/last-applied-configuration annotation names it.
-// Ignore and IgnoreReason are the object's upgradescope.dev/ignore and
-// upgradescope.dev/ignore-reason annotation values, verbatim (see
+// Ignore and IgnoreReason are the object's upgradescope.basit.engineer/ignore and
+// upgradescope.basit.engineer/ignore-reason annotation values, verbatim (see
 // internal/suppress).
 type ObjectRef struct {
 	Namespace    string `json:"namespace,omitempty"`

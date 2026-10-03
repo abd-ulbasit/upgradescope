@@ -17,7 +17,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-const crdName = "clusterreadinesses.upgradescope.dev"
+const crdName = "clusterreadinesses.upgradescope.basit.engineer"
 
 // establishOnCreate makes the fake behave like a real apiserver: a created
 // CRD immediately reports Established=True (mutate-then-fall-through reactor).
@@ -46,8 +46,8 @@ func TestManifestShape(t *testing.T) {
 	if c.Name != crdName {
 		t.Errorf("name = %q, want %q", c.Name, crdName)
 	}
-	if c.Spec.Group != "upgradescope.dev" {
-		t.Errorf("group = %q, want upgradescope.dev", c.Spec.Group)
+	if c.Spec.Group != "upgradescope.basit.engineer" {
+		t.Errorf("group = %q, want upgradescope.basit.engineer", c.Spec.Group)
 	}
 	if c.Spec.Scope != apiextensionsv1.ClusterScoped {
 		t.Errorf("scope = %q, want Cluster", c.Spec.Scope)

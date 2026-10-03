@@ -80,7 +80,7 @@ func TestRunRetriesEnsureCRDOnTheFirstTick(t *testing.T) {
 	})
 	runOneTick(t, apiext, Config{})
 	if _, err := apiext.ApiextensionsV1().CustomResourceDefinitions().Get(
-		context.Background(), "clusterreadinesses.upgradescope.dev", metav1.GetOptions{}); err != nil {
+		context.Background(), "clusterreadinesses.upgradescope.basit.engineer", metav1.GetOptions{}); err != nil {
 		t.Errorf("the CRD was not installed by the tick after a failed startup check: %v", err)
 	}
 }

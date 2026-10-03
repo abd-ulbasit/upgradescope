@@ -14,7 +14,7 @@ patch release (0.x.y) never breaks anything below.
 | REST API | the `/api/v1` path prefix, [OpenAPI document](reference/api.md); report-shaped responses (a cluster's report, the gate's JSON answer) also lead with the JSON report's `schemaVersion` (1) and `toolVersion` | Paths, parameters and response fields keep their meaning; fields, and finding categories, may be added, so ignore unknown fields. The response schemas do not forbid unlisted fields, and a client generated from them keeps working when one is added. A breaking change goes under a new prefix (`/api/v2`) and `/api/v1` keeps serving for at least one minor release. |
 | Webhook payload | `schemaVersion` (1), [schema](reference/webhook.md) | As for the JSON report. |
 | Snapshot push protocol (agent to server) | envelope `schemaVersion` (1) and inventory `schemaVersion` (1) | The server refuses a version it does not know (422) rather than misreading it; a newer server keeps judging older agents' pushes, naming what it cannot judge. |
-| `ClusterReadiness` CRD | `upgradescope.dev/v1alpha1` | See below. |
+| `ClusterReadiness` CRD | `upgradescope.basit.engineer/v1alpha1` | See below. |
 | SARIF | SARIF 2.1.0, `tool.driver.version` | Rule ids are finding keys, which are stable. |
 | Finding keys | — | A finding's `key` (`removed-api/networking.k8s.io/v1beta1/Ingress`) is count-free and stable across runs and releases: baselines, ignore rules and notifications match on it. Changing a key format is a breaking change. |
 | The score formula | — | `max(0, 100 − min(75, 25 × blockers) − min(20, 5 × warnings))`. Changing it is a breaking change. |

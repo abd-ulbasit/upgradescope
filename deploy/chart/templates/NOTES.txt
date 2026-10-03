@@ -83,7 +83,7 @@ The agent reads namespaces, nodes, pods, the deprecated API resources the
 KB tracks{{ if .Values.rbac.helmSecrets }}, and every Secret and ConfigMap (Helm release detection;
 rbac.helmSecrets=false turns that off){{ end }}{{ if .Values.rbac.gitops.argocd }}, and Argo CD Applications (rbac.gitops.argocd){{ end }}{{ if .Values.rbac.gitops.flux }}, and Flux HelmReleases and OCIRepositories (rbac.gitops.flux){{ end }}. It may create ClusterReadiness
 objects (RBAC cannot scope create by name), and updates only
-ClusterReadiness/{{ .Values.agent.crName }}{{ if .Values.agent.manageCRD }} and the clusterreadinesses.upgradescope.dev CRD{{ end }}.
+ClusterReadiness/{{ .Values.agent.crName }}{{ if .Values.agent.manageCRD }} and the clusterreadinesses.upgradescope.basit.engineer CRD{{ end }}.
 The full rule list and its reasons are in the chart README.
 {{- end }}
 {{- if and .Values.server.enabled .Values.agent.enabled }}
@@ -151,4 +151,4 @@ started (a notification sink exists only if its URL was set at start). Then:
 {{- end }}
 
 Uninstall: helm uninstall keeps the CRD (Helm crds/ semantics). Full removal:
-  kubectl delete crd clusterreadinesses.upgradescope.dev
+  kubectl delete crd clusterreadinesses.upgradescope.basit.engineer

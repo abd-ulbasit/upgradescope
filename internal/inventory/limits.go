@@ -111,7 +111,7 @@ const cutMark = " …(cut)"
 //     CRD collector without RBAC for custom resources adds ~200 bytes per
 //     CRD at a deprecated version) to MaxReasonBytes, and each Skipped
 //     entry to MaxStringBytes, ending in cutMark;
-//   - an object's Ignore and IgnoreReason, the upgradescope.dev/ignore
+//   - an object's Ignore and IgnoreReason, the upgradescope.basit.engineer/ignore
 //     and ignore-reason annotations (up to 256 KiB), to MaxStringBytes:
 //     Ignore to the comma-separated tokens that fit whole, IgnoreReason
 //     ending in cutMark;

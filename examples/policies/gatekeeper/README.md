@@ -13,7 +13,7 @@ A Deployment, StatefulSet, DaemonSet or Job that carries
 ```yaml
 metadata:
   annotations:
-    upgradescope.dev/upgrade-target: "1.37"
+    upgradescope.basit.engineer/upgrade-target: "1.37"
 ```
 
 on admission. The annotation is this example's convention, not something
@@ -23,7 +23,7 @@ whatever runs your upgrades. A Constraint cannot select on annotations, so
 `match.kinds` for the kinds that carry it in your cluster.
 
 The template reads
-`data.inventory.cluster["upgradescope.dev/v1alpha1"].ClusterReadiness[<crName>]`
+`data.inventory.cluster["upgradescope.basit.engineer/v1alpha1"].ClusterReadiness[<crName>]`
 (`parameters.crName`, default `cluster`, the chart's `agent.crName`) and
 reports a violation when `status.targets[]` has an entry for the requested
 minor with `ready: false`. `ready` is `false` for a `blocked` verdict **and**
@@ -66,7 +66,7 @@ kubectl apply -f constraint.yaml   # after the template's CRD is established
 Gatekeeper reads one `Config` named `config` in its namespace; if you have
 one, add the `syncOnly` entry to it instead of applying a second.
 `rbac.yaml` binds a read-only role (`get`, `list`, `watch` on
-`clusterreadinesses.upgradescope.dev`) to `gatekeeper-admin`; Gatekeeper's
+`clusterreadinesses.upgradescope.basit.engineer`) to `gatekeeper-admin`; Gatekeeper's
 stock manifests already let its manager read every kind, so it matters for
 hardened installs only. The upgradescope chart grants those verbs to the
 agent only.

@@ -166,7 +166,7 @@ the chart's `agent.targets` is set. To own the spec from Git, commit the
 object and leave `agent.targets` empty:
 
 ```yaml
-apiVersion: upgradescope.dev/v1alpha1
+apiVersion: upgradescope.basit.engineer/v1alpha1
 kind: ClusterReadiness
 metadata:
   name: cluster
@@ -205,8 +205,8 @@ status. Then add this to `argocd-cm`:
 ```yaml
 data:
   # The script needs the string, math and os (os.time) libraries.
-  resource.customizations.useOpenLibs.upgradescope.dev_ClusterReadiness: "true"
-  resource.customizations.health.upgradescope.dev_ClusterReadiness: |
+  resource.customizations.useOpenLibs.upgradescope.basit.engineer_ClusterReadiness: "true"
+  resource.customizations.health.upgradescope.basit.engineer_ClusterReadiness: |
     -- Treat a status older than this as stale: three default 10m intervals.
     local staleAfterSeconds = 30 * 60
 
@@ -296,7 +296,7 @@ spec:
   wait: true
   timeout: 15m
   healthCheckExprs:
-    - apiVersion: upgradescope.dev/v1alpha1
+    - apiVersion: upgradescope.basit.engineer/v1alpha1
       kind: ClusterReadiness
       current: status.conditions.filter(e, e.type == 'Ready').all(e, e.status == 'True')
       failed: status.conditions.filter(e, e.type == 'Ready').all(e, e.status == 'False')

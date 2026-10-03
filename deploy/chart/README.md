@@ -176,7 +176,7 @@ watches.
 | `get`/`list` on each group/resource the KB flags as deprecated or removed | Counting objects still stored at deprecated APIs. Generated into `files/kb-rbac-rules.yaml`; `rbac_test.go` fails when it drifts from the embedded KB |
 | `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
 | `get`/`list` Argo CD Applications, Flux HelmReleases and Flux OCIRepositories (only with `rbac.gitops.argocd` and `rbac.gitops.flux`, both off by default) | The charts GitOps tools deploy: chart, version and repository from each Application source and HelmRelease, for add-on detection. Only those resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials |
-| `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.dev` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
+| `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.basit.engineer` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
 | `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
 
 `rbac.helmSecrets=false` removes the Secret and ConfigMap rules. The Helm
@@ -198,7 +198,7 @@ the agent never reads or writes the CRD itself, so a missing CRD shows up
 as a "CRD not installed" error on every tick instead.
 
 `agent.manageCRD=false` drops the CRD write permissions (`get`/`update`/
-`patch` on `clusterreadinesses.upgradescope.dev`), e.g. when GitOps manages
+`patch` on `clusterreadinesses.upgradescope.basit.engineer`), e.g. when GitOps manages
 the CRD. It does not remove all CRD access: the KB-derived read rule still
 grants `get`/`list` on every CRD, because the KB flags
 `apiextensions.k8s.io/v1beta1` and the api-usage collector counts CRDs.
@@ -417,7 +417,7 @@ settings, so the read token still protects all data.
 Helm leaves CRDs in place by design (`crds/` semantics), and the
 `ClusterReadiness` object the agent created stays too. Full removal:
 
-    kubectl delete crd clusterreadinesses.upgradescope.dev
+    kubectl delete crd clusterreadinesses.upgradescope.basit.engineer
 
 That deletes the CRD and any `ClusterReadiness` objects. Everything else
 (Deployments, RBAC, Secrets, Service, PVC) is removed by `helm uninstall`;
@@ -443,7 +443,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `agent.interval` | string | `"10m"` | Evaluation interval: a Go duration of at least 1m, e.g. 10m, 1h, 1m30s, 300s or 1.5h. |
 | `agent.logFormat` | string | `"text"` | Log format, text (logfmt) or json, and level: debug, info, warn, error. The agent logs one line at startup and one per tick. |
 | `agent.logLevel` | string | `"info"` | — |
-| `agent.manageCRD` | bool | `true` | manage-crd). Grants get/update/patch on that one CRD only. The CRD itself is installed by the chart's crds/ directory; set false when the CRD is managed elsewhere (e.g. GitOps) to drop the CRD write permissions (get/update/patch on clusterreadinesses.upgradescope.dev). The KB-derived read rule still allows get/list on all CRDs (the KB flags apiextensions.k8s.io/v1beta1), whatever this is set to. |
+| `agent.manageCRD` | bool | `true` | manage-crd). Grants get/update/patch on that one CRD only. The CRD itself is installed by the chart's crds/ directory; set false when the CRD is managed elsewhere (e.g. GitOps) to drop the CRD write permissions (get/update/patch on clusterreadinesses.upgradescope.basit.engineer). The KB-derived read rule still allows get/list on all CRDs (the KB flags apiextensions.k8s.io/v1beta1), whatever this is set to. |
 | `agent.nodeSelector` | object | `{}` | — |
 | `agent.podAnnotations` | object | `{}` | — |
 | `agent.podLabels` | object | `{}` | app.kubernetes.io/name, instance and component are reserved for the selector and ignored here. |
@@ -478,7 +478,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `metrics.serviceMonitor.labels` | object | `{}` | Labels your Prometheus selects ServiceMonitors by, e.g. {release: kube-prometheus-stack}. |
 | `networkPolicy.enabled` | bool | `false` | Render a NetworkPolicy that admits traffic to the server only from this release's agent pods and the peers below (no effect without server.enabled, or on a CNI that does not enforce NetworkPolicy). With server.ingress.enabled or metrics.serviceMonitor.enabled the render fails unless serverIngressFrom lists the ingress controller or Prometheus: the policy would otherwise cut them off. |
 | `networkPolicy.serverIngressFrom` | list | `[]` | Extra NetworkPolicyPeer entries allowed to reach the server, e.g. the ingress controller or the CI runners that call /api/v1/gate. The server's /metrics is on the same port, so list Prometheus here when metrics.serviceMonitor is enabled:   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}} |
-| `rbac.create` | bool | `true` | Create the agent ClusterRole/ClusterRoleBinding. Every rule is listed and explained in templates/rbac.yaml and the chart README: get/list on namespaces, nodes, pods and the API group/resources the embedded KB flags as deprecated; get on /version and /metrics; writes only to the ClusterReadiness CR named agent.crName (and, with agent.manageCRD, to the clusterreadinesses.upgradescope.dev CRD; get/list on CRDs comes from the KB rules either way). No wildcards, no watch, no subresources such as nodes/proxy or pods/log. |
+| `rbac.create` | bool | `true` | Create the agent ClusterRole/ClusterRoleBinding. Every rule is listed and explained in templates/rbac.yaml and the chart README: get/list on namespaces, nodes, pods and the API group/resources the embedded KB flags as deprecated; get on /version and /metrics; writes only to the ClusterReadiness CR named agent.crName (and, with agent.manageCRD, to the clusterreadinesses.upgradescope.basit.engineer CRD; get/list on CRDs comes from the KB rules either way). No wildcards, no watch, no subresources such as nodes/proxy or pods/log. |
 | `rbac.gitops.argocd` | bool | `false` | Get/list on Argo CD Applications (argoproj.io/applications, nothing else of that group), to read the chart, repoURL and targetRevision of each chart source: add-ons Argo CD deploys (ingress-nginx, say) are then found by their chart, with no Helm release. Off, with Argo CD installed: the Helm capability is reported partial, naming the forbidden list. Chart kubeVersion and stored-manifest checks stay unavailable for Argo CD either way (helm template leaves no release). |
 | `rbac.gitops.flux` | bool | `false` | Get/list on Flux HelmReleases (helm.toolkit.fluxcd.io/helmreleases) and OCIRepositories (source.toolkit.fluxcd.io/ocirepositories, for a HelmRelease chartRef), to read the chart each HelmRelease deploys. Off, with Flux installed: the Helm capability is reported partial, naming the forbidden list. |
 | `rbac.helmSecrets` | bool | `true` | Cluster-wide get/list on Secrets and ConfigMaps, for Helm release detection (releases stored by Helm's secrets and configmaps drivers). RBAC cannot filter Secrets by label or type, so true means the agent can read EVERY Secret and ConfigMap in the cluster. false removes both rules; the Helm capability is then not assessed (the reason is the forbidden lists) and Helm chart findings are missing from the report. Releases in Helm's sql driver have no object in the cluster, and charts that Argo CD renders with helm template have no release object either; add-on detection from container images still covers them, and rbac.gitops reads the charts GitOps tools declare. |

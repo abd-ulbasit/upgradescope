@@ -66,7 +66,7 @@ In scope:
     ConfigMap; treat its token as privileged. `rbac.helmSecrets=false`
     removes both rules;
   - with `agent.manageCRD=true` (the default), `get`/`update`/`patch` on the
-    one CRD `clusterreadinesses.upgradescope.dev` (by `resourceNames`; no
+    one CRD `clusterreadinesses.upgradescope.basit.engineer` (by `resourceNames`; no
     `create`);
   - `get`/`list`/`create` on `clusterreadinesses`, and `update`/`patch` on
     the object named `agent.crName` and its `status` (by `resourceNames`).

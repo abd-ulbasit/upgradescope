@@ -31,7 +31,7 @@ func TestMarkStatusErrorAndWriteStatusClearsIt(t *testing.T) {
 		return v, ok
 	}
 	at := time.Date(2026, 10, 3, 9, 30, 0, 0, time.UTC)
-	cause := errors.New("update clusterreadiness \"cluster\" status: clusterreadinesses.upgradescope.dev \"cluster\" is forbidden:\n\tUser cannot update resource \"clusterreadinesses/status\" " + strings.Repeat("x", 600))
+	cause := errors.New("update clusterreadiness \"cluster\" status: clusterreadinesses.upgradescope.basit.engineer \"cluster\" is forbidden:\n\tUser cannot update resource \"clusterreadinesses/status\" " + strings.Repeat("x", 600))
 
 	if err := MarkStatusError(ctx, dyn, DefaultName, cause, at); err != nil {
 		t.Fatalf("MarkStatusError: %v", err)

@@ -17,7 +17,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 )
 
-// annotatedPSP is pspManifest accepted by its own upgradescope.dev/ignore
+// annotatedPSP is pspManifest accepted by its own upgradescope.basit.engineer/ignore
 // annotation.
 const annotatedPSP = `apiVersion: policy/v1beta1
 kind: PodSecurityPolicy
@@ -25,8 +25,8 @@ metadata:
   name: restricted
   namespace: payments-prod
   annotations:
-    upgradescope.dev/ignore: removed-api
-    upgradescope.dev/ignore-reason: deleted with the 1.35 upgrade
+    upgradescope.basit.engineer/ignore: removed-api
+    upgradescope.basit.engineer/ignore-reason: deleted with the 1.35 upgrade
 `
 
 // pspRule is a .upgradescope.yaml accepting pspManifest's blocker.
@@ -66,7 +66,7 @@ func withConfig(config string) string {
 	return "&config=" + url.QueryEscape(config)
 }
 
-// #44: /gate applies the upgradescope.dev/ignore annotation as scan
+// #44: /gate applies the upgradescope.basit.engineer/ignore annotation as scan
 // --files does: the annotated object's blocker is suppressed, so the gate
 // passes, and the answer lists it with a count.
 func TestGateAnnotationSuppresses(t *testing.T) {
@@ -90,11 +90,11 @@ func TestGateAnnotationSuppresses(t *testing.T) {
 	}
 
 	// An annotation without a reason is not applied, and says so.
-	noReason := strings.Replace(annotatedPSP, "    upgradescope.dev/ignore-reason: deleted with the 1.35 upgrade\n", "", 1)
+	noReason := strings.Replace(annotatedPSP, "    upgradescope.basit.engineer/ignore-reason: deleted with the 1.35 upgrade\n", "", 1)
 	resp, raw = postGate(t, ts, "?target=1.35&fail-on=blocker", "", noReason, "application/x-yaml")
 	b = decodeSuppressed(t, raw)
 	if resp.StatusCode != http.StatusUnprocessableEntity || b.SuppressedCount != 0 || len(b.Warnings) != 1 ||
-		!strings.Contains(b.Warnings[0], "without upgradescope.dev/ignore-reason") {
+		!strings.Contains(b.Warnings[0], "without upgradescope.basit.engineer/ignore-reason") {
 		t.Errorf("no reason: %d %+v, want 422, nothing suppressed and a warning", resp.StatusCode, b)
 	}
 }

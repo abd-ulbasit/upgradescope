@@ -126,7 +126,7 @@ author who wants to get past it, until you pin the inputs below.
 | What the gate trusts | Where `scan` reads it | A pull request can change it |
 |---|---|---|
 | Ignore rules | the file `--config` (the Action's `config`) names; with none named, `.upgradescope.yaml` in the scan root, then at the repository root | by adding or editing that file. One `ignore: [{category: removed-api, reason: x}]` next to a manifest with a removed API turns `READY no` and exit 2 into `READY yes` and exit 0 |
-| Object annotations | `upgradescope.dev/ignore` with `ignore-reason`, on the objects being scanned; no flag turns them off | by adding the pair to the offending object (in a chart template, a rendered file or a patch) |
+| Object annotations | `upgradescope.basit.engineer/ignore` with `ignore-reason`, on the objects being scanned; no flag turns them off | by adding the pair to the offending object (in a chart template, a rendered file or a patch) |
 | The baseline | the file `--baseline` (the Action's `baseline`) names | by committing a baseline that holds its own findings |
 | The workflow and the Action's inputs | `.github/workflows/` in the pull request's merge commit | by editing the file: `fail-on: never`, `allow-incomplete`, another `version`, or removing the step |
 
@@ -292,7 +292,7 @@ curl -sS --fail-with-body --retry 5 -X POST \
   `scan --files`: API usage, add-ons, and custom resources against the
   CRDs in the stream. `format=json` (the default) returns
   the full report.
-- `upgradescope.dev/ignore` annotations are applied, and so are the ignore
+- `upgradescope.basit.engineer/ignore` annotations are applied, and so are the ignore
   rules of a `.upgradescope.yaml` sent in `config`
   ([The server gate](../guides/suppressions-and-baselines.md#the-server-gate)).
 - The gate stores nothing. It needs the read token, when the server has

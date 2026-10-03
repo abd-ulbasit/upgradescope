@@ -22,7 +22,7 @@ Two things stay, by design:
 To remove both:
 
 ```sh
-kubectl delete crd clusterreadinesses.upgradescope.dev   # deletes every ClusterReadiness too
+kubectl delete crd clusterreadinesses.upgradescope.basit.engineer   # deletes every ClusterReadiness too
 ```
 
 Nothing else in the cluster changed because of upgradescope: the agent

@@ -215,7 +215,7 @@ func TestWriteMarkdownSuppressed(t *testing.T) {
 		"| Severity | Finding | Objects | Reason | Suppressed by |\n" +
 		"|---|---|---|---|---|\n" +
 		"| blocker | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | `rendered/all.yaml:2` shop/web | shop's Ingress is replaced in PLAT-7 | `ci/upgradescope.yaml` until 2099-12-31 |\n" +
-		"| blocker | batch/v1beta1 CronJob removed in 1.25 (1 object) | `rendered/all.yaml:12` nightly | retired with the batch cluster | `upgradescope.dev/ignore` annotation |\n"
+		"| blocker | batch/v1beta1 CronJob removed in 1.25 (1 object) | `rendered/all.yaml:12` nightly | retired with the batch cluster | `upgradescope.basit.engineer/ignore` annotation |\n"
 	if got := buf.String(); got != want {
 		t.Errorf("markdown output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}

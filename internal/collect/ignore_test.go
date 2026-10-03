@@ -11,7 +11,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
-// The upgradescope.dev/ignore annotations travel with the object ref, so
+// The upgradescope.basit.engineer/ignore annotations travel with the object ref, so
 // suppression can accept a finding for that one object.
 func TestCollectFilesIgnoreAnnotations(t *testing.T) {
 	dir := writeTree(t, map[string]string{"all.yaml": `apiVersion: networking.k8s.io/v1beta1
@@ -19,8 +19,8 @@ kind: Ingress
 metadata:
   name: legacy
   annotations:
-    upgradescope.dev/ignore: removed-api, deprecated-api
-    upgradescope.dev/ignore-reason: decommissioned with the old cluster
+    upgradescope.basit.engineer/ignore: removed-api, deprecated-api
+    upgradescope.basit.engineer/ignore-reason: decommissioned with the old cluster
 ---
 apiVersion: networking.k8s.io/v1beta1
 kind: Ingress
@@ -28,7 +28,7 @@ metadata:
   name: web
   annotations:
     other: x
-    upgradescope.dev/ignore: [not, a, string]
+    upgradescope.basit.engineer/ignore: [not, a, string]
 `})
 	inv, _, err := CollectFiles(dir, kb.KB{})
 	if err != nil {
@@ -43,7 +43,7 @@ metadata:
 	}
 }
 
-// Live objects carry their upgradescope.dev/ignore annotations too.
+// Live objects carry their upgradescope.basit.engineer/ignore annotations too.
 func TestCollectAPIUsageRecordsIgnoreAnnotations(t *testing.T) {
 	const beta3 = "flowcontrol.apiserver.k8s.io/v1beta3"
 	served := []string{"flowcontrol.apiserver.k8s.io/v1", beta3}

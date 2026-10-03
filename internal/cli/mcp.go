@@ -367,7 +367,7 @@ func requireBearer(token string, next http.Handler) http.Handler {
 // targets and nothing else, and nothing is defaulted beyond that. In
 // particular no ignore file is discovered from the working directory,
 // which an MCP client chooses; the suppressions that live in the cluster
-// (the upgradescope.dev/ignore annotations) apply, as in a scan with no
+// (the upgradescope.basit.engineer/ignore annotations) apply, as in a scan with no
 // ignore file. --request-timeout is the one scan setting besides: it
 // bounds a request, it does not choose what is read.
 func mcpScanner(base mcpOptions, stderr io.Writer) func(context.Context, mcp.ScanRequest) ([]json.RawMessage, error) {

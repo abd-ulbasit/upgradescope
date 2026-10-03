@@ -8,7 +8,7 @@ package apigroup
 
 const (
 	// Group is the API group of the ClusterReadiness CRD.
-	Group = "upgradescope.dev"
+	Group = "upgradescope.basit.engineer"
 	// AnnotationPrefix starts every annotation key upgradescope reads or
 	// writes.
 	AnnotationPrefix = Group + "/"

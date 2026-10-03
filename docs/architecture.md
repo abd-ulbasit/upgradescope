@@ -127,7 +127,7 @@ sha256(canonical inventory) changed, or --force-sync-every elapsed?
 The CRD status is written on every tick, even when the server is
 unreachable; only a spec the tick could not read, or `spec.targets` it
 could not set to `--targets`, stops the write, and the object is then
-marked stale (`upgradescope.dev/status-error`) instead. Collection gets the
+marked stale (`upgradescope.basit.engineer/status-error`) instead. Collection gets the
 tick deadline minus a reserve (30s, or half the deadline under a minute)
 that the status write, the stale marker and the push keep
 ([observability](observability.md#agent-logs)). The agent's local value never depends on the server. Pushes
@@ -673,7 +673,7 @@ knowledge base would produce silently green scans.
 
 ## The ClusterReadiness CRD
 
-`ClusterReadiness` (`upgradescope.dev/v1alpha1`, cluster-scoped, short name
+`ClusterReadiness` (`upgradescope.basit.engineer/v1alpha1`, cluster-scoped, short name
 `ucr`) is the per-cluster projection, for `kubectl get ucr`, GitOps health
 checks and policy engines that should not need to reach the server.
 
@@ -684,7 +684,7 @@ Kyverno policy, a Gatekeeper constraint and a Renovate preset; they are
 checked offline with the Kyverno CLI and gator, not on a live cluster, and
 cover in-cluster operations only. A policy
 engine reads the object with its own service account, so that account needs
-`get` and `list` on `clusterreadinesses` in the `upgradescope.dev` group. The
+`get` and `list` on `clusterreadinesses` in the `upgradescope.basit.engineer` group. The
 chart grants those verbs to the agent only, as the `clusterreadinesses` rows
 of the [agent's ClusterRole](operations/security-model-and-rbac.md#the-agents-clusterrole)
 show, and ships no read role for anything else; the examples carry the
@@ -756,7 +756,7 @@ if it is deleted, and writes status with conflict retry.
   manifests introduce count toward the verdict. Without `?cluster=`, the
   manifests are judged on their own (API usage, add-ons, and custom
   resources against the CRDs in the stream) as `scan --files` judges them.
-  Either way, `upgradescope.dev/ignore` annotations and the ignore rules of
+  Either way, `upgradescope.basit.engineer/ignore` annotations and the ignore rules of
   a `.upgradescope.yaml` sent in `?config=` are applied with `scan`'s code.
   The gate stores nothing; it answers JSON (leading with `schemaVersion`
   and `toolVersion`, like the server's other report responses), SARIF,

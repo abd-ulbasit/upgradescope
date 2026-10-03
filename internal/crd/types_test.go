@@ -53,7 +53,7 @@ func TestManifestStatusListsEveryStatusField(t *testing.T) {
 }
 
 func TestGVR(t *testing.T) {
-	want := schema.GroupVersionResource{Group: "upgradescope.dev", Version: "v1alpha1", Resource: "clusterreadinesses"}
+	want := schema.GroupVersionResource{Group: "upgradescope.basit.engineer", Version: "v1alpha1", Resource: "clusterreadinesses"}
 	if got := GVR(); got != want {
 		t.Errorf("GVR() = %v, want %v", got, want)
 	}

@@ -181,7 +181,7 @@ watches.
 | `get`/`list` on each group/resource the KB flags as deprecated or removed | Counting objects still stored at deprecated APIs. Generated into `files/kb-rbac-rules.yaml`; `rbac_test.go` fails when it drifts from the embedded KB |
 | `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
 | `get`/`list` Argo CD Applications, Flux HelmReleases and Flux OCIRepositories (only with `rbac.gitops.argocd` and `rbac.gitops.flux`, both off by default) | The charts GitOps tools deploy: chart, version and repository from each Application source and HelmRelease, for add-on detection. Only those resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials |
-| `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.dev` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
+| `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.basit.engineer` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
 | `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
 
 `rbac.helmSecrets=false` removes the Secret and ConfigMap rules. The Helm
@@ -203,7 +203,7 @@ the agent never reads or writes the CRD itself, so a missing CRD shows up
 as a "CRD not installed" error on every tick instead.
 
 `agent.manageCRD=false` drops the CRD write permissions (`get`/`update`/
-`patch` on `clusterreadinesses.upgradescope.dev`), e.g. when GitOps manages
+`patch` on `clusterreadinesses.upgradescope.basit.engineer`), e.g. when GitOps manages
 the CRD. It does not remove all CRD access: the KB-derived read rule still
 grants `get`/`list` on every CRD, because the KB flags
 `apiextensions.k8s.io/v1beta1` and the api-usage collector counts CRDs.
@@ -422,7 +422,7 @@ settings, so the read token still protects all data.
 Helm leaves CRDs in place by design (`crds/` semantics), and the
 `ClusterReadiness` object the agent created stays too. Full removal:
 
-    kubectl delete crd clusterreadinesses.upgradescope.dev
+    kubectl delete crd clusterreadinesses.upgradescope.basit.engineer
 
 That deletes the CRD and any `ClusterReadiness` objects. Everything else
 (Deployments, RBAC, Secrets, Service, PVC) is removed by `helm uninstall`;

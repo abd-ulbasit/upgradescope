@@ -151,8 +151,8 @@ kind: CronJob
 metadata:
   name: nightly
   annotations:
-    upgradescope.dev/ignore: removed-api
-    upgradescope.dev/ignore-reason: deleted in the next release
+    upgradescope.basit.engineer/ignore: removed-api
+    upgradescope.basit.engineer/ignore-reason: deleted in the next release
 `})
 	out, _, err := execScanFiles(t, "--files", dir)
 	if err != nil {
