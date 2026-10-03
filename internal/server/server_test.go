@@ -435,3 +435,34 @@ func TestLargeSnapshotWithinDefaultTimeouts(t *testing.T) {
 		t.Fatalf("status = %d (%s), want 202", resp.StatusCode, msg)
 	}
 }
+
+// A Shutdown that comes before Start has started its background work (a
+// signal during startup, or runServe given a cancelled context) must still
+// stop it: Start then serves nothing and starts no worker that outlives
+// it. It used to start the outbox and re-evaluation workers after
+// Shutdown had found nothing to stop, and they kept the store busy after
+// the caller closed it (TestRunServeCreatesDBParentDir's flaky TempDir
+// cleanup).
+func TestShutdownBeforeStartStopsTheBackground(t *testing.T) {
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.Listen = "127.0.0.1:0" })
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown before Start = %v, want nil", err)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Start() }()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Start after Shutdown = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start after Shutdown did not return")
+	}
+	done := make(chan struct{})
+	go func() { s.backgroundDone.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background workers still running after Shutdown and Start returned")
+	}
+}

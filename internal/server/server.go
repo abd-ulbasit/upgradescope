@@ -243,6 +243,7 @@ type Server struct {
 	retentionInterval  time.Duration // pruning period after the startup pass
 	stopBackground     context.CancelFunc
 	backgroundDone     sync.WaitGroup
+	shutDown           bool // set by Shutdown, under mu: a later Start serves nothing
 
 	metrics *serverMetrics
 
@@ -619,6 +620,14 @@ func (s *Server) Start() error {
 	// run now). Stopped by Shutdown.
 	bg, stop := context.WithCancel(context.Background())
 	s.mu.Lock()
+	if s.shutDown {
+		// Shutdown came first (a signal during startup) and found no
+		// background work to stop: start none, and serve nothing.
+		s.mu.Unlock()
+		stop()
+		ln.Close()
+		return nil
+	}
 	s.addr = ln.Addr().String()
 	s.stopBackground = stop
 	s.mu.Unlock()
@@ -706,6 +715,9 @@ func (s *Server) Addr() string {
 // WriteTimeout bound every legitimate request), so cutting it off is the
 // expected end of the drain, not a shutdown failure.
 //
+// A Shutdown that comes before Start has started serving makes Start return
+// nil without serving or starting any background work.
+//
 // Background work stops after the drain: a notification mid-delivery is
 // cancelled and stays in the outbox (its lease expires and the next start
 // delivers it); a re-evaluation mid-commit rolls back.
@@ -716,6 +728,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		err = s.httpSrv.Close()
 	}
 	s.mu.Lock()
+	s.shutDown = true
 	stop := s.stopBackground
 	s.mu.Unlock()
 	if stop != nil {
