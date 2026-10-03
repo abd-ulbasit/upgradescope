@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -232,6 +236,199 @@ func TestFlush429IsTransientRetried(t *testing.T) {
 	}
 	if rec.requests() != 2 || len(*slept) != 1 {
 		t.Errorf("requests/waits = %d/%d, want 2/1 (429 retried once)", rec.requests(), len(*slept))
+	}
+}
+
+// A redirect is never followed: Go would turn a 301/302/303 POST into a
+// body-less GET that a login page or SPA answers 200, so the push would be
+// reported delivered when nothing arrived (#190). Any 3xx is a permanent
+// misconfiguration: loud, counted as a failure, payload dropped, never
+// resent to the Location.
+func TestFlushRedirectIsPermanentFailureNeverFollowed(t *testing.T) {
+	for _, code := range []int{
+		http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect,
+	} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			var target, origin atomic.Int32
+			var targetMethod atomic.Value
+			dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				target.Add(1)
+				targetMethod.Store(r.Method)
+				w.WriteHeader(http.StatusOK) // what a login page or SPA answers a GET with
+			}))
+			defer dest.Close()
+			src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				origin.Add(1)
+				http.Redirect(w, r, dest.URL+"/api/v1/snapshots", code)
+			}))
+			defer src.Close()
+
+			var logs strings.Builder
+			p := newPusher(src.URL, "sekret")
+			p.log = slog.New(slog.NewTextHandler(&logs, nil))
+			var slept []time.Duration
+			p.wait = func(_ context.Context, d time.Duration) error {
+				slept = append(slept, d)
+				return nil
+			}
+			p.offer(testPayload("c"))
+			err := p.flush(context.Background())
+			if err == nil {
+				t.Fatal("redirect reported as a successful push")
+			}
+			for _, want := range []string{strconv.Itoa(code), dest.URL + "/api/v1/snapshots", "--server-url"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err = %q, want it to mention %q", err, want)
+				}
+			}
+			if target.Load() != 0 {
+				t.Errorf("Location received a %s: the redirect was followed", targetMethod.Load())
+			}
+			if origin.Load() != 1 || len(slept) != 0 {
+				t.Errorf("origin requests/waits = %d/%d, want 1/0 (permanent, no retry)", origin.Load(), len(slept))
+			}
+			if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), dest.URL) {
+				t.Errorf("log = %q, want an error line naming the Location", logs.String())
+			}
+			// Dropped like a permanent 4xx: nothing is resent.
+			if err := p.flush(context.Background()); err != nil || origin.Load() != 1 {
+				t.Errorf("payload kept after a redirect: err %v, %d origin requests", err, origin.Load())
+			}
+		})
+	}
+}
+
+// A redirect with no Location still fails loudly.
+func TestFlushRedirectWithoutLocation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	p := newPusher(srv.URL, "sekret")
+	p.offer(testPayload("c"))
+	if err := p.flush(context.Background()); err == nil || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("err = %v, want a 302 failure", err)
+	}
+}
+
+// Retry-After on a 429 or 503 is honoured when it asks for longer than the
+// backoff step, capped at the backoff maximum; a shorter one changes nothing.
+func TestFlushHonoursRetryAfter(t *testing.T) {
+	future := time.Now().Add(30 * time.Second).UTC().Format(http.TimeFormat)
+	for _, tc := range []struct {
+		name   string
+		status int
+		header string
+		want   time.Duration
+	}{
+		{"429 seconds", http.StatusTooManyRequests, "20", 20 * time.Second},
+		{"503 seconds", http.StatusServiceUnavailable, "10", 10 * time.Second},
+		{"capped at the backoff maximum", http.StatusServiceUnavailable, "3600", maxPushBackoff},
+		{"shorter than the backoff step", http.StatusServiceUnavailable, "0", time.Second},
+		{"http-date", http.StatusTooManyRequests, future, 30 * time.Second},
+		{"unparseable", http.StatusTooManyRequests, "soon", time.Second},
+		{"negative", http.StatusTooManyRequests, "-5", time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				if calls == 1 {
+					w.Header().Set("Retry-After", tc.header)
+					w.WriteHeader(tc.status)
+					return
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer srv.Close()
+			p := newPusher(srv.URL, "sekret")
+			var slept []time.Duration
+			p.wait = func(_ context.Context, d time.Duration) error {
+				slept = append(slept, d)
+				return nil
+			}
+			p.offer(testPayload("c"))
+			if err := p.flush(context.Background()); err != nil {
+				t.Fatalf("flush: %v", err)
+			}
+			if len(slept) != 1 {
+				t.Fatalf("sleeps = %v, want 1", slept)
+			}
+			// The HTTP-date is relative to the wall clock, so allow a second of drift.
+			if d := slept[0] - tc.want; d > 0 || d < -time.Second {
+				t.Errorf("slept %v, want %v", slept[0], tc.want)
+			}
+		})
+	}
+}
+
+// Retry-After repeated on every retry: each wait is the larger of the backoff
+// step and the server's ask (3s, 3s, then the 4s step), and a huge ask is
+// capped at the backoff maximum on every attempt.
+func TestFlushRetryAfterOnEveryAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   []time.Duration
+	}{
+		{"mixed with the backoff steps", "3", []time.Duration{3 * time.Second, 3 * time.Second, 4 * time.Second}},
+		{"capped every time", "3600", []time.Duration{maxPushBackoff, maxPushBackoff, maxPushBackoff}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.Header().Set("Retry-After", tc.header)
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}))
+			defer srv.Close()
+			p := newPusher(srv.URL, "sekret")
+			var slept []time.Duration
+			p.wait = func(_ context.Context, d time.Duration) error {
+				slept = append(slept, d)
+				return nil
+			}
+			p.offer(testPayload("c"))
+			err := p.flush(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "503") {
+				t.Fatalf("err = %v, want the 503 after exhausting retries", err)
+			}
+			if calls != pushRetries+1 {
+				t.Errorf("requests = %d, want %d", calls, pushRetries+1)
+			}
+			if !slices.Equal(slept, tc.want) {
+				t.Errorf("waits = %v, want %v", slept, tc.want)
+			}
+		})
+	}
+}
+
+// A Retry-After longer than the time the tick has left must not hide why the
+// push was failing: the deadline ends the wait, and the error still names the
+// server's status (and wraps the context error).
+func TestFlushDeadlineDuringRetryAfterKeepsStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	p := newPusher(srv.URL, "sekret")
+	p.offer(testPayload("c"))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := p.flush(ctx)
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("err = %v, want it to name the 503", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+	p.mu.Lock()
+	kept := p.pending != nil
+	p.mu.Unlock()
+	if !kept {
+		t.Error("payload dropped on a deadline during backoff, want it kept buffered")
 	}
 }
 

@@ -59,7 +59,10 @@ agent:
   # -- Evaluation interval: a Go duration of at least 1m, e.g. 10m, 1h, 1m30s,
   # 300s or 1.5h.
   interval: 10m
-  # -- Name of the ClusterReadiness object the agent manages.
+  # -- Name of the ClusterReadiness object the agent manages: an RFC 1123
+  # subdomain (lowercase letters, digits, - and .; at most 253 bytes).
+  # Changing it creates a new object and leaves the old one behind, because
+  # the agent has no delete permission: run kubectl delete ucr <old-name>.
   crName: cluster
   # -- Namespace label used for team attribution.
   teamLabel: team

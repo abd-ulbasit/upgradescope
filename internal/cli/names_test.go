@@ -25,14 +25,21 @@ func TestTokensCreateRefusesInvalidClusterNames(t *testing.T) {
 	}
 }
 
-// The agent checks --cluster-name and --team-label at startup, before
-// any cluster access: the server would refuse every push under an
-// invalid name, and an invalid label key names no label.
+// The agent checks --cluster-name, --cr-name and --team-label at startup,
+// before any cluster access: the server would refuse every push under an
+// invalid cluster name, the apiserver would refuse the ClusterReadiness
+// object under an invalid name on every tick (#192), and an invalid label
+// key names no label.
 func TestAgentRefusesInvalidNames(t *testing.T) {
 	for _, args := range [][]string{
 		{"--cluster-name", "../<script>x"},
 		{"--cluster-name", strings.Repeat("a", 254)},
 		{"--cluster-name", "Prod_EU"},
+		{"--cr-name", "Bad_Name"},
+		{"--cr-name", strings.Repeat("a", 254)},
+		{"--cr-name", "a..b"}, // the chart's pattern lets these through; the apiserver does not
+		{"--cr-name", "a.-b"},
+		{"--cr-name", "-a"},
 		{"--team-label", "team label"},
 		{"--team-label", "a/b/c"},
 	} {
@@ -42,6 +49,9 @@ func TestAgentRefusesInvalidNames(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"--cluster-name", "prod-eu-1"},
+		{"--cr-name", "dev"},
+		{"--cr-name", "prod.eu-1"},
+		{"--cr-name", strings.Repeat("a", 253)},
 		{"--team-label", "example.com/team"},
 		{}, // the cluster UID, and the label "team"
 	} {
