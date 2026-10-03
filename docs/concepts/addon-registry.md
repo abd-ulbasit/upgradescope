@@ -161,11 +161,13 @@ rather than judged. ExternalDNS and RKE2's ingress have compatibility
 ranges but no end-of-life data, which is reported the same way. The
 registry is small on purpose: every row needs a source.
 
-An image is matched by the repository path an entry declares, as a suffix
-on whole path segments: `ingress-nginx/controller` is
+An image is matched by the repository path an entry declares. A path of two
+or more segments is a suffix on whole path segments: `ingress-nginx/controller` is
 `registry.k8s.io/ingress-nginx/controller` and
 `myregistry.example.com/mirror/ingress-nginx/controller`, never a bare
-`controller` repository. The vendor builds of Ingress NGINX have their own
+`controller` repository. A one-segment path is that repository exactly, not a
+suffix (etcd lists `etcd`, `bitnami/etcd`, `coreos/etcd` and
+`etcd-development/etcd`). The vendor builds of Ingress NGINX have their own
 entries (`rke2-ingress-nginx`, `aks-app-routing-nginx`) and the Bitnami
 rebuild is in `ingress-nginx`. No image is claimed by two entries.
 Add-ons that endoflife.date does not track and that no entry covers yet
@@ -182,7 +184,9 @@ goes through the same validation as an embedded one, citations included,
 and a file that fails it stops the command at start, naming the file. An
 entry whose `id` is an embedded entry's replaces it entirely (to correct a
 date for your fleet or add a mirror's image path); any other `id` adds an
-add-on. The extra entries are part of the knowledge base version, so a
+add-on, and may not claim an image or chart an embedded entry already claims
+(the command stops at start naming both entries; replace the embedded entry
+instead). The extra entries are part of the knowledge base version, so a
 report says which registry judged it.
 
 `serve` takes the flag too, and needs it when agents push add-ons the extra

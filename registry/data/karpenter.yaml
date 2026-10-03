@@ -6,7 +6,11 @@
 # a vendor commitment. No Kubernetes ranges are recorded: the compatibility
 # matrix is cited for the reader, not encoded. Karpenter's own Helm chart
 # (name karpenter, chart and app version equal) is published as an OCI chart;
-# the CRD chart (karpenter-crd) has no pods.
+# the CRD chart (karpenter-crd) has no pods. Known limit: Azure's
+# karpenter-provider-azure self-hosted chart is also named karpenter, with
+# version numbers that do not follow kubernetes-sigs/karpenter's release
+# lines, so a chart match cannot tell it apart (its image, under
+# mcr.microsoft.com, is not matched).
 schema_version: 2
 id: karpenter
 display_name: Karpenter
