@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -330,5 +331,128 @@ func TestScanHonoursTheCallsContext(t *testing.T) {
 	case <-started:
 		t.Error("the call that gave up waiting ran a scan anyway")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestReportReadsAreBoundedInNumber: each report a tool reads is held
+// several times over while it is checked and sent, so a client that issues
+// many calls at once (prompt-injected content can ask for that) gets at
+// most maxConcurrentReads of them at a time; the rest wait their turn and
+// are answered.
+func TestReportReadsAreBoundedInNumber(t *testing.T) {
+	_, doc := goldenReport(t, "mixed-everything")
+	var inFlight, most atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/clusters" {
+			_, _ = w.Write([]byte(`[{"id":1,"name":"prod"}]`))
+			return
+		}
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			m := most.Load()
+			if n <= m || most.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write(doc)
+	}))
+	defer ts.Close()
+	f, _ := NewFleet(ts.URL, "")
+	cfg := localConfig()
+	cfg.Fleet = f
+	cs := connect(t, cfg)
+
+	const calls = 4 * maxConcurrentReads
+	errs := make(chan error, calls)
+	for i := range calls {
+		tool := ToolGetReport
+		if i%2 == 1 {
+			tool = ToolListFindings
+		}
+		go func() {
+			res, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: tool, Arguments: map[string]any{"cluster": "prod"}})
+			switch {
+			case err != nil:
+				errs <- err
+			case res.IsError:
+				errs <- errors.New(text(res))
+			default:
+				errs <- nil
+			}
+		}()
+	}
+	for range calls {
+		if err := <-errs; err != nil {
+			t.Error(err)
+		}
+	}
+	if got := most.Load(); got > maxConcurrentReads {
+		t.Errorf("%d report reads at once, want at most %d", got, maxConcurrentReads)
+	}
+}
+
+// TestAReportReadWaitingForASlotGivesUp: a call waiting for a read slot
+// gives up when its context ends, reads nothing afterwards, and leaves the
+// slots for the calls after it.
+func TestAReportReadWaitingForASlotGivesUp(t *testing.T) {
+	_, doc := goldenReport(t, "mixed-everything")
+	var reads atomic.Int32
+	started := make(chan struct{}, maxConcurrentReads+1)
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/clusters" {
+			_, _ = w.Write([]byte(`[{"id":1,"name":"prod"}]`))
+			return
+		}
+		reads.Add(1)
+		started <- struct{}{}
+		<-release
+		_, _ = w.Write(doc)
+	}))
+	defer ts.Close()
+	f, _ := NewFleet(ts.URL, "")
+	cfg := localConfig()
+	cfg.Fleet = f
+	cs := connect(t, cfg)
+	args := map[string]any{"cluster": "prod"}
+
+	held := make(chan *mcpsdk.CallToolResult, maxConcurrentReads)
+	for range maxConcurrentReads {
+		go func() {
+			res, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: ToolGetReport, Arguments: args})
+			if err != nil {
+				t.Error(err)
+			}
+			held <- res
+		}()
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a report read did not start")
+		}
+	}
+
+	short, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := cs.CallTool(short, &mcpsdk.CallToolParams{Name: ToolGetReport, Arguments: args}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("the waiting call: %v, want its deadline", err)
+	}
+	// The cancellation reaches the server as a notification; give it time
+	// to end the wait before the slots free up.
+	time.Sleep(500 * time.Millisecond)
+	close(release)
+	for range maxConcurrentReads {
+		if res := <-held; res == nil || res.IsError {
+			t.Errorf("a call holding a slot: %v", res)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := reads.Load(); got != maxConcurrentReads {
+		t.Errorf("%d report reads, want %d: the call that gave up read one anyway", got, maxConcurrentReads)
+	}
+	if res := callWithin(t, cs, 5*time.Second, ToolGetReport, args); res.IsError {
+		t.Errorf("a call after the slots freed up: %q", text(res))
 	}
 }

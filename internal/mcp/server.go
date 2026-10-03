@@ -72,6 +72,14 @@ type Config struct {
 	Registry func() ([]registry.AddOn, error)
 }
 
+// maxConcurrentReads is how many get_report, list_findings and
+// fleet_summary calls run at once. Each holds its report several times
+// over (MaxReportBytes says how), and a client can issue calls in parallel,
+// which prompt-injected content can ask for; the bound keeps the memory
+// they take to that of two calls however many are issued. A call waits for
+// a slot, or gives up when the client cancels it.
+const maxConcurrentReads = 2
+
 type server struct {
 	cfg Config
 
@@ -79,6 +87,10 @@ type server struct {
 	// reads the whole cluster. A channel, not a mutex, so a waiting call
 	// gives up when its context ends.
 	scanSlot chan struct{}
+
+	// readSlots holds a token while a tool reads and returns a report or
+	// the fleet summary (maxConcurrentReads says why).
+	readSlots chan struct{}
 
 	mu       sync.Mutex
 	lastScan map[string]json.RawMessage // target → report of the latest scan call
@@ -89,7 +101,7 @@ func New(cfg Config) *mcpsdk.Server {
 	if cfg.Registry == nil {
 		cfg.Registry = sync.OnceValues(registry.Load)
 	}
-	s := &server{cfg: cfg, scanSlot: make(chan struct{}, 1)}
+	s := &server{cfg: cfg, scanSlot: make(chan struct{}, 1), readSlots: make(chan struct{}, maxConcurrentReads)}
 	srv := mcpsdk.NewServer(&mcpsdk.Implementation{
 		Name:    "upgradescope",
 		Title:   "upgradescope",
@@ -138,7 +150,34 @@ func New(cfg Config) *mcpsdk.Server {
 			Annotations:  readOnly("Summarise the fleet", true),
 		}, s.fleetSummary)
 	}
+	// The slot is held around the whole call, the SDK's check and encoding
+	// of the result included, which is where most of a report's copies are.
+	srv.AddReceivingMiddleware(s.boundReads)
 	return srv
+}
+
+// boundReads runs a get_report, list_findings or fleet_summary call in one
+// of readSlots. Other calls pass straight through: scan has its own slot,
+// and registry_lookup reads only the embedded registry.
+func (s *server) boundReads(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+	return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+		call, ok := req.(*mcpsdk.CallToolRequest)
+		if !ok || call.Params == nil {
+			return next(ctx, method, req)
+		}
+		switch call.Params.Name {
+		case ToolGetReport, ToolListFindings, ToolFleetSummary:
+		default:
+			return next(ctx, method, req)
+		}
+		select {
+		case s.readSlots <- struct{}{}:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for other report reads to finish: %w", ctx.Err())
+		}
+		defer func() { <-s.readSlots }()
+		return next(ctx, method, req)
+	}
 }
 
 func instructions(fleet bool) string {
