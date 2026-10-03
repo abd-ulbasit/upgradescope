@@ -3,7 +3,10 @@
 # repository is archived (`gh api` reports archived=true), so Weave Net gets
 # no further fixes, including for Kubernetes API changes. No eol_date: the
 # repository page shows when it was archived, but no vendor page states an
-# end-of-support date, and one is not inferred.
+# end-of-support date, and one is not inferred. Matched are the images of the
+# archived project (weave-kube, weave-npc); the maintained community fork
+# (reweave, rajchaudhuri/weave-kube) is deliberately not, and older manifests
+# that pulled ghcr.io/weaveworks/launcher/weave-kube are not matched yet.
 schema_version: 2
 id: weave-net
 display_name: Weave Net

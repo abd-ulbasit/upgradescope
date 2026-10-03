@@ -59,7 +59,11 @@ recommendation: Optional one-line remediation hint shown with findings.
 ### How matchers work
 
 - **images** are repository paths *without* the registry host, tag or
-  digest, matched as a suffix on whole path segments. `ingress-nginx/controller`
+  digest. A matcher of two or more segments is matched as a suffix on whole
+  path segments; a one-segment matcher (`etcd`) is the repository exactly
+  and never a suffix, so list a product's other paths in full
+  (`bitnami/etcd`) and a bare `controller` or `operator` claims nothing but
+  a repository of that name. `ingress-nginx/controller`
   matches `registry.k8s.io/ingress-nginx/controller`, the legacy
   `k8s.gcr.io/ingress-nginx/controller`, a mirror such as
   `harbor.example/k8s/ingress-nginx/controller` and an ECR pull-through cache
@@ -159,6 +163,11 @@ single `<id>.yaml` file or a directory of them, in the schema above.
   nothing is merged field by field: copy the embedded file and edit it to
   correct a date for your fleet or add a mirror's image path. Any other id
   adds an add-on.
+- No image or chart may be claimed by two entries. An extra entry whose
+  matcher claims an image or chart that an embedded entry of another id
+  already claims (the same repository, or a longer mirror path of it) stops
+  the command at start, naming both entries: replace the embedded entry
+  instead, by using its id.
 - The entries are part of the knowledge base version a report carries.
 - `serve` judges what agents push and what `/gate` is posted against its
   own registry: give it the same `--registry-dir` as the agents. In the
