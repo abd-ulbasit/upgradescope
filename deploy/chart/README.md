@@ -267,9 +267,9 @@ settings, so the read token still protects all data.
   Below about 962Mi, that worst case (~865 MiB of heap) no longer fits
   under `GOMEMLIMIT`. Each `server.targets` entry adds about one report
   of up to the snapshot cap (`--max-snapshot-bytes`, 20 MiB) to an
-  ingest and one to the re-evaluation pass, about 54 MiB of that sum, so
-  with fewer targets it needs less: with none, about 650 MiB, which
-  768Mi holds.
+  ingest and one to the re-evaluation pass, about 54 MiB of the sum per
+  extra target, so with fewer targets it needs less: with none, about
+  650 MiB, which 768Mi holds.
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
   them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.
@@ -376,7 +376,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.readToken` | string | `""` | Optional bearer token for the read API. EMPTY = READ API IS OPEN — acceptable behind a ClusterIP Service on a private cluster, but set one before exposing the Service in any way. With existingSecret the value itself is not used; a non-empty one acts like readTokenFromSecret=true. |
 | `server.readTokenFromSecret` | bool | `false` | With existingSecret: protect the read API with its readToken key. |
 | `server.replicas` | int | `1` | Server Pods. More than one needs a shared database (database below): SQLite on a ReadWriteOnce volume has a single writer. |
-| `server.resources` | object | `{"limits":{"cpu":"500m","memory":"1Gi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Sets GOMEMLIMIT as agent.resources does (~921MiB for 1Gi). 1Gi holds one /gate request, one snapshot ingest, one cluster read and the re-evaluation pass at their worst with four server.targets, the most serve takes, and notifications configured, measured on SQLite (~176, ~216, ~133 and ~198 MiB of heap, with every report at most the snapshot cap), two reads of a 500-cluster fleet (~16 MiB each), plus the buffered /gate and snapshot bodies (30 and 40 MiB) and the responses held for their clients (one 40 MiB budget): ~865 MiB of heap, which a limit below about 962Mi does not fit. Each server.targets entry adds about one report of up to the snapshot cap to an ingest and one to the re-evaluation pass (~54 MiB of that sum at the default 20 MiB cap), so with fewer targets it needs less: with none, about 650 MiB, which 768Mi holds. Open connections (uncapped, ~18 KiB each), kernel socket buffers, larger fleets and snapshots a v0.1 server stored are outside it: see docs/operations.md. |
+| `server.resources` | object | `{"limits":{"cpu":"500m","memory":"1Gi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Sets GOMEMLIMIT as agent.resources does (~921MiB for 1Gi). 1Gi holds one /gate request, one snapshot ingest, one cluster read and the re-evaluation pass at their worst with four server.targets, the most serve takes, and notifications configured, measured on SQLite (~176, ~216, ~133 and ~198 MiB of heap, with every report at most the snapshot cap), two reads of a 500-cluster fleet (~16 MiB each), plus the buffered /gate and snapshot bodies (30 and 40 MiB) and the responses held for their clients (one 40 MiB budget): ~865 MiB of heap, which a limit below about 962Mi does not fit. Each server.targets entry adds about one report of up to the snapshot cap to an ingest and one to the re-evaluation pass (~54 MiB of the sum per extra target at the default 20 MiB cap), so with fewer targets it needs less: with none, about 650 MiB, which 768Mi holds. Open connections (uncapped, ~18 KiB each), kernel socket buffers, larger fleets and snapshots a v0.1 server stored are outside it: see docs/operations.md. |
 | `server.retention` | string | `"90d"` | History older than this is pruned at startup and daily, except each cluster's latest snapshot and its evaluations: whole days (90d) or a Go duration (2160h); 0 keeps everything (as "0" or --set ...retention=0). |
 | `server.securityContext.allowPrivilegeEscalation` | bool | `false` | — |
 | `server.securityContext.capabilities.drop[0]` | string | `"ALL"` | — |

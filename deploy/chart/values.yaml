@@ -335,9 +335,9 @@ server:
   # responses held for their clients (one 40 MiB budget): ~865 MiB of
   # heap, which a limit below about 962Mi does not fit. Each
   # server.targets entry adds about one report of up to the snapshot cap
-  # to an ingest and one to the re-evaluation pass (~54 MiB of that sum at
-  # the default 20 MiB cap), so with fewer targets it needs less: with
-  # none, about 650 MiB, which 768Mi holds. Open connections (uncapped,
+  # to an ingest and one to the re-evaluation pass (~54 MiB of the sum per
+  # extra target at the default 20 MiB cap), so with fewer targets it
+  # needs less: with none, about 650 MiB, which 768Mi holds. Open connections (uncapped,
   # ~18 KiB each), kernel socket buffers, larger fleets and snapshots a
   # v0.1 server stored are outside it: see docs/operations.md.
   resources:

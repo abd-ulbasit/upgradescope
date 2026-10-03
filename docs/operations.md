@@ -104,12 +104,12 @@ of every snapshot and report it reads beside the one it returns, a
 report from a stored evaluation about the report limit (below) grew the
 heap up to ~109 MiB, a what-if of one ~95 MiB, and the HTML export of
 one whose findings name 547,000 teams, which decode to as many small
-strings, the most: ~133 MiB, the figure the worst case below adds up.
-Since they run one at a time, 10 concurrent requests to any of these
-endpoints whose clients take their responses at once add only the
-garbage of the read before, and that ~133 MiB is their worst too
-(`TestReadHeapIsBounded`, on SQLite, against every snapshot the heap
-tests store, fails above 160 MiB).
+strings, the most: ~129 MiB. Since they run one at a time, 10
+concurrent requests to any of these endpoints whose clients take their
+responses at once add only the garbage of the read before: ~133 MiB
+for that export, the worst read and the figure the worst case below
+adds up (`TestReadHeapIsBounded`, on SQLite, against every snapshot the
+heap tests store, fails above 160 MiB).
 
 A push is checked before it is evaluated, since its reports repeat what
 it names. Its identifiers must be what the apiserver accepts for what

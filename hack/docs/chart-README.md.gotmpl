@@ -272,9 +272,9 @@ settings, so the read token still protects all data.
   Below about 962Mi, that worst case (~865 MiB of heap) no longer fits
   under `GOMEMLIMIT`. Each `server.targets` entry adds about one report
   of up to the snapshot cap (`--max-snapshot-bytes`, 20 MiB) to an
-  ingest and one to the re-evaluation pass, about 54 MiB of that sum, so
-  with fewer targets it needs less: with none, about 650 MiB, which
-  768Mi holds.
+  ingest and one to the re-evaluation pass, about 54 MiB of the sum per
+  extra target, so with fewer targets it needs less: with none, about
+  650 MiB, which 768Mi holds.
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
   them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.
