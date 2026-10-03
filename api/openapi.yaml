@@ -558,6 +558,16 @@ paths:
         a CI step and keeps the report. `X-Upgradescope-Verdict` always
         carries the verdict.
 
+        `allow-incomplete=true` is `scan --allow-incomplete`: the gate
+        decides on findings alone. An `unknown` verdict (a required check
+        did not run, such as a `target` past the knowledge base's
+        horizon) with no finding at the `fail-on` threshold then answers
+        200, and a blocker still answers 422. The verdict header, the
+        body's `verdict` and its required `notAssessed` gaps still say
+        `unknown`. A `target` that is not an upgrade of the cluster (the
+        `target` gap) is a mistake, not a coverage limit, and still fails.
+        Only `true` and `false` are values, given once.
+
         `format` picks the body: the JSON gate response (default), SARIF,
         JUnit XML whose test outcomes follow `fail-on`, or a GitLab Code
         Quality report. SARIF, JUnit and Code Quality hold only the
@@ -617,6 +627,13 @@ paths:
         - name: fail-on
           in: query
           schema: {type: string, enum: [blocker, warning, never], default: blocker}
+        - name: allow-incomplete
+          in: query
+          description: |
+            `true` gates on findings alone: an `unknown` verdict with no
+            finding at the `fail-on` threshold is 200, not 422. See the
+            operation description.
+          schema: {type: string, enum: ["true", "false"], default: "false"}
         - name: path
           in: query
           description: |
@@ -666,8 +683,8 @@ paths:
         "422":
           description: |
             The gate failed (same body as 200), or the request is invalid
-            (no or bad `target`, bad `format`, `fail-on`, `path` or
-            `config`, an invalid document separator, a UTF-16 stream, or an
+            (no or bad `target`, bad `format`, `fail-on`,
+            `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an
             undecodable manifest stream: an Error body).
           headers:
             X-Upgradescope-Verdict: {$ref: "#/components/headers/Verdict"}

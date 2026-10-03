@@ -133,11 +133,16 @@ versions its own CRDs deprecate or do not serve, so live custom resources
 at a version that a posted CRD newly deprecates or stops serving are not
 judged.
 
-The server gate has no counterpart to `allow-incomplete`. A cluster
-already on the knowledge base's newest minor has a default target past the
-horizon, so every request answers `unknown` (422) until a release with a
-newer knowledge base is deployed; pass an explicit `target` the release
-knows, or `fail-on=never` and read the verdict header yourself, until then.
+A `target` newer than the server's knowledge base (a cluster already on its
+newest minor, upgrading to the next) makes the verdict `unknown`, and an
+`unknown` verdict fails the gate (422). Pass a `target` the release knows,
+or add `&allow-incomplete=true`, the server's counterpart to
+`allow-incomplete`: the gate then decides on findings alone. A blocker the
+manifests introduce still answers 422, an `unknown` verdict without one
+answers 200, and the `X-Upgradescope-Verdict` header, the body's `verdict`
+and its required `notAssessed` gaps still say `unknown`. A `target` that is
+not an upgrade of the cluster still fails. The parameter takes `true` or
+`false` (anything else is a 422), and `format=junit` follows it too.
 
 ```sh
 curl -sS --fail-with-body --retry 5 -X POST \
