@@ -99,12 +99,13 @@ type Inventory struct {
 	CRDs []CRD `json:"crds,omitempty"` // sorted by Group, then Kind
 
 	// APIAuthorshipUnknown holds the objects of a flagged kind that nothing
-	// can be attributed to (live clusters only): no managedFields entry and
-	// no last-applied annotation, as an object created through a deprecated
-	// version with an empty spec has. Shaped like APIUsage, per flagged
-	// group/version/kind. The object may as well have been created through
-	// the replacement, so the engine reports it as info and never as use of
-	// the deprecated API.
+	// can be attributed to (live clusters only): no managedFields entry
+	// outside the status subresource and the control plane's managers, and
+	// no usable last-applied annotation, as an object created through a
+	// deprecated version with an empty spec has. Shaped like APIUsage, once
+	// per kind (under one of its flagged versions). The object may as well
+	// have been created through the replacement, so the engine reports it as
+	// info and never as use of the deprecated API.
 	APIAuthorshipUnknown []APIUsage `json:"apiAuthorshipUnknown,omitempty"`
 }
 

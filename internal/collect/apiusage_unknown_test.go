@@ -54,6 +54,34 @@ func TestCollectAPIUsageFieldlessObjectsAreAuthorshipUnknown(t *testing.T) {
 		t.Errorf("authorship unknown entry = %+v, want one DeviceClass counted once, cluster-scoped", u[0])
 	}
 
+	// Objects left with nothing a manager could be named by are authorship
+	// unknown too: the only entries are on the status subresource (a
+	// controller wrote the status of a field-less object), or the
+	// last-applied annotation is there but says nothing (unparseable, or no
+	// apiVersion).
+	status := func(manager, apiVersion string) metav1.ManagedFieldsEntry {
+		e := wrote(manager, apiVersion)
+		e.Subresource = "status"
+		return e
+	}
+	badAnnotation := func(v string) map[string]string {
+		return map[string]string{"kubectl.kubernetes.io/last-applied-configuration": v}
+	}
+	statusApplied := status("my-controller", beta)
+	statusApplied.Operation = metav1.ManagedFieldsOperationApply
+	for name, o := range map[string]obj{
+		"only a status entry":                          {name: "b-empty", managed: []metav1.ManagedFieldsEntry{status("my-controller", beta)}},
+		"only a status entry, applied":                 {name: "b-empty", managed: []metav1.ManagedFieldsEntry{statusApplied}},
+		"an unparseable last-applied annotation":       {name: "b-empty", annotations: badAnnotation("{")},
+		"a last-applied annotation without a version":  {name: "b-empty", annotations: badAnnotation(`{"kind":"DeviceClass"}`)},
+		"a status entry and an unparseable annotation": {name: "b-empty", managed: []metav1.ManagedFieldsEntry{status("my-controller", beta)}, annotations: badAnnotation("{")},
+	} {
+		got := collect(o)
+		if want := []string{"v1beta1/b-empty@"}; !reflect.DeepEqual(names(got.APIAuthorshipUnknown), want) || len(got.APIUsage) != 0 {
+			t.Errorf("%s: authorship unknown = %v, usage = %v; want %v and no usage", name, names(got.APIAuthorshipUnknown), names(got.APIUsage), want)
+		}
+	}
+
 	// Anything that attributes the object, or that is not the user's, is
 	// not authorship unknown.
 	for name, o := range map[string]obj{
@@ -61,6 +89,7 @@ func TestCollectAPIUsageFieldlessObjectsAreAuthorshipUnknown(t *testing.T) {
 		"last-applied at the flagged one":   {name: "x", annotations: lastApplied(beta, "DeviceClass")},
 		"written through the replacement":   {name: "x", managed: []metav1.ManagedFieldsEntry{wrote("kubectl", ga)}},
 		"written by the control plane only": {name: "x", managed: []metav1.ManagedFieldsEntry{wrote("kube-apiserver", beta)}},
+		"a control plane status entry only": {name: "x", managed: []metav1.ManagedFieldsEntry{status("kube-scheduler", beta)}},
 	} {
 		if got := collect(o).APIAuthorshipUnknown; len(got) != 0 {
 			t.Errorf("%s: authorship unknown = %+v, want none", name, got)
@@ -88,4 +117,30 @@ func TestCollectAPIUsageFieldlessObjectsAreAuthorshipUnknown(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A kind with several flagged versions served at once (DeviceClass at
+// resource.k8s.io/v1beta1 and v1beta2 on a 1.34/1.35 cluster): a field-less
+// object is stored the same through all of them, so it is one authorship
+// unknown entry for the kind, not one per flagged version, each naming a
+// version as its likely creator. Attributed objects still count per version.
+func TestCollectAPIUsageAuthorshipUnknownOncePerKind(t *testing.T) {
+	versions := []string{"resource.k8s.io/v1", "resource.k8s.io/v1beta1", "resource.k8s.io/v1beta2"}
+	deviceClasses := metav1.APIResource{Name: "deviceclasses", Kind: "DeviceClass", Verbs: metav1.Verbs{"list"}}
+	disc := fakeDiscovery(resources(versions[0], deviceClasses), resources(versions[1], deviceClasses), resources(versions[2], deviceClasses))
+	k := loadKB(t)
+
+	var inv inventory.Inventory
+	objs := servedAt("DeviceClass", versions,
+		obj{name: "b-empty"},
+		obj{name: "c-real", managed: []metav1.ManagedFieldsEntry{wrote("kubectl", versions[2])}})
+	if _, err := collectAPIUsage(context.Background(), disc, metaClient(objs), k.APILifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	if got := inv.APIAuthorshipUnknown; len(got) != 1 || got[0].Kind != "DeviceClass" || got[0].Count != 1 || len(got[0].Objects) != 1 || got[0].Objects[0].Name != "b-empty" {
+		t.Fatalf("authorship unknown = %+v, want one DeviceClass entry naming b-empty", got)
+	}
+	if got := inv.APIUsage; len(got) != 1 || got[0].Version != "v1beta2" || got[0].Objects[0].Name != "c-real" {
+		t.Errorf("usage = %+v, want c-real attributed to v1beta2 only", got)
+	}
 }

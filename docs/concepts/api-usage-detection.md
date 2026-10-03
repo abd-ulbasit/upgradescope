@@ -157,20 +157,28 @@ lists `crds` as not assessed.
 
 ## Known limits
 
-- **No managedFields, no annotation, no attribution.** An object written
-  through a deprecated version is not counted as use of it when it has no
-  managedFields entry at all and no last-applied annotation: objects
-  created before field tracking existed, objects whose managedFields a
-  client cleared, and objects created with no fields at all (the apiserver
-  drops the entry of a manager that owns no fields, so a `DeviceClass`
-  created through `resource.k8s.io/v1beta1` with `spec: {}` has none). Such
+- **No managedFields to judge by, no usable annotation, no attribution.**
+  An object written through a deprecated version is not counted as use of
+  it when no managedFields entry is left to judge by (none outside the
+  status subresource and the control plane's managers) and the
+  last-applied annotation is absent, unparseable, or names no apiVersion.
+  That covers objects created before field tracking existed, objects whose
+  managedFields a client cleared, and objects created with no fields at all
+  (the apiserver drops the entry of a manager that owns no fields, so a
+  `DeviceClass` created through `resource.k8s.io/v1beta1` with `spec: {}`
+  has none), including such an object whose status a driver or controller
+  wrote afterwards: a status entry says nothing about who created it. Such
   an object is stored the same however it was created, so it cannot be a
   blocker. It is reported as an info finding, `deprecated-api` titled
   "authorship unknown" with the key suffix `/authorship-unknown`, naming the
   objects, so a client that authors through the deprecated version is still
-  visible. It changes neither the verdict nor the score. An object that has
-  entries, all of them the control plane's or the status subresource's, is
-  attributed and is not reported.
+  visible. When a kind has several flagged versions served at once, it is
+  one finding for the kind (under one of the versions), not one per
+  version. It changes neither the verdict nor the score.
+- **Control-plane-only objects are not "unknown".** An object whose every
+  entry is the control plane's (including its status) is the control
+  plane's own, which it replaces across an upgrade. It is neither counted
+  as use nor reported as authorship unknown.
 - **The control plane's managers are trusted.** A write through a
   deprecated version by `kube-apiserver`, `kube-controller-manager` or the
   APF producer is not reported, and neither is an object of a kind that

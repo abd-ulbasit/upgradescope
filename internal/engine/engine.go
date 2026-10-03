@@ -252,9 +252,9 @@ func evalAuthorshipUnknown(inv inventory.Inventory, k kb.KB, b *budget) []Findin
 			Citations:      []string{deprecationGuideURL},
 			Objects:        sortedObjects(u.Objects),
 			ObjectsOmitted: u.ObjectsOmitted,
-			Detail: fmt.Sprintf("%d object(s) carry no managedFields entry and no last-applied annotation, which is what creating one through %s with an empty spec leaves, "+
-				"so who writes them, and through which API version, cannot be told. They are stored the same however they were created: "+
-				"not counted as use of %s, no effect on the verdict or score.", u.Count, gv, gv),
+			Detail: fmt.Sprintf("%d object(s) have no managedFields entry to attribute them by (none outside the status subresource and the control plane) and no usable last-applied annotation, "+
+				"which is what creating one with an empty spec leaves, so who writes them, and through which API version, cannot be told. "+
+				"They are stored the same through every served version of %s: not counted as use of %s, no effect on the verdict or score.", u.Count, u.Kind, gv),
 		}
 		if nsDetail != "" {
 			f.Detail += " Namespaces: " + nsDetail + "."

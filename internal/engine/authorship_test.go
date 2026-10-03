@@ -36,9 +36,9 @@ func TestEvalAuthorshipUnknown(t *testing.T) {
 		Category: CatDeprecatedAPI, Severity: SevInfo,
 		Key:   "deprecated-api/networking.k8s.io/v1beta1/Ingress/authorship-unknown",
 		Title: "networking.k8s.io/v1beta1 Ingress: authorship unknown (2 objects)",
-		Detail: "2 object(s) carry no managedFields entry and no last-applied annotation, which is what creating one through networking.k8s.io/v1beta1 with an empty spec leaves, " +
-			"so who writes them, and through which API version, cannot be told. They are stored the same however they were created: " +
-			"not counted as use of networking.k8s.io/v1beta1, no effect on the verdict or score. Namespaces: shop (2).",
+		Detail: "2 object(s) have no managedFields entry to attribute them by (none outside the status subresource and the control plane) and no usable last-applied annotation, " +
+			"which is what creating one with an empty spec leaves, so who writes them, and through which API version, cannot be told. " +
+			"They are stored the same through every served version of Ingress: not counted as use of networking.k8s.io/v1beta1, no effect on the verdict or score. Namespaces: shop (2).",
 		Teams:      []string{"storefront"},
 		Namespaces: []string{"shop"},
 		Citations:  []string{deprecationGuideURL},
