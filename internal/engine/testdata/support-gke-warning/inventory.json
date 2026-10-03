@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "66666666-6666-6666-6666-666666666666",
+  "collectedAt": "2026-10-15T00:00:00Z",
+  "serverVersion": "v1.34.2-gke.1234000",
+  "provider": "gke",
+  "capabilities": {
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "nodes": [{"name": "gke-prod-default-pool-1a2b3c4d-abcd", "kubeletVersion": "v1.34.2"}],
+  "namespaces": [{"name": "default"}]
+}

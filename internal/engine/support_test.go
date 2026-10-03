@@ -204,8 +204,15 @@ func TestEvalSupportUnknown(t *testing.T) {
 
 func TestEvalSupportRemediationNamesNewerMinorsInStandardSupport(t *testing.T) {
 	_, fs := evalSupport(supportInv(inventory.ProviderEKS, "v1.34.2-eks-3abc123"), supportKB(), day("2026-10-15"))
-	if got := fs[0].Remediation; !strings.Contains(got, "1.36, 1.35") || strings.Contains(got, "1.34") {
-		t.Errorf("remediation = %q, want the newer minors still in standard support, newest first", got)
+	want := "Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.35; the newest known is 1.36."
+	if got := fs[0].Remediation; got != want {
+		t.Errorf("remediation = %q, want %q", got, want)
+	}
+	// A cluster several minors behind is told the nearest minor still in
+	// standard support, not only the newest: its first hop may be past it.
+	_, fs = evalSupport(supportInv(inventory.ProviderEKS, "v1.20.15-eks-3abc123"), supportKB(), day("2027-04-01"))
+	if got := fs[0].Remediation; !strings.Contains(got, "nearest minor in standard support is 1.36") || strings.Contains(got, "1.35") {
+		t.Errorf("remediation at 2027-04-01 = %q, want 1.35 (ended 2027-03-27) skipped for 1.36", got)
 	}
 	// Nothing newer in the dataset: the advice does not name a minor.
 	_, fs = evalSupport(supportInv(inventory.ProviderEKS, "v1.36.1-eks-3abc123"), supportKB(), day("2027-07-01"))
@@ -231,6 +238,16 @@ func TestSupportSummary(t *testing.T) {
 			"EKS 1.34: standard support ends 2026-12-02, extended support until 2027-12-02; extended support adds $4,380/yr per cluster (list price as of 2026-10-03)"},
 		{"standard, no price", withPhase(SupportStatus{Provider: "aks", Minor: "1.34", ExtendedSupportFrom: "2026-11-30", ExtendedSupportEnds: "2027-11-30"}, SupportStandard),
 			"AKS 1.34: standard support ends 2026-11-30, extended support until 2027-11-30"},
+		{"extended, opt-in with a note", func() SupportStatus {
+			s := cost(withPhase(SupportStatus{Provider: "gke", Minor: "1.34", ExtendedSupportFrom: "2027-01-25", ExtendedSupportEnds: "2027-11-25"}, SupportExtended))
+			s.ExtendedSupportCondition, s.AnnualCostNote = "the cluster is on the Extended release channel", "charged only for clusters on the Extended release channel"
+			return s
+		}(), "GKE 1.34: past standard support since 2027-01-25; extended support until 2027-11-25 (only if the cluster is on the Extended release channel); adds $4,380/yr per cluster (list price as of 2026-10-03, charged only for clusters on the Extended release channel)"},
+		{"ending, opt-in, no price", func() SupportStatus {
+			s := withPhase(SupportStatus{Provider: "aks", Minor: "1.34", ExtendedSupportFrom: "2026-11-30", ExtendedSupportEnds: "2027-11-30"}, SupportEnding)
+			s.ExtendedSupportCondition = "Long Term Support is enabled"
+			return s
+		}(), "AKS 1.34: standard support ends 2026-11-30, extended support until 2027-11-30 (only if Long Term Support is enabled)"},
 		{"extended, costed", cost(withPhase(base, SupportExtended)),
 			"EKS 1.34: in extended support since 2026-12-02 (until 2027-12-02); adds $4,380/yr per cluster (list price as of 2026-10-03)"},
 		{"ended", withPhase(base, SupportEnded), "EKS 1.34: out of support (extended support ended 2027-12-02)"},
@@ -284,4 +301,84 @@ func TestEvaluateSupport(t *testing.T) {
 	if r := Evaluate(inv, k, target, day("2027-06-01")); r.Support != nil {
 		t.Errorf("provider other: Support = %+v", r.Support)
 	}
+}
+
+// The wording for the two providers whose extended support is opt-in is
+// pinned against the real embedded dataset (its notes and conditions), at
+// a date inside each phase: the finding states the provider's window
+// conditionally, never that this cluster is in it, and the status carries
+// the caveats the CRD and the report show beside the date and the price.
+func TestEvalSupportOptInProvidersRealDataset(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("aks extended", func(t *testing.T) {
+		st, fs := evalSupport(supportInv(inventory.ProviderAKS, "v1.33.4"), k, day("2026-10-04"))
+		if st == nil || st.Phase != SupportExtended || st.ExtendedSupportCondition != "Long Term Support is enabled" || st.AnnualCostDelta != "" {
+			t.Fatalf("status = %+v", st)
+		}
+		if got, want := st.Summary(), "AKS 1.33: past standard support since 2026-07-31; extended support until 2027-07-31 (only if Long Term Support is enabled)"; got != want {
+			t.Errorf("Summary = %q, want %q", got, want)
+		}
+		if len(fs) != 1 || fs[0].Severity != SevBlocker {
+			t.Fatalf("findings = %+v", fs)
+		}
+		d := fs[0].Detail
+		for _, want := range []string{
+			"extended support, which applies only if Long Term Support is enabled, runs until 2027-07-31",
+			"cannot see whether this cluster is enrolled",
+			"AKS has no automatic extended support.",
+			"platform support",
+		} {
+			if !strings.Contains(d, want) {
+				t.Errorf("detail lacks %q:\n%s", want, d)
+			}
+		}
+		for _, bad := range []string{"the cluster is in extended support", "when Azure Kubernetes Service stops supporting it", "$"} {
+			if strings.Contains(d, bad) {
+				t.Errorf("detail asserts %q:\n%s", bad, d)
+			}
+		}
+	})
+	t.Run("aks ending", func(t *testing.T) {
+		_, fs := evalSupport(supportInv(inventory.ProviderAKS, "v1.34.1"), k, day("2026-10-04"))
+		if len(fs) != 1 || fs[0].Severity != SevWarning {
+			t.Fatalf("findings = %+v", fs)
+		}
+		if d := fs[0].Detail; !strings.Contains(d, "extended support, which applies only if Long Term Support is enabled, then runs until 2027-11-30") || strings.Contains(d, "then moves to extended support") {
+			t.Errorf("detail = %s", d)
+		}
+	})
+	t.Run("gke ending", func(t *testing.T) {
+		st, fs := evalSupport(supportInv(inventory.ProviderGKE, "v1.33.5-gke.1080000"), k, day("2026-06-01"))
+		if st == nil || st.Phase != SupportEnding || st.AnnualCostNote != "charged only for clusters on the Extended release channel" || st.AnnualCostDelta != "4380.00" {
+			t.Fatalf("status = %+v", st)
+		}
+		if got, want := st.Summary(), "GKE 1.33: standard support ends 2026-08-12, extended support until 2027-06-12 (only if the cluster is on the Extended release channel); extended support adds $4,380/yr per cluster (list price as of 2026-10-03, charged only for clusters on the Extended release channel)"; got != want {
+			t.Errorf("Summary = %q\nwant %q", got, want)
+		}
+		d := fs[0].Detail
+		for _, want := range []string{
+			"extended support, which applies only if the cluster is on the Extended release channel, then runs until 2027-06-12",
+			"It is charged only for clusters on the Extended release channel.",
+			"clusters on other channels are upgraded automatically",
+		} {
+			if !strings.Contains(d, want) {
+				t.Errorf("detail lacks %q:\n%s", want, d)
+			}
+		}
+		if strings.Contains(d, "the cluster then moves to extended support") {
+			t.Errorf("detail asserts the move:\n%s", d)
+		}
+	})
+	t.Run("eks is unconditional", func(t *testing.T) {
+		st, fs := evalSupport(supportInv(inventory.ProviderEKS, "v1.33.4-eks-3abc123"), k, day("2026-10-04"))
+		if st == nil || st.ExtendedSupportCondition != "" || st.AnnualCostNote != "" || len(fs) != 1 {
+			t.Fatalf("status = %+v findings %+v", st, fs)
+		}
+		if !strings.Contains(fs[0].Detail, "the cluster is in extended support until 2027-07-29") || strings.Contains(fs[0].Detail, "only if") {
+			t.Errorf("detail = %s", fs[0].Detail)
+		}
+	})
 }

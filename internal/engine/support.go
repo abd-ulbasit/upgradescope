@@ -67,6 +67,16 @@ type SupportStatus struct {
 	AnnualCostDelta string `json:"annualCostDelta,omitempty"`
 	Currency        string `json:"currency,omitempty"`
 	PriceAsOf       string `json:"priceAsOf,omitempty"`
+	// AnnualCostNote is the provider's caveat on whom the price applies to
+	// ("charged only for clusters on the Extended release channel"); it
+	// travels with AnnualCostDelta wherever that is shown.
+	AnnualCostNote string `json:"annualCostNote,omitempty"`
+	// ExtendedSupportCondition is set where the provider's extended window
+	// is not automatic (GKE, AKS): the configuration under which it
+	// applies, as a clause completing "only if ...". The collector cannot
+	// see it, so phases ending and extended mean the provider's window, not
+	// that this cluster is enrolled in it.
+	ExtendedSupportCondition string `json:"extendedSupportCondition,omitempty"`
 }
 
 // Summary is the status in one line for the scan table: the dates, and the
@@ -77,15 +87,28 @@ func (s SupportStatus) Summary() string {
 	cost := ""
 	if s.AnnualCostDelta != "" {
 		if cents, err := strconv.ParseInt(strings.Replace(s.AnnualCostDelta, ".", "", 1), 10, 64); err == nil {
-			cost = fmt.Sprintf(" %s/yr per cluster (list price as of %s)", formatUSD(cents), s.PriceAsOf)
+			asOf := "list price as of " + s.PriceAsOf
+			if s.AnnualCostNote != "" {
+				asOf += ", " + s.AnnualCostNote
+			}
+			cost = fmt.Sprintf(" %s/yr per cluster (%s)", formatUSD(cents), asOf)
 		}
+	}
+	// Where extended support is opt-in the window is the provider's, not a
+	// fact about this cluster: say so beside the date.
+	only := ""
+	if s.ExtendedSupportCondition != "" {
+		only = " (only if " + s.ExtendedSupportCondition + ")"
 	}
 	switch s.Phase {
 	case SupportExtended:
 		if cost != "" {
 			cost = "; adds" + cost
 		}
-		return fmt.Sprintf("%sin extended support since %s (until %s)%s", head, s.ExtendedSupportFrom, s.ExtendedSupportEnds, cost)
+		if s.ExtendedSupportCondition == "" {
+			return fmt.Sprintf("%sin extended support since %s (until %s)%s", head, s.ExtendedSupportFrom, s.ExtendedSupportEnds, cost)
+		}
+		return fmt.Sprintf("%spast standard support since %s; extended support until %s%s%s", head, s.ExtendedSupportFrom, s.ExtendedSupportEnds, only, cost)
 	case SupportEnded:
 		if s.ExtendedSupportEnds == "" {
 			return fmt.Sprintf("%sout of support (standard support ended %s)", head, s.ExtendedSupportFrom)
@@ -98,7 +121,7 @@ func (s SupportStatus) Summary() string {
 	if cost != "" {
 		cost = "; extended support adds" + cost
 	}
-	return fmt.Sprintf("%sstandard support ends %s, extended support until %s%s", head, s.ExtendedSupportFrom, s.ExtendedSupportEnds, cost)
+	return fmt.Sprintf("%sstandard support ends %s, extended support until %s%s%s", head, s.ExtendedSupportFrom, s.ExtendedSupportEnds, only, cost)
 }
 
 // evalSupport places the cluster's control-plane minor in its provider's
@@ -138,6 +161,9 @@ func evalSupport(inv inventory.Inventory, k kb.KB, now time.Time) (*SupportStatu
 	}
 
 	st := &SupportStatus{Provider: p.ID, Minor: minor, ExtendedSupportFrom: w.StandardEnd, ExtendedSupportEnds: w.ExtendedEnd}
+	if w.ExtendedEnd != "" {
+		st.ExtendedSupportCondition = p.ExtendedSupportCondition
+	}
 	switch {
 	case now.Before(from.AddDate(0, 0, -supportWarnDays)):
 		st.Phase = SupportStandard
@@ -152,7 +178,7 @@ func evalSupport(inv inventory.Inventory, k kb.KB, now time.Time) (*SupportStatu
 	if pr := p.Pricing; pr != nil && w.ExtendedEnd != "" && st.Phase != SupportEnded {
 		cents := int64(math.Round((pr.ExtendedPerClusterHour - pr.StandardPerClusterHour) * hoursPerYear * 100))
 		st.AnnualCostDelta = fmt.Sprintf("%d.%02d", cents/100, cents%100)
-		st.Currency, st.PriceAsOf = pr.Currency, pr.AsOf
+		st.Currency, st.PriceAsOf, st.AnnualCostNote = pr.Currency, pr.AsOf, pr.Note
 		cost = costSentence(*pr, cents)
 	}
 	if st.Phase == SupportStandard {
@@ -175,16 +201,25 @@ func evalSupport(inv inventory.Inventory, k kb.KB, now time.Time) (*SupportStatu
 	case SupportEnding:
 		f.Severity = SevWarning
 		f.Title = fmt.Sprintf("Kubernetes %s leaves %s standard support on %s", minor, p.DisplayName, w.StandardEnd)
-		after := fmt.Sprintf("the cluster then moves to extended support until %s, when %s stops supporting it", w.ExtendedEnd, p.DisplayName)
-		if w.ExtendedEnd == "" {
+		after := fmt.Sprintf("extended support then runs until %s, when %s stops supporting it", w.ExtendedEnd, p.DisplayName)
+		switch {
+		case w.ExtendedEnd == "":
 			after = fmt.Sprintf("%s offers no extended support for it", p.DisplayName)
+		case st.ExtendedSupportCondition != "":
+			// Opt-in: the dataset knows the provider's window, not whether
+			// this cluster is enrolled in it.
+			after = fmt.Sprintf("extended support, which applies only if %s, then runs until %s", st.ExtendedSupportCondition, w.ExtendedEnd)
 		}
 		f.Detail = fmt.Sprintf("%s ends standard support for Kubernetes %s on %s; %s.%s%s", p.DisplayName, minor, w.StandardEnd, after, cost, extNote)
 	case SupportExtended:
 		f.Severity = SevBlocker
 		f.Title = fmt.Sprintf("Kubernetes %s is past %s standard support (ended %s)", minor, p.DisplayName, w.StandardEnd)
-		f.Detail = fmt.Sprintf("%s ended standard support for Kubernetes %s on %s; the cluster is in extended support until %s, when %s stops supporting it.%s%s",
-			p.DisplayName, minor, w.StandardEnd, w.ExtendedEnd, p.DisplayName, cost, extNote)
+		window := fmt.Sprintf("the cluster is in extended support until %s, when %s stops supporting it", w.ExtendedEnd, p.DisplayName)
+		if st.ExtendedSupportCondition != "" {
+			window = fmt.Sprintf("extended support, which applies only if %s, runs until %s; upgradescope cannot see whether this cluster is enrolled", st.ExtendedSupportCondition, w.ExtendedEnd)
+		}
+		f.Detail = fmt.Sprintf("%s ended standard support for Kubernetes %s on %s; %s.%s%s",
+			p.DisplayName, minor, w.StandardEnd, window, cost, extNote)
 	default: // SupportEnded
 		f.Severity = SevBlocker
 		if w.ExtendedEnd == "" {
@@ -192,7 +227,11 @@ func evalSupport(inv inventory.Inventory, k kb.KB, now time.Time) (*SupportStatu
 			f.Detail = fmt.Sprintf("%s ended standard support for Kubernetes %s on %s and offered no extended support for it.%s", p.DisplayName, minor, w.StandardEnd, extNote)
 		} else {
 			f.Title = fmt.Sprintf("Kubernetes %s is out of %s support (extended support ended %s)", minor, p.DisplayName, w.ExtendedEnd)
-			f.Detail = fmt.Sprintf("%s ended standard support for Kubernetes %s on %s and extended support on %s.%s", p.DisplayName, minor, w.StandardEnd, w.ExtendedEnd, extNote)
+			ext := "extended support"
+			if st.ExtendedSupportCondition != "" {
+				ext += ", which applied only if " + st.ExtendedSupportCondition + ","
+			}
+			f.Detail = fmt.Sprintf("%s ended standard support for Kubernetes %s on %s and %s on %s.%s", p.DisplayName, minor, w.StandardEnd, ext, w.ExtendedEnd, extNote)
 		}
 	}
 	f.Remediation = supportRemediation(p, server, now)
@@ -211,32 +250,34 @@ func costSentence(pr registry.Pricing, cents int64) string {
 	return s
 }
 
-// supportRemediation names the Kubernetes minors newer than the cluster's
-// that are still in standard support (at most three, newest first) among
-// the ones the dataset knows.
+// supportRemediation names the nearest Kubernetes minor newer than the
+// cluster's that is still in standard support, and the newest one the
+// dataset knows. A cluster several minors behind has to pass through the
+// minors in between one at a time, and the first hop may itself be past
+// standard support, so the nearest one that is not is the useful target.
 func supportRemediation(p registry.ProviderSupport, current inventory.Version, now time.Time) string {
-	type minorEnd struct {
-		v   inventory.Version
-		raw string
-	}
-	var newer []minorEnd
+	var nearest, newest inventory.Version
+	var nearestRaw, newestRaw string
 	for _, w := range p.Versions {
 		v, err := inventory.ParseVersion(w.Minor)
 		end, derr := time.Parse("2006-01-02", w.StandardEnd)
 		if err != nil || derr != nil || v.Compare(current) <= 0 || !now.Before(end) {
 			continue
 		}
-		newer = append(newer, minorEnd{v, w.Minor})
+		if nearestRaw == "" || v.Compare(nearest) < 0 {
+			nearest, nearestRaw = v, w.Minor
+		}
+		if newestRaw == "" || v.Compare(newest) > 0 {
+			newest, newestRaw = v, w.Minor
+		}
 	}
-	slices.SortFunc(newer, func(a, b minorEnd) int { return b.v.Compare(a.v) })
-	if len(newer) == 0 {
+	switch {
+	case nearestRaw == "":
 		return "Upgrade the control plane to a Kubernetes minor that is still in standard support."
+	case nearestRaw == newestRaw:
+		return fmt.Sprintf("Upgrade the control plane, one minor at a time. The nearest minor in standard support is %s.", nearestRaw)
 	}
-	names := make([]string, 0, 3)
-	for _, m := range newer[:min(3, len(newer))] {
-		names = append(names, m.raw)
-	}
-	return fmt.Sprintf("Upgrade the control plane, one minor at a time, to a version in standard support: %s.", strings.Join(names, ", "))
+	return fmt.Sprintf("Upgrade the control plane, one minor at a time. The nearest minor in standard support is %s; the newest known is %s.", nearestRaw, newestRaw)
 }
 
 // priceText renders a per-hour price with at least two decimals: 0.6 as

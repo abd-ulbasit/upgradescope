@@ -108,6 +108,12 @@ var goldenParams = map[string]struct{ target, now string }{
 	"support-unknown-provider": {"1.35", "2026-12-02T00:00:00Z"},
 	// AKS publishes no price the dataset can cite: the dates and no cost line.
 	"support-no-price": {"1.35", "2026-10-15T00:00:00Z"},
+	// Opt-in extended support (AKS, GKE): the finding states the provider's
+	// window conditionally instead of asserting this cluster is in it, and
+	// GKE's price carries its Extended-channel caveat.
+	"support-aks-extended": {"1.35", "2026-12-15T00:00:00Z"},
+	"support-gke-warning":  {"1.35", "2026-12-15T00:00:00Z"},
+	"support-gke-extended": {"1.35", "2027-02-01T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte
