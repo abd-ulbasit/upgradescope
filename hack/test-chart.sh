@@ -214,7 +214,7 @@ assert_contains "$TMP/server.yaml" 'name: upgradescope-server' "server resources
 assert_contains "$TMP/server.yaml" 'type: Recreate' "Recreate strategy (single SQLite writer)"
 assert_contains "$TMP/server.yaml" '--db=/data/upgradescope.sqlite' "db on the data volume"
 assert_env_secret "$TMP/server.yaml" UPGRADESCOPE_INGEST_TOKEN upgradescope-server-tokens ingestToken "ingest token from the Secret via env"
-assert_contains "$TMP/server.yaml" 'ingestToken: "test-token"' "ingest token in Secret stringData"
+assert_contains "$TMP/server.yaml" 'ingestToken: "dGVzdC10b2tlbg=="' "ingest token in Secret data (base64), so switching it off removes it"
 assert_env_secret "$TMP/server.yaml" UPGRADESCOPE_SERVER_TOKEN upgradescope-server-tokens ingestToken "agent pushes with the server's ingest token"
 assert_no_line "$TMP/server.yaml" '  serverToken: "test-token"' "no copy of the ingest token in a second Secret"
 assert_contains "$TMP/server.yaml" '--server-url=http://upgradescope-server.upgradescope.svc:8080' "agent points at in-chart server"
@@ -242,7 +242,7 @@ assert_not_contains "$TMP/readtoken.yaml" '--allow-anonymous-read' "no anonymous
 echo "== server assertions: no ingest token supplied -> chart generates one (one-command install)"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.enabled=true > "$TMP/gentoken.yaml"
-if grep -qE '^  ingestToken: "[A-Za-z0-9]{40}"$' "$TMP/gentoken.yaml"; then
+if grep -qE '^  ingestToken: "[A-Za-z0-9+/]{54}=="$' "$TMP/gentoken.yaml"; then  # base64 of 40 characters
   pass "random 40-char ingest token generated"
 else
   fail "no generated ingestToken in the server Secret"

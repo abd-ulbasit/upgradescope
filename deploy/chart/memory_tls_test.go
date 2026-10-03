@@ -2,6 +2,7 @@ package chart
 
 import (
 	"bytes"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,8 +202,10 @@ func TestSharedIngestTokenOptional(t *testing.T) {
 		t.Error("server gets UPGRADESCOPE_INGEST_TOKEN with server.sharedIngestToken=false")
 	}
 	if sec := find(objs, "Secret", "upgradescope-server-tokens"); sec != nil {
-		if _, ok, _ := unstructured.NestedString(sec.Object, "stringData", "ingestToken"); ok {
-			t.Error("chart Secret holds an ingestToken with server.sharedIngestToken=false")
+		for _, field := range []string{"stringData", "data"} {
+			if _, ok, _ := unstructured.NestedString(sec.Object, field, "ingestToken"); ok {
+				t.Errorf("chart Secret holds an ingestToken in %s with server.sharedIngestToken=false", field)
+			}
 		}
 	}
 	if msg := renderErr(t, "server.enabled=true", "server.sharedIngestToken=false"); !strings.Contains(msg, "sharedIngestToken") {
@@ -212,6 +215,19 @@ func TestSharedIngestTokenOptional(t *testing.T) {
 	objs = render(t, "server.enabled=true", "server.ingestToken=t")
 	if _, set := envVar(container(t, objs, "upgradescope-server"), "UPGRADESCOPE_INGEST_TOKEN"); !set {
 		t.Error("server lacks UPGRADESCOPE_INGEST_TOKEN by default")
+	}
+	// The shared token is rendered under data, not stringData: the API
+	// server turns stringData into data and keeps no record of it, so a
+	// later upgrade that drops the key from stringData left the stored
+	// data.ingestToken behind (the token stayed readable, and flipping the
+	// toggle back reused it). A data key the chart stops rendering is
+	// removed by the upgrade's patch.
+	sec := find(objs, "Secret", "upgradescope-server-tokens")
+	if _, ok, _ := unstructured.NestedString(sec.Object, "stringData", "ingestToken"); ok {
+		t.Error("the shared ingest token is rendered under stringData, so switching sharedIngestToken off later leaves it in the Secret")
+	}
+	if got, _, _ := unstructured.NestedString(sec.Object, "data", "ingestToken"); got != base64.StdEncoding.EncodeToString([]byte("t")) {
+		t.Errorf("Secret data.ingestToken = %q, want the base64 of server.ingestToken", got)
 	}
 }
 
