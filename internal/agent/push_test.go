@@ -315,7 +315,11 @@ func TestFlushRedirectWithoutLocation(t *testing.T) {
 // Retry-After on a 429 or 503 is honoured when it asks for longer than the
 // backoff step, capped at the backoff maximum; a shorter one changes nothing.
 func TestFlushHonoursRetryAfter(t *testing.T) {
-	future := time.Now().Add(30 * time.Second).UTC().Format(http.TimeFormat)
+	// A fixed clock: the HTTP-date case used to be built from the wall
+	// clock before any subtest ran, so a loaded machine that spent over a
+	// second on the earlier subtests failed it.
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	future := now.Add(30 * time.Second).Format(http.TimeFormat)
 	for _, tc := range []struct {
 		name   string
 		status int
@@ -348,6 +352,7 @@ func TestFlushHonoursRetryAfter(t *testing.T) {
 				slept = append(slept, d)
 				return nil
 			}
+			p.now = func() time.Time { return now }
 			p.offer(testPayload("c"))
 			if err := p.flush(context.Background()); err != nil {
 				t.Fatalf("flush: %v", err)
@@ -355,8 +360,7 @@ func TestFlushHonoursRetryAfter(t *testing.T) {
 			if len(slept) != 1 {
 				t.Fatalf("sleeps = %v, want 1", slept)
 			}
-			// The HTTP-date is relative to the wall clock, so allow a second of drift.
-			if d := slept[0] - tc.want; d > 0 || d < -time.Second {
+			if slept[0] != tc.want {
 				t.Errorf("slept %v, want %v", slept[0], tc.want)
 			}
 		})
