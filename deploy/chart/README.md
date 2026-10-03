@@ -172,16 +172,20 @@ watches.
 | `get` `/version`, `/metrics` | Server version; `apiserver_requested_deprecated_apis` (whether any client still calls deprecated APIs, not which) |
 | `get`/`list` on each group/resource the KB flags as deprecated or removed | Counting objects still stored at deprecated APIs. Generated into `files/kb-rbac-rules.yaml`; `rbac_test.go` fails when it drifts from the embedded KB |
 | `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
+| `get`/`list` Argo CD Applications, Flux HelmReleases and `get` Flux OCIRepositories (only with `rbac.gitops.argocd` and `rbac.gitops.flux`, both off by default) | The charts GitOps tools deploy: chart, version and repository from each Application source and HelmRelease, for add-on detection. Only those resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials |
 | `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.dev` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
 | `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
 
 `rbac.helmSecrets=false` removes the Secret and ConfigMap rules. The Helm
 capability is then not assessed, with the forbidden lists as the reason,
 and the report has no Helm chart findings; everything else works. Releases
-kept by Helm's sql driver, and charts that GitOps tools render with
-`helm template` (Argo CD), have no release object in the cluster, so Helm
-chart checks never see them; add-on detection from container images still
-does. `rbac.create=false` lets you bind a
+kept by Helm's sql driver have no object in the cluster, and charts that Argo CD
+renders with `helm template` leave no release, so the Helm chart checks never
+see them. With `rbac.gitops.argocd` or `rbac.gitops.flux` the agent reads the
+charts those tools declare, so add-ons they deploy are found by chart (what is
+read, and what is still not assessed, is on the
+[GitOps page](https://abd-ulbasit.github.io/upgradescope/guides/gitops-argo-flux/#charts-your-gitops-tool-deploys));
+add-on detection from container images covers the rest. `rbac.create=false` lets you bind a
 role of your own; collectors without access degrade the same way.
 
 The agent cannot create CRDs: `crds/` installs the `ClusterReadiness` CRD.
@@ -383,7 +387,9 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `networkPolicy.enabled` | bool | `false` | Render a NetworkPolicy that admits traffic to the server only from this release's agent pods and the peers below (no effect without server.enabled, or on a CNI that does not enforce NetworkPolicy). |
 | `networkPolicy.serverIngressFrom` | list | `[]` | Extra NetworkPolicyPeer entries allowed to reach the server, e.g. the ingress controller or the CI runners that call /api/v1/gate. The server's /metrics is on the same port, so list Prometheus here when metrics.serviceMonitor is enabled:   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}} |
 | `rbac.create` | bool | `true` | Create the agent ClusterRole/ClusterRoleBinding. Every rule is listed and explained in templates/rbac.yaml and the chart README: get/list on namespaces, nodes, pods and the API group/resources the embedded KB flags as deprecated; get on /version and /metrics; writes only to the ClusterReadiness CR named agent.crName (and, with agent.manageCRD, to the clusterreadinesses.upgradescope.dev CRD; get/list on CRDs comes from the KB rules either way). No wildcards, no watch, no subresources such as nodes/proxy or pods/log. |
-| `rbac.helmSecrets` | bool | `true` | Cluster-wide get/list on Secrets and ConfigMaps, for Helm release detection (releases stored by Helm's secrets and configmaps drivers). RBAC cannot filter Secrets by label or type, so true means the agent can read EVERY Secret and ConfigMap in the cluster. false removes both rules; the Helm capability is then not assessed (the reason is the forbidden lists) and Helm chart findings are missing from the report. Releases in Helm's sql driver, and charts that GitOps tools render with helm template (Argo CD), have no release object in the cluster either way; add-on detection from container images still covers them. |
+| `rbac.gitops.argocd` | bool | `false` | Get/list on Argo CD Applications (argoproj.io/applications, nothing else of that group), to read the chart, repoURL and targetRevision of each chart source: add-ons Argo CD deploys (ingress-nginx, say) are then found by their chart, with no Helm release. Off, with Argo CD installed: the Helm capability is reported partial, naming the forbidden list. Chart kubeVersion and stored-manifest checks stay unavailable for Argo CD either way (helm template leaves no release). |
+| `rbac.gitops.flux` | bool | `false` | Get/list on Flux HelmReleases (helm.toolkit.fluxcd.io/helmreleases) and get on OCIRepositories (source.toolkit.fluxcd.io/ocirepositories, for a HelmRelease chartRef), to read the chart each HelmRelease deploys. Off, with Flux installed: the Helm capability is reported partial, naming the forbidden list. |
+| `rbac.helmSecrets` | bool | `true` | Cluster-wide get/list on Secrets and ConfigMaps, for Helm release detection (releases stored by Helm's secrets and configmaps drivers). RBAC cannot filter Secrets by label or type, so true means the agent can read EVERY Secret and ConfigMap in the cluster. false removes both rules; the Helm capability is then not assessed (the reason is the forbidden lists) and Helm chart findings are missing from the report. Releases in Helm's sql driver have no object in the cluster, and charts that Argo CD renders with helm template have no release object either; add-on detection from container images still covers them, and rbac.gitops reads the charts GitOps tools declare. |
 | `server.adminToken` | string | `""` | Bearer token for cluster administration: deleting and renaming clusters (DELETE/PATCH /api/v1/clusters/{id}, `upgradescope clusters delete` and `rename`, with --server). Empty = both are refused. It must differ from the read and ingest tokens. Stored in the chart Secret; ignored when existingSecret is set (use adminTokenFromSecret). |
 | `server.adminTokenFromSecret` | bool | `false` | With existingSecret: enable cluster administration with its adminToken key. |
 | `server.affinity` | object | `{}` | — |

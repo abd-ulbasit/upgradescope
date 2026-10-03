@@ -156,6 +156,13 @@ func TestHiddenByGaps(t *testing.T) {
 			[]check{{CatRemovedAPI, web, true}, {CatRemovedAPI, api, true}, {CatChartIncompat, "chart-incompat/helm-release/shop/api", true}},
 		},
 		{
+			// #70: a GitOps tool in Skipped (no Helm release, or its
+			// resources unread) leaves every chart-derived finding
+			// unassessed, as a driver does.
+			"partial helm naming a GitOps tool", []CapabilityGap{{Capability: inventory.CapHelm, Partial: true, Skipped: []string{inventory.GitOpsArgoCD}}},
+			[]check{{CatEOLAddon, "eol-addon/ingress-nginx", true}, {CatRemovedAPI, web, true}, {CatChartIncompat, "chart-incompat/helm-release/shop/api", true}, {CatRemovedAPI, psp, false}},
+		},
+		{
 			// An add-on found through its chart alone is gone from the
 			// inventory with helm (#189).
 			"unavailable helm", []CapabilityGap{{Capability: inventory.CapHelm, Reason: "list secrets: forbidden"}},

@@ -375,6 +375,54 @@ func TestRenderedRBACHelmSecretsOff(t *testing.T) {
 	assertDenied(t, rules, neverAllowed...)
 }
 
+// #70: the GitOps chart sources are read only when asked for, and only the
+// resources that name a chart: Argo CD Applications, Flux HelmReleases and
+// the OCIRepositories their chartRefs point at (a get by name).
+func TestRenderedRBACGitOpsOptIn(t *testing.T) {
+	argo := res("argoproj.io", "applications", "get", "list")
+	flux := []rbacv1.PolicyRule{
+		res("helm.toolkit.fluxcd.io", "helmreleases", "get", "list"),
+		res("source.toolkit.fluxcd.io", "ocirepositories", "get"),
+	}
+	for _, tc := range []struct {
+		name       string
+		sets       []string
+		argo, flux bool
+	}{
+		{"default", nil, false, false},
+		{"argocd", []string{"rbac.gitops.argocd=true"}, true, false},
+		{"flux", []string{"rbac.gitops.flux=true"}, false, true},
+		{"both", []string{"rbac.gitops.argocd=true", "rbac.gitops.flux=true"}, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rules := renderClusterRole(t, tc.sets...)
+			assertNoWildcards(t, rules)
+			assertAllowed(t, rules, collectorCalls(t)...)
+			assertDenied(t, rules, neverAllowed...)
+			// Never writes or watches a custom resource of either tool, nor
+			// reads the rest of their groups (AppProjects, Secrets of repos).
+			assertDenied(t, rules,
+				res("argoproj.io", "applications", "watch", "create", "update", "patch", "delete"),
+				res("argoproj.io", "appprojects", "get", "list"),
+				res("argoproj.io", "applicationsets", "get", "list"),
+				res("helm.toolkit.fluxcd.io", "helmreleases", "watch", "create", "update", "patch", "delete"),
+				res("source.toolkit.fluxcd.io", "helmrepositories", "get", "list"),
+				res("source.toolkit.fluxcd.io", "ocirepositories", "list", "watch", "update"),
+			)
+			check := assertDenied
+			if tc.argo {
+				check = assertAllowed
+			}
+			check(t, rules, argo)
+			check = assertDenied
+			if tc.flux {
+				check = assertAllowed
+			}
+			check(t, rules, flux...)
+		})
+	}
+}
+
 func TestRenderedRBACManageCRDOff(t *testing.T) {
 	rules := renderClusterRole(t, "agent.manageCRD=false")
 	assertAllowed(t, rules, collectorCalls(t)...)

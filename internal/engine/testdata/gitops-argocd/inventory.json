@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "77777777-7777-7777-7777-777777777777",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "serverVersion": "v1.29.4",
+  "capabilities": {
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {
+      "available": true,
+      "partial": true,
+      "reason": "helm releases: 0 via secrets, 0 via configmaps; GitOps chart sources: 1 via Argo CD; no Helm releases read, but Argo CD is present (applications.argoproj.io/v1alpha1 is served): chart kubeVersion and stored-manifest checks were not assessed for the charts it deploys; it renders charts with helm template and leaves no release object",
+      "skipped": ["argocd"]
+    },
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "gitopsCharts": [
+    {"tool": "argocd", "name": "ingress-nginx", "namespace": "argocd", "target": "ingress-nginx", "chart": "ingress-nginx", "version": "4.11.3", "repo": "https://kubernetes.github.io/ingress-nginx"}
+  ],
+  "addOns": [
+    {"id": "ingress-nginx", "version": "", "chartVersion": "4.11.3", "namespaces": ["ingress-nginx"], "source": "gitops"}
+  ],
+  "nodes": [{"name": "node-a", "kubeletVersion": "v1.29.4"}],
+  "namespaces": [{"name": "ingress-nginx", "team": "platform"}]
+}

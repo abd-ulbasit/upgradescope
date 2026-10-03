@@ -52,7 +52,15 @@
       "additionalProperties": false,
       "properties": {
         "create": { "type": "boolean" },
-        "helmSecrets": { "type": "boolean" }
+        "helmSecrets": { "type": "boolean" },
+        "gitops": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "argocd": { "type": "boolean" },
+            "flux": { "type": "boolean" }
+          }
+        }
       }
     },
     "agent": {

@@ -216,9 +216,14 @@ func Sources(c Category, key string) []inventory.Capability {
 //   - api-usage and deprecated-calls leave unassessed the APIs they name
 //     ("group/version Kind", "group/version resource");
 //   - helm leaves unassessed the releases it names ("namespace/name"),
-//     and every release when it names a storage driver; and every add-on
-//     when it names anything, since an add-on's key does not say which
-//     release, if any, it was found through;
+//     and every release when it names anything without a slash: a
+//     storage driver, or a GitOps tool ("argocd", "flux"). A GitOps tool
+//     is broader than it need be: its gap concerns the charts it deploys,
+//     not the releases read fine from Secrets, which it hides findings of
+//     too, since a release's key does not say which tool deployed it. It
+//     also leaves unassessed every add-on when it names anything, since
+//     an add-on's key does not say which release, if any, it was found
+//     through;
 //   - any other capability that names something leaves all of its
 //     findings unassessed;
 //   - a partial capability that names nothing read everything that could
@@ -251,6 +256,7 @@ func (g CapabilityGap) skips(key string) bool {
 			return len(g.Skipped) > 0 // an add-on finding
 		}
 		return slices.ContainsFunc(g.Skipped, func(s string) bool {
+			// no slash: a storage driver or a GitOps tool
 			return !strings.Contains(s, "/") || strings.HasSuffix(key, "/helm-release/"+s)
 		})
 	}

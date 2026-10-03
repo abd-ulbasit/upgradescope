@@ -107,6 +107,8 @@ func TestCutFreeTextCutsToTheLimits(t *testing.T) {
 	inv.APIUsage[0].Objects[0].IgnoreReason = strings.Repeat("€", 100<<10)
 	inv.CRDs[0].Usage[0].Objects[0].IgnoreReason = strings.Repeat("r", 256<<10)
 	inv.HelmReleases[0].ManifestAPIs[0].Objects[0].Ignore = strings.Repeat("a,", 20<<10)
+	inv.GitOpsCharts[0].Version = strings.Repeat("v", 300<<10) // free text of a custom resource
+	inv.GitOpsCharts[0].Repo = strings.Repeat("é", MaxStringBytes)
 	if err := inv.ValidateLimits(); err == nil {
 		t.Fatal("the uncut inventory is within the limits; the test proves nothing")
 	}
@@ -125,6 +127,9 @@ func TestCutFreeTextCutsToTheLimits(t *testing.T) {
 	}
 	if ig := inv.HelmReleases[0].ManifestAPIs[0].Objects[0].Ignore; len(ig) > MaxStringBytes || !strings.HasSuffix(ig, ",a") {
 		t.Errorf("ignore of many tokens cut to %d bytes ending %q, want whole tokens", len(ig), ig[len(ig)-4:])
+	}
+	if c := inv.GitOpsCharts[0]; len(c.Version) > MaxStringBytes || !strings.HasSuffix(c.Version, cutMark) || len(c.Repo) > MaxStringBytes || !utf8.ValidString(c.Repo) {
+		t.Errorf("gitops chart version cut to %d bytes, repo to %d (valid UTF-8: %v), want both within %d, cut", len(c.Version), len(c.Repo), utf8.ValidString(c.Repo), MaxStringBytes)
 	}
 	if inv.CutFreeText() {
 		t.Error("a second CutFreeText() = true, want nothing left to cut")

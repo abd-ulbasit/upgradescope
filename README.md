@@ -127,7 +127,12 @@ clone and set `image.repository` and `image.tag`.
 - **Version skew** of kubelets, kube-proxy, controller-manager, scheduler
   and HA apiservers; not `kubectl` clients, which only audit logs reveal.
 - **Helm charts** whose `kubeVersion` excludes the target, and stored
-  release manifests that use removed APIs.
+  release manifests that use removed APIs, from releases in Helm's secrets
+  and configmaps drivers (not the sql driver). Charts deployed by Argo CD or
+  Flux are found through the chart their Application or HelmRelease names
+  (opt-in RBAC); Argo CD's `helm template` leaves no release, so for them
+  those two checks are reported as not assessed.
+  [GitOps](https://abd-ulbasit.github.io/upgradescope/guides/gitops-argo-flux/#charts-your-gitops-tool-deploys).
 
 The verdict is `blocked` on any blocker, `unknown` when a required check
 (API usage, the knowledge base covering the target, and for a live cluster

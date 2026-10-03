@@ -182,7 +182,12 @@ release, not a copy of the cluster. The requests of one tick are:
   the API server refuses them), and a metadata-only list for each resource
   the knowledge base flags that the cluster still serves at a non-deprecated
   version. A CRD with a deprecated or unserved version adds a list of its
-  custom resources.
+  custom resources. Where the Argo CD or Flux CRDs are served, the lists
+  of Applications and HelmReleases add ceil(N / 50) requests each (whole
+  objects, so smaller pages), plus a GET per distinct OCIRepository a
+  HelmRelease references; a cluster with no Helm release also lists
+  Deployments, StatefulSets and DaemonSets metadata-only, until it finds
+  a tracking label or annotation of either tool, if the role lets it.
 - **One GET per decoded Helm release**: the full Secret (or ConfigMap) of its
   installed revision, up to the 1 MiB Kubernetes allows. It is fetched again
   on every tick, even when nothing changed. This is the one cost that scales
@@ -288,7 +293,8 @@ store and the push protocol read it. It is JSON on the wire and at rest.
   "apiUsage":        [{ "group", "version", "kind", "count", "namespaces": {"ns": n} }],
   "deprecatedCalls": [{ "group", "version", "resource", "subresource", "removedRelease" }],
   "helmReleases":    [{ "name", "namespace", "chartName", "chartVersion", "appVersion", "status" }],
-  "addOns":          [{ "id", "version", "namespaces", "source": "chart|image|labels|ingressclass" }],
+  "gitopsCharts":    [{ "tool": "argocd|flux", "name", "namespace", "target", "chart", "version", "repo" }],
+  "addOns":          [{ "id", "version", "namespaces", "source": "chart|image|gitops|labels|ingressclass" }],
   "nodes":           [{ "name", "kubeletVersion" }],
   "controlPlane":    [{ "component", "version", "node" /* kube-proxy only */ }],
   "namespaces":      [{ "name", "team" }],

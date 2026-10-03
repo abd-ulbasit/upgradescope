@@ -58,7 +58,8 @@ type addOnEvidence struct {
 	images             []nsImage     // every container and init-container image
 	labelled           []labelledPod // the pods among them that carry appLabels
 	releases           []inventory.HelmRelease
-	ingressControllers []string // IngressClass spec.controller values
+	gitops             []inventory.GitOpsChart // charts Argo CD and Flux deploy
+	ingressControllers []string                // IngressClass spec.controller values
 }
 
 // addPod adds one pod's (or pod template's) images, and the pod to
@@ -80,12 +81,13 @@ func (ev *addOnEvidence) addPod(namespace string, labels map[string]string, imag
 // IngressClasses; without IngressClasses (an apiserver before 1.19 has
 // none, which is not a failure) from pods and releases. A failure leaves
 // the capability partial, naming what went unread, unless nothing else was
-// read either (no releases, no IngressClasses): then it is not assessed.
+// read either (no releases, no GitOps chart sources, no IngressClasses):
+// then it is not assessed.
 // Pods are what finds an add-on installed any other way, so
 // inventory.SkippedPods keeps the gap required; IngressClasses only add
 // evidence.
 func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory) error {
-	ev := addOnEvidence{releases: inv.HelmReleases}
+	ev := addOnEvidence{releases: inv.HelmReleases, gitops: inv.GitOpsCharts}
 	var failures, skipped []string
 	var podErr error
 	classesRead := false
@@ -138,7 +140,7 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 	var unrec []string
 	inv.AddOns, unrec = matchAddOns(ev, addons)
 	setUnrecognized(inv, unrec)
-	if podErr != nil && len(ev.releases) == 0 && !classesRead {
+	if podErr != nil && len(ev.releases) == 0 && len(ev.gitops) == 0 && !classesRead {
 		return fmt.Errorf("list pods: %w", podErr) // nothing was read: not assessed, not partial
 	}
 	if len(failures) == 0 {
@@ -150,6 +152,9 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 	}
 	if len(ev.releases) > 0 || inv.Capabilities[inventory.CapHelm].Available {
 		read = append(read, "Helm releases")
+	}
+	if len(ev.gitops) > 0 {
+		read = append(read, "GitOps chart sources")
 	}
 	if classesRead {
 		read = append(read, "IngressClasses")
@@ -246,6 +251,17 @@ func releaseLine(v string) string {
 	minor, _, _ := strings.Cut(rest, ".")
 	minor, _, _ = strings.Cut(minor, "-")
 	return major + "." + minor
+}
+
+// exactChartVersion returns a chart version as a single version without a
+// leading "v", or "" when it is a constraint or a tag: a GitOps resource's
+// chart version, unlike a Helm release's, is whatever its author wrote.
+func exactChartVersion(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	if _, err := semver.StrictNewVersion(v); err != nil {
+		return ""
+	}
+	return v
 }
 
 // olderVersion returns the older of two versions, ignoring "": the
@@ -352,6 +368,13 @@ var ingressClassAddOns = map[string][]string{
 //     whatever unmatched sidecars run beside it). A pod running a
 //     provider build (registry.IsProviderBuild) is never claimed through
 //     its labels: its support follows the provider, not upstream (#110).
+//   - "gitops": a chart reference of an Argo CD Application or Flux
+//     HelmRelease (inventory.GitOpsChart) naming a chart matcher. It
+//     gives the namespace the chart deploys into and the chart version
+//     (evidence only), but no app version: that comes from the pods
+//     running it, so a product retired as a whole (ingress-nginx) is
+//     still end-of-life, and a per-release-line product gets no
+//     lifecycle verdict without a running pod to read a version from.
 //   - "ingressclass": an IngressClass whose controller names the add-on
 //     (ingressClassAddOns) when nothing else found it nor another
 //     controller that can serve the class. It is cluster-scoped (no
@@ -375,9 +398,9 @@ var ingressClassAddOns = map[string][]string{
 // their image tag, which may not track the app version.
 func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnInstance, []string) {
 	type evidence struct {
-		source  string // "image" | "labels" | "chart" | "ingressclass"
+		source  string // "image" | "labels" | "chart" | "gitops" | "ingressclass"
 		version string // app version
-		chart   string // chart version, chart evidence only
+		chart   string // chart version, chart and gitops evidence only (see below)
 	}
 	type install struct{ id, ns string }
 	byInstall := map[install][]evidence{}
@@ -431,6 +454,20 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		}
 	}
 
+	// A GitOps chart reference names the add-on and where it deploys, but
+	// no app version: the version comes from the pods running it, if any.
+	// Its chart version is evidence only, and only when it is one version:
+	// the resource's spelling is often a constraint ("4.*", ">=4.0.0"),
+	// which says what may be installed, not what is.
+	for _, g := range ev.gitops {
+		for _, a := range addons {
+			if slices.Contains(a.Matchers.Charts, g.Chart) {
+				in := install{a.ID, g.Target}
+				byInstall[in] = append(byInstall[in], evidence{source: "gitops", chart: exactChartVersion(g.Version)})
+			}
+		}
+	}
+
 	detected := map[string]bool{}
 	for in := range byInstall {
 		detected[in.id] = true
@@ -445,21 +482,28 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		byInstall[in] = append(byInstall[in], evidence{source: "ingressclass"})
 	}
 
-	strength := map[string]int{"ingressclass": 1, "labels": 2, "image": 3, "chart": 4}
+	strength := map[string]int{"ingressclass": 1, "gitops": 2, "labels": 3, "image": 4, "chart": 5}
 	instance := func(in install, evs []evidence) inventory.AddOnInstance {
 		inst := inventory.AddOnInstance{ID: in.id}
-		var podVersion, appVersion string
+		var podVersion, appVersion, releaseChart, gitopsChart string
 		for _, e := range evs {
 			if strength[e.source] > strength[inst.Source] {
 				inst.Source = e.source
 			}
 			if e.source == "chart" {
 				appVersion = olderVersion(appVersion, e.version)
-				inst.ChartVersion = olderVersion(inst.ChartVersion, e.chart)
 			} else {
 				podVersion = olderVersion(podVersion, e.version)
 			}
+			if e.source == "gitops" {
+				gitopsChart = olderVersion(gitopsChart, e.chart)
+			} else {
+				releaseChart = olderVersion(releaseChart, e.chart)
+			}
 		}
+		// What a Helm release records is the chart version installed; a
+		// GitOps resource's is what it asks for, so it only fills a gap.
+		inst.ChartVersion = cmp.Or(releaseChart, gitopsChart)
 		// "" is a namespace too: a manifest object's left unset.
 		if inst.Source != "ingressclass" {
 			inst.Namespaces = []string{in.ns}
