@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"slices"
 	"strconv"
@@ -361,8 +362,8 @@ func withEmptyGzipMember(t testing.TB, payload []byte) []byte {
 // agent at its 256Mi limit; one 1 MiB document of "- -" lines alone
 // reached 240 MiB. Now the cap is 16 MiB, the manifest is parsed in runs
 // bounded in bytes and YAML nodes, and lines are counted without the
-// index: every case peaks at up to about 70 MiB (24–68 MiB over eight
-// runs, varying with GC timing). Each case is a valid release whose
+// index: every case peaks at 40–47 MiB of live heap, the same on every
+// run (24–93 MiB at GOGC=100, varying with GC timing). Each case is a valid release whose
 // manifest, JSON-escaped, fills the cap, with ConfigMaps flagged as a real
 // KB flags some kinds, and every object a ConfigMap. Under the race
 // detector, which slows parsing about tenfold, the manifests are 4 MiB.
@@ -370,6 +371,13 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("parses manifests of up to the decompression cap")
 	}
+	// The chart runs the agent with GOMEMLIMIT, under which the collector
+	// holds the heap near its live size as it nears the limit. A low GOGC
+	// does the same here, so what is measured is the live heap parsing
+	// needs, not the garbage GOGC=100 lets pile up before the next
+	// collection, which varies with GC timing (CI once read 93 MiB of a
+	// case that peaks at 51 MiB live).
+	defer debug.SetGCPercent(debug.SetGCPercent(10))
 	lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
 	const head, tail = `{"chart":{"metadata":{"name":"bomb","version":"1.0.0"}},"manifest":`, `}`
 	const object = "---\napiVersion: v1\nkind: ConfigMap\n"
@@ -414,8 +422,8 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 			if !tc.objects && len(apis) != 0 || tc.objects && (len(apis) != 1 || apis[0].Count != n || len(apis[0].Objects) != min(n, inventory.MaxObjectRefs)) {
 				t.Errorf("manifest APIs = %+v, want %d flagged ConfigMaps", apis, n)
 			}
-			if peak > 80<<20 {
-				t.Errorf("peak heap %.1f MiB, want ≤ 80 MiB", float64(peak)/(1<<20))
+			if peak > 64<<20 {
+				t.Errorf("peak heap %.1f MiB, want ≤ 64 MiB", float64(peak)/(1<<20))
 			}
 		})
 	}
