@@ -9,7 +9,7 @@ server or a file.
 
 The server speaks MCP on stdin and stdout, so a client starts it as a
 subprocess; there is nothing to deploy. It is part of the one binary
-(`upgradescope mcp`); it adds about 2 MiB to it (1.97 MiB on linux/amd64, stripped, measured when it was added).
+(`upgradescope mcp`); it adds about 2 MiB to it (1.99 MiB on linux/amd64, stripped, measured when it was added).
 
 ## Connect an assistant
 
