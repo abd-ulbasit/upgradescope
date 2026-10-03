@@ -46,11 +46,16 @@ spec:
               type: object
               properties:
                 targets:
-                  description: Kubernetes minor versions to evaluate against, e.g. "1.36". Empty means the agent targets the next minor above the observed server version.
+                  description: Kubernetes minor versions to evaluate against, e.g. "1.36". Empty means the agent targets the next minor above the observed server version. At most 8, because each target adds a row to status; an agent given more evaluates the first 8 and lists the rest in status.notAssessed.
                   type: array
+                  # maxItems is crd.MaxTargets (a test holds the two together). Twice the
+                  # server's --targets cap of 4; unbounded, 1000 targets overran the
+                  # apiserver's request limit and no status was ever written.
+                  maxItems: 8
                   items:
                     type: string
                     pattern: '^[0-9]+\.[0-9]+$'
+                    maxLength: 8
                 ignore:
                   description: Accepted findings, applied by the agent every tick with the same rules as the CLI's .upgradescope.yaml. Suppressed findings do not count toward score and verdict; status counts them per target.
                   type: array

@@ -32,8 +32,8 @@ Served: true. Storage version: true.
 | Field | Type | Description | Validation |
 |---|---|---|---|
 | `spec` | object | — | — |
-| `spec.targets` | array | Kubernetes minor versions to evaluate against, e.g. "1.36". Empty means the agent targets the next minor above the observed server version. | — |
-| `spec.targets[]` | string | — | pattern `^[0-9]+\.[0-9]+$` |
+| `spec.targets` | array | Kubernetes minor versions to evaluate against, e.g. "1.36". Empty means the agent targets the next minor above the observed server version. At most 8, because each target adds a row to status; an agent given more evaluates the first 8 and lists the rest in status.notAssessed. | at most 8 items |
+| `spec.targets[]` | string | — | pattern `^[0-9]+\.[0-9]+$`; max length 8 |
 | `spec.ignore` | array | Accepted findings, applied by the agent every tick with the same rules as the CLI's .upgradescope.yaml. Suppressed findings do not count toward score and verdict; status counts them per target. | — |
 | `spec.ignore[]` | object | — | — |
 | `spec.ignore[].key` | string | Finding key, e.g. eol-addon/ingress-nginx. Set key or category, not both. | — |

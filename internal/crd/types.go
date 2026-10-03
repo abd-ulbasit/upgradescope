@@ -125,8 +125,60 @@ func ReadyCondition(st Status) metav1.Condition {
 	return c
 }
 
-// maxTopFindings bounds CRD status size; the full list lives in server/CLI.
-const maxTopFindings = 20
+// The status is bounded by construction, so a status write can never grow
+// past the apiserver's request limit (3 MiB) and wedge (issue #191). Four
+// numbers hold it: MaxTargets rows, maxTopFindings findings per row, each
+// title and remediation clipped, and a capped notAssessed. At the limits
+// that is about 8 × 20 × (512 + 1024) bytes of finding text plus 32 × 512 of
+// notes: ~270 KiB. The full finding list lives in the server and CLI.
+const (
+	// MaxTargets is the most targets a ClusterReadiness evaluates, and the
+	// maxItems of spec.targets in manifest.yaml (a test holds the two
+	// together). Each target costs a status row, and 8 is twice the
+	// server's --targets cap of 4: room for the two or three minors an
+	// upgrade plan spans, and for a CI matrix, without letting a CR grow
+	// the status without limit: the red-team measured 1.88 MB at 500
+	// targets and a rejected write at 1000.
+	MaxTargets = 8
+
+	maxTopFindings    = 20
+	maxTitleLen       = 512  // runes; real titles run to about 200
+	maxRemediationLen = 1024 // runes
+	maxNoteLen        = 512  // runes, per notAssessed entry
+	maxNotAssessed    = 32   // entries; one summary line follows if more
+)
+
+// clip cuts s to at most n runes, marking the cut with an ellipsis.
+func clip(s string, n int) string {
+	if len(s) <= n { // fewer bytes than the limit, so fewer runes too
+		return s
+	}
+	i := 0
+	for pos := range s {
+		if i == n {
+			return s[:pos] + "…"
+		}
+		i++
+	}
+	return s
+}
+
+// boundNotAssessed returns notes with each entry clipped and at most
+// maxNotAssessed of them; a summary line counts the ones left out.
+func boundNotAssessed(notes []string) []string {
+	if len(notes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(notes), maxNotAssessed+1))
+	for i, n := range notes {
+		if i == maxNotAssessed {
+			out = append(out, fmt.Sprintf("… and %d more not listed", len(notes)-maxNotAssessed))
+			break
+		}
+		out = append(out, clip(n, maxNoteLen))
+	}
+	return out
+}
 
 // TargetStatusFromReport summarizes one engine.Report for CRD status:
 // severity/category counts over all findings, plus the first maxTopFindings
@@ -150,8 +202,8 @@ func TargetStatusFromReport(r engine.Report) TargetStatus {
 			ts.TopFindings = append(ts.TopFindings, TopFinding{
 				Category:    string(f.Category),
 				Severity:    string(f.Severity),
-				Title:       f.Title,
-				Remediation: f.Remediation,
+				Title:       clip(f.Title, maxTitleLen),
+				Remediation: clip(f.Remediation, maxRemediationLen),
 			})
 		}
 	}
