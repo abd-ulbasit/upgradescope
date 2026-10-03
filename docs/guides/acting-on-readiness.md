@@ -40,12 +40,14 @@ clear the target, so both are reported.
 - **Fail open when stale.** If `status.lastEvaluated` is more than an hour old
   (or missing), the policy allows the request. The default agent interval is 10
   minutes and the agent withdraws its verdict after two intervals plus 12
-  minutes of failed ticks, so an hour tolerates a missed tick or two. Gating a
+  minutes of failed ticks, so an hour tolerates a missed tick or two; if you
+  raise the agent interval, keep the limit at least twice the interval. Gating a
   cluster operation on a verdict nobody refreshed is worse than not gating it.
 - **Fail open when it cannot tell.** No `ClusterReadiness`, or no entry for the
   requested minor (it was never assessed), also allows. The consequence to
-  know: a policy engine that cannot read the object (missing reader role, an
-  unsynced Gatekeeper cache) looks the same as "allowed". Apply the reader role
+  know: a policy engine that cannot read the object (an unsynced Gatekeeper cache,
+  and for Kyverno a missing reader role, which is unverified) may look the same
+  as "allowed". Apply the reader role
   and check the policy report or the replicated data before trusting a quiet
   result.
 

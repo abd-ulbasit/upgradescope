@@ -48,7 +48,8 @@ cluster operation on data nobody refreshed is worse than not gating it:
 
 The agent's default interval is 10 minutes, and it withdraws its verdict
 after two intervals plus 12 minutes of failed ticks, so an hour tolerates a
-missed tick or two. Because an empty cache also fails open, **a sync that does
+missed tick or two. If you raise the agent interval, keep `maxAgeSeconds` at
+least twice the interval. Because an empty cache also fails open, **a sync that does
 not work looks like "allowed"**: apply `config.yaml` (and `rbac.yaml` if your
 install needs it) and check that the object is replicated before trusting a
 quiet result.

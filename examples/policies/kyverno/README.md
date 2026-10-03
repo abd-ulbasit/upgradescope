@@ -40,14 +40,21 @@ cluster operation on data nobody refreshed is worse than not gating it:
 |---|---|
 | `status.lastEvaluated` older than 1 hour, or missing | allowed (stale) |
 | no entry for the requested minor in `status.targets` | allowed (never assessed) |
-| no ClusterReadiness, or the read fails | allowed (`apiCall.default: {}`) |
+| no ClusterReadiness (404) | allowed (`apiCall.default: {}`), unverified against a live Kyverno |
 | the entry says `ready: true` | allowed |
 
 The freshness limit is the `1h` in the last condition. The agent's default
 interval is 10 minutes, and it withdraws its verdict after two intervals plus
-12 minutes of failed ticks, so an hour tolerates a missed tick or two. Because
-a failed read also fails open, **a missing reader role looks like "allowed"**:
-apply `rbac.yaml` and check the policy report before trusting a quiet result.
+12 minutes of failed ticks, so an hour tolerates a missed tick or two. If you
+raise the agent interval, raise the limit with it: keep it at least twice the
+interval, or a healthy agent reads as stale and the policy never denies.
+
+A read that fails for another reason (a 403 from a missing reader role) is
+**not** shown to fail open: `apiCall.default` is documented for a missing
+object, and nothing here checks against a live Kyverno whether a 403 takes the
+default or raises a rule error (which `failurePolicy` then turns into a
+rejection or a pass). Apply `rbac.yaml` first and check the policy report
+before trusting a quiet result.
 
 ## Install
 
