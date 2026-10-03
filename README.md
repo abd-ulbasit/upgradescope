@@ -102,6 +102,14 @@ clone and set `image.repository` and `image.tag`.
 [In-cluster agent](https://abd-ulbasit.github.io/upgradescope/getting-started/in-cluster/) ·
 [Fleet server](https://abd-ulbasit.github.io/upgradescope/getting-started/fleet/).
 
+**Fleet**: agents in many clusters push to one `upgradescope serve` for the
+fleet view, team rollups and the server-side CI gate. Serve it over TLS:
+terminate at an ingress (`server.ingress`), or let `serve` terminate it
+(`server.tls.secretName`; `--tls-cert-file`/`--tls-key-file`, re-read on
+renewal), and point agents at a private CA with `agent.serverCA`. Over plain
+http an agent's bearer token and inventories cross the network in cleartext.
+[Exposing the server to remote agents](https://abd-ulbasit.github.io/upgradescope/getting-started/fleet/#exposing-the-server-to-remote-agents).
+
 ## What it checks, and where it stops
 
 - **Removed and deprecated APIs**, in manifests and in live objects. Live
