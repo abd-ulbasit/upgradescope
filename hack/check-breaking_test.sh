@@ -40,6 +40,8 @@ expect "a CRLF body (the GitHub web form) counts" 1 "has no '!'" \
   PR_TITLE='fix: something' PR_BODY=$'Why.\r\n\r\nBREAKING CHANGE: x\r\n'
 expect "a title with no type cannot carry the break either" 1 "has no '!'" \
   PR_TITLE='Update the thing' PR_BODY=$'BREAKING CHANGE: x'
+expect "an uppercase type is refused: the release-notes group matches lowercase only" 1 "type must be lowercase" \
+  PR_TITLE='Feat!: new scoring' PR_BODY=$'BREAKING CHANGE: scores shift'
 expect "the footer must start a line (prose mentioning it is not a footer)" 0 "ok" \
   PR_TITLE='docs: explain the rule' PR_BODY='Say "BREAKING CHANGE: x" in the footer'
 
@@ -87,6 +89,18 @@ if [ "$got" = 1 ] && ! grep -qF 'Merge branch' "$work/out"; then
 else
   echo "FAIL merge commits are skipped: exit $got" >&2; sed 's/^/     /' "$work/out" >&2
   echo "FAIL merge commits are skipped" >>"$work/results"
+fi
+
+# An uppercase type with `!` is still not Breaking changes in the release notes.
+(cd "$repo" && git commit -q --allow-empty -m 'Chore!: x' -m 'BREAKING CHANGE: y')
+upper=$(cd "$repo" && git rev-parse --short HEAD)
+got=0
+(cd "$repo" && COMMIT_RANGE=base..HEAD "$script" >"$work/out" 2>&1) || got=$?
+if [ "$got" = 1 ] && grep -qF "commit $upper 'Chore!: x'" "$work/out"; then
+  echo "ok   an uppercase-type commit is refused, naming the commit" | tee -a "$work/results"
+else
+  echo "FAIL an uppercase-type commit is refused: exit $got" >&2; sed 's/^/     /' "$work/out" >&2
+  echo "FAIL an uppercase-type commit is refused" >>"$work/results"
 fi
 
 expect "no input at all fails (a misconfigured workflow must not pass)" 1 "nothing to check" \

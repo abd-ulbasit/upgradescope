@@ -27,8 +27,16 @@ fail=0
 # check <what> <subject> <body>
 check() {
   grep -Eq '^BREAKING[ -]CHANGE:' < <(tr -d '\r' <<<"$3") || return 0
-  grep -Eq '^[A-Za-z]+(\([^)]+\))?!:' <<<"$2" && return 0
-  echo "::error::$1 '$2' has no '!' but its body has a BREAKING CHANGE footer. Release notes read only the subject: write it as type!: (feat!:, fix(scope)!:) so the change lands under Breaking changes." >&2
+  # The same pattern as the Breaking changes group in .goreleaser.yml. Its type
+  # is lowercase, so `Feat!:` would pass a looser check and still land under
+  # Other changes.
+  grep -Eq '^[a-z]+(\([^)]+\))?!:' <<<"$2" && return 0
+  local has="has no '!'" hint=""
+  if grep -Eq '^[A-Za-z]+(\([^)]+\))?!:' <<<"$2"; then
+    has="has '!' but an uppercase type"
+    hint=" The type must be lowercase: release notes match lowercase types only."
+  fi
+  echo "::error::$1 '$2' $has but its body has a BREAKING CHANGE footer. Release notes read only the subject: write it as type!: (feat!:, fix(scope)!:) so the change lands under Breaking changes.$hint" >&2
   fail=1
 }
 
