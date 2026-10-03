@@ -954,6 +954,14 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 		// first tick back. A check that times out is retried every tick.
 		sctx, scancel := context.WithTimeout(ctx, startupCRDTimeout)
 		err := ensure(sctx)
+		// The group moved (#68): say once that the old CRD can go. Its
+		// objects are the owner's to delete, so the agent never does. The
+		// check shares the startup bound.
+		if legacy, lerr := crd.LegacyCRDInstalled(sctx, apiext); lerr != nil {
+			log.Info("could not check for the pre-v0.2.0 ClusterReadiness CRD", "crd", crd.LegacyCRDName, "err", lerr)
+		} else if legacy {
+			log.Warn(msgLegacyCRD, "crd", crd.LegacyCRDName, "group", crd.Group, "cleanup", crd.LegacyCRDCleanup)
+		}
 		scancel()
 		if err != nil {
 			if errors.Is(err, crd.ErrCRDNotInstalled) {

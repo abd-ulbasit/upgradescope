@@ -26,6 +26,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
+
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 )
 
 // Manifest is the embedded ClusterReadiness CRD manifest. It is the single
@@ -125,6 +127,29 @@ func EnsureCRD(ctx context.Context, apiext apiextensionsclient.Interface) error 
 		return fmt.Errorf("apply ClusterReadiness CRD: %w", err)
 	}
 	return nil
+}
+
+// LegacyCRDName is the CRD v0.1.x and the v0.2.0 release candidates
+// installed, on the group the project never owned (#68). Nothing reads or
+// writes its objects any more; the agent only says it can be removed.
+const LegacyCRDName = Plural + "." + apigroup.LegacyGroup
+
+// LegacyCRDCleanup is the command that removes the legacy CRD, and with it
+// every ClusterReadiness object stored under the old group.
+const LegacyCRDCleanup = "kubectl delete crd " + LegacyCRDName
+
+// LegacyCRDInstalled reports whether the legacy CRD is still installed. It
+// only reads: deleting the CRD deletes the objects under it, which is the
+// cluster owner's call. A failed read is returned, not taken for "absent".
+func LegacyCRDInstalled(ctx context.Context, apiext apiextensionsclient.Interface) (bool, error) {
+	_, err := apiext.ApiextensionsV1().CustomResourceDefinitions().Get(ctx, LegacyCRDName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get CRD %s: %w", LegacyCRDName, err)
+	}
+	return true, nil
 }
 
 // createCRD installs a missing CRD and waits for it to be Established.

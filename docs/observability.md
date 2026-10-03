@@ -48,7 +48,11 @@ The agent writes a startup line (version, KB version and horizon, interval,
 tick deadline and tick reserve, server URL or CRD-only, health address, profiler address) and exactly one line
 per tick. `--log-format=json` makes every line a JSON object;
 `--log-level` is `debug`, `info`, `warn` or `error`. Chart values:
-`agent.logFormat`, `agent.logLevel`.
+`agent.logFormat`, `agent.logLevel`. At startup, an agent that manages
+the CRD (`--manage-crd`, the default) and finds the CRD of v0.1.x and the
+v0.2.0 release candidates, on the old API group, still installed logs one
+WARN line naming it, with the command that removes it in `cleanup`. It
+never deletes it ([Upgrade](operations/upgrade.md#the-api-group-moved)).
 
 ```
 level=INFO msg="tick complete" duration=2.41s push=ok consecutiveFailures=0 capabilities.addons=true capabilities.api-usage=true capabilities.deprecated-calls=false capabilities.helm=true capabilities.versions=true targets.1.36.verdict=blocked targets.1.36.score=72 targets.1.36.blockers=2

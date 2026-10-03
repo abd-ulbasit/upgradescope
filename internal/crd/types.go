@@ -21,6 +21,11 @@ const (
 	Kind     = "ClusterReadiness"
 	Plural   = "clusterreadinesses"
 	Singular = "clusterreadiness"
+	// CRDName is the ClusterReadiness CustomResourceDefinition's name.
+	CRDName = Plural + "." + Group
+	// AnnotationPrefix starts every annotation key upgradescope reads or
+	// writes, spelled once in internal/crd/apigroup.
+	AnnotationPrefix = apigroup.AnnotationPrefix
 	// DefaultName is the conventional singleton object name.
 	DefaultName = "cluster"
 	// StatusErrorAnnotation marks a ClusterReadiness whose status the agent
