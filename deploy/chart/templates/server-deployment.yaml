@@ -79,8 +79,9 @@ spec:
             - "--team-map=/etc/upgradescope/team-map/team-map.yaml"
             {{- end }}
             {{- if $tls }}
-            # HTTPS with the server.tls Secret, read at startup: a renewed
-            # certificate takes a pod restart.
+            # HTTPS with the server.tls Secret. serve re-reads the pair when
+            # the kubelet updates the mount (no subPath, so it can), so a
+            # renewed certificate needs no restart.
             - --tls-cert-file=/etc/upgradescope/tls/tls.crt
             - --tls-key-file=/etc/upgradescope/tls/tls.key
             {{- end }}

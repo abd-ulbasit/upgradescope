@@ -111,12 +111,19 @@ agent:
   logLevel: info
   # -- Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"].
   extraArgs: []
-  # -- Extra container env, volumes and mounts. Private CA for pushes to a
-  # server behind a corporate CA: mount the PEM bundle and point
-  # SSL_CERT_DIR at it (Go adds those certificates to the image's roots):
-  #   extraVolumes: [{name: ca, configMap: {name: corp-ca}}]
-  #   extraVolumeMounts: [{name: ca, mountPath: /etc/upgradescope/ca, readOnly: true}]
-  #   extraEnv: [{name: SSL_CERT_DIR, value: /etc/upgradescope/ca}]
+  serverCA:
+    # -- A server behind a private CA: name a ConfigMap (configMap) or a
+    # Secret (secret), not both, whose key holds the CA's PEM bundle. It is
+    # mounted read-only and passed as --server-ca-file: pushes trust it on
+    # top of the image's system roots (read at agent startup). Set, it
+    # replaces the in-chart server's server.tls.caKey. Needs a server to
+    # push to (agent.serverUrl or server.enabled).
+    configMap: ""
+    # -- Or a Secret holding the CA bundle (see configMap).
+    secret: ""
+    # -- The key of the PEM bundle in that ConfigMap or Secret.
+    key: ca.crt
+  # -- Extra container env, volumes and mounts.
   extraEnv: []
   extraVolumes: []
   extraVolumeMounts: []
@@ -278,7 +285,8 @@ server:
     # Service port gets appProtocol https, and server.ingress gets
     # nginx.ingress.kubernetes.io/backend-protocol: HTTPS unless its
     # annotations set it; another controller may need its own annotation.
-    # serve reads the certificate at startup, so a renewal takes a pod
+    # serve re-reads the pair when the kubelet updates the mounted Secret
+    # (usually within a minute or two of a renewal), so a renewal needs no
     # restart.
     secretName: ""
     # -- The key of the CA certificate in that Secret, which the ServiceMonitor
