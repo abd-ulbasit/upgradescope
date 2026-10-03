@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "22222222-2222-2222-2222-222222222222",
+  "collectedAt": "2028-01-10T00:00:00Z",
+  "serverVersion": "v1.34.2-eks-3abc123",
+  "provider": "eks",
+  "capabilities": {
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "nodes": [{"name": "ip-10-0-1-1.ec2.internal", "kubeletVersion": "v1.34.2-eks-3abc123"}],
+  "namespaces": [{"name": "default"}]
+}

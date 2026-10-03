@@ -95,6 +95,19 @@ var goldenParams = map[string]struct{ target, now string }{
 	// blocked by the finding, not unknown.
 	"gitops-argocd": {"1.30", "2026-06-10T00:00:00Z"},
 	"gitops-flux":   {"1.30", "2026-06-10T00:00:00Z"},
+	// #77 support lifecycle, one EKS 1.34 cluster (standard support ends
+	// 2026-12-02, extended 2027-12-02) at five instants: 175 days before
+	// the end of standard support (no finding, but the status carries the
+	// date and the figure), 48 days before (warning), the first instant of
+	// extended support (blocker, costed), after extended support ended
+	// (blocker, no cost), and a cluster whose provider is other (nothing).
+	"support-before-window":    {"1.35", "2026-06-10T00:00:00Z"},
+	"support-warning-window":   {"1.35", "2026-10-15T00:00:00Z"},
+	"support-extended":         {"1.35", "2026-12-02T00:00:00Z"},
+	"support-ended":            {"1.35", "2028-01-10T00:00:00Z"},
+	"support-unknown-provider": {"1.35", "2026-12-02T00:00:00Z"},
+	// AKS publishes no price the dataset can cite: the dates and no cost line.
+	"support-no-price": {"1.35", "2026-10-15T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte

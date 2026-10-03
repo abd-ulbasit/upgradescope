@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "33333333-3333-3333-3333-333333333333",
+  "collectedAt": "2026-12-02T00:00:00Z",
+  "serverVersion": "v1.34.2",
+  "provider": "other",
+  "capabilities": {
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "nodes": [{"name": "kind-control-plane", "kubeletVersion": "v1.34.2"}],
+  "namespaces": [{"name": "default"}]
+}
