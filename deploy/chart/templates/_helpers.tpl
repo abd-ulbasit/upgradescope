@@ -134,6 +134,9 @@ string = yes; a half or contradictory setting fails the render. */}}
 {{- if not (include "upgradescope.pushEnabled" .) -}}
 {{- fail "agent.serverCA verifies the server snapshots are pushed to: set agent.serverUrl (or server.enabled)" -}}
 {{- end -}}
+{{- if not (hasPrefix "https://" (lower (include "upgradescope.serverUrl" .))) -}}
+{{- fail "agent.serverCA needs an https server: set an https agent.serverUrl, or server.tls for the in-chart server" -}}
+{{- end -}}
 true
 {{- end -}}
 {{- end -}}

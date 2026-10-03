@@ -385,6 +385,10 @@ func TestAgentServerCA(t *testing.T) {
 		"both sources": {"agent.serverUrl=https://hub.internal", "agent.serverToken=t", "agent.serverCA.configMap=a", "agent.serverCA.secret=b"},
 		"no server":    {"agent.serverCA.configMap=corp-ca"},
 		"no key":       {"agent.serverUrl=https://hub.internal", "agent.serverToken=t", "agent.serverCA.configMap=corp-ca", "agent.serverCA.key="},
+		// The agent refuses --server-ca-file with an http URL; the render
+		// says so first, for an http serverUrl or a plain-HTTP in-chart server.
+		"http serverUrl":        {"agent.serverUrl=http://hub.internal", "agent.serverToken=t", "agent.serverCA.configMap=corp-ca"},
+		"plain in-chart server": {"server.enabled=true", "server.ingestToken=t", "agent.serverCA.configMap=corp-ca"},
 	} {
 		if msg := renderErr(t, sets...); !strings.Contains(msg, "agent.serverCA") {
 			t.Errorf("%s: want a render error naming agent.serverCA, got %q", name, msg)
