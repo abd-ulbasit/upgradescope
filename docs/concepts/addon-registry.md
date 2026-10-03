@@ -140,7 +140,7 @@ their own line too: that is the version running.
 | `kubernetes-dashboard` | retired as a whole (archived 2026-01-21) | — | — |
 | `promtail` | retired as a whole (2026-03-02) | — | — |
 | `grafana-agent` | retired as a whole (2025-11-01) | — | — |
-| `weave-net` | retired as a whole (repository archived, no date) | — | — |
+| `weave-net` | retired as a whole (archived 2024-06-20) | — | — |
 | `external-dns` | — | compat rows | — |
 | `rke2-ingress-nginx` | — | compat rows | — |
 | `aks-app-routing-nginx` | product end of life 2026-11-30 | — | — |
@@ -167,7 +167,10 @@ or more segments is a suffix on whole path segments: `ingress-nginx/controller` 
 `myregistry.example.com/mirror/ingress-nginx/controller`, never a bare
 `controller` repository. A one-segment path is that repository exactly, not a
 suffix (etcd lists `etcd`, `bitnami/etcd`, `coreos/etcd` and
-`etcd-development/etcd`). The vendor builds of Ingress NGINX have their own
+`etcd-development/etcd`, plus `registry-k8s-io/etcd`, the ECR pull-through
+cache of registry.k8s.io). etcd behind a kubeadm `imageRepository` mirror
+(`myregistry.corp/k8s/etcd`) is therefore not recognized: replace the `etcd`
+entry through `--registry-dir` with your mirror's path added. The vendor builds of Ingress NGINX have their own
 entries (`rke2-ingress-nginx`, `aks-app-routing-nginx`) and the Bitnami
 rebuild is in `ingress-nginx`. No image is claimed by two entries.
 Add-ons that endoflife.date does not track and that no entry covers yet
