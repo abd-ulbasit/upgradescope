@@ -281,6 +281,16 @@ e2e:
 	E2E_MINOR=$(E2E_MINOR) ./hack/e2e.sh
 agent-e2e: e2e
 
+# The example policies and the Renovate preset, checked without a cluster
+# (CI's examples job): kyverno test and gator verify (pinned, checksum-
+# verified) against ready, not-ready, stale, unassessed and missing
+# ClusterReadiness fixtures, and renovate-config-validator (the Renovate
+# release pinned in hack/renovate) on the preset. `go test ./examples` is
+# the offline half. Needs network on the first run, and Node 24.
+.PHONY: examples-test
+examples-test:
+	./hack/examples-test.sh
+
 # Every test, e2e gate, CI job, make target and file docs/claims.md names
 # exists, so a public claim cannot lose its proof silently (CI's test job).
 .PHONY: claims-check
@@ -298,6 +308,7 @@ hack-test:
 	./hack/vulncheck_test.sh
 	./hack/check-toolchain_test.sh
 	./hack/install-tool_test.sh
+	./hack/examples-test_test.sh
 	./hack/kind-images_test.sh
 	./hack/envtest_test.sh
 	./hack/e2e_test.sh
