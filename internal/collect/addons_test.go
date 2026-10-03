@@ -321,10 +321,20 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"quay.io/coreos/etcd:v3.5.15", "etcd", "3.5.15"},
 		{"123456789012.dkr.ecr.eu-west-1.amazonaws.com/registry-k8s-io/etcd:3.5.15-0", "etcd", "3.5.15"},
 		{"gcr.io/etcd-development/etcd:v3.5.15", "etcd", "3.5.15"},
-		// A one-segment matcher is no mirror suffix: "etcd" names the
-		// repository etcd and nothing that merely ends in it.
-		{"someone/etcd:3.5.15", "", ""},
-		{"myregistry/mirror/etcd:3.5.15", "", ""},
+		// etcd opts into "*/etcd", so it is found behind a kubeadm
+		// imageRepository, a Harbor proxy cache or any other mirror, and
+		// under Bitnami's legacy namespace.
+		{"harbor.corp/k8s/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"myregistry.example.com/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"myregistry.example.com:5000/mirror/registry.k8s.io/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"docker.io/bitnami/etcd:3.5.15-debian-12-r3", "etcd", "3.5.15"},
+		{"docker.io/bitnamilegacy/etcd:3.5.15-debian-12-r3", "etcd", "3.5.15"},
+		{"etcd:3.5.15", "etcd", "3.5.15"},
+		// Only the repository etcd: neighbours that merely contain the word
+		// are other products.
+		{"quay.io/coreos/etcd-operator:v0.9.4", "", ""},
+		{"harbor.corp/k8s/etcd-backup:1.0.0", "", ""},
+		{"harbor.corp/k8s/etcd/backup:1.0.0", "", ""},
 		{"registry.k8s.io/external-dns/external-dns:v0.14.2", "external-dns", "0.14.2"},
 		{"bitnami/external-dns:0.14.2-debian-12-r4", "external-dns", "0.14.2"},
 		{"registry.k8s.io/metrics-server/metrics-server:v0.7.2", "metrics-server", "0.7.2"},
@@ -433,6 +443,14 @@ func TestImageMatchersNeedTwoSegmentsToSuffixMatch(t *testing.T) {
 		{"quay.io/cilium/operator:v1.16.1", "cilium/operator", true},
 		{"myregistry/mirror/cilium/operator:v1.16.1", "cilium/operator", true},
 		{"quay.io/xcilium/operator:v1.16.1", "cilium/operator", false},
+		// "*/name" is the explicit opt-in to a suffix match on one segment.
+		{"harbor.corp/k8s/etcd:3.5.15-0", "*/etcd", true},
+		{"myregistry.example.com/etcd:3.5.15-0", "*/etcd", true},
+		{"registry.k8s.io/etcd:3.5.15-0", "*/etcd", true},
+		{"harbor.corp/k8s/my-etcd:3.5.15-0", "*/etcd", false},
+		// A provider build is claimed by a matcher naming the provider only.
+		{"mcr.microsoft.com/oss/etcd:3.5.15", "*/etcd", false},
+		{"harbor.corp/mcr.microsoft.com/oss/etcd:3.5.15", "*/etcd", false},
 	} {
 		if got := imageMatches(parseImage(tc.image), tc.matcher); got != tc.want {
 			t.Errorf("imageMatches(%s, %q) = %v, want %v", tc.image, tc.matcher, got, tc.want)

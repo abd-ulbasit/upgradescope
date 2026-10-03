@@ -192,6 +192,14 @@ func TestClaimConflicts(t *testing.T) {
 		{"a longer mirror path of a claimed repository", entry("mine", []string{"corp/mirror/ingress-nginx/controller"}, nil), "ingress-nginx"},
 		{"a one-segment matcher is exact, it cannot reach another product", entry("mine", []string{"operator"}, nil), ""},
 		{"a one-segment matcher is exact, controller", entry("mine", []string{"controller"}, nil), ""},
+		// etcd's any-prefix matcher claims etcd behind every mirror, so an
+		// entry that names any such path double-claims it.
+		{"a mirror path of etcd, claimed by its any-prefix matcher", entry("mine", []string{"corp/k8s/etcd"}, nil), `"*/etcd"`},
+		{"a vendor path of etcd, claimed by its any-prefix matcher", entry("mine", []string{"acme/etcd"}, nil), `"*/etcd"`},
+		{"the bare etcd repository, claimed by its any-prefix matcher", entry("mine", []string{"etcd"}, nil), `"*/etcd"`},
+		{"a second any-prefix matcher on the same name", entry("mine", []string{"*/etcd"}, nil), `"*/etcd"`},
+		{"an any-prefix matcher on another name", entry("mine", []string{"*/my-thing"}, nil), ""},
+		{"an etcd-prefixed repository is not etcd", entry("mine", []string{"acme/etcd-backup"}, nil), ""},
 		{"same chart", entry("mine", []string{"acme/thing"}, []string{"cert-manager"}), `chart "cert-manager"`},
 		{"a provider build is not an upstream claim", entry("mine", []string{"mcr.microsoft.com/oss/calico/node"}, nil), ""},
 		{"a replacement of the claiming entry itself", entry("cilium", []string{"cilium/operator"}, nil), ""},

@@ -5,14 +5,24 @@ import (
 	"strings"
 )
 
+// AnyPrefix marks an image matcher that opts into matching its final segment
+// under any registry host or prefix: "*/etcd" is etcd, bare or behind a
+// kubeadm imageRepository, a Harbor proxy cache or any other mirror. It is
+// for a distinctive name only; validateImageMatcher refuses generic ones.
+const AnyPrefix = "*/"
+
 // PathMatches reports whether a normalised repository path is claimed by an
 // image matcher. A matcher of two or more segments is a suffix on whole
 // segments, so "ingress-nginx/controller" matches the canonical path and
 // every mirror or pull-through-cache path that keeps it
 // ("registry-k8s-io/ingress-nginx/controller"). A one-segment matcher is the
 // repository itself, exactly: a bare "controller" or "operator" never claims
-// another product's repository of that name.
+// another product's repository of that name. A matcher written "*/name"
+// (AnyPrefix) is the explicit opt-in to the suffix match on that one segment.
 func PathMatches(path, matcher string) bool {
+	if name, ok := strings.CutPrefix(matcher, AnyPrefix); ok {
+		return path == name || strings.HasSuffix(path, "/"+name)
+	}
 	if !strings.Contains(matcher, "/") {
 		return path == matcher
 	}

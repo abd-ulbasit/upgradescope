@@ -73,6 +73,19 @@ recommendation: Optional one-line remediation hint shown with findings.
   `istio/pilot`, …), and leave out images that version separately
   (`tigera/operator`, Flux's controllers). Vendor forks with their own
   support (AKS application routing, RKE2) get their own entries.
+- **Any-prefix opt-in (`"*/name"`)** — a one-segment matcher is exact, so a
+  product that is pulled from whatever mirror the operator chose (etcd,
+  behind a kubeadm `imageRepository` or a Harbor proxy cache) cannot list
+  every path. Writing the matcher as `"*/etcd"` (quote it: a YAML plain
+  scalar cannot start with `*`) declares that the final segment `etcd`
+  matches under any registry host or prefix, bare or not:
+  `registry.k8s.io/etcd`, `bitnamilegacy/etcd`, `harbor.corp/k8s/etcd`. It
+  takes exactly one segment (a longer path already matches under any
+  prefix) and only a distinctive name: the validator rejects generic ones
+  (`controller`, `operator`, `server`, `agent`, `proxy`, `manager`,
+  `webhook` and similar), which other products publish too, and the
+  embedded registry uses it for etcd alone (`TestAnyPrefixMatchersAreEtcdOnly`).
+  A provider build is still claimed only by a matcher naming the provider.
 - **Provider builds** — images under `gke.gcr.io/`, `gcr.io/gke-release/`
   or `mcr.microsoft.com/` (`ProviderBuildPrefixes` in `providers.go`), such
   as GKE's Calico and Dataplane V2 Cilium or AKS's Calico, Cilium, Istio and
