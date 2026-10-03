@@ -470,7 +470,8 @@ func TestTrustedTeamHeader(t *testing.T) {
 		}{
 			{"payments", []string{"calm", "mixed"}},
 			{"web, other", []string{"mixed", "web"}},
-			{"*", []string{"calm", "mixed", "web"}},
+			// The header names teams only: "*" is a team nobody owns.
+			{"*", nil},
 		} {
 			resp, raw := fetch(t, ts, "/api/v1/clusters", "", header, tc.value)
 			if resp.StatusCode != http.StatusOK || !slices.Equal(names(raw), tc.want) {

@@ -171,7 +171,7 @@ func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 //  1. a bearer that is --read-token or the admin token: the whole fleet;
 //  2. a bearer that is an active read token: its teams;
 //  3. a request from a trusted proxy that carries the team header: the
-//     teams it lists (proxyScope);
+//     teams it lists, never the whole fleet (proxyScope);
 //  4. otherwise the whole fleet when the read API is open (readOpen),
 //     whatever bearer was sent, as before read tokens existed; else 401.
 func (s *Server) readScope(w http.ResponseWriter, r *http.Request) (readScope, bool) {
@@ -232,9 +232,13 @@ func (s *Server) readOpen(ctx context.Context) (bool, error) {
 // proxyScope is the trusted-proxy mode (Config.TrustTeamHeader): a request
 // whose TCP peer, never a forwarded-for header, is in Config.TrustedProxies
 // and that carries the team header reads as the teams it lists, comma
-// separated, every copy of the header counted. Anywhere else the header is
-// ignored: a client that reaches the server directly cannot spoof it. Only
-// a proxy that strips the header from what clients send makes it safe.
+// separated, every copy of the header counted (oauth2-proxy sends one per
+// group). Anywhere else the header is ignored: a client that reaches the
+// server directly cannot spoof it. Only a proxy that strips the header from
+// what clients send makes it safe. The header always names teams: "*" in it
+// is a team called "*", never the whole fleet, so whoever can name an
+// identity-provider group cannot grant fleet-wide reads with it; a person
+// who needs the fleet uses a fleet-wide read token.
 func (s *Server) proxyScope(r *http.Request) (readScope, bool) {
 	if s.cfg.TrustTeamHeader == "" || !s.trustedPeer(r.RemoteAddr) {
 		return readScope{}, false
@@ -250,7 +254,11 @@ func (s *Server) proxyScope(r *http.Request) (readScope, bool) {
 	if len(teams) == 0 {
 		return readScope{}, false
 	}
-	return scopeOfTeams(teams), true
+	m := make(map[string]bool, len(teams))
+	for _, t := range teams {
+		m[t] = true
+	}
+	return readScope{teams: m}, true
 }
 
 // trustedPeer reports whether remoteAddr (http.Request.RemoteAddr) is in a

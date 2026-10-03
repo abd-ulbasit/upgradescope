@@ -225,7 +225,7 @@ a credential: --read-token (fleet-wide), read tokens minted with
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
 	cmd.Flags().StringVar(&opts.trustTeamHeader, "trust-team-header", "",
 		"DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated "+
-			"(an authenticating proxy's group header, e.g. X-Forwarded-Groups; '*' = the whole fleet); needs --trusted-proxy-cidr")
+			"(an authenticating proxy's group header, e.g. X-Forwarded-Groups; never the whole fleet, '*' included); needs --trusted-proxy-cidr")
 	cmd.Flags().StringSliceVar(&opts.trustedProxies, "trusted-proxy-cidr", nil,
 		"with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16")
 	cmd.MarkFlagsRequiredTogether("trust-team-header", "trusted-proxy-cidr")
