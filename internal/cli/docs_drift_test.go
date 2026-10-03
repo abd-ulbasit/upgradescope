@@ -102,3 +102,20 @@ func TestDocsSecurityHeadersScope(t *testing.T) {
 		t.Errorf("%s must say the headers are on every response the server's handler writes, and that responses net/http writes before routing carry none", page)
 	}
 }
+
+// TestDocsDeprecatedCallsDoNotSayWho: apiserver_requested_deprecated_apis
+// says that a client asked, not which client (DC-01). Only the GKE and AKS
+// comparison, about those services, may say who calls.
+func TestDocsDeprecatedCallsDoNotSayWho(t *testing.T) {
+	for _, page := range docPages(t) {
+		if page == "docs/comparison.md" || page == "docs/claims.md" {
+			continue
+		}
+		doc := strings.ToLower(readDoc(t, page))
+		for _, bad := range []string{"who still calls", "who calls"} {
+			if strings.Contains(doc, bad) {
+				t.Errorf("%s says %q; the metric shows whether any client still calls deprecated APIs (not which)", page, bad)
+			}
+		}
+	}
+}
