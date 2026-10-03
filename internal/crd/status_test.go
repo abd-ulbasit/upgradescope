@@ -201,6 +201,16 @@ func TestStatusFromReportsSupport(t *testing.T) {
 		t.Errorf("status support = %q %q %q %q %q", st.SupportPhase, st.ExtendedSupportFrom, st.AnnualCostDelta, st.Currency, st.PriceAsOf)
 	}
 
+	// Opt-in providers' caveats travel with the status.
+	st = StatusFromReports([]engine.Report{{Target: inventory.Version{Major: 1, Minor: 35}, Support: &engine.SupportStatus{
+		Provider: "gke", Minor: "1.34", Phase: engine.SupportExtended, ExtendedSupportFrom: "2027-01-25",
+		AnnualCostDelta: "4380.00", Currency: "USD", PriceAsOf: "2026-10-03",
+		AnnualCostNote: "charged only for clusters on the Extended release channel", ExtendedSupportCondition: "the cluster is on the Extended release channel",
+	}}}, "v1.34.2-gke.1234000", "v0.3.0", now)
+	if st.AnnualCostNote != "charged only for clusters on the Extended release channel" || st.ExtendedSupportCondition != "the cluster is on the Extended release channel" {
+		t.Errorf("opt-in caveats lost: %+v", st)
+	}
+
 	// A provider with no cited price: the dates, no cost fields.
 	st = StatusFromReports([]engine.Report{{Target: inventory.Version{Major: 1, Minor: 35},
 		Support: &engine.SupportStatus{Provider: "aks", Minor: "1.34", Phase: engine.SupportStandard, ExtendedSupportFrom: "2026-11-30"}}}, "v1.34.2", "v0.3.0", now)
@@ -214,7 +224,7 @@ func TestStatusFromReportsSupport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"supportPhase", "extendedSupportFrom", "annualCostDelta", "priceAsOf", "currency"} {
+	for _, key := range []string{"supportPhase", "extendedSupportFrom", "annualCostDelta", "priceAsOf", "currency", "annualCostNote", "extendedSupportCondition"} {
 		if strings.Contains(string(raw), key) {
 			t.Errorf("a cluster with no support calendar marshals %s: %s", key, raw)
 		}
