@@ -75,6 +75,21 @@ func TestValidate(t *testing.T) {
 		{"image matcher with empty segment", func(a *AddOn) { a.Matchers.Images = []string{"ingress-nginx//controller"} }, "repository path"},
 		{"image matcher with uppercase", func(a *AddOn) { a.Matchers.Images = []string{"Ingress-nginx/controller"} }, "repository path"},
 		{"single-segment image matcher is fine", func(a *AddOn) { a.Matchers.Images = []string{"etcd"} }, ""},
+		// "*/name" opts a distinctive final segment into matching under any
+		// registry prefix; a generic name would reach other products.
+		{"any-prefix matcher on a distinctive name is fine", func(a *AddOn) { a.Matchers.Images = []string{"*/etcd"} }, ""},
+		{"any-prefix matcher on controller", func(a *AddOn) { a.Matchers.Images = []string{"*/controller"} }, "generic"},
+		{"any-prefix matcher on operator", func(a *AddOn) { a.Matchers.Images = []string{"*/operator"} }, "generic"},
+		{"any-prefix matcher on server", func(a *AddOn) { a.Matchers.Images = []string{"*/server"} }, "generic"},
+		{"any-prefix matcher on agent", func(a *AddOn) { a.Matchers.Images = []string{"*/agent"} }, "generic"},
+		{"any-prefix matcher on proxy", func(a *AddOn) { a.Matchers.Images = []string{"*/proxy"} }, "generic"},
+		{"any-prefix matcher on manager", func(a *AddOn) { a.Matchers.Images = []string{"*/manager"} }, "generic"},
+		{"any-prefix matcher on webhook", func(a *AddOn) { a.Matchers.Images = []string{"*/webhook"} }, "generic"},
+		{"any-prefix matcher on several segments", func(a *AddOn) { a.Matchers.Images = []string{"*/ingress-nginx/controller"} }, "one final segment"},
+		{"any-prefix matcher on a provider build", func(a *AddOn) { a.Matchers.Images = []string{"*/mcr.microsoft.com/oss/etcd"} }, "one final segment"},
+		{"any-prefix matcher with nothing after it", func(a *AddOn) { a.Matchers.Images = []string{"*/"} }, "lowercase repository path"},
+		{"star in the middle of a matcher", func(a *AddOn) { a.Matchers.Images = []string{"corp/*/etcd"} }, "lowercase repository path"},
+		{"bare star", func(a *AddOn) { a.Matchers.Images = []string{"*"} }, "lowercase repository path"},
 		{"invalid support status", func(a *AddOn) { a.Support.Status = "deprecated" }, "support.status must be one of"},
 		{"unknown status needs no citations", func(a *AddOn) {
 			a.Support = Support{Status: "unknown"}

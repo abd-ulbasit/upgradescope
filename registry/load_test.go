@@ -245,6 +245,28 @@ func TestEmbeddedEntriesProperties(t *testing.T) {
 	}
 }
 
+// The any-prefix opt-in ("*/name") reaches every repository of that name
+// behind any registry, so the embedded registry grants it to etcd only, whose
+// name is distinctive and which kubeadm pulls from a mirror of the operator's
+// choosing. A new use needs a reason, and a change here.
+func TestAnyPrefixMatchersAreEtcdOnly(t *testing.T) {
+	addons, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, a := range addons {
+		for _, m := range a.Matchers.Images {
+			if strings.HasPrefix(m, AnyPrefix) {
+				got = append(got, a.ID+":"+m)
+			}
+		}
+	}
+	if want := []string{"etcd:*/etcd"}; !slices.Equal(got, want) {
+		t.Errorf("any-prefix image matchers = %v, want %v", got, want)
+	}
+}
+
 // ingress-nginx is the README's headline EOL add-on and is hand-curated
 // (endoflife.date does not track it), so pinning it cannot conflict with
 // eol-sync.

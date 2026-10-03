@@ -166,11 +166,12 @@ or more segments is a suffix on whole path segments: `ingress-nginx/controller` 
 `registry.k8s.io/ingress-nginx/controller` and
 `myregistry.example.com/mirror/ingress-nginx/controller`, never a bare
 `controller` repository. A one-segment path is that repository exactly, not a
-suffix (etcd lists `etcd`, `bitnami/etcd`, `coreos/etcd` and
-`etcd-development/etcd`, plus `registry-k8s-io/etcd`, the ECR pull-through
-cache of registry.k8s.io). etcd behind a kubeadm `imageRepository` mirror
-(`myregistry.corp/k8s/etcd`) is therefore not recognized: replace the `etcd`
-entry through `--registry-dir` with your mirror's path added. The vendor builds of Ingress NGINX have their own
+suffix. An entry can opt one distinctive name into matching under any
+registry host or prefix by writing it `"*/etcd"`; the validator refuses that
+for generic names such as `controller`, and only etcd uses it, so etcd is
+recognized at `registry.k8s.io/etcd`, `bitnamilegacy/etcd` and behind a kubeadm
+`imageRepository` or a Harbor proxy cache (`myregistry.corp/k8s/etcd`). The
+vendor builds of Ingress NGINX have their own
 entries (`rke2-ingress-nginx`, `aks-app-routing-nginx`) and the Bitnami
 rebuild is in `ingress-nginx`. No image is claimed by two entries.
 Add-ons that endoflife.date does not track and that no entry covers yet
