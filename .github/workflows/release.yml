@@ -6,7 +6,9 @@ name: release
 #   preflight  the tag is vX.Y.Z[-pre], deploy/chart/Chart.yaml's
 #              appVersion is that tag (it is the image tag the chart pulls by
 #              default, so a chart that names another release is refused),
-#              and CHANGELOG.md has entries for it (hack/check-changelog.sh);
+#              the tagged commit is on main (a tag pushed on a branch
+#              commit is refused: hack/check-release-ancestry.sh), and
+#              CHANGELOG.md has entries for it (hack/check-changelog.sh);
 #   ci         the whole ci.yml suite (workflow_call) at the tagged commit:
 #              unit/race, vuln gate, web, chart, images, Postgres, kind e2e,
 #              release-check. Nothing below runs unless it passed;
@@ -78,6 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0 # origin/main's history, for the ancestry check below
           persist-credentials: false
       - name: the tag is vX.Y.Z[-pre] and the chart pulls the image it publishes
         id: check
@@ -95,6 +98,8 @@ jobs:
             exit 1
           fi
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: the tagged commit is on main
+        run: hack/check-release-ancestry.sh
       - name: CHANGELOG.md says what this release changes
         run: hack/check-changelog.sh "$GITHUB_REF_NAME"
 
