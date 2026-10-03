@@ -194,7 +194,7 @@ func (s *Server) stale(e store.Evaluation, now time.Time) bool {
 // sameResult reports whether rep matches the stored row on everything a
 // history point or a notification depends on: verdict, score, and the
 // set of (severity, finding key). stored is the row's findings
-// (storedFindingHeads of its report).
+// (the Findings of its storedFindingHeads).
 func sameResult(row store.Evaluation, stored []findingHead, rep engine.Report) bool {
 	if verdictOf(row) != rep.Verdict || row.Score != rep.Score || len(stored) != len(rep.Findings) {
 		return false
@@ -215,7 +215,8 @@ func sameResult(row store.Evaluation, stored []findingHead, rep engine.Report) b
 func findingSignature(h findingHead) string { return string(h.Severity) + "\x00" + h.key() }
 
 // baseline is a notification baseline the caller already holds: the
-// heads of the target's latest decided evaluation, when known.
+// heads of the target's latest decided evaluation (storedHeads.baseline),
+// when known.
 type baseline struct {
 	findings []findingHead
 	ok       bool
@@ -225,16 +226,18 @@ type baseline struct {
 // baseline is the last evaluation with a decided verdict, so an "unknown"
 // pass (a collector failure) is neither a transition nor a reset; a pass
 // whose own verdict is unknown notifies nothing — what it could not see is
-// not news. known is that baseline when the caller holds it; otherwise
-// deltaFor loads it, and decodes only its findings' heads. Failures are
-// logged and never fail the pass.
-func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline) targetDelta {
+// not news. A decided pass that did not assess a capability carries the
+// baseline's findings from it forward (computeDelta, unassessed). known
+// is that baseline when the caller holds it; otherwise deltaFor loads it,
+// and decodes only its findings' heads. Failures are logged and never
+// fail the pass.
+func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline, unassessed func(findingHead) bool) targetDelta {
 	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
 	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
 		return d // a cluster's first push has no baseline either
 	}
 	if known.ok {
-		d.changes = computeDelta(known.findings, cur)
+		d.changes, d.carried = computeDelta(known.findings, cur, unassessed)
 		return d
 	}
 	target := cur.Target.String()
@@ -256,8 +259,32 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 		log.Printf("server: decoding previous report (cluster %d, target %s): %v", cluster.ID, target, err)
 		return d
 	}
-	d.changes = computeDelta(heads, cur)
+	d.changes, d.carried = computeDelta(heads.baseline(), cur, unassessed)
 	return d
+}
+
+// unassessedIn reports which baseline findings rep could not have seen:
+// those whose capability rep did not assess (engine.Unassessed of its
+// gaps).
+func unassessedIn(rep engine.Report) func(findingHead) bool {
+	return func(h findingHead) bool {
+		return engine.Unassessed(rep.NotAssessed, h.Category, h.key())
+	}
+}
+
+// keepCarried stores what e's baseline carries forward in its report
+// (withCarried), within maxReportBytes, or returns a
+// *reportTooLargeError.
+func (s *Server) keepCarried(e *store.Evaluation, rep engine.Report, carried []findingHead) error {
+	b, err := withCarried(e.Report, carried)
+	if err != nil {
+		return fmt.Errorf("storing carried findings (cluster %d, target %s): %w", e.ClusterID, rep.Target, err)
+	}
+	if limit := s.maxReportBytes(); int64(len(b)) > limit {
+		return &reportTooLargeError{target: rep.Target, limit: limit}
+	}
+	e.Report = b
+	return nil
 }
 
 // outboxFor turns one pass's merged deltas into one notification for the
@@ -336,8 +363,12 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		if err != nil {
 			return 0, false, err
 		}
+		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep))
+		if err := s.keepCarried(&e, rep, d.carried); err != nil {
+			return 0, false, err
+		}
 		batch.Insert = append(batch.Insert, e)
-		deltas.add(s.deltaFor(ctx, cluster, e, rep, baseline{}))
+		deltas.add(d)
 	}
 	batch.Outbox = s.outboxFor(cluster, &deltas, now)
 	snapID, duplicate, err := s.cfg.Store.CommitEvaluations(ctx, batch)
@@ -388,7 +419,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		// What sameResult and deltaFor read of the stored report: its
 		// findings' heads, decoded before the new report is built, so the
 		// stored bytes are not held while it is.
-		var stored []findingHead
+		var stored storedHeads
 		decoded := false
 		if found {
 			stored, err = storedFindingHeads(cur.Report)
@@ -407,18 +438,26 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		if err != nil {
 			return err
 		}
+		// A decided current evaluation is the target's latest decided
+		// one, the baseline deltaFor would load again: evaluations are
+		// only added to the latest snapshot, so none is newer. An
+		// unchanged result (below) has no changes, but may carry less.
+		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
+		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep))
+		if err := s.keepCarried(&e, rep, d.carried); errors.As(err, &tooLarge) {
+			log.Printf("server: re-evaluation of cluster %d skipped for target %s: %v", cluster.ID, target, err)
+			continue
+		} else if err != nil {
+			return err
+		}
 		batch.Current[target.String()] = cur.ID // 0 when not found
-		if decoded && sameResult(cur, stored, rep) {
+		if decoded && sameResult(cur, stored.Findings, rep) && sameHeads(stored.CarriedForward, d.carried) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)
 			continue
 		}
 		batch.Insert = append(batch.Insert, e)
-		// A decided current evaluation is the target's latest decided
-		// one, the baseline deltaFor would load again: evaluations are
-		// only added to the latest snapshot, so none is newer.
-		known := baseline{findings: stored, ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
-		deltas.add(s.deltaFor(ctx, cluster, e, rep, known))
+		deltas.add(d)
 	}
 	if len(batch.Current) == 0 {
 		return nil

@@ -37,7 +37,8 @@ const becameReadyTitle = "ready: all blockers resolved"
 //     new-blocker change each.
 //   - Blocker count went >0 → 0 AND curr.Verdict is ready → one became-ready
 //     change. Zero blockers with verdict unknown (a required check was not
-//     assessed, e.g. a transient collector failure) is not readiness.
+//     assessed, e.g. a transient collector failure) is not readiness, and
+//     neither is a pass that could not see a blocker of prev (computeDelta).
 //   - eol-approaching warnings added since prev (by key) → one change each.
 //
 // Identity is Finding.Key — deliberately count-free, so a title-only change
@@ -56,18 +57,38 @@ func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Change {
 	for i, f := range prev.Findings {
 		heads[i] = headOf(f)
 	}
-	return computeDelta(heads, curr)
+	changes, _ := computeDelta(heads, curr, nil)
+	return changes
 }
 
-// computeDelta is ComputeDelta against the heads of the previous report's
-// findings: all it reads of them.
-func computeDelta(prev []findingHead, curr engine.Report) []notify.Change {
+// computeDelta is ComputeDelta against the heads of the baseline's
+// findings, the ones it carries forward included (storedHeads): all it
+// reads of them. unassessed reports which of them curr could not have
+// seen (nil: none), because a capability they come from was not assessed
+// (unassessedIn). A blocker or eol-approaching finding of prev that is
+// gone from curr but unassessed is carried: neither resolved by this pass
+// nor news when its capability returns, and no became-ready while a
+// carried blocker remains. carried is what the new evaluation's baseline
+// keeps of prev, until a pass that assessed it shows it gone.
+func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findingHead) bool) (changes []notify.Change, carried []findingHead) {
 	target := []string{curr.Target.String()}
 
 	prevBlockers := headKeys(prev, findingHead.blocker)
 	prevEOL := headKeys(prev, findingHead.eolApproaching)
 
-	var changes []notify.Change
+	if unassessed != nil {
+		present := keySet(curr.Findings, func(engine.Finding) bool { return true })
+		kept := map[string]bool{}
+		for _, h := range prev {
+			sig := findingSignature(h)
+			if (!h.blocker() && !h.eolApproaching()) || present[h.key()] || kept[sig] || !unassessed(h) {
+				continue
+			}
+			kept[sig] = true
+			carried = append(carried, h)
+		}
+	}
+
 	currBlockerCount := 0
 	seenBlockers := map[string]bool{}
 	for _, f := range curr.Findings {
@@ -85,7 +106,8 @@ func computeDelta(prev []findingHead, curr engine.Report) []notify.Change {
 		}
 	}
 
-	if len(prevBlockers) > 0 && currBlockerCount == 0 && curr.Verdict == engine.VerdictReady {
+	if len(prevBlockers) > 0 && currBlockerCount == 0 && curr.Verdict == engine.VerdictReady &&
+		!slices.ContainsFunc(carried, findingHead.blocker) {
 		changes = append(changes, notify.Change{Kind: notify.KindBecameReady, Title: becameReadyTitle, Targets: target})
 	}
 
@@ -103,7 +125,7 @@ func computeDelta(prev []findingHead, curr engine.Report) []notify.Change {
 			changes = append(changes, change(notify.KindEOLApproaching, f, target))
 		}
 	}
-	return changes
+	return changes, carried
 }
 
 // upgradeLookback is how many minors below a new default target
@@ -147,10 +169,12 @@ func change(kind string, f engine.Finding, targets []string) notify.Change {
 	return notify.Change{Kind: kind, Key: f.Key, Severity: string(f.Severity), Title: f.Title, Detail: f.Detail, Targets: targets}
 }
 
-// targetDelta is one target's verdict after a pass and its changes.
+// targetDelta is one target's verdict after a pass and its changes, and
+// what its evaluation's baseline carries forward (computeDelta).
 type targetDelta struct {
 	target  notify.Target
 	changes []notify.Change
+	carried []findingHead
 }
 
 // kindRank orders a notification's changes: blockers first.
@@ -307,21 +331,73 @@ func (h findingHead) key() string {
 	return h.Title
 }
 
-// storedFindingHeads decodes the heads of a stored report's findings,
-// and nothing else of it.
-func storedFindingHeads(report []byte) ([]findingHead, error) {
-	var r struct {
-		Findings []findingHead `json:"findings"`
-	}
+// storedHeads is what the server reads of a stored report: its findings'
+// heads, and the heads of the findings its notification baseline carries
+// forward, which the report does not have (computeDelta).
+//
+// carriedForward is the server's own: withCarried adds it to the encoded
+// report it stores, and it is never served, because every read decodes
+// the stored report into an engine.Report.
+type storedHeads struct {
+	Findings       []findingHead `json:"findings"`
+	CarriedForward []findingHead `json:"carriedForward,omitempty"`
+}
+
+// baseline is the stored report as a notification baseline: its findings
+// and what it carries forward.
+func (h storedHeads) baseline() []findingHead {
+	return append(slices.Clip(h.Findings), h.CarriedForward...)
+}
+
+// storedFindingHeads decodes a stored report's storedHeads, and nothing
+// else of it.
+func storedFindingHeads(report []byte) (storedHeads, error) {
+	var r storedHeads
 	if err := json.Unmarshal(report, &r); err != nil {
-		return nil, err
+		return storedHeads{}, err
 	}
-	for i := range r.Findings {
-		if r.Findings[i].Key != "" {
-			r.Findings[i].Title = "" // not the identity: let it go
+	for _, hs := range [][]findingHead{r.Findings, r.CarriedForward} {
+		for i := range hs {
+			if hs[i].Key != "" {
+				hs[i].Title = "" // not the identity: let it go
+			}
 		}
 	}
-	return r.Findings, nil
+	return r, nil
+}
+
+// withCarried adds carried to report, an encoded engine.Report, as its
+// carriedForward field (storedHeads). The report is not decoded again:
+// carried goes in before its closing brace.
+func withCarried(report []byte, carried []findingHead) ([]byte, error) {
+	if len(carried) == 0 {
+		return report, nil
+	}
+	if len(report) < 2 || report[0] != '{' || report[len(report)-1] != '}' {
+		return nil, errors.New("report is not a JSON object")
+	}
+	b, err := json.Marshal(carried)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(report)+len(b)+len(`,"carriedForward":`))
+	out = append(out, report[:len(report)-1]...)
+	out = append(out, `,"carriedForward":`...)
+	out = append(out, b...)
+	return append(out, '}'), nil
+}
+
+// sameHeads reports whether a and b hold the same (severity, key) pairs.
+func sameHeads(a, b []findingHead) bool {
+	sig := func(hs []findingHead) []string {
+		out := make([]string, 0, len(hs))
+		for _, h := range hs {
+			out = append(out, findingSignature(h))
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	return slices.Equal(sig(a), sig(b))
 }
 
 func headKeys(hs []findingHead, keep func(findingHead) bool) map[string]bool {
