@@ -108,12 +108,21 @@ put in its place between the check and the open is refused too; Windows has
 no such open, and the check is the only guard there. A regular file whose
 read blocks (one on a stalled NFS or FUSE mount) has no deadline the
 operating system honours: the call returns when the client cancels it, and
-the read goes on in the background until the file answers.
+the read goes on in the background until the file answers. Such a read keeps
+its place among the two file reads that run at once until it returns, so
+cancelled calls cannot pile up reads behind a stalled mount; while two are
+stuck, a further call waits, and gives up when the client cancels it.
 A report may be at most 8 MiB and an inventory at most 20 MiB (what a
-default server takes from an agent). A file that is not an upgradescope
-report, one that does not follow `api/report.schema.json`, or not an
-inventory, is refused with the reason, not scored; the reason never quotes
-the file.
+default server takes from an agent), whatever size the file reports or
+grows to while it is read. An inventory is checked as a server checks an
+agent's push: one the server would refuse (an identifier that is not valid
+for what it names, a `serverVersion` that is not 1.x, a value over the
+limits collectors keep to) is refused, and capability reasons over their
+limit are cut and judged, as the server cuts them. A file that is not an
+upgradescope report, one that does not follow `api/report.schema.json`, or
+not an inventory the server would judge, is refused with the reason, not
+scored; the reason names the field and the rule, and never quotes the file,
+neither a value nor a key.
 
 ## Large reports
 
