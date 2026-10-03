@@ -4,7 +4,8 @@
 # The CLI does not call a cluster: apiCallResponses answers the policy's
 # apiCall with a ClusterReadiness. "Fresh" below is a lastEvaluated in the year
 # 2200: the CLI has no clock to set, so a date that is never in the past
-# stands for "just evaluated".
+# stands for "just evaluated". A lastEvaluated in the future (clock skew) counts
+# as fresh by design: the policy only fails open on data that is too old.
 #
 # Case: the agent evaluated recently and 1.36 is ready, 1.37 is not.
 apiVersion: cli.kyverno.io/v1alpha1

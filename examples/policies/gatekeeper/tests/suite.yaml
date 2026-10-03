@@ -4,6 +4,8 @@
 # The inventory is what Gatekeeper's sync would have replicated. "Fresh" in
 # inventory/fresh.yaml is a lastEvaluated in the year 2200: gator has no clock
 # to set, so a date that is never in the past stands for "just evaluated".
+# A lastEvaluated in the future (clock skew) counts as fresh by design: the
+# policy only fails open on data that is too old.
 # inventory/stale.yaml is 2020, always more than an hour ago.
 kind: Suite
 apiVersion: test.gatekeeper.sh/v1alpha1
