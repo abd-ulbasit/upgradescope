@@ -43,7 +43,7 @@ if [ "${BENCH_REPORT_FORMAT:-}" = json ]; then
 fi
 
 echo
-echo "Per tick, by fill level (median of ticks after the first; heap is the peak live heap, RSS the process peak so far):"
+echo "Per tick, by fill level (medians over the ticks after the first, except peak heap, which is the maximum of them: the peak of live heap objects while a tick ran; RSS is the process peak so far):"
 echo
 echo "| Fill | Nodes | Helm releases | Requests | LIST pods | GET secrets | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB | First tick: requests, wall s, CPU s |"
 echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
