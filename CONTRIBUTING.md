@@ -212,6 +212,16 @@ kubectl and kubeconform are also checked against their upstream sha256
 
 `pr-lint.yml` is a separate workflow, not a `ci.yml` job: on every PR, and again when its title or description is edited, `hack/check-breaking.sh` fails a title, description or commit with a `BREAKING CHANGE:` footer whose subject has no `!` (see [Commit conventions](#commit-conventions)). It is not part of `ci-ok`; the repository ruleset decides whether it blocks a merge.
 
+**When a run is cancelled.** A new push to a pull request cancels that pull
+request's superseded run. Runs on `main`, on a schedule, by dispatch and on
+tags never cancel runs of another commit, ref or kind. Runs of one kind on
+one ref and commit share a concurrency group, though, and GitHub keeps only
+one *pending* run per group: with one run in progress and a second pending,
+a third dispatch of the same commit cancels the pending second (two
+dispatches are fine), so let the first finish before dispatching again.
+`hack/ci-concurrency_test.sh` checks the group expression for each kind of
+run, not repeats of one.
+
 The `kube` job (`hack/e2e.sh`) runs per Kubernetes minor from
 `hack/kind-node-images.txt`, each pinned to a kind node image digest. It
 creates a kind cluster, scans the vanilla cluster at its next minor and

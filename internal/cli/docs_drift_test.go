@@ -119,3 +119,21 @@ func TestDocsDeprecatedCallsDoNotSayWho(t *testing.T) {
 		}
 	}
 }
+
+// TestDocsRound2Gaps: the small documentation gaps of #200 stay filled.
+func TestDocsRound2Gaps(t *testing.T) {
+	for _, tc := range []struct {
+		page, claim string
+		want        []string // lower case, after white space is collapsed
+	}{
+		{"CONTRIBUTING.md", "a third dispatch of one commit cancels the pending second (IR-05)",
+			[]string{"third dispatch", "pending"}},
+	} {
+		doc := strings.Join(strings.Fields(strings.ToLower(readDoc(t, tc.page))), " ")
+		for _, w := range tc.want {
+			if !strings.Contains(doc, w) {
+				t.Errorf("%s does not say that %s (missing %q)", tc.page, tc.claim, w)
+			}
+		}
+	}
+}
