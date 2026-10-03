@@ -4,6 +4,10 @@
 // interfaces — the same pattern the apiserver's
 // k8s.io/apiserver/pkg/endpoints/deprecation package uses.
 //
+// It also records every registered group, with or without lifecycle
+// entries (builtinGroups), so the engine can tell a built-in API it has no
+// data for from a CRD.
+//
 // Output JSON mirrors internal/kb's lifecycleFile / APILifecycleEntry shape
 // (this module cannot import internal/kb; the sanity test in internal/kb
 // and the CI freshness check keep the shapes in sync).
@@ -27,9 +31,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -113,10 +119,22 @@ func (e entry) less(o entry) bool {
 	return e.Kind < o.Kind
 }
 
+// groupVersions is one built-in API group and its versions.
+type groupVersions struct {
+	Group    string   `json:"group"` // "" for core
+	Versions []string `json:"versions"`
+}
+
 type output struct {
 	GeneratedFrom string  `json:"generatedFrom"`
 	MaxKnownK8s   string  `json:"maxKnownK8s"`
 	Entries       []entry `json:"entries"`
+	// BuiltinGroups lists every group the scheme registers (k8s.io/api plus
+	// the apiextensions and apiregistration schemes) at the pinned
+	// version, with or without lifecycle entries, plus the groups of
+	// carried-forward entries: the engine reports an unknown-api info for
+	// an object of any of them that no entry places (see builtinGroups).
+	BuiltinGroups []groupVersions `json:"builtinGroups"`
 }
 
 func main() {
@@ -179,6 +197,7 @@ func main() {
 		GeneratedFrom: "k8s.io/api " + apiVer,
 		MaxKnownK8s:   maxKnown.String(),
 		Entries:       entries,
+		BuiltinGroups: builtinGroups(scheme, entries),
 	}
 	buf, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -237,6 +256,37 @@ func extract(scheme *runtime.Scheme) (entries []entry, upstream map[gvkOut]bool,
 		entries = append(entries, e)
 	}
 	return entries, upstream, noLifecycle
+}
+
+// builtinGroups returns every group registered in scheme (the internal
+// version aside) with its sorted versions, merged with the group/versions
+// of entries so a group that only has carried-forward tombstones stays
+// built-in. Unlike entries it keeps groups whose types have no lifecycle
+// data or are not persisted (internal.apiserver.k8s.io, imagepolicy.k8s.io),
+// which the engine would otherwise treat like a CRD group and stay silent
+// on (#172). Sorted by group.
+func builtinGroups(scheme *runtime.Scheme, entries []entry) []groupVersions {
+	set := map[string]map[string]bool{}
+	add := func(group, version string) {
+		if set[group] == nil {
+			set[group] = map[string]bool{}
+		}
+		set[group][version] = true
+	}
+	for k := range scheme.AllKnownTypes() {
+		if k.Version != runtime.APIVersionInternal {
+			add(k.Group, k.Version)
+		}
+	}
+	for _, e := range entries {
+		add(e.Group, e.Version)
+	}
+	out := make([]groupVersions, 0, len(set))
+	for g, vs := range set {
+		out = append(out, groupVersions{Group: g, Versions: slices.Sorted(maps.Keys(vs))})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Group < out[j].Group })
+	return out
 }
 
 func skipKind(k schema.GroupVersionKind) bool {

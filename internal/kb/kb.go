@@ -20,9 +20,16 @@ type KB struct {
 	// e.g. "k8s.io/api v0.37.1; lifecycle 1a2b3c4d; registry 5e6f7a8b".
 	Version      string
 	APILifecycle []APILifecycleEntry
-	AddOns       []registry.AddOn
-	Skew         SkewPolicy
-	MaxKnownK8s  inventory.Version // newest minor the lifecycle data covers
+	// BuiltinGroups lists every built-in API group, those without an
+	// APILifecycle entry included: the engine reports an unknown-api info
+	// for an object of one the lifecycle data cannot place, and stays
+	// silent for any other group (CRDs, aggregated APIs). Empty for a
+	// dataset that predates it, whose built-in groups are then those of
+	// APILifecycle.
+	BuiltinGroups []BuiltinGroup
+	AddOns        []registry.AddOn
+	Skew          SkewPolicy
+	MaxKnownK8s   inventory.Version // newest minor the lifecycle data covers
 	// UpgradeSteps are control-plane upgrades allowed to skip minors;
 	// upgrade plans take them in place of the one-minor hops they span
 	// (engine.HopTargets). Upstream has none, since the control plane is
@@ -63,16 +70,17 @@ func load(lifecycle []byte) (KB, error) {
 	if err != nil {
 		return KB{}, fmt.Errorf("kb: loading add-on registry: %w", err)
 	}
-	version, err := datasetVersion(f.GeneratedFrom, f.Entries, addons)
+	version, err := datasetVersion(f.GeneratedFrom, f.Entries, f.BuiltinGroups, addons)
 	if err != nil {
 		return KB{}, err
 	}
 	return KB{
-		Version:      version,
-		APILifecycle: f.Entries,
-		AddOns:       addons,
-		Skew:         DefaultSkewPolicy(),
-		MaxKnownK8s:  maxKnown,
+		Version:       version,
+		APILifecycle:  f.Entries,
+		BuiltinGroups: f.BuiltinGroups,
+		AddOns:        addons,
+		Skew:          DefaultSkewPolicy(),
+		MaxKnownK8s:   maxKnown,
 	}, nil
 }
 
@@ -83,11 +91,21 @@ func load(lifecycle []byte) (KB, error) {
 //
 // generatedFrom names the upstream release ("k8s.io/api v0.37.1"); each
 // digest is the first 8 hex digits of the SHA-256 of the canonical JSON of
-// the lifecycle entries or the parsed add-on registry. Any change to
-// either dataset (an eol-sync date flip, a regenerated entry) changes the
-// label; YAML comments and formatting do not.
-func datasetVersion(generatedFrom string, entries []APILifecycleEntry, addons []registry.AddOn) (string, error) {
-	lifecycle, err := digest(entries)
+// the lifecycle entries and built-in groups or the parsed add-on registry.
+// Any change to either dataset (an eol-sync date flip, a regenerated entry,
+// a new built-in group) changes the label; YAML comments and formatting do
+// not.
+func datasetVersion(generatedFrom string, entries []APILifecycleEntry, groups []BuiltinGroup, addons []registry.AddOn) (string, error) {
+	// Without built-in groups the digest is over the bare entries, so a
+	// dataset that predates the field keeps the label it always had.
+	var lifecycleData any = entries
+	if len(groups) > 0 {
+		lifecycleData = struct {
+			Entries []APILifecycleEntry
+			Groups  []BuiltinGroup
+		}{entries, groups}
+	}
+	lifecycle, err := digest(lifecycleData)
 	if err != nil {
 		return "", fmt.Errorf("kb: digest lifecycle data: %w", err)
 	}
