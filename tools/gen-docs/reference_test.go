@@ -70,6 +70,7 @@ func TestGenCRDMarkdown(t *testing.T) {
 		"`example.dev/v1alpha1`",
 		"| Scope | Cluster |",
 		"`exr`",
+		"[Acting on readiness](../guides/acting-on-readiness.md)",
 		"| `spec.targets[]` | string | Minors to evaluate. | pattern `^[0-9]+\\.[0-9]+$` |",
 		"| `status.targets[].verdict` | string | The verdict. | one of `ready`, `blocked`, `unknown` |",
 		"| `status.targets[].findings` | array | — | at most 20 items |",
