@@ -1,0 +1,31 @@
+{
+  "clusterId": "11111111-1111-1111-1111-111111111111",
+  "findings": [
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "After upgrading the control plane to 1.36 these nodes would be more than 3 minor versions behind: node-a (v1.29.4).",
+      "key": "version-skew/kubelet-post-upgrade",
+      "severity": "blocker",
+      "title": "1 node(s) would exceed kubelet version skew after upgrading to 1.36"
+    },
+    {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/"
+      ],
+      "detail": "The control plane is upgraded one minor version at a time. This report judges the cluster as it is against 1.36; add-ons, charts and nodes may need upgrading at each step in between.",
+      "key": "version-skew/upgrade-path",
+      "severity": "info",
+      "title": "upgrading from 1.29 to 1.36 takes 7 minor-version upgrades (1.29 → 1.30 → … → 1.36)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "ready": false,
+  "score": 75,
+  "serverVersion": "v1.29.4",
+  "target": "1.36",
+  "verdict": "blocked"
+}

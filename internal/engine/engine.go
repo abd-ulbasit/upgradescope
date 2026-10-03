@@ -1369,22 +1369,35 @@ func upgradeFrom(inv inventory.Inventory) (inventory.Version, bool) {
 	return apis[0], true
 }
 
+// maxSpelledHops is the longest upgrade path whose title lists every step.
+const maxSpelledHops = 3
+
 // evalUpgradePath: a target more than one minor ahead of the cluster is
 // several upgrades, since the control plane moves one minor at a time →
-// info naming each step.
+// info naming each step, up to maxSpelledHops. The title is copied into the
+// ClusterReadiness status, so past that it shows only the ends of the path:
+// its size must not grow with the distance to the target. It is not part of
+// the finding's identity, which is the Key.
 func evalUpgradePath(inv inventory.Inventory, target inventory.Version) []Finding {
 	from, ok := upgradeFrom(inv)
 	if !ok || target.Major != from.Major || target.Minor-from.Minor < 2 {
 		return nil
 	}
-	var steps []string
-	for v := from.Next(); v.Compare(target) <= 0; v = v.Next() {
-		steps = append(steps, v.String())
+	hops := target.Minor - from.Minor
+	var path string
+	if hops <= maxSpelledHops {
+		steps := make([]string, 0, hops)
+		for v := from.Next(); v.Compare(target) <= 0; v = v.Next() {
+			steps = append(steps, v.String())
+		}
+		path = ": " + strings.Join(steps, ", ")
+	} else {
+		path = fmt.Sprintf(" (%s → %s → … → %s)", from, from.Next(), target)
 	}
 	return []Finding{{
 		Category: CatVersionSkew, Severity: SevInfo,
 		Key:       string(CatVersionSkew) + "/upgrade-path",
-		Title:     fmt.Sprintf("upgrading from %s to %s takes %d minor-version upgrades: %s", from, target, len(steps), strings.Join(steps, ", ")),
+		Title:     fmt.Sprintf("upgrading from %s to %s takes %d minor-version upgrades%s", from, target, hops, path),
 		Detail:    fmt.Sprintf("The control plane is upgraded one minor version at a time. This report judges the cluster as it is against %s; add-ons, charts and nodes may need upgrading at each step in between.", target),
 		Citations: []string{skewPolicyURL},
 	}}

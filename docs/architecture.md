@@ -457,11 +457,21 @@ checks and policy engines that should not need to reach the server.
 - **`spec.targets`** is the only user input: the minors to evaluate against.
   When it is empty, the agent uses the next minor above the observed server
   version. Invalid entries are skipped and reported in `status.notAssessed`.
+  The schema allows **at most 8** targets, since each one is a row in
+  status. A CR written before that limit, with more, is evaluated for its
+  first 8 (in spec order, repeats dropped) and `status.notAssessed` counts
+  the others.
 - **`status`** holds, per target, the score, ready flag, counts by severity
   and by category, and the **top 20** findings. It also records the observed
   server version, knowledge-base version, agent version and evaluation time.
-  Status size is deliberately bounded. The full finding list lives in the
-  CLI and server output.
+  Status size is bounded by construction: at most 8 targets, 20 findings
+  each, finding titles and remediation clipped (to 512 and 1024 bytes as
+  stored, counting JSON escapes: a `<` is six bytes there), and at most 32
+  `notAssessed` entries of 512 bytes. That is about 275 KiB at the limits
+  whatever the characters are (measured, with ASCII, accented, emoji and
+  escaped text alike), under the 1 MiB it is asserted at and far below the
+  apiserver's 3 MiB request limit and etcd's 1.5 MiB object limit. The
+  full finding list lives in the CLI and server output.
 
 The agent applies the CRD on startup. A failure there is non-fatal, because
 the chart also installs the CRD from `crds/`. The agent recreates its object

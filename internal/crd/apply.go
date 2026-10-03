@@ -221,7 +221,10 @@ func stringsToInterfaces(ss []string) []interface{} {
 // since is not claimed as observed; zero stamps the generation of the
 // object being written. It sets the Ready condition from st, keeping the
 // stored condition's lastTransitionTime while its status is unchanged.
+// Whatever st holds, notAssessed is bounded here (boundNotAssessed), the
+// one place every source of notes passes.
 func WriteStatus(ctx context.Context, dyn dynamic.Interface, name string, st Status) error {
+	st.NotAssessed = boundNotAssessed(st.NotAssessed)
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		obj, gerr := dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
 		if gerr != nil {

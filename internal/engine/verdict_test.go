@@ -202,6 +202,38 @@ func TestEvaluateUpgradeHops(t *testing.T) {
 	}
 }
 
+// The upgrade-path title is copied into the ClusterReadiness status, so it
+// must not grow with the distance to the target: past three hops it names
+// the first two versions, an ellipsis and the last. The key, which finding
+// identity (baselines, plan diffs) rests on, is the same at every distance.
+func TestEvaluateUpgradePathTitleIsBounded(t *testing.T) {
+	now := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	path := func(minor int) Finding {
+		t.Helper()
+		r := Evaluate(clusterInv(), testKB(), inventory.Version{Major: 1, Minor: minor}, now)
+		for _, f := range r.Findings {
+			if f.Key == "version-skew/upgrade-path" {
+				return f
+			}
+		}
+		t.Fatalf("no upgrade-path finding for 1.%d", minor)
+		return Finding{}
+	}
+	if got, want := path(37).Title, "upgrading from 1.34 to 1.37 takes 3 minor-version upgrades: 1.35, 1.36, 1.37"; got != want {
+		t.Errorf("three hops (still spelled out):\n got %q\nwant %q", got, want)
+	}
+	if got, want := path(38).Title, "upgrading from 1.34 to 1.38 takes 4 minor-version upgrades (1.34 → 1.35 → … → 1.38)"; got != want {
+		t.Errorf("four hops:\n got %q\nwant %q", got, want)
+	}
+	far := path(400000)
+	if len(far.Title) > 120 {
+		t.Errorf("title for a target 400000 minors away is %d bytes: %q", len(far.Title), far.Title)
+	}
+	if far.Key != "version-skew/upgrade-path" || far.Key != path(38).Key {
+		t.Errorf("key = %q, want it independent of distance", far.Key)
+	}
+}
+
 // The report names the server version the target was judged against, so a
 // reader can see a target that is not an upgrade.
 func TestReportIncludesServerVersion(t *testing.T) {

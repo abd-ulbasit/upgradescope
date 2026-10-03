@@ -37,6 +37,10 @@ var AgentVersion = "dev"
 // ignoreSource labels spec.ignore suppressions and warnings.
 const ignoreSource = "spec.ignore"
 
+// maxSkipNotes is how many invalid or duplicate spec targets get a note of
+// their own in status.notAssessed; a last line counts the rest.
+const maxSkipNotes = 8
+
 type Config struct {
 	Interval       time.Duration // default 10m, min 1m
 	ServerURL      string        // optional; "" = CRD-only mode
@@ -107,6 +111,11 @@ func (c *Config) applyDefaults() error {
 			targets = append(targets, minor)
 		}
 	}
+	// spec.targets takes at most crd.MaxTargets: more would be rejected by
+	// the apiserver on every tick.
+	if len(targets) > crd.MaxTargets {
+		return fmt.Errorf("targets: %d given, at most %d are evaluated (the ClusterReadiness schema allows no more)", len(targets), crd.MaxTargets)
+	}
 	c.Targets = targets
 	return nil
 }
@@ -116,20 +125,50 @@ func (c *Config) applyDefaults() error {
 // status.notAssessed), else the next minor above the observed server version
 // (vendor-suffixed GitVersions such as "v1.33.5-gke.1080000" included).
 // Resolved per-tick because the spec can change at any time.
+//
+// At most crd.MaxTargets are returned, the first in spec order: every target
+// is a row in status, and the schema's maxItems keeps new CRs within that.
+// A CR written under an older schema may list more; the rest are counted
+// in one note, not assessed. Notes for skipped entries are capped too
+// (maxSkipNotes), so the notes do not grow with the spec either.
 func resolveTargets(spec crd.Spec, inv inventory.Inventory) (targets []inventory.Version, notes []string, err error) {
+	seen := map[inventory.Version]bool{}
+	skipped, over := 0, 0
+	firstOver := ""
+	skip := func(note string) {
+		if skipped < maxSkipNotes {
+			notes = append(notes, note)
+		}
+		skipped++
+	}
 	for _, raw := range spec.Targets {
 		v, perr := inventory.ParseTarget(raw)
 		if perr != nil {
-			notes = append(notes, fmt.Sprintf("targets: skipped invalid spec target %q", raw))
+			skip(fmt.Sprintf("targets: skipped invalid spec target %q", raw))
 			continue
 		}
 		// The CRD schema allows repeats; a second evaluation of the same
 		// target would duplicate its status row and its metric series.
-		if slices.Contains(targets, v) {
-			notes = append(notes, fmt.Sprintf("targets: ignored duplicate spec target %q", raw))
+		if seen[v] {
+			skip(fmt.Sprintf("targets: ignored duplicate spec target %q", raw))
+			continue
+		}
+		seen[v] = true
+		if len(targets) == crd.MaxTargets {
+			if over == 0 {
+				firstOver = raw
+			}
+			over++
 			continue
 		}
 		targets = append(targets, v)
+	}
+	if skipped > maxSkipNotes {
+		notes = append(notes, fmt.Sprintf("targets: %d more invalid or duplicate spec targets skipped", skipped-maxSkipNotes))
+	}
+	if over > 0 {
+		notes = append(notes, fmt.Sprintf("targets: %d spec targets not assessed: at most %d are evaluated, the first in spec order (first left out: %q)",
+			over, crd.MaxTargets, firstOver))
 	}
 	if len(targets) > 0 {
 		return targets, notes, nil
@@ -239,7 +278,10 @@ func (r *runner) tick(ctx context.Context) error {
 			reports = append(reports, report)
 		}
 		st = crd.StatusFromReports(reports, inv.ServerVersion, AgentVersion, r.now())
-		st.NotAssessed = append(st.NotAssessed, notes...)
+		// Target-selection notes lead: WriteStatus keeps only the first
+		// maxNotAssessed entries, and "N targets not assessed" must not be
+		// the one folded into "… and N more".
+		st.NotAssessed = append(notes, st.NotAssessed...)
 		r.last.reports = reports
 	}
 

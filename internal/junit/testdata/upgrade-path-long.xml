@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="2" failures="1" errors="0" time="0">
+  <testsuite name="version-skew" tests="2" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="version-skew/kubelet-post-upgrade" classname="upgradescope.version-skew" time="0">
+      <failure message="1 node(s) would exceed kubelet version skew after upgrading to 1.36" type="blocker">1 node(s) would exceed kubelet version skew after upgrading to 1.36.&#xA;After upgrading the control plane to 1.36 these nodes would be more than 3 minor versions behind: node-a (v1.29.4).&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</failure>
+    </testcase>
+    <testcase name="version-skew/upgrade-path" classname="upgradescope.version-skew" time="0">
+      <system-out>info: upgrading from 1.29 to 1.36 takes 7 minor-version upgrades (1.29 → 1.30 → … → 1.36).&#xA;The control plane is upgraded one minor version at a time. This report judges the cluster as it is against 1.36; add-ons, charts and nodes may need upgrading at each step in between.&#xA;References:&#xA;- https://kubernetes.io/releases/version-skew-policy/</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

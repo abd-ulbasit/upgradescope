@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -125,8 +126,78 @@ func ReadyCondition(st Status) metav1.Condition {
 	return c
 }
 
-// maxTopFindings bounds CRD status size; the full list lives in server/CLI.
-const maxTopFindings = 20
+// The status is bounded by construction, so a status write can never grow
+// past the apiserver's request limit (3 MiB) and wedge (issue #191). Four
+// numbers hold it: MaxTargets rows, maxTopFindings findings per row, each
+// title and remediation clipped to a budget of encoded bytes (see clip), and
+// a capped notAssessed. At the limits that is 8 × 20 × (512 + 1024) bytes of
+// finding text plus 32 × 512 of notes: ~280 KiB whatever the characters are,
+// because the budgets count what the text costs in the stored JSON, not
+// characters (counted in characters, a title of '<' costs six bytes each and
+// the worst case is 1.5 MiB). The full finding list lives in the server and
+// CLI.
+const (
+	// MaxTargets is the most targets a ClusterReadiness evaluates, and the
+	// maxItems of spec.targets in manifest.yaml (a test holds the two
+	// together). Each target costs a status row, and 8 is twice the
+	// server's --targets cap of 4: room for the two or three minors an
+	// upgrade plan spans, and for a CI matrix, without letting a CR grow
+	// the status without limit: the red-team measured 1.88 MB at 500
+	// targets and a rejected write at 1000.
+	MaxTargets = 8
+
+	maxTopFindings    = 20
+	maxTitleLen       = 512  // encoded bytes; a title that names objects can pass it
+	maxRemediationLen = 1024 // encoded bytes
+	maxNoteLen        = 512  // encoded bytes, per notAssessed entry
+	maxNotAssessed    = 32   // entries; one summary line follows if more
+)
+
+// jsonCost is what r takes up in a JSON string as the apiserver stores it,
+// never less: Go's encoder writes < > & and U+2028/9 as \uXXXX, control
+// characters as at most six bytes, and bytes that are not UTF-8 as �.
+func jsonCost(r rune) int {
+	switch {
+	case r == '"' || r == '\\':
+		return 2
+	case r < 0x20, r == '<', r == '>', r == '&', r == ' ', r == ' ', r == utf8.RuneError:
+		return 6
+	}
+	return utf8.RuneLen(r)
+}
+
+// clip cuts s to at most n bytes of JSON encoding (see jsonCost), on a rune
+// boundary, marking the cut with an ellipsis (3 bytes more).
+func clip(s string, n int) string {
+	if len(s)*6 <= n { // even all six-byte characters fit
+		return s
+	}
+	cost := 0
+	for pos, r := range s {
+		cost += jsonCost(r)
+		if cost > n {
+			return s[:pos] + "…"
+		}
+	}
+	return s
+}
+
+// boundNotAssessed returns notes with each entry clipped and at most
+// maxNotAssessed of them; a summary line counts the ones left out.
+func boundNotAssessed(notes []string) []string {
+	if len(notes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(notes), maxNotAssessed+1))
+	for i, n := range notes {
+		if i == maxNotAssessed {
+			out = append(out, fmt.Sprintf("… and %d more not listed", len(notes)-maxNotAssessed))
+			break
+		}
+		out = append(out, clip(n, maxNoteLen))
+	}
+	return out
+}
 
 // TargetStatusFromReport summarizes one engine.Report for CRD status:
 // severity/category counts over all findings, plus the first maxTopFindings
@@ -150,8 +221,8 @@ func TargetStatusFromReport(r engine.Report) TargetStatus {
 			ts.TopFindings = append(ts.TopFindings, TopFinding{
 				Category:    string(f.Category),
 				Severity:    string(f.Severity),
-				Title:       f.Title,
-				Remediation: f.Remediation,
+				Title:       clip(f.Title, maxTitleLen),
+				Remediation: clip(f.Remediation, maxRemediationLen),
 			})
 		}
 	}
