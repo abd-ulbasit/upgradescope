@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="1" failures="0" errors="0" time="0">
+  <testsuite name="readiness" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="no findings" classname="upgradescope.readiness" time="0">
+      <system-out>verdict ready, score 100/100, target 1.35, knowledge base test-kb-1: no findings, nothing suppressed, every check assessed.</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

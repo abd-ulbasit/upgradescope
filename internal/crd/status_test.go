@@ -1,8 +1,10 @@
 package crd
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,5 +180,43 @@ func TestStatusFromReportsEmpty(t *testing.T) {
 	}
 	if st.ObservedServerVersion != "v1.35.2" || st.AgentVersion != "v0.2.0" {
 		t.Errorf("base fields missing: %+v", st)
+	}
+}
+
+// The support calendar is the cluster's, not a target's: the status takes
+// it from the first report, and carries the cost only with its currency and
+// the day its list price was read.
+func TestStatusFromReportsSupport(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	support := &engine.SupportStatus{
+		Provider: "eks", Minor: "1.34", Phase: engine.SupportEnding,
+		ExtendedSupportFrom: "2026-12-02", ExtendedSupportEnds: "2027-12-02",
+		AnnualCostDelta: "4380.00", Currency: "USD", PriceAsOf: "2026-10-03",
+	}
+	st := StatusFromReports([]engine.Report{
+		{Target: inventory.Version{Major: 1, Minor: 35}, Support: support},
+		{Target: inventory.Version{Major: 1, Minor: 36}, Support: support},
+	}, "v1.34.2-eks-3abc123", "v0.3.0", now)
+	if st.SupportPhase != "ending" || st.ExtendedSupportFrom != "2026-12-02" || st.AnnualCostDelta != "4380.00" || st.Currency != "USD" || st.PriceAsOf != "2026-10-03" {
+		t.Errorf("status support = %q %q %q %q %q", st.SupportPhase, st.ExtendedSupportFrom, st.AnnualCostDelta, st.Currency, st.PriceAsOf)
+	}
+
+	// A provider with no cited price: the dates, no cost fields.
+	st = StatusFromReports([]engine.Report{{Target: inventory.Version{Major: 1, Minor: 35},
+		Support: &engine.SupportStatus{Provider: "aks", Minor: "1.34", Phase: engine.SupportStandard, ExtendedSupportFrom: "2026-11-30"}}}, "v1.34.2", "v0.3.0", now)
+	if st.SupportPhase != "standard" || st.ExtendedSupportFrom != "2026-11-30" || st.AnnualCostDelta != "" || st.Currency != "" || st.PriceAsOf != "" {
+		t.Errorf("no price: %+v", st)
+	}
+
+	// No support calendar (other, unknown): none of the fields is written.
+	st = StatusFromReports([]engine.Report{{Target: inventory.Version{Major: 1, Minor: 35}}}, "v1.34.2", "v0.3.0", now)
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"supportPhase", "extendedSupportFrom", "annualCostDelta", "priceAsOf", "currency"} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("a cluster with no support calendar marshals %s: %s", key, raw)
+		}
 	}
 }

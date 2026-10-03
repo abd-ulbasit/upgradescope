@@ -69,6 +69,20 @@ type Status struct {
 	Targets               []TargetStatus `json:"targets,omitempty"`
 	NotAssessed           []string       `json:"notAssessed,omitempty"` // "helm: secrets list forbidden"
 	AgentVersion          string         `json:"agentVersion,omitempty"`
+	// SupportPhase, ExtendedSupportFrom, AnnualCostDelta, Currency and
+	// PriceAsOf are the engine's Report.Support for a cluster on EKS, GKE
+	// or AKS whose Kubernetes minor the provider dataset dates: where
+	// the minor stands in the provider's support calendar (standard,
+	// ending, extended, ended), the day extended support begins
+	// (YYYY-MM-DD), and, only where the provider's price is cited, what
+	// extended support adds per cluster per year at list price and the day
+	// that price was read. They are the cluster's, the same for every
+	// target, and absent otherwise.
+	SupportPhase        string `json:"supportPhase,omitempty"`
+	ExtendedSupportFrom string `json:"extendedSupportFrom,omitempty"`
+	AnnualCostDelta     string `json:"annualCostDelta,omitempty"`
+	Currency            string `json:"currency,omitempty"`
+	PriceAsOf           string `json:"priceAsOf,omitempty"`
 	// ObservedGeneration is the metadata.generation whose spec was
 	// evaluated (WriteStatus stamps the current one when it is zero), and
 	// Conditions carry the Ready condition (ReadyCondition): the standard
@@ -270,6 +284,10 @@ func StatusFromReports(reports []engine.Report, observedServerVersion, agentVers
 	}
 	if len(reports) > 0 {
 		st.KBVersion = reports[0].KBVersion
+		if s := reports[0].Support; s != nil {
+			st.SupportPhase, st.ExtendedSupportFrom = string(s.Phase), s.ExtendedSupportFrom
+			st.AnnualCostDelta, st.Currency, st.PriceAsOf = s.AnnualCostDelta, s.Currency, s.PriceAsOf
+		}
 	}
 	return st
 }

@@ -98,6 +98,26 @@ spec:
                   format: date-time
                 agentVersion:
                   type: string
+                supportPhase:
+                  description: Where the cluster's Kubernetes minor stands in its managed provider's (EKS, GKE, AKS) support calendar - standard, ending (standard support ends within 90 days), extended (past standard support, before the provider stops supporting it) or ended. Absent when the provider is not one of the three or its dates for the minor are not in the knowledge base. The same for every target.
+                  type: string
+                  enum: [standard, ending, extended, ended]
+                extendedSupportFrom:
+                  description: The day (UTC, YYYY-MM-DD) standard support for the cluster's minor ends and extended support begins. Set with supportPhase.
+                  type: string
+                  pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                annualCostDelta:
+                  description: What extended support adds per cluster per year at the provider's published list price, (extended - standard) x 8760 cluster-hours, as a decimal string in currency. A list price as of priceAsOf, not the bill. Set only for a provider whose price the knowledge base cites, while the minor can still be in extended support.
+                  type: string
+                  pattern: '^[0-9]+\.[0-9]{2}$'
+                currency:
+                  description: The currency of annualCostDelta.
+                  type: string
+                  enum: [USD]
+                priceAsOf:
+                  description: The day (YYYY-MM-DD) the list price behind annualCostDelta was read from the provider's pricing page.
+                  type: string
+                  pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
                 observedGeneration:
                   description: The metadata.generation (spec version) the status was evaluated for.
                   type: integer

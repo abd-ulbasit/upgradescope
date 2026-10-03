@@ -30,6 +30,9 @@ func WriteTable(out io.Writer, r engine.Report) error {
 	if r.ServerVersion != "" { // files mode has no cluster version
 		fmt.Fprintf(w, "Server:   %s\n", r.ServerVersion)
 	}
+	if r.Support != nil { // a managed cluster whose provider dates its minor
+		fmt.Fprintf(w, "Support:  %s\n", r.Support.Summary())
+	}
 	fmt.Fprintf(w, "Target:   %s\n", r.Target)
 	fmt.Fprintf(w, "KB:       %s\n", r.KBVersion)
 	fmt.Fprintln(w)

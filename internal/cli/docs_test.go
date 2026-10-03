@@ -414,7 +414,21 @@ func TestJSONReportMatchesSchema(t *testing.T) {
 		t.Fatalf("live run: %v", err)
 	}
 	outs = append(outs, live)
+	// An EKS cluster 61 days before its minor leaves standard support: the
+	// support-lifecycle warning, and the status with the list-price delta.
+	eksInv := liveInventory("v1.34.2-eks-3abc123")
+	eksInv.Provider = inventory.ProviderEKS
+	eks, _, err := execScanStderr(t, []string{"--target", "1.35", "--output", "json", "--fail-on", "never"}, evalStub(t, eksInv))
+	if err != nil {
+		t.Fatalf("EKS run: %v", err)
+	}
+	outs = append(outs, eks)
 	all := strings.Join(outs, "\n")
+	for _, want := range []string{`"category": "support-lifecycle"`, `"support": {`, `"annualCostDelta": "4380.00"`, `"priceAsOf"`, `"phase": "ending"`} {
+		if !strings.Contains(eks, want) {
+			t.Errorf("the EKS run lacks %s:\n%s", want, eks)
+		}
+	}
 	for _, want := range []string{`"category": "unknown-api"`, `"serverVersion": "v1.36.4"`, `"baselineState"`, `"suppressed"`, `"notAssessed"`, `"kubeContext": "test-ctx"`, `"apiServer"`, `"unrecognizedImages"`, `"unrecognizedImagesOmitted"`} {
 		if !strings.Contains(all, want) {
 			t.Errorf("no run produced %s; this test no longer covers it", want)

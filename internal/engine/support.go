@@ -69,6 +69,38 @@ type SupportStatus struct {
 	PriceAsOf       string `json:"priceAsOf,omitempty"`
 }
 
+// Summary is the status in one line for the scan table: the dates, and the
+// annual extended-support cost labelled as a list price with its as-of day
+// where the provider's price is cited.
+func (s SupportStatus) Summary() string {
+	head := strings.ToUpper(s.Provider) + " " + s.Minor + ": "
+	cost := ""
+	if s.AnnualCostDelta != "" {
+		if cents, err := strconv.ParseInt(strings.Replace(s.AnnualCostDelta, ".", "", 1), 10, 64); err == nil {
+			cost = fmt.Sprintf(" %s/yr per cluster (list price as of %s)", formatUSD(cents), s.PriceAsOf)
+		}
+	}
+	switch s.Phase {
+	case SupportExtended:
+		if cost != "" {
+			cost = "; adds" + cost
+		}
+		return fmt.Sprintf("%sin extended support since %s (until %s)%s", head, s.ExtendedSupportFrom, s.ExtendedSupportEnds, cost)
+	case SupportEnded:
+		if s.ExtendedSupportEnds == "" {
+			return fmt.Sprintf("%sout of support (standard support ended %s)", head, s.ExtendedSupportFrom)
+		}
+		return fmt.Sprintf("%sout of support (extended support ended %s)", head, s.ExtendedSupportEnds)
+	}
+	if s.ExtendedSupportEnds == "" {
+		return fmt.Sprintf("%sstandard support ends %s, no extended support offered", head, s.ExtendedSupportFrom)
+	}
+	if cost != "" {
+		cost = "; extended support adds" + cost
+	}
+	return fmt.Sprintf("%sstandard support ends %s, extended support until %s%s", head, s.ExtendedSupportFrom, s.ExtendedSupportEnds, cost)
+}
+
 // evalSupport places the cluster's control-plane minor in its provider's
 // support calendar and, once standard support is ending or over, reports
 // it: a warning from supportWarnDays before the day extended support

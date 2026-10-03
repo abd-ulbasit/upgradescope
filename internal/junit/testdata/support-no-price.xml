@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="1" failures="0" errors="0" time="0">
+  <testsuite name="support-lifecycle" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="support-lifecycle/aks/1.34" classname="upgradescope.support-lifecycle" time="0">
+      <system-out>warning: Kubernetes 1.34 leaves Azure Kubernetes Service standard support on 2026-11-30.&#xA;Azure Kubernetes Service ends standard support for Kubernetes 1.34 on 2026-11-30; the cluster then moves to extended support until 2027-11-30, when Azure Kubernetes Service stops supporting it.&#xA;Fix: Upgrade the control plane to a Kubernetes minor that is still in standard support.&#xA;References:&#xA;- https://learn.microsoft.com/en-us/azure/aks/supported-kubernetes-versions</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

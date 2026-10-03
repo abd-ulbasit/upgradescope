@@ -27,6 +27,31 @@ func TestConstantsMatchManifest(t *testing.T) {
 	}
 }
 
+// Every field Status serializes is in the manifest's status schema: the
+// apiserver prunes the status fields a structural schema does not list, so a
+// field added to the Go type alone is written by the agent and never stored.
+func TestManifestStatusListsEveryStatusField(t *testing.T) {
+	status := parseManifest(t).Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"]
+	typ := reflect.TypeOf(Status{})
+	for i := 0; i < typ.NumField(); i++ {
+		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		if _, ok := status.Properties[name]; !ok {
+			t.Errorf("Status.%s is serialized as status.%s, which the manifest's status schema does not list (the apiserver would prune it)", typ.Field(i).Name, name)
+		}
+	}
+	for _, name := range []string{"supportPhase", "extendedSupportFrom", "annualCostDelta", "currency", "priceAsOf"} {
+		if p := status.Properties[name]; p.Type != "string" {
+			t.Errorf("status.%s schema type = %q, want string (a decimal string, never a float)", name, p.Type)
+		}
+	}
+	if enum := status.Properties["supportPhase"].Enum; len(enum) != 4 {
+		t.Errorf("status.supportPhase enum = %v, want the four engine phases", enum)
+	}
+}
+
 func TestGVR(t *testing.T) {
 	want := schema.GroupVersionResource{Group: "upgradescope.dev", Version: "v1alpha1", Resource: "clusterreadinesses"}
 	if got := GVR(); got != want {

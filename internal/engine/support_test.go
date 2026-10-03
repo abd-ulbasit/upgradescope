@@ -214,6 +214,42 @@ func TestEvalSupportRemediationNamesNewerMinorsInStandardSupport(t *testing.T) {
 	}
 }
 
+func TestSupportSummary(t *testing.T) {
+	cost := func(s SupportStatus) SupportStatus {
+		s.AnnualCostDelta, s.Currency, s.PriceAsOf = "4380.00", "USD", "2026-10-03"
+		return s
+	}
+	base := SupportStatus{Provider: "eks", Minor: "1.34", ExtendedSupportFrom: "2026-12-02", ExtendedSupportEnds: "2027-12-02"}
+	for _, tc := range []struct {
+		name string
+		s    SupportStatus
+		want string
+	}{
+		{"standard, costed", cost(SupportStatus{Provider: "eks", Minor: "1.34", Phase: SupportStandard, ExtendedSupportFrom: "2026-12-02", ExtendedSupportEnds: "2027-12-02"}),
+			"EKS 1.34: standard support ends 2026-12-02, extended support until 2027-12-02; extended support adds $4,380/yr per cluster (list price as of 2026-10-03)"},
+		{"ending, costed", cost(withPhase(base, SupportEnding)),
+			"EKS 1.34: standard support ends 2026-12-02, extended support until 2027-12-02; extended support adds $4,380/yr per cluster (list price as of 2026-10-03)"},
+		{"standard, no price", withPhase(SupportStatus{Provider: "aks", Minor: "1.34", ExtendedSupportFrom: "2026-11-30", ExtendedSupportEnds: "2027-11-30"}, SupportStandard),
+			"AKS 1.34: standard support ends 2026-11-30, extended support until 2027-11-30"},
+		{"extended, costed", cost(withPhase(base, SupportExtended)),
+			"EKS 1.34: in extended support since 2026-12-02 (until 2027-12-02); adds $4,380/yr per cluster (list price as of 2026-10-03)"},
+		{"ended", withPhase(base, SupportEnded), "EKS 1.34: out of support (extended support ended 2027-12-02)"},
+		{"ended, none offered", withPhase(SupportStatus{Provider: "eks", Minor: "1.20", ExtendedSupportFrom: "2022-11-01"}, SupportEnded),
+			"EKS 1.20: out of support (standard support ended 2022-11-01)"},
+		{"ending, none offered", withPhase(SupportStatus{Provider: "eks", Minor: "1.20", ExtendedSupportFrom: "2026-11-01"}, SupportEnding),
+			"EKS 1.20: standard support ends 2026-11-01, no extended support offered"},
+	} {
+		if got := tc.s.Summary(); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func withPhase(s SupportStatus, p SupportPhase) SupportStatus {
+	s.Phase = p
+	return s
+}
+
 func TestEvalSupportMoney(t *testing.T) {
 	for _, tc := range []struct {
 		cents int64
