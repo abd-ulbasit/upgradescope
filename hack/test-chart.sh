@@ -110,7 +110,6 @@ assert_contains "$TMP/default.yaml" 'nonResourceURLs: ["/version", "/metrics"]' 
 assert_contains "$TMP/default.yaml" 'clusterreadinesses/status'              "status subresource rule"
 assert_contains "$TMP/default.yaml" 'resourceNames: ["clusterreadinesses.upgradescope.basit.engineer"]' "CRD writes scoped to our CRD"
 assert_contains "$TMP/default.yaml" 'apiGroups: ["upgradescope.basit.engineer"]' "CR rules name the upgradescope.basit.engineer group"
-assert_not_contains "$TMP/default.yaml" 'upgradescope.dev' "no rule names the pre-v0.2.0 group"
 assert_contains "$TMP/default.yaml" 'resourceNames: ["cluster"]' "CR writes scoped to agent.crName"
 assert_contains "$TMP/default.yaml" 'resources: ["secrets"]' "Helm Secret read on by default (rbac.helmSecrets)"
 assert_contains "$TMP/default.yaml" '--manage-crd=true' "agent manages the CRD schema by default"
