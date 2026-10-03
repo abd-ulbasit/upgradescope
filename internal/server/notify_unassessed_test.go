@@ -141,6 +141,37 @@ func TestRequiredCapabilityOutageKeepsItsBlockers(t *testing.T) {
 	expectNoEvents(t, h, "api-usage back, PSP unchanged")
 }
 
+// TestHelmOutageKeepsChartFoundAddOn: an add-on found through its Helm
+// chart alone is gone from the inventory while helm is not assessed. That
+// is not its resolution, and its return is not news (#189).
+func TestHelmOutageKeepsChartFoundAddOn(t *testing.T) {
+	h := newHarness(t, Config{KB: legacyKB()}, aug1)
+	withHelm := func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true}
+		return inv
+	}
+	h.push("prod", withHelm(argoChartInventory("2.10.0"))) // past its end of life
+	if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "blocked" {
+		t.Fatalf("cell with Argo CD 2.10 = %+v, want blocked", c)
+	}
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := argoChartInventory("2.10.0")
+	broken.AddOns = nil
+	broken.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: false, Reason: "list secrets: forbidden"}
+	h.push("prod", broken)
+	if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "ready" {
+		t.Fatalf("cell with helm unavailable = %+v, want the engine's verdict, ready", c)
+	}
+	expectNoEvents(t, h, "helm failure")
+
+	h.push("prod", withHelm(argoChartInventory("2.10.0")))
+	expectNoEvents(t, h, "helm back, Argo CD unchanged")
+
+	h.push("prod", withHelm(argoChartInventory("3.1.0")))
+	expectBecameReady(t, h, "Argo CD upgraded")
+}
+
 // TestUnassessedCapabilityStillAnnouncesNewBlockers: a capability gap
 // holds only the blockers it hides. A blocker another capability finds
 // during the outage is news.

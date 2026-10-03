@@ -165,20 +165,24 @@ func (g CapabilityGap) Label() string {
 // assessed for a finding's absence to mean the problem is gone. Sources
 // refines it by key; TestEveryCategoryHasSources keeps it complete.
 //
-// Add-on findings name {addons, versions}: node container runtimes come
-// from the nodes versions lists. Helm-release findings are keyed
-// category/helm-release/…, and come from helm alone (Sources).
-// deprecated-api-in-use comes from the /metrics scrape only: a caller row
-// that folds into its API's usage finding leaves no key of its own behind.
+// Add-on findings name {addons, versions, helm}: node container runtimes
+// come from the nodes versions lists, and the add-ons collector detects
+// add-ons from the Helm releases the helm step read too (chart evidence,
+// whose app version is the install's), so an add-on found through its
+// chart alone is missing while helm is not assessed. Helm-release
+// findings are keyed category/helm-release/…, and come from helm alone
+// (Sources). deprecated-api-in-use comes from the /metrics scrape only: a
+// caller row that folds into its API's usage finding leaves no key of its
+// own behind.
 var categorySources = map[Category][]inventory.Capability{
 	CatRemovedAPI:         {inventory.CapAPIUsage},
 	CatDeprecatedAPI:      {inventory.CapAPIUsage},
 	CatUnknownAPI:         {inventory.CapAPIUsage},
 	CatDeprecatedAPIInUse: {inventory.CapDeprecatedCalls},
-	CatEOLAddon:           {inventory.CapAddOns, inventory.CapVersions},
-	CatEOLApproaching:     {inventory.CapAddOns, inventory.CapVersions},
-	CatAddOnNoData:        {inventory.CapAddOns, inventory.CapVersions},
-	CatChartIncompat:      {inventory.CapAddOns, inventory.CapVersions},
+	CatEOLAddon:           {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
+	CatEOLApproaching:     {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
+	CatAddOnNoData:        {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
+	CatChartIncompat:      {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
 	CatVersionSkew:        {inventory.CapVersions},
 	CatCRDVersion:         {inventory.CapCRDs},
 	CatKBStale:            {}, // the knowledge base's own date
@@ -201,7 +205,9 @@ func Sources(c Category, key string) []inventory.Capability {
 //   - api-usage and deprecated-calls leave unassessed the APIs they name
 //     ("group/version Kind", "group/version resource");
 //   - helm leaves unassessed the releases it names ("namespace/name"),
-//     and every release when it names a storage driver;
+//     and every release when it names a storage driver; and every add-on
+//     when it names anything, since an add-on's key does not say which
+//     release, if any, it was found through;
 //   - any other capability that names something leaves all of its
 //     findings unassessed;
 //   - a partial capability that names nothing read everything that could
@@ -233,6 +239,9 @@ func (g CapabilityGap) skips(key string) bool {
 			return ok && apiKey(group, version, name) == tail
 		})
 	case inventory.CapHelm:
+		if !strings.Contains(key, "/helm-release/") {
+			return len(g.Skipped) > 0 // an add-on finding
+		}
 		return slices.ContainsFunc(g.Skipped, func(s string) bool {
 			return !strings.Contains(s, "/") || strings.HasSuffix(key, "/helm-release/"+s)
 		})

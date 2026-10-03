@@ -61,7 +61,7 @@ func TestEveryCategoryHasSources(t *testing.T) {
 }
 
 func TestSources(t *testing.T) {
-	addOnData := []inventory.Capability{inventory.CapAddOns, inventory.CapVersions}
+	addOnData := []inventory.Capability{inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm}
 	for _, tc := range []struct {
 		cat  Category
 		key  string
@@ -74,6 +74,7 @@ func TestSources(t *testing.T) {
 		{CatChartIncompat, "chart-incompat/ingress-nginx/1.9", addOnData},
 		{CatEOLAddon, "eol-addon/ingress-nginx", addOnData},
 		{CatEOLApproaching, "eol-approaching/cert-manager", addOnData},
+		{CatAddOnNoData, "addon-no-data/argo-cd", addOnData},
 		{CatDeprecatedAPIInUse, "deprecated-api-in-use/networking.k8s.io/v1beta1/servicecidrs", []inventory.Capability{inventory.CapDeprecatedCalls}},
 		{CatVersionSkew, "version-skew/kubelet-post-upgrade", []inventory.Capability{inventory.CapVersions}},
 		{CatCRDVersion, "crd-version/unserved/cert-manager.io/v1alpha2/Certificate", []inventory.Capability{inventory.CapCRDs}},
@@ -137,6 +138,22 @@ func TestUnassessed(t *testing.T) {
 		{
 			"partial helm driver", []CapabilityGap{{Capability: inventory.CapHelm, Partial: true, Skipped: []string{"configmaps"}}},
 			[]check{{CatRemovedAPI, web, true}, {CatRemovedAPI, api, true}, {CatChartIncompat, "chart-incompat/helm-release/shop/api", true}},
+		},
+		{
+			// An add-on found through its chart alone is gone from the
+			// inventory with helm (#189).
+			"unavailable helm", []CapabilityGap{{Capability: inventory.CapHelm, Reason: "list secrets: forbidden"}},
+			[]check{{CatEOLAddon, "eol-addon/ingress-nginx", true}, {CatChartIncompat, "chart-incompat/ingress-nginx/1.9", true},
+				{CatRemovedAPI, web, true}, {CatRemovedAPI, psp, false}, {CatVersionSkew, skew, false}},
+		},
+		{
+			// An add-on's key does not say which release it came from.
+			"partial helm release, add-on keys", []CapabilityGap{{Capability: inventory.CapHelm, Partial: true, Skipped: []string{"shop/web"}}},
+			[]check{{CatEOLAddon, "eol-addon/ingress-nginx", true}, {CatEOLApproaching, "eol-approaching/cert-manager", true}},
+		},
+		{
+			"partial helm naming nothing", []CapabilityGap{{Capability: inventory.CapHelm, Partial: true}},
+			[]check{{CatEOLAddon, "eol-addon/ingress-nginx", false}, {CatRemovedAPI, web, false}},
 		},
 		{
 			"partial versions", []CapabilityGap{{Capability: inventory.CapVersions, Partial: true, Skipped: []string{"kube-proxy"}}},
