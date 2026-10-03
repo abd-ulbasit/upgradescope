@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -29,7 +30,13 @@ func atTargetCap(c *Config) { c.ExtraTargets = heapTargets }
 // copies what it reads, not the fake's, which hands out what it holds.
 func newSQLiteTestServer(t *testing.T, opts ...func(*Config)) *Server {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "upgradescope.db"))
+	return newSQLiteTestServerAt(t, filepath.Join(t.TempDir(), "upgradescope.db"), opts...)
+}
+
+// newSQLiteTestServerAt is newSQLiteTestServer on the database at path.
+func newSQLiteTestServerAt(t *testing.T, path string, opts ...func(*Config)) *Server {
+	t.Helper()
+	st, err := store.Open(path)
 	if err != nil {
 		t.Fatalf("open sqlite store: %v", err)
 	}
@@ -44,6 +51,65 @@ func newSQLiteTestServer(t *testing.T, opts ...func(*Config)) *Server {
 	}
 	s.now = func() time.Time { return time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) }
 	return s
+}
+
+// withNotifier configures a test server with a notifier, as
+// --slack-webhook or --webhook do: an evaluation of a target that was
+// decided before then loads that evaluation's report, the baseline of
+// what changed (deltaFor).
+func withNotifier(c *Config) { c.Notifier = &recordingNotifier{} }
+
+// earlierPush is body judged at the patch release before: a snapshot of
+// the same cluster with another hash, the same targets and reports as
+// large, which a later push of body is evaluated against.
+func earlierPush(t *testing.T, body string) string {
+	t.Helper()
+	const now, before = `"serverVersion":"v1.34.2"`, `"serverVersion":"v1.34.1"`
+	if !strings.Contains(body, now) {
+		t.Fatalf("push has no %s", now)
+	}
+	return strings.Replace(body, now, before, 1)
+}
+
+// rewordStoredFindings rewrites every finding key and title in the
+// reports stored in the database at path, as a knowledge base that
+// reworded every finding would: the next evaluation of each target then
+// differs from the stored one in every finding, so it is inserted, not
+// refreshed, and its notification has every blocker as news. It returns
+// how many evaluations it rewrote: those with a finding.
+func rewordStoredFindings(t *testing.T, path string) int64 {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	res, err := db.Exec(`UPDATE evaluations SET report = CAST(replace(replace(CAST(report AS TEXT),
+		'"key":"', '"key":"was-'), '"title":"', '"title":"was-') AS BLOB)
+		WHERE instr(CAST(report AS TEXT), '"findings":[{') > 0`)
+	if err != nil {
+		t.Fatalf("rewording stored findings: %v", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// outboxRows is how many notifications are queued in the database at path.
+func outboxRows(t *testing.T, path string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM outbox`).Scan(&n); err != nil {
+		t.Fatalf("counting queued notifications: %v", err)
+	}
+	return n
 }
 
 // concurrentGets sends n GETs of path at once and returns how much the heap
@@ -75,12 +141,15 @@ func concurrentGets(t *testing.T, s *Server, path string, n int) (grew uint64, s
 
 // maxReevaluationHeap is what the background re-evaluation pass may add to
 // the heap: it takes clusters one at a time, and for each target loads the
-// current evaluation's report, evaluates, and holds the new report until
-// the cluster's commit. Measured up to ~189 MiB at the most targets a
-// server takes (atTargetCap), for a snapshot whose five reports are each
-// about the report limit: each extra target adds one, ~19-24 MiB, to the
-// ~81-117 MiB of a pass with one.
-const maxReevaluationHeap = 208 << 20
+// current evaluation's report, decodes its findings' heads, evaluates,
+// and holds the new report until the cluster's commit. Measured at the
+// most targets a server takes (atTargetCap), with a notifier, for a
+// snapshot whose five reports are each about the report limit and whose
+// every finding changed: up to ~198 MiB in six runs on a loaded 8-core
+// machine (runs of one shape differ by up to ~40 MiB), ~105 MiB with no
+// extra target, so each adds 18-33 MiB. The bound leaves ~13% over the
+// worst run.
+const maxReevaluationHeap = 224 << 20
 
 // storedHeapShapes are the snapshots that cost the most once stored, each
 // pushed as storedBody stores it: the dearest to decode at the node
@@ -116,12 +185,17 @@ func storedHeapShapes() map[string]func(int) string {
 
 // The steps that load what was stored, measured on the SQLite store, which
 // copies every snapshot and report it reads, on a server at the most
-// targets it takes (atTargetCap): one push and its five evaluations
-// within maxIngestDecodeHeap, the re-evaluation pass with every
-// evaluation outdated within maxReevaluationHeap, and the dearest /gate
-// stream with ?cluster= against the snapshot within maxGateDecodeHeap
-// (answered, or 413 when the answer would be over the answer limit).
-// docs/operations.md adds these up for the chart's memory limit.
+// targets it takes (atTargetCap) with a notifier, so every evaluation
+// with a decided one before it loads that one as its baseline: a
+// cluster's later push and its five evaluations, against an earlier
+// snapshot as large whose every finding differs, within
+// maxIngestDecodeHeap; the re-evaluation pass the next day, every
+// evaluation outdated and every finding changed again (as a knowledge
+// base update can make them), within maxReevaluationHeap; and the
+// dearest /gate stream with ?cluster= against the snapshot within
+// maxGateDecodeHeap (answered, or 413 when the answer would be over the
+// answer limit). docs/operations.md adds these up for the chart's memory
+// limit.
 func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 	if testing.Short() || raceEnabled || !heapRun {
 		t.Skip("stores snapshots at the node budget; make test-heap runs it, without the race detector")
@@ -130,28 +204,64 @@ func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 	gate := atNodeBudget(gateHeapShapes()["many keys and an alias"])
 	for name, shape := range storedHeapShapes() {
 		t.Run(name, func(t *testing.T) {
-			s := newSQLiteTestServer(t, atTargetCap)
+			path := filepath.Join(t.TempDir(), "upgradescope.db")
+			s := newSQLiteTestServerAt(t, path, atTargetCap, withNotifier)
 			body := []byte(storedBody(name, shape))
+			targets := append([]string{"1.35"}, heapTargets...)
+
+			// The cluster's earlier snapshot, its five reports as large and
+			// every finding in them unlike this push's: the push loads each
+			// as its target's baseline and finds every blocker news.
 			rec := httptest.NewRecorder()
+			serveIngest(s, rec, []byte(earlierPush(t, string(body))), false)
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("earlier push: status %d (%.300s), want 202", rec.Code, rec.Body)
+			}
+			// A report with no finding (none of its shape's kinds flagged at
+			// that target) has nothing to reword, and its evaluation is
+			// refreshed, not inserted.
+			reworded := rewordStoredFindings(t, path)
+			queued := outboxRows(t, path)
+			rec = httptest.NewRecorder()
 			grew := heapPeak(func() { serveIngest(s, rec, body, false) })
 			if rec.Code != http.StatusAccepted || grew > maxIngestDecodeHeap {
 				t.Errorf("push: status %d, the heap grew %d MiB; want 202 within %d MiB", rec.Code, grew>>20, maxIngestDecodeHeap>>20)
 			}
-			t.Logf("%d bytes: push grew the heap %d MiB", len(body), grew>>20)
+			pushNotified := outboxRows(t, path) > queued
+			t.Logf("%d bytes: push grew the heap %d MiB (%d of %d reports reworded, notification queued: %v)", len(body), grew>>20, reworded, len(targets), pushNotified)
 
-			next := s.now().Add(24 * time.Hour) // every evaluation is outdated
+			// A knowledge-base update the next day: every evaluation is
+			// outdated and every finding of each differs from the stored
+			// one, so the pass decodes each stored report, loads it again
+			// as the baseline, and inserts the new one.
+			next := s.now().Add(24 * time.Hour)
 			s.now = func() time.Time { return next }
+			if n := rewordStoredFindings(t, path); n != 2*reworded {
+				t.Fatalf("reworded %d evaluations, want %d", n, 2*reworded)
+			}
+			queued = outboxRows(t, path)
 			grew = heapPeak(func() { s.reevaluateAll(context.Background()) })
 			if grew > maxReevaluationHeap {
 				t.Errorf("re-evaluation pass: the heap grew %d MiB, want at most %d MiB", grew>>20, maxReevaluationHeap>>20)
 			}
-			for _, target := range append([]string{"1.35"}, heapTargets...) {
+			var inserted int64
+			for _, target := range targets {
 				e, err := s.cfg.Store.CurrentEvaluationSummary(context.Background(), 1, target)
 				if err != nil || !e.EvaluatedAt.Equal(next) {
 					t.Fatalf("after the pass, %s = (evaluated %v, %v), want re-evaluated at %v", target, e.EvaluatedAt, err, next)
 				}
+				if e.CreatedAt.Equal(next) {
+					inserted++
+				}
 			}
-			t.Logf("re-evaluation pass grew the heap %d MiB", grew>>20)
+			if inserted != reworded {
+				t.Fatalf("the pass inserted %d evaluations, want the %d whose findings changed", inserted, reworded)
+			}
+			passNotified := outboxRows(t, path) > queued
+			if pushNotified != passNotified {
+				t.Errorf("the push queued a notification: %v, the pass: %v; want the same, from the same findings", pushNotified, passNotified)
+			}
+			t.Logf("re-evaluation pass grew the heap %d MiB (notification queued: %v)", grew>>20, passNotified)
 
 			rec = httptest.NewRecorder()
 			grew = heapPeak(func() {

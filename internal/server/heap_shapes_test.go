@@ -234,6 +234,16 @@ var storedBodies sync.Map
 // within its limit, which a push of some shapes reaches first. Every
 // target is the default and heapTargets (storedPush), the most a server
 // evaluates.
+//
+// The bodies are sized for a server at that cap, and the read proofs
+// (TestReadHeapIsBounded, TestFleetReadsLoadNoReport) store them on
+// servers with no extra target. That still measures the dearest reads
+// because what makes these reports large (a finding per usage, release,
+// call or gap) is the same at every target testKB knows from 1.35 up,
+// and the farther targets add only a version-skew finding (~0.4 KB): the
+// default target's report is about as large as any of the five. A testKB
+// change that made a higher target's reports much larger would shrink
+// these bodies, and the read proofs with them.
 func storedBody(name string, shape func(int) string) string {
 	if b, ok := storedBodies.Load(name); ok {
 		return b.(string)

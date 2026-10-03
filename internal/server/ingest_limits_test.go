@@ -154,12 +154,15 @@ func atSnapshotBudget(shape func(size int) string) string {
 
 // maxIngestDecodeHeap is what decoding, evaluating and storing one
 // snapshot push may add to the heap (#121), on SQLite at the most targets
-// a server takes (atTargetCap): measured up to ~119 MiB to decode 1,000
-// namespace keys per API usage entry, which decode to many maps, and up
-// to ~202 MiB for a stored snapshot whose five reports are each about the
-// report limit (TestStoredSnapshotHeapIsBounded): each extra target adds
-// one, ~16-23 MiB, to the ~81-113 MiB a push with one report takes.
-const maxIngestDecodeHeap = 224 << 20
+// a server takes (atTargetCap): measured up to ~119 MiB for a cluster's
+// first push (1,000 namespace keys per API usage entry decode to many
+// maps), and up to ~216 MiB in six runs on a loaded 8-core machine for a
+// cluster's later push with a notifier, whose five reports are each about
+// the report limit and each previous one its baseline
+// (TestStoredSnapshotHeapIsBounded; runs of one shape differ by up to
+// ~35 MiB). With no extra target that push takes up to ~119 MiB, so each
+// adds 18-28 MiB. The bound leaves ~11% over the worst run.
+const maxIngestDecodeHeap = 240 << 20
 
 // serveIngest runs one snapshot push straight through the handler.
 func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {

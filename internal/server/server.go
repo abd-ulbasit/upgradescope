@@ -124,11 +124,13 @@ const (
 )
 
 // Snapshot ingest concurrency and memory, on the same model as /gate.
-// Decoding, evaluating and storing one push costs up to ~202 MiB of heap
+// Decoding, evaluating and storing one push costs up to ~216 MiB of heap
 // on SQLite at the size and node caps (maxSnapshotUnits) and at
-// MaxExtraTargets (its five reports are at most --max-snapshot-bytes
-// each, maxReportBytes, and the evaluation stops there; each extra target
-// adds one), so pushes are ingested one at a time (a normal one takes milliseconds; an agent's whole fleet
+// MaxExtraTargets, for a cluster's later push with notifications
+// configured (its five reports are at most --max-snapshot-bytes each,
+// maxReportBytes, and the evaluation stops there; each extra target adds
+// one; each previous report is read only for its findings' heads), so
+// pushes are ingested one at a time (a normal one takes milliseconds; an agent's whole fleet
 // pushing on one tick queues). A push asks for the slot once its body is
 // in and waits up to ingestQueueTimeout, under the agent's 30s request
 // timeout, then gets 503 + Retry-After, which the agent retries. Bodies

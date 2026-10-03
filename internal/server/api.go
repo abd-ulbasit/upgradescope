@@ -514,8 +514,9 @@ func (s *Server) authIngest(w http.ResponseWriter, r *http.Request) (boundCluste
 // jsonCost units. Decoding costs memory per JSON value, not per byte:
 // measured heap per unit is at most ~66 bytes (a map of unique keys; a
 // list of `{}` structs is ~50 per unit), so the worst push within it
-// decodes, evaluates and stores in ~115 MiB of live heap on SQLite at the
-// 20 MiB size cap (TestIngestDecodeHeapIsBounded,
+// decodes, evaluates and stores in up to ~216 MiB of heap on SQLite at
+// the 20 MiB size cap, with four --targets and notifications, ~119 MiB
+// with neither (TestIngestDecodeHeapIsBounded,
 // TestStoredSnapshotHeapIsBounded), where 20 MiB of `{}`
 // ObjectRefs used to take ~2.6 GB. A real agent's inventory is far below
 // it: API usage covers only the APIs the knowledge base flags, with at
@@ -630,7 +631,8 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	// One push is decoded, evaluated and stored at a time: each costs up
-	// to ~115 MiB of heap at the size and node caps. Waiting pushes hold
+	// to ~216 MiB of heap at the size and node caps, four --targets and
+	// notifications (TestStoredSnapshotHeapIsBounded). Waiting pushes hold
 	// only their bodies, which the budget bounds.
 	releaseSlot, ok := acquireSlot(w, nil, s.ingestSlots, s.ingestQueueTimeout, "too many concurrent snapshot pushes; retry shortly")
 	if !ok {
@@ -1030,8 +1032,8 @@ type summaryGap struct {
 // the inventory limits may name 32 capabilities: each gap cut to the
 // store column's bounds is up to ~900 bytes (more with escapes), so
 // listing them all made a 500-cluster /fleet of three targets a 10 MB
-// answer that grew the heap 45 MiB, 4.5 times the ~10 MiB the server's
-// worst case allows two fleet reads. A genuine gap is a few hundred
+// answer that grew the heap 45 MiB, almost three times the ~16 MiB the
+// server's worst case allows each of its two fleet reads. A genuine gap is a few hundred
 // bytes, so the gaps of a typical evaluation fit, the required ones
 // (which make a verdict unknown) listed first; the rest are counted, and
 // a cluster's own detail and its report list them all.
