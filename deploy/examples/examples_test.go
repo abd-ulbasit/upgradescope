@@ -109,7 +109,20 @@ func TestOAuth2ProxyExample(t *testing.T) {
 		t.Errorf("--trusted-proxy-cidr = %s, want only the sidecar's 127.0.0.1/32", got)
 	}
 
-	for _, want := range []string{"--upstream=http://127.0.0.1:8080/", "--pass-user-headers=true", "--skip-auth-route=POST=^/api/v1/snapshots$"} {
+	// Everything that reaches serve over loopback is trusted with the
+	// header: a service-mesh sidecar that delivers inbound traffic over
+	// localhost would make every client the proxy.
+	for k, want := range map[string]string{"sidecar.istio.io/inject": "false", "linkerd.io/inject": "disabled"} {
+		if got := d.Spec.Template.Annotations[k]; got != want {
+			t.Errorf("pod annotation %s = %q, want %q: no mesh sidecar in the trusted pod", k, got, want)
+		}
+	}
+
+	// oauth2-proxy sets Authorization only when told to (a basic-auth
+	// password, or --pass-authorization-header); the example says so
+	// explicitly, and strips client copies of the headers it sets.
+	for _, want := range []string{"--upstream=http://127.0.0.1:8080/", "--pass-user-headers=true", "--skip-auth-route=POST=^/api/v1/snapshots$",
+		"--pass-basic-auth=false", "--skip-auth-strip-headers=true"} {
 		if !slices.Contains(proxy.Args, want) {
 			t.Errorf("oauth2-proxy args lack %s", want)
 		}
@@ -117,7 +130,7 @@ func TestOAuth2ProxyExample(t *testing.T) {
 	for _, a := range proxy.Args {
 		// The server reads read tokens from Authorization; a proxy that
 		// overwrites it, or skips authentication on a read, defeats it.
-		if strings.HasPrefix(a, "--pass-authorization-header") || strings.HasPrefix(a, "--set-authorization-header") ||
+		if strings.HasPrefix(a, "--pass-authorization-header") || strings.HasPrefix(a, "--basic-auth-password") || strings.HasPrefix(a, "--set-authorization-header") ||
 			strings.HasPrefix(a, "--skip-auth-regex") || strings.HasPrefix(a, "--skip-auth-preflight") ||
 			(strings.HasPrefix(a, "--skip-auth-route") && a != "--skip-auth-route=POST=^/api/v1/snapshots$") {
 			t.Errorf("oauth2-proxy arg %s", a)

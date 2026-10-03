@@ -4,10 +4,20 @@
 # oauth2-proxy runs as a sidecar in the server's pod and reaches the server
 # over 127.0.0.1, the only address serve trusts the team header from
 # (--trusted-proxy-cidr=127.0.0.1/32). Whoever reaches serve's own port
-# from anywhere else (agents, CI, Prometheus, another pod) comes from a pod
+# over the network (agents, CI, Prometheus, another pod) comes from a pod
 # or node address: the header is ignored there, and a request needs a
 # token. People open the dashboard through the proxy's port and see the
 # teams their identity-provider groups name.
+#
+# WARNING: serve trusts every connection that arrives over loopback, and
+# not only the sidecar's arrive that way:
+#   - kubectl port-forward to this pod connects from 127.0.0.1, so anyone
+#     allowed pods/portforward in this namespace can send the header and
+#     read any team (never the whole fleet). Grant it only to people who
+#     may read every team, or forward to the proxy's port instead.
+#   - a service-mesh sidecar that delivers inbound traffic over localhost
+#     makes every client 127.0.0.1. The pod opts out of Istio and Linkerd
+#     injection below; keep any other mesh out of it too.
 #
 # Before applying, in namespace upgradescope:
 #   - a Secret oauth2-proxy with client-id, client-secret and cookie-secret
@@ -54,6 +64,11 @@ spec:
       labels:
         app.kubernetes.io/name: upgradescope
         app.kubernetes.io/component: server
+      annotations:
+        # No mesh sidecar: it would deliver every client over loopback,
+        # where the team header is trusted.
+        sidecar.istio.io/inject: "false"
+        linkerd.io/inject: disabled
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -129,8 +144,15 @@ spec:
             - --http-address=0.0.0.0:4180
             - --upstream=http://127.0.0.1:8080/
             - --reverse-proxy=true
-            # X-Forwarded-User, -Email and -Groups, from the session.
+            # X-Forwarded-User, -Email and -Groups, from the session; a
+            # client's own copies of them are stripped first.
             - --pass-user-headers=true
+            - --skip-auth-strip-headers=true
+            # Leave Authorization as the client sent it: the server reads
+            # read tokens from it. (Basic credentials replace it only with
+            # a --basic-auth-password, and --pass-authorization-header
+            # would send the ID token; neither is set.)
+            - --pass-basic-auth=false
             # Agents push with their own ingest tokens; the server ignores
             # the team header on this route, which is not a read.
             - --skip-auth-route=POST=^/api/v1/snapshots$
