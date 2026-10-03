@@ -284,9 +284,6 @@ a CI gate.
   last-applied annotation can attribute is an info finding, `authorship
   unknown`, which never changes the verdict or score; it used to be
   missed (#199).
-- One-segment add-on image matchers are exact; an entry opts a distinctive
-  name into matching under any registry prefix with `"*/name"` (etcd
-  only), so etcd behind a mirror is still recognized.
 - The hand-written `supplement.json` is gone: the four entries it held
   (autoscaling HPA v2beta1 and v2beta2, both PodSecurityPolicy versions)
   were already in the generated dataset, which won on overlap. The
