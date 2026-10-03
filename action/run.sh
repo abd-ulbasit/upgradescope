@@ -11,7 +11,9 @@
 # INPUT_BASELINE, INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
 # the runner pastes an expression's value into the script text, so a value
 # holding `"; cmd` would run cmd (GitHub's script-injection guidance).
-# ACTION_REF is the ref the action was used at (github.action_ref). Text that
+# ACTION_REF is the ref the action was used at (github.action_ref), and
+# ACTION_REPOSITORY the repository that ref is in (github.action_repository),
+# which is this one unless another action wraps this one. Text that
 # reaches the log from an input, a file name or the binary cannot start a
 # workflow command: a value in a message is escaped (esc), and the gate's
 # stderr and the Markdown report are printed by logged, which puts "| " in
@@ -19,8 +21,9 @@
 # hack/action_test.sh (make action-test) covers every path here offline.
 set -euo pipefail
 
-releases=https://github.com/abd-ulbasit/upgradescope/releases
-module=github.com/abd-ulbasit/upgradescope/cmd/upgradescope
+repo=abd-ulbasit/upgradescope
+releases=https://github.com/$repo/releases
+module=github.com/$repo/cmd/upgradescope
 
 # esc <text>: the text as one workflow-command value (% and line breaks
 # escaped), so no line of it can start a command of its own. An input
@@ -140,7 +143,16 @@ install() {
   # prereleases, and would run an older release's engine (it missed
   # removals added since) and pass what this one blocks. Any other ref (a
   # branch, a SHA, v0) has no release of its own: latest.
-  local tag=$INPUT_VERSION ref=${ACTION_REF-}
+  # ACTION_REF is this action's ref only when ACTION_REPOSITORY
+  # (github.action_repository) is this repository: in a composite action
+  # that uses this one, both are the outer action's (actions/runner#2473),
+  # and a wrapper pinned at its own v0.1.1 would otherwise install this
+  # action's v0.1.1. GitHub compares owner and repository names
+  # case-insensitively; tr, not ${,,}, for macOS's bash 3.2.
+  local tag=$INPUT_VERSION ref=
+  if [ "$(printf '%s' "${ACTION_REPOSITORY-}" | tr '[:upper:]' '[:lower:]')" = "$repo" ]; then
+    ref=${ACTION_REF-}
+  fi
   if [ -z "$tag" ]; then
     if [[ $ref =~ $release_tag ]]; then
       tag=$ref

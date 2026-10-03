@@ -117,6 +117,7 @@ runs:
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_WRITE_BASELINE: ${{ inputs.write-baseline }}
         ACTION_REF: ${{ github.action_ref }}
+        ACTION_REPOSITORY: ${{ github.action_repository }}
       run: bash "$GITHUB_ACTION_PATH/run.sh" install
 
     - name: Scan manifests

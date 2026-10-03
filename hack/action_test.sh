@@ -61,6 +61,7 @@ done
 # "unset" from an explicit latest.
 for yml in action.yml action/action.yml; do
   if [ "$(grep -cxF '        ACTION_REF: ${{ github.action_ref }}' "$yml")" = 1 ] &&
+    [ "$(grep -cxF '        ACTION_REPOSITORY: ${{ github.action_repository }}' "$yml")" = 1 ] &&
     awk '/^  version:$/ { on = 1; next } on && /^  [a-z-]+:$/ { on = 0 } on && /^    default: ""$/ { found = 1 } END { exit !found }' "$yml"; then
     ok "$yml passes github.action_ref and github.action_repository and leaves version unset by default"
   else
@@ -309,32 +310,50 @@ hasnt "no GITHUB_OUTPUT write for a bad input" "$rt/output" "x="
 # With no version, an action at a release tag runs that release (#197
 # AC-03b): GitHub's latest skips prereleases, so @v0.2.0-rc.2 would
 # otherwise run an older stable release's engine and pass what it blocks.
-run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+# The ref is this repository's only when github.action_repository says so:
+# in a composite action that uses this one, github.action_ref is the outer
+# action's ref (actions/runner#2473).
+own=ACTION_REPOSITORY=abd-ulbasit/upgradescope
+run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
 expect "no version at a release tag ref installs that tag" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
 has "the default version is logged" "$work/out" "version defaults to the action ref v9.9.9"
 hasnt "no version at a tag ref does not ask for the latest release" "$work/calls" "$releases/latest"
-run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4
+run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4
 expect "no version at a release candidate tag ref installs that tag" 0 "installed upgradescope v9.9.9-rc.1 from $releases/download/v9.9.9-rc.1/$asset"
-run install "$work/stub-curl:" INPUT_VERSION=v9.9.9 ACTION_REF=v9.9.9-rc.1
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.9 "$own" ACTION_REF=v9.9.9-rc.1
 expect "an explicit version wins over the ref" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
 for ref in main v0 v9.9 0123456789abcdef0123456789abcdef01234567 v9.9.9-beta.1 "v9.9.9${nl}::x"; do
-  run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF="$ref" STUB_LATEST=v9.9.4
+  run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF="$ref" STUB_LATEST=v9.9.4
   expect "no version at ref ${ref%%$nl*} installs the latest release" 0 "latest release is v9.9.4"
   hasnt "no version at ref ${ref%%$nl*} is not read as a tag" "$work/out" "defaults to the action ref"
 done
 run install "$work/stub-curl:" INPUT_VERSION= STUB_LATEST=v9.9.4
 expect "no version and no ref installs the latest release" 0 "latest release is v9.9.4"
+# Another repository's ref: a wrapper action pinned at its own v9.9.9 must
+# not pick this action's v9.9.9.
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "a release tag ref of another repository installs the latest release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
+hasnt "another repository's ref is not read as this action's release" "$work/out" "defaults to the action ref"
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "a release tag ref without a repository installs the latest release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=abd-ulbasit/upgradescope-fork ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "a repository whose name only starts with this one's installs the latest release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+if grep -q '^::warning' "$work/out"; then fail "another repository's release is not compared with latest" "$work/out"; else ok "another repository's release is not compared with latest"; fi
+# Owner and repository names are case-insensitive on GitHub.
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=abd-ulbasit/UpgradeScope ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "a mixed-case repository name is this repository" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
 # An explicit latest at a tag ref still floats, and says when that is
 # older than the ref's own release.
-run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4
 expect "latest older than the ref's release warns" 0 "::warning::version latest is v9.9.4, older than this action's own release v9.9.9-rc.1"
-run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=v9.9.9 STUB_LATEST=v9.9.9-rc.1
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v9.9.9-rc.1
 expect "a release candidate is older than its release" 0 "::warning::version latest is v9.9.9-rc.1, older than this action's own release v9.9.9"
-run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.9
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.9
 if grep -q '^::warning' "$work/out"; then fail "latest newer than the ref's release does not warn" "$work/out"; else ok "latest newer than the ref's release does not warn"; fi
-run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=v9.9.9 STUB_LATEST=v9.9.9
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v9.9.9
 if grep -q '^::warning' "$work/out"; then fail "latest equal to the ref's release does not warn" "$work/out"; else ok "latest equal to the ref's release does not warn"; fi
-run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=main STUB_LATEST=v9.9.4
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=main STUB_LATEST=v9.9.4
 if grep -q '^::warning' "$work/out"; then fail "a branch ref has no release to compare with" "$work/out"; else ok "a branch ref has no release to compare with"; fi
 
 run install "$work/stub-curl:"
