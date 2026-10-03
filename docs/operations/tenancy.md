@@ -6,9 +6,11 @@ only the clusters those teams own a namespace in and, of those, only their
 findings and team scores, a finding that spans teams cut to their
 namespaces and objects ([Read access](auth.md)). Teams are the
 attribution findings already carry (a namespace label, or the server's
-`--team-map`). The server has no users or roles, and one database holds
-every team's data, so tenants that must not share a server or a database
-operator still need separate servers, each with its own database and
+`--team-map`). Team scoping limits what a read shows; it is not
+isolation. The server has no users or roles, one database holds every
+team's data, and whoever operates the server or the database sees all of
+it. Tenants that must not share an operator, a server process or a
+database therefore need separate servers, each with its own database and
 tokens. In the cluster, the agent's footprint is described in
 [Security model and RBAC](security-model-and-rbac.md).
 

@@ -27,7 +27,8 @@
 #   - optionally a Secret upgradescope-server with readToken (a fleet-wide
 #     token for CI and Prometheus) and ingestToken (or mint per-cluster
 #     ingest tokens: kubectl exec deploy/upgradescope-server -c server --
-#     upgradescope tokens create <cluster> --db /data/upgradescope.sqlite).
+#     /upgradescope tokens create <cluster> --db /data/upgradescope.sqlite;
+#     the image is distroless, so the binary is called by its path).
 #
 # kubectl create namespace upgradescope
 # kubectl apply -n upgradescope -f upgradescope-oauth2-proxy.yaml

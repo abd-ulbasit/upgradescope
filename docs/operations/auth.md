@@ -9,7 +9,10 @@ Every read is answered for a **scope**: the whole fleet, or a set of
 teams. Teams are the attribution findings already carry (a namespace's
 team label, or the server's `--team-map` rule that overrides it), so a
 team can be handed a view of its own clusters and findings without the
-rest of the fleet.
+rest of the fleet. A scope lists its teams comma separated, and `*` in a
+token's scope is the whole fleet, so `--team-map` refuses a team name
+that holds a comma or whitespace or is `*`; a namespace label value
+cannot hold either.
 
 ## Read credentials
 
@@ -95,7 +98,10 @@ sentence that names the namespaces kept and says the rest is not shown.
 The engine caps a finding's lists (100 namespaces, 100 objects) before
 anyone reads it, and what the cap dropped cannot be divided by team, so
 a cut finding counts none omitted and says more of the scope's may be
-affected than it lists. Its key, severity, remediation and citations are
+affected than it lists. A finding whose namespace list was capped is
+always cut, even when every namespace it lists is the scope's: the ones
+it does not list may be another team's or no team's, and its count and
+"and N more" would say how much. Its key, severity, remediation and citations are
 unchanged. A suppressed finding is cut the same way, and one whose
 accepted objects are all another team's is left out. A finding wholly the
 scope's is served exactly as the fleet-wide view serves it.
@@ -224,6 +230,12 @@ group in the identity provider cannot grant fleet-wide reads with it.
 People who need the fleet use a fleet-wide token, which the dashboard
 sends through the proxy.
 
+The proxy's requests carry no `Authorization` header, so a shared cache
+in front of the proxy would key a team's answer by its URL alone. In
+this mode every read answer is sent with `Vary: <header>, Authorization`,
+and every scoped answer, in any mode, with
+`Cache-Control: private, no-store`.
+
 The two flags go together, and the mode is off by default.
 
 !!! danger "Only safe when the proxy strips the header"
@@ -270,7 +282,7 @@ runs oauth2-proxy in the server's pod. It reaches the server on
 (`--trusted-proxy-cidr=127.0.0.1/32`), so no other pod, node or client
 that reaches the server over the network can set a scope, whatever the
 network allows. What reaches it over loopback can, which is why the
-danger box below names port-forwarding and mesh sidecars, and why the
+danger box above names port-forwarding and mesh sidecars, and why the
 pod opts out of Istio and Linkerd sidecar injection. Two Services:
 
 - `upgradescope` (port 80) is the proxy, for people: point your Ingress
