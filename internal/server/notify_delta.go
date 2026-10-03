@@ -324,6 +324,11 @@ type findingHead struct {
 	// report's own finding, storedHeads.baseline fills it in from the
 	// report's NotAssessed.
 	SeenWithout []inventory.Capability `json:"seenWithout,omitempty"`
+	// HoldUntil is, of a carried deprecated caller, when the restart hold
+	// on it ends (callsHold): the start of the apiserver whose empty gauge
+	// it is missing from, plus deprecatedCallsHold. Zero for any other
+	// finding, and once the hold has ended.
+	HoldUntil time.Time `json:"holdUntil,omitzero"`
 }
 
 func headOf(f engine.Finding) findingHead {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -266,7 +267,8 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 // unassessedIn reports which baseline findings rep could not have seen:
 // those a capability rep did not assess hides (engine.HiddenBy of its
 // gaps) that the pass that last saw them did assess
-// (findingHead.SeenWithout).
+// (findingHead.SeenWithout), and the deprecated callers hold keeps
+// (callsHold.until).
 //
 // A capability the finding was seen without cannot hide it: then the
 // finding came from the others, and its absence from them is as much
@@ -274,18 +276,148 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 // went away since the finding was seen (#189) from one a supported
 // install never has, such as helm with rbac.helmSecrets=false, whose
 // add-on findings are then resolved and announced again as usual.
-//
-// A deprecated caller missing from a scrape of a restarted apiserver is
-// not unassessed: apiserver_requested_deprecated_apis starts empty at
-// every apiserver start, and the scrape cannot tell that from a fix, so
-// the caller is resolved and announced again when it next calls (the
-// documented limit, docs/operations.md, Notifications).
-func unassessedIn(rep engine.Report) func(findingHead) bool {
+func unassessedIn(rep engine.Report, hold callsHold) func(findingHead) bool {
 	return func(h findingHead) bool {
+		if !hold.until(h).IsZero() {
+			return true
+		}
 		return slices.ContainsFunc(engine.HiddenBy(rep.NotAssessed, h.Category, h.key()), func(c inventory.Capability) bool {
 			return !slices.Contains(h.SeenWithout, c)
 		})
 	}
+}
+
+// deprecatedCallsHold is how long after an apiserver starts a deprecated
+// caller missing from its /metrics is held instead of resolved.
+// apiserver_requested_deprecated_apis starts empty at every apiserver
+// start, and a client is counted again only at its next request: a
+// controller or operator at once (its watches reconnect), an hourly or
+// nightly CronJob, a daily backup or report within the day. A day covers
+// all of them, and costs a genuinely fixed caller a day's delay in being
+// resolved, which a fix only shows after the restart anyway: the gauge
+// never drops a series while its apiserver runs. A client that calls
+// less often than daily is still resolved after a day, and announced
+// again when it next calls (docs/operations.md, Apiserver restarts).
+//
+// The window is far longer than the agent's --force-sync-every (default
+// 1h): on a quiet cluster the force-sync duplicates are the only pushes,
+// and the first one scraped after the window end resolves the caller, so
+// a caller is resolved at most --force-sync-every (plus one --interval)
+// after the window ends.
+const deprecatedCallsHold = 24 * time.Hour
+
+// startTimeTolerance is how far after the scrape's collectedAt an
+// apiserver start time is still plausible: the agent stamps collectedAt
+// when it starts collecting, and reads /metrics after api-usage, within
+// one tick (at most 5m), on a node whose clock may differ from the
+// apiserver's by a little.
+const startTimeTolerance = 10 * time.Minute
+
+// earliestAPIServerStart is before any apiserver: Kubernetes was first
+// published in June 2014.
+var earliestAPIServerStart = time.Date(2014, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+// apiServerStart is inv's APIServerStartTime when it is plausible for the
+// scrape: not before 2014, and not later than collectedAt plus
+// startTimeTolerance. Anything else is a buggy or skewed clock, and is
+// treated as absent: a start time in the future would otherwise hold
+// callers until it, however far away.
+func apiServerStart(inv inventory.Inventory) (time.Time, bool) {
+	start := inv.APIServerStartTime
+	if start.IsZero() || inv.CollectedAt.IsZero() || start.Before(earliestAPIServerStart) ||
+		start.After(inv.CollectedAt.Add(startTimeTolerance)) {
+		return time.Time{}, false
+	}
+	return start, true
+}
+
+// callsHold is what one pass's inventory says about holding deprecated
+// callers it does not have (#204): when it was scraped, and, when its
+// apiserver had been up for less than deprecatedCallsHold then, when that
+// apiserver's window ends.
+//
+// A missing caller is held when the scrape is from an apiserver too young
+// to have been asked yet. Within one apiserver the gauge never drops a
+// series, so a baseline caller missing from such a scrape was counted by
+// an earlier apiserver process: the apiserver restarted since the
+// baseline's scrape (or the agent reached a younger HA replica, whose
+// gauge is as empty). A scrape from an apiserver up for longer, or that
+// did not report its start time (an agent that predates the field),
+// holds nothing new, as before.
+//
+// The hold's end is a recorded instant, compared only with scrape times,
+// never with this server's clock or with when an evaluation was made:
+// the carried caller keeps it (findingHead.HoldUntil), and every pass
+// compares it with its own inventory's collectedAt. A duplicate push
+// re-evaluates with the pushed inventory, whose collectedAt is that
+// scrape's (an identical scrape bar the times), so the agent's hourly
+// force-sync ends the hold on a quiet cluster; a background pass judges
+// the stored snapshot, scraped inside the window, and keeps the hold
+// without stamping anything that would stop the next push from ending it
+// (holdChanged reads the recorded end, not EvaluatedAt). The bound is
+// deprecatedCallsHold after the last apiserver start the agent scraped,
+// plus the time to the agent's next push.
+type callsHold struct {
+	scraped time.Time // the inventory's collectedAt
+	young   time.Time // its apiserver's start + deprecatedCallsHold, when after scraped; else zero
+}
+
+func callsHoldOf(inv inventory.Inventory) callsHold {
+	h := callsHold{scraped: inv.CollectedAt}
+	if start, ok := apiServerStart(inv); ok && inv.CollectedAt.Before(start.Add(deprecatedCallsHold)) {
+		h.young = start.Add(deprecatedCallsHold)
+	}
+	return h
+}
+
+// until is when the hold on f, a baseline finding missing from the pass,
+// ends: the later of the end f carries and this scrape's own, or zero
+// when f is not a deprecated caller, when the hold ended at or before
+// this scrape, or when the scrape has no time to judge it by.
+func (c callsHold) until(f findingHead) time.Time {
+	if f.Category != engine.CatDeprecatedAPIInUse || c.scraped.IsZero() {
+		return time.Time{}
+	}
+	end := f.HoldUntil
+	if c.young.After(end) {
+		end = c.young
+	}
+	if !c.scraped.Before(end) {
+		return time.Time{}
+	}
+	return end
+}
+
+// stamp records on each carried finding the end of its hold (until). An
+// ended hold is cleared, of a finding still carried for a capability gap
+// too, so holdChanged does not re-evaluate it again at every push.
+func (c callsHold) stamp(carried []findingHead) []findingHead {
+	for i := range carried {
+		carried[i].HoldUntil = c.until(carried[i])
+	}
+	return carried
+}
+
+// holdMarker is in every stored report that carries a held caller: the
+// carried head's field name, which a JSON string in the report cannot
+// contain unescaped.
+var holdMarker = []byte(`"holdUntil":`)
+
+// holdChanged reports whether report, a stored evaluation's, carries a
+// held caller whose hold this scrape ends or moves (callsHold.until), so
+// the evaluation is re-evaluated though it is not stale. A report without
+// the marker is not decoded.
+func holdChanged(report []byte, hold callsHold) bool {
+	if !bytes.Contains(report, holdMarker) {
+		return false
+	}
+	heads, err := storedFindingHeads(report)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(heads.CarriedForward, func(f findingHead) bool {
+		return !f.HoldUntil.IsZero() && !hold.until(f).Equal(f.HoldUntil)
+	})
 }
 
 // keepCarried stores what e's baseline carries forward in its report
@@ -379,6 +511,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
+	hold := callsHoldOf(inv)
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap}
 	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(snap.ServerVersion) {
@@ -386,8 +519,8 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		if err != nil {
 			return 0, false, err
 		}
-		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep))
-		d.carried = s.keepCarried(&e, d.carried)
+		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep, hold))
+		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Insert = append(batch.Insert, e)
 		deltas.add(d)
 	}
@@ -413,14 +546,18 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 }
 
 // reevaluate brings a stored snapshot's evaluations up to date: targets
-// with no evaluation, or a stale one, are recomputed; unchanged results
+// with no evaluation, or a stale one, or one whose restart hold inv's
+// scrape ends or moves (holdChanged), are recomputed; unchanged results
 // are refreshed in place, changed ones inserted with their notifications.
-// A concurrent writer that got there first (store.ErrConflict) has done
-// the same work, so the pass is dropped.
+// inv is the snapshot's inventory: on a duplicate push the pushed one,
+// whose collectedAt is the new scrape's. A concurrent writer that got
+// there first (store.ErrConflict) has done the same work, so the pass is
+// dropped.
 func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory) error {
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
+	hold := callsHoldOf(inv)
 	batch := store.EvaluationBatch{ClusterID: cluster.ID, SnapshotID: snapID, Current: map[string]int64{}}
 	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(serverVersion) {
@@ -434,7 +571,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			log.Printf("server: re-evaluation of cluster %d skipped: snapshot %d is no longer the latest", cluster.ID, snapID)
 			return nil
 		}
-		if found && !s.stale(cur, now) {
+		if found && !s.stale(cur, now) && !holdChanged(cur.Report, hold) {
 			continue
 		}
 		// What sameResult and deltaFor read of the stored report: its
@@ -466,8 +603,8 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		// Without sinks nothing is carried, and what the row carried is
 		// not compared: no notification reads that baseline.
 		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
-		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep))
-		d.carried = s.keepCarried(&e, d.carried)
+		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, hold))
+		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Current[target.String()] = cur.ID // 0 when not found
 		if decoded && sameResult(cur, stored.Findings, rep) && (len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
 			e.ID = cur.ID

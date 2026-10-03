@@ -274,10 +274,12 @@ func TestWithCarriedIsJSON(t *testing.T) {
 // TestAPIServerResetResolvesVanishedCaller pins a documented limit
 // (docs/operations.md, Notifications; NT-01):
 // apiserver_requested_deprecated_apis starts empty when the apiserver
-// restarts, and the scrape after it cannot tell that from a fix. A
-// deprecated caller that has not called since is resolved, with
+// restarts, and an inventory without the apiserver's start time (an
+// agent that predates it, as testInventory is) cannot tell that from a
+// fix. A deprecated caller that has not called since is resolved, with
 // became-ready if it was the only blocker, while it still exists, and is
-// announced again as a new blocker when it next calls.
+// announced again as a new blocker when it next calls. With a start time
+// the caller is held (notify_restart_test.go).
 func TestAPIServerResetResolvesVanishedCaller(t *testing.T) {
 	h := newHarness(t, Config{KB: testKB()}, aug1)
 	h.push("prod", withServiceCIDRCaller(testInventory()))
@@ -461,13 +463,13 @@ func TestCarriedFindingKeepsWhatItWasSeenWithout(t *testing.T) {
 	both := engine.Report{Target: target, Verdict: engine.VerdictReady, NotAssessed: []engine.CapabilityGap{
 		{Capability: inventory.CapHelm}, {Capability: inventory.CapVersions, Partial: true, Skipped: []string{"kube-proxy"}},
 	}}
-	changes, carried := computeDelta(prev, both, unassessedIn(both))
+	changes, carried := computeDelta(prev, both, unassessedIn(both, callsHold{}))
 	if len(changes) != 0 || len(carried) != 1 || !slices.Equal(carried[0].SeenWithout, prev[0].SeenWithout) {
 		t.Fatalf("versions not assessed: changes %+v, carried %+v; want the finding carried as last seen", changes, carried)
 	}
 
 	helmOnly := engine.Report{Target: target, Verdict: engine.VerdictReady, NotAssessed: []engine.CapabilityGap{{Capability: inventory.CapHelm}}}
-	changes, carried = computeDelta(carried, helmOnly, unassessedIn(helmOnly))
+	changes, carried = computeDelta(carried, helmOnly, unassessedIn(helmOnly, callsHold{}))
 	if len(carried) != 0 || len(changes) != 1 || changes[0].Kind != notify.KindBecameReady {
 		t.Fatalf("versions back: changes %+v, carried %+v; want became-ready", changes, carried)
 	}
