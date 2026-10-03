@@ -633,11 +633,18 @@ caller while its apiserver runs.
 A control-plane upgrade is a restart too, and is the one case that is not
 held when it removes the API. A caller of an API that the upgraded
 apiserver no longer serves (the knowledge base removes it at or before the
-scrape's server version, such as a `servicecidrs` `v1beta1` caller after
-an upgrade from v1.34 to v1.35) can never be counted again, so it is
+scrape's server version, such as a `flowschemas` `v1beta3` caller after
+an upgrade from v1.31 to v1.32) can never be counted again, so it is
 resolved at once, as without a start time, and `became-ready` is not
 delayed by the window. An upgrade within a version that still serves the
-API, a patch upgrade for one, is held as any restart is.
+API, a patch upgrade for one, is held as any restart is, and so is an
+upgrade to a release before the knowledge base's removal (a `servicecidrs`
+`v1beta1` caller is held through v1.36 and resolved at once from v1.37).
+With a rolling upgrade of several apiservers, `/version` and `/metrics`
+can be answered by different ones, so a scrape whose server version comes
+from an upgraded replica may resolve a caller at once while an older
+replica still serves the API; the window is short, and the caller starts
+failing on the upgraded replicas anyway.
 
 The hold ends 24 hours after that apiserver started (a later restart
 inside the window moves the end to the new apiserver's), and is measured

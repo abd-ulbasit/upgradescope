@@ -14,7 +14,10 @@ import (
 // and a mix of agents (#204).
 
 // serviceCIDRKB is testKB that also knows v1beta1 ServiceCIDR, removed in
-// 1.35 (the metric row withServiceCIDRCaller adds says so too).
+// 1.35 (the metric row withServiceCIDRCaller adds says so too). That
+// removal is the fixture's, to put the upgrade from the harness's 1.34
+// cluster on a removal; the shipped knowledge base removes it in 1.37
+// (TestRemovalOfCallShippedKB), so docs use a real removal for an example.
 func serviceCIDRKB() kb.KB {
 	k := testKB()
 	deprecated, removed := inventory.Version{Major: 1, Minor: 33}, inventory.Version{Major: 1, Minor: 35}
