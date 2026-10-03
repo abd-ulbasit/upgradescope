@@ -103,9 +103,13 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       release: true # the PR matrices even when this run was dispatched
+    # A called job may ask for no more than this grants, or GitHub refuses
+    # to start the run (v0.2.0-rc.1: startup_failure).
+    # hack/release-ci-permissions_test.sh keeps it in step with ci.yml.
     permissions:
       contents: read
       pull-requests: read # ci.yml's changes job declares it (skipped on tags)
+      security-events: write # ci.yml's action job declares it; it uploads SARIF only on pushes to main
 
   # GoReleaser publishes the archives and the image together: the image
   # packages the exact linux binaries in the archives (Dockerfile.release).
