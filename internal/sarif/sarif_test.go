@@ -3,6 +3,10 @@ package sarif
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -262,5 +266,48 @@ func TestWriteCleanReport(t *testing.T) {
 	}
 	if len(run.Invocations) != 1 || !run.Invocations[0].ExecutionSuccessful || len(run.Invocations[0].ToolExecutionNotifications) != 0 {
 		t.Errorf("invocations = %+v, want one successful invocation without notifications", run.Invocations)
+	}
+}
+
+// categoryText lists every finding category the engine declares, so a rule
+// of a category that later gains a file location reads as a rule, not as
+// its raw category name. The categories are read from package engine's
+// source, as engine's own TestEveryCategoryHasSources does.
+func TestEveryCategoryHasRuleText(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "../engine/findings.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cats []engine.Category
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, s := range gd.Specs {
+			vs := s.(*ast.ValueSpec)
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "Category" {
+				continue
+			}
+			for _, v := range vs.Values {
+				lit, ok := v.(*ast.BasicLit)
+				if !ok {
+					t.Fatalf("Category constant %v is not a string literal", vs.Names)
+				}
+				name, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cats = append(cats, engine.Category(name))
+			}
+		}
+	}
+	if len(cats) < 12 {
+		t.Fatalf("found %d Category constants, want at least 12: %v", len(cats), cats)
+	}
+	for _, c := range cats {
+		if _, ok := categoryText[c]; !ok {
+			t.Errorf("category %q has no entry in categoryText", c)
+		}
 	}
 }
