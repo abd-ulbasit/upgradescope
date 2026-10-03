@@ -1068,6 +1068,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `unrecognizedImages` | array of string | no | Image repositories no add-on image matcher claims; sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories the cap dropped. |
 | `crds` | array of object | no | CustomResourceDefinitions: versions, status.storedVersions, and the custom resources at a deprecated or unserved version. |
+| `apiServerStartTime` | string (date-time) | no | process_start_time_seconds of the kube-apiserver whose /metrics deprecatedCalls were read from, in whole seconds: apiserver_requested_deprecated_apis counts requests since then. Absent when the scrape did not report it. Not part of the snapshot's identity, like collectedAt: a push that differs only in it is a duplicate. The server ignores one before 2014 or more than 10 minutes after collectedAt. |
 
 ### PushAccepted
 

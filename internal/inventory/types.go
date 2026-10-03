@@ -125,6 +125,17 @@ type Inventory struct {
 	// have been created through the replacement, so the engine reports it as
 	// info and never as use of the deprecated API.
 	APIAuthorshipUnknown []APIUsage `json:"apiAuthorshipUnknown,omitempty"`
+
+	// APIServerStartTime is the process_start_time_seconds of the
+	// kube-apiserver whose /metrics DeprecatedCalls were read from, in
+	// whole seconds: apiserver_requested_deprecated_apis counts requests
+	// since then. Zero when the scrape did not report it, and in
+	// inventories from collectors that predate it. It describes which
+	// apiserver answered, not the cluster, so it is not part of a
+	// snapshot's identity: the agent's and the server's canonical hashes
+	// leave it out, as they do CollectedAt, and an agent that moves between
+	// HA apiservers sends the same snapshot.
+	APIServerStartTime time.Time `json:"apiServerStartTime,omitzero"`
 }
 
 // CRD is one CustomResourceDefinition (apiextensions.k8s.io/v1): the

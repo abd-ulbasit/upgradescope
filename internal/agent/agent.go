@@ -366,15 +366,18 @@ func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) (pushed
 
 // snapshotHash returns (sha256 hex of canonical inventory JSON, wire JSON).
 // Canonical form zeroes CollectedAt: the timestamp changes every tick and
-// hashing it would defeat content dedup entirely. The server must use the
-// same canonicalization for its duplicate detection.
+// hashing it would defeat content dedup entirely. It zeroes
+// APIServerStartTime too: it says which apiserver answered the /metrics
+// scrape, and with HA apiservers that changes whenever the connection
+// moves. The server must use the same canonicalization for its duplicate
+// detection.
 func snapshotHash(inv inventory.Inventory) (hash string, raw []byte, err error) {
 	raw, err = json.Marshal(inv)
 	if err != nil {
 		return "", nil, fmt.Errorf("marshal inventory: %w", err)
 	}
 	stable := inv
-	stable.CollectedAt = time.Time{}
+	stable.CollectedAt, stable.APIServerStartTime = time.Time{}, time.Time{}
 	canon, err := json.Marshal(stable)
 	if err != nil {
 		return "", nil, fmt.Errorf("marshal canonical inventory: %w", err)

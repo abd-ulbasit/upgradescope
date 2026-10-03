@@ -461,6 +461,28 @@ func TestSnapshotHashIgnoresCollectedAt(t *testing.T) {
 	}
 }
 
+// The apiserver that answered the /metrics scrape is not the cluster: an
+// agent whose connection moves between HA apiservers, started at
+// different times, sends no new snapshot for it (#204).
+func TestSnapshotHashIgnoresAPIServerStart(t *testing.T) {
+	inv := fakeClientsInventory(t)
+	h1, _, err := snapshotHash(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv.APIServerStartTime = time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	h2, raw, err := snapshotHash(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 != h2 {
+		t.Error("hash changed when only APIServerStartTime changed — an HA move would push every tick")
+	}
+	if !strings.Contains(string(raw), `"apiServerStartTime":"2026-08-01T09:00:00Z"`) {
+		t.Errorf("wire JSON lacks the start time: %s", raw)
+	}
+}
+
 // requireCRValidAgainstCRD validates the stored CR against the embedded
 // CRD's openAPIV3Schema, as the apiserver would on create/patch. The dynamic
 // fake stores anything, so without this a value the real apiserver rejects
