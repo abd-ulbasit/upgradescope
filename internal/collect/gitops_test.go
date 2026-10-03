@@ -383,8 +383,8 @@ func TestGitOpsWorkloadsAreNotListedWhenHelmReleasesExist(t *testing.T) {
 }
 
 // A role that cannot list workloads cannot show their markers; that is not
-// a gap of its own (the agent's default role cannot), and the CRD markers
-// still work.
+// a gap of its own (a restricted user's role may lack list on workloads;
+// the chart's grants it), and the CRD markers still work.
 func TestGitOpsUnreadableWorkloadsAreNotAGap(t *testing.T) {
 	f := newGitOpsFixture(t, nil, nil)
 	for _, r := range []string{"deployments", "statefulsets", "daemonsets"} {
@@ -599,5 +599,184 @@ func TestGitOpsDeployedIngressNginxIsFoundEndToEnd(t *testing.T) {
 				t.Errorf("not assessed = %+v, want the partial helm gap", rep.NotAssessed)
 			}
 		})
+	}
+}
+
+// destination.namespace and targetNamespace are free text the apiserver
+// does not validate as namespaces. A reference to one that is not a
+// namespace name is dropped (and counted), so the inventory it would have
+// poisoned still passes the server's identifier check and the cluster is
+// still reported.
+func TestGitOpsInvalidTargetNamespaceIsDroppedNotPushed(t *testing.T) {
+	badArgo := argoApp("bad", map[string]any{
+		"destination": inCluster("Not_A_Namespace"),
+		"source":      map[string]any{"repoURL": "https://kubernetes.github.io/ingress-nginx", "chart": "ingress-nginx", "targetRevision": "4.11.3"},
+	})
+	badFlux := fluxRelease("v2", "flux-system", "bad", map[string]any{
+		"targetNamespace": "Not_A_Namespace",
+		"chart":           map[string]any{"spec": map[string]any{"chart": "ingress-nginx", "version": "4.11.3", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "x"}}},
+	})
+	good := argoApp("good", map[string]any{
+		"destination": inCluster("cert-manager"),
+		"source":      map[string]any{"repoURL": "https://charts.jetstack.io", "chart": "cert-manager", "targetRevision": "1.15.3"},
+	})
+	f := newGitOpsFixture(t, []*metav1.APIResourceList{argoServed(), resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases)},
+		[]runtime.Object{badArgo, badFlux, good})
+	inv := Collect(context.Background(), f.clients(), loadKB(t), Options{})
+	if err := inv.ValidateIdentifiers(); err != nil {
+		t.Fatalf("inventory with a free-text target namespace does not validate: %v", err)
+	}
+	if len(inv.GitOpsCharts) != 1 || inv.GitOpsCharts[0].Chart != "cert-manager" {
+		t.Errorf("gitops charts = %#v, want only cert-manager", inv.GitOpsCharts)
+	}
+	for _, a := range inv.AddOns {
+		if a.ID == "ingress-nginx" {
+			t.Errorf("ingress-nginx add-on %+v found through a reference to an impossible namespace", a)
+		}
+	}
+	reason := inv.Capabilities[inventory.CapHelm].Reason
+	for _, want := range []string{"1 Argo CD chart source(s)", "1 Flux chart source(s)", "not a namespace name"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("helm reason %q lacks %q", reason, want)
+		}
+	}
+}
+
+// A HelmRelease's constraint ("4.*") is not a chart version. The chart
+// version of the Helm release Flux's helm-controller leaves wins; without
+// a release, only an exact version is shown.
+func TestGitOpsChartVersionIsEvidenceOnlyWhenExact(t *testing.T) {
+	hr := func(version string) *unstructured.Unstructured {
+		return fluxRelease("v2", "flux-system", "ingress-nginx", map[string]any{
+			"targetNamespace": "ingress-nginx",
+			"chart": map[string]any{"spec": map[string]any{"chart": "ingress-nginx", "version": version,
+				"sourceRef": map[string]any{"kind": "HelmRepository", "name": "ingress-nginx"}}},
+		})
+	}
+	release := helmSecret(t, helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: 1, status: "deployed",
+		chart: "ingress-nginx", chartVersion: "4.11.3", appVersion: "1.11.3"})
+	for _, tc := range []struct {
+		name, constraint string
+		withRelease      bool
+		want             string
+	}{
+		{"release secret beats a wildcard constraint", "4.*", true, "4.11.3"},
+		{"release secret beats a range", ">=4.0.0 <5.0.0", true, "4.11.3"},
+		{"release secret beats an older exact version", "4.0.0", true, "4.11.3"},
+		{"a wildcard alone is no version", "4.*", false, ""},
+		{"a range alone is no version", ">=4.0.0 <5.0.0", false, ""},
+		{"an exact version alone is shown", "v4.11.3", false, "4.11.3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var objs []runtime.Object
+			if tc.withRelease {
+				objs = append(objs, release)
+			}
+			f := newGitOpsFixture(t, []*metav1.APIResourceList{resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases)},
+				[]runtime.Object{hr(tc.constraint)}, objs...)
+			inv := Collect(context.Background(), f.clients(), loadKB(t), Options{})
+			var found []inventory.AddOnInstance
+			for _, a := range inv.AddOns {
+				if a.ID == "ingress-nginx" {
+					found = append(found, a)
+				}
+			}
+			if len(found) != 1 || found[0].ChartVersion != tc.want {
+				t.Fatalf("add-ons = %+v, want one ingress-nginx at chart version %q", found, tc.want)
+			}
+			if tc.withRelease && found[0].Source != "chart" {
+				t.Errorf("source = %q, want chart", found[0].Source)
+			}
+		})
+	}
+}
+
+// Application.spec.sources, when set, replaces spec.source: Argo CD
+// ignores a stale source beside it.
+func TestGitOpsArgoSourcesReplaceSource(t *testing.T) {
+	app := argoApp("both", map[string]any{
+		"destination": inCluster("platform"),
+		"source":      map[string]any{"repoURL": "https://kubernetes.github.io/ingress-nginx", "chart": "ingress-nginx", "targetRevision": "4.11.3"},
+		"sources": []any{
+			map[string]any{"repoURL": "https://charts.jetstack.io", "chart": "cert-manager", "targetRevision": "1.15.3"},
+		},
+	})
+	f := newGitOpsFixture(t, []*metav1.APIResourceList{argoServed()}, []runtime.Object{app})
+	inv, err := f.helmStep()
+	partial(t, err)
+	if len(inv.GitOpsCharts) != 1 || inv.GitOpsCharts[0].Chart != "cert-manager" {
+		t.Errorf("gitops charts = %#v, want only the spec.sources chart", inv.GitOpsCharts)
+	}
+}
+
+// A chart from a GitRepository or Bucket is a path in it, whose last
+// element is the chart's directory; a HelmRepository's is a name.
+func TestGitOpsFluxChartPathFromGitRepository(t *testing.T) {
+	git := fluxRelease("v2", "flux-system", "ingress-nginx", map[string]any{
+		"chart": map[string]any{"spec": map[string]any{"chart": "./charts/ingress-nginx",
+			"sourceRef": map[string]any{"kind": "GitRepository", "name": "platform"}}},
+	})
+	f := newGitOpsFixture(t, []*metav1.APIResourceList{resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases)}, []runtime.Object{git})
+	inv, err := f.helmStep()
+	partial(t, err)
+	if len(inv.GitOpsCharts) != 1 || inv.GitOpsCharts[0].Chart != "ingress-nginx" || inv.GitOpsCharts[0].Repo != "GitRepository/flux-system/platform" {
+		t.Errorf("gitops charts = %#v, want ingress-nginx from the GitRepository", inv.GitOpsCharts)
+	}
+}
+
+// The in-cluster API server has more than one spelling.
+func TestArgoInClusterSpellings(t *testing.T) {
+	for server, want := range map[string]bool{
+		"https://kubernetes.default.svc":                    true,
+		"https://kubernetes.default.svc/":                   true,
+		"https://kubernetes.default.svc:443":                true,
+		"https://kubernetes.default.svc.cluster.local":      true,
+		"https://kubernetes.default.svc.cluster.local:443/": true,
+		"https://kubernetes.default":                        false,
+		"https://spoke.example.com:6443":                    false,
+		"https://kubernetes.default.svc.evil.example":       false,
+	} {
+		if got := argoInCluster(map[string]any{"server": server}); got != want {
+			t.Errorf("argoInCluster(%q) = %v, want %v", server, got, want)
+		}
+	}
+}
+
+// An OCIRepository that cannot be read says why, not only that a
+// chartRef was left unresolved.
+func TestGitOpsFluxOCIRepositoryErrorIsInTheReason(t *testing.T) {
+	hr := fluxRelease("v2", "flux-system", "ingress-nginx", map[string]any{
+		"chartRef": map[string]any{"kind": "OCIRepository", "name": "ingress-nginx-chart"},
+	})
+	f := newGitOpsFixture(t, []*metav1.APIResourceList{
+		resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases),
+		resources("source.toolkit.fluxcd.io/v1", fluxOCIRepos),
+	}, []runtime.Object{hr}, helmSecret(t, helmRev{ns: "a", release: "r", rev: 1, status: "deployed", chart: "x", chartVersion: "1.0.0"}))
+	f.dyn.PrependReactor("get", "ocirepositories", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "ocirepositories"}, "ingress-nginx-chart", errors.New("RBAC"))
+	})
+	_, err := f.helmStep()
+	pe := partial(t, err)
+	if !strings.Contains(pe.Error(), "1 HelmRelease chartRef(s) not resolved") || !strings.Contains(pe.Error(), "forbidden") {
+		t.Errorf("reason %q lacks the unresolved chartRef and the forbidden read", pe.Error())
+	}
+}
+
+// When discovery itself fails nothing is known of the tools, and the
+// reason says that, rather than claiming their sources were unread.
+func TestGitOpsDiscoveryFailureIsWorded(t *testing.T) {
+	f := newGitOpsFixture(t, nil, nil, helmSecret(t, helmRev{ns: "a", release: "r", rev: 1, status: "deployed", chart: "x", chartVersion: "1.0.0"}))
+	f.disc.PrependReactor("get", "group", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("discovery down")
+	})
+	_, err := f.helmStep()
+	pe := partial(t, err)
+	for _, want := range []string{"discovery down", "not known whether Argo CD is installed", "not known whether Flux is installed"} {
+		if !strings.Contains(pe.Error(), want) {
+			t.Errorf("reason %q lacks %q", pe.Error(), want)
+		}
+	}
+	if strings.Contains(pe.Error(), "chart sources not read") {
+		t.Errorf("reason %q claims chart sources were unread though neither tool is known to exist", pe.Error())
 	}
 }

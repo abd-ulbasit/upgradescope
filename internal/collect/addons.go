@@ -249,6 +249,17 @@ func releaseLine(v string) string {
 	return major + "." + minor
 }
 
+// exactChartVersion returns a chart version as a single version without a
+// leading "v", or "" when it is a constraint or a tag: a GitOps resource's
+// chart version, unlike a Helm release's, is whatever its author wrote.
+func exactChartVersion(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	if _, err := semver.StrictNewVersion(v); err != nil {
+		return ""
+	}
+	return v
+}
+
 // olderVersion returns the older of two versions, ignoring "": the
 // conservative pick when the pods or releases of one install disagree.
 func olderVersion(cur, v string) string {
@@ -385,7 +396,7 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 	type evidence struct {
 		source  string // "image" | "labels" | "chart" | "ingressclass"
 		version string // app version
-		chart   string // chart version, chart and gitops evidence only
+		chart   string // chart version, chart and gitops evidence only (see below)
 	}
 	type install struct{ id, ns string }
 	byInstall := map[install][]evidence{}
@@ -440,13 +451,15 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 	}
 
 	// A GitOps chart reference names the add-on and where it deploys, but
-	// no app version: its chart version is evidence only (see below), and
-	// the version comes from the pods running it, if any.
+	// no app version: the version comes from the pods running it, if any.
+	// Its chart version is evidence only, and only when it is one version:
+	// the resource's spelling is often a constraint ("4.*", ">=4.0.0"),
+	// which says what may be installed, not what is.
 	for _, g := range ev.gitops {
 		for _, a := range addons {
 			if slices.Contains(a.Matchers.Charts, g.Chart) {
 				in := install{a.ID, g.Target}
-				byInstall[in] = append(byInstall[in], evidence{source: "gitops", chart: strings.TrimPrefix(g.Version, "v")})
+				byInstall[in] = append(byInstall[in], evidence{source: "gitops", chart: exactChartVersion(g.Version)})
 			}
 		}
 	}
@@ -468,7 +481,7 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 	strength := map[string]int{"ingressclass": 1, "gitops": 2, "labels": 3, "image": 4, "chart": 5}
 	instance := func(in install, evs []evidence) inventory.AddOnInstance {
 		inst := inventory.AddOnInstance{ID: in.id}
-		var podVersion, appVersion string
+		var podVersion, appVersion, releaseChart, gitopsChart string
 		for _, e := range evs {
 			if strength[e.source] > strength[inst.Source] {
 				inst.Source = e.source
@@ -478,8 +491,15 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 			} else {
 				podVersion = olderVersion(podVersion, e.version)
 			}
-			inst.ChartVersion = olderVersion(inst.ChartVersion, e.chart)
+			if e.source == "gitops" {
+				gitopsChart = olderVersion(gitopsChart, e.chart)
+			} else {
+				releaseChart = olderVersion(releaseChart, e.chart)
+			}
 		}
+		// What a Helm release records is the chart version installed; a
+		// GitOps resource's is what it asks for, so it only fills a gap.
+		inst.ChartVersion = cmp.Or(releaseChart, gitopsChart)
 		// "" is a namespace too: a manifest object's left unset.
 		if inst.Source != "ingressclass" {
 			inst.Namespaces = []string{in.ns}

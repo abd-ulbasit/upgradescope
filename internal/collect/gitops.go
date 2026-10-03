@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -44,10 +46,8 @@ const (
 	argoLabel = "Argo CD"
 	fluxLabel = "Flux"
 
-	// The Application destination of the cluster Argo CD itself runs in:
-	// its API server URL, and the name Argo CD registers it under.
-	argoInClusterServer = "https://kubernetes.default.svc"
-	argoInClusterName   = "in-cluster"
+	// The name Argo CD registers the cluster it runs in under.
+	argoInClusterName = "in-cluster"
 
 	argoGroup  = "argoproj.io"
 	fluxGroup  = "helm.toolkit.fluxcd.io"
@@ -62,6 +62,10 @@ var (
 	fluxVersions      = []string{"v2", "v2beta2", "v2beta1"}
 	fluxSourceVersion = []string{"v1", "v1beta2"}
 )
+
+// argoInClusterHosts are the hosts of the in-cluster API server URL an
+// Application destination may use (https, with or without port 443).
+var argoInClusterHosts = []string{"kubernetes.default.svc", "kubernetes.default.svc.cluster.local"}
 
 // workloadMarkerResources are the workloads listed, metadata-only, for
 // tracking labels and annotations when no CRD shows the tools.
@@ -80,9 +84,9 @@ type gitopsTool struct {
 	resource string
 	// tracks reports whether a workload carries the tool's tracking
 	// metadata. Argo CD tracks by annotation (argocd.argoproj.io/tracking-id,
-	// the default since Argo CD 2.x) or by the argocd.argoproj.io/instance
-	// label; app.kubernetes.io/instance, its older default, is no marker,
-	// since Helm sets it too. Flux marks what helm-controller applies with
+	// the default since Argo CD 3.0; in 2.x it has to be switched on) or by
+	// the argocd.argoproj.io/instance label; app.kubernetes.io/instance, the
+	// 2.x default, is no marker, since Helm sets it too. Flux marks what helm-controller applies with
 	// helm.toolkit.fluxcd.io/name; kustomize-controller's labels say nothing
 	// about charts.
 	tracks func(metav1.PartialObjectMetadata) bool
@@ -111,9 +115,12 @@ type gitopsToolState struct {
 	marked  bool                        // workloads carry its tracking metadata
 	read    int                         // charts recorded
 	foreign int                         // chart sources for other clusters, not recorded
-	// unresolved counts Flux chartRefs that could not be resolved to a chart.
-	unresolved int
-	failure    string // why its resources could not be read, or ""
+	invalid int                         // chart sources deploying to a name that is no namespace, not recorded
+	// unresolved counts Flux chartRefs that could not be resolved to a
+	// chart; unresolvedWhy is the first read error behind them, or "".
+	unresolved    int
+	unresolvedWhy string
+	failure       string // why its resources could not be read, or ""
 }
 
 func (s gitopsToolState) served() bool { return s.gvr != (schema.GroupVersionResource{}) }
@@ -167,12 +174,19 @@ func (pe partialError) withGitOps(states []gitopsToolState, noReleases bool) err
 		if s.foreign > 0 {
 			msgs = append(msgs, fmt.Sprintf("%d %s chart source(s) deploy to other clusters, not counted", s.foreign, s.label))
 		}
+		if s.invalid > 0 {
+			msgs = append(msgs, fmt.Sprintf("%d %s chart source(s) deploy to a target that is not a namespace name, not counted", s.invalid, s.label))
+		}
 		if s.failure != "" {
-			msgs = append(msgs, fmt.Sprintf("%s chart sources not read: %s", s.label, s.failure))
+			msgs = append(msgs, s.failure)
 			skip = true
 		}
 		if s.unresolved > 0 {
-			msgs = append(msgs, fmt.Sprintf("%d HelmRelease chartRef(s) not resolved to a chart", s.unresolved))
+			msg := fmt.Sprintf("%d HelmRelease chartRef(s) not resolved to a chart", s.unresolved)
+			if s.unresolvedWhy != "" {
+				msg += " (" + s.unresolvedWhy + ")"
+			}
+			msgs = append(msgs, msg)
 			skip = true
 		}
 		if evidence, ok := s.present(); ok && noReleases {
@@ -207,7 +221,7 @@ func (pe partialError) withGitOps(states []gitopsToolState, noReleases bool) err
 // role the chart gives the agent without rbac.gitops.*) is left with a
 // failure that the caller reports as a gap. Workload markers are
 // best-effort: a workload list that fails shows nothing, and is no gap
-// (the agent's role cannot list workloads). Resources not served are not
+// (a role that cannot list workloads). Resources not served are not
 // an error. Nothing is read without a discovery client; without a dynamic
 // client the tools are only looked for.
 func collectGitOps(ctx context.Context, c Clients, noReleases bool, inv *inventory.Inventory) []gitopsToolState {
@@ -222,7 +236,7 @@ func collectGitOps(ctx context.Context, c Clients, noReleases bool, inv *invento
 	groups, err := disc.ServerGroupsWithContext(ctx)
 	if err != nil {
 		for i := range states {
-			states[i].failure = fmt.Sprintf("discovery: %v", err)
+			states[i].failure = fmt.Sprintf("API discovery failed, so it is not known whether %s is installed or what it deploys: %v", states[i].label, err)
 		}
 		return states
 	}
@@ -236,7 +250,7 @@ func collectGitOps(ctx context.Context, c Clients, noReleases bool, inv *invento
 		s := &states[i]
 		gvr, err := servedResource(ctx, disc, served[s.group], s.group, s.versions, s.resource)
 		if err != nil {
-			s.failure = fmt.Sprintf("discovery of %s.%s: %v", s.resource, s.group, err)
+			s.failure = fmt.Sprintf("%s chart sources not read: discovery of %s.%s: %v", s.label, s.resource, s.group, err)
 			continue
 		}
 		s.gvr = gvr
@@ -261,7 +275,7 @@ func collectGitOps(ctx context.Context, c Clients, noReleases bool, inv *invento
 			charts, err = readFluxHelmReleases(ctx, c.Dynamic, disc, served, s)
 		}
 		if err != nil {
-			s.failure = err.Error()
+			s.failure = fmt.Sprintf("%s chart sources not read: %v", s.label, err)
 			continue
 		}
 		s.read = len(charts)
@@ -356,16 +370,17 @@ func readArgoApplications(ctx context.Context, dyn dynamic.Interface, s *gitopsT
 	var out []inventory.GitOpsChart
 	err := listCustomResources(ctx, dyn, s.gvr, func(app *unstructured.Unstructured) {
 		spec := mapAt(app.Object, "spec")
+		// spec.sources, when set, replaces spec.source: Argo CD ignores a
+		// source beside it.
 		var sources []map[string]any
-		if src := mapAt(spec, "source"); src != nil {
-			sources = append(sources, src)
-		}
-		if list, ok := spec["sources"].([]any); ok {
+		if list, _ := spec["sources"].([]any); len(list) > 0 {
 			for _, e := range list {
 				if src, ok := e.(map[string]any); ok {
 					sources = append(sources, src)
 				}
 			}
+		} else if src := mapAt(spec, "source"); src != nil {
+			sources = append(sources, src)
 		}
 		dest := mapAt(spec, "destination")
 		for _, src := range sources {
@@ -377,8 +392,13 @@ func readArgoApplications(ctx context.Context, dyn dynamic.Interface, s *gitopsT
 				s.foreign++
 				continue
 			}
+			target := stringAt(dest, "namespace")
+			if !plausibleTarget(target) {
+				s.invalid++
+				continue
+			}
 			out = append(out, inventory.GitOpsChart{
-				Tool: s.id, Name: app.GetName(), Namespace: app.GetNamespace(), Target: stringAt(dest, "namespace"),
+				Tool: s.id, Name: app.GetName(), Namespace: app.GetNamespace(), Target: target,
 				Chart: chart, Version: stringAt(src, "targetRevision"), Repo: stringAt(src, "repoURL"),
 			})
 		}
@@ -387,12 +407,29 @@ func readArgoApplications(ctx context.Context, dyn dynamic.Interface, s *gitopsT
 }
 
 // argoInCluster reports whether an Application destination is the cluster
-// Argo CD runs in, by its API server URL or its registered name.
+// Argo CD runs in: by its API server URL (the service's short or cluster
+// DNS name, with or without port 443) or, when it names none, by the name
+// Argo CD registers the cluster under.
 func argoInCluster(dest map[string]any) bool {
-	server := strings.TrimSuffix(stringAt(dest, "server"), "/")
-	return server == argoInClusterServer ||
-		server == "" && stringAt(dest, "name") == argoInClusterName
+	server := stringAt(dest, "server")
+	if server == "" {
+		return stringAt(dest, "name") == argoInClusterName
+	}
+	u, err := url.Parse(server)
+	if err != nil || u.Scheme != "https" || u.User != nil || strings.Trim(u.Path, "/") != "" {
+		return false
+	}
+	return slices.Contains(argoInClusterHosts, u.Hostname()) && (u.Port() == "" || u.Port() == "443")
 }
+
+// plausibleTarget reports whether the namespace a chart deploys into, read
+// from a custom resource, could be one: empty (left to the manifests) or a
+// namespace name, by the rule the server holds identifiers to
+// (inventory.ValidateIdentifiers). Argo CD's destination.namespace and
+// Flux's targetNamespace are free text to the apiserver, so a resource
+// anyone with access to one namespace can write must not make the whole
+// inventory unacceptable.
+func plausibleTarget(ns string) bool { return ns == "" || len(content.IsDNS1123Label(ns)) == 0 }
 
 // readFluxHelmReleases reads the chart of every HelmRelease that deploys
 // to the scanned cluster: spec.chart.spec (a HelmRepository, GitRepository
@@ -414,6 +451,10 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 		if target == "" {
 			target = hr.GetNamespace()
 		}
+		if !plausibleTarget(target) {
+			s.invalid++
+			return
+		}
 		c := inventory.GitOpsChart{Tool: s.id, Name: hr.GetName(), Namespace: hr.GetNamespace(), Target: target}
 		if cs := mapAt(mapAt(spec, "chart"), "spec"); cs != nil {
 			c.Chart, c.Version = stringAt(cs, "chart"), stringAt(cs, "version")
@@ -423,6 +464,11 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 					ns = hr.GetNamespace()
 				}
 				c.Repo = fmt.Sprintf("%s/%s/%s", stringAt(sr, "kind"), ns, stringAt(sr, "name"))
+			}
+			// From a GitRepository or Bucket the chart is a path in it
+			// ("./charts/ingress-nginx"): its last element names the chart.
+			if kind := stringAt(mapAt(cs, "sourceRef"), "kind"); kind != "" && kind != "HelmRepository" {
+				c.Chart = path.Base(strings.TrimRight(c.Chart, "/"))
 			}
 			if plausibleChartName(c.Chart) {
 				out = append(out, c)
@@ -462,7 +508,11 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 		}
 		repo, seen := cache[r]
 		if !seen && gvr != (schema.GroupVersionResource{}) {
-			repo, _ = dyn.Resource(gvr).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
+			var err error
+			repo, err = dyn.Resource(gvr).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
+			if err != nil && s.unresolvedWhy == "" {
+				s.unresolvedWhy = fmt.Sprintf("get ocirepository %s/%s: %v", r.namespace, r.name, err)
+			}
 			cache[r] = repo
 		}
 		url := ""
