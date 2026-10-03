@@ -94,8 +94,9 @@ kubectl get ucr        # NAME  TARGET  SCORE  READY  LASTEVALUATED  AGE
 ```
 
 The agent re-evaluates every 10 minutes and writes a `ClusterReadiness`
-object with a standard `Ready` condition, for `kubectl wait`, alerts and
-GitOps health checks. A chart from a clone defaults to the image of the
+object with a standard `Ready` condition, for `kubectl wait`, alerts,
+GitOps health checks and policy engines: [examples](examples/) for Kyverno,
+Gatekeeper and Renovate, in [Acting on readiness](https://abd-ulbasit.github.io/upgradescope/guides/acting-on-readiness/). A chart from a clone defaults to the image of the
 release it was cut for; to run unreleased changes, build an image from the
 clone and set `image.repository` and `image.tag`.
 [In-cluster agent](https://abd-ulbasit.github.io/upgradescope/getting-started/in-cluster/) ·
