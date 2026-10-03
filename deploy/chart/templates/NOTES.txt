@@ -6,10 +6,14 @@ upgradescope {{ .Chart.AppVersion }} installed.
 
 Upgrading from v0.1.x or a v0.2.0 release candidate? The ClusterReadiness
 CRD's API group is now upgradescope.basit.engineer, and Helm does not install
-a new CRD on upgrade. Install it, carry over the old object's spec, move
-ignore annotations to the upgradescope.basit.engineer/ keys (the old ones are
-read, deprecated, until v0.3.0), and point GitOps health checks and policies
-at the new group:
+a new CRD on upgrade. The agent may not create it, so until it is installed
+the agent pod exits at startup with an error that names this command:
+  kubectl apply -f https://raw.githubusercontent.com/abd-ulbasit/upgradescope/{{ .Chart.AppVersion }}/deploy/chart/crds/clusterreadinesses.upgradescope.basit.engineer.yaml
+(or helm pull oci://ghcr.io/abd-ulbasit/charts/upgradescope --version {{ .Chart.Version }} --untar,
+then kubectl apply -f upgradescope/crds/). The pod's next restart picks the
+CRD up. Then carry over the old object's spec, move ignore annotations to the
+upgradescope.basit.engineer/ keys (the old ones are read, deprecated, until
+v0.3.0), and point GitOps health checks and policies at the new group:
   https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-api-group-moved
 While the old CRD is installed, "kubectl get clusterreadiness" and "kubectl
 get ucr" may read the old object, whose status no longer changes; the
