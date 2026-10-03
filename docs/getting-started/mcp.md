@@ -9,7 +9,8 @@ server or a file.
 
 The server speaks MCP on stdin and stdout, so a client starts it as a
 subprocess; there is nothing to deploy. It is part of the one binary
-(`upgradescope mcp`); it adds about 2 MiB to it (1.99 MiB on linux/amd64, stripped, measured when it was added).
+(`upgradescope mcp`); it adds about 2 MiB to it (2.00 MiB on linux/amd64, stripped, measured
+at `67f30be`; MC-08 in the [claims ledger](../claims.md) has the command).
 
 ## Connect an assistant
 
@@ -102,6 +103,12 @@ The source of `list_findings` and `get_report` is one of:
 
 A path must name a regular file you can read: a directory, a named pipe, a
 device or `/dev/stdin` is refused at once, before it is opened for reading.
+On Linux and macOS the file is also opened without waiting, so a named pipe
+put in its place between the check and the open is refused too; Windows has
+no such open, and the check is the only guard there. A regular file whose
+read blocks (one on a stalled NFS or FUSE mount) has no deadline the
+operating system honours: the call returns when the client cancels it, and
+the read goes on in the background until the file answers.
 A report may be at most 8 MiB and an inventory at most 20 MiB (what a
 default server takes from an agent). A file that is not an upgradescope
 report, one that does not follow `api/report.schema.json`, or not an
@@ -118,6 +125,11 @@ report near that bound, a `scan` of a very large cluster) is refused with
 the reason and what to ask for instead: `list_findings` with `severity`,
 `category` or a smaller `limit`. The reports of such a scan are kept, so
 `list_findings` reads them.
+
+Holding a report while it is checked and sent takes several times its size,
+so at most two `get_report`, `list_findings` or `fleet_summary` calls run at
+once, however many a client sends in parallel; the others wait their turn,
+or give up when the client cancels them.
 
 ## Output is the published schema
 
