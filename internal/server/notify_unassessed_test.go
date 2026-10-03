@@ -419,6 +419,34 @@ func TestHelmOutageAfterHelmlessSighting(t *testing.T) {
 	expectBecameReady(t, h, "helm back, Argo CD upgraded")
 }
 
+// TestHelmOutageAfterPartialHelmSighting pins the residual case of the
+// "seen without" rule (docs/operations.md, Notifications): an add-on seen
+// while helm was partial was seen without helm, since its finding does
+// not say which release it came from. If helm then fails outright, an
+// add-on found through another release's chart is gone from the
+// inventory and resolved (became-ready), and a new blocker when helm
+// returns.
+func TestHelmOutageAfterPartialHelmSighting(t *testing.T) {
+	h := newHarness(t, Config{KB: legacyKB()}, aug1)
+	partial := argoChartInventory("2.10.0")
+	partial.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: "release shop/web not decoded", Skipped: []string{"shop/web"}}
+	h.push("prod", partial)
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := argoChartInventory("2.10.0")
+	broken.AddOns = nil
+	broken = persistentGaps[0].gap(broken)
+	h.push("prod", broken)
+	expectBecameReady(t, h, "helm failure")
+
+	back := argoChartInventory("2.10.0")
+	back.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true}
+	h.push("prod", back)
+	if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
+		t.Fatalf("helm back: events = %+v, want exactly one new-blocker", evs)
+	}
+}
+
 // TestCarriedFindingKeepsWhatItWasSeenWithout: a carried finding is
 // judged by the gaps of the pass that last saw it, which it keeps, not
 // by those of the baseline that carries it. Today only helm is an
