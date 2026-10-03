@@ -88,6 +88,13 @@ var goldenParams = map[string]struct{ target, now string }{
 	// partial crds capability did not check (info); a clean Widget CRD
 	// (nothing). The v1alpha2 caller row stays its own info finding.
 	"crd-versions": {"1.35", "2026-06-10T00:00:00Z"},
+	// #70: ingress-nginx deployed by an Argo CD Application or a Flux
+	// HelmRelease leaves no Helm release, only a chart reference with no app
+	// version. The retired product is still a blocker, and the helm gap
+	// (partial, naming the tool) is shown, not required: the verdict is
+	// blocked by the finding, not unknown.
+	"gitops-argocd": {"1.30", "2026-06-10T00:00:00Z"},
+	"gitops-flux":   {"1.30", "2026-06-10T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte

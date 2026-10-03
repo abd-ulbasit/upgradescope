@@ -1,0 +1,38 @@
+{
+  "clusterId": "88888888-8888-8888-8888-888888888888",
+  "findings": [
+    {
+      "category": "eol-addon",
+      "citations": [
+        "https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/"
+      ],
+      "detail": "Detected ingress-nginx version (unknown) via gitops 4.11.3 in namespace(s): ingress-nginx. Upstream support has ended.",
+      "key": "eol-addon/ingress-nginx",
+      "namespaces": [
+        "ingress-nginx"
+      ],
+      "remediation": "migrate to Gateway API (ingress2gateway) or another maintained ingress controller",
+      "severity": "blocker",
+      "teams": [
+        "platform"
+      ],
+      "title": "ingress-nginx is end-of-life since 2026-03-26"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "helm",
+      "partial": true,
+      "reason": "helm releases: 0 via secrets, 0 via configmaps; GitOps chart sources: 1 via Flux; no Helm releases read, but Flux is present (helmreleases.helm.toolkit.fluxcd.io/v2 is served): chart kubeVersion and stored-manifest checks were not assessed for the charts it deploys",
+      "skipped": [
+        "flux"
+      ]
+    }
+  ],
+  "ready": false,
+  "score": 75,
+  "serverVersion": "v1.29.4",
+  "target": "1.30",
+  "verdict": "blocked"
+}
