@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -295,6 +296,7 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"registry.k8s.io/ingress-nginx/controller@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "ingress-nginx", ""},
 		{"docker.io/bitnami/nginx-ingress-controller:1.11.3-debian-12-r0", "ingress-nginx", "1.11.3"},
 		{"bitnami/nginx-ingress-controller:1.11.3", "ingress-nginx", "1.11.3"},
+		{"docker.io/bitnamilegacy/nginx-ingress-controller:1.11.3-debian-12-r0", "ingress-nginx", "1.11.3"},
 		{"rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", "rke2-ingress-nginx", "1.9.4"},
 		{"mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller:v1.11.5", "aks-app-routing-nginx", "1.11.5"},
 		{"coredns/coredns:1.11.1", "coredns", "1.11.1"},
@@ -316,10 +318,56 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"reg.kyverno.io/kyverno/kyverno:v1.14.1", "kyverno", "1.14.1"},
 		{"quay.io/argoproj/argocd:v2.12.3", "argo-cd", "2.12.3"},
 		{"registry.k8s.io/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"bitnami/etcd:3.5.15-debian-12-r3", "etcd", "3.5.15"},
+		{"quay.io/coreos/etcd:v3.5.15", "etcd", "3.5.15"},
+		{"123456789012.dkr.ecr.eu-west-1.amazonaws.com/registry-k8s-io/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"gcr.io/etcd-development/etcd:v3.5.15", "etcd", "3.5.15"},
+		// etcd opts into "*/etcd", so it is found behind a kubeadm
+		// imageRepository, a Harbor proxy cache or any other mirror, and
+		// under Bitnami's legacy namespace.
+		{"harbor.corp/k8s/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"myregistry.example.com/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"myregistry.example.com:5000/mirror/registry.k8s.io/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"docker.io/bitnami/etcd:3.5.15-debian-12-r3", "etcd", "3.5.15"},
+		{"docker.io/bitnamilegacy/etcd:3.5.15-debian-12-r3", "etcd", "3.5.15"},
+		{"etcd:3.5.15", "etcd", "3.5.15"},
+		// Only the repository etcd: neighbours that merely contain the word
+		// are other products.
+		{"quay.io/coreos/etcd-operator:v0.9.4", "", ""},
+		{"harbor.corp/k8s/etcd-backup:1.0.0", "", ""},
+		{"harbor.corp/k8s/etcd/backup:1.0.0", "", ""},
 		{"registry.k8s.io/external-dns/external-dns:v0.14.2", "external-dns", "0.14.2"},
 		{"bitnami/external-dns:0.14.2-debian-12-r4", "external-dns", "0.14.2"},
 		{"registry.k8s.io/metrics-server/metrics-server:v0.7.2", "metrics-server", "0.7.2"},
 		{"quay.io/prometheus-operator/prometheus-operator:v0.75.0", "prometheus-operator", "0.75.0"},
+		// Mirrors keep a vendor or upstream path as a suffix, whatever the
+		// registry host and prefix (#49); a bare "controller" is no path.
+		{"myregistry.example.com/ingress-nginx/controller:v1.11.3", "ingress-nginx", "1.11.3"},
+		{"myregistry/mirror/ingress-nginx/controller:v1.11.3", "ingress-nginx", "1.11.3"},
+		{"myregistry.example.com:5000/mirror/rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", "rke2-ingress-nginx", "1.9.4"},
+		{"myregistry.example.com/controller:v1.11.3", "", ""},
+		{"myregistry/mirror/controller:v1.11.3", "", ""},
+		// Retired as a whole (#49): each is end of life whatever its version.
+		{"docker.io/kubernetesui/dashboard:v2.7.0", "kubernetes-dashboard", "2.7.0"},
+		{"kubernetesui/dashboard-api:1.10.1", "kubernetes-dashboard", "1.10.1"},
+		{"kubernetesui/dashboard-auth:1.2.2", "kubernetes-dashboard", "1.2.2"},
+		{"kubernetesui/dashboard-web:1.6.0", "kubernetes-dashboard", "1.6.0"},
+		// The sidecars version separately: matched, they would report their
+		// version as the Dashboard's.
+		{"kubernetesui/dashboard-metrics-scraper:1.2.1", "", ""},
+		{"kubernetesui/metrics-scraper:v1.0.8", "", ""},
+		{"grafana/promtail:3.0.0", "promtail", "3.0.0"},
+		{"docker.io/grafana/promtail:2.9.4", "promtail", "2.9.4"},
+		{"grafana/agent:v0.44.2", "grafana-agent", "0.44.2"},
+		{"harbor.corp.example/dockerhub/grafana/agent-operator:v0.44.2", "grafana-agent", "0.44.2"},
+		{"weaveworks/weave-kube:2.8.1", "weave-net", "2.8.1"},
+		{"docker.io/weaveworks/weave-npc:2.8.1", "weave-net", "2.8.1"},
+		// Synced from endoflife.date (#49).
+		{"public.ecr.aws/karpenter/controller:1.0.8@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "karpenter", "1.0.8"},
+		{"openpolicyagent/gatekeeper:v3.20.1", "gatekeeper", "3.20.1"},
+		{"openpolicyagent/gatekeeper-crds:v3.20.1", "gatekeeper", "3.20.1"},
+		{"cr.fluentbit.io/fluent/fluent-bit:4.0.3", "fluent-bit", "4.0.3"},
+		{"fluent/fluent-bit:3.2.10", "fluent-bit", "3.2.10"},
 		// Provider-managed builds follow the provider's support policy, not
 		// upstream's (#18): GKE network policy / Dataplane V2, AKS Calico,
 		// Azure CNI powered by Cilium, the AKS Istio and KEDA add-ons. No
@@ -339,6 +387,10 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"ghcr.io/fluxcd/source-controller:v1.4.1", "", ""}, // controller versions are not Flux versions
 	}
 	for _, tc := range cases {
+		// One entry claims an image: a second would judge it twice.
+		if ids := imageAddOns(parseImage(tc.image), addons); len(ids) > 1 {
+			t.Errorf("%s: claimed by %v, want at most one entry", tc.image, ids)
+		}
 		got, unrec := matchAddOns(addOnEvidence{images: []nsImage{{"ns", tc.image}}}, addons)
 		if tc.wantID == "" {
 			if len(got) != 0 || len(unrec) != 1 {
@@ -349,6 +401,83 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		if len(got) != 1 || got[0].ID != tc.wantID || got[0].Version != tc.wantVersion {
 			t.Errorf("%s: got %+v, want %s %q", tc.image, got, tc.wantID, tc.wantVersion)
 		}
+	}
+}
+
+// Helm charts against the embedded registry (#49): a vendor build's chart is
+// its own entry, never upstream ingress-nginx's.
+func TestMatchAddOnsRealWorldCharts(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for chart, wantID := range map[string]string{
+		"ingress-nginx":        "ingress-nginx",
+		"rke2-ingress-nginx":   "rke2-ingress-nginx",
+		"kubernetes-dashboard": "kubernetes-dashboard",
+		"promtail":             "promtail",
+		"grafana-agent":        "grafana-agent",
+		"karpenter":            "karpenter",
+		"gatekeeper":           "gatekeeper",
+		"fluent-bit":           "fluent-bit",
+	} {
+		rel := inventory.HelmRelease{Name: chart, Namespace: "ns", ChartName: chart, ChartVersion: "1.0.0", AppVersion: "1.2.3", Status: "deployed"}
+		got, _ := matchAddOns(addOnEvidence{releases: []inventory.HelmRelease{rel}}, addons)
+		if len(got) != 1 || got[0].ID != wantID || got[0].Source != "chart" || got[0].Version != "1.2.3" {
+			t.Errorf("chart %s: got %+v, want %s from the chart at 1.2.3", chart, got, wantID)
+		}
+	}
+}
+
+// Mirror matching is by a path suffix of at least two segments (#49): a
+// one-segment matcher is an exact repository, so an operator entry (or the
+// embedded etcd) cannot claim the same-named repository of another product.
+func TestImageMatchersNeedTwoSegmentsToSuffixMatch(t *testing.T) {
+	for _, tc := range []struct {
+		image, matcher string
+		want           bool
+	}{
+		{"quay.io/cilium/operator:v1.16.1", "operator", false},
+		{"registry.k8s.io/ingress-nginx/controller:v1.11.3", "controller", false},
+		{"myregistry/mirror/ingress-nginx/controller:v1.11.3", "controller", false},
+		{"myregistry.example.com/operator:v1", "operator", true},
+		{"quay.io/cilium/operator:v1.16.1", "cilium/operator", true},
+		{"myregistry/mirror/cilium/operator:v1.16.1", "cilium/operator", true},
+		{"quay.io/xcilium/operator:v1.16.1", "cilium/operator", false},
+		// "*/name" is the explicit opt-in to a suffix match on one segment.
+		{"harbor.corp/k8s/etcd:3.5.15-0", "*/etcd", true},
+		{"myregistry.example.com/etcd:3.5.15-0", "*/etcd", true},
+		{"registry.k8s.io/etcd:3.5.15-0", "*/etcd", true},
+		{"harbor.corp/k8s/my-etcd:3.5.15-0", "*/etcd", false},
+		// A provider build is claimed by a matcher naming the provider only.
+		{"mcr.microsoft.com/oss/etcd:3.5.15", "*/etcd", false},
+		{"harbor.corp/mcr.microsoft.com/oss/etcd:3.5.15", "*/etcd", false},
+	} {
+		if got := imageMatches(parseImage(tc.image), tc.matcher); got != tc.want {
+			t.Errorf("imageMatches(%s, %q) = %v, want %v", tc.image, tc.matcher, got, tc.want)
+		}
+	}
+}
+
+// The reported failure: an operator's entry with the bare matcher "operator"
+// made quay.io/cilium/operator Cilium and the operator's product at once.
+func TestExtraSingleSegmentMatcherLeavesEmbeddedImagesAlone(t *testing.T) {
+	base, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine := registry.AddOn{ID: "my-operator", Matchers: registry.Matchers{Images: []string{"operator", "controller"}}}
+	addons := registry.Merge(base, []registry.AddOn{mine})
+	if errs := registry.ClaimConflicts(addons); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	for _, image := range []string{"quay.io/cilium/operator:v1.16.1", "registry.k8s.io/ingress-nginx/controller:v1.11.3", "myregistry/mirror/ingress-nginx/controller:v1.11.3"} {
+		if ids := imageAddOns(parseImage(image), addons); slices.Contains(ids, "my-operator") {
+			t.Errorf("%s claimed by %v: the one-segment matcher reached another product", image, ids)
+		}
+	}
+	if ids := imageAddOns(parseImage("myregistry.example.com/operator:v1"), addons); !slices.Equal(ids, []string{"my-operator"}) {
+		t.Errorf("the exact repository operator: claimed by %v, want my-operator", ids)
 	}
 }
 

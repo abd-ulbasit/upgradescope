@@ -1,0 +1,24 @@
+# registry/data/weave-net.yaml
+# Hand-curated: endoflife.date does not track it. The weaveworks/weave
+# repository is archived (`gh api` reports archived=true), so Weave Net gets
+# no further fixes, including for Kubernetes API changes. eol_date is the day
+# the owner archived the repository ("archived by the owner on Jun 20, 2024"
+# on the repository page): no vendor page states an end-of-support date, and
+# the archive day is the rule for such projects (registry/CONTRIBUTING.md).
+# Matched are the images of the archived project (weave-kube, weave-npc); the
+# maintained community fork (reweave, rajchaudhuri/weave-kube) is deliberately
+# not. Other paths (ghcr.io/weaveworks/launcher/weave-kube) are not matched
+# until one is seen in a published manifest.
+schema_version: 2
+id: weave-net
+display_name: Weave Net
+matchers:
+  images:
+    - weaveworks/weave-kube
+    - weaveworks/weave-npc
+support:
+  status: eol
+  eol_date: "2024-06-20"
+  citations:
+    - https://github.com/weaveworks/weave
+recommendation: Migrate to a maintained CNI plugin (Cilium or Calico) in a planned node-by-node cutover.

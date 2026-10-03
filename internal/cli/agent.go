@@ -40,6 +40,7 @@ type agentOptions struct {
 	healthAddr     string
 	logFormat      string
 	logLevel       string
+	registryDir    string // --registry-dir: extra add-on registry entries
 }
 
 // newAgentLogger builds the agent's slog logger: format text (logfmt) or
@@ -76,7 +77,7 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 	if limit, ok := applyMemoryLimit(os.Getenv, cgroupRoot); ok {
 		logger.Info("GOMEMLIMIT unset: Go memory limit set to 90% of the cgroup's memory limit", "bytes", limit)
 	}
-	kbData, err := kb.Load()
+	kbData, err := kb.LoadWithRegistry(opts.registryDir)
 	if err != nil {
 		return fmt.Errorf("load knowledge base: %w", err)
 	}
@@ -222,6 +223,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 		"listen address for /healthz, /readyz and /metrics (empty = disabled)")
 	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "log format: text (logfmt) or json")
 	cmd.Flags().StringVar(&opts.logLevel, "log-level", "info", "log level: debug, info, warn or error")
+	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: in-cluster config, then standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
 	cmd.Flags().DurationVar(&opts.requestTimeout, "request-timeout", defaultRequestTimeout, "give up on a single API request after this long (0 = no per-request limit)")

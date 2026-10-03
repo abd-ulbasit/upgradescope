@@ -25,8 +25,15 @@ spec:
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: agent
-      {{- with .Values.agent.podAnnotations }}
-      annotations: {{- toYaml . | nindent 8 }}
+      {{- if or .Values.agent.podAnnotations .Values.agent.extraRegistry }}
+      annotations:
+        {{- with .Values.agent.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.agent.extraRegistry }}
+        # agent reads --registry-dir at startup: roll the pod when it changes.
+        checksum/registry: {{ toYaml . | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "upgradescope.serviceAccountName" . }}
@@ -52,6 +59,9 @@ spec:
             {{- end }}
             {{- if include "upgradescope.pushEnabled" . }}
             - {{ printf "--server-url=%s" (include "upgradescope.serverUrl" .) | quote }}
+            {{- end }}
+            {{- if .Values.agent.extraRegistry }}
+            - "--registry-dir=/etc/upgradescope/registry"
             {{- end }}
             {{- range .Values.agent.extraArgs }}
             - {{ . | quote }}
@@ -104,18 +114,23 @@ spec:
           securityContext: {{- toYaml . | nindent 12 }}
           {{- end }}
           resources: {{- toYaml .Values.agent.resources | nindent 12 }}
-          {{- if or $serverCA .Values.agent.extraVolumeMounts }}
+          {{- if or $serverCA .Values.agent.extraRegistry .Values.agent.extraVolumeMounts }}
           volumeMounts:
             {{- if $serverCA }}
             - name: server-ca
               mountPath: /etc/upgradescope/server-ca
               readOnly: true
             {{- end }}
+            {{- if .Values.agent.extraRegistry }}
+            - name: extra-registry
+              mountPath: /etc/upgradescope/registry
+              readOnly: true
+            {{- end }}
             {{- with .Values.agent.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or $serverCA .Values.agent.extraVolumes }}
+      {{- if or $serverCA .Values.agent.extraRegistry .Values.agent.extraVolumes }}
       volumes:
         {{- if $serverCA }}
         # Only the CA: the agent never sees the server's private key.
@@ -125,6 +140,11 @@ spec:
             optional: true
             items:
               - {key: {{ .Values.server.tls.caKey | quote }}, path: ca.crt}
+        {{- end }}
+        {{- if .Values.agent.extraRegistry }}
+        - name: extra-registry
+          configMap:
+            name: {{ include "upgradescope.fullname" . }}-agent-registry
         {{- end }}
         {{- with .Values.agent.extraVolumes }}
         {{- toYaml . | nindent 8 }}

@@ -12,8 +12,8 @@ import (
 var loadRegistry = sync.OnceValues(registry.Load)
 
 // handleRegistry: GET /api/v1/registry — the embedded add-on EOL/compat
-// registry, sorted by id. Lets the dashboard (and curl) browse exactly the
-// dataset this binary evaluates against.
+// registry, sorted by id: the dataset compiled into this binary. It does not
+// include entries loaded with --registry-dir, which the server judges by too.
 func (s *Server) handleRegistry(w http.ResponseWriter, _ *http.Request) {
 	addons, err := loadRegistry()
 	if err != nil {
