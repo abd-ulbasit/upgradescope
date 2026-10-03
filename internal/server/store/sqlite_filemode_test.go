@@ -116,6 +116,32 @@ func TestOpenUsesExactPath(t *testing.T) {
 		}
 	})
 
+	// "file://" + "//x" must not read the first path element as a host, and
+	// a relative "a:b.db" must not read "a" as a scheme.
+	t.Run("absolute path starting with //", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := Open("/" + filepath.Join(dir, "db.sqlite"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		if fi, err := os.Stat(filepath.Join(dir, "db.sqlite")); err != nil || fi.Mode().Perm() != 0o600 || fi.Size() == 0 {
+			t.Errorf("db.sqlite: %v, %v", fi, err)
+		}
+	})
+
+	t.Run("relative with a colon", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		s, err := Open("a:b.db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		if fi, err := os.Stat("a:b.db"); err != nil || fi.Size() == 0 || fi.Mode().Perm() != 0o600 {
+			t.Errorf("a:b.db: %v, %v", fi, err)
+		}
+	})
+
 	t.Run("relative", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		s, err := Open("r%3Fs.db")
