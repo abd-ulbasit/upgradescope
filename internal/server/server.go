@@ -630,12 +630,17 @@ func (s *Server) Start() error {
 	}
 	s.addr = ln.Addr().String()
 	s.stopBackground = stop
+	// Counted under the lock Shutdown reads stopBackground under: a
+	// Shutdown that finds it set waits for every worker started here.
+	workers := 2
+	if s.cfg.Retention > 0 {
+		workers++
+	}
+	s.backgroundDone.Add(workers)
 	s.mu.Unlock()
-	s.backgroundDone.Add(2)
 	go func() { defer s.backgroundDone.Done(); s.runOutbox(bg) }()
 	go func() { defer s.backgroundDone.Done(); s.runReevaluation(bg) }()
 	if s.cfg.Retention > 0 {
-		s.backgroundDone.Add(1)
 		go func() { defer s.backgroundDone.Done(); s.runRetention(bg) }()
 	}
 	s.logStartup()

@@ -466,3 +466,39 @@ func TestShutdownBeforeStartStopsTheBackground(t *testing.T) {
 		t.Fatal("background workers still running after Shutdown and Start returned")
 	}
 }
+
+// Start and a Shutdown that races it (runServe on a context cancelled
+// while Start runs): whichever goes first, every background worker Start
+// starts is one Shutdown waits for. Start used to count its workers in
+// backgroundDone after releasing the lock Shutdown reads stopBackground
+// under, so Shutdown's Wait could run concurrently with that Add (a data
+// race under -race) and return before the workers it was to stop had
+// been counted.
+func TestShutdownRacingStartStopsTheBackground(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		s := newTestServer(t, newFakeStore(), func(c *Config) {
+			c.Listen = "127.0.0.1:0"
+			c.Retention = time.Hour
+		})
+		errCh := make(chan error, 1)
+		go func() { errCh <- s.Start() }()
+		if err := s.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown racing Start = %v, want nil", err)
+		}
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("Start = %v, want nil", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Start did not return after Shutdown")
+		}
+		done := make(chan struct{})
+		go func() { s.backgroundDone.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: background workers still running after Shutdown and Start returned", i)
+		}
+	}
+}
