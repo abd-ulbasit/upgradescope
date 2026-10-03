@@ -14,7 +14,8 @@
 # ACTION_REF is the ref the action was used at (github.action_ref). Text that
 # reaches the log from an input, a file name or the binary cannot start a
 # workflow command: a value in a message is escaped (esc), and the gate's
-# stderr is printed by logged, which defangs any line that would be one.
+# stderr and the Markdown report are printed by logged, which defangs any
+# line that would be one, including a ##[ anywhere in it.
 # hack/action_test.sh (make action-test) covers every path here offline.
 set -euo pipefail
 
@@ -25,12 +26,15 @@ module=github.com/abd-ulbasit/upgradescope/cmd/upgradescope
 # escaped), so no line of it can start a command of its own. An input
 # echoed to the log goes through it: a value holding a newline and
 # "::warning::" would otherwise forge an annotation, or "::add-mask::" a
-# log mask.
+# log mask. A ##[ is written "# #[": the runner reads that legacy command
+# anywhere in a line that is not a :: command, and esc is also used in plain
+# echoes.
 esc() {
   local s=$1
   s=${s//\%/%25}
   s=${s//$'\r'/%0D}
   s=${s//$'\n'/%0A}
+  s=${s//'##['/'# #['}
   printf '%s' "$s"
 }
 
@@ -225,12 +229,15 @@ escaped() {
 # logged <file>: the file to the log, unchanged except that no line can be a
 # workflow command. The runner reads a command after trimming leading
 # whitespace and treats a carriage return as a line break, so a line that
-# then starts with :: (or ##[) gets a "| " in front and a CR is written %0D.
-# The binary's messages repeat the path input and file names from the
-# scanned tree, which a fork PR chooses. (The Markdown report is not run
-# through it: the renderer turns a line break in a path into a space.)
+# then starts with :: gets a "| " in front and a CR is written %0D. The
+# runner also reads the legacy form ##[name] anywhere in a line that is not
+# a :: command (and runs ##[warning], ##[error] and ##[add-mask]), so each
+# ##[ is written "# #[". The binary's messages repeat the path input and
+# file names from the scanned tree, which a fork PR chooses, and so does
+# the Markdown report (the renderer turns a line break in a path into a
+# space, but leaves the rest).
 logged() {
-  awk '{ gsub(/\r/, "%0D"); if ($0 ~ /^[ \t]*(::|##\[)/) $0 = "| " $0; print }' "$1"
+  awk '{ gsub(/\r/, "%0D"); gsub(/##\[/, "# #["); if ($0 ~ /^[ \t]*::/) $0 = "| " $0; print }' "$1"
 }
 
 scan() {
@@ -298,7 +305,7 @@ scan() {
   fi
   if upgradescope scan "${args[@]}" --output markdown --fail-on never >"$md" 2>"$out/md.err"; then
     echo "summary-file=$md" >>"$GITHUB_OUTPUT"
-    cat "$md"
+    logged "$md"
     cat "$md" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
   else
     echo "::warning::this upgradescope cannot write the step summary (it predates --output markdown, added after v0.1.1): $(escaped "$out/md.err")"

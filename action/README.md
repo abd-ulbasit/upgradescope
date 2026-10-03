@@ -234,10 +234,13 @@ step with an error that names the input. The error shows the value with
 so a value holding a line break and `::warning::` cannot forge an
 annotation or a log mask. The scan's own messages repeat the `path` input
 and the names of files under it, which a pull request from a fork chooses.
-The action prints them to the log line by line, and a line that would
-start a workflow command (`::` or `##[` after any leading whitespace) gets
-a `| ` in front, a carriage return is written `%0D`, and the rest is
-unchanged. Earlier versions of
+The action prints them, and the Markdown report (which names the files
+with findings), to the log line by line: a line that would start a
+workflow command (`::` after any leading whitespace) gets a `| ` in front,
+a carriage return is written `%0D`, and every `##[` (the runner's older
+command form, which it reads anywhere in a line) is written `# #[`; the
+rest is unchanged. The step summary and the `summary-file` output keep the
+report as it is. Earlier versions of
 the action passed any other `version` to `go install`, so a branch name or
 commit worked there; now it must be a release tag, `latest` or
 `preinstalled`.

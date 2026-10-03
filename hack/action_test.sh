@@ -285,7 +285,7 @@ hasnt "no GITHUB_OUTPUT write for a bad input" "$rt/output" "x="
 # --- install ----------------------------------------------------------------
 
 # With no version, an action at a release tag runs that release (#197
-# NEW-action-1): GitHub's latest skips prereleases, so @v0.2.0-rc.2 would
+# AC-03b): GitHub's latest skips prereleases, so @v0.2.0-rc.2 would
 # otherwise run an older stable release's engine and pass what it blocks.
 run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
 expect "no version at a release tag ref installs that tag" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
@@ -591,6 +591,33 @@ run scan "$work/real:" INPUT_PATH="$mdname"
 if [ "$code" = 2 ] && ! grep -q '^::warning title=FORGEDMD' "$work/out"; then
   ok "a file name with a line break in a finding cannot start a command"
 else fail "a file name with a line break in a finding cannot start a command" "$work/out"; fi
+
+# The runner also reads a legacy command, ##[name], anywhere in a line that
+# is not a :: command. So no line that is not a :: annotation may hold a ##[
+# at all, wherever in the line a path or file name put it (#197 AC-05b). (A
+# :: line is parsed whole as its own command first, so a ##[ in one of its
+# values is inert.)
+nolegacy() { # <name>: the log has no ##[ outside a :: line
+  if grep -v '^::' "$work/out" | grep -qF '##['; then fail "$1" "$work/out"; else ok "$1"; fi
+}
+mkdir -p "$work/hash1/d##[add-mask]upgradescope" && echo readme >"$work/hash1/d##[add-mask]upgradescope/README"
+run scan "$work/real:" INPUT_PATH="$work/hash1/d##[add-mask]upgradescope"
+expect "a ##[ in the path input is still reported in the error" 1 "no Kubernetes manifests found under"
+nolegacy "a ##[ in the path input cannot start a legacy command through the binary's error"
+mkdir -p "$work/hash2" && printf 'a: [\n' >"$work/hash2/x##[warning title=FORGED]y.yaml"
+run scan "$work/real:" INPUT_PATH="$work/hash2"
+expect "a ##[ in a malformed file's name is still reported" 1 "skipped"
+nolegacy "a ##[ in a skipped file's name cannot start a legacy command"
+mkdir -p "$work/hash3" && cp action/testdata/removed/all.yaml "$work/hash3/m##[error title=MD]z.yaml"
+run scan "$work/real:" INPUT_PATH="$work/hash3"
+expect "a finding in a ##[ file is still in the Markdown report" 2 "### upgradescope: blocked"
+nolegacy "a ##[ in a finding's file name cannot start a legacy command through the Markdown report"
+has "the Markdown report in the step summary is unchanged" "$rt/summary" '##[error title=MD]'
+# An echo of a value outside the gate's stderr: the latest release's tag
+# from the redirect, when it is not a version.
+run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST='x##[add-mask]y'
+has "the unresolvable release is still reported" "$work/out" "cannot resolve the latest release (got '"
+nolegacy "a ##[ in a release URL cannot start a legacy command"
 
 mkdir -p "$work/broken"
 printf '#!/bin/sh\necho "load knowledge base: boom" >&2\nexit 1\n' >"$work/broken/upgradescope"
