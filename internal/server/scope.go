@@ -546,3 +546,72 @@ func clusterTeams(inv inventory.Inventory, rep engine.Report) []string {
 	slices.Sort(teams)
 	return slices.Compact(teams)
 }
+
+// clusterShare is inv, a cluster's inventory with its namespaces' teams
+// applied (TeamMap.Apply), reduced to the scope's share: the evidence in
+// the namespaces it attributes to one of the scope's teams. A team-scoped
+// gate merges its manifests into this, so the engine counts, titles and
+// details a finding the PR's objects join from the scope's evidence and
+// the PR's alone, never another team's (#72). Left out: every other
+// namespace (so the PR's objects there are attributed to no team), the
+// API usage, custom resources, Helm releases, GitOps charts and add-on
+// installs in them, cluster-scoped usage and add-ons detected without a
+// namespace (no team's), the apiserver's deprecated-call rows (cluster
+// wide, of any client) and the unrecognized images (any workload's).
+// What describes the cluster as a whole stays: its version, nodes,
+// control plane, CRD definitions and capabilities. inv is not modified.
+// The fleet-wide scope's share is inv.
+func (sc readScope) clusterShare(inv inventory.Inventory) inventory.Inventory {
+	if sc.fleet() {
+		return inv
+	}
+	teams := namespaceTeamsOf(inv.Namespaces)
+	in := func(ns string) bool { t := teams[ns]; return ns != "" && t != "" && sc.teams[t] }
+	out := inv
+	out.Namespaces = slices.DeleteFunc(slices.Clone(inv.Namespaces), func(n inventory.NamespaceInfo) bool { return !in(n.Name) })
+	out.APIUsage = usageShare(inv.APIUsage, in)
+	out.APIAuthorshipUnknown = usageShare(inv.APIAuthorshipUnknown, in)
+	out.CRDs = make([]inventory.CRD, 0, len(inv.CRDs))
+	for _, c := range inv.CRDs {
+		c.Usage = usageShare(c.Usage, in)
+		out.CRDs = append(out.CRDs, c)
+	}
+	out.HelmReleases = slices.DeleteFunc(slices.Clone(inv.HelmReleases), func(r inventory.HelmRelease) bool { return !in(r.Namespace) })
+	out.GitOpsCharts = slices.DeleteFunc(slices.Clone(inv.GitOpsCharts), func(c inventory.GitOpsChart) bool {
+		return !in(c.Namespace) || c.Target != "" && !in(c.Target)
+	})
+	out.AddOns = nil
+	for _, a := range inv.AddOns {
+		a.Namespaces = slices.DeleteFunc(slices.Clone(a.Namespaces), func(ns string) bool { return !in(ns) })
+		if len(a.Namespaces) > 0 {
+			out.AddOns = append(out.AddOns, a)
+		}
+	}
+	out.DeprecatedCalls = nil
+	out.UnrecognizedImages, out.UnrecognizedImagesOmitted = nil, 0
+	return out
+}
+
+// usageShare is the rows of us in the namespaces in keeps: each row's
+// count, per-namespace counts and objects of those namespaces only, and
+// the objects of theirs it did not list counted as omitted. A row without
+// per-namespace counts cannot be divided, so it is left out, as is
+// cluster-scoped usage (the "" namespace).
+func usageShare(us []inventory.APIUsage, in func(string) bool) []inventory.APIUsage {
+	var out []inventory.APIUsage
+	for _, u := range us {
+		namespaces, count := map[string]int{}, 0
+		for ns, n := range u.Namespaces {
+			if in(ns) && n > 0 {
+				namespaces[ns], count = n, count+n
+			}
+		}
+		if count == 0 {
+			continue
+		}
+		u.Objects = slices.DeleteFunc(slices.Clone(u.Objects), func(o inventory.ObjectRef) bool { return !in(o.Namespace) })
+		u.Count, u.Namespaces, u.ObjectsOmitted = count, namespaces, max(0, count-len(u.Objects))
+		out = append(out, u)
+	}
+	return out
+}
