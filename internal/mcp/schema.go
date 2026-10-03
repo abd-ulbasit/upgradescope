@@ -2,9 +2,14 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"regexp"
+	"strings"
 	"sync"
+
+	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/abd-ulbasit/upgradescope/api"
 )
@@ -113,4 +118,72 @@ func fleetOutputSchema() map[string]any {
 		"description": "The server's GET /api/v1/fleet response: one row per cluster, one score cell per target (api/openapi.yaml, FleetResponse).",
 		"type":        "object",
 	}
+}
+
+// reportResolved is ReportOutputSchema compiled by the validator the MCP
+// SDK applies to a tool's output, so a report that passes checkReport is one
+// the SDK sends.
+var reportResolved = sync.OnceValue(func() *jsonschema.Resolved {
+	raw, err := json.Marshal(ReportOutputSchema())
+	if err != nil {
+		panic(fmt.Sprintf("mcp: report schema: %v", err))
+	}
+	var s jsonschema.Schema
+	if err := json.Unmarshal(raw, &s); err != nil {
+		panic(fmt.Sprintf("mcp: report schema: %v", err))
+	}
+	r, err := s.Resolve(nil)
+	if err != nil {
+		panic(fmt.Sprintf("mcp: report schema does not resolve: %v", err))
+	}
+	return r
+})
+
+// errNotJSON is the whole reason given for a document that is not JSON:
+// encoding/json's error quotes the offending character, and the document
+// may be any file an assistant named.
+var errNotJSON = errors.New("not a JSON document")
+
+// checkReport reports why doc, a report from a file or the fleet server, is
+// not one api/report.schema.json accepts, or nil. Without it the SDK's own
+// output check would refuse the result as a JSON-RPC protocol error, which
+// an assistant cannot read as a reason. The reason names where in the
+// schema the document fails and the rule it breaks, never a value of it.
+func checkReport(doc json.RawMessage) error {
+	var v any
+	if err := json.Unmarshal(doc, &v); err != nil {
+		return errNotJSON
+	}
+	if err := reportResolved().Validate(&v); err != nil {
+		return fmt.Errorf("it does not follow api/report.schema.json (%s)", schemaReason(err))
+	}
+	return nil
+}
+
+var (
+	schemaLocation = regexp.MustCompile(`^[A-Za-z0-9_/$.-]+$`)
+	schemaKeyword  = regexp.MustCompile(`^[A-Za-z]+$`)
+)
+
+// schemaReason is the validator's error less the values it quotes: the
+// innermost schema location it names ("validating /properties/target: ...")
+// and the keyword that failed ("pattern"), which come from the schema, not
+// from the document.
+func schemaReason(err error) string {
+	s := err.Error()
+	at := "at the top level"
+	for strings.HasPrefix(s, "validating ") {
+		loc, rest, ok := strings.Cut(strings.TrimPrefix(s, "validating "), ": ")
+		if !ok {
+			break
+		}
+		if loc != "root" && schemaLocation.MatchString(loc) {
+			at = "at " + loc
+		}
+		s = rest
+	}
+	if kw, _, ok := strings.Cut(s, ":"); ok && schemaKeyword.MatchString(kw) {
+		return at + ", rule " + kw
+	}
+	return at
 }

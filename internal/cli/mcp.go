@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,17 +18,23 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/mcp"
+	"github.com/abd-ulbasit/upgradescope/internal/server"
 	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // maxInventoryFileBytes bounds an inventory file the inventory_file input
-// names: the path comes from an assistant.
-const maxInventoryFileBytes = 64 << 20
+// names (the path comes from an assistant): what a default upgradescope
+// server takes as an agent's push, so any inventory an agent sends can be
+// judged, and nothing much larger. Unlike a report, the inventory itself is
+// not sent to the client, only the report it is judged into, whose size
+// the tools check (mcp.MaxReportBytes says why that matters).
+const maxInventoryFileBytes = server.DefaultMaxSnapshotBytes
 
 type mcpOptions struct {
 	kubeconfig     string
@@ -36,6 +43,7 @@ type mcpOptions struct {
 
 	httpAddr    string
 	allowRemote bool
+	httpToken   string
 
 	serverURL string
 	readToken string
@@ -45,6 +53,7 @@ func newMCPCmd() *cobra.Command {
 	var (
 		opts      mcpOptions
 		readToken *secretFlag
+		httpToken *secretFlag
 	)
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -64,17 +73,21 @@ they are the JSON the CLI and the REST API write.
 The server speaks MCP on stdin and stdout, which an assistant client starts
 as a subprocess. With --http ADDR it serves MCP over streamable HTTP at
 http://ADDR/mcp instead, on 127.0.0.1 unless ADDR names another host (which
-needs --allow-remote: the HTTP endpoint has no authentication, and scan reads
-your cluster with your kubeconfig).
+needs --allow-remote). The HTTP endpoint has no authentication unless
+--http-token sets a bearer token every request must carry; without one, any
+local user or process that can reach the port can run scans with your
+kubeconfig.
 
 The cluster a scan reads is the one --kubeconfig and --context name, else
-$KUBECONFIG and the kubeconfig's current context, as for 'scan', and nothing
-else: an assistant names the target versions, never the cluster, and no
-ignore file is looked up. With --server-url, get_report and list_findings can
-read a cluster from an upgradescope server and fleet_summary summarises the
-fleet, using the server's read token (--read-token, --read-token-file or
-$UPGRADESCOPE_READ_TOKEN); a server that requires one rejects calls without
-it, and the tool shows that error.`,
+$KUBECONFIG and the kubeconfig's current context, as for 'scan'; without
+--context, the current context is read once at start and kept, so switching
+contexts later does not move the server to another cluster. Nothing else
+chooses it: an assistant names the target versions, never the cluster, and
+no ignore file is looked up. With --server-url, get_report and list_findings
+can read a cluster from an upgradescope server and fleet_summary summarises
+the fleet, using the server's read token (--read-token, --read-token-file
+or $UPGRADESCOPE_READ_TOKEN); a server that requires one rejects calls
+without it, and the tool shows that error.`,
 		Example: `  # What an MCP client starts (see docs/getting-started/mcp.md for its configuration)
   upgradescope mcp
 
@@ -84,8 +97,8 @@ it, and the tool shows that error.`,
   # Fleet mode: also answer from an upgradescope server
   UPGRADESCOPE_READ_TOKEN=... upgradescope mcp --server-url https://upgradescope.example.com
 
-  # Streamable HTTP on loopback
-  upgradescope mcp --http 127.0.0.1:8808`,
+  # Streamable HTTP on loopback, with a bearer token
+  UPGRADESCOPE_MCP_HTTP_TOKEN=... upgradescope mcp --http 127.0.0.1:8808`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -93,12 +106,23 @@ it, and the tool shows that error.`,
 			if err := readToken.resolve(cmd); err != nil {
 				return err
 			}
+			if err := httpToken.resolve(cmd); err != nil {
+				return err
+			}
 			if err := validateMCPOptions(cmd, &opts); err != nil {
 				return err
 			}
+			stderr := cmd.ErrOrStderr()
+			if opts.kubecontext == "" {
+				// Pin the context: a scan reads the cluster the server
+				// started on, whatever the kubeconfig says later.
+				if opts.kubecontext = currentKubeContext(opts.kubeconfig); opts.kubecontext != "" {
+					fmt.Fprintf(stderr, "upgradescope mcp: scans read kubeconfig context %q (its current context at start; --context names another)\n", opts.kubecontext)
+				}
+			}
 			cfg := mcp.Config{
 				Version:   version,
-				Scan:      mcpScanner(opts, cmd.ErrOrStderr()),
+				Scan:      mcpScanner(opts, stderr),
 				Inventory: mcpInventory,
 			}
 			if opts.serverURL != "" {
@@ -106,23 +130,28 @@ it, and the tool shows that error.`,
 				if err != nil {
 					return err
 				}
+				if w := mcp.CleartextWarning(opts.serverURL, opts.readToken); w != "" {
+					fmt.Fprintf(stderr, "warning: %s\n", w)
+				}
 				cfg.Fleet = fleet
 			}
 			srv := mcp.New(cfg)
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			if opts.httpAddr != "" {
-				return serveMCPHTTP(ctx, srv, opts.httpAddr, cmd.ErrOrStderr())
+				return serveMCPHTTP(ctx, srv, opts.httpAddr, opts.httpToken, stderr)
 			}
 			return serveMCPStdio(ctx, srv, cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
 
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig for scan (default: standard loading rules)")
-	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context for scan (default: the kubeconfig's current context)")
+	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context for scan (default: the kubeconfig's current context when the server starts)")
 	cmd.Flags().DurationVar(&opts.requestTimeout, "request-timeout", defaultRequestTimeout, "give up on a single API request of a scan after this long (0 = no per-request limit)")
 	cmd.Flags().StringVar(&opts.httpAddr, "http", "", "serve MCP over streamable HTTP at http://ADDR/mcp instead of stdio; a bare port or :PORT binds 127.0.0.1")
-	cmd.Flags().BoolVar(&opts.allowRemote, "allow-remote", false, "with --http, accept an address that is not loopback; the endpoint has no authentication")
+	cmd.Flags().BoolVar(&opts.allowRemote, "allow-remote", false, "with --http, accept an address that is not loopback")
+	httpToken = addSecretFlag(cmd, &opts.httpToken, "http-token", "UPGRADESCOPE_MCP_HTTP_TOKEN",
+		"with --http: a bearer token every request must carry (Authorization: Bearer TOKEN); without it the endpoint has no authentication")
 	cmd.Flags().StringVar(&opts.serverURL, "server-url", "", "fleet mode: base URL of an upgradescope server, e.g. https://upgradescope.example.com")
 	readToken = addSecretFlag(cmd, &opts.readToken, "read-token", "UPGRADESCOPE_READ_TOKEN",
 		"with --server-url: the server's read token; omit it for an open read API")
@@ -140,6 +169,10 @@ func validateMCPOptions(cmd *cobra.Command, opts *mcpOptions) error {
 		if opts.allowRemote {
 			return errors.New("--allow-remote needs --http")
 		}
+		if cmd.Flags().Changed("http-token") || cmd.Flags().Changed("http-token-file") {
+			return errors.New("--http-token needs --http")
+		}
+		opts.httpToken = "" // from the environment, for a stdio server: unused
 		return nil
 	}
 	addr, remote, err := normalizeMCPAddr(opts.httpAddr)
@@ -147,7 +180,7 @@ func validateMCPOptions(cmd *cobra.Command, opts *mcpOptions) error {
 		return err
 	}
 	if remote && !opts.allowRemote {
-		return fmt.Errorf("--http %s is not a loopback address: the endpoint has no authentication and scan reads your cluster with your kubeconfig; bind 127.0.0.1, or pass --allow-remote if the network in front of it is the access control", opts.httpAddr)
+		return fmt.Errorf("--http %s is not a loopback address, and scan reads your cluster with your kubeconfig: bind 127.0.0.1, or pass --allow-remote (with --http-token, or with the network in front of it as the access control)", opts.httpAddr)
 	}
 	opts.httpAddr = addr
 	return nil
@@ -176,6 +209,22 @@ func normalizeMCPAddr(s string) (addr string, remote bool, err error) {
 	return net.JoinHostPort(host, port), ip == nil || !ip.IsLoopback(), nil
 }
 
+// currentKubeContext is the kubeconfig's current context, by the loading
+// rules a scan uses ($KUBECONFIG, ~/.kube/config, or kubeconfig), or ""
+// when there is no kubeconfig to read; a scan then fails with the reason.
+// A package var so tests never read the user's kubeconfig.
+var currentKubeContext = func(kubeconfig string) string {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		rules.ExplicitPath = kubeconfig
+	}
+	raw, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).RawConfig()
+	if err != nil {
+		return ""
+	}
+	return raw.CurrentContext
+}
+
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
@@ -194,19 +243,28 @@ func serveMCPStdio(ctx context.Context, srv *mcpsdk.Server, in io.Reader, out io
 	return err
 }
 
-// serveMCPHTTP serves MCP over streamable HTTP at /mcp until ctx ends. The
-// SDK refuses requests whose Host header is not loopback when the listener is
-// (DNS rebinding), and cross-origin browser requests are refused here.
-func serveMCPHTTP(ctx context.Context, srv *mcpsdk.Server, addr string, stderr io.Writer) error {
+// serveMCPHTTP serves MCP over streamable HTTP at /mcp until ctx ends.
+// Cross-origin browser requests are refused here; the SDK refuses a
+// request whose Host header is not loopback when it arrives on a loopback
+// address (DNS rebinding), which covers the default binding but not an
+// --allow-remote one. With token, every request must carry it as a bearer
+// token.
+func serveMCPHTTP(ctx context.Context, srv *mcpsdk.Server, addr, token string, stderr io.Writer) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("mcp: listen: %w", err)
 	}
+	var h http.Handler = http.NewCrossOriginProtection().Handler(
+		mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return srv }, nil))
+	auth := "no authentication: any local user or process that reaches it can run scans with your kubeconfig"
+	if token != "" {
+		h = requireBearer(token, h)
+		auth = "bearer token required"
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(
-		mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return srv }, nil)))
+	mux.Handle("/mcp", h)
 	hs := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	fmt.Fprintf(stderr, "upgradescope mcp: serving MCP on http://%s/mcp\n", ln.Addr())
+	fmt.Fprintf(stderr, "upgradescope mcp: serving MCP on http://%s/mcp (%s)\n", ln.Addr(), auth)
 	errCh := make(chan error, 1)
 	go func() { errCh <- hs.Serve(ln) }()
 	select {
@@ -225,45 +283,106 @@ func serveMCPHTTP(ctx context.Context, srv *mcpsdk.Server, addr string, stderr i
 	}
 }
 
-// mcpScanner is the scan tool: `upgradescope scan --output json` for one
-// target, through the same pieces the command uses (option validation,
-// runScan, the JSON writer), so an assistant gets the report a person at the
-// terminal gets. The cluster read is what base carries, --kubeconfig and
-// --context, and what clientcmd takes from the environment ($KUBECONFIG, the
-// kubeconfig's current context); a call names a target and nothing else, and
-// nothing is defaulted beyond that. In particular no ignore file is
-// discovered from the working directory, which an MCP client chooses; the
-// suppressions that live in the cluster (the upgradescope.dev/ignore
-// annotations) apply, as in a scan with no ignore file. --request-timeout
-// is the one scan setting besides: it bounds a request, it does not choose
-// what is read.
-func mcpScanner(base mcpOptions, stderr io.Writer) func(context.Context, mcp.ScanRequest) (json.RawMessage, error) {
-	return func(ctx context.Context, req mcp.ScanRequest) (json.RawMessage, error) {
+// requireBearer passes on only requests that carry token as a bearer
+// token, compared in constant time.
+func requireBearer(token string, next http.Handler) http.Handler {
+	want := []byte("Bearer " + token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="upgradescope mcp"`)
+			http.Error(w, "missing or invalid bearer token (start the client with the token of 'upgradescope mcp --http-token')", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// mcpScanner is the scan tool: `upgradescope scan --output json` for the
+// call's targets, through the same pieces the command uses (option
+// validation, the cluster read, the evaluation, the JSON writer), so an
+// assistant gets the report a person at the terminal gets. The cluster is
+// read once per call and judged at each target. The cluster read is what
+// base carries, --kubeconfig and --context (pinned at start when it was not
+// given), and what clientcmd takes from the environment; a call names
+// targets and nothing else, and nothing is defaulted beyond that. In
+// particular no ignore file is discovered from the working directory,
+// which an MCP client chooses; the suppressions that live in the cluster
+// (the upgradescope.dev/ignore annotations) apply, as in a scan with no
+// ignore file. --request-timeout is the one scan setting besides: it
+// bounds a request, it does not choose what is read.
+func mcpScanner(base mcpOptions, stderr io.Writer) func(context.Context, mcp.ScanRequest) ([]json.RawMessage, error) {
+	return func(ctx context.Context, req mcp.ScanRequest) ([]json.RawMessage, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		opts := scanOptions{
-			target:         req.Target,
-			kubeconfig:     base.kubeconfig,
-			kubecontext:    base.kubecontext,
-			requestTimeout: base.requestTimeout,
-			output:         "json",
-			failOn:         "never",
-			stderr:         stderr,
+		if len(req.Targets) == 0 {
+			return nil, errors.New("no targets")
 		}
-		if err := validateScanOptions(&opts); err != nil {
-			return nil, err
+		all := make([]scanOptions, 0, len(req.Targets))
+		for _, t := range req.Targets {
+			opts := scanOptions{
+				target:         t,
+				kubeconfig:     base.kubeconfig,
+				kubecontext:    base.kubecontext,
+				requestTimeout: base.requestTimeout,
+				output:         "json",
+				failOn:         "never",
+				stderr:         stderr,
+			}
+			if err := validateScanOptions(&opts); err != nil {
+				return nil, err
+			}
+			all = append(all, opts)
 		}
-		report, err := runScan(opts)
+		reports, err := runMCPScan(ctx, all)
 		if err != nil {
 			return nil, err
 		}
-		report, warnings := suppress.Apply(report, nil, suppress.Options{Now: time.Now()})
-		for _, w := range warnings {
-			fmt.Fprintf(stderr, "warning: %s\n", w)
+		if len(reports) != len(all) {
+			return nil, fmt.Errorf("%d reports for %d targets", len(reports), len(all))
 		}
-		return reportDocument(report, nil)
+		now := time.Now()
+		docs := make([]json.RawMessage, len(reports))
+		for i, r := range reports {
+			r, warnings := suppress.Apply(r, nil, suppress.Options{Now: now})
+			if i == 0 { // the same objects at every target: warn once
+				for _, w := range warnings {
+					fmt.Fprintf(stderr, "warning: %s\n", w)
+				}
+			}
+			if docs[i], err = reportDocument(r, nil); err != nil {
+				return nil, err
+			}
+		}
+		return docs, nil
 	}
+}
+
+// runMCPScan reads the live cluster opts[0] names once and judges it at
+// each opts' target, one report each, in order; every opts names the same
+// cluster. It stops when ctx ends: a call the client cancelled reads no
+// further and reports nothing. A package var so tests can stand in for the
+// cluster, as runScan is for the scan command.
+var runMCPScan = func(ctx context.Context, opts []scanOptions) ([]engine.Report, error) {
+	kbData, err := kb.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load knowledge base: %w", err)
+	}
+	inv, cluster, err := collectCluster(ctx, kbData, opts[0])
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err // the inventory is partial: judging it would mislead
+	}
+	now := time.Now()
+	reports := make([]engine.Report, len(opts))
+	for i, o := range opts {
+		r := evaluateScan(inv, kbData, o, now)
+		r.KubeContext, r.APIServer = cluster.context, cluster.server
+		reports[i] = r
+	}
+	return reports, nil
 }
 
 // mcpInventory judges an inventory file (the JSON an agent pushes to a
@@ -273,26 +392,20 @@ func mcpInventory(path, target string) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid target %q: %w", target, err)
 	}
-	f, err := os.Open(path)
+	raw, err := mcp.ReadFile(path, maxInventoryFileBytes)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, maxInventoryFileBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > maxInventoryFileBytes {
-		return nil, fmt.Errorf("%s is larger than %d MiB", path, maxInventoryFileBytes>>20)
-	}
+	notInventory := fmt.Errorf("%s is not an upgradescope inventory (want schemaVersion 1 with clusterId and capabilities, as an agent pushes); for a report use report_file", path)
 	var inv inventory.Inventory
 	if err := json.Unmarshal(raw, &inv); err != nil {
-		return nil, fmt.Errorf("%s is not an inventory: %w", path, err)
+		// encoding/json's reason quotes the file, which may be any file.
+		return nil, notInventory
 	}
 	// A report or any other JSON would decode into an empty inventory and
 	// score 100; an inventory names its schema, cluster and capabilities.
 	if inv.SchemaVersion != 1 || inv.ClusterID == "" || len(inv.Capabilities) == 0 {
-		return nil, fmt.Errorf("%s is not an upgradescope inventory (want schemaVersion 1 with clusterId and capabilities, as an agent pushes); for a report use report_file", path)
+		return nil, notInventory
 	}
 	if err := inv.ValidateLimits(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

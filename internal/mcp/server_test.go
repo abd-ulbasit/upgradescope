@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -85,7 +86,7 @@ func goldenReport(t *testing.T, name string) (path string, doc []byte) {
 func localConfig() Config {
 	return Config{
 		Version: "test",
-		Scan: func(context.Context, ScanRequest) (json.RawMessage, error) {
+		Scan: func(context.Context, ScanRequest) ([]json.RawMessage, error) {
 			return nil, errors.New("no scans in this test")
 		},
 		Inventory: func(string, string) (json.RawMessage, error) {
@@ -257,6 +258,13 @@ func TestSourceErrorsAreToolErrors(t *testing.T) {
 	if err := os.WriteFile(notReport, []byte(`{"hello":"world"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The schemaVersion of a report and nothing else: without the report
+	// schema check in the handler, the SDK's output check fails it as a
+	// JSON-RPC protocol error.
+	versionOnly := filepath.Join(t.TempDir(), "v1.json")
+	if err := os.WriteFile(versionOnly, []byte(`{"schemaVersion":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cs := connect(t, localConfig())
 	for _, tc := range []struct {
 		name string
@@ -264,6 +272,8 @@ func TestSourceErrorsAreToolErrors(t *testing.T) {
 		args map[string]any
 		want string
 	}{
+		{"schemaVersion 1 only, get_report", ToolGetReport, map[string]any{"report_file": versionOnly}, "does not follow api/report.schema.json (at the top level, rule required)"},
+		{"schemaVersion 1 only, list_findings", ToolListFindings, map[string]any{"report_file": versionOnly}, "does not follow api/report.schema.json"},
 		{"nothing scanned yet", ToolListFindings, nil, "call scan first"},
 		{"two sources", ToolGetReport, map[string]any{"report_file": path, "inventory_file": path}, "name one source"},
 		{"not a report", ToolGetReport, map[string]any{"report_file": notReport}, "not an upgradescope JSON report"},
@@ -307,12 +317,20 @@ func TestScanFeedsTheOtherTools(t *testing.T) {
 	_, clean := goldenReport(t, "clean-cluster")
 	var reqs []ScanRequest
 	cfg := localConfig()
-	cfg.Scan = func(_ context.Context, req ScanRequest) (json.RawMessage, error) {
+	cfg.Scan = func(_ context.Context, req ScanRequest) ([]json.RawMessage, error) {
 		reqs = append(reqs, req)
-		var m map[string]any
-		_ = json.Unmarshal(clean, &m)
-		m["target"] = req.Target
-		return json.Marshal(m)
+		var docs []json.RawMessage
+		for _, target := range req.Targets {
+			var m map[string]any
+			_ = json.Unmarshal(clean, &m)
+			m["target"] = target
+			doc, err := json.Marshal(m)
+			if err != nil {
+				return nil, err
+			}
+			docs = append(docs, doc)
+		}
+		return docs, nil
 	}
 	cs := connect(t, cfg)
 
@@ -332,8 +350,9 @@ func TestScanFeedsTheOtherTools(t *testing.T) {
 	if len(scanned.Reports) != 2 || scanned.Reports[0].Target != "1.34" || scanned.Reports[1].Target != "1.35" {
 		t.Errorf("reports = %+v, want 1.34 then 1.35", scanned.Reports)
 	}
-	if len(reqs) != 2 || reqs[0] != (ScanRequest{Target: "1.34"}) || reqs[1] != (ScanRequest{Target: "1.35"}) {
-		t.Errorf("scan requests = %+v, want one per target and nothing else", reqs)
+	// One request, so one cluster read, naming the targets and nothing else.
+	if len(reqs) != 1 || !reflect.DeepEqual(reqs[0], ScanRequest{Targets: []string{"1.34", "1.35"}}) {
+		t.Errorf("scan requests = %+v, want one naming 1.34 and 1.35 and nothing else", reqs)
 	}
 
 	// Two targets scanned: the other tools need to be told which.
@@ -351,7 +370,7 @@ func TestScanFeedsTheOtherTools(t *testing.T) {
 
 func TestScanInputIsChecked(t *testing.T) {
 	cfg := localConfig()
-	cfg.Scan = func(context.Context, ScanRequest) (json.RawMessage, error) {
+	cfg.Scan = func(context.Context, ScanRequest) ([]json.RawMessage, error) {
 		t.Error("an invalid scan request reached the scanner")
 		return nil, errors.New("unreachable")
 	}
@@ -551,7 +570,7 @@ func TestReportFileIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Truncate(maxReportFileBytes + 1); err != nil { // sparse
+	if err := f.Truncate(MaxReportBytes + 1); err != nil { // sparse
 		t.Fatal(err)
 	}
 	if err := f.Close(); err != nil {
@@ -559,7 +578,7 @@ func TestReportFileIsBounded(t *testing.T) {
 	}
 	cs := connect(t, localConfig())
 	res := call(t, cs, ToolGetReport, map[string]any{"report_file": big})
-	if !res.IsError || !strings.Contains(text(res), "larger than 64 MiB") {
+	if !res.IsError || !strings.Contains(text(res), "larger than 8 MiB") {
 		t.Errorf("a file over the bound: isError=%v %q", res.IsError, text(res))
 	}
 }

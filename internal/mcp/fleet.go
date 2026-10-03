@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,8 +17,10 @@ import (
 // fleetTimeout bounds each request to the server.
 const fleetTimeout = 30 * time.Second
 
-// maxFleetResponseBytes bounds what is read of one response.
-const maxFleetResponseBytes = 64 << 20
+// maxFleetResponseBytes bounds what is read of one response: a report or
+// the fleet summary goes on to a client whole, so the bound is the one on
+// a report a tool reads (MaxReportBytes says why).
+const maxFleetResponseBytes = MaxReportBytes
 
 // Fleet reads an upgradescope server's REST API with its read token, so the
 // server's own read authentication and its limits apply as they do to a
@@ -35,7 +38,34 @@ func NewFleet(baseURL, token string) (*Fleet, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("--server-url %q: want an http(s) URL such as https://upgradescope.example.com", baseURL)
 	}
-	return &Fleet{BaseURL: strings.TrimSuffix(baseURL, "/"), Token: token, Client: &http.Client{Timeout: fleetTimeout}}, nil
+	return &Fleet{BaseURL: strings.TrimSuffix(baseURL, "/"), Token: token, Client: newFleetClient()}, nil
+}
+
+// newFleetClient follows no redirect: the server's API answers where it is
+// asked, and a 3xx (to a login page, or another host) comes back as the
+// error it is rather than as an answer from somewhere else.
+func newFleetClient() *http.Client {
+	return &http.Client{
+		Timeout:       fleetTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// CleartextWarning says why reading serverURL with token is unsafe, or
+// returns "": a read token sent over plain http:// to a host that is not
+// loopback crosses the network in the clear, where anyone on the path can
+// replay it (as agent.CleartextPushWarning says of the ingest token).
+func CleartextWarning(serverURL, token string) string {
+	u, err := url.Parse(serverURL)
+	if err != nil || token == "" || !strings.EqualFold(u.Scheme, "http") {
+		return ""
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback() {
+		return ""
+	}
+	return fmt.Sprintf("reading %s over plain http: the read token crosses the network unencrypted, "+
+		"so anyone on the path can replay it; serve the server over https (--tls-cert-file, the chart's server.tls, or a TLS Ingress)", u.Host)
 }
 
 // get returns the 2xx JSON body of GET path. Any other status is an error
@@ -56,19 +86,22 @@ func (f *Fleet) get(ctx context.Context, path string, query url.Values) (json.Ra
 	}
 	client := f.Client
 	if client == nil {
-		client = &http.Client{Timeout: fleetTimeout}
+		client = newFleetClient()
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("upgradescope server: GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	if resp.ContentLength > maxFleetResponseBytes {
+		return nil, fmt.Errorf("upgradescope server: GET %s: response is larger than %s, the most a tool reads", path, mib(maxFleetResponseBytes))
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxFleetResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("upgradescope server: GET %s: reading the response: %w", path, err)
 	}
 	if len(raw) > maxFleetResponseBytes {
-		return nil, fmt.Errorf("upgradescope server: GET %s: response is larger than %d MiB", path, maxFleetResponseBytes>>20)
+		return nil, fmt.Errorf("upgradescope server: GET %s: response is larger than %s, the most a tool reads", path, mib(maxFleetResponseBytes))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		var e struct {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -242,18 +243,37 @@ func fixtureEvaluator(t *testing.T) func(inventory.Version) engine.Report {
 	return func(target inventory.Version) engine.Report { return engine.Evaluate(inv, k, target, time.Now()) }
 }
 
+// The real cluster read and kubeconfig lookup of `mcp`, for the tests that
+// exercise them against a stand-in; every other test gets the stand-ins
+// init installs, so no test here reads the user's kubeconfig or cluster.
+var (
+	realRunMCPScan         = runMCPScan
+	realCurrentKubeContext = currentKubeContext
+)
+
+func init() {
+	runMCPScan = func(context.Context, []scanOptions) ([]engine.Report, error) {
+		return nil, errors.New("test bug: runMCPScan is not stubbed (stubScan)")
+	}
+	currentKubeContext = func(string) string { return "" }
+}
+
 // stubScan replaces the cluster read of `scan` with the fixture inventory,
-// recording the options each scan was given.
+// recording the options each target of a scan was given.
 func stubScan(t *testing.T) *[]scanOptions {
 	t.Helper()
 	var got []scanOptions
 	evaluate := fixtureEvaluator(t)
-	orig := runScan
-	runScan = func(opts scanOptions) (engine.Report, error) {
-		got = append(got, opts)
-		return evaluate(opts.targetVersion), nil
+	orig := runMCPScan
+	runMCPScan = func(_ context.Context, opts []scanOptions) ([]engine.Report, error) {
+		got = append(got, opts...)
+		reports := make([]engine.Report, len(opts))
+		for i, o := range opts {
+			reports[i] = evaluate(o.targetVersion)
+		}
+		return reports, nil
 	}
-	t.Cleanup(func() { runScan = orig })
+	t.Cleanup(func() { runMCPScan = orig })
 	return &got
 }
 
@@ -303,26 +323,42 @@ func TestMCPScanFeedsTheOtherTools(t *testing.T) {
 
 // TestMCPScanHonoursOnlyKubeconfigContextAndTheEnvironment: the cluster a
 // scan reads is exactly what the command's --kubeconfig and --context name;
-// with neither, the scan gets no kubeconfig or context of its own, so
-// clientcmd's standard rules ($KUBECONFIG, the current context) decide, as
-// for `scan`. A call cannot name another cluster, nor read manifests, nor
-// change the output; the scan carries no other default (no ignore file,
-// no gate, no plan).
+// with no --context, the kubeconfig's current context when the server
+// starts, by clientcmd's standard rules ($KUBECONFIG, or --kubeconfig), as
+// for `scan`, and pinned there. A call cannot name another cluster, nor
+// read manifests, nor change the output; the scan carries no other default
+// (no ignore file, no gate, no plan).
 func TestMCPScanHonoursOnlyKubeconfigContextAndTheEnvironment(t *testing.T) {
 	scans := stubScan(t)
+	currentKubeContext = realCurrentKubeContext
+	t.Cleanup(func() { currentKubeContext = func(string) string { return "" } })
+	envKubeconfig := writeKubeconfig(t) // current-context: test
+	flagKubeconfig := filepath.Join(t.TempDir(), "kc")
+	if err := os.WriteFile(flagKubeconfig, []byte(strings.Replace(testKubeconfig, "current-context: test", "current-context: from-file", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name           string
+		kubeconfigEnv  string
 		flags          []string
 		wantKubeconfig string
 		wantContext    string
 	}{
-		{"nothing named", nil, "", ""},
-		{"kubeconfig and context flags", []string{"--kubeconfig", "/flags/kc", "--context", "from-flag"}, "/flags/kc", "from-flag"},
-		{"context flag only", []string{"--context", "from-flag"}, "", "from-flag"},
+		{"nothing named: the current context, pinned", envKubeconfig, nil, "", "test"},
+		{"no kubeconfig at all", filepath.Join(t.TempDir(), "none"), nil, "", ""},
+		{"kubeconfig flag: its current context", envKubeconfig, []string{"--kubeconfig", flagKubeconfig}, flagKubeconfig, "from-file"},
+		{"kubeconfig and context flags", envKubeconfig, []string{"--kubeconfig", "/flags/kc", "--context", "from-flag"}, "/flags/kc", "from-flag"},
+		{"context flag only", envKubeconfig, []string{"--context", "from-flag"}, "", "from-flag"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			*scans = nil
+			t.Setenv("KUBECONFIG", tc.kubeconfigEnv)
 			cs := startMCP(t, tc.flags...)
+			// Switching the context after the start does not move the server.
+			if err := os.WriteFile(envKubeconfig, []byte(strings.Replace(testKubeconfig, "current-context: test", "current-context: switched", 1)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.WriteFile(envKubeconfig, []byte(testKubeconfig), 0o600) })
 			if res := callMCP(t, cs, mcp.ToolScan, map[string]any{"targets": []any{"1.37"}}); res.IsError {
 				t.Fatal(mcpText(res))
 			}
@@ -389,25 +425,43 @@ func TestMCPScanLooksUpNoIgnoreFile(t *testing.T) {
 	}
 }
 
-// TestMCPScanTargetsAndErrors: several targets are scanned in order, and a
-// cluster that cannot be read is a tool error carrying the reason.
+// TestMCPScanTargetsAndErrors: several targets are judged in order from one
+// read of the cluster, and a cluster that cannot be read is a tool error
+// carrying the reason.
 func TestMCPScanTargetsAndErrors(t *testing.T) {
-	var targets []string
+	var reads [][]string
 	fail := false
 	evaluate := fixtureEvaluator(t)
-	orig := runScan
-	runScan = func(opts scanOptions) (engine.Report, error) {
-		targets = append(targets, opts.targetVersion.String())
-		if fail {
-			return engine.Report{}, fmt.Errorf("cannot read the cluster at context %q: unauthorized", opts.kubecontext)
+	orig := runMCPScan
+	runMCPScan = func(_ context.Context, opts []scanOptions) ([]engine.Report, error) {
+		var targets []string
+		for _, o := range opts {
+			targets = append(targets, o.targetVersion.String())
 		}
-		return evaluate(opts.targetVersion), nil
+		reads = append(reads, targets)
+		if fail {
+			return nil, fmt.Errorf("cannot read the cluster at context %q: unauthorized", opts[0].kubecontext)
+		}
+		reports := make([]engine.Report, len(opts))
+		for i, o := range opts {
+			reports[i] = evaluate(o.targetVersion)
+		}
+		return reports, nil
 	}
-	t.Cleanup(func() { runScan = orig })
+	t.Cleanup(func() { runMCPScan = orig })
 	cs := startMCP(t, "--context", "gone")
 	res := callMCP(t, cs, mcp.ToolScan, map[string]any{"targets": []any{"1.37", "1.38"}})
-	if res.IsError || !slices.Equal(targets, []string{"1.37", "1.38"}) {
-		t.Errorf("targets scanned = %v (error %v)", targets, res.IsError)
+	if res.IsError || len(reads) != 1 || !slices.Equal(reads[0], []string{"1.37", "1.38"}) {
+		t.Errorf("cluster reads = %v (error %v), want one, judged at 1.37 then 1.38", reads, res.IsError)
+	}
+	var sc struct {
+		Reports []struct {
+			Target string `json:"target"`
+		} `json:"reports"`
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(raw, &sc); err != nil || len(sc.Reports) != 2 || sc.Reports[0].Target != "1.37" || sc.Reports[1].Target != "1.38" {
+		t.Errorf("reports = %+v (%v), want 1.37 then 1.38", sc.Reports, err)
 	}
 	fail = true
 	res = callMCP(t, cs, mcp.ToolScan, map[string]any{"targets": []any{"1.37"}})
@@ -559,6 +613,7 @@ func TestMCPOptionsAreChecked(t *testing.T) {
 		{"remote bind", []string{"--http", "0.0.0.0:8808"}, "not a loopback address"},
 		{"named remote host", []string{"--http", "example.com:8808"}, "not a loopback address"},
 		{"allow-remote needs http", []string{"--allow-remote"}, "--allow-remote needs --http"},
+		{"http-token needs http", []string{"--http-token", "x"}, "--http-token needs --http"},
 		{"bad port", []string{"--http", "127.0.0.1:http"}, "bad port"},
 		{"negative timeout", []string{"--request-timeout", "-1s"}, "request-timeout"},
 	} {
@@ -601,35 +656,11 @@ func TestNormalizeMCPAddr(t *testing.T) {
 // with the SDK's HTTP client; a request that carries a foreign Host header
 // (DNS rebinding) is refused.
 func TestMCPHTTP(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("no loopback listener: %v", err)
+	addr, stderr := startMCPHTTP(t)
+	if !strings.Contains(stderr.String(), "no authentication: any local user or process") {
+		t.Errorf("the start message does not say the endpoint is open: %q", stderr.String())
 	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-
-	cmd := Root()
-	cmd.SetArgs([]string{"mcp", "--http", addr})
-	cmd.SetIn(strings.NewReader(""))
-	var stderr syncBuffer
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(&stderr)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- cmd.ExecuteContext(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("mcp --http ended with %v on shutdown", err)
-			}
-		case <-time.After(15 * time.Second):
-			t.Error("mcp --http did not shut down")
-		}
-	})
-	waitFor(t, func() bool { return strings.Contains(stderr.String(), "serving MCP on http://") })
-
+	ctx := context.Background()
 	cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0"}, nil).
 		Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: "http://" + addr + "/mcp"}, nil)
 	if err != nil {
@@ -676,6 +707,90 @@ func TestMCPHTTP(t *testing.T) {
 			t.Errorf("%s = %s, want 403", name, resp.Status)
 		}
 	}
+}
+
+// bearer adds an Authorization header to every request.
+type bearer string
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+string(b))
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// TestMCPHTTPToken: with --http-token, a request without the token, or
+// with another, is refused with 401, and a client that sends it works.
+func TestMCPHTTPToken(t *testing.T) {
+	t.Setenv("UPGRADESCOPE_MCP_HTTP_TOKEN", "from-env")
+	addr, stderr := startMCPHTTP(t, "--http-token-file", writeFiles(t, map[string]string{"tok": "s3cret\n"})+"/tok")
+	if !strings.Contains(stderr.String(), "bearer token required") {
+		t.Errorf("the start message does not say a token is required: %q", stderr.String())
+	}
+	for name, header := range map[string]string{"no token": "", "the environment's, overridden by the file": "Bearer from-env", "a wrong one": "Bearer nope", "not bearer": "Basic czNjcmV0"} {
+		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/mcp", strings.NewReader(`{}`))
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get("WWW-Authenticate") == "" {
+			t.Errorf("%s = %s, want 401 with a challenge", name, resp.Status)
+		}
+	}
+	ctx := context.Background()
+	if cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0"}, nil).
+		Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: "http://" + addr + "/mcp"}, nil); err == nil {
+		_ = cs.Close()
+		t.Error("a client without the token connected")
+	}
+	cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0"}, nil).
+		Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: "http://" + addr + "/mcp", HTTPClient: &http.Client{Transport: bearer("s3cret")}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	if _, err := cs.ListTools(ctx, nil); err != nil {
+		t.Errorf("list tools with the token: %v", err)
+	}
+}
+
+// startMCPHTTP runs `upgradescope mcp --http` on a free loopback port with
+// args and returns the address and its stderr once it serves; the command
+// is stopped, and must return nil, when the test ends.
+func startMCPHTTP(t *testing.T, args ...string) (string, *syncBuffer) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("no loopback listener: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	cmd := Root()
+	cmd.SetArgs(append([]string{"mcp", "--http", addr}, args...))
+	cmd.SetIn(strings.NewReader(""))
+	var stderr syncBuffer
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(&stderr)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- cmd.ExecuteContext(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("mcp --http ended with %v on shutdown", err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Error("mcp --http did not shut down")
+		}
+	})
+	waitFor(t, func() bool { return strings.Contains(stderr.String(), "serving MCP on http://") })
+	return addr, &stderr
 }
 
 // syncBuffer is a bytes.Buffer safe to read while a command writes to it.

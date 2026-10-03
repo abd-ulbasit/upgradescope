@@ -130,14 +130,8 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 			return engine.Report{}, fmt.Errorf("no Kubernetes manifests found under %s (%d files skipped)", opts.filesDir, sum.Skipped)
 		}
 	} else {
-		clients, cluster, cerr := buildClients(opts.kubeconfig, opts.kubecontext, opts.requestTimeout)
-		if cerr != nil {
-			return engine.Report{}, cerr
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		inv = collect.Collect(ctx, clients, kbData, collect.Options{TeamLabel: opts.teamLabel})
-		if err := unreadableCluster(inv, cluster.String()); err != nil {
+		inv, cluster, err := collectCluster(context.Background(), kbData, opts)
+		if err != nil {
 			return engine.Report{}, err
 		}
 		r := evaluateScan(inv, kbData, opts, time.Now())
@@ -146,6 +140,23 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 	}
 
 	return evaluateScan(inv, kbData, opts, time.Now()), nil
+}
+
+// collectCluster reads the live cluster opts names (--kubeconfig,
+// --context) into an inventory, within five minutes and ctx, and refuses a
+// cluster it could read nothing of (unreadableCluster).
+func collectCluster(ctx context.Context, kbData kb.KB, opts scanOptions) (inventory.Inventory, liveCluster, error) {
+	clients, cluster, err := buildClients(opts.kubeconfig, opts.kubecontext, opts.requestTimeout)
+	if err != nil {
+		return inventory.Inventory{}, liveCluster{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	inv := collect.Collect(ctx, clients, kbData, collect.Options{TeamLabel: opts.teamLabel})
+	if err := unreadableCluster(inv, cluster.String()); err != nil {
+		return inventory.Inventory{}, liveCluster{}, err
+	}
+	return inv, cluster, nil
 }
 
 // evaluateScan judges inv at the target and, with --plan, adds the

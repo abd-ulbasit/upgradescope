@@ -41,24 +41,27 @@ func ToolNames(fleet bool) []string {
 	return names
 }
 
-// maxScanTargets bounds one scan call: each target is a full scan.
+// maxScanTargets bounds one scan call: the cluster is read once, and judged
+// at each target, each a report in the result.
 const maxScanTargets = 4
 
-// ScanRequest is one target of the scan tool. It names the target and
+// ScanRequest is one call of the scan tool. It names the targets and
 // nothing else: which cluster is read (and with which credentials) is the
 // command's --kubeconfig and --context and the environment, never an
 // assistant's choice.
 type ScanRequest struct {
-	Target string
+	Targets []string // distinct Kubernetes minors, in the order asked
 }
 
 // Config wires the server to what the CLI already does.
 type Config struct {
 	// Version is the build version, for the server's implementation info.
 	Version string
-	// Scan is `upgradescope scan --output json` for one target: the report
-	// document. Required.
-	Scan func(ctx context.Context, req ScanRequest) (json.RawMessage, error)
+	// Scan reads the cluster once and judges it at each target of req, as
+	// `upgradescope scan --output json` would: one report document per
+	// target, in req's order. It stops when ctx ends (the client cancelled
+	// the call or went away). Required.
+	Scan func(ctx context.Context, req ScanRequest) ([]json.RawMessage, error)
 	// Inventory judges an inventory file (the JSON an agent pushes) at a
 	// target and returns the report document. Required.
 	Inventory func(path, target string) (json.RawMessage, error)
@@ -72,7 +75,10 @@ type Config struct {
 type server struct {
 	cfg Config
 
-	scanMu sync.Mutex // one scan at a time: each reads the whole cluster
+	// scanSlot holds a token while a scan runs: one at a time, since each
+	// reads the whole cluster. A channel, not a mutex, so a waiting call
+	// gives up when its context ends.
+	scanSlot chan struct{}
 
 	mu       sync.Mutex
 	lastScan map[string]json.RawMessage // target → report of the latest scan call
@@ -83,7 +89,7 @@ func New(cfg Config) *mcpsdk.Server {
 	if cfg.Registry == nil {
 		cfg.Registry = sync.OnceValues(registry.Load)
 	}
-	s := &server{cfg: cfg}
+	s := &server{cfg: cfg, scanSlot: make(chan struct{}, 1)}
 	srv := mcpsdk.NewServer(&mcpsdk.Implementation{
 		Name:    "upgradescope",
 		Title:   "upgradescope",

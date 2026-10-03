@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -17,9 +15,23 @@ import (
 	"github.com/abd-ulbasit/upgradescope/registry"
 )
 
-// maxReportFileBytes bounds a report or inventory file the tools read: a
-// file path comes from the assistant.
-const maxReportFileBytes = 64 << 20
+// MaxReportBytes bounds a report a tool reads, from a report_file or the
+// fleet server. A tool's result carries its document twice, as structured
+// content and as the same JSON in a text block, and the MCP Go SDK's client
+// refuses a message over 16 MiB (mcpsdk.DefaultMaxLineLength on stdio, and
+// DefaultMaxEventSize, the same, over HTTP), so a report much over 8 MiB
+// could never reach a client from get_report. Holding one costs several
+// times its size besides: it is decoded to check it against the schema,
+// and the SDK decodes it again to check its output and encodes it twice to
+// send it. Within the bound, list_findings returns the part of a report a
+// filter picks; maxResultBytes is the check on what is sent.
+const MaxReportBytes = 8 << 20
+
+// maxResultBytes is the most a tool's result may take on the wire: the Go
+// SDK client's message limit less room for the JSON-RPC envelope. A larger
+// result is refused with what to ask for instead, before it is sent to a
+// client that would drop the connection on it.
+const maxResultBytes = mcpsdk.DefaultMaxLineLength - 64<<10
 
 const (
 	defaultLimit = 50
@@ -62,7 +74,7 @@ func scanInputSchema() map[string]any {
 		"targets": map[string]any{
 			"type": "array", "minItems": 1, "maxItems": maxScanTargets, "uniqueItems": true,
 			"items":       targetProp("A target Kubernetes minor, e.g. 1.37."),
-			"description": fmt.Sprintf("Target minors to judge the cluster against, at most %d. Each is a full scan. The cluster is the one this server was started against; a call cannot choose another.", maxScanTargets),
+			"description": fmt.Sprintf("Target minors to judge the cluster against, at most %d. The cluster is read once and judged at each. It is the one this server was started against; a call cannot choose another.", maxScanTargets),
 		},
 	})
 }
@@ -138,20 +150,24 @@ func (s *server) scan(ctx context.Context, _ *mcpsdk.CallToolRequest, in scanInp
 		seen[t] = true
 	}
 
-	s.scanMu.Lock()
-	defer s.scanMu.Unlock()
-	reports := make([]json.RawMessage, 0, len(in.Targets))
+	// One scan at a time; a call that is cancelled while it waits for the
+	// slot gives up instead of queueing a cluster read nobody wants.
+	select {
+	case s.scanSlot <- struct{}{}:
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("waiting for another scan to finish: %w", ctx.Err())
+	}
+	defer func() { <-s.scanSlot }()
+	reports, err := s.cfg.Scan(ctx, ScanRequest{Targets: slices.Clone(in.Targets)})
+	if err != nil {
+		return nil, nil, fmt.Errorf("scan: %w", err)
+	}
+	if len(reports) != len(in.Targets) {
+		return nil, nil, fmt.Errorf("scan: %d reports for %d targets", len(reports), len(in.Targets))
+	}
 	byTarget := make(map[string]json.RawMessage, len(in.Targets))
-	for _, t := range in.Targets {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		doc, err := s.cfg.Scan(ctx, ScanRequest{Target: t})
-		if err != nil {
-			return nil, nil, fmt.Errorf("scan --target %s: %w", t, err)
-		}
-		reports = append(reports, doc)
-		byTarget[t] = doc
+	for i, t := range in.Targets {
+		byTarget[t] = reports[i]
 	}
 	s.mu.Lock()
 	s.lastScan = byTarget
@@ -159,12 +175,49 @@ func (s *server) scan(ctx context.Context, _ *mcpsdk.CallToolRequest, in scanInp
 	out, err := json.Marshal(struct {
 		Reports []json.RawMessage `json:"reports"`
 	}{reports})
-	return nil, out, err
+	if err != nil {
+		return nil, nil, err
+	}
+	// The reports are kept whatever their size, so a scan too large to
+	// send whole can still be read through list_findings.
+	return nil, out, fits(out, "the reports are kept: read them with list_findings and a severity, a category or a limit, with target to pick one")
 }
 
 func (s *server) getReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in sourceInput) (*mcpsdk.CallToolResult, json.RawMessage, error) {
 	doc, _, err := s.report(ctx, in)
-	return nil, doc, err
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, doc, fits(doc, "ask list_findings for the findings instead, filtered by severity or category, or with a limit")
+}
+
+// fits refuses a result too large for a client to receive in one message,
+// saying what to ask for instead.
+func fits(out json.RawMessage, instead string) error {
+	n, err := wireSize(out)
+	if err != nil {
+		return err
+	}
+	if n > maxResultBytes {
+		return fmt.Errorf("the result would take %s on the wire, more than an MCP client takes in one message (%s; the result carries its document twice, as structured content and as text): %s",
+			mib(int64(n)), mib(mcpsdk.DefaultMaxLineLength), instead)
+	}
+	return nil
+}
+
+// wireSize is what out takes in a result as the SDK sends it: compacted
+// and HTML-escaped as structured content, and again as a JSON string in the
+// text block.
+func wireSize(out json.RawMessage) (int, error) {
+	compact, err := json.Marshal(out)
+	if err != nil {
+		return 0, err
+	}
+	text, err := json.Marshal(string(compact))
+	if err != nil {
+		return 0, err
+	}
+	return len(compact) + len(text), nil
 }
 
 func (s *server) listFindings(ctx context.Context, _ *mcpsdk.CallToolRequest, in listFindingsInput) (*mcpsdk.CallToolResult, json.RawMessage, error) {
@@ -190,7 +243,7 @@ func (s *server) listFindings(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		Findings  []json.RawMessage `json:"findings"`
 	}
 	if err := json.Unmarshal(doc, &rep); err != nil {
-		return nil, nil, fmt.Errorf("decoding the report: %w", err)
+		return nil, nil, fmt.Errorf("decoding the report: %w", errNotJSON)
 	}
 	var matched []json.RawMessage
 	for _, raw := range rep.Findings {
@@ -199,7 +252,7 @@ func (s *server) listFindings(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 			Category string `json:"category"`
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
-			return nil, nil, fmt.Errorf("decoding a finding: %w", err)
+			return nil, nil, fmt.Errorf("decoding a finding: %w", errNotJSON)
 		}
 		if (in.Severity == "" || f.Severity == in.Severity) && (in.Category == "" || f.Category == in.Category) {
 			matched = append(matched, raw)
@@ -220,7 +273,10 @@ func (s *server) listFindings(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		Total     int               `json:"total"`
 		Truncated bool              `json:"truncated"`
 	}{rep.Target, rep.KBVersion, cluster, matched, total, total > limit})
-	return nil, out, err
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, out, fits(out, "narrow it with severity or category, or a smaller limit")
 }
 
 // report resolves which report a tool reads and returns it with the
@@ -259,7 +315,14 @@ func (s *server) report(ctx context.Context, in sourceInput) (json.RawMessage, s
 		if s.cfg.Fleet == nil {
 			return nil, "", errors.New("cluster needs fleet mode: start the server with --server-url (and a read token if the server requires one)")
 		}
-		return s.cfg.Fleet.Report(ctx, in.Cluster, in.Target)
+		doc, name, err := s.cfg.Fleet.Report(ctx, in.Cluster, in.Target)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := checkReport(doc); err != nil {
+			return nil, "", fmt.Errorf("upgradescope server: the report of cluster %q is not an upgradescope report of schemaVersion 1: %w", name, err)
+		}
+		return doc, name, nil
 	}
 	return s.latestScan(in.Target)
 }
@@ -307,41 +370,19 @@ func reportTarget(doc json.RawMessage) string {
 	return r.Target
 }
 
-// readReportFile reads a JSON report and refuses a file that is not one,
-// by its schemaVersion and findings, with a reason in place of the schema
-// validator's output error.
+// readReportFile reads a JSON report and refuses a file that is not one
+// api/report.schema.json accepts, with the reason, in place of the SDK's
+// output check, whose failure is a protocol error.
 func readReportFile(path string) (json.RawMessage, error) {
-	raw, err := readCapped(path)
+	raw, err := ReadFile(path, MaxReportBytes)
 	if err != nil {
 		return nil, err
 	}
-	var probe struct {
-		SchemaVersion *int              `json:"schemaVersion"`
-		Findings      []json.RawMessage `json:"findings"`
+	doc := json.RawMessage(bytes.TrimSpace(raw))
+	if err := checkReport(doc); err != nil {
+		return nil, fmt.Errorf("%s is not an upgradescope JSON report of schemaVersion 1 (write one with 'upgradescope scan --output json'): %w", path, err)
 	}
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return nil, fmt.Errorf("%s is not a JSON report: %w", path, err)
-	}
-	if probe.SchemaVersion == nil || *probe.SchemaVersion != 1 {
-		return nil, fmt.Errorf("%s is not an upgradescope JSON report of schemaVersion 1 (write one with 'upgradescope scan --output json')", path)
-	}
-	return json.RawMessage(bytes.TrimSpace(raw)), nil
-}
-
-func readCapped(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, maxReportFileBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > maxReportFileBytes {
-		return nil, fmt.Errorf("%s is larger than %d MiB", path, maxReportFileBytes>>20)
-	}
-	return raw, nil
+	return doc, nil
 }
 
 func (s *server) registryLookup(_ context.Context, _ *mcpsdk.CallToolRequest, in registryInput) (*mcpsdk.CallToolResult, json.RawMessage, error) {
@@ -396,5 +437,11 @@ func (s *server) fleetSummary(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		}
 	}
 	doc, err := s.cfg.Fleet.Summary(ctx, in.Targets)
-	return nil, doc, err
+	if err != nil {
+		return nil, nil, err
+	}
+	if d := bytes.TrimSpace(doc); len(d) == 0 || d[0] != '{' || !json.Valid(d) {
+		return nil, nil, errors.New("upgradescope server: the fleet response is not a JSON object (is --server-url an upgradescope server?)")
+	}
+	return nil, doc, fits(doc, "pass fewer targets")
 }
