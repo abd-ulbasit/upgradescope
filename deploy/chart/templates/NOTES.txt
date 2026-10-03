@@ -17,10 +17,11 @@ error that names this command:
   kubectl apply -f https://raw.githubusercontent.com/abd-ulbasit/upgradescope/{{ .Chart.AppVersion }}/deploy/chart/crds/clusterreadinesses.upgradescope.basit.engineer.yaml
 (or helm pull oci://ghcr.io/abd-ulbasit/charts/upgradescope --version {{ .Chart.Version }} --untar,
 then kubectl apply -f upgradescope/crds/).
-{{- if and .Values.agent.enabled .Values.agent.manageCRD }} The pod's next restart picks the
-CRD up.
+{{- if and .Values.agent.enabled .Values.agent.manageCRD }} The pod's next restart picks
+the CRD up.
 {{- else if .Values.agent.enabled }} The next tick picks the CRD up.
-{{- end }} Then carry over the old object's spec, move ignore annotations to the
+{{- end }}
+Then carry over the old object's spec, move ignore annotations to the
 upgradescope.basit.engineer/ keys (the old ones are read, deprecated, until
 v0.3.0), and point GitOps health checks and policies at the new group:
   https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-api-group-moved

@@ -408,10 +408,12 @@ per cluster.
     CRDs (outside the chart) installs it itself. The chart's agent may
     not: upgraded without this step, it exits at startup with an error
     that names the group move, this exact command at its own version
-    (for a dev build, or one from `go install ...@main`, `<tag>` in its
-    place, the release tag of the chart you installed) and this page, its pod restarts, and `helm upgrade
-    --wait` times out. The chart's notes print the same command after
-    the upgrade. Run it then; the next restart picks the CRD up. With
+    (for a build not at a release tag, such as a dev build or one from
+    `go install ...@main`, `<tag>` in its place: the release tag of the
+    chart you installed) and this page, its pod restarts, and
+    `helm upgrade --wait` times out. The chart's notes print the same
+    command after the upgrade. Run it then; the next restart picks the
+    CRD up. With
     `agent.manageCRD=false` the agent stays up instead and every tick
     fails with the same command in its error, which `/readyz` and the
     log carry.

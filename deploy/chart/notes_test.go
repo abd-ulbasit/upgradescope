@@ -2,6 +2,7 @@ package chart
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -110,7 +111,7 @@ func TestNotesUpgradeBlockMatchesWhatTheAgentDoes(t *testing.T) {
 	}{
 		{
 			name:    "agent that manages the CRD",
-			want:    []string{"exits at startup", "next restart picks the", "commands below name the new resource"},
+			want:    []string{"exits at startup", "next restart picks", "commands below name the new resource"},
 			notWant: []string{"never becomes Ready", "next tick picks the CRD up", "Install it with:"},
 		},
 		{
@@ -131,6 +132,13 @@ func TestNotesUpgradeBlockMatchesWhatTheAgentDoes(t *testing.T) {
 			if !strings.Contains(out, cmd) {
 				t.Errorf("NOTES do not name %q:\n%s", cmd, out)
 			}
+			// The trim markers join lines, so check each variant reads as prose, not
+			// one 140-column line. Indented lines are commands and URLs.
+			for _, line := range notesLines(t, out) {
+				if !strings.HasPrefix(line, "  ") && len(line) > 90 {
+					t.Errorf("NOTES line is %d columns: %q", len(line), line)
+				}
+			}
 			for _, w := range tc.want {
 				if !strings.Contains(out, w) {
 					t.Errorf("NOTES lack %q:\n%s", w, out)
@@ -143,4 +151,21 @@ func TestNotesUpgradeBlockMatchesWhatTheAgentDoes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// notesLines returns the lines of the NOTES text in renderNotes' output,
+// where it is the JSON string data.notes of a ConfigMap.
+func notesLines(t *testing.T, out string) []string {
+	t.Helper()
+	for _, l := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(l), "notes: "); ok {
+			var s string
+			if err := json.Unmarshal([]byte(rest), &s); err != nil {
+				t.Fatalf("notes data is not a JSON string: %v", err)
+			}
+			return strings.Split(s, "\n")
+		}
+	}
+	t.Fatalf("no notes ConfigMap in:\n%s", out)
+	return nil
 }
