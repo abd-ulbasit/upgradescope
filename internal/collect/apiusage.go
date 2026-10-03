@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/metadata"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
@@ -35,8 +36,8 @@ const (
 // ObjectRef by both the live and the files collector: a comma-separated
 // list of finding categories or keys, and why (see internal/suppress).
 const (
-	IgnoreAnnotation       = "upgradescope.dev/ignore"
-	IgnoreReasonAnnotation = "upgradescope.dev/ignore-reason"
+	IgnoreAnnotation       = apigroup.IgnoreAnnotation
+	IgnoreReasonAnnotation = apigroup.IgnoreReasonAnnotation
 )
 
 // internalManagers are field managers inside the control plane. Their

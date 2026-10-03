@@ -1,6 +1,6 @@
 // Package suppress applies accepted findings to an engine report: ignore
 // rules (from .upgradescope.yaml or ClusterReadiness spec.ignore) and the
-// upgradescope.dev/ignore object annotation move findings, or single
+// ignore object annotation (apigroup.IgnoreAnnotation) move findings, or single
 // objects of a finding, into Report.Suppressed with the reason given, so
 // they stop counting toward score and verdict but stay visible. It also
 // compares a report with a baseline report (see Baseline).
@@ -21,6 +21,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
@@ -328,7 +329,7 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 			}
 			reason := strings.TrimSpace(o.IgnoreReason)
 			if reason == "" {
-				warnings = append(warnings, fmt.Sprintf("object %s: upgradescope.dev/ignore annotation without upgradescope.dev/ignore-reason is not applied", objectName(o)))
+				warnings = append(warnings, fmt.Sprintf("object %s: %s annotation without %s is not applied", objectName(o), apigroup.IgnoreAnnotation, apigroup.IgnoreReasonAnnotation))
 				return false
 			}
 			g, ok := byReason[reason]
