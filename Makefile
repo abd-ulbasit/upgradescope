@@ -71,6 +71,29 @@ envtest:
 .PHONY: bench-server
 bench-server:
 	UPGRADESCOPE_BENCH=1 go test ./internal/server -run TestBenchServerFleet -count=1 -v
+
+# The agent's cost to a kube-apiserver at scale (#71, docs/operations/scale.md):
+# fills a DISPOSABLE lab cluster with 2k KWOK fake nodes, 20k objects and 1k
+# Helm release Secrets in steps, and measures the real agent tick at each
+# step: requests by verb and resource, bytes, wall time, heap and RSS. Manual
+# (minutes, and heavy for the apiserver), never in CI. The kubeconfig must be
+# given on the command line and is the only one read:
+#   make bench-agent KUBECONFIG=/path/to/lab-kubeconfig
+# Needs go, kubectl, jq and curl.
+.PHONY: bench-agent
+bench-agent:
+	@if [ "$(origin KUBECONFIG)" != "command line" ]; then \
+	  echo "bench-agent: pass the lab cluster's kubeconfig on the command line: make bench-agent KUBECONFIG=<file> (the default kubeconfig is never used)" >&2; exit 2; fi
+	./hack/bench/agent.sh
+
+# `serve` ingesting 200 clusters x 3 targets on SQLite and on Postgres (a
+# throwaway container on the engine docker is bound to): throughput, p50/p99
+# push latency, database growth per snapshot (#71, docs/operations/scale.md).
+# Manual. BENCH_BACKENDS=sqlite skips Docker; see hack/bench/serve.sh.
+.PHONY: bench-ingest
+bench-ingest:
+	./hack/bench/serve.sh
+
 # CI's lint job runs exactly this. golangci-lint-action lags Go releases (its
 # binary must be built with a Go >= our toolchain), so vet + staticcheck are
 # the gate. STATICCHECK_VERSION is pinned, so a clean `make lint` means a
@@ -326,6 +349,7 @@ hack-test:
 	./hack/release-preflight_test.sh
 	./hack/flags-diff_test.sh
 	./hack/check-doc-sizes_test.sh
+	./hack/bench_test.sh
 	./hack/chart-release-annotations_test.sh
 	./hack/vuln-latest-release_test.sh
 	./hack/vuln-latest-release-workflow_test.sh
