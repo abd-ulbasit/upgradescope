@@ -1,10 +1,10 @@
 package apigroup
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -22,11 +22,37 @@ var legacyAllowed = []string{
 	"internal/cli/scan_suppress_test.go",
 	"internal/server/gate_suppress_test.go",
 	"internal/agent/legacycrd_test.go",
+	"internal/crd/apigroup/guard_test.go", // this test's own spellings of it
 	// The migration: which annotations to rewrite, which CRD to delete.
 	"docs/operations/upgrade.md",
 	// History.
 	"CHANGELOG.md",
 	"docs/research.md",
+}
+
+// legacyName matches LegacyGroup as written plainly or escaped for a
+// regular expression, a JSONPath or a Go string (upgradescope\.dev,
+// upgradescope\\.dev, upgradescope[.]dev), in any case: an escaped
+// spelling in a kubectl jsonpath or a grep still names the old key.
+var legacyName = regexp.MustCompile(`(?i)upgradescope(\\*\.|\[\.\])dev`)
+
+func TestLegacyNameMatchesEscapedSpellings(t *testing.T) {
+	for _, s := range []string{
+		LegacyGroup, LegacyIgnoreAnnotation,
+		`{.metadata.annotations.upgradescope\.dev/status-error}`,
+		`"upgradescope\\.dev/ignore"`,
+		`grep 'upgradescope[.]dev'`,
+		"UpgradeScope.Dev",
+	} {
+		if !legacyName.MatchString(s) {
+			t.Errorf("legacyName does not match %q", s)
+		}
+	}
+	for _, s := range []string{Group, IgnoreAnnotation, "upgradescope-dev", "upgradescope dev", "upgradescopeXdev"} {
+		if legacyName.MatchString(s) {
+			t.Errorf("legacyName matches %q", s)
+		}
+	}
 }
 
 func allowed(path string) bool {
@@ -56,7 +82,6 @@ func TestNoLegacyGroupOutsideTheCompatPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git ls-files: %v", err)
 	}
-	needle := []byte(LegacyGroup)
 	var files int
 	for _, path := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
 		if path == "" || allowed(path) {
@@ -70,9 +95,9 @@ func TestNoLegacyGroupOutsideTheCompatPath(t *testing.T) {
 			t.Fatal(err)
 		}
 		files++
-		if bytes.Contains(b, needle) {
+		if legacyName.Match(b) {
 			for i, line := range strings.Split(string(b), "\n") {
-				if strings.Contains(line, LegacyGroup) {
+				if legacyName.MatchString(line) {
 					t.Errorf("%s:%d names the pre-v0.2.0 group %s; use %s (internal/crd/apigroup), or, for a compat read or its test, list the file in legacyAllowed", path, i+1, LegacyGroup, Group)
 				}
 			}
