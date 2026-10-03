@@ -42,9 +42,17 @@ check() {
 
 [ -z "$title" ] || check "the PR title" "$title" "$body"
 if [ -n "$range" ]; then
+  # Resolve the list in a plain assignment: a failure inside `done < <(...)` is
+  # invisible to `set -e`, and an unresolvable range would check zero commits
+  # and print the success message.
+  commits=$(git rev-list --no-merges "$range") || {
+    echo "::error::check-breaking: cannot read COMMIT_RANGE '$range' (does the checkout have the base commit? fetch-depth: 0)" >&2
+    exit 1
+  }
   while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
     check "commit $(git rev-parse --short "$sha")" "$(git log -1 --format=%s "$sha")" "$(git log -1 --format=%b "$sha")"
-  done < <(git rev-list --no-merges "$range")
+  done <<<"$commits"
 fi
 
 [ "$fail" = 0 ] || exit 1

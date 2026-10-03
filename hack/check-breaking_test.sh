@@ -103,6 +103,17 @@ else
   echo "FAIL an uppercase-type commit is refused" >>"$work/results"
 fi
 
+# An unresolvable range must fail, not check zero commits and pass: a base.sha
+# the checkout cannot see would otherwise turn the lint into a silent pass.
+got=0
+(cd "$repo" && COMMIT_RANGE=deadbeefdeadbeef..HEAD "$script" >"$work/out" 2>&1) || got=$?
+if [ "$got" != 0 ] && ! grep -qF 'ok:' "$work/out" && grep -qF 'cannot read COMMIT_RANGE' "$work/out"; then
+  echo "ok   an unresolvable COMMIT_RANGE fails" | tee -a "$work/results"
+else
+  echo "FAIL an unresolvable COMMIT_RANGE fails: exit $got" >&2; sed 's/^/     /' "$work/out" >&2
+  echo "FAIL an unresolvable COMMIT_RANGE fails" >>"$work/results"
+fi
+
 expect "no input at all fails (a misconfigured workflow must not pass)" 1 "nothing to check" \
   PR_TITLE= PR_BODY= COMMIT_RANGE=
 
