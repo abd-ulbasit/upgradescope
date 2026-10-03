@@ -520,14 +520,17 @@ knowledge base would produce silently green scans.
 checks and policy engines that should not need to reach the server.
 
 `kubectl get ucr` and the Argo CD health check
-([GitOps guide](guides/gitops-argo-flux.md#argo-cd)) are tested. The policy
-engine use is not: there is no example policy yet
-([#79](https://github.com/abd-ulbasit/upgradescope/issues/79)). A policy
+([GitOps guide](guides/gitops-argo-flux.md#argo-cd)) are tested. For policy
+engines, [Acting on readiness](guides/acting-on-readiness.md) links an example
+Kyverno policy, a Gatekeeper constraint and a Renovate preset; they are
+checked offline with the Kyverno CLI and gator, not on a live cluster, and
+cover in-cluster operations only. A policy
 engine reads the object with its own service account, so that account needs
 `get` and `list` on `clusterreadinesses` in the `upgradescope.dev` group. The
 chart grants those verbs to the agent only, as the `clusterreadinesses` rows
 of the [agent's ClusterRole](operations/security-model-and-rbac.md#the-agents-clusterrole)
-show, and ships no read role for anything else.
+show, and ships no read role for anything else; the examples carry the
+read-only `ClusterRole` each engine needs.
 
 - **`spec.targets`** is the only user input: the minors to evaluate against.
   When it is empty, the agent uses the next minor above the observed server
