@@ -607,6 +607,11 @@ func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.I
 	spec, gen, obj, err := crd.ReadSpecObject(ctx, r.dyn, r.cfg.CRName)
 	if err == nil && obj == nil {
 		if cerr := crd.EnsureObject(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); cerr != nil {
+			if errors.Is(cerr, crd.ErrCRDNotInstalled) {
+				// --manage-crd=false, or the CRD vanished: say the fix where
+				// /readyz and the tick log will carry it.
+				cerr = fmt.Errorf("%w; %s", cerr, crd.InstallHint(AgentVersion))
+			}
 			errs = append(errs, cerr)
 		}
 		spec, gen, obj, err = crd.ReadSpecObject(ctx, r.dyn, r.cfg.CRName)
@@ -972,10 +977,10 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 			// old CRD installed, the cause is a chart upgraded across the
 			// group move: Helm does not install crds/ on upgrade.
 			if legacy {
-				return fmt.Errorf("%w; only %s, on the old group, is installed: the API group moved to %s and helm upgrade does not install the new CRD, so install it first (%s)",
-					err, crd.LegacyCRDName, crd.Group, crd.UpgradeGuideURL)
+				return fmt.Errorf("%w; only %s, on the old group, is installed: the API group moved to %s and helm upgrade does not install the new CRD, so %s (the other steps: %s)",
+					err, crd.LegacyCRDName, crd.Group, crd.InstallHint(AgentVersion), crd.UpgradeGuideURL)
 			}
-			return err
+			return fmt.Errorf("%w; Helm installs crds/ on first install only, so %s", err, crd.InstallHint(AgentVersion))
 		}
 		if legacy {
 			// Say once that the old CRD can go, now that the new one is

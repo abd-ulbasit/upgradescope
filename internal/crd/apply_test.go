@@ -260,7 +260,7 @@ func TestEnsureCRDNoWriteWhenInSync(t *testing.T) {
 
 // TestEnsureCRDMissingAndCreateForbidden: the chart grants no CRD create
 // (crds/ installs it). A missing CRD must surface as ErrCRDNotInstalled
-// with a message that says how to install it, not a bare Forbidden.
+// that keeps the Forbidden cause; the agent adds how to install it.
 func TestEnsureCRDMissingAndCreateForbidden(t *testing.T) {
 	fc := apiextfake.NewClientset()
 	fc.PrependReactor("create", "customresourcedefinitions",
@@ -272,8 +272,8 @@ func TestEnsureCRDMissingAndCreateForbidden(t *testing.T) {
 	if !errors.Is(err, ErrCRDNotInstalled) {
 		t.Fatalf("err = %v, want ErrCRDNotInstalled", err)
 	}
-	if !strings.Contains(err.Error(), "crds/") {
-		t.Errorf("err = %q, want it to point at the chart's crds/", err)
+	if !apierrors.IsForbidden(err) {
+		t.Errorf("err = %q, want the forbidden cause kept (errors.As reaches it)", err)
 	}
 }
 

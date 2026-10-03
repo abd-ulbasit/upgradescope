@@ -83,7 +83,8 @@ const FieldManager = "upgradescope-agent"
 
 // ErrCRDNotInstalled means the ClusterReadiness CRD is absent and the agent
 // may not create it. The Helm chart grants no CRD create: its crds/
-// directory installs the CRD, and the agent only keeps the schema current.
+// directory installs the CRD on first install only, and the agent only
+// keeps the schema current. InstallHint says how to install it.
 var ErrCRDNotInstalled = errors.New("ClusterReadiness CRD is not installed")
 
 // EnsureCRD keeps the ClusterReadiness CRD in step with the embedded
@@ -160,8 +161,7 @@ func LegacyCRDInstalled(ctx context.Context, apiext apiextensionsclient.Interfac
 func createCRD(ctx context.Context, crds apiextensionsv1typed.CustomResourceDefinitionInterface, want *apiextensionsv1.CustomResourceDefinition) error {
 	_, err := crds.Create(ctx, want, metav1.CreateOptions{FieldManager: FieldManager})
 	if apierrors.IsForbidden(err) {
-		return fmt.Errorf("%w and the agent may not create it: install it from the Helm chart's crds/ "+
-			"(helm install, or kubectl apply -f deploy/chart/crds/): %w", ErrCRDNotInstalled, err)
+		return fmt.Errorf("%w and the agent may not create it: %w", ErrCRDNotInstalled, err)
 	}
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create ClusterReadiness CRD: %w", err)
@@ -230,8 +230,7 @@ func EnsureObject(ctx context.Context, dyn dynamic.Interface, name string, targe
 	}
 	if apierrors.IsNotFound(err) {
 		// A create only 404s when the resource is not served at all.
-		return fmt.Errorf("create clusterreadiness %q: %w; install it with the chart's crds/ "+
-			"(helm install, or kubectl apply -f deploy/chart/crds/): %w", name, ErrCRDNotInstalled, err)
+		return fmt.Errorf("create clusterreadiness %q: %w: %w", name, ErrCRDNotInstalled, err)
 	}
 	return fmt.Errorf("create clusterreadiness %q: %w", name, err)
 }
