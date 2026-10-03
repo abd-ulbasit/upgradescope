@@ -100,7 +100,9 @@ func TestSources(t *testing.T) {
 	}
 }
 
-func TestUnassessed(t *testing.T) {
+// TestHiddenByGaps: which gaps hide a finding, by gap kind: a capability
+// unavailable hides what it produces, a partial one only what it skipped.
+func TestHiddenByGaps(t *testing.T) {
 	const (
 		psp      = "removed-api/policy/v1beta1/PodSecurityPolicy"
 		endpts   = "removed-api/core/v1/Endpoints"
