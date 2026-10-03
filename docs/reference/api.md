@@ -1060,6 +1060,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `apiAuthorshipUnknown` | array of object | no | Objects of a flagged API with no managedFields entry outside the status subresource and the control plane, and no usable last-applied annotation, so nothing says which version wrote them; shaped like apiUsage, once per kind. Reported as info, never as use of the API. |
 | `deprecatedCalls` | array of object | no | — |
 | `helmReleases` | array of object | no | — |
+| `gitopsCharts` | array of object | no | Charts Argo CD (Application sources with chart set) and Flux (HelmReleases) deploy to the cluster, as those resources name them: tool, name, namespace, target namespace, chart, version, repo. They carry no release, so no app version and no stored manifest. |
 | `addOns` | array of object | no | — |
 | `nodes` | array of object | no | — |
 | `controlPlane` | array of object | no | — |

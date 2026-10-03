@@ -1,8 +1,9 @@
 # GitOps with Argo CD and Flux
 
-upgradescope fits a GitOps setup in two places: the chart installs like any
-other, and the `ClusterReadiness` object can live in Git, so a sync or a
-promotion can wait on readiness.
+upgradescope fits a GitOps setup in three places: the chart installs like any
+other, the charts your GitOps tool deploys are found without a Helm release,
+and the `ClusterReadiness` object can live in Git, so a sync or a promotion
+can wait on readiness.
 
 ## Installing the chart from Git
 
@@ -24,6 +25,57 @@ Git yourself, set `agent.manageCRD=false`: the agent then never writes it,
 and the CRD write permissions are dropped from its role. The manifest to
 commit is [`deploy/chart/crds/`](https://github.com/abd-ulbasit/upgradescope/tree/main/deploy/chart/crds),
 documented field by field in the [CRD reference](../reference/crd.md).
+
+## Charts your GitOps tool deploys
+
+Helm checks (a chart's `kubeVersion`, removed APIs in a release's stored
+manifest) read the release records Helm leaves in the cluster. Argo CD
+renders charts with `helm template` and leaves no record at all; Flux's
+helm-controller keeps releases where the HelmRelease says. A cluster managed
+that way has nothing for those checks to read, so upgradescope reads what the
+tools themselves declare, and says what it could not assess. This is exactly
+what is supported:
+
+| | Read | Not read |
+|---|---|---|
+| **Helm** | releases in the `secrets` and `configmaps` storage drivers (`HELM_DRIVER=secret`, the default, and `configmap`): chart, versions, `kubeVersion`, stored manifest | the `sql` driver: its releases live in an external database the cluster does not show. Not supported |
+| **Argo CD** | `applications.argoproj.io/v1alpha1`: the `chart`, `repoURL` and `targetRevision` of each `spec.source` and `spec.sources[]` entry that sets `chart`, for Applications (including those an ApplicationSet generates) whose destination is this cluster (`https://kubernetes.default.svc`, or the name `in-cluster`) | sources that render a path in Git (a Helm chart in a repository, Kustomize with `helmCharts`) name no chart. Applications for other clusters, which are counted in the reason |
+| **Flux** | `helmreleases.helm.toolkit.fluxcd.io`: `spec.chart.spec` (`chart`, `version`, `sourceRef`) and a `spec.chartRef` to an `OCIRepository` (`source.toolkit.fluxcd.io`, its `spec.url` and `spec.ref.tag` or `semver`). The newest of `v2`, `v2beta2` and `v2beta1` the cluster serves | a `chartRef` to a `HelmChart`, or an `OCIRepository` that cannot be read (both are counted in the reason, and the capability is partial). HelmReleases with a `spec.kubeConfig`, which deploy to other clusters |
+
+What the charts feed is **add-on detection**: a chart the registry knows (for
+example `ingress-nginx`) is an install in the namespace the chart deploys
+into, found whether or not a pod's image or labels would have found it. A
+chart reference carries no application version, so the version comes from the
+pods that run it; an add-on retired as a whole (Ingress NGINX) is still
+end-of-life without one. The inventory lists the references as `gitopsCharts`,
+and the add-on's `source` is `gitops` when nothing stronger found it.
+
+What stays **not assessed** for these charts is the part that needs a release:
+`kubeVersion` and the stored manifest. When the cluster has no Helm release at
+all but shows one of the tools, the `helm` capability is *partial* and names it
+(`argocd`, `flux`) in its skipped list, so the report shows those checks as not
+assessed instead of clean. The tool shows when its CRD is served, or when a
+Deployment, StatefulSet or DaemonSet carries its tracking metadata: the
+`argocd.argoproj.io/tracking-id` annotation, the `argocd.argoproj.io/instance`
+label, or Flux's `helm.toolkit.fluxcd.io/name` label. The workload check needs
+a role that can list those workloads, which the chart's does not grant; the CRD
+check needs no permission. Helm is an optional capability, so this never
+turns a verdict to `unknown` by itself.
+
+Reading the custom resources needs permission the agent does not have by
+default. Enable what you run:
+
+```yaml
+rbac:
+  gitops:
+    argocd: true   # get, list on applications.argoproj.io
+    flux: true     # get, list on helmreleases.helm.toolkit.fluxcd.io, get on ocirepositories.source.toolkit.fluxcd.io
+```
+
+Without them, with the tool installed, the agent reports `helm` as partial,
+with the forbidden list as the reason; nothing fails. A CLI scan uses your own
+credentials and needs no values. Lists are paged (50 per page), because an
+Application's status can be large.
 
 ## The ClusterReadiness object in Git
 

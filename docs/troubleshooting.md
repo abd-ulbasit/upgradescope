@@ -58,6 +58,19 @@ cannot list Secrets. Helm chart findings are missing from the report;
 add-ons are still found from images. The trade-off is in
 [Security model and RBAC](operations/security-model-and-rbac.md#the-rbachelmsecrets-trade-off).
 
+## `helm` partial: Argo CD or Flux present, no Helm releases
+
+The reason reads "no Helm releases read, but Argo CD (or Flux) is present".
+The cluster has no Helm release Secrets or ConfigMaps but shows the tool, so
+chart `kubeVersion` and stored-manifest checks were not assessed for the
+charts it deploys; they are not clean. Argo CD's `helm template` leaves no
+release to read. Add-ons are still found from images, and, with
+`rbac.gitops.argocd` or `rbac.gitops.flux` set, from the charts the tool's
+resources name. A reason that says "chart sources not read" with a
+forbidden error means the tool is installed and the agent's role lacks that
+grant. See
+[GitOps with Argo CD and Flux](guides/gitops-argo-flux.md#charts-your-gitops-tool-deploys).
+
 ## Exit code 1
 
 An operational error, never a verdict: the cluster could not be read at all

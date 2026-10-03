@@ -1280,6 +1280,7 @@ components:
         apiAuthorshipUnknown: {type: array, items: {type: object}, description: "Objects of a flagged API with no managedFields entry outside the status subresource and the control plane, and no usable last-applied annotation, so nothing says which version wrote them; shaped like apiUsage, once per kind. Reported as info, never as use of the API."}
         deprecatedCalls: {type: array, items: {type: object}}
         helmReleases: {type: array, items: {type: object}}
+        gitopsCharts: {type: array, items: {type: object}, description: "Charts Argo CD (Application sources with chart set) and Flux (HelmReleases) deploy to the cluster, as those resources name them: tool, name, namespace, target namespace, chart, version, repo. They carry no release, so no app version and no stored manifest."}
         addOns: {type: array, items: {type: object}}
         nodes: {type: array, items: {type: object}}
         controlPlane: {type: array, items: {type: object}}

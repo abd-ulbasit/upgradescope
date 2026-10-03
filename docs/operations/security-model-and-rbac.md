@@ -19,6 +19,7 @@ there are no wildcard groups, resources or verbs, so no subresource
 | `get` on non-resource URLs `/version`, `/metrics` | the server version; `apiserver_requested_deprecated_apis` | — |
 | `get`, `list` on `secrets` | Helm releases (Helm's default storage driver): a metadata-only list of `owner=helm` Secrets, then one `get` per release | `rbac.helmSecrets=false` |
 | `get`, `list` on `configmaps` | Helm releases stored by the configmaps driver, read the same way | `rbac.helmSecrets=false` |
+| `get`, `list` on `applications.argoproj.io`; `get`, `list` on `helmreleases.helm.toolkit.fluxcd.io`; `get` on `ocirepositories.source.toolkit.fluxcd.io` | the charts GitOps tools deploy: chart, version and repository of each Application source and HelmRelease, and the OCIRepository a HelmRelease's `chartRef` names, for add-on detection. Only these resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials. Not granted by default | `rbac.gitops.argocd` and `rbac.gitops.flux` are off unless you set them |
 | `get`, `list` on every group/resource the knowledge base flags as deprecated or removed (one rule per API group, from `files/kb-rbac-rules.yaml`) | the API-usage collector's metadata-only lists. Generated from the embedded knowledge base; a test fails when it drifts. Its `networking.k8s.io` rule also covers the add-on collector's `list` of `ingressclasses` (an Ingress NGINX IngressClass is add-on evidence), and its `apiextensions.k8s.io` rule the CRD collector's `list` of `customresourcedefinitions` (CRD versions and `status.storedVersions`); `rbac_test.go` pins both so a knowledge-base change cannot drop them. No custom resource is granted, so the agent cannot check which custom resources use a deprecated or unserved CRD version, and reports `crds` as partial for such CRDs | — |
 | `get`, `update`, `patch` on `customresourcedefinitions`, `resourceNames: [clusterreadinesses.upgradescope.dev]` | keeping its own CRD's schema in step with the binary (server-side apply). No `create`: the chart's `crds/` installs it | `agent.manageCRD=false` |
 | `get`, `list`, `create` on `clusterreadinesses` | creating its object when it is missing (`create` cannot be limited by name) | — |
@@ -45,9 +46,10 @@ assessed (with the forbidden error as the reason) and the report has no Helm
 chart findings: no chart `kubeVersion` check and no removed APIs in stored
 release manifests. Everything else still works, and add-ons installed by
 Helm are still found by their container images and pod labels. The verdict does not
-require Helm. Releases kept by Helm's SQL driver, and charts that Argo CD
-renders with `helm template`, have no release object in the cluster either
-way.
+require Helm. Releases kept by Helm's SQL driver have no object in the cluster,
+and charts that Argo CD renders with `helm template` leave no release
+object either; the [GitOps page](../guides/gitops-argo-flux.md#charts-your-gitops-tool-deploys)
+says what the agent reads of those, and how to grant it.
 
 `rbac.create=false` lets you bind a role of your own; each collector that
 lacks access degrades to "not assessed" with the reason.
