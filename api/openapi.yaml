@@ -1220,6 +1220,7 @@ components:
           type: object
           additionalProperties: {$ref: "#/components/schemas/CapabilityStatus"}
         apiUsage: {type: array, items: {type: object}}
+        apiAuthorshipUnknown: {type: array, items: {type: object}, description: "Objects of a flagged API with no managedFields entry and no last-applied annotation, so nothing says which version wrote them; shaped like apiUsage. Reported as info, never as use of the API."}
         deprecatedCalls: {type: array, items: {type: object}}
         helmReleases: {type: array, items: {type: object}}
         addOns: {type: array, items: {type: object}}

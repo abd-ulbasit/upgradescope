@@ -220,6 +220,52 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 	return out
 }
 
+// authorshipUnknownKey is the Key suffix of an authorship-unknown finding,
+// which shares its category with the API's deprecated-api finding (when
+// the objects the collector could attribute are not blockers) and needs a
+// key of its own.
+const authorshipUnknownKey = "authorship-unknown"
+
+// evalAuthorshipUnknown reports the objects of a flagged kind that nothing
+// can be attributed to (inv.APIAuthorshipUnknown) as one info finding per
+// API, category deprecated-api, never more: stored the same whether
+// created through the flagged version or its replacement, they are
+// neither evidence of use nor of its absence, and so change neither
+// verdict nor score. An API the KB does not flag is skipped, whatever an
+// inventory says.
+func evalAuthorshipUnknown(inv inventory.Inventory, k kb.KB, b *budget) []Finding {
+	idx := kb.NewIndex(k.APILifecycle)
+	var out []Finding
+	for _, u := range inv.APIAuthorshipUnknown {
+		if e, known := idx.Lookup(u.Group, u.Version, u.Kind); !known || (e.Deprecated == nil && e.Removed == nil) {
+			continue
+		}
+		nsDetail, nsNames := namespaceBreakdown(u.Namespaces, "cluster-scoped")
+		gv := gvString(u.Group, u.Version)
+		f := Finding{
+			Category:       CatDeprecatedAPI,
+			Severity:       SevInfo,
+			Key:            string(CatDeprecatedAPI) + "/" + apiKey(u.Group, u.Version, u.Kind) + "/" + authorshipUnknownKey,
+			Title:          fmt.Sprintf("%s %s: authorship unknown (%s)", gv, u.Kind, pluralObjects(u.Count)),
+			Teams:          teamsFor(nsNames, inv.Namespaces),
+			Namespaces:     nsNames,
+			Citations:      []string{deprecationGuideURL},
+			Objects:        sortedObjects(u.Objects),
+			ObjectsOmitted: u.ObjectsOmitted,
+			Detail: fmt.Sprintf("%d object(s) carry no managedFields entry and no last-applied annotation, which is what creating one through %s with an empty spec leaves, "+
+				"so who writes them, and through which API version, cannot be told. They are stored the same however they were created: "+
+				"not counted as use of %s, no effect on the verdict or score.", u.Count, gv, gv),
+		}
+		if nsDetail != "" {
+			f.Detail += " Namespaces: " + nsDetail + "."
+		}
+		if !b.add(&out, f) {
+			return out
+		}
+	}
+	return out
+}
+
 // writtenBy renders the managers of u's objects as a detail sentence with
 // a leading space, or "" when no object names one. Refs are capped
 // (inventory.MaxObjectRefs): it names the subset the managers come from
@@ -1726,6 +1772,7 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	// charged as a whole; the others charge each finding as they build it
 	// and stop once the budget is spent.
 	steps := []func(){
+		func() { findings = append(findings, evalAuthorshipUnknown(inv, k, b)...) },
 		func() { b.addAll(&findings, evalAddOns(inv, k, target, now)) },
 		func() { findings = append(findings, evalUncoveredRuntimes(inv, k.AddOns, b)...) },
 		func() { findings = append(findings, evalHelmReleases(inv, k, target, b)...) },

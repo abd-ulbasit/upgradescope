@@ -124,6 +124,11 @@ func (inv Inventory) ValidateIdentifiers() error {
 			return err
 		}
 	}
+	for i, u := range inv.APIAuthorshipUnknown {
+		if err := validateUsage(func() string { return fmt.Sprintf("apiAuthorshipUnknown[%d]", i) }, u); err != nil {
+			return err
+		}
+	}
 	for i, r := range inv.HelmReleases {
 		at := func() string { return fmt.Sprintf("helmReleases[%d]", i) }
 		if p := problemsWith(r.Name, subdomainProblems); p != nil {

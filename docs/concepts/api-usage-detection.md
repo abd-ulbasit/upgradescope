@@ -157,11 +157,20 @@ lists `crds` as not assessed.
 
 ## Known limits
 
-- **No managedFields, no annotation, no finding.** An object written
-  through a deprecated version is missed when it has no managedFields entry
-  for that version and no last-applied annotation: objects created before
-  field tracking existed, objects whose managedFields a client cleared, and
-  objects created with no fields at all.
+- **No managedFields, no annotation, no attribution.** An object written
+  through a deprecated version is not counted as use of it when it has no
+  managedFields entry at all and no last-applied annotation: objects
+  created before field tracking existed, objects whose managedFields a
+  client cleared, and objects created with no fields at all (the apiserver
+  drops the entry of a manager that owns no fields, so a `DeviceClass`
+  created through `resource.k8s.io/v1beta1` with `spec: {}` has none). Such
+  an object is stored the same however it was created, so it cannot be a
+  blocker. It is reported as an info finding, `deprecated-api` titled
+  "authorship unknown" with the key suffix `/authorship-unknown`, naming the
+  objects, so a client that authors through the deprecated version is still
+  visible. It changes neither the verdict nor the score. An object that has
+  entries, all of them the control plane's or the status subresource's, is
+  attributed and is not reported.
 - **The control plane's managers are trusted.** A write through a
   deprecated version by `kube-apiserver`, `kube-controller-manager` or the
   APF producer is not reported, and neither is an object of a kind that

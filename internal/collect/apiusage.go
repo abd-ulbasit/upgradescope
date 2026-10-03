@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -108,9 +109,13 @@ func controlPlaneOwned(m *metav1.PartialObjectMetadata) bool {
 //     not the status subresource) names it, or, for an object with no such
 //     entries, the last-applied annotation does (see authoringManager).
 //
-// Objects created by a raw client that leaves neither trace go undetected;
-// the deprecated-calls metric covers live callers. APF objects the
-// apiserver auto-updates are skipped.
+// An object with no managedFields entry at all and no last-applied
+// annotation (created with no fields: the apiserver drops a manager's
+// empty entry) cannot be attributed, and is stored the same through any
+// version. It is not counted as use; it goes to inv.APIAuthorshipUnknown,
+// which the engine reports as info (authorshipUnknown). The
+// deprecated-calls metric covers live callers. APF objects the apiserver
+// auto-updates are skipped.
 //
 // Failures are per-resource: a forbidden or broken endpoint is recorded
 // and the remaining resources still run. If at least one resource (or
@@ -242,6 +247,8 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 				allObjects: e.Replacement == nil && !continues[schema.GroupKind{Group: gr.Group, Kind: s.kind}] && listV.flagged,
 				usage: inventory.APIUsage{Group: gr.Group, Version: s.version, Kind: s.kind,
 					Namespaces: map[string]int{}},
+				unknown: inventory.APIUsage{Group: gr.Group, Version: s.version, Kind: s.kind,
+					Namespaces: map[string]int{}},
 			})
 		}
 	}
@@ -249,7 +256,7 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 	slices.Sort(selfListed)
 
 	attempted, succeeded := 0, 0
-	var usages []inventory.APIUsage
+	var usages, unknowns []inventory.APIUsage
 	for _, gvr := range toList {
 		targets := targetsOf[gvr]
 		attempted++
@@ -265,20 +272,18 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 			if t.usage.Count > 0 {
 				usages = append(usages, t.usage)
 			}
+			if t.unknown.Count > 0 {
+				unknowns = append(unknowns, t.unknown)
+			}
 		}
 	}
 
-	sort.Slice(usages, func(i, j int) bool {
-		a, b := usages[i], usages[j]
-		if a.Group != b.Group {
-			return a.Group < b.Group
-		}
-		if a.Version != b.Version {
-			return a.Version < b.Version
-		}
-		return a.Kind < b.Kind
-	})
-	inv.APIUsage = usages
+	byGVK := func(a, b inventory.APIUsage) int {
+		return cmp.Or(strings.Compare(a.Group, b.Group), strings.Compare(a.Version, b.Version), strings.Compare(a.Kind, b.Kind))
+	}
+	slices.SortFunc(usages, byGVK)
+	slices.SortFunc(unknowns, byGVK)
+	inv.APIUsage, inv.APIAuthorshipUnknown = usages, unknowns
 
 	if len(failures) == 0 {
 		return selfListed, nil
@@ -309,6 +314,9 @@ type usageTarget struct {
 	gv         string // "group/version", or "v1" for core
 	allObjects bool   // the type goes away: every object counts
 	usage      inventory.APIUsage
+	// unknown holds the objects of a flagged kind that nothing attributes
+	// (see authorshipUnknown), which usage does not count.
+	unknown inventory.APIUsage
 }
 
 // listVersion picks the version to list a resource at, or false when none
@@ -401,19 +409,24 @@ func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVer
 					continue // ...except the control plane's own, which it replaces
 				}
 				if !t.allObjects {
-					if manager = authoringManager(m, t.gv); manager == "" {
+					manager = authoringManager(m, t.gv)
+				}
+				u := &t.usage
+				if !t.allObjects && manager == "" {
+					if !authorshipUnknown(m) {
 						continue
 					}
+					u = &t.unknown
 				}
-				t.usage.Count++
-				t.usage.Namespaces[m.Namespace]++
-				if len(t.usage.Objects) < inventory.MaxObjectRefs {
-					t.usage.Objects = append(t.usage.Objects, inventory.ObjectRef{
+				u.Count++
+				u.Namespaces[m.Namespace]++
+				if len(u.Objects) < inventory.MaxObjectRefs {
+					u.Objects = append(u.Objects, inventory.ObjectRef{
 						Namespace: m.Namespace, Name: m.Name, Manager: manager,
 						Ignore: m.Annotations[IgnoreAnnotation], IgnoreReason: m.Annotations[IgnoreReasonAnnotation],
 					})
 				} else {
-					t.usage.ObjectsOmitted++
+					u.ObjectsOmitted++
 				}
 			}
 		}
@@ -479,6 +492,18 @@ func authoringManager(m *metav1.PartialObjectMetadata, gv string) string {
 		}
 	}
 	return ""
+}
+
+// authorshipUnknown reports whether m has nothing to attribute it by: no
+// managedFields entry at all and no last-applied annotation. The apiserver
+// prunes a field manager's entry when it owns no fields, so an object
+// created with an empty spec (a DeviceClass through resource.k8s.io/v1beta1
+// with spec {}) has neither, and is stored the same whichever version
+// created it. An object whose entries are only internal managers' or the
+// status subresource's is attributed, not unknown.
+func authorshipUnknown(m *metav1.PartialObjectMetadata) bool {
+	_, applied := m.Annotations[lastAppliedAnnotation]
+	return len(m.ManagedFields) == 0 && !applied
 }
 
 // writesNow reports whether one manager's entries for one subresource say
