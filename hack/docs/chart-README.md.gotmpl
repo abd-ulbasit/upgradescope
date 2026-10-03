@@ -129,6 +129,40 @@ The docs cover [retention, sizing and backups](https://abd-ulbasit.github.io/upg
 [webhooks](https://abd-ulbasit.github.io/upgradescope/reference/webhook/)
 and [putting the dashboard behind an SSO proxy](https://abd-ulbasit.github.io/upgradescope/operations/tenancy/).
 
+## Exposing the server to remote agents
+
+Every push carries the cluster's ingest token and its full inventory.
+**Over plain `http://`, both cross the network in cleartext**: anyone on
+the path can read the inventory and replay the token to push as that
+cluster (the shared ingest token, as any cluster). Give remote agents an
+`https://` URL, with TLS in one of two places:
+
+- **At an Ingress**, as in the hub recipe above: `server.ingress.enabled`,
+  `server.ingress.host` and `server.ingress.className`, with
+  `server.ingress.tls` on by default (Secret `<fullname>-server-tls`
+  unless `server.ingress.tls.secretName`, e.g. filled by cert-manager's
+  `cert-manager.io/cluster-issuer` annotation). The Ingress refuses to
+  render without a read token.
+- **On the server itself**: `server.tls.secretName` (a `kubernetes.io/tls`
+  Secret, mounted read-only and passed as `--tls-cert-file` and
+  `--tls-key-file`) or `server.tls.certManager.issuerRef`. Probes, the
+  Service port's `appProtocol` and the ServiceMonitor switch to HTTPS, and
+  `serve` re-reads the pair when the kubelet updates the Secret, so a
+  renewal needs no restart. Expose the Service yourself (LoadBalancer, a
+  TLS-passthrough Ingress) or combine it with the Ingress above for TLS
+  on both hops.
+
+An agent whose server's certificate a private CA issued needs that CA:
+
+    helm install upgradescope deploy/chart -n upgradescope \
+      --set agent.serverUrl=https://upgradescope.internal.example \
+      --set agent.existingSecret=push-token \
+      --set agent.serverCA.configMap=corp-ca   # key ca.crt; or agent.serverCA.secret
+
+The agent gets it as `--server-ca-file` and trusts it on top of its
+image's system roots; nothing skips verification. An agent pushing to an
+`http://` URL on a host other than loopback logs a warning at startup.
+
 ## RBAC: what the agent can do, and why
 
 The agent ClusterRole (`templates/rbac.yaml`) lists every resource it
