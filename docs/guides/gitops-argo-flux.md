@@ -53,8 +53,25 @@ and the add-on's `source` is `gitops` when nothing stronger found it.
 A chart version in these resources is what the author asked for, often a
 constraint (`4.*`, `>=4.0.0 <5.0.0`), not what is installed. It is shown as the
 add-on's chart version only when it is a single version and no Helm release
-records the real one; a Flux cluster, where helm-controller leaves a release
-Secret, reports that release's chart version.
+records the real one. A Flux cluster, where helm-controller leaves a release
+Secret, reports that release's chart version when the release and the chart
+source are in the same namespace: the HelmRelease's `targetNamespace` is unset
+or its own namespace, and `spec.storageNamespace` is unset (the release Secret
+lives in the storage namespace, which defaults to the HelmRelease's). With a
+`targetNamespace` elsewhere, the Secret is in the HelmRelease's namespace and
+the chart deploys into the target, so they are two installs of the add-on, as
+for any chart with a namespace override: the release's at its app version, the
+chart source's with the chart version it asks for, if exact.
+
+Repository URLs are recorded **without credentials**. An Application's
+`repoURL` and an OCIRepository's `spec.url` can carry userinfo
+(`https://user:token@host`) or a token in the query string, and the agent
+copies neither: only the scheme, host, port and path are kept, whether or not
+the value parses as a URL (a Git address such as `git@github.com:org/repo.git`
+is recorded as `github.com:org/repo.git`). The agent does not read the Secrets
+that hold repository credentials either. The URL as recorded is what the
+inventory holds, what is pushed to the server and stored, and what the CLI
+prints.
 
 An Application's `destination.namespace` and a HelmRelease's `targetNamespace`
 are free text to the API server. A chart source whose target is not a valid
@@ -85,7 +102,9 @@ is the common case, since Argo CD is usually installed with its own Helm chart.
 Applications that name no chart (a path in Git) add no gap while releases
 exist. Flux is different: helm-controller leaves ordinary release Secrets, so
 Flux is a gap only on a cluster with no Helm release at all, and not when its
-HelmRelease list is served and empty (Flux used for Kustomizations only). When
+HelmRelease list is served and empty (Flux used for Kustomizations only), nor
+when every HelmRelease deploys elsewhere (a `spec.kubeConfig`, or a target that
+is not a namespace name) and so is not counted. When
 API discovery itself fails, `helm` is partial and names both tools, because it
 is not known whether either is installed.
 
@@ -113,7 +132,13 @@ rbac:
 ```
 
 Without them, with the tool installed, the agent reports `helm` as partial,
-with the forbidden list as the reason; nothing fails. A CLI scan uses your own
+with the forbidden list as the reason; nothing fails. The charts that were read
+count as add-on evidence even where nothing else could be: with the pod list
+forbidden and no Helm release or IngressClass readable, `addons` is partial
+(not unavailable) and says it was detected from the GitOps chart sources, and
+when the Helm release storage itself is unreadable (Secrets and ConfigMaps
+forbidden) `helm` is unavailable, its reason saying the chart sources were read
+and still feed add-on detection. A CLI scan uses your own
 credentials and needs no values. Lists are paged (50 per page), because an
 Application's status can be large.
 
