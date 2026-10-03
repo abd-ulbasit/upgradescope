@@ -24,9 +24,11 @@ const (
 	// SupportEnding: standard support ends within supportWarnDays; the
 	// finding is a warning.
 	SupportEnding SupportPhase = "ending"
-	// SupportExtended: past standard support, before the provider stops
-	// supporting the minor (EKS and GKE bill it; AKS's is platform
-	// support); the finding is a blocker.
+	// SupportExtended: past standard support, before the provider's
+	// extended window for the minor ends (EKS and GKE bill it; on AKS it
+	// is the end of Long Term Support, which the collector cannot see is
+	// enabled; AKS's platform support is not this window and is only for
+	// the one minor behind community support); the finding is a blocker.
 	SupportExtended SupportPhase = "extended"
 	// SupportEnded: past the end of extended support, or past standard
 	// support for a minor the provider offered no extended support for;

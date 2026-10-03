@@ -333,13 +333,17 @@ func TestEvalSupportOptInProvidersRealDataset(t *testing.T) {
 			"extended support, which applies only if Long Term Support is enabled, runs until 2027-07-31",
 			"cannot see whether this cluster is enrolled",
 			"AKS has no automatic extended support.",
-			"platform support",
+			"only platform support",
+			"while its minor is N-3, one behind the oldest minor in community support",
+			"Older minors are out of support.",
 		} {
 			if !strings.Contains(d, want) {
 				t.Errorf("detail lacks %q:\n%s", want, d)
 			}
 		}
-		for _, bad := range []string{"the cluster is in extended support", "when Azure Kubernetes Service stops supporting it", "$"} {
+		// Microsoft limits platform support to N-3; the note must not tell a
+		// cluster further behind that it still has it.
+		for _, bad := range []string{"the cluster is in extended support", "when Azure Kubernetes Service stops supporting it", "$", "unless Long Term Support is enabled", "a cluster is in platform support"} {
 			if strings.Contains(d, bad) {
 				t.Errorf("detail asserts %q:\n%s", bad, d)
 			}

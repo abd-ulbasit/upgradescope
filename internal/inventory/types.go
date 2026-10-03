@@ -91,7 +91,8 @@ const CurrentCollectorSchema = 1
 // Provider is the managed Kubernetes service a cluster's control plane is
 // bought from, inferred by the collector from signals only that service
 // produces (see collect.providerEvidence). It is never guessed: a cluster
-// that does not show one of the three is ProviderOther.
+// that does not show one of the three is ProviderOther, and one whose
+// evidence could not be read is left empty (undetermined), not ProviderOther.
 type Provider string
 
 const (

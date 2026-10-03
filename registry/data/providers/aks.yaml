@@ -8,14 +8,16 @@
 # the pricing page, whose rates render client-side (the fetched page shows
 # "$-"), so no number is stated that this file can cite. The delta would also
 # depend on the tier a cluster is on today. AKS also has no automatic extended
-# support: without LTS an out-of-support cluster is in reduced "platform
-# support". Where the source gives only a month, the date is its last day.
+# support: without LTS a cluster past community support gets platform support
+# only while its minor is N-3 (Microsoft: "before the cluster drops to N-4");
+# older minors are out of support, so the note is conditional. Where the
+# source gives only a month, the date is its last day.
 schema_version: 1
 id: aks
 display_name: Azure Kubernetes Service
 endoflife_product: azure-kubernetes-service
 extended_support_condition: Long Term Support is enabled
-extended_support_note: AKS has no automatic extended support. Past community support a cluster is in platform support (Azure and AKS platform issues only, no Kubernetes fixes) unless Long Term Support is enabled, which needs the Premium tier.
+extended_support_note: AKS has no automatic extended support. Without Long Term Support (which needs the Premium tier), a cluster past community support gets only platform support (Azure and AKS platform issues, no Kubernetes fixes) while its minor is N-3, one behind the oldest minor in community support. Older minors are out of support.
 citations:
   - https://learn.microsoft.com/en-us/azure/aks/supported-kubernetes-versions
   - https://learn.microsoft.com/en-us/azure/aks/long-term-support
