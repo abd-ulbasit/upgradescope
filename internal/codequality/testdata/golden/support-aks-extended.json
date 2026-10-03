@@ -1,0 +1,14 @@
+[
+  {
+    "description": "Kubernetes 1.34 is past Azure Kubernetes Service standard support (ended 2026-11-30). Azure Kubernetes Service ended standard support for Kubernetes 1.34 on 2026-11-30; extended support, which applies only if Long Term Support is enabled, runs until 2027-11-30; upgradescope cannot see whether this cluster is enrolled. AKS has no automatic extended support. Past community support a cluster is in platform support (Azure and AKS platform issues only, no Kubernetes fixes) unless Long Term Support is enabled, which needs the Premium tier. Fix: Upgrade the control plane to a Kubernetes minor that is still in standard support.",
+    "check_name": "support-lifecycle/aks/1.34",
+    "fingerprint": "8afb53784abd015b9ed4d62475a331cda21a1f300adbb0da31d08265f8c5b680",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/support-lifecycle/aks/1.34",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]
