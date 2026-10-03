@@ -23,7 +23,10 @@ $ upgradescope version
 ```
 
 The KB version names the `k8s.io/api` release and a digest of each dataset (the registry digest covers the add-ons and the provider calendars),
-so two binaries with the same KB version judge identically. Reports carry it
+so two binaries with the same KB version judge identically. The digests
+shown in this documentation's examples are illustrative: a digest changes
+with any edit to its dataset, so run `upgradescope version` for your
+build's. Reports carry it
 too (`kbVersion`). The registry date (the last change to the registry data)
 is stamped into release builds; a `go install` build prints `unknown`.
 

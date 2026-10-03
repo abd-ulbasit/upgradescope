@@ -34,7 +34,9 @@ the serving server's build, also for an evaluation an older server stored
 ## Example
 
 `scan --files rendered --target 1.37 --output json` on one
-`networking.k8s.io/v1beta1` Ingress (the test validates this example too):
+`networking.k8s.io/v1beta1` Ingress (the test validates this example too;
+the digests in `kbVersion` are illustrative, as a digest changes with any
+edit to its dataset):
 
 ```json
 {

@@ -377,7 +377,7 @@ the dashboard.
 {
   "clusterId": "…",
   "target": "1.35",
-  "kbVersion": "k8s.io/api v0.37.1; lifecycle 696a4b81; registry de96a5da",
+  "kbVersion": "k8s.io/api v0.37.1; lifecycle 696a4b81; registry de96a5da", // digests illustrative
   "score": 70,
   "ready": false,
   "verdict": "blocked",

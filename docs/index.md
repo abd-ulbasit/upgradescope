@@ -63,6 +63,8 @@ $ echo $?
 2
 ```
 
+(The `KB:` digests are illustrative; your build prints its own.)
+
 Against a live cluster, drop `--files`: the same scan then also reads which
 objects were *written* through a deprecated API version, the add-ons
 actually running (from pod images and labels, Helm releases and
