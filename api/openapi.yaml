@@ -1213,6 +1213,16 @@ components:
       properties:
         schemaVersion: {type: integer, const: 1}
         clusterId: {type: string, description: The kube-system namespace UID.}
+        collectorSchema:
+          type: integer
+          description: |
+            The generation of field meanings the collector filled this
+            inventory with (1 from v0.2.0). Absent from inventories of
+            collectors before it — v0.1.x and v0.2.0's release candidates —
+            which are judged by the push's agentVersion: one that is not a
+            release at or after 0.2.0-0 (including "dev" and empty) is a
+            v0.1.x agent, whose api-usage and deprecated-calls are not
+            assessed and whose chart-found add-on version is evidence only.
         source: {type: string, enum: [cluster, files]}
         collectedAt: {type: string, format: date-time}
         serverVersion: {type: string, description: "The apiserver's gitVersion, e.g. v1.34.2-gke.100."}

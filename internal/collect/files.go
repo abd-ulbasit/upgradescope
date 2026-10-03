@@ -915,10 +915,11 @@ func accumulate(counts map[gvk]*inventory.APIUsage, objs []manifestObject) {
 // and assessCRDs).
 func manifestInventory(clusterID, reason string, counts map[gvk]*inventory.APIUsage) inventory.Inventory {
 	inv := inventory.Inventory{
-		SchemaVersion: 1,
-		ClusterID:     clusterID,
-		Source:        inventory.SourceFiles,
-		CollectedAt:   time.Now().UTC(),
+		SchemaVersion:   1,
+		ClusterID:       clusterID,
+		CollectorSchema: inventory.CurrentCollectorSchema,
+		Source:          inventory.SourceFiles,
+		CollectedAt:     time.Now().UTC(),
 		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{
 			inventory.CapAPIUsage:        {Available: true},
 			inventory.CapDeprecatedCalls: {Available: false, Reason: reason},

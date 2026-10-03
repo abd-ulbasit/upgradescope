@@ -120,6 +120,9 @@ func TestCollectDefaults(t *testing.T) {
 	if inv.Source != inventory.SourceCluster {
 		t.Errorf("Source = %q, want %q", inv.Source, inventory.SourceCluster)
 	}
+	if inv.CollectorSchema != inventory.CurrentCollectorSchema {
+		t.Errorf("CollectorSchema = %d, want %d", inv.CollectorSchema, inventory.CurrentCollectorSchema)
+	}
 }
 
 // Offline inventories must say so: the engine does not require the versions
@@ -131,6 +134,9 @@ func TestManifestInventoriesAreFilesSource(t *testing.T) {
 	}
 	if inv.Source != inventory.SourceFiles {
 		t.Errorf("Source = %q, want %q", inv.Source, inventory.SourceFiles)
+	}
+	if inv.CollectorSchema != inventory.CurrentCollectorSchema {
+		t.Errorf("CollectorSchema = %d, want %d", inv.CollectorSchema, inventory.CurrentCollectorSchema)
 	}
 }
 

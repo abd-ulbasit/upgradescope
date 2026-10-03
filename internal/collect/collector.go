@@ -66,10 +66,11 @@ func Collect(ctx context.Context, c Clients, k kb.KB, opts Options) inventory.In
 		opts.TeamLabel = "team"
 	}
 	inv := inventory.Inventory{
-		SchemaVersion: 1,
-		Source:        inventory.SourceCluster,
-		CollectedAt:   time.Now().UTC(),
-		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{},
+		SchemaVersion:   1,
+		CollectorSchema: inventory.CurrentCollectorSchema,
+		Source:          inventory.SourceCluster,
+		CollectedAt:     time.Now().UTC(),
+		Capabilities:    map[inventory.Capability]inventory.CapabilityStatus{},
 	}
 	runSteps(ctx, &inv, steps(c, k, opts))
 	return inv

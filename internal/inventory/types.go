@@ -70,9 +70,22 @@ const (
 	SourceFiles Source = "files"
 )
 
+// CurrentCollectorSchema is the generation of field meanings this
+// package's collectors fill an Inventory with, stamped as
+// Inventory.CollectorSchema. 1 is v0.2.0's: api-usage counts the objects
+// written through a deprecated version and names them in Objects, and a
+// chart-found add-on's Version is its app version. Bump it when a field's
+// meaning changes without a schemaVersion bump.
+const CurrentCollectorSchema = 1
+
 type Inventory struct {
-	SchemaVersion      int                             `json:"schemaVersion"` // 1
-	ClusterID          string                          `json:"clusterId"`     // kube-system ns UID, or "files"
+	SchemaVersion int    `json:"schemaVersion"` // 1
+	ClusterID     string `json:"clusterId"`     // kube-system ns UID, or "files"
+	// CollectorSchema is CurrentCollectorSchema in every inventory this
+	// package collects. It is absent (0) from those of collectors that
+	// predate it — v0.1.x and v0.2.0's release candidates — which the
+	// server tells apart by the pushing agent's version.
+	CollectorSchema    int                             `json:"collectorSchema,omitempty"`
 	Source             Source                          `json:"source,omitempty"`
 	CollectedAt        time.Time                       `json:"collectedAt"`
 	ServerVersion      string                          `json:"serverVersion,omitempty"` // raw GitVersion, e.g. "v1.34.2", "v1.34.2-gke.100"

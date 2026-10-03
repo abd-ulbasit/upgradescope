@@ -74,6 +74,7 @@ func TestInventoryOmitEmpty(t *testing.T) {
 	absent := []string{
 		`"serverVersion"`, `"apiUsage"`, `"deprecatedCalls"`, `"helmReleases"`,
 		`"addOns"`, `"nodes"`, `"controlPlane"`, `"namespaces"`, `"unrecognizedImages"`, `"crds"`,
+		`"collectorSchema"`, // absent from inventories written before collectors stamped it
 	}
 	for _, key := range absent {
 		if bytes.Contains(data, []byte(key)) {
@@ -95,10 +96,11 @@ func TestInventoryOmitEmpty(t *testing.T) {
 // deliberate, versioned decision (bump SchemaVersion).
 func TestInventoryWireFormat(t *testing.T) {
 	inv := Inventory{
-		SchemaVersion: 1,
-		ClusterID:     "8f2a1b3c-kube-system-uid",
-		CollectedAt:   time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
-		ServerVersion: "v1.34.2",
+		SchemaVersion:   1,
+		ClusterID:       "8f2a1b3c-kube-system-uid",
+		CollectorSchema: CurrentCollectorSchema,
+		CollectedAt:     time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+		ServerVersion:   "v1.34.2",
 		Capabilities: map[Capability]CapabilityStatus{
 			CapAPIUsage: {Available: true, Partial: true, Reason: "list networking.k8s.io/v1 ingresses: forbidden", Skipped: []string{"networking.k8s.io/v1beta1 Ingress"}},
 			CapHelm:     {Available: false, Reason: "secrets list forbidden"},
@@ -145,6 +147,7 @@ func TestInventoryWireFormat(t *testing.T) {
 	want := `{
   "schemaVersion": 1,
   "clusterId": "8f2a1b3c-kube-system-uid",
+  "collectorSchema": 1,
   "collectedAt": "2026-06-10T12:00:00Z",
   "serverVersion": "v1.34.2",
   "capabilities": {
