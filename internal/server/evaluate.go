@@ -263,13 +263,54 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 	return d
 }
 
-// unassessedIn reports which baseline findings rep could not have seen:
-// those whose capability rep did not assess (engine.Unassessed of its
-// gaps).
-func unassessedIn(rep engine.Report) func(findingHead) bool {
+// unassessedIn reports which baseline findings rep, evaluated from inv,
+// could not have seen: those whose capability rep did not assess
+// (engine.Unassessed of its gaps), and deprecated callers while inv's
+// apiserver was warming up (callsWarmingUp).
+func unassessedIn(rep engine.Report, inv inventory.Inventory) func(findingHead) bool {
+	warming := callsWarmingUp(inv)
 	return func(h findingHead) bool {
-		return engine.Unassessed(rep.NotAssessed, h.Category, h.key())
+		return (warming && h.Category == engine.CatDeprecatedAPIInUse) ||
+			engine.Unassessed(rep.NotAssessed, h.Category, h.key())
 	}
+}
+
+// deprecatedCallsWarmup is how long an apiserver must have been up when
+// its /metrics were scraped before a deprecated caller missing from the
+// scrape counts as gone. apiserver_requested_deprecated_apis starts empty
+// at every apiserver start, and a client is counted again at its next
+// request: within seconds for one that holds a watch (it reconnects), at
+// its schedule for one that calls periodically. A day covers the common
+// schedules (an hourly sync, a nightly CronJob, a daily CI deploy) and
+// fits a readiness signal, which is not urgent; its cost is that after an
+// apiserver restart a caller that really went away is resolved, and the
+// cluster announced ready, up to a day late. A client that calls less
+// often than daily is the documented limit (docs/operations.md,
+// Notifications).
+const deprecatedCallsWarmup = 24 * time.Hour
+
+// callsWarmingUp reports whether inv's deprecated calls were scraped from
+// an apiserver up for less than deprecatedCallsWarmup. An inventory
+// without the apiserver's start time (an older agent's, a scrape that did
+// not report it) or a collection time is judged as before it existed:
+// not warming.
+func callsWarmingUp(inv inventory.Inventory) bool {
+	start := inv.APIServerStartTime
+	return !start.IsZero() && !inv.CollectedAt.IsZero() && inv.CollectedAt.Before(start.Add(deprecatedCallsWarmup))
+}
+
+// warmupEnded reports whether e, an evaluation of inv's snapshot, was
+// made before inv's apiserver had been up for deprecatedCallsWarmup,
+// while inv was scraped after: a force-sync push, a duplicate of the
+// snapshot that is the only news a quiet cluster sends. e may hold
+// deprecated callers that inv resolves, so it is re-evaluated.
+func warmupEnded(e store.Evaluation, inv inventory.Inventory) bool {
+	start := inv.APIServerStartTime
+	if start.IsZero() || inv.CollectedAt.IsZero() {
+		return false
+	}
+	end := start.Add(deprecatedCallsWarmup)
+	return e.EvaluatedAt.Before(end) && !inv.CollectedAt.Before(end)
 }
 
 // keepCarried stores what e's baseline carries forward in its report
@@ -363,7 +404,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		if err != nil {
 			return 0, false, err
 		}
-		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep))
+		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep, evalInv))
 		if err := s.keepCarried(&e, rep, d.carried); err != nil {
 			return 0, false, err
 		}
@@ -413,7 +454,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			log.Printf("server: re-evaluation of cluster %d skipped: snapshot %d is no longer the latest", cluster.ID, snapID)
 			return nil
 		}
-		if found && !s.stale(cur, now) {
+		if found && !s.stale(cur, now) && !warmupEnded(cur, evalInv) {
 			continue
 		}
 		// What sameResult and deltaFor read of the stored report: its
@@ -443,7 +484,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		// only added to the latest snapshot, so none is newer. An
 		// unchanged result (below) has no changes, but may carry less.
 		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
-		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep))
+		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, evalInv))
 		if err := s.keepCarried(&e, rep, d.carried); errors.As(err, &tooLarge) {
 			log.Printf("server: re-evaluation of cluster %d skipped for target %s: %v", cluster.ID, target, err)
 			continue

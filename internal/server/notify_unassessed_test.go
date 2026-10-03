@@ -155,3 +155,74 @@ func TestUnassessedCapabilityStillAnnouncesNewBlockers(t *testing.T) {
 		t.Fatalf("events = %+v, want one new-blocker for PSP", evs)
 	}
 }
+
+// scrapedAt is inv as scraped at collected from an apiserver started at
+// started.
+func scrapedAt(inv inventory.Inventory, started, collected time.Time) inventory.Inventory {
+	inv.APIServerStartTime, inv.CollectedAt = started, collected
+	return inv
+}
+
+// TestAPIServerRestartHoldsDeprecatedCallers: apiserver_requested_deprecated_apis
+// starts empty when the apiserver restarts, so a caller missing from a
+// scrape of an apiserver up for less than deprecatedCallsWarmup is not
+// resolved, and its return is not news (#189, the red-team's case a).
+func TestAPIServerRestartHoldsDeprecatedCallers(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	booted := aug1.Add(-72 * time.Hour)
+	h.push("prod", scrapedAt(withServiceCIDRCaller(testInventoryWithPSP()), booted, aug1))
+	expectNoEvents(t, h, "first evaluation")
+
+	restarted := aug1.Add(30 * time.Minute)
+	h.clock.set(restarted.Add(10 * time.Minute))
+	h.push("prod", scrapedAt(callsScraped(testInventoryWithPSP()), restarted, h.clock.now()))
+	expectNoEvents(t, h, "scrape after the restart")
+
+	h.clock.set(restarted.Add(20 * time.Minute))
+	h.push("prod", scrapedAt(withServiceCIDRCaller(testInventoryWithPSP()), restarted, h.clock.now()))
+	expectNoEvents(t, h, "caller back after the restart")
+}
+
+// TestAPIServerRestartIsNotBecameReady: with a deprecated caller as the
+// only blocker, an apiserver restart is not readiness (case c). The
+// caller is resolved once a scrape of the restarted apiserver, up for
+// deprecatedCallsWarmup, still does not show it: here the agent's hourly
+// force-sync, a duplicate of the stored snapshot, after a midnight
+// re-evaluation that still held it. Once, whatever is pushed after.
+func TestAPIServerRestartIsNotBecameReady(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	booted := aug1.Add(-72 * time.Hour)
+	h.push("prod", scrapedAt(withServiceCIDRCaller(testInventory()), booted, aug1))
+	expectNoEvents(t, h, "first evaluation")
+
+	restarted := aug1.Add(time.Hour)
+	h.clock.set(restarted.Add(10 * time.Minute))
+	quiet := callsScraped(testInventory())
+	h.push("prod", scrapedAt(quiet, restarted, h.clock.now()))
+	expectNoEvents(t, h, "scrape after the restart")
+
+	h.clock.set(time.Date(2026, 8, 2, 0, 30, 0, 0, time.UTC))
+	h.tick()
+	expectNoEvents(t, h, "midnight re-evaluation within the window")
+
+	h.clock.set(restarted.Add(deprecatedCallsWarmup + time.Hour))
+	h.push("prod", scrapedAt(quiet, restarted, h.clock.now()))
+	expectBecameReady(t, h, "force-sync past the window")
+
+	h.clock.set(h.clock.now().Add(time.Hour))
+	h.push("prod", scrapedAt(quiet, restarted, h.clock.now()))
+	h.tick()
+	expectNoEvents(t, h, "after became-ready")
+}
+
+// TestAPIServerUpLongEnoughResolvesCallers: a scrape of an apiserver up
+// for deprecatedCallsWarmup is evidence, restart or not.
+func TestAPIServerUpLongEnoughResolvesCallers(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", scrapedAt(withServiceCIDRCaller(testInventory()), aug1.Add(-72*time.Hour), aug1))
+	h.drain()
+
+	h.clock.set(aug1.Add(time.Hour))
+	h.push("prod", scrapedAt(callsScraped(testInventory()), h.clock.now().Add(-deprecatedCallsWarmup), h.clock.now()))
+	expectBecameReady(t, h, "scrape of an apiserver up for the window")
+}
