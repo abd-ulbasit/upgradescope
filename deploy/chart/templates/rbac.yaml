@@ -37,6 +37,26 @@ rules:
     resources: ["configmaps"]
     verbs: ["get", "list"]
   {{- end }}
+  {{- if .Values.rbac.gitops.argocd }}
+  # rbac.gitops.argocd: the charts Argo CD deploys, read from Application
+  # spec.source and spec.sources (chart, repoURL, targetRevision). Only
+  # applications; not AppProjects, ApplicationSets or the Secrets that hold
+  # repository credentials.
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list"]
+  {{- end }}
+  {{- if .Values.rbac.gitops.flux }}
+  # rbac.gitops.flux: the charts Flux deploys, read from HelmRelease
+  # spec.chart and spec.chartRef, and a chartRef to an OCIRepository (URL and
+  # tag), fetched by name.
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["ocirepositories"]
+    verbs: ["get"]
+  {{- end }}
   # --- files/kb-rbac-rules.yaml ---
   {{- .Files.Get "files/kb-rbac-rules.yaml" | nindent 2 }}
   {{- if .Values.agent.manageCRD }}

@@ -44,10 +44,26 @@ rbac:
   # read EVERY Secret and ConfigMap in the cluster. false removes both
   # rules; the Helm capability is then not assessed (the reason is the
   # forbidden lists) and Helm chart findings are missing from the report.
-  # Releases in Helm's sql driver, and charts that GitOps tools render with
-  # helm template (Argo CD), have no release object in the cluster either
-  # way; add-on detection from container images still covers them.
+  # Releases in Helm's sql driver have no object in the cluster, and charts
+  # that Argo CD renders with helm template have no release object either;
+  # add-on detection from container images still covers them, and
+  # rbac.gitops reads the charts GitOps tools declare.
   helmSecrets: true
+  gitops:
+    # -- Get/list on Argo CD Applications (argoproj.io/applications, nothing
+    # else of that group), to read the chart, repoURL and targetRevision of
+    # each chart source: add-ons Argo CD deploys (ingress-nginx, say) are
+    # then found by their chart, with no Helm release. Off, with Argo CD
+    # installed: the Helm capability is reported partial, naming the
+    # forbidden list. Chart kubeVersion and stored-manifest checks stay
+    # unavailable for Argo CD either way (helm template leaves no release).
+    argocd: false
+    # -- Get/list on Flux HelmReleases
+    # (helm.toolkit.fluxcd.io/helmreleases) and get on OCIRepositories
+    # (source.toolkit.fluxcd.io/ocirepositories, for a HelmRelease chartRef),
+    # to read the chart each HelmRelease deploys. Off, with Flux installed:
+    # the Helm capability is reported partial, naming the forbidden list.
+    flux: false
 
 agent:
   # -- Run the agent in this cluster. false = server-only install (a fleet
