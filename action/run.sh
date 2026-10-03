@@ -82,14 +82,16 @@ commit_sha='^[0-9a-fA-F]{40}$'
 # The lookup runs from an empty directory of its own, never the workspace: a
 # fork's tree there without a .git could form a bare repository whose config
 # redirects the lookup (url.insteadOf) or runs a credential helper. Discovery
-# stops at that directory, system config is skipped, and a transfer that
-# stalls for 30 s is abandoned as a failed lookup.
+# stops at that directory and no inherited GIT_DIR or GIT_WORK_TREE applies.
+# Once connected, a transfer slower than 1 KB/s for 30 s is abandoned as a
+# failed lookup; connection setup is bounded only by curl's own timeout.
 release_at() {
   command -v git >/dev/null || return 1
-  local dir refs rc=0
-  dir=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/upgradescope-tags.XXXXXX") || return 2
-  refs=$(cd "$dir" && env -u GIT_DIR -u GIT_WORK_TREE GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 \
-    GIT_CEILING_DIRECTORIES="$(dirname "$dir")" \
+  local base=${RUNNER_TEMP:-${TMPDIR:-/tmp}} dir refs rc=0
+  base=${base%/}
+  dir=$(mktemp -d "$base/upgradescope-tags.XXXXXX") || return 2
+  refs=$(cd "$dir" && env -u GIT_DIR -u GIT_WORK_TREE GIT_TERMINAL_PROMPT=0 \
+    GIT_CEILING_DIRECTORIES="$base" \
     git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote --tags "https://github.com/$repo") || rc=$?
   rmdir "$dir" 2>/dev/null || true
   [ "$rc" -eq 0 ] || return 2

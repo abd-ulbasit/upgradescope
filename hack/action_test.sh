@@ -125,7 +125,7 @@ fi
 # A sandbox PATH with the tools run.sh uses and no go; stub dirs are put in
 # front of it per case.
 mkdir -p "$work/sys"
-for t in bash sh env cat chmod cp mkdir mktemp rm tar gzip awk sed grep head tr uname jq sha256sum shasum perl; do
+for t in bash sh env cat chmod cp mkdir mktemp rm rmdir tar gzip awk sed grep head tr uname jq sha256sum shasum perl; do
   p=$(command -v "$t" || true)
   [ -z "$p" ] || ln -s "$p" "$work/sys/$t"
 done
@@ -173,7 +173,7 @@ mkdir -p "$work/stub-git"
 cat >"$work/stub-git/git" <<EOF
 #!/usr/bin/env bash
 echo "git \$*" >>"$work/calls"
-echo "git-env cwd=\$PWD ceiling=\${GIT_CEILING_DIRECTORIES-} nosystem=\${GIT_CONFIG_NOSYSTEM-} gitdir=\${GIT_DIR-unset}" >>"$work/calls"
+echo "git-env cwd=\$PWD ceiling=\${GIT_CEILING_DIRECTORIES-} gitdir=\${GIT_DIR-unset} worktree=\${GIT_WORK_TREE-unset}" >>"$work/calls"
 [ "\$*" = "-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote --tags https://github.com/abd-ulbasit/upgradescope" ] || exit 129
 if [ -n "\${STUB_GIT_FAIL:-}" ]; then
   echo "fatal: unable to access 'https://github.com/abd-ulbasit/upgradescope/': Could not resolve host: github.com" >&2
@@ -390,15 +390,17 @@ warned() {
   if [ "$code" = 0 ] && grep -qF "latest release is v9.9.4" "$work/out" && [ "$(grep -c '^::warning' "$work/out")" = 1 ] &&
     grep -q "^::warning::version defaults to latest at the action ref .*$2" "$work/out"; then ok "$1"; else fail "$1" "$work/out"; fi
 }
-run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4 GIT_DIR="$PWD/.git" GIT_WORK_TREE="$PWD"
 expect "no version at a release candidate's commit SHA installs that release" 0 "installed upgradescope v0.2.0-rc.2 from $releases/download/v0.2.0-rc.2/$asset"
 has "the release at the SHA is logged" "$work/out" "version defaults to v0.2.0-rc.2, the release at the action ref $sha_rc"
 has "the SHA is looked up with git ls-remote --tags" "$work/calls" "ls-remote --tags https://github.com/abd-ulbasit/upgradescope"
 has "the lookup gives up on a stalled transfer" "$work/calls" "git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote"
-has "the lookup skips the system git config" "$work/calls" "nosystem=1"
 hasnt "the lookup does not run in the workspace" "$work/calls" "cwd=$PWD "
-has "the lookup runs in its own directory" "$work/calls" "/upgradescope-tags."
-hasnt "the lookup is not pointed at a repository" "$work/calls" "gitdir=/"
+has "the lookup runs in its own directory under RUNNER_TEMP" "$work/calls" "cwd=$tmp/upgradescope-tags."
+has "repository discovery stops at RUNNER_TEMP" "$work/calls" "ceiling=$tmp gitdir="
+has "an inherited GIT_DIR or GIT_WORK_TREE does not reach the lookup" "$work/calls" "gitdir=unset worktree=unset"
+hasnt "every tool the lookup runs is on PATH" "$work/out" "command not found"
+if compgen -G "$tmp/upgradescope-tags.*" >/dev/null; then fail "the lookup removes its directory"; else ok "the lookup removes its directory"; fi
 hasnt "a release at the SHA does not ask for the latest release" "$work/calls" "$releases/latest"
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF="$(tr 'a-f' 'A-F' <<<"$sha_rc")" STUB_LATEST=v9.9.4
 expect "an upper-case commit SHA finds its release" 0 "installed upgradescope v0.2.0-rc.2 from"
@@ -415,6 +417,7 @@ run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$
 warned "an unknown SHA installs latest and warns" "no release tag"
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4 STUB_GIT_FAIL=1
 warned "a failed lookup installs latest and warns" "git ls-remote --tags https://github.com/abd-ulbasit/upgradescope failed"
+if compgen -G "$tmp/upgradescope-tags.*" >/dev/null; then fail "a failed lookup removes its directory"; else ok "a failed lookup removes its directory"; fi
 run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4
 warned "no git to look the SHA up installs latest and warns" "git is not installed"
 # Only this repository's SHA is looked up, and only for an unset version.
