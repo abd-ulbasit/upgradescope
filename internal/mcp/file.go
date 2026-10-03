@@ -50,8 +50,8 @@ func readUnder(ctx context.Context, sem chan struct{}, path string, read func() 
 	}
 	done := make(chan result, 1) // the read never blocks on sending its result
 	go func() {
-		defer func() { <-sem }()
 		raw, err := read()
+		<-sem // before the result, so a caller that has it finds the slot free
 		done <- result{raw, err}
 	}()
 	select {

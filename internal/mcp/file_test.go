@@ -80,14 +80,21 @@ func TestCancelledReadsThatBlockAreBoundedInNumber(t *testing.T) {
 	}
 	close(release)
 	// The background reads return and give their slots back.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	raw, err := readUnder(ctx, sem, "r.json", func() ([]byte, error) { return []byte("{}"), nil })
-	if err != nil || string(raw) != "{}" {
-		t.Fatalf("a read after the blocked ones returned: %q, %v", raw, err)
+	for deadline := time.Now().Add(5 * time.Second); len(sem) != 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d slots still held 5s after every read was released", len(sem))
+		}
+	}
+	for range slots + 1 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		raw, err := readUnder(ctx, sem, "r.json", func() ([]byte, error) { return []byte("{}"), nil })
+		cancel()
+		if err != nil || string(raw) != "{}" {
+			t.Fatalf("a read after the blocked ones returned: %q, %v", raw, err)
+		}
 	}
 	if got := len(sem); got != 0 {
-		t.Errorf("%d slots still held after every read returned", got)
+		t.Errorf("%d slots held after reads that returned", got)
 	}
 }
 
