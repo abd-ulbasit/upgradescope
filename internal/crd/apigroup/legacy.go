@@ -1,6 +1,9 @@
 package apigroup
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // The group v0.1.x and the v0.2.0 release candidates used, on a domain
 // the project never owned (#68). Objects annotated for those releases
@@ -33,9 +36,25 @@ func read(get func(string) (string, bool), current, old string) (value string, l
 	return v, ok
 }
 
-// LegacyIgnoreWarning is the deprecation notice for an object (named as
-// the caller names objects) whose ignore annotations use the old keys.
-func LegacyIgnoreWarning(object string) string {
-	return fmt.Sprintf("object %s: annotation keys %s and %s are deprecated and read only until v0.3.0: rename them to %s and %s",
-		object, LegacyIgnoreAnnotation, LegacyIgnoreReasonAnnotation, IgnoreAnnotation, IgnoreReasonAnnotation)
+// maxLegacyNamed bounds how many objects LegacyIgnoreWarning names.
+const maxLegacyNamed = 5
+
+// LegacyIgnoreWarning is the one deprecation notice for all the objects
+// (named as the caller names objects, at least one) whose ignore
+// annotations use the old keys. It names the first maxLegacyNamed and
+// counts the rest, so a migrating cluster gets one bounded line however
+// many objects carry the old keys: per-object lines would crowd the
+// capability gaps out of a bounded list such as status.notAssessed.
+func LegacyIgnoreWarning(objects []string) string {
+	named, more := objects, ""
+	if len(objects) > maxLegacyNamed {
+		named, more = objects[:maxLegacyNamed], fmt.Sprintf(" and %d more", len(objects)-maxLegacyNamed)
+	}
+	noun := "objects"
+	if len(objects) == 1 {
+		noun = "object"
+	}
+	return fmt.Sprintf("annotation keys %s and %s are deprecated and read only until v0.3.0: rename them to %s and %s on %d %s: %s%s",
+		LegacyIgnoreAnnotation, LegacyIgnoreReasonAnnotation, IgnoreAnnotation, IgnoreReasonAnnotation,
+		len(objects), noun, strings.Join(named, ", "), more)
 }

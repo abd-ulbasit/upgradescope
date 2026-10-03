@@ -208,7 +208,10 @@ type Options struct {
 // removed API may not be the one that wrote the suppressed objects.
 //
 // The returned warnings name expired rules (which do not apply), invalid
-// rules (skipped), and annotations without a reason (not applied).
+// rules (skipped), and annotations without a reason (not applied). Last
+// comes one warning for all the objects on the deprecated pre-v0.2.0
+// annotation keys that annotate a finding of r (see
+// apigroup.LegacyIgnoreWarning), however many there are.
 func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string) {
 	var warnings []string
 	var active []Rule
@@ -231,16 +234,22 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 	findings := make([]engine.Finding, 0, len(r.Findings))
 	var suppressed []engine.SuppressedFinding
 	warned := map[string]bool{}
+	var legacy []string // objects on the old keys, each once, in report order
 	reemitted := false
 	queue := slices.Clone(r.Findings)
 	for len(queue) > 0 {
 		f := queue[0]
 		queue = queue[1:]
-		kept, taken, callers, warns := applyFinding(f, active, opts)
+		kept, taken, callers, warns, old := applyFinding(f, active, opts)
 		for _, w := range warns {
 			if !warned[w] {
 				warned[w] = true
 				warnings = append(warnings, w)
+			}
+		}
+		for _, name := range old {
+			if !slices.Contains(legacy, name) {
+				legacy = append(legacy, name)
 			}
 		}
 		if kept != nil {
@@ -251,6 +260,9 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 			reemitted = true
 			queue = append(queue, c.Finding()) // judged by the rules in turn
 		}
+	}
+	if len(legacy) > 0 {
+		warnings = append(warnings, apigroup.LegacyIgnoreWarning(legacy))
 	}
 	if len(suppressed) == 0 {
 		return r, warnings
@@ -285,9 +297,9 @@ type group struct {
 // applyFinding splits f into what stays (nil when nothing does), what is
 // suppressed, and the callers folded into f that stand on their own
 // because object selectors or annotations took all of f (see Apply).
-func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding, []engine.SuppressedFinding, []engine.Caller, []string) {
+// legacy names the objects whose annotation of f uses the pre-v0.2.0 keys.
+func applyFinding(f engine.Finding, rules []Rule, opts Options) (kept *engine.Finding, out []engine.SuppressedFinding, callers []engine.Caller, warnings, legacy []string) {
 	var groups []*group
-	var warnings []string
 	remaining := f.Objects
 	whole := false
 	for _, rule := range rules {
@@ -328,7 +340,7 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 				return false
 			}
 			if o.IgnoreLegacyKey {
-				warnings = append(warnings, apigroup.LegacyIgnoreWarning(objectName(o)))
+				legacy = append(legacy, objectName(o))
 			}
 			reason := strings.TrimSpace(o.IgnoreReason)
 			if reason == "" {
@@ -347,9 +359,9 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 	}
 
 	if len(groups) == 0 {
-		return &f, nil, nil, warnings
+		return &f, nil, nil, warnings, legacy
 	}
-	out := make([]engine.SuppressedFinding, 0, len(groups))
+	out = make([]engine.SuppressedFinding, 0, len(groups))
 	listed := 0
 	callersTaken := false
 	for _, g := range groups {
@@ -370,9 +382,9 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 	}
 	if whole || len(remaining) == 0 && f.ObjectsOmitted == 0 {
 		if callersTaken {
-			return nil, out, nil, warnings
+			return nil, out, nil, warnings, legacy
 		}
-		return nil, out, f.Callers, warnings
+		return nil, out, f.Callers, warnings, legacy
 	}
 	f.Objects = remaining
 	// listed counts what the rules and annotations took from the refs f
@@ -380,7 +392,7 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 	// afterwards: the sentence says how many objects were suppressed, not
 	// how many of them the answer lists.
 	f.Detail = strings.TrimSpace(fmt.Sprintf("%s %d object(s) suppressed (see suppressed).", f.Detail, listed))
-	return &f, out, nil, warnings
+	return &f, out, nil, warnings, legacy
 }
 
 // matches reports whether object o satisfies every selector of r.

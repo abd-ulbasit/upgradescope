@@ -182,7 +182,7 @@ metadata:
 	if !strings.Contains(out, "1 suppressed") || !strings.Contains(out, "reason: deleted in the next release (annotation)") {
 		t.Errorf("table = %s", out)
 	}
-	want := "warning: object nightly (cron.yaml:1): annotation keys upgradescope.dev/ignore and upgradescope.dev/ignore-reason are deprecated and read only until v0.3.0: rename them to upgradescope.basit.engineer/ignore and upgradescope.basit.engineer/ignore-reason\n"
+	want := "warning: annotation keys upgradescope.dev/ignore and upgradescope.dev/ignore-reason are deprecated and read only until v0.3.0: rename them to upgradescope.basit.engineer/ignore and upgradescope.basit.engineer/ignore-reason on 1 object: nightly (cron.yaml:1)\n"
 	if !strings.Contains(stderr, want) {
 		t.Errorf("stderr = %q\nwant it to contain %q", stderr, want)
 	}

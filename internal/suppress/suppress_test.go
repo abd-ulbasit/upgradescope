@@ -1,6 +1,7 @@
 package suppress
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -221,9 +222,9 @@ func TestApplyAnnotations(t *testing.T) {
 }
 
 // An object annotated under the pre-v0.2.0 keys is still accepted, and
-// the warnings name the old keys as deprecated and the new ones to use,
-// once however many findings the object is in. A reason-less one is
-// still refused, and gets both warnings.
+// one warning names the old keys as deprecated, the new ones to use and
+// the objects, each once however many findings it is in. A reason-less
+// one is still refused, and is named in both warnings.
 func TestApplyLegacyAnnotationsWarnDeprecated(t *testing.T) {
 	accepted := shopWeb
 	accepted.Ignore, accepted.IgnoreReason, accepted.IgnoreLegacyKey = "removed-api, kb-stale", "replaced by HTTPRoute", true
@@ -238,15 +239,37 @@ func TestApplyLegacyAnnotationsWarnDeprecated(t *testing.T) {
 		t.Errorf("suppressed = %+v", got.Suppressed)
 	}
 	want := []string{
-		apigroup.LegacyIgnoreWarning("shop/web (app.yaml:3)"),
-		apigroup.LegacyIgnoreWarning("internal/api (app.yaml:9)"),
 		"object internal/api (app.yaml:9): " + apigroup.IgnoreAnnotation + " annotation without " + apigroup.IgnoreReasonAnnotation + " is not applied",
+		apigroup.LegacyIgnoreWarning([]string{"shop/web (app.yaml:3)", "internal/api (app.yaml:9)"}),
 	}
 	if !reflect.DeepEqual(warnings, want) {
 		t.Errorf("warnings =\n%s\nwant\n%s", strings.Join(warnings, "\n"), strings.Join(want, "\n"))
 	}
-	if len(warnings) == 0 || !strings.Contains(warnings[0], "deprecated") || !strings.Contains(warnings[0], apigroup.IgnoreAnnotation) {
+	if last := warnings[len(warnings)-1]; !strings.Contains(last, "deprecated") || !strings.Contains(last, apigroup.IgnoreAnnotation) {
 		t.Errorf("the deprecation warning does not say deprecated and name the new key: %v", warnings)
+	}
+}
+
+// A cluster moving from v0.1.x may have accepted findings on many
+// objects under the old keys. They all stay accepted, and the warnings
+// hold one deprecation line for all of them, not one per object: a
+// bounded consumer (the agent's status.notAssessed) must not lose its
+// other lines to them.
+func TestApplyManyLegacyAnnotationsWarnOnce(t *testing.T) {
+	var objs []inventory.ObjectRef
+	for i := range 40 {
+		o := inventory.ObjectRef{Namespace: "shop", Name: fmt.Sprintf("web-%02d", i), Ignore: "removed-api", IgnoreReason: "replaced by HTTPRoute", IgnoreLegacyKey: true}
+		objs = append(objs, o)
+	}
+	got, warnings := Apply(report(removedIngress(objs...), staleKB()), nil, Options{Now: now})
+	if len(got.Suppressed) != 1 || len(got.Suppressed[0].Objects) != 40 {
+		t.Fatalf("suppressed = %+v, want the 40 objects accepted", got.Suppressed)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("got %d warnings, want 1:\n%s", len(warnings), strings.Join(warnings, "\n"))
+	}
+	if w := warnings[0]; !strings.Contains(w, "on 40 objects: shop/web-00, shop/web-01, ") || !strings.HasSuffix(w, " and 35 more") {
+		t.Errorf("warning = %q, want it to count 40 objects, name the first and count the rest", w)
 	}
 }
 

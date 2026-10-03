@@ -61,9 +61,26 @@ func TestReadIgnore(t *testing.T) {
 	}
 }
 
+// One notice covers every object on the old keys: it names the first
+// few and counts the rest, so a migrating cluster with many accepted
+// objects gets one bounded line, not one per object (#68).
 func TestLegacyIgnoreWarning(t *testing.T) {
-	const want = "object shop/web: annotation keys upgradescope.dev/ignore and upgradescope.dev/ignore-reason are deprecated and read only until v0.3.0: rename them to upgradescope.basit.engineer/ignore and upgradescope.basit.engineer/ignore-reason"
-	if got := LegacyIgnoreWarning("shop/web"); got != want {
-		t.Errorf("LegacyIgnoreWarning =\n%s\nwant\n%s", got, want)
+	const keys = "annotation keys upgradescope.dev/ignore and upgradescope.dev/ignore-reason are deprecated and read only until v0.3.0: rename them to upgradescope.basit.engineer/ignore and upgradescope.basit.engineer/ignore-reason"
+	cases := []struct {
+		name    string
+		objects []string
+		want    string
+	}{
+		{"one", []string{"shop/web"}, keys + " on 1 object: shop/web"},
+		{"two", []string{"shop/web", "internal/api (app.yaml:9)"}, keys + " on 2 objects: shop/web, internal/api (app.yaml:9)"},
+		{"at the bound", []string{"a", "b", "c", "d", "e"}, keys + " on 5 objects: a, b, c, d, e"},
+		{"past the bound", []string{"a", "b", "c", "d", "e", "f", "g"}, keys + " on 7 objects: a, b, c, d, e and 2 more"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := LegacyIgnoreWarning(c.objects); got != c.want {
+				t.Errorf("LegacyIgnoreWarning =\n%s\nwant\n%s", got, c.want)
+			}
+		})
 	}
 }
