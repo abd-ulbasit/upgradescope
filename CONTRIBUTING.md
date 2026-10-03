@@ -285,9 +285,15 @@ table.
   explanation and the migration, but it does not mark the change by itself:
   the `pr-lint` check fails a PR whose title, description or commits have the
   footer without `!` in the subject (`hack/check-breaking.sh`). A squash
-  merge uses the PR title as the subject, so put the `!` there. List the
-  change under **Changed** in `CHANGELOG.md` too; that file is the reviewed
-  record.
+  merge uses the PR title as the subject, so put the `!` there. The check
+  also reads each commit on the branch, so a branch commit with a footer
+  needs its own `!` even when the squash merge drops that subject (the
+  squash body can carry the commit messages). A line that starts with
+  `BREAKING CHANGE:` counts as a footer wherever it is, a fenced code block
+  included; indent an example. The type must be lowercase here as well:
+  `Feat!:` is refused, because the release notes would not group it as
+  breaking. List the change under **Changed** in `CHANGELOG.md` too; that
+  file is the reviewed record.
 - Use the body to explain **why**. The diff already shows what changed.
 - Reference the issue in the footer: `Refs #123`, or `Fixes #123` when the PR
   meets all of that issue's acceptance criteria.
