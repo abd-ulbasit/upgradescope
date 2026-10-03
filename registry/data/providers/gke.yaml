@@ -11,6 +11,7 @@
 schema_version: 1
 id: gke
 display_name: Google Kubernetes Engine
+extended_support_condition: the cluster is on the Extended release channel
 extended_support_note: Extended support applies only to clusters on the Extended release channel; clusters on other channels are upgraded automatically at the end of standard support.
 citations:
   - https://docs.cloud.google.com/kubernetes-engine/docs/release-schedule

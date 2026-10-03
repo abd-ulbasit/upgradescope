@@ -169,6 +169,7 @@ id: eks                          # eks | gke | aks, = file name
 display_name: Amazon EKS
 endoflife_product: amazon-eks    # optional: tools/eol-sync owns `versions`
 extended_support_note: One sentence on what extended support means here.
+extended_support_condition: the cluster is on ...   # only where extended support is opt-in (GKE, AKS)
 citations: [https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html]
 pricing:                         # optional, hand-entered, USD per cluster-hour
   currency: USD
@@ -197,6 +198,14 @@ versions:                        # newest first
   as `as_of`. Leave `pricing` out otherwise (AKS): the finding then has
   dates and no cost line. Never derive a number. Prices are list prices;
   the finding labels them so.
+- `extended_support_condition` is set for a provider whose extended support
+  is not automatic (GKE: "the cluster is on the Extended release channel";
+  AKS: "Long Term Support is enabled"): a bare clause that completes "only
+  if ...", with no leading "if" and no trailing period. The collector cannot
+  see a cluster's channel or tier, so the finding then says the provider's
+  extended window applies only under that condition instead of asserting the
+  cluster is in it. Leave it out where extended support is the default
+  (EKS).
 - A minor missing from `versions` gets no finding. Files in
   `registry/data/providers` must be `<id>.yaml`.
 

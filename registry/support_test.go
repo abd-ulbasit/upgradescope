@@ -47,6 +47,10 @@ func TestValidateProvider(t *testing.T) {
 		{"standard_end is required", func(p *ProviderSupport) { p.Versions[0].StandardEnd = "" }, "standard_end"},
 		{"extended_end must be a date", func(p *ProviderSupport) { p.Versions[0].ExtendedEnd = "soon" }, "extended_end"},
 		{"extended_end must follow standard_end", func(p *ProviderSupport) { p.Versions[0].ExtendedEnd = "2026-12-02" }, "must be after standard_end"},
+		{"condition is a bare clause", func(p *ProviderSupport) { p.ExtendedSupportCondition = "Long Term Support is enabled" }, ""},
+		{"condition without a leading if", func(p *ProviderSupport) { p.ExtendedSupportCondition = "if Long Term Support is enabled" }, "extended_support_condition"},
+		{"condition without a trailing period", func(p *ProviderSupport) { p.ExtendedSupportCondition = "Long Term Support is enabled." }, "extended_support_condition"},
+		{"condition without surrounding space", func(p *ProviderSupport) { p.ExtendedSupportCondition = " Long Term Support is enabled" }, "extended_support_condition"},
 		{"price needs a currency", func(p *ProviderSupport) { p.Pricing.Currency = "" }, "currency"},
 		{"price only in USD", func(p *ProviderSupport) { p.Pricing.Currency = "EUR" }, "currency"},
 		{"price needs an as-of date", func(p *ProviderSupport) { p.Pricing.AsOf = "" }, "as_of"},
@@ -148,6 +152,14 @@ func TestEmbeddedProviders(t *testing.T) {
 		}
 		if len(p.Versions) == 0 {
 			t.Errorf("%s: no versions", id)
+		}
+	}
+	// Where extended support is opt-in the finding must say so: GKE (Extended
+	// release channel) and AKS (Long Term Support) carry the condition, EKS,
+	// where it is the default, does not.
+	for id, want := range map[string]bool{"eks": false, "gke": true, "aks": true} {
+		if got := have[id].ExtendedSupportCondition != ""; got != want {
+			t.Errorf("%s: extended_support_condition set = %v, want %v", id, got, want)
 		}
 	}
 	if p := have["eks"]; p.Pricing == nil || p.Pricing.ExtendedPerClusterHour <= p.Pricing.StandardPerClusterHour {

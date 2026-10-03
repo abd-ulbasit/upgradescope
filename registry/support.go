@@ -44,6 +44,15 @@ type ProviderSupport struct {
 	// for clusters on its Extended release channel; AKS has no automatic
 	// extended support, only an opt-in Long Term Support plan).
 	ExtendedSupportNote string `json:"extended_support_note,omitempty" yaml:"extended_support_note,omitempty"`
+	// ExtendedSupportCondition is set where extended support is not
+	// automatic: the configuration a cluster must have for the extended
+	// window to apply to it, as a clause that completes "only if ..." (GKE:
+	// "the cluster is on the Extended release channel"; AKS: "Long Term
+	// Support is enabled"). The collector cannot see it, so findings for
+	// the provider state the window conditionally instead of asserting
+	// that this cluster is in it. Empty for EKS, where extended support is
+	// the default.
+	ExtendedSupportCondition string `json:"extended_support_condition,omitempty" yaml:"extended_support_condition,omitempty"`
 	// Citations are the pages the Versions dates come from.
 	Citations []string `json:"citations" yaml:"citations"`
 	// Versions are the provider's Kubernetes minors, newest first. When
@@ -166,6 +175,12 @@ func ValidateProvider(p ProviderSupport) []error {
 	}
 	if p.EndoflifeProduct != "" && !eolSlugPattern.MatchString(p.EndoflifeProduct) {
 		errs = append(errs, fmt.Errorf("%s: endoflife_product %q must be a lowercase endoflife.date slug", p.ID, p.EndoflifeProduct))
+	}
+	if c := p.ExtendedSupportCondition; c != "" {
+		low := strings.ToLower(c)
+		if c != strings.TrimSpace(c) || strings.HasSuffix(c, ".") || strings.HasPrefix(low, "if ") || strings.HasPrefix(low, "only if ") {
+			errs = append(errs, fmt.Errorf("%s: extended_support_condition %q must be a bare clause with no leading \"if\" and no trailing period (it completes \"only if ...\")", p.ID, c))
+		}
 	}
 	errs = append(errs, validateCitations(p.ID, p.Citations)...)
 	if len(p.Versions) == 0 {
