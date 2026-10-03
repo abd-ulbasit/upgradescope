@@ -93,7 +93,7 @@ the future because neither tool lets a test set the clock.
 `examples/renovate/upgradescope.json` is a **static** preset: a hand-written
 list of the Helm chart names in the add-on registry, with three rules. Minor and
 patch bumps are grouped, major bumps wait for approval and are never
-automerged, and end-of-life add-ons (today `ingress-nginx`) are prioritized and
+automerged, and end-of-life add-ons (today five charts, `ingress-nginx` among them) are prioritized and
 carry a note that the bump does not make a retired project supported. It does
 not follow your scan or the registry once copied; a Go test keeps the file in
 the repository in step with the registry, and Renovate's own

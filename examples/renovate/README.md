@@ -21,7 +21,7 @@ For packages from the `helm` datasource named like a registry chart:
 - **major** bumps stay out of the group, are never automerged, wait for
   approval on the Dependency Dashboard, and are labelled `upgradescope` and
   `major`;
-- **end-of-life add-ons** (today `ingress-nginx`, archived 2026-03-24) are
+- **end-of-life add-ons** (today `ingress-nginx`, `kubernetes-dashboard`, `promtail`, `grafana-agent` and `grafana-agent-operator`; the registry has each date) are
   first in the queue (`prPriority: 10`), never automerged, labelled
   `upgradescope` and `eol`, and the PR says that the bump does not make a
   retired project supported.
