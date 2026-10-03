@@ -640,8 +640,9 @@ func (s *Server) Start() error {
 		if open {
 			ln.Close()
 			return fmt.Errorf("server: refusing to serve the read API and /api/v1/gate without a read token on %s (from %q), "+
-				"which is not a loopback address: set a read token or mint one ('upgradescope tokens create --read'), "+
-				"trust an authenticating proxy's team header, listen on loopback, or allow anonymous reads", ln.Addr(), s.cfg.Listen)
+				"which is not a loopback address: set a read token (--read-token) or mint one ('upgradescope tokens create --read'), "+
+				"trust an authenticating proxy's team header (--trust-team-header), listen on loopback, "+
+				"or allow anonymous reads (--allow-anonymous-read)", ln.Addr(), s.cfg.Listen)
 		}
 	}
 	// Background work: the notification worker, the re-evaluation ticker

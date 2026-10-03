@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -40,6 +41,13 @@ type serveOptions struct {
 	targets      string
 	teamMap      string
 	registryDir  string // --registry-dir: extra add-on registry entries
+
+	// trustTeamHeader and trustedProxies are the trusted-proxy mode
+	// (server.Config.TrustTeamHeader); parsedProxies is trustedProxies
+	// parsed by validateServeOptions.
+	trustTeamHeader string
+	trustedProxies  []string
+	parsedProxies   []netip.Prefix
 
 	maxSnapshotBytes   int64
 	maxGateBytes       int64
@@ -104,6 +112,8 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		ExtraTargets:       extraTargets,
 		TeamMap:            opts.parsedTeamMap,
 		AllowAnonymousRead: opts.allowAnonymousRead,
+		TrustTeamHeader:    opts.trustTeamHeader,
+		TrustedProxies:     opts.parsedProxies,
 		Version:            version,
 
 		MaxSnapshotBytes: opts.maxSnapshotBytes,
@@ -155,7 +165,11 @@ and the dashboard at /, and sends Slack or webhook notifications when a
 cluster's readiness changes.
 
 It listens on loopback by default. On any other address, the read API needs
---read-token, or an explicit --allow-anonymous-read.`,
+a credential: --read-token (fleet-wide), read tokens minted with
+'upgradescope tokens create --read --teams ...' (each scoped to teams, or
+'*' for the fleet), or an authenticating proxy's team header
+(--trust-team-header with --trusted-proxy-cidr); or an explicit
+--allow-anonymous-read.`,
 		Example: `  # Local dashboard at http://127.0.0.1:8080/, SQLite in ./upgradescope.db
   upgradescope serve
 
@@ -209,6 +223,12 @@ It listens on loopback by default. On any other address, the read API needs
 	}
 	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
+	cmd.Flags().StringVar(&opts.trustTeamHeader, "trust-team-header", "",
+		"DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated "+
+			"(an authenticating proxy's group header, e.g. X-Forwarded-Groups; '*' = the whole fleet); needs --trusted-proxy-cidr")
+	cmd.Flags().StringSliceVar(&opts.trustedProxies, "trusted-proxy-cidr", nil,
+		"with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16")
+	cmd.MarkFlagsRequiredTogether("trust-team-header", "trusted-proxy-cidr")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
 	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression); "+
@@ -266,21 +286,6 @@ func cgroupMemoryLimit(root string) (int64, bool) {
 	return 0, false
 }
 
-// exposedListen reports whether a --listen address is certainly not
-// loopback: an empty host (":8080", every interface) or an IP outside
-// 127.0.0.0/8 and ::1. That is refused here, with the flags to fix it. A
-// hostname, "localhost" included, is decided by the server on the address
-// it actually binds (server.Config.AllowAnonymousRead), so neither a
-// literal match nor /etc/hosts can open the read API by accident.
-func exposedListen(listen string) bool {
-	host, _, err := net.SplitHostPort(listen)
-	if err != nil || host == "" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && !ip.IsLoopback()
-}
-
 // validateServeOptions parses --targets and loads --team-map once into
 // opts.parsedTargets/parsedTeamMap (single parse site — runServe never sees
 // the raw values).
@@ -306,9 +311,11 @@ func validateServeOptions(opts *serveOptions) error {
 		return fmt.Errorf("--admin-token must differ from --read-token and --ingest-token: " +
 			"whoever holds those must not be able to delete or rename clusters")
 	}
-	if opts.readToken == "" && !opts.allowAnonymousRead && exposedListen(opts.listen) {
-		return fmt.Errorf("refusing to serve the read API and /api/v1/gate without a token on %q: "+
-			"set --read-token, listen on loopback, or pass --allow-anonymous-read to accept open reads", opts.listen)
+	// Read tokens minted with 'tokens create --read' live in the store, so
+	// whether a read API without --read-token is open is the server's to
+	// decide (server.Start refuses an open one on an exposed address).
+	if err := parseTrustedProxies(opts); err != nil {
+		return err
 	}
 	if opts.teamMap != "" {
 		tm, err := server.LoadTeamMap(opts.teamMap)
@@ -334,6 +341,56 @@ func validateServeOptions(opts *serveOptions) error {
 			n, server.MaxExtraTargets, server.ExtraTargetsCost)
 	}
 	return nil
+}
+
+// parseTrustedProxies checks --trust-team-header and parses
+// --trusted-proxy-cidr into opts.parsedProxies. A bare IP is its own /32
+// (or /128). A range that holds every address would trust the header from
+// any client, so it is refused.
+func parseTrustedProxies(opts *serveOptions) error {
+	if opts.trustTeamHeader == "" && len(opts.trustedProxies) == 0 {
+		return nil
+	}
+	if opts.trustTeamHeader == "" || len(opts.trustedProxies) == 0 {
+		return errors.New("--trust-team-header and --trusted-proxy-cidr go together: the header is trusted only from the proxy that sets it")
+	}
+	h := http.CanonicalHeaderKey(strings.TrimSpace(opts.trustTeamHeader))
+	if !validHeaderName(h) {
+		return fmt.Errorf("--trust-team-header %q is not an HTTP header name", opts.trustTeamHeader)
+	}
+	if h == "Authorization" || h == "Cookie" {
+		return fmt.Errorf("--trust-team-header %q carries credentials, not teams", opts.trustTeamHeader)
+	}
+	opts.trustTeamHeader = h
+	for _, raw := range opts.trustedProxies {
+		raw = strings.TrimSpace(raw)
+		p, err := netip.ParsePrefix(raw)
+		if err != nil {
+			a, aerr := netip.ParseAddr(raw)
+			if aerr != nil {
+				return fmt.Errorf("invalid --trusted-proxy-cidr %q: %w", raw, err)
+			}
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+		if p.Bits() == 0 {
+			return fmt.Errorf("--trusted-proxy-cidr %q trusts every address: any client could set %s", raw, h)
+		}
+		opts.parsedProxies = append(opts.parsedProxies, p.Masked())
+	}
+	return nil
+}
+
+// validHeaderName reports whether h is an RFC 9110 field name (a token).
+func validHeaderName(h string) bool {
+	if h == "" {
+		return false
+	}
+	for _, c := range h {
+		if c > 0x7e || c <= ' ' || strings.ContainsRune(`"(),/:;<=>?@[\]{}`, c) {
+			return false
+		}
+	}
+	return true
 }
 
 // minRetention is the shortest non-zero --retention: a window under a day

@@ -37,6 +37,6 @@ a fleet with 'serve'.
 * [upgradescope mcp](upgradescope_mcp.md)	 - Serve upgrade readiness to AI assistants over MCP (read-only)
 * [upgradescope scan](upgradescope_scan.md)	 - Scan a cluster (or rendered manifests) for upgrade readiness
 * [upgradescope serve](upgradescope_serve.md)	 - Run the upgradescope server: snapshot ingest, REST API, history, notifications
-* [upgradescope tokens](upgradescope_tokens.md)	 - Manage per-cluster ingest tokens for agent snapshot pushes
+* [upgradescope tokens](upgradescope_tokens.md)	 - Manage per-cluster ingest tokens and team-scoped read tokens
 * [upgradescope version](upgradescope_version.md)	 - Print the version, build and knowledge base details
 

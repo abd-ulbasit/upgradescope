@@ -1,6 +1,6 @@
 ## upgradescope tokens revoke
 
-Revoke one ingest token of a cluster by id, or all of them with --all
+Revoke ingest tokens of a cluster (--id or --all), or a read token (--read --id)
 
 ### Synopsis
 
@@ -9,8 +9,11 @@ Zero-downtime rotation: 'tokens create <cluster>', roll the new token out to the
 'tokens revoke <cluster> --id <old id>'. The agent reads its token at startup, so rolling it out
 means restarting the agent after updating its Secret (kubectl rollout restart deploy/<release>-agent).
 
+With --read, revoke the read token --id names (see 'tokens list --read'). The server refuses it
+from its next request on. Revoking the last read token does not open the read API again.
+
 ```
-upgradescope tokens revoke <cluster> (--id <id> | --all) [flags]
+upgradescope tokens revoke (<cluster> (--id <id> | --all) | --read --id <id>) [flags]
 ```
 
 ### Examples
@@ -18,6 +21,7 @@ upgradescope tokens revoke <cluster> (--id <id> | --all) [flags]
 ```
   upgradescope tokens revoke prod-eu --id 3
   upgradescope tokens revoke prod-eu --all
+  upgradescope tokens revoke --read --id 2
 ```
 
 ### Options
@@ -29,9 +33,10 @@ upgradescope tokens revoke <cluster> (--id <id> | --all) [flags]
       --db-url-file string   read --db-url from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
   -h, --help                 help for revoke
       --id int               revoke only the token with this id (from 'tokens list' or 'tokens create')
+      --read                 revoke the read token --id names instead of an ingest token
 ```
 
 ### SEE ALSO
 
-* [upgradescope tokens](upgradescope_tokens.md)	 - Manage per-cluster ingest tokens for agent snapshot pushes
+* [upgradescope tokens](upgradescope_tokens.md)	 - Manage per-cluster ingest tokens and team-scoped read tokens
 

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,40 +161,70 @@ func TestServeDefaults(t *testing.T) {
 	}
 }
 
-// Without a read token the read API and /gate are open, so serve refuses a
-// non-loopback listen address unless open reads are explicitly accepted.
+// Read tokens minted with 'tokens create --read' live in the store, so the
+// CLI leaves an exposed --listen without --read-token to the server, which
+// refuses it on the address it binds unless a read token, the trusted-proxy
+// header or --allow-anonymous-read closes or opens the read API
+// (server.TestStartRejectsNonLoopbackBoundAddr). Here: nothing refuses it
+// early, and the refusal the server gives names the flags that fix it.
 func TestServeAnonymousReadGuard(t *testing.T) {
-	cases := []struct {
-		name    string
-		args    []string
-		wantErr bool
-	}{
-		{"default loopback", nil, false},
-		{"ipv4 loopback", []string{"--listen", "127.0.0.1:9000"}, false},
-		{"ipv6 loopback", []string{"--listen", "[::1]:9000"}, false},
-		{"localhost", []string{"--listen", "localhost:9000"}, false},
-		{"all interfaces", []string{"--listen", ":8080"}, true},
-		{"wildcard ip", []string{"--listen", "0.0.0.0:8080"}, true},
-		{"routable ip", []string{"--listen", "10.0.0.5:8080"}, true},
-		// A hostname is checked on the address serve binds (server.Start).
-		{"hostname", []string{"--listen", "uscope.internal:8080"}, false},
-		{"all interfaces with read token", []string{"--listen", ":8080", "--read-token", "r"}, false},
-		{"all interfaces, explicitly open", []string{"--listen", ":8080", "--allow-anonymous-read"}, false},
+	real := runServe // execServe stubs it until the test ends
+	for _, args := range [][]string{
+		nil,
+		{"--listen", ":8080"},
+		{"--listen", "0.0.0.0:8080"},
+		{"--listen", "10.0.0.5:8080"},
+		{"--listen", ":8080", "--read-token", "r"},
+		{"--listen", ":8080", "--allow-anonymous-read"},
+	} {
+		if err := execServe(t, append([]string{"--ingest-token", "t"}, args...), serveOK()); err != nil {
+			t.Errorf("%v: %v, want the server to decide", args, err)
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := execServe(t, append([]string{"--ingest-token", "t"}, tc.args...), serveOK())
-			if tc.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "--allow-anonymous-read") ||
-					!strings.Contains(err.Error(), "--read-token") {
-					t.Fatalf("want a refusal naming --read-token and --allow-anonymous-read, got %v", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
+
+	// The real wiring, on every interface, with an empty database.
+	db := filepath.Join(t.TempDir(), "open.db")
+	err := execServe(t, []string{"--listen", "0.0.0.0:0", "--db", db}, real)
+	for _, flag := range []string{"--read-token", "tokens create --read", "--trust-team-header", "--allow-anonymous-read"} {
+		if err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("serve on 0.0.0.0 with no read credential: %v, want a refusal naming %s", err, flag)
+		}
+	}
+}
+
+// --trust-team-header needs --trusted-proxy-cidr and the other way round;
+// both are parsed before the server starts.
+func TestServeTrustedProxyFlags(t *testing.T) {
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error {
+		got = opts
+		return nil
+	}
+	if err := execServe(t, []string{"--trust-team-header", "x-forwarded-groups", "--trusted-proxy-cidr", "10.42.0.0/16,192.168.1.7", "--trusted-proxy-cidr", "fd00::/8"}, capture); err != nil {
+		t.Fatal(err)
+	}
+	if got.trustTeamHeader != "X-Forwarded-Groups" {
+		t.Errorf("header = %q, want the canonical X-Forwarded-Groups", got.trustTeamHeader)
+	}
+	want := []netip.Prefix{netip.MustParsePrefix("10.42.0.0/16"), netip.MustParsePrefix("192.168.1.7/32"), netip.MustParsePrefix("fd00::/8")}
+	if !slices.Equal(got.parsedProxies, want) {
+		t.Errorf("proxies = %v, want %v", got.parsedProxies, want)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--trust-team-header", "X-Forwarded-Groups"}, "trusted-proxy-cidr"},
+		{[]string{"--trusted-proxy-cidr", "10.0.0.0/8"}, "trust-team-header"},
+		{[]string{"--trust-team-header", "X-Groups", "--trusted-proxy-cidr", "0.0.0.0/0"}, "every address"},
+		{[]string{"--trust-team-header", "X-Groups", "--trusted-proxy-cidr", "::/0"}, "every address"},
+		{[]string{"--trust-team-header", "X-Groups", "--trusted-proxy-cidr", "10.0.0/8"}, "invalid --trusted-proxy-cidr"},
+		{[]string{"--trust-team-header", "X Groups", "--trusted-proxy-cidr", "10.0.0.0/8"}, "not an HTTP header name"},
+		{[]string{"--trust-team-header", "authorization", "--trusted-proxy-cidr", "10.0.0.0/8"}, "credentials"},
+	} {
+		if err := execServe(t, tc.args, serveOK()); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: err = %v, want one naming %q", tc.args, err, tc.want)
+		}
 	}
 }
 
