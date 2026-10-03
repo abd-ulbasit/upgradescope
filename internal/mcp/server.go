@@ -21,7 +21,7 @@ import (
 )
 
 // The tools. Every one is read-only; TestToolsAreReadOnly holds the set and
-// the hint to that, and docs/guides/mcp.md documents it.
+// the hint to that, and docs/getting-started/mcp.md documents it.
 const (
 	ToolScan           = "scan"
 	ToolListFindings   = "list_findings"
@@ -44,13 +44,12 @@ func ToolNames(fleet bool) []string {
 // maxScanTargets bounds one scan call: each target is a full scan.
 const maxScanTargets = 4
 
-// ScanRequest is one target of the scan tool. Kubeconfig and Context are
-// "" unless the assistant named them, and then the command's own flags apply.
+// ScanRequest is one target of the scan tool. It names the target and
+// nothing else: which cluster is read (and with which credentials) is the
+// command's --kubeconfig and --context and the environment, never an
+// assistant's choice.
 type ScanRequest struct {
-	Target     string
-	Kubeconfig string
-	Context    string
-	Files      string // rendered manifests instead of a live cluster
+	Target string
 }
 
 // Config wires the server to what the CLI already does.
@@ -94,7 +93,7 @@ func New(cfg Config) *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:         ToolScan,
 		Title:        "Scan a cluster for upgrade readiness",
-		Description:  "Scan the Kubernetes cluster the server's kubeconfig points at (or rendered manifests, with files) for what blocks an upgrade to each target minor: removed and deprecated APIs, end-of-life add-ons, version skew, chart compatibility. Read-only. Returns one report per target and keeps them for list_findings and get_report. A scan reads the whole cluster and can take minutes.",
+		Description:  "Scan the Kubernetes cluster this server was started against (its --kubeconfig and --context, else the environment's) for what blocks an upgrade to each target minor: removed and deprecated APIs, end-of-life add-ons, version skew, chart compatibility. Read-only. Returns one report per target and keeps them for list_findings and get_report. A scan reads the whole cluster and can take minutes.",
 		InputSchema:  scanInputSchema(),
 		OutputSchema: ScanOutputSchema(),
 		Annotations:  readOnly("Scan a cluster", true),
