@@ -293,3 +293,26 @@ func TestLegacyInventory(t *testing.T) {
 		}
 	}
 }
+
+// TestLegacyViewJudgesSnapshotsAsCluster: ingest refuses a source other
+// than a cluster (#194), and a snapshot stored before it did is judged as
+// the cluster inventory every snapshot is, so a re-evaluation does not
+// drop the versions and add-ons a files inventory is judged without.
+func TestLegacyViewJudgesSnapshotsAsCluster(t *testing.T) {
+	for _, src := range []inventory.Source{inventory.SourceFiles, "gate"} {
+		for _, agent := range []string{"0.2.0", "dev"} {
+			inv := testInventory()
+			inv.Source = src
+			if got := legacyView(inv, agent).Source; got != inventory.SourceCluster {
+				t.Errorf("stored source %q, agent %q: judged as %q, want %q", src, agent, got, inventory.SourceCluster)
+			}
+		}
+	}
+	for _, src := range []inventory.Source{"", inventory.SourceCluster} {
+		inv := testInventory()
+		inv.Source = src
+		if got := legacyView(inv, "0.2.0").Source; got != src {
+			t.Errorf("stored source %q: judged as %q, want it kept", src, got)
+		}
+	}
+}

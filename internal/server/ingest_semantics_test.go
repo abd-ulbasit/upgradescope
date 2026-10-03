@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
 // pushEnvelope wraps a raw inventory JSON in a schemaVersion 1 push for
@@ -58,6 +60,28 @@ func TestIngestCapabilityLessInventoryNeverReady(t *testing.T) {
 		}
 		if c := h.fleetCell(prod, "1.35"); c == nil || c.Verdict != "blocked" {
 			t.Fatalf("seed: cell = %+v, want blocked", c)
+		}
+		// Claiming files as the source (with the marker too) had the
+		// engine judge it without versions or add-ons, which read
+		// ready/100. No agent pushes one, so it is refused, and the cell
+		// stays blocked.
+		for _, inv := range []string{
+			`{"schemaVersion":1,"source":"files","serverVersion":"v1.34.2","clusterId":"uid-123"}`,
+			`{"schemaVersion":1,"source":"files","collectorSchema":1,"serverVersion":"v1.34.2","clusterId":"uid-123"}`,
+		} {
+			body, err := json.Marshal(map[string]any{
+				"schemaVersion": 1, "clusterName": prod, "agentVersion": agent, "kbVersion": "x",
+				"inventory": json.RawMessage(inv),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp, out := postSnapshot(t, h.ts, "ingest-tok", body, false); resp.StatusCode != http.StatusUnprocessableEntity {
+				t.Errorf("agent %q, %s: status %d %v, want 422", agent, inv, resp.StatusCode, out)
+			}
+			if c := h.fleetCell(prod, "1.35"); c == nil || c.Ready || c.Verdict != "blocked" {
+				t.Errorf("agent %q, after %s: cell = %+v, want blocked", agent, inv, c)
+			}
 		}
 		push(prod, agent, `{"schemaVersion":1,"serverVersion":"v1.34.2","clusterId":"uid-123"}`)
 		if c := h.fleetCell(prod, "1.35"); c == nil || c.Ready || c.Verdict != "unknown" {
@@ -116,6 +140,15 @@ func TestIngestRejectsMalformedInventory(t *testing.T) {
 		"schemaVersion missing": inv(func(m map[string]any) { delete(m, "schemaVersion") }),
 		"garbage serverVersion": inv(func(m map[string]any) { m["serverVersion"] = "garbage" }),
 		"major 2 serverVersion": inv(func(m map[string]any) { m["serverVersion"] = "v2.0.0" }),
+		// Only the agent pushes, and it collects from a cluster: a files
+		// inventory is judged without versions or add-ons (#194).
+		"source files": inv(func(m map[string]any) { m["source"] = "files" }),
+		"source gate":  inv(func(m map[string]any) { m["source"] = "gate" }),
+		"source FILES": inv(func(m map[string]any) { m["source"] = "FILES" }),
+		// A later collector schema means field meanings this server would
+		// misread as its own; a negative one no collector writes.
+		"collectorSchema beyond current": inv(func(m map[string]any) { m["collectorSchema"] = inventory.CurrentCollectorSchema + 1 }),
+		"collectorSchema negative":       inv(func(m map[string]any) { m["collectorSchema"] = -1 }),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

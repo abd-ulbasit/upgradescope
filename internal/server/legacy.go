@@ -57,6 +57,12 @@ func legacyInventory(inv inventory.Inventory, agentVersion string) bool {
 // deprecated-calls not assessed and chart-found add-on versions moved to
 // ChartVersion. inv's maps and slices are not modified.
 func legacyView(inv inventory.Inventory, agentVersion string) inventory.Inventory {
+	// Every snapshot is a cluster inventory: ingest refuses another source
+	// (decodePushedInventory), and one stored before it did is judged as
+	// one, so it is not excused versions and add-ons (#194).
+	if inv.Source != "" && inv.Source != inventory.SourceCluster {
+		inv.Source = inventory.SourceCluster
+	}
 	if !legacyInventory(inv, agentVersion) {
 		if inv.CollectorSchema == 0 {
 			return unattributedUsageView(inv)
