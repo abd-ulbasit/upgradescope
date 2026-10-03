@@ -121,6 +121,8 @@ jobs:
               - 'action/run.sh'
               - 'Makefile'
               - 'hack/release-check.sh'
+              - 'hack/check-asset-names.sh'
+              - 'hack/check-host-leak.sh'
               - 'hack/dashboard-smoke.sh'
               # the sizes release-check compares with the build
               - 'hack/check-doc-sizes.sh'

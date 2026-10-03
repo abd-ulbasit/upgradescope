@@ -7,6 +7,12 @@
 # from the build machine or the clock leaked into an artifact, and the
 # published checksums could not be reproduced from the tag.
 #
+# Two builds on one machine cannot see that machine's own name (the rpm's
+# Build Host header was the build host's name until it was pinned, #198), so
+# the packages are also scanned for this host's name and the clones' paths
+# (hack/check-host-leak.sh). The two clones differ in path; the host name
+# cannot be changed without privileges, so the scan stands in for varying it.
+#
 # Knobs:
 #   GORELEASER_VERSION  required (the Makefile passes its pin)
 #   GORELEASER_SKIP     --skip list (default publish,sign,sbom,docker; drop
@@ -51,6 +57,21 @@ if ! diff -u "$work/a/dist/checksums.txt" "$work/b/dist/checksums.txt"; then
   die "two builds of one commit produced different archives or packages (diff above)"
 fi
 echo "ok: checksums.txt identical ($(grep -c . "$work/a/dist/checksums.txt") artifacts)"
+
+# This host's name and the two build paths (also resolved: macOS's /var is a
+# link into /private) must not be in any package.
+leaks="$work/a
+$work/b
+$(cd "$work/a" && pwd -P)
+$(cd "$work/b" && pwd -P)"
+for run in a b; do
+  pkgs=()
+  while IFS= read -r p; do pkgs+=("$work/$run/$p"); done \
+    < <(jq -r '.[] | select(.type == "Linux Package") | .path' "$work/$run/dist/artifacts.json")
+  [ "${#pkgs[@]}" -gt 0 ] || die "no Linux Package in run $run"
+  UPGRADESCOPE_LEAK_NAMES=$leaks hack/check-host-leak.sh "${pkgs[@]}" \
+    || die "a package from run $run carries a build-machine name (above)"
+done
 
 if [ "$images" = 1 ]; then
   diff -u "$work/a.ids" "$work/b.ids" || die "per-platform images differ between the two builds"

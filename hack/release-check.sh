@@ -16,7 +16,10 @@
 #      release attaches them (release.extra_files) under the signature (#60);
 #   6. the binary and archive sizes README.md and docs/operations/install.md
 #      state are within 2% of the ones just built (hack/check-doc-sizes.sh);
-#   7. the binary for this machine is stamped (version, commit, commit date,
+#   7. every name in checksums.txt is one GitHub serves unchanged, and no
+#      package carries this machine's host name (hack/check-asset-names.sh,
+#      hack/check-host-leak.sh; #198);
+#   8. the binary for this machine is stamped (version, commit, commit date,
 #      registry date) and serves the embedded dashboard at / with every
 #      asset it references (hack/dashboard-smoke.sh).
 #
@@ -132,6 +135,10 @@ for f in api/*; do
   [ "$got" = "$(sha256 "$f")" ] || die "dist/checksums.txt lists $name as $got, which is not the sha256 of $f"
   echo "ok: $name"
 done
+
+echo "== asset names survive GitHub's upload, and no package carries this host's name (#198)"
+hack/check-asset-names.sh dist/checksums.txt
+xargs hack/check-host-leak.sh <"$tmp/pkgs"
 
 echo "== the sizes the docs state are the build's (within 2%)"
 DIST=dist hack/check-doc-sizes.sh
