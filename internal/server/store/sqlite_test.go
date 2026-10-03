@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -50,17 +52,20 @@ func mustSnapshot(t *testing.T, s *SQLite, clusterID int64, hash string, at time
 	return id
 }
 
-// TestOpenRejectsURIMetacharacters: the path is interpolated into a SQLite
-// URI, where '?' starts the query (`q/a?b.db` opened the file q/a and
-// dropped the _txlock pragma, so concurrent ingest failed with
-// SQLITE_BUSY) and '#' truncates the name. Refuse such paths outright.
-func TestOpenRejectsURIMetacharacters(t *testing.T) {
+// TestOpenRejectsNUL: a NUL ends a C string, so SQLite would open a
+// shorter name than the one given. Refuse the path with a clear error.
+func TestOpenRejectsNUL(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"q?b.db", "a#b.db"} {
-		if s, err := Open(filepath.Join(dir, name)); err == nil {
-			_ = s.Close()
-			t.Errorf("Open(%q) succeeded, want an error", name)
-		}
+	s, err := Open(filepath.Join(dir, "g\x00h.db"))
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("Open with a NUL in the path succeeded, want an error")
+	}
+	if !strings.Contains(err.Error(), "NUL byte") {
+		t.Errorf("error %q does not say why", err)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Errorf("a refused path created files: %v", ents)
 	}
 }
 
