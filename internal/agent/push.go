@@ -49,6 +49,7 @@ type pusher struct {
 	hc    *http.Client
 	log   *slog.Logger                                     // nil = slog.Default()
 	wait  func(ctx context.Context, d time.Duration) error // injectable for deterministic tests
+	now   func() time.Time                                 // nil = time.Now; injectable for deterministic tests
 
 	mu      sync.Mutex
 	pending *pushPayload
@@ -159,6 +160,14 @@ func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
 	return min(max(backoff(attempt), retryAfter), maxPushBackoff)
 }
 
+// clock is the pusher's notion of now, for an HTTP-date Retry-After.
+func (p *pusher) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
+}
+
 // parseRetryAfter reads a Retry-After value, delta-seconds or an HTTP-date
 // (RFC 9110 §10.2.3); 0 when absent, malformed or not in the future.
 func parseRetryAfter(v string, now time.Time) time.Duration {
@@ -235,7 +244,7 @@ func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, retr
 		// Retryable by definition despite being 4xx.
 		return false, 0, fmt.Errorf("server returned %s", resp.Status)
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable:
-		return false, parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()), fmt.Errorf("server returned %s", resp.Status)
+		return false, parseRetryAfter(resp.Header.Get("Retry-After"), p.clock()), fmt.Errorf("server returned %s", resp.Status)
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
 		// Any other 4xx: the request itself is wrong; identical retries cannot succeed.
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
