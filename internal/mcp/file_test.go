@@ -98,6 +98,32 @@ func TestCancelledReadsThatBlockAreBoundedInNumber(t *testing.T) {
 	}
 }
 
+// TestReadFileUsesTheBoundedSemaphore pins MC-10's file-read bound: ReadFile
+// reads under fileReads, and fileReads holds maxConcurrentReads slots, so
+// enlarging it or reading outside it fails here, not only in a review.
+func TestReadFileUsesTheBoundedSemaphore(t *testing.T) {
+	if got := cap(fileReads); got != maxConcurrentReads {
+		t.Fatalf("cap(fileReads) = %d, want maxConcurrentReads (%d)", got, maxConcurrentReads)
+	}
+	for range maxConcurrentReads {
+		fileReads <- struct{}{}
+	}
+	defer func() {
+		for range maxConcurrentReads {
+			<-fileReads
+		}
+	}()
+	path := filepath.Join(t.TempDir(), "r.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := ReadFile(ctx, path, 1<<20); err == nil {
+		t.Fatal("ReadFile read with every fileReads slot held, want it to wait and give up when the call ends")
+	}
+}
+
 func TestReadFileReadsARegularFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "r.json")
 	if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {

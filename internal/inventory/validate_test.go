@@ -116,8 +116,6 @@ func TestIdentifierErrorQuotesAShortPrefix(t *testing.T) {
 	}
 }
 
-// Of several invalid namespace keys the least is named, whatever the map
-// order.
 // TestIdentifierErrorUnquoted: Unquoted names the field and the rule, and
 // nothing of the value or of why it fails the rule.
 func TestIdentifierErrorUnquoted(t *testing.T) {
@@ -132,6 +130,8 @@ func TestIdentifierErrorUnquoted(t *testing.T) {
 	}
 }
 
+// Of several invalid namespace keys the least is named, whatever the map
+// order.
 func TestValidateIdentifiersIsDeterministic(t *testing.T) {
 	keys := map[string]int{"ok": 1}
 	for _, k := range []string{"Z", "Y", "B", "X", "C", "D"} {
