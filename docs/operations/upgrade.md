@@ -37,7 +37,9 @@ helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
   (SQLite and Postgres alike). Back it up first
   ([Retention and backup](retention-and-backup.md)); an older server
   cannot read a newer schema.
-- **Agents and servers** can be upgraded in either order. The push
+- **Agents and servers** can be upgraded in either order (from v0.1.x,
+  upgrade the server first when a cluster name is invalid:
+  [Cluster names](#from-v01x)). The push
   protocol is versioned (`schemaVersion` 1), a newer server stores fields
   an older agent does not send and keeps fields a newer agent sends that it
   does not know, and a server re-judges every stored snapshot with its own
@@ -65,10 +67,12 @@ read `ready` under v0.1.x to read differently, in both directions.
 v0.1 agents sent `--cluster-name` (chart `agent.clusterName`) unchecked.
 The server now refuses every push whose cluster name is not a lowercase
 RFC 1123 subdomain of at most 253 bytes (`Prod_EU`, `prod eu`) with
-`422`, and an upgraded agent refuses to start with one. Before you
-upgrade the agents, run `upgradescope clusters list`, and for each name
-that is not valid, rename the cluster (its history and per-cluster
-tokens move with it), then set the agent's name to match:
+`422`, and an upgraded agent refuses to start with one. v0.1.x has no
+`clusters rename` command and no rename endpoint, so upgrade the server
+(and the CLI you run the rename with) first. Then, before you upgrade
+the agents, run `upgradescope clusters list`, and for each name that is
+not valid, rename the cluster (its history and per-cluster tokens move
+with it), then set the agent's name to match:
 
 ```sh
 upgradescope clusters rename Prod_EU prod-eu --server https://upgradescope.example.com
@@ -78,7 +82,12 @@ helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope -n upgra
 
 Until an agent's name is changed its pushes are refused; nothing stored
 is lost, only the cycles it could not push
-([Cluster lifecycle](../operations.md#cluster-lifecycle)).
+([Cluster lifecycle](../operations.md#cluster-lifecycle)). When one
+release runs both the server and the agent, the `helm upgrade` that
+upgrades the server upgrades the agent too, and the new agent refuses to
+start with the invalid name, its pod failing, until you have
+renamed the cluster and the second `helm upgrade` above sets
+`agent.clusterName`.
 
 The server bounds its memory by the input's structure
 ([Memory and request limits](../operations.md#memory-and-request-limits)):
