@@ -69,6 +69,17 @@ jobs:
           category: upgradescope
 ```
 
+Code scanning shows an alert on a pull request's diff only when the file it
+sits on is committed to the repository. This example renders into
+`rendered/`, which is not committed, so its alerts are filed under
+`rendered/<chart>/templates/x.yaml`: they are in the Security tab and the
+gate still fails, but they never appear on the diff. To get alerts on the
+diff, scan manifests that are committed (plain YAML, a kustomize overlay, or
+a rendered directory you commit and keep current). The job summary lists
+every finding and the step annotates each blocker and warning either way. The
+[CI gate page](https://github.com/abd-ulbasit/upgradescope/blob/main/docs/getting-started/ci-gate.md)
+has the details.
+
 `uses: abd-ulbasit/upgradescope/action@<ref>` is the same action at its
 original path, and it keeps working. The two `action.yml` files run the
 same `action/run.sh`, and CI fails if they drift apart.

@@ -128,6 +128,10 @@ func TestDocsRound2Gaps(t *testing.T) {
 	}{
 		{"CONTRIBUTING.md", "a third dispatch of one commit cancels the pending second (IR-05)",
 			[]string{"third dispatch", "pending"}},
+		{"docs/getting-started/ci-gate.md", "an alert reaches a pull request's diff only for a file committed to the repository (FS-03)",
+			[]string{"committed", "pull request's diff", "rendered/"}},
+		{"action/README.md", "an alert reaches a pull request's diff only for a file committed to the repository (FS-03)",
+			[]string{"committed", "pull request's diff", "rendered/"}},
 	} {
 		doc := strings.Join(strings.Fields(strings.ToLower(readDoc(t, tc.page))), " ")
 		for _, w := range tc.want {

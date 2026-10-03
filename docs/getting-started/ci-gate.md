@@ -45,6 +45,23 @@ jobs:
           category: upgradescope
 ```
 
+**Where the alerts land.** Each SARIF result sits on the file and line the
+scan read: the object's `apiVersion` line, in a path relative to the
+checkout. Code scanning shows an alert on a pull request's diff only when
+that file is committed to the repository. The example above renders the
+chart into `rendered/`, which is not committed, so its alerts are filed
+under `rendered/<chart>/templates/x.yaml`, a path the repository does not
+have: they are in the repository's Security tab and the gate still fails,
+but they never appear on the diff, and the message's "rendered from
+`<chart>/templates/x.yaml`" names the chart's directory, not its path in the
+repository. For alerts on the diff, scan manifests that are committed:
+plain YAML or kustomize overlays in the repository, or a rendered directory
+you commit and keep current. Manifests outside the checkout get absolute
+`file://` locations, which code scanning cannot place anywhere (the scan
+prints a note). The job summary lists every finding and the step
+annotates each blocker and warning, committed or not. A finding with no
+file (anything found in a live cluster) is not a SARIF result.
+
 **Pin it.** v0.2.0 is the first release that ships the action at the
 repository root. Release tags `vX.Y.Z` are immutable (a tag ruleset protects
 them); the floating `v0` tag, which the release workflow moves to every
