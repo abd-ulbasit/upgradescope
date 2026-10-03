@@ -51,7 +51,7 @@ upgradescope serve [flags]
       --stale-after duration         mark a cluster stale (API, dashboard data, /metrics) when its agent has not pushed for this long; agents push at least about every 70m by default (default 2h0m0s)
       --targets string               extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors
       --team-map string              YAML file of {pattern, team} namespace globs overriding team labels (first match wins)
-      --tls-cert-file string         PEM certificate (chain) to serve HTTPS directly; requires --tls-key-file (read at startup)
+      --tls-cert-file string         PEM certificate (chain) to serve HTTPS directly, TLS 1.2 minimum; requires --tls-key-file; the pair is re-read when either file changes, so a renewal needs no restart
       --tls-key-file string          PEM private key for --tls-cert-file
       --webhook string               generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in api/webhook.schema.json) (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_URL or --webhook-file)
       --webhook-file string          read --webhook from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
