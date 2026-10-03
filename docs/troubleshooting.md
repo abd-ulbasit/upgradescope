@@ -64,7 +64,10 @@ The reason reads "no Helm releases read, but Argo CD (or Flux) is present".
 The cluster has no Helm release Secrets or ConfigMaps but shows the tool, so
 chart `kubeVersion` and stored-manifest checks were not assessed for the
 charts it deploys; they are not clean. Argo CD's `helm template` leaves no
-release to read. Add-ons are still found from images, and, with
+release to read, so with `rbac.gitops.argocd` set every chart read from an
+Application raises the same gap ("N Argo CD chart(s) read from Applications
+leave no Helm release"), even on a cluster that has other Helm releases.
+Add-ons are still found from images, and, with
 `rbac.gitops.argocd` or `rbac.gitops.flux` set, from the charts the tool's
 resources name. A reason that says "chart sources not read" with a
 forbidden error means the tool is installed and the agent's role lacks that

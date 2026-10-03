@@ -78,12 +78,29 @@ cluster leaves no marker here until `application.resourceTrackingMethod` is
 `annotation` (or `annotation+label`). The CRD check needs no permission. Helm is
 an optional capability, so this never turns a verdict to `unknown` by itself.
 
-The gap is raised when the cluster has **no** Helm release at all. A cluster
-that mixes Helm releases with Argo CD Applications reports no gap for the Argo
-CD charts' `kubeVersion` and stored-manifest checks: those checks run on the
-releases that exist, and nothing says some charts have none. When API discovery
-itself fails, `helm` is partial and names both tools, because it is not known
-whether either is installed.
+Every chart read from an Argo CD Application is that gap too, **whether or not
+the cluster has other Helm releases**: `helm template` leaves the chart no
+release, so its `kubeVersion` and stored-manifest checks cannot have run. This
+is the common case, since Argo CD is usually installed with its own Helm chart.
+Applications that name no chart (a path in Git) add no gap while releases
+exist. Flux is different: helm-controller leaves ordinary release Secrets, so
+Flux is a gap only on a cluster with no Helm release at all, and not when its
+HelmRelease list is served and empty (Flux used for Kustomizations only). When
+API discovery itself fails, `helm` is partial and names both tools, because it
+is not known whether either is installed.
+
+Because a partial `helm` capability makes the add-on and Helm-release findings
+count as unassessed when scans are compared (for deltas and notifications),
+a cluster that serves either CRD without `rbac.gitops.*` set shows `helm` as
+partial for good. Enable the flag for the tool you run to clear it. This
+includes upgrading the chart on a Flux cluster whose releases were read in full
+before this version.
+
+The chart references are free text written by whoever can create a HelmRelease
+in a namespace they own (or an Application, where Argo CD allows Applications in
+any namespace). Such a principal can name `ingress-nginx` and produce an
+end-of-life add-on finding for the cluster. The impact is a false finding, not
+access; if that matters, restrict who may create these resources.
 
 Reading the custom resources needs permission the agent does not have by
 default. Enable what you run:
