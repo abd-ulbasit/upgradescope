@@ -1130,7 +1130,7 @@ are not known. The same for every target.
 | `teams` | [TeamScores](#teamscores) | no | — |
 | `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included; with a team-scoped credential, of the scope's share of the cluster plus the manifests. |
 | `suppressedCount` | integer | yes | The number of `suppressed` entries. |
-| `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply), and `upgradescope.basit.engineer/ignore` annotations without a reason (not applied). |
+| `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply), `upgradescope.basit.engineer/ignore` annotations without a reason (not applied), and annotations under the deprecated pre-v0.2.0 keys (applied, and read until v0.3.0). |
 
 ### SARIF
 

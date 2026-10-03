@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
@@ -216,6 +217,36 @@ func TestApplyAnnotations(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "internal/api") || !strings.Contains(warnings[0], "ignore-reason") {
 		t.Errorf("warnings = %v", warnings)
+	}
+}
+
+// An object annotated under the pre-v0.2.0 keys is still accepted, and
+// the warnings name the old keys as deprecated and the new ones to use,
+// once however many findings the object is in. A reason-less one is
+// still refused, and gets both warnings.
+func TestApplyLegacyAnnotationsWarnDeprecated(t *testing.T) {
+	accepted := shopWeb
+	accepted.Ignore, accepted.IgnoreReason, accepted.IgnoreLegacyKey = "removed-api, kb-stale", "replaced by HTTPRoute", true
+	noReason := internal
+	noReason.Ignore, noReason.IgnoreLegacyKey = "removed-api", true
+
+	stale := staleKB()
+	stale.Objects = []inventory.ObjectRef{accepted}
+	got, warnings := Apply(report(removedIngress(accepted, noReason), stale), nil, Options{Now: now})
+	if len(got.Suppressed) != 2 || got.Suppressed[0].Reason != "replaced by HTTPRoute" ||
+		!reflect.DeepEqual(got.Suppressed[0].Objects, []inventory.ObjectRef{accepted}) {
+		t.Errorf("suppressed = %+v", got.Suppressed)
+	}
+	want := []string{
+		apigroup.LegacyIgnoreWarning("shop/web (app.yaml:3)"),
+		apigroup.LegacyIgnoreWarning("internal/api (app.yaml:9)"),
+		"object internal/api (app.yaml:9): " + apigroup.IgnoreAnnotation + " annotation without " + apigroup.IgnoreReasonAnnotation + " is not applied",
+	}
+	if !reflect.DeepEqual(warnings, want) {
+		t.Errorf("warnings =\n%s\nwant\n%s", strings.Join(warnings, "\n"), strings.Join(want, "\n"))
+	}
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "deprecated") || !strings.Contains(warnings[0], apigroup.IgnoreAnnotation) {
+		t.Errorf("the deprecation warning does not say deprecated and name the new key: %v", warnings)
 	}
 }
 

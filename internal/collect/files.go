@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/registry"
@@ -409,7 +410,7 @@ func kubectlDecode(text []byte, isJSON bool) ([]manifestObject, error) {
 		mo := manifestObject{group: k.Group, version: k.Version, kind: k.Kind}
 		if m, err := meta.Accessor(o); err == nil {
 			mo.ref.Name, mo.ref.Namespace = m.GetName(), m.GetNamespace()
-			mo.ref.Ignore, mo.ref.IgnoreReason = m.GetAnnotations()[IgnoreAnnotation], m.GetAnnotations()[IgnoreReasonAnnotation]
+			mo.ref = withIgnore(mo.ref, m.GetAnnotations())
 		}
 		if u, ok := o.(*unstructured.Unstructured); ok {
 			mo.template = podTemplateOf(k.GroupKind(), u.Object)
@@ -700,15 +701,17 @@ func (d *objectReader) object(n *yaml.Node, av, k string, line int) error {
 			return err
 		}
 		if ann.value != nil && deref(ann.value).Kind == yaml.MappingNode {
-			ignore, err := d.lookup(deref(ann.value), IgnoreAnnotation)
-			if err != nil {
-				return err
+			var lerr error
+			ref.Ignore, ref.IgnoreReason, ref.IgnoreLegacyKey = apigroup.ReadIgnore(func(key string) (string, bool) {
+				h, err := d.lookup(deref(ann.value), key)
+				if err != nil && lerr == nil {
+					lerr = err
+				}
+				return scalar(h.value), h.value != nil
+			})
+			if lerr != nil {
+				return lerr
 			}
-			reason, err := d.lookup(deref(ann.value), IgnoreReasonAnnotation)
-			if err != nil {
-				return err
-			}
-			ref.Ignore, ref.IgnoreReason = scalar(ignore.value), scalar(reason.value)
 		}
 	}
 	d.objs = append(d.objs, manifestObject{group: group, version: version, kind: k, ref: ref})

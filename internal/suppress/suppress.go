@@ -327,6 +327,9 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 			if !annotated(o, f) {
 				return false
 			}
+			if o.IgnoreLegacyKey {
+				warnings = append(warnings, apigroup.LegacyIgnoreWarning(objectName(o)))
+			}
 			reason := strings.TrimSpace(o.IgnoreReason)
 			if reason == "" {
 				warnings = append(warnings, fmt.Sprintf("object %s: %s annotation without %s is not applied", objectName(o), apigroup.IgnoreAnnotation, apigroup.IgnoreReasonAnnotation))

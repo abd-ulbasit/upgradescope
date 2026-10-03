@@ -68,3 +68,65 @@ func TestCollectAPIUsageRecordsIgnoreAnnotations(t *testing.T) {
 		t.Errorf("api usage = %#v\nwant objects %#v", inv.APIUsage, want)
 	}
 }
+
+// Objects annotated for v0.1.x and the v0.2.0 release candidates, under
+// the old group's keys, are still accepted for one minor release, and
+// their refs say so (suppress turns that into a deprecation warning). The
+// current key wins over the old one.
+func TestCollectFilesLegacyIgnoreAnnotations(t *testing.T) {
+	dir := writeTree(t, map[string]string{"all.yaml": `apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: old
+  annotations:
+    upgradescope.dev/ignore: removed-api
+    upgradescope.dev/ignore-reason: decommissioned with the old cluster
+---
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: both
+  annotations:
+    upgradescope.dev/ignore: eol-addon
+    upgradescope.basit.engineer/ignore: removed-api
+    upgradescope.dev/ignore-reason: old reason
+    upgradescope.basit.engineer/ignore-reason: new reason
+`})
+	inv, _, err := CollectFiles(dir, kb.KB{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.ObjectRef{
+		{Name: "old", File: "all.yaml", Line: 1, Ignore: "removed-api", IgnoreReason: "decommissioned with the old cluster", IgnoreLegacyKey: true},
+		{Name: "both", File: "all.yaml", Line: 9, Ignore: "removed-api", IgnoreReason: "new reason"},
+	}
+	if len(inv.APIUsage) != 1 || !reflect.DeepEqual(inv.APIUsage[0].Objects, want) {
+		t.Errorf("api usage = %+v\nwant objects %+v", inv.APIUsage, want)
+	}
+}
+
+// Live objects under the old keys are read the same way.
+func TestCollectAPIUsageReadsLegacyIgnoreAnnotations(t *testing.T) {
+	const beta3 = "flowcontrol.apiserver.k8s.io/v1beta3"
+	served := []string{"flowcontrol.apiserver.k8s.io/v1", beta3}
+	meta := metaClient(servedAt("FlowSchema", served,
+		obj{name: "accepted",
+			annotations: map[string]string{"upgradescope.dev/ignore": "removed-api", "upgradescope.dev/ignore-reason": "owned by vendor"},
+			managed:     []metav1.ManagedFieldsEntry{wrote("kubectl-client-side-apply", beta3)}},
+	))
+	flowschemas := metav1.APIResource{Name: "flowschemas", Kind: "FlowSchema", Verbs: metav1.Verbs{"list"}}
+	disc := fakeDiscovery(resources("flowcontrol.apiserver.k8s.io/v1", flowschemas), resources(beta3, flowschemas))
+	lifecycle := []kb.APILifecycleEntry{
+		{Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3", Kind: "FlowSchema", Introduced: inventory.Version{Major: 1, Minor: 26}, Deprecated: ver(1, 29), Removed: ver(1, 32),
+			Replacement: &kb.GVK{Group: "flowcontrol.apiserver.k8s.io", Version: "v1", Kind: "FlowSchema"}},
+	}
+
+	var inv inventory.Inventory
+	if _, err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.ObjectRef{{Name: "accepted", Manager: "kubectl-client-side-apply", Ignore: "removed-api", IgnoreReason: "owned by vendor", IgnoreLegacyKey: true}}
+	if len(inv.APIUsage) != 1 || !reflect.DeepEqual(inv.APIUsage[0].Objects, want) {
+		t.Errorf("api usage = %#v\nwant objects %#v", inv.APIUsage, want)
+	}
+}

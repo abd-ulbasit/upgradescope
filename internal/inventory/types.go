@@ -282,9 +282,12 @@ const MaxObjectRefs = 100
 // written through the deprecated group/version: the metadata.managedFields
 // manager that wrote it, or "kubectl last-applied" when only the
 // kubectl.kubernetes.io/last-applied-configuration annotation names it.
-// Ignore and IgnoreReason are the object's upgradescope.basit.engineer/ignore and
-// upgradescope.basit.engineer/ignore-reason annotation values, verbatim (see
-// internal/suppress).
+// Ignore and IgnoreReason are the object's ignore and ignore-reason
+// annotation values (apigroup.IgnoreAnnotation, IgnoreReasonAnnotation),
+// verbatim (see internal/suppress). IgnoreLegacyKey marks values read
+// from the pre-v0.2.0 keys (apigroup.ReadIgnore), for suppress's
+// deprecation warning; it never leaves the process (json "-"), so the
+// wire format and the report keep no field that v0.3.0 drops.
 type ObjectRef struct {
 	Namespace    string `json:"namespace,omitempty"`
 	Name         string `json:"name,omitempty"`
@@ -294,6 +297,8 @@ type ObjectRef struct {
 	Manager      string `json:"manager,omitempty"`
 	Ignore       string `json:"ignore,omitempty"`
 	IgnoreReason string `json:"ignoreReason,omitempty"`
+
+	IgnoreLegacyKey bool `json:"-"`
 }
 
 type DeprecatedCall struct { // one row of apiserver_requested_deprecated_apis

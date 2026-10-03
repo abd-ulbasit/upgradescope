@@ -35,10 +35,21 @@ const (
 // The annotations that accept findings for one object, recorded on its
 // ObjectRef by both the live and the files collector: a comma-separated
 // list of finding categories or keys, and why (see internal/suppress).
+// Their pre-v0.2.0 keys are still read (apigroup.ReadIgnore).
 const (
 	IgnoreAnnotation       = apigroup.IgnoreAnnotation
 	IgnoreReasonAnnotation = apigroup.IgnoreReasonAnnotation
 )
+
+// withIgnore returns ref with the ignore annotations of an object whose
+// annotations are ann.
+func withIgnore(ref inventory.ObjectRef, ann map[string]string) inventory.ObjectRef {
+	ref.Ignore, ref.IgnoreReason, ref.IgnoreLegacyKey = apigroup.ReadIgnore(func(k string) (string, bool) {
+		v, ok := ann[k]
+		return v, ok
+	})
+	return ref
+}
 
 // internalManagers are field managers inside the control plane. Their
 // managedFields entries record the version that was current when that
@@ -480,10 +491,9 @@ func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVer
 				u.Count++
 				u.Namespaces[m.Namespace]++
 				if len(u.Objects) < inventory.MaxObjectRefs {
-					u.Objects = append(u.Objects, inventory.ObjectRef{
+					u.Objects = append(u.Objects, withIgnore(inventory.ObjectRef{
 						Namespace: m.Namespace, Name: m.Name, Manager: manager,
-						Ignore: m.Annotations[IgnoreAnnotation], IgnoreReason: m.Annotations[IgnoreReasonAnnotation],
-					})
+					}, m.Annotations))
 				} else {
 					u.ObjectsOmitted++
 				}

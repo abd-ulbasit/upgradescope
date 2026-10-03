@@ -99,6 +99,24 @@ func TestGateAnnotationSuppresses(t *testing.T) {
 	}
 }
 
+// #68: a manifest still annotated with the pre-v0.2.0 keys is accepted
+// as before, and the answer warns that the keys are deprecated.
+func TestGateLegacyAnnotationSuppressesAndWarns(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
+	defer ts.Close()
+
+	legacy := strings.ReplaceAll(annotatedPSP, "upgradescope.basit.engineer/", "upgradescope.dev/")
+	resp, raw := postGate(t, ts, "?target=1.35&fail-on=blocker", "", legacy, "application/x-yaml")
+	b := decodeSuppressed(t, raw)
+	if resp.StatusCode != http.StatusOK || b.Verdict != "ready" || b.SuppressedCount != 1 {
+		t.Fatalf("status %d answer %+v, want 200 ready with the PSP suppressed", resp.StatusCode, b)
+	}
+	if len(b.Warnings) != 1 || !strings.Contains(b.Warnings[0], "upgradescope.dev/ignore and upgradescope.dev/ignore-reason are deprecated") ||
+		!strings.Contains(b.Warnings[0], "rename them to upgradescope.basit.engineer/ignore") {
+		t.Errorf("warnings = %q, want the deprecation of the old keys", b.Warnings)
+	}
+}
+
 // #44: ignore rules travel in ?config= as a .upgradescope.yaml and work as
 // scan --config: a rule with a reason suppresses, an expired one warns and
 // does not, and an invalid config is refused before anything is judged.
