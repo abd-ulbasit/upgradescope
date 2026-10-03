@@ -160,10 +160,10 @@ audited") and names the issue that tracks it.
 
 | ID | Claim | Proven by |
 |---|---|---|
-| AG-02 | One tick at start, then every `--interval` (minimum 1m) with jitter. | `TestRunFirstTickThenGracefulStop` `TestConfigIntervalMinimum` `TestJitterBounds` |
+| AG-02 | One tick at start, then every `--interval` (minimum 1m) with jitter. | `TestRunFirstTickThenGracefulStop` `TestConfigIntervalMinimum` `TestAgentIntervalMinimum` `TestJitterBounds` |
 | AG-03 | A tick has a deadline, and a stop mid-tick is not a failure. | `TestRunTickHasDeadline` `TestTickTimeout` `TestRunStopMidTickIsNotAFailure` |
 | AG-04 | With no server, the agent still writes the CRD status every tick. | `TestTickCRDOnlyModeNoPusher` `TestAgentIntegration_CRDStatusOnKind` |
-| AG-05 | Pushes happen only when the canonical inventory hash changes, retry transient failures with capped backoff, keep only the latest payload, and drop on a permanent 4xx. | `TestTickDedupsUnchangedInventory` `TestSnapshotHashIgnoresCollectedAt` `TestFlushRetriesTransientWithBackoff` `TestBackoffCapped` `TestFlushLatestOnlyBuffer` `TestFlushOther4xxPermanentDropsPayload` `TestFlush401DropsPayloadNoRetry` |
+| AG-05 | Pushes happen only when the canonical inventory hash changes, retry transient failures with capped backoff, keep only the latest payload, and drop on a permanent 4xx. A redirect is a permanent failure that is never followed, and Retry-After on a 429 or 503 is honoured up to the 1m backoff cap. | `TestTickDedupsUnchangedInventory` `TestSnapshotHashIgnoresCollectedAt` `TestFlushRetriesTransientWithBackoff` `TestBackoffCapped` `TestFlushLatestOnlyBuffer` `TestFlushOther4xxPermanentDropsPayload` `TestFlush401DropsPayloadNoRetry` `TestFlushRedirectIsPermanentFailureNeverFollowed` `TestTickRedirectedPushFailsEveryTick` `TestFlushHonoursRetryAfter` |
 | AG-06 | The status write retries on conflict. | `TestWriteStatusRetriesOnConflict` |
 | AG-07 | With `--manage-crd` the agent converges the CRD to its embedded manifest and leaves foreign metadata alone; without it, it never touches the CRD. | `TestEnsureCRDUpdatesExisting` `TestEnsureCRDNoWriteWhenInSync` `TestEnsureCRDPreservesForeignMetadata` `TestRunSkipsCRDWhenNotManaged` |
 | AG-08 | The ClusterReadiness is created if absent and never overwritten; user-set `spec.targets` survive. | `TestEnsureObjectCreatesAndIsIdempotent` `TestTickHonorsSpecTargets` `TestTickNoSpecWriteWhenFlagTargetsMatch` |
@@ -171,7 +171,7 @@ audited") and names the issue that tracks it.
 | AG-10 | Status holds, per target, the score, verdict, counts and at most the top 20 findings. | `TestTargetStatusFromReportTop20Cap` `TestTargetStatusFromReportCounts` `TestStatusFromReports` |
 | AG-11 | `ClusterReadiness` is cluster-scoped, `upgradescope.dev/v1alpha1`, short name `ucr`. | `TestManifestShape` `TestConstantsMatchManifest` |
 | AG-12 | Installed from the chart on a real cluster, the agent keeps a ClusterReadiness with a score and verdict, and `agent.targets` reaches `spec.targets`. | `e2e:cr_has_verdict` `e2e:upgrade_with_targets` `TestAgentIntegration_CRDStatusOnKind` |
-| AG-15 | `--cr-name` (chart `agent.crName`) names the object, and the write rule follows it. | `TestAgentCmdFlagDefaults` `TestRenderedRBACCustomCRName` |
+| AG-15 | `--cr-name` (chart `agent.crName`) names the object, and the write rule follows it. | `TestAgentCmdFlagDefaults` `TestAgentRefusesInvalidNames` `TestRenderedRBACCustomCRName` |
 | AG-13 | A passing EOL date reaches the ClusterReadiness within one interval, with no Kubernetes event. | not automated: #99 (the clock-shifted run did not finish) |
 
 ## Chart, RBAC and what the agent touches

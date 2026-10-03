@@ -14,7 +14,7 @@ instead of being ignored. Installing and configuring the chart:
 |-----|------|---------|-------------|
 | `agent.affinity` | object | `{}` | — |
 | `agent.clusterName` | string | `""` | Human-readable cluster name sent to the server (default: cluster UID). |
-| `agent.crName` | string | `"cluster"` | Name of the ClusterReadiness object the agent manages. |
+| `agent.crName` | string | `"cluster"` | Name of the ClusterReadiness object the agent manages: an RFC 1123 subdomain (lowercase letters, digits, - and .; at most 253 bytes). Changing it creates a new object and leaves the old one behind, because the agent has no delete permission: run kubectl delete ucr &lt;old-name&gt;. |
 | `agent.enabled` | bool | `true` | Run the agent in this cluster. false = server-only install (a fleet hub that agents in other clusters push to): no agent Deployment, ServiceAccount, RBAC, push-token Secret, metrics Service or agent alerts. The ClusterReadiness CRD in crds/ is still installed unless you pass --skip-crds. |
 | `agent.existingSecret` | string | `""` | Name of an existing Secret with key "serverToken" (preferred over an inline token for anything beyond dev). The token reaches the agent as $UPGRADESCOPE_SERVER_TOKEN from a secretKeyRef, never as an argument. |
 | `agent.extraArgs` | list | `[]` | Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"]. |

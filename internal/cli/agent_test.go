@@ -109,6 +109,26 @@ func TestAgentCmdFlagDefaults(t *testing.T) {
 	}
 }
 
+// --interval 0 used to pass the flag and silently mean the 10m default in the
+// agent (#192). It now fails like any other value below the minimum, before
+// any cluster access; leaving the flag out still gives 10m.
+func TestAgentIntervalMinimum(t *testing.T) {
+	for _, v := range []string{"0", "0s", "30s", "59s", "-1m"} {
+		_, err := execAgent(t, "--interval", v)
+		if err == nil || !strings.Contains(err.Error(), "below minimum 1m") {
+			t.Errorf("--interval %s: err = %v, want a below-minimum-1m error", v, err)
+		}
+	}
+	for v, want := range map[string]time.Duration{"1m": time.Minute, "90s": 90 * time.Second, "1h": time.Hour} {
+		if got, err := execAgent(t, "--interval", v); err != nil || got.interval != want {
+			t.Errorf("--interval %s: interval %v, err %v, want %v", v, got.interval, err, want)
+		}
+	}
+	if got, err := execAgent(t); err != nil || got.interval != 10*time.Minute {
+		t.Errorf("no --interval: interval %v, err %v, want 10m", got.interval, err)
+	}
+}
+
 func TestAgentCmdFlagsParsed(t *testing.T) {
 	orig := runAgent
 	defer func() { runAgent = orig }()

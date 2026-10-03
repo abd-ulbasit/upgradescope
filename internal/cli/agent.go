@@ -115,11 +115,19 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 // validAgentNames checks, before any cluster access, the names an agent
 // sends: --cluster-name, which the server refuses pushes under unless it
 // is an RFC 1123 subdomain (empty: the cluster UID, which is one), and
-// --team-label, which must be a label key to name any label.
+// --cr-name, which the apiserver refuses to create the ClusterReadiness
+// object under (a 422 on every tick) unless it is an RFC 1123 subdomain
+// (empty: the default, "cluster"), and --team-label, which must be a label
+// key to name any label.
 func validAgentNames(opts agentOptions) error {
 	if opts.clusterName != "" {
 		if err := inventory.ValidateClusterName(opts.clusterName); err != nil {
 			return fmt.Errorf("invalid --cluster-name: %w", err)
+		}
+	}
+	if opts.crName != "" {
+		if p := content.IsDNS1123Subdomain(opts.crName); len(p) > 0 {
+			return fmt.Errorf("invalid --cr-name %.64q: not an RFC 1123 subdomain, as an object name must be (%s)", opts.crName, strings.Join(p, "; "))
 		}
 	}
 	if p := content.IsLabelKey(opts.teamLabel); len(p) > 0 {
@@ -184,6 +192,9 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if err := validRequestTimeout(opts.requestTimeout); err != nil {
 				return err
 			}
+			if err := agent.ValidateInterval(opts.interval); err != nil {
+				return err // 0 is below the minimum too, not "the default"
+			}
 			if _, err := newAgentLogger(io.Discard, opts.logFormat, opts.logLevel); err != nil {
 				return err // a typo fails before any cluster access
 			}
@@ -200,7 +211,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	serverToken = addSecretFlag(cmd, &opts.serverToken, "server-token", "UPGRADESCOPE_SERVER_TOKEN",
 		"bearer token for snapshot pushes (required with --server-url)")
 	cmd.Flags().StringVar(&opts.clusterName, "cluster-name", "", "cluster label sent to the server, an RFC 1123 subdomain of at most 253 bytes (default: cluster UID)")
-	cmd.Flags().StringVar(&opts.crName, "cr-name", "cluster", "ClusterReadiness object name")
+	cmd.Flags().StringVar(&opts.crName, "cr-name", "cluster", "ClusterReadiness object name, an RFC 1123 subdomain of at most 253 bytes (changing it leaves the old object behind: kubectl delete ucr <old-name>)")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour, "push a snapshot even if unchanged after this long")
 	cmd.Flags().StringSliceVar(&opts.targets, "targets", nil,

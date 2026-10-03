@@ -45,12 +45,24 @@ was not assessed. The complete list of findings is in `upgradescope scan`
 and on the server.
 
 The agent ticks once at startup and then every `agent.interval` (10m by
-default, 1m at least) with ±10% jitter. Its pod is Ready once the first
+default, 1m at least) with ±10% jitter on the later ticks; the first is
+immediate, so the status appears as soon as possible. Its pod is Ready once the first
 tick has written the status, so `helm install --wait` waits for a first
 answer. To block a script or pipeline on readiness:
 
 ```sh
 kubectl wait clusterreadiness/cluster --for=condition=Ready --timeout=15m
+```
+
+The object is named by `agent.crName` (`--cr-name`), which must be an RFC
+1123 subdomain: lowercase letters, digits, `-` and `.`, at most 253 bytes.
+The agent refuses to start under any other name. Changing it creates a new
+object and leaves the old one at its last verdict, because the agent's role
+has no delete permission and Helm does not own the object. Delete the old
+one yourself:
+
+```sh
+kubectl delete ucr <old-name>
 ```
 
 The status is only as fresh as the agent's last successful write. An agent

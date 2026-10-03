@@ -62,13 +62,24 @@ type Config struct {
 	Logger *slog.Logger
 }
 
+// ValidateInterval rejects an evaluation interval below the 1m minimum.
+// Zero is below it: Config treats a zero Interval as unset, but a caller
+// that was given an interval explicitly (the --interval flag) must not
+// have 0 silently mean the default.
+func ValidateInterval(d time.Duration) error {
+	if d < time.Minute {
+		return fmt.Errorf("interval %s below minimum 1m", d)
+	}
+	return nil
+}
+
 // applyDefaults fills zero values and rejects invalid combinations.
 func (c *Config) applyDefaults() error {
 	if c.Interval == 0 {
 		c.Interval = 10 * time.Minute
 	}
-	if c.Interval < time.Minute {
-		return fmt.Errorf("interval %s below minimum 1m", c.Interval)
+	if err := ValidateInterval(c.Interval); err != nil {
+		return err
 	}
 	if c.CRName == "" {
 		c.CRName = crd.DefaultName
@@ -389,8 +400,10 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	}
 }
 
-// jitter returns d ±10%, so a fleet of agents installed at the same moment
-// does not thundering-herd the apiserver and the upgradescope server.
+// jitter returns d ±10%, so the second and later ticks of agents started at
+// the same moment drift apart instead of reaching the upgradescope server
+// together. The first tick is not jittered: it runs at once so the pod is
+// Ready, and `helm install --wait` gets an answer, as soon as possible.
 func jitter(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * (0.9 + 0.2*rand.Float64()))
 }
