@@ -1204,7 +1204,7 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 		if err != nil {
 			return engine.Report{}, reportMeta{}, err
 		}
-		now := s.now()
+		now := s.now().UTC() // as stored evaluations read back
 		meta.EvaluatedAt, meta.SnapshotID, meta.Source = now, snap.ID, sourceWhatIf
 		rep, err := s.evaluateWhatIf(inv, target, now)
 		return rep, meta, err

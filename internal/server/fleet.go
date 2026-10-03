@@ -371,7 +371,7 @@ func (s *Server) fleetTeamsReport(ctx context.Context, c clusterState, target in
 	if err != nil {
 		return engine.Report{}, src, err
 	}
-	now := s.now()
+	now := s.now().UTC() // as stored evaluations read back
 	src.Source, src.EvaluatedAt, src.SnapshotID = sourceWhatIf, now, snap.ID
 	rep, err := s.evaluateWhatIf(inv, target, now)
 	return rep, src, err
