@@ -12,7 +12,8 @@ so one may have been missed. The report's `NOT ASSESSED` section (JSON
 | `api-usage (required)` | The scan could not list resources (RBAC, an unavailable API group), or a partial list skipped an API removed by the target. | Fix the access the reason names. |
 | `versions (required)` | `/version` or nodes could not be read, or the server version did not parse. | Fix the access; a version string that does not parse is a bug, please report it. |
 | `versions (partial, required)` | A component pod in `kube-system` whose version upstream would have told was not read: the reason names the first pod and its image, an upstream-named image under a digest or a tag that is not a version (`kube-proxy@sha256:…`, `kube-scheduler:latest`), or a kube-apiserver, kube-controller-manager or kube-scheduler pod on a vendor image. | Pin the image to a version tag (`kube-proxy:v1.33.4`, `…:v1.33.4@sha256:…` reads too) so its skew is judged, or accept the gap with `--allow-incomplete`. A `versions (partial)` gap without `required` (a vendor kube-proxy image such as Oracle OKE's) leaves the verdict alone. |
-| `addons (required)` | Pods could not be listed. | Grant `list` on pods. |
+| `addons (required)` | Pods could not be listed, and there was nothing else to match add-ons from: no Helm release was found and IngressClasses could not be read. | Grant `list` on pods. |
+| `addons (partial, required)` | Pods could not be listed, but a Helm release or the IngressClasses could be read: add-ons were matched from what was read (the reason says which), so an EOL chart-installed add-on still blocks while one installed any other way is not seen. | Grant `list` on pods, or accept the gap with `--allow-incomplete`. |
 
 `--allow-incomplete` (CLI), or `allow-incomplete: true` in the GitHub
 Action, gates on findings alone; see [CI gate](getting-started/ci-gate.md).
@@ -92,6 +93,14 @@ To accept a finding for now, with a reason and an expiry, use an
 - **`LASTEVALUATED` is old** (more than about two intervals): the agent is
   not ticking. Check the pod; the `UpgradescopeAgentNotTicking` alert fires
   on this ([Prometheus and Grafana](guides/prometheus-grafana.md)).
+- **The ClusterReadiness has an `upgradescope.dev/status-error`
+  annotation.** The agent could not write the status, at the time and for the
+  reason the annotation gives, so the verdict shown is the last one it could
+  write: stale. The usual cause is a role without `update` on
+  `clusterreadinesses/status` (a hand-written role, `rbac.create=false`); the
+  next successful write removes the annotation. If the role also lacks
+  `patch` on the object itself, there is no annotation, and the signals are
+  `/readyz`, the agent's logs (`tick failed`) and the alert above.
 
 ## The server
 

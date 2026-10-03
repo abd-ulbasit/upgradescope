@@ -286,8 +286,18 @@ func (r *runner) tick(ctx context.Context) error {
 	}
 
 	st.ObservedGeneration = gen
-	if err := crd.WriteStatus(ctx, r.dyn, r.cfg.CRName, st); err != nil {
+	if err := crd.WriteStatus(ctx, r.dyn, r.cfg.CRName, st); errors.Is(err, crd.ErrStatusErrorNotCleared) {
+		// The status is current; only the marker of an earlier failure
+		// stayed. Not a failed tick, and not a reason to mark the CR again:
+		// the next write retries the clearing.
+		r.last.markerErr = err
+	} else if err != nil {
 		errs = append(errs, err)
+		// The CR keeps the last verdict it was given: say on the object
+		// itself that it is not current (#199). The next write clears it.
+		if merr := crd.MarkStatusError(ctx, r.dyn, r.cfg.CRName, err, r.now()); merr != nil {
+			errs = append(errs, merr)
+		}
 	}
 	r.last.err = errors.Join(errs...)
 

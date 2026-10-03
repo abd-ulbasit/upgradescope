@@ -38,12 +38,15 @@ const (
 // push failure is reported on its own and never fails the tick, because
 // the agent's local value does not depend on the server (spec §3).
 type tickReport struct {
-	err      error
-	push     string
-	pushErr  error
-	duration time.Duration
-	caps     map[inventory.Capability]inventory.CapabilityStatus
-	reports  []engine.Report // one per evaluated target, in target order
+	err     error
+	push    string
+	pushErr error
+	// markerErr is a status-error marker that could not be cleared after a
+	// status write that succeeded: reported, but not a failed tick.
+	markerErr error
+	duration  time.Duration
+	caps      map[inventory.Capability]inventory.CapabilityStatus
+	reports   []engine.Report // one per evaluated target, in target order
 }
 
 // tickTimeout bounds one tick: half the interval, at most 5m. client-go's
@@ -53,10 +56,30 @@ func tickTimeout(interval time.Duration) time.Duration {
 	return min(interval/2, 5*time.Minute)
 }
 
+// The verdict, score, findings and capability gauges stop being exported
+// when the last successful tick's verdict is too old to stand as current
+// (the ClusterReadiness status it was written to is stale too, and marked
+// so, #199). Both must hold:
+//   - staleAfterFailedTicks ticks in a row have failed: one or two are
+//     blips; three are a persistent fault, at the default 10m interval half
+//     an hour in.
+//   - the last success is older than 2*interval + staleGrace. The chart's
+//     UpgradescopeAgentNotTicking alert fires 2*interval + 10m after the
+//     last success (condition 2*interval + 5m, for 5m); the series must
+//     outlive it, or an UpgradescopeUpgradeBlocked alert would resolve with
+//     nothing else firing. Under a 10m interval three failed ticks are
+//     younger than that. The grace is the alert's 10m plus 2m for scrape
+//     and rule-evaluation lag.
+const (
+	staleAfterFailedTicks = 3
+	staleGrace            = 12 * time.Minute
+)
+
 // observer turns tick reports into one log line per tick, the /readyz
 // verdict and Prometheus metrics. Gauges describe the last successful
 // tick; a failed tick leaves them as they were (the last-success timestamp
-// shows how old they are).
+// shows how old they are) until the verdict is stale (verdictStale), when
+// the verdict gauges are withdrawn.
 type observer struct {
 	log      *slog.Logger
 	kb       kb.KB
@@ -129,11 +152,16 @@ func (o *observer) record(rep tickReport) {
 		capabilityAttr(rep.caps),
 		targetsAttr(rep.reports),
 	}
+	if rep.markerErr != nil {
+		attrs = append(attrs, "statusErrorMarker", rep.markerErr.Error())
+	}
 	switch {
 	case rep.err != nil:
 		o.log.Error(msgTickFailed, append([]any{"err", rep.err}, attrs...)...)
 	case rep.pushErr != nil:
 		o.log.Warn(msgTickComplete, append(attrs, "pushError", rep.pushErr.Error())...)
+	case rep.markerErr != nil:
+		o.log.Warn(msgTickComplete, attrs...)
 	default:
 		o.log.Info(msgTickComplete, attrs...)
 	}
@@ -179,6 +207,12 @@ func blockers(r engine.Report) int {
 // 10%) plus the tick deadline.
 func (o *observer) readyWindow() time.Duration {
 	return 2*o.interval + tickTimeout(o.interval)
+}
+
+// verdictStale reports whether the last good verdict is too old to export:
+// see staleAfterFailedTicks and staleGrace.
+func (o *observer) verdictStale(failures int, lastSuccess time.Time) bool {
+	return failures >= staleAfterFailedTicks && o.now().Sub(lastSuccess) > 2*o.interval+staleGrace
 }
 
 // readiness reports whether the agent is ready and, if not, why.
@@ -244,13 +278,15 @@ func (o *observer) Describe(ch chan<- *prometheus.Desc) {
 	}
 }
 
-// Collect emits the state gauges from the last successful tick. Built at
-// scrape time, so a target or category that disappears drops its series
-// instead of leaving a stale one behind. Labels are targets, verdicts,
-// severities, categories and capabilities: all small fixed sets.
+// Collect emits the state gauges from the last successful tick, except
+// that the verdict, score, findings and capability gauges are withdrawn once
+// the verdict is stale (the timestamp, interval and KB series stay). Built at scrape time, so a target or category that
+// disappears drops its series instead of leaving a stale one behind. Labels
+// are targets, verdicts, severities, categories and capabilities: all small
+// fixed sets.
 func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	o.mu.Lock()
-	last, good := o.lastSuccess, o.good
+	last, good, failures := o.lastSuccess, o.good, o.failures
 	o.mu.Unlock()
 
 	ts := 0.0
@@ -260,6 +296,9 @@ func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(descLastSuccess, prometheus.GaugeValue, ts)
 	ch <- prometheus.MustNewConstMetric(descInterval, prometheus.GaugeValue, o.interval.Seconds())
 	ch <- prometheus.MustNewConstMetric(descKBInfo, prometheus.GaugeValue, 1, o.kb.Version, o.kb.MaxKnownK8s.String())
+	if o.verdictStale(failures, last) {
+		return // the last good verdict is not current any more
+	}
 	for c, st := range good.caps {
 		ch <- prometheus.MustNewConstMetric(descCapability, prometheus.GaugeValue, boolValue(st.Available), string(c))
 		ch <- prometheus.MustNewConstMetric(descCapabilityPartial, prometheus.GaugeValue, boolValue(st.Partial), string(c))

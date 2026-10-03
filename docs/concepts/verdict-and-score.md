@@ -38,7 +38,12 @@ Required checks:
   another name (Oracle OKE's) is an optional gap. See
   [Version skew](version-skew.md).
 - **`addons`**, for live clusters: add-on detection from images, labels,
-  IngressClasses and charts.
+  IngressClasses and charts. Without the cluster-wide pod list the
+  capability is *partial* and still required: the Helm releases and
+  IngressClasses that were read are matched (an EOL chart-installed
+  ingress-nginx still blocks), but an add-on installed any other way goes
+  undetected, so a clean result is `unknown`. A role that cannot list
+  IngressClasses alone leaves an optional partial gap.
 
 Not required, because a blocker cannot hide behind them, or because managed
 platforms routinely deny them: `deprecated-calls` (the apiserver's

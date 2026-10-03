@@ -1044,6 +1044,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `serverVersion` | string | no | The apiserver's gitVersion, e.g. v1.34.2-gke.100. |
 | `capabilities` | map of [CapabilityStatus](#capabilitystatus) | no | — |
 | `apiUsage` | array of object | no | — |
+| `apiAuthorshipUnknown` | array of object | no | Objects of a flagged API with no managedFields entry outside the status subresource and the control plane, and no usable last-applied annotation, so nothing says which version wrote them; shaped like apiUsage, once per kind. Reported as info, never as use of the API. |
 | `deprecatedCalls` | array of object | no | — |
 | `helmReleases` | array of object | no | — |
 | `addOns` | array of object | no | — |

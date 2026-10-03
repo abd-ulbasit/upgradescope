@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -108,9 +109,17 @@ func controlPlaneOwned(m *metav1.PartialObjectMetadata) bool {
 //     not the status subresource) names it, or, for an object with no such
 //     entries, the last-applied annotation does (see authoringManager).
 //
-// Objects created by a raw client that leaves neither trace go undetected;
-// the deprecated-calls metric covers live callers. APF objects the
-// apiserver auto-updates are skipped.
+// An object with no entry left to judge by (none outside the status
+// subresource and the internal managers) and no usable last-applied
+// annotation (absent, or no apiVersion in it) cannot be attributed. That is
+// what creating it with no fields leaves, since the apiserver drops a
+// manager's empty entry, and a controller writing its status afterwards
+// changes nothing. It is stored the same through any version, so it is not
+// counted as use; it goes to inv.APIAuthorshipUnknown, once per kind, and
+// the engine reports it as info (authorshipUnknown). An object only the
+// internal managers wrote is the control plane's, not unknown. The
+// deprecated-calls metric covers live callers. APF objects the apiserver
+// auto-updates are skipped.
 //
 // Failures are per-resource: a forbidden or broken endpoint is recorded
 // and the remaining resources still run. If at least one resource (or
@@ -242,6 +251,8 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 				allObjects: e.Replacement == nil && !continues[schema.GroupKind{Group: gr.Group, Kind: s.kind}] && listV.flagged,
 				usage: inventory.APIUsage{Group: gr.Group, Version: s.version, Kind: s.kind,
 					Namespaces: map[string]int{}},
+				unknown: inventory.APIUsage{Group: gr.Group, Version: s.version, Kind: s.kind,
+					Namespaces: map[string]int{}},
 			})
 		}
 	}
@@ -249,7 +260,7 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 	slices.Sort(selfListed)
 
 	attempted, succeeded := 0, 0
-	var usages []inventory.APIUsage
+	var usages, unknowns []inventory.APIUsage
 	for _, gvr := range toList {
 		targets := targetsOf[gvr]
 		attempted++
@@ -265,20 +276,18 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 			if t.usage.Count > 0 {
 				usages = append(usages, t.usage)
 			}
+			if t.unknown.Count > 0 {
+				unknowns = append(unknowns, t.unknown)
+			}
 		}
 	}
 
-	sort.Slice(usages, func(i, j int) bool {
-		a, b := usages[i], usages[j]
-		if a.Group != b.Group {
-			return a.Group < b.Group
-		}
-		if a.Version != b.Version {
-			return a.Version < b.Version
-		}
-		return a.Kind < b.Kind
-	})
-	inv.APIUsage = usages
+	byGVK := func(a, b inventory.APIUsage) int {
+		return cmp.Or(strings.Compare(a.Group, b.Group), strings.Compare(a.Version, b.Version), strings.Compare(a.Kind, b.Kind))
+	}
+	slices.SortFunc(usages, byGVK)
+	slices.SortFunc(unknowns, byGVK)
+	inv.APIUsage, inv.APIAuthorshipUnknown = usages, unknowns
 
 	if len(failures) == 0 {
 		return selfListed, nil
@@ -309,6 +318,9 @@ type usageTarget struct {
 	gv         string // "group/version", or "v1" for core
 	allObjects bool   // the type goes away: every object counts
 	usage      inventory.APIUsage
+	// unknown holds the objects of a flagged kind that nothing attributes
+	// (see authorshipUnknown), which usage does not count.
+	unknown inventory.APIUsage
 }
 
 // listVersion picks the version to list a resource at, or false when none
@@ -384,6 +396,17 @@ func replacementList(resource string, r *kb.GVK, byResource map[schema.GroupReso
 // object to the targets it uses.
 func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVersionResource, targets []usageTarget) error {
 	opts := metav1.ListOptions{Limit: listPageSize}
+	// An object nothing attributes is stored the same through every served
+	// version, so it is recorded once, on the lowest target that looks at
+	// authors (not the first in discovery order, which the apiserver does
+	// not promise: the finding's key would follow it), not once per
+	// flagged version.
+	unknownAt := -1
+	for j, t := range targets {
+		if !t.allObjects && (unknownAt < 0 || version.CompareKubeAwareVersionStrings(t.usage.Version, targets[unknownAt].usage.Version) < 0) {
+			unknownAt = j
+		}
+	}
 	for {
 		page, err := meta.Resource(gvr).List(ctx, opts)
 		if err != nil {
@@ -401,19 +424,24 @@ func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVer
 					continue // ...except the control plane's own, which it replaces
 				}
 				if !t.allObjects {
-					if manager = authoringManager(m, t.gv); manager == "" {
+					manager = authoringManager(m, t.gv)
+				}
+				u := &t.usage
+				if !t.allObjects && manager == "" {
+					if j != unknownAt || !authorshipUnknown(m) {
 						continue
 					}
+					u = &t.unknown
 				}
-				t.usage.Count++
-				t.usage.Namespaces[m.Namespace]++
-				if len(t.usage.Objects) < inventory.MaxObjectRefs {
-					t.usage.Objects = append(t.usage.Objects, inventory.ObjectRef{
+				u.Count++
+				u.Namespaces[m.Namespace]++
+				if len(u.Objects) < inventory.MaxObjectRefs {
+					u.Objects = append(u.Objects, inventory.ObjectRef{
 						Namespace: m.Namespace, Name: m.Name, Manager: manager,
 						Ignore: m.Annotations[IgnoreAnnotation], IgnoreReason: m.Annotations[IgnoreReasonAnnotation],
 					})
 				} else {
-					t.usage.ObjectsOmitted++
+					u.ObjectsOmitted++
 				}
 			}
 		}
@@ -449,19 +477,7 @@ func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVer
 // to judge by: kubectl client-side apply rewrites it, nothing else does,
 // so under any other writer's entries it may be long stale.
 func authoringManager(m *metav1.PartialObjectMetadata, gv string) string {
-	type key struct{ manager, subresource string }
-	var order []key
-	byKey := map[key][]metav1.ManagedFieldsEntry{}
-	for _, f := range m.ManagedFields {
-		if f.Subresource == "status" || internalManagers[f.Manager] {
-			continue
-		}
-		k := key{f.Manager, f.Subresource}
-		if _, seen := byKey[k]; !seen {
-			order = append(order, k)
-		}
-		byKey[k] = append(byKey[k], f)
-	}
+	order, byKey := writerEntries(m)
 	for _, k := range order {
 		if writesNow(byKey[k], gv) {
 			return k.manager
@@ -470,15 +486,68 @@ func authoringManager(m *metav1.PartialObjectMetadata, gv string) string {
 	if len(order) > 0 {
 		return ""
 	}
-	if raw, ok := m.Annotations[lastAppliedAnnotation]; ok {
-		var applied struct {
-			APIVersion string `json:"apiVersion"`
-		}
-		if json.Unmarshal([]byte(raw), &applied) == nil && applied.APIVersion == gv {
-			return lastAppliedManager
-		}
+	if lastAppliedVersion(m) == gv {
+		return lastAppliedManager
 	}
 	return ""
+}
+
+// writerKey is one manager's entries for one subresource.
+type writerKey struct{ manager, subresource string }
+
+// writerEntries groups m's managedFields by (manager, subresource) in first
+// seen order, leaving out what no user manifest is behind and so cannot say
+// which version someone writes through: internal managers and the status
+// subresource.
+func writerEntries(m *metav1.PartialObjectMetadata) (order []writerKey, byKey map[writerKey][]metav1.ManagedFieldsEntry) {
+	byKey = map[writerKey][]metav1.ManagedFieldsEntry{}
+	for _, f := range m.ManagedFields {
+		if f.Subresource == "status" || internalManagers[f.Manager] {
+			continue
+		}
+		k := writerKey{f.Manager, f.Subresource}
+		if _, seen := byKey[k]; !seen {
+			order = append(order, k)
+		}
+		byKey[k] = append(byKey[k], f)
+	}
+	return order, byKey
+}
+
+// lastAppliedVersion returns the apiVersion kubectl recorded in m's
+// last-applied annotation, or "" when there is none or it does not parse.
+func lastAppliedVersion(m *metav1.PartialObjectMetadata) string {
+	raw, ok := m.Annotations[lastAppliedAnnotation]
+	if !ok {
+		return ""
+	}
+	var applied struct {
+		APIVersion string `json:"apiVersion"`
+	}
+	if json.Unmarshal([]byte(raw), &applied) != nil {
+		return ""
+	}
+	return applied.APIVersion
+}
+
+// authorshipUnknown reports whether nothing could ever attribute m, which
+// authoringManager has already failed to: it has no managedFields entry
+// outside the status subresource and the internal managers, and its
+// last-applied annotation is absent or names no apiVersion (unparseable, or
+// empty). The apiserver prunes a field manager's entry when it owns no
+// fields, so an object created with an empty spec (a DeviceClass through
+// resource.k8s.io/v1beta1 with spec {}) has neither, and is stored the
+// same whichever version created it. A controller that later wrote its
+// status leaves a status entry, which says nothing about the creator, so
+// that object is as unknown as before.
+//
+// An object only internal managers wrote (controlPlaneOwned) is not
+// unknown: the control plane made it, and replaces it across an upgrade.
+func authorshipUnknown(m *metav1.PartialObjectMetadata) bool {
+	if order, _ := writerEntries(m); len(order) > 0 {
+		return false
+	}
+	return lastAppliedVersion(m) == "" && !controlPlaneOwned(m)
 }
 
 // writesNow reports whether one manager's entries for one subresource say

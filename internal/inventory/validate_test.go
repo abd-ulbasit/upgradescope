@@ -21,13 +21,14 @@ func validInventory() Inventory {
 		}
 	}
 	return Inventory{
-		SchemaVersion: 1,
-		APIUsage:      []APIUsage{usage()},
-		HelmReleases:  []HelmRelease{{Name: "ingress-nginx", Namespace: "ingress", ManifestAPIs: []APIUsage{usage()}}},
-		AddOns:        []AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"ingress"}}, {ID: "x"}},
-		Nodes:         []NodeInfo{{Name: "ip-10-0-0-1.ec2.internal"}},
-		Namespaces:    []NamespaceInfo{{Name: "team-a", Team: "Payments_Team.1"}, {Name: "kube-system"}},
-		CRDs:          []CRD{{Group: "example.com", Kind: "Widget", Usage: []APIUsage{usage()}}},
+		SchemaVersion:        1,
+		APIUsage:             []APIUsage{usage()},
+		APIAuthorshipUnknown: []APIUsage{usage()},
+		HelmReleases:         []HelmRelease{{Name: "ingress-nginx", Namespace: "ingress", ManifestAPIs: []APIUsage{usage()}}},
+		AddOns:               []AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"ingress"}}, {ID: "x"}},
+		Nodes:                []NodeInfo{{Name: "ip-10-0-0-1.ec2.internal"}},
+		Namespaces:           []NamespaceInfo{{Name: "team-a", Team: "Payments_Team.1"}, {Name: "kube-system"}},
+		CRDs:                 []CRD{{Group: "example.com", Kind: "Widget", Usage: []APIUsage{usage()}}},
 	}
 }
 
@@ -68,6 +69,7 @@ func TestValidateIdentifiersRefusesInvalid(t *testing.T) {
 		{"object name ..", func(inv *Inventory) { inv.APIUsage[0].Objects[0].Name = ".." }, "apiUsage[0].objects[0].name"},
 		{"object name with %", func(inv *Inventory) { inv.APIUsage[0].Objects[0].Name = "a%2f" }, "apiUsage[0].objects[0].name"},
 		{"object name too long", func(inv *Inventory) { inv.APIUsage[0].Objects[0].Name = strings.Repeat("n", 254) }, "apiUsage[0].objects[0].name"},
+		{"authorship unknown object", func(inv *Inventory) { inv.APIAuthorshipUnknown[0].Objects[0].Name = "a/b" }, "apiAuthorshipUnknown[0].objects[0].name"},
 		{"helm release name", func(inv *Inventory) { inv.HelmReleases[0].Name = "Ingress" }, "helmReleases[0].name"},
 		{"helm release namespace", func(inv *Inventory) { inv.HelmReleases[0].Namespace = "<x>" }, "helmReleases[0].namespace"},
 		{"helm manifest object", func(inv *Inventory) {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -215,6 +216,11 @@ func stringsToInterfaces(ss []string) []interface{} {
 	return out
 }
 
+// ErrStatusErrorNotCleared is what WriteStatus returns, wrapped, when the
+// status was written but the StatusErrorAnnotation of an earlier failure
+// could not be removed: the status is current, only the marker outlived it.
+var ErrStatusErrorNotCleared = errors.New("status written, marker not cleared")
+
 // WriteStatus replaces the status subresource, retrying on conflict with a
 // fresh read each attempt. st.ObservedGeneration should be the generation
 // whose spec was evaluated (from ReadSpec or SetTargets), so a spec edited
@@ -225,11 +231,13 @@ func stringsToInterfaces(ss []string) []interface{} {
 // one place every source of notes passes.
 func WriteStatus(ctx context.Context, dyn dynamic.Interface, name string, st Status) error {
 	st.NotAssessed = boundNotAssessed(st.NotAssessed)
+	marked := false
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		obj, gerr := dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
 		if gerr != nil {
 			return gerr
 		}
+		_, marked = obj.GetAnnotations()[StatusErrorAnnotation]
 		out := st
 		if out.ObservedGeneration == 0 {
 			out.ObservedGeneration = obj.GetGeneration()
@@ -249,7 +257,48 @@ func WriteStatus(ctx context.Context, dyn dynamic.Interface, name string, st Sta
 	if err != nil {
 		return fmt.Errorf("update clusterreadiness %q status: %w", name, err)
 	}
+	if marked {
+		// The status is current again: drop the marker of an earlier
+		// failure. A failure here is retried by the next tick's write.
+		if err := patchStatusError(ctx, dyn, name, nil); err != nil {
+			return fmt.Errorf("clear clusterreadiness %q %s annotation: %w: %w", name, StatusErrorAnnotation, ErrStatusErrorNotCleared, err)
+		}
+	}
 	return nil
+}
+
+// maxStatusErrorReason bounds the reason in a StatusErrorAnnotation value:
+// an apiserver's error can carry a whole request.
+const maxStatusErrorReason = 240
+
+// MarkStatusError annotates the ClusterReadiness with when its status write
+// failed and why (StatusErrorAnnotation), by a merge patch of the object
+// itself: an agent that lost only the status subresource can still say so.
+// A role that lost patch on the object too cannot, and gets the error; its
+// /readyz and metrics are then the only signals. cause is cut to one short
+// line; at is the failure's time.
+func MarkStatusError(ctx context.Context, dyn dynamic.Interface, name string, cause error, at time.Time) error {
+	reason := strings.Join(strings.Fields(cause.Error()), " ")
+	if r := []rune(reason); len(r) > maxStatusErrorReason {
+		reason = string(r[:maxStatusErrorReason]) + "…"
+	}
+	value := at.UTC().Format(time.RFC3339) + " " + reason
+	if err := patchStatusError(ctx, dyn, name, &value); err != nil {
+		return fmt.Errorf("mark clusterreadiness %q with %s: %w", name, StatusErrorAnnotation, err)
+	}
+	return nil
+}
+
+// patchStatusError sets the annotation to *value, or removes it for nil.
+func patchStatusError(ctx context.Context, dyn dynamic.Interface, name string, value *string) error {
+	body, err := json.Marshal(map[string]interface{}{
+		"metadata": map[string]interface{}{"annotations": map[string]interface{}{StatusErrorAnnotation: value}},
+	})
+	if err != nil {
+		return fmt.Errorf("encode annotation patch: %w", err)
+	}
+	_, err = dyn.Resource(GVR()).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{})
+	return err
 }
 
 // storedConditions returns the object's current status.conditions. An

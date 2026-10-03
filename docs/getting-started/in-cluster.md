@@ -67,10 +67,21 @@ kubectl delete ucr <old-name>
 
 The status is only as fresh as the agent's last successful write. An agent
 that can no longer write it (its role narrowed, for example) leaves the
-last verdict and `Ready` condition in place; its own `/readyz`, the
+last verdict and `Ready` condition in place, but marks the object: the
+annotation `upgradescope.dev/status-error` holds the time of the failed
+write and its reason, and the next successful write removes it.
+
+```sh
+kubectl get clusterreadiness cluster -o jsonpath='{.metadata.annotations.upgradescope\.dev/status-error}'
+```
+
+Treat a verdict on an object carrying it as stale. If the role lost `patch`
+on the object as well, nothing can be marked: the agent's `/readyz`, the
 `upgradescope_agent_last_success_timestamp_seconds` metric and the chart's
-`UpgradescopeAgentNotTicking` alert report the failure
-([#137](https://github.com/abd-ulbasit/upgradescope/issues/137)).
+`UpgradescopeAgentNotTicking` alert report the failure. Once at least 3
+ticks in a row have failed and the last success is older than the alert's
+threshold, the agent also stops exporting its verdict, score, findings and
+capability gauges (see [Observability](../observability.md)).
 
 ## Choose the targets
 

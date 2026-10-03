@@ -20,6 +20,11 @@ const (
 	CapCRDs Capability = "crds"
 )
 
+// SkippedPods is the addons capability's Skipped entry for a cluster-wide
+// pod list that failed: pod images and labels find an add-on whatever
+// installed it, so the engine keeps that gap required.
+const SkippedPods = "v1 pods"
+
 type CapabilityStatus struct {
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"` // e.g. `nodes list forbidden`
@@ -48,7 +53,8 @@ type CapabilityStatus struct {
 	//     on a vendor image of another name (OKE's oke-public-kube-proxy)
 	//     is named in Reason only, so Skipped may be empty;
 	//   - addons: resources not read for add-on evidence,
-	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses");
+	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses",
+	//     "v1 pods", SkippedPods);
 	//   - crds: the custom resources not checked for use of a deprecated
 	//     or unserved CRD version, "group/version Kind"
 	//     ("cert-manager.io/v1alpha2 Certificate").
@@ -91,6 +97,16 @@ type Inventory struct {
 	UnrecognizedImagesOmitted int `json:"unrecognizedImagesOmitted,omitempty"`
 
 	CRDs []CRD `json:"crds,omitempty"` // sorted by Group, then Kind
+
+	// APIAuthorshipUnknown holds the objects of a flagged kind that nothing
+	// can be attributed to (live clusters only): no managedFields entry
+	// outside the status subresource and the control plane's managers, and
+	// no usable last-applied annotation, as an object created through a
+	// deprecated version with an empty spec has. Shaped like APIUsage, once
+	// per kind (under one of its flagged versions). The object may as well
+	// have been created through the replacement, so the engine reports it as
+	// info and never as use of the deprecated API.
+	APIAuthorshipUnknown []APIUsage `json:"apiAuthorshipUnknown,omitempty"`
 }
 
 // CRD is one CustomResourceDefinition (apiextensions.k8s.io/v1): the

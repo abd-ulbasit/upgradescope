@@ -294,7 +294,7 @@ func collectorCalls(t *testing.T) []rbacv1.PolicyRule {
 		// with a deprecated or unserved version.
 		res("apiextensions.k8s.io", "customresourcedefinitions", "list"),
 		res("upgradescope.dev", "clusterreadinesses", "get", "create"),
-		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets
+		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets, and the status-error annotation
 		named(res("upgradescope.dev", "clusterreadinesses/status", "get", "update"), "cluster"),
 	}
 	for g, rs := range kbGroupResources(t) {

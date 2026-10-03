@@ -47,6 +47,9 @@ func TestValidateLimitsRefusesBeyond(t *testing.T) {
 		{"a manifest group/version/kind twice", func(inv *Inventory) {
 			inv.HelmReleases[0].ManifestAPIs = append(inv.HelmReleases[0].ManifestAPIs, inv.HelmReleases[0].ManifestAPIs[0])
 		}, "helmReleases[0].manifestApis[1]"},
+		{"an authorship-unknown group/version/kind twice", func(inv *Inventory) {
+			inv.APIAuthorshipUnknown = append(inv.APIAuthorshipUnknown, inv.APIAuthorshipUnknown[0])
+		}, "apiAuthorshipUnknown[1]"},
 		{"a CRD version twice", func(inv *Inventory) { inv.CRDs[0].Usage = append(inv.CRDs[0].Usage, inv.CRDs[0].Usage[0]) }, "crds[0].usage[1]"},
 		{"a manager over 128 bytes", func(inv *Inventory) { inv.APIUsage[0].Objects[1].Manager = strings.Repeat("'", 129) }, "apiUsage[0].objects[1].manager"},
 		{"a manager with a control character", func(inv *Inventory) { inv.CRDs[0].Usage[0].Objects[0].Manager = "m\x01" }, "crds[0].usage[0].objects[0].manager"},

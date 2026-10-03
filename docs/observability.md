@@ -102,7 +102,21 @@ categories, capabilities, route patterns, and on the server cluster names
 
 Score, verdict, findings and capability gauges describe the last
 **successful** tick. A failed tick leaves them as they were, and
-`upgradescope_agent_last_success_timestamp_seconds` shows how old they are.
+`upgradescope_agent_last_success_timestamp_seconds` shows how old they are,
+until the verdict is too old to stand as current: at least 3 ticks in a row
+have failed **and** the last success is more than `2 × interval + 12m` old.
+The agent then stops exporting those gauges (the ClusterReadiness it could
+not update carries the `upgradescope.dev/status-error` annotation). The
+first successful tick brings them back. An alert on `blocked` or `unknown`
+therefore resolves while the agent is failing; the
+`UpgradescopeAgentNotTicking` alert is the one that fires. It fires
+`2 × interval + 10m` after the last success (its condition plus its `for`),
+and the gauges are withdrawn 2m after that, for scrape and rule-evaluation
+lag, so a firing `UpgradescopeUpgradeBlocked` never resolves with nothing
+else firing. The age bound is what matters below a 10m interval (at 1m the
+gauges go at about 14m, not at the third failed tick); from 10m up the 3
+failed ticks come about as late, so at the default 10m interval the gauges
+go at the third or fourth failed tick.
 A target removed from `spec.targets` drops its series at the next tick.
 
 Go runtime and process metrics (`go_*`, `process_*`) are included.

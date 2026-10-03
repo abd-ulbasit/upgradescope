@@ -21,6 +21,11 @@ const (
 	Singular = "clusterreadiness"
 	// DefaultName is the conventional singleton object name.
 	DefaultName = "cluster"
+	// StatusErrorAnnotation marks a ClusterReadiness whose status the agent
+	// failed to write, so the verdict it still shows is not read as
+	// current: its value is the time of the failure (RFC 3339, UTC) and a
+	// short reason. The next successful status write removes it.
+	StatusErrorAnnotation = Group + "/status-error"
 )
 
 // GVR is the dynamic-client resource identifier for ClusterReadiness.

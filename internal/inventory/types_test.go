@@ -72,7 +72,7 @@ func TestInventoryOmitEmpty(t *testing.T) {
 	}
 
 	absent := []string{
-		`"serverVersion"`, `"apiUsage"`, `"deprecatedCalls"`, `"helmReleases"`,
+		`"serverVersion"`, `"apiUsage"`, `"apiAuthorshipUnknown"`, `"deprecatedCalls"`, `"helmReleases"`,
 		`"addOns"`, `"nodes"`, `"controlPlane"`, `"namespaces"`, `"unrecognizedImages"`, `"crds"`,
 	}
 	for _, key := range absent {

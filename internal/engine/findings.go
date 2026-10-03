@@ -121,6 +121,9 @@ type SuppressedFinding struct {
 //   - addons, for cluster inventories while the KB's add-on registry is
 //     not empty: the EOL add-on check is a headline check, and files mode
 //     has no running add-ons to detect;
+//   - a partial addons, for cluster inventories, when Skipped names the pods
+//     (inventory.SkippedPods): only Helm releases and IngressClasses were
+//     read, and an add-on installed any other way goes undetected;
 //   - a partial api-usage, when Skipped names an API the KB removes at or
 //     before the target (an unchecked object of it would be a blocker);
 //   - a partial versions, for cluster inventories, when Skipped names a

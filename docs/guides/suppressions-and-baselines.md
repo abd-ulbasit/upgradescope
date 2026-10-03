@@ -244,6 +244,7 @@ becomes "2 objects"). Examples:
 | Finding | Key |
 |---|---|
 | Removed or deprecated API | `removed-api/networking.k8s.io/v1beta1/Ingress`, `deprecated-api/core/v1/ComponentStatus` (the core group is `core`) |
+| Objects of a flagged API nothing can be attributed to | `deprecated-api/<group>/<version>/<kind>/authorship-unknown` (info) |
 | Deprecated API still requested | `deprecated-api-in-use/<group>/<version>/<resource>` |
 | EOL add-on | `eol-addon/ingress-nginx`, or `eol-addon/<id>/<cycle>` for a release line |
 | Version skew | `version-skew/kubelet-post-upgrade`, `version-skew/<component>-newer` or `-behind`, `version-skew/upgrade-path` |

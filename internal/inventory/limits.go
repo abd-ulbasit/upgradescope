@@ -57,13 +57,16 @@ func (e *LimitError) Error() string { return e.Field + ": " + e.Problem }
 //     manager at most MaxManagerBytes of printable characters, as the
 //     apiserver requires of a managedFields manager;
 //   - an API usage entry lists at most MaxObjectRefs objects (collectors
-//     count the rest in objectsOmitted), and a list of them (apiUsage, a
-//     Helm release's manifestApis, a CRD's usage) names each
+//     count the rest in objectsOmitted), and a list of them (apiUsage,
+//     apiAuthorshipUnknown, a Helm release's manifestApis, a CRD's usage) names each
 //     group/version/kind once, as every collector counts them;
 //   - unrecognizedImages lists at most MaxUnrecognizedImages, and
 //     capabilities at most MaxCapabilities.
 func (inv Inventory) ValidateLimits() error {
 	if err := validateUsages(func() string { return "apiUsage" }, inv.APIUsage); err != nil {
+		return err
+	}
+	if err := validateUsages(func() string { return "apiAuthorshipUnknown" }, inv.APIAuthorshipUnknown); err != nil {
 		return err
 	}
 	for i, r := range inv.HelmReleases {
@@ -138,6 +141,7 @@ func (inv *Inventory) CutFreeText() bool {
 		}
 	}
 	refs(inv.APIUsage)
+	refs(inv.APIAuthorshipUnknown)
 	for i := range inv.HelmReleases {
 		refs(inv.HelmReleases[i].ManifestAPIs)
 	}
