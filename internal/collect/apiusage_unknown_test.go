@@ -127,20 +127,31 @@ func TestCollectAPIUsageFieldlessObjectsAreAuthorshipUnknown(t *testing.T) {
 func TestCollectAPIUsageAuthorshipUnknownOncePerKind(t *testing.T) {
 	versions := []string{"resource.k8s.io/v1", "resource.k8s.io/v1beta1", "resource.k8s.io/v1beta2"}
 	deviceClasses := metav1.APIResource{Name: "deviceclasses", Kind: "DeviceClass", Verbs: metav1.Verbs{"list"}}
-	disc := fakeDiscovery(resources(versions[0], deviceClasses), resources(versions[1], deviceClasses), resources(versions[2], deviceClasses))
 	k := loadKB(t)
 
-	var inv inventory.Inventory
-	objs := servedAt("DeviceClass", versions,
-		obj{name: "b-empty"},
-		obj{name: "c-real", managed: []metav1.ManagedFieldsEntry{wrote("kubectl", versions[2])}})
-	if _, err := collectAPIUsage(context.Background(), disc, metaClient(objs), k.APILifecycle, &inv); err != nil {
-		t.Fatal(err)
-	}
-	if got := inv.APIAuthorshipUnknown; len(got) != 1 || got[0].Kind != "DeviceClass" || got[0].Count != 1 || len(got[0].Objects) != 1 || got[0].Objects[0].Name != "b-empty" {
-		t.Fatalf("authorship unknown = %+v, want one DeviceClass entry naming b-empty", got)
-	}
-	if got := inv.APIUsage; len(got) != 1 || got[0].Version != "v1beta2" || got[0].Objects[0].Name != "c-real" {
-		t.Errorf("usage = %+v, want c-real attributed to v1beta2 only", got)
+	// The entry (and so the finding key a baseline or ignore rule matches)
+	// names the lowest flagged version whichever order discovery lists them.
+	for name, order := range map[string][]int{"discovery ascending": {0, 1, 2}, "discovery descending": {2, 1, 0}} {
+		t.Run(name, func(t *testing.T) {
+			var groups []*metav1.APIResourceList
+			for _, i := range order {
+				groups = append(groups, resources(versions[i], deviceClasses))
+			}
+			disc := fakeDiscovery(groups...)
+
+			var inv inventory.Inventory
+			objs := servedAt("DeviceClass", versions,
+				obj{name: "b-empty"},
+				obj{name: "c-real", managed: []metav1.ManagedFieldsEntry{wrote("kubectl", versions[2])}})
+			if _, err := collectAPIUsage(context.Background(), disc, metaClient(objs), k.APILifecycle, &inv); err != nil {
+				t.Fatal(err)
+			}
+			if got := inv.APIAuthorshipUnknown; len(got) != 1 || got[0].Kind != "DeviceClass" || got[0].Version != "v1beta1" || got[0].Count != 1 || len(got[0].Objects) != 1 || got[0].Objects[0].Name != "b-empty" {
+				t.Fatalf("authorship unknown = %+v, want one DeviceClass v1beta1 entry naming b-empty", got)
+			}
+			if got := inv.APIUsage; len(got) != 1 || got[0].Version != "v1beta2" || got[0].Objects[0].Name != "c-real" {
+				t.Errorf("usage = %+v, want c-real attributed to v1beta2 only", got)
+			}
+		})
 	}
 }

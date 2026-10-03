@@ -397,9 +397,16 @@ func replacementList(resource string, r *kb.GVK, byResource map[schema.GroupReso
 func listUsage(ctx context.Context, meta metadata.Interface, gvr schema.GroupVersionResource, targets []usageTarget) error {
 	opts := metav1.ListOptions{Limit: listPageSize}
 	// An object nothing attributes is stored the same through every served
-	// version, so it is recorded once, on the first target that looks at
-	// authors, not once per flagged version.
-	unknownAt := slices.IndexFunc(targets, func(t usageTarget) bool { return !t.allObjects })
+	// version, so it is recorded once, on the lowest target that looks at
+	// authors (not the first in discovery order, which the apiserver does
+	// not promise: the finding's key would follow it), not once per
+	// flagged version.
+	unknownAt := -1
+	for j, t := range targets {
+		if !t.allObjects && (unknownAt < 0 || version.CompareKubeAwareVersionStrings(t.usage.Version, targets[unknownAt].usage.Version) < 0) {
+			unknownAt = j
+		}
+	}
 	for {
 		page, err := meta.Resource(gvr).List(ctx, opts)
 		if err != nil {
