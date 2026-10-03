@@ -60,6 +60,7 @@ type scanOptions struct {
 	kubeconfig  string
 	kubecontext string
 	filesDir    string
+	registryDir string // --registry-dir: extra add-on registry entries
 	output      string
 	teamLabel   string
 	failOn      string
@@ -93,10 +94,13 @@ type scanOptions struct {
 	ignore ignoreConfig
 }
 
+// registryDirUsage is the help of --registry-dir on scan, agent and serve.
+const registryDirUsage = "extra add-on registry entries: one <id>.yaml file or a directory of them, in the schema of registry/CONTRIBUTING.md and validated like the embedded entries; an entry with an embedded id replaces it"
+
 // runScan is the real I/O pipeline: kb.Load → collect (cluster or files) →
 // engine.Evaluate. A package var so tests can inject Reports without a cluster.
 var runScan = func(opts scanOptions) (engine.Report, error) {
-	kbData, err := kb.Load()
+	kbData, err := kb.LoadWithRegistry(opts.registryDir)
 	if err != nil {
 		return engine.Report{}, fmt.Errorf("load knowledge base: %w", err)
 	}
@@ -381,6 +385,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
 	cmd.Flags().DurationVar(&opts.requestTimeout, "request-timeout", defaultRequestTimeout, "give up on a single API request after this long (0 = no per-request limit)")
 	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
+	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
 	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown|junit|gitlab-codequality")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never")
