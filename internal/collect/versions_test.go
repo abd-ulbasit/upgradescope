@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -66,9 +67,16 @@ func cpPod(name string, labels map[string]string, image string) *corev1.Pod {
 	}
 }
 
+// testNode is a listed node: with none, the versions capability is partial
+// (#174), which tests of the control-plane pods are not about.
+func testNode() *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.34.2"}}}
+}
+
 func TestCollectVersionsControlPlane(t *testing.T) {
 	cs := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		testNode(),
 		// kubeadm static pods carry component=<name> labels.
 		cpPod("kube-apiserver-cp1", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2"),
 		cpPod("kube-apiserver-cp2", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2"), // duplicate (component, version) → deduped
@@ -124,6 +132,7 @@ func TestCollectVersionsControlPlane(t *testing.T) {
 func TestCollectVersionsUnreadableControlPlaneVersionIsPartial(t *testing.T) {
 	cs := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		testNode(),
 		cpPod("kube-apiserver-cp1", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2"),
 		cpPod("kube-scheduler-cp2", nil, "registry.k8s.io/kube-scheduler:latest"),
 		cpPod("kube-scheduler-cp1", map[string]string{"component": "kube-scheduler"}, "registry.k8s.io/kube-scheduler@sha256:4f8bd1ec8bb2e6a5fcd4b4bbc6e4d5b0fdcb7f0f8a1c8c3f63b5f7f2b1a3c9d1"),
@@ -166,6 +175,7 @@ func TestCollectVersionsRKE2HardenedKubernetes(t *testing.T) {
 	const image = "docker.io/rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101"
 	cs := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		testNode(),
 		cpPod("kube-apiserver-cp1", map[string]string{"component": "kube-apiserver"}, image),
 		cpPod("kube-controller-manager-cp1", map[string]string{"component": "kube-controller-manager"}, image),
 		cpPod("kube-scheduler-cp1", map[string]string{"component": "kube-scheduler"}, image),
@@ -243,6 +253,7 @@ func TestCollectVersionsManagedClusterEmptyControlPlane(t *testing.T) {
 	// no error.
 	cs := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		testNode(),
 		cpPod("coredns-12345", map[string]string{"k8s-app": "kube-dns"}, "registry.k8s.io/coredns/coredns:v1.11.1"),
 	)
 	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
@@ -354,5 +365,106 @@ func TestCollectVersionsFollowsListPagination(t *testing.T) {
 	}
 	if len(inv.Nodes) != 2 || len(inv.Namespaces) != 2 || len(inv.ControlPlane) != 2 {
 		t.Errorf("nodes %+v, namespaces %+v, control plane %+v: want 2 of each (items from every page count)", inv.Nodes, inv.Namespaces, inv.ControlPlane)
+	}
+}
+
+// cpPodOn is cpPod scheduled on node.
+func cpPodOn(node, name string, labels map[string]string, image string) *corev1.Pod {
+	p := cpPod(name, labels, image)
+	p.Spec.NodeName = node
+	return p
+}
+
+// A kube-proxy is recorded with the node it runs on and is not deduped
+// across nodes, so the engine can pair it with that node's kubelet (#148).
+// Every other component keeps the (Component, Version) dedupe, whatever
+// node its pod is on.
+func TestCollectVersionsKubeProxyRecordsNodeNotDeduped(t *testing.T) {
+	proxy := map[string]string{"k8s-app": "kube-proxy"}
+	cs := kubefake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.34.2"}}},
+		cpPodOn("node-b", "kube-proxy-bbbbb", proxy, "registry.k8s.io/kube-proxy:v1.33.0"),
+		cpPodOn("node-a", "kube-proxy-aaaaa", proxy, "registry.k8s.io/kube-proxy:v1.33.0"),
+		cpPodOn("node-c", "kube-proxy-ccccc", proxy, "registry.k8s.io/kube-proxy:v1.34.2"),
+		cpPod("kube-proxy-unscheduled", proxy, "registry.k8s.io/kube-proxy:v1.34.2"), // no node yet
+		cpPodOn("node-a", "kube-apiserver-a", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2"),
+		cpPodOn("node-b", "kube-apiserver-b", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2"),
+	)
+	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+	disc.FakedServerVersion = &version.Info{GitVersion: "v1.34.2"}
+
+	var inv inventory.Inventory
+	if err := collectVersions(context.Background(), disc, cs, "team", &inv); err != nil {
+		t.Fatal(err)
+	}
+	want := []inventory.ComponentVersion{
+		{Component: "kube-apiserver", Version: "v1.34.2"},
+		{Component: "kube-proxy", Version: "v1.33.0", Node: "node-a"},
+		{Component: "kube-proxy", Version: "v1.33.0", Node: "node-b"},
+		{Component: "kube-proxy", Version: "v1.34.2"},
+		{Component: "kube-proxy", Version: "v1.34.2", Node: "node-c"},
+	}
+	if !reflect.DeepEqual(inv.ControlPlane, want) {
+		t.Errorf("ControlPlane =\n%+v\nwant\n%+v", inv.ControlPlane, want)
+	}
+}
+
+// No Node listed means the kubelet-skew and node-runtime checks had
+// nothing to check: the versions capability is partial, naming them, and
+// that gap is required (a forbidden Node list makes versions unavailable,
+// which is required for a cluster), so the verdict cannot be ready on it
+// (#174). What was read is still recorded.
+func TestCollectVersionsNoNodesIsPartial(t *testing.T) {
+	cs := kubefake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		cpPod("kube-apiserver-cp1", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2"),
+	)
+	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+	disc.FakedServerVersion = &version.Info{GitVersion: "v1.34.2"}
+
+	var inv inventory.Inventory
+	err := collectVersions(context.Background(), disc, cs, "team", &inv)
+	var pe partialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want a partialError", err)
+	}
+	const wantMsg = "no nodes listed: kubelet skew and node runtimes not assessed"
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"nodes"}) || pe.msg != wantMsg {
+		t.Errorf("partial = %v, skipped = %q, reason = %q; want incomplete, [nodes], %q", pe.incomplete, pe.skipped, pe.msg, wantMsg)
+	}
+	if inv.ServerVersion != "v1.34.2" || len(inv.ControlPlane) != 1 {
+		t.Errorf("what was read must persist: %+v", inv)
+	}
+
+	got := Collect(context.Background(), Clients{Kube: cs, Discovery: disc}, kb.KB{}, Options{}).Capabilities[inventory.CapVersions]
+	if want := (inventory.CapabilityStatus{Available: true, Reason: wantMsg, Partial: true, Skipped: []string{"nodes"}}); !reflect.DeepEqual(got, want) {
+		t.Errorf("versions capability = %+v, want %+v", got, want)
+	}
+}
+
+// An empty node list and an unreadable control-plane pod are both
+// reported: one reason, one Skipped listing both.
+func TestCollectVersionsNoNodesAndUnreadablePodReportBoth(t *testing.T) {
+	cs := kubefake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		cpPod("kube-scheduler-cp1", map[string]string{"component": "kube-scheduler"}, "registry.k8s.io/kube-scheduler:latest"),
+	)
+	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+	disc.FakedServerVersion = &version.Info{GitVersion: "v1.34.2"}
+
+	var inv inventory.Inventory
+	err := collectVersions(context.Background(), disc, cs, "team", &inv)
+	var pe partialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want a partialError", err)
+	}
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"kube-scheduler", "nodes"}) {
+		t.Errorf("partial = %v, skipped = %q, want incomplete, [kube-scheduler nodes]", pe.incomplete, pe.skipped)
+	}
+	for _, part := range []string{"version not read from 1 control-plane pod(s) (kube-scheduler)", "no nodes listed: kubelet skew and node runtimes not assessed"} {
+		if !strings.Contains(pe.msg, part) {
+			t.Errorf("reason %q lacks %q", pe.msg, part)
+		}
 	}
 }

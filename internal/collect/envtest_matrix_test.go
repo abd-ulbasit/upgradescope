@@ -269,8 +269,16 @@ func TestEnvtestMatrix(t *testing.T) {
 				t.Errorf("scan %d: %s finding on %s holding only GA objects: %s: %s", n, f.Severity, server, f.Title, f.Detail)
 			}
 		}
-		if report.Verdict != engine.VerdictReady || !report.Ready {
-			t.Errorf("scan %d: verdict = %s, ready = %v, score %d on %s holding only GA objects, want ready; findings: %s", n, report.Verdict, report.Ready, report.Score, server, findingKeys(report))
+		// There is no node, so kubelet skew was not assessed (#174): the
+		// verdict is unknown, on that one required gap and no other,
+		// never ready.
+		if report.Verdict != engine.VerdictUnknown || report.Ready {
+			t.Errorf("scan %d: verdict = %s, ready = %v, score %d on %s holding only GA objects, want unknown: no node to judge; findings: %s", n, report.Verdict, report.Ready, report.Score, server, findingKeys(report))
+		}
+		for _, g := range report.NotAssessed {
+			if g.Required != (g.Capability == inventory.CapVersions) {
+				t.Errorf("scan %d: not assessed %s required = %v on %s, want only versions required", n, g.Capability, g.Required, server)
+			}
 		}
 	}
 
@@ -288,6 +296,11 @@ func TestEnvtestMatrix(t *testing.T) {
 			if st := inv.Capabilities[c]; !st.Available {
 				t.Errorf("capability %s unavailable on a bare apiserver: %s", c, st.Reason)
 			}
+		}
+		// No node is listed, so the kubelet-skew and node-runtime checks
+		// had nothing to check: versions is partial for that, never clean.
+		if st := inv.Capabilities[inventory.CapVersions]; !st.Partial || st.Reason != noNodesReason || !slices.Equal(st.Skipped, []string{"nodes"}) {
+			t.Errorf("versions = %+v on a bare apiserver, want partial, skipping nodes, reason %q", st, noNodesReason)
 		}
 		for c, st := range inv.Capabilities {
 			if st.Available && !st.Partial {
