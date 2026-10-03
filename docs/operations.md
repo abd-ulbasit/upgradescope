@@ -400,6 +400,21 @@ per-cluster reads waiting, and some of them get `503`. A read token
 limits both to token holders; the same holds for pushes and the ingest
 tokens.
 
+## CPU and fleet read latency
+
+The bounds above are on memory; fleet read latency is bound by CPU. `make
+bench-server` (500 clusters of ~35 KiB inventories on SQLite, 10
+concurrent `/fleet` readers) passes its 1 s p95 with at least one full
+core of an Apple M1 Pro-class CPU: in October 2026, p95 0.33 s
+unconstrained (8 cores) and 0.56 s with `GOMAXPROCS=1`. It does not hold
+at the chart's default `server.resources.limits.cpu` of 500m: the
+red-team round 2 measured p95 3.9 s at `--cpus 0.5` on a 2017 dual-core
+i3, about twice its single-core figure on the same host, which would put
+even an M1 Pro near 1.2 s (#196). The heap stays far below its 512 MiB
+bound in every case (7 to 21 MiB). For a fleet of hundreds of clusters
+read by several dashboards at once, give the server a CPU limit of at
+least one core.
+
 ## What a push is judged as
 
 - **Stored as sent.** A snapshot keeps the inventory bytes the agent pushed,
