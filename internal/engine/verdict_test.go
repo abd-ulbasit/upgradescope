@@ -415,7 +415,13 @@ func TestEvaluateUnreportedRequiredCapabilities(t *testing.T) {
 			[]CapabilityGap{unreported(inventory.CapVersions)}},
 		{"optional capabilities unreported stay ready", without(inventory.CapHelm, inventory.CapDeprecatedCalls), withRegistry, VerdictReady, nil},
 		{"a blocker it does report still blocks", blocked, withRegistry, VerdictBlocked, all},
-		{"files mode is judged as before", with(nil, inventory.SourceFiles), withRegistry, VerdictReady, []CapabilityGap{crds}},
+		// Files collectors since v0.1.0 report api-usage, which a files
+		// inventory is judged on as well; it needs no versions or add-ons.
+		{"files mode requires api-usage", with(nil, inventory.SourceFiles), withRegistry, VerdictUnknown,
+			[]CapabilityGap{unreported(inventory.CapAPIUsage), crds}},
+		{"files mode reporting api-usage is judged as before",
+			with(map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}}, inventory.SourceFiles),
+			withRegistry, VerdictReady, []CapabilityGap{crds}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
