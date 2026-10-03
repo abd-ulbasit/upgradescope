@@ -24,15 +24,19 @@ finding is:
 | `extended` | from the day standard support ends, until the provider's extended window ends | **blocker** |
 | `ended` | extended support has ended, or the provider offered none for the minor | **blocker** |
 
+For EKS 1.34 on 2026-10-15, `scan` prints (the detail is one line in the
+terminal and is wrapped here):
+
 ```text
 [support-lifecycle] Kubernetes 1.34 leaves Amazon EKS standard support on 2026-12-02
-    Amazon EKS ends standard support for Kubernetes 1.34 on 2026-12-02; the cluster
-    then moves to extended support until 2027-12-02, when Amazon EKS stops
-    supporting it. Extended support costs $4,380 more per cluster per year at list
-    price ($0.60 against $0.10 per cluster-hour, over 8,760 hours; list price as
-    of 2026-10-03, not your bill). Extended support is on by default and billed
-    per cluster-hour.
-    fix: Upgrade the control plane, one minor at a time, to a version in standard support: 1.36, 1.35.
+    Amazon EKS ends standard support for Kubernetes 1.34 on 2026-12-02; extended
+    support then runs until 2027-12-02, when Amazon EKS stops supporting it.
+    Extended support costs $4,380 more per cluster per year at list price ($0.60
+    against $0.10 per cluster-hour, over 8,760 hours; list price as of
+    2026-10-03, not your bill). Extended support is on by default and billed per
+    cluster-hour; a cluster whose upgrade policy is STANDARD is upgraded
+    automatically at the end of standard support instead.
+    fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.35; the newest known is 1.36.
 ```
 
 On GKE and AKS the same finding is worded conditionally, because the
@@ -45,8 +49,10 @@ For AKS 1.33 on 2026-10-04:
     2026-07-31; extended support, which applies only if Long Term Support is
     enabled, runs until 2027-07-31; upgradescope cannot see whether this
     cluster is enrolled. AKS has no automatic extended support. Past community
-    support a cluster is in platform support (...) unless Long Term Support is
-    enabled, which needs the Premium tier.
+    support a cluster is in platform support (Azure and AKS platform issues
+    only, no Kubernetes fixes) unless Long Term Support is enabled, which needs
+    the Premium tier.
+    fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.34; the newest known is 1.36.
 ```
 
 and on a GKE cluster, "extended support, which applies only if the cluster
