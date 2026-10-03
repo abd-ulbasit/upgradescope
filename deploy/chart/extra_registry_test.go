@@ -52,17 +52,18 @@ func TestAgentExtraRegistry(t *testing.T) {
 	var mounted bool
 	for _, m := range mounts {
 		mm := m.(map[string]any)
-		mounted = mounted || mm["mountPath"] == "/etc/upgradescope/registry" && mm["readOnly"] == true
+		mounted = mounted || mm["name"] == "extra-registry" && mm["mountPath"] == "/etc/upgradescope/registry" && mm["readOnly"] == true
 	}
 	if !mounted {
-		t.Errorf("volumeMounts = %v, want the ConfigMap mounted read-only at /etc/upgradescope/registry", mounts)
+		t.Errorf("volumeMounts = %v, want the ConfigMap volume extra-registry mounted read-only at /etc/upgradescope/registry", mounts)
 	}
 	d := find(objs, "Deployment", "upgradescope-agent")
 	vols, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "volumes")
 	var hasVolume bool
 	for _, v := range vols {
 		name, _, _ := unstructured.NestedString(v.(map[string]any), "configMap", "name")
-		hasVolume = hasVolume || name == "upgradescope-agent-registry"
+		volName, _ := v.(map[string]any)["name"].(string)
+		hasVolume = hasVolume || name == "upgradescope-agent-registry" && volName == "extra-registry"
 	}
 	if !hasVolume {
 		t.Errorf("volumes = %v, want the registry ConfigMap", vols)
@@ -88,5 +89,35 @@ func TestAgentExtraRegistryKeysMustBeYAMLFiles(t *testing.T) {
 		if out := renderErr(t, "agent.extraRegistry."+strings.ReplaceAll(key, ".", "\\.")+"=x"); out == "" {
 			t.Errorf("key %q rendered, want a schema error", key)
 		}
+	}
+}
+
+// The chart's own volume must not take a name a user is likely to pick: a
+// user volume called "registry" in agent.extraVolumes (a registry CA, a
+// registry credential) would otherwise duplicate it and fail the install.
+func TestAgentExtraRegistryVolumeDoesNotClashWithUserVolumes(t *testing.T) {
+	values := filepath.Join(t.TempDir(), "values.yaml")
+	if err := os.WriteFile(values, []byte(extraRegistryValues+`  extraVolumes:
+    - name: registry
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: registry
+      mountPath: /etc/registry-ca
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objs := render(t, "-f="+values)
+	d := find(objs, "Deployment", "upgradescope-agent")
+	vols, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "volumes")
+	seen := map[string]bool{}
+	for _, v := range vols {
+		name, _ := v.(map[string]any)["name"].(string)
+		if seen[name] {
+			t.Errorf("volume %q is declared twice: %v", name, vols)
+		}
+		seen[name] = true
+	}
+	if !seen["registry"] || !seen["extra-registry"] {
+		t.Errorf("volumes = %v, want the user's registry and the chart's extra-registry", vols)
 	}
 }

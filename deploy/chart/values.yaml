@@ -114,8 +114,10 @@ agent:
   # schema of registry/CONTRIBUTING.md, every claim cited). Rendered into a
   # ConfigMap and passed as --registry-dir; an entry with a built-in id
   # replaces it, and an invalid entry stops the agent at start, naming the
-  # file. Only the agent uses it: a server that judges what the agent
-  # pushes needs the same entries (server.extraArgs and server.extraVolumes).
+  # file. The ConfigMap is mounted as the volume `extra-registry`, a name
+  # to avoid in extraVolumes. Only the agent uses it: a server that judges
+  # what the agent pushes needs the same entries (server.extraArgs and
+  # server.extraVolumes).
   extraRegistry: {}
   # -- Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"].
   extraArgs: []
