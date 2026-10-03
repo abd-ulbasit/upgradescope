@@ -85,3 +85,62 @@ func TestNotesNameTheCRDInstallCommandOnUpgrade(t *testing.T) {
 		t.Errorf("NOTES on a first install name a CRD install command:\n%s", first)
 	}
 }
+
+// What the upgrade block says happens to the agent depends on how the chart
+// runs it: with agent.manageCRD the pod exits at startup and a restart picks
+// the CRD up; without, it stays up unready and the next tick does; with no
+// agent there is no pod to mention. The CRD command shows in all three.
+func TestNotesUpgradeBlockMatchesWhatTheAgentDoes(t *testing.T) {
+	raw, err := os.ReadFile("Chart.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta struct {
+		AppVersion string `json:"appVersion"`
+	}
+	if err := yaml.Unmarshal(raw, &meta); err != nil {
+		t.Fatal(err)
+	}
+	cmd := crd.InstallCommand(meta.AppVersion)
+	for _, tc := range []struct {
+		name    string
+		set     []string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "agent that manages the CRD",
+			want:    []string{"exits at startup", "next restart picks the", "commands below name the new resource"},
+			notWant: []string{"never becomes Ready", "next tick picks the CRD up", "Install it with:"},
+		},
+		{
+			name:    "agent that does not manage the CRD",
+			set:     []string{"--set", "agent.manageCRD=false"},
+			want:    []string{"stays up but never becomes Ready", "every tick fails", "next tick picks the CRD up", "commands below name the new resource"},
+			notWant: []string{"exits at startup", "restart picks", "Install it with:"},
+		},
+		{
+			name:    "no agent",
+			set:     []string{"--set", "agent.enabled=false"},
+			want:    []string{"Install it with:"},
+			notWant: []string{"agent pod", "exits at startup", "restart", "next tick", "never becomes Ready", "commands below name"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := renderNotes(t, append([]string{"--is-upgrade"}, tc.set...)...)
+			if !strings.Contains(out, cmd) {
+				t.Errorf("NOTES do not name %q:\n%s", cmd, out)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(out, w) {
+					t.Errorf("NOTES lack %q:\n%s", w, out)
+				}
+			}
+			for _, w := range tc.notWant {
+				if strings.Contains(out, w) {
+					t.Errorf("NOTES wrongly contain %q:\n%s", w, out)
+				}
+			}
+		})
+	}
+}
