@@ -18,4 +18,4 @@ Fixes #<!-- issue number, or "Refs #N" if this only partly addresses it -->
 - [ ] New behaviour has tests, and any golden diff is intentional and explained above
 - [ ] User-facing changes are documented (README, `deploy/chart/README.md`, flag help)
 - [ ] Registry changes follow `registry/CONTRIBUTING.md`, and `make eol-check` passes
-- [ ] Commit subjects use conventional prefixes (`feat:`, `fix:`, `docs:`, …)
+- [ ] Commit subjects use conventional prefixes (`feat:`, `fix:`, `docs:`, …), and a breaking change has `!` in the subject (`feat!:`)
