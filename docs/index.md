@@ -17,9 +17,8 @@ as a table, JSON, SARIF or Markdown, an exit code for CI, and a
     OCI chart) does not resolve yet. To try what these pages describe,
     build `main`
     (`go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@main`);
-    the chart in a clone needs an image you build from it, since its
-    default image was never published
-    ([#127](https://github.com/abd-ulbasit/upgradescope/issues/127)).
+    the chart in a clone defaults to the image of the release it was cut
+    for, so to run `main` set an image you build from it.
     [Install](operations/install.md) says what v0.1.x lacks.
 
 It is one Apache-2.0 binary with three modes:

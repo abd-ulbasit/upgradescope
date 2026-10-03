@@ -16,10 +16,10 @@ From v0.2.0 the chart is published, signed with cosign, as an OCI artifact:
 
 Before that release, or to run unreleased changes, install from a clone
 of the repository with `deploy/chart` in place of the OCI reference. The
-examples below use the clone path. Until v0.2.0 is published, also set
+examples below use the clone path. A clone's chart defaults to the image
+of the release it was cut for; to run unreleased changes, also set
 `image.repository` and `image.tag` to an image built from the clone
-(`make docker-build`): the chart's default image, `v0.1.1`, was never
-published ([#127](https://github.com/abd-ulbasit/upgradescope/issues/127)).
+(`make docker-build`).
 
 Agent only (CRD-only mode — no server, results via `kubectl`):
 
