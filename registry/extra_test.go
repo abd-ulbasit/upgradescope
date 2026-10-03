@@ -78,6 +78,41 @@ func TestLoadExtra(t *testing.T) {
 			}
 		}
 	})
+	// The path is split into a parent and a base for os.DirFS, and ".." and
+	// "/" have no usable base: the path is made absolute first.
+	t.Run("a relative path, .. and the file system root", func(t *testing.T) {
+		dir := t.TempDir()
+		sub := filepath.Join(dir, "sub")
+		if err := os.Mkdir(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeEntry(t, dir, "my-a.yaml", validYAML("my-a"))
+		t.Chdir(sub)
+		for _, path := range []string{"..", "../sub/..", "../my-a.yaml", "../sub/../my-a.yaml"} {
+			got, err := LoadExtra(path)
+			if err != nil {
+				t.Fatalf("LoadExtra(%q): %v", path, err)
+			}
+			if want := []string{"my-a"}; !slices.Equal(ids(got), want) {
+				t.Errorf("LoadExtra(%q) ids = %v, want %v", path, ids(got), want)
+			}
+		}
+		writeEntry(t, sub, "my-b.yaml", validYAML("my-b"))
+		for _, path := range []string{".", "./my-b.yaml", "my-b.yaml"} {
+			got, err := LoadExtra(path)
+			if err != nil {
+				t.Fatalf("LoadExtra(%q): %v", path, err)
+			}
+			if want := []string{"my-b"}; !slices.Equal(ids(got), want) {
+				t.Errorf("LoadExtra(%q) ids = %v, want %v", path, ids(got), want)
+			}
+		}
+		// "/" is a directory like any other: whatever it holds, the failure
+		// must not be a path error ("invalid argument").
+		if _, err := LoadExtra("/"); err != nil && strings.Contains(err.Error(), "invalid argument") {
+			t.Errorf("LoadExtra(/): %v", err)
+		}
+	})
 	// The same validator as the embedded entries: a file that fails it fails
 	// the load and is named, in a directory and when given as the file.
 	bad := strings.Replace(validYAML("my-a"), "https://vendor.dev/releases", "https://example.com/releases", 1)
