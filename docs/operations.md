@@ -526,13 +526,15 @@ capabilities: API usage findings from api-usage, Helm release findings
 from helm, deprecated callers from deprecated-calls, add-on findings from
 addons, versions (node container runtimes) and helm (an add-on found
 through its Helm chart, whose app version is the install's), skew from
-versions, CRD findings from crds. A blocker or eol-approaching warning of the baseline
-whose capability the pass did not assess is **carried forward**: the pass
-does not resolve it, it is not a `new-blocker` when the capability
-returns, and the evaluation stored for the pass keeps it in its baseline,
-over any number of passes, until one that assessed the capability no
-longer finds it. While a carried blocker remains there is no
-`became-ready`, even if the pass's verdict is ready. A capability is not
+versions, CRD findings from crds. A blocker or eol-approaching warning of
+the baseline that is missing from a pass that did not assess one of its
+capabilities, when the pass that last saw it did assess that capability,
+is **carried forward**: the pass does not resolve it, it is not a
+`new-blocker` when the capability returns, and the evaluation stored for
+the pass keeps it in its baseline, over any number of passes, until one
+that assessed the capability no longer finds it. While a carried blocker
+remains there is no `became-ready`, even if the pass's verdict is ready.
+A capability is not
 assessed for a finding when it is unavailable, or partial over it:
 api-usage and deprecated-calls skipped its API, helm skipped its release
 or a whole storage driver (and, for an add-on finding, helm skipped any
@@ -547,12 +549,27 @@ while api-usage does not see that API, the caller is a blocker of its
 own, and that is not a `new-blocker` either: it is the carried finding,
 seen through `/metrics`.
 
-A capability that stays unassessed holds what it carries for as long as
-it does. Under a custom role that cannot list IngressClasses (addons
-partial), or with a Helm release the agent cannot decode (helm partial),
-an add-on blocker that is fixed stays carried, and there is no
-`became-ready`, until the capability is assessed again; the report and
-the fleet view show the fix at once. The carried findings are stored with
+Only a capability that went away after a finding was seen holds it. A
+finding seen while a capability was not assessed came from the others,
+so that capability's gap cannot hide it later: its absence is as much
+evidence as its presence was. So an install that never assesses a
+capability is notified as if the capability did not exist. With
+`rbac.helmSecrets=false` (helm is never assessed), or with helm always
+partial (a storage driver or a release the agent cannot read), an add-on
+found from its images that is fixed sends `became-ready` (if it was the
+last blocker), and is a `new-blocker` again if it returns; an EOL warning
+that leaves and returns is announced again. The same holds for a custom
+role that never could list IngressClasses (addons partial). With
+`rbac.helmSecrets=false`, an add-on found through its Helm chart alone
+is not in the inventory at all, and is never reported.
+
+A capability that went away holds what it carries for as long as it
+stays away. If `rbac.helmSecrets` is turned off, or a custom role loses
+IngressClasses, after an add-on finding was seen with it, that finding
+stays carried, and there is no `became-ready`, until the capability is
+assessed again; the report and the fleet view show a fix at once. The
+same applies to a Helm release the agent could read before and cannot
+decode now (helm partial). The carried findings are stored with
 the evaluation, within `--max-snapshot-bytes`: if they would take its
 report over, the evaluation is stored without them, and its baseline is
 its own findings, as if nothing were carried.
@@ -566,14 +583,21 @@ deprecated caller missing from a scrape of an apiserver that had been up
 for less than **24 hours** is carried forward, as above. It is resolved by
 the first scrape of an apiserver up for 24 hours that still does not show
 it; an unchanged cluster needs no new snapshot for that, since the agent's
-hourly re-push of the same inventory is enough. So after a restart, a
+force-sync re-push of the same inventory is enough. So after a restart, a
 caller that really went away is resolved, and the cluster announced
-ready, 24 to 25 hours after the restart. The window covers clients that hold a
-watch (they reconnect at once) and clients that call hourly, nightly or
-daily. It is judged from the scrape alone, not from whether the apiserver
-restarted since the baseline: a new cluster's apiserver also starts with
-an empty metric, so in its first 24 hours a caller missing from a scrape
-is held the same way. Limits:
+ready, 24 hours after the restart plus up to one `--force-sync-every`
+(25 hours with the default of `1h`). That figure assumes the agent's and
+the server's clocks agree: the window is measured from the start time
+and collection time the agent reports, and the server compares the
+latter with the time it evaluated the snapshot. The window covers
+clients that hold a watch (they reconnect at once) and clients that call
+hourly, nightly or daily. It is judged from the scrape alone, not from
+whether the apiserver restarted since the baseline, which is broader on
+purpose: the metric only ever starts empty at an apiserver start, so a
+young apiserver may not have been asked yet by a caller, whether it
+restarted, is a new cluster's, or is another replica of an HA control
+plane that the scrape moved to. In its first 24 hours, a caller missing
+from its scrape is held the same way. Limits:
 
 - a client that calls less often than once a day may not have called
   again within the window. Its blocker is then resolved, and announced
