@@ -80,7 +80,9 @@ type Config struct {
 	MaxGateBytes     int64 // POST /api/v1/gate body cap; 0 = DefaultMaxGateBytes
 
 	// TLSCertFile/TLSKeyFile (PEM) make Start serve HTTPS; both or neither.
-	// Loaded once in New, so a rotated certificate needs a restart.
+	// Loaded in New (a bad pair fails it) and re-read when either file
+	// changes, checked at most once a second on a new handshake, so a
+	// rotated certificate needs no restart.
 	TLSCertFile string
 	TLSKeyFile  string
 }
@@ -311,14 +313,14 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("server: Config.TLSCertFile and Config.TLSKeyFile must be set together")
 	}
 	if cfg.TLSCertFile != "" {
-		// Load now so a bad pair fails New, not the first handshake.
-		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		kp, err := newKeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
 		if err != nil {
-			return nil, fmt.Errorf("server: load TLS key pair: %w", err)
+			return nil, err
 		}
+		// Go's default cipher suites; TLS 1.2 at the oldest.
 		s.httpSrv.TLSConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
+			GetCertificate: kp.getCertificate,
+			MinVersion:     tls.VersionTLS12,
 		}
 	}
 	return s, nil
@@ -646,7 +648,7 @@ func (s *Server) Start() error {
 	s.logStartup()
 	close(s.ready)
 	if s.httpSrv.TLSConfig != nil {
-		err = s.httpSrv.ServeTLS(ln, "", "") // certificate already in TLSConfig
+		err = s.httpSrv.ServeTLS(ln, "", "") // certificate from TLSConfig.GetCertificate
 	} else {
 		err = s.httpSrv.Serve(ln)
 	}

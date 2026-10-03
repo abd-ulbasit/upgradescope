@@ -315,12 +315,28 @@ func TestStartWarnsSharedTokenAlongsidePerClusterTokens(t *testing.T) {
 // and its key as PEM files, returning their paths and the certificate.
 func writeSelfSignedCert(t *testing.T) (certFile, keyFile string, cert *x509.Certificate) {
 	t.Helper()
+	certPEM, keyPEM, cert := selfSignedPEM(t, 1)
+	dir := t.TempDir()
+	certFile, keyFile = filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
+	if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certFile, keyFile, cert
+}
+
+// selfSignedPEM is a throwaway ECDSA certificate for 127.0.0.1 with the
+// given serial, and its key, PEM-encoded.
+func selfSignedPEM(t *testing.T, serial int64) (certPEM, keyPEM []byte, cert *x509.Certificate) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: big.NewInt(serial),
 		Subject:      pkix.Name{CommonName: "upgradescope-test"},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 		NotBefore:    time.Now().Add(-time.Hour),
@@ -339,15 +355,8 @@ func writeSelfSignedCert(t *testing.T) (certFile, keyFile string, cert *x509.Cer
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	certFile, keyFile = filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return certFile, keyFile, cert
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), cert
 }
 
 // With a certificate and key the server speaks HTTPS directly — agents in
