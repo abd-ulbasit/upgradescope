@@ -23,6 +23,10 @@ var goldenParams = map[string]struct{ target, now string }{
 	"removed-api-at-target": {"1.22", "2026-06-10T00:00:00Z"},
 	"eol-ingress-nginx":     {"1.30", "2026-06-10T00:00:00Z"},
 	"mixed-everything":      {"1.38", "2026-06-10T00:00:00Z"},
+	// #148: a kube-proxy 4 minors from the kubelet on its node is a warning
+	// naming the node; one with no node, or on a node not listed, is not
+	// paired.
+	"kube-proxy-node-skew": {"1.35", "2026-06-10T00:00:00Z"},
 	// Optional capabilities degraded, and no crds capability at all (a
 	// collector that predates it): gaps, none required.
 	"degraded-capabilities": {"1.34", "2026-06-10T00:00:00Z"},

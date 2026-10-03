@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "88888888-8888-8888-8888-888888888888",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "serverVersion": "v1.34.2",
+  "capabilities": {
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "controlPlane": [
+    {"component": "kube-proxy", "version": "v1.34.2", "node": "node-a"},
+    {"component": "kube-proxy", "version": "v1.29.0", "node": "node-b"},
+    {"component": "kube-proxy", "version": "v1.34.2", "node": "node-gone"},
+    {"component": "kube-proxy", "version": "v1.20.0"}
+  ],
+  "nodes": [
+    {"name": "node-a", "kubeletVersion": "v1.34.2"},
+    {"name": "node-b", "kubeletVersion": "v1.33.1"}
+  ],
+  "namespaces": [{"name": "default"}]
+}
