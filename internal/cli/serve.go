@@ -215,7 +215,7 @@ It listens on loopback by default. On any other address, the read API needs
 	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes; "+
 		"the body must arrive within the 60s read timeout or the request gets 408, and a stream of too many YAML nodes gets 413 whatever its size "+
 		"(the 400k-node budget is about 4.4 MiB of typical kubectl YAML, so it, not this cap, limits a realistic stream)")
-	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert-file", "", "PEM certificate (chain) to serve HTTPS directly, TLS 1.2 minimum; requires --tls-key-file; the pair is re-read when either file changes, so a renewal needs no restart")
+	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert-file", "", "PEM certificate (chain) to serve HTTPS directly, TLS 1.2 minimum; requires --tls-key-file; a new handshake re-reads the pair when either file changed (checked at most once a second), so a renewal needs no restart")
 	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key-file", "", "PEM private key for --tls-cert-file")
 	cmd.Flags().DurationVar(&opts.staleAfter, "stale-after", server.DefaultStaleAfter, "mark a cluster stale (API, dashboard data, /metrics) when its agent has not pushed for this long; agents push at least about every 70m by default")
 	cmd.Flags().StringVar(&opts.retention, "retention", "90d", "prune snapshots and evaluations older than this, in days (90d) or a Go duration (2160h), at startup and daily; each cluster's latest snapshot and its evaluations are always kept; 0 keeps everything")
