@@ -167,7 +167,42 @@ case "\$1 \${2:-}" in
   install*) mkdir -p "$work/gobin" && printf '#!/bin/sh\necho built from source\n' >"$work/gobin/upgradescope" && chmod +x "$work/gobin/upgradescope" ;;
 esac
 EOF
-chmod +x "$work/stub-curl/curl" "$work/stub-go/go"
+# git: answers only `git ls-remote --tags <this repository>`, with
+# $work/ls-remote, or fails as an unreachable host with STUB_GIT_FAIL=1.
+mkdir -p "$work/stub-git"
+cat >"$work/stub-git/git" <<EOF
+#!/usr/bin/env bash
+echo "git \$*" >>"$work/calls"
+[ "\$*" = "ls-remote --tags https://github.com/abd-ulbasit/upgradescope" ] || exit 129
+if [ -n "\${STUB_GIT_FAIL:-}" ]; then
+  echo "fatal: unable to access 'https://github.com/abd-ulbasit/upgradescope/': Could not resolve host: github.com" >&2
+  exit 128
+fi
+cat "$work/ls-remote"
+EOF
+chmod +x "$work/stub-curl/curl" "$work/stub-go/go" "$work/stub-git/git"
+# The tags at each commit, as git ls-remote --tags lists them: an annotated
+# tag's own object on refs/tags/<tag>, the commit it points at on
+# refs/tags/<tag>^{}; a lightweight tag only the commit.
+sha_rc=cccccccccccccccccccccccccccccccccccccccc    # v0.2.0-rc.2, annotated
+sha_rc_tag=1111111111111111111111111111111111111111 # v0.2.0-rc.2's tag object
+sha_light=dddddddddddddddddddddddddddddddddddddddd # v9.9.4, lightweight
+sha_two=ffffffffffffffffffffffffffffffffffffffff   # v9.9.9-rc.1 and v9.9.9
+sha_float=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb # only v0 and nightly, no release
+sha_none=0123456789abcdef0123456789abcdef01234567  # no tag at all
+tab=$'\t'
+cat >"$work/ls-remote" <<EOF
+2222222222222222222222222222222222222222${tab}refs/tags/v0
+$sha_float${tab}refs/tags/v0^{}
+$sha_float${tab}refs/tags/nightly
+$sha_rc_tag${tab}refs/tags/v0.2.0-rc.2
+$sha_rc${tab}refs/tags/v0.2.0-rc.2^{}
+$sha_light${tab}refs/tags/v9.9.4
+3333333333333333333333333333333333333333${tab}refs/tags/v9.9.9
+$sha_two${tab}refs/tags/v9.9.9^{}
+4444444444444444444444444444444444444444${tab}refs/tags/v9.9.9-rc.1
+$sha_two${tab}refs/tags/v9.9.9-rc.1^{}
+EOF
 
 # release <tag> <checksums-mode: ok|bad|missing|none> [no-archive]
 release() {
@@ -191,6 +226,7 @@ release v9.9.6 none no-archive
 release v9.9.5 none
 release v9.9.4 ok
 release v9.9.9-rc.1 ok
+release v0.2.0-rc.2 ok
 
 # The real binary, for the scan cases.
 mkdir -p "$work/real"
@@ -322,7 +358,7 @@ run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF=v9.9.9-rc.1 STUB
 expect "no version at a release candidate tag ref installs that tag" 0 "installed upgradescope v9.9.9-rc.1 from $releases/download/v9.9.9-rc.1/$asset"
 run install "$work/stub-curl:" INPUT_VERSION=v9.9.9 "$own" ACTION_REF=v9.9.9-rc.1
 expect "an explicit version wins over the ref" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
-for ref in main v0 v9.9 0123456789abcdef0123456789abcdef01234567 v9.9.9-beta.1 "v9.9.9${nl}::x"; do
+for ref in main v0 v9.9 0123456789abcdef v9.9.9-beta.1 "v9.9.9${nl}::x"; do
   run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF="$ref" STUB_LATEST=v9.9.4
   expect "no version at ref ${ref%%$nl*} installs the latest release" 0 "latest release is v9.9.4"
   hasnt "no version at ref ${ref%%$nl*} is not read as a tag" "$work/out" "defaults to the action ref"
@@ -334,6 +370,7 @@ expect "no version and no ref installs the latest release" 0 "latest release is 
 run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
 expect "a release tag ref of another repository installs the latest release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
 hasnt "another repository's ref is not read as this action's release" "$work/out" "defaults to the action ref"
+has "another repository's ref is logged as the reason for latest" "$work/out" "the action ref is in 'other/wrapper' (github.action_repository), not abd-ulbasit/upgradescope"
 run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
 expect "a release tag ref without a repository installs the latest release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
 run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=abd-ulbasit/upgradescope-fork ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
@@ -343,6 +380,45 @@ if grep -q '^::warning' "$work/out"; then fail "another repository's release is 
 # Owner and repository names are case-insensitive on GitHub.
 run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=abd-ulbasit/UpgradeScope ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
 expect "a mixed-case repository name is this repository" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+
+# At a full commit SHA of this repository, the release tag that points at
+# it (#197): git ls-remote --tags, an annotated tag peeled to its commit.
+# Not a release, or no answer: latest, and one ::warning that says why.
+# warned <name> <reason>: the last run installed latest with one warning.
+warned() {
+  if [ "$code" = 0 ] && grep -qF "latest release is v9.9.4" "$work/out" && [ "$(grep -c '^::warning' "$work/out")" = 1 ] &&
+    grep -q "^::warning::version defaults to latest at the action ref .*$2" "$work/out"; then ok "$1"; else fail "$1" "$work/out"; fi
+}
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4
+expect "no version at a release candidate's commit SHA installs that release" 0 "installed upgradescope v0.2.0-rc.2 from $releases/download/v0.2.0-rc.2/$asset"
+has "the release at the SHA is logged" "$work/out" "version defaults to v0.2.0-rc.2, the release at the action ref $sha_rc"
+has "the SHA is looked up with git ls-remote --tags" "$work/calls" "git ls-remote --tags https://github.com/abd-ulbasit/upgradescope"
+hasnt "a release at the SHA does not ask for the latest release" "$work/calls" "$releases/latest"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF="$(tr 'a-f' 'A-F' <<<"$sha_rc")" STUB_LATEST=v9.9.4
+expect "an upper-case commit SHA finds its release" 0 "installed upgradescope v0.2.0-rc.2 from"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_light STUB_LATEST=v9.9.9
+expect "a lightweight release tag's SHA installs that release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
+hasnt "a lightweight release tag's SHA does not warn" "$work/out" "::warning"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_LATEST=v9.9.4
+expect "a SHA with a candidate and its release installs the release" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc_tag STUB_LATEST=v9.9.4
+warned "an annotated tag's own object is not the commit it tags" "no release tag"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_float STUB_LATEST=v9.9.4
+warned "a SHA with only non-release tags (v0, nightly) installs latest and warns" "no release tag (vX.Y.Z or vX.Y.Z-rc.N) of abd-ulbasit/upgradescope points at it"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_none STUB_LATEST=v9.9.4
+warned "an unknown SHA installs latest and warns" "no release tag"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4 STUB_GIT_FAIL=1
+warned "a failed lookup installs latest and warns" "git ls-remote --tags https://github.com/abd-ulbasit/upgradescope failed"
+run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4
+warned "no git to look the SHA up installs latest and warns" "git is not installed"
+# Only this repository's SHA is looked up, and only for an unset version.
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= ACTION_REPOSITORY=other/wrapper ACTION_REF=$sha_rc STUB_LATEST=v9.9.4
+expect "another repository's SHA installs the latest release" 0 "installed upgradescope v9.9.4 from"
+hasnt "another repository's SHA is not looked up" "$work/calls" "git "
+hasnt "another repository's SHA does not warn" "$work/out" "::warning"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION=v9.9.9 "$own" ACTION_REF=$sha_rc
+expect "an explicit version wins over the SHA" 0 "installed upgradescope v9.9.9 from"
+hasnt "an explicit version does not look the SHA up" "$work/calls" "git "
 # An explicit latest at a tag ref still floats, and says when that is
 # older than the ref's own release.
 run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4

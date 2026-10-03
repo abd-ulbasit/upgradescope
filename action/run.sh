@@ -71,6 +71,35 @@ release_older() {
   ((10#$ap < 10#$bp))
 }
 
+# A full commit SHA, what pinning the action by commit gives github.action_ref.
+commit_sha='^[0-9a-fA-F]{40}$'
+
+# release_at <sha>: the release tags (vX.Y.Z, vX.Y.Z-rc.N) of this
+# repository at commit sha (lower case), one per line, from git ls-remote.
+# An annotated tag lists its own object on refs/tags/<tag> and the commit
+# it points at on refs/tags/<tag>^{}; the ^{} line is the one that counts.
+# Exit 1: no git on the runner; 2: the lookup failed.
+release_at() {
+  command -v git >/dev/null || return 1
+  local refs
+  refs=$(GIT_TERMINAL_PROMPT=0 git ls-remote --tags "https://github.com/$repo") || return 2
+  printf '%s\n' "$refs" | awk -v sha="$1" '
+    NF == 2 && sub(/^refs\/tags\//, "", $2) {
+      if (sub(/\^\{\}$/, "", $2)) peeled[$2] = $1; else direct[$2] = $1
+    }
+    END { for (t in direct) if (tolower((t in peeled) ? peeled[t] : direct[t]) == sha) print t }
+  ' | { grep -E "$release_tag" || true; }
+}
+
+# newest <tag>...: the newest of the release tags.
+newest() {
+  local best= t
+  for t in "$@"; do
+    if [ -z "$best" ] || release_older "$best" "$t"; then best=$t; fi
+  done
+  printf '%s' "$best"
+}
+
 validate() {
   local v=${INPUT_VERSION-} t=${INPUT_TARGET-} f=${INPUT_FAIL_ON-} p=${INPUT_PATH-}
   # Empty is the default: the action ref's release, else latest.
@@ -138,11 +167,14 @@ install() {
   # deliberately omits the version (hack/release-check.sh checks this line).
   asset="upgradescope_${os}_${arch}.tar.gz"
 
-  # No version: the release the action itself is pinned at, when its ref is
-  # one, so @v0.2.0-rc.2 runs v0.2.0-rc.2. GitHub's latest skips
-  # prereleases, and would run an older release's engine (it missed
-  # removals added since) and pass what this one blocks. Any other ref (a
-  # branch, a SHA, v0) has no release of its own: latest.
+  # No version: the release the action itself is pinned at, so
+  # @v0.2.0-rc.2 runs v0.2.0-rc.2. GitHub's latest skips prereleases, and
+  # would run an older release's engine (it missed removals added since)
+  # and pass what this one blocks. At a full commit SHA, the release tag
+  # that points at that commit (the newest, if several do); a SHA that no
+  # release tag points at, or one that cannot be looked up, gets latest and
+  # a warning that says why. Any other ref (a branch, v0) has no release of
+  # its own: latest.
   # ACTION_REF is this action's ref only when ACTION_REPOSITORY
   # (github.action_repository) is this repository: in a composite action
   # that uses this one, both are the outer action's (actions/runner#2473),
@@ -157,8 +189,28 @@ install() {
     if [[ $ref =~ $release_tag ]]; then
       tag=$ref
       echo "version defaults to the action ref $tag"
+    elif [[ $ref =~ $commit_sha ]]; then
+      local sha at rc=0 why
+      sha=$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')
+      at=$(release_at "$sha") || rc=$?
+      # Tags match release_tag, so word splitting is safe.
+      at=$(newest $at)
+      if [ -n "$at" ]; then
+        tag=$at
+        echo "version defaults to $tag, the release at the action ref $sha"
+      else
+        tag=latest
+        case $rc in
+          1) why="git is not installed, so its release tag cannot be looked up" ;;
+          2) why="git ls-remote --tags https://github.com/$repo failed, so its release tag is unknown" ;;
+          *) why="no release tag (vX.Y.Z or vX.Y.Z-rc.N) of $repo points at it" ;;
+        esac
+        echo "::warning::version defaults to latest at the action ref $sha: $why. Set version: to the release this commit belongs to"
+      fi
     else
       tag=latest
+      [ -z "${ACTION_REF-}" ] || [ -n "$ref" ] ||
+        echo "version defaults to latest: the action ref is in '$(esc "${ACTION_REPOSITORY-}")' (github.action_repository), not $repo"
     fi
   fi
   if [ "$tag" = latest ]; then
