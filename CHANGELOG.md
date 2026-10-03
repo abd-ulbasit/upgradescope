@@ -456,9 +456,9 @@ a CI gate.
   `server.targets` and notifications configured, is ~865 MiB (a limit
   below about 962Mi does not fit it). Each extra target adds about one
   report of up to `--max-snapshot-bytes` to every push and one to the
-  re-evaluation pass (18-33 MiB each at the default 20 MiB, ~54 MiB of
-  that sum); without `server.targets` it is about 650 MiB, which 768Mi
-  holds.
+  re-evaluation pass (18-33 MiB each at the default 20 MiB): ~54 MiB of
+  that sum per extra target, so without `server.targets` it is about
+  650 MiB, which 768Mi holds.
 - `serve --targets` and the chart's `server.targets` take at most 4
   distinct minors; more is refused at startup (and by the chart's schema)
   with a message saying why. The server's memory bounds are measured at

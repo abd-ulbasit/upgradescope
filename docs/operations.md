@@ -104,9 +104,10 @@ of every snapshot and report it reads beside the one it returns, a
 report from a stored evaluation about the report limit (below) grew the
 heap up to ~109 MiB, a what-if of one ~95 MiB, and the HTML export of
 one whose findings name 547,000 teams, which decode to as many small
-strings, ~129 MiB. Since they run one at a time, 10 concurrent requests
-to any of these endpoints whose clients take their responses at once
-add only the garbage of the read before: up to ~132 MiB in all
+strings, the most: ~133 MiB, the figure the worst case below adds up.
+Since they run one at a time, 10 concurrent requests to any of these
+endpoints whose clients take their responses at once add only the
+garbage of the read before, and that ~133 MiB is their worst too
 (`TestReadHeapIsBounded`, on SQLite, against every snapshot the heap
 tests store, fails above 160 MiB).
 
@@ -306,7 +307,7 @@ evaluated for every push and every re-evaluation: **each extra target
 adds about one report of up to `--max-snapshot-bytes` to an ingest and
 one to the re-evaluation pass**, measured at 18-28 MiB to an ingest and
 18-33 MiB to the pass with the default 20 MiB, and ~3 MiB to each fleet
-read, so about 54 MiB to the sum above (with no `--targets`, a push
+read, so about 54 MiB per extra target to the sum above (with no `--targets`, a push
 takes up to ~119 MiB and the pass ~105 MiB). With fewer `--targets` the
 server needs that much less per target it does not have (with none,
 about 650 MiB, which a 768Mi limit holds). These figures are at the default
@@ -479,7 +480,7 @@ agents sent `--cluster-name` (chart `agent.clusterName`) unchecked, and
 a v0.1 server registered and renamed clusters under any name: uppercase,
 `_` and spaces included. After the upgrade every push under such a name
 (`Prod-EU`, `prod_eu`) is `422`, and an upgraded agent refuses to
-start with it. `upgradescope clusters list` shows each name; for each one
+start with it. `upgradescope clusters list`, run from the upgraded binary, shows each name; for each one
 that is not valid, rename the cluster, which keeps its history and
 re-binds its per-cluster tokens to the new name, then set the agent's
 `--cluster-name` to that name:

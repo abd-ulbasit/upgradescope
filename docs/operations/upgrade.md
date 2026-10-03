@@ -38,7 +38,8 @@ helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
   ([Retention and backup](retention-and-backup.md)); an older server
   cannot read a newer schema.
 - **Agents and servers** can be upgraded in either order (from v0.1.x,
-  upgrade the server first when a cluster name is invalid:
+  upgrade the server first when a cluster name is invalid, and run both
+  `clusters list` and `clusters rename` from the upgraded binary:
   [Cluster names](#from-v01x)). The push
   protocol is versioned (`schemaVersion` 1), a newer server stores fields
   an older agent does not send and keeps fields a newer agent sends that it
@@ -70,7 +71,7 @@ RFC 1123 subdomain of at most 253 bytes (`Prod_EU`, `prod eu`) with
 `422`, and an upgraded agent refuses to start with one. v0.1.x has no
 `clusters rename` command and no rename endpoint, so upgrade the server
 (and the CLI you run the rename with) first. Then, before you upgrade
-the agents, run `upgradescope clusters list`, and for each name that is
+the agents, run `upgradescope clusters list` from the upgraded binary, and for each name that is
 not valid, rename the cluster (its history and per-cluster tokens move
 with it), then set the agent's name to match:
 
