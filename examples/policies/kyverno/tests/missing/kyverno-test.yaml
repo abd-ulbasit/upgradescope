@@ -1,0 +1,25 @@
+# Case: there is no ClusterReadiness (the agent is not installed, or runs with
+# a different --cr-name). On a cluster the apiserver answers 404 and the
+# policy's apiCall `default: {}` stands in for the object; the CLI's mock
+# fails a non-2xx answer before it reaches that default, so this case feeds
+# the policy the empty object directly. It proves the rule fails open on it,
+# not that Kyverno applies the default.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: missing
+policies:
+  - ../../upgradescope-ready-target.yaml
+resources:
+  - ../resources.yaml
+apiCallResponses:
+  - urlPath: /apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster
+    method: GET
+    response:
+      body: {}
+results:
+  - policy: upgradescope-ready-target
+    rule: target-is-ready
+    kind: Deployment
+    resources: [upgrade-to-1-37]
+    result: pass

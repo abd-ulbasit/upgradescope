@@ -1,0 +1,28 @@
+# Case: 1.37 is not ready, but the verdict was written in 2020, so it is far
+# past the one-hour freshness limit. The policy fails open.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: stale
+policies:
+  - ../../upgradescope-ready-target.yaml
+resources:
+  - ../resources.yaml
+apiCallResponses:
+  - urlPath: /apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster
+    method: GET
+    response:
+      body:
+        apiVersion: upgradescope.dev/v1alpha1
+        kind: ClusterReadiness
+        metadata: {name: cluster}
+        status:
+          lastEvaluated: "2020-01-01T00:00:00Z"
+          targets:
+            - {target: "1.37", score: 62, ready: false, verdict: blocked, blockers: 3, warnings: 2, infos: 0}
+results:
+  - policy: upgradescope-ready-target
+    rule: target-is-ready
+    kind: Deployment
+    resources: [upgrade-to-1-37]
+    result: pass
