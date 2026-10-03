@@ -14,8 +14,8 @@
 # ACTION_REF is the ref the action was used at (github.action_ref). Text that
 # reaches the log from an input, a file name or the binary cannot start a
 # workflow command: a value in a message is escaped (esc), and the gate's
-# stderr and the Markdown report are printed by logged, which defangs any
-# line that would be one, including a ##[ anywhere in it.
+# stderr and the Markdown report are printed by logged, which puts "| " in
+# front of every line and defangs a ##[ anywhere in it.
 # hack/action_test.sh (make action-test) covers every path here offline.
 set -euo pipefail
 
@@ -226,18 +226,20 @@ escaped() {
   awk '{ gsub(/%/, "%25"); gsub(/\r/, "%0D"); printf "%s%s", (NR > 1 ? "%0A" : ""), $0 }' "$1"
 }
 
-# logged <file>: the file to the log, unchanged except that no line can be a
-# workflow command. The runner reads a command after trimming leading
-# whitespace and treats a carriage return as a line break, so a line that
-# then starts with :: gets a "| " in front and a CR is written %0D. The
-# runner also reads the legacy form ##[name] anywhere in a line that is not
-# a :: command (and runs ##[warning], ##[error] and ##[add-mask]), so each
-# ##[ is written "# #[". The binary's messages repeat the path input and
-# file names from the scanned tree, which a fork PR chooses, and so does
-# the Markdown report (the renderer turns a line break in a path into a
-# space, but leaves the rest).
+# logged <file>: the file to the log, every line with "| " in front, so that
+# none can be a workflow command. The runner reads a line as a command when
+# it starts with :: after .NET's TrimStart, which strips all Unicode
+# whitespace (\f, \v, U+0085, U+00A0, U+3000, ...), not only space and tab:
+# no pattern for "a line that would be a command" is safe, a prefix on every
+# line is. The runner also treats a carriage return as a line break, so a CR
+# is written %0D, and it reads the legacy form ##[name] anywhere in a line
+# that is not a :: command (and runs ##[warning], ##[error] and
+# ##[add-mask]), so each ##[ is written "# #[". The binary's messages repeat
+# the path input and file names from the scanned tree, which a fork PR
+# chooses, and so does the Markdown report (the renderer turns a line break
+# in a path into a space, but leaves the rest).
 logged() {
-  awk '{ gsub(/\r/, "%0D"); gsub(/##\[/, "# #["); if ($0 ~ /^[ \t]*::/) $0 = "| " $0; print }' "$1"
+  awk '{ gsub(/\r/, "%0D"); gsub(/##\[/, "# #["); print "| " $0 }' "$1"
 }
 
 scan() {

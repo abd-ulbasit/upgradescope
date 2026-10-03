@@ -10,7 +10,9 @@
 #     only with a Go toolchain, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
 #     summary on action/testdata, the allow-incomplete, config, baseline
-#     and write-baseline inputs, and an injection payload as data.
+#     and write-baseline inputs, and an injection payload as data;
+#   - every run: the log holds no workflow command but run.sh's own, as the
+#     runner reads them (leading Unicode whitespace stripped).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -53,16 +55,17 @@ for i in $inputs; do
     fail "action.yml passes input $i to both steps as $var" "$work/out"
   fi
 done
-# run.sh's install reads the ref the action was used at (ACTION_REF) to
-# default version to a release tag ref; the empty version default is what
-# tells "unset" from an explicit latest.
+# run.sh's install reads the ref the action was used at (ACTION_REF), and
+# the repository that ref belongs to (ACTION_REPOSITORY), to default
+# version to the ref's release; the empty version default is what tells
+# "unset" from an explicit latest.
 for yml in action.yml action/action.yml; do
   if [ "$(grep -cxF '        ACTION_REF: ${{ github.action_ref }}' "$yml")" = 1 ] &&
     awk '/^  version:$/ { on = 1; next } on && /^  [a-z-]+:$/ { on = 0 } on && /^    default: ""$/ { found = 1 } END { exit !found }' "$yml"; then
-    ok "$yml passes github.action_ref and leaves version unset by default"
+    ok "$yml passes github.action_ref and github.action_repository and leaves version unset by default"
   else
-    grep -n 'ACTION_REF\|default:' "$yml" >"$work/out" || true
-    fail "$yml passes github.action_ref and leaves version unset by default" "$work/out"
+    grep -n 'ACTION_RE\|default:' "$yml" >"$work/out" || true
+    fail "$yml passes github.action_ref and github.action_repository and leaves version unset by default" "$work/out"
   fi
 done
 for var in $(grep -o 'INPUT_[A-Z_]*' action/run.sh | sort -u); do
@@ -208,8 +211,27 @@ run() {
     GITHUB_OUTPUT="$rt/output" GITHUB_PATH="$rt/path" GITHUB_STEP_SUMMARY="$rt/summary" \
     INPUT_PATH=action/testdata/removed INPUT_TARGET=1.36 INPUT_FAIL_ON=blocker INPUT_VERSION=v9.9.9 \
     "$@" bash action/run.sh "$cmd" >"$work/out" 2>&1 || code=$?
+  forged "$work/out" | sed "s/^/run $n ($cmd): /" >>"$work/forged"
 }
 n=0
+: >"$work/forged"
+# forged <file>: each line of the log that the runner would read as a
+# workflow command but that is not one run.sh writes. The runner splits the
+# log at line breaks, strips all leading Unicode whitespace (.NET's
+# TrimStart: \f, \v, U+0085, U+00A0, U+2000-U+200A, U+3000 and the rest, not
+# only space and tab) and reads a line that then starts with :: as a
+# command. run.sh's own commands start at the line's first character and
+# are ::error or ::warning, with properties only from annotations(), whose
+# values have : and , escaped.
+forged() {
+  perl -CSD -0777 -ne '
+    for (split /\r\n|\r|\n/) {
+      (my $t = $_) =~ s/^\p{White_Space}+//;
+      next unless $t =~ /^::/;
+      next if $t eq $_ && /^::(?:error|warning)(?: (?:file=[^:,]*,line=\d+,)?title=upgradescope (?:blocker|warning) \([^:,]*\))?::/;
+      print "$_\n";
+    }' "$1"
+}
 # expect <name> <want-exit> <want-substring>: checks the last run.
 expect() {
   if [ "$code" = "$2" ] && grep -qF -- "$3" "$work/out"; then ok "$1"; else
@@ -592,6 +614,54 @@ if [ "$code" = 2 ] && ! grep -q '^::warning title=FORGEDMD' "$work/out"; then
   ok "a file name with a line break in a finding cannot start a command"
 else fail "a file name with a line break in a finding cannot start a command" "$work/out"; fi
 
+# Line breaks followed by whitespace other than space and tab: the runner's
+# TrimStart strips all Unicode whitespace before it looks for ::, so a
+# pattern for "a line that would start a command" misses some of it, and
+# every line of the gate's stderr and of the Markdown report gets the
+# prefix instead (#197 AC-05b). Each in a skipped file's name, in a finding's
+# file name, and in the path input (the binary's error, and validate's).
+i=0
+for label in FF VT NBSP U+3000 U+0085; do
+  case $label in
+    FF) ws=$'\f' ;;
+    VT) ws=$'\v' ;;
+    NBSP) ws=$'\xc2\xa0' ;;
+    U+3000) ws=$'\xe3\x80\x80' ;;
+    U+0085) ws=$'\xc2\x85' ;;
+  esac
+  i=$((i + 1))
+  d="$work/ws$i"
+  mkdir -p "$d" && printf 'a: [\n' >"$d/b${nl}${ws}::warning title=FORGED::q.yaml"
+  cp action/testdata/removed/all.yaml "$d/m${nl}${ws}::warning title=FORGED::z.yaml"
+  run scan "$work/real:" INPUT_PATH="$d"
+  forged "$work/out" >"$work/forged.case"
+  if [ "$code" = 2 ] && grep -qF "| ${ws}::warning title=FORGED::q.yaml" "$work/out" &&
+    grep -qF 'skipped' "$work/out" && [ ! -s "$work/forged.case" ]; then
+    ok "a line break and $label in a file name cannot start a workflow command"
+  else
+    cat "$work/forged.case" >>"$work/out"
+    fail "a line break and $label in a file name cannot start a workflow command" "$work/out"
+  fi
+  p="$work/wsp$i${nl}${ws}::warning title=FORGED::y"
+  mkdir -p "$p" && echo readme >"$p/README"
+  run scan "$work/real:" INPUT_PATH="$p"
+  forged "$work/out" >"$work/forged.case"
+  if [ "$code" = 1 ] && grep -qF 'no Kubernetes manifests found' "$work/out" && [ ! -s "$work/forged.case" ]; then
+    ok "a line break and $label in the path input cannot start a workflow command"
+  else
+    cat "$work/forged.case" >>"$work/out"
+    fail "a line break and $label in the path input cannot start a workflow command" "$work/out"
+  fi
+  run install "$work/stub-curl:" INPUT_PATH="does/not/exist${nl}${ws}::warning title=FORGED::y"
+  forged "$work/out" >"$work/forged.case"
+  if [ "$code" = 1 ] && grep -qF "path 'does/not/exist%0A${ws}::warning" "$work/out" && [ ! -s "$work/forged.case" ]; then
+    ok "a line break and $label in a missing path input cannot start a workflow command"
+  else
+    cat "$work/forged.case" >>"$work/out"
+    fail "a line break and $label in a missing path input cannot start a workflow command" "$work/out"
+  fi
+done
+
 # The runner also reads a legacy command, ##[name], anywhere in a line that
 # is not a :: command. So no line that is not a :: annotation may hold a ##[
 # at all, wherever in the line a path or file name put it (#197 AC-05b). (A
@@ -635,6 +705,11 @@ run scan "$work/real:" INPUT_PATH=action/testdata/clean
 run scan "$work/real:" INPUT_PATH=action/testdata/clean INPUT_CONFIG=action/testdata/baseline-cronjob.json
 [ "$code" != 0 ] && [ -z "$(output sarif-file)" ] &&
   ok "a config that cannot load sets no sarif-file" || fail "a config that cannot load sets no sarif-file" "$work/out"
+
+# Every run above: whatever the inputs, file names and binary printed, the
+# only workflow commands in the log are run.sh's own.
+if [ -s "$work/forged" ]; then fail "no run's log holds a workflow command run.sh did not write" "$work/forged"; else
+  ok "no run's log holds a workflow command run.sh did not write"; fi
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)
