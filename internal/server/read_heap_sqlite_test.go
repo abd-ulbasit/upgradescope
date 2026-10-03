@@ -112,6 +112,26 @@ func outboxRows(t *testing.T, path string) int {
 	return n
 }
 
+// blockedEvaluations is how many evaluations of the latest snapshot in the
+// database at path have the verdict blocked: each has a blocker, and
+// against an earlier snapshot whose findings were all reworded
+// (rewordStoredFindings) every one of them is news.
+func blockedEvaluations(t *testing.T, path string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM evaluations
+		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots)
+		AND json_extract(CAST(report AS TEXT), '$.verdict') = 'blocked'`).Scan(&n); err != nil {
+		t.Fatalf("counting blocked evaluations: %v", err)
+	}
+	return n
+}
+
 // concurrentGets sends n GETs of path at once and returns how much the heap
 // grew, failing the test unless every one answered 200, or, for an
 // export, 413 for one over the report limit (maxReportBytes).
@@ -202,8 +222,18 @@ func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
 	gate := atNodeBudget(gateHeapShapes()["many keys and an alias"])
-	for name, shape := range storedHeapShapes() {
+	shapes, ran, notified := storedHeapShapes(), 0, 0
+	defer func() {
+		// Most shapes are measured with their notification built: those
+		// that are not have no blocker news (a verdict of unknown, or
+		// warnings only). Checked when every shape ran (not under -run).
+		if !t.Failed() && ran == len(shapes) && 2*notified <= len(shapes) {
+			t.Errorf("%d of %d shapes queued a notification, want most", notified, len(shapes))
+		}
+	}()
+	for name, shape := range shapes {
 		t.Run(name, func(t *testing.T) {
+			ran++
 			path := filepath.Join(t.TempDir(), "upgradescope.db")
 			s := newSQLiteTestServerAt(t, path, atTargetCap, withNotifier)
 			body := []byte(storedBody(name, shape))
@@ -228,7 +258,19 @@ func TestStoredSnapshotHeapIsBounded(t *testing.T) {
 				t.Errorf("push: status %d, the heap grew %d MiB; want 202 within %d MiB", rec.Code, grew>>20, maxIngestDecodeHeap>>20)
 			}
 			pushNotified := outboxRows(t, path) > queued
-			t.Logf("%d bytes: push grew the heap %d MiB (%d of %d reports reworded, notification queued: %v)", len(body), grew>>20, reworded, len(targets), pushNotified)
+			blocked := blockedEvaluations(t, path)
+			t.Logf("%d bytes: push grew the heap %d MiB (%d of %d reports reworded, %d blocked, notification queued: %v)",
+				len(body), grew>>20, reworded, len(targets), blocked, pushNotified)
+			// Every blocker of a blocked evaluation is news against the
+			// reworded baseline, so one blocked evaluation must notify: a
+			// push that loaded no baseline (deltaFor skipping it) would not,
+			// and its heap would be measured short of what it costs.
+			if blocked > 0 && !pushNotified {
+				t.Errorf("%d evaluations of the push are blocked against a baseline that has none of their blockers, but no notification was queued", blocked)
+			}
+			if pushNotified {
+				notified++
+			}
 
 			// A knowledge-base update the next day: every evaluation is
 			// outdated and every finding of each differs from the stored
