@@ -343,6 +343,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `agent.existingSecret` | string | `""` | Name of an existing Secret with key "serverToken" (preferred over an inline token for anything beyond dev). The token reaches the agent as $UPGRADESCOPE_SERVER_TOKEN from a secretKeyRef, never as an argument. |
 | `agent.extraArgs` | list | `[]` | Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"]. |
 | `agent.extraEnv` | list | `[]` | Extra container env, volumes and mounts. |
+| `agent.extraRegistry` | object | `{}` | Extra add-on registry entries, to cover add-ons the built-in registry does not know: a map of `&lt;id&gt;.yaml` file name to the entry's YAML (the schema of registry/CONTRIBUTING.md, every claim cited). Rendered into a ConfigMap and passed as --registry-dir; an entry with a built-in id replaces it, and an invalid entry stops the agent at start, naming the file. Only the agent uses it: a server that judges what the agent pushes needs the same entries (server.extraArgs and server.extraVolumes). |
 | `agent.extraVolumeMounts` | list | `[]` | — |
 | `agent.extraVolumes` | list | `[]` | — |
 | `agent.healthPort` | int | `8081` | Port of the agent's /healthz (liveness), /readyz (a tick succeeded within two intervals) and /metrics (Prometheus) listener, named "http" on the pod. See docs/observability.md. |
