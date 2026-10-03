@@ -518,6 +518,58 @@ window. Each pass is compared with the target's last evaluation that had
 a decided verdict (ready or blocked). A pass whose verdict is unknown sends
 nothing and is not a baseline either: what it could not see is not news.
 
+**What a decided pass could not see.** A pass can be decided and still
+miss a check: blocked by one blocker while api-usage was forbidden, or
+ready while `/metrics` was denied or timed out (deprecated-calls is not
+required for the verdict). Each finding comes from known collector
+capabilities: API usage findings from api-usage, Helm release findings
+from helm, deprecated callers from deprecated-calls, add-on findings from
+addons and versions (node container runtimes), skew from versions, CRD
+findings from crds. A blocker or eol-approaching warning of the baseline
+whose capability the pass did not assess is **carried forward**: the pass
+does not resolve it, it is not a `new-blocker` when the capability
+returns, and the evaluation stored for the pass keeps it in its baseline,
+over any number of passes, until one that assessed the capability no
+longer finds it. While a carried blocker remains there is no
+`became-ready`, even if the pass's verdict is ready. A capability is not
+assessed for a finding when it is unavailable, or partial over it:
+api-usage and deprecated-calls skipped its API, helm skipped its release
+or a whole storage driver, and any other capability that is partial and
+names what it skipped. A partial capability that names nothing (a
+discovery failure in an API group with no flagged API) read everything
+that could have produced a finding. A blocker that a capability the pass
+did assess finds is announced as usual.
+
+**Apiserver restarts.** `apiserver_requested_deprecated_apis` counts
+requests since the apiserver started, so a restart empties it, and a
+caller that has not called since is missing from the next scrape. The
+agent records the scraped apiserver's start time (`apiServerStartTime`,
+from `process_start_time_seconds` in the same `/metrics` response). A
+deprecated caller missing from a scrape of an apiserver that had been up
+for less than **24 hours** is carried forward, as above. It is resolved by
+the first scrape of an apiserver up for 24 hours that still does not show
+it; an unchanged cluster needs no new snapshot for that, since the agent's
+hourly re-push of the same inventory is enough. So after a restart, a
+caller that really went away is resolved, and the cluster announced
+ready, 24 to 25 hours after the restart. The window covers clients that hold a
+watch (they reconnect at once) and clients that call hourly, nightly or
+daily. Limits:
+
+- a client that calls less often than once a day may not have called
+  again within the window. Its blocker is then resolved, and announced
+  again as a `new-blocker` when it next calls;
+- with several kube-apiservers (HA control planes, most managed ones),
+  each counts its own requests, and the agent scrapes whichever one its
+  connection reaches. A caller that the scraped apiserver never served,
+  because it talked to another, looks gone however long that apiserver
+  has been up: it is resolved (a `became-ready` if it was the last
+  blocker) and announced again when a scrape shows it. The start time
+  also changes the inventory when the scrape moves to another
+  apiserver, so that push is a new snapshot;
+- an inventory without the start time (from an agent older than this
+  field, or an apiserver whose `/metrics` does not report it) is judged as
+  before: a missing caller is resolved at once.
+
 A new cluster's first evaluation of a target is the baseline and sends
 nothing, and so does the first evaluation of a target added to
 `--targets` later, so that restarting the server with a new target does
