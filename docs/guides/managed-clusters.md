@@ -34,6 +34,10 @@ see.
   `gke.gcr.io/`, `gcr.io/gke-release/` and `mcr.microsoft.com/` follow the
   provider's support policy, so upstream release lines are not applied to
   them ([Add-on registry](../concepts/addon-registry.md)).
+- **Support dates and what waiting costs.** On EKS, GKE and AKS the scanner
+  dates the day your minor enters extended support and, where the provider
+  publishes a price, the annual list-price delta
+  ([Managed-provider support](../concepts/support-lifecycle.md)).
 
 Everything else, objects, add-ons from images and Helm releases, the score,
 the `ClusterReadiness` status and server pushes, works the same way.
