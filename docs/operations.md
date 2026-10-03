@@ -574,50 +574,32 @@ the evaluation, within `--max-snapshot-bytes`: if they would take its
 report over, the evaluation is stored without them, and its baseline is
 its own findings, as if nothing were carried.
 
-**Apiserver restarts.** `apiserver_requested_deprecated_apis` counts
-requests since the apiserver started, so a restart empties it, and a
-caller that has not called since is missing from the next scrape. The
-agent records the scraped apiserver's start time (`apiServerStartTime`,
-from `process_start_time_seconds` in the same `/metrics` response). A
-deprecated caller missing from a scrape of an apiserver that had been up
-for less than **24 hours** is carried forward, as above. It is resolved by
-the first scrape of an apiserver up for 24 hours that still does not show
-it; an unchanged cluster needs no new snapshot for that, since the agent's
-force-sync re-push of the same inventory is enough. So after a restart, a
-caller that really went away is resolved, and the cluster announced
-ready, 24 hours after the restart plus up to one `--force-sync-every`
-(25 hours with the default of `1h`). That figure assumes the agent's and
-the server's clocks agree: the window is measured from the start time
-and collection time the agent reports, and the server compares the
-latter with the time it evaluated the snapshot. The window covers
-clients that hold a watch (they reconnect at once) and clients that call
-hourly, nightly or daily. It is judged from the scrape alone, not from
-whether the apiserver restarted since the baseline, which is broader on
-purpose: the metric only ever starts empty at an apiserver start, so a
-young apiserver may not have been asked yet by a caller, whether it
-restarted, is a new cluster's, or is another replica of an HA control
-plane that the scrape moved to. In its first 24 hours, a caller missing
-from its scrape is held the same way. Limits:
+The "seen without" rule has one narrow residual case. An add-on finding
+does not say which Helm release it came from, so an add-on seen while
+helm was partial (any release or driver skipped) was seen without helm.
+If helm then becomes unavailable altogether, and that add-on was found
+through the chart of a release that was read, it is gone from the
+inventory and resolved: a `became-ready` if it was the last blocker,
+then a `new-blocker` when helm returns.
 
-- a client that calls less often than once a day may not have called
-  again within the window. Its blocker is then resolved, and announced
-  again as a `new-blocker` when it next calls;
-- with several kube-apiservers (HA control planes, most managed ones),
-  each counts its own requests, and the agent scrapes whichever one its
-  connection reaches. A caller that the scraped apiserver never served,
-  because it talked to another, looks gone however long that apiserver
-  has been up: it is resolved (a `became-ready` if it was the last
-  blocker) and announced again when a scrape shows it. The start time
-  also changes the inventory when the scrape moves to another
-  apiserver, so that push is a new snapshot (a new evaluation and
-  history point, with no notification unless a finding changed). The
-  agent builds its clients once and client-go keeps its HTTP/2
-  connection, so the scrape moves only when that connection is
-  re-established: an apiserver restart, a load balancer dropping it, or
-  an apiserver's `--goaway-chance`;
-- an inventory without the start time (from an agent older than this
-  field, or an apiserver whose `/metrics` does not report it) is judged as
-  before: a missing caller is resolved at once.
+**Apiserver restarts.** Deprecated callers are not carried over an
+apiserver restart. `apiserver_requested_deprecated_apis` counts requests
+since the apiserver started, so a restart empties it, and a scrape after
+the restart cannot tell a caller that has not called since from one that
+went away. A deprecated-call blocker missing from that scrape is
+resolved, and if it was the cluster's last blocker the pass sends
+`became-ready` while the caller still exists. It is announced again as a
+`new-blocker` once the caller calls again, on the agent's next scrape
+after that: a client that holds a watch reconnects at once, one that
+calls periodically (an hourly sync, a nightly CronJob) at its schedule. The
+same holds with several kube-apiservers (HA control planes, most managed
+ones): each counts its own requests, and the agent scrapes whichever one
+its connection reaches, so a caller that the scraped apiserver never
+served looks gone. It is resolved, and announced again when a scrape
+shows it. So a `became-ready` that follows an apiserver restart or a
+control plane upgrade may come from this reset rather than a fix. API
+usage findings (objects stored at a removed version) are read from the
+objects themselves and do not have this limit.
 
 A new cluster's first evaluation of a target is the baseline and sends
 nothing, and so does the first evaluation of a target added to
