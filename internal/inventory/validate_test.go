@@ -27,6 +27,7 @@ func validInventory() Inventory {
 		HelmReleases:         []HelmRelease{{Name: "ingress-nginx", Namespace: "ingress", ManifestAPIs: []APIUsage{usage()}}},
 		AddOns:               []AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"ingress"}}, {ID: "x"}},
 		Nodes:                []NodeInfo{{Name: "ip-10-0-0-1.ec2.internal"}},
+		ControlPlane:         []ComponentVersion{{Component: "kube-proxy", Version: "v1.33.0", Node: "ip-10-0-0-1.ec2.internal"}, {Component: "kube-apiserver", Version: "v1.33.0"}},
 		Namespaces:           []NamespaceInfo{{Name: "team-a", Team: "Payments_Team.1"}, {Name: "kube-system"}},
 		CRDs:                 []CRD{{Group: "example.com", Kind: "Widget", Usage: []APIUsage{usage()}}},
 	}
@@ -77,6 +78,7 @@ func TestValidateIdentifiersRefusesInvalid(t *testing.T) {
 		}, "helmReleases[0].manifestApis[0].objects[1].namespace"},
 		{"add-on namespace", func(inv *Inventory) { inv.AddOns[0].Namespaces = append(inv.AddOns[0].Namespaces, "-x") }, "addOns[0].namespaces[1]"},
 		{"node name", func(inv *Inventory) { inv.Nodes[0].Name = "node 1" }, "nodes[0].name"},
+		{"kube-proxy node name", func(inv *Inventory) { inv.ControlPlane[0].Node = "node 1" }, "controlPlane[0].node"},
 		{"namespace list name", func(inv *Inventory) { inv.Namespaces[1].Name = strings.Repeat("k", 64) }, "namespaces[1].name"},
 		{"team label value", func(inv *Inventory) { inv.Namespaces[0].Team = "payments team" }, "namespaces[0].team"},
 		{"team label value too long", func(inv *Inventory) { inv.Namespaces[0].Team = strings.Repeat("t", 64) }, "namespaces[0].team"},
