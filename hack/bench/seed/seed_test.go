@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -284,5 +285,33 @@ func TestAwaitKWOKCountsReadyNodesAndRunningPods(t *testing.T) {
 	ready, running, err = awaitKWOK(ctx, cs, config{Nodes: 2, Pods: 4}, io.Discard)
 	if err != nil || ready != 2 || running != 4 {
 		t.Errorf("awaitKWOK = %d, %d, %v; want it to return once 2 nodes and 4 pods are up", ready, running, err)
+	}
+}
+
+// agent.sh grows one cluster in steps (a quarter, half, all of the full
+// seed) and the numbers it reports are for the counts it names, so a step
+// must add exactly the difference: the same objects land where the previous
+// step put them, as long as the namespace count stays the same.
+func TestGrowingTheFillAddsExactlyTheDifference(t *testing.T) {
+	cs := fake.NewClientset()
+	steps := []config{
+		{Nodes: 10, Namespaces: 7, Pods: 20, ConfigMaps: 12, Deployments: 8, HelmReleases: 5, HelmRevisions: 1, KubeletVersion: "v1.37.0", Seed: 1},
+		{Nodes: 20, Namespaces: 7, Pods: 40, ConfigMaps: 24, Deployments: 16, HelmReleases: 10, HelmRevisions: 1, KubeletVersion: "v1.37.0", Seed: 1},
+	}
+	ctx := context.Background()
+	for i, cfg := range steps {
+		if _, err := run(ctx, cs, cfg, 4, 0, io.Discard); err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+		nodes, _ := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		pods, _ := cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+		secrets, _ := cs.CoreV1().Secrets("").List(ctx, metav1.ListOptions{})
+		cms, _ := cs.CoreV1().ConfigMaps("").List(ctx, metav1.ListOptions{})
+		deps, _ := cs.AppsV1().Deployments("").List(ctx, metav1.ListOptions{})
+		got := []int{len(nodes.Items), len(pods.Items), len(secrets.Items), len(cms.Items), len(deps.Items)}
+		want := []int{cfg.Nodes, cfg.Pods, cfg.HelmReleases, cfg.ConfigMaps, cfg.Deployments}
+		if !slices.Equal(got, want) {
+			t.Errorf("after step %d: nodes, pods, helm secrets, configmaps, deployments = %v, want %v", i, got, want)
+		}
 	}
 }

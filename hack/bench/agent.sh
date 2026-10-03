@@ -168,7 +168,8 @@ failed=""
 full_nodes=2000 full_pods=10000 full_cms=6000 full_deps=4000 full_helm=1000 full_ns=100
 for f in $BENCH_STEPS; do
   nodes=$(scale $full_nodes "$f") pods=$(scale $full_pods "$f") cms=$(scale $full_cms "$f")
-  deps=$(scale $full_deps "$f") helm=$(scale $full_helm "$f") nss=$(scale $full_ns "$f")
+  deps=$(scale $full_deps "$f") helm=$(scale $full_helm "$f")
+  nss=$full_ns # constant: an object is placed by its number modulo this, so a step adds only the difference
   if [ "$f" != 0 ]; then
     echo "bench-agent: seeding to $f of full: $nodes nodes, $pods pods, $cms ConfigMaps, $deps Deployments, $helm Helm releases ($BENCH_HELM_REVISIONS revision each)" >&2
     "$BENCH_BIN/bench-seed" --kubeconfig "$KUBECONFIG" --nodes "$nodes" --pods "$pods" --configmaps "$cms" \
