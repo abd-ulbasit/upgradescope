@@ -358,6 +358,16 @@ status is 422 with the full body, so `curl --fail-with-body` fails
 a CI step and keeps the report. `X-Upgradescope-Verdict` always
 carries the verdict.
 
+`allow-incomplete=true` is `scan --allow-incomplete`: the gate
+decides on findings alone. An `unknown` verdict (a required check
+did not run, such as a `target` past the knowledge base's
+horizon) with no finding at the `fail-on` threshold then answers
+200, and a blocker still answers 422. The verdict header, the
+body's `verdict` and its required `notAssessed` gaps still say
+`unknown`. A `target` that is not an upgrade of the cluster (the
+`target` gap) is a mistake, not a coverage limit, and still fails.
+Only `true` and `false` are values, given once.
+
 `format` picks the body: the JSON gate response (default), SARIF,
 JUnit XML whose test outcomes follow `fail-on`, or a GitLab Code
 Quality report. SARIF, JUnit and Code Quality hold only the
@@ -411,6 +421,7 @@ Auth: `readToken` (bearer).
 | `cluster` | query | string | no | A cluster name or id whose stored context the manifests are judged in. |
 | `format` | query | `json` \| `sarif` \| `junit` \| `gitlab-codequality` | no | — |
 | `fail-on` | query | `blocker` \| `warning` \| `never` | no | — |
+| `allow-incomplete` | query | `true` \| `false` | no | `true` gates on findings alone: an `unknown` verdict with no finding at the `fail-on` threshold is 200, not 422. See the operation description. |
 | `path` | query | string | no | The repository-relative file the stream was rendered to (`deploy/rendered.yaml`): clean, relative, valid UTF-8 without control characters, at most 512 bytes (every listed object carries it); otherwise 422. Introduced findings are then located in it in SARIF and Code Quality, so code scanning or the merge request widget shows them on the change. |
 | `config` | query | string | no | A `.upgradescope.yaml` (its text, URL-encoded): ignore rules applied as `scan --config` applies them, `file` globs matched against `path`. An invalid config, one over 32 KiB, or `config` given more than once is a 422. The request line, and so this parameter, also counts toward the server's 64 KiB request-header limit: URL-encoding expands YAML, so a config under 32 KiB can exceed it, and the server then answers 431 with a plain-text body. A reverse proxy in front of the server may refuse a long request line sooner (ingress-nginx's default answers 414 above 8 KiB). |
 
@@ -423,9 +434,9 @@ Request body (`application/json`): string
 | 200 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) | The gate passed. |
 | 200 | `application/sarif+json` | [SARIF](#sarif) | The gate passed. |
 | 200 | `application/xml` | [JUnit](#junit) | The gate passed. |
-| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
-| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
-| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
 | 400 | `application/json` | [Error](#error) | The body ended early or could not be read. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |

@@ -66,6 +66,12 @@ var yamlContentTypes = map[string]bool{
 // a bare request must be able to fail CI). X-Upgradescope-Verdict always
 // carries the verdict (ready | blocked | unknown).
 //
+// ?allow-incomplete=true (true or false, default false) is `scan
+// --allow-incomplete`: the gate decides on findings alone, so an unknown
+// verdict without a finding at the threshold answers 200. The verdict, its
+// header and the required gaps in the body still say unknown, and a target
+// that is not an upgrade of the cluster (the target gap) still fails.
+//
 // ?path=<file> names the repository file the stream was rendered to (e.g.
 // deploy/rendered.yaml): manifest objects carry it with their stream line,
 // so format=sarif places introduced findings there and code scanning shows
@@ -115,6 +121,10 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid fail-on %q (want blocker, warning or never)", failOn))
 		return
 	}
+	allowIncomplete, ok := gateAllowIncomplete(w, r)
+	if !ok {
+		return
+	}
 	artifact := r.URL.Query().Get("path")
 	if len(artifact) > maxArtifactPathBytes {
 		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf(
@@ -153,7 +163,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	defer releaseSlot()
 	resp := newHeldResponse()
 	s.evaluateGate(resp, r, gateRequest{body: body, shape: shape, releaseBody: releaseBody,
-		target: target, format: format, failOn: failOn, artifact: artifact, rules: rules})
+		target: target, format: format, failOn: failOn, allowIncomplete: allowIncomplete, artifact: artifact, rules: rules})
 	s.send(w, resp, releaseSlot)
 }
 
@@ -168,6 +178,24 @@ type gateRequest struct {
 	failOn      string
 	artifact    string
 	rules       []suppress.Rule // ?config='s ignore rules
+
+	allowIncomplete bool // ?allow-incomplete=true
+}
+
+// gateAllowIncomplete reads ?allow-incomplete: true or false, given once,
+// absent meaning false. Anything else is a 422, like a bad fail-on, so a
+// typo cannot silently leave the gate stricter or laxer than asked.
+func gateAllowIncomplete(w http.ResponseWriter, r *http.Request) (value, ok bool) {
+	switch vals := r.URL.Query()["allow-incomplete"]; {
+	case len(vals) == 0:
+		return false, true
+	case len(vals) == 1 && vals[0] == "true":
+		return true, true
+	case len(vals) == 1 && vals[0] == "false":
+		return false, true
+	}
+	errJSON(w, http.StatusUnprocessableEntity, "invalid allow-incomplete (want true or false, once)")
+	return false, false
 }
 
 // evaluateGate decodes and evaluates g, in the evaluation slot, and
@@ -255,7 +283,7 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	}
 	w.Header().Set("X-Upgradescope-Verdict", string(resp.Verdict))
 	status := http.StatusOK
-	if gateFails(resp, g.failOn) {
+	if gateFails(resp, g.failOn, g.allowIncomplete) {
 		status = http.StatusUnprocessableEntity
 	}
 	if g.format == "sarif" {
@@ -267,7 +295,7 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	if g.format == "junit" {
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(status)
-		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: g.failOn})
+		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: g.failOn, AllowIncomplete: g.allowIncomplete})
 		return
 	}
 	if g.format == "gitlab-codequality" {
@@ -465,13 +493,25 @@ func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 // gateFails applies ?fail-on: never never fails (the v0.1 always-200
 // contract); blocker fails on an introduced blocker, warning on an
 // introduced blocker or warning; both fail when the verdict is unknown,
-// like `scan --fail-on`.
-func gateFails(resp gateResponse, failOn string) bool {
+// like `scan --fail-on`. With allowIncomplete (?allow-incomplete=true) an
+// unknown verdict does not fail on its own, as in `scan --allow-incomplete`;
+// a target that is not an upgrade of the cluster is not a coverage limit, so
+// it still does.
+func gateFails(resp gateResponse, failOn string, allowIncomplete bool) bool {
 	if failOn == "never" {
 		return false
 	}
-	if resp.Verdict != engine.VerdictReady {
+	switch {
+	case resp.Verdict == engine.VerdictBlocked:
 		return true
+	case resp.Verdict == engine.VerdictUnknown && !allowIncomplete:
+		return true
+	case resp.Verdict == engine.VerdictUnknown:
+		for _, g := range resp.NotAssessed {
+			if g.Capability == engine.GapTarget {
+				return true
+			}
+		}
 	}
 	if failOn == "warning" {
 		for _, f := range resp.Findings {
