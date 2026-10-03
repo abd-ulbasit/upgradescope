@@ -21,20 +21,36 @@ import (
 // A regular file whose read blocks (one on a stalled NFS or FUSE mount; on
 // Linux, /proc/kmsg, readable only by root) has no deadline the platform
 // honours, so ReadFile returns when ctx ends, and the read itself goes on in
-// the background until the file answers.
+// the background until the file answers. It keeps its slot of fileReads
+// until then, so calls cancelled one after another against a stalled mount
+// run no more reads than there are slots, and hold no more memory than that
+// many files within the bound; a call that finds every slot held by such a
+// read waits, and gives up when ctx ends.
 func ReadFile(ctx context.Context, path string, max int64) ([]byte, error) {
-	return readUnder(ctx, path, func() ([]byte, error) { return readFile(path, max) })
+	return readUnder(ctx, fileReads, path, func() ([]byte, error) { return readFile(path, max) })
 }
 
-// readUnder runs read and returns what it returns, or gives up when ctx
-// ends first.
-func readUnder(ctx context.Context, path string, read func() ([]byte, error)) ([]byte, error) {
+// fileReads holds a token for each file read in flight, a read that its
+// call gave up on included: as many as there are report reads at once
+// (maxConcurrentReads).
+var fileReads = make(chan struct{}, maxConcurrentReads)
+
+// readUnder runs read in a slot of sem and returns what it returns, or
+// gives up when ctx ends first, while it waits for the slot or reads. The
+// slot is released when read returns, not when the call gives up.
+func readUnder(ctx context.Context, sem chan struct{}, path string, read func() ([]byte, error)) ([]byte, error) {
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("reading %s: waiting for an earlier file read to return (one on a stalled mount holds its slot until it does): %w", path, ctx.Err())
+	}
 	type result struct {
 		raw []byte
 		err error
 	}
 	done := make(chan result, 1) // the read never blocks on sending its result
 	go func() {
+		defer func() { <-sem }()
 		raw, err := read()
 		done <- result{raw, err}
 	}()
@@ -45,6 +61,10 @@ func readUnder(ctx context.Context, path string, read func() ([]byte, error)) ([
 		return nil, fmt.Errorf("reading %s: %w", path, ctx.Err())
 	}
 }
+
+// afterOpenChecks runs between the checks of the opened file and its read:
+// a test makes the file grow there.
+var afterOpenChecks = func() {}
 
 func readFile(path string, max int64) ([]byte, error) {
 	fi, err := os.Stat(path)
@@ -69,6 +89,10 @@ func readFile(path string, max int64) ([]byte, error) {
 	if err := regularWithin(path, opened, max); err != nil {
 		return nil, err
 	}
+	afterOpenChecks()
+	// The stat'ed size does not bound the read: the file can grow, and
+	// some (those under /proc) report 0 bytes. The read stops one byte
+	// past the bound, and that byte refuses the file.
 	raw, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
