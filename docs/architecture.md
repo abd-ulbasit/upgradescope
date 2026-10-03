@@ -121,8 +121,8 @@ buffer at most one payload (the latest replaces any pending one) and retry
 transient failures with exponential backoff (a `Retry-After` on a 429 or 503
 is honoured, up to one minute). Permanent 4xx responses drop the payload. A
 redirect is never followed, since the push would turn into a body-less GET:
-it counts as a permanent failure, and the log names the `Location` to use as
-`--server-url`. The canonical hash zeroes `collectedAt`, so an unchanged cluster
+it counts as a permanent failure, and the log names the status and `Location`;
+set `--server-url` to the final URL. The canonical hash zeroes `collectedAt`, so an unchanged cluster
 does not produce a new snapshot every tick.
 
 ### `serve`
