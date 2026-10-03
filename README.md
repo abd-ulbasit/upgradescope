@@ -189,6 +189,32 @@ at the cost of Helm findings.
 
 More, with sizes per platform: [Install](https://abd-ulbasit.github.io/upgradescope/operations/install/#sizes).
 
+## Scale and cost
+
+Measured on 3 October 2026 with the harness in `hack/bench/` (branch
+`feat/scale-harness`, `91a4e74`; the server benchmark at `a735fcb`). The
+cluster was a kind control plane (Kubernetes 1.37.0) on a ThinkPad with an
+Intel Core i3-7100U (2 cores, 4 threads) and 7.3 GiB of RAM, filled by
+[KWOK](https://kwok.sigs.k8s.io/) v0.8.0 with 2,000 fake nodes, 10,000 pods
+(plus 4,000 DaemonSet pods), 6,000 ConfigMaps, 4,000 Deployments and 1,000
+real `helm.sh/release.v1` Secrets; the agent ran on the same host. A MacBook
+Pro (`MacBookPro18,3`, M1 Pro) drove the seeding. **The nodes are fake**: no
+kubelet load, one kind apiserver, and generated objects.
+[Scale and cost](https://abd-ulbasit.github.io/upgradescope/operations/scale/)
+has the tables, the simulation's limits and the open hotspots.
+
+| What | Measured | How |
+|---|---|---|
+| A steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm releases | 59 API requests, 68 MiB read (4.3 MiB on the wire), 4.4 s, 3.4 CPU-seconds; peak live heap 27 MiB, peak RSS 54 MiB | median of the 4 ticks after the first, `make bench-agent` |
+| The first tick after the agent starts (reads each Helm release once) | 1,059 requests, 90 MiB, 35 s, 24 CPU-seconds | the first of 5 ticks, same run |
+| The same steady tick before #71 (a GET per release every tick) | 1,059 requests, 90 MiB, 29 s, 24 CPU-seconds | 4 ticks, same harness with the cache commit reverted |
+| `serve` taking 200 clusters x 3 targets, all pushing at once | SQLite 57 new snapshots a second (p99 3.4 s); Postgres 17 42 a second (p99 4.6 s); no failed push or retry | 200 pushers, `make bench-ingest`; 25 CPU-ms a snapshot on either |
+| Storage per changed snapshot (3 evaluations) | about 100 KiB on SQLite, 19 KiB on Postgres | database growth over 200 new snapshots averaging 28 KiB |
+
+Reproduce: `BENCH_RUN_ON=<ssh host of your lab> make bench-agent
+KUBECONFIG=<lab kubeconfig>` (a disposable cluster; no other kubeconfig is
+ever read) and `make bench-ingest`.
+
 ## How it compares
 
 pluto, kubent and kubepug find deprecated APIs in manifests, Helm releases

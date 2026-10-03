@@ -169,8 +169,9 @@ read-only.
 
 ### API cost per tick
 
-The agent holds no watch and no cache, so it asks the API server again on
-every tick, and the number of requests grows with the cluster. What stays
+The agent holds no watch and no informer cache of the cluster, so it lists the API server again on
+every tick, and the number of requests grows with the cluster (the one thing it remembers
+between ticks is what it decoded from each Helm release, below). What stays
 bounded is the work held at once: one page of a list and one decoded Helm
 release, not a copy of the cluster. The requests of one tick are:
 
@@ -205,25 +206,34 @@ release, not a copy of the cluster. The requests of one tick are:
   server or proxy that rejects the field selector with a 400 is asked
   again without it, and the add-ons skip the `kube-system` pods in the
   response.
-- **One GET per decoded Helm release**: the full Secret (or ConfigMap) of its
-  installed revision, up to the 1 MiB Kubernetes allows. It is fetched again
-  on every tick, even when nothing changed. This is the one cost that scales
-  with releases rather than with pages, and the largest request count of a
-  big cluster.
+- **One GET per Helm release the agent has not decoded yet**: the full Secret
+  (or ConfigMap) of its installed revision, up to the 1 MiB Kubernetes
+  allows. The agent keeps what it decoded, keyed by the object's UID and
+  resourceVersion from the metadata-only list it makes anyway, so a tick
+  fetches only the releases that are new or changed: the first tick after
+  a start fetches every release, and a steady tick fetches none. A one-shot
+  `scan` has nothing to remember and fetches every release. Before the
+  cache (#71) this was a GET per release on every tick, the cost that grew
+  with releases rather than with pages and the largest request count of a
+  big cluster. The cache holds a few fields per release, never a payload,
+  and drops an entry when its object stops being a release's installed
+  revision. [Scale and cost](operations/scale.md) has the measured counts.
 - **A few calls that do not grow with the cluster**: `/version`, the
   `kube-system` namespace, `/metrics`, API discovery (it depends on the
   number of API groups, not objects) and the agent's own `ClusterReadiness`
   (a few reads and one status update).
 
-So a tick sends about the sum of the page counts, plus the Helm releases,
-plus that constant. Listing, not decoding, is what the page size bounds. The
+So a tick sends about the sum of the page counts, plus the Helm releases not
+yet decoded, plus that constant. Listing, not decoding, is what the page size bounds. The
 client is limited to 50 requests per second (burst 300) unless the caller
 sets a limit, so a tick lasts longer as the request count grows. The agent
 never sends a `watch`, and the chart's role grants none
 ([pinned by a test](operations/security-model-and-rbac.md#the-agents-clusterrole)).
 `--interval` sets how often this repeats.
-`TestCollectAPIUsageFollowsListPagination` pins the paging and
-`TestCollectHelmPeakHeapIsBoundedByOneRelease` the one GET per release.
+`TestCollectAPIUsageFollowsListPagination` pins the paging,
+`TestCollectHelmPeakHeapIsBoundedByOneRelease` the one GET per release read
+and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` that a steady tick makes
+none.
 
 ### API usage: authorship, not residency
 
