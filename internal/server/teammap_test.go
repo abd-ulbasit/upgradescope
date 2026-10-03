@@ -28,6 +28,12 @@ func TestParseTeamMapRejectsBadInput(t *testing.T) {
 		"empty pattern": "- pattern: \"\"\n  team: x\n",
 		"empty team":    "- pattern: \"a-*\"\n  team: \"\"\n",
 		"bad glob":      "- pattern: \"[\"\n  team: x\n",
+		// Read scopes list teams comma separated (X-Upgradescope-Teams, the
+		// trusted-proxy header, tokens create --teams), and '*' there is
+		// the whole fleet: a team must be nameable in them.
+		"comma in team":      "- pattern: \"a-*\"\n  team: \"pay,web\"\n",
+		"whitespace in team": "- pattern: \"a-*\"\n  team: \"pay ments\"\n",
+		"team named *":       "- pattern: \"a-*\"\n  team: \"*\"\n",
 	}
 	for name, in := range cases {
 		if _, err := ParseTeamMap([]byte(in)); err == nil {

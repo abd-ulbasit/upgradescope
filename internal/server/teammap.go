@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strings"
+	"unicode"
 
 	"sigs.k8s.io/yaml"
 
@@ -41,7 +43,8 @@ func LoadTeamMap(p string) (TeamMap, error) {
 //   - pattern: "payments-*"
 //     team: payments
 //
-// Every rule must have a non-empty pattern (valid path.Match glob) and team.
+// Every rule must have a non-empty pattern (valid path.Match glob) and a
+// team that a read scope can name: no comma or whitespace, and not "*".
 func ParseTeamMap(data []byte) (TeamMap, error) {
 	var tm TeamMap
 	if err := yaml.UnmarshalStrict(data, &tm); err != nil {
@@ -53,6 +56,13 @@ func ParseTeamMap(data []byte) (TeamMap, error) {
 		}
 		if r.Team == "" {
 			return nil, fmt.Errorf("team map rule %d (%q): team is required", i+1, r.Pattern)
+		}
+		// Read scopes name teams comma separated (the X-Upgradescope-Teams
+		// answer header, the trusted-proxy header, tokens create --teams,
+		// each entry trimmed), and "*" there is the whole fleet, so a team
+		// a scope could not name is refused here, not silently unreadable.
+		if strings.ContainsFunc(r.Team, func(c rune) bool { return c == ',' || unicode.IsSpace(c) }) || r.Team == "*" {
+			return nil, fmt.Errorf("team map rule %d (%q): team %q must not contain a comma or whitespace, nor be '*'", i+1, r.Pattern, r.Team)
 		}
 		// path.Match validates the pattern syntax regardless of the name
 		// matched against; bad globs must fail at load, not silently never
