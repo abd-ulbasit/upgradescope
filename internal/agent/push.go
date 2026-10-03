@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -77,10 +78,12 @@ func CleartextPushWarning(serverURL, token string) string {
 
 // LoadServerCAs is the system root pool plus the PEM certificates in file
 // (agent --server-ca-file), for a server whose certificate a private CA
-// issued. A file without one certificate in it is an error, not an
-// unchanged pool: that would fail every push later with a less useful one.
+// issued. A file without one certificate in it, or with a CERTIFICATE block
+// that does not parse, is an error, not a pool missing a CA: that would fail
+// every push later with a less useful one. Other PEM block types are
+// skipped, as AppendCertsFromPEM skips them.
 func LoadServerCAs(file string) (*x509.CertPool, error) {
-	pemBytes, err := os.ReadFile(file)
+	rest, err := os.ReadFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("read server CA bundle: %w", err)
 	}
@@ -88,7 +91,23 @@ func LoadServerCAs(file string) (*x509.CertPool, error) {
 	if err != nil {
 		pool = x509.NewCertPool() // no system roots on this platform: the bundle alone
 	}
-	if !pool.AppendCertsFromPEM(pemBytes) {
+	n := 0
+	for {
+		var block *pem.Block
+		if block, rest = pem.Decode(rest); block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		n++
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("server CA bundle %s: certificate %d: %w", file, n, err)
+		}
+		pool.AddCert(cert)
+	}
+	if n == 0 {
 		return nil, fmt.Errorf("server CA bundle %s: no PEM certificate in it", file)
 	}
 	return pool, nil

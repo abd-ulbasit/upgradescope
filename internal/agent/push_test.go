@@ -575,7 +575,21 @@ func TestLoadServerCAsRejectsUnusableFiles(t *testing.T) {
 	if err := os.WriteFile(notPEM, []byte("this is not a certificate\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{filepath.Join(dir, "missing.crt"), notPEM} {
+	// One good certificate does not excuse a corrupt one beside it: the
+	// operator meant to trust both, so a silently dropped CA would fail
+	// pushes later with a less useful error.
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	good, err := os.ReadFile(writeServerCA(t, srv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partly := filepath.Join(dir, "partly-corrupt.crt")
+	corrupt := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not DER")})
+	if err := os.WriteFile(partly, append(good, corrupt...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{filepath.Join(dir, "missing.crt"), notPEM, partly} {
 		if _, err := LoadServerCAs(f); err == nil || !strings.Contains(err.Error(), f) {
 			t.Errorf("LoadServerCAs(%q) = %v, want an error naming the file", f, err)
 		}
