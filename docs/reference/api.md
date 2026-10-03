@@ -753,7 +753,8 @@ whole.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `score` | integer | yes | — |
-| `ready` | boolean | yes | No blocker among this team's findings. It counts only the team's findings: the cluster's not-assessed gaps and unattributed blockers do not lower it, so gate on the report's verdict, not on a team's ready. |
+| `ready` | boolean | yes | verdict == ready. |
+| `verdict` | `ready` \| `blocked` \| `unknown` | no | The team's readiness, by the report's rules over what can concern it: blocked by a blocker of its own or by an unattributed one (which cannot be ruled out as the team's); otherwise unknown when the report has a required not-assessed gap, which may hide any team's blocker; otherwise ready. Another team's blocker does not lower it; score, blockers and warnings count only the team's own findings. |
 | `blockers` | integer | yes | — |
 | `warnings` | integer | yes | — |
 

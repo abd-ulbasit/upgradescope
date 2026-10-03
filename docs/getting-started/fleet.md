@@ -105,8 +105,13 @@ labels with a glob map, first match wins:
 ```
 
 Team scores apply the score formula to each team's findings. Findings with
-no team are grouped as `unattributed`. Teams split the findings; they are
-not an access boundary ([Tenancy](../operations/tenancy.md)).
+no team are grouped as `unattributed`. A team's verdict is `blocked` by a
+blocker of its own or an unattributed one (kubelet skew, an object in an
+unlabelled namespace), which cannot be ruled out as the team's; otherwise
+it is `unknown` when the cluster's report has a required not-assessed gap,
+which may hide any team's blocker; otherwise `ready`. Another team's
+blocker does not lower it. Teams split the findings; they are not an
+access boundary ([Tenancy](../operations/tenancy.md)).
 
 ## Next
 

@@ -53,7 +53,7 @@ func TestWriteJSON(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &withTeams); err != nil {
 		t.Fatalf("unmarshal teams: %v", err)
 	}
-	want := map[string]engine.TeamScore{"unattributed": {Score: 75, Ready: false, Blockers: 1}}
+	want := map[string]engine.TeamScore{"unattributed": {Score: 75, Ready: false, Verdict: engine.VerdictBlocked, Blockers: 1}}
 	if len(withTeams.Teams) != 1 || withTeams.Teams["unattributed"] != want["unattributed"] {
 		t.Errorf("teams = %+v, want %+v", withTeams.Teams, want)
 	}

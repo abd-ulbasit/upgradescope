@@ -969,7 +969,18 @@ components:
       required: [score, ready, blockers, warnings]
       properties:
         score: {type: integer}
-        ready: {type: boolean, description: "No blocker among this team's findings. It counts only the team's findings: the cluster's not-assessed gaps and unattributed blockers do not lower it, so gate on the report's verdict, not on a team's ready."}
+        ready: {type: boolean, description: "verdict == ready."}
+        verdict:
+          type: string
+          enum: [ready, blocked, unknown]
+          description: |
+            The team's readiness, by the report's rules over what can
+            concern it: blocked by a blocker of its own or by an
+            unattributed one (which cannot be ruled out as the team's);
+            otherwise unknown when the report has a required not-assessed
+            gap, which may hide any team's blocker; otherwise ready.
+            Another team's blocker does not lower it; score, blockers and
+            warnings count only the team's own findings.
         blockers: {type: integer}
         warnings: {type: integer}
     TeamScores:

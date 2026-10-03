@@ -74,7 +74,8 @@ export interface CapabilityGap {
 
 export interface TeamScore {
   score: number;
-  ready: boolean;
+  ready: boolean; // verdict === "ready"
+  verdict?: Verdict; // newer servers: blocked, unknown on a required gap, else ready
   blockers: number;
   warnings: number;
 }
