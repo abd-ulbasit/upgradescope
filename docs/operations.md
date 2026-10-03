@@ -524,8 +524,9 @@ ready while `/metrics` was denied or timed out (deprecated-calls is not
 required for the verdict). Each finding comes from known collector
 capabilities: API usage findings from api-usage, Helm release findings
 from helm, deprecated callers from deprecated-calls, add-on findings from
-addons and versions (node container runtimes), skew from versions, CRD
-findings from crds. A blocker or eol-approaching warning of the baseline
+addons, versions (node container runtimes) and helm (an add-on found
+through its Helm chart, whose app version is the install's), skew from
+versions, CRD findings from crds. A blocker or eol-approaching warning of the baseline
 whose capability the pass did not assess is **carried forward**: the pass
 does not resolve it, it is not a `new-blocker` when the capability
 returns, and the evaluation stored for the pass keeps it in its baseline,
@@ -534,11 +535,27 @@ longer finds it. While a carried blocker remains there is no
 `became-ready`, even if the pass's verdict is ready. A capability is not
 assessed for a finding when it is unavailable, or partial over it:
 api-usage and deprecated-calls skipped its API, helm skipped its release
-or a whole storage driver, and any other capability that is partial and
-names what it skipped. A partial capability that names nothing (a
-discovery failure in an API group with no flagged API) read everything
-that could have produced a finding. A blocker that a capability the pass
-did assess finds is announced as usual.
+or a whole storage driver (and, for an add-on finding, helm skipped any
+release: a finding does not say which release an add-on was found
+through), and any other capability that is partial and names what it
+skipped. A partial capability that names nothing (a discovery failure in
+an API group with no flagged API) read everything that could have
+produced a finding. A blocker that a capability the pass did assess finds
+is announced as usual. A controller that both stores and calls a removed
+API is one blocker, the API usage finding with the caller as evidence;
+while api-usage does not see that API, the caller is a blocker of its
+own, and that is not a `new-blocker` either: it is the carried finding,
+seen through `/metrics`.
+
+A capability that stays unassessed holds what it carries for as long as
+it does. Under a custom role that cannot list IngressClasses (addons
+partial), or with a Helm release the agent cannot decode (helm partial),
+an add-on blocker that is fixed stays carried, and there is no
+`became-ready`, until the capability is assessed again; the report and
+the fleet view show the fix at once. The carried findings are stored with
+the evaluation, within `--max-snapshot-bytes`: if they would take its
+report over, the evaluation is stored without them, and its baseline is
+its own findings, as if nothing were carried.
 
 **Apiserver restarts.** `apiserver_requested_deprecated_apis` counts
 requests since the apiserver started, so a restart empties it, and a
@@ -553,7 +570,10 @@ hourly re-push of the same inventory is enough. So after a restart, a
 caller that really went away is resolved, and the cluster announced
 ready, 24 to 25 hours after the restart. The window covers clients that hold a
 watch (they reconnect at once) and clients that call hourly, nightly or
-daily. Limits:
+daily. It is judged from the scrape alone, not from whether the apiserver
+restarted since the baseline: a new cluster's apiserver also starts with
+an empty metric, so in its first 24 hours a caller missing from a scrape
+is held the same way. Limits:
 
 - a client that calls less often than once a day may not have called
   again within the window. Its blocker is then resolved, and announced
@@ -565,7 +585,12 @@ daily. Limits:
   has been up: it is resolved (a `became-ready` if it was the last
   blocker) and announced again when a scrape shows it. The start time
   also changes the inventory when the scrape moves to another
-  apiserver, so that push is a new snapshot;
+  apiserver, so that push is a new snapshot (a new evaluation and
+  history point, with no notification unless a finding changed). The
+  agent builds its clients once and client-go keeps its HTTP/2
+  connection, so the scrape moves only when that connection is
+  re-established: an apiserver restart, a load balancer dropping it, or
+  an apiserver's `--goaway-chance`;
 - an inventory without the start time (from an agent older than this
   field, or an apiserver whose `/metrics` does not report it) is judged as
   before: a missing caller is resolved at once.
