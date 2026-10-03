@@ -79,6 +79,7 @@ bench-server:
 # (minutes, and heavy for the apiserver), never in CI. The kubeconfig must be
 # given on the command line and is the only one read:
 #   make bench-agent KUBECONFIG=/path/to/lab-kubeconfig
+#   BENCH_RUN_ON=lab-host make bench-agent KUBECONFIG=...   # ticks run on that ssh host, beside the apiserver
 # Needs go, kubectl, jq and curl.
 .PHONY: bench-agent
 bench-agent:
