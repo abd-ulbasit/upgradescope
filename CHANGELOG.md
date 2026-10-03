@@ -553,6 +553,10 @@ a CI gate.
 - The containerd compat blocker (`chart-incompat/containerd/<line>`) names
   the nodes that cannot run the target even when they all run one version,
   so blocker-only outputs (gate, JUnit, code quality) say where (#169).
+- `serve` stopped during startup (a signal while it opens the store) no
+  longer leaves its notification and re-evaluation workers running on a
+  closed store: a shutdown that came before or during the server's start
+  did not always stop them.
 
 ### Security
 
