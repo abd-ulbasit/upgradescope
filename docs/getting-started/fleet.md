@@ -48,7 +48,7 @@ push only as the cluster it names:
 ```console
 $ upgradescope tokens create prod-eu-1 --db upgradescope.db
 ee2b2560...
-ingest token id 1 (prefix ee2b2560) for cluster "prod-eu-1" created — shown once, only its hash is stored
+ingest token id 1 (prefix ee2b2560) for cluster "prod-eu-1" created — shown once: the server stores its sha256 hash and its first 8 characters, never the token
 ```
 
 (Against Postgres, pass `--db-url` or set `$UPGRADESCOPE_DB_URL`.) Then, in
