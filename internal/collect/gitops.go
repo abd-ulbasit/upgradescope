@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -602,6 +603,17 @@ func redactRepoURL(raw string) string {
 		// credential.
 		scheme, rest, hasScheme = "", s, false
 	}
+	// An OCI reference pinned by digest ("ghcr.io/acme/chart@sha256:...")
+	// keeps its digest: it is set aside, and only when what precedes it is a
+	// registry host and a path, so a credential cannot pass for a digest's
+	// prefix (in "user:pw@sha256:..." the digest is a host, and is cut).
+	digest := ""
+	if m := ociDigestSuffix.FindStringIndex(rest); m != nil {
+		before := rest[:m[0]]
+		if ociRegistryPath.MatchString(before[strings.LastIndex(before, "@")+1:]) {
+			rest, digest = before, rest[m[0]:]
+		}
+	}
 	if at := strings.LastIndex(rest, "@"); at >= 0 {
 		rest = rest[at+1:]
 	}
@@ -609,13 +621,21 @@ func redactRepoURL(raw string) string {
 		rest = rest[:i]
 	}
 	if !hasScheme {
-		return rest
+		return rest + digest
 	}
 	if host, _, _ := strings.Cut(rest, "/"); host == "" {
 		return ""
 	}
-	return scheme + "://" + rest
+	return scheme + "://" + rest + digest
 }
+
+var (
+	// ociDigestSuffix is a trailing "@<algorithm>:<hex>" digest.
+	ociDigestSuffix = regexp.MustCompile(`@(?:sha256|sha384|sha512):[0-9a-fA-F]{32,}$`)
+	// ociRegistryPath is a registry host, an optional numeric port, and a
+	// path: what must follow any userinfo for a digest to be kept.
+	ociRegistryPath = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]+)?/[^@]+$`)
+)
 
 // validScheme reports whether s is a URL scheme (RFC 3986: a letter, then
 // letters, digits, "+", "-" or ".").

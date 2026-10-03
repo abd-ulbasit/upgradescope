@@ -64,7 +64,7 @@ target, so they are two installs of the add-on, as
 for any chart with a namespace override: the release's at its app version, the
 chart source's with the chart version it asks for, if exact.
 
-Repository URLs are recorded **without credentials**. An Application's
+Repository URLs are recorded **without userinfo, query string or fragment**. An Application's
 `repoURL` and an OCIRepository's `spec.url` can carry userinfo
 (`https://user:token@host`) or a token in the query string, and the agent
 copies neither: only the scheme, host, port and path are kept, whether or not
@@ -73,10 +73,13 @@ is recorded as `github.com:org/repo.git`). The cut does not depend on the URL
 parsing: everything up to the last `@` is dropped, so a token or password that
 itself contains a `/`, `?` or `#` does not leak either. An `@` anywhere else in
 the URL, which a chart repository does not use, therefore costs the part
-before it. The agent does not read the Secrets
-that hold repository credentials either. The URL as recorded is what the
-inventory holds, what is pushed to the server and stored, and what the CLI
-prints.
+before it; an OCI reference pinned by digest keeps its digest. A token
+embedded in the URL *path* cannot be told from a path and is recorded: a
+Cloudsmith entitlement URL such as `https://dl.cloudsmith.io/<token>/org/repo/helm/charts/`
+keeps its token, so give such tokens through userinfo or a Secret-backed
+repository instead. The agent does not read the Secrets that hold
+repository credentials. The URL as recorded is what the inventory holds,
+what is pushed to the server and stored, and what the CLI prints.
 
 An Application's `destination.namespace` and a HelmRelease's `targetNamespace`
 are free text to the API server. A chart source whose target is not a valid

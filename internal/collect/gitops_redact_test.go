@@ -37,6 +37,14 @@ func TestRedactRepoURL(t *testing.T) {
 		{"empty", "", ""},
 		{"empty host is dropped", "https://u:s3cret@/x", ""},
 		{"control characters are dropped", "https://host/a\nb\tc", "https://host/abc"},
+		{"oci pinned by digest keeps it", "oci://ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "oci://ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"oci pinned by digest with userinfo", "oci://user:s3cret@ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "oci://ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"oci by digest with a port", "oci://registry.example.com:5000/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "oci://registry.example.com:5000/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"a credential cannot pass for a digest's prefix", "https://user:s3cret@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"a credential with a slash before a digest is cut", "oci://user:s3/cret@ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "oci://ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"a non-numeric port before a digest is not a registry", "https://user:s3cret/x@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"percent-encoded @ in the userinfo", "https://user%40x:s3cret@host/x", "https://host/x"},
+		{"a path token is kept: it cannot be told from a path", "https://dl.cloudsmith.io/T0KEN/org/repo/helm/charts/", "https://dl.cloudsmith.io/T0KEN/org/repo/helm/charts/"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := redactRepoURL(tc.in)

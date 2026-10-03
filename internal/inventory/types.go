@@ -288,7 +288,8 @@ type GitOpsChart struct {
 	// Repo is an Application's repoURL, a HelmRelease's chart source
 	// ("HelmRepository/flux-system/ingress-nginx") or the URL of the
 	// OCIRepository it references. A URL is recorded without userinfo,
-	// query string or fragment, so no credential written into it is kept.
+	// query string or fragment. A token embedded in the path (Cloudsmith's
+	// dl.cloudsmith.io/<token>/...) cannot be told from a path and is kept.
 	Repo string `json:"repo,omitempty"`
 }
 
