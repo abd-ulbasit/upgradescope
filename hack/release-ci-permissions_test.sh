@@ -13,21 +13,26 @@ release=${RELEASE_WORKFLOW:-.github/workflows/release.yml}
 
 # perms <file> <job|""> : "scope access" lines of a job's permissions block
 # (two-space job key, four-space permissions:, six-space scopes), or of the
-# workflow's top-level block when job is empty.
+# workflow's top-level block when job is empty. An inline value on the
+# permissions: line becomes "* write" (write-all), "* read" (read-all) or
+# "? <value>" (a flow mapping this cannot read); {} asks for nothing.
 perms() {
   awk -v job="$2" '
-    job == "" && /^permissions:/ { p = 1; next }
+    function inl(l,   v) { v = l; sub(/^[^:]*:[ ]*/, "", v); sub(/[ ]*#.*$/, "", v)
+      if (v == "write-all") print "* write"; else if (v == "read-all") print "* read"
+      else if (v != "" && v != "{}") print "? " v }
+    job == "" && /^permissions:/ { p = 1; inl($0); next }
     job == "" && p && /^  [a-z-]+:/ { s = $1; sub(/:$/, "", s); print s, $2; next }
     job == "" && p && /^[^ ]/ { p = 0 }
-    job != "" && $0 ~ "^  " job ":[ ]*$" { j = 1; next }
+    job != "" && $0 ~ "^  " job ":[ ]*(#.*)?$" { j = 1; next }
     j && /^  [^ ]/ { j = 0; p = 0 }
-    j && /^    permissions:/ { p = 1; next }
+    j && /^    permissions:/ { p = 1; inl($0); next }
     j && p && /^      [a-z-]+:/ { s = $1; sub(/:$/, "", s); print s, $2; next }
     j && p && !/^      / { p = 0 }
   ' "$1"
 }
 
-jobs=$(awk '/^jobs:/{j=1;next} j&&/^[^ #]/{j=0} j&&/^  [a-z0-9_-]+:[ ]*$/{sub(/^  /,"");sub(/:.*/,"");print}' "$ci")
+jobs=$(awk '/^jobs:/{j=1;next} j&&/^[^ #]/{j=0} j&&/^  [a-z0-9_-]+:[ ]*(#.*)?$/{sub(/^  /,"");sub(/:.*/,"");print}' "$ci")
 asked=$( { perms "$ci" ""; for j in $jobs; do perms "$ci" "$j"; done; } | sort -u)
 granted=$(perms "$release" ci)
 
@@ -36,7 +41,11 @@ rank() { case $1 in write) echo 2 ;; read) echo 1 ;; *) echo 0 ;; esac; }
 fail=0
 while read -r scope access; do
   [ -n "$scope" ] || continue
-  have=$(awk -v s="$scope" '$1 == s { print $2 }' <<<"$granted")
+  case $scope in
+    '*') echo "FAIL ci.yml uses permissions: $access-all; list the scopes so release.yml's ci job can be checked against them" >&2; fail=1; continue ;;
+    '?') echo "FAIL ci.yml has a permissions form this test cannot read ($access); write it as a block" >&2; fail=1; continue ;;
+  esac
+  have=$(awk -v s="$scope" '$1 == s || $1 == "*" { print $2; exit }' <<<"$granted")
   if [ "$(rank "${have:-none}")" -lt "$(rank "$access")" ]; then
     echo "FAIL ci.yml asks for $scope: $access, release.yml's ci job grants ${have:-nothing}" >&2
     fail=1
