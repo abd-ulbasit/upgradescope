@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 	"sort"
 	"strings"
 
@@ -49,7 +50,7 @@ func loadFS(fsys fs.FS, dir string) ([]AddOn, error) {
 		if !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		name := dir + "/" + e.Name()
+		name := path.Join(dir, e.Name())
 		raw, err := fs.ReadFile(fsys, name)
 		if err != nil {
 			return nil, fmt.Errorf("registry: read %s: %w", name, err)
