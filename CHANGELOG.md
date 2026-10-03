@@ -19,6 +19,20 @@ a CI gate.
 
 ### Added
 
+- Each team in a report and on the dashboard has a `verdict` (`blocked`,
+  `unknown` or `ready`). A team is `blocked` by a blocker of its own or by
+  one no team is attributed, which cannot be ruled out as its own;
+  otherwise `unknown` when the report has any required gap, which may hide
+  a blocker of any team; otherwise `ready`. Another team's blocker leaves
+  it `ready` (#196).
+- Inventories carry `collectorSchema`, the collector's version of the
+  inventory contract. An inventory that carries it is judged as current;
+  one without it is judged as a v0.1.x inventory unless its `agentVersion`
+  is a semantic version at or after 0.2.0-0, so `dev`, `unknown` and an
+  empty version count as v0.1.x (#194).
+- The agent marks its `ClusterReadiness` with the
+  `upgradescope.dev/status-error` annotation while the status cannot be
+  written, and clears it on the next successful write (#199).
 - Documentation site (MkDocs Material, published to GitHub Pages) with
   getting-started guides, concepts, operations pages, and CLI, Helm values,
   CRD, REST API, metrics and configuration references generated from the
@@ -227,6 +241,70 @@ a CI gate.
 
 ### Changed
 
+- Notifications: a blocker or EOL warning that came from a capability the
+  current pass did not assess (unavailable, or partial over it; required or
+  optional) is carried forward in the baseline. It is not *resolved* in
+  that pass and not *new* when the capability returns, and `became-ready`
+  waits while one is carried. A capability that a finding was already seen
+  without cannot hide it later, so a steady gap such as
+  `rbac.helmSecrets=false` still resolves and re-alerts. An apiserver
+  restart empties `apiserver_requested_deprecated_apis`, so a deprecated
+  caller that has not called since is resolved, which can send
+  `became-ready`, and is announced again when it calls; #204 tracks telling
+  the two apart (#189).
+- A cluster inventory that does not report a required capability
+  (`api-usage`, `versions`, and `addons` when the knowledge base lists
+  add-ons) has a required gap, so it reads `unknown` unless it holds a
+  blocker: an empty `capabilities` map no longer reads `ready`. Ingest
+  refuses (422) an inventory whose `source` is set to anything but
+  `cluster`, or whose `collectorSchema` this server does not know. In an
+  inventory without `collectorSchema` from an agent reporting 0.2.0-0 or
+  later (v0.2.0-rc.1 and v0.2.0-rc.2), a usage count that names no object
+  is not judged: api-usage is partial over that API, a required gap when
+  the target removes it, so the verdict is `unknown`, not `blocked` (#194).
+- A team's `ready` is true only when its verdict is `ready`: a required gap
+  in the report, or a blocker no team is attributed, now makes it false,
+  where it used to be true whenever the team had no blocker of its own. The
+  CLI's team table prints the verdict instead of `ready yes/no` (#196).
+- `spec.targets` of a `ClusterReadiness` takes at most 8 entries (schema
+  `maxItems`). An agent reading an older object with more evaluates the
+  first 8 distinct valid targets, in spec order, and counts the rest in one
+  `status.notAssessed` note that names the first left out. Given more than
+  8 distinct minors in `--targets`, the agent refuses to start. Finding
+  titles in the status are clipped to 512 bytes and remediation to 1024,
+  as stored (JSON escapes counted). Past 3 hops, the version-skew
+  upgrade-path title, in every output, shows only the start, the first
+  step and the end of the path (`1.29 → 1.30 → … → 1.36`). The worst-case
+  status is about 273 KiB (#191).
+- The agent refuses at startup `--interval 0`, which used to mean the 10m
+  default (minimum 1m, as for any other value below it), and a `--cr-name`
+  that is not an RFC 1123 subdomain, which used to fail every tick (#192).
+  The chart's values schema refuses the same names, and more than 8
+  `agent.targets`, at install.
+- After at least 3 failed ticks in a row, and once the last success is
+  older than twice the interval plus 12 minutes, the agent stops exporting
+  its verdict, score, finding and capability gauges, so
+  `UpgradescopeUpgradeBlocked` and `UpgradescopeVerdictUnknown` resolve
+  while `UpgradescopeAgentNotTicking` fires: alert on that one too (#199).
+- The Action, with `version` unset, runs its own ref's release: the tag at
+  a release tag ref (`@vX.Y.Z`, `@vX.Y.Z-rc.N`), or at a full commit SHA
+  the release tag that points at that commit (`git ls-remote --tags`). At
+  a commit SHA no release tag points at, or when the lookup fails, it runs
+  the latest release and warns; at any other ref (a branch, `v0`) it runs
+  the latest release. With `version: latest` at a release tag ref, it warns
+  when latest is older than that ref. Only a ref of this repository
+  counts: inside a wrapping composite action the default stays latest. It
+  used to run GitHub's latest release, so `@v0.2.0-rc.2` ran v0.1.1 (#197).
+- `--db`: a path containing a `%XX` escape opens the file of that literal
+  name; it used to open the percent-decoded name. Rename a database created
+  under the decoded name before upgrading. A path containing `?` or `#`,
+  which rc.2 refused, now opens that exact file, and a NUL byte is refused
+  (#195).
+- An object of a flagged kind that neither `managedFields` nor the
+  last-applied annotation attributes to a writer is an info finding,
+  `authorship unknown`, which never changes the verdict or score; it used
+  to be missed. Inventories record such objects in `apiAuthorshipUnknown`
+  (#199).
 - The hand-written `supplement.json` is gone: the four entries it held
   (autoscaling HPA v2beta1 and v2beta2, both PodSecurityPolicy versions)
   were already in the generated dataset, which won on overlap. The
@@ -466,6 +544,40 @@ a CI gate.
 
 ### Fixed
 
+- The agent no longer follows a redirect when it pushes: a 3xx answer is a
+  permanent failure that names the status and `Location` and says to use
+  the final URL in `--server-url`. A 301, 302 or 303 used to turn the push
+  into a body-less GET that could read as delivered. `Retry-After` on 429
+  and 503 is honoured, up to 1 minute (#190).
+- When the cluster-wide pod list fails, add-ons are still matched from Helm
+  releases and IngressClass controllers. The `addons` capability is then
+  partial with the reason, and a required gap, so the verdict stays
+  `unknown` unless a blocker is found; when no Helm release was read and
+  the IngressClass list could not be read either, `addons` is not
+  assessed, as before (#199). Upgrade the server before the agent of a
+  cluster whose agent role cannot list pods: an older server takes that
+  partial `addons` for an optional gap, so a cluster it read as `unknown`
+  can read `ready`.
+- The Action sets `sarif-file` only after a scan that completed (exit 0 or
+  2). After a scan error it used to point at an empty or partial file, so
+  the documented upload step guarded on `sarif-file != ''` failed with
+  Invalid SARIF (#197).
+- A what-if evaluation (a target with no stored evaluation, in the cluster
+  report, findings and teams endpoints and the `/api/v1/fleet/teams`
+  rollup) is timestamped in UTC, as a stored one is; it used to carry the
+  server's local offset (#196).
+- The rpm is byte-reproducible: its Build Host header is pinned to
+  `upgradescope`, and the reproducibility check scans the packages for the
+  build machine's host name and build paths. Pre-release deb and rpm file
+  names use `.` where nfpm puts `~`, so they match their `checksums.txt`
+  entries as downloaded, and the release notes of a pre-release no longer
+  offer the Homebrew tap (#198).
+- Switching `server.sharedIngestToken` off removes the `ingestToken` key
+  from a chart Secret written by this version or later, which writes it
+  under `data`. A Secret written by v0.2.0-rc.2 or earlier keeps the key:
+  remove it once with the `kubectl patch` that the
+  `server.sharedIngestToken` comment gives. Checked by rendering; not yet
+  on a live API server (#200).
 - A control-plane or kube-proxy pod whose version upstream would have
   told but cannot be read makes the verdict `unknown`, not `ready`: an
   upstream-named component image under a digest or a tag that is not a
@@ -560,6 +672,29 @@ a CI gate.
 
 ### Security
 
+- The Action prefixes every line of the gate's stderr and of the Markdown
+  summary it echoes to the log (both carry the scanned tree's file names)
+  with `| `, and writes a CR in them as `%0D` and a `##[` as `# #[`; the
+  JSON and Markdown passes' errors reach the log only escaped inside a
+  `::warning`. It escapes `%`, CR and LF in every input it echoes. So a
+  pull request's file names or manifests, or an input, cannot start a
+  workflow command; v0.2.0-rc.2 relayed them as written. A check for a
+  leading `::` would not be enough: the runner strips all leading Unicode
+  whitespace (a form feed, a vertical tab, a no-break space) before it
+  parses a line. The release-tag lookup runs from an empty directory of
+  its own, never the workspace, with repository discovery stopped there
+  and a stall limit, so files a fork places in the workspace cannot
+  redirect it or run a credential helper (#197).
+- The SQLite database, and its `-wal` and `-shm` files, are created 0600
+  under exactly the name given: a `%3F`, `%23` or `%00` in `--db` could
+  bypass the `?`/`#` guard and leave a 0644 file under another name next
+  to an empty 0600 decoy (#195).
+- Release tags must point at a commit on `main` (release.yml preflight),
+  and a pull request whose description, or one of whose commits, has a
+  `BREAKING CHANGE:` (or `BREAKING-CHANGE:`) footer without a lowercase
+  `type!:` subject (the PR title, for the description) fails the
+  `pr-lint / breaking-change` check, which is not yet a required check on
+  `main` (#198).
 - Built with Go 1.26.8 and current dependencies. govulncheck finds 22
   reachable vulnerabilities in the v0.1.1 binary and none in this build.
   A daily workflow now scans the latest published release, not only
