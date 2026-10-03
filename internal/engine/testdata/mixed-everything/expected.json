@@ -166,6 +166,16 @@
       "title": "kube-proxy exceeds version skew vs kube-apiserver"
     },
     {
+      "category": "version-skew",
+      "citations": [
+        "https://kubernetes.io/releases/version-skew-policy/#kube-proxy"
+      ],
+      "detail": "kube-proxy v1.33.0 on node node-a is more than 3 minor version(s) older or newer than the kubelet on that node (v1.37.0).",
+      "key": "version-skew/kube-proxy-kubelet/node-a",
+      "severity": "warning",
+      "title": "kube-proxy on node node-a exceeds version skew vs its kubelet"
+    },
+    {
       "category": "deprecated-api",
       "citations": [
         "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
