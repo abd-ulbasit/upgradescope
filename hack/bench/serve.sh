@@ -131,7 +131,7 @@ run_backend() { # run_backend <backend> [PG_DSN]
       for kv in "${vars[@]}"; do printf 'export %s\n' "$(printf '%q' "$kv")"; done
     } | ssh "$BENCH_RUN_ON" "umask 077; cat > '$remote_dir/env'"
     # shellcheck disable=SC2029
-    ssh "$BENCH_RUN_ON" "cd '$remote_dir' && . ./env && UPGRADESCOPE_BENCH_OUT='$remote_out' ./server.test -test.run '^TestBenchServeIngest\$' -test.v -test.timeout 60m" >&2
+    ssh "$BENCH_RUN_ON" "cd '$remote_dir' && . ./env && rm -f '$remote_out' && UPGRADESCOPE_BENCH_OUT='$remote_out' ./server.test -test.run '^TestBenchServeIngest\$' -test.v -test.timeout 60m" >&2
     # shellcheck disable=SC2029
     ssh "$BENCH_RUN_ON" "cat '$remote_out'" >>"$out"
   fi
