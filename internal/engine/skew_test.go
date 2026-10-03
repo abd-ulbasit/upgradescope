@@ -2,6 +2,7 @@ package engine
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -494,5 +495,98 @@ func TestEvalKBStale(t *testing.T) {
 				t.Fatalf("key = %q, want kb-stale", fs[0].Key)
 			}
 		})
+	}
+}
+
+// kube-proxy must be within 3 minors of the kubelet on its own node, older
+// or newer (2 below 1.25). Each kube-proxy is paired with the kubelet of the
+// node it runs on; the finding names the node and its key is stable.
+func TestEvalKubeProxyKubeletSkew(t *testing.T) {
+	nodes := []inventory.NodeInfo{
+		{Name: "node-a", KubeletVersion: "v1.34.2"},
+		{Name: "node-b", KubeletVersion: "v1.31.4-eks-aeac579"},
+		{Name: "node-old", KubeletVersion: "v1.24.3"},
+	}
+	cases := []struct {
+		name  string
+		proxy inventory.ComponentVersion
+		want  bool
+	}{
+		{"3 older is within policy", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.31.0", Node: "node-a"}, false},
+		{"4 older violates", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.30.9", Node: "node-a"}, true},
+		{"3 newer is within policy", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.34.0", Node: "node-b"}, false},
+		{"4 newer violates", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.35.0", Node: "node-b"}, true},
+		{"same minor", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.31.0", Node: "node-b"}, false},
+		{"below 1.25 may only be 2 apart", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.24.0", Node: "node-a"}, true},
+		{"2 apart below 1.25 is within policy", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.22.0", Node: "node-old"}, false},
+		{"3 apart below 1.25 violates", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.21.0", Node: "node-old"}, true},
+		{"no node name is not paired", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.20.0"}, false},
+		{"node not listed is not paired", inventory.ComponentVersion{Component: "kube-proxy", Version: "v1.20.0", Node: "node-gone"}, false},
+		{"other components are not paired", inventory.ComponentVersion{Component: "kube-scheduler", Version: "v1.20.0", Node: "node-a"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := inventory.Inventory{ServerVersion: "v1.34.2", Nodes: nodes, ControlPlane: []inventory.ComponentVersion{tc.proxy}}
+			fs := evalKubeProxyKubeletSkew(inv, testKB())
+			if !tc.want {
+				if len(fs) != 0 {
+					t.Fatalf("want no findings, got %+v", fs)
+				}
+				return
+			}
+			if len(fs) != 1 {
+				t.Fatalf("want one finding, got %+v", fs)
+			}
+			f := fs[0]
+			if f.Category != CatVersionSkew || f.Severity != SevWarning {
+				t.Errorf("finding = %s %s, want a version-skew warning", f.Category, f.Severity)
+			}
+			if want := "version-skew/kube-proxy-kubelet/" + tc.proxy.Node; f.Key != want {
+				t.Errorf("key = %q, want %q", f.Key, want)
+			}
+			if !strings.Contains(f.Title, tc.proxy.Node) || !strings.Contains(f.Detail, tc.proxy.Version) {
+				t.Errorf("finding does not name the node and kube-proxy version: %q / %q", f.Title, f.Detail)
+			}
+			if !reflect.DeepEqual(f.Citations, []string{skewPolicyURL + "#kube-proxy"}) {
+				t.Errorf("citations = %v, want the skew policy's kube-proxy section", f.Citations)
+			}
+		})
+	}
+}
+
+// One finding per node even when a rolling DaemonSet update leaves two
+// kube-proxy pods on it, so keys stay unique; the order of the inventory
+// does not change them; and an inventory from before the node field (no
+// kube-proxy names a node) evaluates as it did, with no new finding.
+func TestEvalKubeProxyKubeletSkewKeysAndOldInventories(t *testing.T) {
+	inv := inventory.Inventory{
+		ServerVersion: "v1.34.2",
+		Nodes: []inventory.NodeInfo{
+			{Name: "node-b", KubeletVersion: "v1.34.2"},
+			{Name: "node-a", KubeletVersion: "v1.34.2"},
+		},
+		ControlPlane: []inventory.ComponentVersion{
+			{Component: "kube-proxy", Version: "v1.29.0", Node: "node-b"},
+			{Component: "kube-proxy", Version: "v1.30.0", Node: "node-b"},
+			{Component: "kube-proxy", Version: "v1.28.0", Node: "node-a"},
+			{Component: "kube-proxy", Version: "v1.34.0", Node: "node-a"},
+		},
+	}
+	fs := evalKubeProxyKubeletSkew(inv, testKB())
+	var keys []string
+	for _, f := range fs {
+		keys = append(keys, f.Key)
+	}
+	if want := []string{"version-skew/kube-proxy-kubelet/node-a", "version-skew/kube-proxy-kubelet/node-b"}; !reflect.DeepEqual(keys, want) {
+		t.Fatalf("keys = %v, want %v", keys, want)
+	}
+	if !strings.Contains(fs[1].Detail, "v1.29.0") || !strings.Contains(fs[1].Detail, "v1.30.0") {
+		t.Errorf("node-b detail = %q, want both kube-proxy versions on it", fs[1].Detail)
+	}
+
+	old := inv
+	old.ControlPlane = []inventory.ComponentVersion{{Component: "kube-proxy", Version: "v1.20.0"}, {Component: "kube-proxy", Version: "v1.29.0"}}
+	if fs := evalKubeProxyKubeletSkew(old, testKB()); len(fs) != 0 {
+		t.Errorf("an inventory without kube-proxy nodes gave %+v, want nothing", fs)
 	}
 }

@@ -26,7 +26,8 @@
     {"component": "kube-apiserver", "version": "v1.35.0"},
     {"component": "kube-apiserver", "version": "v1.37.0"},
     {"component": "kube-controller-manager", "version": "v1.35.0"},
-    {"component": "kube-proxy", "version": "v1.33.0"},
+    {"component": "kube-proxy", "version": "v1.33.0", "node": "node-a"},
+    {"component": "kube-proxy", "version": "v1.33.0", "node": "node-b"},
     {"component": "kube-scheduler", "version": "v1.37.0"}
   ],
   "nodes": [
