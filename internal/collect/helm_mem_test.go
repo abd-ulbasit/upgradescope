@@ -353,28 +353,35 @@ func withEmptyGzipMember(t testing.TB, payload []byte) []byte {
 }
 
 // maxManifestHeap is what parsing one worst-case manifest may add to the
-// heap: TestCollectHelmManifestParsingIsBounded enforces it, and holds the
-// heap to it with limitMemory.
+// heap: TestCollectHelmManifestParsingIsBounded enforces it, under the
+// memory limit limitMemory sets.
 const maxManifestHeap = 64 << 20
 
 // limitMemory models the agent's GOMEMLIMIT: for the rest of t it sets the
-// soft memory limit to what the runtime holds now (after a GC, with the
-// free memory returned to the OS) plus bound. Near the limit the runtime
-// makes every allocating goroutine do GC work (assists), so the heap stays
-// near its live size however far the GC's own workers fall behind, as on a
-// starved CPU. A low GOGC only makes collections frequent, not forced: at
-// GOGC=10 the collector fell behind the allocations on a loaded machine and
-// a case that is 44 MiB live read 97 MiB (#213). GOGC stays at its default,
-// as the chart leaves it. The limit is soft: a live heap above it still
-// grows past it, so an input that needs more than bound still fails the
-// test's own check.
+// soft memory limit to the heap now (after a GC) plus bound/2, and leaves
+// GOGC at its default, as the chart does. The agent's limit makes the
+// collector work whenever the heap nears it: the runtime paces the cycle
+// to the limit and makes every allocating goroutine do GC work (assists),
+// so the heap follows the live data however far the GC's own workers fall
+// behind on a starved CPU. A low GOGC only makes cycles frequent, not
+// forced: at GOGC=10 a case that is 44 MiB live read 66-97 MiB on a loaded
+// machine (and 162 MiB once at a load average of 280), #213.
+//
+// Half the bound, not the bound: the limit counts all the memory the
+// runtime holds, and a concurrent cycle overshoots its goal by what is
+// allocated while it marks, so a limit at base+bound let the same cases
+// read 70-120 MiB at a load average of 45, as the cycle ended just past
+// it. At half the bound the heap is past the limit for the whole parse
+// (these cases are 24-47 MiB live), so assists work throughout, and the
+// overshoot lands inside the bound the test still asserts in full. The
+// limit is soft: a live heap above it still grows past it, so an input
+// that needs more than the bound still fails the test's own check.
 func limitMemory(t *testing.T, bound uint64) {
 	t.Helper()
 	debug.FreeOSMemory()
-	sample := []metrics.Sample{{Name: "/memory/classes/total:bytes"}, {Name: "/memory/classes/heap/released:bytes"}}
+	sample := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
 	metrics.Read(sample)
-	held := sample[0].Value.Uint64() - sample[1].Value.Uint64() // what the limit counts
-	prev := debug.SetMemoryLimit(int64(held + bound))
+	prev := debug.SetMemoryLimit(int64(sample[0].Value.Uint64() + bound/2))
 	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
 }
 
@@ -388,10 +395,12 @@ func limitMemory(t *testing.T, bound uint64) {
 // agent at its 256Mi limit; one 1 MiB document of "- -" lines alone
 // reached 240 MiB. Now the cap is 16 MiB, the manifest is parsed in runs
 // bounded in bytes and YAML nodes, and lines are counted without the
-// index: every case peaks at 40–47 MiB of live heap, the same on every
-// run (24–93 MiB at GOGC=100 with no limit, varying with GC timing). Each case is a
-// valid release whose manifest, JSON-escaped, fills the cap, with ConfigMaps flagged as a real
-// KB flags some kinds, and every object a ConfigMap. Under the race
+// index: every case is 24–47 MiB of live heap. The test runs under a memory
+// limit (limitMemory), as the agent runs under GOMEMLIMIT, so the heap it
+// reads follows the live data even on a starved CPU: with no limit it
+// varies with GC timing, 24–93 MiB at GOGC=100. Each case is a valid
+// release whose manifest, JSON-escaped, fills the cap, with ConfigMaps
+// flagged as a real KB flags some kinds, and every object a ConfigMap. Under the race
 // detector, which slows parsing about tenfold, the manifests are 4 MiB.
 func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 	if testing.Short() {
