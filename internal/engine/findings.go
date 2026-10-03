@@ -162,8 +162,9 @@ func (g CapabilityGap) Label() string {
 
 // categorySources maps each finding category to the inventory
 // capabilities its findings are built from: what a report must have
-// assessed for a finding's absence to mean the problem is gone. Sources
-// refines it by key; TestEveryCategoryHasSources keeps it complete.
+// assessed for a finding's absence to mean the problem is gone, unless
+// the finding was itself found without one of them. Sources refines it
+// by key; TestEveryCategoryHasSources keeps it complete.
 //
 // Add-on findings name {addons, versions, helm}: node container runtimes
 // come from the nodes versions lists, and the add-ons collector detects
@@ -198,10 +199,12 @@ func Sources(c Category, key string) []inventory.Capability {
 	return categorySources[c]
 }
 
-// Unassessed reports whether a report with these gaps (its NotAssessed)
-// could not have produced the finding of category c and key: one of its
-// Sources is unavailable, or partial with Skipped naming what the finding
-// is about. A partial capability's Skipped is what it did not read, so:
+// HiddenBy lists the capabilities of gaps, a report's NotAssessed, that
+// leave the finding of category c and key unassessed, in gaps' order: a
+// report with any could not have produced the finding. A gap hides it
+// when its capability is one of the finding's Sources and is
+// unavailable, or partial with Skipped naming what the finding is about.
+// A partial capability's Skipped is what it did not read, so:
 //
 //   - api-usage and deprecated-calls leave unassessed the APIs they name
 //     ("group/version Kind", "group/version resource");
@@ -214,20 +217,17 @@ func Sources(c Category, key string) []inventory.Capability {
 //   - a partial capability that names nothing read everything that could
 //     have produced a finding.
 //
-// A category this binary does not know is unassessed whenever there is
-// any gap.
-func Unassessed(gaps []CapabilityGap, c Category, key string) bool {
+// Every gap hides a finding of a category this binary does not know.
+func HiddenBy(gaps []CapabilityGap, c Category, key string) []inventory.Capability {
 	sources := Sources(c, key)
+	var out []inventory.Capability
 	for _, g := range gaps {
-		switch {
-		case sources == nil:
-			return true
-		case !slices.Contains(sources, g.Capability):
-		case !g.Partial || g.skips(key):
-			return true
+		hides := sources == nil || slices.Contains(sources, g.Capability) && (!g.Partial || g.skips(key))
+		if hides && !slices.Contains(out, g.Capability) {
+			out = append(out, g.Capability)
 		}
 	}
-	return false
+	return out
 }
 
 // skips reports whether a partial gap's Skipped names what key is about.

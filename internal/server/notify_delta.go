@@ -65,13 +65,14 @@ func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Change {
 // findings, the ones it carries forward included (storedHeads): all it
 // reads of them. unassessed reports which of them curr could not have
 // seen (nil: none), because a capability they come from was not assessed
-// (unassessedIn). A blocker or eol-approaching finding of prev that is
-// gone from curr but unassessed is carried: neither resolved by this pass
-// nor news when its capability returns, and no became-ready while a
-// carried blocker remains. Nor is a deprecated caller that folds into a
-// carried usage finding (engine.FoldsInto) news: it is that finding, seen
-// without api-usage. carried is what the new evaluation's baseline
-// keeps of prev, until a pass that assessed it shows it gone.
+// in curr but was in the pass that last saw them (unassessedIn). A
+// blocker or eol-approaching finding of prev that is gone from curr but
+// unassessed is carried, with what it was seen without: neither resolved
+// by this pass nor news when its capability returns, and no became-ready
+// while a carried blocker remains. Nor is a deprecated caller that folds
+// into a carried usage finding (engine.FoldsInto) news: it is that
+// finding, seen without api-usage. carried is what the new evaluation's
+// baseline keeps of prev, until a pass that assessed it shows it gone.
 func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findingHead) bool) (changes []notify.Change, carried []findingHead) {
 	target := []string{curr.Target.String()}
 
@@ -316,6 +317,12 @@ type findingHead struct {
 	Severity engine.Severity `json:"severity"`
 	Key      string          `json:"key,omitempty"`
 	Title    string          `json:"title"` // kept only when Key is empty: the identity then
+	// SeenWithout is, of a carried finding, the capabilities the pass
+	// that last saw it did not assess for it (engine.HiddenBy): their
+	// gaps cannot hide it, since that pass found it without them. Of a
+	// report's own finding, storedHeads.baseline fills it in from the
+	// report's NotAssessed.
+	SeenWithout []inventory.Capability `json:"seenWithout,omitempty"`
 }
 
 func headOf(f engine.Finding) findingHead {
@@ -337,21 +344,30 @@ func (h findingHead) key() string {
 }
 
 // storedHeads is what the server reads of a stored report: its findings'
-// heads, and the heads of the findings its notification baseline carries
-// forward, which the report does not have (computeDelta).
+// heads, the capabilities it did not assess, and the heads of the
+// findings its notification baseline carries forward, which the report
+// does not have (computeDelta).
 //
 // carriedForward is the server's own: withCarried adds it to the encoded
 // report it stores, and it is never served, because every read decodes
 // the stored report into an engine.Report.
 type storedHeads struct {
-	Findings       []findingHead `json:"findings"`
-	CarriedForward []findingHead `json:"carriedForward,omitempty"`
+	Findings       []findingHead          `json:"findings"`
+	NotAssessed    []engine.CapabilityGap `json:"notAssessed,omitempty"`
+	CarriedForward []findingHead          `json:"carriedForward,omitempty"`
 }
 
-// baseline is the stored report as a notification baseline: its findings
-// and what it carries forward.
+// baseline is the stored report as a notification baseline: its findings,
+// each with the capabilities the report found it without (SeenWithout),
+// and what it carries forward, which keeps those of the pass that last
+// saw it.
 func (h storedHeads) baseline() []findingHead {
-	return append(slices.Clip(h.Findings), h.CarriedForward...)
+	out := make([]findingHead, 0, len(h.Findings)+len(h.CarriedForward))
+	for _, f := range h.Findings {
+		f.SeenWithout = engine.HiddenBy(h.NotAssessed, f.Category, f.key())
+		out = append(out, f)
+	}
+	return append(out, h.CarriedForward...)
 }
 
 // storedFindingHeads decodes a stored report's storedHeads, and nothing

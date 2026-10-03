@@ -227,10 +227,10 @@ type baseline struct {
 // pass (a collector failure) is neither a transition nor a reset; a pass
 // whose own verdict is unknown notifies nothing — what it could not see is
 // not news. A decided pass that did not assess a capability carries the
-// baseline's findings from it forward (computeDelta, unassessed). known
-// is that baseline when the caller holds it; otherwise deltaFor loads it,
-// and decodes only its findings' heads. Failures are logged and never
-// fail the pass.
+// baseline's findings from it forward, when the baseline saw them with it
+// (computeDelta, unassessed). known is that baseline when the caller
+// holds it; otherwise deltaFor loads it, and decodes only its findings'
+// heads and its gaps. Failures are logged and never fail the pass.
 func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline, unassessed func(findingHead) bool) targetDelta {
 	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
 	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
@@ -264,14 +264,26 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 }
 
 // unassessedIn reports which baseline findings rep, evaluated from inv,
-// could not have seen: those whose capability rep did not assess
-// (engine.Unassessed of its gaps), and deprecated callers while inv's
+// could not have seen: those a capability rep did not assess hides
+// (engine.HiddenBy of its gaps) that the pass that last saw them did
+// assess (findingHead.SeenWithout), and deprecated callers while inv's
 // apiserver was warming up (callsWarmingUp).
+//
+// A capability the finding was seen without cannot hide it: then the
+// finding came from the others, and its absence from them is as much
+// evidence as its presence was. That is what tells a capability that
+// went away since the finding was seen (#189) from one a supported
+// install never has, such as helm with rbac.helmSecrets=false, whose
+// add-on findings are then resolved and announced again as usual.
 func unassessedIn(rep engine.Report, inv inventory.Inventory) func(findingHead) bool {
 	warming := callsWarmingUp(inv)
 	return func(h findingHead) bool {
-		return (warming && h.Category == engine.CatDeprecatedAPIInUse) ||
-			engine.Unassessed(rep.NotAssessed, h.Category, h.key())
+		if warming && h.Category == engine.CatDeprecatedAPIInUse {
+			return true
+		}
+		return slices.ContainsFunc(engine.HiddenBy(rep.NotAssessed, h.Category, h.key()), func(c inventory.Capability) bool {
+			return !slices.Contains(h.SeenWithout, c)
+		})
 	}
 }
 

@@ -3,13 +3,16 @@ package server
 import (
 	"bytes"
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+	"github.com/abd-ulbasit/upgradescope/registry"
 )
 
 // A capability a pass did not assess hides its findings without anything
@@ -322,4 +325,130 @@ func TestAPIServerUpLongEnoughResolvesCallers(t *testing.T) {
 	h.clock.set(aug1.Add(time.Hour))
 	h.push("prod", scrapedAt(callsScraped(testInventory()), h.clock.now().Add(-deprecatedCallsWarmup), h.clock.now()))
 	expectBecameReady(t, h, "scrape of an apiserver up for the window")
+}
+
+// imageArgoInventory is Argo CD at version, found through its images,
+// with gap applied: a capability add-on findings come from that no pass
+// assesses (persistentGaps).
+func imageArgoInventory(version string, gap func(inventory.Inventory) inventory.Inventory) inventory.Inventory {
+	inv := argoChartInventory(version)
+	inv.AddOns[0].Source = "image"
+	return gap(inv)
+}
+
+// persistentGaps are supported installs that never assess a capability
+// add-on findings come from: a steady state, not an outage.
+var persistentGaps = []struct {
+	name string
+	gap  func(inventory.Inventory) inventory.Inventory
+}{
+	{"rbac.helmSecrets=false", func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: false, Reason: "list secrets: forbidden"}
+		return inv
+	}},
+	{"helm on the configmaps driver", func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: "configmaps driver not read", Skipped: []string{"configmaps"}}
+		return inv
+	}},
+	{"IngressClasses forbidden", func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true}
+		inv.Capabilities[inventory.CapAddOns] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: "list ingressclasses: forbidden", Skipped: []string{"ingressclasses"}}
+		return inv
+	}},
+}
+
+// TestPersistentGapStillResolvesAndReAlerts: a capability the pass that
+// saw a finding did not assess cannot hide that finding later; its
+// absence is as much evidence as its presence was. With helm never read,
+// an image-found EOL add-on that is fixed is became-ready, and its
+// return is a new blocker again.
+func TestPersistentGapStillResolvesAndReAlerts(t *testing.T) {
+	for _, tc := range persistentGaps {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, Config{KB: legacyKB()}, aug1)
+			h.push("prod", imageArgoInventory("2.10.0", tc.gap))
+			if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "blocked" {
+				t.Fatalf("cell with Argo CD 2.10 = %+v, want blocked", c)
+			}
+			expectNoEvents(t, h, "first evaluation")
+
+			h.push("prod", imageArgoInventory("3.1.0", tc.gap))
+			expectBecameReady(t, h, "Argo CD upgraded")
+
+			h.push("prod", imageArgoInventory("2.10.0", tc.gap))
+			if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
+				t.Fatalf("Argo CD 2.10 again: events = %+v, want one new-blocker", evs)
+			}
+		})
+	}
+}
+
+// TestPersistentGapReAlertsEOLApproaching: the same for a warning: a
+// release line nearing its end of life that leaves and returns is
+// announced again.
+func TestPersistentGapReAlertsEOLApproaching(t *testing.T) {
+	k := legacyKB()
+	a := &k.AddOns[0]
+	a.Cycles = append(a.Cycles, registry.Cycle{Cycle: "3.0", EOL: &registry.CycleEOL{Date: "2026-09-15"}, Citations: a.Support.Citations})
+	gap := persistentGaps[0].gap
+	h := newHarness(t, Config{KB: k}, aug1)
+	h.push("prod", imageArgoInventory("3.0.2", gap))
+	expectNoEvents(t, h, "first evaluation")
+	h.push("prod", imageArgoInventory("3.1.0", gap))
+	expectNoEvents(t, h, "Argo CD upgraded")
+
+	h.push("prod", imageArgoInventory("3.0.2", gap))
+	if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindEOLApproaching {
+		t.Fatalf("Argo CD 3.0 again: events = %+v, want one eol-approaching", evs)
+	}
+}
+
+// TestHelmOutageAfterHelmlessSighting: a finding seen while helm was not
+// assessed is not held by helm's gap later, but one seen with helm is,
+// and stays held through further passes of the outage (#189).
+func TestHelmOutageAfterHelmlessSighting(t *testing.T) {
+	h := newHarness(t, Config{KB: legacyKB()}, aug1)
+	withHelm := func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true}
+		return inv
+	}
+	h.push("prod", withHelm(argoChartInventory("2.10.0")))
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := argoChartInventory("2.10.0")
+	broken.AddOns = nil
+	broken = persistentGaps[0].gap(broken)
+	for i := range 3 {
+		h.push("prod", broken)
+		expectNoEvents(t, h, "helm failure, pass "+itoa(int64(i+1)))
+	}
+	h.push("prod", withHelm(argoChartInventory("3.1.0")))
+	expectBecameReady(t, h, "helm back, Argo CD upgraded")
+}
+
+// TestCarriedFindingKeepsWhatItWasSeenWithout: a carried finding is
+// judged by the gaps of the pass that last saw it, which it keeps, not
+// by those of the baseline that carries it. Today only helm is an
+// optional capability add-on findings come from, so the engine would
+// call the pass with versions partial unknown (and the server compute no
+// delta for it); the rule does not depend on that.
+func TestCarriedFindingKeepsWhatItWasSeenWithout(t *testing.T) {
+	inv := persistentGaps[0].gap(testInventory())
+	prev := []findingHead{{Category: engine.CatEOLAddon, Severity: engine.SevBlocker, Key: "eol-addon/argo-cd/2.10",
+		SeenWithout: []inventory.Capability{inventory.CapHelm}}}
+
+	target := inventory.Version{Major: 1, Minor: 35}
+	both := engine.Report{Target: target, Verdict: engine.VerdictReady, NotAssessed: []engine.CapabilityGap{
+		{Capability: inventory.CapHelm}, {Capability: inventory.CapVersions, Partial: true, Skipped: []string{"kube-proxy"}},
+	}}
+	changes, carried := computeDelta(prev, both, unassessedIn(both, inv))
+	if len(changes) != 0 || len(carried) != 1 || !slices.Equal(carried[0].SeenWithout, prev[0].SeenWithout) {
+		t.Fatalf("versions not assessed: changes %+v, carried %+v; want the finding carried as last seen", changes, carried)
+	}
+
+	helmOnly := engine.Report{Target: target, Verdict: engine.VerdictReady, NotAssessed: []engine.CapabilityGap{{Capability: inventory.CapHelm}}}
+	changes, carried = computeDelta(carried, helmOnly, unassessedIn(helmOnly, inv))
+	if len(carried) != 0 || len(changes) != 1 || changes[0].Kind != notify.KindBecameReady {
+		t.Fatalf("versions back: changes %+v, carried %+v; want became-ready", changes, carried)
+	}
 }

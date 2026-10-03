@@ -4,26 +4,39 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
-// TestEveryCategoryHasSources: every Category constant declared in
-// findings.go has an entry in categorySources, so a new category cannot
+// TestEveryCategoryHasSources: every Category constant declared in the
+// package has an entry in categorySources, so a new category cannot
 // leave its findings' capabilities unknown (and the server's notification
 // baseline unable to tell a capability gap from a fix).
 func TestEveryCategoryHasSources(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "findings.go", nil, 0)
+	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var decls []ast.Decl
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decls = append(decls, f.Decls...)
+	}
 	var cats []Category
-	for _, d := range f.Decls {
+	for _, d := range decls {
 		gd, ok := d.(*ast.GenDecl)
 		if !ok || gd.Tok != token.CONST {
 			continue
@@ -47,7 +60,7 @@ func TestEveryCategoryHasSources(t *testing.T) {
 		}
 	}
 	if len(cats) < 11 {
-		t.Fatalf("found %d Category constants in findings.go, want at least 11: %v", len(cats), cats)
+		t.Fatalf("found %d Category constants in package engine, want at least 11: %v", len(cats), cats)
 	}
 	for _, c := range cats {
 		if _, ok := categorySources[c]; !ok {
@@ -56,7 +69,7 @@ func TestEveryCategoryHasSources(t *testing.T) {
 	}
 	for c := range categorySources {
 		if !slices.Contains(cats, c) {
-			t.Errorf("categorySources lists %q, which findings.go does not declare", c)
+			t.Errorf("categorySources lists %q, which package engine does not declare", c)
 		}
 	}
 }
@@ -176,9 +189,35 @@ func TestUnassessed(t *testing.T) {
 		},
 	} {
 		for _, c := range tc.checks {
-			if got := Unassessed(tc.gaps, c.cat, c.key); got != c.want {
-				t.Errorf("%s: Unassessed(%s) = %v, want %v", tc.name, c.key, got, c.want)
+			if got := HiddenBy(tc.gaps, c.cat, c.key); (len(got) > 0) != c.want {
+				t.Errorf("%s: HiddenBy(%s) = %v, want unassessed %v", tc.name, c.key, got, c.want)
 			}
+		}
+	}
+}
+
+// TestHiddenBy: the capabilities named are those of the gaps that hide
+// the finding, once each, in the gaps' order.
+func TestHiddenBy(t *testing.T) {
+	gaps := []CapabilityGap{
+		{Capability: inventory.CapAddOns, Partial: true, Skipped: []string{"ingressclasses"}},
+		{Capability: inventory.CapAPIUsage, Partial: true, Skipped: []string{"v1 Endpoints"}},
+		{Capability: inventory.CapHelm},
+		{Capability: inventory.CapHelm, Partial: true, Skipped: []string{"shop/web"}}, // defensive: one gap per capability
+	}
+	for _, tc := range []struct {
+		cat  Category
+		key  string
+		want []inventory.Capability
+	}{
+		{CatEOLAddon, "eol-addon/argo-cd/2.10", []inventory.Capability{inventory.CapAddOns, inventory.CapHelm}},
+		{CatRemovedAPI, "removed-api/helm-release/shop/api", []inventory.Capability{inventory.CapHelm}},
+		{CatRemovedAPI, "removed-api/core/v1/Endpoints", []inventory.Capability{inventory.CapAPIUsage}},
+		{CatRemovedAPI, "removed-api/policy/v1beta1/PodSecurityPolicy", nil},
+		{Category("from-the-future"), "from-the-future/x", []inventory.Capability{inventory.CapAddOns, inventory.CapAPIUsage, inventory.CapHelm}},
+	} {
+		if got := HiddenBy(gaps, tc.cat, tc.key); !slices.Equal(got, tc.want) {
+			t.Errorf("HiddenBy(%s) = %v, want %v", tc.key, got, tc.want)
 		}
 	}
 }
