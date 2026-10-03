@@ -56,14 +56,25 @@ Each archive also has an SPDX SBOM (`<archive>.sbom.json`) and a GitHub
 build-provenance attestation (`gh attestation verify <archive> --repo
 abd-ulbasit/upgradescope`).
 
+The deb, rpm and apk packages are covered by the same `checksums.txt`, under
+the names GitHub serves them with, so download them by those names and the
+command above checks them too. (A pre-release's package names use `.` where
+nfpm's own would use `~`: `upgradescope_0.2.0.rc.2_amd64.deb`. `release-check`
+fails any asset name GitHub would rewrite.) `--ignore-missing` skips a file
+checksums.txt does not list, so confirm the output names every package you
+downloaded with `OK`.
+
 ## Homebrew
 
 ```sh
 brew install abd-ulbasit/tap/upgradescope
 ```
 
-Available from v0.2.0. The tap's formula is rendered only from releases
-whose `checksums.txt` verifies against the release workflow's signature.
+Available from v0.2.0, for stable releases only: the tap skips
+pre-releases (`-rc.N`), and its release notes do not offer it. The tap pulls
+each stable release on a schedule, so a new release reaches it within about
+six hours. Its formula is rendered only from releases whose `checksums.txt`
+verifies against the release workflow's signature.
 
 ## Go
 

@@ -309,6 +309,7 @@ hack-test:
 	./hack/check-changelog_test.sh
 	./hack/check-asset-names_test.sh
 	./hack/check-host-leak_test.sh
+	./hack/release-footer_test.sh
 	./hack/flags-diff_test.sh
 	./hack/check-doc-sizes_test.sh
 	./hack/chart-release-annotations_test.sh

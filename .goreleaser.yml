@@ -308,11 +308,14 @@ release:
   replace_existing_artifacts: true
   # The contracts listed under checksum: (#60).
   extra_files: *contracts
+  # The Homebrew line is stable-only: the tap pulls stable releases on a
+  # schedule and skips pre-releases (hack/release-footer_test.sh renders
+  # this for both). It must stay the last key of the file for that test.
   footer: |
     ## Install
 
-    - Homebrew: `brew install abd-ulbasit/tap/upgradescope`
-    - krew: `kubectl krew install upgradescope` (once the plugin is in krew-index)
+    {{ if not .Prerelease }}- Homebrew: `brew install abd-ulbasit/tap/upgradescope` (the tap pulls each stable release within about 6 hours)
+    {{ end }}- krew: `kubectl krew install upgradescope` (once the plugin is in krew-index)
     - Debian/Ubuntu, Fedora/RHEL, Alpine: the `.deb`, `.rpm` and `.apk` packages below. The packages themselves are unsigned (verify them with `checksums.txt`), so Alpine needs `apk add --allow-untrusted ./upgradescope_*.apk`.
     - Binary: download the archive for your platform below; it includes shell completions and man pages.
     - Image: `ghcr.io/abd-ulbasit/upgradescope:{{ .Version }}` (linux/amd64, linux/arm64)
