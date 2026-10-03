@@ -227,15 +227,18 @@ of 16 KiB with 64 KiB reasons and long skipped lists: with the gaps
 listed whole but for 1 KiB reasons and 10 skipped entries of 512 bytes,
 50 such clusters made `/fleet` answer 108 MB and grow the heap 516 MiB;
 now 500 of them, each evaluated at five targets (the default and four
-`--targets`, the most a server takes), grow it 16.4 MiB for `/fleet` (a
-2.5 MB answer), 3.8 for `/clusters` and 9.4 for `/metrics`
+`--targets`, the most a server takes), grow it 12.1 MiB for `/fleet` (a
+1.3 MB answer), 3.1 for `/clusters` and 9.7 for `/metrics`, on a
+GitHub-hosted `ubuntu-latest` runner; half of those clusters push as a
+v0.1.x agent does, unmarked, whose summaries are 24-31% larger
 (`TestFleetReadsOfTheWidestGapsAreBounded`). Their responses do
 grow with the fleet: at 500 clusters `/clusters` is ~230 KB, `/fleet`
 ~480 KB (~590 KB with 16 `?targets=`) and `/metrics` ~740 KB, and
 building one adds up to ~5 MiB to the heap (`/metrics` the most, about
-five times its response; ~16 MiB for the `/fleet` of the widest gaps
-above); at 2000 clusters with 200-byte names, with two
-`--targets`, they are 1.3, 2.3 (2.7 with 16 `?targets=`) and 9 MB, and
+five times its response; ~12 MiB for the `/fleet` of the widest gaps
+above); at 2000 clusters with 200-byte names, from a v0.1.x agent
+(unmarked, so each evaluation lists the gaps it is given), with two
+`--targets`, they are 2.1, 4.6 (5.0 with 16 `?targets=`) and 9.0 MB, and
 `/metrics` adds ~47 MiB. `/fleet?targets=` takes at most 16 distinct
 minors (`422` above): each is a column and a store query per cluster,
 and unbounded but for the 64 KiB URL, 8,718 of them against 500 clusters
@@ -257,7 +260,9 @@ that 2000-cluster fleet, and 30 held 433 MiB of `/metrics`, whose handler
 keeps the gathered metric families until its write returns; now 100 of
 any of them, a 16-target `/fleet` included, leave at most the 40 MiB
 budget live, and the heap peaks at most 168 MiB above idle with the two
-builds in their slots (`TestUnreadFleetResponsesAreBounded`). A
+builds in their slots: 57, 86, 90 and 127 MiB for `/clusters`, `/fleet`,
+the 16-target `/fleet` and `/metrics`, measured on a GitHub-hosted
+`ubuntu-latest` runner (`TestUnreadFleetResponsesAreBounded`). A
 Prometheus scrape or a dashboard poll that gets `503` is retried at its
 next interval.
 

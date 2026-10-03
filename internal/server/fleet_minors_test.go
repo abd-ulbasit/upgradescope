@@ -90,7 +90,7 @@ func TestFleetDefaultColumnsAreMeasured(t *testing.T) {
 // maxWideGapsFleetHeap is what one fleet-wide read of 500 clusters whose
 // evaluations carry the most gaps a push may name may add to the heap:
 // docs/operations.md counts two of them in the server's worst case.
-const maxWideGapsFleetHeap = 20 << 20 // measured 16.4 MiB for /fleet, at five targets
+const maxWideGapsFleetHeap = 20 << 20 // measured 12.1 MiB for /fleet, at five targets, on a GitHub-hosted ubuntu-latest runner (#212)
 
 // What an evaluation could not assess is in every fleet-wide read, for
 // every cluster and target, and a push within the inventory limits may

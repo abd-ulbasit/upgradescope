@@ -17,7 +17,7 @@ import (
 
 // The fleet TestUnreadFleetResponsesAreBounded reads: unreadFleetSize
 // clusters with names of unreadFleetNameLen bytes, each evaluated for its
-// next minor and two serve --targets minors. Its responses (1.3-4 MB) are
+// next minor and two serve --targets minors. Its responses (2.1-9.0 MB) are
 // several times what a kernel buffers for a client that does not read (a
 // few KiB on Linux with the test's small buffers, ~520 KiB on macOS
 // loopback whatever they are set to), so they wait in the server's heap.
@@ -31,7 +31,7 @@ const (
 // slots (maxConcurrentFleetReads at once) may add to the heap for that
 // fleet: the summaries they read, the responses and their encodings (for
 // /metrics, the gathered metric families too).
-const maxFleetSlotHeap = 128 << 20
+const maxFleetSlotHeap = 128 << 20 // measured 57-127 MiB on a GitHub-hosted ubuntu-latest runner (#212)
 
 // pushedFleet is a SQLite server holding one push from each of n
 // clusters, named with nameLen bytes, at v1.34 with no other signal, from
