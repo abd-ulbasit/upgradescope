@@ -542,3 +542,24 @@ func TestFleetRefusesAServerThatIsNotOne(t *testing.T) {
 		t.Error("NewFleet accepted an ftp URL")
 	}
 }
+
+// TestReportFileIsBounded: a path comes from an assistant, so a file larger
+// than the bound is refused before it is held in memory.
+func TestReportFileIsBounded(t *testing.T) {
+	big := filepath.Join(t.TempDir(), "big.json")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxReportFileBytes + 1); err != nil { // sparse
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cs := connect(t, localConfig())
+	res := call(t, cs, ToolGetReport, map[string]any{"report_file": big})
+	if !res.IsError || !strings.Contains(text(res), "larger than 64 MiB") {
+		t.Errorf("a file over the bound: isError=%v %q", res.IsError, text(res))
+	}
+}

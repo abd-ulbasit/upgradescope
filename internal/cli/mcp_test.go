@@ -28,6 +28,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/mcp"
 	"github.com/abd-ulbasit/upgradescope/internal/server"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // mixedInventory is the engine's mixed-everything fixture: an inventory with
@@ -219,12 +220,14 @@ func TestMCPStdioListsOnlyReadOnlyToolsAndListsFindings(t *testing.T) {
 	}
 }
 
-// fixtureReport is the engine's report of the mixed-everything inventory at
-// target: real findings of every severity, as a scan of a cluster with that
-// inventory would produce.
-func fixtureReport(t *testing.T, target inventory.Version) engine.Report {
+// fixtureEvaluator returns the engine's judgement of the mixed-everything
+// inventory at a target: real findings of every severity, as a scan of a
+// cluster with that inventory would produce. It loads everything up front,
+// by absolute path, so it can run on the server's goroutine (where t.Fatal
+// must not be called) and after the test has changed directory.
+func fixtureEvaluator(t *testing.T) func(inventory.Version) engine.Report {
 	t.Helper()
-	raw, err := os.ReadFile(mixedInventory)
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "internal", "engine", "testdata", "mixed-everything", "inventory.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +239,7 @@ func fixtureReport(t *testing.T, target inventory.Version) engine.Report {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return engine.Evaluate(inv, k, target, time.Now())
+	return func(target inventory.Version) engine.Report { return engine.Evaluate(inv, k, target, time.Now()) }
 }
 
 // stubScan replaces the cluster read of `scan` with the fixture inventory,
@@ -244,10 +247,11 @@ func fixtureReport(t *testing.T, target inventory.Version) engine.Report {
 func stubScan(t *testing.T) *[]scanOptions {
 	t.Helper()
 	var got []scanOptions
+	evaluate := fixtureEvaluator(t)
 	orig := runScan
 	runScan = func(opts scanOptions) (engine.Report, error) {
 		got = append(got, opts)
-		return fixtureReport(t, opts.targetVersion), nil
+		return evaluate(opts.targetVersion), nil
 	}
 	t.Cleanup(func() { runScan = orig })
 	return &got
@@ -302,8 +306,8 @@ func TestMCPScanFeedsTheOtherTools(t *testing.T) {
 // with neither, the scan gets no kubeconfig or context of its own, so
 // clientcmd's standard rules ($KUBECONFIG, the current context) decide, as
 // for `scan`. A call cannot name another cluster, nor read manifests, nor
-// change the output; the scan carries no other default (no team label, no
-// ignore file, no gate).
+// change the output; the scan carries no other default (no ignore file,
+// no gate, no plan).
 func TestMCPScanHonoursOnlyKubeconfigContextAndTheEnvironment(t *testing.T) {
 	scans := stubScan(t)
 	for _, tc := range []struct {
@@ -360,18 +364,44 @@ func TestMCPScanHonoursOnlyKubeconfigContextAndTheEnvironment(t *testing.T) {
 	})
 }
 
+// TestMCPScanLooksUpNoIgnoreFile: the working directory is the MCP client's
+// choice, so an .upgradescope.yaml found there does not hide findings from
+// the assistant; the report holds every finding of the scan.
+func TestMCPScanLooksUpNoIgnoreFile(t *testing.T) {
+	stubScan(t)
+	want := fixtureEvaluator(t)(inventory.Version{Major: 1, Minor: 38})
+	if len(want.Findings) == 0 {
+		t.Fatal("the fixture has no findings to hide")
+	}
+	dir := writeFiles(t, map[string]string{suppress.ConfigFile: "ignore:\n  - category: " + string(want.Findings[0].Category) + "\n    reason: not for the assistant\n"})
+	t.Chdir(dir)
+
+	cs := startMCP(t)
+	callMCP(t, cs, mcp.ToolScan, map[string]any{"targets": []any{"1.38"}})
+	res := callMCP(t, cs, mcp.ToolListFindings, map[string]any{"limit": 500})
+	var found findingsResult // not validateFindings: the schema is found relative to the test's directory
+	raw, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(raw, &found); err != nil {
+		t.Fatal(err)
+	}
+	if found.Total != len(want.Findings) {
+		t.Errorf("list_findings = %d findings, want the scan's %d: an ignore file in the working directory was applied", found.Total, len(want.Findings))
+	}
+}
+
 // TestMCPScanTargetsAndErrors: several targets are scanned in order, and a
 // cluster that cannot be read is a tool error carrying the reason.
 func TestMCPScanTargetsAndErrors(t *testing.T) {
 	var targets []string
 	fail := false
+	evaluate := fixtureEvaluator(t)
 	orig := runScan
 	runScan = func(opts scanOptions) (engine.Report, error) {
 		targets = append(targets, opts.targetVersion.String())
 		if fail {
 			return engine.Report{}, fmt.Errorf("cannot read the cluster at context %q: unauthorized", opts.kubecontext)
 		}
-		return fixtureReport(t, opts.targetVersion), nil
+		return evaluate(opts.targetVersion), nil
 	}
 	t.Cleanup(func() { runScan = orig })
 	cs := startMCP(t, "--context", "gone")
@@ -627,6 +657,24 @@ func TestMCPHTTP(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("a request with a foreign Host header = %s, want 403", resp.Status)
+	}
+
+	// A page in a browser on another origin cannot drive the endpoint,
+	// whether the browser says so (Sec-Fetch-Site) or only names its Origin.
+	for name, header := range map[string]http.Header{
+		"cross-site fetch": {"Sec-Fetch-Site": {"cross-site"}, "Origin": {"http://evil.example.com"}},
+		"foreign origin":   {"Origin": {"http://evil.example.com"}},
+	} {
+		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/mcp", strings.NewReader(`{}`))
+		req.Header = header
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s = %s, want 403", name, resp.Status)
+		}
 	}
 }
 
