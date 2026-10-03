@@ -290,7 +290,11 @@ func unassessedIn(rep engine.Report, inv inventory.Inventory) func(findingHead) 
 const deprecatedCallsWarmup = 24 * time.Hour
 
 // callsWarmingUp reports whether inv's deprecated calls were scraped from
-// an apiserver up for less than deprecatedCallsWarmup. An inventory
+// an apiserver up for less than deprecatedCallsWarmup. It reads the
+// current scrape alone, not whether the apiserver restarted since the
+// baseline's: deliberately broader, since the metric only ever starts
+// empty at a start, so a scrape this young misses what the apiserver
+// has not been asked yet, restart or new cluster. An inventory
 // without the apiserver's start time (an older agent's, a scrape that did
 // not report it) or a collection time is judged as before it existed:
 // not warming.
@@ -314,18 +318,25 @@ func warmupEnded(e store.Evaluation, inv inventory.Inventory) bool {
 }
 
 // keepCarried stores what e's baseline carries forward in its report
-// (withCarried), within maxReportBytes, or returns a
-// *reportTooLargeError.
-func (s *Server) keepCarried(e *store.Evaluation, rep engine.Report, carried []findingHead) error {
-	b, err := withCarried(e.Report, carried)
-	if err != nil {
-		return fmt.Errorf("storing carried findings (cluster %d, target %s): %w", e.ClusterID, rep.Target, err)
+// (withCarried) and returns it. Over maxReportBytes, or should the report
+// not take it, it stores none and returns nil: the evaluation of a
+// report that fits is never refused for the server's own bookkeeping,
+// and its baseline is then its findings alone, as before carry-forward
+// existed (a carried blocker may be resolved, or announced again).
+func (s *Server) keepCarried(e *store.Evaluation, carried []findingHead) []findingHead {
+	if len(carried) == 0 {
+		return nil
 	}
-	if limit := s.maxReportBytes(); int64(len(b)) > limit {
-		return &reportTooLargeError{target: rep.Target, limit: limit}
+	b, err := withCarried(e.Report, carried)
+	if err == nil && int64(len(b)) > s.maxReportBytes() {
+		err = fmt.Errorf("the report would be over the %s limit for a report", sizeString(s.maxReportBytes()))
+	}
+	if err != nil {
+		log.Printf("server: not carrying %d finding(s) forward (cluster %d, target %s): %v", len(carried), e.ClusterID, e.Target, err)
+		return nil
 	}
 	e.Report = b
-	return nil
+	return carried
 }
 
 // outboxFor turns one pass's merged deltas into one notification for the
@@ -405,9 +416,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			return 0, false, err
 		}
 		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep, evalInv))
-		if err := s.keepCarried(&e, rep, d.carried); err != nil {
-			return 0, false, err
-		}
+		d.carried = s.keepCarried(&e, d.carried)
 		batch.Insert = append(batch.Insert, e)
 		deltas.add(d)
 	}
@@ -485,12 +494,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		// unchanged result (below) has no changes, but may carry less.
 		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
 		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, evalInv))
-		if err := s.keepCarried(&e, rep, d.carried); errors.As(err, &tooLarge) {
-			log.Printf("server: re-evaluation of cluster %d skipped for target %s: %v", cluster.ID, target, err)
-			continue
-		} else if err != nil {
-			return err
-		}
+		d.carried = s.keepCarried(&e, d.carried)
 		batch.Current[target.String()] = cur.ID // 0 when not found
 		if decoded && sameResult(cur, stored.Findings, rep) && sameHeads(stored.CarriedForward, d.carried) {
 			e.ID = cur.ID

@@ -1,12 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 // A capability a pass did not assess hides its findings without anything
@@ -220,6 +223,33 @@ func TestUnassessedCapabilityStillAnnouncesNewBlockers(t *testing.T) {
 	evs := h.drain()
 	if len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
 		t.Fatalf("events = %+v, want one new-blocker for PSP", evs)
+	}
+}
+
+// TestKeepCarriedOverLimitKeepsTheEvaluation: carried heads that would
+// take a report over maxReportBytes are not stored, rather than failing
+// a push whose report fits: the next pass's baseline is then the
+// report's own findings, as before carry-forward existed.
+func TestKeepCarriedOverLimitKeepsTheEvaluation(t *testing.T) {
+	const limit = 1 << 10
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxSnapshotBytes = limit })
+	carried := []findingHead{{Category: "deprecated-api-in-use", Severity: "blocker", Key: "deprecated-api-in-use/networking.k8s.io/v1beta1/servicecidrs"}}
+
+	small := store.Evaluation{Report: []byte(`{"findings":[]}`)}
+	if got := s.keepCarried(&small, carried); len(got) != 1 {
+		t.Fatalf("kept %v, want the carried head", got)
+	}
+	if heads, err := storedFindingHeads(small.Report); err != nil || len(heads.CarriedForward) != 1 {
+		t.Fatalf("stored heads = %+v, %v; want the carried head", heads, err)
+	}
+
+	report := []byte(`{"findings":[],"pad":"` + strings.Repeat("x", limit-40) + `"}`)
+	near := store.Evaluation{Report: report}
+	if got := s.keepCarried(&near, carried); got != nil {
+		t.Fatalf("kept %v over the limit, want none", got)
+	}
+	if !bytes.Equal(near.Report, report) {
+		t.Fatalf("report changed over the limit: %d bytes", len(near.Report))
 	}
 }
 
