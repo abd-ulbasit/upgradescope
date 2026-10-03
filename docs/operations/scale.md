@@ -20,8 +20,9 @@ them.
   the one cost that grew with releases rather than with pages (1,000 GETs of
   1,059 requests).
 - **Memory fits the chart's defaults** (64Mi request, 256Mi limit) with room:
-  the peak RSS never passed 59 MiB at any size measured, including the first tick. CPU is what a large
-  cluster uses: see [CPU](#cpu-and-the-chart-limit).
+  the peak RSS never passed 59 MiB at any size measured, the first tick
+  included. CPU is what a large cluster uses: see
+  [CPU](#cpu-and-the-chart-limit).
 - **One `serve` ingested 200 clusters with three targets each, all pushing at
   once, with no failed push and no retry**: 57 new snapshots a second on
   SQLite and 42 on Postgres, on a 2017 dual-core i3 that also ran the
@@ -37,7 +38,7 @@ them.
 | Driver | MacBook Pro (`MacBookPro18,3`, Apple M1 Pro, 16 GiB, `sysctl hw.model`), Go 1.26.8, client-go 0.37.1. It seeded the cluster and cross-compiled the benchmarks; the measured agent ticks and the server benchmark ran on the ThinkPad |
 | Postgres | 17.11 (`postgres:17-alpine`), a throwaway container on the ThinkPad's Docker engine, 0.1 ms round trip from the benchmark |
 | SQLite | the embedded `modernc.org/sqlite` v1.60.1, in a temporary directory on the ThinkPad's SSD |
-| upgradescope | branch `feat/scale-harness` at `91a4e74` for the agent (the "before" column is the same commit with the Helm cache commit `e1ef4ca` reverted) and `a735fcb` for the server; the server code is unchanged by this work |
+| upgradescope | branch `feat/scale-harness` at `91a4e74` for the agent (the "before" table is the same commit with the Helm cache commit `e1ef4ca` reverted) and `a735fcb` for the server; the server code is unchanged by this work |
 | Also running | two other idle kind clusters on the same ThinkPad, and for the agent runs the lab's own KWOK controller keeping 2,000 nodes alive |
 
 ### What is simulated
@@ -54,8 +55,8 @@ them.
   contention with other clients, no admission webhooks, and the agent talks
   to it from the same host (a round trip well under a millisecond). The
   requests of a tick are mostly sequential, so a slow link multiplies: a
-  trial run from a laptop over a VPN (60 ms round trip) took 15 s for the
-  tick that took 5.4 s beside the apiserver (250 releases), and an earlier
+  trial run from a laptop over a VPN (60 ms round trip) took 13 to 16 s for
+  the tick that took 5.4 s beside the apiserver (250 releases), and an earlier
   trial beside the apiserver, with about 1,360 releases because of a seeding
   bug since fixed, took 40 to 78 s a tick and reached the Helm step's
   deadline on the first (13 releases unread).
