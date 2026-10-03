@@ -273,3 +273,45 @@ func TestIngressNginxRetirement(t *testing.T) {
 		t.Errorf("recommendation = %q, want Gateway API migration hint", in.Recommendation)
 	}
 }
+
+// Five products are retired as a whole and are end-of-life at any version
+// (docs/claims.md AO-10). Their status and dates come from vendor pages and
+// the archived repositories cited in each entry; pinning them here is what
+// turns CI red if one is edited back to `supported` or loses its date.
+func TestRetiredProductsAreEOL(t *testing.T) {
+	addons, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	tests := []struct {
+		id      string
+		eolDate string // a vendor page's date, or the day the repository was archived
+		cite    string // a primary source the entry must carry
+	}{
+		{"kubernetes-dashboard", "2026-01-21", "https://github.com/kubernetes-retired/dashboard"},
+		{"promtail", "2026-03-02", "https://grafana.com/docs/loki/latest/send-data/promtail/"},
+		{"grafana-agent", "2025-11-01", "https://grafana.com/docs/agent/latest/"},
+		{"weave-net", "2024-06-20", "https://github.com/weaveworks/weave"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id, func(t *testing.T) {
+			i := slices.IndexFunc(addons, func(a AddOn) bool { return a.ID == tc.id })
+			if i < 0 {
+				t.Fatalf("%s not found in embedded registry", tc.id)
+			}
+			a := addons[i]
+			if a.Support.Status != "eol" || a.Support.EOLDate != tc.eolDate {
+				t.Errorf("support = %s/%q, want eol/%q", a.Support.Status, a.Support.EOLDate, tc.eolDate)
+			}
+			if !slices.Contains(a.Support.Citations, tc.cite) {
+				t.Errorf("citations %v missing %q", a.Support.Citations, tc.cite)
+			}
+			if len(a.Compat) != 0 || len(a.Cycles) != 0 {
+				t.Errorf("a product retired as a whole carries no release lines, got compat=%d cycles=%d", len(a.Compat), len(a.Cycles))
+			}
+			if a.Recommendation == "" {
+				t.Error("no recommendation")
+			}
+		})
+	}
+}
