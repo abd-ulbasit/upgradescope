@@ -19,8 +19,9 @@ step when findings reach `fail-on`, and it reports in three places:
   had never fails the gate: its `::warning` title says "in baseline".
   Suppressed findings are not annotated.
 - **SARIF and outputs.** The SARIF file is complete even when the gate fails,
-  so you can upload it to code scanning. The action also sets the verdict,
-  score and counts as outputs for later steps.
+  so you can upload it to code scanning. When the scan itself fails (exit
+  1), there is no complete SARIF and `sarif-file` is not set. The action
+  also sets the verdict, score and counts as outputs for later steps.
 
 ## Usage
 
@@ -28,15 +29,24 @@ Pick how the gate moves:
 
 - **`@v0` follows the newest v0.x release.** The release workflow moves the
   `v0` tag to every stable release once it is published and verified
-  (from v0.2.0 on). With the default `version: latest`, the binary and its
-  knowledge base move with it. This is the convenient choice, but a release
-  can change the verdict on an unchanged pull request.
+  (from v0.2.0 on). Since `v0` is not a release tag, the default `version`
+  is `latest`, and the binary and its knowledge base move with it. This is
+  the convenient choice, but a release can change the verdict on an
+  unchanged pull request.
 - **`@vX.Y.Z` or a commit SHA, plus `version`, for a reproducible gate.**
   Pin the action to a release tag or, stricter, the tag's full commit SHA,
-  and set `version` to the same release. If you pin only the action ref,
-  `version: latest` still floats the binary to the newest release, and with
-  it the knowledge base and the verdicts. With both pinned, the gate changes
-  only when you bump them.
+  and set `version` to the same release. With `version` unset, an action at
+  a release tag (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that same release, so
+  `@v0.2.0-rc.2` runs v0.2.0-rc.2. At any other ref (a branch, a commit SHA,
+  `v0`) an unset `version` means `latest`, which floats the binary to the
+  newest stable release, and with it the knowledge base and the verdicts.
+  With both pinned, the gate changes only when you bump them.
+- **`latest` skips prereleases.** GitHub's latest release is never a release
+  candidate. If you set `version: latest` at a release tag that is newer
+  than the latest release (a release candidate, say), the step logs a
+  `::warning` that the binary is older than the action, since an older
+  engine can pass what the newer one blocks. The action cannot compare a
+  commit SHA or branch with a release, so it gives no such warning there.
 
 The examples below pin v0.2.0, the first release that ships this action
 (root `action.yml`, outputs, step summary). Put the release you pin in its
@@ -209,7 +219,7 @@ release assets anonymously.
 | `target` | yes | | Target Kubernetes minor version, such as `1.36`. |
 | `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
 | `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
-| `version` | no | `latest` | A release tag such as `v0.2.0`, `latest`, or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. |
+| `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag, and at any other ref it runs `latest`. |
 | `config` | no | | Path to an `.upgradescope.yaml` with ignore rules (`scan --config`). Unset, the scan looks for `.upgradescope.yaml` in `path`, then at the repository root. |
 | `baseline` | no | | Path to the JSON report of an earlier scan: the `report-json` output, or a `write-baseline` file (`scan --baseline`). The gate then fails only on findings that are new since. |
 | `write-baseline` | no | | Also write this scan's JSON report, after suppression, to this path, for a later `baseline` (`scan --write-baseline`). |
@@ -218,7 +228,10 @@ Relative paths resolve from the workspace. The action checks every input
 before it downloads anything. A bad `version`, `target`, `fail-on` or
 `allow-incomplete` value, a `path` that does not exist, a `config` or `baseline` that is not
 a file, or a `write-baseline` whose directory does not exist fails the
-step with an error that names the input. Earlier versions of
+step with an error that names the input. The error shows the value with
+`%`, carriage returns and line breaks escaped (as `%25`, `%0D` and `%0A`),
+so a value holding a line break and `::warning::` cannot forge an
+annotation or a log mask. Earlier versions of
 the action passed any other `version` to `go install`, so a branch name or
 commit worked there; now it must be a release tag, `latest` or
 `preinstalled`.
@@ -227,7 +240,7 @@ commit worked there; now it must be a release tag, `latest` or
 
 | Output | |
 |---|---|
-| `sarif-file` | Path to the SARIF report. It is complete when the gate fails, so upload it with `if: ${{ !cancelled() }}`. |
+| `sarif-file` | Path to the SARIF report. It is complete when the gate fails, so upload it with `if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}`. It is not set when the scan itself failed (exit 1), so that guard skips the upload instead of failing on an empty file. |
 | `report-json` | Path to the JSON report, the same as `upgradescope scan --output json`. |
 | `verdict` | `ready`, `blocked` or `unknown`. `unknown` means no blocker was found but a required check could not run. |
 | `ready` | `true` when the verdict is `ready`, otherwise `false`. |
@@ -261,7 +274,7 @@ cannot write the step summary, so a warning replaces it.
 |---|---|
 | 0 | The gate passed. |
 | 2 | The scan worked and the gate failed: findings at or above `fail-on`, or an `unknown` verdict without `allow-incomplete`. The SARIF, outputs and summary are all written. |
-| 1 | The scan itself failed, for example because no manifests were found under `path`, or the config file or baseline is invalid. The summary says so and the log has the error. |
+| 1 | The scan itself failed, for example because no manifests were found under `path`, or the config file or baseline is invalid. The summary says so and the log has the error. No outputs are set, `sarif-file` included. |
 
 ## Install and integrity
 

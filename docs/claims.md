@@ -152,8 +152,11 @@ audited") and names the issue that tracks it.
 | ID | Claim | Proven by |
 |---|---|---|
 | AC-02 | Exit code 2 (findings at or above `fail-on`, or an `unknown` verdict without `allow-incomplete`) fails the step. | `ci:action` `hack/action_test.sh` |
+| AC-02b | `sarif-file` is set only when the scan produced a complete SARIF (exit 0 or 2), so the documented upload guard `!cancelled() && sarif-file != ''` skips the upload after a scan error (#197). | `hack/action_test.sh` |
 | AC-03 | `version` installs a release archive verified against its `checksums.txt`, or `preinstalled` uses the binary on PATH. | `hack/action_test.sh` `ci:action` |
 | AC-05 | Inputs never reach a `run:` script unquoted, and are validated before use. | `hack/action_test.sh` |
+| AC-05b | An input value echoed to the log (in a validation error) has `%`, CR and LF escaped, so it cannot start a workflow command: no forged annotation, no `::add-mask::` (#197). | `hack/action_test.sh` |
+| NEW-action-1 | With `version` unset, the Action used at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that release, not GitHub's latest, which skips prereleases; at another ref it runs latest; `version: latest` at a tag ref warns when the latest is older than the ref's release (#197). | `hack/action_test.sh` |
 | AC-07 | Run as a consumer runs it, on Linux and macOS, the Action installs the latest release and fails on a fixture holding a removed API. | `ci:action` |
 | AC-08 | The Action sets `score`, `verdict`, `blockers` and the other outputs, annotations, and a job summary listing suppressed findings and the baseline diff. | `hack/action_test.sh` `ci:action` |
 | AC-09 | `allow-incomplete: true` passes `scan --allow-incomplete` to the gate (#130): a target past the knowledge base's horizon, with no blocker, passes with the `verdict` output still `unknown`, and blockers still fail; `false` or unset passes nothing, so the unknown verdict fails the step; any other value is refused before anything is downloaded. | `hack/action_test.sh` |

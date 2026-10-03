@@ -11,20 +11,61 @@
 # INPUT_BASELINE, INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
 # the runner pastes an expression's value into the script text, so a value
 # holding `"; cmd` would run cmd (GitHub's script-injection guidance).
+# ACTION_REF is the ref the action was used at (github.action_ref). A value
+# echoed to the log is escaped (esc), so it cannot start a workflow command.
 # hack/action_test.sh (make action-test) covers every path here offline.
 set -euo pipefail
 
 releases=https://github.com/abd-ulbasit/upgradescope/releases
 module=github.com/abd-ulbasit/upgradescope/cmd/upgradescope
 
+# esc <text>: the text as one workflow-command value (% and line breaks
+# escaped), so no line of it can start a command of its own. An input
+# echoed to the log goes through it: a value holding a newline and
+# "::warning::" would otherwise forge an annotation, or "::add-mask::" a
+# log mask.
+esc() {
+  local s=$1
+  s=${s//\%/%25}
+  s=${s//$'\r'/%0D}
+  s=${s//$'\n'/%0A}
+  printf '%s' "$s"
+}
+
 die() {
-  echo "::error::upgradescope action: $*"
+  echo "::error::$(esc "upgradescope action: $*")"
   exit 1
+}
+
+# An action ref that is a release tag: vX.Y.Z or vX.Y.Z-rc.N.
+release_tag='^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'
+
+# release_older <a> <b>: whether release tag a is older than b. Semver
+# order: the core numerically, then a candidate (-rc.N) before its release.
+release_older() {
+  local a=${1#v} b=${2#v} ac bc ap bp i
+  ac=${a%%-*} bc=${b%%-*}
+  ap=${a#"$ac"} bp=${b#"$bc"}
+  if [ "$ac" != "$bc" ]; then
+    local IFS=.
+    local x=($ac) y=($bc)
+    for i in 0 1 2; do
+      ((10#${x[i]} == 10#${y[i]})) || return $((10#${x[i]} < 10#${y[i]} ? 0 : 1))
+    done
+  fi
+  [ "$ap" != "$bp" ] || return 1
+  [ -n "$ap" ] || return 1
+  [ -n "$bp" ] || return 0
+  ap=${ap##*.} bp=${bp##*.}
+  [[ $ap =~ ^[0-9]+$ ]] || ap=0
+  [[ $bp =~ ^[0-9]+$ ]] || bp=0
+  ((10#$ap < 10#$bp))
 }
 
 validate() {
   local v=${INPUT_VERSION-} t=${INPUT_TARGET-} f=${INPUT_FAIL_ON-} p=${INPUT_PATH-}
-  [[ $v =~ ^(latest|preinstalled|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] ||
+  # Empty is the default: the action ref's release, else latest.
+  [ -z "$v" ] || [[ $v =~ ^(latest|preinstalled|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] ||
     die "invalid version '$v' (want latest, preinstalled or a release tag like v0.2.0)"
   [[ $t =~ ^v?1\.[0-9]+(\.[0-9]+)?$ ]] ||
     die "invalid target '$t' (want a Kubernetes minor version like 1.36)"
@@ -88,7 +129,20 @@ install() {
   # deliberately omits the version (hack/release-check.sh checks this line).
   asset="upgradescope_${os}_${arch}.tar.gz"
 
-  local tag=$INPUT_VERSION
+  # No version: the release the action itself is pinned at, when its ref is
+  # one, so @v0.2.0-rc.2 runs v0.2.0-rc.2. GitHub's latest skips
+  # prereleases, and would run an older release's engine (it missed
+  # removals added since) and pass what this one blocks. Any other ref (a
+  # branch, a SHA, v0) has no release of its own: latest.
+  local tag=$INPUT_VERSION ref=${ACTION_REF-}
+  if [ -z "$tag" ]; then
+    if [[ $ref =~ $release_tag ]]; then
+      tag=$ref
+      echo "version defaults to the action ref $tag"
+    else
+      tag=latest
+    fi
+  fi
   if [ "$tag" = latest ]; then
     # Pin "latest" to one tag first, so the archive and checksums.txt come
     # from the same release even if one is published in between.
@@ -96,11 +150,14 @@ install() {
     url=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' "$releases/latest") || url=
     tag=${url##*/}
     if [[ ! $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-      echo "cannot resolve the latest release (got '$url')"
+      echo "cannot resolve the latest release (got '$(esc "$url")')"
       go_install latest
       return
     fi
     echo "latest release is $tag"
+    if [[ $ref =~ $release_tag ]] && release_older "$tag" "$ref"; then
+      echo "::warning::version latest is $tag, older than this action's own release $ref: GitHub's latest skips prereleases, and an older engine can pass what $ref blocks. Set version: $ref"
+    fi
   fi
 
   local dl
@@ -184,10 +241,10 @@ scan() {
   # never, where an unknown verdict already passes.
   local allow=()
   [ "${INPUT_ALLOW_INCOMPLETE:-false}" != true ] || allow=(--allow-incomplete)
-  echo "sarif-file=$sarif" >>"$GITHUB_OUTPUT"
 
   # The gate. exit 0: passed; 2: scan worked, gate failed (the SARIF is
-  # still complete: upload it with `if: always()`); 1: the scan broke.
+  # still complete: upload it with `if: ${{ !cancelled() && ... }}`);
+  # 1: the scan broke, and the SARIF is empty or cut short.
   local status=0
   upgradescope scan "${gate[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" ${allow[@]+"${allow[@]}"} >"$sarif" || status=$?
   if [ "$status" != 0 ] && [ "$status" != 2 ]; then
@@ -195,6 +252,9 @@ scan() {
     echo "::error::upgradescope scan failed (exit $status)"
     exit "$status"
   fi
+  # Only a complete SARIF is an output: after a scan error, an upload step
+  # guarded on sarif-file != '' skips, and does not fail on an empty file.
+  echo "sarif-file=$sarif" >>"$GITHUB_OUTPUT"
 
   # The same scan as JSON (outputs, annotations) and Markdown (summary,
   # log). --fail-on never: the gate above already decided the exit code.

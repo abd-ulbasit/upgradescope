@@ -53,6 +53,18 @@ for i in $inputs; do
     fail "action.yml passes input $i to both steps as $var" "$work/out"
   fi
 done
+# run.sh's install reads the ref the action was used at (ACTION_REF) to
+# default version to a release tag ref; the empty version default is what
+# tells "unset" from an explicit latest.
+for yml in action.yml action/action.yml; do
+  if [ "$(grep -cxF '        ACTION_REF: ${{ github.action_ref }}' "$yml")" = 1 ] &&
+    awk '/^  version:$/ { on = 1; next } on && /^  [a-z-]+:$/ { on = 0 } on && /^    default: ""$/ { found = 1 } END { exit !found }' "$yml"; then
+    ok "$yml passes github.action_ref and leaves version unset by default"
+  else
+    grep -n 'ACTION_REF\|default:' "$yml" >"$work/out" || true
+    fail "$yml passes github.action_ref and leaves version unset by default" "$work/out"
+  fi
+done
 for var in $(grep -o 'INPUT_[A-Z_]*' action/run.sh | sort -u); do
   if grep -qx "$var" < <(for i in $inputs; do echo "INPUT_$(tr 'a-z-' 'A-Z_' <<<"$i")"; done); then
     ok "run.sh's $var is an input"
@@ -173,6 +185,8 @@ release v9.9.8 bad
 release v9.9.7 missing
 release v9.9.6 none no-archive
 release v9.9.5 none
+release v9.9.4 ok
+release v9.9.9-rc.1 ok
 
 # The real binary, for the scan cases.
 mkdir -p "$work/real"
@@ -239,7 +253,67 @@ expect "write-baseline into a missing directory is rejected" 1 "write-baseline '
 run install "$work/stub-curl:" INPUT_WRITE_BASELINE=action/testdata
 expect "a directory as write-baseline is rejected" 1 "write-baseline 'action/testdata' is a directory"
 
+# A value that reaches the log must not start a workflow command of its own
+# (#197 AC-05b): its line breaks and % are escaped, so the only line that
+# starts with :: is die()'s own ::error. Every input that die() echoes.
+nl=$'\n'
+for pair in \
+  "INPUT_VERSION=v1.0.0${nl}::warning title=FORGED::x" \
+  "INPUT_TARGET=1.36${nl}::warning title=FORGED::x" \
+  "INPUT_FAIL_ON=never${nl}::add-mask::upgradescope" \
+  "INPUT_ALLOW_INCOMPLETE=true${nl}::notice::x" \
+  "INPUT_PATH=action/testdata/removed${nl}::error title=FORGED-PATH::x" \
+  "INPUT_CONFIG=ci/x.yaml${nl}::notice::x" \
+  "INPUT_BASELINE=ci/x.json${nl}::notice::x" \
+  "INPUT_WRITE_BASELINE=ci/${nl}::notice::x/y.json"; do
+  var=${pair%%=*}
+  run install "$work/stub-curl:" "$pair"
+  if [ "$code" = 1 ] && [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -q '^::error::upgradescope action: ' "$work/out" &&
+    grep -qF '%0A::' "$work/out"; then ok "a line break in $var cannot start a workflow command"; else
+    fail "a line break in $var cannot start a workflow command" "$work/out"
+  fi
+done
+run install "$work/stub-curl:" INPUT_TARGET=$'1.36\r::warning::x'
+if [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -qF '%0D::warning::x' "$work/out"; then ok "a CR in an input cannot start a workflow command"; else
+  fail "a CR in an input cannot start a workflow command" "$work/out"
+fi
+# % is escaped too, so an input cannot spell %0A for the runner to decode.
+run install "$work/stub-curl:" INPUT_TARGET='1.36%0A::set-output name=x::y'
+expect "a % in an input is escaped, not decoded by the runner" 1 "invalid target '1.36%250A::set-output name=x::y'"
+hasnt "no GITHUB_OUTPUT write for a bad input" "$rt/output" "x="
+
 # --- install ----------------------------------------------------------------
+
+# With no version, an action at a release tag runs that release (#197
+# NEW-action-1): GitHub's latest skips prereleases, so @v0.2.0-rc.2 would
+# otherwise run an older stable release's engine and pass what it blocks.
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "no version at a release tag ref installs that tag" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+has "the default version is logged" "$work/out" "version defaults to the action ref v9.9.9"
+hasnt "no version at a tag ref does not ask for the latest release" "$work/calls" "$releases/latest"
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4
+expect "no version at a release candidate tag ref installs that tag" 0 "installed upgradescope v9.9.9-rc.1 from $releases/download/v9.9.9-rc.1/$asset"
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.9 ACTION_REF=v9.9.9-rc.1
+expect "an explicit version wins over the ref" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+for ref in main v0 v9.9 0123456789abcdef0123456789abcdef01234567 v9.9.9-beta.1 "v9.9.9${nl}::x"; do
+  run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF="$ref" STUB_LATEST=v9.9.4
+  expect "no version at ref ${ref%%$nl*} installs the latest release" 0 "latest release is v9.9.4"
+  hasnt "no version at ref ${ref%%$nl*} is not read as a tag" "$work/out" "defaults to the action ref"
+done
+run install "$work/stub-curl:" INPUT_VERSION= STUB_LATEST=v9.9.4
+expect "no version and no ref installs the latest release" 0 "latest release is v9.9.4"
+# An explicit latest at a tag ref still floats, and says when that is
+# older than the ref's own release.
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4
+expect "latest older than the ref's release warns" 0 "::warning::version latest is v9.9.4, older than this action's own release v9.9.9-rc.1"
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=v9.9.9 STUB_LATEST=v9.9.9-rc.1
+expect "a release candidate is older than its release" 0 "::warning::version latest is v9.9.9-rc.1, older than this action's own release v9.9.9"
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.9
+if grep -q '^::warning' "$work/out"; then fail "latest newer than the ref's release does not warn" "$work/out"; else ok "latest newer than the ref's release does not warn"; fi
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=v9.9.9 STUB_LATEST=v9.9.9
+if grep -q '^::warning' "$work/out"; then fail "latest equal to the ref's release does not warn" "$work/out"; else ok "latest equal to the ref's release does not warn"; fi
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REF=main STUB_LATEST=v9.9.4
+if grep -q '^::warning' "$work/out"; then fail "a branch ref has no release to compare with" "$work/out"; else ok "a branch ref has no release to compare with"; fi
 
 run install "$work/stub-curl:"
 expect "release install verifies the checksum" 0 "sha256 OK: $asset"
@@ -477,6 +551,16 @@ chmod +x "$work/broken/upgradescope"
 run scan "$work/broken:"
 expect "a scan error is exit 1" 1 "load knowledge base: boom"
 has "a scan error is in the summary" "$rt/summary" "upgradescope: scan failed (exit 1)"
+# sarif-file means a complete SARIF (exit 0 or 2); after a scan error the
+# file is empty, and an upload step guarded on sarif-file != '' must skip
+# it, not fail with "Invalid SARIF" (#197 AC-02b).
+hasnt "a scan error sets no sarif-file" "$rt/output" "sarif-file="
+run scan "$work/real:" INPUT_PATH=action/testdata/clean
+[ -s "$(output sarif-file)" ] && jq -e '.runs' "$(output sarif-file)" >/dev/null &&
+  ok "a passing gate sets sarif-file to a complete SARIF" || fail "a passing gate sets sarif-file to a complete SARIF" "$rt/output"
+run scan "$work/real:" INPUT_PATH=action/testdata/clean INPUT_CONFIG=action/testdata/baseline-cronjob.json
+[ "$code" != 0 ] && [ -z "$(output sarif-file)" ] &&
+  ok "a config that cannot load sets no sarif-file" || fail "a config that cannot load sets no sarif-file" "$work/out"
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)

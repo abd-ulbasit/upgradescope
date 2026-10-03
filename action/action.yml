@@ -35,13 +35,16 @@ inputs:
   version:
     description: >-
       Which upgradescope to run: a release tag such as v0.2.0, "latest"
-      (the newest release), or "preinstalled" (the one already on PATH).
-      For a reproducible gate, pin a tag here and pin the action ref
-      (@vX.Y.Z or a commit SHA): @v0 and "latest" move with each release.
+      (the newest stable release; GitHub's latest skips prereleases), or
+      "preinstalled" (the one already on PATH). Left unset, an action used
+      at a release tag (@vX.Y.Z or @vX.Y.Z-rc.N) runs that same release,
+      and any other ref (a branch, a commit SHA, @v0) runs latest.
+      For a reproducible gate, pin the action ref (@vX.Y.Z or a commit SHA)
+      and a tag here: @v0 and "latest" move with each release.
       The archive is verified against the release's checksums.txt; without
       one for this runner, it is built with `go install` when Go is set up.
     required: false
-    default: latest
+    default: ""
   config:
     description: >-
       Path to an .upgradescope.yaml with ignore rules (scan --config).
@@ -66,7 +69,7 @@ inputs:
 
 outputs:
   sarif-file:
-    description: Path to the SARIF report (upload with github/codeql-action/upload-sarif; complete even when the gate fails).
+    description: Path to the SARIF report (upload with github/codeql-action/upload-sarif; complete even when the gate fails; not set when the scan itself failed).
     value: ${{ steps.scan.outputs.sarif-file }}
   report-json:
     description: Path to the JSON report (upgradescope scan --output json).
@@ -113,6 +116,7 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_WRITE_BASELINE: ${{ inputs.write-baseline }}
+        ACTION_REF: ${{ github.action_ref }}
       run: bash "$GITHUB_ACTION_PATH/run.sh" install
 
     - name: Scan manifests

@@ -69,7 +69,15 @@ stable release, is not, and with `version: latest` the binary and its
 knowledge base move too, so a release can change the verdict on an
 unchanged pull request. For a gate that changes only when you change it, pin
 the action to `@vX.Y.Z` or its commit SHA, and `version` to the same
-release.
+release. Left unset, `version` follows the ref when it is a release tag
+(`@vX.Y.Z` or `@vX.Y.Z-rc.N`), so `@v0.2.0-rc.2` runs v0.2.0-rc.2 and not
+the older "latest" release, which GitHub never sets to a release candidate.
+At any other ref (a branch, a commit SHA, `v0`) it is `latest`, so give a
+SHA its release in `version`.
+
+If the scan itself fails (exit 1), the action sets no `sarif-file`, so the
+`sarif-file != ''` guard above skips the upload instead of failing on an
+empty file. Any other exit, a failed gate included, leaves a complete SARIF.
 
 **Targets past the horizon.** A `target` newer than the knowledge base's
 horizon makes the verdict `unknown`, which fails the gate. Target a minor the
