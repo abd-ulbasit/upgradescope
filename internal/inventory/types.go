@@ -20,6 +20,11 @@ const (
 	CapCRDs Capability = "crds"
 )
 
+// SkippedPods is the addons capability's Skipped entry for a cluster-wide
+// pod list that failed: pod images and labels find an add-on whatever
+// installed it, so the engine keeps that gap required.
+const SkippedPods = "v1 pods"
+
 type CapabilityStatus struct {
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"` // e.g. `nodes list forbidden`
@@ -48,7 +53,8 @@ type CapabilityStatus struct {
 	//     on a vendor image of another name (OKE's oke-public-kube-proxy)
 	//     is named in Reason only, so Skipped may be empty;
 	//   - addons: resources not read for add-on evidence,
-	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses");
+	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses",
+	//     "v1 pods", SkippedPods);
 	//   - crds: the custom resources not checked for use of a deprecated
 	//     or unserved CRD version, "group/version Kind"
 	//     ("cert-manager.io/v1alpha2 Certificate").

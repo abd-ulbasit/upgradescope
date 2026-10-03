@@ -75,16 +75,28 @@ func (ev *addOnEvidence) addPod(namespace string, labels map[string]string, imag
 // collectAddOns lists pod images (containers + init containers) and
 // labels, and IngressClass controllers, and runs the pure matcher over
 // them, already-collected Helm releases (inv.HelmReleases — the helm step
-// runs first), and the registry. IngressClasses only add evidence, so a
-// role that cannot list them leaves add-ons assessed from pods, partially;
-// an apiserver without networking.k8s.io/v1 (before 1.19) has none.
+// runs first), and the registry. A list that fails does not discard the
+// rest (#199): without pods, add-ons are matched from Helm releases and
+// IngressClasses; without IngressClasses (an apiserver before 1.19 has
+// none, which is not a failure) from pods and releases. A failure leaves
+// the capability partial, naming what went unread, unless nothing else was
+// read either (no releases, no IngressClasses): then it is not assessed.
+// Pods are what finds an add-on installed any other way, so
+// inventory.SkippedPods keeps the gap required; IngressClasses only add
+// evidence.
 func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory) error {
 	ev := addOnEvidence{releases: inv.HelmReleases}
+	var failures, skipped []string
+	var podErr error
+	classesRead := false
 	opts := metav1.ListOptions{Limit: listPageSize}
 	for {
 		pods, err := kube.CoreV1().Pods(metav1.NamespaceAll).List(ctx, opts)
 		if err != nil {
-			return fmt.Errorf("list pods: %w", err)
+			podErr = err
+			failures = append(failures, fmt.Sprintf("list pods: %v", err))
+			skipped = append(skipped, inventory.SkippedPods)
+			break
 		}
 		// Extract images and labels per page so only those are retained —
 		// never the accumulated PodList of a large cluster.
@@ -104,17 +116,17 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 		}
 		opts.Continue = pods.Continue
 	}
-	var classErr error
 	opts = metav1.ListOptions{Limit: listPageSize}
 	for {
 		classes, err := kube.NetworkingV1().IngressClasses().List(ctx, opts)
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
-				classErr = partialError{incomplete: true, skipped: []string{"networking.k8s.io/v1 ingressclasses"},
-					msg: fmt.Sprintf("list ingressclasses: %v; add-ons were detected from pods and Helm releases only", err)}
+				failures = append(failures, fmt.Sprintf("list ingressclasses: %v", err))
+				skipped = append(skipped, "networking.k8s.io/v1 ingressclasses")
 			}
 			break
 		}
+		classesRead = true
 		for _, c := range classes.Items {
 			ev.ingressControllers = append(ev.ingressControllers, c.Spec.Controller)
 		}
@@ -126,7 +138,22 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 	var unrec []string
 	inv.AddOns, unrec = matchAddOns(ev, addons)
 	setUnrecognized(inv, unrec)
-	return classErr
+	if podErr != nil && len(ev.releases) == 0 && !classesRead {
+		return fmt.Errorf("list pods: %w", podErr) // nothing was read: not assessed, not partial
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	from := "pods and Helm releases"
+	switch {
+	case len(failures) == 2:
+		from = "Helm releases"
+	case slices.Contains(skipped, inventory.SkippedPods):
+		from = "Helm releases and IngressClasses"
+	}
+	slices.Sort(skipped)
+	return partialError{incomplete: true, skipped: skipped,
+		msg: fmt.Sprintf("%s; add-ons were detected from %s only", strings.Join(failures, "; "), from)}
 }
 
 // splitImage strips digest then tag:

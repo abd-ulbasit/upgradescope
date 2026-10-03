@@ -1441,6 +1441,11 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 				// Partial naming none (a vendor kube-proxy image, OKE's) is
 				// disclosed, optional.
 				g.Required = required[c] && len(st.Skipped) > 0
+			case inventory.CapAddOns:
+				// Without pods only Helm releases and IngressClasses speak:
+				// an add-on installed any other way goes undetected (#199).
+				// IngressClasses alone are supplementary evidence, optional.
+				g.Required = required[c] && slices.Contains(st.Skipped, inventory.SkippedPods)
 			}
 			gaps = append(gaps, g)
 		}
