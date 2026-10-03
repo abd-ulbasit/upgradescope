@@ -23,7 +23,11 @@ func TestInstallCommandUsesTheBinarysRelease(t *testing.T) {
 // A dev build has no release tag: the hint carries a placeholder and says
 // what goes there instead of a URL that 404s.
 func TestInstallHintDevBuildSaysWhatTagToUse(t *testing.T) {
-	for _, v := range []string{"dev", "dev+0123456789ab.dirty", "0.2.0-SNAPSHOT-abc", ""} {
+	for _, v := range []string{"dev", "dev+0123456789ab.dirty", "0.2.0-SNAPSHOT-abc", "",
+		// Go pseudo-versions (go install ...@main, or a VCS-stamped build not
+		// at a tag) look like releases but name no tag.
+		"0.2.1-0.20261004120000-abcdef123456", "v0.2.1-0.20261004120000-abcdef123456",
+		"0.2.0-rc.2.0.20261004120000-abcdef123456"} {
 		h := InstallHint(v)
 		if !strings.Contains(h, "/<tag>/deploy/chart/crds/"+ManifestFile) || !strings.Contains(h, "dev build") ||
 			!strings.Contains(h, "replace <tag>") {
