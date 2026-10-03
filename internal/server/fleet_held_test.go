@@ -34,8 +34,10 @@ const (
 const maxFleetSlotHeap = 128 << 20
 
 // pushedFleet is a SQLite server holding one push from each of n
-// clusters, named with nameLen bytes, at v1.34 with no other signal; it
-// evaluates 1.35 and the serve --targets 1.36 and 1.37.
+// clusters, named with nameLen bytes, at v1.34 with no other signal: a
+// current collector's inventory reporting every capability, so each
+// evaluation is decided as a real agent's would be, not unknown (#194);
+// it evaluates 1.35 and the serve --targets 1.36 and 1.37.
 func pushedFleet(t *testing.T, n, nameLen int) *Server {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "upgradescope.db"))
@@ -53,7 +55,8 @@ func pushedFleet(t *testing.T, n, nameLen int) *Server {
 		name += strings.Repeat("x", nameLen-len(name))
 		body, err := json.Marshal(map[string]any{
 			"schemaVersion": 1, "clusterName": name, "agentVersion": "test", "kbVersion": "agent-kb",
-			"inventory": inventory.Inventory{SchemaVersion: 1, ClusterID: fmt.Sprintf("uid-%d", i), ServerVersion: "v1.34.2"},
+			"inventory": inventory.Inventory{SchemaVersion: 1, CollectorSchema: inventory.CurrentCollectorSchema, ClusterID: fmt.Sprintf("uid-%d", i),
+				ServerVersion: "v1.34.2", Capabilities: collectedCaps()},
 		})
 		if err != nil {
 			t.Fatal(err)
