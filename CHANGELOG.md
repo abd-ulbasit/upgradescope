@@ -623,7 +623,7 @@ a CI gate.
   16 MiB decompressed (real releases decode to under 7 MiB), and its
   manifest is parsed in runs of at most 1 MiB and 64Ki YAML nodes; a
   single document over 2 MiB or 64Ki nodes is not parsed. The worst
-  releases now peak at up to about 70 MiB of heap. A release over a bound is
+  releases now peak at up to 47 MiB of live heap. A release over a bound is
   skipped (`release payload too large`) or recorded without that document,
   named on a partial `helm` capability, and the rest are still read
   (#168).

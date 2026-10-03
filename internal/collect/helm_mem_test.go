@@ -363,8 +363,8 @@ func withEmptyGzipMember(t testing.TB, payload []byte) []byte {
 // reached 240 MiB. Now the cap is 16 MiB, the manifest is parsed in runs
 // bounded in bytes and YAML nodes, and lines are counted without the
 // index: every case peaks at 40–47 MiB of live heap, the same on every
-// run (24–93 MiB at GOGC=100, varying with GC timing). Each case is a valid release whose
-// manifest, JSON-escaped, fills the cap, with ConfigMaps flagged as a real
+// run (24–93 MiB at GOGC=100, varying with GC timing). Each case is a
+// valid release whose manifest, JSON-escaped, fills the cap, with ConfigMaps flagged as a real
 // KB flags some kinds, and every object a ConfigMap. Under the race
 // detector, which slows parsing about tenfold, the manifests are 4 MiB.
 func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
@@ -376,8 +376,9 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 	// does the same here, so what is measured is the live heap parsing
 	// needs, not the garbage GOGC=100 lets pile up before the next
 	// collection, which varies with GC timing (CI once read 93 MiB of a
-	// case that peaks at 51 MiB live).
-	defer debug.SetGCPercent(debug.SetGCPercent(10))
+	// case that peaks at 46 MiB live).
+	gogc := debug.SetGCPercent(10)
+	t.Cleanup(func() { debug.SetGCPercent(gogc) })
 	lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
 	const head, tail = `{"chart":{"metadata":{"name":"bomb","version":"1.0.0"}},"manifest":`, `}`
 	const object = "---\napiVersion: v1\nkind: ConfigMap\n"

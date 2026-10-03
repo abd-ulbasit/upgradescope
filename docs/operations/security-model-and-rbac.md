@@ -107,9 +107,10 @@ second gzip member follows (`TestCollectHelmGzipBombIsBounded`;
 its test process at 71 MB resident), and the worst manifests that fit
 the cap at up to 47 MiB of live heap (`TestCollectHelmManifestParsingIsBounded`:
 all newlines, tiny objects, documents that are not objects, documents at
-the size and at the node bound). That test runs at GOGC=10 because the
-chart's GOMEMLIMIT keeps the heap near its live size as it nears the
-limit; at GOGC=100, uncollected garbage took one CI run to 93 MiB.
+the size and at the node bound; the test enforces 64 MiB). That test runs
+at GOGC=10 because under the chart's GOMEMLIMIT the runtime collects
+garbage as the heap nears the limit, so live heap is what must fit; at
+the default GOGC=100 the same cases peaked at 24–93 MiB.
 Before the bounds, a 951 KB Secret that
 decompressed to 700 MiB took a scan to 1.93 GB and OOM-killed the agent at
 its 256Mi limit, and a 127 KiB one of tiny ConfigMaps still could (#168).
