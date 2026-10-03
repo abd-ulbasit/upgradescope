@@ -1,0 +1,29 @@
+# registry/data/kubernetes-dashboard.yaml
+# Hand-curated: endoflife.date does not track it. The project is retired as a
+# whole: its README says it "is now archived and no longer maintained due to
+# lack of active maintainers" and points to Headlamp. eol_date is the day the
+# owner archived the repository ("archived by the owner on Jan 21, 2026" on
+# the repository page), which is also what `gh api` reports as archived=true.
+# The v7+ chart has no appVersion (the chart version is the app version), so
+# a Helm release is matched by chart name and the version comes from the
+# image tags; it does not matter here, the whole product is retired.
+schema_version: 2
+id: kubernetes-dashboard
+display_name: Kubernetes Dashboard
+matchers:
+  images:
+    - kubernetesui/dashboard # v2.x
+    - kubernetesui/metrics-scraper # v2.x sidecar
+    - kubernetesui/dashboard-api # v7+ chart
+    - kubernetesui/dashboard-auth
+    - kubernetesui/dashboard-web
+    - kubernetesui/dashboard-metrics-scraper
+  charts:
+    - kubernetes-dashboard
+support:
+  status: eol
+  eol_date: "2026-01-21"
+  citations:
+    - https://github.com/kubernetes-retired/dashboard
+    - https://github.com/kubernetes-retired/dashboard/blob/master/README.md
+recommendation: Migrate to Headlamp (kubernetes-sigs/headlamp, under SIG UI), the replacement the Dashboard README points to.
