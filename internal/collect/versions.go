@@ -288,11 +288,16 @@ func componentImageTag(containers []corev1.Container, comp string) (tag, why str
 		if i := strings.IndexAny(v, "-+_"); i >= 0 {
 			v = v[:i]
 		}
-		if plugins {
+		// No Kubernetes release is 0.x. A 0.x kube-scheduler is a
+		// scheduler-plugins build, also through a mirror that dropped its
+		// path; any other 0.x tag is unreadable, not a version to judge.
+		pv, perr := inventory.ParseVersion(v)
+		zero := perr == nil && pv.Major == 0
+		if plugins || (zero && comp == "kube-scheduler") {
 			if k, ok := schedulerPluginsVersion(v); ok {
 				return k, ""
 			}
-		} else if _, err := inventory.ParseVersion(v); err == nil {
+		} else if perr == nil && !zero {
 			return v, ""
 		}
 		if why != "" {
@@ -303,6 +308,8 @@ func componentImageTag(containers []corev1.Container, comp string) (tag, why str
 			why = fmt.Sprintf("%s image %s has no version tag", comp, c.Image)
 		case plugins:
 			why = fmt.Sprintf("%s image %s has tag %q, not a scheduler-plugins version (v0.<minor>.<patch>)", comp, c.Image, t)
+		case zero:
+			why = fmt.Sprintf("%s image %s has tag %q, not a Kubernetes version (no release is 0.x)", comp, c.Image, t)
 		default:
 			why = fmt.Sprintf("%s image %s has tag %q, not a version", comp, c.Image, t)
 		}

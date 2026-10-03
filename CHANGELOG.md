@@ -295,14 +295,18 @@ a CI gate.
   `?cluster=` only what the manifests introduce counts (#120).
 - A live scan whose control-plane skew could not be judged where upstream
   would have told the version now gives `unknown` and exits 2 (it gave
-  `ready` and exited 0): a `kube-system` pod on an upstream-named
-  component image under a digest or a tag that is not a version
-  (`kube-proxy@sha256:…`, `kube-scheduler:latest`), or a
+  `ready` and exited 0); the agent's `ClusterReadiness` status and the
+  server's reports read `unknown` too. That is a component pod in
+  `kube-system` (labelled `component=` or `k8s-app=`, or named after the
+  component) on an upstream-named image under a digest or a tag that is
+  not a version (`kube-proxy@sha256:…`, `kube-scheduler:latest`), or a
   kube-apiserver, kube-controller-manager or kube-scheduler pod whose
   version is not read. Pin the image to a version tag, or pass
   `--allow-incomplete`. A kube-proxy pod on a vendor image of another
   name (Oracle OKE's `oke-public-kube-proxy`) does not change the
-  verdict (#169).
+  verdict. A component image tagged 0.x is never read as Kubernetes 0.x:
+  a kube-scheduler is read as a scheduler-plugins build, any other is
+  unreadable (#169).
 - A scan of a cluster that could not be read at all exits 1, and so does a
   `--files` scan that found no Kubernetes objects. Neither reports
   100/100 any more.

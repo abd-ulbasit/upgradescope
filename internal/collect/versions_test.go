@@ -215,11 +215,25 @@ func TestComponentImageTagUnreadableReasons(t *testing.T) {
 		{"registry.k8s.io/scheduler-plugins/kube-scheduler@sha256:abc", "", "kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler@sha256:abc has no version tag"},
 		{"registry.k8s.io/scheduler-plugins/kube-scheduler:latest", "", `kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler:latest has tag "latest", not a scheduler-plugins version (v0.<minor>.<patch>)`},
 		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v1.0.0", "", `kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler:v1.0.0 has tag "v1.0.0", not a scheduler-plugins version (v0.<minor>.<patch>)`},
+		// No Kubernetes release is 0.x: a v0 kube-scheduler tag is a
+		// scheduler-plugins build, also when a mirror dropped that path.
+		{"myreg.example.com/kube-scheduler:v0.31.8", "v1.31.8", ""},
 	} {
 		tag, why := componentImageTag([]corev1.Container{{Image: tc.image}}, "kube-scheduler")
 		if tag != tc.tag || why != tc.why {
 			t.Errorf("%s: tag %q, why %q; want %q, %q", tc.image, tag, why, tc.tag, tc.why)
 		}
+	}
+}
+
+// Any other component tagged 0.x is no Kubernetes version (#169 review):
+// it reads as unreadable, not as Kubernetes 0.x, which would be a false
+// skew blocker.
+func TestComponentImageTagRejectsMajorZero(t *testing.T) {
+	tag, why := componentImageTag([]corev1.Container{{Image: "myreg.example.com/kube-proxy:v0.31.8"}}, "kube-proxy")
+	want := `kube-proxy image myreg.example.com/kube-proxy:v0.31.8 has tag "v0.31.8", not a Kubernetes version (no release is 0.x)`
+	if tag != "" || why != want {
+		t.Errorf("tag %q, why %q; want \"\", %q", tag, why, want)
 	}
 }
 
