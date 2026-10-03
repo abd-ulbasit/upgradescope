@@ -3,7 +3,11 @@
 On EKS, GKE and AKS a cluster that stays on a Kubernetes minor after the
 provider's standard support for it ends moves into extended support (paid on
 EKS and GKE) or, on AKS, into reduced support. Nothing in the cluster
-changes when that happens, so teams find out from the bill. upgradescope
+changes when that happens, so teams find out from the bill. Extended
+support is automatic only on EKS; on GKE and AKS it is opt-in, and the
+scanner cannot see a cluster's release channel or AKS tier, so it states
+the provider's window and the condition it applies under, never that
+your cluster is enrolled (see below). upgradescope
 dates it: **the day your cluster's minor enters extended support, and, where
 the provider publishes a price, what that adds per cluster per year.**
 
@@ -17,7 +21,7 @@ finding is:
 |---|---|---|
 | `standard` | standard support does not end within 90 days | none |
 | `ending` | standard support ends within 90 days | **warning** |
-| `extended` | from the day standard support ends, until the provider stops supporting the minor | **blocker** |
+| `extended` | from the day standard support ends, until the provider's extended window ends | **blocker** |
 | `ended` | extended support has ended, or the provider offered none for the minor | **blocker** |
 
 ```text
@@ -30,6 +34,29 @@ finding is:
     per cluster-hour.
     fix: Upgrade the control plane, one minor at a time, to a version in standard support: 1.36, 1.35.
 ```
+
+On GKE and AKS the same finding is worded conditionally, because the
+dataset knows the provider's window and not whether this cluster is in it.
+For AKS 1.33 on 2026-10-04:
+
+```text
+[support-lifecycle] Kubernetes 1.33 is past Azure Kubernetes Service standard support (ended 2026-07-31)
+    Azure Kubernetes Service ended standard support for Kubernetes 1.33 on
+    2026-07-31; extended support, which applies only if Long Term Support is
+    enabled, runs until 2027-07-31; upgradescope cannot see whether this
+    cluster is enrolled. AKS has no automatic extended support. Past community
+    support a cluster is in platform support (...) unless Long Term Support is
+    enabled, which needs the Premium tier.
+```
+
+and on a GKE cluster, "extended support, which applies only if the cluster
+is on the Extended release channel", with the price followed by "It is
+charged only for clusters on the Extended release channel", since other
+channels are upgraded automatically. The `scan` line and the
+`ClusterReadiness` status carry the same caveat
+(`extendedSupportCondition`, `annualCostNote`), so a `supportPhase` of
+`extended` on GKE or AKS means the provider's window, not a confirmed
+enrolment. Treat it as a prompt to check the cluster's channel or tier.
 
 The 90 days are the same window as the add-on
 [end-of-life warning](addon-registry.md): long enough to schedule an upgrade
@@ -47,8 +74,9 @@ The status is also reported when there is no finding: `scan` prints a
 `Support:` line under `Server:` in every phase, `--output json` carries it as
 `support` (see the [JSON report](../reference/json-report.md)), and the
 agent writes it to the `ClusterReadiness` status as `supportPhase`,
-`extendedSupportFrom`, and, with a price, `annualCostDelta`, `currency` and
-`priceAsOf` (see the [CRD reference](../reference/crd.md)). The server's
+`extendedSupportFrom`, and, with a price, `annualCostDelta`, `currency`,
+`priceAsOf` and `annualCostNote`, plus `extendedSupportCondition` where
+extended support is opt-in (see the [CRD reference](../reference/crd.md)). The server's
 report endpoint carries `support` and the finding too. Those fields are the
 cluster's, the same for every target. The dashboard lists the finding like
 any other; it has no support or fleet-cost view yet.
@@ -70,7 +98,7 @@ regions differ.
 | Provider | Price in the knowledge base | Figure |
 |---|---|---|
 | EKS | $0.10 standard, $0.60 extended per cluster-hour ([AWS pricing](https://aws.amazon.com/eks/pricing/)) | $4,380 per cluster per year |
-| GKE | $0.10 standard, $0.60 extended per cluster-hour; the extra $0.50 is charged only to clusters on the **Extended release channel** ([GKE pricing](https://cloud.google.com/kubernetes-engine/pricing)). The finding says so. | $4,380 per cluster per year, for those clusters |
+| GKE | $0.10 standard, $0.60 extended per cluster-hour; the extra $0.50 is charged only to clusters on the **Extended release channel** ([GKE pricing](https://cloud.google.com/kubernetes-engine/pricing)). The finding, the `scan` line and the status (`annualCostNote`) say so. | $4,380 per cluster per year, for those clusters |
 | AKS | none. Long Term Support needs the Premium tier and Microsoft's pages defer to a pricing page that shows no number a citation can point at; the difference would also depend on the tier the cluster is on. | no cost line, dates only |
 
 A provider whose price is not cited, a cluster whose provider is not known,
@@ -84,12 +112,14 @@ What "extended support" means differs, and the finding states it:
 - **EKS**: on by default, billed per cluster-hour from the start of the day
   standard support ends. A cluster whose upgrade policy is `STANDARD` is
   upgraded automatically at the end of standard support instead.
-- **GKE**: for clusters on the Extended release channel; clusters on other
-  channels are upgraded automatically at the end of standard support.
-- **AKS**: there is no automatic extended support. After community support a
-  cluster is in platform support (Azure and AKS platform issues only, no
-  Kubernetes fixes) unless Long Term Support is enabled. The dates are the
-  community-support end and the LTS end.
+- **GKE**: opt-in, for clusters on the Extended release channel; clusters on
+  other channels are upgraded automatically at the end of standard support.
+  The dataset's `extended_support_condition` carries this.
+- **AKS**: opt-in. There is no automatic extended support. After community
+  support a cluster is in platform support (Azure and AKS platform issues
+  only, no Kubernetes fixes) unless Long Term Support is enabled, which
+  needs the Premium tier. The dates are the community-support end and the
+  LTS end.
 
 ## How the provider is known
 
@@ -106,9 +136,17 @@ A node's `providerID` scheme (`aws://`, `gce://`, `azure://`) is never a
 claim, because kubeadm on EC2 or on Azure VMs has the same: it can only
 contradict one (a `-gke.` version on vSphere nodes is GKE on-prem, not GKE).
 Two providers' claims, a contradiction, or no claim at all give `other`. When
-the nodes could not be listed, an EKS or GKE version suffix still names the
-provider, and a cluster the version does not name is left undetermined
-rather than called `other`. Manifests (`--files`) have no provider.
+the nodes could not be listed, or the list failed partway (the pages read
+are not evidence), an EKS or GKE version suffix still names the provider,
+and a cluster the version does not name is left undetermined rather than
+called `other`. Manifests (`--files`) have no provider.
+
+Only an agent that sends `provider` gets a support status from the server:
+agents before this field (v0.2.x) push none, so for their clusters the
+server reports no support line or cost until the agent is upgraded. A
+server that does not know a provider name an agent sends (a newer agent
+that learned another service) accepts the snapshot and reports no support
+for it.
 
 ## Where the dates come from
 
