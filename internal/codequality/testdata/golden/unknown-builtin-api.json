@@ -10,5 +10,29 @@
         "begin": 1
       }
     }
+  },
+  {
+    "description": "imagepolicy.k8s.io/v1alpha1 ImageReview is not in the knowledge base (1 object): review.",
+    "check_name": "unknown-api/imagepolicy.k8s.io/v1alpha1/ImageReview",
+    "fingerprint": "1fd38299b264785d728313ba9856a4776de18a1728fa02bf5fd48ea7589e1eb0",
+    "severity": "info",
+    "location": {
+      "path": "cluster/imagereview.yaml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "internal.apiserver.k8s.io/v1alpha1 StorageVersion is not in the knowledge base (1 object): apps.deployments.",
+    "check_name": "unknown-api/internal.apiserver.k8s.io/v1alpha1/StorageVersion",
+    "fingerprint": "a85767d86c1a166c8b4578486e492ce1a32e68656a64318c09e4c6aafa63d324",
+    "severity": "info",
+    "location": {
+      "path": "cluster/storageversion.yaml",
+      "lines": {
+        "begin": 1
+      }
+    }
   }
 ]
