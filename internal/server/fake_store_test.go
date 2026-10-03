@@ -20,11 +20,12 @@ type fakeStore struct {
 	mu     sync.Mutex
 	nextID int64
 
-	clusters  map[int64]store.Cluster
-	snapshots []store.Snapshot
-	evals     []store.Evaluation
-	outbox    []store.OutboxMessage
-	tokens    map[string]*fakeToken // keyed by plaintext token
+	clusters   map[int64]store.Cluster
+	snapshots  []store.Snapshot
+	evals      []store.Evaluation
+	outbox     []store.OutboxMessage
+	tokens     map[string]*fakeToken     // keyed by plaintext token
+	readTokens map[string]*fakeReadToken // keyed by plaintext token
 
 	// errs injects failures by method name, e.g. errs["InsertSnapshot"].
 	errs map[string]error
@@ -40,11 +41,18 @@ type fakeToken struct {
 	revoked bool
 }
 
+type fakeReadToken struct {
+	id      int64
+	teams   []string
+	revoked bool
+}
+
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		clusters: map[int64]store.Cluster{},
-		tokens:   map[string]*fakeToken{},
-		errs:     map[string]error{},
+		clusters:   map[int64]store.Cluster{},
+		tokens:     map[string]*fakeToken{},
+		readTokens: map[string]*fakeReadToken{},
+		errs:       map[string]error{},
 	}
 }
 
@@ -442,7 +450,7 @@ func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBat
 	}
 	for i, r := range b.Refresh {
 		e := &f.evals[refreshAt[i]]
-		e.Report, e.KBVersion, e.TeamMapHash = r.Report, r.KBVersion, r.TeamMapHash
+		e.Report, e.KBVersion, e.TeamMapHash, e.Teams = r.Report, r.KBVersion, r.TeamMapHash, r.Teams
 		e.Blockers, e.Warnings, e.EvaluatedAt = r.Blockers, r.Warnings, r.EvaluatedAt
 	}
 	for _, m := range b.Outbox {
@@ -629,3 +637,93 @@ func (f *fakeStore) RevokeToken(_ context.Context, clusterName string) error {
 }
 
 func (f *fakeStore) Close() error { return nil }
+
+func (f *fakeStore) CreateReadToken(_ context.Context, teams []string, token string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["CreateReadToken"]; err != nil {
+		return 0, err
+	}
+	if _, exists := f.readTokens[token]; exists || len(teams) == 0 || token == "" {
+		return 0, store.ErrNotFound // any error works; real stores fail on UNIQUE and validate
+	}
+	id := f.id()
+	f.readTokens[token] = &fakeReadToken{id: id, teams: slices.Sorted(slices.Values(teams))}
+	return id, nil
+}
+
+func (f *fakeStore) ValidReadToken(_ context.Context, token string) ([]string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["ValidReadToken"]; err != nil {
+		return nil, false, err
+	}
+	tk, ok := f.readTokens[token]
+	if !ok || tk.revoked {
+		return nil, false, nil
+	}
+	return slices.Clone(tk.teams), true, nil
+}
+
+func (f *fakeStore) ListReadTokens(_ context.Context) ([]store.ReadToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["ListReadTokens"]; err != nil {
+		return nil, err
+	}
+	var out []store.ReadToken
+	for _, tk := range f.readTokens {
+		row := store.ReadToken{ID: tk.id, Teams: slices.Clone(tk.teams)}
+		if tk.revoked {
+			row.RevokedAt = &time.Time{}
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (f *fakeStore) RevokeReadToken(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, tk := range f.readTokens {
+		if tk.id == id && !tk.revoked {
+			tk.revoked = true
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+// ClustersOfTeams mirrors the stores: the clusters whose current
+// evaluations (each target's newest of the latest snapshot) name a team.
+func (f *fakeStore) ClustersOfTeams(ctx context.Context, teams []string) ([]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := f.errs["ClustersOfTeams"]; err != nil {
+		return nil, err
+	}
+	var out []int64
+	for id := range f.clusters {
+		snap, ok := f.latestSnapshotLocked(id)
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for i := len(f.evals) - 1; i >= 0; i-- {
+			e := f.evals[i]
+			if e.SnapshotID != snap.ID || seen[e.Target] {
+				continue
+			}
+			seen[e.Target] = true
+			if slices.ContainsFunc(e.Teams, func(t string) bool { return slices.Contains(teams, t) }) && !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}

@@ -146,6 +146,25 @@ type Store interface {
 	RevokeTokenID(ctx context.Context, clusterName string, id int64) error     // revokes one active token of clusterName; ErrNotFound otherwise
 	RevokeToken(ctx context.Context, clusterName string) error                 // revokes ALL active tokens; ErrNotFound when none are active
 
+	// Read tokens: bearer tokens for the read API, each scoped to a set of
+	// team names, or to ReadScopeFleet ("*") for the whole fleet. Like
+	// ingest tokens, only the sha256 of the plaintext and its prefix are
+	// stored, in a table of their own: an ingest token never reads, and a
+	// read token never pushes. Never deleted, only revoked, so the server
+	// can tell a database where read tokens were ever minted (it then
+	// requires one) from one where none were.
+	CreateReadToken(ctx context.Context, teams []string, token string) (int64, error) // returns the token id; errors on no teams, or if the token is already issued
+	ValidReadToken(ctx context.Context, token string) ([]string, bool, error)         // (teams, sorted, true) for active; (nil, false, nil) for unknown/revoked
+	ListReadTokens(ctx context.Context) ([]ReadToken, error)                          // active and revoked, ascending id
+	RevokeReadToken(ctx context.Context, id int64) error                              // revokes one active read token; ErrNotFound otherwise
+
+	// ClustersOfTeams returns, ascending, the ids of the clusters whose
+	// current evaluations (each target's newest of the cluster's latest
+	// snapshot) name at least one of teams in their Teams: the clusters a
+	// read token scoped to those teams reads. One query, whatever the
+	// fleet's size; nothing is returned for no teams.
+	ClustersOfTeams(ctx context.Context, teams []string) ([]int64, error)
+
 	Close() error
 }
 
@@ -199,6 +218,25 @@ type Evaluation struct {
 	// TeamMapHash identifies the server --team-map the report was computed
 	// with ("" = none), so a changed map triggers a re-evaluation.
 	TeamMapHash string `json:"teamMapHash,omitempty"`
+	// Teams are the teams the evaluated inventory attributes a namespace to
+	// (sorted): the clusters a team-scoped read token reads
+	// (ClustersOfTeams). Written with every Report, on insert and refresh
+	// (nil is none); reads leave it nil.
+	Teams []string `json:"-"`
+	// TeamsUnknown is set on read for a row written by a binary that
+	// predates the teams column (NULL): no scoped token reads its cluster
+	// until the next pass rewrites it, so the server treats it as stale.
+	TeamsUnknown bool `json:"-"`
+}
+
+// teamsColumn is Teams as the teams column stores it: a JSON array of
+// strings, "[]" for none.
+func teamsColumn(teams []string) string {
+	if len(teams) == 0 {
+		return "[]"
+	}
+	b, _ := json.Marshal(teams) // a []string cannot fail
+	return string(b)
 }
 
 // What the not_assessed column keeps of a gap. The fleet-wide reads load
@@ -420,6 +458,43 @@ func TokenPrefix(token string) string {
 		return ""
 	}
 	return token[:8]
+}
+
+// ReadScopeFleet is the team scope of a fleet-wide read token.
+const ReadScopeFleet = "*"
+
+// ReadToken is a read token's metadata. The plaintext is never stored;
+// Prefix is TokenPrefix of it, as for an ingest token.
+type ReadToken struct {
+	ID        int64      `json:"id"`
+	Teams     []string   `json:"teams"` // sorted; [ReadScopeFleet] for fleet-wide
+	Prefix    string     `json:"prefix"`
+	CreatedAt time.Time  `json:"createdAt"`
+	RevokedAt *time.Time `json:"revokedAt,omitempty"` // nil = active
+}
+
+// readTokenTeams is a read token's scope as stored: sorted and
+// deduplicated, or an error when it is empty or names an empty team.
+func readTokenTeams(teams []string) (string, error) {
+	if len(teams) == 0 {
+		return "", errors.New("a read token needs at least one team, or " + ReadScopeFleet + " for the whole fleet")
+	}
+	out := slices.Clone(teams)
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if out[0] == "" {
+		return "", errors.New("a read token's team names must be non-empty")
+	}
+	return teamsColumn(out), nil
+}
+
+// decodeTeams reads a teams column back.
+func decodeTeams(raw string) ([]string, error) {
+	var teams []string
+	if err := json.Unmarshal([]byte(raw), &teams); err != nil {
+		return nil, fmt.Errorf("stored teams %q: %w", raw, err)
+	}
+	return teams, nil
 }
 
 type ScorePoint struct {

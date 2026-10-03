@@ -68,6 +68,8 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("TokensDuplicateRejected", func(t *testing.T) { testTokensDuplicate(t, newStore(t)) })
 	t.Run("TokensRevokeByID", func(t *testing.T) { testTokensRevokeByID(t, newStore(t)) })
 	t.Run("TokensList", func(t *testing.T) { testTokensList(t, newStore(t)) })
+	t.Run("ReadTokens", func(t *testing.T) { testReadTokens(t, newStore(t)) })
+	t.Run("ClustersOfTeams", func(t *testing.T) { testClustersOfTeams(t, newStore(t)) })
 	t.Run("Close", func(t *testing.T) { testClose(t, newStore(t)) })
 }
 
