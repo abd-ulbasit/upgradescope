@@ -263,16 +263,17 @@ settings, so the read token still protects all data.
   instead. The server's 1Gi holds its worst case, measured on SQLite:
   one `/gate` request, one snapshot ingest, one cluster read and the
   re-evaluation pass at their node budgets, with four `server.targets`,
-  the most `serve` takes, two reads of a 500-cluster fleet, plus their
+  the most `serve` takes, and notifications configured, two reads of a
+  500-cluster fleet, plus their
   buffered bodies and the responses held for their clients. Open
   connections, kernel socket buffers and larger fleets are not in that
   figure
   ([memory and request limits](https://abd-ulbasit.github.io/upgradescope/operations/#memory-and-request-limits)).
-  Below about 936Mi, that worst case (~842 MiB of heap) no longer fits
+  Below about 962Mi, that worst case (~865 MiB of heap) no longer fits
   under `GOMEMLIMIT`. Each `server.targets` entry adds about one report
   of up to the snapshot cap (`--max-snapshot-bytes`, 20 MiB) to an
-  ingest and one to the re-evaluation pass, about 45 MiB of that sum, so
-  with fewer targets it needs less: with none, about 660 MiB, which
+  ingest and one to the re-evaluation pass, about 54 MiB of that sum, so
+  with fewer targets it needs less: with none, about 650 MiB, which
   768Mi holds.
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
   them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`

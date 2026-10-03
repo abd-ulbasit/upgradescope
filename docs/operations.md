@@ -30,7 +30,7 @@ request is measured before it is decoded:
 | answer | at most `--max-gate-bytes`, bounded before it is encoded; `?path=` at most 512 bytes | — |
 | what it may carry | — | identifiers valid for what they name, values within limits no genuine inventory reaches (`422`); free text a collector copies whole is cut to them |
 | reports | — | one per target, the default and at most 4 `--targets`; each at most `--max-snapshot-bytes`, the evaluation stops there (`413`) |
-| worst live heap within the budget (measured on SQLite) | ~176 MiB, with `?cluster=` too, the answer included | ~202 MiB with four `--targets`, the most `serve` takes (five reports at the limit; ~119 MiB with none), the body's copy and the reports it stores included |
+| worst live heap within the budget (measured on SQLite) | ~176 MiB, with `?cluster=` too, the answer included | ~216 MiB with four `--targets`, the most `serve` takes, for a cluster's later push with notifications configured (five reports at the limit, each previous one read as its baseline; ~119 MiB with no `--targets`), the body's copy and the reports it stores included |
 | bodies buffered across requests | 3 × the cap (30 MiB) | 2 × the cap (40 MiB) |
 | measured for aliases, decoded and evaluated at once | 1, others wait up to 30s holding only their bodies | 1, others wait up to 10s |
 
@@ -262,8 +262,9 @@ next interval.
 
 Worst case for the chart's 1Gi server, each part measured on SQLite
 against the dearest snapshot the server stores, at its node budget or
-with reports at the report limit, of every string class above, and with
-four `--targets`, the most `serve` takes
+with reports at the report limit, of every string class above, with
+four `--targets`, the most `serve` takes, and with notifications
+configured (`--slack-webhook` or `--webhook`)
 (`TestGateDecodeHeapIsBounded`,
 `TestStoredSnapshotHeapIsBounded`, `TestIngestDecodeHeapIsBounded`,
 `TestReadHeapIsBounded`,
@@ -274,34 +275,41 @@ four `--targets`, the most `serve` takes
 one `/gate` request in the evaluation slot (~176 MiB, with `?cluster=`
 too, since the cluster's inventory is decoded once the manifests' node
 trees are garbage, its answer included: answers big enough to cost more
-to encode are cheap to decode) plus one ingest (~202 MiB, for a
-snapshot whose five reports, at the default target and the four
-`--targets`, are each about the report limit, its copy of the body and
+to encode are cheap to decode) plus one ingest (~216 MiB, for a
+cluster's later push whose five reports, at the default target and the
+four `--targets`, are each about the report limit, against an earlier
+snapshot as large whose every finding differs: each previous report is
+loaded as its target's notification baseline, its copy of the body and
 the reports it stores included) plus one read in the read slot
-(~132 MiB, the HTML export of a report at the report limit, its
+(~133 MiB, the HTML export of a report at the report limit, its
 response included) plus two reads of the whole fleet in their slots
 (up to ~16 MiB each for 500 clusters, a `/fleet` of evaluations that
 list the most of what they could not assess) plus the read, fleet read
 and `/gate` responses held for their clients (the one 40 MiB budget) plus the
 background re-evaluation pass, which takes clusters one at a time
-(~189 MiB for such a snapshot, its five reports again) plus both body
-budgets (70 MiB; an ingest gives its share back once it holds that copy,
-so another push can wait in it): about 842 MiB for a 500-cluster fleet,
-inside the 921 MiB `GOMEMLIMIT` the chart derives from the limit. Below
-about 936Mi, that sum no longer fits under `GOMEMLIMIT`. (Each figure is
-a peak with its garbage, measured with the collector held near the live
-heap; runs differ by a few MiB.)
+(~198 MiB for such a snapshot when every finding of its five reports
+changed, as a knowledge-base update or a server upgrade can make them,
+each stored report decoded for what changed) plus both body budgets
+(70 MiB; an ingest gives its share back once it holds that copy, so
+another push can wait in it): about 865 MiB for a 500-cluster fleet,
+inside the 921 MiB `GOMEMLIMIT` the chart derives from the limit, with
+~56 MiB to spare. Below about 962Mi, that sum no longer fits under
+`GOMEMLIMIT`. (Each figure is a peak with its garbage, measured with
+the collector held near the live heap, and the worst of six runs on a
+loaded 8-core machine: runs of one shape differ by up to ~40 MiB, so
+each test's bound is at least 10% above its figure.)
 
 `serve --targets` takes at most 4 distinct minors (more is refused at
-startup, and the chart's schema refuses more `server.targets`), because each one is
+startup, and the chart's schema refuses more than 4 `server.targets`
+entries), because each one is
 evaluated for every push and every re-evaluation: **each extra target
 adds about one report of up to `--max-snapshot-bytes` to an ingest and
-one to the re-evaluation pass**, measured at 16-24 MiB each with the
-default 20 MiB, and ~3 MiB to each fleet read, so about 45 MiB to the sum
-above (one push with a single report takes ~81-119 MiB, a pass with one
-~81-117 MiB). With fewer `--targets` the server needs that much less per
-target it does not have (with none, about 660 MiB, which a 768Mi limit
-holds). These figures are at the default
+one to the re-evaluation pass**, measured at 18-28 MiB to an ingest and
+18-33 MiB to the pass with the default 20 MiB, and ~3 MiB to each fleet
+read, so about 54 MiB to the sum above (with no `--targets`, a push
+takes up to ~119 MiB and the pass ~105 MiB). With fewer `--targets` the
+server needs that much less per target it does not have (with none,
+about 650 MiB, which a 768Mi limit holds). These figures are at the default
 `--max-snapshot-bytes`; each target's share grows with it, by about two
 reports of the new limit.
 
@@ -328,7 +336,8 @@ What is outside these bounds, and what it costs:
 - **The fleet's size.** Nothing caps how many clusters the server
   holds, and a holder of the shared ingest token registers a new one
   with each new name it pushes. What a fleet read costs grows with the
-  fleet (above): up to ~10 MiB for 500 clusters, ~47 MiB for a
+  fleet (above): up to ~16 MiB for 500 clusters evaluated at five
+  targets (the `/fleet` of the widest gaps), ~47 MiB for a
   `/metrics` of 2000 clusters with 200-byte names, twice that with both
   fleet slots busy.
 - **Snapshots stored by v0.1.** A snapshot a v0.1 server stored before

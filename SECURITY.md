@@ -112,9 +112,12 @@ In scope:
   `'` `"` `&` as five bytes). A push is evaluated, and re-evaluated, at
   its default target and every `serve --targets` minor, and each extra
   target adds about one report of up to `--max-snapshot-bytes` to an
-  ingest and one to the re-evaluation pass (16-24 MiB each at the
+  ingest and one to the re-evaluation pass (18-33 MiB each at the
   default 20 MiB, measured), so `serve` refuses more than 4 of them and
-  the bounds are measured, and the chart's memory limit is sized, at 4.
+  the bounds are measured, and the chart's memory limit is sized, at 4,
+  with notifications configured: each evaluation of a target decided
+  before reads that earlier report for what changed (its findings' keys
+  and severities only).
   Stored reports and JSON responses carry a
   snapshot's strings as long as they were pushed (no HTML or
   line-separator escapes; a push that is not UTF-8 is `422`), and the
@@ -139,9 +142,10 @@ In scope:
   up to the host's TCP send buffer maximum (4 MiB by default on Linux)
   of the pod's memory until a write deadline closes it; nothing caps how
   many clusters the server holds (a shared ingest token registers one
-  per new name), and a fleet read costs more as the fleet grows (~5 MiB
-  for 500 clusters, ~47 MiB for `/metrics` of 2000 clusters with
-  200-byte names); and a snapshot a v0.1 server stored before these
+  per new name), and a fleet read costs more as the fleet grows (up to
+  ~16 MiB for 500 clusters evaluated at five targets, ~47 MiB for
+  `/metrics` of 2000 clusters with 200-byte names); and a snapshot a
+  v0.1 server stored before these
   budgets existed is decoded without a node count when `/gate?cluster=`,
   re-evaluation or a what-if read reads it, and, having no stored server
   version, is loaded whole by `/clusters`, `/fleet` and `/metrics` to

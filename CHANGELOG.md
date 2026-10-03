@@ -430,10 +430,11 @@ a CI gate.
   `GOMEMLIMIT` ~921MiB: the worst case of one `/gate` request, one push,
   one read, two reads of a 500-cluster fleet, the responses held for
   their clients and the re-evaluation pass, measured on SQLite with four
-  `server.targets`, is ~842 MiB. Each extra target adds about one report
-  of up to `--max-snapshot-bytes` to every push and one to the
-  re-evaluation pass (16-24 MiB each at the default 20 MiB, ~45 MiB of
-  that sum); without `server.targets` it is about 660 MiB, which 768Mi
+  `server.targets` and notifications configured, is ~865 MiB (a limit
+  below about 962Mi does not fit it). Each extra target adds about one
+  report of up to `--max-snapshot-bytes` to every push and one to the
+  re-evaluation pass (18-33 MiB each at the default 20 MiB, ~54 MiB of
+  that sum); without `server.targets` it is about 650 MiB, which 768Mi
   holds.
 - `serve --targets` and the chart's `server.targets` take at most 4
   distinct minors; more is refused at startup (and by the chart's schema)
@@ -547,6 +548,17 @@ a CI gate.
   minors had held a fleet slot for over two minutes. Object names of `<`
   had made a push store reports six times its size (a 323 MiB ingest);
   stored reports and responses no longer escape them (#121).
+- With notifications configured (`--slack-webhook`, `--webhook`), each
+  evaluation of a target decided before decoded that earlier report whole
+  as the baseline of what changed, and a cluster's later push loaded its
+  previous inventory to compare hashes. At the report limit with four
+  `--targets`, a later push grew the heap up to ~257 MiB and a
+  re-evaluation that changed every finding up to ~265 MiB; the memory
+  bounds had been measured on first pushes without notifications only.
+  A push now reads the previous snapshot's head alone, a baseline only
+  its findings' keys and severities, and one pass's changes are merged
+  target by target, keeping a digest of those past the notification's
+  cap: ~216 and ~198 MiB, and the bounds are measured that way (#121).
 - The CSV export guards every cell against formula injection, including
   after leading white space. Anonymous read access is decided on the
   resolved bind address. The `Bearer` scheme is case-insensitive. The
