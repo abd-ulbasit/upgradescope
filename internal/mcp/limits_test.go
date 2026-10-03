@@ -113,10 +113,68 @@ func TestAResultTooLargeToReceiveIsRefusedWithAWayOut(t *testing.T) {
 	if len(got.Findings) != 5 || !got.Truncated {
 		t.Errorf("list_findings limit=5 of the large report: %d findings, truncated %v", len(got.Findings), got.Truncated)
 	}
-	// The whole list cannot be sent either, and the reason says how to narrow it.
+	// The most list_findings returns of these findings (about 0.5 KiB each)
+	// is well within one message, so it is sent.
 	res = call(t, cs, ToolListFindings, map[string]any{"report_file": path, "limit": maxLimit})
-	if res.IsError && !strings.Contains(text(res), "smaller limit") {
-		t.Errorf("list_findings limit=%d: %q", maxLimit, text(res))
+	if res.IsError {
+		t.Fatalf("list_findings limit=%d of the large report: %q", maxLimit, text(res))
+	}
+	if err := json.Unmarshal(structured(t, res), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Findings) != maxLimit || !got.Truncated {
+		t.Errorf("list_findings limit=%d: %d findings, truncated %v", maxLimit, len(got.Findings), got.Truncated)
+	}
+}
+
+// TestFindingsTooLargeToReceiveAreRefusedWithAWayOut: findings that are
+// small in the file can still be too large on the wire (each '<' is sent as
+// \u003c, and again escaped in the text block), so the most list_findings
+// returns is refused with how to narrow it, and a smaller limit is sent.
+func TestFindingsTooLargeToReceiveAreRefusedWithAWayOut(t *testing.T) {
+	_, golden := goldenReport(t, "mixed-everything")
+	var m map[string]any
+	if err := json.Unmarshal(golden, &m); err != nil {
+		t.Fatal(err)
+	}
+	first := m["findings"].([]any)[0].(map[string]any)
+	first["detail"] = strings.Repeat("<", 4000)
+	findings := make([]any, maxLimit+100)
+	for i := range findings {
+		findings[i] = first
+	}
+	m["findings"] = findings
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // '<' takes one byte in the file
+	if err := enc.Encode(m); err != nil {
+		t.Fatal(err)
+	}
+	doc := buf.Bytes()
+	if len(doc) > MaxReportBytes/2 {
+		t.Fatalf("report of %d bytes, want well within %d", len(doc), MaxReportBytes)
+	}
+	path := filepath.Join(t.TempDir(), "escaped.json")
+	if err := os.WriteFile(path, doc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cs := connect(t, localConfig())
+	res := call(t, cs, ToolListFindings, map[string]any{"report_file": path, "limit": maxLimit})
+	if !res.IsError || !strings.Contains(text(res), "more than an MCP client takes in one message") || !strings.Contains(text(res), "smaller limit") {
+		t.Errorf("list_findings limit=%d of a %d-byte report: isError=%v %.300q", maxLimit, len(doc), res.IsError, text(res))
+	}
+	res = call(t, cs, ToolListFindings, map[string]any{"report_file": path, "limit": 50})
+	if res.IsError {
+		t.Fatalf("list_findings limit=50: %q", text(res))
+	}
+	var got struct {
+		Findings []json.RawMessage `json:"findings"`
+	}
+	if err := json.Unmarshal(structured(t, res), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Findings) != 50 {
+		t.Errorf("list_findings limit=50: %d findings", len(got.Findings))
 	}
 }
 
