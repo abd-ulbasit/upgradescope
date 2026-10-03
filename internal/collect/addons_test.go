@@ -296,6 +296,7 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"registry.k8s.io/ingress-nginx/controller@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "ingress-nginx", ""},
 		{"docker.io/bitnami/nginx-ingress-controller:1.11.3-debian-12-r0", "ingress-nginx", "1.11.3"},
 		{"bitnami/nginx-ingress-controller:1.11.3", "ingress-nginx", "1.11.3"},
+		{"docker.io/bitnamilegacy/nginx-ingress-controller:1.11.3-debian-12-r0", "ingress-nginx", "1.11.3"},
 		{"rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", "rke2-ingress-nginx", "1.9.4"},
 		{"mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller:v1.11.5", "aks-app-routing-nginx", "1.11.5"},
 		{"coredns/coredns:1.11.1", "coredns", "1.11.1"},
