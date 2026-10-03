@@ -19,12 +19,13 @@ const chartRef = "oci://ghcr.io/abd-ulbasit/charts/upgradescope"
 // "dev" and "dev+<rev>", or a snapshot's "-SNAPSHOT", name no tag.
 var releaseVersion = regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 
-// pseudoVersion matches a Go pseudo-version's tail: what "go install
-// ...@main" stamps for a commit that is not at a tag, such as
-// 0.2.1-0.20261004120000-abcdef123456 or
-// 0.2.0-rc.2.0.20261004120000-abcdef123456. It fits the pre-release form
-// but names no tag.
-var pseudoVersion = regexp.MustCompile(`[-.]0\.\d{14}-[0-9a-f]{12}$`)
+// pseudoVersion matches the three forms of a Go pseudo-version, which is what
+// "go install ...@main" or a VCS-stamped "go build" reports for a commit that
+// is not at a tag: vX.Y.Z-0.<time>-<rev> after a release,
+// vX.Y.Z-pre.0.<time>-<rev> after a pre-release, and v0.0.0-<time>-<rev> when
+// no tag is reachable (a shallow clone). All end in a 14-digit UTC time and
+// 12 hex digits of the commit. They fit the pre-release form but name no tag.
+var pseudoVersion = regexp.MustCompile(`(-|[-.]0\.)\d{14}-[0-9a-f]{12}$`)
 
 // isRelease reports whether version names a release tag. Snapshots and
 // pseudo-versions match the pre-release form but are never published as

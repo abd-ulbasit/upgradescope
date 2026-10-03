@@ -27,7 +27,9 @@ func TestInstallHintDevBuildSaysWhatTagToUse(t *testing.T) {
 		// Go pseudo-versions (go install ...@main, or a VCS-stamped build not
 		// at a tag) look like releases but name no tag.
 		"0.2.1-0.20261004120000-abcdef123456", "v0.2.1-0.20261004120000-abcdef123456",
-		"0.2.0-rc.2.0.20261004120000-abcdef123456"} {
+		"0.2.0-rc.2.0.20261004120000-abcdef123456",
+		// No tag reachable at all (git clone --depth 1, then go build).
+		"0.0.0-20261004120000-abcdef123456", "v0.0.0-20261004120000-abcdef123456"} {
 		h := InstallHint(v)
 		if !strings.Contains(h, "/<tag>/deploy/chart/crds/"+ManifestFile) || !strings.Contains(h, "dev build") ||
 			!strings.Contains(h, "replace <tag>") {
