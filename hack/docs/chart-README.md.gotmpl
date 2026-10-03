@@ -181,7 +181,8 @@ The chart never renders the `ClusterReadiness` object; the agent creates
 it. `agent.targets` is passed to the agent as `--targets`, and while it is
 non-empty the agent resets `spec.targets` to it every tick, so the Helm
 value wins over `kubectl edit`. Values are `MAJOR.MINOR` (`1.37`), the
-format the CRD accepts; the schema rejects `v1.37` and `1.37.2`. Changing
+format the CRD accepts, and at most 8 of them (the CRD's `spec.targets`
+cap); the schema rejects `v1.37`, `1.37.2` and a ninth entry. Changing
 it with `helm upgrade` touches only the agent Deployment. With
 `agent.targets` empty, set targets on the object directly:
 

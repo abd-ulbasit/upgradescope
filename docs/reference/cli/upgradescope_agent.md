@@ -46,7 +46,7 @@ upgradescope agent [flags]
       --server-token string         bearer token for snapshot pushes (required with --server-url) (visible in process listings: prefer $UPGRADESCOPE_SERVER_TOKEN or --server-token-file)
       --server-token-file string    read --server-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
       --server-url string           upgradescope server base URL (empty = CRD-only mode)
-      --targets strings             target minors, CSV, e.g. 1.37,1.38; when set, the ClusterReadiness spec.targets is reconciled to them every tick (overriding kubectl edits)
+      --targets strings             target minors, CSV, e.g. 1.37,1.38, at most 8 distinct minors (the ClusterReadiness spec.targets cap; more is refused at start); when set, the ClusterReadiness spec.targets is reconciled to them every tick (overriding kubectl edits)
       --team-label string           namespace label used for team attribution (default "team")
 ```
 

@@ -60,7 +60,9 @@ agent:
   # 300s or 1.5h.
   interval: 10m
   # -- Name of the ClusterReadiness object the agent manages: an RFC 1123
-  # subdomain (lowercase letters, digits, - and .; at most 253 bytes).
+  # subdomain (dot-separated labels of lowercase letters, digits and -, each
+  # starting and ending with a letter or digit; at most 253 bytes). The
+  # schema refuses any other name at helm install, as the agent does at start.
   # Changing it creates a new object and leaves the old one behind, because
   # the agent has no delete permission: run kubectl delete ucr <old-name>.
   crName: cluster
@@ -77,7 +79,9 @@ agent:
   # apiextensions.k8s.io/v1beta1), whatever this is set to.
   manageCRD: true
   # -- Target Kubernetes minors to evaluate, MAJOR.MINOR only (the CRD's
-  # format), e.g. ["1.37", "1.38"], passed to the agent as --targets. The
+  # format), e.g. ["1.37", "1.38"], at most 8 entries (the CRD's spec.targets
+  # cap, which the agent also enforces on distinct minors; the chart counts
+  # entries, so list each minor once), passed to the agent as --targets. The
   # chart never renders the ClusterReadiness object: the agent creates it
   # and, when targets is non-empty, resets spec.targets to this list on
   # every tick, so this value wins over `kubectl edit`. Empty = the agent
