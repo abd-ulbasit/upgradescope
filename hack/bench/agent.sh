@@ -27,6 +27,12 @@
 #   BENCH_HELM_REVISIONS  stored revisions per Helm release, default 1
 #   BENCH_BIN        where tools and results go, default bin/bench (gitignored)
 #   BENCH_RESET_CMD  a command run before and after (a cluster-recreate script)
+#   BENCH_RUN_ON     an ssh host to run the measured agent tick on (default: this
+#                    machine). Set it to the lab's host: the benchmark binary is
+#                    cross-compiled for linux/amd64 and copied there with the
+#                    kubeconfig (a private temp directory, removed at the end),
+#                    so the tick sees the apiserver's LAN latency instead of
+#                    this machine's. The seeding always runs here.
 #   BENCH_CP_STATS_CMD  a command that prints the control plane's memory (run
 #                    after each level and shown in the table; e.g. over ssh
 #                    to the kind host: docker stats --no-stream)
@@ -50,6 +56,7 @@ BENCH_BIN=${BENCH_BIN:-bin/bench}
 BENCH_STEPS=${BENCH_STEPS:-0 0.25 0.5 1}
 BENCH_TICKS=${BENCH_TICKS:-5}
 BENCH_HELM_REVISIONS=${BENCH_HELM_REVISIONS:-1}
+BENCH_RUN_ON=${BENCH_RUN_ON:-local}
 mkdir -p "$BENCH_BIN"
 BENCH_BIN=$(cd "$BENCH_BIN" && pwd -P)
 
@@ -92,12 +99,55 @@ scale() { # scale <full-count> <fraction> -> rounded count
   awk -v n="$1" -v f="$2" 'BEGIN { printf "%d", n * f + 0.5 }'
 }
 
+remote_dir=""
+cleanup() {
+  if [ -n "$remote_dir" ]; then
+    # shellcheck disable=SC2029 # expanded here on purpose
+    ssh "$BENCH_RUN_ON" "rm -rf '$remote_dir'" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
 reset_hook
 guard_cluster
 
 echo "bench-agent: building the seeder and the agent benchmark from $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD))" >&2
 go build -o "$BENCH_BIN/bench-seed" ./hack/bench/seed
-go test -c -o "$BENCH_BIN/agent-bench.test" ./internal/agent
+if [ "$BENCH_RUN_ON" = local ]; then
+  go test -c -o "$BENCH_BIN/agent-bench.test" ./internal/agent
+else
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$BENCH_BIN/agent-bench-linux-amd64.test" ./internal/agent
+  remote_dir=$(ssh "$BENCH_RUN_ON" 'umask 077; mktemp -d /tmp/upgradescope-bench.XXXXXX')
+  scp -q "$BENCH_BIN/agent-bench-linux-amd64.test" "$BENCH_RUN_ON:$remote_dir/agent.test"
+  scp -q "$KUBECONFIG" "$BENCH_RUN_ON:$remote_dir/kubeconfig"
+  echo "bench-agent: the measured ticks run on $BENCH_RUN_ON, next to the apiserver" >&2
+fi
+
+# measure <label> <expected nodes> <expected helm releases>: the tick
+# benchmark at the cluster's current fill, appending one JSON line per tick
+# to $results.
+measure() {
+  local vars=(UPGRADESCOPE_BENCH_TICKS="$BENCH_TICKS" UPGRADESCOPE_BENCH_LABEL="$1"
+    UPGRADESCOPE_BENCH_EXPECT_NODES="$2" UPGRADESCOPE_BENCH_EXPECT_HELM="$3")
+  if [ "$BENCH_RUN_ON" = local ]; then
+    env "${vars[@]}" UPGRADESCOPE_BENCH_KUBECONFIG="$KUBECONFIG" UPGRADESCOPE_BENCH_OUT="$results" \
+      "$BENCH_BIN/agent-bench.test" -test.run '^TestBenchAgentTick$' -test.v -test.timeout 30m >&2
+  else
+    local remote_out=$remote_dir/out.jsonl
+    # shellcheck disable=SC2029 # $remote_dir is expanded here on purpose
+    {
+      for kv in "${vars[@]}"; do printf 'export %s\n' "$(printf '%q' "$kv")"; done
+    } | ssh "$BENCH_RUN_ON" "umask 077; cat > '$remote_dir/env'"
+    # shellcheck disable=SC2029
+    ssh "$BENCH_RUN_ON" "cd '$remote_dir' && . ./env && rm -f out.jsonl && UPGRADESCOPE_BENCH_KUBECONFIG='$remote_dir/kubeconfig' UPGRADESCOPE_BENCH_OUT='$remote_out' ./agent.test -test.run '^TestBenchAgentTick\$' -test.v -test.timeout 30m" >&2 || {
+      # shellcheck disable=SC2029
+      ssh "$BENCH_RUN_ON" "cat '$remote_out' 2>/dev/null" >>"$results" || true
+      return 1
+    }
+    # shellcheck disable=SC2029
+    ssh "$BENCH_RUN_ON" "cat '$remote_out'" >>"$results"
+  fi
+}
 
 kwok=$(fetch_pinned kwok.yaml "$KWOK_SHA256_kwok_yaml")
 stage=$(fetch_pinned stage-fast.yaml "$KWOK_SHA256_stage_fast_yaml")
@@ -114,6 +164,7 @@ results=$BENCH_BIN/agent-$stamp.jsonl
 steps_file=$BENCH_BIN/agent-$stamp.steps.jsonl
 : >"$steps_file"
 
+failed=""
 full_nodes=2000 full_pods=10000 full_cms=6000 full_deps=4000 full_helm=1000 full_ns=100
 for f in $BENCH_STEPS; do
   nodes=$(scale $full_nodes "$f") pods=$(scale $full_pods "$f") cms=$(scale $full_cms "$f")
@@ -129,14 +180,11 @@ for f in $BENCH_STEPS; do
     echo "bench-agent: control plane at $f: $(bash -c "$BENCH_CP_STATS_CMD" 2>&1 | tr '\n' ' ')" >&2
   fi
   echo "bench-agent: measuring $BENCH_TICKS ticks at fill $f" >&2
-  UPGRADESCOPE_BENCH_KUBECONFIG="$KUBECONFIG" UPGRADESCOPE_BENCH_TICKS="$BENCH_TICKS" \
-    UPGRADESCOPE_BENCH_LABEL="fill=$f nodes=$nodes pods=$pods configmaps=$cms deployments=$deps helm=$helm" \
-    UPGRADESCOPE_BENCH_OUT="$results" \
-    UPGRADESCOPE_BENCH_EXPECT_NODES=$((nodes + $(kc get nodes -o json | jq '[.items[] | select(.metadata.annotations["kwok.x-k8s.io/node"] != "fake")] | length'))) \
-    UPGRADESCOPE_BENCH_EXPECT_HELM="$helm" \
-    "$BENCH_BIN/agent-bench.test" -test.run '^TestBenchAgentTick$' -test.v -test.timeout 30m >&2
+  measure "fill=$f nodes=$nodes pods=$pods configmaps=$cms deployments=$deps helm=$helm" \
+    $((nodes + $(kc get nodes -o json | jq '[.items[] | select(.metadata.annotations["kwok.x-k8s.io/node"] != "fake")] | length'))) "$helm" || failed=1
 done
 
 "$(dirname "$0")/agent-report.sh" "$results"
 echo "bench-agent: raw per-tick results: $results" >&2
 reset_hook
+[ -z "$failed" ] || die "a measurement failed (ticks with an error or an incomplete capability are not valid numbers): see the output above"
