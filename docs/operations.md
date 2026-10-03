@@ -417,17 +417,21 @@ tokens.
   required, so such a cell is `unknown` at best (`blocked` when the push
   shows a blocker), and the report's `notAssessed` says why. A cluster's
   very first push without a version is judged only at `--targets`.
-- **v0.1.x agents** (`agentVersion` 0.1.0, 0.1.1 or earlier, their
-  pre-releases and Go pseudo-versions) collected two signals with meanings
-  this server no longer judges: api-usage counted every object the
-  apiserver *serves* at a deprecated version (APF FlowSchemas became
-  removed-API blockers) and their own requests landed in the
-  deprecated-calls metric; a Helm-chart-found add-on's version was the
-  chart version. Their api-usage and deprecated-calls are reported as not
-  assessed, with the reason, and a chart version is kept as evidence only,
-  so such a cluster is `unknown` until its agent is upgraded. Builds from
-  later source (`dev`, a 0.1.2 pseudo-version or snapshot) are judged
-  normally.
+- **v0.1.x agents** collected two signals with meanings this server no
+  longer judges: api-usage counted every object the apiserver *serves* at
+  a deprecated version (APF FlowSchemas became removed-API blockers) and
+  their own requests landed in the deprecated-calls metric; a
+  Helm-chart-found add-on's version was the chart version. Collectors from
+  v0.2.0 on stamp `collectorSchema` in the inventory and are judged
+  normally whatever their `agentVersion`. An inventory without it is from
+  a v0.1.x agent unless its `agentVersion` is a semantic version at or
+  after `0.2.0-0` (v0.2.0's release candidates report `0.2.0-rc.N`): so
+  `0.1.1`, `dev`, an empty or `unknown` version and a pre-0.2 pseudo-version
+  all count, since a v0.1.x agent built the default way (its Dockerfile,
+  chart image tag, `go install`) reports `dev`. Its api-usage and
+  deprecated-calls are reported as not assessed, with the reason, and a
+  chart version is kept as evidence only, so such a cluster is `unknown`
+  until its agent is upgraded.
 - **Outdated verdicts.** A stored verdict depends on the date (EOL windows),
   the KB and the team map. The background pass re-evaluates hourly and just
   after each UTC midnight; until it has, every read of a stored verdict

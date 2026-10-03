@@ -33,10 +33,11 @@ func newTestServer(t *testing.T, st *fakeStore, opts ...func(*Config)) *Server {
 
 func testInventory() inventory.Inventory {
 	return inventory.Inventory{
-		SchemaVersion: 1,
-		ClusterID:     "uid-123",
-		CollectedAt:   time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC),
-		ServerVersion: "v1.34.2",
+		SchemaVersion:   1,
+		ClusterID:       "uid-123",
+		CollectorSchema: inventory.CurrentCollectorSchema,
+		CollectedAt:     time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC),
+		ServerVersion:   "v1.34.2",
 		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{
 			inventory.CapVersions: {Available: true},
 			inventory.CapCRDs:     {Available: true},
@@ -322,6 +323,7 @@ func TestIngestDuplicateCanonicalHash(t *testing.T) {
 	    "serverVersion": "v1.34.2",
 	    "collectedAt": "2026-06-10T11:00:00Z",
 	    "clusterId": "uid-123",
+	    "collectorSchema": 1,
 	    "schemaVersion": 1
 	  }
 	}`)

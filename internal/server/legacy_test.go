@@ -90,45 +90,64 @@ func argoChartInventory(version string) inventory.Inventory {
 	return inv
 }
 
+// unmarked is inv as a collector before collectorSchema wrote it: v0.1.x,
+// or a v0.2.0 release candidate.
+func unmarked(inv inventory.Inventory) inventory.Inventory {
+	inv.CollectorSchema = 0
+	return inv
+}
+
 // TestLegacyChartSourcedAddOnNotReady: a v0.1.x agent reported a
 // chart-found add-on's CHART version as its version (#110 changed that to
 // the app version without a schema bump). Argo CD chart 7.1.0 is app 2.10,
 // past its end of life, yet it was judged as "7.1.0": no release line,
 // ready/100. A legacy agent's chart version is now evidence only, and its
 // data can never make a cluster ready; a current agent is judged as before.
+// "dev" is what nearly every v0.1.x agent reports (its Dockerfile, chart
+// image tag and go install all default to it), so an unmarked inventory
+// is legacy unless its agentVersion is a release at or after 0.2.0-0
+// (#194 SV-12).
 func TestLegacyChartSourcedAddOnNotReady(t *testing.T) {
 	h := newHarness(t, Config{KB: legacyKB()}, aug1)
-	for _, agent := range []string{"0.1.1", "v0.1.0"} {
-		if code, out := h.pushAs("legacy-"+agent, agent, argoChartInventory("7.1.0")); code != http.StatusAccepted {
-			t.Fatalf("push as %s = %d %v", agent, code, out)
+	for i, agent := range []string{"0.1.1", "v0.1.0", "dev", "", "unknown", "(devel)", "0.1.2-0.20261001120000-4bca610f1e2d"} {
+		cluster := "legacy-" + itoa(int64(i))
+		if code, out := h.pushAs(cluster, agent, unmarked(argoChartInventory("7.1.0"))); code != http.StatusAccepted {
+			t.Fatalf("push as %q = %d %v", agent, code, out)
 		}
-		c := h.fleetCell("legacy-"+agent, "1.35")
+		c := h.fleetCell(cluster, "1.35")
 		if c == nil || c.Ready || c.Verdict == "ready" {
-			t.Errorf("agent %s: cell = %+v, want not ready", agent, c)
+			t.Errorf("agent %q: cell = %+v, want not ready", agent, c)
 		}
-		rep := h.report("legacy-"+agent, "1.35")
-		if reason, required := rep.gap("api-usage"); !required || !strings.Contains(reason, agent) {
-			t.Errorf("agent %s: api-usage gap = %q (required %v), want a required gap naming the agent", agent, reason, required)
+		rep := h.report(cluster, "1.35")
+		if reason, required := rep.gap("api-usage"); !required || !strings.Contains(reason, `"`+agent+`"`) {
+			t.Errorf("agent %q: api-usage gap = %q (required %v), want a required gap naming the agent", agent, reason, required)
 		}
 		for _, f := range rep.Findings {
 			if strings.Contains(f.Title, "Argo CD") && strings.Contains(f.Title, "7.1.0") {
-				t.Errorf("agent %s: finding %q judges the chart version as the app version", agent, f.Title)
+				t.Errorf("agent %q: finding %q judges the chart version as the app version", agent, f.Title)
 			}
 		}
 	}
 
-	// The same data from a current agent: 7.1.0 is its app version.
-	if code, _ := h.pushAs("current", "v0.2.0", argoChartInventory("2.10.0")); code != http.StatusAccepted {
-		t.Fatal("current push failed")
-	}
-	if c := h.fleetCell("current", "1.35"); c == nil || c.Verdict != "blocked" {
-		t.Errorf("current agent, Argo CD 2.10: cell = %+v, want blocked (end of life)", c)
-	}
-	if code, _ := h.pushAs("dev", "dev", argoChartInventory("3.1.0")); code != http.StatusAccepted {
-		t.Fatal("dev push failed")
-	}
-	if c := h.fleetCell("dev", "1.35"); c == nil || c.Verdict != "ready" {
-		t.Errorf("dev agent, Argo CD 3.1: cell = %+v, want ready", c)
+	// The same data from a current agent: the version is its app version.
+	// A release candidate's inventory is unmarked; its version says it is
+	// current.
+	for cluster, push := range map[string]struct {
+		agent   string
+		inv     inventory.Inventory
+		verdict string
+	}{
+		"current":  {"v0.2.0", argoChartInventory("2.10.0"), "blocked"}, // end of life
+		"rc2":      {"0.2.0-rc.2", unmarked(argoChartInventory("2.10.0")), "blocked"},
+		"dev":      {"dev", argoChartInventory("3.1.0"), "ready"}, // marked: a build from current source
+		"marked-0": {"0.1.1", argoChartInventory("3.1.0"), "ready"},
+	} {
+		if code, _ := h.pushAs(cluster, push.agent, push.inv); code != http.StatusAccepted {
+			t.Fatalf("%s push failed", cluster)
+		}
+		if c := h.fleetCell(cluster, "1.35"); c == nil || c.Verdict != push.verdict {
+			t.Errorf("%s (agent %q): cell = %+v, want %s", cluster, push.agent, c, push.verdict)
+		}
 	}
 }
 
@@ -155,27 +174,32 @@ func flowSchemaInventory() inventory.Inventory {
 // assessed, with the reason, instead of judged.
 func TestLegacyResidencyFlagged(t *testing.T) {
 	h := newHarness(t, Config{KB: legacyKB()}, aug1)
-	if code, out := h.pushAs("old", "0.1.1", flowSchemaInventory()); code != http.StatusAccepted {
-		t.Fatalf("legacy push = %d %v", code, out)
-	}
-	rep := h.report("old", "1.29")
-	for _, f := range rep.Findings {
-		if f.Severity == "blocker" {
-			t.Errorf("legacy blocker %q (%s), want residency not judged", f.Title, f.Category)
+	// "dev" and "" are what a v0.1.1 agent built without a version sends
+	// (#194 KB-14).
+	for i, agent := range []string{"0.1.1", "dev", ""} {
+		cluster := "old-" + itoa(int64(i))
+		if code, out := h.pushAs(cluster, agent, unmarked(flowSchemaInventory())); code != http.StatusAccepted {
+			t.Fatalf("legacy push as %q = %d %v", agent, code, out)
 		}
-	}
-	if rep.Verdict != "unknown" {
-		t.Errorf("verdict = %s, want unknown", rep.Verdict)
-	}
-	for _, capability := range []string{"api-usage", "deprecated-calls"} {
-		if reason, _ := rep.gap(capability); !strings.Contains(reason, "0.1.1") {
-			t.Errorf("%s gap = %q, want one naming agent 0.1.1", capability, reason)
+		rep := h.report(cluster, "1.29")
+		for _, f := range rep.Findings {
+			if f.Severity == "blocker" {
+				t.Errorf("agent %q: legacy blocker %q (%s), want residency not judged", agent, f.Title, f.Category)
+			}
+		}
+		if rep.Verdict != "unknown" {
+			t.Errorf("agent %q: verdict = %s, want unknown", agent, rep.Verdict)
+		}
+		for _, capability := range []string{"api-usage", "deprecated-calls"} {
+			if reason, _ := rep.gap(capability); !strings.Contains(reason, `"`+agent+`"`) {
+				t.Errorf("agent %q: %s gap = %q, want one naming the agent", agent, capability, reason)
+			}
 		}
 	}
 	var detail struct {
 		Capabilities map[string]inventory.CapabilityStatus `json:"capabilities"`
 	}
-	h.get("/api/v1/clusters/"+itoa(h.clusterID("old")), &detail)
+	h.get("/api/v1/clusters/"+itoa(h.clusterID("old-0")), &detail)
 	if st, ok := detail.Capabilities["api-usage"]; !ok || st.Available {
 		t.Errorf("cluster detail api-usage = %+v, want unavailable (legacy agent)", st)
 	}
@@ -189,17 +213,28 @@ func TestLegacyResidencyFlagged(t *testing.T) {
 	}
 }
 
-func TestLegacyAgent(t *testing.T) {
+func TestLegacyInventory(t *testing.T) {
 	for v, want := range map[string]bool{
-		"0.1.0": true, "0.1.1": true, "v0.1.1": true, "0.0.9": true, "0.1.1-rc.1": true,
+		"0.1.0": true, "0.1.1": true, "v0.1.1": true, "0.0.9": true, "0.1.1-rc.1": true, "0.1.10": true,
 		"0.1.1-0.20260720120000-4bca610f1e2d": true, // go install of a commit before v0.1.1
-		// Built from source after v0.1.1: a go install pseudo-version, a
-		// GoReleaser snapshot.
-		"0.1.2-0.20261001120000-4bca610f1e2d": false, "0.1.2-SNAPSHOT-abc123": false,
-		"0.2.0": false, "v0.2.0-rc.1": false, "1.0.0": false, "dev": false, "": false, "test": false, "0.10.0": false, "0.1.10": false,
+		// Unmarked builds that are not a release at or after 0.2.0-0: what a
+		// v0.1.x agent reports when built without a version (its default),
+		// a pseudo-version or snapshot of pre-0.2 source, and strings no
+		// release ever sends.
+		"dev": true, "": true, "unknown": true, "(devel)": true, "test": true,
+		"0.1.2-0.20261001120000-4bca610f1e2d": true, "0.1.2-SNAPSHOT-abc123": true,
+		"V0.1.1": true, "0.1.1 ": true, "0.01.1": true,
+		// v0.2.0's release candidates and later stamp a semantic version.
+		"0.2.0-0": false, "0.2.0-rc.2": false, "v0.2.0-rc.1": false, "0.2.0": false, "v0.2.0-test": false,
+		"0.2.0-rc.2.0.20261001120000-4bca610f1e2d": false, "0.10.0": false, "1.0.0": false,
 	} {
-		if got := legacyAgent(v); got != want {
-			t.Errorf("legacyAgent(%q) = %v, want %v", v, got, want)
+		if got := legacyInventory(unmarked(testInventory()), v); got != want {
+			t.Errorf("unmarked inventory, agent %q: legacy = %v, want %v", v, got, want)
+		}
+		// A collector that stamps collectorSchema is current, whatever the
+		// envelope says.
+		if legacyInventory(testInventory(), v) {
+			t.Errorf("marked inventory, agent %q: legacy, want current", v)
 		}
 	}
 }

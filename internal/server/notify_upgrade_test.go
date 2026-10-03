@@ -43,12 +43,13 @@ func openSQLite(t *testing.T) store.Store {
 // the given APIs.
 func atVersion(serverVersion string, usage ...inventory.APIUsage) inventory.Inventory {
 	return inventory.Inventory{
-		SchemaVersion: 1,
-		ClusterID:     "uid-1",
-		CollectedAt:   time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
-		ServerVersion: serverVersion,
-		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{},
-		APIUsage:      usage,
+		SchemaVersion:   1,
+		ClusterID:       "uid-1",
+		CollectorSchema: inventory.CurrentCollectorSchema,
+		CollectedAt:     time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+		ServerVersion:   serverVersion,
+		Capabilities:    map[inventory.Capability]inventory.CapabilityStatus{},
+		APIUsage:        usage,
 	}
 }
 
