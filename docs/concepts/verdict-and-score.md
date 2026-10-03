@@ -16,6 +16,13 @@ pure function, `engine.Evaluate(inventory, knowledge base, target, date)`.
 v0.1, when it meant "no blockers". A failed required check never leaves a
 report reading ready.
 
+A check the inventory does not report at all (its `capabilities` map has
+no entry for it, as in a hand-built, third-party or empty inventory) was
+not assessed, and for a required check below that is a required gap too:
+`api-usage` always, `versions` and `addons` in a cluster inventory. The
+server judges such a push `unknown` at best; every collector since v0.1.0
+reports them.
+
 Required checks:
 
 - **`api-usage`**, always: which removed or deprecated APIs objects use.
@@ -90,6 +97,16 @@ caps keep one noisy category from zeroing the score, and keep a cluster with
 many warnings distinguishable from one with a blocker. The score is for
 trends and comparison: **gate on the verdict**, not on a score threshold.
 Per-team scores apply the same formula to each team's findings.
+
+Each team also has a verdict, on the report's rules: `blocked` by a
+blocker of its own or one no team is attributed (it cannot be ruled out as
+the team's, and it blocks the cluster's upgrade either way), otherwise
+`unknown` when a required check was not assessed (it may have hidden a
+blocker of any team), otherwise `ready`. A team's `ready` is true only when
+its verdict is `ready`, so no team reads ready on an `unknown` cluster.
+Another team's blocker leaves it `ready`; gate on the cluster's verdict,
+not on one team's. A team with no findings is not listed, and there is no
+per-namespace score.
 
 The formula is part of the public contract
 ([compatibility policy](../compatibility-policy.md)): changing it is a
