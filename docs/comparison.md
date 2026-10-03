@@ -20,7 +20,7 @@ before deciding). Corrections are welcome as issues.
 | **AKS** | blocks a minor upgrade on recent deprecated API use | no | no | at upgrade time | — |
 | **Radar** (Skyhook) | removed APIs in the target, from live resources, Helm manifests, last-applied configuration and apiserver metrics | not documented | kubelet, kube-proxy | live UI, checked when opened | hosted Radar Cloud (commercial) |
 | **Chkk** (commercial) | breaking changes and incompatibilities, curated (see below) | see below | see below | yes (SaaS) | yes |
-| **upgradescope** | written objects, manifests, Helm releases, apiserver requests | 20 add-ons, cited | kubelet, kube-proxy, control plane | yes (agent) | yes (server) |
+| **upgradescope** | written objects, manifests, Helm releases, apiserver requests | 27 add-ons, cited | kubelet, kube-proxy, control plane | yes (agent) | yes (server) |
 
 Every cell is expanded below. "Continuous" means it re-evaluates without
 someone re-running it.
@@ -119,7 +119,7 @@ deprecated, and can report outdated container images.
 
 - **Nova, not upgradescope:** "a newer version exists", for any chart in a
   repository you can reach; upgradescope's registry knows end-of-life
-  dates for 20 add-ons, not the newest version of every chart.
+  dates for 27 add-ons, not the newest version of every chart.
 - **upgradescope, not Nova:** end of life rather than "outdated" (a
   supported old line is fine, an unsupported one blocks), API removals,
   skew and a verdict per target.

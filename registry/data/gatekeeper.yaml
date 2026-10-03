@@ -1,0 +1,34 @@
+# registry/data/gatekeeper.yaml
+# Release lines are synced from endoflife.date (make eol-sync). Gatekeeper
+# "supports" the current and the previous major.minor release (its Release
+# Management document); the Helm chart and the image share the version
+# (appVersion v3.x.y).
+schema_version: 2
+id: gatekeeper
+display_name: OPA Gatekeeper
+endoflife_product: gatekeeper
+matchers:
+  images:
+    - openpolicyagent/gatekeeper
+    - openpolicyagent/gatekeeper-crds
+  charts:
+    - gatekeeper
+support:
+  status: supported
+  citations:
+    - https://endoflife.date/gatekeeper
+    - https://github.com/open-policy-agent/gatekeeper/blob/master/docs/Release_Management.md#supported-releases
+cycles:
+  - {cycle: "3.23", eol: false, citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.22", eol: false, citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.21", eol: "2026-07-09", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.20", eol: "2026-03-09", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.19", eol: "2025-11-19", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.18", eol: "2025-07-24", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.17", eol: "2025-04-09", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.16", eol: "2024-12-12", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.15", eol: "2024-08-21", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.14", eol: "2024-05-09", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.13", eol: "2024-02-05", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.12", eol: "2023-11-01", citations: ["https://endoflife.date/gatekeeper"]}
+  - {cycle: "3.11", eol: "2023-08-08", citations: ["https://endoflife.date/gatekeeper"]}

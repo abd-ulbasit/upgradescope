@@ -320,6 +320,32 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"bitnami/external-dns:0.14.2-debian-12-r4", "external-dns", "0.14.2"},
 		{"registry.k8s.io/metrics-server/metrics-server:v0.7.2", "metrics-server", "0.7.2"},
 		{"quay.io/prometheus-operator/prometheus-operator:v0.75.0", "prometheus-operator", "0.75.0"},
+		// Mirrors keep a vendor or upstream path as a suffix, whatever the
+		// registry host and prefix (#49); a bare "controller" is no path.
+		{"myregistry.example.com/ingress-nginx/controller:v1.11.3", "ingress-nginx", "1.11.3"},
+		{"myregistry/mirror/ingress-nginx/controller:v1.11.3", "ingress-nginx", "1.11.3"},
+		{"myregistry.example.com:5000/mirror/rancher/nginx-ingress-controller:nginx-1.9.4-hardened1", "rke2-ingress-nginx", "1.9.4"},
+		{"myregistry.example.com/controller:v1.11.3", "", ""},
+		{"myregistry/mirror/controller:v1.11.3", "", ""},
+		// Retired as a whole (#49): each is end of life whatever its version.
+		{"docker.io/kubernetesui/dashboard:v2.7.0", "kubernetes-dashboard", "2.7.0"},
+		{"kubernetesui/dashboard-api:1.10.1", "kubernetes-dashboard", "1.10.1"},
+		{"kubernetesui/dashboard-auth:1.2.2", "kubernetes-dashboard", "1.2.2"},
+		{"kubernetesui/dashboard-web:1.6.0", "kubernetes-dashboard", "1.6.0"},
+		{"kubernetesui/dashboard-metrics-scraper:1.2.1", "kubernetes-dashboard", "1.2.1"},
+		{"kubernetesui/metrics-scraper:v1.0.8", "kubernetes-dashboard", "1.0.8"},
+		{"grafana/promtail:3.0.0", "promtail", "3.0.0"},
+		{"docker.io/grafana/promtail:2.9.4", "promtail", "2.9.4"},
+		{"grafana/agent:v0.44.2", "grafana-agent", "0.44.2"},
+		{"harbor.corp.example/dockerhub/grafana/agent-operator:v0.44.2", "grafana-agent", "0.44.2"},
+		{"weaveworks/weave-kube:2.8.1", "weave-net", "2.8.1"},
+		{"docker.io/weaveworks/weave-npc:2.8.1", "weave-net", "2.8.1"},
+		// Synced from endoflife.date (#49).
+		{"public.ecr.aws/karpenter/controller:1.0.8@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "karpenter", "1.0.8"},
+		{"openpolicyagent/gatekeeper:v3.20.1", "gatekeeper", "3.20.1"},
+		{"openpolicyagent/gatekeeper-crds:v3.20.1", "gatekeeper", "3.20.1"},
+		{"cr.fluentbit.io/fluent/fluent-bit:4.0.3", "fluent-bit", "4.0.3"},
+		{"fluent/fluent-bit:3.2.10", "fluent-bit", "3.2.10"},
 		// Provider-managed builds follow the provider's support policy, not
 		// upstream's (#18): GKE network policy / Dataplane V2, AKS Calico,
 		// Azure CNI powered by Cilium, the AKS Istio and KEDA add-ons. No
@@ -339,6 +365,10 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"ghcr.io/fluxcd/source-controller:v1.4.1", "", ""}, // controller versions are not Flux versions
 	}
 	for _, tc := range cases {
+		// One entry claims an image: a second would judge it twice.
+		if ids := imageAddOns(parseImage(tc.image), addons); len(ids) > 1 {
+			t.Errorf("%s: claimed by %v, want at most one entry", tc.image, ids)
+		}
 		got, unrec := matchAddOns(addOnEvidence{images: []nsImage{{"ns", tc.image}}}, addons)
 		if tc.wantID == "" {
 			if len(got) != 0 || len(unrec) != 1 {
@@ -348,6 +378,31 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		}
 		if len(got) != 1 || got[0].ID != tc.wantID || got[0].Version != tc.wantVersion {
 			t.Errorf("%s: got %+v, want %s %q", tc.image, got, tc.wantID, tc.wantVersion)
+		}
+	}
+}
+
+// Helm charts against the embedded registry (#49): a vendor build's chart is
+// its own entry, never upstream ingress-nginx's.
+func TestMatchAddOnsRealWorldCharts(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for chart, wantID := range map[string]string{
+		"ingress-nginx":        "ingress-nginx",
+		"rke2-ingress-nginx":   "rke2-ingress-nginx",
+		"kubernetes-dashboard": "kubernetes-dashboard",
+		"promtail":             "promtail",
+		"grafana-agent":        "grafana-agent",
+		"karpenter":            "karpenter",
+		"gatekeeper":           "gatekeeper",
+		"fluent-bit":           "fluent-bit",
+	} {
+		rel := inventory.HelmRelease{Name: chart, Namespace: "ns", ChartName: chart, ChartVersion: "1.0.0", AppVersion: "1.2.3", Status: "deployed"}
+		got, _ := matchAddOns(addOnEvidence{releases: []inventory.HelmRelease{rel}}, addons)
+		if len(got) != 1 || got[0].ID != wantID || got[0].Source != "chart" || got[0].Version != "1.2.3" {
+			t.Errorf("chart %s: got %+v, want %s from the chart at 1.2.3", chart, got, wantID)
 		}
 	}
 }

@@ -1,0 +1,22 @@
+# registry/data/grafana-agent.yaml
+# Hand-curated: endoflife.date does not track it. Grafana's documentation
+# states that "Grafana Agent has reached End-of-Life (EOL) on November 1,
+# 2025", for Static mode, Flow mode and the Agent Operator alike, and the
+# source repository is archived (moved to grafana-cold-storage/agent).
+schema_version: 2
+id: grafana-agent
+display_name: Grafana Agent
+matchers:
+  images:
+    - grafana/agent
+    - grafana/agent-operator
+  charts:
+    - grafana-agent
+    - grafana-agent-operator
+support:
+  status: eol
+  eol_date: "2025-11-01"
+  citations:
+    - https://grafana.com/docs/agent/latest/
+    - https://github.com/grafana-cold-storage/agent
+recommendation: Migrate to Grafana Alloy, the successor Grafana recommends for Static mode, Flow mode and Operator users.
