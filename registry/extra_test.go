@@ -52,6 +52,32 @@ func TestLoadExtra(t *testing.T) {
 			t.Errorf("ids = %v, want %v", ids(got), want)
 		}
 	})
+	// A mounted ConfigMap (the chart's agent.extraRegistry): the keys are
+	// symlinks to ..data, itself a symlink to a timestamped directory.
+	t.Run("a ConfigMap volume layout", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "..2026_10_03_09_00_00.1"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeEntry(t, filepath.Join(dir, "..2026_10_03_09_00_00.1"), "my-a.yaml", validYAML("my-a"))
+		for _, link := range [][2]string{
+			{"..2026_10_03_09_00_00.1", "..data"},
+			{"..data/my-a.yaml", "my-a.yaml"},
+		} {
+			if err := os.Symlink(link[0], filepath.Join(dir, link[1])); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, path := range []string{dir, dir + string(filepath.Separator), filepath.Join(dir, "my-a.yaml")} {
+			got, err := LoadExtra(path)
+			if err != nil {
+				t.Fatalf("LoadExtra(%q): %v", path, err)
+			}
+			if want := []string{"my-a"}; !slices.Equal(ids(got), want) {
+				t.Errorf("LoadExtra(%q) ids = %v, want %v (the timestamped copy must not load twice)", path, ids(got), want)
+			}
+		}
+	})
 	// The same validator as the embedded entries: a file that fails it fails
 	// the load and is named, in a directory and when given as the file.
 	bad := strings.Replace(validYAML("my-a"), "https://vendor.dev/releases", "https://example.com/releases", 1)
