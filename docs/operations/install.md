@@ -107,8 +107,8 @@ with cosign (`cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:0.2.0`
 with the flags above). Before v0.2.0 is published, install from a clone of
 the repository: `helm install upgradescope deploy/chart ...`, with
 `image.repository` and `image.tag` set to an image built from the clone
-(`make docker-build`): the chart's default image, `v0.1.1`, was never
-published ([#127](https://github.com/abd-ulbasit/upgradescope/issues/127)).
+(`make docker-build`) when you run unreleased changes: a clone's chart
+defaults to the image of the release it was cut for.
 
 What the chart installs, and the agent-only, combined and fleet-hub setups:
 [In-cluster agent](../getting-started/in-cluster.md), the

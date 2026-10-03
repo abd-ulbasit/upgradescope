@@ -17,9 +17,9 @@ helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
 Before that release, install from a clone: `helm install upgradescope
 deploy/chart -n upgradescope --create-namespace`, with
 `--set image.repository=…,image.tag=…` naming an image you built from the
-clone (`make docker-build`) and pushed or loaded into the cluster: the
-chart's default image, `v0.1.1`, was never published
-([#127](https://github.com/abd-ulbasit/upgradescope/issues/127)). Either way the release
+clone (`make docker-build`) and pushed or loaded into the cluster when you
+run unreleased changes: a clone's chart defaults to the image of the
+release it was cut for. Either way the release
 installs the agent Deployment, its ServiceAccount and read-only ClusterRole,
 and the `ClusterReadiness` CRD. [Install](../operations/install.md) lists
 the options, [Helm values](../reference/helm-values.md) every value.
