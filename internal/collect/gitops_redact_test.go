@@ -37,6 +37,16 @@ func TestRedactRepoURL(t *testing.T) {
 		{"empty", "", ""},
 		{"empty host is dropped", "https://u:s3cret@/x", ""},
 		{"control characters are dropped", "https://host/a\nb\tc", "https://host/abc"},
+		// An "@" in the query or fragment: to Go, Helm, curl and git what
+		// follows it is still query, so nothing is recorded.
+		{"an @ in the query before a token", "https://host/repo?user=ci@example.com&token=s3cret", ""},
+		{"a query password holding an @", "https://host/repo?user=ci&password=hunter2@s3cret", ""},
+		{"userinfo and an @ in the query", "https://u:p@host/repo?e=a@b&token=s3cret", ""},
+		{"oci with an @ in the query", "oci://ghcr.io/acme/chart?x=a@b&token=s3cret", ""},
+		{"an @ in the query before a path-like token", "https://host/repo?x=a@b/s3cret", ""},
+		{"an @ in the fragment", "https://host/repo#a@s3cret", ""},
+		{"a digest inside the query is not kept", "https://host/repo?token=s3cret@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", ""},
+		{"a digest inside the fragment is not kept", "https://host/repo#@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", ""},
 		{"oci pinned by digest keeps it", "oci://ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "oci://ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		{"oci pinned by digest with userinfo", "oci://user:s3cret@ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "oci://ghcr.io/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		{"oci by digest with a port", "oci://registry.example.com:5000/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "oci://registry.example.com:5000/acme/chart@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
@@ -66,8 +76,8 @@ func TestRedactRepoURLCredentialWithDelimiter(t *testing.T) {
 		{"token with a slash as the user", "https://AbC1/s3cret+gh@charts.example.com/repo", "https://charts.example.com/repo"},
 		{"password with a slash after digits", "https://user:123/s3cret@host/x", "https://host/x"},
 		{"oci password with a slash after digits", "oci://x:12/s3cret@ghcr.io/acme/chart", "oci://ghcr.io/acme/chart"},
-		{"password with a hash", "https://user:1234#s3cret@host/x", "https://host/x"},
-		{"password with a question mark", "https://user:443?s3cret@host/x", "https://host/x"},
+		{"password with a hash", "https://user:1234#s3cret@host/x", ""},
+		{"password with a question mark", "https://user:443?s3cret@host/x", ""},
 		{"several at signs", "https://a@b:s3cret@host/x", "https://host/x"},
 		{"scheme is part of the credential", "user:s3cret://x@host/repo", "host/repo"},
 	} {

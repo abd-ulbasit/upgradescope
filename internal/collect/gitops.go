@@ -583,9 +583,12 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 // token, a password such as "12/ab") parses successfully with the
 // credential as the host, path, query or fragment. Everything up to the
 // last "@" after the scheme is therefore dropped first, and only then are
-// the query and fragment cut off. An "@" is never legitimate in a Helm or
-// OCI repository URL, so a value that has one elsewhere (a query such as
-// "?email=a@b") loses more than the credential, never less. A value with
+// the query and fragment cut off. When a "?" or "#" comes before that last
+// "@", text cannot tell a password holding "?" ("user:443?tok@host") from
+// a query holding "@" ("?user=ci@example.com&token=tok", which Helm, curl
+// and git all send), so nothing is recorded: the value is returned as the
+// empty string. An "@" is never legitimate in a Helm or OCI repository
+// URL, so such a value loses more than the credential, never less. A value with
 // no scheme, such as an scp-like Git address ("git@host:org/repo.git"), is
 // cut the same way. Control characters are removed, and a URL left with no
 // host is returned as the empty string.
@@ -615,6 +618,9 @@ func redactRepoURL(raw string) string {
 		}
 	}
 	if at := strings.LastIndex(rest, "@"); at >= 0 {
+		if q := strings.IndexAny(rest, "?#"); q >= 0 && q < at {
+			return ""
+		}
 		rest = rest[at+1:]
 	}
 	if i := strings.IndexAny(rest, "?#"); i >= 0 {
@@ -634,7 +640,7 @@ var (
 	ociDigestSuffix = regexp.MustCompile(`@(?:sha256|sha384|sha512):[0-9a-fA-F]{32,}$`)
 	// ociRegistryPath is a registry host, an optional numeric port, and a
 	// path: what must follow any userinfo for a digest to be kept.
-	ociRegistryPath = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]+)?/[^@]+$`)
+	ociRegistryPath = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]+)?/[^@?#]+$`)
 )
 
 // validScheme reports whether s is a URL scheme (RFC 3986: a letter, then

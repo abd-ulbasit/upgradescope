@@ -71,9 +71,11 @@ copies neither: only the scheme, host, port and path are kept, whether or not
 the value parses as a URL (a Git address such as `git@github.com:org/repo.git`
 is recorded as `github.com:org/repo.git`). The cut does not depend on the URL
 parsing: everything up to the last `@` is dropped, so a token or password that
-itself contains a `/`, `?` or `#` does not leak either. An `@` anywhere else in
-the URL, which a chart repository does not use, therefore costs the part
-before it; an OCI reference pinned by digest keeps its digest. A token
+itself contains a `/`, `?` or `#` does not leak either. A URL with a `?` or
+`#` before its last `@` cannot be told apart from a query that holds an `@`
+and a token (`?user=ci@example.com&token=...`, which Helm, curl and git all
+send), so it is recorded as empty. An `@` anywhere else in the URL, which a
+chart repository does not use, therefore costs the part before it; an OCI reference pinned by digest keeps its digest. A token
 embedded in the URL *path* cannot be told from a path and is recorded: a
 Cloudsmith entitlement URL such as `https://dl.cloudsmith.io/<token>/org/repo/helm/charts/`
 keeps its token, so give such tokens through userinfo or a Secret-backed
