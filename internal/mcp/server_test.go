@@ -316,7 +316,7 @@ func TestScanFeedsTheOtherTools(t *testing.T) {
 	}
 	cs := connect(t, cfg)
 
-	res := call(t, cs, ToolScan, map[string]any{"targets": []any{"1.34", "1.35"}, "context": "staging"})
+	res := call(t, cs, ToolScan, map[string]any{"targets": []any{"1.34", "1.35"}})
 	out := structured(t, res)
 	if err := validate(t, resolve(t, ScanOutputSchema()), out); err != nil {
 		t.Fatalf("scan output does not validate: %v", err)
@@ -332,8 +332,8 @@ func TestScanFeedsTheOtherTools(t *testing.T) {
 	if len(scanned.Reports) != 2 || scanned.Reports[0].Target != "1.34" || scanned.Reports[1].Target != "1.35" {
 		t.Errorf("reports = %+v, want 1.34 then 1.35", scanned.Reports)
 	}
-	if len(reqs) != 2 || reqs[0].Context != "staging" || reqs[0].Kubeconfig != "" || reqs[1].Target != "1.35" {
-		t.Errorf("scan requests = %+v: the assistant's context is passed on, and nothing else is invented", reqs)
+	if len(reqs) != 2 || reqs[0] != (ScanRequest{Target: "1.34"}) || reqs[1] != (ScanRequest{Target: "1.35"}) {
+		t.Errorf("scan requests = %+v, want one per target and nothing else", reqs)
 	}
 
 	// Two targets scanned: the other tools need to be told which.
@@ -364,7 +364,10 @@ func TestScanInputIsChecked(t *testing.T) {
 		{"too many", map[string]any{"targets": []any{"1.30", "1.31", "1.32", "1.33", "1.34"}}},
 		{"not a minor", map[string]any{"targets": []any{"v1.34.2"}}},
 		{"duplicate", map[string]any{"targets": []any{"1.34", "1.34"}}},
-		{"files and context", map[string]any{"targets": []any{"1.34"}, "files": "x", "context": "y"}},
+		// Which cluster is read is the command's flags and the environment, never a call's.
+		{"kubeconfig", map[string]any{"targets": []any{"1.34"}, "kubeconfig": "/etc/other/kubeconfig"}},
+		{"context", map[string]any{"targets": []any{"1.34"}, "context": "other"}},
+		{"files", map[string]any{"targets": []any{"1.34"}, "files": "/some/dir"}},
 		{"unknown input", map[string]any{"targets": []any{"1.34"}, "namespace": "x"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

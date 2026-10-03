@@ -62,11 +62,8 @@ func scanInputSchema() map[string]any {
 		"targets": map[string]any{
 			"type": "array", "minItems": 1, "maxItems": maxScanTargets, "uniqueItems": true,
 			"items":       targetProp("A target Kubernetes minor, e.g. 1.37."),
-			"description": fmt.Sprintf("Target minors to judge the cluster against, at most %d. Each is a full scan.", maxScanTargets),
+			"description": fmt.Sprintf("Target minors to judge the cluster against, at most %d. Each is a full scan. The cluster is the one this server was started against; a call cannot choose another.", maxScanTargets),
 		},
-		"kubeconfig": strProp("Path of a kubeconfig. Default: what the server was started with (--kubeconfig, else $KUBECONFIG, else ~/.kube/config)."),
-		"context":    strProp("Kubeconfig context to scan. Default: what the server was started with (--context, else the kubeconfig's current context)."),
-		"files":      strProp("Scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a cluster; cannot be combined with kubeconfig or context."),
 	})
 }
 
@@ -97,10 +94,7 @@ func fleetInputSchema() map[string]any {
 }
 
 type scanInput struct {
-	Targets    []string `json:"targets"`
-	Kubeconfig string   `json:"kubeconfig"`
-	Context    string   `json:"context"`
-	Files      string   `json:"files"`
+	Targets []string `json:"targets"`
 }
 
 type sourceInput struct {
@@ -143,9 +137,6 @@ func (s *server) scan(ctx context.Context, _ *mcpsdk.CallToolRequest, in scanInp
 		}
 		seen[t] = true
 	}
-	if in.Files != "" && (in.Kubeconfig != "" || in.Context != "") {
-		return nil, nil, errors.New("files scans rendered manifests and cannot be combined with kubeconfig or context")
-	}
 
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
@@ -155,7 +146,7 @@ func (s *server) scan(ctx context.Context, _ *mcpsdk.CallToolRequest, in scanInp
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		doc, err := s.cfg.Scan(ctx, ScanRequest{Target: t, Kubeconfig: in.Kubeconfig, Context: in.Context, Files: in.Files})
+		doc, err := s.cfg.Scan(ctx, ScanRequest{Target: t})
 		if err != nil {
 			return nil, nil, fmt.Errorf("scan --target %s: %w", t, err)
 		}
