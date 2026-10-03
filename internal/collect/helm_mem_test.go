@@ -356,6 +356,10 @@ func withEmptyGzipMember(t testing.TB, payload []byte) []byte {
 // live heap: TestCollectHelmManifestParsingIsBounded enforces it.
 const maxManifestHeap = 64 << 20
 
+// maxManifestAttempts is how many times the test reads a case that reads
+// over the bound before failing it.
+const maxManifestAttempts = 3
+
 // peakLiveHeap runs f while a goroutine forces a full collection back to
 // back (runtime.GC returns once the cycle is marked and swept) and reads
 // the heap objects after each, and returns the largest, above the heap
@@ -367,11 +371,14 @@ const maxManifestHeap = 64 << 20
 // garbage is what GOMEMLIMIT makes the runtime shed, live data is not.
 //
 // Sampling is by collection, not by time, so a starved CPU spaces the
-// samples further apart, and can miss a peak held through none, but cannot
-// inflate one beyond what is allocated while a cycle marks, which a low
-// GOGC (10, set here) holds to about a tenth of the live heap: the same
-// 47 MiB-live case read up to 59 MiB at GOGC=100, 46 MiB at 10, at a load
-// average of 80 at the default GOMAXPROCS.
+// samples further apart, and can miss a peak held through none, but
+// cannot count the garbage a lagging collector has yet to free. It does
+// count what the parse allocates while a cycle marks (those objects are
+// kept to the next one), which a low GOGC (10, set here) cuts: the same
+// 47 MiB-live case read up to 59 MiB at GOGC=100 and 46 MiB at 10, at a
+// load average of 80 at the default GOMAXPROCS. A machine starved enough
+// still reads high: 72.4 MiB in a plain `go test -p 2 ./...`, which is
+// why the test reads a case over its bound again (maxManifestAttempts).
 //
 // What it catches: parsing in no runs at all (a 64 MiB run, no node bound)
 // reads 104-202 MiB and fails the test; a byte bound for runs of 4 or 16
@@ -486,8 +493,23 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 			manifest = nil
 			var inv inventory.Inventory
 			var err error
-			peak := peakLiveHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
-			t.Logf("stored %d KiB decoding to %d MiB; live heap peak above baseline %.1f MiB", len(s.Data["release"])>>10, fits>>20, float64(peak)/(1<<20))
+			// A reading is the live heap plus whatever a starved collector
+			// let the parse allocate while its cycle marked: it can rise
+			// above the live heap, and by tens of MiB when the machine is
+			// busy (72 MiB for a 47 MiB case in a plain `go test ./...`),
+			// but a parse that really holds more than the bound reads
+			// above it every time (no runs: 104-202 MiB). So a reading
+			// over the bound is read again, up to maxManifestAttempts, and
+			// the test fails only if none is under it.
+			var peak uint64
+			for attempt := 1; ; attempt++ {
+				inv = inventory.Inventory{}
+				peak = peakLiveHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
+				t.Logf("stored %d KiB decoding to %d MiB; live heap peak above baseline %.1f MiB (attempt %d)", len(s.Data["release"])>>10, fits>>20, float64(peak)/(1<<20), attempt)
+				if peak <= maxManifestHeap || attempt == maxManifestAttempts {
+					break
+				}
+			}
 			if pe := (partialError{}); !errors.As(err, &pe) || pe.incomplete {
 				t.Fatalf("err = %v, want the release read whole", err)
 			}
