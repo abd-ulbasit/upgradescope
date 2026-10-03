@@ -148,11 +148,11 @@ and a cluster the version does not name is left undetermined rather than
 called `other`. Manifests (`--files`) have no provider.
 
 Only an agent that sends `provider` gets a support status from the server:
-agents before this field (v0.2.x) push none, so for their clusters the
-server reports no support line or cost until the agent is upgraded. A
-server that does not know a provider name an agent sends (a newer agent
-that learned another service) accepts the snapshot and reports no support
-for it.
+agents from v0.1.x and v0.2.0's release candidates push none, so for their
+clusters the server reports no support line or cost until the agent is
+upgraded to v0.2.0 or later. A server that does not know a provider name
+an agent sends (a newer agent that learned another service) accepts the
+snapshot and reports no support for it.
 
 ## Where the dates come from
 
