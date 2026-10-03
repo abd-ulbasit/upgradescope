@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -86,6 +87,9 @@ func loadWith(lifecycle []byte, extra string) (KB, error) {
 			return KB{}, fmt.Errorf("kb: loading extra registry %s: %w", extra, err)
 		}
 		addons = registry.Merge(addons, more)
+		if errs := registry.ClaimConflicts(addons); len(errs) > 0 {
+			return KB{}, fmt.Errorf("kb: extra registry %s: %w", extra, errors.Join(errs...))
+		}
 	}
 	version, err := datasetVersion(f.GeneratedFrom, f.Entries, f.BuiltinGroups, addons)
 	if err != nil {

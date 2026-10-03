@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -105,5 +106,46 @@ func TestMerge(t *testing.T) {
 	}
 	if base[1].DisplayName != "base c" {
 		t.Error("Merge changed its base")
+	}
+}
+
+// No image or chart is claimed by two entries: a second claim would judge
+// one workload twice and, for an operator's entry, can raise a false blocker.
+func TestClaimConflicts(t *testing.T) {
+	entry := func(id string, images, charts []string) AddOn {
+		return AddOn{ID: id, Matchers: Matchers{Images: images, Charts: charts}}
+	}
+	base, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := ClaimConflicts(base); len(errs) != 0 {
+		t.Fatalf("the embedded registry double-claims: %v", errs)
+	}
+	for _, tc := range []struct {
+		name  string
+		extra AddOn
+		want  string // "" = no conflict
+	}{
+		{"same repository", entry("mine", []string{"cilium/operator"}, nil), `"cilium/operator"`},
+		{"a longer mirror path of a claimed repository", entry("mine", []string{"corp/mirror/ingress-nginx/controller"}, nil), "ingress-nginx"},
+		{"a one-segment matcher is exact, it cannot reach another product", entry("mine", []string{"operator"}, nil), ""},
+		{"a one-segment matcher is exact, controller", entry("mine", []string{"controller"}, nil), ""},
+		{"same chart", entry("mine", []string{"acme/thing"}, []string{"cert-manager"}), `chart "cert-manager"`},
+		{"a provider build is not an upstream claim", entry("mine", []string{"mcr.microsoft.com/oss/calico/node"}, nil), ""},
+		{"a replacement of the claiming entry itself", entry("cilium", []string{"cilium/operator"}, nil), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ClaimConflicts(Merge(base, []AddOn{tc.extra}))
+			if tc.want == "" {
+				if len(errs) != 0 {
+					t.Errorf("want no conflict, got %v", errs)
+				}
+				return
+			}
+			if len(errs) == 0 || !strings.Contains(errors.Join(errs...).Error(), tc.want) {
+				t.Errorf("want a conflict mentioning %s, got %v", tc.want, errs)
+			}
+		})
 	}
 }

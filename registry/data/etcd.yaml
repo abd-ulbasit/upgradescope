@@ -8,9 +8,14 @@ display_name: etcd
 endoflife_product: etcd
 matchers:
   images:
-    # Any repository named etcd: registry.k8s.io/etcd,
-    # gcr.io/etcd-development/etcd, quay.io/coreos/etcd, bitnami/etcd.
+    # A one-segment matcher is an exact repository, not a mirror suffix, so
+    # the other published paths are listed: gcr.io/etcd-development/etcd,
+    # quay.io/coreos/etcd, bitnami/etcd. "etcd" itself is registry.k8s.io/etcd
+    # (and k8s.gcr.io/etcd), where kubeadm pulls it.
     - etcd
+    - etcd-development/etcd
+    - coreos/etcd
+    - bitnami/etcd
 support:
   status: supported
   citations:

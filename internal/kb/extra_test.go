@@ -64,3 +64,26 @@ func TestLoadWithRegistry(t *testing.T) {
 		t.Errorf("an invalid extra entry must fail the load naming its file and the path, got %v", err)
 	}
 }
+
+// An extra entry may not claim an image an embedded entry (of another id)
+// already claims: that image would be judged twice, and by the operator's
+// entry wrongly. A one-segment matcher claims only that exact repository, so
+// a bare "operator" is accepted and leaves cilium/operator to Cilium.
+func TestLoadWithRegistryRejectsDoubleClaims(t *testing.T) {
+	load := func(matcher string) error {
+		dir := t.TempDir()
+		entry := "schema_version: 2\nid: my-operator\ndisplay_name: My Operator\nmatchers:\n  images:\n    - " + matcher +
+			"\nsupport:\n  status: eol\n  citations:\n    - https://acme.dev/lifecycle\n"
+		if err := os.WriteFile(filepath.Join(dir, "my-operator.yaml"), []byte(entry), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadWithRegistry(dir)
+		return err
+	}
+	if err := load("cilium/operator"); err == nil || !strings.Contains(err.Error(), "cilium") || !strings.Contains(err.Error(), "my-operator") {
+		t.Errorf("claiming cilium/operator: want an error naming both entries, got %v", err)
+	}
+	if err := load("operator"); err != nil {
+		t.Errorf("an exact one-segment matcher claims no mirror path and no other product: %v", err)
+	}
+}
