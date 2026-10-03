@@ -44,8 +44,8 @@ const (
 	argoLabel = "Argo CD"
 	fluxLabel = "Flux"
 
-	// argoInCluster is the Application destination of the cluster Argo CD
-	// itself runs in.
+	// The Application destination of the cluster Argo CD itself runs in:
+	// its API server URL, and the name Argo CD registers it under.
 	argoInClusterServer = "https://kubernetes.default.svc"
 	argoInClusterName   = "in-cluster"
 

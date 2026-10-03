@@ -117,8 +117,9 @@ type helmDriver struct {
 // helmDrivers are the storage drivers collectHelm reads. Helm's sql driver
 // keeps releases in an external database the cluster cannot show, and
 // GitOps tools that render charts with helm template (Argo CD) create no
-// release object at all; neither is assessed here. Add-on image matching
-// still sees what they deploy.
+// release object at all; neither is read here. collectHelmStep reads the
+// charts those tools declare, and add-on image matching still sees what
+// they deploy.
 func helmDrivers(kube kubernetes.Interface) []helmDriver {
 	return []helmDriver{
 		{

@@ -6,7 +6,7 @@
       "citations": [
         "https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/"
       ],
-      "detail": "Detected ingress-nginx version (unknown) via gitops 4.11.3 in namespace(s): ingress-nginx. Upstream support has ended.",
+      "detail": "Detected ingress-nginx version (unknown) via gitops, chart 4.11.3 in namespace(s): ingress-nginx. Upstream support has ended.",
       "key": "eol-addon/ingress-nginx",
       "namespaces": [
         "ingress-nginx"

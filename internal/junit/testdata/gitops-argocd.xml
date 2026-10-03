@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="2" failures="1" errors="0" time="0">
+  <testsuite name="eol-addon" tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="eol-addon/ingress-nginx" classname="upgradescope.eol-addon" time="0">
+      <failure message="ingress-nginx is end-of-life since 2026-03-26" type="blocker">ingress-nginx is end-of-life since 2026-03-26.&#xA;Detected ingress-nginx version (unknown) via gitops, chart 4.11.3 in namespace(s): ingress-nginx. Upstream support has ended.&#xA;Teams: platform&#xA;Fix: migrate to Gateway API (ingress2gateway) or another maintained ingress controller.&#xA;References:&#xA;- https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="not-assessed" tests="1" failures="0" errors="0" skipped="1" time="0">
+    <testcase name="helm" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: helm (partial): helm releases: 0 via secrets, 0 via configmaps; GitOps chart sources: 1 via Argo CD; no Helm releases read, but Argo CD is present (applications.argoproj.io/v1alpha1 is served): chart kubeVersion and stored-manifest checks were not assessed for the charts it deploys; it renders charts with helm template and leaves no release object (skipped: argocd)"></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>

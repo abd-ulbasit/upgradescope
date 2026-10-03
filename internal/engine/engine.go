@@ -465,7 +465,7 @@ func kindMatchesResource(kind, resource string) bool {
 // installs) or one node's container runtime.
 type addOnInstall struct {
 	version string   // normalised app version; "" when unknown
-	via     string   // "image", "labels", "ingressclass", "chart 1.14.5"; "" for a node runtime
+	via     string   // "image", "labels", "ingressclass", "chart 1.14.5", "gitops, chart 4.11.3"; "" for a node runtime
 	where   []string // sorted namespaces (none for an IngressClass), or the node's name
 	teams   []string // of the namespaces
 }
@@ -490,8 +490,12 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 			ids = append(ids, inst.ID)
 		}
 		via := inst.Source
-		if inst.ChartVersion != "" {
-			via += " " + inst.ChartVersion // chart version: evidence only
+		if inst.ChartVersion != "" { // chart version: evidence only
+			if inst.Source == "chart" {
+				via += " " + inst.ChartVersion
+			} else { // a GitOps chart reference beside stronger or weaker evidence
+				via += ", chart " + inst.ChartVersion
+			}
 		}
 		ns := slices.Sorted(slices.Values(inst.Namespaces))
 		installs[inst.ID] = append(installs[inst.ID], addOnInstall{
