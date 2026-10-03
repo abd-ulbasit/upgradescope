@@ -635,27 +635,38 @@ documented_gate_command() {
   echo "$GATE_CMD"
 }
 
-# gate_post <dir> <manifest>: the documented command, in <dir> beside a copy
-# of the manifest as rendered.yaml. Returns curl's exit code; the report is
+# gate_post <dir> <manifest> [allow-incomplete]: the documented command, in
+# <dir> beside a copy of the manifest as rendered.yaml; with allow-incomplete
+# it also carries &allow-incomplete=true (#177), the option the page documents
+# for a target past the horizon. Returns curl's exit code; the report is
 # <dir>/results.sarif. The server has no read token here, so READ_TOKEN is
 # any value; no_proxy keeps the port-forward off a CI proxy.
 gate_post() {
+  local cmd=$GATE_CMD
+  [ "${3-}" != allow-incomplete ] || cmd=$(sed "s/target=$NEXT/target=$NEXT\&allow-incomplete=true/" <<<"$cmd")
   mkdir -p "$1" && cp "$2" "$1/rendered.yaml" || return 1
-  (cd "$1" && env SERVER="$SERVER_URL" READ_TOKEN=e2e-open-read no_proxy=127.0.0.1 sh -ec "$GATE_CMD") 2>"$1/curl.err"
+  (cd "$1" && env SERVER="$SERVER_URL" READ_TOKEN=e2e-open-read no_proxy=127.0.0.1 sh -ec "$cmd") 2>"$1/curl.err"
 }
 
 # #120 (FS-04, SV-06), the clean half: a ConfigMap posted with ?cluster= adds
 # nothing, so the pull request passes although the cluster has blockers of
 # its own. Within the KB horizon the documented command exits 0 with verdict
-# ready; at a target past it (the newest minor's next) the verdict is
-# unknown, so curl exits 22, but nothing is blamed on the manifest and the
-# one required gap is kb-coverage. Either way the SARIF is non-empty and
-# holds no result, and the same request as JSON attributes every finding,
-# the EOL ingress-nginx included, to the cluster.
+# ready. At a target past it (the newest minor's next) the verdict is
+# unknown, so the plain command exits 22; the option the page gives for that,
+# &allow-incomplete=true (#177), gates on findings alone: curl exits 0 and
+# the verdict is still unknown. Nothing is blamed on the manifest and the one
+# required gap is kb-coverage. Either way the SARIF is non-empty and holds no
+# result, and the same request as JSON attributes every finding, the EOL
+# ingress-nginx included, to the cluster.
 gate_passes_clean_manifest() {
-  local dir=$work/gate-clean rc=0 want=ready
-  past_horizon && want=unknown
-  gate_post "$dir" hack/e2e/gate/clean.yaml || rc=$?
+  local dir=$work/gate-clean rc=0 want=ready extra=""
+  if past_horizon; then
+    want=unknown extra=allow-incomplete
+    gate_post "$work/gate-clean-strict" hack/e2e/gate/clean.yaml || rc=$?
+    [ "$rc" = 22 ] || { echo "clean manifest at $NEXT (past the KB horizon $HORIZON): the plain command exited $rc, want 22 (verdict unknown)" >&2; return 1; }
+    rc=0
+  fi
+  gate_post "$dir" hack/e2e/gate/clean.yaml $extra || rc=$?
   [ -s "$dir/results.sarif" ] || { echo "clean manifest: results.sarif is empty (curl exit $rc)" >&2; cat "$dir/curl.err" >&2; return 1; }
   jq -e --arg want "$want" '.runs[0] | .properties.verdict == $want and (.results | length) == 0
       and ([.properties.notAssessed[]? | select(.required) | .capability] == (if $want == "ready" then [] else ["kb-coverage"] end))' \
@@ -664,11 +675,7 @@ gate_passes_clean_manifest() {
     jq -c '.runs[0] | {properties, results: [.results[]? | .ruleId]}' "$dir/results.sarif" >&2
     return 1
   }
-  if [ "$want" = ready ]; then
-    [ "$rc" = 0 ] || { echo "clean manifest: the documented command exited $rc, want 0:" >&2; cat "$dir/curl.err" >&2; return 1; }
-  else
-    [ "$rc" = 22 ] || { echo "clean manifest at $NEXT (past the KB horizon $HORIZON): curl exited $rc, want 22 (verdict unknown)" >&2; return 1; }
-  fi
+  [ "$rc" = 0 ] || { echo "clean manifest: the documented command${extra:+ with &allow-incomplete=true} exited $rc, want 0 (verdict $want):" >&2; cat "$dir/curl.err" >&2; return 1; }
   curl -fsS -X POST "$SERVER_URL/api/v1/gate?target=$NEXT&cluster=$GATE_CLUSTER&fail-on=never" \
     -H "Content-Type: application/x-yaml" --data-binary @hack/e2e/gate/clean.yaml >"$dir/gate.json" || return 1
   jq -e '.clusterVerdict == "blocked" and any(.findings[]; .severity == "blocker")
@@ -682,10 +689,13 @@ gate_passes_clean_manifest() {
 # #120, the removed half: a manifest at extensions/v1beta1 is the pull
 # request's blocker at any target. The documented command fails the step
 # (curl 22, the 422 of --fail-with-body) and still writes the SARIF, with a
-# result for the object at the file ?path= names.
+# result for the object at the file ?path= names. Past the horizon it does so
+# with &allow-incomplete=true too (#177): that excuses the unknown, never a
+# blocker.
 gate_fails_removed_api() {
-  local dir=$work/gate-removed rc=0
-  gate_post "$dir" hack/e2e/gate/removed-api.yaml || rc=$?
+  local dir=$work/gate-removed rc=0 extra=""
+  ! past_horizon || extra=allow-incomplete
+  gate_post "$dir" hack/e2e/gate/removed-api.yaml $extra || rc=$?
   [ "$rc" != 0 ] || { echo "removed-API manifest: the documented command passed it (exit 0)" >&2; return 1; }
   [ "$rc" = 22 ] || { echo "removed-API manifest: curl exited $rc, want 22 (HTTP 422):" >&2; cat "$dir/curl.err" >&2; return 1; }
   [ -s "$dir/results.sarif" ] || { echo "removed-API manifest: results.sarif is empty, the failing report was lost" >&2; return 1; }
