@@ -52,11 +52,15 @@ func legacyInventory(inv inventory.Inventory, agentVersion string) bool {
 }
 
 // legacyView returns inv as this server can judge it given the agent that
-// collected it: unchanged for a current agent, and for a legacy one with
-// api-usage and deprecated-calls not assessed and chart-found add-on
-// versions moved to ChartVersion. inv's maps and slices are not modified.
+// collected it: unchanged for a current agent's (but for an unmarked one,
+// see unattributedUsageView), and for a legacy one with api-usage and
+// deprecated-calls not assessed and chart-found add-on versions moved to
+// ChartVersion. inv's maps and slices are not modified.
 func legacyView(inv inventory.Inventory, agentVersion string) inventory.Inventory {
 	if !legacyInventory(inv, agentVersion) {
+		if inv.CollectorSchema == 0 {
+			return unattributedUsageView(inv)
+		}
 		return inv
 	}
 	caps := maps.Clone(inv.Capabilities)
@@ -81,5 +85,48 @@ func legacyView(inv inventory.Inventory, agentVersion string) inventory.Inventor
 		}
 		inv.AddOns[i].Version = ""
 	}
+	return inv
+}
+
+// unattributedUsageView returns an unmarked inventory judged as current
+// (agentVersion 0.2.0-0 or later) without the api-usage rows shaped like
+// v0.1.x residency data: a count with no object named (#194 KB-14).
+// Every collector since v0.2.0-rc.1 names each object it counts (Objects,
+// then ObjectsOmitted past the cap), so such a row is one a v0.1.x
+// collector would have written — every object the apiserver serves at the
+// version — and who writes through it is unknown. It is not judged: the
+// API is named in a partial api-usage gap instead, which the engine makes
+// required when the target removes it, so the verdict is unknown rather
+// than blocked or ready. inv's maps and slices are not modified.
+func unattributedUsageView(inv inventory.Inventory) inventory.Inventory {
+	st, ok := inv.Capabilities[inventory.CapAPIUsage]
+	if !ok || !st.Available {
+		return inv
+	}
+	var kept []inventory.APIUsage
+	var unattributed []string
+	for _, u := range inv.APIUsage {
+		if u.Count > 0 && len(u.Objects) == 0 && u.ObjectsOmitted == 0 {
+			gv := u.Version
+			if u.Group != "" {
+				gv = u.Group + "/" + u.Version
+			}
+			unattributed = append(unattributed, gv+" "+u.Kind)
+			continue
+		}
+		kept = append(kept, u)
+	}
+	if len(unattributed) == 0 {
+		return inv
+	}
+	reason := fmt.Sprintf("%d API usage count(s) name no object, as a v0.1.x collector's did, so who writes through the deprecated version is unknown; they were not judged", len(unattributed))
+	if st.Reason != "" {
+		reason = st.Reason + "; " + reason
+	}
+	st.Reason, st.Partial = reason, true
+	st.Skipped = slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(st.Skipped), unattributed...))))
+	caps := maps.Clone(inv.Capabilities)
+	caps[inventory.CapAPIUsage] = st
+	inv.Capabilities, inv.APIUsage = caps, kept
 	return inv
 }

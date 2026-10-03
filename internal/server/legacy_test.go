@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,9 +58,11 @@ type legacyReportView struct {
 		Title    string `json:"title"`
 	} `json:"findings"`
 	NotAssessed []struct {
-		Capability string `json:"capability"`
-		Reason     string `json:"reason"`
-		Required   bool   `json:"required"`
+		Capability string   `json:"capability"`
+		Reason     string   `json:"reason"`
+		Required   bool     `json:"required"`
+		Partial    bool     `json:"partial"`
+		Skipped    []string `json:"skipped"`
 	} `json:"notAssessed"`
 }
 
@@ -210,6 +213,58 @@ func TestLegacyResidencyFlagged(t *testing.T) {
 	}
 	if rep := h.report("new", "1.29"); rep.Verdict != "blocked" {
 		t.Errorf("current agent verdict = %s, want blocked", rep.Verdict)
+	}
+}
+
+// TestUnmarkedResidencyWithoutObjectsNotJudged (#194 KB-14): an unmarked
+// inventory whose agentVersion reads as v0.2.0 or later is judged as
+// current, yet a usage row that counts objects and names none is shaped
+// like v0.1.x residency data: every collector since v0.2.0-rc.1 names
+// each object it counts. Who writes through that version is unknown, so
+// the row is no blocker; it is a partial api-usage gap naming the API,
+// required when the target removes it. A row that names its objects is
+// judged as before.
+func TestUnmarkedResidencyWithoutObjectsNotJudged(t *testing.T) {
+	h := newHarness(t, Config{KB: legacyKB()}, aug1)
+	residency := unmarked(flowSchemaInventory())
+	residency.DeprecatedCalls = nil // only the residency counts are in question
+	if code, out := h.pushAs("residency", "v0.2.0", residency); code != http.StatusAccepted {
+		t.Fatalf("push = %d %v", code, out)
+	}
+	rep := h.report("residency", "1.29")
+	for _, f := range rep.Findings {
+		if f.Severity == "blocker" {
+			t.Errorf("blocker %q (%s) from a count that names no object, want it not judged", f.Title, f.Category)
+		}
+	}
+	if rep.Verdict != "unknown" {
+		t.Errorf("verdict = %s, want unknown", rep.Verdict)
+	}
+	want := []string{"flowcontrol.apiserver.k8s.io/v1beta2 FlowSchema", "flowcontrol.apiserver.k8s.io/v1beta2 PriorityLevelConfiguration"}
+	found := false
+	for _, g := range rep.NotAssessed {
+		if g.Capability != "api-usage" {
+			continue
+		}
+		found = true
+		if !g.Partial || !g.Required || !slices.Equal(g.Skipped, want) || !strings.Contains(g.Reason, "name no object") {
+			t.Errorf("api-usage gap = %+v, want a required partial gap skipping %v", g, want)
+		}
+	}
+	if !found {
+		t.Errorf("no api-usage gap in %+v", rep.NotAssessed)
+	}
+
+	named := residency
+	named.APIUsage = slices.Clone(residency.APIUsage)
+	for i := range named.APIUsage {
+		named.APIUsage[i].Objects = []inventory.ObjectRef{{Name: "probe", Manager: "kubectl"}}
+	}
+	if code, _ := h.pushAs("named", "0.2.0-rc.2", named); code != http.StatusAccepted {
+		t.Fatal("push failed")
+	}
+	if rep := h.report("named", "1.29"); rep.Verdict != "blocked" {
+		t.Errorf("rows naming their objects: verdict %s, want blocked", rep.Verdict)
 	}
 }
 
