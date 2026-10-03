@@ -319,6 +319,7 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"registry.k8s.io/etcd:3.5.15-0", "etcd", "3.5.15"},
 		{"bitnami/etcd:3.5.15-debian-12-r3", "etcd", "3.5.15"},
 		{"quay.io/coreos/etcd:v3.5.15", "etcd", "3.5.15"},
+		{"123456789012.dkr.ecr.eu-west-1.amazonaws.com/registry-k8s-io/etcd:3.5.15-0", "etcd", "3.5.15"},
 		{"gcr.io/etcd-development/etcd:v3.5.15", "etcd", "3.5.15"},
 		// A one-segment matcher is no mirror suffix: "etcd" names the
 		// repository etcd and nothing that merely ends in it.
@@ -340,8 +341,10 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"kubernetesui/dashboard-api:1.10.1", "kubernetes-dashboard", "1.10.1"},
 		{"kubernetesui/dashboard-auth:1.2.2", "kubernetes-dashboard", "1.2.2"},
 		{"kubernetesui/dashboard-web:1.6.0", "kubernetes-dashboard", "1.6.0"},
-		{"kubernetesui/dashboard-metrics-scraper:1.2.1", "kubernetes-dashboard", "1.2.1"},
-		{"kubernetesui/metrics-scraper:v1.0.8", "kubernetes-dashboard", "1.0.8"},
+		// The sidecars version separately: matched, they would report their
+		// version as the Dashboard's.
+		{"kubernetesui/dashboard-metrics-scraper:1.2.1", "", ""},
+		{"kubernetesui/metrics-scraper:v1.0.8", "", ""},
 		{"grafana/promtail:3.0.0", "promtail", "3.0.0"},
 		{"docker.io/grafana/promtail:2.9.4", "promtail", "2.9.4"},
 		{"grafana/agent:v0.44.2", "grafana-agent", "0.44.2"},

@@ -7,17 +7,19 @@
 # The v7+ chart has no appVersion (the chart version is the app version), so
 # a Helm release is matched by chart name and the version comes from the
 # image tags; it does not matter here, the whole product is retired.
+# The metrics-scraper sidecars (kubernetesui/metrics-scraper and
+# dashboard-metrics-scraper) are not matched: they carry their own version
+# (1.0.8, 1.2.1), which would be reported as the Dashboard's, and every
+# Dashboard install also runs one of the images below.
 schema_version: 2
 id: kubernetes-dashboard
 display_name: Kubernetes Dashboard
 matchers:
   images:
     - kubernetesui/dashboard # v2.x
-    - kubernetesui/metrics-scraper # v2.x sidecar
     - kubernetesui/dashboard-api # v7+ chart
     - kubernetesui/dashboard-auth
     - kubernetesui/dashboard-web
-    - kubernetesui/dashboard-metrics-scraper
   charts:
     - kubernetes-dashboard
 support:
