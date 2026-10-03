@@ -70,6 +70,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, "decoding stored report", fmt.Errorf("evaluation %d: %w", eval.ID, err))
 		return
 	}
+	// A team scope exports its teams' findings and scores, the scores
+	// computed from the whole report as the report endpoint's are.
+	sc := scopeOf(r)
+	teams := sc.renderedTeams(rep)
+	rep = sc.report(rep)
 
 	// The export is at most maxReportBytes, as the report it renders is:
 	// HTML writes ' " & as five bytes and < > as four, and CSV doubles
@@ -95,6 +100,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		Target:      target.String(),
 		Eval:        eval,
 		Report:      rep,
+		TeamScores:  teams,
 		History:     history,
 		GeneratedAt: s.now(),
 	}))
@@ -260,6 +266,7 @@ type exportData struct {
 	Target      string
 	Eval        store.Evaluation
 	Report      engine.Report
+	TeamScores  map[string]engine.TeamScore // the report endpoint's teams, as the reader may see them
 	History     []store.ScorePoint
 	GeneratedAt time.Time
 }
@@ -297,9 +304,8 @@ type teamRow struct {
 // score first, then by name; empty when no finding is attributed to a
 // team.
 func (d exportData) Teams() []teamRow {
-	scores := renderTeamScores(engine.TeamScores(d.Report))
-	out := make([]teamRow, 0, len(scores))
-	for team, ts := range scores {
+	out := make([]teamRow, 0, len(d.TeamScores))
+	for team, ts := range d.TeamScores {
 		out = append(out, teamRow{Team: team, TeamScore: ts})
 	}
 	slices.SortFunc(out, func(a, b teamRow) int {

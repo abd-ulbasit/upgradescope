@@ -268,6 +268,7 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	}
 	rep, warnings := s.suppressGate(full, g.rules)
 	resp := gateResult(rep, baseline, introduced)
+	resp.scope(scopeOf(r))
 	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings
 	bound := gateAnswerBound(resp, g.format)
@@ -387,6 +388,32 @@ func gateResult(rep engine.Report, baseline *engine.Report, introduced gateSide)
 		resp.ClusterVerdict = rep.Verdict
 	}
 	return resp
+}
+
+// scope cuts a gate answer to what sc may see of the cluster it was asked
+// about: the cluster's findings and suppressed findings of sc's teams,
+// and their team scores. What the manifests introduce is the caller's own
+// and stays, so the verdict, which judges only that, is unchanged.
+func (g *gateResponse) scope(sc readScope) {
+	if sc.fleet() {
+		return
+	}
+	introduced := map[string]bool{}
+	for _, f := range g.introducedSuppressed {
+		introduced[findingKey(f.Finding)] = true
+	}
+	g.Teams = sc.renderedTeams(g.Report)
+	g.Findings = slices.DeleteFunc(g.Findings, func(f gateFinding) bool {
+		return f.Source == sourceCluster && !sc.owns(f.Teams)
+	})
+	// A new slice: without ?cluster=, introducedSuppressed is this one.
+	var kept []engine.SuppressedFinding
+	for _, f := range g.Report.Suppressed {
+		if introduced[findingKey(f.Finding)] || sc.owns(f.Teams) {
+			kept = append(kept, f)
+		}
+	}
+	g.Report.Suppressed, g.SuppressedCount = kept, len(kept)
 }
 
 // sarifReport is what the SARIF answer carries. SARIF becomes code-scanning
@@ -544,6 +571,13 @@ func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref 
 		}
 		return store.Cluster{}, store.ErrNotFound
 	}()
+	if err == nil {
+		// Outside the scope, as unknown as a cluster that does not exist.
+		var in bool
+		if in, err = s.inScope(ctx, scopeOf(r), cluster.ID); err == nil && !in {
+			err = store.ErrNotFound
+		}
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "cluster not found")
 		return inventory.Inventory{}, false

@@ -471,15 +471,6 @@ func bearerToken(r *http.Request) string {
 	return h[len(prefix):]
 }
 
-// bearerOK does a constant-time check of "Authorization: Bearer <token>".
-func bearerOK(r *http.Request, token string) bool {
-	presented := bearerToken(r)
-	if presented == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1
-}
-
 // authIngest authorizes a snapshot push. Two token kinds are accepted:
 // the optional shared Config.IngestToken (fleet-wide; single-cluster/dev
 // setups — when it is "" only per-cluster tokens work) and per-cluster
@@ -824,19 +815,7 @@ func writeUIDConflict(w http.ResponseWriter, conflict *store.ClusterUIDConflictE
 
 // ----- read API -----
 
-// readAuth gates a read handler behind Config.ReadToken when configured;
-// an empty ReadToken leaves the read API open (the CLI documents this loudly).
-// The admin token reads too, so one credential can list and then delete.
-func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.ReadToken != "" && !bearerOK(r, s.cfg.ReadToken) &&
-			(s.cfg.AdminToken == "" || !bearerOK(r, s.cfg.AdminToken)) {
-			errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
-			return
-		}
-		next(w, r)
-	}
-}
+// readAuth (scope.go) gates every read handler and gives it its scope.
 
 // handleHealthz is always unauthenticated: liveness probes carry no tokens.
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -854,13 +833,20 @@ func (s *Server) pathClusterID(w http.ResponseWriter, r *http.Request) (int64, b
 }
 
 // requireCluster 404s (JSON) for unknown clusters so every per-cluster
-// endpoint shares one existence check.
+// endpoint shares one existence check. A cluster outside the request's
+// scope is answered exactly as an unknown one, so its id says nothing.
 func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.Cluster, bool) {
 	id, ok := s.pathClusterID(w, r)
 	if !ok {
 		return store.Cluster{}, false
 	}
 	c, err := s.cfg.Store.GetCluster(r.Context(), id)
+	if err == nil {
+		var in bool
+		if in, err = s.inScope(r.Context(), scopeOf(r), id); err == nil && !in {
+			err = store.ErrNotFound
+		}
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "cluster not found")
 		return store.Cluster{}, false
@@ -1097,7 +1083,7 @@ type clusterSummary struct {
 // fleet pushed.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	states, err := s.clusterStates(ctx)
+	states, err := s.clusterStates(ctx, scopeOf(r))
 	if err != nil {
 		internalErr(w, "listing clusters", err)
 		return
@@ -1253,7 +1239,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, reportResponse{s.versioned(withTeams(rep)), meta})
+	writeJSON(w, http.StatusOK, reportResponse{s.versioned(withTeamsIn(rep, scopeOf(r))), meta})
 }
 
 // handleFindings: GET /api/v1/clusters/{id}/findings?target=&severity=&category=
@@ -1267,7 +1253,7 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	severity := r.URL.Query().Get("severity")
 	category := r.URL.Query().Get("category")
 	findings := []engine.Finding{} // non-nil so JSON renders []
-	for _, f := range rep.Findings {
+	for _, f := range scopeOf(r).findings(rep.Findings) {
 		if severity != "" && string(f.Severity) != severity {
 			continue
 		}

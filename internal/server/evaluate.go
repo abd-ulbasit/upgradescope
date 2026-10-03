@@ -175,6 +175,7 @@ func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, targ
 		CreatedAt:   now,
 		EvaluatedAt: now,
 		TeamMapHash: s.teamMapHash,
+		Teams:       clusterTeams(inv, rep),
 	}, rep, nil
 }
 
@@ -185,10 +186,11 @@ const futureTolerance = 5 * time.Minute
 
 // stale reports whether a stored evaluation must be recomputed now. A row
 // evaluated "in the future" (the clock stepped backwards since) is stale
-// too: its EOL math used a date that has not come yet.
+// too: its EOL math used a date that has not come yet. So is one written
+// before evaluations stored their teams, which no scoped read token reads.
 func (s *Server) stale(e store.Evaluation, now time.Time) bool {
 	today := now.UTC().Truncate(24 * time.Hour)
-	return e.KBVersion != s.cfg.KB.Version || e.TeamMapHash != s.teamMapHash ||
+	return e.KBVersion != s.cfg.KB.Version || e.TeamMapHash != s.teamMapHash || e.TeamsUnknown ||
 		e.EvaluatedAt.Before(today) || e.EvaluatedAt.After(now.Add(futureTolerance))
 }
 

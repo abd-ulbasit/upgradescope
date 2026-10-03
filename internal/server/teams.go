@@ -40,7 +40,13 @@ type reportWithTeams struct {
 }
 
 func withTeams(rep engine.Report) reportWithTeams {
-	return reportWithTeams{Report: rep, Teams: renderTeamScores(engine.TeamScores(rep))}
+	return withTeamsIn(rep, fleetScope)
+}
+
+// withTeamsIn is withTeams as sc sees it: the team scores of its teams,
+// computed from the whole report, and the findings it owns (readScope).
+func withTeamsIn(rep engine.Report, sc readScope) reportWithTeams {
+	return reportWithTeams{Report: sc.report(rep), Teams: sc.renderedTeams(rep)}
 }
 
 // handleTeams: GET /api/v1/clusters/{id}/teams?target= — per-team readiness
@@ -56,5 +62,5 @@ func (s *Server) handleTeams(w http.ResponseWriter, r *http.Request) {
 		Target string                      `json:"target"`
 		Teams  map[string]engine.TeamScore `json:"teams"`
 		reportMeta
-	}{rep.Target.String(), renderTeamScores(engine.TeamScores(rep)), meta})
+	}{rep.Target.String(), scopeOf(r).renderedTeams(rep), meta})
 }

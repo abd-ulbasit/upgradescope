@@ -41,7 +41,7 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 			errJSON(w, http.StatusForbidden, "this endpoint needs the admin token")
 			return
 		}
-		next(w, r)
+		next(w, withScope(r, fleetScope)) // the admin token administers every cluster
 	}
 }
 

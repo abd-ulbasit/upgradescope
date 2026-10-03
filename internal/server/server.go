@@ -13,10 +13,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -64,9 +66,17 @@ type Config struct {
 	// AllowAnonymousRead serves an open read API (ReadToken "") on an
 	// address that is not loopback. Without it Start refuses one.
 	AllowAnonymousRead bool
-	AdminToken         string  // bearer for cluster delete/rename (also accepted for reads); "" = both refused
-	TeamMap            TeamMap // optional namespace→team override, applied before every Evaluate
-	Version            string  // build version: SARIF tool metadata ("" = omitted there) and toolVersion in report responses ("" when unset)
+	// TrustTeamHeader and TrustedProxies, always together, are the
+	// trusted-proxy mode: a read whose TCP peer is in TrustedProxies and
+	// that carries this header (an authenticating proxy's group header,
+	// e.g. X-Forwarded-Groups) reads as the teams it lists (proxyScope).
+	// Dangerous unless that proxy strips the header from what clients
+	// send, and nothing but it can reach the server from those addresses.
+	TrustTeamHeader string
+	TrustedProxies  []netip.Prefix
+	AdminToken      string  // bearer for cluster delete/rename (also accepted for reads); "" = both refused
+	TeamMap         TeamMap // optional namespace→team override, applied before every Evaluate
+	Version         string  // build version: SARIF tool metadata ("" = omitted there) and toolVersion in report responses ("" when unset)
 
 	// StaleAfter marks a cluster stale when its agent has not pushed
 	// (duplicates included) for longer; 0 = DefaultStaleAfter.
@@ -249,6 +259,8 @@ type Server struct {
 
 	metrics *serverMetrics
 
+	readTokensMinted atomic.Bool // a read token exists in the store: reads need a credential (readOpen)
+
 	ready chan struct{} // closed once the listener is bound
 	mu    sync.Mutex
 	addr  string
@@ -258,6 +270,10 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("server: Config.Store is required")
+	}
+	if (cfg.TrustTeamHeader == "") != (len(cfg.TrustedProxies) == 0) {
+		return nil, errors.New("server: Config.TrustTeamHeader and Config.TrustedProxies must be set together: " +
+			"a team header is trusted only from the proxies that set it")
 	}
 	s := &Server{
 		cfg:              cfg,
@@ -332,8 +348,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	// Per-cluster scores are what the read token protects, so /metrics
-	// takes it too (the chart's ServiceMonitor sends it).
-	s.mux.HandleFunc("GET /metrics", s.readAuth(s.inMetricsSlot(s.metrics.handler().ServeHTTP)))
+	// takes it too (the chart's ServiceMonitor sends it). Its series name
+	// every cluster, so a team-scoped credential is refused (fleetOnly).
+	s.mux.HandleFunc("GET /metrics", s.readAuth(fleetOnly(s.inMetricsSlot(s.metrics.handler().ServeHTTP))))
 	s.mux.HandleFunc("POST /api/v1/snapshots", s.handleIngest)
 	s.mux.HandleFunc("GET /api/v1/clusters", s.readAuth(s.inFleetSlot(s.handleListClusters)))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}", s.readAuth(s.inReadSlot(s.handleGetCluster)))
@@ -612,10 +629,20 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.cfg.Listen, err)
 	}
-	if s.cfg.ReadToken == "" && !s.cfg.AllowAnonymousRead && !isLoopbackAddr(ln.Addr()) {
-		ln.Close()
-		return fmt.Errorf("server: refusing to serve the read API and /api/v1/gate without a read token on %s (from %q), "+
-			"which is not a loopback address: set a read token, listen on loopback, or allow anonymous reads", ln.Addr(), s.cfg.Listen)
+	if !s.cfg.AllowAnonymousRead && !isLoopbackAddr(ln.Addr()) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		open, err := s.readOpen(ctx)
+		cancel()
+		if err != nil {
+			ln.Close()
+			return fmt.Errorf("server: listing read tokens: %w", err)
+		}
+		if open {
+			ln.Close()
+			return fmt.Errorf("server: refusing to serve the read API and /api/v1/gate without a read token on %s (from %q), "+
+				"which is not a loopback address: set a read token or mint one ('upgradescope tokens create --read'), "+
+				"trust an authenticating proxy's team header, listen on loopback, or allow anonymous reads", ln.Addr(), s.cfg.Listen)
+		}
 	}
 	// Background work: the notification worker, the re-evaluation ticker
 	// and, with a retention window, the pruner (the first passes of both
@@ -674,8 +701,16 @@ func (s *Server) logStartup() {
 		scheme = "https"
 	}
 	log.Printf("server: listening on %s://%s", scheme, s.Addr())
-	if s.cfg.ReadToken == "" {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if open, err := s.readOpen(ctx); err != nil {
+		log.Printf("server: listing read tokens: %v", err)
+	} else if open {
 		log.Printf("WARN server: no read token: the read API, dashboard data and /api/v1/gate are open to anyone who can reach %s", s.Addr())
+	}
+	if s.cfg.TrustTeamHeader != "" {
+		log.Printf("WARN server: reads from %v carrying %s are scoped to the teams it lists: "+
+			"the proxy there must strip that header from what clients send", s.cfg.TrustedProxies, s.cfg.TrustTeamHeader)
 	}
 	if s.cfg.AdminToken == "" {
 		log.Printf("server: no admin token: cluster delete and rename (DELETE/PATCH /api/v1/clusters/{id}) are refused")
@@ -688,8 +723,6 @@ func (s *Server) logStartup() {
 	// as any cluster, including ones that moved to per-cluster tokens.
 	// Checked once here: a token minted later with `tokens create` does not
 	// re-trigger the warning until the next start (the flag help says so).
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	toks, err := s.cfg.Store.ListTokens(ctx, "")
 	if err != nil {
 		log.Printf("server: listing per-cluster tokens: %v", err)
