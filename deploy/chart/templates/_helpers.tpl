@@ -114,9 +114,31 @@ Ingress's default, which holds the public host's certificate. */}}
 {{- end -}}
 
 {{/* Does the in-chart agent push to the in-chart server over HTTPS, and
-so trust its Secret's CA (server.tls.caKey)? Non-empty string = yes. */}}
+so trust its Secret's CA (server.tls.caKey)? Non-empty string = yes.
+agent.serverCA, when set, is trusted instead. */}}
 {{- define "upgradescope.agentTrustsServerCA" -}}
-{{- if and .Values.server.enabled (not .Values.agent.serverUrl) (include "upgradescope.serverTLSSecret" .) .Values.server.tls.caKey -}}true{{- end -}}
+{{- if and .Values.server.enabled (not .Values.agent.serverUrl) (include "upgradescope.serverTLSSecret" .) .Values.server.tls.caKey (not (include "upgradescope.agentServerCA" .)) -}}true{{- end -}}
+{{- end -}}
+
+{{/* Does agent.serverCA name a CA bundle for --server-ca-file? Non-empty
+string = yes; a half or contradictory setting fails the render. */}}
+{{- define "upgradescope.agentServerCA" -}}
+{{- $ca := .Values.agent.serverCA -}}
+{{- if or $ca.configMap $ca.secret -}}
+{{- if and $ca.configMap $ca.secret -}}
+{{- fail "agent.serverCA: set configMap or secret, not both" -}}
+{{- end -}}
+{{- if not $ca.key -}}
+{{- fail "agent.serverCA.key is empty: name the key that holds the PEM bundle" -}}
+{{- end -}}
+{{- if not (include "upgradescope.pushEnabled" .) -}}
+{{- fail "agent.serverCA verifies the server snapshots are pushed to: set agent.serverUrl (or server.enabled)" -}}
+{{- end -}}
+{{- if not (hasPrefix "https://" (lower (include "upgradescope.serverUrl" .))) -}}
+{{- fail "agent.serverCA needs an https server: set an https agent.serverUrl, or server.tls for the in-chart server" -}}
+{{- end -}}
+true
+{{- end -}}
 {{- end -}}
 
 {{/* Does env (a container env list) set name? Non-empty string = yes.

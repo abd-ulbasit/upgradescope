@@ -43,6 +43,7 @@ upgradescope agent [flags]
       --log-level string            log level: debug, info, warn or error (default "info")
       --manage-crd                  keep the ClusterReadiness CRD schema in step with this binary at startup (needs get/patch on that CRD); false = never touch the CRD (default true)
       --request-timeout duration    give up on a single API request after this long (0 = no per-request limit) (default 30s)
+      --server-ca-file string       PEM bundle of CA certificates trusted for an https --server-url, on top of the system roots (a server behind a private CA); read at startup
       --server-token string         bearer token for snapshot pushes (required with --server-url) (visible in process listings: prefer $UPGRADESCOPE_SERVER_TOKEN or --server-token-file)
       --server-token-file string    read --server-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
       --server-url string           upgradescope server base URL (empty = CRD-only mode)

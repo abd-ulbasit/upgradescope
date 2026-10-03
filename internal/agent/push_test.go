@@ -3,12 +3,16 @@ package agent
 import (
 	"compress/gzip"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,7 +87,7 @@ func newTestPusher(t *testing.T, rec *pushRecorder, statuses ...int) (*pusher, *
 	rec.statuses = statuses
 	srv := httptest.NewServer(rec.handler(t))
 	t.Cleanup(srv.Close)
-	p := newPusher(srv.URL+"/", "sekret") // trailing slash must be trimmed
+	p := newPusher(srv.URL+"/", "sekret", nil) // trailing slash must be trimmed
 	var slept []time.Duration
 	p.wait = func(_ context.Context, d time.Duration) error {
 		slept = append(slept, d)
@@ -265,7 +269,7 @@ func TestFlushRedirectIsPermanentFailureNeverFollowed(t *testing.T) {
 			defer src.Close()
 
 			var logs strings.Builder
-			p := newPusher(src.URL, "sekret")
+			p := newPusher(src.URL, "sekret", nil)
 			p.log = slog.New(slog.NewTextHandler(&logs, nil))
 			var slept []time.Duration
 			p.wait = func(_ context.Context, d time.Duration) error {
@@ -305,7 +309,7 @@ func TestFlushRedirectWithoutLocation(t *testing.T) {
 		w.WriteHeader(http.StatusFound)
 	}))
 	defer srv.Close()
-	p := newPusher(srv.URL, "sekret")
+	p := newPusher(srv.URL, "sekret", nil)
 	p.offer(testPayload("c"))
 	if err := p.flush(context.Background()); err == nil || !strings.Contains(err.Error(), "302") {
 		t.Fatalf("err = %v, want a 302 failure", err)
@@ -342,7 +346,7 @@ func TestFlushHonoursRetryAfter(t *testing.T) {
 				w.WriteHeader(http.StatusAccepted)
 			}))
 			defer srv.Close()
-			p := newPusher(srv.URL, "sekret")
+			p := newPusher(srv.URL, "sekret", nil)
 			var slept []time.Duration
 			p.wait = func(_ context.Context, d time.Duration) error {
 				slept = append(slept, d)
@@ -383,7 +387,7 @@ func TestFlushRetryAfterOnEveryAttempt(t *testing.T) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 			}))
 			defer srv.Close()
-			p := newPusher(srv.URL, "sekret")
+			p := newPusher(srv.URL, "sekret", nil)
 			var slept []time.Duration
 			p.wait = func(_ context.Context, d time.Duration) error {
 				slept = append(slept, d)
@@ -413,7 +417,7 @@ func TestFlushDeadlineDuringRetryAfterKeepsStatus(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	p := newPusher(srv.URL, "sekret")
+	p := newPusher(srv.URL, "sekret", nil)
 	p.offer(testPayload("c"))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -512,6 +516,146 @@ func TestCleartextPushWarning(t *testing.T) {
 		}
 		if tc.warn && !strings.Contains(msg, "https") {
 			t.Errorf("warning %q does not say to use https", msg)
+		}
+	}
+}
+
+// writeServerCA writes srv's certificate as a PEM bundle, as an operator
+// would export their private CA.
+func writeServerCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ca.crt")
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(path, block, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A server behind a private CA: --server-ca-file adds the bundle to the
+// system roots for pushes, and without it the push fails verification —
+// there is no option to skip it.
+func TestPushTrustsServerCAFile(t *testing.T) {
+	rec := &pushRecorder{statuses: []int{http.StatusAccepted}}
+	srv := httptest.NewTLSServer(rec.handler(t))
+	t.Cleanup(srv.Close)
+
+	roots, err := LoadServerCAs(writeServerCA(t, srv))
+	if err != nil {
+		t.Fatalf("LoadServerCAs: %v", err)
+	}
+	p := newPusher(srv.URL, "sekret", roots)
+	p.offer(testPayload("prod-eu-1"))
+	if err := p.flush(context.Background()); err != nil {
+		t.Fatalf("push trusting the CA file: %v", err)
+	}
+	if rec.requests() != 1 {
+		t.Fatalf("requests = %d, want 1", rec.requests())
+	}
+
+	p = newPusher(srv.URL, "sekret", nil)
+	p.wait = func(context.Context, time.Duration) error { return nil }
+	p.offer(testPayload("prod-eu-1"))
+	var uerr x509.UnknownAuthorityError
+	if err := p.flush(context.Background()); !errors.As(err, &uerr) {
+		t.Fatalf("push with system roots only: err = %v, want an unknown-authority error", err)
+	}
+	if rec.requests() != 1 {
+		t.Fatalf("an unverified push reached the handler (%d requests)", rec.requests())
+	}
+}
+
+// The transport a private CA gets (--server-ca-file) must not bring back
+// redirect following: a pusher with roots refuses every 3xx exactly as one
+// without does (#201). The Location is an https server the same CA signed,
+// so following it would succeed; it is never reached.
+func TestPushWithServerCAFileNeverFollowsRedirects(t *testing.T) {
+	for _, code := range []int{
+		http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect,
+	} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			var target, origin atomic.Int32
+			var targetMethod atomic.Value
+			dest := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				target.Add(1)
+				targetMethod.Store(r.Method)
+				w.WriteHeader(http.StatusAccepted) // would count as delivered
+			}))
+			defer dest.Close()
+			src := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				origin.Add(1)
+				http.Redirect(w, r, dest.URL+"/api/v1/snapshots", code)
+			}))
+			defer src.Close()
+
+			roots, err := LoadServerCAs(writeServerCA(t, src))
+			if err != nil {
+				t.Fatalf("LoadServerCAs: %v", err)
+			}
+			p := newPusher(src.URL, "sekret", roots)
+			tr, ok := p.hc.Transport.(*http.Transport)
+			if !ok || tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs != roots {
+				t.Fatalf("pusher transport = %#v, want one verifying with the CA file's roots", p.hc.Transport)
+			}
+			var logs strings.Builder
+			p.log = slog.New(slog.NewTextHandler(&logs, nil))
+			var slept []time.Duration
+			p.wait = func(_ context.Context, d time.Duration) error {
+				slept = append(slept, d)
+				return nil
+			}
+			p.offer(testPayload("c"))
+			err = p.flush(context.Background())
+			if err == nil {
+				t.Fatal("redirect over TLS reported as a successful push")
+			}
+			for _, want := range []string{strconv.Itoa(code), dest.URL + "/api/v1/snapshots", "--server-url"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err = %q, want it to mention %q", err, want)
+				}
+			}
+			if target.Load() != 0 {
+				t.Errorf("Location received a %s over TLS: the redirect was followed", targetMethod.Load())
+			}
+			// One request reached the origin: the handshake verified against
+			// the CA file, and the 3xx was not retried.
+			if origin.Load() != 1 || len(slept) != 0 {
+				t.Errorf("origin requests/waits = %d/%d, want 1/0 (permanent, no retry)", origin.Load(), len(slept))
+			}
+			if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), dest.URL) {
+				t.Errorf("log = %q, want an error line naming the Location", logs.String())
+			}
+			if err := p.flush(context.Background()); err != nil || origin.Load() != 1 {
+				t.Errorf("payload kept after a redirect: err %v, %d origin requests", err, origin.Load())
+			}
+		})
+	}
+}
+
+func TestLoadServerCAsRejectsUnusableFiles(t *testing.T) {
+	dir := t.TempDir()
+	notPEM := filepath.Join(dir, "not-pem")
+	if err := os.WriteFile(notPEM, []byte("this is not a certificate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// One good certificate does not excuse a corrupt one beside it: the
+	// operator meant to trust both, so a silently dropped CA would fail
+	// pushes later with a less useful error.
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	good, err := os.ReadFile(writeServerCA(t, srv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partly := filepath.Join(dir, "partly-corrupt.crt")
+	corrupt := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not DER")})
+	if err := os.WriteFile(partly, append(good, corrupt...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{filepath.Join(dir, "missing.crt"), notPEM, partly} {
+		if _, err := LoadServerCAs(f); err == nil || !strings.Contains(err.Error(), f) {
+			t.Errorf("LoadServerCAs(%q) = %v, want an error naming the file", f, err)
 		}
 	}
 }
