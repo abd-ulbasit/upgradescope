@@ -81,7 +81,8 @@ func (ev *addOnEvidence) addPod(namespace string, labels map[string]string, imag
 // IngressClasses; without IngressClasses (an apiserver before 1.19 has
 // none, which is not a failure) from pods and releases. A failure leaves
 // the capability partial, naming what went unread, unless nothing else was
-// read either (no releases, no IngressClasses): then it is not assessed.
+// read either (no releases, no GitOps chart sources, no IngressClasses):
+// then it is not assessed.
 // Pods are what finds an add-on installed any other way, so
 // inventory.SkippedPods keeps the gap required; IngressClasses only add
 // evidence.
@@ -139,7 +140,7 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 	var unrec []string
 	inv.AddOns, unrec = matchAddOns(ev, addons)
 	setUnrecognized(inv, unrec)
-	if podErr != nil && len(ev.releases) == 0 && !classesRead {
+	if podErr != nil && len(ev.releases) == 0 && len(ev.gitops) == 0 && !classesRead {
 		return fmt.Errorf("list pods: %w", podErr) // nothing was read: not assessed, not partial
 	}
 	if len(failures) == 0 {
@@ -151,6 +152,9 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 	}
 	if len(ev.releases) > 0 || inv.Capabilities[inventory.CapHelm].Available {
 		read = append(read, "Helm releases")
+	}
+	if len(ev.gitops) > 0 {
+		read = append(read, "GitOps chart sources")
 	}
 	if classesRead {
 		read = append(read, "IngressClasses")
@@ -394,7 +398,7 @@ var ingressClassAddOns = map[string][]string{
 // their image tag, which may not track the app version.
 func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnInstance, []string) {
 	type evidence struct {
-		source  string // "image" | "labels" | "chart" | "ingressclass"
+		source  string // "image" | "labels" | "chart" | "gitops" | "ingressclass"
 		version string // app version
 		chart   string // chart version, chart and gitops evidence only (see below)
 	}

@@ -156,7 +156,16 @@ func collectHelmStep(ctx context.Context, c Clients, lifecycle []kb.APILifecycle
 	var pe partialError
 	available := errors.As(err, &pe)
 	states := collectGitOps(ctx, c, available && len(inv.HelmReleases) == 0, inv)
-	if !available || len(states) == 0 {
+	if !available {
+		// The release storage could not be read at all, so the capability
+		// is unavailable; say that the charts GitOps tools declare were
+		// read all the same, since add-on detection uses them.
+		if n := len(inv.GitOpsCharts); err != nil && n > 0 {
+			err = fmt.Errorf("%w; %d GitOps chart source(s) were read and still feed add-on detection", err, n)
+		}
+		return err
+	}
+	if len(states) == 0 {
 		return err
 	}
 	return pe.withGitOps(states, len(inv.HelmReleases) == 0)
@@ -205,8 +214,10 @@ func (pe partialError) withGitOps(states []gitopsToolState, noReleases bool) err
 			msgs = append(msgs, fmt.Sprintf("%d %s chart(s) read from Applications leave no Helm release: chart kubeVersion and stored-manifest checks were not assessed for them; %s", s.read, s.label, s.note))
 			skip = true
 		}
-		// A tool whose resources were listed and are none deploys no chart.
-		nothingDeployed := !s.rendersOnly && s.listed && s.seen == 0
+		// A tool whose resources were listed and are none deploys no chart;
+		// nor does one whose resources all deploy elsewhere (to other
+		// clusters, or to no namespace), which are not counted here.
+		nothingDeployed := !s.rendersOnly && s.listed && s.seen-s.foreign-s.invalid == 0
 		if evidence, ok := s.present(); ok && noReleases && !nothingDeployed {
 			msg := fmt.Sprintf("no Helm releases read, but %s is present (%s): chart kubeVersion and stored-manifest checks were not assessed for the charts it deploys", s.label, evidence)
 			if s.note != "" {
@@ -419,7 +430,7 @@ func readArgoApplications(ctx context.Context, dyn dynamic.Interface, s *gitopsT
 			}
 			out = append(out, inventory.GitOpsChart{
 				Tool: s.id, Name: app.GetName(), Namespace: app.GetNamespace(), Target: target,
-				Chart: chart, Version: stringAt(src, "targetRevision"), Repo: stringAt(src, "repoURL"),
+				Chart: chart, Version: stringAt(src, "targetRevision"), Repo: redactRepoURL(stringAt(src, "repoURL")),
 			})
 		}
 	})
@@ -536,17 +547,19 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 			}
 			cache[r] = repo
 		}
-		url := ""
+		// The URL is redacted first: the chart name is its last element,
+		// which a query string would otherwise be part of.
+		repoURL := ""
 		if repo != nil {
-			url = stringAt(mapAt(repo.Object, "spec"), "url")
+			repoURL = redactRepoURL(stringAt(mapAt(repo.Object, "spec"), "url"))
 		}
-		chart := path.Base(strings.TrimRight(strings.TrimPrefix(url, "oci://"), "/"))
-		if url == "" || !plausibleChartName(chart) {
+		chart := path.Base(strings.TrimRight(strings.TrimPrefix(repoURL, "oci://"), "/"))
+		if repoURL == "" || !plausibleChartName(chart) {
 			s.unresolved++
 			continue
 		}
 		ociRef := mapAt(mapAt(repo.Object, "spec"), "ref")
-		c.Chart, c.Repo = chart, url
+		c.Chart, c.Repo = chart, repoURL
 		c.Version = stringAt(ociRef, "tag")
 		if c.Version == "" {
 			c.Version = stringAt(ociRef, "semver")
@@ -554,6 +567,40 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 		resolved = append(resolved, c)
 	}
 	return resolved, nil
+}
+
+// redactRepoURL returns a chart repository URL read from a custom resource
+// without anything that could be a credential: userinfo ("user:token@"),
+// the query string and the fragment. The scheme, host (with port) and path
+// are kept. The agent never reads repository credentials, and a URL that
+// carries one must not be copied into the inventory, which is pushed to
+// the server, stored and printed by the CLI.
+//
+// A URL that parses is rebuilt from its parts. One that does not (a
+// password with an unescaped "/", an invalid escape), and a value with no
+// scheme such as an scp-like Git address ("git@host:org/repo.git"), is cut
+// the leak-safe way instead: everything up to the last "@" is userinfo,
+// and the query and fragment are cut off after that.
+func redactRepoURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	scheme, rest, hasScheme := strings.Cut(s, "://")
+	if hasScheme {
+		if u, err := url.Parse(s); err == nil && u.Host != "" {
+			return scheme + "://" + u.Host + u.EscapedPath()
+		}
+	} else {
+		rest = s
+	}
+	if at := strings.LastIndex(rest, "@"); at >= 0 {
+		rest = rest[at+1:]
+	}
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	if hasScheme {
+		return scheme + "://" + rest
+	}
+	return rest
 }
 
 // plausibleChartName reports whether a chart name read from a custom
