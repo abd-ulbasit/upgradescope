@@ -2,8 +2,9 @@
 
 On EKS, GKE and AKS a cluster that stays on a Kubernetes minor after the
 provider's standard support for it ends moves into extended support (paid on
-EKS and GKE) or, on AKS, into reduced support. Nothing in the cluster
-changes when that happens, so teams find out from the bill. Extended
+EKS and GKE) or, on AKS, into Long Term Support if it is enabled and
+otherwise, for one minor only, into platform support. Nothing in the
+cluster changes when that happens, so teams find out from the bill. Extended
 support is automatic only on EKS; on GKE and AKS it is opt-in, and the
 scanner cannot see a cluster's release channel or AKS tier, so it states
 the provider's window and the condition it applies under, never that
@@ -48,10 +49,11 @@ For AKS 1.33 on 2026-10-04:
     Azure Kubernetes Service ended standard support for Kubernetes 1.33 on
     2026-07-31; extended support, which applies only if Long Term Support is
     enabled, runs until 2027-07-31; upgradescope cannot see whether this
-    cluster is enrolled. AKS has no automatic extended support. Past community
-    support a cluster is in platform support (Azure and AKS platform issues
-    only, no Kubernetes fixes) unless Long Term Support is enabled, which needs
-    the Premium tier.
+    cluster is enrolled. AKS has no automatic extended support. Without Long
+    Term Support (which needs the Premium tier), a cluster past community
+    support gets only platform support (Azure and AKS platform issues, no
+    Kubernetes fixes) while its minor is N-3, one behind the oldest minor in
+    community support. Older minors are out of support.
     fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.34; the newest known is 1.36.
 ```
 
@@ -122,11 +124,16 @@ What "extended support" means differs, and the finding states it:
 - **GKE**: opt-in, for clusters on the Extended release channel; clusters on
   other channels are upgraded automatically at the end of standard support.
   The dataset's `extended_support_condition` carries this.
-- **AKS**: opt-in. There is no automatic extended support. After community
-  support a cluster is in platform support (Azure and AKS platform issues
-  only, no Kubernetes fixes) unless Long Term Support is enabled, which
-  needs the Premium tier. The dates are the community-support end and the
-  LTS end.
+- **AKS**: opt-in. There is no automatic extended support. Without Long
+  Term Support (which needs the Premium tier), a cluster past community
+  support gets only platform support (Azure and AKS platform issues, no
+  Kubernetes fixes), and only while its minor is N-3, one behind the oldest
+  minor in community support; Microsoft's platform-support policy ends
+  when the cluster drops to N-4, and older minors are out of support. The
+  dates in the dataset are the community-support end and the LTS end, not
+  the end of platform support, so a cluster two or more minors past
+  community support with no LTS is out of support whatever phase the
+  dataset shows.
 
 ## How the provider is known
 
