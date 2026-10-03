@@ -39,6 +39,7 @@ type serveOptions struct {
 	webhookKey   string
 	targets      string
 	teamMap      string
+	registryDir  string // --registry-dir: extra add-on registry entries
 
 	maxSnapshotBytes   int64
 	maxGateBytes       int64
@@ -72,7 +73,7 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 	}
 	defer st.Close()
 
-	kbData, err := kb.Load()
+	kbData, err := kb.LoadWithRegistry(opts.registryDir)
 	if err != nil {
 		return fmt.Errorf("load knowledge base: %w", err)
 	}
@@ -209,6 +210,7 @@ It listens on loopback by default. On any other address, the read API needs
 	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
+	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
 	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression); "+
 		"the body must arrive within the 60s read timeout (~350 KiB/s at the 20 MiB default) or the push gets 408, and a push that decodes to too many JSON values gets 413 whatever its size; "+
 		"it also caps every report the server evaluates, stores or exports (a push whose report would be larger gets 413)")
