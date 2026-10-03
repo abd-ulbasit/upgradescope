@@ -266,7 +266,10 @@ func (r *runner) tick(ctx context.Context) error {
 			reports = append(reports, report)
 		}
 		st = crd.StatusFromReports(reports, inv.ServerVersion, AgentVersion, r.now())
-		st.NotAssessed = append(st.NotAssessed, notes...)
+		// Target-selection notes lead: WriteStatus keeps only the first
+		// maxNotAssessed entries, and "N targets not assessed" must not be
+		// the one folded into "… and N more".
+		st.NotAssessed = append(notes, st.NotAssessed...)
 		r.last.reports = reports
 	}
 

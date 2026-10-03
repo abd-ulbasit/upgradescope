@@ -115,10 +115,10 @@ func TestTickWithThousandSpecTargetsWritesBoundedStatus(t *testing.T) {
 	if len(r.last.reports) != crd.MaxTargets {
 		t.Errorf("evaluated %d targets, want %d", len(r.last.reports), crd.MaxTargets)
 	}
-	if !slices.ContainsFunc(st.NotAssessed, func(n string) bool {
-		return strings.HasPrefix(n, "targets: ") && strings.Contains(n, "992 ") && strings.Contains(n, "not assessed")
-	}) {
-		t.Errorf("notAssessed = %q, want a targets note counting the 992 entries left out", st.NotAssessed)
+	// The note leads, so a long list of capability gaps cannot fold it into
+	// the "… and N more" line of the notAssessed bound.
+	if n := st.NotAssessed[0]; !strings.HasPrefix(n, "targets: ") || !strings.Contains(n, "992 ") || !strings.Contains(n, "not assessed") {
+		t.Errorf("notAssessed = %q, want a targets note first, counting the 992 entries left out", st.NotAssessed)
 	}
 	obj, err := dyn.Resource(crd.GVR()).Get(context.Background(), "t1000", metav1.GetOptions{})
 	if err != nil {
