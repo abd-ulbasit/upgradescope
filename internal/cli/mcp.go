@@ -386,7 +386,11 @@ var runMCPScan = func(ctx context.Context, opts []scanOptions) ([]engine.Report,
 }
 
 // mcpInventory judges an inventory file (the JSON an agent pushes to a
-// server) at target, as the server would for a what-if target.
+// server) at target, as the server would for a what-if target: what the
+// server refuses at ingest (inventory.Admit) is refused, and the free text
+// it cuts is cut, so a file is judged here exactly when a default server
+// would judge it pushed. A refusal quotes nothing of the file
+// (inventoryRefusal).
 func mcpInventory(ctx context.Context, path, target string) (json.RawMessage, error) {
 	tv, err := inventory.ParseTarget(target)
 	if err != nil {
@@ -404,17 +408,40 @@ func mcpInventory(ctx context.Context, path, target string) (json.RawMessage, er
 	}
 	// A report or any other JSON would decode into an empty inventory and
 	// score 100; an inventory names its schema, cluster and capabilities.
-	if inv.SchemaVersion != 1 || inv.ClusterID == "" || len(inv.Capabilities) == 0 {
+	if inv.SchemaVersion != inventory.SupportedSchemaVersion || inv.ClusterID == "" || len(inv.Capabilities) == 0 {
 		return nil, notInventory
 	}
-	if err := inv.ValidateLimits(); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	if err := inv.Admit(); err != nil {
+		return nil, inventoryRefusal(path, err)
 	}
 	kbData, err := kb.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load knowledge base: %w", err)
 	}
 	return reportDocument(engine.Evaluate(inv, kbData, tv, time.Now()), nil)
+}
+
+// inventoryRefusal is the tool error for an inventory file that
+// inventory.Admit refused. Admit's own messages quote the value at fault
+// (map keys included), and the file is whatever an assistant named, so
+// this names the field and the rule and nothing of the file.
+func inventoryRefusal(path string, err error) error {
+	const lead = "%s is not an inventory upgradescope judges (a server refuses it, 422): inventory.%s"
+	var (
+		ie *inventory.IdentifierError
+		le *inventory.LimitError
+		ve *inventory.ServerVersionError
+	)
+	switch {
+	case errors.As(err, &ie):
+		return fmt.Errorf(lead, path, ie.Unquoted())
+	case errors.As(err, &le):
+		return fmt.Errorf(lead, path, le.Unquoted())
+	case errors.As(err, &ve):
+		return fmt.Errorf(lead, path, "serverVersion is not a Kubernetes 1.x version")
+	default:
+		return fmt.Errorf("%s is not an upgradescope inventory of schemaVersion %d", path, inventory.SupportedSchemaVersion)
+	}
 }
 
 // reportDocument renders r as `scan --output json` writes it.
