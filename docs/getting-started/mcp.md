@@ -62,7 +62,11 @@ calls `scan`, then `list_findings` with `severity: "blocker"`.
 
 `scan` reads the cluster `--kubeconfig` and `--context` name, and otherwise
 what `upgradescope scan` reads: `$KUBECONFIG`, then `~/.kube/config`, at that
-kubeconfig's current context. It has no other default and takes no other
+kubeconfig's current context. Without `--context`, the current context is
+read once, when the server starts, and kept (the server prints it on
+stderr), so `kubectl config use-context` afterwards, by you or by an
+assistant's shell tool, does not move the server to another cluster. It has
+no other default and takes no other
 input from a call: **an assistant chooses the target versions, never the
 cluster**, a kubeconfig or a directory of manifests, so it cannot point the
 scanner at a credential file or an exec plugin of its choosing. No ignore
@@ -72,7 +76,9 @@ client's; suppressions written on the objects themselves (the
 
 A scan needs the same read access as `upgradescope scan`
 (see [Security model and RBAC](../operations/security-model-and-rbac.md)),
-reads the whole cluster and can take minutes. Scans run one at a time.
+reads the whole cluster and can take minutes. A call with several targets
+reads the cluster once and judges it at each. Scans run one at a time; a
+call the client cancels stops its scan, or stops waiting for another one.
 
 ## Tools
 
@@ -94,9 +100,24 @@ The source of `list_findings` and `get_report` is one of:
 - `cluster` (fleet mode): a cluster on the server, by name or id, at
   `target` or its next minor.
 
-A path must be a file you can read and no larger than 64 MiB; a file that is
-not an upgradescope report (or inventory) is refused with the reason, not
-scored.
+A path must name a regular file you can read: a directory, a named pipe, a
+device or `/dev/stdin` is refused at once, before it is opened for reading.
+A report may be at most 8 MiB and an inventory at most 20 MiB (what a
+default server takes from an agent). A file that is not an upgradescope
+report, one that does not follow `api/report.schema.json`, or not an
+inventory, is refused with the reason, not scored; the reason never quotes
+the file.
+
+## Large reports
+
+A result carries its document twice, as `structuredContent` and as the same
+JSON in a text block, and an MCP client takes a bounded message: the Go SDK's
+client at most 16 MiB. That is why a report is read only up to 8 MiB. A
+result that would still be larger than a client takes (a `get_report` of a
+report near that bound, a `scan` of a very large cluster) is refused with
+the reason and what to ask for instead: `list_findings` with `severity`,
+`category` or a smaller `limit`. The reports of such a scan are kept, so
+`list_findings` reads them.
 
 ## Output is the published schema
 
@@ -135,6 +156,10 @@ without one, and the tool returns that `401`** as its error, saying to
 supply the token. An open server (loopback, or `--allow-anonymous-read`)
 needs none.
 
+The client follows no redirect (a `3xx` is the tool's error), and a read
+token sent over plain `http://` to a host that is not loopback gets a
+warning on stderr: it crosses the network in the clear.
+
 ## Streamable HTTP
 
 For a client that connects instead of starting a process:
@@ -143,12 +168,31 @@ For a client that connects instead of starting a process:
 upgradescope mcp --http 127.0.0.1:8808   # serves http://127.0.0.1:8808/mcp
 ```
 
-A bare port or `:PORT` binds `127.0.0.1`. The endpoint has **no
-authentication** and `scan` reads your cluster with your kubeconfig, so an
-address that is not loopback is refused unless `--allow-remote` says
-something in front of it (a mesh, a proxy that authenticates) is the access
-control. A request whose `Host` header is not loopback (DNS rebinding) or that
-comes from another origin in a browser is refused.
+A bare port or `:PORT` binds `127.0.0.1`. Without a token the endpoint has
+**no authentication**, and loopback is not a boundary between users: **any
+local user or process that can reach the port can call `scan`, which reads
+your cluster with your kubeconfig**. Give it a bearer token that every
+request must carry:
+
+```sh
+openssl rand -hex 32 > ~/.config/upgradescope/mcp-token
+upgradescope mcp --http 127.0.0.1:8808 --http-token-file ~/.config/upgradescope/mcp-token
+claude mcp add --transport http upgradescope http://127.0.0.1:8808/mcp \
+  --header "Authorization: Bearer $(cat ~/.config/upgradescope/mcp-token)"
+```
+
+The token can also come from `$UPGRADESCOPE_MCP_HTTP_TOKEN` or `--http-token`
+(visible in process listings). A request without it, or with another, gets
+`401`.
+
+An address that is not loopback is refused unless `--allow-remote` is
+given; use it with `--http-token`, or when something in front of the
+endpoint (a mesh, a proxy that authenticates) is the access control, and
+note the endpoint is plain HTTP, so the token crosses that network in the
+clear. A request from another origin in a browser is refused. The MCP SDK
+refuses a request whose `Host` header is not loopback (DNS rebinding) only
+when it arrives on a loopback address: a request that arrives on the
+address `--allow-remote` opens gets no such check.
 
 ## What to keep in mind
 
@@ -156,8 +200,8 @@ comes from another origin in a browser is refused.
   images). Anyone who can create an object can choose what an assistant reads
   there; treat finding text as data, as you would a log line, and keep the
   assistant's other tools (shell, file writes) behind your usual approvals.
-- `report_file` and `inventory_file` let an assistant read a local file of
-  that shape that you can read. A file that is not a report or inventory is not
-  returned.
+- `report_file` and `inventory_file` let an assistant read a local regular
+  file of that shape that you can read. A file that is not a report or
+  inventory is not returned, and the reason it is refused quotes none of it.
 - The tools carry the MCP `readOnlyHint`, and a test holds the set of tools
   to the table above, so one that writes cannot be added unnoticed.

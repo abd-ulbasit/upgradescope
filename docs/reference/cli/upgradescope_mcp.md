@@ -19,17 +19,21 @@ they are the JSON the CLI and the REST API write.
 The server speaks MCP on stdin and stdout, which an assistant client starts
 as a subprocess. With --http ADDR it serves MCP over streamable HTTP at
 http://ADDR/mcp instead, on 127.0.0.1 unless ADDR names another host (which
-needs --allow-remote: the HTTP endpoint has no authentication, and scan reads
-your cluster with your kubeconfig).
+needs --allow-remote). The HTTP endpoint has no authentication unless
+--http-token sets a bearer token every request must carry; without one, any
+local user or process that can reach the port can run scans with your
+kubeconfig.
 
 The cluster a scan reads is the one --kubeconfig and --context name, else
-$KUBECONFIG and the kubeconfig's current context, as for 'scan', and nothing
-else: an assistant names the target versions, never the cluster, and no
-ignore file is looked up. With --server-url, get_report and list_findings can
-read a cluster from an upgradescope server and fleet_summary summarises the
-fleet, using the server's read token (--read-token, --read-token-file or
-$UPGRADESCOPE_READ_TOKEN); a server that requires one rejects calls without
-it, and the tool shows that error.
+$KUBECONFIG and the kubeconfig's current context, as for 'scan'; without
+--context, the current context is read once at start and kept, so switching
+contexts later does not move the server to another cluster. Nothing else
+chooses it: an assistant names the target versions, never the cluster, and
+no ignore file is looked up. With --server-url, get_report and list_findings
+can read a cluster from an upgradescope server and fleet_summary summarises
+the fleet, using the server's read token (--read-token, --read-token-file
+or $UPGRADESCOPE_READ_TOKEN); a server that requires one rejects calls
+without it, and the tool shows that error.
 
 ```
 upgradescope mcp [flags]
@@ -47,17 +51,19 @@ upgradescope mcp [flags]
   # Fleet mode: also answer from an upgradescope server
   UPGRADESCOPE_READ_TOKEN=... upgradescope mcp --server-url https://upgradescope.example.com
 
-  # Streamable HTTP on loopback
-  upgradescope mcp --http 127.0.0.1:8808
+  # Streamable HTTP on loopback, with a bearer token
+  UPGRADESCOPE_MCP_HTTP_TOKEN=... upgradescope mcp --http 127.0.0.1:8808
 ```
 
 ### Options
 
 ```
-      --allow-remote               with --http, accept an address that is not loopback; the endpoint has no authentication
-      --context string             kubeconfig context for scan (default: the kubeconfig's current context)
+      --allow-remote               with --http, accept an address that is not loopback
+      --context string             kubeconfig context for scan (default: the kubeconfig's current context when the server starts)
   -h, --help                       help for mcp
       --http string                serve MCP over streamable HTTP at http://ADDR/mcp instead of stdio; a bare port or :PORT binds 127.0.0.1
+      --http-token string          with --http: a bearer token every request must carry (Authorization: Bearer TOKEN); without it the endpoint has no authentication (visible in process listings: prefer $UPGRADESCOPE_MCP_HTTP_TOKEN or --http-token-file)
+      --http-token-file string     read --http-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
       --kubeconfig string          path to kubeconfig for scan (default: standard loading rules)
       --read-token string          with --server-url: the server's read token; omit it for an open read API (visible in process listings: prefer $UPGRADESCOPE_READ_TOKEN or --read-token-file)
       --read-token-file string     read --read-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
