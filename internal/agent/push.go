@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,18 +75,48 @@ func CleartextPushWarning(serverURL, token string) string {
 		"so anyone on the path can replay it; serve the server over https (--tls-cert-file, the chart's server.tls, or a TLS Ingress)", u.Host)
 }
 
-func newPusher(serverURL, token string) *pusher {
+// LoadServerCAs is the system root pool plus the PEM certificates in file
+// (agent --server-ca-file), for a server whose certificate a private CA
+// issued. A file without one certificate in it is an error, not an
+// unchanged pool: that would fail every push later with a less useful one.
+func LoadServerCAs(file string) (*x509.CertPool, error) {
+	pemBytes, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("read server CA bundle: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool() // no system roots on this platform: the bundle alone
+	}
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("server CA bundle %s: no PEM certificate in it", file)
+	}
+	return pool, nil
+}
+
+// newPusher pushes to serverURL with token. roots, when not nil, replaces
+// the system roots for verifying the server (LoadServerCAs); verification
+// is never skipped.
+func newPusher(serverURL, token string, roots *x509.CertPool) *pusher {
+	hc := &http.Client{
+		Timeout: 30 * time.Second,
+		// Never follow a redirect: Go turns a 301/302/303 POST into a
+		// body-less GET, which a login page or SPA can answer 200 and the
+		// push would count as delivered. send reports any 3xx instead. Set
+		// on the client, not the transport, so a pusher with a private CA
+		// (roots != nil) refuses redirects exactly as one without does.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	if roots != nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone() // keeps the proxy, dial and idle settings
+		tr.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+		hc.Transport = tr
+	}
 	return &pusher{
 		url:   strings.TrimRight(serverURL, "/"),
 		token: token,
-		hc: &http.Client{
-			Timeout: 30 * time.Second,
-			// Never follow a redirect: Go turns a 301/302/303 POST into a
-			// body-less GET, which a login page or SPA can answer 200 and the
-			// push would count as delivered. send reports any 3xx instead.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-		wait: waitFor,
+		hc:    hc,
+		wait:  waitFor,
 	}
 }
 

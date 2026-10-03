@@ -302,3 +302,34 @@ func TestRunAgentWarnsOnCleartextPush(t *testing.T) {
 		}
 	}
 }
+
+// --server-ca-file names a private CA bundle for pushes; it needs
+// --server-url.
+func TestAgentServerCAFileFlag(t *testing.T) {
+	got, err := execAgent(t, "--server-url", "https://hub.internal", "--server-token", "t", "--server-ca-file", "/etc/ca/ca.crt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.serverCAFile != "/etc/ca/ca.crt" {
+		t.Errorf("serverCAFile = %q, want /etc/ca/ca.crt", got.serverCAFile)
+	}
+	if _, err := execAgent(t, "--server-ca-file", "/etc/ca/ca.crt"); err == nil || !strings.Contains(err.Error(), "--server-ca-file") {
+		t.Errorf("--server-ca-file without --server-url: err = %v, want one naming the flag", err)
+	}
+}
+
+// An unusable --server-ca-file fails the start before any cluster access,
+// instead of every push.
+func TestRunAgentRejectsUnusableServerCAFile(t *testing.T) {
+	origDefault, origBuild := slog.Default(), buildAgentRESTConfig
+	t.Cleanup(func() { slog.SetDefault(origDefault); buildAgentRESTConfig = origBuild })
+	buildAgentRESTConfig = func(string, string, time.Duration) (*rest.Config, error) {
+		return nil, errors.New("no cluster in this test")
+	}
+	missing := filepath.Join(t.TempDir(), "missing.crt")
+	err := runAgent(context.Background(), agentOptions{serverURL: "https://hub.internal", serverToken: "t",
+		serverCAFile: missing, logFormat: "text", logLevel: "error"})
+	if err == nil || !strings.Contains(err.Error(), "--server-ca-file") || !strings.Contains(err.Error(), missing) {
+		t.Errorf("runAgent with a missing CA file: err = %v, want one naming --server-ca-file and the file", err)
+	}
+}
