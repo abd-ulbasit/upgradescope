@@ -194,7 +194,7 @@ func (s *Server) stale(e store.Evaluation, now time.Time) bool {
 // sameResult reports whether rep matches the stored row on everything a
 // history point or a notification depends on: verdict, score, and the
 // set of (severity, finding key). stored is the row's findings
-// (storedFindingHeads of its report).
+// (the Findings of its storedFindingHeads).
 func sameResult(row store.Evaluation, stored []findingHead, rep engine.Report) bool {
 	if verdictOf(row) != rep.Verdict || row.Score != rep.Score || len(stored) != len(rep.Findings) {
 		return false
@@ -215,7 +215,8 @@ func sameResult(row store.Evaluation, stored []findingHead, rep engine.Report) b
 func findingSignature(h findingHead) string { return string(h.Severity) + "\x00" + h.key() }
 
 // baseline is a notification baseline the caller already holds: the
-// heads of the target's latest decided evaluation, when known.
+// heads of the target's latest decided evaluation (storedHeads.baseline),
+// when known.
 type baseline struct {
 	findings []findingHead
 	ok       bool
@@ -225,16 +226,18 @@ type baseline struct {
 // baseline is the last evaluation with a decided verdict, so an "unknown"
 // pass (a collector failure) is neither a transition nor a reset; a pass
 // whose own verdict is unknown notifies nothing — what it could not see is
-// not news. known is that baseline when the caller holds it; otherwise
-// deltaFor loads it, and decodes only its findings' heads. Failures are
-// logged and never fail the pass.
-func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline) targetDelta {
+// not news. A decided pass that did not assess a capability carries the
+// baseline's findings from it forward, when the baseline saw them with it
+// (computeDelta, unassessed). known is that baseline when the caller
+// holds it; otherwise deltaFor loads it, and decodes only its findings'
+// heads and its gaps. Failures are logged and never fail the pass.
+func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline, unassessed func(findingHead) bool) targetDelta {
 	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
 	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
 		return d // a cluster's first push has no baseline either
 	}
 	if known.ok {
-		d.changes = computeDelta(known.findings, cur)
+		d.changes, d.carried = computeDelta(known.findings, cur, unassessed)
 		return d
 	}
 	target := cur.Target.String()
@@ -256,8 +259,55 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 		log.Printf("server: decoding previous report (cluster %d, target %s): %v", cluster.ID, target, err)
 		return d
 	}
-	d.changes = computeDelta(heads, cur)
+	d.changes, d.carried = computeDelta(heads.baseline(), cur, unassessed)
 	return d
+}
+
+// unassessedIn reports which baseline findings rep could not have seen:
+// those a capability rep did not assess hides (engine.HiddenBy of its
+// gaps) that the pass that last saw them did assess
+// (findingHead.SeenWithout).
+//
+// A capability the finding was seen without cannot hide it: then the
+// finding came from the others, and its absence from them is as much
+// evidence as its presence was. That is what tells a capability that
+// went away since the finding was seen (#189) from one a supported
+// install never has, such as helm with rbac.helmSecrets=false, whose
+// add-on findings are then resolved and announced again as usual.
+//
+// A deprecated caller missing from a scrape of a restarted apiserver is
+// not unassessed: apiserver_requested_deprecated_apis starts empty at
+// every apiserver start, and the scrape cannot tell that from a fix, so
+// the caller is resolved and announced again when it next calls (the
+// documented limit, docs/operations.md, Notifications).
+func unassessedIn(rep engine.Report) func(findingHead) bool {
+	return func(h findingHead) bool {
+		return slices.ContainsFunc(engine.HiddenBy(rep.NotAssessed, h.Category, h.key()), func(c inventory.Capability) bool {
+			return !slices.Contains(h.SeenWithout, c)
+		})
+	}
+}
+
+// keepCarried stores what e's baseline carries forward in its report
+// (withCarried) and returns it. Over maxReportBytes, or should the report
+// not take it, it stores none and returns nil: the evaluation of a
+// report that fits is never refused for the server's own bookkeeping,
+// and its baseline is then its findings alone, as before carry-forward
+// existed (a carried blocker may be resolved, or announced again).
+func (s *Server) keepCarried(e *store.Evaluation, carried []findingHead) []findingHead {
+	if len(carried) == 0 {
+		return nil
+	}
+	b, err := withCarried(e.Report, carried)
+	if err == nil && int64(len(b)) > s.maxReportBytes() {
+		err = fmt.Errorf("the report would be over the %s limit for a report", sizeString(s.maxReportBytes()))
+	}
+	if err != nil {
+		log.Printf("server: not carrying %d finding(s) forward (cluster %d, target %s): %v", len(carried), e.ClusterID, e.Target, err)
+		return nil
+	}
+	e.Report = b
+	return carried
 }
 
 // outboxFor turns one pass's merged deltas into one notification for the
@@ -336,8 +386,10 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		if err != nil {
 			return 0, false, err
 		}
+		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep))
+		d.carried = s.keepCarried(&e, d.carried)
 		batch.Insert = append(batch.Insert, e)
-		deltas.add(s.deltaFor(ctx, cluster, e, rep, baseline{}))
+		deltas.add(d)
 	}
 	batch.Outbox = s.outboxFor(cluster, &deltas, now)
 	snapID, duplicate, err := s.cfg.Store.CommitEvaluations(ctx, batch)
@@ -388,7 +440,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		// What sameResult and deltaFor read of the stored report: its
 		// findings' heads, decoded before the new report is built, so the
 		// stored bytes are not held while it is.
-		var stored []findingHead
+		var stored storedHeads
 		decoded := false
 		if found {
 			stored, err = storedFindingHeads(cur.Report)
@@ -407,18 +459,23 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		if err != nil {
 			return err
 		}
+		// A decided current evaluation is the target's latest decided
+		// one, the baseline deltaFor would load again: evaluations are
+		// only added to the latest snapshot, so none is newer. An
+		// unchanged result (below) has no changes, but may carry less.
+		// Without sinks nothing is carried, and what the row carried is
+		// not compared: no notification reads that baseline.
+		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
+		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep))
+		d.carried = s.keepCarried(&e, d.carried)
 		batch.Current[target.String()] = cur.ID // 0 when not found
-		if decoded && sameResult(cur, stored, rep) {
+		if decoded && sameResult(cur, stored.Findings, rep) && (len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)
 			continue
 		}
 		batch.Insert = append(batch.Insert, e)
-		// A decided current evaluation is the target's latest decided
-		// one, the baseline deltaFor would load again: evaluations are
-		// only added to the latest snapshot, so none is newer.
-		known := baseline{findings: stored, ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
-		deltas.add(s.deltaFor(ctx, cluster, e, rep, known))
+		deltas.add(d)
 	}
 	if len(batch.Current) == 0 {
 		return nil

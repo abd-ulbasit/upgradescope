@@ -175,7 +175,7 @@ func TestComputeDelta(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := computeDelta(heads, tc.curr); !reflect.DeepEqual(got, tc.want) {
+			if got, _ := computeDelta(heads.baseline(), tc.curr, nil); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("computeDelta of the stored heads:\n got  %+v\n want %+v", got, tc.want)
 			}
 		})

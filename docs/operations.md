@@ -518,6 +518,89 @@ window. Each pass is compared with the target's last evaluation that had
 a decided verdict (ready or blocked). A pass whose verdict is unknown sends
 nothing and is not a baseline either: what it could not see is not news.
 
+**What a decided pass could not see.** A pass can be decided and still
+miss a check: blocked by one blocker while api-usage was forbidden, or
+ready while `/metrics` was denied or timed out (deprecated-calls is not
+required for the verdict). Each finding comes from known collector
+capabilities: API usage findings from api-usage, Helm release findings
+from helm, deprecated callers from deprecated-calls, add-on findings from
+addons, versions (node container runtimes) and helm (an add-on found
+through its Helm chart, whose app version is the install's), skew from
+versions, CRD findings from crds. A blocker or eol-approaching warning of
+the baseline that is missing from a pass that did not assess one of its
+capabilities, when the pass that last saw it did assess that capability,
+is **carried forward**: the pass does not resolve it, it is not a
+`new-blocker` when the capability returns, and the evaluation stored for
+the pass keeps it in its baseline, over any number of passes, until one
+that assessed the capability no longer finds it. While a carried blocker
+remains there is no `became-ready`, even if the pass's verdict is ready.
+A capability is not
+assessed for a finding when it is unavailable, or partial over it:
+api-usage and deprecated-calls skipped its API, helm skipped its release
+or a whole storage driver (and, for an add-on finding, helm skipped any
+release: a finding does not say which release an add-on was found
+through), and any other capability that is partial and names what it
+skipped. A partial capability that names nothing (a discovery failure in
+an API group with no flagged API) read everything that could have
+produced a finding. A blocker that a capability the pass did assess finds
+is announced as usual. A controller that both stores and calls a removed
+API is one blocker, the API usage finding with the caller as evidence;
+while api-usage does not see that API, the caller is a blocker of its
+own, and that is not a `new-blocker` either: it is the carried finding,
+seen through `/metrics`.
+
+Only a capability that went away after a finding was seen holds it. A
+finding seen while a capability was not assessed came from the others,
+so that capability's gap cannot hide it later: its absence is as much
+evidence as its presence was. So an install that never assesses a
+capability is notified as if the capability did not exist. With
+`rbac.helmSecrets=false` (helm is never assessed), or with helm always
+partial (a storage driver or a release the agent cannot read), an add-on
+found from its images that is fixed sends `became-ready` (if it was the
+last blocker), and is a `new-blocker` again if it returns; an EOL warning
+that leaves and returns is announced again. The same holds for a custom
+role that never could list IngressClasses (addons partial). With
+`rbac.helmSecrets=false`, an add-on found through its Helm chart alone
+is not in the inventory at all, and is never reported.
+
+A capability that went away holds what it carries for as long as it
+stays away. If `rbac.helmSecrets` is turned off, or a custom role loses
+IngressClasses, after an add-on finding was seen with it, that finding
+stays carried, and there is no `became-ready`, until the capability is
+assessed again; the report and the fleet view show a fix at once. The
+same applies to a Helm release the agent could read before and cannot
+decode now (helm partial). The carried findings are stored with
+the evaluation, within `--max-snapshot-bytes`: if they would take its
+report over, the evaluation is stored without them, and its baseline is
+its own findings, as if nothing were carried.
+
+The "seen without" rule has one narrow residual case. An add-on finding
+does not say which Helm release it came from, so an add-on seen while
+helm was partial (any release or driver skipped) was seen without helm.
+If helm then becomes unavailable altogether, and that add-on was found
+through the chart of a release that was read, it is gone from the
+inventory and resolved: a `became-ready` if it was the last blocker,
+then a `new-blocker` when helm returns.
+
+**Apiserver restarts.** Deprecated callers are not carried over an
+apiserver restart. `apiserver_requested_deprecated_apis` records, per deprecated API, that it
+was requested since the apiserver started, so a restart empties it, and a scrape after
+the restart cannot tell a caller that has not called since from one that
+went away. A deprecated-call blocker missing from that scrape is
+resolved, and if it was the cluster's last blocker the pass sends
+`became-ready` while the caller still exists. It is announced again as a
+`new-blocker` once the caller calls again, on the agent's next scrape
+after that: a client that holds a watch reconnects at once, one that
+calls periodically (an hourly sync, a nightly CronJob) at its schedule. The
+same holds with several kube-apiservers (HA control planes, most managed
+ones): each counts its own requests, and the agent scrapes whichever one
+its connection reaches, so a caller that the scraped apiserver never
+served looks gone. It is resolved, and announced again when a scrape
+shows it. So a `became-ready` that follows an apiserver restart or a
+control plane upgrade may come from this reset rather than a fix. API
+usage findings (objects stored at a removed version) are read from the
+objects themselves and do not have this limit.
+
 A new cluster's first evaluation of a target is the baseline and sends
 nothing, and so does the first evaluation of a target added to
 `--targets` later, so that restarting the server with a new target does

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -157,6 +158,130 @@ func (g CapabilityGap) Label() string {
 		return string(g.Capability)
 	}
 	return fmt.Sprintf("%s (%s)", g.Capability, strings.Join(marks, ", "))
+}
+
+// categorySources maps each finding category to the inventory
+// capabilities its findings are built from: what a report must have
+// assessed for a finding's absence to mean the problem is gone, unless
+// the finding was itself found without one of them. Sources refines it
+// by key; TestEveryCategoryHasSources keeps it complete.
+//
+// Add-on findings name {addons, versions, helm}: node container runtimes
+// come from the nodes versions lists, and the add-ons collector detects
+// add-ons from the Helm releases the helm step read too (chart evidence,
+// whose app version is the install's), so an add-on found through its
+// chart alone is missing while helm is not assessed. Helm-release
+// findings are keyed category/helm-release/…, and come from helm alone
+// (Sources). deprecated-api-in-use comes from the /metrics scrape only: a
+// caller row that folds into its API's usage finding leaves no key of its
+// own behind, and has one while api-usage does not see that API
+// (FoldsInto).
+var categorySources = map[Category][]inventory.Capability{
+	CatRemovedAPI:         {inventory.CapAPIUsage},
+	CatDeprecatedAPI:      {inventory.CapAPIUsage},
+	CatUnknownAPI:         {inventory.CapAPIUsage},
+	CatDeprecatedAPIInUse: {inventory.CapDeprecatedCalls},
+	CatEOLAddon:           {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
+	CatEOLApproaching:     {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
+	CatAddOnNoData:        {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
+	CatChartIncompat:      {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
+	CatVersionSkew:        {inventory.CapVersions},
+	CatCRDVersion:         {inventory.CapCRDs},
+	CatKBStale:            {}, // the knowledge base's own date
+}
+
+// Sources lists the inventory capabilities a finding of category c and
+// key is built from; nil for a category this binary does not know.
+func Sources(c Category, key string) []inventory.Capability {
+	if strings.HasPrefix(key, string(c)+"/helm-release/") {
+		return []inventory.Capability{inventory.CapHelm}
+	}
+	return categorySources[c]
+}
+
+// HiddenBy lists the capabilities of gaps, a report's NotAssessed, that
+// leave the finding of category c and key unassessed, in gaps' order: a
+// report with any could not have produced the finding. A gap hides it
+// when its capability is one of the finding's Sources and is
+// unavailable, or partial with Skipped naming what the finding is about.
+// A partial capability's Skipped is what it did not read, so:
+//
+//   - api-usage and deprecated-calls leave unassessed the APIs they name
+//     ("group/version Kind", "group/version resource");
+//   - helm leaves unassessed the releases it names ("namespace/name"),
+//     and every release when it names a storage driver; and every add-on
+//     when it names anything, since an add-on's key does not say which
+//     release, if any, it was found through;
+//   - any other capability that names something leaves all of its
+//     findings unassessed;
+//   - a partial capability that names nothing read everything that could
+//     have produced a finding.
+//
+// Every gap hides a finding of a category this binary does not know.
+func HiddenBy(gaps []CapabilityGap, c Category, key string) []inventory.Capability {
+	sources := Sources(c, key)
+	var out []inventory.Capability
+	for _, g := range gaps {
+		hides := sources == nil || slices.Contains(sources, g.Capability) && (!g.Partial || g.skips(key))
+		if hides && !slices.Contains(out, g.Capability) {
+			out = append(out, g.Capability)
+		}
+	}
+	return out
+}
+
+// skips reports whether a partial gap's Skipped names what key is about.
+func (g CapabilityGap) skips(key string) bool {
+	switch g.Capability {
+	case inventory.CapAPIUsage, inventory.CapDeprecatedCalls:
+		_, tail, _ := strings.Cut(key, "/") // category/group/version/name
+		return slices.ContainsFunc(g.Skipped, func(s string) bool {
+			group, version, name, ok := splitAPI(s)
+			return ok && apiKey(group, version, name) == tail
+		})
+	case inventory.CapHelm:
+		if !strings.Contains(key, "/helm-release/") {
+			return len(g.Skipped) > 0 // an add-on finding
+		}
+		return slices.ContainsFunc(g.Skipped, func(s string) bool {
+			return !strings.Contains(s, "/") || strings.HasSuffix(key, "/helm-release/"+s)
+		})
+	}
+	return len(g.Skipped) > 0
+}
+
+// FoldsInto reports whether call, the key of a deprecated-api-in-use
+// finding, names the API of usage, the key of an API usage finding
+// (removed-api, deprecated-api, unknown-api): the match
+// foldDeprecatedCalls folds a caller row by. A report with both findings
+// has usage's key alone, so call's is a finding of its own in a report
+// whose api-usage did not see that API, without anything having changed.
+func FoldsInto(call, usage string) bool {
+	cat, tail, _ := strings.Cut(usage, "/")
+	switch Category(cat) {
+	case CatRemovedAPI, CatDeprecatedAPI, CatUnknownAPI:
+	default:
+		return false
+	}
+	u := strings.Split(tail, "/") // group/version/Kind
+	cat, tail, _ = strings.Cut(call, "/")
+	c := strings.SplitN(tail, "/", 4) // group/version/resource[/subresource]
+	return Category(cat) == CatDeprecatedAPIInUse && len(u) == 3 && u[0] != "helm-release" && len(c) >= 3 &&
+		c[0] == u[0] && c[1] == u[1] && kindMatchesResource(u[2], c[2])
+}
+
+// splitAPI splits an API as a partial capability names it in Skipped,
+// "group/version name" (core "v1 name"), into its parts.
+func splitAPI(api string) (group, version, name string, ok bool) {
+	gv, name, ok := strings.Cut(api, " ")
+	if !ok {
+		return "", "", "", false
+	}
+	version = gv
+	if i := strings.LastIndex(gv, "/"); i >= 0 {
+		group, version = gv[:i], gv[i+1:]
+	}
+	return group, version, name, true
 }
 
 // GapKBCoverage is the CapabilityGap capability recorded when the target is

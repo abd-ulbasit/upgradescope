@@ -1,0 +1,474 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+	"github.com/abd-ulbasit/upgradescope/registry"
+)
+
+// A capability a pass did not assess hides its findings without anything
+// being fixed (#189). These tests push through the real ingest on SQLite
+// (testKB: PSP removed in 1.35; the cluster is on v1.34.2, target 1.35),
+// as TestUnknownVerdictNeverReadyOrAlerting does.
+
+// withServiceCIDRCaller adds a deprecated-calls row for v1beta1
+// ServiceCIDR removed in 1.35: a blocker at the default target, from the
+// /metrics scrape alone (no API usage to fold into).
+func withServiceCIDRCaller(inv inventory.Inventory) inventory.Inventory {
+	inv.Capabilities[inventory.CapDeprecatedCalls] = inventory.CapabilityStatus{Available: true}
+	inv.DeprecatedCalls = []inventory.DeprecatedCall{{Group: "networking.k8s.io", Version: "v1beta1", Resource: "servicecidrs", RemovedRelease: "1.35"}}
+	return inv
+}
+
+// callsScraped is inv with a /metrics scrape that recorded no deprecated
+// call.
+func callsScraped(inv inventory.Inventory) inventory.Inventory {
+	inv.Capabilities[inventory.CapDeprecatedCalls] = inventory.CapabilityStatus{Available: true}
+	return inv
+}
+
+// callsUnavailable is inv with the /metrics scrape failed.
+func callsUnavailable(inv inventory.Inventory) inventory.Inventory {
+	inv.Capabilities[inventory.CapDeprecatedCalls] = inventory.CapabilityStatus{Available: false, Reason: "get /metrics: context deadline exceeded"}
+	inv.DeprecatedCalls = nil
+	return inv
+}
+
+func expectNoEvents(t *testing.T, h *harness, step string) {
+	t.Helper()
+	if evs := h.drain(); len(evs) != 0 {
+		t.Fatalf("%s notified: %+v", step, evs)
+	}
+}
+
+func expectBecameReady(t *testing.T, h *harness, step string) {
+	t.Helper()
+	evs := h.drain()
+	if len(evs) != 1 || evs[0].Kind != notify.KindBecameReady {
+		t.Fatalf("%s: events = %+v, want exactly one became-ready", step, evs)
+	}
+}
+
+// TestUnassessedCapabilityKeepsItsBlockers: blocked{A,B} → blocked{A}
+// with B's capability unavailable → blocked{A,B} sends nothing, and the
+// genuine resolution, assessed and gone, still sends became-ready.
+func TestUnassessedCapabilityKeepsItsBlockers(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withServiceCIDRCaller(testInventoryWithPSP())) // baseline: PSP + caller
+	expectNoEvents(t, h, "first evaluation")
+
+	h.push("prod", callsUnavailable(testInventoryWithPSP())) // still blocked by PSP
+	expectNoEvents(t, h, "/metrics failure")
+	h.push("prod", withServiceCIDRCaller(testInventoryWithPSP()))
+	expectNoEvents(t, h, "/metrics back, caller unchanged")
+
+	h.push("prod", callsScraped(testInventoryWithPSP())) // caller really gone, PSP left
+	expectNoEvents(t, h, "caller resolved while PSP remains")
+	h.push("prod", callsScraped(testInventory()))
+	expectBecameReady(t, h, "PSP resolved")
+}
+
+// TestUnassessedCapabilityNeverBecomesReady: blocked{deprecated call
+// only} → deprecated-calls unavailable is "ready" (the capability is
+// optional), but sends no became-ready; the capability's return with the
+// caller still there is not news, across several passes and a
+// re-evaluation of the outage.
+func TestUnassessedCapabilityNeverBecomesReady(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withServiceCIDRCaller(testInventory()))
+	expectNoEvents(t, h, "first evaluation")
+
+	h.push("prod", callsUnavailable(testInventory()))
+	if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "ready" {
+		t.Fatalf("cell with deprecated-calls unavailable = %+v, want the engine's verdict, ready", c)
+	}
+	expectNoEvents(t, h, "/metrics failure")
+	// The stored report carries the caller forward; the served one is
+	// the engine's report.
+	cur, err := h.st.CurrentEvaluation(context.Background(), h.clusterID("prod"), "1.35")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heads, err := storedFindingHeads(cur.Report); err != nil || len(heads.CarriedForward) != 1 {
+		t.Fatalf("stored heads = %+v, %v; want the caller carried forward", heads, err)
+	}
+	var served map[string]any
+	h.get("/api/v1/clusters/"+itoa(h.clusterID("prod"))+"/report?target=1.35", &served)
+	if _, ok := served["carriedForward"]; ok || served["verdict"] != "ready" {
+		t.Fatalf("served report = %v, want the engine's report (ready, no carriedForward)", served)
+	}
+
+	// The outage outlives a pass with other changes and a re-evaluation
+	// of the stored snapshot (a new UTC day).
+	other := callsUnavailable(testInventory())
+	other.Namespaces = []inventory.NamespaceInfo{{Name: "shop", Team: "payments"}}
+	h.push("prod", other)
+	expectNoEvents(t, h, "second pass of the outage")
+	h.clock.set(aug1.Add(24 * time.Hour))
+	h.tick()
+	expectNoEvents(t, h, "re-evaluation of the outage")
+
+	h.push("prod", withServiceCIDRCaller(testInventory()))
+	expectNoEvents(t, h, "/metrics back, caller unchanged")
+
+	h.push("prod", callsScraped(testInventory()))
+	expectBecameReady(t, h, "caller resolved, assessed")
+	h.tick()
+	h.push("prod", callsScraped(testInventory()))
+	expectNoEvents(t, h, "after became-ready")
+}
+
+// TestRequiredCapabilityOutageKeepsItsBlockers: blocked{PSP, caller}
+// with api-usage unavailable stays decided (the caller blocks), and
+// api-usage's recovery does not announce PSP again.
+func TestRequiredCapabilityOutageKeepsItsBlockers(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withServiceCIDRCaller(testInventoryWithPSP()))
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := withServiceCIDRCaller(testInventory())
+	broken.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: false, Reason: "forbidden"}
+	h.push("prod", broken)
+	if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "blocked" {
+		t.Fatalf("cell with api-usage unavailable = %+v, want blocked by the caller", c)
+	}
+	expectNoEvents(t, h, "api-usage failure")
+
+	h.push("prod", withServiceCIDRCaller(testInventoryWithPSP()))
+	expectNoEvents(t, h, "api-usage back, PSP unchanged")
+}
+
+// withPSPCaller adds a deprecated-calls row for the PSP objects of
+// testInventoryWithPSP: with them, the engine folds it into the PSP
+// finding, which keeps its key; without them, it is a finding of its own.
+func withPSPCaller(inv inventory.Inventory) inventory.Inventory {
+	inv.Capabilities[inventory.CapDeprecatedCalls] = inventory.CapabilityStatus{Available: true}
+	inv.DeprecatedCalls = []inventory.DeprecatedCall{{Group: "policy", Version: "v1beta1", Resource: "podsecuritypolicies", RemovedRelease: "1.25"}}
+	return inv
+}
+
+// TestAPIUsageOutageKeepsFoldedCaller: a controller that both stores and
+// calls a removed API is one blocker, the usage finding with the caller
+// folded in. With api-usage unavailable the caller is a blocker of its
+// own; it is the carried usage finding seen through the other
+// capability, not news, and nor is the fold again when api-usage returns.
+func TestAPIUsageOutageKeepsFoldedCaller(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withPSPCaller(testInventoryWithPSP()))
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := withPSPCaller(testInventory())
+	broken.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: false, Reason: "forbidden"}
+	h.push("prod", broken)
+	if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "blocked" {
+		t.Fatalf("cell with api-usage unavailable = %+v, want blocked by the caller", c)
+	}
+	expectNoEvents(t, h, "api-usage failure")
+	h.push("prod", broken)
+	expectNoEvents(t, h, "second pass of the outage")
+
+	h.push("prod", withPSPCaller(testInventoryWithPSP()))
+	expectNoEvents(t, h, "api-usage back, PSP and its caller unchanged")
+
+	h.push("prod", callsScraped(testInventory()))
+	expectBecameReady(t, h, "PSP and its caller resolved")
+}
+
+// TestHelmOutageKeepsChartFoundAddOn: an add-on found through its Helm
+// chart alone is gone from the inventory while helm is not assessed. That
+// is not its resolution, and its return is not news (#189).
+func TestHelmOutageKeepsChartFoundAddOn(t *testing.T) {
+	h := newHarness(t, Config{KB: legacyKB()}, aug1)
+	withHelm := func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true}
+		return inv
+	}
+	h.push("prod", withHelm(argoChartInventory("2.10.0"))) // past its end of life
+	if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "blocked" {
+		t.Fatalf("cell with Argo CD 2.10 = %+v, want blocked", c)
+	}
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := argoChartInventory("2.10.0")
+	broken.AddOns = nil
+	broken.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: false, Reason: "list secrets: forbidden"}
+	h.push("prod", broken)
+	if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "ready" {
+		t.Fatalf("cell with helm unavailable = %+v, want the engine's verdict, ready", c)
+	}
+	expectNoEvents(t, h, "helm failure")
+
+	h.push("prod", withHelm(argoChartInventory("2.10.0")))
+	expectNoEvents(t, h, "helm back, Argo CD unchanged")
+
+	h.push("prod", withHelm(argoChartInventory("3.1.0")))
+	expectBecameReady(t, h, "Argo CD upgraded")
+}
+
+// TestUnassessedCapabilityStillAnnouncesNewBlockers: a capability gap
+// holds only the blockers it hides. A blocker another capability finds
+// during the outage is news.
+func TestUnassessedCapabilityStillAnnouncesNewBlockers(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withServiceCIDRCaller(testInventory()))
+	h.drain()
+
+	h.push("prod", callsUnavailable(testInventoryWithPSP()))
+	evs := h.drain()
+	if len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
+		t.Fatalf("events = %+v, want one new-blocker for PSP", evs)
+	}
+}
+
+// TestKeepCarriedOverLimitKeepsTheEvaluation: carried heads that would
+// take a report over maxReportBytes are not stored, rather than failing
+// a push whose report fits: the next pass's baseline is then the
+// report's own findings, as before carry-forward existed.
+func TestKeepCarriedOverLimitKeepsTheEvaluation(t *testing.T) {
+	const limit = 1 << 10
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxSnapshotBytes = limit })
+	carried := []findingHead{{Category: "deprecated-api-in-use", Severity: "blocker", Key: "deprecated-api-in-use/networking.k8s.io/v1beta1/servicecidrs"}}
+
+	small := store.Evaluation{Report: []byte(`{"findings":[]}`)}
+	if got := s.keepCarried(&small, carried); len(got) != 1 {
+		t.Fatalf("kept %v, want the carried head", got)
+	}
+	if heads, err := storedFindingHeads(small.Report); err != nil || len(heads.CarriedForward) != 1 {
+		t.Fatalf("stored heads = %+v, %v; want the carried head", heads, err)
+	}
+
+	report := []byte(`{"findings":[],"pad":"` + strings.Repeat("x", limit-40) + `"}`)
+	near := store.Evaluation{Report: report}
+	if got := s.keepCarried(&near, carried); got != nil {
+		t.Fatalf("kept %v over the limit, want none", got)
+	}
+	if !bytes.Equal(near.Report, report) {
+		t.Fatalf("report changed over the limit: %d bytes", len(near.Report))
+	}
+}
+
+// TestWithCarriedIsJSON: the carried heads go into any JSON object,
+// the empty one included.
+func TestWithCarriedIsJSON(t *testing.T) {
+	carried := []findingHead{{Category: "eol-addon", Severity: "blocker", Key: "eol-addon/argo-cd/2.10"}}
+	for _, report := range []string{`{}`, `{"findings":[]}`} {
+		b, err := withCarried([]byte(report), carried)
+		if err != nil {
+			t.Fatalf("%s: %v", report, err)
+		}
+		if heads, err := storedFindingHeads(b); err != nil || len(heads.CarriedForward) != 1 {
+			t.Errorf("%s → %s: heads %+v, %v; want the carried head", report, b, heads, err)
+		}
+	}
+}
+
+// TestAPIServerResetResolvesVanishedCaller pins a documented limit
+// (docs/operations.md, Notifications; NT-01):
+// apiserver_requested_deprecated_apis starts empty when the apiserver
+// restarts, and the scrape after it cannot tell that from a fix. A
+// deprecated caller that has not called since is resolved, with
+// became-ready if it was the only blocker, while it still exists, and is
+// announced again as a new blocker when it next calls.
+func TestAPIServerResetResolvesVanishedCaller(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withServiceCIDRCaller(testInventory()))
+	expectNoEvents(t, h, "first evaluation")
+
+	h.clock.set(aug1.Add(time.Hour))
+	h.push("prod", callsScraped(testInventory())) // the gauge reset; the caller has not called since
+	expectBecameReady(t, h, "scrape after the reset")
+
+	h.clock.set(aug1.Add(2 * time.Hour))
+	h.push("prod", withServiceCIDRCaller(testInventory())) // the caller calls again
+	if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
+		t.Fatalf("caller back: events = %+v, want exactly one new-blocker", evs)
+	}
+}
+
+// TestStaleCarriedEvaluationWithoutSinksRefreshes: with no sinks, a pass
+// carries nothing, and an unchanged re-evaluation of an evaluation stored
+// with carried findings (sinks removed since) is a refresh, not a new
+// history point.
+func TestStaleCarriedEvaluationWithoutSinksRefreshes(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withServiceCIDRCaller(testInventory()))
+	h.push("prod", callsUnavailable(testInventory()))
+	h.drain()
+	history := func() int {
+		points, err := h.st.ScoreHistory(context.Background(), h.clusterID("prod"), "1.35", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(points)
+	}
+	before := history()
+
+	h.srv.sinks = nil
+	h.clock.set(aug1.Add(24 * time.Hour))
+	h.tick()
+	if after := history(); after != before {
+		t.Fatalf("history points after an unchanged re-evaluation = %d, want %d", after, before)
+	}
+}
+
+// imageArgoInventory is Argo CD at version, found through its images,
+// with gap applied: a capability add-on findings come from that no pass
+// assesses (persistentGaps).
+func imageArgoInventory(version string, gap func(inventory.Inventory) inventory.Inventory) inventory.Inventory {
+	inv := argoChartInventory(version)
+	inv.AddOns[0].Source = "image"
+	return gap(inv)
+}
+
+// persistentGaps are supported installs that never assess a capability
+// add-on findings come from: a steady state, not an outage.
+var persistentGaps = []struct {
+	name string
+	gap  func(inventory.Inventory) inventory.Inventory
+}{
+	{"rbac.helmSecrets=false", func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: false, Reason: "list secrets: forbidden"}
+		return inv
+	}},
+	{"helm on the configmaps driver", func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: "configmaps driver not read", Skipped: []string{"configmaps"}}
+		return inv
+	}},
+	{"IngressClasses forbidden", func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true}
+		inv.Capabilities[inventory.CapAddOns] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: "list ingressclasses: forbidden", Skipped: []string{"ingressclasses"}}
+		return inv
+	}},
+}
+
+// TestPersistentGapStillResolvesAndReAlerts: a capability the pass that
+// saw a finding did not assess cannot hide that finding later; its
+// absence is as much evidence as its presence was. With helm never read,
+// an image-found EOL add-on that is fixed is became-ready, and its
+// return is a new blocker again.
+func TestPersistentGapStillResolvesAndReAlerts(t *testing.T) {
+	for _, tc := range persistentGaps {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, Config{KB: legacyKB()}, aug1)
+			h.push("prod", imageArgoInventory("2.10.0", tc.gap))
+			if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "blocked" {
+				t.Fatalf("cell with Argo CD 2.10 = %+v, want blocked", c)
+			}
+			expectNoEvents(t, h, "first evaluation")
+
+			h.push("prod", imageArgoInventory("3.1.0", tc.gap))
+			expectBecameReady(t, h, "Argo CD upgraded")
+
+			h.push("prod", imageArgoInventory("2.10.0", tc.gap))
+			if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
+				t.Fatalf("Argo CD 2.10 again: events = %+v, want one new-blocker", evs)
+			}
+		})
+	}
+}
+
+// TestPersistentGapReAlertsEOLApproaching: the same for a warning: a
+// release line nearing its end of life that leaves and returns is
+// announced again.
+func TestPersistentGapReAlertsEOLApproaching(t *testing.T) {
+	k := legacyKB()
+	a := &k.AddOns[0]
+	a.Cycles = append(a.Cycles, registry.Cycle{Cycle: "3.0", EOL: &registry.CycleEOL{Date: "2026-09-15"}, Citations: a.Support.Citations})
+	gap := persistentGaps[0].gap
+	h := newHarness(t, Config{KB: k}, aug1)
+	h.push("prod", imageArgoInventory("3.0.2", gap))
+	expectNoEvents(t, h, "first evaluation")
+	h.push("prod", imageArgoInventory("3.1.0", gap))
+	expectNoEvents(t, h, "Argo CD upgraded")
+
+	h.push("prod", imageArgoInventory("3.0.2", gap))
+	if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindEOLApproaching {
+		t.Fatalf("Argo CD 3.0 again: events = %+v, want one eol-approaching", evs)
+	}
+}
+
+// TestHelmOutageAfterHelmlessSighting: a finding seen while helm was not
+// assessed is not held by helm's gap later, but one seen with helm is,
+// and stays held through further passes of the outage (#189).
+func TestHelmOutageAfterHelmlessSighting(t *testing.T) {
+	h := newHarness(t, Config{KB: legacyKB()}, aug1)
+	withHelm := func(inv inventory.Inventory) inventory.Inventory {
+		inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true}
+		return inv
+	}
+	h.push("prod", withHelm(argoChartInventory("2.10.0")))
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := argoChartInventory("2.10.0")
+	broken.AddOns = nil
+	broken = persistentGaps[0].gap(broken)
+	for i := range 3 {
+		h.push("prod", broken)
+		expectNoEvents(t, h, "helm failure, pass "+itoa(int64(i+1)))
+	}
+	h.push("prod", withHelm(argoChartInventory("3.1.0")))
+	expectBecameReady(t, h, "helm back, Argo CD upgraded")
+}
+
+// TestHelmOutageAfterPartialHelmSighting pins the residual case of the
+// "seen without" rule (docs/operations.md, Notifications): an add-on seen
+// while helm was partial was seen without helm, since its finding does
+// not say which release it came from. If helm then fails outright, an
+// add-on found through another release's chart is gone from the
+// inventory and resolved (became-ready), and a new blocker when helm
+// returns.
+func TestHelmOutageAfterPartialHelmSighting(t *testing.T) {
+	h := newHarness(t, Config{KB: legacyKB()}, aug1)
+	partial := argoChartInventory("2.10.0")
+	partial.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: "release shop/web not decoded", Skipped: []string{"shop/web"}}
+	h.push("prod", partial)
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := argoChartInventory("2.10.0")
+	broken.AddOns = nil
+	broken = persistentGaps[0].gap(broken)
+	h.push("prod", broken)
+	expectBecameReady(t, h, "helm failure")
+
+	back := argoChartInventory("2.10.0")
+	back.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{Available: true}
+	h.push("prod", back)
+	if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
+		t.Fatalf("helm back: events = %+v, want exactly one new-blocker", evs)
+	}
+}
+
+// TestCarriedFindingKeepsWhatItWasSeenWithout: a carried finding is
+// judged by the gaps of the pass that last saw it, which it keeps, not
+// by those of the baseline that carries it. Today only helm is an
+// optional capability add-on findings come from, so the engine would
+// call the pass with versions partial unknown (and the server compute no
+// delta for it); the rule does not depend on that.
+func TestCarriedFindingKeepsWhatItWasSeenWithout(t *testing.T) {
+	prev := []findingHead{{Category: engine.CatEOLAddon, Severity: engine.SevBlocker, Key: "eol-addon/argo-cd/2.10",
+		SeenWithout: []inventory.Capability{inventory.CapHelm}}}
+
+	target := inventory.Version{Major: 1, Minor: 35}
+	both := engine.Report{Target: target, Verdict: engine.VerdictReady, NotAssessed: []engine.CapabilityGap{
+		{Capability: inventory.CapHelm}, {Capability: inventory.CapVersions, Partial: true, Skipped: []string{"kube-proxy"}},
+	}}
+	changes, carried := computeDelta(prev, both, unassessedIn(both))
+	if len(changes) != 0 || len(carried) != 1 || !slices.Equal(carried[0].SeenWithout, prev[0].SeenWithout) {
+		t.Fatalf("versions not assessed: changes %+v, carried %+v; want the finding carried as last seen", changes, carried)
+	}
+
+	helmOnly := engine.Report{Target: target, Verdict: engine.VerdictReady, NotAssessed: []engine.CapabilityGap{{Capability: inventory.CapHelm}}}
+	changes, carried = computeDelta(carried, helmOnly, unassessedIn(helmOnly))
+	if len(carried) != 0 || len(changes) != 1 || changes[0].Kind != notify.KindBecameReady {
+		t.Fatalf("versions back: changes %+v, carried %+v; want became-ready", changes, carried)
+	}
+}
