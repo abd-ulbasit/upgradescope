@@ -1,20 +1,32 @@
 # upgradescope serve behind oauth2-proxy, with team-scoped reads from the
 # proxy's group header (docs/operations/auth.md).
 #
-# oauth2-proxy runs as a sidecar in the server's pod and reaches the server
-# over 127.0.0.1, the only address serve trusts the team header from
-# (--trusted-proxy-cidr=127.0.0.1/32). Whoever reaches serve's own port
-# over the network (agents, CI, Prometheus, another pod) comes from a pod
-# or node address: the header is ignored there, and a request needs a
-# token. People open the dashboard through the proxy's port and see the
-# teams their identity-provider groups name.
+# The header mode is safe only when both hold, and this example holds
+# both (deploy/examples/examples_test.go checks them):
+#   1. serve is reachable only through the proxy: it listens on
+#      127.0.0.1:8080 inside the pod, and the one Service exposes the
+#      proxy's port, never serve's;
+#   2. the proxy removes every client-supplied copy of the header before
+#      it forwards a request. oauth2-proxy v7.8.1 strips the headers it
+#      injects (X-Forwarded-Groups here) from the client's request first
+#      when --skip-auth-strip-headers is true, on authenticated and
+#      skip-auth routes alike, and adds one X-Forwarded-Groups line per
+#      group of the session.
+#
+# Machines go through the proxy too, on routes it does not authenticate
+# (with the header stripped, so they read as the token they present):
+# agents push to http://upgradescope.upgradescope.svc/api/v1/snapshots
+# with their ingest tokens, CI posts to /api/v1/gate and Prometheus
+# scrapes /metrics with read tokens. Every other read through the proxy
+# needs a signed-in person. Operators reach serve itself with kubectl
+# port-forward to port 8080 and the admin or a read token.
 #
 # WARNING: serve trusts every connection that arrives over loopback, and
 # not only the sidecar's arrive that way:
 #   - kubectl port-forward to this pod connects from 127.0.0.1, so anyone
 #     allowed pods/portforward in this namespace can send the header and
 #     read any team (never the whole fleet). Grant it only to people who
-#     may read every team, or forward to the proxy's port instead.
+#     may read every team.
 #   - a service-mesh sidecar that delivers inbound traffic over localhost
 #     makes every client 127.0.0.1. The pod opts out of Istio and Linkerd
 #     injection below; keep any other mesh out of it too.
@@ -84,7 +96,9 @@ spec:
           image: ghcr.io/abd-ulbasit/upgradescope:v0.2.0-rc.2
           args:
             - serve
-            - --listen=:8080
+            # Loopback only: nothing outside the pod reaches serve except
+            # through the proxy (kubectl port-forward aside, see above).
+            - --listen=127.0.0.1:8080
             - --db=/data/upgradescope.sqlite
             # Reads from the sidecar carry the user's groups: they read as
             # those teams. From any other address the header is ignored.
@@ -92,7 +106,7 @@ spec:
             - --trusted-proxy-cidr=127.0.0.1/32
           env:
             # Fleet-wide, for CI (/api/v1/gate), Prometheus (/metrics) and
-            # operators; it also works through the proxy as a bearer.
+            # operators.
             - name: UPGRADESCOPE_READ_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -107,17 +121,19 @@ spec:
                   optional: true
             - name: GOMEMLIMIT
               value: "921MiB"
-          ports:
-            - name: api
-              containerPort: 8080
+          # The kubelet probes the pod's address, where serve does not
+          # listen: it probes serve through the proxy's port (4180; a
+          # probe's named port is looked up in its own container).
           readinessProbe:
             httpGet:
               path: /readyz
-              port: api
+              port: 4180
           livenessProbe:
             httpGet:
               path: /healthz
-              port: api
+              port: 4180
+            # A proxy restart must not restart serve.
+            failureThreshold: 6
           resources:
             requests:
               cpu: 100m
@@ -133,9 +149,8 @@ spec:
             - name: data
               mountPath: /data
         - name: oauth2-proxy
-          # Pin the release you have vetted. oauth2-proxy v7 removes what a
-          # client sends in the headers it sets (X-Forwarded-Groups here)
-          # before setting them; that is what makes the header mode safe.
+          # Pin the release you have vetted: what makes the header mode
+          # safe is this version's --skip-auth-strip-headers behaviour.
           image: quay.io/oauth2-proxy/oauth2-proxy:v7.8.1
           args:
             - --provider=oidc
@@ -145,18 +160,25 @@ spec:
             - --http-address=0.0.0.0:4180
             - --upstream=http://127.0.0.1:8080/
             - --reverse-proxy=true
-            # X-Forwarded-User, -Email and -Groups, from the session; a
-            # client's own copies of them are stripped first.
+            # X-Forwarded-User, -Email and -Groups, from the session.
             - --pass-user-headers=true
+            # Remove the client's own copies of every header the proxy
+            # injects before forwarding, on every route: without it a
+            # client could name any team in X-Forwarded-Groups.
             - --skip-auth-strip-headers=true
             # Leave Authorization as the client sent it: the server reads
             # read tokens from it. (Basic credentials replace it only with
             # a --basic-auth-password, and --pass-authorization-header
             # would send the ID token; neither is set.)
             - --pass-basic-auth=false
-            # Agents push with their own ingest tokens; the server ignores
-            # the team header on this route, which is not a read.
+            # Machines, with the tokens they present and no group header:
+            # agents' pushes, the CI gate, Prometheus, and the kubelet's
+            # probes of serve.
             - --skip-auth-route=POST=^/api/v1/snapshots$
+            - --skip-auth-route=POST=^/api/v1/gate$
+            - --skip-auth-route=GET=^/metrics$
+            - --skip-auth-route=GET=^/readyz$
+            - --skip-auth-route=GET=^/healthz$
           env:
             - name: OAUTH2_PROXY_CLIENT_ID
               valueFrom:
@@ -190,8 +212,9 @@ spec:
           persistentVolumeClaim:
             claimName: upgradescope-data
 ---
-# People: the proxy. Point your Ingress (and the OIDC client's redirect
-# URL, https://<host>/oauth2/callback) here.
+# The only way in: the proxy. Point your Ingress (and the OIDC client's
+# redirect URL, https://<host>/oauth2/callback) here; agents, CI and
+# Prometheus use it too (http://upgradescope.upgradescope.svc).
 apiVersion: v1
 kind: Service
 metadata:
@@ -206,20 +229,3 @@ spec:
     - name: http
       port: 80
       targetPort: proxy
----
-# Machines: serve itself, where every read needs a token (agents push to
-# http://upgradescope-api.upgradescope.svc:8080 with their ingest tokens).
-apiVersion: v1
-kind: Service
-metadata:
-  name: upgradescope-api
-  labels:
-    app.kubernetes.io/name: upgradescope
-spec:
-  selector:
-    app.kubernetes.io/name: upgradescope
-    app.kubernetes.io/component: server
-  ports:
-    - name: api
-      port: 8080
-      targetPort: api

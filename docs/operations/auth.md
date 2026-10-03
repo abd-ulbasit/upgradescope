@@ -9,10 +9,15 @@ Every read is answered for a **scope**: the whole fleet, or a set of
 teams. Teams are the attribution findings already carry (a namespace's
 team label, or the server's `--team-map` rule that overrides it), so a
 team can be handed a view of its own clusters and findings without the
-rest of the fleet. A scope lists its teams comma separated, and `*` in a
-token's scope is the whole fleet, so `--team-map` refuses a team name
-that holds a comma or whitespace or is `*`; a namespace label value
-cannot hold either.
+rest of the fleet. A team name is free text: a `--team-map` team can be
+`Platform Team` or `Équipe, Paris`. A read token names one team per
+`--teams` flag, taken as written, and the trusted header and the
+`X-Upgradescope-Teams` answer header use the
+[team list encoding](#the-team-list-encoding). The one name a scope
+cannot hold is `*`, a token's scope of the whole fleet: a `--team-map`
+team called `*` is read as the team `(*)` (serve logs a warning at
+startup and keeps serving), so mint its token with `--teams '(*)'`. A
+namespace label value cannot be `*`.
 
 ## Read credentials
 
@@ -22,7 +27,7 @@ The server checks, in this order:
 |---|---|---|
 | `--read-token` | the whole fleet | `serve --read-token` (or `$UPGRADESCOPE_READ_TOKEN`, `--read-token-file`) |
 | the admin token | the whole fleet | `serve --admin-token` |
-| a stored read token | its teams, or the whole fleet for `*` | `upgradescope tokens create --read --teams payments,checkout` |
+| a stored read token | its teams, or the whole fleet for `*` | `upgradescope tokens create --read --teams payments --teams checkout` |
 | a trusted proxy's team header | the teams it lists, never the whole fleet | `serve --trust-team-header X-Forwarded-Groups --trusted-proxy-cidr 127.0.0.1/32` |
 | nothing | the whole fleet, only while the read API is open | no `--read-token`, no read token ever minted, no trusted header |
 
@@ -34,7 +39,7 @@ loopback unless `--allow-anonymous-read` is set.
 ## Team-scoped read tokens
 
 ```console
-$ upgradescope tokens create --read --teams payments,checkout
+$ upgradescope tokens create --read --teams payments --teams checkout
 3f9a1c0e...  (the token, on stdout alone)
 read token id 1 (prefix 3f9a1c0e) for teams checkout,payments created — shown once: ...
 $ upgradescope tokens create --read --teams '*'
@@ -215,20 +220,21 @@ operators and their CLI, not to the dashboard.
 ### Trusted team header (`--trust-team-header`)
 
 ```
-upgradescope serve --trust-team-header X-Forwarded-Groups --trusted-proxy-cidr 127.0.0.1/32
+upgradescope serve --listen 127.0.0.1:8080 \
+  --trust-team-header X-Forwarded-Groups --trusted-proxy-cidr 127.0.0.1/32
 ```
 
 A read whose TCP peer is in a `--trusted-proxy-cidr` range and that
-carries the header reads as the teams it lists, comma separated, every
-copy of the header counted (oauth2-proxy sends one per group). A bearer
-token, when one is presented and valid, takes precedence. The peer is the
-connection's source address, never `X-Forwarded-For`. From any other
-address the header is ignored: a client that reaches the server directly
-cannot spoof it, and needs a token. The header always names teams: `*` in
-it is a team called `*`, never the whole fleet, so whoever can name a
-group in the identity provider cannot grant fleet-wide reads with it.
-People who need the fleet use a fleet-wide token, which the dashboard
-sends through the proxy.
+carries the header reads as the teams it lists, in the
+[team list encoding](#the-team-list-encoding), every copy of the header
+counted (oauth2-proxy sends one per group). A bearer token, when one is
+presented and valid, takes precedence. The peer is the connection's
+source address, never `X-Forwarded-For`. From any other address the
+header is ignored: a client that reaches the server directly cannot
+spoof it, and needs a token. The header always names teams: `*` in it is
+a team called `*`, never the whole fleet, so whoever can name a group in
+the identity provider cannot grant fleet-wide reads with it. People who
+need the fleet use a fleet-wide token.
 
 The proxy's requests carry no `Authorization` header, so a shared cache
 in front of the proxy would key a team's answer by its URL alone. In
@@ -238,19 +244,49 @@ and every scoped answer, in any mode, with
 
 The two flags go together, and the mode is off by default.
 
-!!! danger "Only safe when the proxy strips the header"
-    The server trusts whatever the proxy forwards. If a client can send
-    its own `X-Forwarded-Groups` through the proxy and the proxy passes it
-    on (or appends to it), that client reads any team it names. Use this
-    mode only with a proxy that removes client-supplied copies of the
-    header before setting it, on every route it forwards to the read API,
-    and with `--trusted-proxy-cidr` covering the proxy's addresses and
-    nothing else. A pod CIDR is not "the proxy": every pod in it could
-    send the header. oauth2-proxy v7 removes client-supplied copies of
-    the headers it sets unless told to preserve them
-    (`preserveRequestValue`); check yours with
+!!! danger "When header mode is safe"
+    The server trusts whatever arrives from a trusted address. Header
+    mode is safe only when **both** hold:
+
+    1. **The server is reachable only through the proxy.** Listen on
+       loopback (`--listen 127.0.0.1:8080`) with the proxy in the same
+       pod, or otherwise make sure nothing but the proxy can open a
+       connection from a `--trusted-proxy-cidr` address: no Service,
+       NodePort or Ingress that reaches the server's port, and a
+       `--trusted-proxy-cidr` that covers the proxy's addresses and
+       nothing else. A pod CIDR is not "the proxy": every pod in it could
+       send the header.
+    2. **The proxy removes every client-supplied copy of the header**
+       before it forwards a request, on every route it forwards,
+       authenticated or not, and then sets it from the signed-in session
+       only. A proxy that passes a client's `X-Forwarded-Groups` on (or
+       appends to it) lets that client read any team it names.
+
+    oauth2-proxy v7.8.1, which the example pins, does both halves of
+    (2) with `--pass-user-headers=true --skip-auth-strip-headers=true`:
+    it deletes the request's copies of each header it injects
+    (`X-Forwarded-Groups` among them) before injecting it, one line per
+    group of the session, and on routes it does not authenticate
+    (`--skip-auth-route`) it strips them without setting them
+    ([flag reference](https://oauth2-proxy.github.io/oauth2-proxy/7.8.x/configuration/overview);
+    in its source, `getRequestHeaders` in
+    [`pkg/apis/options/legacy_options.go`](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.8.1/pkg/apis/options/legacy_options.go)
+    sets `PreserveRequestValue` to `!SkipAuthStripHeaders`, and
+    `newStripHeaders` in
+    [`pkg/middleware/headers.go`](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.8.1/pkg/middleware/headers.go)
+    deletes those headers before the injector runs). With the alpha
+    configuration, the same holds only for headers whose
+    `preserveRequestValue` is false. Any other proxy must be checked for
+    the same: it strips the client's copies, whatever their case, before
+    it sets the header. (`X_Forwarded_Groups` is not the same header to
+    the server: Go reads header names as written, with `-`, so a client
+    cannot slip one past a proxy that strips `X-Forwarded-Groups`.)
+    Check yours after signing in:
     `curl -H 'X-Forwarded-Groups: other-team' https://<host>/api/v1/clusters`
-    after signing in, which must not list `other-team`'s clusters.
+    must not list `other-team`'s clusters, and neither may the same
+    request to a route the proxy does not authenticate
+    (`POST /api/v1/gate?cluster=<other-team's cluster>` must answer 401
+    without a token).
 
     **Everything that arrives from a trusted address is the proxy.** With
     `--trusted-proxy-cidr=127.0.0.1/32` that is every connection made
@@ -270,30 +306,64 @@ The two flags go together, and the mode is off by default.
       `linkerd.io/inject: disabled`).
 
 Map identity-provider groups to team names: the header's values are
-compared with the teams namespaces are attributed to, exactly. With
-oauth2-proxy, `--oidc-groups-claim` picks the claim and `--allowed-group`
-limits who may sign in at all.
+compared with the teams namespaces are attributed to, exactly, after
+decoding. With oauth2-proxy, `--oidc-groups-claim` picks the claim and
+`--allowed-group` limits who may sign in at all.
+
+#### The team list encoding
+
+Team names are free text, so the trusted header and the
+`X-Upgradescope-Teams` answer header carry them in one defined form: a
+comma-separated list in which each team is percent-encoded as a URL path
+segment (Go's `url.PathEscape`, JavaScript's `encodeURIComponent` reads
+it): a comma is `%2C`, a percent sign `%25`, a space `%20`, and a
+non-ASCII character its UTF-8 bytes (`é` is `%C3%A9`). The server trims
+the whitespace around each entry, decodes it, and drops an entry that is
+not valid percent-encoding (`50%off`): it cannot know which team that
+is. A name sent as is reads as itself when it holds no comma and no
+percent sign: `Platform Team`, or raw UTF-8 `équipe`, both work, which is
+what oauth2-proxy sends for such groups. A group whose name holds a comma
+or a percent sign must be sent encoded, or renamed: oauth2-proxy sends
+it as is, and `a,b` would read as the teams `a` and `b`.
+
+| Team | In the header |
+|---|---|
+| `payments` | `payments` |
+| `Platform Team` | `Platform Team` or `Platform%20Team` |
+| `Équipe, Paris` | `%C3%89quipe%2C%20Paris` |
+| two teams, `payments` and `web` | `payments,web`, or two header lines |
+
+`X-Upgradescope-Teams` on a scoped answer is always fully encoded
+(`Platform%20Team,payments`), and the dashboard decodes it.
 
 ### Example: oauth2-proxy as a sidecar
 
 [`deploy/examples/oauth2-proxy/upgradescope-oauth2-proxy.yaml`](https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/examples/oauth2-proxy/upgradescope-oauth2-proxy.yaml)
-runs oauth2-proxy in the server's pod. It reaches the server on
-`127.0.0.1`, the only address the server trusts the header from
-(`--trusted-proxy-cidr=127.0.0.1/32`), so no other pod, node or client
-that reaches the server over the network can set a scope, whatever the
-network allows. What reaches it over loopback can, which is why the
-danger box above names port-forwarding and mesh sidecars, and why the
-pod opts out of Istio and Linkerd sidecar injection. Two Services:
+runs oauth2-proxy v7.8.1 in the server's pod and holds both conditions
+above (its test, `deploy/examples/examples_test.go`, fails if one goes):
 
-- `upgradescope` (port 80) is the proxy, for people: point your Ingress
-  and the OIDC client's redirect URL (`https://<host>/oauth2/callback`)
-  at it.
-- `upgradescope-api` (port 8080) is the server itself, for machines:
-  agents push there with their ingest tokens, CI and Prometheus read with
-  fleet-wide or scoped tokens. Every read there needs a token.
+- `serve` listens on `127.0.0.1:8080`, so it is reachable only from
+  inside the pod, and trusts the header from `127.0.0.1/32` only. The
+  one Service, `upgradescope` (port 80), exposes the proxy's port and
+  never the server's. Point your Ingress and the OIDC client's redirect
+  URL (`https://<host>/oauth2/callback`) at it.
+- The proxy pins `--pass-user-headers=true` and
+  `--skip-auth-strip-headers=true`, and leaves `Authorization` alone
+  (`--pass-basic-auth=false`).
 
-The proxy skips authentication on `POST /api/v1/snapshots` only, so agents
-can push through it too; the server never takes the team header on a push.
+Machines use the same Service, on the routes the proxy does not
+authenticate: agents push to `POST /api/v1/snapshots` with their ingest
+tokens, CI posts to `POST /api/v1/gate` and Prometheus scrapes
+`GET /metrics` with read tokens, and the kubelet probes `/readyz` and
+`/healthz` through it (serve does not listen on the pod's address). The
+proxy strips the group header on those routes too, so each request reads
+as the token it presents and nothing else: without one, `401`. Every
+other read through the proxy needs a signed-in person; operators reach
+the server itself with `kubectl port-forward` to port 8080 and a token
+(the danger box above says what that permission allows). What reaches
+the server over loopback is trusted with the header, which is why the
+pod opts out of Istio and Linkerd sidecar injection.
+
 Adapt the provider flags to your identity provider, and create the
 `oauth2-proxy` Secret (`client-id`, `client-secret`, `cookie-secret`)
 first; the manifest's header lists what it expects.

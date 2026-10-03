@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -80,10 +81,12 @@ func container(t *testing.T, d appsv1.Deployment, name string) corev1.Container 
 	return corev1.Container{}
 }
 
-// The oauth2-proxy example (docs/operations/auth.md): serve trusts the
-// team header from the sidecar on 127.0.0.1 only, its arguments parse as
-// serve's, the proxy sets the groups header and leaves Authorization alone,
-// and people reach the proxy, not serve.
+// The oauth2-proxy example (docs/operations/auth.md) holds what makes the
+// trusted header safe: serve trusts it from the sidecar on 127.0.0.1
+// only, (1) serve listens on loopback and every Service exposes the
+// proxy alone, and (2) the proxy strips a client's copies of the header
+// it sets. Its arguments parse as serve's, and the proxy leaves
+// Authorization alone.
 func TestOAuth2ProxyExample(t *testing.T) {
 	deploys, services := decodeAll(t, "oauth2-proxy/upgradescope-oauth2-proxy.yaml")
 	if len(deploys) != 1 {
@@ -118,33 +121,59 @@ func TestOAuth2ProxyExample(t *testing.T) {
 		}
 	}
 
-	// oauth2-proxy sets Authorization only when told to (a basic-auth
-	// password, or --pass-authorization-header); the example says so
-	// explicitly, and strips client copies of the headers it sets.
-	for _, want := range []string{"--upstream=http://127.0.0.1:8080/", "--pass-user-headers=true", "--skip-auth-route=POST=^/api/v1/snapshots$",
-		"--pass-basic-auth=false", "--skip-auth-strip-headers=true"} {
+	// (1) serve is reachable only through the proxy: it listens on
+	// loopback, the proxy forwards there, and no Service exposes any port
+	// but the proxy's.
+	if got := cmd.Flags().Lookup("listen").Value.String(); !strings.HasPrefix(got, "127.0.0.1:") {
+		t.Errorf("serve --listen = %q, want 127.0.0.1:<port>: reachable only through the sidecar", got)
+	} else if want := "--upstream=http://" + got + "/"; !slices.Contains(proxy.Args, want) {
+		t.Errorf("oauth2-proxy args lack %s", want)
+	}
+	if len(server.Ports) != 0 {
+		t.Errorf("server container declares ports %v: serve listens on loopback only", server.Ports)
+	}
+	proxyPorts := map[string]bool{}
+	for _, p := range proxy.Ports {
+		proxyPorts[p.Name], proxyPorts[fmt.Sprint(p.ContainerPort)] = true, true
+	}
+	if len(services) == 0 {
+		t.Error("no Service")
+	}
+	for _, s := range services {
+		for _, p := range s.Spec.Ports {
+			if !proxyPorts[p.TargetPort.String()] {
+				t.Errorf("Service %s targets port %s, which is not the proxy's: only the proxy may be reachable", s.Name, p.TargetPort.String())
+			}
+		}
+	}
+
+	// (2) the proxy strips what a client sends in the header it sets.
+	// oauth2-proxy v7.8.1 removes a client's copies of the headers it
+	// injects (X-Forwarded-Groups with --pass-user-headers) on every route
+	// when --skip-auth-strip-headers is true, which this pins (it is the
+	// default, so a later default change cannot undo it), on the version
+	// that behaviour was verified against.
+	if !strings.HasSuffix(proxy.Image, ":v7.8.1") {
+		t.Errorf("oauth2-proxy image %s, want the pinned, verified v7.8.1", proxy.Image)
+	}
+	for _, want := range []string{"--pass-user-headers=true", "--skip-auth-strip-headers=true", "--pass-basic-auth=false"} {
 		if !slices.Contains(proxy.Args, want) {
 			t.Errorf("oauth2-proxy args lack %s", want)
 		}
 	}
+	// Machines go through the proxy on routes it does not authenticate,
+	// where it strips the header too, so they read as their tokens.
+	skips := []string{"--skip-auth-route=POST=^/api/v1/snapshots$", "--skip-auth-route=POST=^/api/v1/gate$",
+		"--skip-auth-route=GET=^/metrics$", "--skip-auth-route=GET=^/readyz$", "--skip-auth-route=GET=^/healthz$"}
 	for _, a := range proxy.Args {
 		// The server reads read tokens from Authorization; a proxy that
-		// overwrites it, or skips authentication on a read, defeats it.
+		// overwrites it, keeps a client's copy of the groups header, or
+		// skips authentication on a dashboard read, defeats it.
 		if strings.HasPrefix(a, "--pass-authorization-header") || strings.HasPrefix(a, "--basic-auth-password") || strings.HasPrefix(a, "--set-authorization-header") ||
-			strings.HasPrefix(a, "--skip-auth-regex") || strings.HasPrefix(a, "--skip-auth-preflight") ||
-			(strings.HasPrefix(a, "--skip-auth-route") && a != "--skip-auth-route=POST=^/api/v1/snapshots$") {
+			strings.HasPrefix(a, "--skip-auth-regex") || strings.HasPrefix(a, "--skip-auth-preflight") || strings.HasPrefix(a, "--alpha-config") ||
+			strings.HasPrefix(a, "--skip-auth-strip-headers") && a != "--skip-auth-strip-headers=true" ||
+			(strings.HasPrefix(a, "--skip-auth-route") && !slices.Contains(skips, a)) {
 			t.Errorf("oauth2-proxy arg %s", a)
 		}
-	}
-
-	// People reach the proxy; serve's own port is a Service of its own.
-	ports := map[string]string{}
-	for _, s := range services {
-		for _, p := range s.Spec.Ports {
-			ports[s.Name] = p.TargetPort.String()
-		}
-	}
-	if ports["upgradescope"] != "proxy" || ports["upgradescope-api"] != "api" {
-		t.Errorf("Service target ports = %v, want upgradescope→proxy and upgradescope-api→api", ports)
 	}
 }
