@@ -316,6 +316,11 @@ func TestAgentServerCAFileFlag(t *testing.T) {
 	if _, err := execAgent(t, "--server-ca-file", "/etc/ca/ca.crt"); err == nil || !strings.Contains(err.Error(), "--server-ca-file") {
 		t.Errorf("--server-ca-file without --server-url: err = %v, want one naming the flag", err)
 	}
+	// Over plain http the CA would verify nothing; saying so beats a flag
+	// that silently does nothing.
+	if _, err := execAgent(t, "--server-url", "HTTP://hub.internal", "--server-token", "t", "--server-ca-file", "/etc/ca/ca.crt"); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Errorf("--server-ca-file with an http --server-url: err = %v, want one asking for https", err)
+	}
 }
 
 // An unusable --server-ca-file fails the start before any cluster access,

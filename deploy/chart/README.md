@@ -359,7 +359,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `agent.securityContext.allowPrivilegeEscalation` | bool | `false` | — |
 | `agent.securityContext.capabilities.drop[0]` | string | `"ALL"` | — |
 | `agent.securityContext.readOnlyRootFilesystem` | bool | `true` | — |
-| `agent.serverCA.configMap` | string | `""` | A server behind a private CA: name a ConfigMap (configMap) or a Secret (secret), not both, whose key holds the CA's PEM bundle. It is mounted read-only and passed as --server-ca-file: pushes trust it on top of the image's system roots (read at agent startup). Set, it replaces the in-chart server's server.tls.caKey. Needs a server to push to (agent.serverUrl or server.enabled). |
+| `agent.serverCA.configMap` | string | `""` | A server behind a private CA: name a ConfigMap (configMap) or a Secret (secret), not both, whose key holds the CA's PEM bundle. It is mounted read-only and passed as --server-ca-file: pushes trust it on top of the image's system roots (read at agent startup). Set, it replaces the in-chart server's server.tls.caKey. Needs an https server to push to (an https agent.serverUrl, or server.enabled with server.tls). |
 | `agent.serverCA.key` | string | `"ca.crt"` | The key of the PEM bundle in that ConfigMap or Secret. |
 | `agent.serverCA.secret` | string | `""` | Or a Secret holding the CA bundle (see configMap). |
 | `agent.serverToken` | string | `""` | Bearer token for snapshot pushes, stored in a chart Secret. Ignored when existingSecret is set. When both are empty and server.enabled=true, the agent uses the in-chart server's ingest token (key ingestToken of its Secret, generated or server.existingSecret). |

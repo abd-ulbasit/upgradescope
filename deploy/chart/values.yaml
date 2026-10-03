@@ -120,8 +120,9 @@ agent:
     # Secret (secret), not both, whose key holds the CA's PEM bundle. It is
     # mounted read-only and passed as --server-ca-file: pushes trust it on
     # top of the image's system roots (read at agent startup). Set, it
-    # replaces the in-chart server's server.tls.caKey. Needs a server to
-    # push to (agent.serverUrl or server.enabled).
+    # replaces the in-chart server's server.tls.caKey. Needs an https
+    # server to push to (an https agent.serverUrl, or server.enabled with
+    # server.tls).
     configMap: ""
     # -- Or a Secret holding the CA bundle (see configMap).
     secret: ""

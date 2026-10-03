@@ -213,6 +213,9 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if opts.serverCAFile != "" && opts.serverURL == "" {
 				return fmt.Errorf("--server-ca-file needs --server-url: it only verifies the server snapshots are pushed to")
 			}
+			if opts.serverCAFile != "" && !strings.HasPrefix(strings.ToLower(opts.serverURL), "https://") {
+				return fmt.Errorf("--server-ca-file needs an https --server-url: over plain http there is no certificate to verify")
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return runAgent(ctx, opts)
