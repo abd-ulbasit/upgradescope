@@ -38,16 +38,32 @@ Pick how the gate moves:
   Pin the action to a release tag or, stricter, the tag's full commit SHA,
   and set `version` to the same release. With `version` unset, an action at
   a release tag (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that same release, so
-  `@v0.2.0-rc.2` runs v0.2.0-rc.2. At any other ref (a branch, a commit SHA,
-  `v0`) an unset `version` means `latest`, which floats the binary to the
-  newest stable release, and with it the knowledge base and the verdicts.
-  With both pinned, the gate changes only when you bump them.
+  `@v0.2.0-rc.2` runs v0.2.0-rc.2. At a full 40-character commit SHA, the
+  action looks the commit up with
+  `git ls-remote --tags https://github.com/abd-ulbasit/upgradescope`
+  (an annotated tag counts at the commit it points at) and runs the release
+  tag, `vX.Y.Z` or `vX.Y.Z-rc.N`, that points at it; the newest, if several
+  do. If no release tag points at the commit, or the lookup fails (no `git`
+  on the runner, no network), it runs `latest` and logs one `::warning`
+  that says which. At any other ref (a branch, `v0`) an unset `version`
+  means `latest`, which floats the binary to the newest stable release, and
+  with it the knowledge base and the verdicts. With both pinned, the gate
+  changes only when you bump them.
+- **Only this repository's ref counts.** The action reads its ref as a
+  release only when `github.action_repository` is
+  `abd-ulbasit/upgradescope` (in any letter case). Inside a composite action
+  that wraps this one, GitHub gives the wrapper's repository and ref
+  ([actions/runner#2473](https://github.com/actions/runner/issues/2473)),
+  so a wrapper pinned at its own `v1.0.0` does not pick upgradescope
+  v1.0.0: with `version` unset it runs `latest`. Set `version` in the
+  wrapper.
 - **`latest` skips prereleases.** GitHub's latest release is never a release
   candidate. If you set `version: latest` at a release tag that is newer
   than the latest release (a release candidate, say), the step logs a
   `::warning` that the binary is older than the action, since an older
-  engine can pass what the newer one blocks. The action cannot compare a
-  commit SHA or branch with a release, so it gives no such warning there.
+  engine can pass what the newer one blocks. With `version: latest` the
+  action does not look up a commit SHA's release, so at a SHA or a branch
+  it gives no such warning.
 
 The examples below pin v0.2.0, the first release that ships this action
 (root `action.yml`, outputs, step summary). Put the release you pin in its
@@ -220,7 +236,7 @@ release assets anonymously.
 | `target` | yes | | Target Kubernetes minor version, such as `1.36`. |
 | `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
 | `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
-| `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag, and at any other ref it runs `latest`. |
+| `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag; at a full commit SHA it runs the release tag that points at that commit, or `latest` with a `::warning` when none does or the lookup fails; at any other ref, or inside another action, it runs `latest`. See [Usage](#usage). |
 | `config` | no | | Path to an `.upgradescope.yaml` with ignore rules (`scan --config`). Unset, the scan looks for `.upgradescope.yaml` in `path`, then at the repository root. |
 | `baseline` | no | | Path to the JSON report of an earlier scan: the `report-json` output, or a `write-baseline` file (`scan --baseline`). The gate then fails only on findings that are new since. |
 | `write-baseline` | no | | Also write this scan's JSON report, after suppression, to this path, for a later `baseline` (`scan --write-baseline`). |

@@ -36,9 +36,12 @@ inputs:
     description: >-
       Which upgradescope to run: a release tag such as v0.2.0, "latest"
       (the newest stable release; GitHub's latest skips prereleases), or
-      "preinstalled" (the one already on PATH). Left unset, an action used
-      at a release tag (@vX.Y.Z or @vX.Y.Z-rc.N) runs that same release,
-      and any other ref (a branch, a commit SHA, @v0) runs latest.
+      "preinstalled" (the one already on PATH). Left unset, it is the
+      release of the action ref: at a release tag (@vX.Y.Z or
+      @vX.Y.Z-rc.N), that release; at a full commit SHA, the release tag
+      that points at the commit (git ls-remote), or latest with a warning
+      when no release tag does or the lookup fails; at any other ref (a
+      branch, @v0), or used from another action, latest.
       For a reproducible gate, pin the action ref (@vX.Y.Z or a commit SHA)
       and a tag here: @v0 and "latest" move with each release.
       The archive is verified against the release's checksums.txt; without
