@@ -10,6 +10,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
+	github.com/yuin/gopher-lua v1.1.2
 	go.yaml.in/yaml/v3 v3.0.5
 	k8s.io/api v0.37.1
 	k8s.io/apiextensions-apiserver v0.37.1

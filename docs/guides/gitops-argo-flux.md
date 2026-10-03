@@ -56,8 +56,12 @@ what health checks read.
 ## Argo CD
 
 !!! note "Tested in part"
-    The `Ready` condition and `lastEvaluated` this script reads are
-    tested in `internal/crd`; the Lua script itself is not run by CI.
+    CI runs this script, read from this page, under gopher-lua (the Lua
+    engine Argo CD embeds) over objects the agent's status writer produced:
+    ready, blocked, unknown, no target, stale, a spec edited since the last
+    tick, and no status
+    (`TestArgoHealthScriptAgainstWrittenStatus` in `internal/crd`). It has
+    not been run inside a live Argo CD.
 
 Argo CD applies health checks to the resources an Application tracks. To
 gate a sync or a promotion on readiness, commit the `ClusterReadiness`

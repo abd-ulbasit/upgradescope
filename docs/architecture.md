@@ -167,6 +167,42 @@ ones after it. client-go's `rest.Config.Timeout` (`--request-timeout`, default
 Every cluster-wide list is paged (`limit=500`). The collectors are
 read-only.
 
+### API cost per tick
+
+The agent holds no watch and no cache, so it asks the API server again on
+every tick, and the number of requests grows with the cluster. What stays
+bounded is the work held at once: one page of a list and one decoded Helm
+release, not a copy of the cluster. The requests of one tick are:
+
+- **One paged list per resource type, ceil(N / 500) requests for N
+  objects, and at least one.** The types are nodes, namespaces, pods in
+  `kube-system`, pods in all namespaces, IngressClasses,
+  CustomResourceDefinitions, the `owner=helm` Secrets and the `owner=helm`
+  ConfigMaps (both are still attempted with `rbac.helmSecrets=false`, and
+  the API server refuses them), and a metadata-only list for each resource
+  the knowledge base flags that the cluster still serves at a non-deprecated
+  version. A CRD with a deprecated or unserved version adds a list of its
+  custom resources.
+- **One GET per decoded Helm release**: the full Secret (or ConfigMap) of its
+  installed revision, up to the 1 MiB Kubernetes allows. It is fetched again
+  on every tick, even when nothing changed. This is the one cost that scales
+  with releases rather than with pages, and the largest request count of a
+  big cluster.
+- **A few calls that do not grow with the cluster**: `/version`, the
+  `kube-system` namespace, `/metrics`, API discovery (it depends on the
+  number of API groups, not objects) and the agent's own `ClusterReadiness`
+  (a few reads and one status update).
+
+So a tick sends about the sum of the page counts, plus the Helm releases,
+plus that constant. Listing, not decoding, is what the page size bounds. The
+client is limited to 50 requests per second (burst 300) unless the caller
+sets a limit, so a tick lasts longer as the request count grows. The agent
+never sends a `watch`, and the chart's role grants none
+([pinned by a test](operations/security-model-and-rbac.md#the-agents-clusterrole)).
+`--interval` sets how often this repeats.
+`TestCollectAPIUsageFollowsListPagination` pins the paging and
+`TestCollectHelmPeakHeapIsBoundedByOneRelease` the one GET per release.
+
 ### API usage: authorship, not residency
 
 The apiserver serves every stored object at every served version of its
@@ -454,6 +490,16 @@ knowledge base would produce silently green scans.
 `ucr`) is the per-cluster projection, for `kubectl get ucr`, GitOps health
 checks and policy engines that should not need to reach the server.
 
+`kubectl get ucr` and the Argo CD health check
+([GitOps guide](guides/gitops-argo-flux.md#argo-cd)) are tested. The policy
+engine use is not: there is no example policy yet
+([#79](https://github.com/abd-ulbasit/upgradescope/issues/79)). A policy
+engine reads the object with its own service account, so that account needs
+`get` and `list` on `clusterreadinesses` in the `upgradescope.dev` group. The
+chart grants those verbs to the agent only, as the `clusterreadinesses` rows
+of the [agent's ClusterRole](operations/security-model-and-rbac.md#the-agents-clusterrole)
+show, and ships no read role for anything else.
+
 - **`spec.targets`** is the only user input: the minors to evaluate against.
   When it is empty, the agent uses the next minor above the observed server
   version. Invalid entries are skipped and reported in `status.notAssessed`.
@@ -556,7 +602,9 @@ first.
   reconciler would requeue on unrelated churn and still miss the day an EOL
   date passes. A fixed interval with jitter instead re-collects, re-evaluates
   and rewrites the status on every tick, so a passing EOL date shows up
-  within one interval, and the cost is predictable.
+  within one interval, and the cost is predictable: it follows the
+  [request formula above](#api-cost-per-tick), growing with the cluster's
+  size and its Helm releases.
 - **No audit-log ingestion.** Active callers come from the apiserver metric.
   Audit logs would add kubectl client skew and caller identity, but they are
   operationally heavy and often unavailable on managed control planes.
