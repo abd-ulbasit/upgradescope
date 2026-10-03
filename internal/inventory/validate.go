@@ -41,6 +41,9 @@ const (
 	ruleSubdomain = "an RFC 1123 subdomain of at most 253 bytes"
 	// ruleLabelValue: a label value, as the team label's is.
 	ruleLabelValue = "a label value: at most 63 bytes"
+	// ruleProvider: Inventory.Provider, a closed vocabulary the reports
+	// repeat.
+	ruleProvider = "a managed provider: eks, gke, aks or other"
 )
 
 // MaxObjectNameBytes caps an object name in an inventory: the most an
@@ -115,10 +118,16 @@ func ValidateClusterName(name string) error {
 // the rule the apiserver applies to it, and returns the first that fails
 // as an *IdentifierError: namespace names (API usage namespaces and object
 // refs, Helm releases, add-on installs, the namespace list), object names,
-// node names (a kube-proxy's too) and Helm release names, and team label values. Fields that are not
+// node names (a kube-proxy's too) and Helm release names, and team label
+// values, and the provider against its closed vocabulary. Fields that are not
 // identifiers (versions, image repositories, field managers, annotation
 // values) are not checked.
 func (inv Inventory) ValidateIdentifiers() error {
+	switch inv.Provider {
+	case "", ProviderEKS, ProviderGKE, ProviderAKS, ProviderOther:
+	default:
+		return &IdentifierError{Field: "provider", Value: string(inv.Provider), Rule: ruleProvider, Problems: []string{"not a provider this build knows"}}
+	}
 	for i, u := range inv.APIUsage {
 		if err := validateUsage(func() string { return fmt.Sprintf("apiUsage[%d]", i) }, u); err != nil {
 			return err
