@@ -241,9 +241,10 @@ settings, so the read token still protects all data.
   `podLabels`, `resources`.
 - Extra flags, env and mounts: `extraArgs`, `extraEnv`, `extraVolumes`,
   `extraVolumeMounts`.
-- Server behind a private CA: mount the CA bundle into the agent and set
-  `SSL_CERT_DIR` to its directory; Go adds those certificates to the
-  image's system roots (example in `values.yaml`).
+- Server behind a private CA: `agent.serverCA.configMap` or
+  `agent.serverCA.secret` (and `agent.serverCA.key`, default `ca.crt`)
+  names the CA's PEM bundle; the agent gets it as `--server-ca-file` and
+  trusts it on top of the image's system roots.
 - HTTPS for the in-chart server: `server.tls.secretName` (an existing
   `kubernetes.io/tls` Secret) or `server.tls.certManager.issuerRef` (the
   chart renders a cert-manager `Certificate` for the Service names into

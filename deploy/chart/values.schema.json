@@ -73,6 +73,15 @@
         "serverUrl": { "type": "string", "pattern": "^(https?://.+)?$" },
         "serverToken": { "type": "string" },
         "existingSecret": { "$ref": "#/definitions/secretName" },
+        "serverCA": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": { "$ref": "#/definitions/secretName" },
+            "secret": { "$ref": "#/definitions/secretName" },
+            "key": { "type": "string", "pattern": "^[-._a-zA-Z0-9]*$", "maxLength": 253 }
+          }
+        },
         "healthPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "logFormat": { "type": "string", "enum": ["text", "json"] },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },

@@ -293,3 +293,120 @@ func hasSecretVolume(vols []any, secret string) bool {
 	}
 	return false
 }
+
+// TLS terminated at an Ingress (#65): off by default; enabled, it serves
+// the host from a TLS Secret through the named class.
+func TestIngressTerminatesTLS(t *testing.T) {
+	if ing := find(render(t, "server.enabled=true", "server.ingestToken=t"), "Ingress", "upgradescope-server"); ing != nil {
+		t.Fatal("an Ingress renders by default")
+	}
+	objs := render(t, "server.enabled=true", "server.ingestToken=t", "server.readToken=r",
+		"server.ingress.enabled=true", "server.ingress.className=nginx", "server.ingress.host=upgradescope.example.com")
+	ing := find(objs, "Ingress", "upgradescope-server")
+	if ing == nil {
+		t.Fatalf("no Ingress (have %v)", kinds(objs))
+	}
+	class, _, _ := unstructured.NestedString(ing.Object, "spec", "ingressClassName")
+	tls, _, _ := unstructured.NestedSlice(ing.Object, "spec", "tls")
+	if class != "nginx" || len(tls) != 1 {
+		t.Fatalf("Ingress class %q, tls %v: want nginx and one TLS block", class, tls)
+	}
+	hosts, _, _ := unstructured.NestedStringSlice(tls[0].(map[string]any), "hosts")
+	if secret, _ := tls[0].(map[string]any)["secretName"].(string); secret != "upgradescope-server-tls" || !slices.Equal(hosts, []string{"upgradescope.example.com"}) {
+		t.Errorf("Ingress TLS secretName %q hosts %v", secret, hosts)
+	}
+}
+
+// serve re-reads its key pair when the files change, which only happens
+// when the kubelet can update the mounted Secret: a subPath mount never
+// sees an update, so a renewal would need a restart again.
+func TestServerTLSMountFollowsSecretUpdates(t *testing.T) {
+	objs := render(t, "server.enabled=true", "server.ingestToken=t", "server.tls.secretName=srv-tls")
+	mounts, _, _ := unstructured.NestedSlice(container(t, objs, "upgradescope-server"), "volumeMounts")
+	found := false
+	for _, m := range mounts {
+		m := m.(map[string]any)
+		if m["mountPath"] != "/etc/upgradescope/tls" {
+			continue
+		}
+		found = true
+		if _, sub := m["subPath"]; sub || m["readOnly"] != true {
+			t.Errorf("TLS mount %v: want a read-only directory mount without subPath", m)
+		}
+	}
+	if !found {
+		t.Fatalf("server mounts %v: no /etc/upgradescope/tls", mounts)
+	}
+}
+
+// agent.serverCA trusts a private CA for pushes: one key of a ConfigMap
+// or a Secret, mounted read-only and passed as --server-ca-file. It
+// replaces the in-chart server's own CA, needs a server to push to, and
+// takes a ConfigMap or a Secret, not both.
+func TestAgentServerCA(t *testing.T) {
+	const file = "--server-ca-file=/etc/upgradescope/server-ca/ca.crt"
+	for _, tc := range []struct {
+		name, source, key string // source: configMap or secret
+		sets              []string
+	}{
+		{"configMap, default key", "configMap", "ca.crt", []string{"agent.serverCA.configMap=corp-ca"}},
+		{"secret, own key", "secret", "bundle.pem", []string{"agent.serverCA.secret=corp-ca", "agent.serverCA.key=bundle.pem"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := render(t, append([]string{"agent.serverUrl=https://hub.internal", "agent.serverToken=t"}, tc.sets...)...)
+			agent := container(t, objs, "upgradescope-agent")
+			if !slices.Contains(args(agent), file) {
+				t.Errorf("agent args %v lack %s", args(agent), file)
+			}
+			if _, set := envVar(agent, "SSL_CERT_DIR"); set {
+				t.Error("agent sets SSL_CERT_DIR alongside --server-ca-file")
+			}
+			vols, _, _ := unstructured.NestedSlice(find(objs, "Deployment", "upgradescope-agent").Object, "spec", "template", "spec", "volumes")
+			if !hasCAVolume(vols, tc.source, "corp-ca", tc.key) {
+				t.Errorf("agent volumes %v: want %s corp-ca, key %s at ca.crt", vols, tc.source, tc.key)
+			}
+		})
+	}
+
+	// With the in-chart server's TLS, agent.serverCA wins over its Secret's CA.
+	objs := render(t, "server.enabled=true", "server.ingestToken=t", "server.tls.secretName=srv-tls", "agent.serverCA.configMap=corp-ca")
+	agent := container(t, objs, "upgradescope-agent")
+	vols, _, _ := unstructured.NestedSlice(find(objs, "Deployment", "upgradescope-agent").Object, "spec", "template", "spec", "volumes")
+	if _, set := envVar(agent, "SSL_CERT_DIR"); set || hasSecretVolume(vols, "srv-tls") || !slices.Contains(args(agent), file) {
+		t.Errorf("agent args %v, volumes %v: want only agent.serverCA trusted", args(agent), vols)
+	}
+	// No serverCA: no flag.
+	objs = render(t, "agent.serverUrl=https://hub.internal", "agent.serverToken=t")
+	if slices.ContainsFunc(args(container(t, objs, "upgradescope-agent")), func(a string) bool { return strings.HasPrefix(a, "--server-ca-file") }) {
+		t.Error("agent gets --server-ca-file without agent.serverCA")
+	}
+
+	for name, sets := range map[string][]string{
+		"both sources": {"agent.serverUrl=https://hub.internal", "agent.serverToken=t", "agent.serverCA.configMap=a", "agent.serverCA.secret=b"},
+		"no server":    {"agent.serverCA.configMap=corp-ca"},
+		"no key":       {"agent.serverUrl=https://hub.internal", "agent.serverToken=t", "agent.serverCA.configMap=corp-ca", "agent.serverCA.key="},
+	} {
+		if msg := renderErr(t, sets...); !strings.Contains(msg, "agent.serverCA") {
+			t.Errorf("%s: want a render error naming agent.serverCA, got %q", name, msg)
+		}
+	}
+}
+
+// hasCAVolume reports whether vols holds a volume from the source
+// (configMap or secret) name that projects key to ca.crt.
+func hasCAVolume(vols []any, source, name, key string) bool {
+	nameField := map[string]string{"configMap": "name", "secret": "secretName"}[source]
+	for _, v := range vols {
+		src, ok, _ := unstructured.NestedMap(v.(map[string]any), source)
+		if !ok || src[nameField] != name {
+			continue
+		}
+		items, _, _ := unstructured.NestedSlice(src, "items")
+		for _, it := range items {
+			if it := it.(map[string]any); it["key"] == key && it["path"] == "ca.crt" {
+				return true
+			}
+		}
+	}
+	return false
+}
