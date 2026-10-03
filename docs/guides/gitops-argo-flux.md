@@ -56,10 +56,11 @@ add-on's chart version only when it is a single version and no Helm release
 records the real one. A Flux cluster, where helm-controller leaves a release
 Secret, reports that release's chart version when the release and the chart
 source are in the same namespace: the HelmRelease's `targetNamespace` is unset
-or its own namespace, and `spec.storageNamespace` is unset (the release Secret
-lives in the storage namespace, which defaults to the HelmRelease's). With a
-`targetNamespace` elsewhere, the Secret is in the HelmRelease's namespace and
-the chart deploys into the target, so they are two installs of the add-on, as
+or its own namespace (the agent matches by namespace and does not read
+`spec.storageNamespace`; the release Secret lives in the storage namespace,
+which defaults to the HelmRelease's). With a `targetNamespace` elsewhere, the
+Secret is in the HelmRelease's namespace and the chart deploys into the
+target, so they are two installs of the add-on, as
 for any chart with a namespace override: the release's at its app version, the
 chart source's with the chart version it asks for, if exact.
 
@@ -68,7 +69,11 @@ Repository URLs are recorded **without credentials**. An Application's
 (`https://user:token@host`) or a token in the query string, and the agent
 copies neither: only the scheme, host, port and path are kept, whether or not
 the value parses as a URL (a Git address such as `git@github.com:org/repo.git`
-is recorded as `github.com:org/repo.git`). The agent does not read the Secrets
+is recorded as `github.com:org/repo.git`). The cut does not depend on the URL
+parsing: everything up to the last `@` is dropped, so a token or password that
+itself contains a `/`, `?` or `#` does not leak either. An `@` anywhere else in
+the URL, which a chart repository does not use, therefore costs the part
+before it. The agent does not read the Secrets
 that hold repository credentials either. The URL as recorded is what the
 inventory holds, what is pushed to the server and stored, and what the CLI
 prints.

@@ -287,7 +287,8 @@ type GitOpsChart struct {
 	Version string `json:"version,omitempty"`
 	// Repo is an Application's repoURL, a HelmRelease's chart source
 	// ("HelmRepository/flux-system/ingress-nginx") or the URL of the
-	// OCIRepository it references.
+	// OCIRepository it references. A URL is recorded without userinfo,
+	// query string or fragment, so no credential written into it is kept.
 	Repo string `json:"repo,omitempty"`
 }
 
