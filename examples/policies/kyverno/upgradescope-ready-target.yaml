@@ -53,7 +53,8 @@ spec:
             urlPath: /apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster
             jmesPath: "@"
             # No ClusterReadiness (agent not installed, another --cr-name):
-            # an empty object, so the rule fails open instead of erroring.
+            # an empty object, so the rule fails open. A 403 (no reader role)
+            # is not verified to take this default; see the README.
             default: {}
         - name: requested
           variable:

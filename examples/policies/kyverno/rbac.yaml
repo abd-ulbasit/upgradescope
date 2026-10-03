@@ -1,6 +1,6 @@
 # Lets Kyverno read the ClusterReadiness the policy looks up. The chart grants
-# those verbs to the agent only, so without this the apiCall is forbidden and
-# the policy errors. The aggregate-to labels are Kyverno's: its admission
+# those verbs to the agent only, so without this the apiCall is forbidden,
+# and what Kyverno then does with the rule is not verified (see the README). The aggregate-to labels are Kyverno's: its admission
 # controller (live requests) and background controller (the policy report scan
 # of existing objects) pick the rules up from here. Read-only.
 apiVersion: rbac.authorization.k8s.io/v1
