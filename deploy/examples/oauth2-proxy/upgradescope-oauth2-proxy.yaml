@@ -1,0 +1,202 @@
+# upgradescope serve behind oauth2-proxy, with team-scoped reads from the
+# proxy's group header (docs/operations/auth.md).
+#
+# oauth2-proxy runs as a sidecar in the server's pod and reaches the server
+# over 127.0.0.1, the only address serve trusts the team header from
+# (--trusted-proxy-cidr=127.0.0.1/32). Whoever reaches serve's own port
+# from anywhere else (agents, CI, Prometheus, another pod) comes from a pod
+# or node address: the header is ignored there, and a request needs a
+# token. People open the dashboard through the proxy's port and see the
+# teams their identity-provider groups name.
+#
+# Before applying, in namespace upgradescope:
+#   - a Secret oauth2-proxy with client-id, client-secret and cookie-secret
+#     (32 random bytes, base64: openssl rand -base64 32 | tr -- '+/' '-_');
+#   - the issuer URL, and an OIDC client whose ID token carries a groups
+#     claim (--oidc-groups-claim) holding team names;
+#   - optionally a Secret upgradescope-server with readToken (a fleet-wide
+#     token for CI and Prometheus) and ingestToken (or mint per-cluster
+#     ingest tokens: kubectl exec deploy/upgradescope-server -c server --
+#     upgradescope tokens create <cluster> --db /data/upgradescope.sqlite).
+#
+# kubectl create namespace upgradescope
+# kubectl apply -n upgradescope -f upgradescope-oauth2-proxy.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: upgradescope-data
+  labels:
+    app.kubernetes.io/name: upgradescope
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upgradescope-server
+  labels:
+    app.kubernetes.io/name: upgradescope
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # One SQLite writer on a ReadWriteOnce volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: upgradescope
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: upgradescope
+        app.kubernetes.io/component: server
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: ghcr.io/abd-ulbasit/upgradescope:v0.2.0-rc.2
+          args:
+            - serve
+            - --listen=:8080
+            - --db=/data/upgradescope.sqlite
+            # Reads from the sidecar carry the user's groups: they read as
+            # those teams. From any other address the header is ignored.
+            - --trust-team-header=X-Forwarded-Groups
+            - --trusted-proxy-cidr=127.0.0.1/32
+          env:
+            # Fleet-wide, for CI (/api/v1/gate), Prometheus (/metrics) and
+            # operators; it also works through the proxy as a bearer.
+            - name: UPGRADESCOPE_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: upgradescope-server
+                  key: readToken
+                  optional: true
+            - name: UPGRADESCOPE_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: upgradescope-server
+                  key: ingestToken
+                  optional: true
+            - name: GOMEMLIMIT
+              value: "921MiB"
+          ports:
+            - name: api
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: api
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        - name: oauth2-proxy
+          # Pin the release you have vetted. oauth2-proxy v7 removes what a
+          # client sends in the headers it sets (X-Forwarded-Groups here)
+          # before setting them; that is what makes the header mode safe.
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.8.1
+          args:
+            - --provider=oidc
+            - --oidc-issuer-url=https://sso.example.com
+            - --oidc-groups-claim=groups
+            - --email-domain=*
+            - --http-address=0.0.0.0:4180
+            - --upstream=http://127.0.0.1:8080/
+            - --reverse-proxy=true
+            # X-Forwarded-User, -Email and -Groups, from the session.
+            - --pass-user-headers=true
+            # Agents push with their own ingest tokens; the server ignores
+            # the team header on this route, which is not a read.
+            - --skip-auth-route=POST=^/api/v1/snapshots$
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: oauth2-proxy, key: client-id}
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: oauth2-proxy, key: client-secret}
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef: {name: oauth2-proxy, key: cookie-secret}
+          ports:
+            - name: proxy
+              containerPort: 4180
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: upgradescope-data
+---
+# People: the proxy. Point your Ingress (and the OIDC client's redirect
+# URL, https://<host>/oauth2/callback) here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: upgradescope
+  labels:
+    app.kubernetes.io/name: upgradescope
+spec:
+  selector:
+    app.kubernetes.io/name: upgradescope
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: proxy
+---
+# Machines: serve itself, where every read needs a token (agents push to
+# http://upgradescope-api.upgradescope.svc:8080 with their ingest tokens).
+apiVersion: v1
+kind: Service
+metadata:
+  name: upgradescope-api
+  labels:
+    app.kubernetes.io/name: upgradescope
+spec:
+  selector:
+    app.kubernetes.io/name: upgradescope
+    app.kubernetes.io/component: server
+  ports:
+    - name: api
+      port: 8080
+      targetPort: api

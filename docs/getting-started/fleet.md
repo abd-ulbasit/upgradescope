@@ -20,15 +20,17 @@ The defaults are deliberately narrow: it listens on loopback
 file and its `-wal` and `-shm` files hold every cluster's inventory and the
 token hashes; `serve` creates them readable by its user only (0600), in
 a directory it creates 0700, and tightens an existing database on open.
-On any other address it refuses to start without a read token, unless
-`--allow-anonymous-read` says something else guards it:
+On any other address it refuses to start without a read credential
+(`--read-token`, a read token minted with `tokens create --read`, or a
+trusted proxy's team header), unless `--allow-anonymous-read` says
+something else guards it:
 
 ```console
 $ upgradescope serve --listen :8080
-refusing to serve the read API and /api/v1/gate without a token on ":8080": set --read-token, listen on loopback, or pass --allow-anonymous-read to accept open reads
+server: refusing to serve the read API and /api/v1/gate without a read token on [::]:8080 (from ":8080"), which is not a loopback address: set a read token (--read-token) or mint one (...), trust an authenticating proxy's team header (--trust-team-header), listen on loopback, or allow anonymous reads (--allow-anonymous-read)
 ```
 
-Without `--read-token`, the read API, the dashboard's data and
+Without a read credential, the read API, the dashboard's data and
 `/api/v1/gate` answer anyone who can reach the address. On loopback that is
 every user and process on the machine; the first command above is meant
 for a single-user workstation. Add `--read-token` (and send it as
@@ -157,11 +159,13 @@ blocker of its own or an unattributed one (kubelet skew, an object in an
 unlabelled namespace), which cannot be ruled out as the team's; otherwise
 it is `unknown` when the cluster's report has a required not-assessed gap,
 which may hide any team's blocker; otherwise `ready`. Another team's
-blocker does not lower it. Teams split the findings; they are not an
-access boundary ([Tenancy](../operations/tenancy.md)).
+blocker does not lower it. A read token minted for a team
+(`upgradescope tokens create --read --teams payments`) reads only that
+team's clusters, findings and scores ([Read access](../operations/auth.md)).
 
 ## Next
 
 - Retention, sizing and backups: [Retention and backup](../operations/retention-and-backup.md).
-- Tokens, SSO and who can read what: [Tenancy and access control](../operations/tenancy.md).
+- Tokens, SSO and who can read what: [Tenancy and access control](../operations/tenancy.md)
+  and [Read access: tokens, teams and SSO](../operations/auth.md).
 - Notifications, cluster lifecycle and exports: [Running the server](../operations.md).

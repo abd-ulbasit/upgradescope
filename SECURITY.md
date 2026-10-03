@@ -79,8 +79,10 @@ In scope:
   restates them is not a new finding.
 - **Server authentication and authorization.** This covers the ingest bearer
   tokens (the shared `--ingest-token` and per-cluster tokens from
-  `upgradescope tokens`), the read token, the cluster binding of per-cluster
-  tokens, and input handling on `POST /api/v1/snapshots` and
+  `upgradescope tokens`), the read token, team-scoped read tokens and the
+  trusted-proxy team header (a scoped read that sees another team's
+  cluster, finding or team score is in scope), the cluster binding of
+  per-cluster tokens, and input handling on `POST /api/v1/snapshots` and
   `POST /api/v1/gate` (size limits, gzip handling, malformed input). It also
   covers the store layer (SQL injection) and the exported HTML reports
   (injection or XSS) and CSV exports (spreadsheet formula injection).
@@ -171,9 +173,12 @@ In scope:
 
 Out of scope:
 
-- **Running `serve` without `--read-token`.** The flag help and the chart's
-  `values.yaml` both document that this leaves the read API open. A missing
-  token is a configuration choice, not a vulnerability.
+- **Running `serve` without a read credential.** The flag help and the
+  chart's `values.yaml` both document that this leaves the read API open. A
+  missing token is a configuration choice, not a vulnerability. So is a
+  `--trust-team-header` proxy that passes client-supplied copies of the
+  header on, or a `--trusted-proxy-cidr` wider than the proxy: the docs
+  say both make the header spoofable.
 - Findings that are wrong (false positives or false negatives) but have no
   security impact. Open a regular bug report for those.
 - Vulnerabilities in dependencies that upgradescope does not reach. Do report

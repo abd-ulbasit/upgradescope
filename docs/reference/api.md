@@ -9,9 +9,26 @@ read API behind the dashboard, the CI gate, auditor exports and cluster
 administration.
 
 **Authentication.** Every credential is a bearer token
-(`Authorization: Bearer <token>`). Reads and the gate take the read
-token (`serve --read-token`; with none set, they are open), and the
-admin token is accepted wherever the read token is. Pushes take the
+(`Authorization: Bearer <token>`). Reads, the gate and `/metrics` take
+a read credential: `serve --read-token`, the admin token, or a read
+token minted with `upgradescope tokens create --read`; or, in the
+opt-in trusted-proxy mode (`--trust-team-header` with
+`--trusted-proxy-cidr`), a team header from a proxy in those ranges.
+With none configured, reads are open.
+
+**Read scopes.** `--read-token`, the admin token and a read token
+minted for `*` read the whole fleet. A read token minted for teams, and
+the trusted proxy's header, read only those teams: the clusters one of
+them owns a namespace in (by the namespace attribution findings carry,
+after `--team-map`), and of those only their findings, suppressed
+findings and team scores. Any other cluster answers the same 404 as an
+unknown one, on every per-cluster endpoint and for `/api/v1/gate`'s
+`?cluster=`, and is absent from the cluster list and fleet rollups.
+`/metrics` answers a team-scoped read 403. A scoped answer carries
+`X-Upgradescope-Teams: <team,...>`; a fleet-wide one carries none. See
+https://abd-ulbasit.github.io/upgradescope/operations/auth/
+
+Pushes take the
 shared ingest token (`--ingest-token`) or a per-cluster token from
 `upgradescope tokens create`. Deleting and renaming clusters take the
 admin token (`--admin-token`); without one the server refuses both.
@@ -39,7 +56,7 @@ https://abd-ulbasit.github.io/upgradescope/compatibility-policy/
 
 | Scheme | Type | Description |
 |---|---|---|
-| `readToken` | bearer | `serve --read-token` (or the admin token). Not required when the server runs without one. |
+| `readToken` | bearer | `serve --read-token`, the admin token, or a read token from `upgradescope tokens create --read` (fleet-wide, or scoped to teams). Not required when the server runs with no read credential configured. |
 | `ingestToken` | bearer | `serve --ingest-token`, or a per-cluster token from `upgradescope tokens create`. |
 | `adminToken` | bearer | `serve --admin-token`. |
 
@@ -73,7 +90,9 @@ Auth: none.
 **Prometheus metrics.** Prometheus text exposition: HTTP traffic, ingest results, and per
 cluster the score, verdict, blockers, push age and staleness of
 its current evaluations. Behind the read token when one is set.
-The metric names are listed in the observability reference.
+Its series name every cluster, so it takes a fleet-wide read
+credential: a team-scoped one is 403. The metric names are listed
+in the observability reference.
 
 Auth: `readToken` (bearer).
 
@@ -81,6 +100,7 @@ Auth: `readToken` (bearer).
 |---|---|---|---|
 | 200 | `text/plain` | string | Prometheus text format. |
 | 401 | `application/json` | [Error](#error) | An error. |
+| 403 | `application/json` | [Error](#error) | A team-scoped read credential. |
 | 503 | `application/json` | [Error](#error) | Reads of the whole fleet (`/api/v1/clusters`, `/api/v1/fleet`, `/metrics`) run two at a time, and this one waited more than 30s for its turn, or the responses waiting for their clients leave no room for this one (they share a budget of twice `--max-snapshot-bytes` with the per-cluster reads and `/gate`); retry after `Retry-After`. A response is sent with its `Content-Length`; one larger than that whole budget is sent while the next fleet read waits, and cut off if the client has not taken it within 20s. |
 
 ## ingest

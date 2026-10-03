@@ -668,8 +668,10 @@ first.
 - **No audit-log ingestion.** Active callers come from the apiserver metric.
   Audit logs would add kubectl client skew and caller identity, but they are
   operationally heavy and often unavailable on managed control planes.
-- **Single-tenant auth.** The server uses static bearer tokens. SSO and
-  multi-tenancy are out of scope for now.
+- **Token auth, no identities.** The server uses bearer tokens, fleet-wide
+  or scoped to teams, and can take the team scope from an authenticating
+  proxy's header. Built-in OIDC sessions are out of scope: an SSO proxy in
+  front covers it without an identity dependency in the binary.
 - **Clean-room data.** Every dataset comes from upstream source or public
   pages, and every registry claim carries a citation. Other scanners'
   datasets are never copied.

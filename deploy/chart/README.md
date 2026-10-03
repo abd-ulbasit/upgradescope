@@ -122,7 +122,7 @@ The server prunes history older than `server.retention` (90 days) and
 marks clusters that stopped pushing stale after `server.staleAfter` (2h).
 The docs cover [retention, sizing and backups](https://abd-ulbasit.github.io/upgradescope/operations/retention-and-backup/),
 [webhooks](https://abd-ulbasit.github.io/upgradescope/reference/webhook/)
-and [putting the dashboard behind an SSO proxy](https://abd-ulbasit.github.io/upgradescope/operations/tenancy/).
+and [team-scoped read tokens and putting the dashboard behind an SSO proxy](https://abd-ulbasit.github.io/upgradescope/operations/auth/).
 
 ## Exposing the server to remote agents
 
@@ -402,7 +402,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.extraVolumeMounts` | list | `[]` | — |
 | `server.extraVolumes` | list | `[]` | — |
 | `server.ingestToken` | string | `""` | Shared bearer token agents must present on POST /api/v1/snapshots. Empty = the chart generates a random 40-character token into its Secret on first install and keeps it on upgrades (Helm lookup). NOTES.txt prints the command to read it back for agents in other clusters (Secret &lt;fullname&gt;-server-tokens, e.g. upgradescope-server-tokens). Renderers without cluster access (helm template, Argo CD) cannot look the old token up and generate a new one on every render: under GitOps set this or existingSecret. Ignored when existingSecret is set. |
-| `server.ingress.allowAnonymousRead` | bool | `false` | The render fails when the Ingress would publish a read API with no read token. Set true only when an authenticating layer (oauth2-proxy through ingress annotations, an identity-aware proxy) fronts it; see docs/operations/tenancy.md. |
+| `server.ingress.allowAnonymousRead` | bool | `false` | The render fails when the Ingress would publish a read API with no read token. Set true only when an authenticating layer (oauth2-proxy through ingress annotations, an identity-aware proxy) fronts it; see docs/operations/auth.md. |
 | `server.ingress.annotations` | object | `{}` | — |
 | `server.ingress.className` | string | `""` | — |
 | `server.ingress.enabled` | bool | `false` | Expose the server (API, dashboard, snapshot ingest) through an Ingress. Set a read token first. Agents push to https://&lt;host&gt;. |

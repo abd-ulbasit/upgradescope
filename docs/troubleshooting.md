@@ -120,10 +120,17 @@ To accept a finding for now, with a reason and an expiry, use an
 
 ## The server
 
-- **`refusing to serve the read API and /api/v1/gate without a token`.**
-  `serve` listens on a non-loopback address with no `--read-token`. Set
-  one, listen on loopback, or pass `--allow-anonymous-read` when something
-  in front of the server authenticates ([Tenancy](operations/tenancy.md)).
+- **`refusing to serve the read API and /api/v1/gate without a read token`.**
+  `serve` bound a non-loopback address with no read credential. Set
+  `--read-token`, mint a read token
+  (`upgradescope tokens create --read --teams '*'`), trust an
+  authenticating proxy's team header, listen on loopback, or pass
+  `--allow-anonymous-read` when something in front of the server
+  authenticates ([Read access](operations/auth.md)).
+- **A scoped read token gets 404 for a cluster that exists, or 403 on
+  `/metrics`.** The cluster has no namespace of the token's teams in its
+  latest evaluated snapshot, and `/metrics` takes a fleet-wide credential
+  ([what a team-scoped read sees](operations/auth.md#what-a-team-scoped-read-sees)).
 - **A push gets 409: `cluster name ... is registered to clusterId ...`.**
   Another cluster already uses this `--cluster-name`, or the cluster was
   rebuilt. Give the agent a distinct name, or delete the old record with

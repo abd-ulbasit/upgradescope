@@ -92,6 +92,7 @@ nav:
       - Security model and RBAC: operations/security-model-and-rbac.md
       - Retention and backup: operations/retention-and-backup.md
       - Tenancy and access control: operations/tenancy.md
+      - "Read access: tokens, teams and SSO": operations/auth.md
       - Scale and cost: operations/scale.md
       - Running the server: operations.md
   - Reference:
