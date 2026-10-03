@@ -29,7 +29,7 @@ func TestEvaluationWrittenWithoutTeamsIsUnknown(t *testing.T) {
 			t.Errorf("%s of a pre-0008 row = (TeamsUnknown %v, %v), want true", name, got.TeamsUnknown, err)
 		}
 	}
-	if got, err := s.ClustersOfTeams(ctx, []string{"payments"}); err != nil || len(got) != 0 {
+	if got, err := s.ClustersOfTeams(ctx, []string{"payments"}, ""); err != nil || len(got) != 0 {
 		t.Fatalf("ClustersOfTeams before the refresh = (%v, %v), want none", got, err)
 	}
 	if _, _, err := s.CommitEvaluations(ctx, EvaluationBatch{
@@ -41,7 +41,7 @@ func TestEvaluationWrittenWithoutTeamsIsUnknown(t *testing.T) {
 	if got, err := s.CurrentEvaluationSummary(ctx, cid, "1.36"); err != nil || got.TeamsUnknown {
 		t.Errorf("after the refresh = (TeamsUnknown %v, %v), want known", got.TeamsUnknown, err)
 	}
-	if got, err := s.ClustersOfTeams(ctx, []string{"payments"}); err != nil || !slices.Equal(got, []int64{cid}) {
+	if got, err := s.ClustersOfTeams(ctx, []string{"payments"}, ""); err != nil || !slices.Equal(got, []int64{cid}) {
 		t.Errorf("ClustersOfTeams after the refresh = (%v, %v), want [%d]", got, err, cid)
 	}
 }

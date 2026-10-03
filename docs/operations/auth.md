@@ -78,7 +78,12 @@ namespace→team mapping the engine uses to give each finding its teams. So
 a cluster is in scope as soon as one of the team's namespaces is in it:
 every workload in that namespace, and every finding about them, is that
 team's. A team's cluster with no finding at all is in scope too. A cluster
-with no evaluation yet (no snapshot pushed) is in no team's scope.
+with no evaluation yet (no snapshot pushed) is in no team's scope. Only
+evaluations written with the server's current `--team-map` count: after
+the map changes, a cluster is in no team's scope until the startup pass
+(or its next push) re-evaluates it, and the evaluation of a target since
+removed from `--targets`, which is never rewritten, never puts it back in
+the old team's.
 
 **Which findings and teams.** Of an in-scope cluster's report, a scoped
 read keeps the findings (and suppressed findings) attributed to one of
@@ -131,12 +136,11 @@ not shown:
 with the same body as a cluster id that does not exist, on every
 per-cluster endpoint and for `/api/v1/gate?cluster=`, so its name cannot
 be probed by its answer. It is absent from `/clusters`, `/fleet` and
-`/fleet/teams`. The answer is the same, the time it takes is not quite:
-an id that exists but is out of scope costs one more store query than an
-unknown one, so a patient caller could tell the two apart by timing.
-Cluster ids are sequential and say nothing but how many clusters were
-registered; what the 404 keeps from a scoped caller is the cluster's
-name and data.
+`/fleet/teams`. The server looks the scope up first and never looks up a
+cluster outside it, so an id that exists but is out of scope costs the
+same store query as an unknown one. Cluster ids are sequential and say
+nothing but how many clusters were registered; what the 404 keeps from a
+scoped caller is the cluster's name and data.
 
 | Endpoint | A team-scoped read |
 |---|---|

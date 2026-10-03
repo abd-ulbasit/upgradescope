@@ -802,10 +802,10 @@ func (p *Postgres) RevokeReadToken(ctx context.Context, id int64) error {
 		`UPDATE read_tokens SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL`, time.Now().UTC(), id)
 }
 
-// ClustersOfTeams returns the clusters whose current evaluations name one
-// of teams, in one query; the teams travel as one JSON parameter, as the
-// SQLite store's do.
-func (p *Postgres) ClustersOfTeams(ctx context.Context, teams []string) ([]int64, error) {
+// ClustersOfTeams returns the clusters whose current evaluations, written
+// with teamMapHash, name one of teams, in one query; the teams travel as
+// one JSON parameter, as the SQLite store's do.
+func (p *Postgres) ClustersOfTeams(ctx context.Context, teams []string, teamMapHash string) ([]int64, error) {
 	if len(teams) == 0 {
 		return nil, nil
 	}
@@ -815,10 +815,11 @@ func (p *Postgres) ClustersOfTeams(ctx context.Context, teams []string) ([]int64
 			SELECT MAX(id) FROM evaluations
 			WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
 			GROUP BY snapshot_id, target)
+		AND e.team_map_hash = $2
 		AND EXISTS (
 			SELECT 1 FROM jsonb_array_elements_text(e.teams::jsonb) AS t(team)
 			WHERE t.team IN (SELECT jsonb_array_elements_text($1::jsonb)))
-		ORDER BY e.cluster_id`, teamsColumn(teams)))
+		ORDER BY e.cluster_id`, teamsColumn(teams), teamMapHash))
 }
 
 // ScoreHistory returns score points for (cluster, target), oldest-first

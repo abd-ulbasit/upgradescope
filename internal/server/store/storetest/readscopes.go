@@ -130,7 +130,7 @@ func testClustersOfTeams(t *testing.T, s store.Store) {
 		{[]string{"nobody"}, nil},
 		{nil, nil},
 	} {
-		got, err := s.ClustersOfTeams(ctx, tc.teams)
+		got, err := s.ClustersOfTeams(ctx, tc.teams, "")
 		if err != nil {
 			t.Fatalf("ClustersOfTeams(%v): %v", tc.teams, err)
 		}
@@ -141,7 +141,7 @@ func testClustersOfTeams(t *testing.T, s store.Store) {
 
 	// A newer evaluation of the same target replaces the older one's teams.
 	mustEval(t, s, store.Evaluation{ClusterID: web, SnapshotID: webSnap, Target: "1.36", Teams: []string{}})
-	if got, _ := s.ClustersOfTeams(ctx, []string{"frontend"}); len(got) != 0 {
+	if got, _ := s.ClustersOfTeams(ctx, []string{"frontend"}, ""); len(got) != 0 {
 		t.Errorf("after a newer evaluation without frontend, ClustersOfTeams(frontend) = %v, want none", got)
 	}
 
@@ -165,10 +165,10 @@ func testClustersOfTeams(t *testing.T, s store.Store) {
 	}); err != nil {
 		t.Fatalf("CommitEvaluations(refresh): %v", err)
 	}
-	if got, _ := s.ClustersOfTeams(ctx, []string{"payments"}); len(got) != 0 {
+	if got, _ := s.ClustersOfTeams(ctx, []string{"payments"}, ""); len(got) != 0 {
 		t.Errorf("after a refresh to ledger, ClustersOfTeams(payments) = %v, want none", got)
 	}
-	if got, _ := s.ClustersOfTeams(ctx, []string{"ledger"}); !slices.Equal(got, []int64{pay}) {
+	if got, _ := s.ClustersOfTeams(ctx, []string{"ledger"}, ""); !slices.Equal(got, []int64{pay}) {
 		t.Errorf("after a refresh to ledger, ClustersOfTeams(ledger) = %v, want [%d]", got, pay)
 	}
 
@@ -180,10 +180,30 @@ func testClustersOfTeams(t *testing.T, s store.Store) {
 	}); err != nil {
 		t.Fatalf("CommitEvaluations(insert): %v", err)
 	}
-	if got, _ := s.ClustersOfTeams(ctx, []string{"growth"}); !slices.Equal(got, []int64{web}) {
+	if got, _ := s.ClustersOfTeams(ctx, []string{"growth"}, ""); !slices.Equal(got, []int64{web}) {
 		t.Errorf("ClustersOfTeams(growth) = %v, want [%d]", got, web)
 	}
 	if sum, err := s.CurrentEvaluationSummary(ctx, web, "1.36"); err != nil || sum.TeamsUnknown {
 		t.Errorf("CurrentEvaluationSummary = (TeamsUnknown %v, err %v), want known teams", sum.TeamsUnknown, err)
+	}
+
+	// Only evaluations written with the server's current team map count:
+	// one written with another (a removed target's, never rewritten, or a
+	// current one before the next pass) says who owned the namespaces
+	// then.
+	old := mustCluster(t, s, "old-map")
+	oldMapSnap := mustSnapshot(t, s, old, "o1", base)
+	mustEval(t, s, store.Evaluation{ClusterID: old, SnapshotID: oldMapSnap, Target: "1.36", Teams: []string{"payments"}, TeamMapHash: "map-v1"})
+	mustEval(t, s, store.Evaluation{ClusterID: old, SnapshotID: oldMapSnap, Target: "1.37", Teams: []string{"billing"}, TeamMapHash: "map-v2"})
+	for _, tc := range []struct {
+		team, hash string
+		want       []int64
+	}{
+		{"payments", "map-v2", nil}, {"billing", "map-v2", []int64{old}}, {"payments", "map-v1", []int64{old}}, {"payments", "", []int64{}},
+	} {
+		got, err := s.ClustersOfTeams(ctx, []string{tc.team}, tc.hash)
+		if err != nil || !slices.Equal(got, tc.want) && len(got)+len(tc.want) > 0 {
+			t.Errorf("ClustersOfTeams(%s, team map %q) = (%v, %v), want %v", tc.team, tc.hash, got, err, tc.want)
+		}
 	}
 }

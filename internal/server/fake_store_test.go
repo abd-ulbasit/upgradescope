@@ -696,8 +696,9 @@ func (f *fakeStore) RevokeReadToken(_ context.Context, id int64) error {
 }
 
 // ClustersOfTeams mirrors the stores: the clusters whose current
-// evaluations (each target's newest of the latest snapshot) name a team.
-func (f *fakeStore) ClustersOfTeams(ctx context.Context, teams []string) ([]int64, error) {
+// evaluations (each target's newest of the latest snapshot), written with
+// teamMapHash, name a team.
+func (f *fakeStore) ClustersOfTeams(ctx context.Context, teams []string, teamMapHash string) ([]int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -719,7 +720,7 @@ func (f *fakeStore) ClustersOfTeams(ctx context.Context, teams []string) ([]int6
 				continue
 			}
 			seen[e.Target] = true
-			if slices.ContainsFunc(e.Teams, func(t string) bool { return slices.Contains(teams, t) }) && !slices.Contains(out, id) {
+			if e.TeamMapHash == teamMapHash && slices.ContainsFunc(e.Teams, func(t string) bool { return slices.Contains(teams, t) }) && !slices.Contains(out, id) {
 				out = append(out, id)
 			}
 		}

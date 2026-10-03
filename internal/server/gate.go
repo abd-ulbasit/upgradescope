@@ -674,6 +674,13 @@ func gateFails(resp gateResponse, failOn string, allowIncomplete bool) bool {
 // cluster id 1.
 func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref string) (inventory.Inventory, bool) {
 	ctx := r.Context()
+	// The scope first, whatever ref names, so a cluster outside it costs
+	// what an unknown one does.
+	scoped, err := s.scopeClusters(ctx, scopeOf(r))
+	if err != nil {
+		internalErr(w, "resolving gate cluster", err)
+		return inventory.Inventory{}, false
+	}
 	cluster, err := func() (store.Cluster, error) {
 		clusters, lerr := s.cfg.Store.ListClusters(ctx)
 		if lerr != nil {
@@ -689,12 +696,8 @@ func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref 
 		}
 		return store.Cluster{}, store.ErrNotFound
 	}()
-	if err == nil {
-		// Outside the scope, as unknown as a cluster that does not exist.
-		var in bool
-		if in, err = s.inScope(ctx, scopeOf(r), cluster.ID); err == nil && !in {
-			err = store.ErrNotFound
-		}
+	if err == nil && scoped != nil && !scoped[cluster.ID] {
+		err = store.ErrNotFound // outside the scope, as unknown as a cluster that does not exist
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "cluster not found")

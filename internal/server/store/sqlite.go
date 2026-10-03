@@ -924,10 +924,11 @@ func (s *SQLite) RevokeReadToken(ctx context.Context, id int64) error {
 		`UPDATE read_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, formatTime(time.Now()), id)
 }
 
-// ClustersOfTeams returns the clusters whose current evaluations name one
-// of teams, in one query: the teams travel as one JSON parameter, so their
-// number is not bound by SQLite's parameter limit.
-func (s *SQLite) ClustersOfTeams(ctx context.Context, teams []string) ([]int64, error) {
+// ClustersOfTeams returns the clusters whose current evaluations, written
+// with teamMapHash, name one of teams, in one query: the teams travel as
+// one JSON parameter, so their number is not bound by SQLite's parameter
+// limit.
+func (s *SQLite) ClustersOfTeams(ctx context.Context, teams []string, teamMapHash string) ([]int64, error) {
 	if len(teams) == 0 {
 		return nil, nil
 	}
@@ -937,8 +938,9 @@ func (s *SQLite) ClustersOfTeams(ctx context.Context, teams []string) ([]int64, 
 			SELECT MAX(id) FROM evaluations
 			WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
 			GROUP BY snapshot_id, target)
+		AND e.team_map_hash = ?
 		AND EXISTS (SELECT 1 FROM json_each(e.teams) t WHERE t.value IN (SELECT value FROM json_each(?)))
-		ORDER BY e.cluster_id`, teamsColumn(teams)))
+		ORDER BY e.cluster_id`, teamMapHash, teamsColumn(teams)))
 }
 
 // scanIDs reads a one-column result of ids.

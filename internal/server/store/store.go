@@ -160,10 +160,16 @@ type Store interface {
 
 	// ClustersOfTeams returns, ascending, the ids of the clusters whose
 	// current evaluations (each target's newest of the cluster's latest
-	// snapshot) name at least one of teams in their Teams: the clusters a
-	// read token scoped to those teams reads. One query, whatever the
-	// fleet's size; nothing is returned for no teams.
-	ClustersOfTeams(ctx context.Context, teams []string) ([]int64, error)
+	// snapshot) were written with teamMapHash (Evaluation.TeamMapHash, the
+	// server's current --team-map) and name at least one of teams in their
+	// Teams: the clusters a read token scoped to those teams reads. An
+	// evaluation written with another team map says which teams owned the
+	// cluster's namespaces then, not now: the row of a target no longer
+	// evaluated (a removed --targets entry) is never rewritten, and a
+	// current target's is until the next pass rewrites it, so neither
+	// counts. One query, whatever the fleet's size; nothing is returned
+	// for no teams.
+	ClustersOfTeams(ctx context.Context, teams []string, teamMapHash string) ([]int64, error)
 
 	Close() error
 }

@@ -834,18 +834,22 @@ func (s *Server) pathClusterID(w http.ResponseWriter, r *http.Request) (int64, b
 
 // requireCluster 404s (JSON) for unknown clusters so every per-cluster
 // endpoint shares one existence check. A cluster outside the request's
-// scope is answered exactly as an unknown one, so its id says nothing.
+// scope is answered exactly as an unknown one, so its id says nothing:
+// the scope is looked up first, whether the id exists or not, and an id
+// outside it is never looked up, so both cost the same one query.
 func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.Cluster, bool) {
 	id, ok := s.pathClusterID(w, r)
 	if !ok {
 		return store.Cluster{}, false
 	}
-	c, err := s.cfg.Store.GetCluster(r.Context(), id)
-	if err == nil {
-		var in bool
-		if in, err = s.inScope(r.Context(), scopeOf(r), id); err == nil && !in {
-			err = store.ErrNotFound
-		}
+	in, err := s.inScope(r.Context(), scopeOf(r), id)
+	var c store.Cluster
+	switch {
+	case err != nil:
+	case !in:
+		err = store.ErrNotFound
+	default:
+		c, err = s.cfg.Store.GetCluster(r.Context(), id)
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "cluster not found")

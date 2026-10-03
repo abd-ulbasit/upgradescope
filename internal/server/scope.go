@@ -25,7 +25,8 @@ import (
 // header of a trusted proxy). A team scope reads:
 //
 //   - the clusters it is attributed to: those whose current evaluations
-//     (each target's newest of the latest snapshot) name one of its teams
+//     (each target's newest of the latest snapshot), written with the
+//     current --team-map (store.ClustersOfTeams), name one of its teams
 //     in their Teams, the teams the evaluated inventory attributes a
 //     namespace to (its team label, or the --team-map rule that overrides
 //     it, as the engine attributes findings). A cluster of a team with no
@@ -546,7 +547,7 @@ func (s *Server) scopeClusters(ctx context.Context, sc readScope) (map[int64]boo
 	if sc.fleet() {
 		return nil, nil
 	}
-	ids, err := s.cfg.Store.ClustersOfTeams(ctx, sc.names())
+	ids, err := s.cfg.Store.ClustersOfTeams(ctx, sc.names(), s.teamMapHash)
 	if err != nil {
 		return nil, err
 	}
