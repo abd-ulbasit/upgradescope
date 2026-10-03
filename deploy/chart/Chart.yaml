@@ -5,8 +5,8 @@ type: application
 # Both follow the latest release tag. The release workflow stamps them from
 # the tag when it packages the chart (vX.Y.Z -> version X.Y.Z, appVersion
 # vX.Y.Z), and appVersion is the default image tag.
-version: 0.2.0-rc.3
-appVersion: "v0.2.0-rc.3"
+version: 0.2.0-rc.2
+appVersion: "v0.2.0-rc.2"
 home: https://github.com/abd-ulbasit/upgradescope
 sources:
   - https://github.com/abd-ulbasit/upgradescope
@@ -44,7 +44,7 @@ annotations:
       url: https://github.com/abd-ulbasit/upgradescope/releases
   artifacthub.io/images: |
     - name: upgradescope
-      image: ghcr.io/abd-ulbasit/upgradescope:v0.2.0-rc.3
+      image: ghcr.io/abd-ulbasit/upgradescope:v0.2.0-rc.2
       platforms:
         - linux/amd64
         - linux/arm64
