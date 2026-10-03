@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
@@ -82,12 +84,21 @@ func TestTickNamesTheInstallCommandWhenTheCRDIsMissing(t *testing.T) {
 		return true, nil, apierrors.NewNotFound(schema.GroupResource{Group: crd.Group, Resource: crd.Plural}, "")
 	})
 	r := testRunner(t, dyn, "")
-	err := r.tick(context.Background())
-	if !errors.Is(err, crd.ErrCRDNotInstalled) {
-		t.Fatalf("tick err = %v, want crd.ErrCRDNotInstalled", err)
+	rep := r.runTick(context.Background())
+	if !errors.Is(rep.err, crd.ErrCRDNotInstalled) {
+		t.Fatalf("tick err = %v, want crd.ErrCRDNotInstalled", rep.err)
 	}
 	want := "kubectl apply -f https://raw.githubusercontent.com/abd-ulbasit/upgradescope/v0.2.0/deploy/chart/crds/" + crd.ManifestFile
-	if !strings.Contains(err.Error(), want) {
-		t.Errorf("tick err = %v\nwant the command %q", err, want)
+	if !strings.Contains(rep.err.Error(), want) {
+		t.Errorf("tick err = %v\nwant the command %q", rep.err, want)
+	}
+
+	// The observer records that error and /readyz serves it, as the claim says.
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	o := newTestObserver(t, &now)
+	o.record(rep)
+	code, body := serve(t, o.handler(), "/readyz")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, want) {
+		t.Errorf("/readyz = %d %q\nwant 503 carrying the command %q", code, body, want)
 	}
 }
