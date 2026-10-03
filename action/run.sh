@@ -79,10 +79,20 @@ commit_sha='^[0-9a-fA-F]{40}$'
 # An annotated tag lists its own object on refs/tags/<tag> and the commit
 # it points at on refs/tags/<tag>^{}; the ^{} line is the one that counts.
 # Exit 1: no git on the runner; 2: the lookup failed.
+# The lookup runs from an empty directory of its own, never the workspace: a
+# fork's tree there without a .git could form a bare repository whose config
+# redirects the lookup (url.insteadOf) or runs a credential helper. Discovery
+# stops at that directory, system config is skipped, and a transfer that
+# stalls for 30 s is abandoned as a failed lookup.
 release_at() {
   command -v git >/dev/null || return 1
-  local refs
-  refs=$(GIT_TERMINAL_PROMPT=0 git ls-remote --tags "https://github.com/$repo") || return 2
+  local dir refs rc=0
+  dir=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/upgradescope-tags.XXXXXX") || return 2
+  refs=$(cd "$dir" && env -u GIT_DIR -u GIT_WORK_TREE GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CEILING_DIRECTORIES="$(dirname "$dir")" \
+    git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote --tags "https://github.com/$repo") || rc=$?
+  rmdir "$dir" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || return 2
   printf '%s\n' "$refs" | awk -v sha="$1" '
     NF == 2 && sub(/^refs\/tags\//, "", $2) {
       if (sub(/\^\{\}$/, "", $2)) peeled[$2] = $1; else direct[$2] = $1

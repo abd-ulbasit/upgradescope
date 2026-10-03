@@ -173,7 +173,8 @@ mkdir -p "$work/stub-git"
 cat >"$work/stub-git/git" <<EOF
 #!/usr/bin/env bash
 echo "git \$*" >>"$work/calls"
-[ "\$*" = "ls-remote --tags https://github.com/abd-ulbasit/upgradescope" ] || exit 129
+echo "git-env cwd=\$PWD ceiling=\${GIT_CEILING_DIRECTORIES-} nosystem=\${GIT_CONFIG_NOSYSTEM-} gitdir=\${GIT_DIR-unset}" >>"$work/calls"
+[ "\$*" = "-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote --tags https://github.com/abd-ulbasit/upgradescope" ] || exit 129
 if [ -n "\${STUB_GIT_FAIL:-}" ]; then
   echo "fatal: unable to access 'https://github.com/abd-ulbasit/upgradescope/': Could not resolve host: github.com" >&2
   exit 128
@@ -392,7 +393,12 @@ warned() {
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4
 expect "no version at a release candidate's commit SHA installs that release" 0 "installed upgradescope v0.2.0-rc.2 from $releases/download/v0.2.0-rc.2/$asset"
 has "the release at the SHA is logged" "$work/out" "version defaults to v0.2.0-rc.2, the release at the action ref $sha_rc"
-has "the SHA is looked up with git ls-remote --tags" "$work/calls" "git ls-remote --tags https://github.com/abd-ulbasit/upgradescope"
+has "the SHA is looked up with git ls-remote --tags" "$work/calls" "ls-remote --tags https://github.com/abd-ulbasit/upgradescope"
+has "the lookup gives up on a stalled transfer" "$work/calls" "git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote"
+has "the lookup skips the system git config" "$work/calls" "nosystem=1"
+hasnt "the lookup does not run in the workspace" "$work/calls" "cwd=$PWD "
+has "the lookup runs in its own directory" "$work/calls" "/upgradescope-tags."
+hasnt "the lookup is not pointed at a repository" "$work/calls" "gitdir=/"
 hasnt "a release at the SHA does not ask for the latest release" "$work/calls" "$releases/latest"
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF="$(tr 'a-f' 'A-F' <<<"$sha_rc")" STUB_LATEST=v9.9.4
 expect "an upper-case commit SHA finds its release" 0 "installed upgradescope v0.2.0-rc.2 from"
