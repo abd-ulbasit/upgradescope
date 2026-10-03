@@ -8,6 +8,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/validate/content"
@@ -576,20 +577,30 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 // carries one must not be copied into the inventory, which is pushed to
 // the server, stored and printed by the CLI.
 //
-// A URL that parses is rebuilt from its parts. One that does not (a
-// password with an unescaped "/", an invalid escape), and a value with no
-// scheme such as an scp-like Git address ("git@host:org/repo.git"), is cut
-// the leak-safe way instead: everything up to the last "@" is userinfo,
-// and the query and fragment are cut off after that.
+// The cut is textual and does not trust url.Parse. Go ends the authority at
+// the first "/", "?" or "#", so a userinfo holding one of them (a base64
+// token, a password such as "12/ab") parses successfully with the
+// credential as the host, path, query or fragment. Everything up to the
+// last "@" after the scheme is therefore dropped first, and only then are
+// the query and fragment cut off. An "@" is never legitimate in a Helm or
+// OCI repository URL, so a value that has one elsewhere (a query such as
+// "?email=a@b") loses more than the credential, never less. A value with
+// no scheme, such as an scp-like Git address ("git@host:org/repo.git"), is
+// cut the same way. Control characters are removed, and a URL left with no
+// host is returned as the empty string.
 func redactRepoURL(raw string) string {
-	s := strings.TrimSpace(raw)
-	scheme, rest, hasScheme := strings.Cut(s, "://")
-	if hasScheme {
-		if u, err := url.Parse(s); err == nil && u.Host != "" {
-			return scheme + "://" + u.Host + u.EscapedPath()
+	s := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
 		}
-	} else {
-		rest = s
+		return r
+	}, strings.TrimSpace(raw))
+	scheme, rest, hasScheme := strings.Cut(s, "://")
+	if !hasScheme || !validScheme(scheme) {
+		// No scheme, or something before the first "://" that cannot be
+		// one ("user:pa" in "user:pa://x@host"): that "://" is part of a
+		// credential.
+		scheme, rest, hasScheme = "", s, false
 	}
 	if at := strings.LastIndex(rest, "@"); at >= 0 {
 		rest = rest[at+1:]
@@ -597,10 +608,25 @@ func redactRepoURL(raw string) string {
 	if i := strings.IndexAny(rest, "?#"); i >= 0 {
 		rest = rest[:i]
 	}
-	if hasScheme {
-		return scheme + "://" + rest
+	if !hasScheme {
+		return rest
 	}
-	return rest
+	if host, _, _ := strings.Cut(rest, "/"); host == "" {
+		return ""
+	}
+	return scheme + "://" + rest
+}
+
+// validScheme reports whether s is a URL scheme (RFC 3986: a letter, then
+// letters, digits, "+", "-" or ".").
+func validScheme(s string) bool {
+	for i, r := range s {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		if !letter && (i == 0 || !(r >= '0' && r <= '9' || r == '+' || r == '-' || r == '.')) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // plausibleChartName reports whether a chart name read from a custom

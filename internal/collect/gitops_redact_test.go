@@ -33,8 +33,35 @@ func TestRedactRepoURL(t *testing.T) {
 		{"unparseable password with a slash", "https://user:pa/ss@host:port/x", "https://host:port/x"},
 		{"unparseable with a query", "https://host/%zz?token=s3cret", "https://host/%zz"},
 		{"an invalid string is kept without userinfo or query", "not a url?token=s3cret", "not a url"},
-		{"an invalid string with userinfo", "%%%://u:s3cret@x y", "%%%://x y"},
+		{"an invalid string with userinfo", "%%%://u:s3cret@x y", "x y"},
 		{"empty", "", ""},
+		{"empty host is dropped", "https://u:s3cret@/x", ""},
+		{"control characters are dropped", "https://host/a\nb\tc", "https://host/abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactRepoURL(tc.in)
+			if got != tc.want {
+				t.Errorf("redactRepoURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if strings.Contains(got, "s3cret") {
+				t.Errorf("redactRepoURL(%q) = %q still holds the secret", tc.in, got)
+			}
+		})
+	}
+}
+
+// Go's URL parser ends the authority at the first "/", "?" or "#", so a
+// userinfo holding one of them parses "successfully" with the credential
+// as the host, path, query or fragment. None of it may survive.
+func TestRedactRepoURLCredentialWithDelimiter(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"token with a slash as the user", "https://AbC1/s3cret+gh@charts.example.com/repo", "https://charts.example.com/repo"},
+		{"password with a slash after digits", "https://user:123/s3cret@host/x", "https://host/x"},
+		{"oci password with a slash after digits", "oci://x:12/s3cret@ghcr.io/acme/chart", "oci://ghcr.io/acme/chart"},
+		{"password with a hash", "https://user:1234#s3cret@host/x", "https://host/x"},
+		{"password with a question mark", "https://user:443?s3cret@host/x", "https://host/x"},
+		{"several at signs", "https://a@b:s3cret@host/x", "https://host/x"},
+		{"scheme is part of the credential", "user:s3cret://x@host/repo", "host/repo"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := redactRepoURL(tc.in)
@@ -62,7 +89,7 @@ func TestGitOpsRepoCredentialsNeverReachTheInventory(t *testing.T) {
 		"chartRef": map[string]any{"kind": "OCIRepository", "name": "cm"},
 	})
 	repo := cr("source.toolkit.fluxcd.io/v1", "OCIRepository", "flux-system", "cm", map[string]any{
-		"url": "oci://user:s3cret@ghcr.io/acme/charts/cert-manager?token=s3cret", "ref": map[string]any{"tag": "1.15.3"},
+		"url": "oci://x:12/s3cret@ghcr.io/acme/charts/cert-manager?token=s3cret", "ref": map[string]any{"tag": "1.15.3"},
 	})
 	f := newGitOpsFixture(t, []*metav1.APIResourceList{
 		argoServed(),
