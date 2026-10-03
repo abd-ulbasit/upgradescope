@@ -599,6 +599,11 @@ func testLatestSnapshotHeads(t *testing.T, s store.Store) {
 			got.AgentVersion != want.AgentVersion || got.ServerVersion != want.ServerVersion || !got.ReceivedAt.Equal(want.ReceivedAt) || got.Inventory != nil {
 			t.Errorf("head of cluster %d = %+v, want %+v without inventory", cid, got, want)
 		}
+		one, err := s.LatestSnapshotHead(ctx, cid)
+		if err != nil || one.ID != want.ID || one.Hash != want.Hash || one.ServerVersion != want.ServerVersion ||
+			one.KBVersion != want.KBVersion || one.AgentVersion != want.AgentVersion || !one.ReceivedAt.Equal(want.ReceivedAt) || one.Inventory != nil {
+			t.Errorf("LatestSnapshotHead(%d) = (%+v, %v), want %+v without inventory", cid, one, err, want)
+		}
 	}
 	if heads[prod].Hash != "bbb" || heads[dev].ServerVersion != "v1.33.1" {
 		t.Errorf("heads = %+v, want prod at bbb and dev judged at v1.33.1", heads)
@@ -790,6 +795,7 @@ func testNotFound(t *testing.T, s store.Store) {
 	}{
 		{"GetCluster", func() error { _, err := s.GetCluster(ctx, 999); return err }},
 		{"LatestSnapshot", func() error { _, err := s.LatestSnapshot(ctx, 999); return err }},
+		{"LatestSnapshotHead", func() error { _, err := s.LatestSnapshotHead(ctx, 999); return err }},
 		{"LatestEvaluation", func() error { _, err := s.LatestEvaluation(ctx, 999, "1.36"); return err }},
 	}
 	for _, tt := range tests {

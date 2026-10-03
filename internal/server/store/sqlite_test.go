@@ -425,6 +425,7 @@ func TestNotFoundSentinels(t *testing.T) {
 	}{
 		{"GetCluster", func() error { _, err := s.GetCluster(ctx, 999); return err }},
 		{"LatestSnapshot", func() error { _, err := s.LatestSnapshot(ctx, 999); return err }},
+		{"LatestSnapshotHead", func() error { _, err := s.LatestSnapshotHead(ctx, 999); return err }},
 		{"LatestEvaluation", func() error { _, err := s.LatestEvaluation(ctx, 999, "1.36"); return err }},
 	}
 	for _, tt := range tests {

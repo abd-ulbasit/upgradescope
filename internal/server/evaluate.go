@@ -193,36 +193,49 @@ func (s *Server) stale(e store.Evaluation, now time.Time) bool {
 
 // sameResult reports whether rep matches the stored row on everything a
 // history point or a notification depends on: verdict, score, and the
-// set of (severity, finding key).
-func sameResult(stored store.Evaluation, rep engine.Report) bool {
-	if verdictOf(stored) != rep.Verdict || stored.Score != rep.Score {
+// set of (severity, finding key). stored is the row's findings
+// (storedFindingHeads of its report).
+func sameResult(row store.Evaluation, stored []findingHead, rep engine.Report) bool {
+	if verdictOf(row) != rep.Verdict || row.Score != rep.Score || len(stored) != len(rep.Findings) {
 		return false
 	}
-	var prev engine.Report
-	if err := json.Unmarshal(stored.Report, &prev); err != nil {
-		return false
-	}
-	return slices.Equal(findingSignature(prev), findingSignature(rep))
-}
-
-func findingSignature(rep engine.Report) []string {
 	sig := make([]string, 0, len(rep.Findings))
 	for _, f := range rep.Findings {
-		sig = append(sig, string(f.Severity)+"\x00"+findingKey(f))
+		sig = append(sig, findingSignature(headOf(f)))
+	}
+	prev := make([]string, 0, len(stored))
+	for _, h := range stored {
+		prev = append(prev, findingSignature(h))
 	}
 	slices.Sort(sig)
-	return sig
+	slices.Sort(prev)
+	return slices.Equal(prev, sig)
+}
+
+func findingSignature(h findingHead) string { return string(h.Severity) + "\x00" + h.key() }
+
+// baseline is a notification baseline the caller already holds: the
+// heads of the target's latest decided evaluation, when known.
+type baseline struct {
+	findings []findingHead
+	ok       bool
 }
 
 // deltaFor computes the notification delta of one new evaluation. The
 // baseline is the last evaluation with a decided verdict, so an "unknown"
 // pass (a collector failure) is neither a transition nor a reset; a pass
 // whose own verdict is unknown notifies nothing — what it could not see is
-// not news. Failures are logged and never fail the pass.
-func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report) targetDelta {
+// not news. known is that baseline when the caller holds it; otherwise
+// deltaFor loads it, and decodes only its findings' heads. Failures are
+// logged and never fail the pass.
+func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline) targetDelta {
 	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
 	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
 		return d // a cluster's first push has no baseline either
+	}
+	if known.ok {
+		d.changes = computeDelta(known.findings, cur)
+		return d
 	}
 	target := cur.Target.String()
 	prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, cluster.ID, target)
@@ -238,19 +251,19 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 		log.Printf("server: loading notification baseline (cluster %d, target %s): %v", cluster.ID, target, err)
 		return d
 	}
-	var prevRep engine.Report
-	if err := json.Unmarshal(prev.Report, &prevRep); err != nil {
+	heads, err := storedFindingHeads(prev.Report)
+	if err != nil {
 		log.Printf("server: decoding previous report (cluster %d, target %s): %v", cluster.ID, target, err)
 		return d
 	}
-	d.changes = ComputeDelta(&prevRep, cur)
+	d.changes = computeDelta(heads, cur)
 	return d
 }
 
-// outboxFor turns one pass's deltas into one notification for the
+// outboxFor turns one pass's merged deltas into one notification for the
 // cluster, queued once per sink with the same delivery id.
-func (s *Server) outboxFor(cluster store.Cluster, deltas []targetDelta, now time.Time) []store.OutboxMessage {
-	n, ok := buildNotification(cluster, deltas, now, newDeliveryID())
+func (s *Server) outboxFor(cluster store.Cluster, deltas *changeMerger, now time.Time) []store.OutboxMessage {
+	n, ok := deltas.notification(cluster, now, newDeliveryID())
 	if !ok {
 		return nil
 	}
@@ -284,11 +297,18 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	// target for the commit to discard. The commit still checks the hash,
 	// for a push racing this one.
 	if cluster.ID != 0 {
-		latest, err := s.cfg.Store.LatestSnapshot(ctx, cluster.ID)
+		// The head only: its inventory is up to --max-snapshot-bytes, and
+		// only a row stored before the server_version column needs it.
+		latest, err := s.cfg.Store.LatestSnapshotHead(ctx, cluster.ID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
 		}
 		if err == nil && snap.ServerVersion == "" {
+			if latest.ServerVersion == "" {
+				if latest, err = s.cfg.Store.LatestSnapshot(ctx, cluster.ID); err != nil {
+					return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
+				}
+			}
 			snap.ServerVersion = judgedVersion(latest)
 		}
 		if err == nil && latest.Hash == snap.Hash {
@@ -310,16 +330,16 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap}
-	var deltas []targetDelta
+	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(snap.ServerVersion) {
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
 		if err != nil {
 			return 0, false, err
 		}
 		batch.Insert = append(batch.Insert, e)
-		deltas = append(deltas, s.deltaFor(ctx, cluster, e, rep))
+		deltas.add(s.deltaFor(ctx, cluster, e, rep, baseline{}))
 	}
-	batch.Outbox = s.outboxFor(cluster, deltas, now)
+	batch.Outbox = s.outboxFor(cluster, &deltas, now)
 	snapID, duplicate, err := s.cfg.Store.CommitEvaluations(ctx, batch)
 	if err != nil {
 		return 0, false, err
@@ -350,7 +370,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
 	batch := store.EvaluationBatch{ClusterID: cluster.ID, SnapshotID: snapID, Current: map[string]int64{}}
-	var deltas []targetDelta
+	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(serverVersion) {
 		cur, err := s.cfg.Store.CurrentEvaluation(ctx, cluster.ID, target.String())
 		found := err == nil
@@ -365,6 +385,16 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		if found && !s.stale(cur, now) {
 			continue
 		}
+		// What sameResult and deltaFor read of the stored report: its
+		// findings' heads, decoded before the new report is built, so the
+		// stored bytes are not held while it is.
+		var stored []findingHead
+		decoded := false
+		if found {
+			stored, err = storedFindingHeads(cur.Report)
+			decoded = err == nil
+			cur.Report = nil
+		}
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
 		var tooLarge *reportTooLargeError
 		if errors.As(err, &tooLarge) {
@@ -378,18 +408,22 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			return err
 		}
 		batch.Current[target.String()] = cur.ID // 0 when not found
-		if found && sameResult(cur, rep) {
+		if decoded && sameResult(cur, stored, rep) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)
 			continue
 		}
 		batch.Insert = append(batch.Insert, e)
-		deltas = append(deltas, s.deltaFor(ctx, cluster, e, rep))
+		// A decided current evaluation is the target's latest decided
+		// one, the baseline deltaFor would load again: evaluations are
+		// only added to the latest snapshot, so none is newer.
+		known := baseline{findings: stored, ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
+		deltas.add(s.deltaFor(ctx, cluster, e, rep, known))
 	}
 	if len(batch.Current) == 0 {
 		return nil
 	}
-	batch.Outbox = s.outboxFor(cluster, deltas, now)
+	batch.Outbox = s.outboxFor(cluster, &deltas, now)
 	_, _, err := s.cfg.Store.CommitEvaluations(ctx, batch)
 	if errors.Is(err, store.ErrConflict) {
 		log.Printf("server: re-evaluation of cluster %d skipped: %v", cluster.ID, err)

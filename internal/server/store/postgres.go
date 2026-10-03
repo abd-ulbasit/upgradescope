@@ -312,6 +312,23 @@ func (p *Postgres) LatestSnapshot(ctx context.Context, clusterID int64) (Snapsho
 	return snap, nil
 }
 
+// LatestSnapshotHead is LatestSnapshot without the inventory.
+func (p *Postgres) LatestSnapshotHead(ctx context.Context, clusterID int64) (Snapshot, error) {
+	var snap Snapshot
+	err := p.db.QueryRowContext(ctx, `
+		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, server_version
+		FROM snapshots WHERE cluster_id = $1 ORDER BY id DESC LIMIT 1`, clusterID).
+		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &snap.ReceivedAt, &snap.ServerVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, ErrNotFound)
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, err)
+	}
+	snap.ReceivedAt = snap.ReceivedAt.UTC()
+	return snap, nil
+}
+
 // LatestSnapshotHeads returns every cluster's latest snapshot without its
 // inventory, in one query over idx_snapshots_cluster_id.
 func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {

@@ -357,6 +357,26 @@ func (s *SQLite) LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot,
 	return snap, nil
 }
 
+// LatestSnapshotHead is LatestSnapshot without the inventory.
+func (s *SQLite) LatestSnapshotHead(ctx context.Context, clusterID int64) (Snapshot, error) {
+	var snap Snapshot
+	var received string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, server_version
+		FROM snapshots WHERE cluster_id = ? ORDER BY id DESC LIMIT 1`, clusterID).
+		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &received, &snap.ServerVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, ErrNotFound)
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, err)
+	}
+	if snap.ReceivedAt, err = parseStoredTime(received); err != nil {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, err)
+	}
+	return snap, nil
+}
+
 // LatestSnapshotHeads returns every cluster's latest snapshot without its
 // inventory, in one query over idx_snapshots_cluster_id.
 func (s *SQLite) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {
