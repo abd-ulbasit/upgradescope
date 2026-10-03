@@ -1713,7 +1713,7 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	// and stop once the budget is spent.
 	steps := []func(){
 		func() { b.addAll(&findings, evalAddOns(inv, k, target, now)) },
-		func() { b.addAll(&findings, evalUncoveredRuntimes(inv, k.AddOns)) },
+		func() { findings = append(findings, evalUncoveredRuntimes(inv, k.AddOns, b)...) },
 		func() { findings = append(findings, evalHelmReleases(inv, k, target, b)...) },
 		func() { b.addAll(&findings, evalSkew(inv, k, target)) },
 		func() { b.addAll(&findings, evalControlPlaneSkew(inv, k, target)) },

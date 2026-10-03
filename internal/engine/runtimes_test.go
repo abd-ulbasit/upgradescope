@@ -52,7 +52,7 @@ func TestEvalAddOnsNodeRuntimeCompatNamesNodes(t *testing.T) {
 // names no runtime and is skipped.
 func TestEvalUncoveredNodeRuntimes(t *testing.T) {
 	inv := nodes("cri-o://1.30.4", "docker://24.0.7", "", "containerd", "cri-o://1.30.4", "containerd://1.7.27", "cri-o://1.29.1")
-	got := evalUncoveredRuntimes(inv, runtimeKB("1.37").AddOns)
+	got := evalUncoveredRuntimes(inv, runtimeKB("1.37").AddOns, nil)
 	want := []Finding{
 		{Category: CatAddOnNoData, Severity: SevInfo, Key: "addon-no-data/cri-o", Title: "no lifecycle data for container runtime cri-o",
 			Detail: "Detected cri-o on node(s): worker-1 (1.30.4), worker-5 (1.30.4), worker-7 (1.29.1). The registry has no entry for this container runtime, so its end of life and Kubernetes compatibility were not assessed."},
@@ -63,12 +63,12 @@ func TestEvalUncoveredNodeRuntimes(t *testing.T) {
 		t.Errorf("got\n%+v\nwant\n%+v", got, want)
 	}
 
-	if got := evalUncoveredRuntimes(nodes("containerd://1.7.27"), []registry.AddOn{{ID: "istio"}}); len(got) != 1 || got[0].Key != "addon-no-data/containerd" {
+	if got := evalUncoveredRuntimes(nodes("containerd://1.7.27"), []registry.AddOn{{ID: "istio"}}, nil); len(got) != 1 || got[0].Key != "addon-no-data/containerd" {
 		t.Errorf("containerd without a registry entry: got %+v, want one addon-no-data/containerd finding", got)
 	}
 	// A KB without add-ons (a custom --kb of API lifecycle only) assesses
 	// no add-on at all: runtimes are not singled out among them.
-	if got := evalUncoveredRuntimes(nodes("containerd://1.7.27", "cri-o://1.30.4"), nil); len(got) != 0 {
+	if got := evalUncoveredRuntimes(nodes("containerd://1.7.27", "cri-o://1.30.4"), nil, nil); len(got) != 0 {
 		t.Errorf("KB without add-ons: got %+v, want no finding", got)
 	}
 

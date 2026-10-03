@@ -18,7 +18,11 @@ import (
 // without "<runtime>://" names no runtime and is skipped. A KB without
 // add-ons (a custom --kb of API lifecycle only) assesses no add-on at all,
 // so runtimes are not singled out: nothing is disclosed.
-func evalUncoveredRuntimes(inv inventory.Inventory, addons []registry.AddOn) []Finding {
+//
+// A push can give each node a runtime of its own, so each finding is
+// charged to b as it is built, and the findings stop once it is spent
+// (EvaluateWithin).
+func evalUncoveredRuntimes(inv inventory.Inventory, addons []registry.AddOn, b *budget) []Finding {
 	if len(addons) == 0 {
 		return nil
 	}
@@ -42,12 +46,15 @@ func evalUncoveredRuntimes(inv inventory.Inventory, addons []registry.AddOn) []F
 		// One known version names it once; otherwise each node's own.
 		same := ins[0].version != "" && !slices.ContainsFunc(ins, func(in addOnInstall) bool { return in.version != ins[0].version })
 		s := newAddOnSubject(rt, ins, same, true)
-		out = append(out, Finding{
+		f := Finding{
 			Category: CatAddOnNoData, Severity: SevInfo, Key: string(CatAddOnNoData) + "/" + rt,
 			Title: "no lifecycle data for container runtime " + rt,
 			Detail: s.located + " The registry has no entry for this container runtime," +
 				" so its end of life and Kubernetes compatibility were not assessed.",
-		})
+		}
+		if !b.add(&out, f) {
+			break
+		}
 	}
 	return out
 }

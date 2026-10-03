@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +163,65 @@ func TestSkewListsAtMostMaxListedNodes(t *testing.T) {
 		if !strings.HasPrefix(f.Title, fmt.Sprint(maxListedNodes+5, " node(s)")) || strings.Count(f.Detail, "(") != maxListedNodes ||
 			!strings.Contains(f.Detail, ", and 5 more") {
 			t.Errorf("%s: title %q, detail %q: want all counted, %d listed and 5 more", f.Key, f.Title, f.Detail, maxListedNodes)
+		}
+	}
+}
+
+// The node findings #176 added are charged like the others: a node of
+// its own uncovered runtime builds a finding, so an evaluation over its
+// limit stops about one node after it; a containerd compat blocker names
+// its nodes, at most addOnLocatedLimit of them. A report within its limit
+// stays about that size whatever mix of them a push sends.
+func TestEvaluateWithinBoundsNodeRuntimeFindings(t *testing.T) {
+	long := strings.Repeat("n", 240)
+	inv := inventory.Inventory{SchemaVersion: 1, ServerVersion: "v1.37.0"}
+	for i := range 20000 {
+		inv.Nodes = append(inv.Nodes,
+			inventory.NodeInfo{Name: fmt.Sprint(long, i, "a"), KubeletVersion: "v1.37.0", ContainerRuntime: fmt.Sprintf("rt%d://1.%d", i, i)},
+			inventory.NodeInfo{Name: fmt.Sprint(long, i, "b"), KubeletVersion: "v1.37.0", ContainerRuntime: "containerd://1.7.27"},
+			inventory.NodeInfo{Name: fmt.Sprint(long, i, "c"), KubeletVersion: "v1.37.0", ContainerRuntime: fmt.Sprintf("cri-o://1.30.%d", i)})
+	}
+	k, target, now := runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 38}, day("2026-10-02")
+	full := Evaluate(inv, k, target, now)
+	compat := slices.IndexFunc(full.Findings, func(f Finding) bool { return f.Category == CatChartIncompat })
+	if len(full.Findings) < 20000 || compat < 0 || !strings.Contains(full.Findings[compat].Detail, "Incompatible nodes: ") {
+		t.Fatalf("Evaluate built %d findings (compat blocker at %d), want one per uncovered runtime and a node-named compat blocker",
+			len(full.Findings), compat)
+	}
+
+	// Uncovered runtimes alone: every node is judged either way, but only
+	// the findings that fit are built.
+	uncovered := inv
+	uncovered.Nodes = nil
+	for i := 0; i < len(inv.Nodes); i += 3 {
+		uncovered.Nodes = append(uncovered.Nodes, inv.Nodes[i])
+	}
+	all := totalAlloc(func() { Evaluate(uncovered, k, target, now) })
+	const limit = 64 << 10
+	var err error
+	used := totalAlloc(func() { _, err = EvaluateWithin(uncovered, k, target, now, limit) })
+	if !errors.Is(err, ErrReportTooLarge) {
+		t.Fatalf("EvaluateWithin(%d bytes) = %v, want ErrReportTooLarge", limit, err)
+	}
+	if used > all/3 {
+		t.Errorf("stopping at %d bytes allocated %d bytes; the whole evaluation allocates %d", limit, used, all)
+	}
+
+	for _, n := range []int{1, 10, 100, 1000} {
+		some := inv
+		some.Nodes = inv.Nodes[:3*n]
+		for _, limit := range []int{4 << 10, 64 << 10, 1 << 20} {
+			r, err := EvaluateWithin(some, k, target, now, limit)
+			if errors.Is(err, ErrReportTooLarge) {
+				continue
+			}
+			raw, jerr := json.Marshal(r)
+			if err != nil || jerr != nil {
+				t.Fatalf("%d nodes, %d bytes: %v, %v", 3*n, limit, err, jerr)
+			}
+			if len(raw) > 2*limit {
+				t.Errorf("%d nodes within %d bytes: a %d-byte report", 3*n, limit, len(raw))
+			}
 		}
 	}
 }
