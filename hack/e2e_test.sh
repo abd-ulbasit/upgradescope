@@ -110,7 +110,8 @@ stub make 'exit 0'
 # failing report is lost), STUB_GATE_NO_RESULT (a blocked verdict without a
 # result), STUB_GATE_REMOVED_PASSES, STUB_GATE_CLEAN_BLOCKED (the clean
 # manifest is blamed), STUB_GATE_CLUSTER_BLAMED (the JSON blames the PR for
-# the cluster's blocker).
+# the cluster's blocker), STUB_GATE_ALLOW_IGNORED (allow-incomplete=true does
+# not excuse an unknown verdict, as before #177).
 stub curl '
 case "$*" in
   */api/v1/clusters*) echo "[{\"name\":\"kind\",\"score\":40}]" ;;
@@ -144,6 +145,8 @@ case "$*" in
     fi
     status=200
     [ "$verdict" = ready ] || [ "$(query fail-on)" = never ] || status=422
+    # allow-incomplete=true excuses an unknown verdict, never a blocker.
+    [ "$verdict" != unknown ] || [ "$(query allow-incomplete)" != true ] || [ -n "${STUB_GATE_ALLOW_IGNORED:-}" ] || status=200
     source=cluster
     [ -z "${STUB_GATE_CLUSTER_BLAMED:-}" ] || source=manifest
     if [ "$format" = sarif ]; then
@@ -544,10 +547,12 @@ has "1.37 at 1.38: the past-horizon scan gates and passes" "$work/summary" "- PA
 has "1.37 at 1.38: --allow-incomplete is scanned" "$work/log" "upgradescope scan --context kind-upgradescope-demo --target 1.38 --allow-incomplete --output json"
 has "1.37 at 1.38: the CR kb-coverage gate gates and passes" "$work/summary" "- PASS — $cr_gap_gate"
 has "1.37 at 1.38: the CR unknown gate gates and passes" "$work/summary" "- PASS — $cr_unknown_gate"
-# Past the horizon the clean manifest's verdict is unknown (curl exits 22),
-# not ready: the gate step still passes, on no result and the kb-coverage gap.
+# Past the horizon the clean manifest's verdict is unknown, not ready: the
+# plain documented command exits 22, &allow-incomplete=true (#177) exits 0,
+# and the gate step passes on no result and the kb-coverage gap.
 has "1.37 at 1.38: the clean-manifest gate passes on an unknown verdict" "$work/summary" "- PASS — $gate_clean"
 has "1.37 at 1.38: the documented command targets 1.38" "$work/log" "api/v1/gate?target=1.38&cluster=kind&format=sarif&path=rendered.yaml"
+has "1.37 at 1.38: the unknown verdict is excused with allow-incomplete=true" "$work/log" "api/v1/gate?target=1.38&allow-incomplete=true&cluster=kind&format=sarif&path=rendered.yaml"
 has "1.37 at 1.38: the removed-API gate passes" "$work/summary" "- PASS — $gate_removed"
 has "the CR's blocker categories are accepted in ingress-nginx only, plus the run's own deprecated caller by key" "$work/log" \
   'kubectl --context kind-upgradescope-demo patch clusterreadiness cluster --type merge -p {"spec":{"ignore":[{"category":"chart-incompat","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"category":"eol-addon","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"key":"deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses","reason":"e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}]}}'
@@ -648,6 +653,9 @@ has "the lost removed-API report is a FAIL in the summary" "$work/summary" "- **
 
 run "a removed-API manifest the gate passes fails the run" 1 STUB_GATE_REMOVED_PASSES=1
 has "the passed removed API is named" "$work/out" "removed-API manifest: the documented command passed it"
+
+run "a server that ignores allow-incomplete past the horizon fails the run" 1 E2E_MINOR=1.37 STUB_SERVER_MINOR=37 STUB_NEXT=1.38 STUB_GATE_ALLOW_IGNORED=1
+has "the ignored allow-incomplete is named" "$work/out" "the documented command with &allow-incomplete=true exited 22, want 0 (verdict unknown)"
 
 run "a blocked verdict without a result for the object fails the run" 1 STUB_GATE_NO_RESULT=1
 has "the missing result is shown" "$work/out" "want a blocked verdict and a removed-api result for the Ingress at rendered.yaml"
