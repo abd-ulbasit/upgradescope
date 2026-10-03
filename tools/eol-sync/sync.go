@@ -124,13 +124,18 @@ func renderCycles(rows []cycleRow, citation string) []byte {
 // "cycles:" key (whatever follows it on the line: "[]", a comment) to the
 // next top-level key; blank lines and column-0 comments just before that key
 // stay with it. Every other byte is preserved, CRLF line endings included.
-func rewriteCycles(raw, block []byte) []byte {
+func rewriteCycles(raw, block []byte) []byte { return rewriteBlock(raw, "cycles", block) }
+
+// rewriteBlock is rewriteCycles for any top-level key: a provider entry
+// has its "versions:" block replaced the same way.
+func rewriteBlock(raw []byte, key string, block []byte) []byte {
+	prefix := []byte(key + ":")
 	lines := bytes.SplitAfter(raw, []byte("\n"))
 	var out, held [][]byte // held: blank/comment lines whose owner is not yet known
 	inBlock, replaced := false, false
 	for _, line := range lines {
 		trimmed := bytes.TrimRight(line, "\r\n")
-		if rest, ok := bytes.CutPrefix(trimmed, []byte("cycles:")); ok && (len(rest) == 0 || rest[0] == ' ' || rest[0] == '\t') {
+		if rest, ok := bytes.CutPrefix(trimmed, prefix); ok && (len(rest) == 0 || rest[0] == ' ' || rest[0] == '\t') {
 			inBlock, replaced = true, true
 			out = append(out, block)
 			continue

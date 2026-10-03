@@ -1,0 +1,35 @@
+# registry/data/providers/gke.yaml
+# Google Kubernetes Engine: when each Kubernetes minor leaves standard support
+# and when extended support ends. Hand-curated from Google's release schedule
+# ("End of standard support" and "End of extended support" columns), read on
+# 2026-10-03; it is not synced because endoflife.date's google-kubernetes-engine
+# product publishes no extended-support end and its standard-support dates
+# differ from Google's (1.34: 2026-10-01 there, 2027-01-25 on the schedule).
+# Google updates the schedule monthly: re-read it when refreshing. Minors
+# whose dates are still a month or quarter estimate (1.37) are left out; a
+# minor missing here gets no finding.
+schema_version: 1
+id: gke
+display_name: Google Kubernetes Engine
+extended_support_note: Extended support applies only to clusters on the Extended release channel; clusters on other channels are upgraded automatically at the end of standard support.
+citations:
+  - https://docs.cloud.google.com/kubernetes-engine/docs/release-schedule
+pricing:
+  currency: USD
+  standard_per_cluster_hour: 0.10
+  # "Priced at $0.50 per cluster per hour. The GKE extended period cluster
+  # management fee is in addition to the GKE cluster management fee at $0.10
+  # per cluster per hour, for a total of $0.60 per cluster per hour."
+  extended_per_cluster_hour: 0.60
+  as_of: "2026-10-03"
+  note: charged only for clusters on the Extended release channel
+  citations:
+    - https://cloud.google.com/kubernetes-engine/pricing
+versions:
+  - {minor: "1.36", standard_end: "2027-08-09", extended_end: "2028-06-09"}
+  - {minor: "1.35", standard_end: "2027-04-11", extended_end: "2028-02-11"}
+  - {minor: "1.34", standard_end: "2027-01-25", extended_end: "2027-11-25"}
+  - {minor: "1.33", standard_end: "2026-08-12", extended_end: "2027-06-12"}
+  - {minor: "1.32", standard_end: "2026-04-27", extended_end: "2027-02-11"}
+  - {minor: "1.31", standard_end: "2026-01-16", extended_end: "2026-10-22"}
+  - {minor: "1.30", standard_end: "2025-09-30", extended_end: "2026-07-30"}
