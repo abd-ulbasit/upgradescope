@@ -58,7 +58,8 @@ type addOnEvidence struct {
 	images             []nsImage     // every container and init-container image
 	labelled           []labelledPod // the pods among them that carry appLabels
 	releases           []inventory.HelmRelease
-	ingressControllers []string // IngressClass spec.controller values
+	gitops             []inventory.GitOpsChart // charts Argo CD and Flux deploy
+	ingressControllers []string                // IngressClass spec.controller values
 }
 
 // addPod adds one pod's (or pod template's) images, and the pod to
@@ -85,7 +86,7 @@ func (ev *addOnEvidence) addPod(namespace string, labels map[string]string, imag
 // inventory.SkippedPods keeps the gap required; IngressClasses only add
 // evidence.
 func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory) error {
-	ev := addOnEvidence{releases: inv.HelmReleases}
+	ev := addOnEvidence{releases: inv.HelmReleases, gitops: inv.GitOpsCharts}
 	var failures, skipped []string
 	var podErr error
 	classesRead := false
@@ -352,6 +353,13 @@ var ingressClassAddOns = map[string][]string{
 //     whatever unmatched sidecars run beside it). A pod running a
 //     provider build (registry.IsProviderBuild) is never claimed through
 //     its labels: its support follows the provider, not upstream (#110).
+//   - "gitops": a chart reference of an Argo CD Application or Flux
+//     HelmRelease (inventory.GitOpsChart) naming a chart matcher. It
+//     gives the namespace the chart deploys into and the chart version
+//     (evidence only), but no app version: that comes from the pods
+//     running it, so a product retired as a whole (ingress-nginx) is
+//     still end-of-life, and a per-release-line product gets no
+//     lifecycle verdict without a running pod to read a version from.
 //   - "ingressclass": an IngressClass whose controller names the add-on
 //     (ingressClassAddOns) when nothing else found it nor another
 //     controller that can serve the class. It is cluster-scoped (no
@@ -377,7 +385,7 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 	type evidence struct {
 		source  string // "image" | "labels" | "chart" | "ingressclass"
 		version string // app version
-		chart   string // chart version, chart evidence only
+		chart   string // chart version, chart and gitops evidence only
 	}
 	type install struct{ id, ns string }
 	byInstall := map[install][]evidence{}
@@ -431,6 +439,18 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		}
 	}
 
+	// A GitOps chart reference names the add-on and where it deploys, but
+	// no app version: its chart version is evidence only (see below), and
+	// the version comes from the pods running it, if any.
+	for _, g := range ev.gitops {
+		for _, a := range addons {
+			if slices.Contains(a.Matchers.Charts, g.Chart) {
+				in := install{a.ID, g.Target}
+				byInstall[in] = append(byInstall[in], evidence{source: "gitops", chart: strings.TrimPrefix(g.Version, "v")})
+			}
+		}
+	}
+
 	detected := map[string]bool{}
 	for in := range byInstall {
 		detected[in.id] = true
@@ -445,7 +465,7 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		byInstall[in] = append(byInstall[in], evidence{source: "ingressclass"})
 	}
 
-	strength := map[string]int{"ingressclass": 1, "labels": 2, "image": 3, "chart": 4}
+	strength := map[string]int{"ingressclass": 1, "gitops": 2, "labels": 3, "image": 4, "chart": 5}
 	instance := func(in install, evs []evidence) inventory.AddOnInstance {
 		inst := inventory.AddOnInstance{ID: in.id}
 		var podVersion, appVersion string
@@ -455,10 +475,10 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 			}
 			if e.source == "chart" {
 				appVersion = olderVersion(appVersion, e.version)
-				inst.ChartVersion = olderVersion(inst.ChartVersion, e.chart)
 			} else {
 				podVersion = olderVersion(podVersion, e.version)
 			}
+			inst.ChartVersion = olderVersion(inst.ChartVersion, e.chart)
 		}
 		// "" is a namespace too: a manifest object's left unset.
 		if inst.Source != "ingressclass" {

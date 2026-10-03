@@ -12,6 +12,7 @@ import (
 
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
@@ -29,6 +30,9 @@ type Clients struct {
 	RESTClient rest.Interface
 	// APIExtensions reads CustomResourceDefinitions (the crds capability).
 	APIExtensions apiextensionsclient.Interface
+	// Dynamic reads the Argo CD and Flux custom resources that name the
+	// charts they deploy (the helm capability). Nil: they are not read.
+	Dynamic dynamic.Interface
 }
 
 // Options tunes collection behavior.
@@ -163,7 +167,7 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Kube == nil || c.Metadata == nil {
 				return errors.New("kubernetes/metadata client not configured")
 			}
-			return collectHelm(ctx, c.Kube, c.Metadata, k.APILifecycle, inv)
+			return collectHelmStep(ctx, c, k.APILifecycle, inv)
 		}},
 		{cap: inventory.CapAddOns, run: func(ctx context.Context, inv *inventory.Inventory) error { // after helm: consumes inv.HelmReleases
 			if c.Kube == nil {
@@ -220,11 +224,16 @@ func NewClients(cfg *rest.Config) (Clients, error) {
 	if err != nil {
 		return Clients{}, fmt.Errorf("build apiextensions client: %w", err)
 	}
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return Clients{}, fmt.Errorf("build dynamic client: %w", err)
+	}
 	return Clients{
 		Kube:          kube,
 		Metadata:      md,
 		Discovery:     kube.Discovery(),
 		RESTClient:    kube.CoreV1().RESTClient(),
 		APIExtensions: ext,
+		Dynamic:       dyn,
 	}, nil
 }
