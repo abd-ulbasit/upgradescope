@@ -419,6 +419,9 @@ function FindingItem({ f }: { f: Finding }) {
               {ns}
             </span>
           ))}
+          {f.namespacesOmitted ? (
+            <span className="chip muted">and {f.namespacesOmitted} more</span>
+          ) : null}
         </p>
       ) : null}
       {f.remediation && <p className="remediation">{f.remediation}</p>}

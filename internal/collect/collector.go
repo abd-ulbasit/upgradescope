@@ -115,6 +115,10 @@ func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
 			inv.Capabilities[s.cap] = inventory.CapabilityStatus{Available: false, Reason: err.Error() + note}
 		}
 	}
+	// A reason joins one failure per resource a step could not read, and
+	// object refs carry their ignore annotations whole: cut both to the
+	// inventory limits, which the server refuses a push beyond.
+	inv.CutFreeText()
 }
 
 // stepContext derives a step's context from the scan's: an equal share of

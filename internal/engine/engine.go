@@ -53,8 +53,25 @@ func keyGroup(group string) string {
 	return group
 }
 
-// namespaceBreakdown renders "ns (count)" parts sorted by namespace name and
-// returns the sorted namespace names. The empty key "" renders as
+// MaxFindingNamespaces caps the namespaces a finding lists, in Namespaces
+// (NamespacesOmitted counts the rest) and in an API usage finding's
+// evidence sentence, as inventory.MaxObjectRefs caps its objects: a
+// finding's size does not grow with how many namespaces it affects. Its
+// Teams still come from every affected namespace.
+const MaxFindingNamespaces = 100
+
+// capNamespaces lists at most MaxFindingNamespaces of f's sorted
+// namespaces, counting the rest in NamespacesOmitted.
+func capNamespaces(f *Finding) {
+	if n := len(f.Namespaces) - MaxFindingNamespaces; n > 0 {
+		f.Namespaces = f.Namespaces[:MaxFindingNamespaces:MaxFindingNamespaces]
+		f.NamespacesOmitted += n
+	}
+}
+
+// namespaceBreakdown renders "ns (count)" parts sorted by namespace name,
+// at most MaxFindingNamespaces named ones and then how many more, and
+// returns every sorted namespace name. The empty key "" renders as
 // emptyLabel in the detail and is excluded from the returned names.
 func namespaceBreakdown(counts map[string]int, emptyLabel string) (detail string, names []string) {
 	keys := make([]string, 0, len(counts))
@@ -62,17 +79,24 @@ func namespaceBreakdown(counts map[string]int, emptyLabel string) (detail string
 		keys = append(keys, ns)
 	}
 	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
+	parts := make([]string, 0, min(len(keys), MaxFindingNamespaces+1))
 	for _, ns := range keys {
 		label := ns
 		if ns == "" {
 			label = emptyLabel
 		} else {
 			names = append(names, ns)
+			if len(names) > MaxFindingNamespaces {
+				continue
+			}
 		}
 		parts = append(parts, fmt.Sprintf("%s (%d)", label, counts[ns]))
 	}
-	return strings.Join(parts, ", "), names
+	detail = strings.Join(parts, ", ")
+	if n := len(names) - MaxFindingNamespaces; n > 0 {
+		detail += fmt.Sprintf(", and %d more namespace(s)", n)
+	}
+	return detail, names
 }
 
 // teamsFor maps namespace names to teams via the inventory's namespace team
@@ -108,7 +132,7 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 //     (upstream may have deleted it), and dropping it would read as
 //     ready. Other groups (CRDs, aggregated APIs) are never in the KB and
 //     produce nothing.
-func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
+func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
 	idx := kb.NewIndex(k.APILifecycle)
 	builtin := map[string]bool{}
 	for _, e := range k.APILifecycle {
@@ -189,7 +213,9 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version) []
 		if !known {
 			f.Detail += fmt.Sprintf(" The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes %s serves it.", target)
 		}
-		out = append(out, f)
+		if !b.add(&out, f) {
+			return out
+		}
 	}
 	return out
 }
@@ -251,7 +277,7 @@ func sortedObjects(refs []inventory.ObjectRef) []inventory.ObjectRef {
 // == target+1 → warning; otherwise (incl. missing/unparseable
 // removedRelease) → info. The metric is the runtime-caller signal: it
 // says a deprecated API was requested, not by whom.
-func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Finding {
+func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version, b *budget) []Finding {
 	var out []Finding
 	for _, c := range inv.DeprecatedCalls {
 		res := c.Resource
@@ -275,7 +301,9 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 			} else {
 				f.Detail = metric + fmt.Sprintf("removal release %q could not be parsed.", c.RemovedRelease) + anonymous
 			}
-			out = append(out, f)
+			if !b.add(&out, f) {
+				return out
+			}
 			continue
 		}
 		f.Title = fmt.Sprintf("clients still requesting %s %s (removed in %s)", gv, res, removed)
@@ -288,7 +316,9 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version) []Fi
 		default:
 			f.Severity = SevInfo
 		}
-		out = append(out, f)
+		if !b.add(&out, f) {
+			return out
+		}
 	}
 	return out
 }
@@ -323,7 +353,7 @@ func otherCallers(inv inventory.Inventory) []inventory.DeprecatedCall {
 // finding, so the finding keeps its key. Rows for APIs without flagged
 // objects stay standalone, as do rows more severe than the matching usage
 // finding (the apiserver records a removal the KB does not know).
-func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding) []Finding {
+func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding, b *budget) []Finding {
 	byAPI := make(map[string]int, len(usage)) // apiKey → index in usage
 	for i, f := range usage {
 		_, api, _ := strings.Cut(f.Key, "/")
@@ -353,7 +383,13 @@ func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding) []Find
 		evidence[j] = append(evidence[j], res)
 	}
 	for j, rs := range evidence {
-		usage[j].Detail += fmt.Sprintf(" apiserver_requested_deprecated_apis also records requests to %s since the last apiserver restart; the metric does not identify the client.", strings.Join(rs, ", "))
+		more := fmt.Sprintf(" apiserver_requested_deprecated_apis also records requests to %s since the last apiserver restart; the metric does not identify the client.", strings.Join(rs, ", "))
+		usage[j].Detail += more
+		// The rows were charged as findings of their own; their text may
+		// be longer here, and the budget charges what it adds.
+		if !b.charge(len(more)) {
+			return nil
+		}
 	}
 	return append(usage, standalone...)
 }
@@ -481,7 +517,8 @@ func groupInstalls(a registry.AddOn, ins []addOnInstall, node bool, now time.Tim
 // version where they differ. Node runtimes on one release line (line) are
 // named by the line's oldest version alone. The sentence lists at most
 // addOnLocatedLimit installs, so a mesh with sidecars in hundreds of
-// namespaces stays one bounded finding; Namespaces and Teams name them all.
+// namespaces stays one bounded finding; Teams name them all, Namespaces up to
+// MaxFindingNamespaces (Evaluate caps it).
 func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addOnSubject {
 	s := addOnSubject{installs: ins, node: node}
 	for _, in := range ins {
@@ -714,8 +751,8 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 // installs that cannot run it, titled for the oldest of them; ok is false
 // when every install can. The detail lists them, at most addOnLocatedLimit,
 // when their versions differ, and for node runtimes always: nodes have no
-// Namespaces to name them by. Namespaces and Teams name them all. Key is
-// left to the caller.
+// Namespaces to name them by. Teams name them all, Namespaces up to
+// MaxFindingNamespaces (Evaluate caps it). Key is left to the caller.
 func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version) (Finding, bool) {
 	f := Finding{Category: CatChartIncompat, Severity: SevBlocker, Remediation: a.Recommendation}
 	var named []string // "where (version)" of each install that cannot run target
@@ -1069,7 +1106,7 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 			Category: CatVersionSkew, Severity: SevBlocker,
 			Key:       string(CatVersionSkew) + "/kubelet-post-upgrade",
 			Title:     fmt.Sprintf("%d node(s) would exceed kubelet version skew after upgrading to %s", len(postBad), target),
-			Detail:    fmt.Sprintf("After upgrading the control plane to %s these nodes would be more than %d minor versions behind: %s.", target, maxBehind, strings.Join(postBad, ", ")) + legacyNote("Kubelets", postLegacy),
+			Detail:    fmt.Sprintf("After upgrading the control plane to %s these nodes would be more than %d minor versions behind: %s.", target, maxBehind, listedNodes(postBad)) + legacyNote("Kubelets", postLegacy),
 			Citations: []string{skewPolicyURL},
 		})
 	}
@@ -1078,7 +1115,7 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 			Category: CatVersionSkew, Severity: SevWarning,
 			Key:       string(CatVersionSkew) + "/kubelet-current",
 			Title:     fmt.Sprintf("%d node(s) exceed kubelet version skew vs control plane %s", len(nowBad), newest),
-			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, strings.Join(nowBad, ", ")) + legacyNote("Kubelets", nowLegacy),
+			Detail:    fmt.Sprintf("Nodes more than %d minor versions behind: %s.", maxBehind, listedNodes(nowBad)) + legacyNote("Kubelets", nowLegacy),
 			Citations: []string{skewPolicyURL},
 		})
 	}
@@ -1087,7 +1124,7 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 			Category: CatVersionSkew, Severity: SevWarning,
 			Key:       string(CatVersionSkew) + "/kubelet-newer-than-apiserver",
 			Title:     fmt.Sprintf("%d node(s) run a kubelet newer than kube-apiserver %s", len(newer), oldest),
-			Detail:    fmt.Sprintf("kubelet must not be newer than kube-apiserver; when kube-apiserver versions differ, the oldest one (%s) bounds the allowed kubelet versions. Newer nodes: %s.", oldest, strings.Join(newer, ", ")),
+			Detail:    fmt.Sprintf("kubelet must not be newer than kube-apiserver; when kube-apiserver versions differ, the oldest one (%s) bounds the allowed kubelet versions. Newer nodes: %s.", oldest, listedNodes(newer)),
 			Citations: []string{skewPolicyURL},
 		})
 	}
@@ -1097,11 +1134,24 @@ func evalSkew(inv inventory.Inventory, k kb.KB, target inventory.Version) []Find
 			Category: CatVersionSkew, Severity: SevInfo,
 			Key:       string(CatVersionSkew) + "/kubelet-unparseable",
 			Title:     fmt.Sprintf("%d node(s) have unparseable kubelet versions", len(unparseable)),
-			Detail:    fmt.Sprintf("These nodes could not be evaluated against the kubelet skew policy: %s.", strings.Join(unparseable, ", ")),
+			Detail:    fmt.Sprintf("These nodes could not be evaluated against the kubelet skew policy: %s.", listedNodes(unparseable)),
 			Citations: []string{skewPolicyURL},
 		})
 	}
 	return out
+}
+
+// maxListedNodes caps the nodes a kubelet skew finding's detail names;
+// its title counts them all.
+const maxListedNodes = 100
+
+// listedNodes joins sorted node entries, the first maxListedNodes of
+// them, and counts the rest.
+func listedNodes(entries []string) string {
+	if len(entries) <= maxListedNodes {
+		return strings.Join(entries, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(entries[:maxListedNodes], ", "), len(entries)-maxListedNodes)
 }
 
 // apiserverVersions returns the distinct kube-apiserver minors observed,
@@ -1477,7 +1527,7 @@ func helmReleaseRef(rel inventory.HelmRelease) string {
 //     standing for the release's) are left to the live finding, so no
 //     object is counted twice; a release whose objects are all flagged
 //     live gets no manifest finding.
-func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version) []Finding {
+func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
 	idx := kb.NewIndex(k.APILifecycle)
 	live := map[string][]inventory.ObjectRef{} // apiKey → live objects
 	for _, u := range inv.APIUsage {
@@ -1493,11 +1543,15 @@ func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version
 		teams := teamsFor(ns, inv.Namespaces)
 		if f, ok := evalChartKubeVersion(rel, target); ok {
 			f.Namespaces, f.Teams = ns, teams
-			out = append(out, f)
+			if !b.add(&out, f) {
+				return out
+			}
 		}
 		for _, f := range evalHelmManifest(rel, idx, live, target) {
 			f.Namespaces, f.Teams = ns, teams
-			out = append(out, f)
+			if !b.add(&out, f) {
+				return out
+			}
 		}
 	}
 	return out
@@ -1626,27 +1680,53 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 // Evaluate is the pure evaluation entrypoint: no I/O, no clock reads — now is
 // injected for EOL-window math. Output is fully deterministic for a given
 // (inventory, kb, target, now), whatever the order of the inventory's slices.
+// EvaluateWithin bounds its size.
 func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) Report {
+	r, _ := evaluate(inv, k, target, now, nil) // no budget: no error
+	return r
+}
+
+// evaluate is Evaluate within b (nil: no limit), or ErrReportTooLarge.
+func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time, b *budget) (Report, error) {
 	// Caller rows are judged, and folded into usage findings as evidence,
 	// in this order, so the same rows in another order (a pusher that
 	// sorts differently) give the same report. A clone: otherCallers may
 	// return the caller's own slice.
 	inv.DeprecatedCalls = slices.Clone(otherCallers(inv))
-	slices.SortFunc(inv.DeprecatedCalls, func(a, b inventory.DeprecatedCall) int {
-		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Version, b.Version),
-			cmp.Compare(a.Resource, b.Resource), cmp.Compare(a.Subresource, b.Subresource),
-			cmp.Compare(a.RemovedRelease, b.RemovedRelease))
+	slices.SortFunc(inv.DeprecatedCalls, func(x, y inventory.DeprecatedCall) int {
+		return cmp.Or(cmp.Compare(x.Group, y.Group), cmp.Compare(x.Version, y.Version),
+			cmp.Compare(x.Resource, y.Resource), cmp.Compare(x.Subresource, y.Subresource),
+			cmp.Compare(x.RemovedRelease, y.RemovedRelease))
 	})
 	findings := []Finding{} // non-nil so JSON renders "findings": []
-	findings = append(findings, foldDeprecatedCalls(inv, evalAPIUsage(inv, k, target), evalDeprecatedCalls(inv, target))...)
-	findings = append(findings, evalAddOns(inv, k, target, now)...)
-	findings = append(findings, evalUncoveredRuntimes(inv, k.AddOns)...)
-	findings = append(findings, evalHelmReleases(inv, k, target)...)
-	findings = append(findings, evalSkew(inv, k, target)...)
-	findings = append(findings, evalControlPlaneSkew(inv, k, target)...)
-	findings = append(findings, evalKBStale(inv, k, target)...)
-	findings = append(findings, evalUpgradePath(inv, target)...)
-	findings = append(findings, evalCRDVersions(inv, target)...)
+	b.charge(reportBaseSize(inv, k))
+	usage := evalAPIUsage(inv, k, target, b)
+	var calls []Finding
+	if !b.exceeded() {
+		calls = evalDeprecatedCalls(inv, target, b)
+	}
+	if !b.exceeded() {
+		findings = append(findings, foldDeprecatedCalls(inv, usage, calls, b)...)
+	}
+	// The checks whose output does not grow with the inventory's size are
+	// charged as a whole; the others charge each finding as they build it
+	// and stop once the budget is spent.
+	steps := []func(){
+		func() { b.addAll(&findings, evalAddOns(inv, k, target, now)) },
+		func() { findings = append(findings, evalUncoveredRuntimes(inv, k.AddOns, b)...) },
+		func() { findings = append(findings, evalHelmReleases(inv, k, target, b)...) },
+		func() { b.addAll(&findings, evalSkew(inv, k, target)) },
+		func() { b.addAll(&findings, evalControlPlaneSkew(inv, k, target)) },
+		func() { b.addAll(&findings, evalKBStale(inv, k, target)) },
+		func() { b.addAll(&findings, evalUpgradePath(inv, target)) },
+		func() { findings = append(findings, evalCRDVersions(inv, target, b)...) },
+	}
+	for _, step := range steps {
+		if b.exceeded() {
+			return Report{}, ErrReportTooLarge
+		}
+		step()
+	}
 	sortFindings(findings)
 	score, _ := Score(findings)
 	gaps := assessmentGaps(inv, k, target)
@@ -1656,6 +1736,15 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	omitted := inv.UnrecognizedImagesOmitted
 	if n := len(unrecognized) - inventory.MaxUnrecognizedImages; n > 0 {
 		unrecognized, omitted = unrecognized[:inventory.MaxUnrecognizedImages], omitted+n
+	}
+	for i := range gaps {
+		b.charge(gapSize(&gaps[i]))
+	}
+	for _, img := range unrecognized {
+		b.charge(len(img) + 3)
+	}
+	if b.exceeded() {
+		return Report{}, ErrReportTooLarge
 	}
 
 	return Report{
@@ -1671,5 +1760,5 @@ func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 
 		UnrecognizedImages:        unrecognized,
 		UnrecognizedImagesOmitted: omitted,
-	}
+	}, nil
 }

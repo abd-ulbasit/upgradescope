@@ -502,10 +502,12 @@ echo "== values.schema.json rejects bad values"
 # MAJOR.MINOR: v1.38 or 1.37.2 would make every create/patch 422.
 # agent.interval: Go durations of at least 1m render in any spelling v0.1
 # (which had no schema) let through, e.g. 300s or 1.5h; under 1m or a bare
-# number fails.
+# number fails. server.targets takes at most 4 minors, as serve --targets
+# does: the server's memory limit is sized for that many.
 for bad in 'server.enable=true' 'agent.interval=30s' 'agent.interval=59s' 'agent.interval=59.9s' \
   'agent.interval=0.5m' 'agent.interval=100ms' 'agent.interval=10' 'agent.targets={latest}' \
-  'agent.targets={v1.38}' 'agent.targets={1.37.2}' 'rbac.helmSecret=false'; do
+  'agent.targets={v1.38}' 'agent.targets={1.37.2}' 'rbac.helmSecret=false' \
+  'server.targets={1.36,1.37,1.38,1.39,1.40}'; do
   if helm template upgradescope "$CHART" --set "$bad" >/dev/null 2>&1; then
     fail "schema accepted --set $bad"
   else
@@ -514,7 +516,8 @@ for bad in 'server.enable=true' 'agent.interval=30s' 'agent.interval=59s' 'agent
 done
 for good in 'agent.interval=1m' 'agent.interval=1h30m' 'agent.interval=10m0s' 'agent.interval=60s' \
   'agent.interval=90s' 'agent.interval=300s' 'agent.interval=1.5h' 'agent.interval=0.5h' \
-  'agent.interval=1.5m' 'agent.interval=2m30.5s' 'agent.targets={1.37,1.38}'; do
+  'agent.interval=1.5m' 'agent.interval=2m30.5s' 'agent.targets={1.37,1.38}' \
+  'server.targets={1.36,1.37,1.38,1.39}'; do
   if helm template upgradescope "$CHART" --set "$good" >/dev/null 2>&1; then
     pass "schema accepts --set $good"
   else

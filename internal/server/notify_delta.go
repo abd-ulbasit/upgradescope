@@ -4,8 +4,11 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"slices"
 	"time"
 
@@ -49,10 +52,20 @@ func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Change {
 	if prev == nil {
 		return nil
 	}
+	heads := make([]findingHead, len(prev.Findings))
+	for i, f := range prev.Findings {
+		heads[i] = headOf(f)
+	}
+	return computeDelta(heads, curr)
+}
+
+// computeDelta is ComputeDelta against the heads of the previous report's
+// findings: all it reads of them.
+func computeDelta(prev []findingHead, curr engine.Report) []notify.Change {
 	target := []string{curr.Target.String()}
 
-	prevBlockers := keySet(prev.Findings, isBlocker)
-	prevEOL := keySet(prev.Findings, isEOLApproaching)
+	prevBlockers := headKeys(prev, findingHead.blocker)
+	prevEOL := headKeys(prev, findingHead.eolApproaching)
 
 	var changes []notify.Change
 	currBlockerCount := 0
@@ -153,51 +166,97 @@ var kindCap = map[string]int{notify.KindNewBlocker: maxBlockerChanges, notify.Ki
 // new-blocker and eol-approaching changes are capped, the rest counted in
 // Omitted. ok is false when the pass changed nothing.
 func buildNotification(cluster store.Cluster, deltas []targetDelta, now time.Time, deliveryID string) (n notify.Notification, ok bool) {
+	var m changeMerger
+	for _, d := range deltas {
+		m.add(d)
+	}
+	return m.notification(cluster, now, deliveryID)
+}
+
+// changeMerger is buildNotification one target at a time, so a pass holds
+// what its notification lists, not every change of every target: a
+// knowledge-base update can make every finding of a report at the limit
+// news, for each target. A change past its kind's cap is kept as the
+// digest of its identity only, so the same change for a later target is
+// still counted once.
+type changeMerger struct {
+	targets []notify.Target
+	changes []notify.Change
+	listed  map[[sha256.Size]byte]int      // identity → index in changes
+	omitted map[[sha256.Size]byte]struct{} // identities past their kind's cap
+	count   map[string]int                 // distinct changes of each kind
+	counted map[string]int                 // of those, omitted
+}
+
+// add merges one target's delta: in target order, which the merged
+// changes keep.
+func (m *changeMerger) add(d targetDelta) {
+	if len(d.changes) == 0 {
+		return
+	}
+	if m.listed == nil {
+		m.listed, m.omitted, m.count = map[[sha256.Size]byte]int{}, map[[sha256.Size]byte]struct{}{}, map[string]int{}
+	}
+	m.targets = append(m.targets, d.target)
+	for _, c := range d.changes {
+		// Same finding, same wording: one change for all its targets.
+		// A title or detail that names the target keeps a change per
+		// target, so no target is described in another's words.
+		id := changeIdentity(c)
+		if i, seen := m.listed[id]; seen {
+			m.changes[i].Targets = append(m.changes[i].Targets, c.Targets...)
+			continue
+		}
+		if _, seen := m.omitted[id]; seen {
+			continue
+		}
+		m.count[c.Kind]++
+		if limit := kindCap[c.Kind]; limit > 0 && m.count[c.Kind] > limit {
+			m.omitted[id] = struct{}{}
+			if m.counted == nil {
+				m.counted = map[string]int{}
+			}
+			m.counted[c.Kind]++
+			continue
+		}
+		m.listed[id] = len(m.changes)
+		c.Targets = slices.Clone(c.Targets)
+		m.changes = append(m.changes, c)
+	}
+}
+
+// changeIdentity digests what makes two targets' changes one: kind, key,
+// title and detail.
+func changeIdentity(c notify.Change) [sha256.Size]byte {
+	h := sha256.New()
+	for _, part := range []string{c.Kind, c.Key, c.Title, c.Detail} {
+		_, _ = io.WriteString(h, part) // a hash.Hash never fails a write
+		_, _ = h.Write([]byte{0})
+	}
+	var id [sha256.Size]byte
+	h.Sum(id[:0])
+	return id
+}
+
+// notification is the merged changes as one notification, blockers
+// first; ok is false when no target changed. It ends the merge.
+func (m *changeMerger) notification(cluster store.Cluster, now time.Time, deliveryID string) (n notify.Notification, ok bool) {
+	if len(m.changes) == 0 {
+		return notify.Notification{}, false
+	}
+	slices.SortStableFunc(m.changes, func(a, b notify.Change) int { return cmp.Compare(kindRank[a.Kind], kindRank[b.Kind]) })
 	n = notify.Notification{
 		SchemaVersion: notify.SchemaVersion,
 		DeliveryID:    deliveryID,
 		Type:          notify.TypeReadinessChanged,
 		Timestamp:     now.UTC(),
 		Cluster:       notify.Cluster{ID: cluster.ID, Name: cluster.Name},
+		Targets:       m.targets,
+		Changes:       m.changes,
 	}
-	merged := map[string]int{} // identity → index in n.Changes
-	for _, d := range deltas {
-		if len(d.changes) == 0 {
-			continue
-		}
-		n.Targets = append(n.Targets, d.target)
-		for _, c := range d.changes {
-			// Same finding, same wording: one change for all its targets.
-			// A title or detail that names the target keeps a change per
-			// target, so no target is described in another's words.
-			id := c.Kind + "\x00" + c.Key + "\x00" + c.Title + "\x00" + c.Detail
-			if i, seen := merged[id]; seen {
-				n.Changes[i].Targets = append(n.Changes[i].Targets, c.Targets...)
-				continue
-			}
-			merged[id] = len(n.Changes)
-			c.Targets = slices.Clone(c.Targets)
-			n.Changes = append(n.Changes, c)
-		}
+	if len(m.counted) > 0 {
+		n.Omitted = m.counted
 	}
-	if len(n.Changes) == 0 {
-		return notify.Notification{}, false
-	}
-	slices.SortStableFunc(n.Changes, func(a, b notify.Change) int { return cmp.Compare(kindRank[a.Kind], kindRank[b.Kind]) })
-	kept := n.Changes[:0]
-	count := map[string]int{}
-	for _, c := range n.Changes {
-		count[c.Kind]++
-		if limit := kindCap[c.Kind]; limit > 0 && count[c.Kind] > limit {
-			if n.Omitted == nil {
-				n.Omitted = map[string]int{}
-			}
-			n.Omitted[c.Kind]++
-			continue
-		}
-		kept = append(kept, c)
-	}
-	n.Changes = kept
 	return n, true
 }
 
@@ -209,20 +268,70 @@ func newDeliveryID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func isBlocker(f engine.Finding) bool { return f.Severity == engine.SevBlocker }
+func isBlocker(f engine.Finding) bool { return headOf(f).blocker() }
 
-func isEOLApproaching(f engine.Finding) bool {
-	return f.Category == engine.CatEOLApproaching && f.Severity == engine.SevWarning
-}
+func isEOLApproaching(f engine.Finding) bool { return headOf(f).eolApproaching() }
 
 // findingKey is the delta identity: the stable count-free Key when set,
 // else Title — a defensive fallback for reports stored before Finding.Key
 // existed (those deltas keep the old title-diff behavior).
-func findingKey(f engine.Finding) string {
-	if f.Key != "" {
-		return f.Key
+func findingKey(f engine.Finding) string { return headOf(f).key() }
+
+// findingHead is what a notification delta and sameResult read of a
+// stored finding: its identity, severity and category. A stored report
+// is up to maxReportBytes, and decoded whole its findings take several
+// times that (their objects, namespaces and evidence); its heads take a
+// fraction of it.
+type findingHead struct {
+	Category engine.Category `json:"category"`
+	Severity engine.Severity `json:"severity"`
+	Key      string          `json:"key,omitempty"`
+	Title    string          `json:"title"` // kept only when Key is empty: the identity then
+}
+
+func headOf(f engine.Finding) findingHead {
+	return findingHead{Category: f.Category, Severity: f.Severity, Key: f.Key, Title: f.Title}
+}
+
+func (h findingHead) blocker() bool { return h.Severity == engine.SevBlocker }
+
+func (h findingHead) eolApproaching() bool {
+	return h.Category == engine.CatEOLApproaching && h.Severity == engine.SevWarning
+}
+
+// key is findingKey of the finding.
+func (h findingHead) key() string {
+	if h.Key != "" {
+		return h.Key
 	}
-	return f.Title
+	return h.Title
+}
+
+// storedFindingHeads decodes the heads of a stored report's findings,
+// and nothing else of it.
+func storedFindingHeads(report []byte) ([]findingHead, error) {
+	var r struct {
+		Findings []findingHead `json:"findings"`
+	}
+	if err := json.Unmarshal(report, &r); err != nil {
+		return nil, err
+	}
+	for i := range r.Findings {
+		if r.Findings[i].Key != "" {
+			r.Findings[i].Title = "" // not the identity: let it go
+		}
+	}
+	return r.Findings, nil
+}
+
+func headKeys(hs []findingHead, keep func(findingHead) bool) map[string]bool {
+	s := make(map[string]bool)
+	for _, h := range hs {
+		if keep(h) {
+			s[h.key()] = true
+		}
+	}
+	return s
 }
 
 func keySet(fs []engine.Finding, keep func(engine.Finding) bool) map[string]bool {

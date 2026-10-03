@@ -118,6 +118,7 @@ paths:
               schema: {type: string}
         "401":
           $ref: "#/components/responses/Error"
+        "503": {$ref: "#/components/responses/FleetBusy"}
 
   /api/v1/snapshots:
     post:
@@ -140,7 +141,34 @@ paths:
         under that name from another UID, or with none, is a 409.
 
         A per-cluster token may push only as its own cluster (403 before
-        anything is written).
+        anything is written). `clusterName` is an RFC 1123 subdomain of at
+        most 253 bytes, and the inventory's identifiers are what the
+        apiserver accepts for what they name: namespaces RFC 1123 labels,
+        object names at most 253 bytes without `/` or `%`, node and Helm
+        release names RFC 1123 subdomains, team labels label values. Its
+        other values are within the limits collectors keep to: strings at
+        most 16 KiB (a capability's reason 64 KiB, an object's field
+        manager 128 printable bytes), at most 100 objects per API usage
+        entry, each group/version/kind once per list, at most 200
+        unrecognized images and 32 capabilities. Anything else is 422,
+        naming the field and the rule, before anything is stored. The free
+        text a collector copies whole from the cluster is cut to the
+        limits, not refused: a capability's reason and skipped entries,
+        and an object's `ignore` (to its whole tokens) and `ignoreReason`
+        (the upgradescope.dev/ignore annotations). The snapshot keeps the
+        push as sent.
+
+        Each target's report is at most `--max-snapshot-bytes`: a push
+        whose report for one would be larger is 413, and nothing is
+        stored. No genuine inventory's report comes near it.
+
+        Memory is bounded by the body's structure as well as its size:
+        while the body is read, its JSON values are counted (each value 1,
+        each object 8) against a budget of 1,000,000 units, and buffered
+        bodies share a budget of twice the cap across requests. One push
+        is decoded at a time; a push that waits more than 10s for its
+        turn, or finds the body budget full, gets 503 with `Retry-After`.
+        The agent retries 408 and 503.
       security:
         - ingestToken: []
       parameters:
@@ -166,20 +194,48 @@ paths:
               schema: {$ref: "#/components/schemas/PushAccepted"}
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
+        "400":
+          description: The body ended early or could not be read.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "408":
+          description: The body did not arrive within the server's read timeout (60s for `serve`).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "409": {$ref: "#/components/responses/Error"}
-        "413": {$ref: "#/components/responses/Error"}
+        "413":
+          description: |
+            Over the byte cap (on the wire or after decompression) or over
+            the node budget, before anything is decoded; or, once decoded,
+            a report for one of the targets would be over
+            `--max-snapshot-bytes`, and nothing is stored.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "415": {$ref: "#/components/responses/Error"}
         "422":
           description: |
             Not judgeable, refused before anything is written: invalid
-            JSON or gzip, an envelope `schemaVersion` other than 1, no
-            `clusterName`, a missing or `null` inventory, an inventory
-            `schemaVersion` other than 1, or a `serverVersion` that is not
-            a Kubernetes 1.x version.
+            JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no
+            `clusterName` or one that is not an RFC 1123 subdomain of at
+            most 253 bytes, a missing or `null` inventory, an inventory
+            `schemaVersion` other than 1, a `serverVersion` that is not
+            a Kubernetes 1.x version, an identifier that is not valid for
+            what it names, or a value beyond the limits collectors keep to
+            (see above). The message names the field and the rule.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
         "500": {$ref: "#/components/responses/Error"}
+        "503":
+          description: The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`.
+          headers:
+            Retry-After: {$ref: "#/components/headers/RetryAfter"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
 
   /api/v1/clusters:
     get:
@@ -199,6 +255,7 @@ paths:
                 items: {$ref: "#/components/schemas/ClusterSummary"}
         "401": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/FleetBusy"}
 
   /api/v1/clusters/{id}:
     parameters:
@@ -220,6 +277,7 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
     delete:
       tags: [admin]
       operationId: deleteCluster
@@ -283,7 +341,8 @@ paths:
         The full report for one target: the stored evaluation of the latest
         snapshot when there is one (`source: stored`), otherwise a what-if
         evaluated now from the latest snapshot and not stored
-        (`source: what-if`). `teams` holds per-team scores.
+        (`source: what-if`), 413 when its report would be over
+        `--max-snapshot-bytes`. `teams` holds per-team scores.
       responses:
         "200":
           description: The report.
@@ -293,7 +352,9 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/clusters/{id}/findings:
     parameters:
@@ -321,7 +382,9 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/clusters/{id}/history:
     parameters:
@@ -329,8 +392,8 @@ paths:
       - $ref: "#/components/parameters/Target"
       - name: limit
         in: query
-        description: Most recent points to return.
-        schema: {type: integer, minimum: 1, default: 100}
+        description: Most recent points to return, at most 1000.
+        schema: {type: integer, minimum: 1, maximum: 1000, default: 100}
     get:
       tags: [clusters]
       operationId: getHistory
@@ -348,6 +411,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/clusters/{id}/teams:
     parameters:
@@ -370,7 +434,9 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/clusters/{id}/export:
     parameters:
@@ -389,7 +455,10 @@ paths:
         row, one row per finding, one per capability not assessed) or a
         self-contained HTML report with the score history. Never a what-if:
         404 when no stored evaluation exists for the target, or when the
-        cluster already runs it.
+        cluster already runs it. An export is at most
+        `--max-snapshot-bytes`, as the report it renders is (HTML writes
+        `'` `"` `&` as five bytes and `<` `>` as four): 413 above, saying to
+        read the JSON report.
       responses:
         "200":
           description: The export.
@@ -401,7 +470,9 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/fleet:
     get:
@@ -417,8 +488,11 @@ paths:
         - name: targets
           in: query
           description: |
-            Comma-separated minors. Default: every cluster's next minor
-            plus the `serve --targets` minors some cluster does not run yet.
+            Comma-separated minors, at most 16 distinct (more is 422).
+            Default: every cluster's next minor plus the `serve --targets`
+            minors some cluster does not run yet, at most 16 of them: those
+            with the most clusters to fill them (the older minor on a tie),
+            the rest counted in `targetsOmitted`.
           schema: {type: string, example: "1.37,1.38"}
       responses:
         "200":
@@ -429,6 +503,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/FleetBusy"}
 
   /api/v1/fleet/teams:
     get:
@@ -439,8 +514,9 @@ paths:
         For one target, each team's worst score, total blockers and the
         clusters it has findings in. Each cluster contributes its stored
         evaluation, else a what-if from its latest snapshot (`evaluated`
-        says which); clusters without a snapshot are `missing`, and
-        clusters that already run the target are `notApplicable`.
+        says which); clusters without a snapshot, or whose what-if report
+        would be over `--max-snapshot-bytes`, are `missing`, and clusters
+        that already run the target are `notApplicable`.
       parameters:
         - name: target
           in: query
@@ -455,6 +531,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/ReadBusy"}
 
   /api/v1/gate:
     post:
@@ -499,10 +576,31 @@ paths:
         the baseline (`source: cluster`), and manifest-level debt is
         accepted with `scan --baseline` or ignore rules.
 
-        Limits: `serve --max-gate-bytes` (10 MiB) per body, 4 MiB per
-        document, 20,000 documents. Evaluations run one at a time; a
-        request that waits more than 30s for its turn, or finds the shared
-        body budget full, gets 503 with `Retry-After`.
+        Limits: `serve --max-gate-bytes` (10 MiB) per body, and for the
+        stream with its YAML aliases expanded; 4 MiB per document with its
+        aliases expanded, 20,000 documents, and a node budget of 400,000
+        units (each YAML node 1, each sequence entry 4, each alias what it
+        names), counted from the raw bytes before anything is decoded;
+        over any of them is 413. Buffered bodies share a budget of three
+        times the cap. Measuring aliases, decoding and evaluating run one
+        request at a time; a request that waits more than 30s for its
+        turn, or finds the shared body budget full, gets 503 with
+        `Retry-After`. A stream with a UTF-16 byte order mark is 422: send
+        UTF-8.
+
+        The answer may take at most `--max-gate-bytes` too: an upper bound
+        on it, in the asked format (every string at its dearest escape),
+        is computed after the evaluation and before anything is encoded,
+        and over the cap is 413, saying to split the stream. With
+        `cluster`, the cluster's own findings and the objects they list
+        count toward it. The answer is built before it is sent, with its
+        `Content-Length`. Answers waiting for their clients share a budget
+        of twice `--max-snapshot-bytes` with the per-cluster and fleet
+        reads; an answer that does not fit what is left of it is 503 with
+        `Retry-After`. (One larger than that whole budget, possible only
+        when `--max-gate-bytes` is over twice `--max-snapshot-bytes`, is
+        sent while the next request waits, and cut off if the client has
+        not taken it within 20s.)
       parameters:
         - name: target
           in: query
@@ -522,10 +620,12 @@ paths:
           in: query
           description: |
             The repository-relative file the stream was rendered to
-            (`deploy/rendered.yaml`). Introduced findings are then located
-            in it in SARIF and Code Quality, so code scanning or the merge
-            request widget shows them on the change.
-          schema: {type: string}
+            (`deploy/rendered.yaml`): clean, relative, valid UTF-8 without
+            control characters, at most 512 bytes (every listed object
+            carries it); otherwise 422. Introduced findings are then
+            located in it in SARIF and Code Quality, so code scanning or
+            the merge request widget shows them on the change.
+          schema: {type: string, maxLength: 512}
         - name: config
           in: query
           description: |
@@ -566,7 +666,8 @@ paths:
           description: |
             The gate failed (same body as 200), or the request is invalid
             (no or bad `target`, bad `format`, `fail-on`, `path` or
-            `config`, or an undecodable manifest stream: an Error body).
+            `config`, an invalid document separator, a UTF-16 stream, or an
+            undecodable manifest stream: an Error body).
           headers:
             X-Upgradescope-Verdict: {$ref: "#/components/headers/Verdict"}
           content:
@@ -580,11 +681,36 @@ paths:
               schema: {$ref: "#/components/schemas/SARIF"}
             application/xml:
               schema: {$ref: "#/components/schemas/JUnit"}
+        "400":
+          description: The body ended early or could not be read.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
-        "413": {$ref: "#/components/responses/Error"}
+        "408":
+          description: The body did not arrive within the server's read timeout (60s for `serve`).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "413":
+          description: |
+            Over the byte cap (for the body, or for the stream with its
+            aliases expanded), the per-document size (aliases expanded),
+            the document count, the node budget, or the answer's bound,
+            or, with `?cluster=`, a report over `--max-snapshot-bytes`;
+            the message says which, and to split the stream.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "415": {$ref: "#/components/responses/Error"}
-        "503": {$ref: "#/components/responses/Error"}
+        "503":
+          description: The shared body budget is full, the request waited more than 30s for its turn, or the answers waiting for their clients leave no room for this one; retry after `Retry-After`.
+          headers:
+            Retry-After: {$ref: "#/components/headers/RetryAfter"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
 
   /api/v1/registry:
     get:
@@ -632,10 +758,44 @@ components:
     Verdict:
       description: The gate's verdict.
       schema: {$ref: "#/components/schemas/Verdict"}
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema: {type: integer, minimum: 1}
 
   responses:
     Error:
       description: An error.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    ReadBusy:
+      description: |
+        Reads that load a cluster's snapshot run one at a time, and this
+        one waited more than 30s for its turn, or the responses waiting for
+        their clients leave no room for this one (they share a budget of
+        twice `--max-snapshot-bytes` with the fleet reads and `/gate`);
+        retry after
+        `Retry-After`. A response is sent with its `Content-Length`; one
+        larger than that whole budget is sent while the next read waits,
+        and cut off if the client has not taken it within 20s.
+      headers:
+        Retry-After: {$ref: "#/components/headers/RetryAfter"}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    FleetBusy:
+      description: |
+        Reads of the whole fleet (`/api/v1/clusters`, `/api/v1/fleet`,
+        `/metrics`) run two at a time, and this one waited more than 30s
+        for its turn, or the responses waiting for their clients leave no
+        room for this one (they share a budget of twice
+        `--max-snapshot-bytes` with the per-cluster reads and `/gate`);
+        retry after `Retry-After`. A response is sent with its
+        `Content-Length`; one larger than that whole budget is sent while
+        the next fleet read waits, and cut off if the client has not taken
+        it within 20s.
+      headers:
+        Retry-After: {$ref: "#/components/headers/RetryAfter"}
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -699,6 +859,18 @@ components:
         partial: {type: boolean, description: The capability ran but did not read everything.}
         skipped: {type: array, items: {type: string}, description: What a partial capability did not read.}
         required: {type: boolean, description: The gap makes the verdict unknown.}
+    SummaryGap:
+      description: |
+        A report's gap as an evaluation summary carries it, bounded: its
+        capability cut to 64 bytes, its reason to 256 and at most 3 of what
+        it skipped, each cut to 128 bytes (a cut one ends in "…"), with
+        `skippedOmitted` counting the rest. The report lists every gap
+        whole.
+      allOf:
+        - {$ref: "#/components/schemas/CapabilityGap"}
+        - type: object
+          properties:
+            skippedOmitted: {type: integer, minimum: 1, description: Skipped entries not listed.}
     CapabilityStatus:
       type: object
       required: [available]
@@ -721,7 +893,14 @@ components:
         evaluatedAt: {type: string, format: date-time, description: When the result was last confirmed.}
         snapshotId: {type: integer, format: int64}
         outdated: {type: boolean, description: "Evaluated before today (UTC), or under another knowledge base or team map; the next pass replaces it."}
-        notAssessed: {type: array, items: {$ref: "#/components/schemas/CapabilityGap"}}
+        notAssessed:
+          type: array
+          items: {$ref: "#/components/schemas/SummaryGap"}
+          description: |
+            The required gaps first, then the rest. A cluster's detail lists
+            every gap; `/clusters` lists at most 1 KiB of them (encoded) and
+            counts the rest in `notAssessedOmitted`.
+        notAssessedOmitted: {type: integer, minimum: 1, description: Gaps not listed (only in /clusters).}
     ClusterSummary:
       allOf:
         - {$ref: "#/components/schemas/ClusterFields"}
@@ -769,7 +948,8 @@ components:
         title: {type: string}
         detail: {type: string}
         teams: {type: array, items: {type: string}}
-        namespaces: {type: array, items: {type: string}}
+        namespaces: {type: array, items: {type: string}, maxItems: 100, description: "Affected namespaces, sorted, at most 100."}
+        namespacesOmitted: {type: integer, description: Affected namespaces not listed.}
         remediation: {type: string}
         citations: {type: array, items: {type: string, format: uri}}
         objects: {type: array, items: {$ref: "#/components/schemas/ObjectRef"}, maxItems: 100}
@@ -891,7 +1071,11 @@ components:
         snapshotId: {type: integer, format: int64}
         source: {type: string, const: stored}
         outdated: {type: boolean}
-        notAssessed: {type: array, items: {$ref: "#/components/schemas/CapabilityGap"}}
+        notAssessed:
+          type: array
+          items: {$ref: "#/components/schemas/SummaryGap"}
+          description: The required gaps first, then the rest, at most 1 KiB of them (encoded).
+        notAssessedOmitted: {type: integer, minimum: 1, description: Gaps not listed.}
     FleetRow:
       type: object
       required: [clusterId, name, lastSeen, stale, cells]
@@ -914,6 +1098,12 @@ components:
       required: [targets, clusters]
       properties:
         targets: {type: array, items: {$ref: "#/components/schemas/Target"}}
+        targetsOmitted:
+          type: integer
+          minimum: 1
+          description: |
+            Default columns left out past the 16 (absent with `?targets=`
+            and when none are); ask for them with `?targets=`.
         clusters: {type: array, items: {$ref: "#/components/schemas/FleetRow"}}
     FleetTeam:
       type: object

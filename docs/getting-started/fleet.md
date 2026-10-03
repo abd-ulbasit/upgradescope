@@ -18,10 +18,9 @@ upgradescope serve --ingest-token "$(openssl rand -hex 32)"
 The defaults are deliberately narrow: it listens on loopback
 (`--listen 127.0.0.1:8080`) and keeps SQLite in `upgradescope.db`. That
 file and its `-wal` and `-shm` files hold every cluster's inventory and the
-token hashes, and are created with your umask, so 0644 under the usual 022
-([#126](https://github.com/abd-ulbasit/upgradescope/issues/126)): put them
-in a directory only the server's user can read. On any
-other address it refuses to start without a read token, unless
+token hashes; `serve` creates them readable by its user only (0600), in
+a directory it creates 0700, and tightens an existing database on open.
+On any other address it refuses to start without a read token, unless
 `--allow-anonymous-read` says something else guards it:
 
 ```console
@@ -42,8 +41,9 @@ has the hub recipe.
 
 ## Connect agents
 
-Give each cluster its own ingest token. It is printed once, only its hash
-is stored, and it can push only as the cluster it names:
+Give each cluster its own ingest token. It is printed once, the server
+keeps its sha256 hash and first 8 characters (never the token), and it can
+push only as the cluster it names:
 
 ```console
 $ upgradescope tokens create prod-eu-1 --db upgradescope.db

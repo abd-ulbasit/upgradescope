@@ -37,7 +37,10 @@ helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
   (SQLite and Postgres alike). Back it up first
   ([Retention and backup](retention-and-backup.md)); an older server
   cannot read a newer schema.
-- **Agents and servers** can be upgraded in either order. The push
+- **Agents and servers** can be upgraded in either order (from v0.1.x,
+  upgrade the server first when a cluster name is invalid, and run both
+  `clusters list` and `clusters rename` from the upgraded binary:
+  [Cluster names](#from-v01x)). The push
   protocol is versioned (`schemaVersion` 1), a newer server stores fields
   an older agent does not send and keeps fields a newer agent sends that it
   does not know, and a server re-judges every stored snapshot with its own
@@ -60,3 +63,49 @@ who writes an API instead of what is served, which removes false blockers;
 and the server's gate endpoint fails on blockers by default. Read the
 **Changed** section before you upgrade a CI gate, and expect clusters that
 read `ready` under v0.1.x to read differently, in both directions.
+
+**Cluster names.** A v0.1 server registered clusters under any name, and
+v0.1 agents sent `--cluster-name` (chart `agent.clusterName`) unchecked.
+The server now refuses every push whose cluster name is not a lowercase
+RFC 1123 subdomain of at most 253 bytes (`Prod_EU`, `prod eu`) with
+`422`, and an upgraded agent refuses to start with one. v0.1.x has no
+`clusters rename` command and no rename endpoint, so upgrade the server
+(and the CLI you run the rename with) first. Then, before you upgrade
+the agents, run `upgradescope clusters list` from the upgraded binary, and for each name that is
+not valid, rename the cluster (its history and per-cluster tokens move
+with it), then set the agent's name to match:
+
+```sh
+upgradescope clusters rename Prod_EU prod-eu --server https://upgradescope.example.com
+helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope -n upgradescope \
+  --reuse-values --set agent.clusterName=prod-eu
+```
+
+Until an agent's name is changed its pushes are refused; nothing stored
+is lost, only the cycles it could not push
+([Cluster lifecycle](../operations.md#cluster-lifecycle)). When one
+release runs both the server and the agent, the `helm upgrade` that
+upgrades the server upgrades the agent too, and the new agent refuses to
+start with the invalid name, its pod failing, until you have
+renamed the cluster and the second `helm upgrade` above sets
+`agent.clusterName`.
+
+The server bounds its memory by the input's structure
+([Memory and request limits](../operations.md#memory-and-request-limits)):
+a `/gate` stream of more than about 4.4 MiB of typical kubectl YAML, or a
+document that YAML aliases expand past 4 MiB, gets 413 where v0.1.x decoded
+it, so split such streams. Reads that load a stored snapshot run one at a
+time and can get 503 with `Retry-After` under load. Snapshots a v0.1
+server stored are decoded without a node count until their clusters push
+again. On its first start,
+`serve` tightens an existing SQLite database and its `-wal` and `-shm`
+files to 0600, and its migration copies what each stored evaluation could
+not assess out of the report into a column of its own, reading every
+stored report once, so that first start takes longer on a large
+database. The chart's server memory limit is 1Gi, up from 512Mi, which
+the worst case measured on SQLite no longer fit; if you set
+`server.resources` yourself, see
+[Memory and request limits](../operations.md#memory-and-request-limits).
+`serve --targets` (chart `server.targets`) takes at most 4 minors now,
+the count that worst case is measured at: a server started with more
+refuses to start, so trim the list before you upgrade.

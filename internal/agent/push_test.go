@@ -288,3 +288,33 @@ func TestBackoffCapped(t *testing.T) {
 		t.Errorf("backoff(0) = %v, want 1s", got)
 	}
 }
+
+// A bearer token sent over plain http:// to another host crosses the
+// network in the clear; the chart's default in-cluster push did exactly
+// that with the any-cluster ingest token (#126 SE-09). The agent says so.
+func TestCleartextPushWarning(t *testing.T) {
+	for _, tc := range []struct {
+		url, token string
+		warn       bool
+	}{
+		{"http://upgradescope-server.upgradescope.svc:8080", "tok", true},
+		{"http://10.0.0.5:8080/", "tok", true},
+		{"HTTP://hub.example.com", "tok", true},
+		{"https://hub.example.com", "tok", false},
+		{"http://127.0.0.1:8080", "tok", false},
+		{"http://127.1.2.3:8080", "tok", false},
+		{"http://[::1]:8080", "tok", false},
+		{"http://localhost:8080", "tok", false},
+		{"http://LocalHost:8080", "tok", false},
+		{"http://hub.example.com", "", false},
+		{"", "tok", false},
+	} {
+		msg := CleartextPushWarning(tc.url, tc.token)
+		if (msg != "") != tc.warn {
+			t.Errorf("CleartextPushWarning(%q, %q) = %q, want a warning: %v", tc.url, tc.token, msg, tc.warn)
+		}
+		if tc.warn && !strings.Contains(msg, "https") {
+			t.Errorf("warning %q does not say to use https", msg)
+		}
+	}
+}

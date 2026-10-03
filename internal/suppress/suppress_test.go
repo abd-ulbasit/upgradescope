@@ -184,6 +184,18 @@ func TestApplyNamespaceSelectorOnObjectlessFinding(t *testing.T) {
 	}
 }
 
+// A finding that lists only some of its namespaces (NamespacesOmitted)
+// cannot be shown to be all in a rule's namespaces, so the rule does not
+// take it.
+func TestApplyNamespaceSelectorNeedsEveryNamespaceListed(t *testing.T) {
+	f := eolNginx()
+	f.NamespacesOmitted = 3
+	got, _ := Apply(report(f), []Rule{{Key: "eol-addon/ingress-nginx", Namespace: "ingress-*", Reason: "r"}}, Options{Now: now})
+	if len(got.Suppressed) != 0 || len(got.Findings) != 1 {
+		t.Fatalf("suppressed %d, kept %d; want the finding kept", len(got.Suppressed), len(got.Findings))
+	}
+}
+
 func TestApplyAnnotations(t *testing.T) {
 	accepted := shopWeb
 	accepted.Ignore, accepted.IgnoreReason = "deprecated-api, removed-api/networking.k8s.io/v1beta1/Ingress", "replaced by HTTPRoute"

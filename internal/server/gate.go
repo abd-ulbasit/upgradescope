@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/abd-ulbasit/upgradescope/internal/codequality"
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
@@ -20,6 +21,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/junit"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // yamlContentTypes are the media types the gate accepts for a manifest
@@ -74,6 +76,10 @@ var yamlContentTypes = map[string]bool{
 // format=gitlab-codequality (GitLab Code Quality; findings without a file
 // are on the virtual upgradescope/ path) answer like sarif: the introduced
 // findings only, with the gate's status and verdict.
+//
+// An answer whose bound in its format (gateAnswerBound) is over
+// --max-gate-bytes is 413 before it is encoded, and ?path= is at most
+// maxArtifactPathBytes: both multiply what the answer lists.
 func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mt, _, err := mime.ParseMediaType(ct)
@@ -110,6 +116,12 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	artifact := r.URL.Query().Get("path")
+	if len(artifact) > maxArtifactPathBytes {
+		errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+			"path is %d bytes, over the %d bytes a repository path may have here (every object in the answer carries it)",
+			len(artifact), maxArtifactPathBytes))
+		return
+	}
 	if artifact != "" && !repoPath(artifact) {
 		errJSON(w, http.StatusUnprocessableEntity,
 			fmt.Sprintf("invalid path %q (want the repository-relative file the stream was rendered to, e.g. deploy/rendered.yaml)", artifact))
@@ -121,31 +133,64 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The body stays charged to the shared buffered-body budget until it is
-	// decoded, and the evaluation slot is held only for decoding and
-	// evaluation: a client that stops reading the response must not pin it.
-	// Both releases are idempotent; the defers cover the early returns.
-	body, releaseBody, ok := s.readManifestBody(w, r)
+	// decoded, and the evaluation slot is held for measuring what its
+	// aliases expand to, decoding, evaluation and encoding the response,
+	// the steps whose memory follows the YAML's structure and the cluster's
+	// stored inventory. The response is written to memory in the slot and
+	// sent as a read's is (send): a client that stops reading holds only
+	// its bytes, under the held-response budget, never the slot nor the
+	// reports it was built from. Both releases are idempotent; the defers
+	// cover the early returns.
+	body, shape, releaseBody, ok := s.readManifestBody(w, r)
 	if !ok {
 		return
 	}
 	defer releaseBody()
-	releaseSlot, ok := s.acquireGateSlot(w, r)
+	releaseSlot, ok := acquireSlot(w, r.Context().Done(), s.gateSlots, s.gateQueueTimeout, "too many concurrent gate evaluations; retry shortly")
 	if !ok {
 		return
 	}
 	defer releaseSlot()
-	manifests, err := collect.CollectManifests(body.reader(), s.cfg.KB.AddOns)
-	releaseBody()
+	resp := newHeldResponse()
+	s.evaluateGate(resp, r, gateRequest{body: body, shape: shape, releaseBody: releaseBody,
+		target: target, format: format, failOn: failOn, artifact: artifact, rules: rules})
+	s.send(w, resp, releaseSlot)
+}
+
+// gateRequest is a /gate request whose parameters are checked and whose
+// body is read.
+type gateRequest struct {
+	body        bufferedBody
+	shape       *manifestShape
+	releaseBody func()
+	target      inventory.Version
+	format      string
+	failOn      string
+	artifact    string
+	rules       []suppress.Rule // ?config='s ignore rules
+}
+
+// evaluateGate decodes and evaluates g, in the evaluation slot, and
+// writes the answer to w. What it builds the answer from is garbage once
+// it returns.
+func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequest) {
+	if status, msg := g.shape.checkAliases(s.maxGateBytes()); status != 0 {
+		errJSON(w, status, msg)
+		return
+	}
+	manifests, err := collect.CollectManifests(g.body.reader(), s.cfg.KB.AddOns)
+	g.releaseBody()
 	if err != nil {
 		errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
 		return
 	}
 	for _, u := range manifests.APIUsage { // refs carry stream lines; ?path= names their file
 		for i := range u.Objects {
-			u.Objects[i].File = artifact
+			u.Objects[i].File = g.artifact
 		}
 	}
 
+	target := g.target
 	inv := manifests
 	var baseline *engine.Report
 	var introduced gateSide
@@ -157,7 +202,11 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		clusterInv.Namespaces = s.cfg.TeamMap.Apply(clusterInv.Namespaces)
 		// Baseline: the cluster as it is, so findings it already has are
 		// not blamed on the PR.
-		base := engine.Evaluate(clusterInv, s.cfg.KB, target, s.now())
+		base, err := s.evaluateWithin(clusterInv, target, s.now())
+		if err != nil {
+			errJSON(w, http.StatusRequestEntityTooLarge, "?cluster="+ref+": "+err.Error())
+			return
+		}
 		baseline = &base
 		// Merge: cluster context + manifest API usage. The manifest objects
 		// are upserted into the cluster's API usage (see upsertUsage), and
@@ -174,34 +223,54 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		// and the findings the manifests' own content produces, once
 		// suppressed, are introduced by the PR (suppressSide).
 		side := mergeManifests(&inv, manifests)
-		introduced = s.suppressSide(engine.Evaluate(side, s.cfg.KB, target, s.now()), rules)
+		sideRep, err := s.evaluateWithin(side, target, s.now())
+		if err != nil {
+			errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
+		introduced = s.suppressSide(sideRep, g.rules)
 	} else {
 		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	}
 
-	rep, warnings := s.suppressGate(engine.Evaluate(inv, s.cfg.KB, target, s.now()), rules)
-	releaseSlot()
+	full, err := s.evaluateWithin(inv, target, s.now())
+	if err != nil {
+		errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
+	rep, warnings := s.suppressGate(full, g.rules)
 	resp := gateResult(rep, baseline, introduced)
 	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings
+	bound := gateAnswerBound(resp, g.format)
+	if s.observeGateBound != nil {
+		s.observeGateBound(bound)
+	}
+	if limit := s.gateAnswerLimit(); bound > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"the answer to this stream could take up to %d bytes, over the %s limit for a /gate answer "+
+				"(it lists every object the findings name, with its name, namespace and path); split the stream into several requests"+
+				" (with ?cluster=, the cluster's own findings count too)", bound, sizeString(limit)))
+		return
+	}
 	w.Header().Set("X-Upgradescope-Verdict", string(resp.Verdict))
 	status := http.StatusOK
-	if gateFails(resp, failOn) {
+	if gateFails(resp, g.failOn) {
 		status = http.StatusUnprocessableEntity
 	}
-	if format == "sarif" {
+	if g.format == "sarif" {
 		w.Header().Set("Content-Type", "application/sarif+json")
 		w.WriteHeader(status)
 		_ = sarif.Write(w, sarifReport(rep, resp), s.cfg.Version)
 		return
 	}
-	if format == "junit" {
+	if g.format == "junit" {
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(status)
-		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: failOn})
+		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: g.failOn})
 		return
 	}
-	if format == "gitlab-codequality" {
+	if g.format == "gitlab-codequality" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = codequality.Write(w, sarifReport(rep, resp))
@@ -311,12 +380,19 @@ func sarifReport(rep engine.Report, resp gateResponse) engine.Report {
 	return out
 }
 
+// maxArtifactPathBytes caps ?path=. Every object ref in the answer carries
+// the path, up to inventory.MaxObjectRefs per finding, so its length
+// multiplies the answer's: unbounded, a 60 KB path and a 1.2 MB stream
+// (the KB's 136 deprecated or removed GVKs, 100 objects each) made an
+// 817 MB answer. Repository paths are rarely over 200 bytes.
+const maxArtifactPathBytes = 512
+
 // repoPath reports whether p can name a file in the repository: relative,
-// slash-separated, clean, inside the repository, without control
-// characters.
+// slash-separated, clean, inside the repository, valid UTF-8 without
+// control characters.
 func repoPath(p string) bool {
 	return !strings.HasPrefix(p, "/") && !strings.Contains(p, `\`) && path.Clean(p) == p &&
-		p != "." && p != ".." && !strings.HasPrefix(p, "../") && !strings.ContainsFunc(p, unicode.IsControl)
+		p != "." && p != ".." && !strings.HasPrefix(p, "../") && !strings.ContainsFunc(p, unicode.IsControl) && utf8.ValidString(p)
 }
 
 // usageKeys returns the keys of the API-usage findings (removed or
@@ -451,5 +527,6 @@ func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref 
 		internalErr(w, "decoding gate cluster inventory", fmt.Errorf("snapshot %d: %w", snap.ID, err))
 		return inventory.Inventory{}, false
 	}
+	inv.CutFreeText() // as ingest judged it (decodeInventory)
 	return inv, true
 }

@@ -4,12 +4,18 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
+	"unicode/utf8"
 )
 
 // HashToken is the storage form of an ingest token: lowercase hex sha256.
@@ -73,6 +79,10 @@ type Store interface {
 
 	InsertSnapshot(ctx context.Context, s Snapshot) (int64, bool, error) // (id, duplicate, err) — duplicate iff same cluster+hash as latest
 	LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error)
+	// LatestSnapshotHead is LatestSnapshot without Inventory (nil): a
+	// push compares its hash and reads its server version, and the
+	// inventory is up to --max-snapshot-bytes.
+	LatestSnapshotHead(ctx context.Context, clusterID int64) (Snapshot, error)
 	// LatestSnapshotHeads returns every cluster's latest snapshot, keyed by
 	// cluster id, without Inventory (nil): fleet views need the id and
 	// server version of each, not hundreds of inventory blobs. Clusters
@@ -88,6 +98,11 @@ type Store interface {
 	// cluster's LATEST snapshot, or ErrNotFound — an evaluation of an
 	// older snapshot describes an inventory the cluster no longer has.
 	CurrentEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error)
+	// CurrentEvaluationSummary is CurrentEvaluation without the report
+	// (Report nil): the columns and NotAssessed. The read API's summaries
+	// of every cluster (cluster list, fleet matrix, metrics) use it, so
+	// their cost never depends on how large a report is.
+	CurrentEvaluationSummary(ctx context.Context, clusterID int64, target string) (Evaluation, error)
 	// LatestKnownEvaluation is the newest evaluation for (cluster, target)
 	// whose verdict was decided — ready, or at least one blocker — skipping
 	// "unknown" ones (no blockers but required checks not assessed).
@@ -160,17 +175,22 @@ type Snapshot struct {
 }
 
 type Evaluation struct {
-	ID         int64     `json:"id"`
-	ClusterID  int64     `json:"clusterId"`
-	SnapshotID int64     `json:"snapshotId"`
-	Target     string    `json:"target"`
-	KBVersion  string    `json:"kbVersion"`
-	Score      int       `json:"score"`
-	Ready      bool      `json:"ready"`
-	Blockers   int       `json:"blockers"`
-	Warnings   int       `json:"warnings"`
-	Report     []byte    `json:"-"` // full engine.Report JSON
-	CreatedAt  time.Time `json:"createdAt"`
+	ID         int64  `json:"id"`
+	ClusterID  int64  `json:"clusterId"`
+	SnapshotID int64  `json:"snapshotId"`
+	Target     string `json:"target"`
+	KBVersion  string `json:"kbVersion"`
+	Score      int    `json:"score"`
+	Ready      bool   `json:"ready"`
+	Blockers   int    `json:"blockers"`
+	Warnings   int    `json:"warnings"`
+	Report     []byte `json:"-"` // full engine.Report JSON
+	// NotAssessed is the report's notAssessed array as JSON, nil when it
+	// is absent or empty. Written by the store, never by the caller: every
+	// write that stores a Report stores this beside it (notAssessedOf), so
+	// a summary that says what a verdict could not cover reads no report.
+	NotAssessed []byte    `json:"-"`
+	CreatedAt   time.Time `json:"createdAt"`
 	// EvaluatedAt is when this result was last confirmed: a re-evaluation
 	// with the same verdict, score and finding keys refreshes the row
 	// instead of adding a history point. Zero on insert defaults to
@@ -179,6 +199,152 @@ type Evaluation struct {
 	// TeamMapHash identifies the server --team-map the report was computed
 	// with ("" = none), so a changed map triggers a re-evaluation.
 	TeamMapHash string `json:"teamMapHash,omitempty"`
+}
+
+// What the not_assessed column keeps of a gap. The fleet-wide reads load
+// it for every cluster and target, so it is bounded: a gap's capability
+// name (a push may name one of 16 KiB) is cut to SummaryCapabilityBytes,
+// its reason (up to 64 KiB) to SummaryReasonBytes, and its skipped list
+// to its first SummarySkipped entries, each cut to SummarySkippedBytes,
+// with skippedOmitted counting the rest. A gap is then at most about
+// 900 bytes, and with at most inventory.MaxCapabilities gaps and the
+// engine's own an evaluation's column at most about 30 KB. (With names
+// whole, a 1 KiB reason and 10 entries of 512 bytes, the columns of 50
+// clusters made /fleet answer 108 MB and grow the heap 516 MiB; the reads
+// also list only part of a column: fleetSummaryBytes in the server.) A
+// genuine name, reason or entry is shorter; the report keeps every gap
+// whole.
+const (
+	SummaryCapabilityBytes = 64
+	SummaryReasonBytes     = 256
+	SummarySkipped         = 3
+	SummarySkippedBytes    = 128
+)
+
+// notAssessedOf extracts a report's notAssessed array for its own column,
+// each gap bounded as above: "" when the report has none, an empty one,
+// or does not decode (the report endpoint then says it is corrupt).
+// Skipped fields allocate nothing, so this costs a scan of the report, not
+// a copy of it.
+func notAssessedOf(report []byte) string {
+	var r struct {
+		NotAssessed []json.RawMessage `json:"notAssessed"`
+	}
+	if len(report) == 0 || json.Unmarshal(report, &r) != nil || len(r.NotAssessed) == 0 {
+		return ""
+	}
+	var out bytes.Buffer
+	out.WriteByte('[')
+	for i, raw := range r.NotAssessed {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		if writeGapSummary(&out, raw) != nil {
+			return ""
+		}
+	}
+	out.WriteByte(']')
+	return out.String()
+}
+
+// writeGapSummary writes one gap of a report's notAssessed to out, cut to
+// the column's bounds, every field it does not cut as it was, with < > &
+// and U+2028/U+2029 as themselves (json.Marshal writes each as six bytes),
+// and no field the gap did not have.
+func writeGapSummary(out *bytes.Buffer, raw json.RawMessage) error {
+	var g struct {
+		Capability string   `json:"capability"`
+		Reason     string   `json:"reason"`
+		Skipped    []string `json:"skipped"`
+	}
+	if err := json.Unmarshal(raw, &g); err != nil {
+		return err
+	}
+	if len(g.Capability) <= SummaryCapabilityBytes && len(g.Reason) <= SummaryReasonBytes && len(g.Skipped) <= SummarySkipped &&
+		!slices.ContainsFunc(g.Skipped, func(s string) bool { return len(s) > SummarySkippedBytes }) {
+		return json.Compact(out, raw)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["capability"]; ok {
+		fields["capability"] = jsonString(CutString(g.Capability, SummaryCapabilityBytes))
+	}
+	if _, ok := fields["reason"]; ok {
+		fields["reason"] = jsonString(CutString(g.Reason, SummaryReasonBytes))
+	}
+	if n := len(g.Skipped) - SummarySkipped; n > 0 {
+		g.Skipped = g.Skipped[:SummarySkipped]
+		fields["skippedOmitted"] = json.RawMessage(fmt.Sprint(n))
+	}
+	if _, ok := fields["skipped"]; ok && g.Skipped != nil {
+		var list bytes.Buffer
+		list.WriteByte('[')
+		for i, s := range g.Skipped {
+			if i > 0 {
+				list.WriteByte(',')
+			}
+			list.Write(jsonString(CutString(s, SummarySkippedBytes)))
+		}
+		list.WriteByte(']')
+		fields["skipped"] = list.Bytes()
+	}
+	out.WriteByte('{')
+	for i, k := range slices.Sorted(maps.Keys(fields)) {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(jsonString(k))
+		out.WriteByte(':')
+		if err := json.Compact(out, fields[k]); err != nil {
+			return err
+		}
+	}
+	out.WriteByte('}')
+	return nil
+}
+
+// jsonString is s as a JSON string with only what JSON requires escaped:
+// '"', '\\' and control characters, so < > & and U+2028/U+2029 are
+// themselves.
+func jsonString(s string) json.RawMessage {
+	b := make([]byte, 0, len(s)+2)
+	b = append(b, '"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '"' || c == '\\':
+			b = append(b, '\\', c)
+		case c < 0x20:
+			b = fmt.Appendf(b, `\u%04x`, c)
+		default:
+			b = append(b, c)
+		}
+	}
+	return append(b, '"')
+}
+
+// CutString is s cut to at most max bytes, at a UTF-8 boundary, marked
+// with "…" when it is cut.
+func CutString(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
+// notAssessedBytes is the read side of the not_assessed column: NULL (a
+// row written by a binary that predates migration 0007) and "" both read
+// as none.
+func notAssessedBytes(v sql.NullString) []byte {
+	if !v.Valid || v.String == "" {
+		return nil
+	}
+	return []byte(v.String)
 }
 
 // ErrConflict is returned by CommitEvaluations when the batch was computed

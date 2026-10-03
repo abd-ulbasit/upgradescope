@@ -14,10 +14,29 @@ The server has four credentials, each optional except where noted:
 
 | Credential | Authorizes | Configured with |
 |---|---|---|
-| read token | every `GET /api/v1/*` endpoint (clusters, reports, findings, history, team rollups, exports, registry), `POST /api/v1/gate`, `/metrics` | `--read-token`; empty = open, refused on a non-loopback `--listen` without `--allow-anonymous-read` |
+| read token | every `GET /api/v1/*` endpoint (clusters, reports, findings, history, team rollups, exports, registry), `POST /api/v1/gate`, `/metrics` | `--read-token`; empty = open, which `serve` refuses unless the address it binds is loopback or `--allow-anonymous-read` is set |
 | per-cluster ingest tokens | `POST /api/v1/snapshots` as one cluster name | `upgradescope tokens create <cluster>` |
 | shared ingest token | `POST /api/v1/snapshots` as **any** cluster | `--ingest-token` |
 | admin token | deleting and renaming clusters, plus reads | `--admin-token`; empty = both refused |
+
+Per-cluster tokens are 64 random hex characters, printed once by
+`tokens create`. The server stores each one's sha256 hash and its first 8
+characters, which `tokens list` prints to tell them apart; never the
+token. `tokens revoke <cluster> --id <id>` revokes one and `--all` every
+active one of a cluster. To rotate without a gap: `tokens create`, put
+the new token in the agent's Secret, restart the agent (it reads the
+token at startup: `kubectl rollout restart deploy/<release>-agent`), then
+revoke the old id.
+
+Tokens are bearer secrets: anyone who sees one in transit can replay it.
+Serve HTTPS (`--tls-cert-file`, the chart's `server.tls`, or an Ingress
+that terminates TLS) wherever pushes or reads cross a network you do not
+trust. The agent logs a warning at startup when it would send its token
+over plain `http://` to a host that is not loopback.
+
+The server's SQLite database, and its `-wal` and `-shm` files, are
+created readable by their owner only (0600), and a directory `serve`
+creates for them 0700; an existing database is tightened on open.
 
 What the read token does **not** do:
 
@@ -30,8 +49,9 @@ What the read token does **not** do:
   every consumer at once.
 - **It does not protect the dashboard's static files** (HTML, JS, CSS),
   which hold no data, nor `/healthz` and `/readyz`.
-- **It is not encryption.** Without TLS (`--tls-cert-file`, or an Ingress
-  that terminates it) it crosses the network in the clear.
+- **It is not encryption.** Without TLS (`--tls-cert-file`, the chart's
+  `server.tls`, or an Ingress that terminates it) it crosses the network in
+  the clear.
 - **It lives in the browser.** The dashboard keeps it in `localStorage`;
   the server's Content-Security-Policy forbids inline and third-party
   script, which is what would read it.

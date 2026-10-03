@@ -93,6 +93,7 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "ingestToken": { "type": "string" },
+        "sharedIngestToken": { "type": "boolean" },
         "readToken": { "type": "string" },
         "existingSecret": { "$ref": "#/definitions/secretName" },
         "readTokenFromSecret": { "type": "boolean" },
@@ -101,7 +102,11 @@
         "slackWebhook": { "type": "string", "pattern": "^(https?://.+)?$" },
         "webhook": { "type": "string", "pattern": "^(https?://.+)?$" },
         "webhookSecret": { "type": "string" },
-        "targets": { "$ref": "#/definitions/targets" },
+        "targets": {
+          "description": "Extra targets serve evaluates on every snapshot: at most 4 entries (serve --targets takes 4 distinct minors; this counts entries, so 1.39 and v1.39 are two), since each adds a report of up to --max-snapshot-bytes to every push and re-evaluation and the server's memory limit is sized for that many.",
+          "allOf": [{ "$ref": "#/definitions/targets" }],
+          "maxItems": 4
+        },
         "retention": {
           "description": "Whole days (90d), a Go duration (2160h) of at least a day, or 0 to keep everything (`--set server.retention=0` passes the number 0); serve validates the value.",
           "anyOf": [
@@ -148,6 +153,29 @@
               "properties": {
                 "enabled": { "type": "boolean" },
                 "secretName": { "$ref": "#/definitions/secretName" }
+              }
+            }
+          }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretName": { "$ref": "#/definitions/secretName" },
+            "caKey": { "type": "string" },
+            "certManager": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "issuerRef": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "group": { "type": "string" }
+                  }
+                }
               }
             }
           }

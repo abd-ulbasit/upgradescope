@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -148,5 +150,48 @@ func TestReadAPIAcceptsAdminToken(t *testing.T) {
 	defer ts.Close()
 	if resp := getJSON(t, ts, "/api/v1/clusters", "admin-tok", nil); resp.StatusCode != http.StatusOK {
 		t.Errorf("GET /api/v1/clusters with the admin token = %d, want 200", resp.StatusCode)
+	}
+}
+
+// A v0.1 server registered any cluster name its agents sent, "Prod_EU"
+// included, and minted per-cluster tokens for it. Pushes under that name
+// are now 422, so the upgrade path is a rename to a valid name, which
+// moves the history and re-binds the tokens, then the agent's
+// --cluster-name: its next push, with the same token, lands on the same
+// cluster.
+func TestRenameMigratesAnInvalidV01ClusterName(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "upgradescope.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	id, err := st.UpsertCluster(ctx, store.Cluster{Name: "Prod_EU", ClusterUID: "uid-123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateToken(ctx, "Prod_EU", "prod-tok"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Config{Store: st, KB: testKB(), AdminToken: "admin-tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	if resp, out := postSnapshot(t, ts, "prod-tok", pushNamed(t, "Prod_EU", testInventory()), false); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("push as Prod_EU = %d %v, want 422", resp.StatusCode, out)
+	}
+	if code, out := adminRequest(t, ts, http.MethodPatch, fmt.Sprintf("/api/v1/clusters/%d", id), "admin-tok", `{"name":"prod-eu"}`); code != http.StatusOK {
+		t.Fatalf("rename Prod_EU to prod-eu = %d %v, want 200", code, out)
+	}
+	resp, out := postSnapshot(t, ts, "prod-tok", pushNamed(t, "prod-eu", testInventory()), false)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("push as prod-eu with the old token = %d %v, want 202", resp.StatusCode, out)
+	}
+	clusters, err := st.ListClusters(ctx)
+	if err != nil || len(clusters) != 1 || clusters[0].ID != id || clusters[0].Name != "prod-eu" {
+		t.Fatalf("clusters = %+v (%v), want only cluster %d, named prod-eu", clusters, err, id)
 	}
 }

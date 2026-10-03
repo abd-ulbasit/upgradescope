@@ -63,6 +63,20 @@ spec:
     - port: http
       path: /metrics
       interval: {{ .Values.metrics.serviceMonitor.interval }}
+      {{- with include "upgradescope.serverTLSSecret" . }}
+      scheme: https
+      tlsConfig:
+        serverName: {{ printf "%s.%s.svc" (include "upgradescope.serverFullname" $) $.Release.Namespace }}
+        {{- with $.Values.server.tls.caKey }}
+        # The CA in the server.tls Secret (cert-manager CA and self-signed
+        # issuers write ca.crt); with server.tls.caKey empty, Prometheus's
+        # system roots.
+        ca:
+          secret:
+            name: {{ include "upgradescope.serverTLSSecret" $ }}
+            key: {{ . | quote }}
+        {{- end }}
+      {{- end }}
       {{- if include "upgradescope.readTokenEnabled" . }}
       # The read token guards /metrics too (per-cluster scores).
       authorization:

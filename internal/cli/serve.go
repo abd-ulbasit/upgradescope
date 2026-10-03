@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -59,6 +63,9 @@ type serveOptions struct {
 // ctx is cancelled, then graceful stop).
 // A package var so command tests can stub it, same seam as runScan.
 var runServe = func(ctx context.Context, opts serveOptions) error {
+	if limit, ok := applyMemoryLimit(os.Getenv, cgroupRoot); ok {
+		log.Printf("serve: GOMEMLIMIT unset: Go memory limit set to %d bytes, 90%% of the cgroup's memory limit", limit)
+	}
 	st, err := dbFlags{db: opts.db, dbURL: opts.dbURL}.openStore()
 	if err != nil {
 		return err
@@ -86,16 +93,17 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 	}
 
 	srv, err := server.New(server.Config{
-		Listen:       opts.listen,
-		Store:        st,
-		KB:           kbData,
-		Notifier:     notify.Multi(notifiers...), // zero notifiers → harmless no-op
-		IngestToken:  opts.ingestToken,
-		ReadToken:    opts.readToken,
-		AdminToken:   opts.adminToken,
-		ExtraTargets: extraTargets,
-		TeamMap:      opts.parsedTeamMap,
-		Version:      version,
+		Listen:             opts.listen,
+		Store:              st,
+		KB:                 kbData,
+		Notifier:           notify.Multi(notifiers...), // zero notifiers → harmless no-op
+		IngestToken:        opts.ingestToken,
+		ReadToken:          opts.readToken,
+		AdminToken:         opts.adminToken,
+		ExtraTargets:       extraTargets,
+		TeamMap:            opts.parsedTeamMap,
+		AllowAnonymousRead: opts.allowAnonymousRead,
+		Version:            version,
 
 		MaxSnapshotBytes: opts.maxSnapshotBytes,
 		MaxGateBytes:     opts.maxGateBytes,
@@ -199,10 +207,14 @@ It listens on loopback by default. On any other address, the read API needs
 			"sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key>"),
 	}
 	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
-	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38")
+	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
-	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression)")
-	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes")
+	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression); "+
+		"the body must arrive within the 60s read timeout (~350 KiB/s at the 20 MiB default) or the push gets 408, and a push that decodes to too many JSON values gets 413 whatever its size; "+
+		"it also caps every report the server evaluates, stores or exports (a push whose report would be larger gets 413)")
+	cmd.Flags().Int64Var(&opts.maxGateBytes, "max-gate-bytes", server.DefaultMaxGateBytes, "largest accepted /api/v1/gate manifest stream, in bytes; "+
+		"the body must arrive within the 60s read timeout or the request gets 408, and a stream of too many YAML nodes gets 413 whatever its size "+
+		"(the 400k-node budget is about 4.4 MiB of typical kubectl YAML, so it, not this cap, limits a realistic stream)")
 	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert-file", "", "PEM certificate (chain) to serve HTTPS directly; requires --tls-key-file (read at startup)")
 	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key-file", "", "PEM private key for --tls-cert-file")
 	cmd.Flags().DurationVar(&opts.staleAfter, "stale-after", server.DefaultStaleAfter, "mark a cluster stale (API, dashboard data, /metrics) when its agent has not pushed for this long; agents push at least about every 70m by default")
@@ -211,19 +223,60 @@ It listens on loopback by default. On any other address, the read API needs
 	return cmd
 }
 
-// isLoopbackListen reports whether a --listen address binds only loopback:
-// "localhost" or a loopback IP. An empty host (":8080"), a wildcard IP and
-// any other hostname count as exposed — fail closed rather than resolve.
-func isLoopbackListen(listen string) bool {
-	host, _, err := net.SplitHostPort(listen)
-	if err != nil {
-		return false
+// cgroupRoot is where the container's own cgroup is mounted.
+const cgroupRoot = "/sys/fs/cgroup"
+
+// applyMemoryLimit sets the Go runtime's soft memory limit to 90% of the
+// cgroup's memory limit, unless GOMEMLIMIT is set (the runtime has applied
+// that already) or there is no limit. The runtime does not read the
+// container's limit itself: without one, the collector lets garbage grow
+// to as much as the live heap again, and a process whose live heap fits
+// is OOM-killed anyway. The chart sets GOMEMLIMIT; this covers docker run
+// -m and other cgroups. It returns the limit it set.
+func applyMemoryLimit(getenv func(string) string, root string) (int64, bool) {
+	if getenv("GOMEMLIMIT") != "" {
+		return 0, false
 	}
-	if host == "localhost" {
+	limit, ok := cgroupMemoryLimit(root)
+	if !ok {
+		return 0, false
+	}
+	soft := limit * 9 / 10
+	debug.SetMemoryLimit(soft)
+	return soft, true
+}
+
+// cgroupMemoryLimit reads the memory limit of the cgroup mounted at root:
+// memory.max (cgroup v2, "max" = none) or memory/memory.limit_in_bytes
+// (v1, which reports "none" as a value near 2^63).
+func cgroupMemoryLimit(root string) (int64, bool) {
+	for _, f := range []string{"memory.max", "memory/memory.limit_in_bytes"} {
+		raw, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+		if err != nil || n <= 0 || n >= 1<<60 {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+// exposedListen reports whether a --listen address is certainly not
+// loopback: an empty host (":8080", every interface) or an IP outside
+// 127.0.0.0/8 and ::1. That is refused here, with the flags to fix it. A
+// hostname, "localhost" included, is decided by the server on the address
+// it actually binds (server.Config.AllowAnonymousRead), so neither a
+// literal match nor /etc/hosts can open the read API by accident.
+func exposedListen(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil || host == "" {
 		return true
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return ip != nil && !ip.IsLoopback()
 }
 
 // validateServeOptions parses --targets and loads --team-map once into
@@ -251,7 +304,7 @@ func validateServeOptions(opts *serveOptions) error {
 		return fmt.Errorf("--admin-token must differ from --read-token and --ingest-token: " +
 			"whoever holds those must not be able to delete or rename clusters")
 	}
-	if opts.readToken == "" && !opts.allowAnonymousRead && !isLoopbackListen(opts.listen) {
+	if opts.readToken == "" && !opts.allowAnonymousRead && exposedListen(opts.listen) {
 		return fmt.Errorf("refusing to serve the read API and /api/v1/gate without a token on %q: "+
 			"set --read-token, listen on loopback, or pass --allow-anonymous-read to accept open reads", opts.listen)
 	}
@@ -270,7 +323,13 @@ func validateServeOptions(opts *serveOptions) error {
 		if err != nil {
 			return fmt.Errorf("invalid --targets entry %q: %w", raw, err)
 		}
-		opts.parsedTargets = append(opts.parsedTargets, v)
+		if !slices.Contains(opts.parsedTargets, v) {
+			opts.parsedTargets = append(opts.parsedTargets, v)
+		}
+	}
+	if n := len(opts.parsedTargets); n > server.MaxExtraTargets {
+		return fmt.Errorf("--targets lists %d distinct minors, at most %d are allowed: %s",
+			n, server.MaxExtraTargets, server.ExtraTargetsCost)
 	}
 	return nil
 }

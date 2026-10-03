@@ -11,7 +11,7 @@ export function Fleet() {
 
   if (fleet.loading) return <Loading label="Loading fleet…" />;
   if (fleet.error) return <ErrorState error={fleet.error} onRetry={fleet.reload} />;
-  const { targets, clusters } = fleet.data!;
+  const { targets, targetsOmitted, clusters } = fleet.data!;
 
   if (clusters.length === 0) {
     return (
@@ -30,6 +30,13 @@ export function Fleet() {
           Readiness score per cluster and upgrade target — latest stored
           evaluations only. An empty cell opens a what-if for that target.
         </p>
+        {targetsOmitted ? (
+          <p className="muted" role="note">
+            {targetsOmitted} more target{targetsOmitted > 1 ? "s" : ""} not
+            shown: the fleet runs more minors than the 16 columns the server
+            opens, so these are the ones with the most clusters.
+          </p>
+        ) : null}
       </header>
       <div className="card table-wrap">
         <table className="matrix">

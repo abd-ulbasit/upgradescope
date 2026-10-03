@@ -312,6 +312,23 @@ func (p *Postgres) LatestSnapshot(ctx context.Context, clusterID int64) (Snapsho
 	return snap, nil
 }
 
+// LatestSnapshotHead is LatestSnapshot without the inventory.
+func (p *Postgres) LatestSnapshotHead(ctx context.Context, clusterID int64) (Snapshot, error) {
+	var snap Snapshot
+	err := p.db.QueryRowContext(ctx, `
+		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, server_version
+		FROM snapshots WHERE cluster_id = $1 ORDER BY id DESC LIMIT 1`, clusterID).
+		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &snap.ReceivedAt, &snap.ServerVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, ErrNotFound)
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, err)
+	}
+	snap.ReceivedAt = snap.ReceivedAt.UTC()
+	return snap, nil
+}
+
 // LatestSnapshotHeads returns every cluster's latest snapshot without its
 // inventory, in one query over idx_snapshots_cluster_id.
 func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {
@@ -340,10 +357,12 @@ func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot,
 // scanEvaluationPg mirrors scanEvaluation for TIMESTAMPTZ columns.
 func scanEvaluationPg(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
+	var gaps sql.NullString
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps); err != nil {
 		return Evaluation{}, err
 	}
+	e.NotAssessed = notAssessedBytes(gaps)
 	e.CreatedAt = e.CreatedAt.UTC()
 	e.EvaluatedAt = e.EvaluatedAt.UTC()
 	return e, nil
@@ -366,10 +385,10 @@ func insertEvaluationPg(ctx context.Context, x sqlExecer, e Evaluation) (int64, 
 	}
 	var id int64
 	err := x.QueryRowContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		created, evaluated, e.TeamMapHash).Scan(&id)
+		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report)).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -403,6 +422,14 @@ func (p *Postgres) LatestEvaluation(ctx context.Context, clusterID int64, target
 func (p *Postgres) CurrentEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
 	return p.queryEvaluation(ctx, fmt.Sprintf("current evaluation for cluster %d target %s", clusterID, target), `
 		SELECT `+evaluationColumns+` FROM evaluations
+		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = $1) AND target = $2
+		ORDER BY id DESC LIMIT 1`, clusterID, target)
+}
+
+// CurrentEvaluationSummary is CurrentEvaluation without the report.
+func (p *Postgres) CurrentEvaluationSummary(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
+	return p.queryEvaluation(ctx, fmt.Sprintf("current evaluation summary for cluster %d target %s", clusterID, target), `
+		SELECT `+summaryColumns+` FROM evaluations
 		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = $1) AND target = $2
 		ORDER BY id DESC LIMIT 1`, clusterID, target)
 }
@@ -518,9 +545,9 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = $1, kb_version = $2, team_map_hash = $3, blockers = $4, warnings = $5, evaluated_at = $6
-			WHERE id = $7 AND cluster_id = $8`,
-			e.Report, e.KBVersion, e.TeamMapHash, e.Blockers, e.Warnings, evaluated, e.ID, b.ClusterID); err != nil {
+			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, blockers = $5, warnings = $6, evaluated_at = $7
+			WHERE id = $8 AND cluster_id = $9`,
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, e.Blockers, e.Warnings, evaluated, e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}

@@ -10,8 +10,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"unicode"
 
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -23,11 +23,6 @@ import (
 
 // maxAdminBody caps a PATCH body: {"name": "..."} needs well under 1 KiB.
 const maxAdminBody = 4 << 10
-
-// maxClusterNameLen bounds a cluster name set by rename (a DNS name's
-// length; agents send their --cluster-name unchecked, but a rename is an
-// operator typing one).
-const maxClusterNameLen = 253
 
 // adminAuth gates a handler behind Config.AdminToken: 403 when no admin
 // token is configured or a different token is presented, 401 when none is.
@@ -123,17 +118,11 @@ func (s *Server) handleRenameCluster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, renamed)
 }
 
-// checkClusterName returns why name cannot be a cluster's name, or "".
+// checkClusterName returns why name cannot be a cluster's name, or "":
+// the rule pushes and `tokens create` apply, an RFC 1123 subdomain.
 func checkClusterName(name string) string {
-	switch {
-	case name == "":
-		return "name must not be empty"
-	case len(name) > maxClusterNameLen:
-		return fmt.Sprintf("name is longer than %d bytes", maxClusterNameLen)
-	case strings.TrimSpace(name) != name:
-		return "name must not start or end with whitespace"
-	case strings.ContainsFunc(name, unicode.IsControl):
-		return "name must not contain control characters"
+	if err := inventory.ValidateClusterName(name); err != nil {
+		return "name: " + strings.TrimPrefix(err.Error(), "clusterName: ")
 	}
 	return ""
 }

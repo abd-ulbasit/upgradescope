@@ -122,10 +122,17 @@ Go runtime and process metrics (`go_*`, `process_*`) are included.
 
 Per-cluster gauges are read from the database at scrape time, for each
 cluster's default target and every applicable `--targets` minor: the same
-set the cluster page shows. Each scrape reads every cluster's latest
-snapshot, which is fine for fleets of hundreds of clusters at a 1m scrape
-interval. If the database cannot be read the scrape fails, so Prometheus
-reports `up == 0` for the server.
+set the cluster page shows. Each scrape reads every cluster's snapshot
+head and its evaluations' summary columns, never an inventory or a
+report: for 500 clusters the response is ~740 KB and the scrape adds
+~5 MiB to the heap, fine at a 1m scrape interval. If the database cannot
+be read the scrape fails, so Prometheus reports `up == 0` for the
+server. So it does when the scrape gets `503`: scrapes share two slots
+with the cluster list and the fleet matrix, and wait up to 5s for one
+(within Prometheus' default 10s `scrape_timeout`; a shorter
+`scrape_timeout` can still end a scrape first, as a timeout rather than
+a `503`), and their response waits for Prometheus in the budget the
+other reads share ([memory and request limits](operations.md#memory-and-request-limits)).
 
 With a read token (`--read-token`, chart `server.readToken` or
 `server.readTokenFromSecret`), `/metrics` needs it like the rest of the

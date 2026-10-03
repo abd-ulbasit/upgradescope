@@ -213,6 +213,17 @@ a CI gate.
   minor still serves blocks at its removal minor. Only the live collector
   and engine are tested there (no nodes, agent or chart); the tested range
   is on the compatibility page. `make envtest` runs it locally (#135, #69).
+- Chart: HTTPS on the server's own port (`server.tls`), from an existing
+  certificate Secret or a cert-manager `Certificate` issued into
+  `<fullname>-server-https`. The in-chart agent then pushes over HTTPS and
+  trusts the Secret's CA (`server.tls.caKey`, empty for a publicly trusted
+  certificate); probes and the ServiceMonitor use HTTPS, and the chart's
+  Ingress is told the backend speaks HTTPS.
+- `GOMEMLIMIT` is set when unset: the chart sets 90% of each container's
+  memory limit, and `serve` and `agent` take 90% of the cgroup's memory
+  limit (v2 or v1) outside the chart. An explicit value wins.
+- Chart: `server.sharedIngestToken=false` drops the shared, any-cluster
+  ingest token, so only per-cluster tokens can push.
 
 ### Changed
 
@@ -321,8 +332,8 @@ a CI gate.
   the kubelet upper bound after the upgrade.
 - The knowledge base version label is derived from the embedded data:
   `k8s.io/api vX; lifecycle <digest>; registry <digest>`.
-- Server: open read access on a non-loopback `--listen` address is refused
-  unless you pass `--allow-anonymous-read`. Connections have read, write
+- Server: open read access is refused unless the address `serve` actually
+  binds is loopback or you pass `--allow-anonymous-read`. Connections have read, write
   and idle timeouts. Snapshot and gate bodies are capped
   (`--max-snapshot-bytes`, `--max-gate-bytes`). Responses carry CSP and
   other security headers. A push whose cluster ID differs from the ID
@@ -347,6 +358,12 @@ a CI gate.
   only the affected namespaces and teams, and list at most 10 installs
   ("and N more"). A newer Helm release in one namespace no longer hides an
   older end-of-life install in another.
+- A finding lists at most 100 affected namespaces, in `namespaces` and
+  in its evidence sentence, sorted, and counts the rest in the new
+  `namespacesOmitted`, as `objects` and `objectsOmitted` do; `teams`
+  still names the teams of every affected namespace. A namespace-scoped
+  ignore rule suppresses such a finding only when it lists every
+  namespace (#121).
 - Version-skew finding keys: `version-skew/<component>` is split into
   `version-skew/<component>-newer` and `version-skew/<component>-behind`,
   and the upgrade-path finding is `version-skew/upgrade-path`. Baselines
@@ -355,6 +372,97 @@ a CI gate.
   risen since the baseline.
 - Deprecations that take effect after the target are titled as future
   deprecations, with "(projected)" beyond the knowledge base's horizon.
+- Server: `GET /api/v1/clusters/{id}` and its `report`, `findings`,
+  `teams`, `history` and `export`, and `GET /api/v1/fleet/teams`, run one
+  at a time and can answer `503` with `Retry-After` after waiting 30s for
+  their turn; retry them as the agent retries pushes. `/api/v1/clusters`,
+  `/api/v1/fleet` and `/metrics` read no snapshot inventory and no stored
+  report; a `/metrics` scrape waits at most 5s for its turn. When the
+  responses those reads hold for slow clients fill their budget, a
+  response is sent while the read holds its turn, and a client that has
+  not taken it within 20s is disconnected (#121).
+- Server: `/api/v1/fleet?targets=` takes at most 16 distinct minors, and
+  `/api/v1/clusters/{id}/history?limit=` at most 1000; more is `422`. A
+  snapshot push that is not valid UTF-8 is `422` (#121).
+- Server: JSON responses and stored reports write `<`, `>`, `&`, U+2028
+  and U+2029 as themselves, not as `\u` escapes (#121).
+- Server: `POST /api/v1/snapshots` answers `422`, naming the field and
+  the rule, for an inventory no collector writes, before anything is
+  stored: a `clusterName` that is not an RFC 1123 subdomain of at most
+  253 bytes (#37); a namespace that is not an RFC 1123 label, an object
+  name over 253 bytes or with `/` or `%`, a node or Helm release name
+  that is not an RFC 1123 subdomain, a team label that is not a label
+  value; a string over 16 KiB (a capability reason over 64 KiB, an
+  object's field manager over the apiserver's 128 bytes or not
+  printable), more than 100 objects in an API usage entry, a
+  group/version/kind listed twice in one list, more than 200
+  unrecognized images or more than 32 capabilities. The free text a
+  collector copies whole from the cluster is cut to those limits, by the
+  agent and at ingest, not refused: a capability's reason (one failure
+  per resource the agent could not read) and skipped entries, and the
+  `upgradescope.dev/ignore` and `ignore-reason` annotations. v0.1 agents'
+  inventories are within the rest, but not necessarily their cluster
+  names: `tokens create`, cluster rename (the CLI's too) and the agent's
+  `--cluster-name` (checked at startup, with `--team-label`) take only
+  RFC 1123 subdomains now, and v0.1 took any name (#121, #37).
+- **Upgrade note:** a cluster a v0.1 server registered under a name that
+  is not an RFC 1123 subdomain (uppercase, `_` or spaces: `Prod-EU`,
+  `prod_eu`) gets `422` on every push once the server is upgraded, and
+  its per-cluster tokens are bound to that name. For each such cluster
+  (`upgradescope clusters list`), run `upgradescope clusters rename
+  <old> <new>`, which keeps its history and re-binds its tokens, then set
+  the agent's `--cluster-name` (chart `agent.clusterName`) to the new
+  name. See the operations guide's cluster lifecycle (#37).
+- Server: `/api/v1/fleet` without `?targets=` opens at most 16 columns,
+  as `?targets=` takes at most 16: the minors with the most clusters to
+  fill them, the older on a tie. The rest are counted in a new
+  `targetsOmitted`, which the dashboard shows; ask for them with
+  `?targets=` (#121).
+- Server: a report is at most `--max-snapshot-bytes`. A push whose report
+  for a target would be larger is `413` and stores nothing; a what-if
+  report is `413` (the fleet teams rollup lists such a cluster as
+  `missing`); `/gate?cluster=` is `413`; the re-evaluation pass keeps
+  what is stored. An export larger than the limit is `413`, saying to
+  read the JSON report (#121).
+- Server: the evaluation summaries that `/clusters`, `/fleet` and a
+  cluster's detail carry list each gap's capability cut to 64 bytes, its
+  reason to 256 and at most 3 skipped entries of 128 bytes, with a new
+  `skippedOmitted` count; `/clusters` and `/fleet` list at most 1 KiB of
+  gaps per evaluation, the required ones first, and count the rest in a
+  new `notAssessedOmitted`. The report keeps every gap whole (#121).
+- The kubelet skew findings name at most 100 nodes, and count the rest
+  ("and N more"); their titles count every node.
+- Server: `POST /api/v1/gate` answers `413` for a stream over its node
+  budget, which a realistic kubectl YAML stream reaches at about 4.4 MiB
+  (v0.1 decoded streams up to 20 MiB), or a document whose YAML
+  aliases expand past 4 MiB, or a stream they expand past
+  `--max-gate-bytes`; split such streams. It answers `413` too when its
+  answer could be larger than `--max-gate-bytes` (it lists every object
+  the findings name, with `?path=`; with `?cluster=`, the cluster's
+  findings count too), and `422` for a `?path=` over 512 bytes or not
+  UTF-8. A UTF-16 stream gets `422`. A `/gate` or snapshot body that does not arrive within the 60s
+  read timeout gets `408`, which the agent retries (#121, #100).
+- Server database: migration 0007 (SQLite and Postgres) adds
+  `evaluations.not_assessed` and fills it from every stored report on the
+  first start, so that start takes longer on a large database. A server
+  rolled back after it still runs, but summaries do not follow what it
+  writes: an evaluation it creates shows no `notAssessed`, and one it
+  refreshes keeps the `notAssessed` it had, until a newer server writes
+  that evaluation again.
+- Chart: the server's memory limit is 1Gi (was 512Mi), and its
+  `GOMEMLIMIT` ~921MiB: the worst case of one `/gate` request, one push,
+  one read, two reads of a 500-cluster fleet, the responses held for
+  their clients and the re-evaluation pass, measured on SQLite with four
+  `server.targets` and notifications configured, is ~865 MiB (a limit
+  below about 962Mi does not fit it). Each extra target adds about one
+  report of up to `--max-snapshot-bytes` to every push and one to the
+  re-evaluation pass (18-33 MiB each at the default 20 MiB): ~54 MiB of
+  that sum per extra target, so without `server.targets` it is about
+  650 MiB, which 768Mi holds.
+- `serve --targets` and the chart's `server.targets` take at most 4
+  distinct minors; more is refused at startup (and by the chart's schema)
+  with a message saying why. The server's memory bounds are measured at
+  that many (#121).
 
 ### Fixed
 
@@ -445,6 +553,10 @@ a CI gate.
 - The containerd compat blocker (`chart-incompat/containerd/<line>`) names
   the nodes that cannot run the target even when they all run one version,
   so blocker-only outputs (gate, JUnit, code quality) say where (#169).
+- `serve` stopped during startup (a signal while it opens the store) no
+  longer leaves its notification and re-evaluation workers running on a
+  closed store: a shutdown that came before or during the server's start
+  did not always stop them.
 
 ### Security
 
@@ -458,6 +570,50 @@ a CI gate.
   SLSA provenance and build attestations. A ruleset makes release tags
   immutable.
 - An OpenSSF Scorecard workflow publishes its results.
+- `/api/v1/gate` and snapshot ingest bound their memory by the input's
+  YAML or JSON structure and by concurrency budgets, not only by bytes.
+  Nodes are counted before anything is decoded. YAML aliases are charged
+  at their expanded size, and that is measured inside the single
+  evaluation slot. UTF-16 streams are refused. A body over a budget gets
+  413, and one too slow for the read timeout gets 408, before any 503
+  (#121, #100).
+- Reads of stored data are bounded too. Reads that load a cluster's
+  snapshot run in a read slot of their own, and only a what-if decodes
+  the whole inventory: one 370 KB push, from any ingest token, had made
+  10 concurrent reads of it grow the heap ~400 MiB. The cluster list, the
+  fleet matrix and `/metrics` read evaluation summaries instead of whole
+  reports (after one 17 MB push, 30 concurrent requests to them had
+  grown the heap by up to 584 MiB), and run two at a time in fleet slots
+  of their own. Every read's response and every `/gate` answer is built
+  in its slot and waits for its client in one budget of twice
+  `--max-snapshot-bytes`; one that does not fit what is left gets 503
+  with `Retry-After`, and one larger than the whole budget is sent in its
+  slot under a 20s write deadline. Unbounded, 20 clients that asked for a
+  17.5 MB report and never read it had held 366 MiB, and 100 that asked
+  for a 2000-cluster fleet's `/fleet` 251 MiB (#121).
+- A `/gate` answer is bounded before it is encoded: a 60 KB `?path=` had
+  made a 1.2 MB stream answer 817 MB, YAML aliases across 136 documents
+  532 MB, and names of `<` 72 MB of SARIF. `/fleet?targets=` with 8,718
+  minors had held a fleet slot for over two minutes. Object names of `<`
+  had made a push store reports six times its size (a 323 MiB ingest);
+  stored reports and responses no longer escape them (#121).
+- With notifications configured (`--slack-webhook`, `--webhook`), each
+  evaluation of a target decided before decoded that earlier report whole
+  as the baseline of what changed, and a cluster's later push loaded its
+  previous inventory to compare hashes. At the report limit with four
+  `--targets`, a later push grew the heap up to ~257 MiB and a
+  re-evaluation that changed every finding up to ~265 MiB; the memory
+  bounds had been measured on first pushes without notifications only.
+  A push now reads the previous snapshot's head alone, a baseline only
+  its findings' keys and severities, and one pass's changes are merged
+  target by target, keeping a digest of those past the notification's
+  cap: ~216 and ~198 MiB, and the bounds are measured that way (#121).
+- The CSV export guards every cell against formula injection, including
+  after leading white space. Anonymous read access is decided on the
+  resolved bind address. The `Bearer` scheme is case-insensitive. The
+  SQLite database and its WAL and SHM files are created 0600. The agent
+  warns when it would push its token over plain HTTP to a host that is
+  not loopback (#126).
 - One Helm release object can no longer exhaust the agent's memory. A
   951 KB release Secret whose gzip held 700 MiB took a scan to 1.93 GB and
   OOM-killed the agent at its 256Mi limit; anyone who can create a Secret

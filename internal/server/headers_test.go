@@ -9,8 +9,9 @@ import (
 )
 
 // assertSecurityHeaders checks the defense-in-depth headers every response
-// must carry (the SPA keeps the read token in localStorage, so an XSS or a
-// framing page must find as little room as possible).
+// the handler writes must carry (the SPA keeps the read token in
+// localStorage, so an XSS or a framing page must find as little room as
+// possible).
 func assertSecurityHeaders(t *testing.T, what string, h http.Header) {
 	t.Helper()
 	if got := h.Get("X-Content-Type-Options"); got != "nosniff" {
@@ -59,6 +60,34 @@ func TestSecurityHeadersOnAPIAndExport(t *testing.T) {
 	assertSecurityHeaders(t, "export", resp.Header)
 	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "style-src 'self' 'unsafe-inline'") {
 		t.Errorf("export CSP %q must allow its inline styles", csp)
+	}
+}
+
+// Every response the handler writes carries the headers, errors included.
+// (Responses net/http writes before any handler runs, such as 431 or a 400
+// for a malformed request line, do not: their bodies are fixed text.)
+func TestSecurityHeadersHandlerStatuses(t *testing.T) {
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.ReadToken = "r"; c.MaxGateBytes = 10 })
+	for _, tc := range []struct {
+		method, path, token, body string
+		want                      int
+	}{
+		{http.MethodGet, "/healthz", "", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/clusters", "", "", http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1/nope", "r", "", http.StatusNotFound},
+		{http.MethodDelete, "/api/v1/fleet", "r", "", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/api/v1/gate?target=1.35", "r", strings.Repeat("#", 20), http.StatusRequestEntityTooLarge},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		if tc.token != "" {
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+		}
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("%s %s: status = %d, want %d", tc.method, tc.path, rec.Code, tc.want)
+		}
+		assertSecurityHeaders(t, tc.method+" "+tc.path, rec.Header())
 	}
 }
 

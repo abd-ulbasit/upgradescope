@@ -2,12 +2,16 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 // pushCluster pushes inv under clusterName and fails the test on non-202.
@@ -129,6 +133,32 @@ func TestFleetMatrixBadTargets(t *testing.T) {
 	}
 }
 
+// ?targets= took any number of distinct minors, bounded only by the 64 KiB
+// URL: 8,718 of them against a 500-cluster fleet held a fleet slot for
+// 2m13s (a store query per cell), grew the heap 418 MiB and answered
+// 57 MiB. At most maxFleetTargets distinct minors are taken (a repeat
+// does not count); more is 422 before any cell is read.
+func TestFleetTargetsAreCapped(t *testing.T) {
+	ts, done := fleetFixture(t)
+	defer done()
+	minors := func(n int) string {
+		var out []string
+		for i := range n {
+			out = append(out, fmt.Sprintf("1.%d", 30+i))
+		}
+		return strings.Join(out, ",")
+	}
+	var got fleetMatrix
+	if resp := getJSON(t, ts, "/api/v1/fleet?targets="+minors(maxFleetTargets)+",1.30", "", &got); resp.StatusCode != http.StatusOK ||
+		len(got.Targets) != maxFleetTargets {
+		t.Fatalf("%d distinct targets and a repeat: status %d, %d targets; want 200 with %d", maxFleetTargets, resp.StatusCode, len(got.Targets), maxFleetTargets)
+	}
+	resp, body := getRaw(t, ts, "/api/v1/fleet?targets="+minors(maxFleetTargets+1), "")
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, fmt.Sprint(maxFleetTargets)) {
+		t.Fatalf("%d distinct targets: status %d (%s), want 422 naming the limit", maxFleetTargets+1, resp.StatusCode, body)
+	}
+}
+
 // Issue #122: what an evaluation could not assess reaches the fleet
 // matrix and the cluster views, not only the full report, so an unknown
 // (or a qualified ready) cell says why.
@@ -182,6 +212,106 @@ func TestFleetAndClusterViewsCarryGaps(t *testing.T) {
 			t.Errorf("GET /clusters charlie latest = %+v, want the partial gap", c.Latest)
 		}
 	}
+}
+
+// The fleet-wide reads carry what each evaluation could not assess for
+// every cluster and target, so what they list of it is bounded per
+// evaluation: a push within the limits may name 32 capabilities, each
+// 16 KiB long, with 64 KiB reasons and long skipped lists, and 50 such
+// clusters made /fleet a 108 MB answer that grew the heap 516 MiB. A
+// summary there lists the required gaps first, each cut, within
+// fleetSummaryBytes, and counts the rest in notAssessedOmitted; the
+// cluster's own detail lists every gap, cut.
+func TestFleetSummariesAreBoundedPerEvaluation(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
+	defer ts.Close()
+	inv := testInventory()
+	inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
+		inventory.CapCRDs:     {Available: true},
+		inventory.CapVersions: {Available: false, Reason: strings.Repeat("v", 2000)}, // required: listed first
+	}
+	for c := range inventory.MaxCapabilities - 2 {
+		var skipped []string
+		for k := range 10 {
+			skipped = append(skipped, fmt.Sprint(k)+strings.Repeat("s", 600))
+		}
+		inv.Capabilities[inventory.Capability(fmt.Sprintf("%02d", c)+strings.Repeat("c", inventory.MaxStringBytes-2))] = inventory.CapabilityStatus{
+			Available: true, Partial: true, Reason: strings.Repeat("é", 1000), Skipped: skipped}
+	}
+	pushCluster(t, ts, "wide", inv)
+	const gapsInAll = inventory.MaxCapabilities - 1 // crds is available
+
+	type gap struct {
+		Capability     string   `json:"capability"`
+		Reason         string   `json:"reason"`
+		Required       bool     `json:"required"`
+		Partial        bool     `json:"partial"`
+		Skipped        []string `json:"skipped"`
+		SkippedOmitted int      `json:"skippedOmitted"`
+	}
+	type summary struct {
+		NotAssessed        json.RawMessage `json:"notAssessed"`
+		NotAssessedOmitted int             `json:"notAssessedOmitted"`
+	}
+	check := func(what string, sum summary, budget int) {
+		t.Helper()
+		var gaps []gap
+		if err := json.Unmarshal(sum.NotAssessed, &gaps); err != nil || len(gaps) == 0 {
+			t.Fatalf("%s: notAssessed %.200s (%v), want gaps", what, sum.NotAssessed, err)
+		}
+		if len(gaps)+sum.NotAssessedOmitted != gapsInAll {
+			t.Errorf("%s: %d gaps listed and %d omitted, want %d in all", what, len(gaps), sum.NotAssessedOmitted, gapsInAll)
+		}
+		if gaps[0].Capability != string(inventory.CapVersions) || !gaps[0].Required {
+			t.Errorf("%s: first gap %.40q (required %v), want the required versions gap", what, gaps[0].Capability, gaps[0].Required)
+		}
+		for _, g := range gaps {
+			if len(g.Capability) > store.SummaryCapabilityBytes+len("…") || len(g.Reason) > store.SummaryReasonBytes+len("…") ||
+				len(g.Skipped) > store.SummarySkipped || g.Partial && g.SkippedOmitted != 10-store.SummarySkipped {
+				t.Errorf("%s: gap %.40q not cut: capability %d bytes, reason %d, %d skipped (%d omitted)", what, g.Capability, len(g.Capability), len(g.Reason), len(g.Skipped), g.SkippedOmitted)
+			}
+			for _, s := range g.Skipped {
+				if len(s) > store.SummarySkippedBytes+len("…") {
+					t.Errorf("%s: skipped entry of %d bytes", what, len(s))
+				}
+			}
+		}
+		if budget > 0 && len(sum.NotAssessed) > budget {
+			t.Errorf("%s: the summary is %d bytes, want at most %d", what, len(sum.NotAssessed), budget)
+		}
+		if budget == 0 && sum.NotAssessedOmitted != 0 {
+			t.Errorf("%s: %d gaps omitted, want every gap listed", what, sum.NotAssessedOmitted)
+		}
+	}
+	var fleet struct {
+		Clusters []struct {
+			Cells map[string]*summary `json:"cells"`
+		} `json:"clusters"`
+	}
+	getJSON(t, ts, "/api/v1/fleet", "", &fleet)
+	if len(fleet.Clusters) != 1 || fleet.Clusters[0].Cells["1.35"] == nil {
+		t.Fatalf("GET /fleet = %+v", fleet)
+	}
+	check("/fleet cell", *fleet.Clusters[0].Cells["1.35"], fleetSummaryBytes)
+
+	var clusters []struct {
+		ID     int64    `json:"id"`
+		Latest *summary `json:"latest"`
+	}
+	getJSON(t, ts, "/api/v1/clusters", "", &clusters)
+	if len(clusters) != 1 || clusters[0].Latest == nil {
+		t.Fatalf("GET /clusters = %+v", clusters)
+	}
+	check("/clusters latest", *clusters[0].Latest, fleetSummaryBytes)
+
+	var detail struct {
+		Evaluations []summary `json:"evaluations"`
+	}
+	getJSON(t, ts, fmt.Sprintf("/api/v1/clusters/%d", clusters[0].ID), "", &detail)
+	if len(detail.Evaluations) == 0 {
+		t.Fatal("cluster detail has no evaluations")
+	}
+	check("cluster detail", detail.Evaluations[0], 0)
 }
 
 func TestFleetTeams(t *testing.T) {
@@ -291,5 +421,53 @@ func TestFleetReadAuth(t *testing.T) {
 		if resp := getJSON(t, ts, path, "read-tok", nil); resp.StatusCode != 200 {
 			t.Fatalf("GET %s with token status = %d, want 200", path, resp.StatusCode)
 		}
+	}
+}
+
+// Without ?targets=, /fleet opens at most maxFleetTargets columns, the
+// minors with the most clusters to fill them (the older on a tie), and
+// counts the rest in targetsOmitted: a holder of the ingest token who
+// pushes clusters at 500 minors widens it no further than ?targets= can.
+func TestFleetDefaultColumnsAreCapped(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore(), func(c *Config) { c.ExtraTargets = []string{"1.40"} }).Handler())
+	defer ts.Close()
+	push := func(name string, minor int) {
+		inv := testInventory()
+		inv.ClusterID = "uid-" + name
+		inv.ServerVersion = fmt.Sprintf("v1.%d.0", minor)
+		pushCluster(t, ts, name, inv)
+	}
+	// One cluster at each of 1.10-1.29 (next minors 1.11-1.30), and a
+	// second at 1.28 and 1.29: twenty next minors plus the extra target.
+	for m := 10; m < 30; m++ {
+		push(fmt.Sprintf("c-%d", m), m)
+	}
+	push("c-28b", 28)
+	push("c-29b", 29)
+
+	var got struct {
+		Targets        []string `json:"targets"`
+		TargetsOmitted int      `json:"targetsOmitted"`
+	}
+	if resp := getJSON(t, ts, "/api/v1/fleet", "", &got); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	// 1.40 (every cluster's), 1.29 and 1.30 (two clusters each), then the
+	// older minors of one cluster each: 1.11-1.23.
+	var want []string
+	for m := 11; m <= 23; m++ {
+		want = append(want, fmt.Sprintf("1.%d", m))
+	}
+	want = append(want, "1.29", "1.30", "1.40")
+	if !reflect.DeepEqual(got.Targets, want) || got.TargetsOmitted != 5 {
+		t.Errorf("targets = %v (omitted %d), want %v (omitted 5)", got.Targets, got.TargetsOmitted, want)
+	}
+
+	// Within the cap nothing is omitted, and the field is left out.
+	ts2, done := fleetFixture(t)
+	defer done()
+	resp, body := getRaw(t, ts2, "/api/v1/fleet", "")
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, "targetsOmitted") {
+		t.Errorf("a two-cluster fleet: status %d, body %s; want 200 without targetsOmitted", resp.StatusCode, body)
 	}
 }

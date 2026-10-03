@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
@@ -41,7 +42,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	snap, inv, err := s.latestInventory(ctx, c.ID)
+	snap, head, err := s.latestHead(ctx, c.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
 		return
@@ -50,7 +51,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, "loading latest snapshot", err)
 		return
 	}
-	if version := judgedAt(snap, inv); notApplicable(version, target) {
+	if version := judgedAt(snap, head); notApplicable(version, target) {
 		errJSON(w, http.StatusNotFound, fmt.Sprintf("cluster %s already runs %s: target %s is not applicable", c.Name, version, target))
 		return
 	}
@@ -70,11 +71,15 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The export is at most maxReportBytes, as the report it renders is:
+	// HTML writes ' " & as five bytes and < > as four, and CSV doubles
+	// quotes, so an export can be several times its report.
+	out := &cappedWriter{w: w, left: s.maxReportBytes()}
 	if format == "csv" {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", exportFilename(c.Name, target.String(), "csv")))
 		w.WriteHeader(http.StatusOK)
-		_ = writeExportCSV(w, c.Name, eval, rep)
+		s.exportWritten(w, writeExportCSV(out, c.Name, eval, rep))
 		return
 	}
 
@@ -85,14 +90,49 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_ = writeExportHTML(w, exportData{
+	s.exportWritten(w, writeExportHTML(out, exportData{
 		Cluster:     c.Name,
 		Target:      target.String(),
 		Eval:        eval,
 		Report:      rep,
 		History:     history,
 		GeneratedAt: s.now(),
-	})
+	}))
+}
+
+// errExportTooLarge is a cappedWriter's error once it is over its limit.
+var errExportTooLarge = errors.New("export over its size limit")
+
+// cappedWriter writes to w until left bytes are written, then fails every
+// write with errExportTooLarge, writing nothing more.
+type cappedWriter struct {
+	w    io.Writer
+	left int64
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > c.left {
+		c.left = -1
+		return 0, errExportTooLarge
+	}
+	c.left -= int64(len(p))
+	return c.w.Write(p)
+}
+
+// exportWritten answers an export over its limit (err errExportTooLarge)
+// with 413 in place of what was written of it. w is the read slot's held
+// response (inReadSlot), which nothing has sent yet. Any other error is
+// the client's connection: nothing is left to answer.
+func (s *Server) exportWritten(w http.ResponseWriter, err error) {
+	if !errors.Is(err, errExportTooLarge) {
+		return
+	}
+	if h, ok := w.(*heldResponse); ok {
+		h.reset()
+	}
+	errJSON(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+		"the export would be over the %s limit for a report (--max-snapshot-bytes); "+
+			"read the JSON report, GET /api/v1/clusters/{id}/report, instead", sizeString(s.maxReportBytes())))
 }
 
 func exportFilename(cluster, target, ext string) string {
@@ -100,18 +140,40 @@ func exportFilename(cluster, target, ext string) string {
 }
 
 // csvSafe guards against spreadsheet formula injection: cluster names,
-// namespaces, and team labels are attacker-influenceable, and a cell
-// starting with = + - @ (or a tab/CR remnant) executes as a formula when
-// the CSV is opened in Excel/Sheets. Prefixing with ' forces text.
+// namespaces, team labels and field-manager names are
+// attacker-influenceable, and a cell starting with = + - @ (or a tab or
+// CR, or a full-width ＝＋－＠) executes as a formula when the CSV is
+// opened in Excel, Sheets or LibreOffice. A cell can start anywhere a
+// spreadsheet may split the field again, not only at its first byte: an
+// import with ; as the separator (Excel's default in many locales) turned
+// the manager `x;=1+1;` in a finding's detail into the cell `=1+1`. So
+// every such place — the start, and after each , ; tab CR or newline, past
+// any white space (a no-break or ideographic space too) — gets a ' in
+// front of a trigger, which makes the spreadsheet read text. The boundary:
+// an import told to split on spaces as well (LibreOffice offers it) sees a
+// cell after every space, which is not guarded, since that would mark
+// every ` -` in prose.
 func csvSafe(s string) string {
-	if s == "" {
+	if !strings.ContainsAny(s, "=+-@\t\r＝＋－＠") {
 		return s
 	}
-	switch s[0] {
-	case '=', '+', '-', '@', '\t', '\r':
-		return "'" + s
+	var b strings.Builder
+	cellStart := true
+	for _, r := range s {
+		if cellStart && (r == '\t' || r == '\r' || !unicode.IsSpace(r)) {
+			switch r {
+			case '=', '+', '-', '@', '\t', '\r', '＝', '＋', '－', '＠':
+				b.WriteByte('\'')
+			}
+			cellStart = false
+		}
+		b.WriteRune(r)
+		switch r {
+		case ',', ';', '\t', '\r', '\n':
+			cellStart = true
+		}
 	}
-	return s
+	return b.String()
 }
 
 // CSV row types beyond the finding severities (blocker, warning, info), in
@@ -126,7 +188,8 @@ const (
 // finding, then one not-assessed row per capability gap — so a clean
 // cluster's export is not a bare header, and a partly assessed one does
 // not look clean. Multi-valued columns (teams, namespaces, citations) are
-// ";"-joined inside a single CSV field. All non-numeric fields pass
+// ";"-joined inside a single CSV field; a finding's namespaces end in
+// "and N more" when it lists only some. All non-numeric fields pass
 // through csvSafe.
 func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engine.Report) error {
 	cw := csv.NewWriter(w)
@@ -170,7 +233,11 @@ func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engi
 		return err
 	}
 	for _, f := range rep.Findings {
-		if err := row(string(f.Severity), string(f.Category), f.Key, f.Title, f.Detail, f.Remediation, f.Teams, f.Namespaces, f.Citations); err != nil {
+		namespaces := f.Namespaces
+		if f.NamespacesOmitted > 0 { // as the HTML export says it
+			namespaces = append(slices.Clip(namespaces), fmt.Sprintf("and %d more", f.NamespacesOmitted))
+		}
+		if err := row(string(f.Severity), string(f.Category), f.Key, f.Title, f.Detail, f.Remediation, f.Teams, namespaces, f.Citations); err != nil {
 			return err
 		}
 	}
@@ -364,7 +431,7 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
       {{if .Citations}}<div class="cites">{{range .Citations}}<a href="{{.}}">{{.}}</a> {{end}}</div>{{end}}
     </td>
     <td>{{range $i, $t := .Teams}}{{if $i}}, {{end}}{{$t}}{{end}}</td>
-    <td>{{range $i, $n := .Namespaces}}{{if $i}}, {{end}}{{$n}}{{end}}</td>
+    <td>{{range $i, $n := .Namespaces}}{{if $i}}, {{end}}{{$n}}{{end}}{{if .NamespacesOmitted}} and {{.NamespacesOmitted}} more{{end}}</td>
   </tr>
   {{end}}
 </table>

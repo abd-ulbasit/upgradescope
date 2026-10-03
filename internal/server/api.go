@@ -1,11 +1,10 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -13,12 +12,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -36,15 +36,29 @@ const DefaultMaxSnapshotBytes = 20 << 20 // 20 MiB
 const DefaultMaxGateBytes = 10 << 20 // 10 MiB
 
 // Manifest stream shape limits for /gate, checked on the raw bytes before
-// any YAML is decoded. Decoding a document builds a generic tree and then
-// JSON — measured at 25-50x the document's size in heap — so the
-// per-document cap, not the body cap, is what bounds one request's memory.
-// 4 MiB fits any single Kubernetes object (etcd stores at most ~1.5 MiB)
-// and a multi-MiB `kubectl get -o yaml` List. The document count bounds
-// CPU on streams of many tiny documents.
+// the request waits for the evaluation slot (checkManifestStream), and
+// what aliases expand to in the slot, before decoding (checkAliases).
+//
+// Decoding costs memory per YAML node, not per byte: each document becomes
+// a yaml.v3 node tree and kubectl's generic tree, and list items become
+// objects. Measured live heap (4 MiB documents) runs from ~9 bytes per
+// input byte for one big string to ~170 for a flow sequence `[1,1,…]` and
+// ~330 for a List of empty items; the flow sequence peaked at ~900 MB of
+// heap with garbage. Per node it is at most ~390 bytes, and a sequence
+// entry (a possible list item) costs about four nodes. So the whole
+// stream's node count (yamlCost.units) is capped at maxManifestUnits:
+// the worst stream within it decodes in ~155 MB of live heap
+// (TestGateDecodeHeapIsBounded), and a realistic ~4 MiB `kubectl get -o
+// yaml` List of Deployments is ~360k units and fits. A larger one is
+// refused with 413 asking to split it.
+//
+// 4 MiB per document fits any single Kubernetes object (etcd stores at
+// most ~1.5 MiB) and caps the cheapest shape, one big value, at ~40 MB.
+// The document count bounds CPU on streams of many tiny documents.
 const (
 	maxManifestDocBytes = 4 << 20
 	maxManifestDocs     = 20000
+	maxManifestUnits    = 400_000
 )
 
 // sizeString renders a byte limit for error messages: "20MiB" when it is
@@ -70,8 +84,9 @@ func (s *Server) maxGateBytes() int64 {
 	return DefaultMaxGateBytes
 }
 
-// byteBudget caps the /gate body bytes held in memory across all requests.
-// It never blocks: a charge either fits now or is refused.
+// byteBudget caps the request body bytes held in memory across all
+// requests of one kind (/gate manifest streams, snapshot pushes). It never
+// blocks: a charge either fits now or is refused.
 type byteBudget struct {
 	mu   sync.Mutex
 	used int64
@@ -108,20 +123,28 @@ func (b *byteBudget) inUse() int64 {
 	return b.used
 }
 
-// /gate bodies are read into chunks: the first is minGateChunk bytes and
+// fits reports whether n more bytes would fit now.
+func (b *byteBudget) fits(n int64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used+n <= b.max
+}
+
+// Request bodies are read into chunks: the first is minBodyChunk bytes and
 // each next one is as large as everything received so far, up to
-// maxGateChunk. A client that declares a large Content-Length and then
+// maxBodyChunk. A client that declares a large Content-Length and then
 // sends little has little allocated, and a large body costs no copying.
 const (
-	minGateChunk = 512
-	maxGateChunk = 64 << 10
+	minBodyChunk = 512
+	maxBodyChunk = 64 << 10
 )
 
-// gateBody is a buffered /gate request body, in the chunks it was read in.
-type gateBody [][]byte
+// bufferedBody is a request body held in memory, in the chunks it was
+// read in.
+type bufferedBody [][]byte
 
 // reader returns a fresh reader over the whole body.
-func (b gateBody) reader() io.Reader {
+func (b bufferedBody) reader() io.Reader {
 	rs := make([]io.Reader, len(b))
 	for i, c := range b {
 		rs[i] = bytes.NewReader(c)
@@ -129,38 +152,51 @@ func (b gateBody) reader() io.Reader {
 	return io.MultiReader(rs...)
 }
 
-// readManifestBody reads a /gate manifest stream under the body cap and the
-// shared buffered-body budget, then splits it (the same kubectl-compatible
-// splitter collect uses) to check the document count and each document's
-// size before anything decodes it. It writes the 413/422/503 itself.
-//
-// Each read is charged to the budget for exactly the bytes it returned,
-// as they arrive. A declared Content-Length reserves nothing (it only
-// bounds the reads, and one over the cap is refused before any are made),
-// so a client that stalls mid-upload holds only what it has sent, until
-// ReadTimeout ends its request. When a charge does not fit, the request
-// gives back everything it holds, in the same step, and gets 503 +
-// Retry-After immediately. Nothing waits for budget, let alone while
-// holding some, so concurrent uploads cannot deadlock or queue behind a
-// stalled one. On success the caller must call release once it no longer
-// needs the body; release is idempotent. On failure everything has
-// already been given back.
-func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body gateBody, release func(), ok bool) {
-	limit := s.maxGateBytes()
-	tooLarge := "manifest stream exceeds the " + sizeString(limit) + " limit"
-	if r.ContentLength > limit {
-		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
-		return nil, nil, false
+// bytes returns the body as one slice: its only chunk, or a copy.
+func (b bufferedBody) bytes() []byte {
+	if len(b) == 1 {
+		return b[0]
 	}
+	return bytes.Join(b, nil)
+}
 
-	var held int64 // bytes received and charged so far
-	release = sync.OnceFunc(func() { s.gateBuffered.give(held) })
-	src := http.MaxBytesReader(w, r.Body, limit)
+// bodyError is why a request body was refused: the status and message to
+// answer with.
+type bodyError struct {
+	status int
+	msg    string
+}
+
+func (e *bodyError) write(w http.ResponseWriter) {
+	if e.status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", "10")
+	}
+	errJSON(w, e.status, e.msg)
+}
+
+// errBodyTooLarge ends a stream that grew past its cap after decoding (a
+// decompressed snapshot); readBody answers it like *http.MaxBytesError.
+var errBodyTooLarge = errors.New("body too large")
+
+// readBody reads src into memory under a shared budget. Each read is
+// charged for exactly the bytes it returned, as they arrive. declared (the
+// Content-Length, or -1) only sizes the reads, so it reserves nothing: a
+// client that stalls mid-upload holds only what it has sent, until
+// ReadTimeout ends its request. When a charge does not fit, the request
+// gives back everything it holds, in the same step, and is refused with
+// 503 (busy) at once. Nothing waits for budget, let alone while holding
+// some, so concurrent uploads cannot deadlock or queue behind a stalled
+// one. A body over its cap is refused with 413 (tooLarge) whether or not
+// its last bytes fit the budget, and one whose body does not arrive within
+// ReadTimeout with 408. feed, when not nil, sees each piece as it is read
+// and may refuse the body. On success the caller gives back held when it
+// no longer needs the body; on failure everything is given back already.
+func readBody(src io.Reader, declared int64, budget *byteBudget, busy, tooLarge string, feed func([]byte) *bodyError) (body bufferedBody, held int64, berr *bodyError) {
 	for {
 		if len(body) == 0 || len(body[len(body)-1]) == cap(body[len(body)-1]) {
-			size := min(max(held, minGateChunk), maxGateChunk)
-			if r.ContentLength >= 0 {
-				size = min(size, r.ContentLength-held)
+			size := min(max(held, minBodyChunk), maxBodyChunk)
+			if declared >= 0 {
+				size = min(size, declared-held)
 			}
 			if size == 0 {
 				break // the whole declared Content-Length is in
@@ -169,62 +205,246 @@ func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body 
 		}
 		chunk := body[len(body)-1]
 		n, err := src.Read(chunk[len(chunk):cap(chunk)])
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) || errors.Is(err, errBodyTooLarge) {
+			// The read that crosses the cap returns the last bytes under
+			// it: the request is too large whether or not they would fit.
+			budget.give(held)
+			return nil, 0, &bodyError{http.StatusRequestEntityTooLarge, tooLarge}
+		}
 		if n > 0 {
-			if !s.gateBuffered.charge(held, int64(n)) { // gives back held too
-				w.Header().Set("Retry-After", "10")
-				errJSON(w, http.StatusServiceUnavailable, "too many concurrent gate requests; retry shortly")
-				return nil, nil, false
+			if !budget.charge(held, int64(n)) { // gives back held too
+				return nil, 0, &bodyError{http.StatusServiceUnavailable, busy}
 			}
 			held += int64(n)
 			body[len(body)-1] = chunk[:len(chunk)+n]
-		}
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			release()
-			var mbe *http.MaxBytesError
-			if errors.As(err, &mbe) {
-				errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
-				return nil, nil, false
+			if feed != nil {
+				if berr := feed(chunk[len(chunk) : len(chunk)+n]); berr != nil {
+					budget.give(held)
+					return nil, 0, berr
+				}
 			}
-			errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
-			return nil, nil, false
 		}
-	}
-
-	docs := utilyaml.NewYAMLReader(bufio.NewReader(body.reader()))
-	for n := 1; ; n++ {
-		doc, err := docs.Read()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			release()
-			errJSON(w, http.StatusUnprocessableEntity, "invalid manifest stream: "+err.Error())
-			return nil, nil, false
-		}
-		if n > maxManifestDocs {
-			release()
-			errJSON(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("manifest stream has more than %d documents", maxManifestDocs))
-			return nil, nil, false
-		}
-		if len(doc) > maxManifestDocBytes {
-			release()
-			errJSON(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("manifest document %d is %d bytes, over the %s per-document limit (split large Lists into separate documents)",
-					n, len(doc), sizeString(maxManifestDocBytes)))
-			return nil, nil, false
+			budget.give(held)
+			return nil, 0, readError(err)
 		}
 	}
-	return body, release, true
+	return body, held, nil
+}
+
+// readError says why reading a request body failed without echoing the
+// error, which names the connection's socket addresses. A body that did
+// not arrive within ReadTimeout is 408, which clients (the agent among
+// them) retry. Its message names no duration: the handler cannot see the
+// ReadTimeout of the http.Server it runs in, which an embedder sets.
+func readError(err error) *bodyError {
+	var corrupt flate.CorruptInputError
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return &bodyError{http.StatusRequestTimeout,
+			"the request body did not arrive within the server's read timeout; send it faster or make it smaller"}
+	case errors.Is(err, gzip.ErrHeader) || errors.Is(err, gzip.ErrChecksum) || errors.As(err, &corrupt):
+		return &bodyError{http.StatusUnprocessableEntity, "body is not valid gzip"}
+	}
+	return &bodyError{http.StatusBadRequest, "the request body ended early or could not be read"}
+}
+
+// firstRead is how many bytes a body's first read can return: the first
+// chunk, or less when the body is declared smaller.
+func firstRead(declared int64) int64 {
+	if declared >= 0 {
+		return min(declared, minBodyChunk)
+	}
+	return minBodyChunk
+}
+
+// readManifestBody reads a /gate manifest stream under the body cap and the
+// shared buffered-body budget (see readBody), then checks its shape before
+// anything decodes it (checkManifestStream). It writes the error itself.
+// When the budget has no room even for the first read, the request is
+// refused before reading any of its body: the first read would send a
+// client waiting on Expect: 100-continue the go-ahead for all of it. On
+// success the caller must run shape.checkAliases in the evaluation slot
+// before decoding the body, and call release once it no longer needs the
+// body; release is idempotent. On failure everything has already been
+// given back.
+func (s *Server) readManifestBody(w http.ResponseWriter, r *http.Request) (body bufferedBody, shape *manifestShape, release func(), ok bool) {
+	const busy = "too many concurrent gate requests; retry shortly"
+	limit := s.maxGateBytes()
+	tooLarge := "manifest stream exceeds the " + sizeString(limit) + " limit"
+	if r.ContentLength > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+		return nil, nil, nil, false
+	}
+	if r.ContentLength != 0 && !s.gateBuffered.fits(firstRead(r.ContentLength)) {
+		(&bodyError{http.StatusServiceUnavailable, busy}).write(w)
+		return nil, nil, nil, false
+	}
+	body, held, berr := readBody(http.MaxBytesReader(w, r.Body, limit), r.ContentLength, s.gateBuffered, busy, tooLarge, nil)
+	if berr != nil {
+		berr.write(w)
+		return nil, nil, nil, false
+	}
+	release = sync.OnceFunc(func() { s.gateBuffered.give(held) })
+	shape, status, msg := checkManifestStream(body)
+	if status != 0 {
+		release()
+		errJSON(w, status, msg)
+		return nil, nil, nil, false
+	}
+	return body, shape, release, true
+}
+
+// manifestShape is what checkManifestStream measured of a stream it let
+// through: the YAML nodes it holds, each alias counted once, and the
+// documents with aliases, whose expansion checkAliases measures.
+type manifestShape struct {
+	src     *byteSource
+	total   yamlCost
+	aliased []manifestDoc
+}
+
+// manifestDoc is the nth document of a stream, at src[start:end], which
+// the meter measured at cost.
+type manifestDoc struct {
+	n, start, end int
+	cost          yamlCost
+}
+
+// checkManifestStream splits a buffered manifest stream into documents as
+// kubectl does (a line starting with "---" ends one; only white space or a
+// comment may follow it) and checks it against the shape limits before
+// anything decodes it: the document count, each document's size, and the
+// YAML nodes the whole stream holds. It reads the body in place, in
+// memory that does not grow with it, so it runs before the request waits
+// for the evaluation slot; what aliases expand to is checked in the slot
+// (checkAliases). It returns the status and message to refuse the stream
+// with, or 0 and the stream's shape.
+func checkManifestStream(body bufferedBody) (shape *manifestShape, status int, msg string) {
+	src := newByteSource(body)
+	if off := src.utf16BOM(); off >= 0 {
+		// yaml.v3 and kubectl's decoder read a document that starts with
+		// one as UTF-16, which the meter, reading UTF-8, cannot measure.
+		return nil, http.StatusUnprocessableEntity, fmt.Sprintf(
+			"invalid manifest stream: a UTF-16 byte order mark at byte %d; /gate reads UTF-8 only", off)
+	}
+	shape = &manifestShape{src: src}
+	n := 0
+	check := func(start, end int) (int, string) {
+		if start == end {
+			return 0, ""
+		}
+		if n++; n > maxManifestDocs {
+			return http.StatusRequestEntityTooLarge, fmt.Sprintf("manifest stream has more than %d documents", maxManifestDocs)
+		}
+		if end-start > maxManifestDocBytes {
+			return http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("manifest document %d is %d bytes, over the %s per-document limit (split large Lists into separate documents)",
+					n, end-start, sizeString(maxManifestDocBytes))
+		}
+		cost := measureYAMLRange(src, start, end)
+		if cost.aliases > 0 {
+			shape.aliased = append(shape.aliased, manifestDoc{n: n, start: start, end: end, cost: cost})
+		}
+		return shape.charge(n, cost, cost)
+	}
+	docStart := 0
+	for off := 0; off < src.size; {
+		next := off
+		for next < src.size && src.at(next) != '\n' {
+			next++
+		}
+		next++ // past the newline
+		if src.at(off) == '-' && src.at(off+1) == '-' && src.at(off+2) == '-' {
+			i := off + 3
+			for i < next { // white space, as the stream parser's bytes.TrimSpace
+				r, size := src.runeAt(i)
+				if !unicode.IsSpace(r) {
+					break
+				}
+				i += size
+			}
+			if c := src.at(i); i < min(next, src.size) && c != '\n' && c != '#' {
+				return nil, http.StatusUnprocessableEntity, fmt.Sprintf(
+					"invalid manifest stream: invalid YAML document separator at byte %d (only a comment may follow ---)", off)
+			}
+			if status, msg := check(docStart, off); status != 0 {
+				return nil, status, msg
+			}
+			docStart = min(next, src.size)
+		}
+		off = next
+	}
+	if status, msg := check(docStart, src.size); status != 0 {
+		return nil, status, msg
+	}
+	return shape, 0, ""
+}
+
+// charge adds what document n adds to the stream's cost, and refuses the
+// stream once it is over the node budget, naming the document when it is
+// over the budget alone at docCost.
+func (m *manifestShape) charge(n int, docCost, added yamlCost) (status int, msg string) {
+	if m.total = m.total.add(added); m.total.units() > maxManifestUnits {
+		what := "the manifest stream"
+		if docCost.units() > maxManifestUnits {
+			what = fmt.Sprintf("manifest document %d", n)
+		}
+		return http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"%s is too large to evaluate in one request: decoding YAML costs memory per node, and the stream holds "+
+				"over %d node units (each node 1, each sequence entry 4, each alias what it names); split it into several requests "+
+				"(a large List into separate, smaller ones)", what, maxManifestUnits)
+	}
+	return 0, ""
+}
+
+// checkAliases charges each document with aliases what kubectl's decoder
+// expands them to (aliasExpansion): their nodes against the stream's node
+// budget, and their bytes against the document's size and against
+// maxStreamBytes (the body cap), which the stream with every alias
+// expanded must fit as the stream itself does. Without the stream's
+// charge, documents each within 4 MiB added up: 136 of 40 KB that named
+// 100 objects each after one anchor answered 532 MB. Measuring that
+// reads the document into yaml.v3 nodes, which costs about what decoding
+// it does (no more: the stream is within the node budget), so it runs in
+// the evaluation slot, one document at a time, and requests waiting for
+// the slot hold no node trees. It returns the status and message to
+// refuse the stream with, or 0.
+func (m *manifestShape) checkAliases(maxStreamBytes int64) (status int, msg string) {
+	stream := int64(m.src.size)
+	for _, d := range m.aliased {
+		extra, scalars, err := aliasExpansion(m.src.slice(d.start, d.end))
+		if err != nil {
+			return http.StatusUnprocessableEntity, fmt.Sprintf(
+				"invalid manifest document %d: %v (a document that holds YAML aliases must parse, so that what they expand to can be measured)", d.n, err)
+		}
+		if size := d.end - d.start + scalars; size > maxManifestDocBytes {
+			return http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"manifest document %d is too large to evaluate in one request: its YAML aliases expand it to %d bytes, "+
+					"and every alias is decoded as a full copy of what it names; the per-document limit is %s "+
+					"(write the values out, or split it into smaller documents)", d.n, size, sizeString(maxManifestDocBytes))
+		}
+		if stream += int64(scalars); stream > maxStreamBytes {
+			return http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"the manifest stream is too large to evaluate in one request: its YAML aliases expand it past the %s limit "+
+					"(by document %d), and every alias is decoded as a full copy of what it names "+
+					"(write the values out, or split the stream into several requests)", sizeString(maxStreamBytes), d.n)
+		}
+		if status, msg := m.charge(d.n, d.cost.add(extra), extra); status != 0 {
+			return status, msg
+		}
+	}
+	return 0, ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_ = encodeJSON(w, v)
 }
 
 func errJSON(w http.ResponseWriter, status int, msg string) {
@@ -240,11 +460,12 @@ func internalErr(w http.ResponseWriter, what string, err error) {
 }
 
 // bearerToken extracts the raw "Authorization: Bearer <token>" value, ""
-// when the header is absent or malformed.
+// when the header is absent or malformed. The scheme is case-insensitive
+// (RFC 7235).
 func bearerToken(r *http.Request) string {
 	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
-	if len(h) <= len(prefix) || !strings.HasPrefix(h, prefix) {
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
 		return ""
 	}
 	return h[len(prefix):]
@@ -289,6 +510,101 @@ func (s *Server) authIngest(w http.ResponseWriter, r *http.Request) (boundCluste
 	return name, true
 }
 
+// maxSnapshotUnits caps what decoding one snapshot push may build, in
+// jsonCost units. Decoding costs memory per JSON value, not per byte:
+// measured heap per unit is at most ~66 bytes (a map of unique keys; a
+// list of `{}` structs is ~50 per unit), so the worst push within it
+// decodes, evaluates and stores in up to ~216 MiB of heap on SQLite at
+// the 20 MiB size cap, with four --targets and notifications, ~119 MiB
+// with neither (TestIngestDecodeHeapIsBounded,
+// TestStoredSnapshotHeapIsBounded), where 20 MiB of `{}`
+// ObjectRefs used to take ~2.6 GB. A real agent's inventory is far below
+// it: API usage covers only the APIs the knowledge base flags, with at
+// most 100 object refs each (~1,200 units), so even 5,000 nodes (~55k)
+// and a few hundred flagged kinds fit.
+const maxSnapshotUnits = 1_000_000
+
+// readSnapshotBody reads a snapshot push, decompressing gzip, under the
+// snapshot cap (on the wire and decompressed: a tiny gzip bomb must not
+// bypass it), the shared buffered-body budget (see readBody, which
+// charges the decompressed bytes) and the node budget, which it checks as
+// the bytes arrive, so a push over it is refused without reading the
+// rest. It writes the error itself; on success the caller must call
+// release (idempotent) once it no longer needs the body.
+func (s *Server) readSnapshotBody(w http.ResponseWriter, r *http.Request) (body bufferedBody, release func(), ok bool) {
+	const busy = "too many concurrent snapshot pushes; retry shortly"
+	limit := s.maxSnapshotBytes()
+	tooLarge := "snapshot exceeds the " + sizeString(limit) + " limit (on the wire and after decompression)"
+	if r.ContentLength > limit {
+		errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+		return nil, nil, false
+	}
+	enc := r.Header.Get("Content-Encoding")
+	if enc != "" && enc != "identity" && enc != "gzip" {
+		errJSON(w, http.StatusUnsupportedMediaType, fmt.Sprintf("unsupported Content-Encoding %q (use gzip or identity)", enc))
+		return nil, nil, false
+	}
+	if r.ContentLength != 0 && !s.ingestBuffered.fits(firstRead(r.ContentLength)) {
+		(&bodyError{http.StatusServiceUnavailable, busy}).write(w)
+		return nil, nil, false
+	}
+	var src io.Reader = http.MaxBytesReader(w, r.Body, limit)
+	declared := r.ContentLength
+	if enc == "gzip" {
+		gz, err := gzip.NewReader(src)
+		if err != nil {
+			var mbe *http.MaxBytesError
+			switch berr := readError(err); {
+			case errors.As(err, &mbe):
+				errJSON(w, http.StatusRequestEntityTooLarge, tooLarge)
+			case berr.status == http.StatusRequestTimeout:
+				berr.write(w)
+			default:
+				errJSON(w, http.StatusUnprocessableEntity, "body is not valid gzip")
+			}
+			return nil, nil, false
+		}
+		defer gz.Close()
+		src, declared = &capReader{r: gz, left: limit}, -1
+	}
+	var meter jsonMeter
+	feed := func(p []byte) *bodyError {
+		if meter.feed(p); meter.cost.units() > maxSnapshotUnits {
+			return &bodyError{http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"snapshot is too large to evaluate: decoding JSON costs memory per value, and it holds over %d units "+
+					"(each value 1, each object 8)", maxSnapshotUnits)}
+		}
+		return nil
+	}
+	body, held, berr := readBody(src, declared, s.ingestBuffered, busy, tooLarge, feed)
+	if berr != nil {
+		berr.write(w)
+		return nil, nil, false
+	}
+	return body, sync.OnceFunc(func() { s.ingestBuffered.give(held) }), true
+}
+
+// capReader passes at most left bytes through and then fails with
+// errBodyTooLarge if there are more.
+type capReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		var one [1]byte
+		n, err := c.r.Read(one[:])
+		if n > 0 {
+			return 0, errBodyTooLarge
+		}
+		return 0, err
+	}
+	n, err := c.r.Read(p[:min(int64(len(p)), c.left)])
+	c.left -= int64(n)
+	return n, err
+}
+
 // pushRequest is the snapshot push protocol body (schemaVersion 1).
 type pushRequest struct {
 	SchemaVersion int             `json:"schemaVersion"`
@@ -299,7 +615,8 @@ type pushRequest struct {
 }
 
 // handleIngest implements POST /api/v1/snapshots: bearer auth, gzip or
-// identity body, schema validation, cluster upsert (409 on a cluster UID
+// identity body under the size, node and buffered-body budgets
+// (readSnapshotBody), the ingest slot, schema validation, cluster upsert (409 on a cluster UID
 // conflict), then ingestSnapshot: every target evaluated and committed
 // with the snapshot in one transaction (202), or — for a duplicate of the
 // latest snapshot — stale evaluations refreshed (200 duplicate).
@@ -308,38 +625,28 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := s.maxSnapshotBytes()
-	body := http.MaxBytesReader(w, r.Body, limit)
-	var reader io.Reader = body
-	switch enc := r.Header.Get("Content-Encoding"); enc {
-	case "", "identity":
-	case "gzip":
-		gz, err := gzip.NewReader(body)
-		if err != nil {
-			errJSON(w, http.StatusUnprocessableEntity, "body is not valid gzip")
-			return
-		}
-		defer gz.Close()
-		// Cap the decompressed stream too: a tiny gzip bomb must not bypass
-		// the wire-byte limit. Read one byte past the cap so overflow is
-		// detectable below.
-		reader = io.LimitReader(gz, limit+1)
-	default:
-		errJSON(w, http.StatusUnsupportedMediaType, fmt.Sprintf("unsupported Content-Encoding %q (use gzip or identity)", enc))
+	body, release, ok := s.readSnapshotBody(w, r)
+	if !ok {
 		return
 	}
-	raw, err := io.ReadAll(reader)
-	if err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the "+sizeString(limit)+" limit")
-			return
-		}
-		errJSON(w, http.StatusUnprocessableEntity, "reading body: "+err.Error())
+	defer release()
+	// One push is decoded, evaluated and stored at a time: each costs up
+	// to ~216 MiB of heap at the size and node caps, four --targets and
+	// notifications (TestStoredSnapshotHeapIsBounded). Waiting pushes hold
+	// only their bodies, which the budget bounds.
+	releaseSlot, ok := acquireSlot(w, nil, s.ingestSlots, s.ingestQueueTimeout, "too many concurrent snapshot pushes; retry shortly")
+	if !ok {
 		return
 	}
-	if int64(len(raw)) > limit {
-		errJSON(w, http.StatusRequestEntityTooLarge, "snapshot exceeds the "+sizeString(limit)+" limit after decompression")
+	defer releaseSlot()
+	raw := body.bytes()
+	// raw (a copy, or the body's only chunk) is the slot's to hold now: one
+	// ingest at a time, so giving the budget back here still bounds it.
+	release()
+	// encoding/json would decode each invalid byte to U+FFFD, three bytes
+	// in every report that names it; JSON is UTF-8, and agents write it.
+	if !utf8.Valid(raw) {
+		errJSON(w, http.StatusUnprocessableEntity, "invalid JSON: the body is not valid UTF-8")
 		return
 	}
 	var req pushRequest
@@ -353,6 +660,12 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ClusterName == "" {
 		errJSON(w, http.StatusUnprocessableEntity, "clusterName is required")
+		return
+	}
+	// A cluster name is an RFC 1123 subdomain, checked before anything is
+	// stored: "../<script>x" registered a cluster of that name (#37).
+	if err := inventory.ValidateClusterName(req.ClusterName); err != nil {
+		errJSON(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	// Per-cluster tokens authenticate exactly one cluster. 403 (not 401):
@@ -379,12 +692,11 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// differs only in those is a duplicate, since nothing judged changed.
 	hashed := inv
 	hashed.CollectedAt = time.Time{}
-	canonical, err := json.Marshal(hashed)
+	hash, err := canonicalHash(hashed)
 	if err != nil {
 		internalErr(w, "canonicalizing inventory", err)
 		return
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256(canonical))
 
 	ctx := r.Context()
 	now := s.now()
@@ -423,6 +735,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		writeUIDConflict(w, conflict)
 		return
 	}
+	var tooLarge *reportTooLargeError
+	if errors.As(err, &tooLarge) {
+		// Nothing was stored: every target is evaluated before the commit.
+		errJSON(w, http.StatusRequestEntityTooLarge, err.Error()+
+			"; no cluster's inventory names that much, and nothing was stored")
+		return
+	}
 	if err != nil {
 		internalErr(w, "storing snapshot and evaluations", err)
 		return
@@ -441,7 +760,11 @@ const supportedInventorySchema = 1
 // decodePushedInventory parses and checks a pushed inventory, returning a
 // 422 message for one the server cannot judge: absent or null, another
 // schemaVersion (which includes {} and a missing one), or a serverVersion
-// that is not a Kubernetes 1.x version. A degraded inventory with no
+// that is not a Kubernetes 1.x version, an identifier (a namespace,
+// object, node or Helm release name, a team label value) that is not
+// valid for what it names, or a value beyond the limits collectors keep
+// to (inventory.ValidateLimits), once the free text collectors copy whole
+// is cut to them (inventory.CutFreeText). A degraded inventory with no
 // serverVersion at all (the versions collector failed) is accepted and
 // judged at the cluster's last reported version (ingestSnapshot).
 func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
@@ -459,6 +782,24 @@ func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
 		if _, err := inventory.ParseTarget(inv.ServerVersion); err != nil {
 			return inv, "invalid inventory serverVersion: " + err.Error()
 		}
+	}
+	// Collectors read identifiers from objects the apiserver validated, so
+	// one that is not a valid Kubernetes identifier is not from a genuine
+	// inventory; reports repeat them, so they are refused before anything
+	// is stored or evaluated.
+	if err := inv.ValidateIdentifiers(); err != nil {
+		return inv, "invalid inventory: inventory." + err.Error()
+	}
+	// So are values beyond what any collector records (a string over
+	// 16 KiB, an object list over 100, a group/version/kind counted
+	// twice): the engine repeats them in what it builds. The free text a
+	// collector copies whole, which Kubernetes lets be longer (capability
+	// reasons, the ignore annotations), is cut to the limits first, as
+	// collectors since CutFreeText do themselves: an older agent's push
+	// is not refused for it.
+	inv.CutFreeText()
+	if err := inv.ValidateLimits(); err != nil {
+		return inv, "invalid inventory: inventory." + err.Error()
 	}
 	return inv, ""
 }
@@ -538,21 +879,20 @@ func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.C
 	return c, true
 }
 
-// defaultTarget computes a cluster's default evaluation target (next minor
-// above the version its latest snapshot is judged at — judgedVersion) and
-// returns the parsed latest inventory alongside so callers don't
-// unmarshal twice. Errors: store.ErrNotFound (no snapshots) or a
-// corrupt/unparseable-version error.
-func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.Version, inventory.Inventory, error) {
-	snap, inv, err := s.latestInventory(ctx, clusterID)
+// defaultTarget computes a cluster's default evaluation target: the next
+// minor above the version its latest snapshot is judged at (judgedAt).
+// Only the snapshot's head is decoded. Errors: store.ErrNotFound (no
+// snapshots) or a corrupt/unparseable-version error.
+func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.Version, error) {
+	snap, head, err := s.latestHead(ctx, clusterID)
 	if err != nil {
-		return inventory.Version{}, inventory.Inventory{}, err
+		return inventory.Version{}, err
 	}
-	server, err := inventory.ParseVersion(judgedAt(snap, inv))
+	server, err := inventory.ParseVersion(judgedAt(snap, head))
 	if err != nil {
-		return inventory.Version{}, inv, fmt.Errorf("latest snapshot has no parseable server version: %w", err)
+		return inventory.Version{}, fmt.Errorf("latest snapshot has no parseable server version: %w", err)
 	}
-	return server.Next(), inv, nil
+	return server.Next(), nil
 }
 
 // resolveTarget picks the evaluation target: explicit ?target= (422 when
@@ -567,7 +907,7 @@ func (s *Server) resolveTarget(w http.ResponseWriter, r *http.Request, clusterID
 		}
 		return v, true
 	}
-	target, _, err := s.defaultTarget(r.Context(), clusterID)
+	target, err := s.defaultTarget(r.Context(), clusterID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			errJSON(w, http.StatusNotFound, "no snapshots for cluster")
@@ -591,10 +931,51 @@ func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Sn
 	if err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, err
 	}
+	inv, err := decodeInventory(snap)
+	if err != nil {
+		return store.Snapshot{}, inventory.Inventory{}, err
+	}
+	return snap, inv, nil
+}
+
+// decodeInventory decodes a stored snapshot's whole inventory, as this
+// server judges it (legacyView), its free text cut as ingest cuts it
+// (inventory.CutFreeText): the snapshot keeps the inventory as pushed, an
+// older agent's longer reasons and ignore annotations included. Its cost
+// follows the inventory's structure (~45 MB of heap for a snapshot at its
+// node budget), so a request handler calls it only in the read slot
+// (inReadSlot).
+func decodeInventory(snap store.Snapshot) (inventory.Inventory, error) {
 	var inv inventory.Inventory
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
+		return inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", snap.ClusterID, snap.ID, errCorruptInventory, err)
+	}
+	inv.CutFreeText()
+	return legacyView(inv, snap.AgentVersion), nil
+}
+
+// latestHead loads the cluster's latest snapshot and decodes only its
+// head, the server version and capabilities, as this server judges them
+// (legacyView). encoding/json still checks that the whole document is
+// valid JSON, so a truncated one is corrupt here too, but it builds
+// nothing for what it skips: a 370 KB snapshot that decodes whole to
+// ~45 MB of heap costs about its own bytes here. The snapshot, inventory
+// bytes included, is returned for a caller that turns out to need the
+// rest (decodeInventory).
+func (s *Server) latestHead(ctx context.Context, clusterID int64) (store.Snapshot, inventory.Inventory, error) {
+	snap, err := s.cfg.Store.LatestSnapshot(ctx, clusterID)
+	if err != nil {
+		return store.Snapshot{}, inventory.Inventory{}, err
+	}
+	var head struct {
+		ServerVersion string                                              `json:"serverVersion"`
+		Capabilities  map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities"`
+	}
+	if err := json.Unmarshal(snap.Inventory, &head); err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", clusterID, snap.ID, errCorruptInventory, err)
 	}
+	inv := inventory.Inventory{ServerVersion: head.ServerVersion, Capabilities: head.Capabilities}
+	inv.CutFreeText()
 	return snap, legacyView(inv, snap.AgentVersion), nil
 }
 
@@ -611,37 +992,98 @@ type evalSummary struct {
 	EvaluatedAt time.Time      `json:"evaluatedAt"` // last confirmed; a re-evaluation with an unchanged result moves it
 	SnapshotID  int64          `json:"snapshotId"`
 	Outdated    bool           `json:"outdated,omitempty"` // evaluated before today UTC or under another KB or team map; the next pass replaces it
-	// NotAssessed is the report's: what the verdict could not cover.
-	NotAssessed []engine.CapabilityGap `json:"notAssessed,omitempty"`
+	// NotAssessed is the report's, bounded (gapsOf): what the verdict
+	// could not cover. NotAssessedOmitted counts the gaps not listed.
+	NotAssessed        []summaryGap `json:"notAssessed,omitempty"`
+	NotAssessedOmitted int          `json:"notAssessedOmitted,omitempty"`
 }
 
-func (s *Server) summarize(e store.Evaluation, now time.Time) evalSummary {
+// summarize is e as the read API carries it, its notAssessed within budget
+// bytes (gapsOf; 0 = every gap, each cut).
+func (s *Server) summarize(e store.Evaluation, now time.Time, budget int) evalSummary {
+	gaps, omitted := gapsOf(e, budget)
 	return evalSummary{
-		Target:      e.Target,
-		Score:       e.Score,
-		Ready:       e.Ready,
-		Verdict:     verdictOf(e),
-		Blockers:    e.Blockers,
-		Warnings:    e.Warnings,
-		KBVersion:   e.KBVersion,
-		EvaluatedAt: e.EvaluatedAt,
-		SnapshotID:  e.SnapshotID,
-		Outdated:    s.outdated(e, now),
-		NotAssessed: gapsOf(e),
+		Target:             e.Target,
+		Score:              e.Score,
+		Ready:              e.Ready,
+		Verdict:            verdictOf(e),
+		Blockers:           e.Blockers,
+		Warnings:           e.Warnings,
+		KBVersion:          e.KBVersion,
+		EvaluatedAt:        e.EvaluatedAt,
+		SnapshotID:         e.SnapshotID,
+		Outdated:           s.outdated(e, now),
+		NotAssessed:        gaps,
+		NotAssessedOmitted: omitted,
 	}
 }
 
-// gapsOf reads the stored report's notAssessed, so the summaries that
-// carry a verdict also say what it could not cover. A report that does not
-// decode yields none here; the report endpoint says it is corrupt.
-func gapsOf(e store.Evaluation) []engine.CapabilityGap {
-	var rep struct {
-		NotAssessed []engine.CapabilityGap `json:"notAssessed"`
+// summaryGap is a report's gap as an evaluation summary carries it (cut
+// by gapsOf), with SkippedOmitted counting the skipped entries it does
+// not list. The report has every gap whole.
+type summaryGap struct {
+	engine.CapabilityGap
+	SkippedOmitted int `json:"skippedOmitted,omitempty"`
+}
+
+// fleetSummaryBytes is how much of what an evaluation could not assess
+// the fleet-wide reads (/clusters, /fleet) list per evaluation, encoded.
+// They carry a summary for every cluster and target, and a push within
+// the inventory limits may name 32 capabilities: each gap cut to the
+// store column's bounds is up to ~900 bytes (more with escapes), so
+// listing them all made a 500-cluster /fleet of three targets a 10 MB
+// answer that grew the heap 45 MiB, almost three times the ~16 MiB the
+// server's worst case allows each of its two fleet reads. A genuine gap is a few hundred
+// bytes, so the gaps of a typical evaluation fit, the required ones
+// (which make a verdict unknown) listed first; the rest are counted, and
+// a cluster's own detail and its report list them all.
+const fleetSummaryBytes = 1 << 10
+
+// gapsOf decodes the evaluation's notAssessed, which the store keeps beside
+// the report, cut to its bounds, so the summaries that carry a verdict also
+// say what it could not cover without loading the report. It lists the
+// required gaps (those that make a verdict unknown) first, then the rest,
+// each in the report's order, and with budget > 0 stops before the gap
+// that would take the list past budget bytes encoded, returning how many
+// it left out. Each gap is cut to the column's bounds again, for a row an
+// earlier build wrote with wider ones. A report that does not decode has
+// none; the report endpoint says it is corrupt.
+func gapsOf(e store.Evaluation, budget int) ([]summaryGap, int) {
+	var all []summaryGap
+	if json.Unmarshal(e.NotAssessed, &all) != nil || len(all) == 0 {
+		return nil, 0
 	}
-	if json.Unmarshal(e.Report, &rep) != nil {
-		return nil
+	gaps := make([]summaryGap, 0, len(all))
+	size := len("[]")
+	full := false
+	for _, required := range []bool{true, false} {
+		for _, g := range all {
+			if g.Required != required || full {
+				continue
+			}
+			g.Capability = inventory.Capability(store.CutString(string(g.Capability), store.SummaryCapabilityBytes))
+			g.Reason = store.CutString(g.Reason, store.SummaryReasonBytes)
+			if n := len(g.Skipped) - store.SummarySkipped; n > 0 {
+				g.Skipped, g.SkippedOmitted = g.Skipped[:store.SummarySkipped], g.SkippedOmitted+n
+			}
+			for i, s := range g.Skipped {
+				g.Skipped[i] = store.CutString(s, store.SummarySkippedBytes)
+			}
+			if budget > 0 {
+				enc, err := marshalJSON(g)
+				if err != nil || size+len(enc)+1 > budget {
+					full = true
+					continue
+				}
+				size += len(enc) + 1
+			}
+			gaps = append(gaps, g)
+		}
 	}
-	return rep.NotAssessed
+	if len(gaps) == 0 {
+		gaps = nil
+	}
+	return gaps, len(all) - len(gaps)
 }
 
 type clusterSummary struct {
@@ -653,7 +1095,9 @@ type clusterSummary struct {
 // handleListClusters: GET /api/v1/clusters — every cluster plus its current
 // default-target score summary (omitted when no snapshot/evaluation exists).
 // Snapshot heads come from one store call (clusterStates), so no inventory
-// is decoded; the summaries are still one CurrentEvaluation per cluster.
+// is decoded, and each summary is one CurrentEvaluationSummary, which
+// loads no report: the request costs about its response, whatever the
+// fleet pushed.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	states, err := s.clusterStates(ctx)
@@ -667,8 +1111,8 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 		cs := clusterSummary{Cluster: c.Cluster, Stale: s.clusterStale(c.Cluster, now)}
 		if server, err := inventory.ParseVersion(c.version); c.hasSnapshot && err == nil {
 			target := server.Next()
-			if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String()); err == nil {
-				sum := s.summarize(e, now)
+			if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, target.String()); err == nil {
+				sum := s.summarize(e, now, fleetSummaryBytes)
 				cs.Latest = &sum
 			}
 		}
@@ -697,16 +1141,16 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	detail := clusterDetail{Cluster: c, Stale: s.clusterStale(c, now), Evaluations: []evalSummary{}}
 	var targets []inventory.Version
-	if snap, inv, err := s.latestInventory(ctx, c.ID); err == nil {
-		detail.ServerVersion = judgedAt(snap, inv)
-		detail.Capabilities = inv.Capabilities
+	if snap, head, err := s.latestHead(ctx, c.ID); err == nil {
+		detail.ServerVersion = judgedAt(snap, head)
+		detail.Capabilities = head.Capabilities
 		targets = s.evalTargets(detail.ServerVersion)
 	} else {
 		targets = s.extraTargets
 	}
 	for _, t := range targets {
-		if e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, t.String()); err == nil {
-			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now))
+		if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, t.String()); err == nil {
+			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now, 0))
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)
@@ -737,12 +1181,13 @@ type reportMeta struct {
 // through to the what-if path — any other store failure is returned, never
 // masked by a recompute that would hide a broken store behind a 200.
 // A store.ErrNotFound result means the cluster has no snapshots at all.
+// Only a what-if decodes the whole inventory.
 func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version) (engine.Report, reportMeta, error) {
-	snap, inv, err := s.latestInventory(ctx, clusterID)
+	snap, head, err := s.latestHead(ctx, clusterID)
 	if err != nil {
 		return engine.Report{}, reportMeta{}, err
 	}
-	version := judgedAt(snap, inv)
+	version := judgedAt(snap, head)
 	meta := reportMeta{ServerVersion: version, NotApplicable: notApplicable(version, target)}
 	e, err := s.cfg.Store.CurrentEvaluation(ctx, clusterID, target.String())
 	switch {
@@ -755,9 +1200,14 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 		meta.Outdated = s.outdated(e, s.now())
 		return rep, meta, nil
 	case errors.Is(err, store.ErrNotFound):
+		inv, err := decodeInventory(snap)
+		if err != nil {
+			return engine.Report{}, reportMeta{}, err
+		}
 		now := s.now()
 		meta.EvaluatedAt, meta.SnapshotID, meta.Source = now, snap.ID, sourceWhatIf
-		return evaluateWhatIf(inv, s.cfg.KB, s.cfg.TeamMap, target, now), meta, nil
+		rep, err := s.evaluateWhatIf(inv, target, now)
+		return rep, meta, err
 	default:
 		return engine.Report{}, reportMeta{}, fmt.Errorf("loading current evaluation: %w", err)
 	}
@@ -777,6 +1227,11 @@ func (s *Server) reportForRequest(w http.ResponseWriter, r *http.Request) (engin
 	rep, meta, err := s.loadOrComputeReport(r.Context(), c.ID, target)
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
+		return engine.Report{}, reportMeta{}, false
+	}
+	var tooLarge *reportTooLargeError
+	if errors.As(err, &tooLarge) {
+		errJSON(w, http.StatusRequestEntityTooLarge, "what-if: "+err.Error())
 		return engine.Report{}, reportMeta{}, false
 	}
 	if err != nil {
@@ -831,8 +1286,13 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	}{rep.Target.String(), findings, meta})
 }
 
+// maxHistoryLimit caps /history's ?limit=, so the response does not grow
+// with how long the server has kept evaluations.
+const maxHistoryLimit = 1000
+
 // handleHistory: GET /api/v1/clusters/{id}/history?target=&limit= —
-// []store.ScorePoint, oldest first, default limit 100.
+// []store.ScorePoint, oldest first, default limit 100, at most
+// maxHistoryLimit.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.requireCluster(w, r)
 	if !ok {
@@ -845,8 +1305,8 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if q := r.URL.Query().Get("limit"); q != "" {
 		n, err := strconv.Atoi(q)
-		if err != nil || n < 1 {
-			errJSON(w, http.StatusUnprocessableEntity, "limit must be a positive integer")
+		if err != nil || n < 1 || n > maxHistoryLimit {
+			errJSON(w, http.StatusUnprocessableEntity, fmt.Sprintf("limit must be an integer from 1 to %d", maxHistoryLimit))
 			return
 		}
 		limit = n

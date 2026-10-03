@@ -1,0 +1,287 @@
+package server
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	yaml "go.yaml.in/yaml/v3"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	sigsyaml "sigs.k8s.io/yaml"
+)
+
+// decodedCost is what yaml.v3 really builds for a document: every node
+// (aliases not expanded, and counted in aliases too) and every sequence
+// entry. ok is false when yaml.v3 cannot read it.
+func decodedCost(doc []byte) (c yamlCost, ok bool) {
+	dec := yaml.NewDecoder(bytes.NewReader(doc))
+	for {
+		var n yaml.Node
+		if err := dec.Decode(&n); errors.Is(err, io.EOF) {
+			return c, true
+		} else if err != nil {
+			return c, false
+		}
+		for stack := []*yaml.Node{&n}; len(stack) > 0; {
+			n := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if n.Kind != yaml.DocumentNode {
+				c.nodes++
+			}
+			if n.Kind == yaml.SequenceNode {
+				c.entries += len(n.Content)
+			}
+			if n.Kind == yaml.AliasNode {
+				c.aliases++
+			}
+			stack = append(stack, n.Content...)
+		}
+	}
+}
+
+// kubectlNodes is how many values kubectl's YAML-to-JSON decoder (go-yaml
+// v2) builds for a document's first node, aliases expanded, and how many
+// bytes its strings and numbers hold; ok is false when it cannot read it.
+// Duplicate keys collapse in its maps, so this may under-count it.
+func kubectlNodes(doc []byte) (n, scalars int, ok bool) {
+	j, err := sigsyaml.YAMLToJSON(doc)
+	if err != nil {
+		return 0, 0, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(j))
+	dec.UseNumber()
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return n, scalars, true
+		}
+		switch tok := tok.(type) {
+		case json.Delim:
+			if tok == '{' || tok == '[' {
+				n++
+			}
+		case string:
+			n++
+			scalars += len(tok)
+		case json.Number:
+			n++
+			scalars += len(tok)
+		default:
+			n++
+		}
+	}
+}
+
+// gateDocCost is what /gate charges a document: the nodes measureYAML
+// counts and, when it counted aliases, what expanding them adds
+// (checkAliases); size is its bytes plus the scalar bytes that expansion adds. ok
+// is false when it is refused for aliases it cannot measure.
+func gateDocCost(doc []byte) (c yamlCost, size int, ok bool) {
+	c, size = measureYAML(doc), len(doc)
+	if c.aliases > 0 {
+		extra, scalars, err := aliasExpansion(doc)
+		if err != nil {
+			return c, size, false
+		}
+		c, size = c.add(extra), size+scalars
+	}
+	return c, size, true
+}
+
+// checkNoUndercount fails when measureYAML counts fewer nodes, entries or
+// aliases than yaml.v3 builds for doc, or measures it differently when it arrives
+// in small chunks (unless it is UTF-16, which /gate refuses), or when what /gate charges it (gateDocCost) is less
+// than what kubectl's decoder builds from it with its aliases expanded:
+// fewer nodes, or fewer bytes than its strings and numbers hold. A scalar
+// may grow in conversion, `y` to `true`, and most of all a YAML 1.1
+// float, which JSON writes out in full below 1e21: `1e20` is 21 digits,
+// `-1e20` 22, 17 more than in the source. So each node is allowed 24.
+func checkNoUndercount(t *testing.T, name string, doc []byte) {
+	t.Helper()
+	if newByteSource([][]byte{doc}).utf16BOM() >= 0 {
+		return // read as UTF-16 by the decoders, and refused by /gate
+	}
+	got := measureYAML(doc)
+	if want, ok := decodedCost(doc); ok && (got.nodes < want.nodes || got.entries < want.entries || got.aliases < want.aliases) {
+		t.Errorf("%s: measured %+v, yaml.v3 builds %+v\n%q", name, got, want, doc)
+	}
+	if charged, size, ok := gateDocCost(doc); ok {
+		if want, scalars, ok := kubectlNodes(doc); ok && (charged.nodes < want || size+24*charged.nodes < scalars) {
+			t.Errorf("%s: charged %+v and %d bytes, kubectl's decoder builds %d nodes holding %d bytes\n%q",
+				name, charged, size, want, scalars, doc)
+		}
+	}
+	var chunks [][]byte
+	for p := doc; len(p) > 0; {
+		n := min(len(p), 7)
+		chunks = append(chunks, p[:n])
+		p = p[n:]
+	}
+	if inChunks := measureYAMLRange(newByteSource(chunks), 0, len(doc)); inChunks != got {
+		t.Errorf("%s in chunks: measured %+v, whole %+v", name, inChunks, got)
+	}
+}
+
+var measureSeeds = []string{
+	"a: 1\n",
+	"a:\n",
+	"a:\nb:\n",
+	"- \n- \n",
+	"-\n-\n",
+	"- - - a\n",
+	"- a: 1\n  b: 2\n",
+	"- {}\n- []\n",
+	"[]\n",
+	"[[], [[]], {}]\n",
+	"{a, b, c}\n",
+	"{a: , b: }\n",
+	"{a: 1, b: [1, 2], c: {d: e}}\n",
+	"[a: 1, b: 2]\n",
+	"[1,1,1,1]\n",
+	`{"a":"x,y,z","b":[1,2,{"c":null}],"d":{}}` + "\n",
+	"a: &x [1, 2]\nb: *x\nc: [*x, *x]\n",
+	"a: &x\n  b: 1\nc:\n  <<: *x\n",
+	"a: !!str 1\nb: !!map\n  c: d\n",
+	"a: |\n  x: [1,2,3]\n  - y\nb: >-\n  z, z\n",
+	"- |\n  x\n- >\n  y\n",
+	"- k: |2\n     x\n   [1, 1]\n",
+	"a: 'it''s, [x]'\nb: \"q\\\"uote, {x}\"\n",
+	"a: \"multi\n  line, [x]\"\nb: 1\n",
+	"? a\n: b\n? [c]\n: d\n",
+	"a: b # c: d\n#- e\n",
+	"a:\n# |\n  b: [1, 1, 1]\n",
+	"key: value: with colon\n",
+	"url: http://x:80/a,b\n",
+	"a:\n- b\n- c:\n  - d\n",
+	"apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: ConfigMap\n  metadata: {name: a}\n- {apiVersion: v1, kind: Secret}\n",
+	"a: [\n  1,\n  2\n]\nb: {\n  c: d\n}\n",
+	"a: b\n  c\n  d\n",
+	"- a\n  b\n- 'c'\n",
+	"a: &anchor\nb: *anchor\n",
+	"!!set {a, b}\n",
+	"[a, [b, c], {d: e, f}, ]\n",
+	"{a: [b, c], [d]: e}\n",
+	"- &a - b\n",
+	"a: -1\nb: - c\n",
+	"&0:\n",
+	"- ! : \n",
+	"{0:\", {0}} ",
+	// A plain scalar's continuation line that starts with a quote: text,
+	// not a quoted scalar swallowing what follows.
+	"k: x\n \"\nb: [1, 1, 1]\nc: \"\"\n",
+	"k:\n  x\n  \"\nb: [1, 1, 1]\nc: \"\"\n",
+	"a: 1\r\nb:\r\n- 2\r\n",
+	"a: 1\u2028b: [1, 1]\n",
+	// Aliases, which kubectl's decoder expands.
+	"a: &a xxxxxxxx\nb: *a\nc: *a\n",
+	"a: &a [x, x]\nb: &b [*a, *a]\nc: [*b, *b]\n",
+	"a: &a {k: v, l: w}\nb:\n  <<: *a\nc: {<<: [*a, *a]}\n",
+	"- &a x\n- *a\n- {*a : *a}\n",
+	"a: &a [*a]\n",
+	"\xff\xfea\x00:\x00 \x00[\x001\x00]\x00\n\x00",
+	// go-yaml v2 resolves YAML 1.1 floats, which JSON spells out: four
+	// bytes become twenty-one.
+	"1e20\n",
+	"a: [1e20, -1E+20, 6.02e23, .5e-9, 1e300]\n",
+	// A '*' that is not an alias token.
+	"verbs: [\"*\"] # *\nhost: '*.example.com'\nglob: a*b\nmsg: |\n  *x\n",
+	"k: x\n  *y\n",
+}
+
+func TestMeasureYAMLNeverUndercounts(t *testing.T) {
+	for _, s := range measureSeeds {
+		checkNoUndercount(t, "seed", []byte(s))
+	}
+	for name, shape := range gateHeapShapes() {
+		checkNoUndercount(t, name, []byte(shape(64<<10)))
+	}
+	// Every YAML file in the repository, document by document.
+	err := filepath.WalkDir("../..", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == "node_modules" || d.Name() == ".git") {
+			return filepath.SkipDir
+		}
+		if ext := filepath.Ext(path); d.IsDir() || ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
+		for {
+			doc, err := docs.Read()
+			if err != nil {
+				return nil
+			}
+			checkNoUndercount(t, path, doc)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// yaml.v3 and go-yaml v2 stop at 10,000 levels of nesting, and so does the
+// meter: a megabyte of `[` neither grows its stacks without bound nor
+// counts what neither decoder builds, and up to the limit it counts all.
+func TestMeasureYAMLDepthLimit(t *testing.T) {
+	deep := strings.Repeat("[", maxYAMLDepth) + strings.Repeat("]", maxYAMLDepth) + "\n"
+	checkNoUndercount(t, "10000 nested flow sequences", []byte(deep))
+	var block strings.Builder
+	for i := range 3000 {
+		fmt.Fprintf(&block, "%sk:\n", strings.Repeat(" ", i))
+	}
+	checkNoUndercount(t, "3000 nested block mappings", []byte(block.String()))
+	if c := measureYAML([]byte(strings.Repeat("[", 1<<20))); c.nodes > maxYAMLDepth+2 {
+		t.Fatalf("1 MiB of [ counted %d nodes, want at most the %d levels decoders accept", c.nodes, maxYAMLDepth)
+	}
+}
+
+// Over-counting refuses legitimate manifests early. On realistic ones the
+// count is what yaml.v3 builds.
+func TestMeasureYAMLIsExactOnRealisticManifests(t *testing.T) {
+	for _, doc := range []string{deploymentList(20), bigConfigMap(64 << 10), pspManifest, smallConfigMaps(4 << 10)} {
+		for _, d := range strings.Split(doc, "---\n") {
+			if d == "" {
+				continue
+			}
+			want, _ := decodedCost([]byte(d))
+			if got := measureYAML([]byte(d)); got != want {
+				t.Fatalf("measured %+v, yaml.v3 builds %+v\n%.200s", got, want, d)
+			}
+		}
+	}
+}
+
+// The check runs before every /gate decode, over up to 10 MiB in chunks.
+func BenchmarkCheckManifestStream(b *testing.B) {
+	doc := []byte(deploymentList(3000))
+	var body bufferedBody
+	for p := doc; len(p) > 0; p = p[min(len(p), maxBodyChunk):] {
+		body = append(body, p[:min(len(p), maxBodyChunk)])
+	}
+	b.SetBytes(int64(len(doc)))
+	for b.Loop() {
+		checkManifestStream(body)
+	}
+}
+
+func FuzzMeasureYAMLNeverUndercounts(f *testing.F) {
+	for _, s := range measureSeeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		checkNoUndercount(t, "fuzz", []byte(s))
+	})
+}

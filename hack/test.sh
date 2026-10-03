@@ -7,6 +7,7 @@
 #     and the notifier are concurrent; -count=1 so a cached pass never stands
 #     in for a run. Integration suites stay env-gated (UPGRADESCOPE_IT,
 #     UPGRADESCOPE_PG_TEST_DSN), so this needs no cluster, database or Docker.
+#     The heap-bound tests skip under -race; make test-heap runs them.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

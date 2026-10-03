@@ -51,13 +51,16 @@ type Finding struct {
 	// fluctuates ("3 objects" → "2 objects"). Notification delta diffing
 	// keys on it. Convention: category + "/" + stable discriminator
 	// (e.g. "removed-api/extensions/v1beta1/Ingress", "eol-addon/ingress-nginx").
-	Key         string   `json:"key,omitempty"`
-	Title       string   `json:"title"`           // one line, deterministic
-	Detail      string   `json:"detail"`          // evidence sentence(s), deterministic
-	Teams       []string `json:"teams,omitempty"` // sorted, deduped
-	Namespaces  []string `json:"namespaces,omitempty"`
-	Remediation string   `json:"remediation,omitempty"`
-	Citations   []string `json:"citations,omitempty"`
+	Key    string   `json:"key,omitempty"`
+	Title  string   `json:"title"`           // one line, deterministic
+	Detail string   `json:"detail"`          // evidence sentence(s), deterministic
+	Teams  []string `json:"teams,omitempty"` // sorted, deduped; of every affected namespace, listed or not
+	// Namespaces are the affected namespaces, sorted, at most
+	// MaxFindingNamespaces; NamespacesOmitted counts the ones not listed.
+	Namespaces        []string `json:"namespaces,omitempty"`
+	NamespacesOmitted int      `json:"namespacesOmitted,omitempty"`
+	Remediation       string   `json:"remediation,omitempty"`
+	Citations         []string `json:"citations,omitempty"`
 	// Objects identifies the affected objects for API-usage findings
 	// (copied from inventory.APIUsage, so at most inventory.MaxObjectRefs),
 	// sorted by file, line, namespace, name; ObjectsOmitted counts the

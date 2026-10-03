@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -45,6 +46,9 @@ func Open(path string) (*SQLite, error) {
 	// DeleteCluster, applyMigration) is a write path; a read-only
 	// transaction here would needlessly take the write lock, so keep it
 	// that way.
+	if err := restrictDBFiles(path); err != nil {
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+	}
 	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -60,6 +64,33 @@ func Open(path string) (*SQLite, error) {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
 	return &SQLite{db: db}, nil
+}
+
+// restrictDBFiles makes the database at path readable by its owner only:
+// it holds every inventory, evaluation and queued notification. SQLite
+// creates a database 0644 whatever the umask, and its -wal and -shm with
+// the database's mode, so the database is created 0600 here first, and an
+// existing one (an older version's, 0644) is tightened along with its
+// -wal and -shm. Setting the umask instead would be process-wide and
+// racy. A tightening the owner may not do (a file someone else owns) is
+// left as it is.
+func restrictDBFiles(path string) error {
+	if path == ":memory:" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&0o077 != 0 {
+			_ = os.Chmod(p, fi.Mode().Perm()&0o700)
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database.
@@ -326,6 +357,26 @@ func (s *SQLite) LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot,
 	return snap, nil
 }
 
+// LatestSnapshotHead is LatestSnapshot without the inventory.
+func (s *SQLite) LatestSnapshotHead(ctx context.Context, clusterID int64) (Snapshot, error) {
+	var snap Snapshot
+	var received string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, cluster_id, hash, kb_version, agent_version, received_at, server_version
+		FROM snapshots WHERE cluster_id = ? ORDER BY id DESC LIMIT 1`, clusterID).
+		Scan(&snap.ID, &snap.ClusterID, &snap.Hash, &snap.KBVersion, &snap.AgentVersion, &received, &snap.ServerVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, ErrNotFound)
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, err)
+	}
+	if snap.ReceivedAt, err = parseStoredTime(received); err != nil {
+		return Snapshot{}, fmt.Errorf("latest snapshot head for cluster %d: %w", clusterID, err)
+	}
+	return snap, nil
+}
+
 // LatestSnapshotHeads returns every cluster's latest snapshot without its
 // inventory, in one query over idx_snapshots_cluster_id.
 func (s *SQLite) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {
@@ -362,15 +413,22 @@ type sqlExecer interface {
 }
 
 // evaluationColumns is the SELECT list scanEvaluation reads.
-const evaluationColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash`
+const evaluationColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed`
+
+// summaryColumns is evaluationColumns without the report: NULL scans to a
+// nil Report, and the other columns are all a summary needs. Both drivers
+// use it.
+const summaryColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, NULL, created_at, evaluated_at, team_map_hash, not_assessed`
 
 func scanEvaluation(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
 	var created, evaluated string
+	var gaps sql.NullString
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &created, &evaluated, &e.TeamMapHash); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &created, &evaluated, &e.TeamMapHash, &gaps); err != nil {
 		return Evaluation{}, err
 	}
+	e.NotAssessed = notAssessedBytes(gaps)
 	var err error
 	if e.CreatedAt, err = parseStoredTime(created); err != nil {
 		return Evaluation{}, err
@@ -403,10 +461,10 @@ func insertEvaluationSQLite(ctx context.Context, x sqlExecer, e Evaluation) (int
 		evaluated = created
 	}
 	res, err := x.ExecContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		formatTime(created), formatTime(evaluated), e.TeamMapHash)
+		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report))
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -444,6 +502,14 @@ func (s *SQLite) LatestEvaluation(ctx context.Context, clusterID int64, target s
 func (s *SQLite) CurrentEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
 	return s.queryEvaluation(ctx, fmt.Sprintf("current evaluation for cluster %d target %s", clusterID, target), `
 		SELECT `+evaluationColumns+` FROM evaluations
+		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = ?) AND target = ?
+		ORDER BY id DESC LIMIT 1`, clusterID, target)
+}
+
+// CurrentEvaluationSummary is CurrentEvaluation without the report.
+func (s *SQLite) CurrentEvaluationSummary(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
+	return s.queryEvaluation(ctx, fmt.Sprintf("current evaluation summary for cluster %d target %s", clusterID, target), `
+		SELECT `+summaryColumns+` FROM evaluations
 		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = ?) AND target = ?
 		ORDER BY id DESC LIMIT 1`, clusterID, target)
 }
@@ -549,9 +615,9 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = ?, kb_version = ?, team_map_hash = ?, blockers = ?, warnings = ?, evaluated_at = ?
+			UPDATE evaluations SET report = ?, not_assessed = ?, kb_version = ?, team_map_hash = ?, blockers = ?, warnings = ?, evaluated_at = ?
 			WHERE id = ? AND cluster_id = ?`,
-			e.Report, e.KBVersion, e.TeamMapHash, e.Blockers, e.Warnings, formatTime(evaluated), e.ID, b.ClusterID); err != nil {
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, e.Blockers, e.Warnings, formatTime(evaluated), e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}

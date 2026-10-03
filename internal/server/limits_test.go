@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,10 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
@@ -56,6 +61,144 @@ func deploymentList(n int) string {
 		for k := range 25 {
 			fmt.Fprintf(&b, "          - {name: VAR_%d, value: \"value-%d-%s\"}\n", k, k, strings.Repeat("y", 40))
 		}
+	}
+	return b.String()
+}
+
+// gateHeapShapes builds single documents of about size bytes in every
+// shape the red team used against /gate (#121), from cheapest to dearest
+// per byte to decode: one big value, a realistic List, many keys, a flow
+// mapping of bare keys, block and flow sequences, Lists of empty items
+// (each an object; in the last, every object a finding), and aliases.
+func gateHeapShapes() map[string]func(size int) string {
+	const head = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+	repeat := func(start, unit, end string) func(int) string {
+		return func(size int) string {
+			var b strings.Builder
+			b.WriteString(start)
+			for b.Len() < size-len(unit)-len(end) {
+				b.WriteString(unit)
+			}
+			b.WriteString(end)
+			return b.String()
+		}
+	}
+	return map[string]func(int) string{
+		"one big value": func(size int) string {
+			return head + "data:\n  k: " + strings.Repeat("x", max(size-len(head)-12, 0)) + "\n"
+		},
+		"kind List": func(size int) string { return deploymentList(max(size/len(deploymentList(1)), 1)) },
+		"many keys": bigConfigMap,
+		// One alias makes /gate read the document into yaml.v3 nodes to
+		// measure what it expands to, before decoding it.
+		"many keys and an alias": func(size int) string {
+			const alias = "x: &x 1\ny: *x\n"
+			return bigConfigMap(size-len(alias)-16) + alias
+		},
+		"flow mapping": func(size int) string {
+			var b strings.Builder
+			b.WriteString(head + "data: {")
+			for i := 0; b.Len() < size-16; i++ {
+				fmt.Fprintf(&b, "%x,", i)
+			}
+			b.WriteString("z}\n")
+			return b.String()
+		},
+		"block sequence":            repeat(head+"data:\n  k:\n", "  - 1\n", ""),
+		"flow sequence":             repeat(head+"data: {k: [1", ",1", "]}\n"),
+		"List of null items":        repeat("apiVersion: v1\nkind: ConfigMapList\nitems:\n", "- \n", ""),
+		"List of {} items":          repeat("apiVersion: v1\nkind: ConfigMapList\nitems: [{}", ",{}", "]\n"),
+		"List of removed-API items": repeat("apiVersion: policy/v1beta1\nkind: PodSecurityPolicyList\nitems:\n", "- {}\n", ""),
+		"alias bomb":                func(int) string { return nestedAliases(20, 5) },
+		"wide aliases": func(size int) string {
+			return head + "a: &a [" + strings.Repeat("1,", size/4) + "1]\n" +
+				"b: [" + strings.Repeat("*a,", min(size/8, 1000)) + "*a]\n"
+		},
+		// kubectl's decoder copies what an alias names at every alias. Fewer
+		// than 100 aliases never meet go-yaml v2's excessive-aliasing check,
+		// and that check counts nodes, not the bytes a scalar holds.
+		"scalar aliases": func(size int) string {
+			return aliasedScalar(head, max(size-len(head)-1100, 1), 99)
+		},
+		// Aliases of aliases: three levels of nine multiply a scalar 729
+		// times with only 27 aliases.
+		"nested aliases": func(size int) string {
+			var b strings.Builder
+			b.WriteString(head + "l0: &l0 " + strings.Repeat("x", max(size-len(head)-200, 1)) + "\n")
+			for i := 1; i <= 3; i++ {
+				fmt.Fprintf(&b, "l%d: &l%d [%s]\n", i, i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), 9), ","))
+			}
+			return b.String()
+		},
+		// Merge keys: each `<<: *m` copies every pair of the mapping m.
+		"merge keys": func(size int) string {
+			var b strings.Builder
+			b.WriteString(head + "m: &m\n")
+			for i := 0; b.Len() < size-1500; i++ {
+				fmt.Fprintf(&b, "  k%x: v\n", i)
+			}
+			for i := range 90 {
+				fmt.Fprintf(&b, "c%d: {<<: *m}\n", i)
+			}
+			return b.String()
+		},
+	}
+}
+
+// aliasedScalar is head followed by an anchored plain scalar of size bytes
+// and n aliases of it.
+func aliasedScalar(head string, size, n int) string {
+	var b strings.Builder
+	b.WriteString(head + "a: &a " + strings.Repeat("x", size) + "\n")
+	for i := range n {
+		fmt.Fprintf(&b, "k%d: *a\n", i)
+	}
+	return b.String()
+}
+
+// checkStream runs both of /gate's checks on a stream, checkManifestStream
+// and then, as in the evaluation slot, checkAliases, and returns the
+// first refusal, or 0.
+func checkStream(body bufferedBody) (status int, msg string) {
+	shape, status, msg := checkManifestStream(body)
+	if status != 0 {
+		return status, msg
+	}
+	return shape.checkAliases(DefaultMaxGateBytes)
+}
+
+// withinBudget reports whether /gate's checks let doc be decoded.
+func withinBudget(doc string) bool {
+	status, _ := checkStream(bufferedBody{[]byte(doc)})
+	return status == 0
+}
+
+// atNodeBudget returns the largest document shape builds (up to the
+// per-document size cap) that /gate's checks still let be decoded:
+// within the node budget, and its aliases within the per-document limit.
+func atNodeBudget(shape func(size int) string) string {
+	lo, hi := 0, maxManifestDocBytes-64
+	if doc := shape(hi); withinBudget(doc) {
+		return doc
+	}
+	for hi-lo > 1024 {
+		if mid := (lo + hi) / 2; withinBudget(shape(mid)) {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return shape(lo)
+}
+
+// nestedAliases is a billion-laughs document: fan aliases per level, over
+// levels levels.
+func nestedAliases(fan, levels int) string {
+	var b strings.Builder
+	b.WriteString("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: bomb}\n")
+	b.WriteString("l0: &l0 [" + strings.TrimSuffix(strings.Repeat("lol,", fan), ",") + "]\n")
+	for i := 1; i <= levels; i++ {
+		fmt.Fprintf(&b, "l%d: &l%d [%s]\n", i, i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d,", i-1), fan), ","))
 	}
 	return b.String()
 }
@@ -106,11 +249,11 @@ func TestGateBodyCapIsConfigurable(t *testing.T) {
 }
 
 // Billion-laughs: a few hundred bytes that expand to millions of nodes.
-// The shared manifest parser (collect.parseManifestStream) walks the YAML node
-// tree and never expands aliases, so a billion-laughs document is just a small
-// document: it must come back fast with an ordinary status — never a 5xx, an
-// OOM, or a timeout. (Before the shared parser, /gate converted YAML to JSON,
-// which expanded aliases, so this used to require a 4xx.)
+// The shared manifest parser walks the yaml.v3 node tree, which does not
+// expand aliases, but it checks every object against kubectl's own
+// decoder, which does (up to go-yaml v2's excessive-aliasing check). So
+// what the aliases expand to is measured before anything decodes them,
+// and the bomb is refused with 413 at once.
 func TestGateAliasBombDoesNotAmplify(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: bomb}\n")
@@ -123,11 +266,63 @@ func TestGateAliasBombDoesNotAmplify(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
 	began := time.Now()
 	code, _, raw := gateStatus(t, s, b.String())
-	if code >= 500 {
-		t.Fatalf("status = %d (%s), want 2xx or 4xx", code, raw)
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "alias") {
+		t.Fatalf("status = %d (%s), want 413 about the aliases", code, raw)
 	}
 	if took := time.Since(began); took > 5*time.Second {
 		t.Fatalf("alias bomb took %s to reject", took)
+	}
+}
+
+// The #121 review's repro: one 3.5 MiB anchored scalar and 99 aliases of
+// it, 3.7 MB on the wire and a few hundred nodes, decoded by kubectl's
+// decoder into 99 copies — ~1.5 GiB of heap from one anonymous request.
+// What aliases expand to is charged against the per-document limit, so it
+// is refused before anything decodes it; the same document with a small
+// scalar is decoded.
+func TestGateChargesAliasesAtTheirExpandedSize(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	head := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+	code, _, raw := gateStatus(t, s, aliasedScalar(head, 3500<<10, 99))
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "alias") {
+		t.Fatalf("status = %d (%.300s), want 413 about the aliases", code, raw)
+	}
+	if code, _, raw := gateStatus(t, s, aliasedScalar(head, 1<<10, 99)); code != http.StatusOK {
+		t.Fatalf("small scalar: status = %d (%.300s), want 200", code, raw)
+	}
+}
+
+// aliasedNames is a stream of docs Lists of 100 PodSecurityPolicies, one
+// per document, whose names are all one size-byte anchored scalar: each
+// document is ~size bytes and expands to ~100 x size.
+func aliasedNames(docs, size int) string {
+	var b strings.Builder
+	for d := range docs {
+		if d > 0 {
+			b.WriteString("---\n")
+		}
+		fmt.Fprintf(&b, "apiVersion: policy/v1beta1\nkind: PodSecurityPolicyList\nitems:\n- metadata: {name: &a %s}\n",
+			strings.Repeat("x", size))
+		b.WriteString(strings.Repeat("- metadata: {name: *a}\n", 99))
+	}
+	return b.String()
+}
+
+// Each document's aliases may expand it to 4 MiB, but across documents
+// nothing capped what they added: 136 documents of 40 KB, each naming 100
+// objects of a deprecated GVK after one anchor, were a 5.8 MB stream whose
+// answer was 532 MB and whose evaluation took 1.8 GiB of heap. The stream
+// with its aliases expanded must fit the body cap, as the stream itself
+// does, or it is 413 before anything decodes it.
+func TestGateChargesAliasesAgainstTheStreamCap(t *testing.T) {
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxGateBytes = 8 << 20 })
+	const size = 39 << 10 // a document expands to ~3.9 MiB, within the 4 MiB per document
+	if code, _, raw := gateStatus(t, s, aliasedNames(2, size)); code != http.StatusOK {
+		t.Fatalf("2 documents (~7.8 MiB expanded): status = %d (%.300s), want 200", code, raw)
+	}
+	code, _, raw := gateStatus(t, s, aliasedNames(3, size))
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "alias") || !strings.Contains(string(raw), "8MiB") {
+		t.Fatalf("3 documents (~11.7 MiB expanded): status = %d (%.300s), want 413 naming the aliases and the 8MiB cap", code, raw)
 	}
 }
 
@@ -149,6 +344,284 @@ func TestGateAcceptsLargeList(t *testing.T) {
 	}
 	if rep.ClusterID != "manifests" {
 		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// heapPeak runs f while sampling the heap and returns how far HeapInuse
+// rose above where it was before f, garbage included: the process's
+// footprint, not just its live data.
+func heapPeak(f func()) uint64 {
+	runtime.GC()
+	var base runtime.MemStats
+	runtime.ReadMemStats(&base)
+	var peak atomic.Uint64
+	stop := make(chan struct{})
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		var m runtime.MemStats
+		for {
+			runtime.ReadMemStats(&m)
+			peak.Store(max(peak.Load(), m.HeapInuse))
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
+	f()
+	close(stop)
+	<-sampled
+	return max(peak.Load(), base.HeapInuse) - base.HeapInuse
+}
+
+// maxGateDecodeHeap is what decoding and evaluating one /gate request may
+// add to the heap, garbage included (#121).
+const maxGateDecodeHeap = 200 << 20
+
+// /gate decode cost follows a document's YAML structure, not its size: a
+// 4 MiB flow sequence decoded to ~900 MB of heap, and two at once OOM-killed
+// a 512Mi server (#121). Every shape the red team used, sent once and then
+// twice at once, at the per-document size cap and at the largest size
+// within the node budget, is refused with 413 before it is decoded or
+// decoded within maxGateDecodeHeap, and gives its body budget back either
+// way. Within the node budget everything is decoded.
+func TestGateDecodeHeapIsBounded(t *testing.T) {
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("decodes several 4 MiB documents; make test-heap runs it, without the race detector")
+	}
+	// The chart runs the server with GOMEMLIMIT, under which the collector
+	// holds the heap near its live size as it nears the limit. A low GOGC
+	// does the same here, so what is measured is the live heap the
+	// requests need, not how much garbage GOGC=100 lets pile up (up to as
+	// much again) before the next collection.
+	defer debug.SetGCPercent(debug.SetGCPercent(10))
+	for name, shape := range gateHeapShapes() {
+		t.Run(name, func(t *testing.T) {
+			full := shape(maxManifestDocBytes - 64)
+			fits := atNodeBudget(shape)
+			bodies := []string{full}
+			if fits != full {
+				bodies = append(bodies, fits)
+			}
+			for _, body := range bodies {
+				checkGateHeap(t, body, len(body) < len(full) || withinBudget(full))
+			}
+		})
+	}
+	// A realistic ~4 MiB List fits.
+	if units := measureYAML([]byte(gateHeapShapes()["kind List"](maxManifestDocBytes - 64))).units(); units > maxManifestUnits {
+		t.Fatalf("a 4 MiB List of Deployments is %d units, over the %d budget", units, maxManifestUnits)
+	}
+}
+
+// checkGateHeap sends body once and then twice at once, and checks the
+// heap stays within maxGateDecodeHeap, the body budget is given back, and
+// a body within the node budget is decoded (any other is refused with
+// 413).
+func checkGateHeap(t *testing.T, body string, decode bool) {
+	t.Helper()
+	for _, n := range []int{1, 2} {
+		s := newTestServer(t, newFakeStore())
+		codes := make([]int, n)
+		msgs := make([]string, n)
+		grew := heapPeak(func() {
+			var wg sync.WaitGroup
+			for i := range n {
+				wg.Go(func() {
+					rec := httptest.NewRecorder()
+					serveGate(s, rec, body)
+					codes[i], msgs[i] = rec.Code, rec.Body.String()
+				})
+			}
+			wg.Wait()
+		})
+		for i, code := range codes {
+			refused := code == http.StatusRequestEntityTooLarge
+			if code >= 500 || decode == refused || refused && !strings.Contains(msgs[i], "split") {
+				t.Fatalf("%d bytes x%d: status = %d (%.300s)", len(body), n, code, msgs[i])
+			}
+		}
+		if grew > maxGateDecodeHeap {
+			t.Fatalf("%d bytes x%d: statuses %v; the heap grew %d MiB, want at most %d MiB",
+				len(body), n, codes, grew>>20, maxGateDecodeHeap>>20)
+		}
+		if used := s.gateBuffered.inUse(); used != 0 {
+			t.Fatalf("%d bytes x%d: %d body bytes still charged", len(body), n, used)
+		}
+		t.Logf("%d bytes (%d units) x%d: statuses %v, heap grew %d MiB",
+			len(body), measureYAML([]byte(body)).units(), n, codes, grew>>20)
+	}
+}
+
+// Measuring what a document's aliases expand to reads it into yaml.v3
+// nodes, which costs about what decoding it does, so it waits for the
+// evaluation slot like decoding: requests waiting for the slot hold their
+// bodies and nothing more. As many documents at the node budget, each
+// with an alias, as the body budget holds, sent at once, are each
+// evaluated, and the heap stays within one decode plus the bodies (#121:
+// measured before the slot, these 13 took ~1.2 GiB).
+func TestGateAliasCheckWaitsForTheSlot(t *testing.T) {
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("decodes a dozen 2 MiB documents; make test-heap runs it, without the race detector")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
+	body := atNodeBudget(gateHeapShapes()["many keys and an alias"])
+	s := newTestServer(t, newFakeStore())
+	s.gateQueueTimeout = 5 * time.Minute // the requests are evaluated one at a time
+	n := int(s.gateBuffered.max) / len(body)
+	codes := make([]int, n)
+	msgs := make([]string, n)
+	grew := heapPeak(func() {
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Go(func() {
+				rec := httptest.NewRecorder()
+				serveGate(s, rec, body)
+				codes[i], msgs[i] = rec.Code, rec.Body.String()
+			})
+		}
+		wg.Wait()
+	})
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Fatalf("%d bytes x%d: status = %d (%.300s), want 200", len(body), n, code, msgs[i])
+		}
+	}
+	if limit := uint64(maxGateDecodeHeap + s.gateBuffered.max); grew > limit {
+		t.Fatalf("%d bytes x%d: the heap grew %d MiB, want at most %d MiB (one decode and the body budget)",
+			len(body), n, grew>>20, limit>>20)
+	}
+	t.Logf("%d bytes x%d: heap grew %d MiB", len(body), n, grew>>20)
+}
+
+// With ?cluster=, the gate also decodes the cluster's stored inventory in
+// the evaluation slot and evaluates against it twice. The manifests'
+// node trees are garbage by then, so the dearest manifest stream at the
+// node budget against the dearest snapshot at the snapshot budget still
+// stays within maxGateDecodeHeap.
+func TestGateClusterContextHeapIsBounded(t *testing.T) {
+	if testing.Short() || raceEnabled || !heapRun {
+		t.Skip("decodes a 2 MiB manifest and a 6 MiB snapshot; make test-heap runs it, without the race detector")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(10)) // as in TestGateDecodeHeapIsBounded
+	s := newTestServer(t, newFakeStore())
+	rec := httptest.NewRecorder()
+	serveIngest(s, rec, []byte(storedBody("ObjectRefs {}, 100 per usage", objectRefUsages)), false)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("push: status = %d (%.300s)", rec.Code, rec.Body)
+	}
+	body := atNodeBudget(gateHeapShapes()["many keys and an alias"])
+	rec = httptest.NewRecorder()
+	grew := heapPeak(func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/gate?target=1.35&fail-on=never&cluster=prod-eu-1", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-yaml")
+		s.Handler().ServeHTTP(rec, req)
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("gate: status = %d (%.300s), want 200", rec.Code, rec.Body)
+	}
+	if grew > maxGateDecodeHeap {
+		t.Fatalf("the heap grew %d MiB, want at most %d MiB", grew>>20, maxGateDecodeHeap>>20)
+	}
+	t.Logf("heap grew %d MiB", grew>>20)
+}
+
+// A '*' that is no alias token — a wildcard in a string, a comment, a
+// glob in a plain scalar — costs no alias measurement, so a document
+// yaml.v3 cannot read but kubectl's decoder can, such as JSON with a `\/`
+// escape, is still evaluated when it holds one.
+func TestGateWildcardsAreNotAliases(t *testing.T) {
+	wildcards := "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole # * \nmetadata: {name: all}\n" +
+		"rules:\n- apiGroups: ['*']\n  resources: [\"*\"]\n  verbs: [get*, list]\n  nonResourceURLs: [/api/*]\n"
+	jsonEscape := `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"x"},"data":{"glob":"*.example.com\/*"}}` + "\n"
+	if _, _, err := aliasExpansion([]byte(jsonEscape)); err == nil {
+		t.Fatal("yaml.v3 reads the JSON escape fixture; it no longer shows that /gate must not read it with yaml.v3")
+	}
+	s := newTestServer(t, newFakeStore())
+	for name, body := range map[string]string{"wildcards": wildcards, "JSON escape": jsonEscape} {
+		shape, status, msg := checkManifestStream(bufferedBody{[]byte(body)})
+		if status != 0 || len(shape.aliased) != 0 {
+			t.Fatalf("%s: status %d (%s), %d documents with aliases; want none", name, status, msg, len(shape.aliased))
+		}
+		if code, _, raw := gateStatus(t, s, body); code != http.StatusOK {
+			t.Fatalf("%s: status = %d (%.300s), want 200", name, code, raw)
+		}
+	}
+}
+
+// The node budget is per request: documents that each fit it are refused
+// together when the stream does not, and the message says which.
+func TestGateNodeBudgetCoversTheStream(t *testing.T) {
+	half := atNodeBudget(gateHeapShapes()["flow sequence"])
+	half = half[:len(half)/2] + "]}\n"
+	if u := measureYAML([]byte(half)).units(); u > maxManifestUnits || 3*u <= maxManifestUnits {
+		t.Fatalf("fixture is %d units, want a third to a whole of the %d budget", u, maxManifestUnits)
+	}
+	s := newTestServer(t, newFakeStore())
+	code, _, raw := gateStatus(t, s, half+"---\n"+half+"---\n"+half)
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "the manifest stream is too large") {
+		t.Fatalf("three documents within the budget each: status = %d (%s), want 413 about the stream", code, raw)
+	}
+	code, _, raw = gateStatus(t, s, pspManifest+"---\n"+gateHeapShapes()["flow sequence"](1<<20))
+	if code != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "manifest document 2 is too large") {
+		t.Fatalf("one document over the budget: status = %d (%s), want 413 naming document 2", code, raw)
+	}
+}
+
+func TestGateRejectsInvalidSeparator(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	code, _, raw := gateStatus(t, s, pspManifest+"--- kind: oops\n"+pspManifest)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "separator") {
+		t.Fatalf("status = %d (%s), want 422 about the separator", code, raw)
+	}
+	// A comment may follow it, and a trailing CR.
+	if code, _, raw := gateStatus(t, s, pspManifest+"--- # next\r\n"+pspManifest+"---\r\n"); code != http.StatusOK && code != http.StatusUnprocessableEntity ||
+		strings.Contains(string(raw), "separator") {
+		t.Fatalf("status = %d (%s), want the stream evaluated", code, raw)
+	}
+	// Any Unicode white space may, as the stream parser trims it.
+	for _, sep := range []string{"---\v\n", "---  # next\n", "---　\n"} {
+		if code, _, raw := gateStatus(t, s, pspManifest+sep+pspManifest); code != http.StatusOK && code != http.StatusUnprocessableEntity ||
+			strings.Contains(string(raw), "separator") {
+			t.Fatalf("%q: status = %d (%s), want the stream evaluated", sep, code, raw)
+		}
+	}
+}
+
+// yaml.v3 and kubectl's decoder read a document that starts with a UTF-16
+// byte order mark as UTF-16, which the meter, reading UTF-8, would see as
+// one node: a 4 MiB UTF-16 flow sequence would decode to a million. Such
+// a stream is refused, wherever the mark is (anywhere else it is not
+// UTF-8 either), and wherever a chunk boundary splits it.
+func TestGateRefusesUTF16(t *testing.T) {
+	utf16Doc := func(order binary.AppendByteOrder, bom []byte, s string) string {
+		b := bom
+		for _, c := range utf16.Encode([]rune(s)) {
+			b = order.AppendUint16(b, c)
+		}
+		return string(b)
+	}
+	flow := gateHeapShapes()["flow sequence"](1 << 20)
+	s := newTestServer(t, newFakeStore())
+	for name, body := range map[string]string{
+		"LE":                utf16Doc(binary.LittleEndian, []byte{0xFF, 0xFE}, flow),
+		"BE":                utf16Doc(binary.BigEndian, []byte{0xFE, 0xFF}, flow),
+		"after a UTF-8 doc": pspManifest + "---\n" + utf16Doc(binary.LittleEndian, []byte{0xFF, 0xFE}, flow),
+	} {
+		code, _, raw := gateStatus(t, s, body)
+		if code != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "UTF-16") {
+			t.Fatalf("%s: status = %d (%.300s), want 422 about UTF-16", name, code, raw)
+		}
+	}
+	split := bufferedBody{[]byte(pspManifest + "---\n\xff"), []byte("\xfe" + utf16Doc(binary.LittleEndian, nil, flow))}
+	if status, msg := checkStream(split); status != http.StatusUnprocessableEntity || !strings.Contains(msg, "UTF-16") {
+		t.Fatalf("a mark across chunks: %d %q, want 422 about UTF-16", status, msg)
+	}
+	// A UTF-8 byte order mark is UTF-8.
+	if code, _, raw := gateStatus(t, s, "\xef\xbb\xbf"+pspManifest); code == http.StatusUnprocessableEntity && strings.Contains(string(raw), "UTF-16") {
+		t.Fatalf("UTF-8 BOM: status = %d (%.300s)", code, raw)
 	}
 }
 
@@ -287,8 +760,9 @@ func TestGateBufferedBodiesAreBounded(t *testing.T) {
 }
 
 // With the budget full, a request is refused with 503 + Retry-After at
-// once — not after the queue timeout — having read no more than its first
-// chunk, and gets in as soon as there is room.
+// once — not after the queue timeout — having read none of its body (the
+// first read would send a client waiting on Expect: 100-continue the
+// go-ahead for all of it), and gets in as soon as there is room.
 func TestGateBodyBudgetFull(t *testing.T) {
 	s := newTestServer(t, newFakeStore())
 	s.gateQueueTimeout = time.Minute
@@ -304,9 +778,9 @@ func TestGateBodyBudgetFull(t *testing.T) {
 	began := time.Now()
 	s.Handler().ServeHTTP(rec, req)
 	if took := time.Since(began); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" ||
-		rd.n > minGateChunk || took > 10*time.Second {
-		t.Fatalf("status = %d (%s), Retry-After %q, %d body bytes read, after %s; want 503 with Retry-After at once, at most %d bytes read",
-			rec.Code, rec.Body, rec.Header().Get("Retry-After"), rd.n, took.Round(time.Millisecond), minGateChunk)
+		rd.n > 0 || took > 10*time.Second {
+		t.Fatalf("status = %d (%s), Retry-After %q, %d body bytes read, after %s; want 503 with Retry-After at once, nothing read",
+			rec.Code, rec.Body, rec.Header().Get("Retry-After"), rd.n, took.Round(time.Millisecond))
 	}
 	if used := s.gateBuffered.inUse(); used != s.gateBuffered.max {
 		t.Fatalf("refused request left %d bytes charged, want the %d it found", used, s.gateBuffered.max)
@@ -317,6 +791,127 @@ func TestGateBodyBudgetFull(t *testing.T) {
 	}
 	if used := s.gateBuffered.inUse(); used != 0 {
 		t.Fatalf("%d body bytes still charged after the request finished", used)
+	}
+}
+
+// readStatus reads the response on conn, failing after within.
+func readStatus(t *testing.T, conn net.Conn, within time.Duration) (int, string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(within))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("reading the response: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
+
+// Over a real connection: with the budget full, a client that asks
+// Expect: 100-continue gets the 503 as its first response, not a 100
+// Continue that would make it send the whole body.
+func TestGateBodyBudgetFullSendsNo100Continue(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	s.gateBuffered.charge(0, s.gateBuffered.max)
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: gate\r\nContent-Type: application/x-yaml\r\n"+
+		"Expect: 100-continue\r\nContent-Length: 4096\r\n\r\n")
+	if code, body := readStatus(t, conn, 5*time.Second); code != http.StatusServiceUnavailable {
+		t.Fatalf("first response = %d (%s), want 503", code, body)
+	}
+}
+
+// On a chunked body, the read that crosses --max-gate-bytes returns the
+// last bytes under the cap together with the overflow error. The request
+// is too large whether or not those bytes fit the budget: 413, not a
+// retryable 503 (#100).
+func TestGateChunkedOverflowIs413EvenWithoutBudget(t *testing.T) {
+	const limit = 50000 // not a multiple of the read chunk sizes, so the crossing read returns bytes
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxGateBytes = limit })
+	s.gateBuffered.charge(0, s.gateBuffered.max-40000) // room for the first 32 KiB of reads, not the cap
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate?target=1.35", strings.NewReader(strings.Repeat("#", limit+1000)))
+	req.ContentLength = -1 // chunked
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d (%s), want 413", rec.Code, rec.Body)
+	}
+	if used := s.gateBuffered.inUse(); used != s.gateBuffered.max-40000 {
+		t.Fatalf("%d bytes charged after the refusal, want the %d it found", used, s.gateBuffered.max-40000)
+	}
+}
+
+// A /gate body that does not arrive within ReadTimeout gets 408, naming no
+// socket addresses, and its bytes are given back. The handler cannot know
+// the ReadTimeout of the http.Server it runs in (an embedder's, here
+// 300ms), so the message names none.
+func TestGateBodyReadTimeoutIs408(t *testing.T) {
+	s := newTestServer(t, newFakeStore())
+	ts := httptest.NewUnstartedServer(s.Handler())
+	ts.Config.ReadTimeout = 300 * time.Millisecond
+	ts.Start()
+	t.Cleanup(ts.Close)
+	conn := stallUpload(t, ts, 100000, 1000)
+	code, body := readStatus(t, conn, 5*time.Second)
+	if code != http.StatusRequestTimeout || strings.Contains(body, "127.0.0.1") || strings.Contains(body, "tcp") {
+		t.Fatalf("status = %d (%s), want 408 naming no address", code, body)
+	}
+	if strings.Contains(body, readTimeout.String()) {
+		t.Fatalf("408 body %s names the default %s, not this server's read timeout", body, readTimeout)
+	}
+	waitBuffered(t, s, 0)
+}
+
+// Every way a /gate request can fail gives its body budget back (#100).
+func TestGateBudgetReturnsToZeroOnEveryError(t *testing.T) {
+	big := atNodeBudget(gateHeapShapes()["flow sequence"])
+	for _, tc := range []struct {
+		name    string
+		body    string
+		chunked bool
+		limit   int64
+		want    int
+	}{
+		{"over the cap, declared", strings.Repeat("#", 2000), false, 1000, http.StatusRequestEntityTooLarge},
+		{"over the cap, chunked", strings.Repeat("#", 50000), true, 30000, http.StatusRequestEntityTooLarge},
+		{"invalid separator", pspManifest + "--- x\n", false, 0, http.StatusUnprocessableEntity},
+		{"too many documents", strings.Repeat("---\na: 1\n", maxManifestDocs+1), false, 0, http.StatusRequestEntityTooLarge},
+		{"oversized document", bigConfigMap(maxManifestDocBytes + 1), false, 0, http.StatusRequestEntityTooLarge},
+		{"over the node budget", big + "---\n" + big, false, 0, http.StatusRequestEntityTooLarge},
+		{"undecodable", "a: [\n", false, 0, http.StatusUnprocessableEntity},
+		{"ok", pspManifest, false, 0, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t, newFakeStore(), func(c *Config) { c.MaxGateBytes = tc.limit })
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/gate?target=1.35&fail-on=never", strings.NewReader(tc.body))
+			if tc.chunked {
+				req.ContentLength = -1
+			}
+			req.Header.Set("Content-Type", "application/x-yaml")
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d (%.200s), want %d", rec.Code, rec.Body, tc.want)
+			}
+			if used := s.gateBuffered.inUse(); used != 0 {
+				t.Fatalf("%d body bytes still charged", used)
+			}
+		})
+	}
+	// Refused for a full budget: what it found is still charged, nothing more.
+	s := newTestServer(t, newFakeStore())
+	s.gateBuffered.charge(0, s.gateBuffered.max-100)
+	rec := httptest.NewRecorder()
+	serveGate(s, rec, smallConfigMaps(64<<10))
+	if rec.Code != http.StatusServiceUnavailable || s.gateBuffered.inUse() != s.gateBuffered.max-100 {
+		t.Fatalf("status = %d, %d bytes charged; want 503 and the %d it found", rec.Code, s.gateBuffered.inUse(), s.gateBuffered.max-100)
 	}
 }
 

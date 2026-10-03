@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"flag"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
@@ -129,6 +131,20 @@ func TestExportCSVNotAssessedRows(t *testing.T) {
 	}
 }
 
+// A finding lists at most 100 namespaces; the CSV says how many more
+// there are, as the HTML export does.
+func TestExportCSVCountsOmittedNamespaces(t *testing.T) {
+	rep := engine.Report{Findings: []engine.Finding{{Severity: engine.SevWarning, Title: "wide",
+		Namespaces: []string{"a", "b"}, NamespacesOmitted: 98}}}
+	var b strings.Builder
+	if err := writeExportCSV(&b, "prod", store.Evaluation{}, rep); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), ",a;b;and 98 more,") {
+		t.Errorf("CSV = %s, want the namespaces column to end in \"and 98 more\"", b.String())
+	}
+}
+
 // TestSparklineTimeProportional: points are placed by time, not index, so
 // a burst of changes and a quiet month do not look alike, and the SVG
 // labels the dates it spans.
@@ -192,6 +208,20 @@ func TestExportHTMLPartialGap(t *testing.T) {
 	}
 }
 
+// A finding lists at most engine.MaxFindingNamespaces namespaces; the
+// auditor report says how many more it affects.
+func TestExportHTMLNamespacesOmitted(t *testing.T) {
+	var b bytes.Buffer
+	f := engine.Finding{Category: engine.CatRemovedAPI, Severity: engine.SevBlocker, Title: "t", Detail: "d",
+		Namespaces: []string{"a", "b"}, NamespacesOmitted: 7}
+	if err := writeExportHTML(&b, exportData{Report: engine.Report{Findings: []engine.Finding{f}}}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "<td>a, b and 7 more</td>"; !strings.Contains(b.String(), want) {
+		t.Errorf("HTML lacks %q:\n%s", want, b.String())
+	}
+}
+
 func TestExportErrors(t *testing.T) {
 	ts, done := exportFixture(t)
 	defer done()
@@ -217,15 +247,53 @@ func TestExportErrors(t *testing.T) {
 
 func TestCSVSafeBlocksFormulaInjection(t *testing.T) {
 	for in, want := range map[string]string{
-		"=HYPERLINK(\"x\")": "'=HYPERLINK(\"x\")",
-		"+1":                "'+1",
-		"-cmd":              "'-cmd",
-		"@SUM":              "'@SUM",
-		"":                  "",
-		"payments":          "payments",
+		"=HYPERLINK(\"x\")":     "'=HYPERLINK(\"x\")",
+		"+1":                    "'+1",
+		"-cmd":                  "'-cmd",
+		"@SUM":                  "'@SUM",
+		"\t=1":                  "'\t'=1",
+		"\r=1":                  "'\r'=1",
+		"＝1+1":                  "'＝1+1",
+		"x;=1+1;":               "x;'=1+1;",
+		"a, -b":                 "a, '-b",
+		"\u00a0=1":              "\u00a0'=1",
+		"x;\u3000\u2003@x":      "x;\u3000\u2003'@x",
+		"kubectl get x -o yaml": "kubectl get x -o yaml",
+		"":                      "",
+		"payments":              "payments",
 	} {
 		if got := csvSafe(in); got != want {
 			t.Errorf("csvSafe(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A spreadsheet imports the export with ; as the separator in many locales
+// (and LibreOffice lets the user pick ,;tab freely), which re-splits a
+// field: a field-manager name `x;=1+1;` in a finding's detail became the
+// cell `=1+1` and evaluated (#126 SE-07). Whatever the separator, no cell
+// of the export starts with a formula trigger.
+func TestWriteExportCSV_FormulaAfterSeparator(t *testing.T) {
+	rep := engine.Report{
+		Target: inventory.Version{Major: 1, Minor: 35}, Verdict: engine.VerdictBlocked, KBVersion: "kb",
+		Findings: []engine.Finding{{
+			Severity: engine.SevBlocker, Category: engine.CatRemovedAPI, Key: "k",
+			Title:  "t",
+			Detail: "written by managers kube-controller-manager, x;=1+1;, y;=HYPERLINK(CHAR(104)&\"x\");, z\t@SUM(1)",
+			Teams:  []string{"\n=1+1", "+team"}, Namespaces: []string{"ns", "-ns"},
+			Citations: []string{"https://example.com/a,=1"},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := writeExportCSV(&buf, "c;-1", store.Evaluation{}, rep); err != nil {
+		t.Fatal(err)
+	}
+	for _, sep := range []string{",", ";", "\t", "\n", "\r"} {
+		for _, cell := range strings.Split(buf.String(), sep) {
+			cell = strings.TrimLeft(cell, " \"")
+			if cell != "" && strings.ContainsRune("=+-@＝＋－＠", []rune(cell)[0]) {
+				t.Errorf("split on %q: cell %q starts with a formula trigger", sep, cell)
+			}
 		}
 	}
 }

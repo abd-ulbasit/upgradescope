@@ -40,6 +40,15 @@ web-test:
 # module and every tools/ module. Needs only Go.
 test:
 	./hack/test.sh
+
+# The heap-bound tests (the proofs of the server's and the Helm collector's
+# memory bounds), without the race detector, under which they skip or
+# shrink; CI's test-heap job runs this, apart from the test job. Needs
+# only Go.
+.PHONY: test-heap
+test-heap:
+	./hack/test-heap.sh
+
 # it writes to a cluster (the agent IT installs a CRD), so the tests refuse
 # any context that is not a kind-* context on a loopback API server; set
 # UPGRADESCOPE_IT_CONTEXT=<context> to use a different disposable cluster.
@@ -58,7 +67,7 @@ envtest:
 
 # The fleet-scale gate (#125): 500 clusters with ~35 KiB inventories on
 # SQLite, 10 concurrent /fleet readers; fails when p95 is over 1s or the
-# live heap peaks over 512MiB (the chart's memory limit). Needs only Go.
+# live heap peaks over 512MiB (inside the chart's 1Gi memory limit). Needs only Go.
 .PHONY: bench-server
 bench-server:
 	UPGRADESCOPE_BENCH=1 go test ./internal/server -run TestBenchServerFleet -count=1 -v
@@ -283,6 +292,7 @@ claims-check:
 .PHONY: hack-test
 hack-test:
 	./hack/claims-check_test.sh
+	./hack/test-heap_test.sh
 	./hack/cross-build_test.sh
 	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh

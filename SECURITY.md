@@ -83,7 +83,84 @@ In scope:
   tokens, and input handling on `POST /api/v1/snapshots` and
   `POST /api/v1/gate` (size limits, gzip handling, malformed input). It also
   covers the store layer (SQL injection) and the exported HTML reports
-  (injection or XSS).
+  (injection or XSS) and CSV exports (spreadsheet formula injection).
+
+  The server's memory is bounded by the request budgets in
+  [docs/operations.md](docs/operations.md#memory-and-request-limits): body
+  caps, node budgets counted before anything is decoded (YAML aliases at
+  what they expand to, and the stream with its aliases expanded within
+  the body cap), a shared budget for buffered bodies, and one request at
+  a time per endpoint doing anything whose memory follows the input's
+  structure (measuring what YAML aliases expand to, decoding,
+  evaluating); the per-cluster reads, which load a stored snapshot and
+  may evaluate it, share one more such slot, and the reads of the whole
+  fleet (`/clusters`, `/fleet`, `/metrics`), which load no snapshot
+  inventory and no stored report, two slots of their own (`/fleet`
+  takes at most 16 `?targets=`). A `/gate` answer is bounded, in its
+  format, before it is encoded, and one that could be over
+  `--max-gate-bytes` is `413` (`?path=` is at most 512 bytes). A push
+  whose identifiers are not valid for what they name (the cluster name
+  an RFC 1123 subdomain, namespaces RFC 1123 labels, and so on), or that
+  carries more than the limits collectors keep to (a string over 16 KiB,
+  more than 100 objects per API usage entry, a group/version/kind listed
+  twice), is `422` before anything is stored; the free text a collector
+  copies whole from the cluster (capability reasons, the ignore
+  annotations) is cut to the limits instead. Every report the server
+  evaluates, stores or exports is at most `--max-snapshot-bytes`, since a
+  report repeats what its inventory names: a push, a what-if or a
+  `/gate?cluster=` over it is `413`, and so is an export (HTML writes
+  `'` `"` `&` as five bytes). A push is evaluated, and re-evaluated, at
+  its default target and every `serve --targets` minor, and each extra
+  target adds about one report of up to `--max-snapshot-bytes` to an
+  ingest and one to the re-evaluation pass (18-33 MiB each at the
+  default 20 MiB, measured), so `serve` refuses more than 4 of them and
+  the bounds are measured, and the chart's memory limit is sized, at 4,
+  with notifications configured: each evaluation of a target decided
+  before reads that earlier report for what changed (its findings' keys
+  and severities only).
+  Stored reports and JSON responses carry a
+  snapshot's strings as long as they were pushed (no HTML or
+  line-separator escapes; a push that is not UTF-8 is `422`), and the
+  evaluation summaries the fleet reads carry keep a bounded part of what
+  each evaluation could not assess. Every read's response and every `/gate` answer is
+  built in its slot and waits for its client in one budget of twice
+  `--max-snapshot-bytes`; one larger than what is left of that budget
+  gets `503`, and one larger than the whole budget (never a `/gate`
+  answer, unless `--max-gate-bytes` is over twice `--max-snapshot-bytes`)
+  is sent in its slot, whose client gets 20s to take it.
+  Any request that makes the server use memory beyond them is in scope,
+  with or without credentials, except what is listed as outside them
+  below.
+
+  What the budgets leave is known, and documented with its measured
+  cost in docs/operations.md. Memory outside them: nothing caps how many
+  connections a client opens, and each costs ~10 KiB of heap and an
+  8 KiB goroutine stack while open (more while up to 64 KiB of headers
+  arrive), until the idle (120s), header (10s), read (60s) or write
+  (120s) timeout closes it; the kernel's socket buffers are not in the
+  heap figures either, and each connection that does not read can hold
+  up to the host's TCP send buffer maximum (4 MiB by default on Linux)
+  of the pod's memory until a write deadline closes it; nothing caps how
+  many clusters the server holds (a shared ingest token registers one
+  per new name), and a fleet read costs more as the fleet grows (up to
+  ~16 MiB for 500 clusters evaluated at five targets, ~47 MiB for
+  `/metrics` of 2000 clusters with 200-byte names); and a snapshot a
+  v0.1 server stored before these
+  budgets existed is decoded without a node count when `/gate?cluster=`,
+  re-evaluation or a what-if read reads it, and, having no stored server
+  version, is loaded whole by `/clusters`, `/fleet` and `/metrics` to
+  read it. Availability within them: a client that really sends three
+  times `--max-gate-bytes` and then stalls makes other `/gate` requests
+  `503` until the 60s read timeout cuts it off; one that keeps asking for
+  what-if reports keeps other per-cluster reads waiting; and because any
+  answer larger than what is left of the response budget gets `503`, a
+  client that chooses large answers (a report, a `/gate` answer of up to
+  `--max-gate-bytes`, or a fleet read of a large fleet) and does not
+  read them can keep that budget full for up to the
+  120s write timeout, and again after it, starving per-cluster reads,
+  fleet reads (Prometheus scrapes and the dashboard included) and `/gate`
+  of every answer that does not fit. All of these need no credentials
+  when the read API is open.
 - **Supply chain.** This covers release archives and `checksums.txt`, the
   container image, the GitHub Action in `action/` (how it downloads and runs
   the binary), the CI workflows (for example, pull request workflows that can

@@ -102,8 +102,8 @@ replica). With `agent.enabled=false` and `existingSecret`, the shared
 `ingestToken` key is optional: agents can use per-cluster tokens only, and
 each one can push only as its own cluster.
 
-Mint one token per cluster in the hub (printed once; only its hash is
-stored), then install each agent with it:
+Mint one token per cluster in the hub (printed once; the hub stores its
+sha256 hash and first 8 characters), then install each agent with it:
 
     kubectl -n upgradescope exec deploy/upgradescope-server -- \
       /upgradescope tokens create prod-eu-1                       # Postgres
@@ -204,7 +204,7 @@ from `secretKeyRef`, never as arguments, and never appear in a Deployment.
 
 | Env var | Secret key | Source |
 |---|---|---|
-| `UPGRADESCOPE_INGEST_TOKEN` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` (optional key without the agent) |
+| `UPGRADESCOPE_INGEST_TOKEN` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` (optional key without the agent); none with `server.sharedIngestToken=false` |
 | `UPGRADESCOPE_READ_TOKEN` (server) | `readToken` | `server.readToken`, or `server.existingSecret` with `server.readTokenFromSecret=true` |
 | `UPGRADESCOPE_ADMIN_TOKEN` (server) | `adminToken` | `server.adminToken`, or `server.existingSecret` with `server.adminTokenFromSecret=true` |
 | `UPGRADESCOPE_DB_URL` (server) | `server.database.key` | `server.database.existingSecret` (Postgres) |
@@ -243,6 +243,38 @@ settings, so the read token still protects all data.
 - Server behind a private CA: mount the CA bundle into the agent and set
   `SSL_CERT_DIR` to its directory; Go adds those certificates to the
   image's system roots (example in `values.yaml`).
+- HTTPS for the in-chart server: `server.tls.secretName` (an existing
+  `kubernetes.io/tls` Secret) or `server.tls.certManager.issuerRef` (the
+  chart renders a cert-manager `Certificate` for the Service names into
+  `<fullname>-server-https`, apart from the Ingress's `-server-tls`). The
+  in-chart agent then pushes to `https://` and, like the ServiceMonitor,
+  trusts the Secret's `ca.crt` (`server.tls.caKey`; empty for a publicly
+  trusted certificate whose Secret has no CA); probes and the
+  ServiceMonitor use HTTPS, the Service port gets `appProtocol: https`,
+  and `server.ingress` gets ingress-nginx's `backend-protocol: HTTPS`
+  annotation unless you set it. Without it the agent sends its bearer
+  token over plain HTTP inside the cluster and logs a warning saying so.
+- `server.sharedIngestToken=false` drops the shared, any-cluster ingest
+  token: only per-cluster tokens push, and the in-chart agent needs its own
+  (`agent.existingSecret` or `agent.serverToken`).
+- Memory: both containers get `GOMEMLIMIT` at 90% of their memory limit
+  (the Go runtime does not read the limit itself), from a byte count or a
+  quantity up to `E`/`Ei`; `extraEnv` can set it
+  instead. The server's 1Gi holds its worst case, measured on SQLite:
+  one `/gate` request, one snapshot ingest, one cluster read and the
+  re-evaluation pass at their node budgets, with four `server.targets`,
+  the most `serve` takes, and notifications configured, two reads of a
+  500-cluster fleet, plus their
+  buffered bodies and the responses held for their clients. Open
+  connections, kernel socket buffers and larger fleets are not in that
+  figure
+  ([memory and request limits](https://abd-ulbasit.github.io/upgradescope/operations/#memory-and-request-limits)).
+  Below about 962Mi, that worst case (~865 MiB of heap) no longer fits
+  under `GOMEMLIMIT`. Each `server.targets` entry adds about one report
+  of up to the snapshot cap (`--max-snapshot-bytes`, 20 MiB) to an
+  ingest and one to the re-evaluation pass, about 54 MiB of the sum per
+  extra target, so with fewer targets it needs less: with none, about
+  650 MiB, which 768Mi holds.
 - OpenShift `restricted-v2`: unset the fixed IDs so the SCC can assign
   them, e.g. `agent.podSecurityContext: {runAsUser: null, runAsGroup: null}`
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.
@@ -250,8 +282,9 @@ settings, so the read token still protects all data.
 - The server runs under its own ServiceAccount and mounts no API token.
 - `values.schema.json` rejects unknown keys, intervals under one minute
   (`agent.interval` takes any Go duration of at least `1m`: `10m`, `90s`,
-  `1.5h`) and malformed targets (`agent.targets` must be `MAJOR.MINOR`) at
-  render time.
+  `1.5h`), malformed targets (`agent.targets` must be `MAJOR.MINOR`) and
+  more than 4 `server.targets` entries at render time (`serve` counts
+  distinct minors, so list each once).
 
 ## Uninstall
 

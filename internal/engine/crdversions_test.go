@@ -49,7 +49,7 @@ func TestEvalCRDVersionsDeprecatedInUse(t *testing.T) {
 	inv := clusterInv()
 	inv.Namespaces = testNamespaces()
 	inv.CRDs = []inventory.CRD{crd}
-	got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35})
+	got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35}, nil)
 
 	f, ok := findingByKey(got, "crd-version/deprecated/cert-manager.io/v1alpha2/Certificate")
 	if !ok {
@@ -83,7 +83,7 @@ func TestEvalCRDVersionsDeprecatedInUse(t *testing.T) {
 
 	// No usage: the deprecation alone is info.
 	inv.CRDs = []inventory.CRD{certManagerCRD()}
-	got = evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35})
+	got = evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35}, nil)
 	f, ok = findingByKey(got, "crd-version/deprecated/cert-manager.io/v1alpha2/Certificate")
 	if !ok || f.Severity != SevInfo {
 		t.Fatalf("unused deprecated version: %+v (found %v), want an info finding", f, ok)
@@ -111,7 +111,7 @@ func TestEvalCRDVersionsUnservedInUse(t *testing.T) {
 	}
 	inv := clusterInv()
 	inv.CRDs = []inventory.CRD{crd}
-	got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35})
+	got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35}, nil)
 
 	f, ok := findingByKey(got, "crd-version/unserved/cert-manager.io/v1alpha3/Certificate")
 	if !ok || f.Severity != SevBlocker || f.Category != CatCRDVersion {
@@ -153,7 +153,7 @@ func TestEvalCRDVersionsUnservedInUse(t *testing.T) {
 func TestEvalCRDVersionsStoredUnserved(t *testing.T) {
 	inv := clusterInv()
 	inv.CRDs = []inventory.CRD{certManagerCRD()}
-	got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35})
+	got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35}, nil)
 
 	f, ok := findingByKey(got, "crd-version/stored-unserved/cert-manager.io/v1alpha3/Certificate")
 	if !ok || f.Severity != SevWarning {
@@ -182,7 +182,7 @@ func TestEvalCRDVersionsCleanCRD(t *testing.T) {
 		Versions:       []inventory.CRDVersion{{Name: "v1beta1", Served: true}, {Name: "v1", Served: true, Storage: true}},
 		StoredVersions: []string{"v1beta1", "v1"},
 	}}
-	if got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35}); len(got) != 0 {
+	if got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35}, nil); len(got) != 0 {
 		t.Errorf("findings for a clean CRD: %+v", got)
 	}
 }
@@ -194,7 +194,7 @@ func TestEvalCRDVersionsUncheckedUsage(t *testing.T) {
 	inv.Capabilities[inventory.CapCRDs] = inventory.CapabilityStatus{Available: true, Partial: true,
 		Reason: "list cert-manager.io/v1 certificates: forbidden", Skipped: []string{"cert-manager.io/v1alpha2 Certificate"}}
 	inv.CRDs = []inventory.CRD{certManagerCRD()}
-	got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35})
+	got := evalCRDVersions(inv, inventory.Version{Major: 1, Minor: 35}, nil)
 	f, ok := findingByKey(got, "crd-version/deprecated/cert-manager.io/v1alpha2/Certificate")
 	if !ok || f.Severity != SevInfo {
 		t.Fatalf("got %+v (found %v)", f, ok)

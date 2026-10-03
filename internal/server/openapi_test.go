@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"sigs.k8s.io/yaml"
@@ -270,6 +272,7 @@ func TestOpenAPIResponsesMatchSpec(t *testing.T) {
 		{name: "push duplicate", method: "post", route: "/api/v1/snapshots", url: "/api/v1/snapshots", token: "ingest-tok", contentType: "application/json", body: pushBody, status: 200},
 		{name: "push unauthorized", method: "post", route: "/api/v1/snapshots", url: "/api/v1/snapshots", contentType: "application/json", body: pushBody, status: 401},
 		{name: "push invalid", method: "post", route: "/api/v1/snapshots", url: "/api/v1/snapshots", token: "ingest-tok", contentType: "application/json", body: []byte(`{"schemaVersion":2}`), status: 422},
+		{name: "push over the node budget", method: "post", route: "/api/v1/snapshots", url: "/api/v1/snapshots", token: "ingest-tok", contentType: "application/json", body: []byte(`{"x":[` + strings.Repeat(`{},`, maxSnapshotUnits/8) + `{}]}`), status: 413},
 		{name: "healthz", method: "get", route: "/healthz", url: "/healthz", status: 200},
 		{name: "readyz", method: "get", route: "/readyz", url: "/readyz", status: 200},
 		{name: "metrics", method: "get", route: "/metrics", url: "/metrics", token: "read-tok", status: 200},
@@ -306,6 +309,8 @@ func TestOpenAPIResponsesMatchSpec(t *testing.T) {
 		{name: "gate no target", method: "post", route: "/api/v1/gate", url: "/api/v1/gate", token: "read-tok", contentType: "application/x-yaml", body: []byte(deploymentManifest), status: 422},
 		{name: "gate unknown cluster", method: "post", route: "/api/v1/gate", url: "/api/v1/gate?target=1.35&cluster=nope", token: "read-tok", contentType: "application/x-yaml", body: []byte(deploymentManifest), status: 404},
 		{name: "gate media type", method: "post", route: "/api/v1/gate", url: "/api/v1/gate?target=1.35", token: "read-tok", contentType: "text/plain", body: []byte(deploymentManifest), status: 415},
+		{name: "gate over the node budget", method: "post", route: "/api/v1/gate", url: "/api/v1/gate?target=1.35", token: "read-tok", contentType: "application/x-yaml", body: []byte("[" + strings.Repeat("1,", maxManifestUnits/4) + "1]"), status: 413},
+		{name: "gate UTF-16", method: "post", route: "/api/v1/gate", url: "/api/v1/gate?target=1.35", token: "read-tok", contentType: "application/x-yaml", body: []byte("\xff\xfea\x00:\x00 \x001\x00\n\x00"), status: 422},
 		{name: "rename read token", method: "patch", route: "/api/v1/clusters/{id}", url: "/api/v1/clusters/1", token: "read-tok", contentType: "application/json", body: []byte(`{"name":"prod-eu-2"}`), status: 403},
 		{name: "rename invalid", method: "patch", route: "/api/v1/clusters/{id}", url: "/api/v1/clusters/1", token: "admin-tok", contentType: "application/json", body: []byte(`{"nom":"x"}`), status: 422},
 		{name: "rename", method: "patch", route: "/api/v1/clusters/{id}", url: "/api/v1/clusters/1", token: "admin-tok", contentType: "application/json", body: []byte(`{"name":"prod-eu-2"}`), status: 200},
@@ -353,6 +358,77 @@ func TestOpenAPIResponsesMatchSpec(t *testing.T) {
 			t.Errorf("no call exercises %q; add one so its responses are checked", r)
 		}
 	}
+}
+
+// TestOpenAPIReadBusyMatchesSpec: every read that waits for the read slot
+// or a fleet slot answers 503 + Retry-After as the document says when it
+// waits too long, and so does every read and /gate when the responses
+// held for their clients leave no room for theirs.
+func TestOpenAPIReadBusyMatchesSpec(t *testing.T) {
+	v := newSpecValidator(t)
+	s := newTestServer(t, newFakeStore())
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	seedViaPush(t, ts)
+	reads := map[string]string{
+		"/api/v1/clusters/{id}":          "/api/v1/clusters/1",
+		"/api/v1/clusters/{id}/report":   "/api/v1/clusters/1/report",
+		"/api/v1/clusters/{id}/findings": "/api/v1/clusters/1/findings",
+		"/api/v1/clusters/{id}/history":  "/api/v1/clusters/1/history",
+		"/api/v1/clusters/{id}/teams":    "/api/v1/clusters/1/teams",
+		"/api/v1/clusters/{id}/export":   "/api/v1/clusters/1/export?format=csv",
+		"/api/v1/fleet/teams":            "/api/v1/fleet/teams?target=1.35",
+	}
+	s.readQueueTimeout = time.Millisecond
+	for range cap(s.readSlots) {
+		s.readSlots <- struct{}{}
+	}
+	for route, url := range reads {
+		resp, body := getRaw(t, ts, url, "")
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("GET %s with the read slot busy = %d, want 503: %s", url, resp.StatusCode, body)
+		}
+		v.check(route+" busy", route, "get", resp, []byte(body))
+	}
+	for range cap(s.readSlots) {
+		<-s.readSlots
+	}
+	fleetReads := map[string]string{
+		"/api/v1/clusters": "/api/v1/clusters",
+		"/api/v1/fleet":    "/api/v1/fleet",
+		"/metrics":         "/metrics",
+	}
+	s.fleetQueueTimeout, s.metricsQueueTimeout = time.Millisecond, time.Millisecond
+	for range cap(s.fleetSlots) {
+		s.fleetSlots <- struct{}{}
+	}
+	for route, url := range fleetReads {
+		resp, body := getRaw(t, ts, url, "")
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("GET %s with the fleet slots busy = %d, want 503: %s", url, resp.StatusCode, body)
+		}
+		v.check(route+" busy", route, "get", resp, []byte(body))
+	}
+	for range cap(s.fleetSlots) {
+		<-s.fleetSlots
+	}
+	maps.Copy(reads, fleetReads)
+
+	if !s.heldResponses.charge(0, s.heldResponses.max-2) {
+		t.Fatal("could not fill the held-response budget")
+	}
+	for route, url := range reads {
+		resp, body := getRaw(t, ts, url, "")
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("GET %s with the held-response budget busy = %d, want 503: %s", url, resp.StatusCode, body)
+		}
+		v.check(route+" held budget busy", route, "get", resp, []byte(body))
+	}
+	resp, body := postGate(t, ts, "?target=1.35", "", deploymentManifest, "application/x-yaml")
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("POST /api/v1/gate with the held-response budget busy = %d, want 503: %s", resp.StatusCode, body)
+	}
+	v.check("gate held budget busy", "/api/v1/gate", "post", resp, body)
 }
 
 // TestOpenAPIUnknownPathIsJSONError: the error envelope the document

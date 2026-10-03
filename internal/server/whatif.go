@@ -27,12 +27,17 @@ func WhatIf(ctx context.Context, st store.Store, k kb.KB, tm TeamMap, clusterID 
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
 		return engine.Report{}, fmt.Errorf("what-if for cluster %d: corrupt stored inventory (snapshot %d): %w", clusterID, snap.ID, err)
 	}
-	return evaluateWhatIf(legacyView(inv, snap.AgentVersion), k, tm, target, now), nil
+	inv.CutFreeText() // as ingest judged it (decodeInventory)
+	inv = legacyView(inv, snap.AgentVersion)
+	inv.Namespaces = tm.Apply(inv.Namespaces)
+	return engine.Evaluate(inv, k, target, now), nil
 }
 
 // evaluateWhatIf evaluates an already-loaded inventory the way ingest
-// would (team map applied), for read paths that hold the snapshot.
-func evaluateWhatIf(inv inventory.Inventory, k kb.KB, tm TeamMap, target inventory.Version, now time.Time) engine.Report {
-	inv.Namespaces = tm.Apply(inv.Namespaces)
-	return engine.Evaluate(inv, k, target, now)
+// would (team map applied, within maxReportBytes), for read paths that
+// hold the snapshot. It returns a *reportTooLargeError for a report over
+// the limit.
+func (s *Server) evaluateWhatIf(inv inventory.Inventory, target inventory.Version, now time.Time) (engine.Report, error) {
+	inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
+	return s.evaluateWithin(inv, target, now)
 }

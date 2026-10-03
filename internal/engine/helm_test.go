@@ -72,7 +72,7 @@ func TestEvalHelmChartKubeVersion(t *testing.T) {
 				HelmReleases: []inventory.HelmRelease{rel},
 				Namespaces:   []inventory.NamespaceInfo{{Name: "shop", Team: "payments"}},
 			}
-			fs := evalHelmReleases(inv, helmTestKB(), inventory.Version{Major: 1, Minor: tc.target})
+			fs := evalHelmReleases(inv, helmTestKB(), inventory.Version{Major: 1, Minor: tc.target}, nil)
 			if tc.want == "" {
 				if len(fs) != 0 {
 					t.Fatalf("findings = %+v, want none", fs)
@@ -96,7 +96,7 @@ func TestEvalHelmChartKubeVersionText(t *testing.T) {
 	inv := inventory.Inventory{HelmReleases: []inventory.HelmRelease{{
 		Name: "web", Namespace: "shop", ChartName: "web", ChartVersion: "2.0.0", KubeVersion: ">=1.21.0-0 <1.33.0-0", Status: "deployed", Revision: 3,
 	}}}
-	fs := evalHelmReleases(inv, helmTestKB(), inventory.Version{Major: 1, Minor: 33})
+	fs := evalHelmReleases(inv, helmTestKB(), inventory.Version{Major: 1, Minor: 33}, nil)
 	want := Finding{
 		Category: CatChartIncompat, Severity: SevBlocker,
 		Key:         "chart-incompat/helm-release/shop/web",
@@ -143,7 +143,7 @@ func TestEvalHelmManifestRemovedAPIBlocks(t *testing.T) {
 
 func TestEvalHelmManifestDeprecatedAPIWarns(t *testing.T) {
 	inv := inventory.Inventory{HelmReleases: []inventory.HelmRelease{flowSchemaRelease()}}
-	fs := evalHelmReleases(inv, helmTestKB(), inventory.Version{Major: 1, Minor: 30})
+	fs := evalHelmReleases(inv, helmTestKB(), inventory.Version{Major: 1, Minor: 30}, nil)
 	want := Finding{
 		Category: CatDeprecatedAPI, Severity: SevWarning,
 		Key:         "deprecated-api/helm-release/platform/apf",
@@ -191,7 +191,7 @@ func TestEvalHelmManifestNotDoubleCounted(t *testing.T) {
 			Namespaces: map[string]int{"batch": 1}, Objects: []inventory.ObjectRef{{Namespace: "batch", Name: "nightly", Manager: "helm"}}}},
 		HelmReleases: []inventory.HelmRelease{cron},
 	}
-	fs := evalHelmReleases(inv, helmTestKB(), inventory.Version{Major: 1, Minor: 25})
+	fs := evalHelmReleases(inv, helmTestKB(), inventory.Version{Major: 1, Minor: 25}, nil)
 	if len(fs) != 1 || !reflect.DeepEqual(fs[0].Objects, []inventory.ObjectRef{{Name: "weekly", Line: 20}}) ||
 		fs[0].Title != "helm upgrade of release batch/jobs will fail: its manifest uses batch/v1beta1 CronJob" {
 		t.Errorf("findings = %+v, want one blocker naming only the weekly CronJob", fs)
@@ -205,12 +205,12 @@ func TestEvalHelmManifestOneFindingPerReleaseAndSeverity(t *testing.T) {
 		Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 2, Namespaces: map[string]int{"": 2},
 		Objects: []inventory.ObjectRef{{Name: "a", Line: 30}, {Name: "b", Line: 50}},
 	})
-	fs := evalHelmReleases(inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}, helmTestKB(), inventory.Version{Major: 1, Minor: 32})
+	fs := evalHelmReleases(inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}, helmTestKB(), inventory.Version{Major: 1, Minor: 32}, nil)
 	if len(fs) != 1 || fs[0].Severity != SevBlocker || len(fs[0].Objects) != 3 ||
 		fs[0].Title != "helm upgrade of release platform/apf will fail: its manifest uses batch/v1beta1 CronJob, flowcontrol.apiserver.k8s.io/v1beta3 FlowSchema" {
 		t.Errorf("findings = %+v, want one blocker for both APIs", fs)
 	}
-	fs = evalHelmReleases(inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}, helmTestKB(), inventory.Version{Major: 1, Minor: 25})
+	fs = evalHelmReleases(inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}, helmTestKB(), inventory.Version{Major: 1, Minor: 25}, nil)
 	if got := findingKeys(fs); !slices.Equal(got, []string{"removed-api/helm-release/platform/apf", "deprecated-api/helm-release/platform/apf"}) {
 		t.Errorf("finding keys = %v, want a blocker (CronJob) and a warning (FlowSchema)", got)
 	}
@@ -223,7 +223,7 @@ func TestEvalHelmSkipsUninstalledReleases(t *testing.T) {
 		rel := flowSchemaRelease()
 		rel.Status = status
 		rel.KubeVersion = "<1.20.0-0"
-		if fs := evalHelmReleases(inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}, helmTestKB(), inventory.Version{Major: 1, Minor: 32}); len(fs) != 0 {
+		if fs := evalHelmReleases(inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}, helmTestKB(), inventory.Version{Major: 1, Minor: 32}, nil); len(fs) != 0 {
 			t.Errorf("%s: findings = %+v, want none", status, fs)
 		}
 	}

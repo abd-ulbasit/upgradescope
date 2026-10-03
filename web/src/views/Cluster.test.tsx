@@ -279,6 +279,15 @@ describe("Cluster view", () => {
     expect(names[0]).toMatch(/^kubernetes\.io/);
   });
 
+  it("counts the namespaces a finding does not list", async () => {
+    const many = report("1.35", {
+      findings: [finding({ key: "w", title: "wide", namespaces: ["ns-a", "ns-b"], namespacesOmitted: 98 })],
+    });
+    await openCluster("#/cluster/1?target=1.35", { "api/v1/clusters/1/report?target=1.35": many });
+    expect(screen.getByText("ns-a")).toBeTruthy();
+    expect(screen.getByText("and 98 more")).toBeTruthy();
+  });
+
   it("applies a team filter from the route", async () => {
     await openCluster("#/cluster/1?target=1.35&team=platform");
     expect((screen.getByLabelText("Team") as HTMLSelectElement).value).toBe("platform");

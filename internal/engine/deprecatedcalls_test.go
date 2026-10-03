@@ -27,7 +27,7 @@ func TestEvalDeprecatedCallsSeverityVsTarget(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fs := evalDeprecatedCalls(callsInv(row), tc.target)
+			fs := evalDeprecatedCalls(callsInv(row), tc.target, nil)
 			if len(fs) != 1 || fs[0].Severity != tc.sev || fs[0].Category != CatDeprecatedAPIInUse {
 				t.Fatalf("want one %s deprecated-api-in-use, got %+v", tc.sev, fs)
 			}
@@ -43,7 +43,7 @@ func TestEvalDeprecatedCallsSeverityVsTarget(t *testing.T) {
 
 func TestEvalDeprecatedCallsUnparseableIsInfo(t *testing.T) {
 	row := inventory.DeprecatedCall{Group: "extensions", Version: "v1beta1", Resource: "ingresses"}
-	fs := evalDeprecatedCalls(callsInv(row), inventory.Version{Major: 1, Minor: 34})
+	fs := evalDeprecatedCalls(callsInv(row), inventory.Version{Major: 1, Minor: 34}, nil)
 	if len(fs) != 1 || fs[0].Severity != SevInfo {
 		t.Fatalf("missing removedRelease must yield info, got %+v", fs)
 	}
@@ -60,7 +60,7 @@ func TestEvalDeprecatedCallsUnparseableIsInfo(t *testing.T) {
 
 func TestEvalDeprecatedCallsUnparseableReleaseIsInfo(t *testing.T) {
 	row := inventory.DeprecatedCall{Group: "extensions", Version: "v1beta1", Resource: "ingresses", RemovedRelease: "soon"}
-	fs := evalDeprecatedCalls(callsInv(row), inventory.Version{Major: 1, Minor: 34})
+	fs := evalDeprecatedCalls(callsInv(row), inventory.Version{Major: 1, Minor: 34}, nil)
 	if len(fs) != 1 || fs[0].Severity != SevInfo {
 		t.Fatalf("unparseable removedRelease must yield info, got %+v", fs)
 	}
@@ -75,7 +75,7 @@ func TestEvalDeprecatedCallsUnparseableReleaseIsInfo(t *testing.T) {
 func TestEvalDeprecatedCallsSubresource(t *testing.T) {
 	row := inventory.DeprecatedCall{Group: "apps", Version: "v1beta2", Resource: "deployments",
 		Subresource: "scale", RemovedRelease: "1.16"}
-	fs := evalDeprecatedCalls(callsInv(row), inventory.Version{Major: 1, Minor: 34})
+	fs := evalDeprecatedCalls(callsInv(row), inventory.Version{Major: 1, Minor: 34}, nil)
 	if len(fs) != 1 || fs[0].Title != "clients still requesting apps/v1beta2 deployments/scale (removed in 1.16)" {
 		t.Fatalf("got %+v", fs)
 	}

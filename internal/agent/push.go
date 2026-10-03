@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +49,23 @@ type pusher struct {
 
 	mu      sync.Mutex
 	pending *pushPayload
+}
+
+// CleartextPushWarning says why pushing to serverURL with token is unsafe,
+// or returns "": a bearer token sent over plain http:// to a host that is
+// not loopback crosses the network in the clear, where anyone on the path
+// can replay it — and the shared ingest token may push as any cluster.
+func CleartextPushWarning(serverURL, token string) string {
+	u, err := url.Parse(serverURL)
+	if err != nil || token == "" || !strings.EqualFold(u.Scheme, "http") {
+		return ""
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback() {
+		return ""
+	}
+	return fmt.Sprintf("pushing snapshots to %s over plain http: the bearer token crosses the network unencrypted, "+
+		"so anyone on the path can replay it; serve the server over https (--tls-cert-file, the chart's server.tls, or a TLS Ingress)", u.Host)
 }
 
 func newPusher(serverURL, token string) *pusher {

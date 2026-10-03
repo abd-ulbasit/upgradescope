@@ -80,6 +80,10 @@ hack/                  the scripts behind every CI job (see "What CI runs"), plu
 ```sh
 make test                              # what CI's test job runs: gofmt, go vet and
                                        # go test -race -count=1, tools/ modules included
+make test-heap                         # CI's test-heap job: the heap-bound tests, which
+                                       # skip under -race and in a plain go test ./...
+                                       # (UPGRADESCOPE_HEAP=1 runs them), run without
+                                       # -race (~12 min)
 go test -race ./internal/agent/...     # while iterating: just the packages you touched
 ```
 
@@ -190,6 +194,7 @@ kubectl and kubeconform are also checked against their upstream sha256
 | Job | Runs on | Reproduce with | What it checks |
 |---|---|---|---|
 | `test` | PR, push | `make test check-toolchain hack-test` | gofmt, `go vet`, `go test -race -count=1` for the main and `tools/` modules; the Dockerfile's golang tag equals `go.mod`'s `go` directive and GoReleaser is one pinned version; offline self-tests of the `hack/` scripts, and that no tag run can share a concurrency group with main or another tag |
+| `test-heap` | PR, push | `make test-heap` | the heap-bound tests, without the race detector (under it they skip or shrink, so `make test` never runs them in full): every test that reads `raceEnabled`, found by `hack/test-heap.sh`, which sets `UPGRADESCOPE_HEAP=1` (without it a plain `go test` skips the server's, which take ~10 min) and fails on a skip. These are the proofs of the server's and the Helm collector's memory bounds that `docs/claims.md` and the operations guide cite |
 | `lint` | PR, push | `make lint` | `go vet` and pinned staticcheck |
 | `build` | PR, push | `make build` | the binary builds |
 | `vuln` | PR, push, weekly | `make vuln-test vuln` | govulncheck in binary mode on the linux/amd64 build; fails closed, and accepts a reachable advisory only through an expiring, per-ID entry in `hack/vuln-allowlist.txt` |

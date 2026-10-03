@@ -6,7 +6,8 @@ Revoke one ingest token of a cluster by id, or all of them with --all
 
 Revoke one ingest token by id (see 'tokens list'), or every active token of the cluster with --all.
 Zero-downtime rotation: 'tokens create <cluster>', roll the new token out to the agent, then
-'tokens revoke <cluster> --id <old id>'.
+'tokens revoke <cluster> --id <old id>'. The agent reads its token at startup, so rolling it out
+means restarting the agent after updating its Secret (kubectl rollout restart deploy/<release>-agent).
 
 ```
 upgradescope tokens revoke <cluster> (--id <id> | --all) [flags]

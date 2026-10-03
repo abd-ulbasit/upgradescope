@@ -6,15 +6,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
-// TestFleetDecodesNoInventories: /fleet reads each cluster's latest
-// snapshot head (id, server version) in one store call and never loads an
-// inventory blob. Decoding them all per request held over 1 GiB at 500
-// clusters with 10 readers (`make bench-server`; #125 SV-14).
+// TestFleetDecodesNoInventories: /fleet, /clusters and /metrics read each
+// cluster's latest snapshot head (id, server version) in one store call
+// and never load an inventory blob. Decoding them all per request held
+// over 1 GiB at 500 clusters with 10 readers (`make bench-server`; #125
+// SV-14).
 func TestFleetDecodesNoInventories(t *testing.T) {
 	st := newFakeStore()
 	ts := httptest.NewServer(newTestServer(t, st).Handler())
@@ -36,6 +38,11 @@ func TestFleetDecodesNoInventories(t *testing.T) {
 	}
 	if resp := getJSON(t, ts, "/api/v1/clusters", "", &list); resp.StatusCode != http.StatusOK || len(list) != 1 || list[0].Latest == nil || list[0].Latest.Target != "1.35" {
 		t.Errorf("GET /clusters = %d %+v, want the 1.35 summary without loading a snapshot", resp.StatusCode, list)
+	}
+	// So do the per-cluster gauges: a scrape loaded every inventory.
+	if resp, body := getRaw(t, ts, "/metrics", ""); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, `upgradescope_cluster_score{cluster="prod-eu-1",target="1.35"}`) {
+		t.Errorf("GET /metrics = %d, want the 1.35 score without loading a snapshot:\n%s", resp.StatusCode, body)
 	}
 }
 

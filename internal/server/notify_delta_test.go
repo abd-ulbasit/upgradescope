@@ -162,6 +162,22 @@ func TestComputeDelta(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("ComputeDelta:\n got  %+v\n want %+v", got, tc.want)
 			}
+			if tc.prev == nil {
+				return
+			}
+			// The server reads only the heads of a stored baseline's
+			// findings: the same delta.
+			stored, err := marshalJSON(*tc.prev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			heads, err := storedFindingHeads(stored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := computeDelta(heads, tc.curr); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("computeDelta of the stored heads:\n got  %+v\n want %+v", got, tc.want)
+			}
 		})
 	}
 }
@@ -243,6 +259,26 @@ func TestBuildNotification(t *testing.T) {
 		}
 		if n.Changes[0].Key != "b-0" || n.Changes[4].Key != "b-4" {
 			t.Errorf("kept blockers start %s..%s, want the first five in pass order", n.Changes[0].Key, n.Changes[4].Key)
+		}
+	})
+
+	t.Run("a change past the cap on several targets is omitted once", func(t *testing.T) {
+		blockers := func(keys ...int) []notify.Change {
+			var cs []notify.Change
+			for _, k := range keys {
+				cs = append(cs, notify.Change{Kind: notify.KindNewBlocker, Key: fmt.Sprintf("b-%d", k), Title: "x"})
+			}
+			return cs
+		}
+		n, _ := buildNotification(cluster, []targetDelta{
+			delta("1.36", blockers(0, 1, 2, 3, 4, 5, 6)...),
+			delta("1.37", blockers(6, 5, 0, 7)...),
+		}, now, "id")
+		if !reflect.DeepEqual(n.Omitted, map[string]int{notify.KindNewBlocker: 3}) {
+			t.Errorf("omitted = %v, want b-5, b-6 and b-7 once each", n.Omitted)
+		}
+		if len(n.Changes) != maxBlockerChanges || !reflect.DeepEqual(n.Changes[0].Targets, []string{"1.36", "1.37"}) {
+			t.Errorf("changes = %+v, want b-0..b-4, b-0 on both targets", n.Changes)
 		}
 	})
 }

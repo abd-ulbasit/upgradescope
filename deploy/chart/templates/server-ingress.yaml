@@ -11,7 +11,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: server
-  {{- with $ing.annotations }}
+  {{- $annotations := $ing.annotations | default dict }}
+  {{- if include "upgradescope.serverTLSSecret" . }}
+  {{- /* serve speaks HTTPS (server.tls); the operator's own value wins. */}}
+  {{- $annotations = merge (dict) $annotations (dict "nginx.ingress.kubernetes.io/backend-protocol" "HTTPS") }}
+  {{- end }}
+  {{- with $annotations }}
   annotations: {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:

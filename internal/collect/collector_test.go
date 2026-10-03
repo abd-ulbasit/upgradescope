@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -73,6 +74,35 @@ func TestRunStepsPartialErrorKeepsCapabilityAvailable(t *testing.T) {
 	}
 	if !reflect.DeepEqual(inv.Capabilities, want) {
 		t.Errorf("capabilities = %+v\nwant           %+v", inv.Capabilities, want)
+	}
+}
+
+// A step's reason joins one failure per resource it could not read, and
+// objects carry their ignore annotations whole: the default chart grants
+// no custom resources, so each CRD at a deprecated version adds a ~200-byte
+// forbidden list. runSteps cuts both to the inventory limits, or 400 such
+// CRDs or one long annotation would get every push of the agent refused.
+func TestRunStepsCutsFreeTextToTheLimits(t *testing.T) {
+	inv := inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+	var failures []string
+	for i := range 400 {
+		failures = append(failures, fmt.Sprintf(`list example%03d.io/v1beta1 widgets: widgets.example%03d.io is forbidden: User "system:serviceaccount:upgradescope:upgradescope-agent" cannot list resource "widgets" in API group "example%03d.io" at the cluster scope`, i, i, i))
+	}
+	runSteps(context.Background(), &inv, []step{
+		{cap: inventory.CapAPIUsage, run: func(_ context.Context, inv *inventory.Inventory) error {
+			inv.APIUsage = []inventory.APIUsage{{Version: "v1", Kind: "ConfigMap", Count: 1, Objects: []inventory.ObjectRef{{
+				Name: "cm", Ignore: "deprecated-api", IgnoreReason: strings.Repeat("why ", 64<<10)}}}}
+			return nil
+		}},
+		{cap: inventory.CapCRDs, run: func(context.Context, *inventory.Inventory) error {
+			return partialError{msg: strings.Join(failures, "; "), incomplete: true}
+		}},
+	})
+	if err := inv.ValidateLimits(); err != nil {
+		t.Fatalf("ValidateLimits() = %v, want the collected inventory within the limits", err)
+	}
+	if r := inv.Capabilities[inventory.CapCRDs].Reason; !strings.HasPrefix(r, failures[0]) {
+		t.Errorf("reason starts %.80q, want the first failure", r)
 	}
 }
 

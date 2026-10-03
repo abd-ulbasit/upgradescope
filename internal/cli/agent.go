@@ -7,17 +7,20 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/abd-ulbasit/upgradescope/internal/agent"
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
@@ -67,6 +70,12 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 	// Code that logs through slog's package-level functions shares the
 	// format and level.
 	slog.SetDefault(logger)
+	if msg := agent.CleartextPushWarning(opts.serverURL, opts.serverToken); msg != "" {
+		logger.Warn(msg)
+	}
+	if limit, ok := applyMemoryLimit(os.Getenv, cgroupRoot); ok {
+		logger.Info("GOMEMLIMIT unset: Go memory limit set to 90% of the cgroup's memory limit", "bytes", limit)
+	}
 	kbData, err := kb.Load()
 	if err != nil {
 		return fmt.Errorf("load knowledge base: %w", err)
@@ -101,6 +110,22 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 		HealthAddr:        opts.healthAddr,
 		Logger:            logger,
 	})
+}
+
+// validAgentNames checks, before any cluster access, the names an agent
+// sends: --cluster-name, which the server refuses pushes under unless it
+// is an RFC 1123 subdomain (empty: the cluster UID, which is one), and
+// --team-label, which must be a label key to name any label.
+func validAgentNames(opts agentOptions) error {
+	if opts.clusterName != "" {
+		if err := inventory.ValidateClusterName(opts.clusterName); err != nil {
+			return fmt.Errorf("invalid --cluster-name: %w", err)
+		}
+	}
+	if p := content.IsLabelKey(opts.teamLabel); len(p) > 0 {
+		return fmt.Errorf("invalid --team-label %q: not a label key (%s)", opts.teamLabel, strings.Join(p, "; "))
+	}
+	return nil
 }
 
 // buildAgentRESTConfig prefers in-cluster config (the agent's normal home)
@@ -162,6 +187,9 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if _, err := newAgentLogger(io.Discard, opts.logFormat, opts.logLevel); err != nil {
 				return err // a typo fails before any cluster access
 			}
+			if err := validAgentNames(opts); err != nil {
+				return err
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return runAgent(ctx, opts)
@@ -171,7 +199,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().StringVar(&opts.serverURL, "server-url", "", "upgradescope server base URL (empty = CRD-only mode)")
 	serverToken = addSecretFlag(cmd, &opts.serverToken, "server-token", "UPGRADESCOPE_SERVER_TOKEN",
 		"bearer token for snapshot pushes (required with --server-url)")
-	cmd.Flags().StringVar(&opts.clusterName, "cluster-name", "", "cluster label sent to the server (default: cluster UID)")
+	cmd.Flags().StringVar(&opts.clusterName, "cluster-name", "", "cluster label sent to the server, an RFC 1123 subdomain of at most 253 bytes (default: cluster UID)")
 	cmd.Flags().StringVar(&opts.crName, "cr-name", "cluster", "ClusterReadiness object name")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour, "push a snapshot even if unchanged after this long")

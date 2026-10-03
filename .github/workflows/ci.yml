@@ -196,6 +196,25 @@ jobs:
       - name: every test the claims ledger names exists
         run: make claims-check
 
+  # The heap-bound tests skip (or shrink) under the race detector, so
+  # `make test` above never runs them in full; they are the proofs the
+  # claims ledger and docs/operations.md cite for the server's memory
+  # bounds. hack/test-heap.sh finds every test that reads raceEnabled and
+  # runs it without -race, failing on a skip. They take ~11.5 minutes on
+  # an Apple silicon laptop; a hosted runner is slower.
+  test-heap:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make test-heap
+
   # The binary and the dashboard it embeds, then every package (tests
   # included) compiled and vetted for each platform the release ships: lint
   # and test run on linux only, and a windows- or darwin-only break would
@@ -788,7 +807,7 @@ jobs:
   # hack-test) fails if a job is missing from needs.
   ci-ok:
     if: always()
-    needs: [changes, lint, test, build, notices, vuln, web, helm, images, registry, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
+    needs: [changes, lint, test, test-heap, build, notices, vuln, web, helm, images, registry, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

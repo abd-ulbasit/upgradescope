@@ -31,7 +31,7 @@ const (
 //
 // "Use" is CRD.Usage: live objects some manager still writes through the
 // version, manifest objects at it. target only appears in the text.
-func evalCRDVersions(inv inventory.Inventory, target inventory.Version) []Finding {
+func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budget) []Finding {
 	unchecked := map[string]bool{}
 	for _, s := range inv.Capabilities[inventory.CapCRDs].Skipped {
 		unchecked[s] = true
@@ -103,7 +103,9 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version) []Findin
 			default:
 				f.Remediation = fmt.Sprintf("use %s; an add-on upgrade may stop serving %s", gvString(c.Group, to), v.Name)
 			}
-			out = append(out, f)
+			if !b.add(&out, f) {
+				return out
+			}
 		}
 
 		for _, u := range c.Usage {
@@ -137,14 +139,16 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version) []Findin
 				// version stays until something replaces it.
 				f.Remediation += ". A named manager that no longer writes them keeps them listed through its managedFields entry until another manager takes over its fields or the entry is removed"
 			}
-			out = append(out, f)
+			if !b.add(&out, f) {
+				return out
+			}
 		}
 
 		for _, s := range c.StoredVersions {
 			if v, ok := listed[s]; s == storage || ok && v.Served {
 				continue
 			}
-			out = append(out, Finding{
+			f := Finding{
 				Category: CatCRDVersion,
 				Severity: SevWarning,
 				Key:      string(CatCRDVersion) + "/stored-unserved/" + apiKey(c.Group, s, c.Kind),
@@ -154,7 +158,10 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version) []Findin
 				Remediation: fmt.Sprintf("migrate every stored %s to the storage version %s (kube-storage-version-migrator, the add-on's own tool such as cert-manager's cmctl upgrade migrate-api-version, or a no-op update of each object), then remove %s from status.storedVersions (kubectl patch crd %s --subresource=status)",
 					c.Kind, storage, s, name),
 				Citations: []string{storageMigrationURL},
-			})
+			}
+			if !b.add(&out, f) {
+				return out
+			}
 		}
 	}
 	return out

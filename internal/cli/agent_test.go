@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/client-go/rest"
 )
 
 const testKubeconfig = `apiVersion: v1
@@ -246,5 +251,34 @@ func TestNewAgentLogger(t *testing.T) {
 	log.Info("hello", "k", "v")
 	if got := buf.String(); !strings.Contains(got, "msg=hello") || !strings.Contains(got, "k=v") {
 		t.Errorf("text line = %q, want logfmt msg=hello k=v", got)
+	}
+}
+
+// The agent warns at startup when it would push its bearer token over
+// plain http:// to a host that is not loopback (#126 SE-09).
+func TestRunAgentWarnsOnCleartextPush(t *testing.T) {
+	origDefault, origStderr, origBuild := slog.Default(), os.Stderr, buildAgentRESTConfig
+	t.Cleanup(func() { slog.SetDefault(origDefault); os.Stderr = origStderr; buildAgentRESTConfig = origBuild })
+	buildAgentRESTConfig = func(string, string, time.Duration) (*rest.Config, error) {
+		return nil, errors.New("no cluster in this test")
+	}
+	for _, tc := range []struct {
+		url  string
+		warn bool
+	}{
+		{"http://upgradescope-server.upgradescope.svc:8080", true},
+		{"https://upgradescope-server.upgradescope.svc:8080", false},
+	} {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.Stderr = w
+		_ = runAgent(context.Background(), agentOptions{serverURL: tc.url, serverToken: "t", logFormat: "text", logLevel: "info"})
+		w.Close()
+		out, _ := io.ReadAll(r)
+		if got := strings.Contains(string(out), "level=WARN") && strings.Contains(string(out), "plain http"); got != tc.warn {
+			t.Errorf("%s: logged %q, want a plain-http warning: %v", tc.url, out, tc.warn)
+		}
 	}
 }

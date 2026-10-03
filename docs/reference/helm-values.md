@@ -31,10 +31,7 @@ instead of being ignored. Installing and configuring the chart:
 | `agent.podLabels` | object | `{}` | app.kubernetes.io/name, instance and component are reserved for the selector and ignored here. |
 | `agent.podSecurityContext` | object | `{"runAsGroup":65532,"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod and container security contexts, merged over these defaults. For OpenShift's restricted-v2 SCC, which assigns the UID itself, unset the IDs: podSecurityContext: {runAsUser: null, runAsGroup: null}. |
 | `agent.priorityClassName` | string | `""` | — |
-| `agent.resources.limits.cpu` | string | `"200m"` | — |
-| `agent.resources.limits.memory` | string | `"256Mi"` | — |
-| `agent.resources.requests.cpu` | string | `"50m"` | — |
-| `agent.resources.requests.memory` | string | `"64Mi"` | — |
+| `agent.resources` | object | `{"limits":{"cpu":"200m","memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}` | The memory limit also sets GOMEMLIMIT to 90% of it (the Go runtime does not read the container limit itself); set GOMEMLIMIT in extraEnv to override. Without a memory limit, or with one the chart cannot read (e.g. "100m"), the chart sets none; the binary then takes 90% of its cgroup limit itself, when it has one. |
 | `agent.securityContext.allowPrivilegeEscalation` | bool | `false` | — |
 | `agent.securityContext.capabilities.drop[0]` | string | `"ALL"` | — |
 | `agent.securityContext.readOnlyRootFilesystem` | bool | `true` | — |
@@ -91,10 +88,7 @@ instead of being ignored. Installing and configuring the chart:
 | `server.readToken` | string | `""` | Optional bearer token for the read API. EMPTY = READ API IS OPEN — acceptable behind a ClusterIP Service on a private cluster, but set one before exposing the Service in any way. With existingSecret the value itself is not used; a non-empty one acts like readTokenFromSecret=true. |
 | `server.readTokenFromSecret` | bool | `false` | With existingSecret: protect the read API with its readToken key. |
 | `server.replicas` | int | `1` | Server Pods. More than one needs a shared database (database below): SQLite on a ReadWriteOnce volume has a single writer. |
-| `server.resources.limits.cpu` | string | `"500m"` | — |
-| `server.resources.limits.memory` | string | `"512Mi"` | — |
-| `server.resources.requests.cpu` | string | `"100m"` | — |
-| `server.resources.requests.memory` | string | `"128Mi"` | — |
+| `server.resources` | object | `{"limits":{"cpu":"500m","memory":"1Gi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Sets GOMEMLIMIT as agent.resources does (~921MiB for 1Gi). 1Gi holds one /gate request, one snapshot ingest, one cluster read and the re-evaluation pass at their worst with four server.targets, the most serve takes, and notifications configured, measured on SQLite (~176, ~216, ~133 and ~198 MiB of heap, with every report at most the snapshot cap), two reads of a 500-cluster fleet (~16 MiB each), plus the buffered /gate and snapshot bodies (30 and 40 MiB) and the responses held for their clients (one 40 MiB budget): ~865 MiB of heap, which a limit below about 962Mi does not fit. Each server.targets entry adds about one report of up to the snapshot cap to an ingest and one to the re-evaluation pass (~54 MiB of the sum per extra target at the default 20 MiB cap), so with fewer targets it needs less: with none, about 650 MiB, which 768Mi holds. Open connections (uncapped, ~18 KiB each), kernel socket buffers, larger fleets and snapshots a v0.1 server stored are outside it: see docs/operations.md. |
 | `server.retention` | string | `"90d"` | History older than this is pruned at startup and daily, except each cluster's latest snapshot and its evaluations: whole days (90d) or a Go duration (2160h); 0 keeps everything (as "0" or --set ...retention=0). |
 | `server.securityContext.allowPrivilegeEscalation` | bool | `false` | — |
 | `server.securityContext.capabilities.drop[0]` | string | `"ALL"` | — |
@@ -103,10 +97,14 @@ instead of being ignored. Installing and configuring the chart:
 | `server.service.type` | string | `"ClusterIP"` | — |
 | `server.serviceAccount.create` | bool | `true` | The server never calls the Kubernetes API: it gets its own ServiceAccount and its pod mounts no API token. create=false with an empty name runs it as the namespace's default ServiceAccount (still without a mounted token). |
 | `server.serviceAccount.name` | string | `""` | — |
+| `server.sharedIngestToken` | bool | `true` | Serve the shared ingest token at all. It may push as ANY cluster; false leaves only per-cluster tokens (`upgradescope tokens create &lt;cluster&gt;`, each bound to one cluster name): the chart Secret holds no ingestToken, serve gets none, and the in-chart agent needs its own token (agent.existingSecret or agent.serverToken). |
 | `server.slackWebhook` | string | `""` | Optional Slack incoming-webhook URL for finding-delta notifications. Stored in the chart Secret and passed as $UPGRADESCOPE_SLACK_WEBHOOK; it never appears in the Deployment. Ignored when existingSecret is set. |
 | `server.staleAfter` | string | `"2h"` | A cluster whose agent has not pushed for this long is marked stale in the API, the dashboard data and /metrics. Agents push at least about every 70m by default. |
-| `server.targets` | list | `[]` | Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"]. |
+| `server.targets` | list | `[]` | Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"]: at most 4 entries (serve --targets takes 4 distinct minors; the chart counts entries, so list each minor once). Each adds about one report of up to the snapshot cap to every push and to the re-evaluation pass, and server.resources is sized for 4. |
 | `server.teamMap` | list | `[]` | Namespace→team overrides applied before every evaluation, rendered into a ConfigMap and passed as --team-map; the first matching glob wins, e.g. [{pattern: "payments-*", team: payments}]. |
+| `server.tls.caKey` | string | `"ca.crt"` | The key of the CA certificate in that Secret, which the ServiceMonitor and the in-chart agent trust (cert-manager CA and self-signed issuers write ca.crt). Empty for a publicly trusted certificate whose Secret has no CA: they then use their system roots. |
+| `server.tls.certManager.issuerRef` | object | `{}` | Or have cert-manager issue one for the Service names into &lt;fullname&gt;-server-https (not the Ingress's &lt;fullname&gt;-server-tls), e.g. {name: cluster-ca, kind: ClusterIssuer}. Needs the cert-manager CRDs. |
+| `server.tls.secretName` | string | `""` | HTTPS on the server's own port, from an existing kubernetes.io/tls Secret (tls.crt, tls.key, optional CA). Without it the in-chart agent pushes its bearer token over plain HTTP inside the cluster (the agent logs a warning). The certificate must name the Service (&lt;fullname&gt;-server.&lt;namespace&gt;.svc); the in-chart agent then pushes to https:// and trusts the Secret's caKey, when it has one, on top of its image's roots. Probes and the ServiceMonitor switch to HTTPS. The Service port gets appProtocol https, and server.ingress gets nginx.ingress.kubernetes.io/backend-protocol: HTTPS unless its annotations set it; another controller may need its own annotation. serve reads the certificate at startup, so a renewal takes a pod restart. |
 | `server.tolerations` | list | `[]` | — |
 | `server.webhook` | string | `""` | Optional generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in docs/reference/webhook.md). Stored like slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL. |
 | `server.webhookSecret` | string | `""` | Optional HMAC-SHA256 key: webhook requests then carry X-Upgradescope-Signature: sha256=&lt;hex&gt;. Stored like slackWebhook, as $UPGRADESCOPE_WEBHOOK_SECRET. |

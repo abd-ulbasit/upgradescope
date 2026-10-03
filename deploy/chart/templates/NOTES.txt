@@ -18,12 +18,22 @@ Pin target versions without Helm:
 
 Server API (port-forward):
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "upgradescope.serverFullname" . }} 8080:{{ .Values.server.service.port }}
+{{- if include "upgradescope.serverTLSSecret" . }}
+  SERVER=https://127.0.0.1:8080   # serves the server.tls certificate: pass curl its CA (--cacert)
+{{- else }}
   SERVER=http://127.0.0.1:8080
+{{- end }}
   curl $SERVER/api/v1/clusters
 {{- if .Values.server.ingress.enabled }}
   (or https://{{ .Values.server.ingress.host }} through the Ingress)
 {{- end }}
-{{- if and (not .Values.server.existingSecret) (not .Values.server.ingestToken) }}
+{{- if not (include "upgradescope.serverTLSSecret" .) }}
+
+The in-chart agent pushes its bearer token over plain HTTP inside the
+cluster; set server.tls to serve HTTPS. Agents in other clusters should push
+over HTTPS (an Ingress with TLS, or server.tls).
+{{- end }}
+{{- if and .Values.server.sharedIngestToken (not .Values.server.existingSecret) (not .Values.server.ingestToken) }}
 
 The ingest token was generated and is kept across upgrades. Agents in other
 clusters push with it:

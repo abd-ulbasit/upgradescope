@@ -133,17 +133,36 @@ cannot read is reported as not assessed.
   and its pod mounts no API token.
 - **Bearer tokens** for reads, pushes and administration, each optional
   except where noted ([Tenancy and access control](tenancy.md)). Per-cluster
-  ingest tokens are stored as hashes and can push only as their own cluster;
-  the server refuses an open read API on a non-loopback address unless told
-  otherwise (`--allow-anonymous-read`).
+  ingest tokens are stored as their sha256 hash and first 8 characters and
+  can push only as their own cluster; the server refuses an open read API
+  unless the address it actually bound is loopback, or it is told otherwise
+  (`--allow-anonymous-read`). The `Bearer` scheme is matched
+  case-insensitively.
 - **Secrets never in argv.** Every token and the database URL can come from
   an environment variable or a file (`--read-token-file`, ...); the chart
   passes them as environment variables from Secrets, never as arguments.
 - **Bounded input.** Snapshot and gate bodies are capped
-  (`--max-snapshot-bytes`, `--max-gate-bytes`), gzip included; connections
-  have read, write and idle timeouts.
-- **TLS** directly (`--tls-cert-file`, `--tls-key-file`, TLS 1.2 minimum) or
-  at an Ingress.
+  (`--max-snapshot-bytes`, `--max-gate-bytes`), gzip included, and their
+  memory is bounded by structure, not only bytes: JSON values and YAML
+  nodes (aliases at what they expand to) are counted against a budget
+  before anything is decoded, buffered bodies share a budget, and one
+  request per endpoint decodes at a time, as does one read of a stored
+  snapshot (two reads of the whole fleet). A `/gate` answer is bounded
+  before it is encoded, within `--max-gate-bytes`. Responses waiting for
+  slow clients share one budget. Over a budget is `413`, a body too slow for
+  the read timeout `408`, a full queue or response budget `503`
+  ([Memory and request limits](../operations.md#memory-and-request-limits),
+  which lists what is outside these bounds). Connections have read,
+  write and idle timeouts; their number is not capped.
+- **Data at rest.** The SQLite database and its `-wal` and `-shm` files
+  are created 0600 (an existing one is tightened on open).
+- **CSV exports** guard every place a spreadsheet could start a cell
+  against formula injection, past leading white space too.
+- **TLS** directly (`--tls-cert-file`, `--tls-key-file`, TLS 1.2 minimum),
+  from the chart (`server.tls`: a Secret or a cert-manager `Certificate`;
+  the in-chart agent then pushes over HTTPS) or at an Ingress. The agent
+  warns at startup when it would send its token over plain HTTP to a host
+  that is not loopback.
 - **Browser hardening.** Every response carries a Content-Security-Policy
   that forbids inline and third-party script, plus `nosniff`,
   `no-referrer` and `DENY` framing.

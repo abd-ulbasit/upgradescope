@@ -469,14 +469,18 @@ if it is deleted, and writes status with conflict retry.
 - **Ingest** (`POST /api/v1/snapshots`): bearer auth accepts the shared
   `--ingest-token`, or a per-cluster token from `upgradescope tokens create`.
   A per-cluster token may push only for its own cluster (otherwise 403).
-  Only sha256 hashes of tokens are stored. The body can be gzip or identity,
+  A per-cluster token is stored as its sha256 hash and its first 8
+  characters, never the token itself. The body can be gzip or identity,
   is capped at 20 MiB both on the wire and after decompression, and must use
   `schemaVersion` 1. Deduplication uses the hash of the canonical inventory
-  JSON.
+  JSON. Before it is decoded, the body's JSON values are counted against a
+  node budget, and buffered bodies share one memory budget across
+  requests ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **Store** (`store.Store`): SQLite by default (`--db`, WAL mode,
   pure-Go driver, so no cgo) or Postgres (`--db-url`). Tables are
-  `clusters`, `snapshots`, `evaluations` (report JSON plus score, per
-  target) and `tokens`. Both backends must pass one shared conformance suite
+  `clusters`, `snapshots`, `evaluations` (report JSON plus score, counts
+  and the report's `notAssessed`, per target, so summaries never read the
+  report) and `tokens`. Both backends must pass one shared conformance suite
   (`store/storetest`).
 - **Read API** (`GET /api/v1/...`): clusters, the latest report for a
   target (`?target=`; the stored evaluation for that target when one exists,
@@ -485,6 +489,13 @@ if it is deleted, and writes status with conflict retry.
   or category, score history, team scores, fleet
   matrices, the registry, and CSV or HTML exports. Exports are built from
   the *stored* evaluation, so an audit artifact reflects what was recorded.
+  Reads that load a cluster's stored snapshot run one at a time, and only
+  a what-if decodes the whole inventory. The cluster list, the fleet
+  matrix and `/metrics` read snapshot heads and each evaluation's summary
+  columns (score, verdict, counts, `notAssessed`), never an inventory or a
+  stored report, and run two at a time. Every read's response is built
+  in its slot and waits for its client in one budget shared with `/gate`
+  ([Memory and request limits](operations.md#memory-and-request-limits)).
   The read token is optional. Without one, the read API is open.
 - **CI gate** (`POST /api/v1/gate`): the request body is a YAML manifest
   stream. With `?cluster=`, the cluster's latest stored inventory supplies
@@ -500,7 +511,10 @@ if it is deleted, and writes status with conflict retry.
   a `.upgradescope.yaml` sent in `?config=` are applied with `scan`'s code.
   The gate stores nothing; it answers JSON (leading with `schemaVersion`
   and `toolVersion`, like the server's other report responses), SARIF,
-  JUnit or GitLab Code Quality.
+  JUnit or GitLab Code Quality. The stream's YAML nodes, aliases at what
+  they expand to, are counted against a node budget before anything is
+  decoded, and one request at a time is decoded and evaluated
+  ([Memory and request limits](operations.md#memory-and-request-limits)).
 - **Notifications**: after each evaluation, the server diffs the new report
   against the previous one for that cluster and target, using finding keys.
   It emits `new-blocker` (capped at 5, plus an "N more" summary),

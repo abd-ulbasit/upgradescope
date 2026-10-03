@@ -8,6 +8,9 @@ Rename a cluster; its history and its per-cluster ingest tokens move to the new 
 The agent sends its own --cluster-name with every push, so change that too (chart value
 agent.clusterName). Until then its pushes are refused when it uses a per-cluster token
 (now bound to the new name), or register the old name again when it uses the shared one.
+The new name must be an RFC 1123 subdomain (lowercase alphanumerics, '-' and '.', at most
+253 bytes), as pushes require: renaming is how a cluster a v0.1 server registered under
+another name (Prod_EU) moves to one its agent can push under.
 
 ```
 upgradescope clusters rename <cluster> <new-name> [flags]

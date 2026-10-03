@@ -12,6 +12,11 @@ spec:
     - name: http
       port: {{ .Values.server.service.port }}
       targetPort: http
+      {{- if include "upgradescope.serverTLSSecret" . }}
+      # serve speaks HTTPS on it (server.tls); Ingress and Gateway
+      # controllers that read appProtocol connect with TLS.
+      appProtocol: https
+      {{- end }}
   selector:
     app.kubernetes.io/name: {{ include "upgradescope.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
