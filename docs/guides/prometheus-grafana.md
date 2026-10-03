@@ -44,6 +44,11 @@ for a release named `upgradescope`).
 | `UpgradescopeAgentNotTicking` | `time() - upgradescope_agent_last_success_timestamp_seconds > 2 * upgradescope_agent_interval_seconds + 300 or absent(up{job="…-agent-metrics"} == 1)` | 5m | warning |
 | `UpgradescopeClusterStale` (server only) | `upgradescope_cluster_last_push_age_seconds > 7200` | 10m | warning |
 
+While an agent keeps failing its ticks, the verdict gauges behind the first
+two alerts are withdrawn, so those alerts resolve; `UpgradescopeAgentNotTicking`
+has been firing since just before (see
+[Observability](../observability.md#agent-8081metrics)).
+
 Agents push on every inventory change and at least hourly
 (`--force-sync-every`), so keep `metrics.prometheusRule.clusterStaleAfterSeconds`
 (default 7200) above an hour.

@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -56,10 +59,15 @@ func TestTickMarksTheCRWhenTheStatusWriteFails(t *testing.T) {
 	r := testRunner(t, dyn, "")
 	at := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
 	r.now = func() time.Time { return at }
+	// What the loop does with each tick's outcome, on its own clock so
+	// /readyz can be asked after the allowed age has passed.
+	obsNow := at
+	o := newTestObserver(t, &obsNow)
 
 	if err := r.tick(ctx); err != nil {
 		t.Fatalf("first tick: %v", err)
 	}
+	o.record(r.last)
 	if v, ok := statusErrorAnnotation(t, dyn); ok {
 		t.Fatalf("annotation %q on a healthy CR", v)
 	}
@@ -73,6 +81,7 @@ func TestTickMarksTheCRWhenTheStatusWriteFails(t *testing.T) {
 	if !ok || !strings.HasPrefix(v, "2026-10-03T10:01:00Z ") || !strings.Contains(v, "forbidden") {
 		t.Fatalf("annotation = %q (%v), want the failure's time and reason", v, ok)
 	}
+	o.record(r.last)
 
 	// Patch revoked as well: nothing can mark the CR, the tick says so
 	// (the earlier marker stays, it is the CR's, not ours to guess about).
@@ -82,11 +91,22 @@ func TestTickMarksTheCRWhenTheStatusWriteFails(t *testing.T) {
 		t.Errorf("tick with status and patch forbidden: err = %v, want it to name the annotation it could not set", err)
 	}
 	patchDenied = false
+	// The failing agent stops being ready once its last success is older
+	// than the allowed window, and says why.
+	obsNow = obsNow.Add(o.readyWindow() + time.Minute)
+	o.record(r.last)
+	if code, body := serve(t, o.handler(), "/readyz"); code != http.StatusServiceUnavailable || !strings.Contains(body, "forbidden") {
+		t.Errorf("/readyz = %d %q, want 503 naming the status failure", code, body)
+	}
 
 	failing = false
 	at = at.Add(time.Minute)
 	if err := r.tick(ctx); err != nil {
 		t.Fatalf("tick after access returned: %v", err)
+	}
+	o.record(r.last)
+	if code, body := serve(t, o.handler(), "/readyz"); code != http.StatusOK {
+		t.Errorf("/readyz = %d %q after a successful status write, want 200", code, body)
 	}
 	if v, ok := statusErrorAnnotation(t, dyn); ok {
 		t.Errorf("annotation %q survived a successful status write", v)
@@ -139,62 +159,86 @@ func TestTickWithAFailedMarkerClearIsNotAFailedTick(t *testing.T) {
 }
 
 // The gauges describe the last successful tick. A verdict that old is no
-// longer current once staleAfterFailedTicks ticks in a row have failed:
-// the verdict, score, findings and capability series then drop, so an
-// alert on "blocked" or "ready" does not keep reading a verdict the CR no
-// longer carries. The timestamp, interval and KB series stay, so the age of
-// the last good verdict can still be alerted on; one success brings it back.
+// longer current once staleAfterFailedTicks ticks in a row have failed and
+// the last success is older than the NotTicking alert's threshold: the
+// verdict, score, findings and capability series then drop, so an alert on
+// "blocked" or "ready" does not keep reading a verdict the CR no longer
+// carries. The timestamp, interval and KB series stay, so the age of the
+// last good verdict can still be alerted on; one success brings it back.
+// The series must never drop before UpgradescopeAgentNotTicking fires
+// (2*interval+10m after the last success), or a firing blocked alert would
+// resolve with nothing else firing: at a 1m interval three failed ticks are
+// only 3m, so the age bound decides there.
 func TestObserverDropsStaleVerdictGaugesAfterFailedTicks(t *testing.T) {
-	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
-	o := newTestObserver(t, &now)
-	good := tickReport{
-		duration: time.Second,
-		caps:     map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}},
-		reports: []engine.Report{{
-			Target: inventory.Version{Major: 1, Minor: 38}, Verdict: engine.VerdictBlocked, Score: 70,
-			Findings: []engine.Finding{{Category: engine.CatRemovedAPI, Severity: engine.SevBlocker}},
-		}},
-	}
-	failed := tickReport{err: errors.New("update status: forbidden"), duration: time.Second}
-	families := func() map[string]bool {
-		fs, err := o.reg.Gather()
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := map[string]bool{}
-		for _, f := range fs {
-			out[f.GetName()] = true
-		}
-		return out
-	}
 	verdictSeries := []string{"upgradescope_readiness_verdict", "upgradescope_readiness_score", "upgradescope_findings", "upgradescope_capability_available"}
-
-	o.record(good)
-	for i := 1; i < staleAfterFailedTicks; i++ {
-		o.record(failed)
-		for _, name := range verdictSeries {
-			if !families()[name] {
-				t.Fatalf("%s gone after %d failed ticks, want it kept until %d", name, i, staleAfterFailedTicks)
+	for _, interval := range []time.Duration{time.Minute, 10 * time.Minute, 30 * time.Minute} {
+		t.Run(interval.String(), func(t *testing.T) {
+			now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+			o := newObserver(slog.New(slog.NewTextHandler(io.Discard, nil)), mustKB(t), interval)
+			o.now = func() time.Time { return now }
+			good := tickReport{
+				duration: time.Second,
+				caps:     map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}},
+				reports: []engine.Report{{
+					Target: inventory.Version{Major: 1, Minor: 38}, Verdict: engine.VerdictBlocked, Score: 70,
+					Findings: []engine.Finding{{Category: engine.CatRemovedAPI, Severity: engine.SevBlocker}},
+				}},
 			}
-		}
-	}
-	o.record(failed)
-	got := families()
-	for _, name := range verdictSeries {
-		if got[name] {
-			t.Errorf("%s still exported after %d failed ticks in a row", name, staleAfterFailedTicks)
-		}
-	}
-	for _, name := range []string{"upgradescope_agent_last_success_timestamp_seconds", "upgradescope_agent_interval_seconds", "upgradescope_kb_info"} {
-		if !got[name] {
-			t.Errorf("%s dropped with the verdict, want it kept", name)
-		}
-	}
+			failed := tickReport{err: errors.New("update status: forbidden"), duration: time.Second}
+			families := func() map[string]bool {
+				fs, err := o.reg.Gather()
+				if err != nil {
+					t.Fatal(err)
+				}
+				out := map[string]bool{}
+				for _, f := range fs {
+					out[f.GetName()] = true
+				}
+				return out
+			}
 
-	o.record(good)
-	for _, name := range verdictSeries {
-		if !families()[name] {
-			t.Errorf("%s missing after a successful tick", name)
-		}
+			o.record(good)
+			start := now
+			// The NotTicking alert fires 2*interval+10m after the last
+			// success; the verdict series must outlive that instant.
+			alertFires := 2*interval + 10*time.Minute
+			var withdrawnAt time.Duration
+			for i := 1; i <= 40 && withdrawnAt == 0; i++ {
+				now = now.Add(interval)
+				o.record(failed)
+				age := now.Sub(start)
+				if families()[verdictSeries[0]] {
+					continue
+				}
+				if i < staleAfterFailedTicks {
+					t.Fatalf("verdict series gone after %d failed ticks, want them kept until %d", i, staleAfterFailedTicks)
+				}
+				if age <= alertFires {
+					t.Fatalf("verdict series gone %s after the last success, before the NotTicking alert fires at %s", age, alertFires)
+				}
+				withdrawnAt = age
+			}
+			if withdrawnAt == 0 {
+				t.Fatalf("verdict series still exported %s after the last success", now.Sub(start))
+			}
+			got := families()
+			for _, name := range verdictSeries {
+				if got[name] {
+					t.Errorf("%s exported while the verdict was withdrawn", name)
+				}
+			}
+			for _, name := range []string{"upgradescope_agent_last_success_timestamp_seconds", "upgradescope_agent_interval_seconds", "upgradescope_kb_info"} {
+				if !got[name] {
+					t.Errorf("%s dropped with the verdict, want it kept", name)
+				}
+			}
+
+			o.record(good)
+			for _, name := range verdictSeries {
+				if !families()[name] {
+					t.Errorf("%s missing after a successful tick", name)
+				}
+			}
+		})
 	}
 }

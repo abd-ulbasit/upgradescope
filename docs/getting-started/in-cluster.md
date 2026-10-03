@@ -78,9 +78,10 @@ kubectl get clusterreadiness cluster -o jsonpath='{.metadata.annotations.upgrade
 Treat a verdict on an object carrying it as stale. If the role lost `patch`
 on the object as well, nothing can be marked: the agent's `/readyz`, the
 `upgradescope_agent_last_success_timestamp_seconds` metric and the chart's
-`UpgradescopeAgentNotTicking` alert report the failure. After 3 failed
-ticks in a row the agent also stops exporting its verdict, score, findings
-and capability gauges (see [Observability](../observability.md)).
+`UpgradescopeAgentNotTicking` alert report the failure. Once at least 3
+ticks in a row have failed and the last success is older than the alert's
+threshold, the agent also stops exporting its verdict, score, findings and
+capability gauges (see [Observability](../observability.md)).
 
 ## Choose the targets
 

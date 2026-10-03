@@ -56,19 +56,30 @@ func tickTimeout(interval time.Duration) time.Duration {
 	return min(interval/2, 5*time.Minute)
 }
 
-// staleAfterFailedTicks is how many ticks in a row may fail before the
-// verdict, score, findings and capability gauges stop being exported: the
-// last successful tick's verdict is then too old to stand as current (the
-// ClusterReadiness status it was written to is stale too, and marked so,
-// #199). One or two failures are blips; three are a persistent fault, at
-// the default 10m interval half an hour in.
-const staleAfterFailedTicks = 3
+// The verdict, score, findings and capability gauges stop being exported
+// when the last successful tick's verdict is too old to stand as current
+// (the ClusterReadiness status it was written to is stale too, and marked
+// so, #199). Both must hold:
+//   - staleAfterFailedTicks ticks in a row have failed: one or two are
+//     blips; three are a persistent fault, at the default 10m interval half
+//     an hour in.
+//   - the last success is older than 2*interval + staleGrace. The chart's
+//     UpgradescopeAgentNotTicking alert fires 2*interval + 10m after the
+//     last success (condition 2*interval + 5m, for 5m); the series must
+//     outlive it, or an UpgradescopeUpgradeBlocked alert would resolve with
+//     nothing else firing. Under a 10m interval three failed ticks are
+//     younger than that. The grace is the alert's 10m plus 2m for scrape
+//     and rule-evaluation lag.
+const (
+	staleAfterFailedTicks = 3
+	staleGrace            = 12 * time.Minute
+)
 
 // observer turns tick reports into one log line per tick, the /readyz
 // verdict and Prometheus metrics. Gauges describe the last successful
 // tick; a failed tick leaves them as they were (the last-success timestamp
-// shows how old they are) until staleAfterFailedTicks have failed in a row,
-// when the verdict gauges are withdrawn.
+// shows how old they are) until the verdict is stale (verdictStale), when
+// the verdict gauges are withdrawn.
 type observer struct {
 	log      *slog.Logger
 	kb       kb.KB
@@ -198,6 +209,12 @@ func (o *observer) readyWindow() time.Duration {
 	return 2*o.interval + tickTimeout(o.interval)
 }
 
+// verdictStale reports whether the last good verdict is too old to export:
+// see staleAfterFailedTicks and staleGrace.
+func (o *observer) verdictStale(failures int, lastSuccess time.Time) bool {
+	return failures >= staleAfterFailedTicks && o.now().Sub(lastSuccess) > 2*o.interval+staleGrace
+}
+
 // readiness reports whether the agent is ready and, if not, why.
 func (o *observer) readiness() (bool, string) {
 	o.mu.Lock()
@@ -263,8 +280,7 @@ func (o *observer) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect emits the state gauges from the last successful tick, except
 // that the verdict, score, findings and capability gauges are withdrawn once
-// staleAfterFailedTicks ticks in a row have failed (the timestamp, interval
-// and KB series stay). Built at scrape time, so a target or category that
+// the verdict is stale (the timestamp, interval and KB series stay). Built at scrape time, so a target or category that
 // disappears drops its series instead of leaving a stale one behind. Labels
 // are targets, verdicts, severities, categories and capabilities: all small
 // fixed sets.
@@ -280,7 +296,7 @@ func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(descLastSuccess, prometheus.GaugeValue, ts)
 	ch <- prometheus.MustNewConstMetric(descInterval, prometheus.GaugeValue, o.interval.Seconds())
 	ch <- prometheus.MustNewConstMetric(descKBInfo, prometheus.GaugeValue, 1, o.kb.Version, o.kb.MaxKnownK8s.String())
-	if failures >= staleAfterFailedTicks {
+	if o.verdictStale(failures, last) {
 		return // the last good verdict is not current any more
 	}
 	for c, st := range good.caps {
