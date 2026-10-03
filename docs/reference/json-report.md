@@ -31,6 +31,10 @@ and the gate's JSON answer (`POST /api/v1/gate`). There `toolVersion` is
 the serving server's build, also for an evaluation an older server stored
 ([REST API](api.md)).
 
+The MCP tools return these documents too: `get_report` is this schema, and
+the output schemas of `scan` and `list_findings` refer to its definitions
+([AI assistants](../getting-started/mcp.md)).
+
 ## Example
 
 `scan --files rendered --target 1.37 --output json` on one

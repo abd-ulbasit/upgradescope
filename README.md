@@ -101,6 +101,8 @@ clone and set `image.repository` and `image.tag`.
 [In-cluster agent](https://abd-ulbasit.github.io/upgradescope/getting-started/in-cluster/) ·
 [Fleet server](https://abd-ulbasit.github.io/upgradescope/getting-started/fleet/).
 
+**Ask an AI assistant**: `claude mcp add upgradescope -- upgradescope mcp` gives Claude Code, or any MCP client, read-only tools that return these reports; setup for Claude Desktop is in [AI assistants (MCP)](https://abd-ulbasit.github.io/upgradescope/getting-started/mcp/).
+
 ## What it checks, and where it stops
 
 - **Removed and deprecated APIs**, in manifests and in live objects. Live
