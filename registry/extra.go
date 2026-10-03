@@ -17,7 +17,12 @@ import (
 // "nothing extra": an unmounted ConfigMap would otherwise leave the
 // operator's add-ons silently unjudged.
 func LoadExtra(path string) ([]AddOn, error) {
-	path = filepath.Clean(path)
+	// Absolute first: the split below needs a real base name, which "..",
+	// "." and "/" only have once resolved.
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("registry: %w", err)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("registry: %w", err)
@@ -25,7 +30,11 @@ func LoadExtra(path string) ([]AddOn, error) {
 	parent, base := filepath.Dir(path), filepath.Base(path)
 	var addons []AddOn
 	if info.IsDir() {
-		addons, err = loadFS(os.DirFS(parent), base)
+		if parent == path { // the file system root has no parent to split from
+			addons, err = loadFS(os.DirFS(path), ".")
+		} else {
+			addons, err = loadFS(os.DirFS(parent), base)
+		}
 	} else {
 		if !strings.HasSuffix(base, ".yaml") {
 			return nil, fmt.Errorf("registry: %s: registry entries must use the .yaml extension", path)
