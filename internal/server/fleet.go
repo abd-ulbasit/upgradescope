@@ -162,6 +162,7 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case err == nil:
 				gaps, gapsOmitted := gapsOf(e, fleetSummaryBytes)
+				gaps = scopeOf(r).summaryGaps(gaps)
 				row.Cells[t.String()] = &fleetCell{
 					Score: e.Score, Ready: e.Ready, Verdict: verdictOf(e), Blockers: e.Blockers,
 					EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID, Source: sourceStored, Outdated: s.outdated(e, now),

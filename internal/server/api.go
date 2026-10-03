@@ -1096,6 +1096,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 			target := server.Next()
 			if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, target.String()); err == nil {
 				sum := s.summarize(e, now, fleetSummaryBytes)
+				sum.NotAssessed = scopeOf(r).summaryGaps(sum.NotAssessed)
 				cs.Latest = &sum
 			}
 		}
@@ -1126,14 +1127,16 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	var targets []inventory.Version
 	if snap, head, err := s.latestHead(ctx, c.ID); err == nil {
 		detail.ServerVersion = judgedAt(snap, head)
-		detail.Capabilities = head.Capabilities
+		detail.Capabilities = scopeOf(r).capabilities(head.Capabilities)
 		targets = s.evalTargets(detail.ServerVersion)
 	} else {
 		targets = s.extraTargets
 	}
 	for _, t := range targets {
 		if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, t.String()); err == nil {
-			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now, 0))
+			sum := s.summarize(e, now, 0)
+			sum.NotAssessed = scopeOf(r).summaryGaps(sum.NotAssessed)
+			detail.Evaluations = append(detail.Evaluations, sum)
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)
@@ -1156,6 +1159,9 @@ type reportMeta struct {
 	ServerVersion string    `json:"serverVersion,omitempty"` // the version the latest snapshot is judged at (judgedVersion)
 	NotApplicable bool      `json:"notApplicable,omitempty"` // target at or below ServerVersion
 	Outdated      bool      `json:"outdated,omitempty"`      // a stored evaluation the next pass replaces (evalSummary.Outdated)
+	// nsTeams is the evaluated inventory's namespace teams
+	// (namespaceTeams), for a scoped read only: what readScope cuts by.
+	nsTeams map[string]string
 }
 
 // loadOrComputeReport returns the current stored evaluation's report for
@@ -1164,14 +1170,20 @@ type reportMeta struct {
 // through to the what-if path — any other store failure is returned, never
 // masked by a recompute that would hide a broken store behind a 200.
 // A store.ErrNotFound result means the cluster has no snapshots at all.
-// Only a what-if decodes the whole inventory.
-func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version) (engine.Report, reportMeta, error) {
+// Only a what-if decodes the whole inventory; a read scoped to teams
+// decodes its namespaces too (reportMeta.nsTeams).
+func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version, sc readScope) (engine.Report, reportMeta, error) {
 	snap, head, err := s.latestHead(ctx, clusterID)
 	if err != nil {
 		return engine.Report{}, reportMeta{}, err
 	}
 	version := judgedAt(snap, head)
 	meta := reportMeta{ServerVersion: version, NotApplicable: notApplicable(version, target)}
+	if !sc.fleet() {
+		if meta.nsTeams, err = s.namespaceTeams(snap); err != nil {
+			return engine.Report{}, reportMeta{}, err
+		}
+	}
 	e, err := s.cfg.Store.CurrentEvaluation(ctx, clusterID, target.String())
 	switch {
 	case err == nil:
@@ -1207,7 +1219,7 @@ func (s *Server) reportForRequest(w http.ResponseWriter, r *http.Request) (engin
 	if !ok {
 		return engine.Report{}, reportMeta{}, false
 	}
-	rep, meta, err := s.loadOrComputeReport(r.Context(), c.ID, target)
+	rep, meta, err := s.loadOrComputeReport(r.Context(), c.ID, target, scopeOf(r))
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
 		return engine.Report{}, reportMeta{}, false
@@ -1239,7 +1251,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, reportResponse{s.versioned(withTeamsIn(rep, scopeOf(r))), meta})
+	writeJSON(w, http.StatusOK, reportResponse{s.versioned(withTeamsIn(rep, scopeOf(r), meta.nsTeams)), meta})
 }
 
 // handleFindings: GET /api/v1/clusters/{id}/findings?target=&severity=&category=
@@ -1253,7 +1265,7 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	severity := r.URL.Query().Get("severity")
 	category := r.URL.Query().Get("category")
 	findings := []engine.Finding{} // non-nil so JSON renders []
-	for _, f := range scopeOf(r).findings(rep.Findings) {
+	for _, f := range scopeOf(r).findings(rep.Findings, meta.nsTeams) {
 		if severity != "" && string(f.Severity) != severity {
 			continue
 		}

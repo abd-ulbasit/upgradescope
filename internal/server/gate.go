@@ -222,12 +222,14 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	inv := manifests
 	var baseline *engine.Report
 	var introduced gateSide
+	var cut gateCut // with ?cluster=: what a team-scoped caller may see of it
 	if ref := r.URL.Query().Get("cluster"); ref != "" {
 		clusterInv, ok := s.gateClusterContext(w, r, ref)
 		if !ok {
 			return
 		}
 		clusterInv.Namespaces = s.cfg.TeamMap.Apply(clusterInv.Namespaces)
+		cut.namespaces = namespaceTeamsOf(clusterInv.Namespaces)
 		// Baseline: the cluster as it is, so findings it already has are
 		// not blamed on the PR.
 		base, err := s.evaluateWithin(clusterInv, target, s.now())
@@ -251,6 +253,7 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 		// and the findings the manifests' own content produces, once
 		// suppressed, are introduced by the PR (suppressSide).
 		side := mergeManifests(&inv, manifests)
+		cut.mine = manifestsOwn(manifests, side)
 		sideRep, err := s.evaluateWithin(side, target, s.now())
 		if err != nil {
 			errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
@@ -268,7 +271,9 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	}
 	rep, warnings := s.suppressGate(full, g.rules)
 	resp := gateResult(rep, baseline, introduced)
-	resp.scope(scopeOf(r))
+	if baseline != nil { // without ?cluster= the answer is all the caller's own
+		resp.scope(scopeOf(r), cut)
+	}
 	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings
 	bound := gateAnswerBound(resp, g.format)
@@ -290,19 +295,19 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	if g.format == "sarif" {
 		w.Header().Set("Content-Type", "application/sarif+json")
 		w.WriteHeader(status)
-		_ = sarif.Write(w, sarifReport(rep, resp), s.cfg.Version)
+		_ = sarif.Write(w, sarifReport(resp.Report, resp), s.cfg.Version)
 		return
 	}
 	if g.format == "junit" {
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(status)
-		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: g.failOn, AllowIncomplete: g.allowIncomplete})
+		_ = junit.Write(w, sarifReport(resp.Report, resp), junit.Options{FailOn: g.failOn, AllowIncomplete: g.allowIncomplete})
 		return
 	}
 	if g.format == "gitlab-codequality" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_ = codequality.Write(w, sarifReport(rep, resp))
+		_ = codequality.Write(w, sarifReport(resp.Report, resp))
 		return
 	}
 	writeJSON(w, status, resp)
@@ -390,30 +395,103 @@ func gateResult(rep engine.Report, baseline *engine.Report, introduced gateSide)
 	return resp
 }
 
-// scope cuts a gate answer to what sc may see of the cluster it was asked
-// about: the cluster's findings and suppressed findings of sc's teams,
-// and their team scores. What the manifests introduce is the caller's own
-// and stays, so the verdict, which judges only that, is unchanged.
-func (g *gateResponse) scope(sc readScope) {
+// gateCut is what scope needs of a ?cluster= gate: the cluster's
+// namespace teams and what the manifests themselves hold.
+type gateCut struct {
+	namespaces map[string]string
+	mine       manifestContent
+}
+
+// manifestContent is what a gate's manifests hold: their objects, the
+// namespaces they name and their unrecognized images.
+type manifestContent struct {
+	objects    map[inventory.ObjectRef]bool
+	namespaces map[string]bool
+	images     map[string]bool
+}
+
+// manifestsOwn collects the objects and namespaces of the manifests and of
+// their side of the merge (mergeManifests), whose CRD usage holds the
+// manifests' custom resources.
+func manifestsOwn(invs ...inventory.Inventory) manifestContent {
+	m := manifestContent{objects: map[inventory.ObjectRef]bool{}, namespaces: map[string]bool{}, images: map[string]bool{}}
+	usage := func(us []inventory.APIUsage) {
+		for _, u := range us {
+			for ns := range u.Namespaces {
+				m.namespaces[ns] = true
+			}
+			for _, o := range u.Objects {
+				m.objects[o], m.namespaces[o.Namespace] = true, true
+			}
+		}
+	}
+	for _, inv := range invs {
+		usage(inv.APIUsage)
+		for _, c := range inv.CRDs {
+			usage(c.Usage)
+		}
+		for _, a := range inv.AddOns {
+			for _, ns := range a.Namespaces {
+				m.namespaces[ns] = true
+			}
+		}
+		for _, n := range inv.Namespaces {
+			m.namespaces[n.Name] = true
+		}
+		for _, img := range inv.UnrecognizedImages {
+			m.images[img] = true
+		}
+	}
+	delete(m.namespaces, "")
+	return m
+}
+
+// scope cuts a ?cluster= gate answer to what sc may see of the cluster it
+// was asked about. What the manifests hold is the caller's own and stays:
+// their objects, the namespaces they name, and those namespaces' teams.
+// Of the cluster, a finding of its own is kept when sc owns it, and every
+// finding, the manifests' included (the cluster's objects at the same API
+// join theirs), is cut to sc's teams' namespaces and objects besides
+// (keep.cut), as are the suppressed findings. The team scores are sc's
+// teams', the unrecognized images the manifests', and the helm
+// capability's own words are withheld (readScope.withholds). The verdict
+// judges only what the manifests introduce and is unchanged.
+func (g *gateResponse) scope(sc readScope, c gateCut) {
 	if sc.fleet() {
 		return
+	}
+	cluster := sc.clusterKeep(c.namespaces)
+	mineTeams := map[string]bool{}
+	for ns := range c.mine.namespaces {
+		if t := c.namespaces[ns]; t != "" {
+			mineTeams[t] = true
+		}
+	}
+	k := keep{
+		team:      func(t string) bool { return cluster.team(t) || mineTeams[t] },
+		namespace: func(ns string) bool { return cluster.namespace(ns) || c.mine.namespaces[ns] },
+		object:    func(o inventory.ObjectRef) bool { return cluster.object(o) || c.mine.objects[o] },
 	}
 	introduced := map[string]bool{}
 	for _, f := range g.introducedSuppressed {
 		introduced[findingKey(f.Finding)] = true
 	}
 	g.Teams = sc.renderedTeams(g.Report)
-	g.Findings = slices.DeleteFunc(g.Findings, func(f gateFinding) bool {
-		return f.Source == sourceCluster && !sc.owns(f.Teams)
-	})
-	// A new slice: without ?cluster=, introducedSuppressed is this one.
-	var kept []engine.SuppressedFinding
-	for _, f := range g.Report.Suppressed {
-		if introduced[findingKey(f.Finding)] || sc.owns(f.Teams) {
-			kept = append(kept, f)
+	kept := []gateFinding{}
+	for _, f := range g.Findings {
+		if f.Source == sourceCluster && !sc.owns(f.Teams) {
+			continue
 		}
+		f.Finding, _ = k.cut(f.Finding)
+		kept = append(kept, f)
 	}
-	g.Report.Suppressed, g.SuppressedCount = kept, len(kept)
+	g.Findings = kept
+	g.Report.Suppressed = sc.suppressed(g.Report.Suppressed, k, func(f engine.Finding) bool { return introduced[findingKey(f)] })
+	g.SuppressedCount = len(g.Report.Suppressed)
+	g.introducedSuppressed = sc.suppressed(g.introducedSuppressed, k, func(engine.Finding) bool { return true })
+	g.Report.UnrecognizedImages = slices.DeleteFunc(slices.Clone(g.Report.UnrecognizedImages), func(img string) bool { return !c.mine.images[img] })
+	g.Report.UnrecognizedImagesOmitted = 0
+	g.Report.NotAssessed = sc.scopeGaps(g.Report.NotAssessed)
 }
 
 // sarifReport is what the SARIF answer carries. SARIF becomes code-scanning

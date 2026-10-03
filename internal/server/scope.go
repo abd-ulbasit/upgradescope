@@ -3,9 +3,14 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -30,8 +35,13 @@ import (
 //     and the team scores of its teams. Findings no team owns are another
 //     team's as far as it can tell, so they are left out too; its team
 //     verdict still counts them (engine.TeamScores), as the fleet-wide
-//     view does. What describes the cluster as a whole stays: its score,
-//     verdict, blocker and warning counts, capability gaps, history.
+//     view does. A finding that spans teams is cut to the scope's teams,
+//     their namespaces and the objects in them (keep.cut). What
+//     describes the cluster as a whole stays: its score, verdict, blocker
+//     and warning counts, capability gaps, history; but not its
+//     unrecognized images, which name any team's workloads, nor the helm
+//     capability's reason and skipped list, which name releases
+//     (readScope.withholds).
 //
 // /metrics, whose per-cluster series name every cluster, takes a
 // fleet-wide scope only (403 otherwise).
@@ -80,38 +90,236 @@ func (sc readScope) owns(teams []string) bool {
 	return sc.fleet() || slices.ContainsFunc(teams, func(t string) bool { return sc.teams[t] })
 }
 
-// report is rep with only the findings and suppressed findings the scope
-// owns; the rest of it describes the cluster and is kept. A fleet-wide
-// scope gets rep as it is.
-func (sc readScope) report(rep engine.Report) engine.Report {
+// report is rep as the scope sees it: the findings and suppressed
+// findings it owns, each cut to the scope (cut), with ns the evaluated
+// inventory's namespace teams (namespaceTeams); no unrecognized images,
+// which no namespace is attributed (an image is any workload's); and the
+// helm capability's own words withheld (scopeGaps). The rest of it
+// describes the cluster and is kept. A fleet-wide scope gets rep as it is.
+func (sc readScope) report(rep engine.Report, ns map[string]string) engine.Report {
 	if sc.fleet() {
 		return rep
 	}
-	rep.Findings = sc.findings(rep.Findings)
+	k := sc.clusterKeep(ns)
+	rep.Findings = sc.findings(rep.Findings, ns)
 	if rep.Suppressed != nil {
-		kept := []engine.SuppressedFinding{}
-		for _, f := range rep.Suppressed {
-			if sc.owns(f.Teams) {
-				kept = append(kept, f)
-			}
-		}
-		rep.Suppressed = kept
+		rep.Suppressed = sc.suppressed(rep.Suppressed, k, func(engine.Finding) bool { return false })
 	}
+	rep.UnrecognizedImages, rep.UnrecognizedImagesOmitted = nil, 0
+	rep.NotAssessed = sc.scopeGaps(rep.NotAssessed)
 	return rep
 }
 
-// findings is the findings the scope owns (never nil).
-func (sc readScope) findings(fs []engine.Finding) []engine.Finding {
+// findings is the findings the scope owns, each cut to it (never nil).
+func (sc readScope) findings(fs []engine.Finding, ns map[string]string) []engine.Finding {
 	if sc.fleet() {
 		return fs
 	}
+	k := sc.clusterKeep(ns)
 	out := []engine.Finding{}
 	for _, f := range fs {
 		if sc.owns(f.Teams) {
-			out = append(out, f)
+			cut, _ := k.cut(f)
+			out = append(out, cut)
 		}
 	}
 	return out
+}
+
+// suppressed is the suppressed findings the scope sees: those it owns or
+// mine says are the caller's own, each cut by k. One whose accepted
+// objects are all cut away is left out: the objects it accepted are
+// another team's, whatever else its finding covers.
+func (sc readScope) suppressed(fs []engine.SuppressedFinding, k keep, mine func(engine.Finding) bool) []engine.SuppressedFinding {
+	kept := []engine.SuppressedFinding{}
+	for _, f := range fs {
+		if !mine(f.Finding) && !sc.owns(f.Teams) {
+			continue
+		}
+		cut, _ := k.cut(f.Finding)
+		if len(f.Objects) > 0 && len(cut.Objects) == 0 {
+			continue
+		}
+		f.Finding = cut
+		kept = append(kept, f)
+	}
+	return kept
+}
+
+// keep says what of a finding a scoped read may see: which of its teams,
+// namespaces and objects.
+type keep struct {
+	team      func(string) bool
+	namespace func(string) bool
+	object    func(inventory.ObjectRef) bool
+}
+
+// clusterKeep keeps of a cluster's finding the scope's teams, the
+// namespaces ns attributes to them, and the objects in those namespaces.
+// A namespace no team is attributed is no team's, so it is cut too.
+func (sc readScope) clusterKeep(ns map[string]string) keep {
+	inScope := func(name string) bool { t := ns[name]; return t != "" && sc.teams[t] }
+	return keep{
+		team:      func(t string) bool { return sc.teams[t] },
+		namespace: inScope,
+		object:    func(o inventory.ObjectRef) bool { return inScope(o.Namespace) },
+	}
+}
+
+// cut is f with only the teams, namespaces and objects k keeps, and
+// whether anything was cut. The engine aggregates one finding over every
+// namespace an API, add-on or release line is used in, so a finding the
+// scope owns can still name other teams' namespaces, objects and teams;
+// those are removed. An object without a namespace stays only when no
+// namespace was cut. A cut finding's title no longer counts the objects
+// the scope does not see (it counts the scope's when every object was
+// listed), and its detail, which names and counts everything the finding
+// covers, is replaced by one that names only what is kept. Lists the
+// engine capped (NamespacesOmitted, ObjectsOmitted) cannot be divided by
+// team, so a cut finding counts none omitted and its detail says more of
+// the scope's may be affected.
+func (k keep) cut(f engine.Finding) (engine.Finding, bool) {
+	teams := slices.DeleteFunc(slices.Clone(f.Teams), func(t string) bool { return !k.team(t) })
+	namespaces := slices.DeleteFunc(slices.Clone(f.Namespaces), func(n string) bool { return !k.namespace(n) })
+	nsCut := len(namespaces) < len(f.Namespaces)
+	objects := slices.DeleteFunc(slices.Clone(f.Objects), func(o inventory.ObjectRef) bool {
+		return !k.object(o) && (o.Namespace != "" || nsCut)
+	})
+	if len(teams) == len(f.Teams) && !nsCut && len(objects) == len(f.Objects) {
+		return f, false
+	}
+	capped := f.NamespacesOmitted > 0 || f.ObjectsOmitted > 0
+	f.Title = cutTitle(f.Title, f.ObjectsOmitted == 0 && len(f.Objects) > 0, len(f.Objects), len(objects))
+	f.Teams, f.Namespaces, f.Objects = nilIfEmpty(teams), nilIfEmpty(namespaces), nilIfEmpty(objects)
+	f.NamespacesOmitted, f.ObjectsOmitted = 0, 0
+	f.Detail = cutDetail(namespaces, len(objects), capped)
+	return f, true
+}
+
+func nilIfEmpty[T any](s []T) []T {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
+}
+
+// titleCount matches the object count the engine ends an API finding's
+// title with (pluralObjects): "... (3 objects)".
+var titleCount = regexp.MustCompile(`^(.*) \((\d+) objects?\)$`)
+
+// cutTitle is a cut finding's title: the engine's count of every object
+// replaced by the scope's (listed of all, exact) or dropped.
+func cutTitle(title string, listed bool, all, kept int) string {
+	m := titleCount.FindStringSubmatch(title)
+	if m == nil {
+		return title
+	}
+	if n, err := strconv.Atoi(m[2]); err == nil && listed && n == all {
+		noun := "objects"
+		if kept == 1 {
+			noun = "object"
+		}
+		return fmt.Sprintf("%s (%d %s in scope)", m[1], kept, noun)
+	}
+	return m[1]
+}
+
+// cutDetail is a cut finding's detail.
+func cutDetail(namespaces []string, objects int, capped bool) string {
+	where := "none of its namespaces is listed"
+	if len(namespaces) > 0 {
+		where = "its namespaces in scope are " + strings.Join(namespaces, ", ")
+	}
+	d := fmt.Sprintf("Cut to this read's teams: the finding also covers namespaces or objects outside them, "+
+		"which a team-scoped read does not show, so its evidence is not repeated; %s, with %d object(s) listed.", where, objects)
+	if capped {
+		d += " Its lists were capped before the cut, so more of this read's teams' may be affected than are listed."
+	}
+	return d
+}
+
+// withheldGapReason replaces the helm capability's reason for a scoped
+// read.
+const withheldGapReason = "withheld from a team-scoped read: the helm collector names the releases it could not read by namespace and name, which can be other teams'"
+
+// withholds reports whether a scoped read is shown a capability's reason
+// and skipped list: not the helm collector's, which name releases as
+// namespace/name, of any team. The other collectors name APIs, components
+// and resources.
+func (sc readScope) withholds(c inventory.Capability) bool {
+	return !sc.fleet() && c == inventory.CapHelm
+}
+
+// scopeGaps is gaps as the scope sees them (withholds).
+func (sc readScope) scopeGaps(gaps []engine.CapabilityGap) []engine.CapabilityGap {
+	if !slices.ContainsFunc(gaps, func(g engine.CapabilityGap) bool { return sc.withholds(g.Capability) }) {
+		return gaps
+	}
+	out := slices.Clone(gaps)
+	for i, g := range out {
+		if sc.withholds(g.Capability) {
+			out[i].Reason, out[i].Skipped = withheldIfSet(g.Reason), nil
+		}
+	}
+	return out
+}
+
+// summaryGaps is a summary's gaps as the scope sees them (withholds):
+// the skipped entries it does not show are counted as omitted.
+func (sc readScope) summaryGaps(gaps []summaryGap) []summaryGap {
+	for i, g := range gaps {
+		if sc.withholds(g.Capability) {
+			gaps[i].Reason = withheldIfSet(g.Reason)
+			gaps[i].SkippedOmitted += len(g.Skipped)
+			gaps[i].Skipped = nil
+		}
+	}
+	return gaps
+}
+
+// capabilities is a snapshot's capability map as the scope sees it
+// (withholds).
+func (sc readScope) capabilities(caps map[inventory.Capability]inventory.CapabilityStatus) map[inventory.Capability]inventory.CapabilityStatus {
+	st, ok := caps[inventory.CapHelm]
+	if !ok || !sc.withholds(inventory.CapHelm) {
+		return caps
+	}
+	out := maps.Clone(caps)
+	st.Reason, st.Skipped = withheldIfSet(st.Reason), nil
+	out[inventory.CapHelm] = st
+	return out
+}
+
+func withheldIfSet(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return withheldGapReason
+}
+
+// namespaceTeams maps every namespace of snap's inventory to its team as
+// its evaluations attribute it (the namespace's team label, or the
+// --team-map rule that overrides it), "" for none. Only the namespaces
+// are decoded. A namespace the map does not name is no team's, so a
+// snapshot newer than the evaluation it is read with cuts more, never
+// less.
+func (s *Server) namespaceTeams(snap store.Snapshot) (map[string]string, error) {
+	var v struct {
+		Namespaces []inventory.NamespaceInfo `json:"namespaces"`
+	}
+	if err := json.Unmarshal(snap.Inventory, &v); err != nil {
+		return nil, fmt.Errorf("cluster %d (snapshot %d): %w: %v", snap.ClusterID, snap.ID, errCorruptInventory, err)
+	}
+	return namespaceTeamsOf(s.cfg.TeamMap.Apply(v.Namespaces)), nil
+}
+
+// namespaceTeamsOf maps each of namespaces to its team.
+func namespaceTeamsOf(namespaces []inventory.NamespaceInfo) map[string]string {
+	m := make(map[string]string, len(namespaces))
+	for _, n := range namespaces {
+		m[n.Name] = n.Team
+	}
+	return m
 }
 
 // teamScores is the scores of the scope's teams among engine.TeamScores'

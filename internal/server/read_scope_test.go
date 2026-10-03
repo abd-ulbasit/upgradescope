@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
@@ -68,7 +69,61 @@ var scopeClusters = []struct {
 		inv.Namespaces = []inventory.NamespaceInfo{{Name: "pay-dev", Team: "payments"}}
 		return inv
 	}},
+	{"shared", sharedInventory},
 }
+
+// sharedInventory is a cluster whose one finding spans teams (#72): an
+// Ingress at extensions/v1beta1 in a payments namespace, in a web one
+// (annotated as accepted, so a gate suppresses it) and in one no team
+// owns. It also has an unrecognized image of web's and a partial helm
+// capability whose message and skipped list name a web release. A
+// payments-scoped read must see none of web's, nor of the unowned
+// namespace (sharedSecrets).
+func sharedInventory() inventory.Inventory {
+	inv := testInventory()
+	inv.Namespaces = []inventory.NamespaceInfo{{Name: "pay-prod", Team: "payments"}, {Name: "web-secret-ns", Team: "web"}, {Name: "shared-tools"}}
+	inv.APIUsage = []inventory.APIUsage{{
+		Group: "extensions", Version: "v1beta1", Kind: "Ingress", Count: 3,
+		Namespaces: map[string]int{"pay-prod": 1, "web-secret-ns": 1, "shared-tools": 1},
+		Objects: []inventory.ObjectRef{
+			{Namespace: "pay-prod", Name: "pay-ingress"},
+			{Namespace: "web-secret-ns", Name: "web-secret-ingress", Ignore: "removed-api", IgnoreReason: "web-secret-reason"},
+			{Namespace: "shared-tools", Name: "tools-ingress"},
+		},
+	}}
+	inv.UnrecognizedImages = []string{"registry.example.com/web/secret-app"}
+	inv.Capabilities[inventory.CapHelm] = inventory.CapabilityStatus{
+		Available: true, Partial: true,
+		Reason:  "1 release(s) not read, first web-secret-ns/secret-release",
+		Skipped: []string{"web-secret-ns/secret-release"},
+	}
+	return inv
+}
+
+// sharedSecrets are what the shared cluster says of web and of the
+// namespace no team owns.
+var sharedSecrets = []string{"web-secret", "secret-app", "secret-release", "shared-tools", "tools-ingress"}
+
+// leaked is the first of sharedSecrets that body contains, or "".
+func leaked(body []byte) string {
+	for _, s := range sharedSecrets {
+		if bytes.Contains(body, []byte(s)) {
+			return s
+		}
+	}
+	return ""
+}
+
+// ingressManifest is a PR's Ingress at extensions/v1beta1 in a namespace
+// the cluster does not have yet: with ?cluster=shared, the cluster's
+// Ingress objects join its finding, and the PR's namespace and object are
+// the caller's own, whatever its scope.
+const ingressManifest = `apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: pr-ingress
+  namespace: pr-new-ns
+`
 
 // scopeServer is a server on a real SQLite store (so ClustersOfTeams runs
 // its SQL) with the fleet-wide --read-token "fleet-tok", the admin token
@@ -209,8 +264,8 @@ func TestScopedTokenReadsOnlyItsTeams(t *testing.T) {
 		for _, c := range got {
 			names = append(names, c.Name)
 		}
-		if !slices.Equal(names, []string{"calm", "mixed"}) {
-			t.Errorf("clusters = %v, want [calm mixed]: calm has a payments namespace and no finding", names)
+		if !slices.Equal(names, []string{"calm", "mixed", "shared"}) {
+			t.Errorf("clusters = %v, want [calm mixed shared]: calm has a payments namespace and no finding", names)
 		}
 		if h := resp.Header.Get("X-Upgradescope-Teams"); h != "payments" {
 			t.Errorf("X-Upgradescope-Teams = %q, want payments", h)
@@ -288,8 +343,8 @@ func TestScopedTokenReadsOnlyItsTeams(t *testing.T) {
 		for _, c := range got.Clusters {
 			names = append(names, c.Name)
 		}
-		if !slices.Equal(names, []string{"calm", "mixed"}) {
-			t.Errorf("fleet rows = %v, want [calm mixed]", names)
+		if !slices.Equal(names, []string{"calm", "mixed", "shared"}) {
+			t.Errorf("fleet rows = %v, want [calm mixed shared]", names)
 		}
 	})
 	t.Run("fleet teams", func(t *testing.T) {
@@ -323,8 +378,22 @@ func TestScopedTokenReadsOnlyItsTeams(t *testing.T) {
 		}
 	})
 	t.Run("gate without cluster", func(t *testing.T) {
-		if resp, raw := postGate(t, ts, "?target=1.35&fail-on=never", "pay-tok", pspManifest, "application/x-yaml"); resp.StatusCode != http.StatusOK {
-			t.Errorf("status %d, %s", resp.StatusCode, raw)
+		// Without ?cluster= the answer is all the caller's own manifests:
+		// a scoped caller reads it exactly as the fleet-wide one does,
+		// whatever namespaces they name.
+		const webManifest = `apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: web-ingress
+  namespace: web-prod
+`
+		resp, raw := postGate(t, ts, "?target=1.35&fail-on=never", "pay-tok", webManifest, "application/x-yaml")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d, %s", resp.StatusCode, raw)
+		}
+		_, fleet := postGate(t, ts, "?target=1.35&fail-on=never", "fleet-tok", webManifest, "application/x-yaml")
+		if !bytes.Equal(raw, fleet) || !bytes.Contains(raw, []byte("web-prod (1)")) {
+			t.Errorf("payments-scoped gate without ?cluster=:\n%s\nwant the fleet-wide answer:\n%s", raw, fleet)
 		}
 	})
 	t.Run("registry", func(t *testing.T) {
@@ -372,6 +441,196 @@ func TestScopedTokenOutOfScopeClusterIsNotFound(t *testing.T) {
 		if _, raw := fetch(t, ts, path, "pay-tok"); strings.Contains(string(raw), `"web"`) {
 			t.Errorf("%s names the out-of-scope cluster: %s", path, raw)
 		}
+	}
+}
+
+// A finding that spans teams is cut to the scope's: a payments-scoped
+// read of the shared cluster lists the Ingress finding with payments'
+// namespace and object only, from every endpoint that carries findings,
+// and none of web's namespaces, objects, team, accepted objects,
+// unrecognized images or Helm releases, nor the unowned namespace's. The
+// fleet-wide token reads all of it.
+func TestScopedReadCutsFindingsThatSpanTeams(t *testing.T) {
+	_, st, ts, ids := scopeServer(t)
+	mintReadToken(t, st, "pay-tok", "payments")
+	shared := "/api/v1/clusters/" + fmt.Sprint(ids["shared"])
+
+	reads := []string{
+		"/api/v1/clusters", shared, shared + "/report", shared + "/report?target=1.36", shared + "/findings",
+		shared + "/teams", shared + "/history", shared + "/export?format=csv", shared + "/export?format=html",
+		"/api/v1/fleet", "/api/v1/fleet/teams?target=1.35",
+	}
+	for _, p := range reads {
+		resp, raw := fetch(t, ts, p, "pay-tok")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s = %d %s", p, resp.StatusCode, raw)
+		}
+		if s := leaked(raw); s != "" {
+			t.Errorf("payments-scoped %s names %q:\n%s", p, s, raw)
+		}
+		if bytes.Contains(raw, []byte(`"web"`)) {
+			t.Errorf("payments-scoped %s names the web team:\n%s", p, raw)
+		}
+	}
+	// What the fleet-wide token reads has them all: the fixture holds
+	// what the test looks for.
+	// (Exports list namespaces, not objects.)
+	for _, p := range []string{shared + "/report", shared + "/findings", shared + "/export?format=csv", shared + "/export?format=html"} {
+		_, raw := fetch(t, ts, p, "fleet-tok")
+		want := []string{"web-secret-ns", "shared-tools", "pay-prod"}
+		if !strings.Contains(p, "/export") {
+			want = append(want, "web-secret-ingress", "tools-ingress", "pay-ingress")
+		}
+		for _, s := range want {
+			if !bytes.Contains(raw, []byte(s)) {
+				t.Errorf("fleet-wide %s does not name %q", p, s)
+			}
+		}
+	}
+	for _, p := range []string{shared + "/report", "/api/v1/clusters", shared} {
+		_, raw := fetch(t, ts, p, "fleet-tok")
+		for _, s := range []string{"secret-release"} {
+			if !bytes.Contains(raw, []byte(s)) {
+				t.Errorf("fleet-wide %s does not name %q", p, s)
+			}
+		}
+	}
+	if _, raw := fetch(t, ts, shared+"/report", "fleet-tok"); !bytes.Contains(raw, []byte("secret-app")) {
+		t.Errorf("fleet-wide report has no unrecognized image")
+	}
+
+	// What payments does see: its own object, under the finding's key,
+	// counted as the scope's.
+	for _, p := range []string{shared + "/report", shared + "/findings", shared + "/report?target=1.36"} {
+		_, raw := fetch(t, ts, p, "pay-tok")
+		var body struct {
+			Findings []struct {
+				Key        string
+				Title      string
+				Teams      []string
+				Namespaces []string
+				Objects    []struct{ Namespace, Name string }
+			}
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Findings) != 1 {
+			t.Fatalf("%s: %d findings, want the Ingress one: %s", p, len(body.Findings), raw)
+		}
+		f := body.Findings[0]
+		if f.Key != "removed-api/extensions/v1beta1/Ingress" || !slices.Equal(f.Teams, []string{"payments"}) ||
+			!slices.Equal(f.Namespaces, []string{"pay-prod"}) || len(f.Objects) != 1 || f.Objects[0].Name != "pay-ingress" {
+			t.Errorf("%s: finding = %+v, want the Ingress finding cut to pay-prod's pay-ingress", p, f)
+		}
+		if !strings.HasSuffix(f.Title, "(1 object in scope)") {
+			t.Errorf("%s: title %q, want the scope's count of objects", p, f.Title)
+		}
+	}
+	if _, raw := fetch(t, ts, shared+"/export?format=csv", "pay-tok"); !bytes.Contains(raw, []byte("pay-prod")) {
+		t.Errorf("payments-scoped CSV export does not name payments' own namespace:\n%s", raw)
+	}
+
+	// The gate: the cluster's finding, and the PR's that the cluster's
+	// objects join, are cut alike; the PR's own object stays, and web's
+	// accepted object is suppressed out of sight.
+	for _, manifest := range []string{pspManifest, ingressManifest} {
+		for _, format := range []string{"", "&format=sarif", "&format=junit", "&format=gitlab-codequality"} {
+			q := "?target=1.35&fail-on=never&cluster=shared" + format
+			resp, raw := postGate(t, ts, q, "pay-tok", manifest, "application/x-yaml")
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("gate %s = %d %s", q, resp.StatusCode, raw)
+			}
+			if s := leaked(raw); s != "" {
+				t.Errorf("payments-scoped gate %s names %q:\n%s", q, s, raw)
+			}
+			if manifest == ingressManifest && (!bytes.Contains(raw, []byte("pr-ingress")) || !bytes.Contains(raw, []byte("pr-new-ns"))) {
+				t.Errorf("payments-scoped gate %s lost the PR's own object:\n%s", q, raw)
+			}
+			if format == "" && !bytes.Contains(raw, []byte("pay-ingress")) {
+				t.Errorf("payments-scoped gate %s lost payments' cluster object:\n%s", q, raw)
+			}
+			if format == "" && manifest == ingressManifest {
+				var body struct {
+					Findings []struct {
+						Key, Source string
+						Namespaces  []string
+						Objects     []struct{ Name string }
+					}
+				}
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Fatal(err)
+				}
+				var names []string
+				for _, f := range body.Findings {
+					if f.Key != "removed-api/extensions/v1beta1/Ingress" {
+						continue
+					}
+					for _, o := range f.Objects {
+						names = append(names, o.Name)
+					}
+					if f.Source != sourceManifest || !slices.Equal(f.Namespaces, []string{"pay-prod", "pr-new-ns"}) {
+						t.Errorf("gate's Ingress finding: source %s, namespaces %v, want the manifests', pay-prod and pr-new-ns", f.Source, f.Namespaces)
+					}
+				}
+				if slices.Sort(names); !slices.Equal(names, []string{"pay-ingress", "pr-ingress"}) {
+					t.Errorf("gate's Ingress objects = %v, want payments' and the PR's", names)
+				}
+			}
+		}
+		_, raw := postGate(t, ts, "?target=1.35&fail-on=never&cluster=shared", "fleet-tok", manifest, "application/x-yaml")
+		var body struct {
+			Suppressed []struct{ Objects []struct{ Name string } }
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Suppressed) == 0 || !bytes.Contains(raw, []byte("web-secret-reason")) {
+			t.Errorf("fleet-wide gate has no suppressed web object: the fixture does not test the cut:\n%s", raw)
+		}
+	}
+}
+
+// readScope.report cuts the suppressed findings as it cuts the findings:
+// one of another team's is left out, one spanning teams keeps only the
+// scope's objects, and one whose accepted objects are all another team's
+// is left out, though its finding spans the scope's team too. The
+// fleet-wide scope keeps every one.
+func TestScopeCutsSuppressedFindings(t *testing.T) {
+	ns := map[string]string{"pay-prod": "payments", "web-prod": "web"}
+	sup := func(teams, namespaces []string, objects ...inventory.ObjectRef) engine.SuppressedFinding {
+		return engine.SuppressedFinding{Finding: engine.Finding{
+			Category: engine.CatRemovedAPI, Severity: engine.SevBlocker, Key: "removed-api/x", Title: "x removed (2 objects)",
+			Detail: "2 object(s) still stored/served at this version.", Teams: teams, Namespaces: namespaces, Objects: objects,
+		}, Reason: "accepted", Source: "annotation"}
+	}
+	payObj := inventory.ObjectRef{Namespace: "pay-prod", Name: "pay-obj"}
+	webObj := inventory.ObjectRef{Namespace: "web-prod", Name: "web-obj"}
+	rep := engine.Report{Findings: []engine.Finding{}, Suppressed: []engine.SuppressedFinding{
+		sup([]string{"web"}, []string{"web-prod"}, webObj),
+		sup([]string{"payments", "web"}, []string{"pay-prod", "web-prod"}, payObj, webObj),
+		sup([]string{"payments", "web"}, []string{"pay-prod", "web-prod"}, webObj),
+		sup([]string{"payments"}, []string{"pay-prod"}, payObj),
+	}}
+
+	if got := fleetScope.report(rep, ns); len(got.Suppressed) != 4 {
+		t.Errorf("fleet-wide: %d suppressed findings, want all 4", len(got.Suppressed))
+	}
+	got := scopeOfTeams([]string{"payments"}).report(rep, ns).Suppressed
+	if len(got) != 2 {
+		t.Fatalf("payments: %d suppressed findings, want 2: %+v", len(got), got)
+	}
+	for _, f := range got {
+		raw, _ := json.Marshal(f)
+		if bytes.Contains(raw, []byte("web")) {
+			t.Errorf("payments' suppressed finding names web: %s", raw)
+		}
+		if len(f.Objects) != 1 || f.Objects[0] != payObj || f.Reason != "accepted" {
+			t.Errorf("payments' suppressed finding = %+v, want pay-obj, still accepted", f)
+		}
+	}
+	if got[1].Detail != rep.Suppressed[3].Detail {
+		t.Errorf("a suppressed finding of payments' only was rewritten: %q", got[1].Detail)
 	}
 }
 
@@ -468,8 +727,8 @@ func TestTrustedTeamHeader(t *testing.T) {
 			value string
 			want  []string
 		}{
-			{"payments", []string{"calm", "mixed"}},
-			{"web, other", []string{"mixed", "web"}},
+			{"payments", []string{"calm", "mixed", "shared"}},
+			{"web, other", []string{"mixed", "shared", "web"}},
 			// The header names teams only: "*" is a team nobody owns.
 			{"*", nil},
 		} {
@@ -483,7 +742,7 @@ func TestTrustedTeamHeader(t *testing.T) {
 			t.Errorf("from the proxy without the header = %d, want 401", resp.StatusCode)
 		}
 		// A token still reads as its own scope.
-		if _, raw := fetch(t, ts, "/api/v1/clusters", "pay-tok"); !slices.Equal(names(raw), []string{"calm", "mixed"}) {
+		if _, raw := fetch(t, ts, "/api/v1/clusters", "pay-tok"); !slices.Equal(names(raw), []string{"calm", "mixed", "shared"}) {
 			t.Errorf("a scoped token through the proxy = %v, want its own scope", names(raw))
 		}
 	})
@@ -496,7 +755,7 @@ func TestTrustedTeamHeader(t *testing.T) {
 				t.Errorf("%s: %s from 127.0.0.1 (proxies 10.0.0.0/8) = %d %s, want 401", header, value, resp.StatusCode, raw)
 			}
 			// With a valid scoped token, the spoofed header widens nothing.
-			if _, raw := fetch(t, ts, "/api/v1/clusters", "pay-tok", header, value); !slices.Equal(names(raw), []string{"calm", "mixed"}) {
+			if _, raw := fetch(t, ts, "/api/v1/clusters", "pay-tok", header, value); !slices.Equal(names(raw), []string{"calm", "mixed", "shared"}) {
 				t.Errorf("pay-tok with a spoofed %s: %s = %v, want the token's scope only", header, value, names(raw))
 			}
 		}
@@ -506,8 +765,8 @@ func TestTrustedTeamHeader(t *testing.T) {
 		req.Header.Set(header, "web")
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK || !slices.Equal(names(rec.Body.Bytes()), []string{"mixed", "web"}) {
-			t.Errorf("from 10.1.2.3 = %d %v, want 200 [mixed web]", rec.Code, names(rec.Body.Bytes()))
+		if rec.Code != http.StatusOK || !slices.Equal(names(rec.Body.Bytes()), []string{"mixed", "shared", "web"}) {
+			t.Errorf("from 10.1.2.3 = %d %v, want 200 [mixed shared web]", rec.Code, names(rec.Body.Bytes()))
 		}
 	})
 

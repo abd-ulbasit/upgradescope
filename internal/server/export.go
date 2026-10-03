@@ -74,7 +74,14 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	// computed from the whole report as the report endpoint's are.
 	sc := scopeOf(r)
 	teams := sc.renderedTeams(rep)
-	rep = sc.report(rep)
+	if !sc.fleet() {
+		ns, err := s.namespaceTeams(snap)
+		if err != nil {
+			internalErr(w, "decoding snapshot namespaces", err)
+			return
+		}
+		rep = sc.report(rep, ns)
+	}
 
 	// The export is at most maxReportBytes, as the report it renders is:
 	// HTML writes ' " & as five bytes and < > as four, and CSV doubles
