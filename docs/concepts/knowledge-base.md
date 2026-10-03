@@ -100,10 +100,13 @@ the horizon minor, until you upgrade to a release with a newer KB.
 - Registered types with no lifecycle markers and no release-note source are
   not judged, so they never block. A `scheduling.k8s.io/v1alpha3` Workload,
   PodGroup or CompositePodGroup (still served at 1.37) is an `unknown-api`
-  info, because the KB knows that group. `imagepolicy.k8s.io/v1alpha1`
-  ImageReview and `internal.apiserver.k8s.io/v1alpha1` StorageVersion are in
-  groups the KB has no entries for, so, like CRD groups, they produce no
-  finding at all.
+  info, and so are `imagepolicy.k8s.io/v1alpha1` ImageReview and
+  `internal.apiserver.k8s.io/v1alpha1` StorageVersion: the dataset lists
+  every group the generator's scheme registers (`k8s.io/api` plus the
+  apiextensions and apiregistration schemes, as `builtinGroups`), whether or
+  not it has entries, and a manifest of any of them the KB cannot place is an
+  `unknown-api` info. Only groups outside that list (CRDs, aggregated APIs)
+  produce no finding.
 - CRD versions served by your own or third-party CRDs (deprecated CRD
   versions and stale `status.storedVersions`) are not in the KB: they are
   judged from the CRDs themselves, deprecated and unserved versions live or

@@ -395,3 +395,73 @@ func TestEvalAPIUsageUnknownGVK(t *testing.T) {
 		t.Errorf("a known, current API must produce no findings, got %+v", fs)
 	}
 }
+
+// A built-in group is one the KB lists in BuiltinGroups even when it has no
+// lifecycle entry: internal.apiserver.k8s.io StorageVersion and
+// imagepolicy.k8s.io ImageReview are registered in k8s.io/api but carry no
+// lifecycle markers, so they gave no finding at all, like a CRD (#172). A
+// KB without the list (a dataset from before it) behaves as it did.
+func TestEvalAPIUsageUnknownGVKInGroupWithoutEntries(t *testing.T) {
+	inv := inventory.Inventory{
+		APIUsage: []inventory.APIUsage{
+			{Group: "internal.apiserver.k8s.io", Version: "v1alpha1", Kind: "StorageVersion", Count: 1,
+				Objects: []inventory.ObjectRef{{Name: "sv", File: "sv.yaml", Line: 1}}},
+			{Group: "imagepolicy.k8s.io", Version: "v1alpha1", Kind: "ImageReview", Count: 1,
+				Objects: []inventory.ObjectRef{{Name: "ir", File: "ir.yaml", Line: 1}}},
+			{Group: "cert-manager.io", Version: "v1", Kind: "Certificate", Count: 1},
+			{Group: "metrics.k8s.io", Version: "v1beta1", Kind: "PodMetrics", Count: 1},
+		},
+	}
+	target := inventory.Version{Major: 1, Minor: 34}
+
+	if fs := evalAPIUsage(inv, testKB(), target, nil); len(fs) != 0 {
+		t.Errorf("a KB without builtinGroups must keep today's behaviour, got %+v", fs)
+	}
+
+	k := testKB()
+	k.BuiltinGroups = []kb.BuiltinGroup{
+		{Group: "imagepolicy.k8s.io", Versions: []string{"v1alpha1"}},
+		{Group: "internal.apiserver.k8s.io", Versions: []string{"v1alpha1"}},
+	}
+	var got []string
+	for _, f := range evalAPIUsage(inv, k, target, nil) {
+		if f.Category != CatUnknownAPI || f.Severity != SevInfo {
+			t.Errorf("%s: %s/%s, want an unknown-api info", f.Key, f.Category, f.Severity)
+		}
+		got = append(got, f.Key+" | "+f.Title)
+	}
+	want := []string{
+		"unknown-api/internal.apiserver.k8s.io/v1alpha1/StorageVersion | internal.apiserver.k8s.io/v1alpha1 StorageVersion is not in the knowledge base (1 object)",
+		"unknown-api/imagepolicy.k8s.io/v1alpha1/ImageReview | imagepolicy.k8s.io/v1alpha1 ImageReview is not in the knowledge base (1 object)",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("findings = %q, want %q (CRD and aggregated groups stay silent)", got, want)
+	}
+}
+
+// The same against the shipped dataset: manifests of a registered type with
+// no lifecycle data are unknown-api infos, a CRD group's are silent.
+func TestEvalAPIUsageUnknownGVKEmbeddedKB(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := inventory.Inventory{
+		APIUsage: []inventory.APIUsage{
+			{Group: "internal.apiserver.k8s.io", Version: "v1alpha1", Kind: "StorageVersion", Count: 1},
+			{Group: "imagepolicy.k8s.io", Version: "v1alpha1", Kind: "ImageReview", Count: 1},
+			{Group: "cert-manager.io", Version: "v1", Kind: "Certificate", Count: 1},
+		},
+	}
+	var got []string
+	for _, f := range evalAPIUsage(inv, k, inventory.Version{Major: 1, Minor: 34}, nil) {
+		got = append(got, string(f.Severity)+" "+f.Key)
+	}
+	want := []string{
+		"info unknown-api/internal.apiserver.k8s.io/v1alpha1/StorageVersion",
+		"info unknown-api/imagepolicy.k8s.io/v1alpha1/ImageReview",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("findings = %q, want %q", got, want)
+	}
+}

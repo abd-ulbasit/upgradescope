@@ -23,9 +23,11 @@ const (
 	// CatAddOnNoData (info): a detected add-on whose version has no
 	// lifecycle data, so its EOL and compatibility were not assessed.
 	CatAddOnNoData Category = "addon-no-data"
-	// CatUnknownAPI (info): objects of a built-in API group (one the KB
-	// has entries for, core included) at a version/kind the KB does not
-	// know, so whether the target serves it was not assessed.
+	// CatUnknownAPI (info): objects of a built-in API group (core, or any
+	// group k8s.io/api registers: KB.BuiltinGroups and the groups of its
+	// entries) at a version/kind the KB does not know, so whether the
+	// target serves it was not assessed. CRD and aggregated groups
+	// produce nothing.
 	CatUnknownAPI Category = "unknown-api"
 	// CatCRDVersion: a CustomResourceDefinition version problem that
 	// breaks an add-on upgrade, whatever the Kubernetes target: custom

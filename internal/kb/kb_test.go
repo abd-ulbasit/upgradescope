@@ -152,13 +152,18 @@ func TestDatasetVersion(t *testing.T) {
 	}
 	const from = "k8s.io/api v0.37.1"
 
-	base, err := datasetVersion(from, entries(), addons())
+	base, err := datasetVersion(from, entries(), nil, addons())
 	if err != nil {
 		t.Fatalf("datasetVersion() error = %v", err)
 	}
-	again, _ := datasetVersion(from, entries(), addons())
+	again, _ := datasetVersion(from, entries(), nil, addons())
 	if base != again {
 		t.Errorf("datasetVersion not deterministic: %q vs %q", base, again)
+	}
+	// A dataset without built-in groups keeps the label it had before the
+	// field existed: the digest is over the bare entries.
+	if bare, _ := digest(entries()); !strings.Contains(base, "; lifecycle "+bare+";") {
+		t.Errorf("datasetVersion() = %q, want the lifecycle digest %s of the bare entries", base, bare)
 	}
 	if !strings.HasPrefix(base, from+"; lifecycle ") {
 		t.Errorf("datasetVersion() = %q, want prefix %q", base, from+"; lifecycle ")
@@ -172,10 +177,13 @@ func TestDatasetVersion(t *testing.T) {
 	tomb[0].RemovedInferred = true
 
 	for name, got := range map[string]func() (string, error){
-		"registry eol_date": func() (string, error) { return datasetVersion(from, entries(), synced) },
-		"lifecycle entry":   func() (string, error) { return datasetVersion(from, e, addons()) },
-		"tombstone flag":    func() (string, error) { return datasetVersion(from, tomb, addons()) },
-		"generatedFrom":     func() (string, error) { return datasetVersion("k8s.io/api v0.37.2", entries(), addons()) },
+		"registry eol_date": func() (string, error) { return datasetVersion(from, entries(), nil, synced) },
+		"lifecycle entry":   func() (string, error) { return datasetVersion(from, e, nil, addons()) },
+		"tombstone flag":    func() (string, error) { return datasetVersion(from, tomb, nil, addons()) },
+		"builtin group": func() (string, error) {
+			return datasetVersion(from, entries(), []BuiltinGroup{{Group: "imagepolicy.k8s.io", Versions: []string{"v1alpha1"}}}, addons())
+		},
+		"generatedFrom": func() (string, error) { return datasetVersion("k8s.io/api v0.37.2", entries(), nil, addons()) },
 	} {
 		v, err := got()
 		if err != nil {

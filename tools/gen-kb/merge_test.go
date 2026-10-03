@@ -5,7 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sort"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func v(major, minor int) *version { return &version{Major: major, Minor: minor} }
@@ -117,6 +121,51 @@ func TestReadDataset(t *testing.T) {
 	}
 	if _, err := readDataset(p); err == nil {
 		t.Error("readDataset(bad version) = nil error, want error")
+	}
+}
+
+// The dataset records every group k8s.io/api registers, with or without
+// lifecycle entries (internal.apiserver.k8s.io and imagepolicy.k8s.io have
+// none), plus the groups of carried-forward entries (#172).
+func TestBuiltinGroups(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range addToSchemes {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extra := []entry{
+		{Group: "gone.k8s.io", Version: "v1alpha1", Kind: "Gone", Introduced: *v(1, 30)},
+		{Group: "batch", Version: "v1beta9", Kind: "Gone", Introduced: *v(1, 30)},
+	}
+	got := map[string][]string{}
+	var order []string
+	for _, g := range builtinGroups(scheme, extra) {
+		got[g.Group] = g.Versions
+		order = append(order, g.Group)
+	}
+	if !sort.StringsAreSorted(order) {
+		t.Errorf("groups not sorted: %q", order)
+	}
+	for group, want := range map[string][]string{
+		"internal.apiserver.k8s.io": {"v1alpha1"},
+		"imagepolicy.k8s.io":        {"v1alpha1"},
+		"gone.k8s.io":               {"v1alpha1"},
+	} {
+		if !reflect.DeepEqual(got[group], want) {
+			t.Errorf("versions of %q = %q, want %q", group, got[group], want)
+		}
+	}
+	if vs, ok := got[""]; !ok || !slices.Contains(vs, "v1") {
+		t.Errorf("core group = %q, %v; want it registered with v1", vs, ok)
+	}
+	if vs := got["batch"]; !slices.Contains(vs, "v1") || !slices.Contains(vs, "v1beta9") || !sort.StringsAreSorted(vs) {
+		t.Errorf("batch versions = %q, want sorted, with v1 (registered) and v1beta9 (from an entry)", vs)
+	}
+	for group, vs := range got {
+		if slices.Contains(vs, runtime.APIVersionInternal) {
+			t.Errorf("group %q records the internal version", group)
+		}
 	}
 }
 

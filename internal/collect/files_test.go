@@ -7,9 +7,11 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
@@ -665,4 +667,36 @@ func FuzzScanManifestStream(f *testing.F) {
 			}
 		}
 	})
+}
+
+// Manifests of built-in groups the KB has no entries for are parsed into
+// the inventory and reported as unknown-api; a CRD group stays silent.
+func TestCollectFilesUnknownBuiltinGroup(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, _, err := CollectFiles(writeTree(t, map[string]string{
+		"storageversion.yaml": "apiVersion: internal.apiserver.k8s.io/v1alpha1\nkind: StorageVersion\nmetadata: {name: sv}\n",
+		"imagereview.yaml":    "apiVersion: imagepolicy.k8s.io/v1alpha1\nkind: ImageReview\nmetadata: {name: ir}\n",
+		"cert.yaml":           "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata: {name: c}\n",
+	}), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := evaluateAt(inv, k, "v1.33.0", inventory.Version{Major: 1, Minor: 34})
+	var got []string
+	for _, f := range rep.Findings {
+		if f.Category == engine.CatUnknownAPI {
+			got = append(got, string(f.Severity)+" "+f.Key)
+		}
+	}
+	slices.Sort(got)
+	want := []string{
+		"info unknown-api/imagepolicy.k8s.io/v1alpha1/ImageReview",
+		"info unknown-api/internal.apiserver.k8s.io/v1alpha1/StorageVersion",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("unknown-api findings = %q, want %q", got, want)
+	}
 }
