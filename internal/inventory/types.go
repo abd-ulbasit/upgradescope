@@ -51,7 +51,9 @@ type CapabilityStatus struct {
 	//     with no version tag, or any unread kube-apiserver,
 	//     kube-controller-manager or kube-scheduler pod. A kube-proxy pod
 	//     on a vendor image of another name (OKE's oke-public-kube-proxy)
-	//     is named in Reason only, so Skipped may be empty;
+	//     is named in Reason only, so Skipped may be empty. "nodes"
+	//     means the Node list was empty, so kubelet skew and node
+	//     runtimes were not assessed (#174);
 	//   - addons: resources not read for add-on evidence,
 	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses",
 	//     "v1 pods", SkippedPods);

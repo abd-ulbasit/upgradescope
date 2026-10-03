@@ -1565,7 +1565,9 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 				// could not be read (#169), which collect names in Skipped,
 				// may be the one past the skew policy: never READY on that.
 				// Partial naming none (a vendor kube-proxy image, OKE's) is
-				// disclosed, optional.
+				// disclosed, optional. "nodes" (no Node listed, #174) is
+				// required like a forbidden Node list: no kubelet was
+				// judged, and one past the policy would block.
 				g.Required = required[c] && len(st.Skipped) > 0
 			case inventory.CapAddOns:
 				// Without pods only Helm releases and IngressClasses speak:
