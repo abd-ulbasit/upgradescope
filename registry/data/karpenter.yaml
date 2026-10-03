@@ -7,10 +7,13 @@
 # matrix is cited for the reader, not encoded. Karpenter's own Helm chart
 # (name karpenter, chart and app version equal) is published as an OCI chart;
 # the CRD chart (karpenter-crd) has no pods. Known limit: Azure's
-# karpenter-provider-azure self-hosted chart is also named karpenter, with
-# version numbers that do not follow kubernetes-sigs/karpenter's release
-# lines, so a chart match cannot tell it apart (its image, under
-# mcr.microsoft.com, is not matched).
+# karpenter-provider-azure self-hosted chart is also named karpenter. Its
+# minors track core's (v1.10.2 vendors sigs.k8s.io/karpenter v1.10.0, v1.14.3
+# vendors v1.14.1: go.mod of github.com/Azure/karpenter-provider-azure), so
+# core's lines are a fair guide, but it is a different build with its own
+# patch releases. A chart match cannot tell it apart, so an Azure self-hosted
+# Helm release is judged by core's lines (its image, under mcr.microsoft.com,
+# is not matched).
 schema_version: 2
 id: karpenter
 display_name: Karpenter
