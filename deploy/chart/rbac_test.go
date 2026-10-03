@@ -24,6 +24,7 @@ import (
 	"k8s.io/component-helpers/auth/rbac/validation"
 	"sigs.k8s.io/yaml"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
@@ -349,6 +350,11 @@ func TestRenderedRBACDefault(t *testing.T) {
 		res("", "secrets", "get", "list"),    // rbac.helmSecrets defaults on: Helm secrets driver
 		res("", "configmaps", "get", "list"), // and configmaps driver
 		named(res("apiextensions.k8s.io", "customresourcedefinitions", "get", "update", "patch"), ourCRD),
+		// agent.manageCRD defaults on: the agent looks up the pre-v0.2.0
+		// CRD to say it can be deleted (#68). Granted by the KB rules'
+		// get/list on all CRDs, pinned here so a KB change cannot turn
+		// the check into a silent "could not check".
+		named(res("apiextensions.k8s.io", "customresourcedefinitions", "get"), crd.LegacyCRDName),
 	)
 	assertDenied(t, rules, neverAllowed...)
 	assertDenied(t, rules, res("", "secrets", "watch", "create", "update"))

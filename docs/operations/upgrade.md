@@ -419,17 +419,32 @@ per cluster.
 
 4. **Rewrite the annotations.** The scanner reads
    `upgradescope.dev/ignore` and `upgradescope.dev/ignore-reason` until
-   v0.3.0, warns for each object that carries them (on `scan`'s stderr,
-   in the gate's `warnings`, in the agent's `status.notAssessed`), and
-   prefers the new key when an object has both. Rename them where the
-   objects are defined, usually in Git:
+   v0.3.0 and prefers the new key when an object has both. When an old
+   annotation accepts a finding of the scan, one warning (on `scan`'s
+   stderr, in the gate's `warnings`, in the agent's `status.notAssessed`)
+   says the keys are deprecated and names the first five such objects,
+   counting the rest. It does not name an object whose old annotation
+   matches no current finding, nor one past the cap on listed objects
+   per finding, and those too lose their acceptance at v0.3.0, so find
+   them without the scanner. Rename the keys where the objects are
+   defined, usually in Git:
 
     ```sh
     git grep -lz 'upgradescope\.dev/ignore' | xargs -0 sed -i 's#upgradescope\.dev/ignore#upgradescope.basit.engineer/ignore#g'
     ```
 
-    and for an object only the cluster holds, each warning names it; one
-    `kubectl annotate` moves both keys (the value is the old one's):
+    List the objects in the cluster that still carry an old key (every
+    kind you may list, so it takes a while on a large cluster):
+
+    ```sh
+    kubectl api-resources --verbs=list -o name \
+      | xargs -n 1 kubectl get -A -o json 2>/dev/null \
+      | jq -r '.items[] | select(.metadata.annotations // {} | keys | any(startswith("upgradescope.dev/")))
+          | "\(.metadata.namespace // "-") \(.kind)/\(.metadata.name)"'
+    ```
+
+    For one that only the cluster holds, one `kubectl annotate` moves
+    both keys (the values are the old ones):
 
     ```sh
     kubectl annotate -n shop ingress/web --overwrite \
