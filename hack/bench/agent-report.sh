@@ -30,9 +30,10 @@ def summary: {
   wireMiB: (steady | map(.wireDownBytes + .wireUpBytes) | median | mib | r1),
   wallS: (steady | map(.wallMs) | median / 1000 | r1),
   collectS: (steady | map(.collectMs) | median / 1000 | r1),
+  cpuS: (steady | map(.cpuMs // 0) | median / 1000 | r1),
   peakHeapMiB: (steady | map(.peakHeapBytes) | max | mib | r1),
   maxRssMiB: (map(.maxRssBytes) | max | mib | r1),
-  firstTick: (.[0] | {requests, wallS: (.wallMs / 1000 | r1), bodyMiB: (.bodyBytes | mib | r1), wireMiB: ((.wireDownBytes + .wireUpBytes) | mib | r1), peakHeapMiB: (.peakHeapBytes | mib | r1)}),
+  firstTick: (.[0] | {requests, wallS: (.wallMs / 1000 | r1), cpuS: ((.cpuMs // 0) / 1000 | r1), bodyMiB: (.bodyBytes | mib | r1), wireMiB: ((.wireDownBytes + .wireUpBytes) | mib | r1), peakHeapMiB: (.peakHeapBytes | mib | r1)}),
   errors: (map(select(.error != null and .error != "")) | length)
 };'
 
@@ -44,11 +45,11 @@ fi
 echo
 echo "Per tick, by fill level (median of ticks after the first; heap is the peak live heap, RSS the process peak so far):"
 echo
-echo "| Fill | Nodes | Helm releases | Requests | LIST pods | GET secrets | Response MiB | Wire MiB | Wall s | Collect s | Peak heap MiB | Peak RSS MiB | First tick: requests, wall s, wire MiB |"
+echo "| Fill | Nodes | Helm releases | Requests | LIST pods | GET secrets | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB | First tick: requests, wall s, CPU s |"
 echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 jq -rs "$defs"'
   levels | map(summary)[] |
-  "| \(.fill) | \(.nodes) | \(.helmReleases) | \(.requests) | \(.listPods) | \(.getSecrets) | \(.bodyMiB) | \(.wireMiB) | \(.wallS) | \(.collectS) | \(.peakHeapMiB) | \(.maxRssMiB) | \(.firstTick.requests), \(.firstTick.wallS), \(.firstTick.wireMiB) |"' "$1"
+  "| \(.fill) | \(.nodes) | \(.helmReleases) | \(.requests) | \(.listPods) | \(.getSecrets) | \(.bodyMiB) | \(.wireMiB) | \(.wallS) | \(.cpuS) | \(.peakHeapMiB) | \(.maxRssMiB) | \(.firstTick.requests), \(.firstTick.wallS), \(.firstTick.cpuS) |"' "$1"
 
 echo
 echo "Requests by verb and resource at the last fill level (a steady tick):"

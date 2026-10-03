@@ -105,11 +105,13 @@ func TestBenchAgentTick(t *testing.T) {
 		proxy.resetBytes()
 		runtime.GC()
 		sampler := startBenchSampler()
+		cpu0 := cpuTime()
 		rep := r.runTick(ctx)
+		cpu := cpuTime() - cpu0
 		heap, sys := sampler.finish()
 		stats, total := rec.stats()
 		res := benchTick{
-			Label: label, Tick: n, WallMS: rep.duration.Milliseconds(), CollectMS: collectDur.Milliseconds(),
+			Label: label, Tick: n, WallMS: rep.duration.Milliseconds(), CollectMS: collectDur.Milliseconds(), CPUMS: cpu.Milliseconds(),
 			Requests: total, ByVerbResource: stats, BodyBytes: rec.bodyBytes.Load(),
 			WireDownBytes: proxy.down.Load(), WireUpBytes: proxy.up.Load(), Connections: proxy.conns.Load(),
 			PeakHeapBytes: heap, PeakRuntimeBytes: sys, MaxRSSBytes: maxRSSBytes(),
@@ -130,9 +132,9 @@ func TestBenchAgentTick(t *testing.T) {
 			}
 			res.Capabilities[string(c)] = state
 		}
-		t.Logf("tick %d: %d requests, %d MiB body, %d MiB wire, %v wall (%v collecting), peak heap %d MiB, max RSS %d MiB",
+		t.Logf("tick %d: %d requests, %d MiB body, %d MiB wire, %v wall (%v collecting, %v CPU), peak heap %d MiB, max RSS %d MiB",
 			n, res.Requests, res.BodyBytes>>20, res.WireDownBytes>>20, rep.duration.Round(time.Millisecond),
-			collectDur.Round(time.Millisecond), res.PeakHeapBytes>>20, res.MaxRSSBytes>>20)
+			collectDur.Round(time.Millisecond), cpu.Round(time.Millisecond), res.PeakHeapBytes>>20, res.MaxRSSBytes>>20)
 		if out != nil {
 			line, _ := json.Marshal(res)
 			fmt.Fprintf(out, "%s\n", line)
@@ -160,6 +162,7 @@ type benchTick struct {
 	Tick             int               `json:"tick"`
 	WallMS           int64             `json:"wallMs"`
 	CollectMS        int64             `json:"collectMs"`
+	CPUMS            int64             `json:"cpuMs"` // the process's CPU time (user and system) over the tick
 	Requests         int               `json:"requests"`
 	ByVerbResource   []requestStat     `json:"byVerbResource"`
 	BodyBytes        int64             `json:"bodyBytes"`        // response bodies as client-go read them (decompressed)

@@ -92,7 +92,7 @@ expect "agent.sh: a vanilla cluster, even a seeded one (fake nodes, bench namesp
 # --- agent-report.sh over fixture ticks -------------------------------------
 tick() { # tick <label> <n> <nodes> <requests> <wallMs> <getSecrets>
   jq -nc --arg label "$1" --argjson tick "$2" --argjson nodes "$3" --argjson req "$4" --argjson wall "$5" --argjson gets "$6" '{
-    label: $label, tick: $tick, wallMs: $wall, collectMs: ($wall - 100), requests: $req,
+    label: $label, tick: $tick, wallMs: $wall, collectMs: ($wall - 100), cpuMs: ($wall / 2), requests: $req,
     byVerbResource: [{verb: "GET", resource: "secrets", count: $gets}, {verb: "LIST", resource: "pods", count: 5}],
     bodyBytes: 10485760, wireDownBytes: 2097152, wireUpBytes: 1048576, connections: 1,
     peakHeapBytes: 52428800, peakRuntimeBytes: 83886080, maxRssBytes: (104857600 + $tick * 1048576),
@@ -109,8 +109,8 @@ tick() { # tick <label> <n> <nodes> <requests> <wallMs> <getSecrets>
 } >"$work/agent.jsonl"
 "hack/bench/agent-report.sh" "$work/agent.jsonl" >"$work/report" 2>&1 || true
 # The median of the steady ticks (after the first), the levels in order of size.
-if grep -qF "| 0 | 1 | 0 | 17 | 5 | 0 | 10 | 3 | 0.9 | 0.8 |" "$work/report" &&
-  grep -qF "| 1 | 2001 | 1000 | 1310 | 5 | 1000 | 10 | 3 | 21 | 20.9 |" "$work/report" &&
+if grep -qF "| 0 | 1 | 0 | 17 | 5 | 0 | 10 | 3 | 0.9 | 0.5 |" "$work/report" &&
+  grep -qF "| 1 | 2001 | 1000 | 1310 | 5 | 1000 | 10 | 3 | 21 | 10.5 |" "$work/report" &&
   [ "$(grep -n '^| 0 |' "$work/report" | head -1 | cut -d: -f1)" -lt "$(grep -n '^| 1 |' "$work/report" | head -1 | cut -d: -f1)" ]; then
   ok "agent-report.sh: medians of the ticks after the first, one row per level, smallest first"
 else
