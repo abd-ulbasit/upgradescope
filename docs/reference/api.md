@@ -21,7 +21,12 @@ minted for `*` read the whole fleet. A read token minted for teams, and
 the trusted proxy's header, read only those teams: the clusters one of
 them owns a namespace in (by the namespace attribution findings carry,
 after `--team-map`), and of those only their findings, suppressed
-findings and team scores. Any other cluster answers the same 404 as an
+findings and team scores. A finding that spans teams is cut to theirs:
+only their teams, namespaces and objects, its title counting only
+theirs and its detail replaced by one that names only what is kept.
+A scoped report has no `unrecognizedImages`, and the helm
+capability's reason and skipped list (which name releases as
+namespace/name) are withheld. Any other cluster answers the same 404 as an
 unknown one, on every per-cluster endpoint and for `/api/v1/gate`'s
 `?cluster=`, and is absent from the cluster list and fleet rollups.
 `/metrics` answers a team-scoped read 403. A scoped answer carries

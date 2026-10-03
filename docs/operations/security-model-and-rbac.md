@@ -146,8 +146,9 @@ cannot read is reported as not assessed.
   except where noted ([Tenancy and access control](tenancy.md)). Per-cluster
   ingest tokens and read tokens are stored as their sha256 hash and first 8
   characters; an ingest token can push only as its own cluster, and a read
-  token minted for teams reads only their clusters and findings (any other
-  cluster answers 404, as an unknown one does), never `/metrics`
+  token minted for teams reads only their clusters and findings, a finding
+  that spans teams cut to their namespaces and objects (any other cluster
+  answers 404, as an unknown one does), never `/metrics`
   ([Read access](auth.md)). The server refuses an open read API unless the
   address it actually bound is loopback, or it is told otherwise
   (`--allow-anonymous-read`). The `Bearer` scheme is matched
@@ -156,7 +157,10 @@ cannot read is reported as not assessed.
   `--trusted-proxy-cidr`, a read whose TCP peer is in those ranges takes its
   team scope from that header; from anywhere else the header is ignored. It
   is only as safe as the proxy: it must strip what clients send in that
-  header, and the ranges must hold the proxy and nothing else
+  header, and the ranges must hold the proxy and nothing else. Every
+  connection over loopback counts as the proxy when 127.0.0.1 is trusted:
+  `kubectl port-forward` and a mesh sidecar that delivers traffic over
+  localhost included
   ([Trusted team header](auth.md#trusted-team-header-trust-team-header)).
 - **Secrets never in argv.** Every token and the database URL can come from
   an environment variable or a file (`--read-token-file`, ...); the chart

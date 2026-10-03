@@ -56,7 +56,8 @@ so one minted or revoked takes effect at once, without a restart.
   last one does not open the read API again.
 - **`--read-token` keeps working** as a fleet-wide token, answering exactly
   what it answered before scoped tokens existed (a regression test
-  compares the bytes of every read endpoint).
+  compares the bytes of every read endpoint and the gate with the answers
+  the server gave before read scopes were added).
 - **A revoked token is refused** (`401`) from the next request on.
 
 ### What a team-scoped read sees
@@ -79,34 +80,93 @@ they are not the scope's to see. A team's score is still computed from
 the whole report, so the team's verdict is the one the fleet-wide view
 shows.
 
+**A finding that spans teams is cut to the scope.** The engine reports
+one finding per API, add-on or release line, over every namespace it is
+used in: one `extensions/v1beta1` Ingress finding covers payments' and
+web's Ingresses alike. A payments-scoped read gets that finding with
+payments' teams, payments' namespaces (by the same namespace→team
+mapping, after `--team-map`) and the objects in them only. A namespace
+no team is attributed counts as another team's and is cut too. Its title
+counts payments' objects ("(1 object in scope)") when the finding listed
+every object, and otherwise drops the count. Its detail, which the engine
+writes about everything the finding covers (each namespace's count, the
+managers writing the objects, the add-on installs), is replaced by a
+sentence that names the namespaces kept and says the rest is not shown.
+The engine caps a finding's lists (100 namespaces, 100 objects) before
+anyone reads it, and what the cap dropped cannot be divided by team, so
+a cut finding counts none omitted and says more of the scope's may be
+affected than it lists. Its key, severity, remediation and citations are
+unchanged. A suppressed finding is cut the same way, and one whose
+accepted objects are all another team's is left out. A finding wholly the
+scope's is served exactly as the fleet-wide view serves it.
+
 **What stays.** What describes the cluster as a whole: its name, version,
 score, verdict, blocker and warning counts, capability gaps, and score
-history.
+history. Two parts of the cluster's description name workloads and are
+not shown:
+
+- **Unrecognized images** (`unrecognizedImages`): image repositories no
+  add-on matcher claims, collected cluster-wide and attributed to no
+  namespace, so a scoped read gets none.
+- **The helm capability's own words**: when the Helm collector could not
+  read some releases, its reason and skipped list name them as
+  `namespace/name`. A scoped read gets the gap (capability, required,
+  partial) with the reason replaced and the skipped list withheld, in
+  reports, exports, cluster summaries and the cluster's capability map.
+  The other collectors' gaps name APIs, components and resources, and
+  are shown whole.
 
 **Everything else is hidden.** A cluster outside the scope answers `404`
 with the same body as a cluster id that does not exist, on every
-per-cluster endpoint and for `/api/v1/gate?cluster=`, so neither its name
-nor its id can be probed. It is absent from `/clusters`, `/fleet` and
-`/fleet/teams`.
+per-cluster endpoint and for `/api/v1/gate?cluster=`, so its name cannot
+be probed by its answer. It is absent from `/clusters`, `/fleet` and
+`/fleet/teams`. The answer is the same, the time it takes is not quite:
+an id that exists but is out of scope costs one more store query than an
+unknown one, so a patient caller could tell the two apart by timing.
+Cluster ids are sequential and say nothing but how many clusters were
+registered; what the 404 keeps from a scoped caller is the cluster's
+name and data.
 
 | Endpoint | A team-scoped read |
 |---|---|
-| `GET /api/v1/clusters` | in-scope clusters only |
-| `GET /api/v1/clusters/{id}` | `404` outside the scope |
-| `GET /api/v1/clusters/{id}/report` (stored or what-if) | `404` outside the scope; the scope's findings and team scores |
-| `GET /api/v1/clusters/{id}/findings` | `404` outside the scope; the scope's findings |
+| `GET /api/v1/clusters` | in-scope clusters only, the helm gap's reason and skipped list withheld |
+| `GET /api/v1/clusters/{id}` | `404` outside the scope; the helm capability's reason and skipped list withheld |
+| `GET /api/v1/clusters/{id}/report` (stored or what-if) | `404` outside the scope; the scope's findings, cut to it, and team scores; no unrecognized images |
+| `GET /api/v1/clusters/{id}/findings` | `404` outside the scope; the scope's findings, cut to it |
 | `GET /api/v1/clusters/{id}/teams` | `404` outside the scope; the scope's teams |
 | `GET /api/v1/clusters/{id}/history` | `404` outside the scope; the cluster's scores |
-| `GET /api/v1/clusters/{id}/export` (CSV, HTML) | `404` outside the scope; the scope's findings and teams |
+| `GET /api/v1/clusters/{id}/export` (CSV, HTML) | `404` outside the scope; the scope's findings, cut to it, and teams |
 | `GET /api/v1/fleet` | in-scope clusters only |
 | `GET /api/v1/fleet/teams` | in-scope clusters, the scope's teams |
-| `POST /api/v1/gate` | without `?cluster=`: as fleet-wide, it reads no stored data. With `?cluster=`: `404` outside the scope; of the cluster's findings, the scope's. The manifests' own findings and the verdict are unchanged |
+| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope; of the cluster's findings, the scope's, and every finding (the manifests' too, which the cluster's objects at the same API join) cut to the scope's namespaces and objects plus what the manifests themselves hold (their objects, the namespaces they name and those namespaces' teams); the scope's team scores; the manifests' unrecognized images only. The verdict, which judges only what the manifests introduce, is unchanged |
 | `GET /api/v1/registry` | as fleet-wide: the public knowledge base |
 | `GET /metrics` | `403`: its per-cluster series name every cluster, so it takes a fleet-wide credential (Prometheus gets `--read-token` or a `*` token) |
 
 Every scoped answer carries `X-Upgradescope-Teams: <team,...>`, and the
 dashboard says "Showing teams ... only" while it is set. A fleet-wide
 answer carries no such header.
+
+Every read that presents a bearer other than `--read-token` or the admin
+token looks it up in the store (an indexed query on its hash), and while
+no read token has been minted an open read API lists them once per read,
+before the read and fleet concurrency limits apply. Requests with random
+bearers therefore each cost a store query; put the server behind a proxy
+that rate-limits unauthenticated clients if that matters to you.
+
+### With the Helm chart
+
+The chart has no values for the trusted header yet: add
+`--trust-team-header` and `--trusted-proxy-cidr` with your own manifest
+(the [example](#example-oauth2-proxy-as-a-sidecar)) or a post-renderer.
+Read tokens minted with `tokens create --read` work with the chart as it
+is (`kubectl exec deploy/<release>-server -- /upgradescope tokens create
+--read --teams payments --db /data/upgradescope.sqlite`). Its Ingress
+guard knows only `server.readToken` and `server.ingress.allowAnonymousRead`:
+a deployment that relies on minted tokens alone sets
+`server.ingress.allowAnonymousRead=true`, which passes
+`--allow-anonymous-read`. That is safe once the first read token is
+minted (the read API is closed from then on, for good) and open until
+then, so mint one before enabling the Ingress.
 
 ## Putting the dashboard behind SSO
 
@@ -133,8 +193,16 @@ Three patterns, from simplest to most integrated:
    each person's scope, and the server trusts it only from the proxy.
 
 With any of them, do not let the proxy overwrite the `Authorization`
-header (oauth2-proxy's `--pass-authorization-header` and
-`--set-authorization-header` do): the server reads tokens from it. Keep
+header: the server reads tokens from it. oauth2-proxy sets it on the
+upstream request only when told to: `--pass-authorization-header` (the
+ID token as a bearer), or `--pass-basic-auth` (on by default) together
+with a `--basic-auth-password`; in `auth_request` setups,
+`--set-authorization-header` and `--set-basic-auth` put it on the auth
+response, which the ingress may copy upstream. The example sets
+`--pass-basic-auth=false` and none of the others, and its test fails if
+one appears. To check yours, send a fleet-wide token through the proxy
+after signing in (`curl -H 'Authorization: Bearer <token>' --cookie ...
+https://<host>/metrics` must answer 200, which no team scope does). Keep
 cluster administration off the proxied path: the admin token belongs to
 operators and their CLI, not to the dashboard.
 
@@ -172,6 +240,23 @@ The two flags go together, and the mode is off by default.
     `curl -H 'X-Forwarded-Groups: other-team' https://<host>/api/v1/clusters`
     after signing in, which must not list `other-team`'s clusters.
 
+    **Everything that arrives from a trusted address is the proxy.** With
+    `--trusted-proxy-cidr=127.0.0.1/32` that is every connection made
+    over the pod's loopback, not only the sidecar's:
+
+    - `kubectl port-forward` to the server's pod delivers its connections
+      from `127.0.0.1`, so anyone allowed `pods/portforward` in the
+      server's namespace can send the header to port 8080 and read any
+      team they can name (never the whole fleet: `*` is a team). Treat
+      that permission as read access to every team, or keep it to the
+      people who already have it.
+    - A service-mesh sidecar (Istio, Linkerd and others) that delivers
+      inbound traffic to the application over localhost makes every
+      client, inside or outside the cluster, `127.0.0.1`: the header
+      would then be trusted from anyone. Keep the server's pod out of the
+      mesh (the example sets `sidecar.istio.io/inject: "false"` and
+      `linkerd.io/inject: disabled`).
+
 Map identity-provider groups to team names: the header's values are
 compared with the teams namespaces are attributed to, exactly. With
 oauth2-proxy, `--oidc-groups-claim` picks the claim and `--allowed-group`
@@ -183,7 +268,10 @@ limits who may sign in at all.
 runs oauth2-proxy in the server's pod. It reaches the server on
 `127.0.0.1`, the only address the server trusts the header from
 (`--trusted-proxy-cidr=127.0.0.1/32`), so no other pod, node or client
-can set a scope, whatever the network allows. Two Services:
+that reaches the server over the network can set a scope, whatever the
+network allows. What reaches it over loopback can, which is why the
+danger box below names port-forwarding and mesh sidecars, and why the
+pod opts out of Istio and Linkerd sidecar injection. Two Services:
 
 - `upgradescope` (port 80) is the proxy, for people: point your Ingress
   and the OIDC client's redirect URL (`https://<host>/oauth2/callback`)

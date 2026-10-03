@@ -3,7 +3,8 @@
 One server holds one fleet. Reads can be scoped to teams: a read token
 minted for some teams, or an authenticating proxy's team header, reads
 only the clusters those teams own a namespace in and, of those, only their
-findings and team scores ([Read access](auth.md)). Teams are the
+findings and team scores, a finding that spans teams cut to their
+namespaces and objects ([Read access](auth.md)). Teams are the
 attribution findings already carry (a namespace label, or the server's
 `--team-map`). The server has no users or roles, and one database holds
 every team's data, so tenants that must not share a server or a database

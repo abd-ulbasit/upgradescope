@@ -37,6 +37,16 @@ helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
   (SQLite and Postgres alike). Back it up first
   ([Retention and backup](retention-and-backup.md)); an older server
   cannot read a newer schema.
+- **Team-scoped reads (0.2.0).** The migration that adds read tokens also
+  records, with every evaluation, the teams it names. Evaluations written
+  before it have none, so the first start re-evaluates every stored
+  evaluation once, in its startup pass: about the cost of one knowledge
+  base change across the fleet. Until the pass reaches a cluster, its
+  evaluations read `outdated: true` and no team-scoped token sees it;
+  fleet-wide reads are unaffected. `serve` decides whether its read API is
+  open only after opening (and so migrating) the database, since minted
+  read tokens live there: a first start that refuses an open read API on
+  an exposed address has already migrated it.
 - **Agents and servers** can be upgraded in either order (from v0.1.x,
   upgrade the server first when a cluster name is invalid, and run both
   `clusters list` and `clusters rename` from the upgraded binary:

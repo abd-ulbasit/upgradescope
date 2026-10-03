@@ -55,7 +55,9 @@ chart at it.
 **Can teams see only their own clusters on the server?**
 Yes. A read token minted with
 `upgradescope tokens create --read --teams payments` reads only the clusters payments owns a namespace in, and only
-payments' findings and team scores; any other cluster answers 404. An
+payments' findings and team scores; a finding that also covers other
+teams' namespaces is cut to payments' namespaces and objects, and any other
+cluster answers 404. An
 authenticating proxy's group header can set the scope instead. Tenants
 that must not share a database still need one server each.
 [Read access](operations/auth.md).
