@@ -256,6 +256,21 @@ func TestKeepCarriedOverLimitKeepsTheEvaluation(t *testing.T) {
 	}
 }
 
+// TestWithCarriedIsJSON: the carried heads go into any JSON object,
+// the empty one included.
+func TestWithCarriedIsJSON(t *testing.T) {
+	carried := []findingHead{{Category: "eol-addon", Severity: "blocker", Key: "eol-addon/argo-cd/2.10"}}
+	for _, report := range []string{`{}`, `{"findings":[]}`} {
+		b, err := withCarried([]byte(report), carried)
+		if err != nil {
+			t.Fatalf("%s: %v", report, err)
+		}
+		if heads, err := storedFindingHeads(b); err != nil || len(heads.CarriedForward) != 1 {
+			t.Errorf("%s → %s: heads %+v, %v; want the carried head", report, b, heads, err)
+		}
+	}
+}
+
 // scrapedAt is inv as scraped at collected from an apiserver started at
 // started.
 func scrapedAt(inv inventory.Inventory, started, collected time.Time) inventory.Inventory {
@@ -325,6 +340,32 @@ func TestAPIServerUpLongEnoughResolvesCallers(t *testing.T) {
 	h.clock.set(aug1.Add(time.Hour))
 	h.push("prod", scrapedAt(callsScraped(testInventory()), h.clock.now().Add(-deprecatedCallsWarmup), h.clock.now()))
 	expectBecameReady(t, h, "scrape of an apiserver up for the window")
+}
+
+// TestStaleCarriedEvaluationWithoutSinksRefreshes: with no sinks, a pass
+// carries nothing, and an unchanged re-evaluation of an evaluation stored
+// with carried findings (sinks removed since) is a refresh, not a new
+// history point.
+func TestStaleCarriedEvaluationWithoutSinksRefreshes(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withServiceCIDRCaller(testInventory()))
+	h.push("prod", callsUnavailable(testInventory()))
+	h.drain()
+	history := func() int {
+		points, err := h.st.ScoreHistory(context.Background(), h.clusterID("prod"), "1.35", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(points)
+	}
+	before := history()
+
+	h.srv.sinks = nil
+	h.clock.set(aug1.Add(24 * time.Hour))
+	h.tick()
+	if after := history(); after != before {
+		t.Fatalf("history points after an unchanged re-evaluation = %d, want %d", after, before)
+	}
 }
 
 // imageArgoInventory is Argo CD at version, found through its images,

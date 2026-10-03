@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -403,7 +404,10 @@ func withCarried(report []byte, carried []findingHead) ([]byte, error) {
 	}
 	out := make([]byte, 0, len(report)+len(b)+len(`,"carriedForward":`))
 	out = append(out, report[:len(report)-1]...)
-	out = append(out, `,"carriedForward":`...)
+	if len(bytes.TrimSpace(report[1:len(report)-1])) > 0 {
+		out = append(out, ',') // after the report's own members
+	}
+	out = append(out, `"carriedForward":`...)
 	out = append(out, b...)
 	return append(out, '}'), nil
 }

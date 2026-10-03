@@ -504,11 +504,13 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		// one, the baseline deltaFor would load again: evaluations are
 		// only added to the latest snapshot, so none is newer. An
 		// unchanged result (below) has no changes, but may carry less.
+		// Without sinks nothing is carried, and what the row carried is
+		// not compared: no notification reads that baseline.
 		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
 		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, evalInv))
 		d.carried = s.keepCarried(&e, d.carried)
 		batch.Current[target.String()] = cur.ID // 0 when not found
-		if decoded && sameResult(cur, stored.Findings, rep) && sameHeads(stored.CarriedForward, d.carried) {
+		if decoded && sameResult(cur, stored.Findings, rep) && (len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)
 			continue
