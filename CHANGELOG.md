@@ -263,7 +263,8 @@ a CI gate.
   273 KiB (#191).
 - The agent refuses `--interval 0` (minimum 1m, as for any other value
   below it) and a `--cr-name` that is not an RFC 1123 subdomain, at
-  startup, instead of failing every tick (#192).
+  startup, instead of failing every tick (#192). The chart's values schema
+  refuses the same names, and more than 8 `agent.targets`, at install.
 - After at least 3 failed ticks in a row, and once the last success is
   older than twice the interval plus 12 minutes, the agent stops exporting
   its verdict, score, finding and capability gauges, so
