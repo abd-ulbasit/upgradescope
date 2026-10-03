@@ -200,6 +200,12 @@ func TestClaimConflicts(t *testing.T) {
 		{"a second any-prefix matcher on the same name", entry("mine", []string{"*/etcd"}, nil), `"*/etcd"`},
 		{"an any-prefix matcher on another name", entry("mine", []string{"*/my-thing"}, nil), ""},
 		{"an etcd-prefixed repository is not etcd", entry("mine", []string{"acme/etcd-backup"}, nil), ""},
+		// labelAddOn reads a pod's app.kubernetes.io/name against both an
+		// entry's id and its chart names, so an id equal to another entry's
+		// chart would make one label name two add-ons.
+		{"an id equal to another entry's chart name", entry("istiod", []string{"acme/mesh"}, nil), `id "istiod"`},
+		{"a chart equal to another entry's id", entry("mine", nil, []string{"istio"}), `also a chart name of mine`},
+		{"an entry's own id as its chart is fine", entry("mine", nil, []string{"mine"}), ""},
 		{"same chart", entry("mine", []string{"acme/thing"}, []string{"cert-manager"}), `chart "cert-manager"`},
 		{"a provider build is not an upstream claim", entry("mine", []string{"mcr.microsoft.com/oss/calico/node"}, nil), ""},
 		{"a replacement of the claiming entry itself", entry("cilium", []string{"cilium/operator"}, nil), ""},

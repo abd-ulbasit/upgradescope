@@ -185,7 +185,9 @@ single `<id>.yaml` file or a directory of them, in the schema above.
   matcher claims an image or chart that an embedded entry of another id
   already claims (the same repository, or a longer mirror path of it) stops
   the command at start, naming both entries: replace the embedded entry
-  instead, by using its id.
+  instead, by using its id. An `id` that is another entry's chart name (or
+  a chart that is another entry's id) is refused the same way, because a
+  pod's `app.kubernetes.io/name` label names an add-on by either.
 - The entries are part of the knowledge base version a report carries.
 - `serve` judges what agents push and what `/gate` is posted against its
   own registry: give it the same `--registry-dir` as the agents. In the

@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -61,6 +62,15 @@ func ClaimConflicts(addons []AddOn) []error {
 					if ca == cb {
 						errs = append(errs, fmt.Errorf("registry: %s and %s both match chart %q; a chart may belong to one entry only (replace the embedded entry by using its id)", a.ID, b.ID, ca))
 					}
+				}
+			}
+			// A pod's app.kubernetes.io/name label names an add-on by its id
+			// or by a chart name alike, so one entry's id equal to another's
+			// chart would let a single label name two add-ons.
+			for _, pair := range [][2]AddOn{{a, b}, {b, a}} {
+				id, other := pair[0].ID, pair[1]
+				if slices.Contains(other.Matchers.Charts, id) {
+					errs = append(errs, fmt.Errorf("registry: the id %q of %s is also a chart name of %s; a label may name one entry only (rename the entry or drop the chart)", id, pair[0].ID, other.ID))
 				}
 			}
 		}
