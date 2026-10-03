@@ -80,8 +80,12 @@ func TestCollectVersionsControlPlane(t *testing.T) {
 		cpPod("kube-proxy-abc12", map[string]string{"k8s-app": "kube-proxy"}, "registry.k8s.io/kube-proxy:v1.34.2"),
 		// EKS-style build-suffix tag normalizes to a parseable version.
 		cpPod("kube-proxy-def34", map[string]string{"k8s-app": "kube-proxy"}, "602401143452.dkr.ecr.us-east-1.amazonaws.com/eks/kube-proxy:v1.33.0-eksbuild.1"),
-		// unparseable tag → skipped, not an error.
-		cpPod("kube-scheduler-cp2", nil, "registry.k8s.io/kube-scheduler:latest"),
+		// per-architecture image names (GKE's kube-proxy, older kubeadm) → read (#169).
+		cpPod("kube-proxy-gke-pool-1-abcd", map[string]string{"component": "kube-proxy"}, "gke.gcr.io/kube-proxy-amd64:v1.32.0-gke.1000"),
+		cpPod("kube-controller-manager-cp2", map[string]string{"component": "kube-controller-manager"}, "k8s.gcr.io/kube-controller-manager-arm64:v1.33.1"),
+		// a pod named like a component running another image → not that component, silently.
+		cpPod("kube-scheduler-extender-x1", nil, "example.com/kube-scheduler-extender:v1.0.0"),
+		cpPod("kube-proxy-sidecar-x1", nil, "example.com/kube-proxy-sidecar:v2.0.0"),
 		// unrelated kube-system pod → ignored.
 		cpPod("coredns-12345", map[string]string{"k8s-app": "kube-dns"}, "registry.k8s.io/coredns/coredns:v1.11.1"),
 	)
@@ -95,13 +99,141 @@ func TestCollectVersionsControlPlane(t *testing.T) {
 	want := []inventory.ComponentVersion{
 		{Component: "kube-apiserver", Version: "v1.33.0"},
 		{Component: "kube-apiserver", Version: "v1.34.2"},
+		{Component: "kube-controller-manager", Version: "v1.33.1"},
 		{Component: "kube-controller-manager", Version: "v1.34.2"},
+		{Component: "kube-proxy", Version: "v1.32.0"},
 		{Component: "kube-proxy", Version: "v1.33.0"},
 		{Component: "kube-proxy", Version: "v1.34.2"},
 		{Component: "kube-scheduler", Version: "v1.34.2"},
 	}
 	if !reflect.DeepEqual(inv.ControlPlane, want) {
 		t.Errorf("ControlPlane =\n%+v\nwant sorted+deduped\n%+v", inv.ControlPlane, want)
+	}
+}
+
+// A control-plane or kube-proxy pod whose version cannot be read — a
+// digest-only or non-version tag on the component's image, or a pod
+// labelled as the component that runs a vendor image of another name (a
+// wrapper image) — leaves the versions capability partial, naming the
+// components and the first such pod, rather than being dropped silently
+// (#169). Skipped names only the components whose skew upstream would have
+// told (the scheduler's latest and digest-only images), not kube-proxy's
+// vendor image, so only that part is a required gap, and the reason names
+// the first pod of a required component. The versions that were read are
+// still recorded.
+func TestCollectVersionsUnreadableControlPlaneVersionIsPartial(t *testing.T) {
+	cs := kubefake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		cpPod("kube-apiserver-cp1", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2"),
+		cpPod("kube-scheduler-cp2", nil, "registry.k8s.io/kube-scheduler:latest"),
+		cpPod("kube-scheduler-cp1", map[string]string{"component": "kube-scheduler"}, "registry.k8s.io/kube-scheduler@sha256:4f8bd1ec8bb2e6a5fcd4b4bbc6e4d5b0fdcb7f0f8a1c8c3f63b5f7f2b1a3c9d1"),
+		cpPod("kube-proxy-abc12", map[string]string{"k8s-app": "kube-proxy"}, "registry.example.com/platform/proxy-wrapper:2.1"),
+		// named like a component, no label, another image: not that component, no gap.
+		cpPod("kube-scheduler-extender-x1", nil, "example.com/kube-scheduler-extender:v1.0.0"),
+	)
+	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+	disc.FakedServerVersion = &version.Info{GitVersion: "v1.34.2"}
+
+	var inv inventory.Inventory
+	err := collectVersions(context.Background(), disc, cs, "team", &inv)
+	var pe partialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want a partialError", err)
+	}
+	// The reason names the first pod of a required component, the one to
+	// fix, not the alphabetically earlier vendor kube-proxy.
+	const wantMsg = "version not read from 3 control-plane pod(s) (kube-proxy, kube-scheduler), first kube-system/kube-scheduler-cp1: " +
+		"kube-scheduler image registry.k8s.io/kube-scheduler@sha256:4f8bd1ec8bb2e6a5fcd4b4bbc6e4d5b0fdcb7f0f8a1c8c3f63b5f7f2b1a3c9d1 has no version tag; their skew was not evaluated"
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"kube-scheduler"}) || pe.msg != wantMsg {
+		t.Errorf("partial = %v, skipped = %q, reason =\n%q\nwant incomplete, [kube-scheduler],\n%q", pe.incomplete, pe.skipped, pe.msg, wantMsg)
+	}
+	if want := []inventory.ComponentVersion{{Component: "kube-apiserver", Version: "v1.34.2"}}; !reflect.DeepEqual(inv.ControlPlane, want) {
+		t.Errorf("ControlPlane = %+v, want %+v", inv.ControlPlane, want)
+	}
+
+	// Collect surfaces it as a partial capability, still available.
+	got := Collect(context.Background(), Clients{Kube: cs, Discovery: disc}, kb.KB{}, Options{}).Capabilities[inventory.CapVersions]
+	if !got.Available || !got.Partial || got.Reason != wantMsg {
+		t.Errorf("versions capability = %+v, want available, partial, with the reason", got)
+	}
+}
+
+// RKE2 runs every control-plane component and kube-proxy from one image,
+// rancher/hardened-kubernetes, tagged with the Kubernetes version: its
+// static pods' versions are read, so its skew is judged rather than every
+// component being a gap.
+func TestCollectVersionsRKE2HardenedKubernetes(t *testing.T) {
+	const image = "docker.io/rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101"
+	cs := kubefake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		cpPod("kube-apiserver-cp1", map[string]string{"component": "kube-apiserver"}, image),
+		cpPod("kube-controller-manager-cp1", map[string]string{"component": "kube-controller-manager"}, image),
+		cpPod("kube-scheduler-cp1", map[string]string{"component": "kube-scheduler"}, image),
+		cpPod("kube-proxy-worker1", map[string]string{"component": "kube-proxy"}, "docker.io/rancher/hardened-kubernetes:v1.33.6-rke2r1-build20251101"),
+	)
+	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+	disc.FakedServerVersion = &version.Info{GitVersion: "v1.34.2+rke2r1"}
+	var inv inventory.Inventory
+	if err := collectVersions(context.Background(), disc, cs, "team", &inv); err != nil {
+		t.Fatalf("err = %v, want every version read", err)
+	}
+	want := []inventory.ComponentVersion{
+		{Component: "kube-apiserver", Version: "v1.34.2"},
+		{Component: "kube-controller-manager", Version: "v1.34.2"},
+		{Component: "kube-proxy", Version: "v1.33.6"},
+		{Component: "kube-scheduler", Version: "v1.34.2"},
+	}
+	if !reflect.DeepEqual(inv.ControlPlane, want) {
+		t.Errorf("ControlPlane = %+v, want %+v", inv.ControlPlane, want)
+	}
+}
+
+// The reasons a pod's version is unreadable name the image.
+func TestComponentImageTagUnreadableReasons(t *testing.T) {
+	for _, tc := range []struct {
+		image, tag, why string
+	}{
+		{"registry.k8s.io/kube-scheduler:v1.34.2", "v1.34.2", ""},
+		{"registry.k8s.io/kube-scheduler:v1.34.2@sha256:abc", "v1.34.2", ""},
+		{"gke.gcr.io/kube-scheduler-amd64:v1.32.0-gke.1000", "v1.32.0", ""},
+		{"docker.io/rancher/hardened-kubernetes:v1.34.2-rke2r1-build20260101", "v1.34.2", ""},
+		{"projects.registry.vmware.com/tkg/kube-scheduler:v1.28.7_vmware.1", "v1.28.7", ""}, // TKG: Docker tags cannot hold '+'
+		{"registry.k8s.io/kube-scheduler@sha256:abc", "", "kube-scheduler image registry.k8s.io/kube-scheduler@sha256:abc has no version tag"},
+		{"registry.k8s.io/kube-scheduler:latest", "", `kube-scheduler image registry.k8s.io/kube-scheduler:latest has tag "latest", not a version`},
+		{"registry.k8s.io/kube-scheduler", "", "kube-scheduler image registry.k8s.io/kube-scheduler has no version tag"},
+		{"example.com/kube-scheduler-extender:v1.0.0", "", ""},
+		{"example.com/kube-scheduler-mips:v1.0.0", "", ""},
+		{"k8s.gcr.io/hyperkube:v1.18.20", "v1.18.20", ""}, // pre-1.19: one image ran every component
+		{"gcr.io/google-containers/hyperkube-amd64:v1.15.12", "v1.15.12", ""},
+		// scheduler-plugins' kube-scheduler carries its own version, whose
+		// minor is the Kubernetes minor it is compiled with: v0.29.7 is
+		// built on v1.29.7, and a three-digit patch (v0.18.800) changed
+		// plugin code only, so only the minor is read.
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v0.29.7", "v1.29.7", ""},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v0.31.8-rc.1", "v1.31.8", ""},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v0.18.800", "v1.18.0", ""},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler@sha256:abc", "", "kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler@sha256:abc has no version tag"},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:latest", "", `kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler:latest has tag "latest", not a scheduler-plugins version (v0.<minor>.<patch>)`},
+		{"registry.k8s.io/scheduler-plugins/kube-scheduler:v1.0.0", "", `kube-scheduler image registry.k8s.io/scheduler-plugins/kube-scheduler:v1.0.0 has tag "v1.0.0", not a scheduler-plugins version (v0.<minor>.<patch>)`},
+		// No Kubernetes release is 0.x: a v0 kube-scheduler tag is a
+		// scheduler-plugins build, also when a mirror dropped that path.
+		{"myreg.example.com/kube-scheduler:v0.31.8", "v1.31.8", ""},
+	} {
+		tag, why := componentImageTag([]corev1.Container{{Image: tc.image}}, "kube-scheduler")
+		if tag != tc.tag || why != tc.why {
+			t.Errorf("%s: tag %q, why %q; want %q, %q", tc.image, tag, why, tc.tag, tc.why)
+		}
+	}
+}
+
+// Any other component tagged 0.x is no Kubernetes version (#169 review):
+// it reads as unreadable, not as Kubernetes 0.x, which would be a false
+// skew blocker.
+func TestComponentImageTagRejectsMajorZero(t *testing.T) {
+	tag, why := componentImageTag([]corev1.Container{{Image: "myreg.example.com/kube-proxy:v0.31.8"}}, "kube-proxy")
+	want := `kube-proxy image myreg.example.com/kube-proxy:v0.31.8 has tag "v0.31.8", not a Kubernetes version (no release is 0.x)`
+	if tag != "" || why != want {
+		t.Errorf("tag %q, why %q; want \"\", %q", tag, why, want)
 	}
 }
 

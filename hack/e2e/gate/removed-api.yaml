@@ -1,0 +1,11 @@
+# An Ingress at extensions/v1beta1, removed in Kubernetes 1.22: the gate must
+# fail it at any target, and name this object in the SARIF.
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: upgradescope-e2e-gate
+  namespace: default
+spec:
+  backend:
+    serviceName: web
+    servicePort: 80

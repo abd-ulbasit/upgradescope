@@ -15,6 +15,43 @@ once the control plane runs the target.
 | kube-controller-manager, kube-scheduler | `kube-system` pod image tags | not newer than the oldest apiserver; at most 1 minor behind the newest |
 | kube-proxy | `kube-system` pod image tags | not newer than the oldest apiserver; at most 3 minors behind (2 before 1.25) |
 
+A component pod is one labelled `component=<name>` or `k8s-app=<name>`
+(the kube-proxy DaemonSet, kOps and Talos static pods), or one named
+`<name>-…` that runs the component's image. Its version is
+the tag of the container whose image is named `<name>` or, for
+per-architecture images such as GKE's `gke.gcr.io/kube-proxy-amd64` and
+older kubeadm's `kube-scheduler-amd64`, `<name>-<arch>`, or RKE2's
+`rancher/hardened-kubernetes`, which runs every component and is tagged
+with the Kubernetes version; a build suffix (`-gke.1000`, `-eksbuild.1`,
+`-rke2r1-build…`, VMware TKG's `_vmware.1`) is dropped. scheduler-plugins'
+`kube-scheduler` (`registry.k8s.io/scheduler-plugins/kube-scheduler:v0.31.8`),
+which its single-scheduler install swaps into the kube-scheduler static
+pod, is tagged with that project's version, whose minor is the Kubernetes
+minor it is compiled with: `v0.31.8` reads as `v1.31.8`, and a three-digit
+patch (`v0.18.800`, plugin changes only) as `v1.18.0`. A component pod
+whose version cannot be read — a digest-only image, a tag that is not a
+version (`latest`), or a labelled pod that runs a vendor image (one not
+named like the component) — is not skipped silently: the `versions`
+capability is reported partial, naming the components and the first such
+pod with its image (the first of a component whose gap is required, when
+there is one), because its skew was not evaluated.
+
+The gap is *required*, so the verdict is `unknown`, never `ready`, when
+upstream would have told the version and did not: a component image named
+like the component whose tag is not a version, or any unread
+kube-apiserver, kube-controller-manager or kube-scheduler pod. That
+component may be the one past the policy. `--allow-incomplete` lets the
+gate (the exit code, and the JUnit `not-assessed` case) pass on the
+findings alone; the verdict still reads `unknown`. Pin the component's
+image to a version tag to have its skew judged.
+
+A kube-proxy pod running a vendor image of another name is an *optional*
+gap: disclosed, verdict unaffected. Platforms ship kube-proxy that way
+(Oracle OKE runs `<region>.ocir.io/…/oke-public-kube-proxy@sha256:…`,
+pinned by digest) and manage and upgrade it themselves, and no upstream
+image would have told its version. Its skew against the target is then
+the platform's to keep, not judged here.
+
 `kubectl` client skew is in the policy but is not checked: client versions
 appear only in apiserver audit logs, which upgradescope does not read.
 
@@ -56,7 +93,7 @@ controller-manager or scheduler pods to read. The skew checks then use the
 `/version` answer as the apiserver version and simply have no
 controller-manager or scheduler to judge: no finding, and no false one.
 Kubelets and, where it runs as a pod in `kube-system`, kube-proxy are still
-checked. Managed-cluster version strings (`v1.33.1-eks-…`, `-gke.…`, k3s,
+checked (GKE's `kube-proxy-amd64` image included). Managed-cluster version strings (`v1.33.1-eks-…`, `-gke.…`, k3s,
 RKE2 and OpenShift suffixes) parse
 ([Managed clusters](../guides/managed-clusters.md)).
 

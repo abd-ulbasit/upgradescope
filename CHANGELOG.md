@@ -59,6 +59,9 @@ a CI gate.
   in the stored release manifests. Releases stored by Helm's configmaps
   driver are read too.
 - Node container runtimes (containerd) are judged against the registry.
+  A runtime the registry does not cover (cri-o, docker) is an
+  `addon-no-data/<runtime>` info finding naming its nodes, instead of
+  nothing (#169).
 - Add-on end of life is judged per release line (Istio 1.24, not "Istio"),
   keyed on the installed app version. Registry schema v2 adds
   `tools/eol-sync`-generated cycles, path-suffix image matchers and Helm
@@ -295,6 +298,26 @@ a CI gate.
   unreadable, or the target is beyond the knowledge base. v0.1.1 reported
   such scans as `ready: true` and exited 0. Pass `--allow-incomplete` to
   gate on findings alone.
+- **The server gate fails closed too.** `POST /api/v1/gate` defaults to
+  `fail-on=blocker`: a blocker or an `unknown` verdict answers 422 with
+  the full report body, and `fail-on=never` keeps 200. v0.1.1 always
+  answered 200. Use `curl --fail-with-body` to fail the CI step and keep
+  the SARIF; `?path=` gives SARIF results file locations, and with
+  `?cluster=` only what the manifests introduce counts (#120).
+- A live scan whose control-plane skew could not be judged where upstream
+  would have told the version now gives `unknown` and exits 2 (it gave
+  `ready` and exited 0); the agent's `ClusterReadiness` status and the
+  server's reports read `unknown` too. That is a component pod in
+  `kube-system` (labelled `component=` or `k8s-app=`, or named after the
+  component) on an upstream-named image under a digest or a tag that is
+  not a version (`kube-proxy@sha256:…`, `kube-scheduler:latest`), or a
+  kube-apiserver, kube-controller-manager or kube-scheduler pod whose
+  version is not read. Pin the image to a version tag, or pass
+  `--allow-incomplete`. A kube-proxy pod on a vendor image of another
+  name (Oracle OKE's `oke-public-kube-proxy`) does not change the
+  verdict. A component image tagged 0.x is never read as Kubernetes 0.x:
+  a kube-scheduler is read as a scheduler-plugins build, any other is
+  unreadable (#169).
 - A scan of a cluster that could not be read at all exits 1, and so does a
   `--files` scan that found no Kubernetes objects. Neither reports
   100/100 any more.
@@ -443,6 +466,15 @@ a CI gate.
 
 ### Fixed
 
+- A control-plane or kube-proxy pod whose version upstream would have
+  told but cannot be read makes the verdict `unknown`, not `ready`: an
+  upstream-named component image under a digest or a tag that is not a
+  version (`latest`), or an unread kube-apiserver, kube-controller-manager
+  or kube-scheduler pod. Its skew was not evaluated, and it may be the
+  component past the policy. A kube-proxy pod on a vendor image of
+  another name (Oracle OKE's `oke-public-kube-proxy`) is an optional,
+  disclosed `versions` gap, and the verdict is unaffected. The gate
+  change this brings is under **Changed** (#169).
 - Notifications after a cluster upgrade: a blocker that the cluster's new
   default target adds (for example `networking.k8s.io/v1beta1` ServiceCIDR,
   removed in 1.37, once the cluster runs 1.36) is notified instead of being
@@ -508,6 +540,19 @@ a CI gate.
   any file in `registry/data` that is not `*.yaml`. The registry notes
   that endoflife.date puts Istio 1.29's end of life at 31 October 2026
   where istio.io says 12 October (#166).
+- Control-plane and kube-proxy versions are read from per-architecture
+  images (`gke.gcr.io/kube-proxy-amd64`, `kube-scheduler-amd64`), so GKE's
+  kube-proxy is skew-checked, and from VMware TKG's tags, whose build
+  suffix follows an underscore (`v1.28.7_vmware.1`). A component pod whose version cannot be read
+  (a digest-only image, a tag such as `latest`, or a labelled pod running
+  an image of another name) makes the `versions` capability partial,
+  naming the components and the first pod, instead of being dropped
+  silently. scheduler-plugins' `kube-scheduler` is read by the Kubernetes
+  minor its tag is built on (`v0.31.8` as `v1.31.8`), and kOps' and
+  Talos' `k8s-app=<component>` labels mark component pods (#169).
+- The containerd compat blocker (`chart-incompat/containerd/<line>`) names
+  the nodes that cannot run the target even when they all run one version,
+  so blocker-only outputs (gate, JUnit, code quality) say where (#169).
 
 ### Security
 
@@ -565,6 +610,26 @@ a CI gate.
   SQLite database and its WAL and SHM files are created 0600. The agent
   warns when it would push its token over plain HTTP to a host that is
   not loopback (#126).
+- One Helm release object can no longer exhaust the agent's memory. A
+  951 KB release Secret whose gzip held 700 MiB took a scan to 1.93 GB and
+  OOM-killed the agent at its 256Mi limit; anyone who can create a Secret
+  or ConfigMap in one namespace could plant one, and a valid release built
+  to amplify parsing (a 127 KiB Secret of tiny ConfigMaps took 564 MiB)
+  could too. Each release payload is now decoded within 4 MiB stored and
+  16 MiB decompressed (real releases decode to under 7 MiB), and its
+  manifest is parsed in runs of at most 1 MiB and 64Ki YAML nodes; a
+  single document over 2 MiB or 64Ki nodes is not parsed. The worst
+  releases now peak at up to about 70 MiB of heap. A release over a bound is
+  skipped (`release payload too large`) or recorded without that document,
+  named on a partial `helm` capability, and the rest are still read
+  (#168).
+- The security model documents that Helm release Secrets, pod images and
+  labels are tenant-controlled evidence: findings are only as trustworthy
+  as namespace write access. A forged release can raise a finding in its
+  namespace; its `appVersion` stands only for pods on its own release
+  line, so it cannot hide an older image on another line there, only a
+  patch-level difference on the same line, an untagged image, or an
+  image no matcher recognizes (#165).
 
 ## [0.1.1] - 2026-07-27
 

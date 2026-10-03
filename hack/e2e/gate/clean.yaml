@@ -1,0 +1,9 @@
+# A manifest that adds nothing the upgrade cares about: the gate must pass it
+# even though the cluster it is judged in has blockers of its own.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: upgradescope-e2e-gate
+  namespace: default
+data:
+  note: clean

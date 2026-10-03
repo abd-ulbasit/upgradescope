@@ -80,7 +80,9 @@ jobs:
       contents: read
       pull-requests: read # paths-filter lists PR files through the API
     outputs:
-      e2e: ${{ steps.code.outputs.e2e }}
+      # hack/e2e.sh runs the server-gate command from the CI gate page, so
+      # that one docs page counts as code for the e2e.
+      e2e: ${{ (steps.code.outputs.e2e == 'true' || steps.code.outputs.e2e_doc == 'true') && 'true' || 'false' }}
       release: ${{ steps.paths.outputs.release }}
       action: ${{ steps.paths.outputs.action }}
     steps:
@@ -98,6 +100,8 @@ jobs:
               - '**'
               - '!docs/**'
               - '!**/*.md'
+            e2e_doc:
+              - 'docs/getting-started/ci-gate.md'
       # Two filters, one per job they gate: release-check (GoReleaser
       # snapshot and multi-arch images, the slowest PR job) runs only for
       # packaging changes; the action job for the action and the scan code

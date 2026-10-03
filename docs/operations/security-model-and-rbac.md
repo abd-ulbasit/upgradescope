@@ -52,6 +52,67 @@ way.
 `rbac.create=false` lets you bind a role of your own; each collector that
 lacks access degrades to "not assessed" with the reason.
 
+## Findings are only as trustworthy as namespace write access
+
+Most of what upgradescope judges comes from objects that whoever can
+write to a namespace controls: Helm release Secrets and ConfigMaps (labels
+`owner=helm`), pod images and tags, and pod labels such as
+`app.kubernetes.io/name` and `app.kubernetes.io/version`. Nothing proves
+that a release object was written by Helm or that a label tells the
+truth. A tenant with `create` on Secrets (or ConfigMaps) in its own
+namespace can forge a release, and one that can create pods can run any
+image or label:
+
+- **Fabricate a finding.** A forged release of chart `ingress-nginx`, or a
+  pod labelled `app.kubernetes.io/name=ingress-nginx`, raises the
+  `eol-addon/ingress-nginx` blocker for that namespace and, through it,
+  the cluster's verdict and every gate that reads it.
+- **Hide a finding**, only within its own namespace and only narrowly. A
+  release's chart `appVersion` stands only for pods on its own release
+  line there, so a forged release that claims a newer version of an
+  add-on does not hide an older image of it on another line: that image
+  is judged at its own version (#165). A patch-level difference on the
+  same line, a pod whose image has no version tag, and an add-on whose
+  image no matcher recognizes can still be hidden
+  ([Add-on registry](../concepts/addon-registry.md#how-an-add-on-is-found)).
+
+The effects stay within what the tenant can write: its forged evidence is
+attributed to its own namespace (and team), it cannot change what
+upgradescope reads from other namespaces, nodes or the API server
+(`/version`, `/metrics`, discovery), and it cannot make the agent write
+anything but its own `ClusterReadiness`. Treat findings about add-ons and
+Helm releases in a namespace as no more trustworthy than the namespace's
+write access; where tenants are not trusted, review a blocker's namespaces
+before acting on it, and suppress with a reason what you have verified
+to be forged ([Suppressions and baselines](../guides/suppressions-and-baselines.md)).
+
+Forged or not, one Helm release object cannot take the agent down: what
+reading it costs is bounded, not only its size. Its payload is decoded
+within fixed bounds (4 MiB stored, 16 MiB of JSON once decompressed; real
+releases decode to under 7 MiB). A release over them, such as a gzip bomb
+that decompresses to hundreds of MiB, is skipped as `release payload too
+large`; one that is not a single gzip member, or that decompresses past
+its gzip size trailer, is not decodable either. The stored manifest of a release within them is parsed a run of
+documents at a time, each run at most 1 MiB and 64Ki YAML nodes, because
+parsing amplifies its input: a manifest of tiny objects or of newlines
+that fits the cap took 390–564 MiB parsed whole. A single document over 2
+MiB or 64Ki nodes (the largest real ones found are kyverno's policies
+CRD, 1.4 MiB, and Argo CD's applicationsets CRD, about 48,500 nodes) is
+not parsed: the release is recorded
+with what its other documents hold, and named. Either way the `helm`
+capability becomes partial and names the release; the others are still
+read. Measured on the test harness, above the collector's baseline: the
+gzip bomb peaks at 17 MiB of heap, also when its size trailer lies or a
+second gzip member follows (`TestCollectHelmGzipBombIsBounded`;
+its test process at 71 MB resident), and the worst manifests that fit
+the cap at up to about 70 MiB (`TestCollectHelmManifestParsingIsBounded`: all
+newlines, tiny objects, documents that are not objects, documents at the
+size and at the node bound). Before the bounds, a 951 KB Secret that
+decompressed to 700 MiB took a scan to 1.93 GB and OOM-killed the agent at
+its 256Mi limit, and a 127 KiB one of tiny ConfigMaps still could (#168).
+Releases are read one at a time, so the bound holds however many such
+objects there are.
+
 ## What the agent writes
 
 Only its own `ClusterReadiness` object (`agent.crName`, default `cluster`),
