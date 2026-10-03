@@ -129,7 +129,8 @@ type output struct {
 	GeneratedFrom string  `json:"generatedFrom"`
 	MaxKnownK8s   string  `json:"maxKnownK8s"`
 	Entries       []entry `json:"entries"`
-	// BuiltinGroups lists every group k8s.io/api registers at the pinned
+	// BuiltinGroups lists every group the scheme registers (k8s.io/api plus
+	// the apiextensions and apiregistration schemes) at the pinned
 	// version, with or without lifecycle entries, plus the groups of
 	// carried-forward entries: the engine reports an unknown-api info for
 	// an object of any of them that no entry places (see builtinGroups).

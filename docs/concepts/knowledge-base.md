@@ -102,8 +102,9 @@ the horizon minor, until you upgrade to a release with a newer KB.
   PodGroup or CompositePodGroup (still served at 1.37) is an `unknown-api`
   info, and so are `imagepolicy.k8s.io/v1alpha1` ImageReview and
   `internal.apiserver.k8s.io/v1alpha1` StorageVersion: the dataset lists
-  every group `k8s.io/api` registers (`builtinGroups`), whether or not it
-  has entries, and a manifest of any of them the KB cannot place is an
+  every group the generator's scheme registers (`k8s.io/api` plus the
+  apiextensions and apiregistration schemes, as `builtinGroups`), whether or
+  not it has entries, and a manifest of any of them the KB cannot place is an
   `unknown-api` info. Only groups outside that list (CRDs, aggregated APIs)
   produce no finding.
 - CRD versions served by your own or third-party CRDs (deprecated CRD

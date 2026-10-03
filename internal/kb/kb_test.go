@@ -160,6 +160,11 @@ func TestDatasetVersion(t *testing.T) {
 	if base != again {
 		t.Errorf("datasetVersion not deterministic: %q vs %q", base, again)
 	}
+	// A dataset without built-in groups keeps the label it had before the
+	// field existed: the digest is over the bare entries.
+	if bare, _ := digest(entries()); !strings.Contains(base, "; lifecycle "+bare+";") {
+		t.Errorf("datasetVersion() = %q, want the lifecycle digest %s of the bare entries", base, bare)
+	}
 	if !strings.HasPrefix(base, from+"; lifecycle ") {
 		t.Errorf("datasetVersion() = %q, want prefix %q", base, from+"; lifecycle ")
 	}

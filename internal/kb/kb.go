@@ -96,10 +96,16 @@ func load(lifecycle []byte) (KB, error) {
 // a new built-in group) changes the label; YAML comments and formatting do
 // not.
 func datasetVersion(generatedFrom string, entries []APILifecycleEntry, groups []BuiltinGroup, addons []registry.AddOn) (string, error) {
-	lifecycle, err := digest(struct {
-		Entries []APILifecycleEntry
-		Groups  []BuiltinGroup `json:",omitempty"`
-	}{entries, groups})
+	// Without built-in groups the digest is over the bare entries, so a
+	// dataset that predates the field keeps the label it always had.
+	var lifecycleData any = entries
+	if len(groups) > 0 {
+		lifecycleData = struct {
+			Entries []APILifecycleEntry
+			Groups  []BuiltinGroup
+		}{entries, groups}
+	}
+	lifecycle, err := digest(lifecycleData)
 	if err != nil {
 		return "", fmt.Errorf("kb: digest lifecycle data: %w", err)
 	}
