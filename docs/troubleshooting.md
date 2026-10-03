@@ -95,10 +95,15 @@ To accept a finding for now, with a reason and an expiry, use an
 ## The agent
 
 - **`ClusterReadiness CRD is not installed`.** The chart installs the CRD
-  from `crds/`; it is missing when the chart was installed with
-  `--skip-crds`, or the CRD was deleted. Apply `deploy/chart/crds/`.
-  With `agent.manageCRD=true` the agent stops at startup with this error;
-  with `false`, every tick fails with it.
+  from `crds/` on first install only; it is missing when the chart was
+  installed with `--skip-crds`, the CRD was deleted, or the chart was
+  upgraded from v0.1.x or a release candidate across the
+  [API group move](operations/upgrade.md#the-api-group-moved). The error
+  carries the fix: `kubectl apply -f` of the CRD manifest at the agent's
+  release (`https://raw.githubusercontent.com/abd-ulbasit/upgradescope/v<version>/deploy/chart/crds/clusterreadinesses.upgradescope.basit.engineer.yaml`,
+  or `crds/` from `helm pull --untar`). With `agent.manageCRD=true` the
+  agent stops at startup with this error; with `false`, every tick fails
+  with it.
 - **`could not bring the ClusterReadiness CRD up to date`** (startup, WARN)
   **and `crdError` on tick lines.** The CRD exists but the agent could not
   check or upgrade its schema: a transient apiserver fault, an apiserver

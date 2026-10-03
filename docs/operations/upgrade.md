@@ -396,16 +396,25 @@ per cluster.
    on first install only, and the chart's agent may not create CRDs:
 
     ```sh
-    helm show crds oci://ghcr.io/abd-ulbasit/charts/upgradescope --version <new> \
-      | kubectl apply -f -
+    kubectl apply -f https://raw.githubusercontent.com/abd-ulbasit/upgradescope/v<new>/deploy/chart/crds/clusterreadinesses.upgradescope.basit.engineer.yaml
     ```
+
+    `<new>` is the version you are upgrading to, as in `--version`
+    (`v0.2.0` for `0.2.0`). The same manifest comes out of the chart:
+    `helm pull oci://ghcr.io/abd-ulbasit/charts/upgradescope --version
+    <new> --untar`, then `kubectl apply -f upgradescope/crds/`.
 
     An agent run with `--manage-crd` and a kubeconfig that may create
     CRDs (outside the chart) installs it itself. The chart's agent may
     not: upgraded without this step, it exits at startup with an error
-    that names the group move and this page, its pod restarts, and
-    `helm upgrade --wait` times out. Install the CRD then; the next
-    restart picks it up.
+    that names the group move, this exact command at its own version
+    (for a dev build, `<tag>` in its place, the release tag of the chart
+    you installed) and this page, its pod restarts, and `helm upgrade
+    --wait` times out. The chart's notes print the same command after
+    the upgrade. Run it then; the next restart picks the CRD up. With
+    `agent.manageCRD=false` the agent stays up instead and every tick
+    fails with the same command in its error, which `/readyz` and the
+    log carry.
 
 2. **Carry over the old object's spec**, if you set `spec.targets` or
    `spec.ignore` on it (the agent creates the new object empty on its
@@ -434,7 +443,11 @@ per cluster.
    defined, usually in Git:
 
     ```sh
-    git grep -lz 'upgradescope\.dev/ignore' | xargs -0 sed -i 's#upgradescope\.dev/ignore#upgradescope.basit.engineer/ignore#g'
+    # Linux (GNU): -r skips sed when nothing matches
+    git grep -lz 'upgradescope\.dev/ignore' | xargs -0 -r sed -i 's#upgradescope\.dev/ignore#upgradescope.basit.engineer/ignore#g'
+    # macOS (BSD): older releases' xargs rejects -r, and none runs the
+    # command on empty input; sed needs the empty suffix after -i
+    git grep -lz 'upgradescope\.dev/ignore' | xargs -0 sed -i '' 's#upgradescope\.dev/ignore#upgradescope.basit.engineer/ignore#g'
     ```
 
     List the objects in the cluster that still carry an old key (every
@@ -456,8 +469,6 @@ per cluster.
       upgradescope.basit.engineer/ignore-reason="$(kubectl get -n shop ingress/web -o jsonpath='{.metadata.annotations.upgradescope\.dev/ignore-reason}')" \
       upgradescope.dev/ignore- upgradescope.dev/ignore-reason-
     ```
-
-    On macOS, `sed -i ''`.
 
 5. **Point everything that names the group at the new one**: Argo CD
    health checks (the key is now

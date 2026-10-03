@@ -191,11 +191,16 @@ read, and what is still not assessed, is on the
 add-on detection from container images covers the rest. `rbac.create=false` lets you bind a
 role of your own; collectors without access degrade the same way.
 
-The agent cannot create CRDs: `crds/` installs the `ClusterReadiness` CRD.
+The agent cannot create CRDs: `crds/` installs the `ClusterReadiness` CRD,
+on first install only (Helm never installs `crds/` on upgrade).
 With `agent.manageCRD=true` (the default), a missing CRD makes the agent
-exit at startup with an error that says so. With `agent.manageCRD=false`
+exit at startup with an error that says so and names the fix: the
+`kubectl apply -f` of the CRD manifest at the agent's release, or of
+`crds/` from `helm pull --untar`. With `agent.manageCRD=false`
 the agent never reads or writes the CRD itself, so a missing CRD shows up
-as a "CRD not installed" error on every tick instead.
+as a "CRD not installed" error on every tick instead, with the same fix.
+[Upgrade](https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-api-group-moved)
+has the steps for a chart upgraded across the API group move.
 
 `agent.manageCRD=false` drops the CRD write permissions (`get`/`update`/
 `patch` on `clusterreadinesses.upgradescope.basit.engineer`), e.g. when GitOps manages
