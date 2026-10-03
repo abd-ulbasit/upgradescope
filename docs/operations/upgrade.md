@@ -382,6 +382,85 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   looks up the live Secret). Under GitOps renderers that cannot look it up,
   set them explicitly ([GitOps](../guides/gitops-argo-flux.md)).
 
+## The API group moved
+
+From v0.1.x or a v0.2.0 release candidate to the first stable release:
+the `ClusterReadiness` CRD moved from the group `upgradescope.dev`, a
+domain the project never owned, to `upgradescope.basit.engineer`, and
+every annotation key moved with it. The kind, the version (`v1alpha1`),
+the short name `ucr` and the object's name are unchanged. Nothing is
+migrated in place: the new CRD is a different resource, so do this once
+per cluster.
+
+1. **Install the new CRD before `helm upgrade`.** Helm installs `crds/`
+   on first install only, and the chart's agent may not create CRDs:
+
+    ```sh
+    helm show crds oci://ghcr.io/abd-ulbasit/charts/upgradescope --version <new> \
+      | kubectl apply -f -
+    ```
+
+    An agent run with `--manage-crd` and a kubeconfig that may create
+    CRDs (outside the chart) installs it itself.
+
+2. **Carry over the old object's spec**, if you set `spec.targets` or
+   `spec.ignore` on it (the agent creates the new object empty on its
+   first tick otherwise; `agent.targets` resets `spec.targets` anyway):
+
+    ```sh
+    kubectl get clusterreadinesses.upgradescope.dev cluster -o json \
+      | jq '{apiVersion: "upgradescope.basit.engineer/v1alpha1", kind, metadata: {name: .metadata.name}, spec}' \
+      | kubectl create -f -
+    ```
+
+3. **Upgrade the chart** ([The chart](#the-chart)). The agent creates
+   `clusterreadinesses.upgradescope.basit.engineer/cluster` (or
+   `agent.crName`) on its first tick, if step 2 did not.
+
+4. **Rewrite the annotations.** The scanner reads
+   `upgradescope.dev/ignore` and `upgradescope.dev/ignore-reason` until
+   v0.3.0, warns for each object that carries them (on `scan`'s stderr,
+   in the gate's `warnings`, in the agent's `status.notAssessed`), and
+   prefers the new key when an object has both. Rename them where the
+   objects are defined, usually in Git:
+
+    ```sh
+    git grep -lz 'upgradescope\.dev/ignore' | xargs -0 sed -i 's#upgradescope\.dev/ignore#upgradescope.basit.engineer/ignore#g'
+    ```
+
+    and for an object only the cluster holds, each warning names it; one
+    `kubectl annotate` moves both keys (the value is the old one's):
+
+    ```sh
+    kubectl annotate -n shop ingress/web --overwrite \
+      upgradescope.basit.engineer/ignore="$(kubectl get -n shop ingress/web -o jsonpath='{.metadata.annotations.upgradescope\.dev/ignore}')" \
+      upgradescope.basit.engineer/ignore-reason="$(kubectl get -n shop ingress/web -o jsonpath='{.metadata.annotations.upgradescope\.dev/ignore-reason}')" \
+      upgradescope.dev/ignore- upgradescope.dev/ignore-reason-
+    ```
+
+    On macOS, `sed -i ''`.
+
+5. **Point everything that names the group at the new one**: Argo CD
+   health checks (the key is now
+   `resource.customizations.health.upgradescope.basit.engineer_ClusterReadiness`,
+   [GitOps](../guides/gitops-argo-flux.md)), Flux health checks, admission
+   policies (Kyverno, Gatekeeper, ValidatingAdmissionPolicy), RBAC you
+   wrote for the CRD or its objects, and scripts or dashboards that read
+   the object by its group. Until the old CRD is deleted, `kubectl get
+   clusterreadiness` and `kubectl get ucr` match both CRDs, and kubectl
+   picks one of them; name the new one in full,
+   `clusterreadinesses.upgradescope.basit.engineer`, or delete the old CRD
+   first.
+
+6. **Delete the old CRD** once nothing reads it. This deletes the old
+   objects with it; nothing writes them any more. While it is installed,
+   an agent that manages the CRD logs one WARN line at startup with this
+   command, and never runs it itself:
+
+    ```sh
+    kubectl delete crd clusterreadinesses.upgradescope.dev
+    ```
+
 ## From v0.1.x
 
 v0.2.0 changes scanning and gating substantially. Among the changes the

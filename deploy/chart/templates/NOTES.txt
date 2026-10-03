@@ -1,4 +1,14 @@
 upgradescope {{ .Chart.AppVersion }} installed.
+{{- if .Release.IsUpgrade }}
+
+Upgrading from v0.1.x or a v0.2.0 release candidate? The ClusterReadiness
+CRD's API group is now upgradescope.basit.engineer, and Helm does not install
+a new CRD on upgrade. Install it, carry over the old object's spec, move
+ignore annotations to the upgradescope.basit.engineer/ keys (the old ones are
+read, deprecated, until v0.3.0), and point GitOps health checks and policies
+at the new group:
+  https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-api-group-moved
+{{- end }}
 {{- if .Values.agent.enabled }}
 
 Watch readiness (the agent creates the object on its first tick):

@@ -89,6 +89,18 @@ releases. The path to `v1`:
 `spec.targets` and `spec.ignore` are the only user input and will keep
 their meaning across versions; `status` is the agent's to rewrite.
 
+**The API group** is `upgradescope.basit.engineer`, on a domain the
+maintainer owns, and so is the prefix of every annotation key
+(`upgradescope.basit.engineer/ignore`, `…/ignore-reason`). v0.1.x and the
+v0.2.0 release candidates used a group on a domain the project never
+owned. The first stable release moved both, before anything could be
+built on the old name: the scanner still reads the old annotation keys,
+with a deprecation warning that names the new ones, until v0.3.0, and
+nothing writes them. The agent leaves the old CRD installed and says how
+to remove it ([Upgrade](operations/upgrade.md#the-api-group-moved)).
+Changing the group again would be a breaking change, made only with a
+major release.
+
 ## Deprecation
 
 A deprecated flag, field or endpoint is named in the changelog, keeps
