@@ -99,10 +99,15 @@ const maxWideGapsFleetHeap = 20 << 20 // measured 16.4 MiB for /fleet, at five t
 // answer 108 MB; the store's column now keeps each gap cut and the reads
 // list at most fleetSummaryBytes of them per evaluation. Each gap here,
 // cut, is just under that, so every summary lists one: the dearest
-// summaries. 500 such clusters, each evaluated at five targets (the
-// default and heapTargets, the most a server evaluates), are read within
-// maxWideGapsFleetHeap by each of /clusters, /fleet and /metrics; the
-// test logs the figures docs/operations.md quotes.
+// summaries. Half of the clusters push as a v0.1.x agent would, unmarked:
+// the server adds its required api-usage and deprecated-calls gaps to
+// theirs, and its summaries are 24-31% larger (727 against 586 bytes per
+// cluster in /clusters, 2963 against 2258 in /fleet), so the fixture keeps
+// the dearest input a push can be (#212). 500 such clusters, each
+// evaluated at five targets (the default and heapTargets, the most a
+// server evaluates), are read within maxWideGapsFleetHeap by each of
+// /clusters, /fleet and /metrics; the test logs the figures
+// docs/operations.md quotes.
 func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 	if testing.Short() || raceEnabled || !heapRun {
 		t.Skip("seeds 500 clusters of 770 KB pushes; make test-heap runs it, without the race detector")
@@ -128,10 +133,14 @@ func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 			Available: true, Partial: true, Reason: strings.Repeat("é", 1000), Skipped: skipped}
 	}
 	for i := range fleetMinors {
+		inv := inventory.Inventory{SchemaVersion: 1, CollectorSchema: inventory.CurrentCollectorSchema, ClusterID: fmt.Sprintf("uid-%d", i),
+			ServerVersion: "v1.34.2", Capabilities: caps}
+		if i%2 == 1 {
+			inv = unmarked(inv) // a v0.1.x agent's push: its summaries are the larger (#212)
+		}
 		body, err := json.Marshal(map[string]any{
 			"schemaVersion": 1, "clusterName": fmt.Sprintf("cluster-%03d", i), "agentVersion": "test", "kbVersion": "agent-kb",
-			"inventory": inventory.Inventory{SchemaVersion: 1, CollectorSchema: inventory.CurrentCollectorSchema, ClusterID: fmt.Sprintf("uid-%d", i),
-				ServerVersion: "v1.34.2", Capabilities: caps},
+			"inventory": inv,
 		})
 		if err != nil {
 			t.Fatal(err)
