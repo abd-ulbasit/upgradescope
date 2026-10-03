@@ -209,7 +209,8 @@ server:
   # $UPGRADESCOPE_WEBHOOK_SECRET.
   webhookSecret: ""
   # -- Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"]:
-  # at most 4, as serve --targets takes. Each adds about one report of up
+  # at most 4 entries (serve --targets takes 4 distinct minors; the chart
+  # counts entries, so list each minor once). Each adds about one report of up
   # to the snapshot cap to every push and to the re-evaluation pass, and
   # server.resources is sized for 4.
   targets: []

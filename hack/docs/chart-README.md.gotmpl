@@ -282,7 +282,8 @@ settings, so the read token still protects all data.
 - `values.schema.json` rejects unknown keys, intervals under one minute
   (`agent.interval` takes any Go duration of at least `1m`: `10m`, `90s`,
   `1.5h`), malformed targets (`agent.targets` must be `MAJOR.MINOR`) and
-  more than 4 `server.targets` at render time.
+  more than 4 `server.targets` entries at render time (`serve` counts
+  distinct minors, so list each once).
 
 ## Uninstall
 

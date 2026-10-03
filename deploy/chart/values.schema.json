@@ -103,7 +103,7 @@
         "webhook": { "type": "string", "pattern": "^(https?://.+)?$" },
         "webhookSecret": { "type": "string" },
         "targets": {
-          "description": "Extra targets serve evaluates on every snapshot: at most 4, as serve --targets takes, since each adds a report of up to --max-snapshot-bytes to every push and re-evaluation and the server's memory limit is sized for that many.",
+          "description": "Extra targets serve evaluates on every snapshot: at most 4 entries (serve --targets takes 4 distinct minors; this counts entries, so 1.39 and v1.39 are two), since each adds a report of up to --max-snapshot-bytes to every push and re-evaluation and the server's memory limit is sized for that many.",
           "allOf": [{ "$ref": "#/definitions/targets" }],
           "maxItems": 4
         },
