@@ -44,10 +44,19 @@ const (
 // records.
 type LimitError struct {
 	Field   string // JSON path within the inventory, e.g. "apiUsage[3].objects"
-	Problem string
+	Problem string // what is wrong, quoting (a prefix of) the value at fault
+
+	// At is Field with each map key in it shown as […], and Limit is
+	// Problem without the value: what Unquoted says.
+	At, Limit string
 }
 
 func (e *LimitError) Error() string { return e.Field + ": " + e.Problem }
+
+// Unquoted says where the inventory breaks which limit, and nothing of
+// what it holds there, map keys included: what may be shown where the
+// inventory's contents must not be.
+func (e *LimitError) Unquoted() string { return e.At + ": " + e.Limit }
 
 // ValidateLimits checks what ValidateIdentifiers does not, and returns the
 // first problem as a *LimitError:
@@ -80,10 +89,12 @@ func (inv Inventory) ValidateLimits() error {
 		}
 	}
 	if n := len(inv.UnrecognizedImages); n > MaxUnrecognizedImages {
-		return &LimitError{Field: "unrecognizedImages", Problem: fmt.Sprintf("%d images, over the %d a collector lists (it counts the rest in unrecognizedImagesOmitted)", n, MaxUnrecognizedImages)}
+		p := fmt.Sprintf("%d images, over the %d a collector lists (it counts the rest in unrecognizedImagesOmitted)", n, MaxUnrecognizedImages)
+		return &LimitError{Field: "unrecognizedImages", Problem: p, At: "unrecognizedImages", Limit: p}
 	}
 	if n := len(inv.Capabilities); n > MaxCapabilities {
-		return &LimitError{Field: "capabilities", Problem: fmt.Sprintf("%d capabilities, over the %d this server takes", n, MaxCapabilities)}
+		p := fmt.Sprintf("%d capabilities, over the %d this server takes", n, MaxCapabilities)
+		return &LimitError{Field: "capabilities", Problem: p, At: "capabilities", Limit: p}
 	}
 	var w stringWalker
 	return w.walk(reflect.ValueOf(inv), MaxStringBytes)
@@ -201,17 +212,21 @@ func validateUsages(at func() string, us []APIUsage) error {
 	for i, u := range us {
 		gvk := [3]string{u.Group, u.Version, u.Kind}
 		if j, dup := seen[gvk]; dup {
-			return &LimitError{Field: fmt.Sprintf("%s[%d]", at(), i), Problem: fmt.Sprintf(
+			field := fmt.Sprintf("%s[%d]", at(), i)
+			limit := fmt.Sprintf("the group/version/kind of %s[%d] listed again: a collector counts each group/version/kind once", at(), j)
+			return &LimitError{Field: field, At: field, Limit: limit, Problem: fmt.Sprintf(
 				"%s is listed again (first at %s[%d]): a collector counts each group/version/kind once", quoteShort(gvString(u.Group, u.Version)+" "+u.Kind), at(), j)}
 		}
 		seen[gvk] = i
 		if n := len(u.Objects); n > MaxObjectRefs {
-			return &LimitError{Field: fmt.Sprintf("%s[%d].objects", at(), i), Problem: fmt.Sprintf(
-				"%d objects, over the %d a collector records (it counts the rest in objectsOmitted)", n, MaxObjectRefs)}
+			field := fmt.Sprintf("%s[%d].objects", at(), i)
+			p := fmt.Sprintf("%d objects, over the %d a collector records (it counts the rest in objectsOmitted)", n, MaxObjectRefs)
+			return &LimitError{Field: field, Problem: p, At: field, Limit: p}
 		}
 		for k, o := range u.Objects {
-			if p := managerProblem(o.Manager); p != "" {
-				return &LimitError{Field: fmt.Sprintf("%s[%d].objects[%d].manager", at(), i, k), Problem: p}
+			if p, limit := managerProblem(o.Manager); p != "" {
+				field := fmt.Sprintf("%s[%d].objects[%d].manager", at(), i, k)
+				return &LimitError{Field: field, Problem: p, At: field, Limit: limit}
 			}
 		}
 	}
@@ -226,15 +241,17 @@ func gvString(group, version string) string {
 }
 
 // managerProblem says why m is not a managedFields manager the apiserver
-// accepts, or "".
-func managerProblem(m string) string {
+// accepts, quoting it and not, or "" twice.
+func managerProblem(m string) (problem, limit string) {
 	if len(m) > MaxManagerBytes {
-		return fmt.Sprintf("%s is not a field manager: longer than the apiserver's %d bytes", quoteShort(m), MaxManagerBytes)
+		limit = fmt.Sprintf("not a field manager: longer than the apiserver's %d bytes", MaxManagerBytes)
+		return quoteShort(m) + " is " + limit, limit
 	}
 	if i := strings.IndexFunc(m, func(r rune) bool { return !unicode.IsPrint(r) }); i >= 0 {
-		return fmt.Sprintf("%s is not a field manager: a non-printable character at byte %d", quoteShort(m), i)
+		limit = fmt.Sprintf("not a field manager: a non-printable character at byte %d", i)
+		return quoteShort(m) + " is " + limit, limit
 	}
-	return ""
+	return "", ""
 }
 
 var (
@@ -258,10 +275,14 @@ type pathStep struct {
 	index int
 }
 
-func (w *stringWalker) at() string {
+// at renders the path, each map key quoted (in part, where it is long),
+// or shown as […] when unquoted.
+func (w *stringWalker) at(unquoted bool) string {
 	var b strings.Builder
 	for _, p := range w.path {
 		switch {
+		case p.keyed && unquoted:
+			b.WriteString("[…]")
 		case p.keyed:
 			b.WriteString("[" + quoteShort(p.key) + "]")
 		case p.name != "":
@@ -278,7 +299,9 @@ func (w *stringWalker) at() string {
 
 func (w *stringWalker) check(s string, max int, suffix string) error {
 	if len(s) > max {
-		return &LimitError{Field: w.at() + suffix, Problem: fmt.Sprintf("%s is over the %d-byte limit", quoteShort(s), max)}
+		limit := fmt.Sprintf("%d bytes, over the %d-byte limit", len(s), max)
+		return &LimitError{Field: w.at(false) + suffix, Problem: fmt.Sprintf("%s is over the %d-byte limit", quoteShort(s), max),
+			At: w.at(true) + suffix, Limit: limit}
 	}
 	return nil
 }

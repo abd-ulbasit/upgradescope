@@ -83,6 +83,15 @@ func TestValidateLimitsRefusesBeyond(t *testing.T) {
 			if !errors.As(err, &le) || le.Field != tc.field {
 				t.Fatalf("ValidateLimits() = %.300v, want a LimitError at %s", err, tc.field)
 			}
+			// Unquoted names the place and the limit with no value of the
+			// inventory, map keys included (quoteShort's quotes mark one).
+			at := strings.NewReplacer(`["helm"]`, "[…]", `["api-usage"]`, "[…]").Replace(tc.field)
+			if le.At != at {
+				t.Errorf("At = %q, want %q: %s with its map keys left out", le.At, at, tc.field)
+			}
+			if u := le.Unquoted(); strings.Contains(u, `"`) || le.Limit == "" || !strings.HasPrefix(u, le.At+": ") {
+				t.Errorf("Unquoted() = %q, want the place and the limit, quoting nothing", u)
+			}
 			if len(err.Error()) > 1024 {
 				t.Fatalf("message is %d bytes, want a short one", len(err.Error()))
 			}
