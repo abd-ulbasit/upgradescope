@@ -411,7 +411,7 @@ at the chart's default `server.resources.limits.cpu` of 500m: the
 red-team round 2 measured p95 3.9 s at `--cpus 0.5` on a 2017 dual-core
 i3, about twice its single-core figure on the same host, which would put
 even an M1 Pro near 1.2 s (#196). The heap stays far below its 512 MiB
-bound in every case (7 to 21 MiB). For a fleet of hundreds of clusters
+bound in every case (about 7 to 25 MiB). For a fleet of hundreds of clusters
 read by several dashboards at once, give the server a CPU limit of at
 least one core.
 
@@ -424,8 +424,16 @@ least one core.
   duplicate (`200`), and the duplicate's `agentVersion` and `kbVersion` are
   recorded on the latest snapshot.
 - **Refused before anything is written** (`422`): a missing or `null`
-  inventory, an inventory `schemaVersion` other than 1 (including `{}`), or
-  a `serverVersion` that is not a Kubernetes 1.x version.
+  inventory, an inventory `schemaVersion` other than 1 (including `{}`), a
+  `source` other than `cluster` (a files inventory is judged without
+  versions or add-ons, and only the agent pushes), a `collectorSchema`
+  this server does not know (a later one means field meanings it would
+  misread), or a `serverVersion` that is not a Kubernetes 1.x version.
+- **Capabilities not reported** (an inventory without api-usage, versions
+  or, when the KB has add-ons, addons in its `capabilities` map, or with
+  no map at all) are stored and judged with each as a required
+  not-assessed gap: `unknown` at best, never `ready`. Every collector
+  since v0.1.0 reports them.
 - **Degraded pushes** (no `serverVersion`: the agent could not read
   `/version`) are judged at the version the cluster last reported, so its
   fleet cells, default target and report stay. The versions capability is
