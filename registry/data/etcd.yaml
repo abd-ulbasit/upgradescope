@@ -8,9 +8,16 @@ display_name: etcd
 endoflife_product: etcd
 matchers:
   images:
-    # Any repository named etcd: registry.k8s.io/etcd,
-    # gcr.io/etcd-development/etcd, quay.io/coreos/etcd, bitnami/etcd.
-    - etcd
+    # A one-segment matcher is an exact repository, so "etcd" alone would be
+    # registry.k8s.io/etcd and nothing behind a mirror. "*/etcd" opts etcd
+    # into matching its final segment under any registry host or prefix: the
+    # upstream paths (registry.k8s.io/etcd and k8s.gcr.io/etcd, where kubeadm
+    # pulls it, gcr.io/etcd-development/etcd, quay.io/coreos/etcd), the vendor
+    # builds (bitnami/etcd, bitnamilegacy/etcd), the ECR pull-through cache
+    # (registry-k8s-io/etcd) and a kubeadm imageRepository or Harbor proxy
+    # cache (myregistry.corp/k8s/etcd). The name is distinctive enough for
+    # that; the validator refuses the opt-in for generic names ("controller").
+    - "*/etcd"
 support:
   status: supported
   citations:

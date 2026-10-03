@@ -113,6 +113,16 @@ agent:
   # The agent logs one line at startup and one per tick.
   logFormat: text
   logLevel: info
+  # -- Extra add-on registry entries, to cover add-ons the built-in registry
+  # does not know: a map of `<id>.yaml` file name to the entry's YAML (the
+  # schema of registry/CONTRIBUTING.md, every claim cited). Rendered into a
+  # ConfigMap and passed as --registry-dir; an entry with a built-in id
+  # replaces it, and an invalid entry stops the agent at start, naming the
+  # file. The ConfigMap is mounted as the volume `extra-registry`, a name
+  # to avoid in extraVolumes. Only the agent uses it: a server that judges
+  # what the agent pushes needs the same entries (server.extraArgs and
+  # server.extraVolumes).
+  extraRegistry: {}
   # -- Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"].
   extraArgs: []
   serverCA:

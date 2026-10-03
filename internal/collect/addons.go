@@ -200,14 +200,6 @@ func parseImage(image string) imageRef {
 	return imageRef{host: host, path: path, tag: tag}
 }
 
-// pathMatches reports whether the repository path ends with the matcher on
-// whole segments, so "ingress-nginx/controller" matches the canonical path
-// and every mirror or pull-through-cache path that keeps it as a suffix
-// ("registry-k8s-io/ingress-nginx/controller").
-func pathMatches(path, matcher string) bool {
-	return path == matcher || strings.HasSuffix(path, "/"+matcher)
-}
-
 // imageMatches applies one registry image matcher. A provider build
 // (registry.ProviderBuildPrefixes: GKE's and AKS's own builds of Calico,
 // Cilium, Istio, …) follows the provider's support policy, so host-less
@@ -216,9 +208,9 @@ func pathMatches(path, matcher string) bool {
 func imageMatches(ref imageRef, matcher string) bool {
 	full := ref.host + "/" + ref.path
 	if registry.IsProviderBuild(matcher) {
-		return pathMatches(full, matcher)
+		return registry.PathMatches(full, matcher)
 	}
-	return !registry.IsProviderBuild(full) && pathMatches(ref.path, matcher)
+	return !registry.IsProviderBuild(full) && registry.PathMatches(ref.path, matcher)
 }
 
 // versionRe finds a version anywhere in an image tag or chart appVersion:

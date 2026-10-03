@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -51,10 +52,20 @@ type UpgradeStep struct {
 // corrupt or empty dataset — a silent empty KB would mean silent green scans.
 func Load() (KB, error) { return load(apilifecycleJSON) }
 
+// LoadWithRegistry is Load with operator-supplied registry entries applied
+// to the embedded ones (registry.LoadExtra: a file or a directory of
+// *.yaml, validated like the embedded entries; an entry with an embedded
+// id replaces it). extra "" is Load. A bad extra entry fails the load,
+// naming the path and the file. The extra entries are part of the version
+// label, so a report says which registry judged it.
+func LoadWithRegistry(extra string) (KB, error) { return loadWith(apilifecycleJSON, extra) }
+
 // load builds the KB from the given lifecycle dataset; Load passes the
 // embedded one. Beyond parsing, it refuses a dataset too small or with too
 // few removals to be the generated one (checkLifecycleFloors).
-func load(lifecycle []byte) (KB, error) {
+func load(lifecycle []byte) (KB, error) { return loadWith(lifecycle, "") }
+
+func loadWith(lifecycle []byte, extra string) (KB, error) {
 	f, err := parseLifecycle(lifecycle)
 	if err != nil {
 		return KB{}, err
@@ -69,6 +80,16 @@ func load(lifecycle []byte) (KB, error) {
 	addons, err := registry.Load()
 	if err != nil {
 		return KB{}, fmt.Errorf("kb: loading add-on registry: %w", err)
+	}
+	if extra != "" {
+		more, err := registry.LoadExtra(extra)
+		if err != nil {
+			return KB{}, fmt.Errorf("kb: loading extra registry %s: %w", extra, err)
+		}
+		addons = registry.Merge(addons, more)
+		if errs := registry.ClaimConflicts(addons); len(errs) > 0 {
+			return KB{}, fmt.Errorf("kb: extra registry %s: %w", extra, errors.Join(errs...))
+		}
 	}
 	version, err := datasetVersion(f.GeneratedFrom, f.Entries, f.BuiltinGroups, addons)
 	if err != nil {

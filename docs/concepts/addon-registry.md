@@ -118,7 +118,7 @@ their own line too: that is the version running.
 
 ## What is in it
 
-20 add-ons today:
+27 add-ons today:
 
 | Add-on (`id`) | Release lines | Kubernetes ranges | Synced from endoflife.date |
 |---|---|---|---|
@@ -128,12 +128,19 @@ their own line too: that is the version running.
 | `cilium` | yes | — | yes |
 | `containerd` (node runtime) | yes | compat rows | yes |
 | `etcd` | yes | — | yes |
+| `fluent-bit` | yes | — | yes |
 | `flux` | yes | — | yes |
+| `gatekeeper` | yes | — | yes |
 | `istio` | yes | per release line | yes |
+| `karpenter` | yes | — | yes |
 | `keda` | yes | per release line | yes |
 | `kyverno` | yes | per release line | yes |
 | `traefik` | yes | — | yes |
 | `ingress-nginx` | retired as a whole (March 2026) | — | — |
+| `kubernetes-dashboard` | retired as a whole (archived 2026-01-21) | — | — |
+| `promtail` | retired as a whole (2026-03-02) | — | — |
+| `grafana-agent` | retired as a whole (2025-11-01) | — | — |
+| `weave-net` | retired as a whole (archived 2024-06-20) | — | — |
 | `external-dns` | — | compat rows | — |
 | `rke2-ingress-nginx` | — | compat rows | — |
 | `aks-app-routing-nginx` | product end of life 2026-11-30 | — | — |
@@ -143,14 +150,61 @@ their own line too: that is the version running.
 | `prometheus-operator` | — | — | — |
 | `velero` | — | — | — |
 
-So: 11 entries carry release-line EOL data kept in sync with
-[endoflife.date](https://endoflife.date), two carry an end-of-life date for
-the product as a whole (Ingress NGINX, retired; the AKS application routing
-NGINX build), 6 carry Kubernetes compatibility ranges, and for the 5 entries with
+So: 14 entries carry release-line EOL data kept in sync with
+[endoflife.date](https://endoflife.date), five are retired as a whole
+(Ingress NGINX, Kubernetes Dashboard, Promtail, Grafana Agent and Weave
+Net, each a blocker at any version), one more carries an end-of-life date
+for the product as a whole (the AKS application routing NGINX build),
+6 carry Kubernetes compatibility ranges, and for the 5 entries with
 none of these, a detected install is reported as `addon-no-data` (info)
 rather than judged. ExternalDNS and RKE2's ingress have compatibility
 ranges but no end-of-life data, which is reported the same way. The
 registry is small on purpose: every row needs a source.
+
+An image is matched by the repository path an entry declares. A path of two
+or more segments is a suffix on whole path segments: `ingress-nginx/controller` is
+`registry.k8s.io/ingress-nginx/controller` and
+`myregistry.example.com/mirror/ingress-nginx/controller`, never a bare
+`controller` repository. A one-segment path is that repository exactly, not a
+suffix. An entry can opt one distinctive name into matching under any
+registry host or prefix by writing it `"*/etcd"`; the validator refuses that
+for generic names such as `controller`, and only etcd uses it, so etcd is
+recognized at `registry.k8s.io/etcd`, `bitnamilegacy/etcd` and behind a kubeadm
+`imageRepository` or a Harbor proxy cache (`myregistry.corp/k8s/etcd`). The
+vendor builds of Ingress NGINX have their own
+entries (`rke2-ingress-nginx`, `aks-app-routing-nginx`) and the Bitnami
+rebuild is in `ingress-nginx`. No image is claimed by two entries.
+Add-ons that endoflife.date does not track and that no entry covers yet
+(cluster-autoscaler, the AWS Load Balancer Controller and the other EKS
+add-ons) are not judged; the report lists their images as unrecognized.
+
+## Cover your own add-ons
+
+`--registry-dir <file-or-directory>` on `scan`, `agent` and `serve` loads
+more registry entries from YAML in the schema of
+[`registry/CONTRIBUTING.md`](https://github.com/abd-ulbasit/upgradescope/blob/main/registry/CONTRIBUTING.md):
+one `<id>.yaml` file, or every `*.yaml` file of a directory. Each entry
+goes through the same validation as an embedded one, citations included,
+and a file that fails it stops the command at start, naming the file. An
+entry whose `id` is an embedded entry's replaces it entirely (to correct a
+date for your fleet or add a mirror's image path); any other `id` adds an
+add-on, and may not claim an image or chart an embedded entry already claims
+(the command stops at start naming both entries; replace the embedded entry
+instead). The extra entries are part of the knowledge base version, so a
+report says which registry judged it.
+
+`serve` takes the flag too, and needs it when agents push add-ons the extra
+entries cover: it judges stored inventories, and what `/gate` finds in
+posted manifests, against its own registry, so an add-on it has no entry
+for is not judged, whatever the agent detected. Give the server and the
+agents the same entries. `GET /api/v1/registry` and the dashboard's
+registry view list the embedded registry only.
+
+In the Helm chart, `agent.extraRegistry` maps `<id>.yaml` file names to
+entries and mounts them from a ConfigMap as `--registry-dir`. The server
+has no such option: pass `--registry-dir` through `server.extraArgs` and
+mount the entries with `server.extraVolumes` and
+`server.extraVolumeMounts`.
 
 ## Citations are enforced
 

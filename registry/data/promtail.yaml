@@ -1,0 +1,21 @@
+# registry/data/promtail.yaml
+# Hand-curated: endoflife.date does not track it. Grafana's Promtail page
+# states "Promtail is end of life (EOL) as of March 2, 2026. Commercial
+# support has ended." The deprecation does not include lambda-promtail, which
+# is not a pod. The grafana/helm-charts promtail chart is marked
+# `deprecated: true`.
+schema_version: 2
+id: promtail
+display_name: Promtail
+matchers:
+  images:
+    - grafana/promtail
+  charts:
+    - promtail
+support:
+  status: eol
+  eol_date: "2026-03-02"
+  citations:
+    - https://grafana.com/docs/loki/latest/send-data/promtail/
+    - https://github.com/grafana/helm-charts/blob/main/charts/promtail/Chart.yaml
+recommendation: Migrate to Grafana Alloy (the Alloy migration documentation has a tool that converts a Promtail configuration).

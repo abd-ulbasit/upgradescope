@@ -7,6 +7,9 @@ matchers:
     - ingress-nginx/controller
     - ingress-nginx/controller-chroot
     - bitnami/nginx-ingress-controller # Bitnami rebuild of the upstream controller
+    # Bitnami moved its Debian-based images to docker.io/bitnamilegacy in 2025:
+    # https://github.com/bitnami/containers/issues/83267
+    - bitnamilegacy/nginx-ingress-controller
     - kubernetes-ingress-controller/nginx-ingress-controller # pre-1.0 (quay.io, 0.x)
   charts:
     - ingress-nginx

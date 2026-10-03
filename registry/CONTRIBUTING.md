@@ -59,7 +59,11 @@ recommendation: Optional one-line remediation hint shown with findings.
 ### How matchers work
 
 - **images** are repository paths *without* the registry host, tag or
-  digest, matched as a suffix on whole path segments. `ingress-nginx/controller`
+  digest. A matcher of two or more segments is matched as a suffix on whole
+  path segments; a one-segment matcher (`etcd`) is the repository exactly
+  and never a suffix, so list a product's other paths in full
+  (`bitnami/etcd`) and a bare `controller` or `operator` claims nothing but
+  a repository of that name. `ingress-nginx/controller`
   matches `registry.k8s.io/ingress-nginx/controller`, the legacy
   `k8s.gcr.io/ingress-nginx/controller`, a mirror such as
   `harbor.example/k8s/ingress-nginx/controller` and an ECR pull-through cache
@@ -69,6 +73,19 @@ recommendation: Optional one-line remediation hint shown with findings.
   `istio/pilot`, …), and leave out images that version separately
   (`tigera/operator`, Flux's controllers). Vendor forks with their own
   support (AKS application routing, RKE2) get their own entries.
+- **Any-prefix opt-in (`"*/name"`)** — a one-segment matcher is exact, so a
+  product that is pulled from whatever mirror the operator chose (etcd,
+  behind a kubeadm `imageRepository` or a Harbor proxy cache) cannot list
+  every path. Writing the matcher as `"*/etcd"` (quote it: a YAML plain
+  scalar cannot start with `*`) declares that the final segment `etcd`
+  matches under any registry host or prefix, bare or not:
+  `registry.k8s.io/etcd`, `bitnamilegacy/etcd`, `harbor.corp/k8s/etcd`. It
+  takes exactly one segment (a longer path already matches under any
+  prefix) and only a distinctive name: the validator rejects generic ones
+  (`controller`, `operator`, `server`, `agent`, `proxy`, `manager`,
+  `webhook` and similar), which other products publish too, and the
+  embedded registry uses it for etcd alone (`TestAnyPrefixMatchersAreEtcdOnly`).
+  A provider build is still claimed only by a matcher naming the provider.
 - **Provider builds** — images under `gke.gcr.io/`, `gcr.io/gke-release/`
   or `mcr.microsoft.com/` (`ProviderBuildPrefixes` in `providers.go`), such
   as GKE's Calico and Dataplane V2 Cilium or AKS's Calico, Cilium, Istio and
@@ -118,6 +135,11 @@ per-version lifecycle source.
   `localhost`, a single-label host, any IP address). It cannot tell a wrong
   real URL from a right one: CI does not fetch citations, so the checklist
   below is yours.
+- `eol_date` of a product retired as a whole is a date a vendor page states
+  (Promtail, Grafana Agent) or, for a project with no end-of-support notice,
+  the day its repository was archived as the repository page shows it
+  (Kubernetes Dashboard, Weave Net). Where neither is available, leave the
+  date out rather than infer one: `status: eol` alone is a blocker.
 - A date is a claim, so `eol_date` needs `status: supported` or `eol`;
   `status: unknown` (which needs no citation) with a date is rejected, since
   it would print an uncited end-of-life blocker.
@@ -143,6 +165,33 @@ per-version lifecycle source.
    (schema, matchers, citations, semver ranges, id = file name, cycles on
    synced entries); no Go change is needed for a new entry.
 5. Run `make eol-check` — must report `in sync` / drift 0.
+
+## Covering add-ons only you run: `--registry-dir`
+
+An add-on the registry lacks (an in-house controller, a product too niche
+to ship) does not need a pull request to be judged in your fleet.
+`upgradescope scan`, `agent` and `serve` take `--registry-dir <path>`, a
+single `<id>.yaml` file or a directory of them, in the schema above.
+
+- Extra entries pass the same validator as the embedded ones (schema,
+  citations, id = file name): an invalid file stops the command at start
+  with an error naming the file, and a path with no `*.yaml` entry is an
+  error too, so an unmounted ConfigMap cannot silently leave add-ons unjudged.
+- An extra entry whose `id` is an embedded entry's **replaces** it entirely,
+  nothing is merged field by field: copy the embedded file and edit it to
+  correct a date for your fleet or add a mirror's image path. Any other id
+  adds an add-on.
+- No image or chart may be claimed by two entries. An extra entry whose
+  matcher claims an image or chart that an embedded entry of another id
+  already claims (the same repository, or a longer mirror path of it) stops
+  the command at start, naming both entries: replace the embedded entry
+  instead, by using its id. An `id` that is another entry's chart name (or
+  a chart that is another entry's id) is refused the same way, because a
+  pod's `app.kubernetes.io/name` label names an add-on by either.
+- The entries are part of the knowledge base version a report carries.
+- `serve` judges what agents push and what `/gate` is posted against its
+  own registry: give it the same `--registry-dir` as the agents. In the
+  Helm chart, `agent.extraRegistry` renders the ConfigMap and the flag.
 
 ## PR checklist
 

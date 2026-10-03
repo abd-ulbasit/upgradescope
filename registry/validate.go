@@ -123,6 +123,9 @@ func validateImageMatcher(m string) error {
 	if strings.ContainsAny(m, ":@") {
 		return fmt.Errorf("must not carry a tag or digest")
 	}
+	if name, ok := strings.CutPrefix(m, AnyPrefix); ok {
+		return validateAnyPrefixMatcher(name)
+	}
 	path := m
 	for _, p := range ProviderBuildPrefixes {
 		if strings.HasPrefix(m, p) {
@@ -139,6 +142,36 @@ func validateImageMatcher(m string) error {
 		if !pathSegmentPattern.MatchString(s) {
 			return fmt.Errorf("must be a lowercase repository path such as \"ingress-nginx/controller\"")
 		}
+	}
+	return nil
+}
+
+// genericImageNames are final path segments many unrelated products publish
+// ("controller", "operator", "server", ...). An any-prefix matcher
+// ("*/controller") on one would claim every other product's image of that
+// name behind any registry, so it is refused.
+var genericImageNames = map[string]bool{
+	"controller": true, "operator": true, "server": true, "agent": true,
+	"proxy": true, "manager": true, "webhook": true,
+	"api": true, "app": true, "backend": true, "frontend": true, "web": true,
+	"ui": true, "worker": true, "core": true, "node": true, "cli": true,
+	"client": true, "daemon": true, "exporter": true, "gateway": true,
+	"service": true, "sidecar": true, "init": true, "job": true,
+	"runner": true, "scheduler": true, "metrics": true,
+}
+
+// validateAnyPrefixMatcher checks the part after "*/" of an any-prefix image
+// matcher: one repository segment (so it is a name, not a path or a provider
+// location) that is distinctive rather than generic.
+func validateAnyPrefixMatcher(name string) error {
+	if strings.Contains(name, "/") {
+		return fmt.Errorf("an any-prefix matcher (%q) takes one final segment, e.g. %q; write a longer path without it, which already matches under any prefix", AnyPrefix, AnyPrefix+"etcd")
+	}
+	if !pathSegmentPattern.MatchString(name) {
+		return fmt.Errorf("must be a lowercase repository path such as \"ingress-nginx/controller\"")
+	}
+	if genericImageNames[name] {
+		return fmt.Errorf("%q is a generic name that other products publish too, so it cannot match under any registry prefix; use the vendor path (\"cilium/operator\")", name)
 	}
 	return nil
 }

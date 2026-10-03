@@ -317,3 +317,27 @@ func TestEvalAddOnsWithoutNamespace(t *testing.T) {
 		t.Errorf("findings = %+v\nwant first detail %q", fs, want)
 	}
 }
+
+// The products the registry retires as a whole (#49) are end-of-life
+// blockers at any version, judged by the embedded registry itself: editing
+// one back to `supported` fails here, not in a user's cluster.
+func TestEmbeddedRetiredProductsAreBlockers(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatalf("kb.Load: %v", err)
+	}
+	for _, id := range []string{"ingress-nginx", "kubernetes-dashboard", "promtail", "grafana-agent", "weave-net"} {
+		for _, version := range []string{"", "0.1.0", "99.0.0"} {
+			t.Run(id+"/"+version, func(t *testing.T) {
+				inv := inventory.Inventory{AddOns: []inventory.AddOnInstance{{ID: id, Version: version, Namespaces: []string{"kube-system"}, Source: "image"}}}
+				fs := evalAddOns(inv, k, inventory.Version{Major: 1, Minor: 33}, testNow)
+				if len(fs) != 1 || fs[0].Category != CatEOLAddon || fs[0].Severity != SevBlocker || fs[0].Key != "eol-addon/"+id {
+					t.Fatalf("findings = %+v, want the single blocker eol-addon/%s", fs, id)
+				}
+				if len(fs[0].Citations) == 0 {
+					t.Error("blocker carries no citations")
+				}
+			})
+		}
+	}
+}

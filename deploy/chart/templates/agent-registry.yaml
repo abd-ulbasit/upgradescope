@@ -1,0 +1,16 @@
+{{- if and .Values.agent.enabled .Values.agent.extraRegistry }}
+# agent.extraRegistry, read by agent --registry-dir at startup (the
+# Deployment's checksum/registry annotation rolls the pod when it changes).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "upgradescope.fullname" . }}-agent-registry
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+data:
+  {{- range $file, $entry := .Values.agent.extraRegistry }}
+  {{ $file }}: |
+    {{- $entry | nindent 4 }}
+  {{- end }}
+{{- end }}
