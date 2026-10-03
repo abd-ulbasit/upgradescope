@@ -634,6 +634,74 @@ func TestScopeCutsSuppressedFindings(t *testing.T) {
 	}
 }
 
+// A finding whose namespace list the engine capped is cut for a scoped
+// read even when every namespace and object it lists is the scope's: the
+// namespaces it does not list may be no team's or another's, so its
+// title's count, NamespacesOmitted and its detail's "and N more" would
+// tell the scoped read how much exists outside its teams. The fixture is
+// payments' Ingress in MaxFindingNamespaces payments namespaces plus five
+// in one no team owns, which sorts last, so every listed namespace is
+// payments' and the finding's teams are payments' only.
+func TestScopedReadCutsCappedNamespaceList(t *testing.T) {
+	_, st, ts, _ := scopeServer(t)
+	mintReadToken(t, st, "pay-tok", "payments")
+	inv := testInventory()
+	inv.ClusterID = "uid-capped"
+	counts := map[string]int{"zz-unowned": 5}
+	for i := range engine.MaxFindingNamespaces {
+		ns := fmt.Sprintf("pay-%03d", i)
+		inv.Namespaces = append(inv.Namespaces, inventory.NamespaceInfo{Name: ns, Team: "payments"})
+		counts[ns] = 1
+	}
+	inv.Namespaces = append(inv.Namespaces, inventory.NamespaceInfo{Name: "zz-unowned"})
+	inv.APIUsage = []inventory.APIUsage{{Group: "extensions", Version: "v1beta1", Kind: "Ingress", Count: engine.MaxFindingNamespaces + 5, Namespaces: counts}}
+	body, err := json.Marshal(map[string]any{"schemaVersion": 1, "clusterName": "capped", "agentVersion": "v0.2.0-test", "inventory": inv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := postSnapshot(t, ts, "ingest-tok", body, false); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("push capped = %d %v", resp.StatusCode, out)
+	}
+	c, err := st.ClusterByName(context.Background(), "capped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingress := func(token string) engine.Finding {
+		t.Helper()
+		resp, raw := fetch(t, ts, fmt.Sprintf("/api/v1/clusters/%d/findings", c.ID), token)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("findings with %s = %d %s", token, resp.StatusCode, raw)
+		}
+		var got struct {
+			Findings []engine.Finding `json:"findings"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		for _, f := range got.Findings {
+			if strings.Contains(f.Title, "Ingress") {
+				return f
+			}
+		}
+		t.Fatalf("findings with %s have no Ingress finding: %s", token, raw)
+		return engine.Finding{}
+	}
+
+	fleet := ingress("fleet-tok")
+	if fleet.NamespacesOmitted != 1 || !slices.Equal(fleet.Teams, []string{"payments"}) || !strings.Contains(fleet.Title, "105 objects") {
+		t.Fatalf("fleet-wide finding = %+v, want 1 namespace omitted, teams payments only, 105 objects: the fixture does not test the cap", fleet)
+	}
+	pay := ingress("pay-tok")
+	raw, _ := json.Marshal(pay)
+	if pay.NamespacesOmitted != 0 || strings.Contains(pay.Title, "105") || strings.Contains(pay.Detail, "more namespace") ||
+		strings.Contains(string(raw), "zz-unowned") || len(pay.Namespaces) != engine.MaxFindingNamespaces {
+		t.Errorf("payments-scoped finding = %s, want it cut: no omitted count, no 105, its %d payments namespaces", raw, engine.MaxFindingNamespaces)
+	}
+	if !strings.Contains(pay.Detail, "capped") {
+		t.Errorf("payments-scoped detail %q does not say the lists were capped", pay.Detail)
+	}
+}
+
 // Every fleet-wide credential (--read-token, a stored "*" read token, the
 // admin token) reads exactly what --read-token read before scoped tokens
 // existed: the same bytes, and no scope header.
@@ -668,6 +736,9 @@ func TestFleetWideTokensReadAsBefore(t *testing.T) {
 			}
 			if h := resp.Header.Values("X-Upgradescope-Teams"); h != nil {
 				t.Errorf("%s with %s: X-Upgradescope-Teams = %v, want none on a fleet-wide read", p, tok, h)
+			}
+			if h := resp.Header.Get("Cache-Control"); h != "" {
+				t.Errorf("%s with %s: Cache-Control = %q, want none on a fleet-wide read", p, tok, h)
 			}
 		}
 		if _, raw := postGate(t, ts, "?target=1.35&fail-on=never&cluster=mixed", tok, pspManifest, "application/x-yaml"); !bytes.Equal(raw, gateBefore) {
@@ -744,6 +815,27 @@ func TestTrustedTeamHeader(t *testing.T) {
 		// A token still reads as its own scope.
 		if _, raw := fetch(t, ts, "/api/v1/clusters", "pay-tok"); !slices.Equal(names(raw), []string{"calm", "mixed", "shared"}) {
 			t.Errorf("a scoped token through the proxy = %v, want its own scope", names(raw))
+		}
+	})
+
+	// The proxy's request has no Authorization header, so a shared cache in
+	// front of it could store one team's answer and serve it to another:
+	// every read answer varies on the team header, and a scoped one is
+	// never stored.
+	t.Run("answers are not shared-cacheable", func(t *testing.T) {
+		_, _, ts, _ := scopeServer(t, func(c *Config) { c.TrustTeamHeader, c.TrustedProxies = header, loopback })
+		for _, path := range []string{"/api/v1/clusters", "/api/v1/fleet", "/api/v1/fleet/teams"} {
+			resp, _ := fetch(t, ts, path, "", header, "payments")
+			if got := resp.Header.Get("Cache-Control"); got != "private, no-store" {
+				t.Errorf("%s scoped by the header: Cache-Control %q, want private, no-store", path, got)
+			}
+			if vary := resp.Header.Values("Vary"); !slices.Contains(vary, header) || !slices.Contains(vary, "Authorization") {
+				t.Errorf("%s scoped by the header: Vary %v, want %s and Authorization", path, vary, header)
+			}
+			resp, _ = fetch(t, ts, path, "fleet-tok")
+			if vary := resp.Header.Values("Vary"); !slices.Contains(vary, header) {
+				t.Errorf("%s fleet-wide in header mode: Vary %v, want %s", path, vary, header)
+			}
 		}
 	})
 

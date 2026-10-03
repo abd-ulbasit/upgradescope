@@ -177,7 +177,8 @@ func (sc readScope) clusterKeep(ns map[string]string) keep {
 // covers, is replaced by one that names only what is kept. Lists the
 // engine capped (NamespacesOmitted, ObjectsOmitted) cannot be divided by
 // team, so a cut finding counts none omitted and its detail says more of
-// the scope's may be affected.
+// the scope's may be affected. A finding whose namespace list was capped
+// is always cut, since its omitted namespaces may be outside the scope.
 func (k keep) cut(f engine.Finding) (engine.Finding, bool) {
 	teams := slices.DeleteFunc(slices.Clone(f.Teams), func(t string) bool { return !k.team(t) })
 	namespaces := slices.DeleteFunc(slices.Clone(f.Namespaces), func(n string) bool { return !k.namespace(n) })
@@ -185,7 +186,11 @@ func (k keep) cut(f engine.Finding) (engine.Finding, bool) {
 	objects := slices.DeleteFunc(slices.Clone(f.Objects), func(o inventory.ObjectRef) bool {
 		return !k.object(o) && (o.Namespace != "" || nsCut)
 	})
-	if len(teams) == len(f.Teams) && !nsCut && len(objects) == len(f.Objects) {
+	// A capped namespace list is cut even when every namespace it lists is
+	// kept: the namespaces it does not list may be no team's or another's,
+	// and the title's count, NamespacesOmitted and the detail's "and N
+	// more" would tell a scoped read how much of the finding is theirs.
+	if len(teams) == len(f.Teams) && !nsCut && len(objects) == len(f.Objects) && f.NamespacesOmitted == 0 {
 		return f, false
 	}
 	capped := f.NamespacesOmitted > 0 || f.ObjectsOmitted > 0
@@ -360,15 +365,24 @@ func scopeOf(r *http.Request) readScope {
 }
 
 // readAuth authorizes a read (readScope) and runs next with its scope. A
-// scoped answer names its teams in scopeHeader.
+// scoped answer names its teams in scopeHeader and is never stored by a
+// cache (Cache-Control: private, no-store). In the trusted-proxy mode
+// every answer also varies on the team header and Authorization: the
+// proxy's requests carry no Authorization, so a shared cache in front of
+// it would otherwise key one team's answer by the URL alone.
 func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.TrustTeamHeader != "" {
+			w.Header().Add("Vary", s.cfg.TrustTeamHeader)
+			w.Header().Add("Vary", "Authorization")
+		}
 		sc, ok := s.readScope(w, r)
 		if !ok {
 			return
 		}
 		if !sc.fleet() {
 			w.Header().Set(scopeHeader, strings.Join(sc.names(), ","))
+			w.Header().Set("Cache-Control", "private, no-store")
 		}
 		next(w, withScope(r, sc))
 	}
