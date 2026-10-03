@@ -635,6 +635,9 @@ func TestDocsContractsAreReleaseAssets(t *testing.T) {
 	}
 	policy := readDoc(t, "docs/compatibility-policy.md")
 	for _, c := range contracts {
+		if filepath.Ext(c) == ".go" {
+			continue // api/embed.go is the Go package that embeds the contracts, not one of them
+		}
 		rel, _ := filepath.Rel(repoRoot, c)
 		rel = filepath.ToSlash(rel)
 		for section, files := range map[string][]extraFile{

@@ -34,6 +34,7 @@ a fleet with 'serve'.
 * [upgradescope agent](upgradescope_agent.md)	 - Run the in-cluster continuous upgrade-readiness agent
 * [upgradescope clusters](upgradescope_clusters.md)	 - List, delete and rename the clusters a server knows
 * [upgradescope completion](upgradescope_completion.md)	 - Generate the autocompletion script for the specified shell
+* [upgradescope mcp](upgradescope_mcp.md)	 - Serve upgrade readiness to AI assistants over MCP (read-only)
 * [upgradescope scan](upgradescope_scan.md)	 - Scan a cluster (or rendered manifests) for upgrade readiness
 * [upgradescope serve](upgradescope_serve.md)	 - Run the upgradescope server: snapshot ingest, REST API, history, notifications
 * [upgradescope tokens](upgradescope_tokens.md)	 - Manage per-cluster ingest tokens for agent snapshot pushes
