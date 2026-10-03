@@ -1039,6 +1039,7 @@ sent, unknown fields included, so a newer server can judge them.
 |---|---|---|---|
 | `schemaVersion` | `1` | yes | — |
 | `clusterId` | string | no | The kube-system namespace UID. |
+| `collectorSchema` | integer | no | The generation of field meanings the collector filled this inventory with (1 from v0.2.0). Absent from inventories of collectors before it — v0.1.x and v0.2.0's release candidates — which are judged by the push's agentVersion: one that is not a release at or after 0.2.0-0 (including "dev" and empty) is a v0.1.x agent, whose api-usage and deprecated-calls are not assessed and whose chart-found add-on version is evidence only. |
 | `source` | `cluster` \| `files` | no | — |
 | `collectedAt` | string (date-time) | no | — |
 | `serverVersion` | string | no | The apiserver's gitVersion, e.g. v1.34.2-gke.100. |
