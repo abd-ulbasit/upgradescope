@@ -202,13 +202,15 @@ kubectl and kubeconform are also checked against their upstream sha256
 | `helm` | PR, push | `make helm-test` | `helm lint --strict`, the values render matrix, kubeconform (strict) on every render against Kubernetes 1.29 and 1.37, `hack/test-chart.sh` contract |
 | `images` | PR, push | `make images` | `Dockerfile` and `Dockerfile.release` build for linux/amd64 and linux/arm64 (nothing pushed) |
 | `pg-conformance` | PR, push (Postgres 17); weekly (14–18) | `make pg-test` (`PG_VERSION=14`, …) | the store conformance suite against a real Postgres |
-| `release-check` | PRs touching release inputs, dispatch, release | `make release-check` (no Docker: `GORELEASER_SKIP=publish,sign,sbom,docker`) | `goreleaser check` and a snapshot with the pinned GoReleaser, archive names match what `action/run.sh` downloads, `checksums.txt` covers the `api/` contracts, the sizes the README and Install page state are within 2% of the build, the binary serves the dashboard, and every flag, default or usage line the CLI lost or changed since the last release tag is named under CHANGELOG.md's Changed (`make flags-diff`) |
+| `release-check` | PRs touching release inputs, dispatch, release | `make release-check` (no Docker: `GORELEASER_SKIP=publish,sign,sbom,docker`) | `goreleaser check` and a snapshot with the pinned GoReleaser, archive names match what `action/run.sh` downloads, every `checksums.txt` name is one GitHub serves unchanged and no package carries the build host's name (a generic host name such as `localhost` or `ubuntu` can match package text and fail it: set a distinctive host name or run it in CI), `checksums.txt` covers the `api/` contracts, the sizes the README and Install page state are within 2% of the build, the binary serves the dashboard, and every flag, default or usage line the CLI lost or changed since the last release tag is named under CHANGELOG.md's Changed (`make flags-diff`) |
 | `kube` | PR, push (Kubernetes 1.31, 1.37); weekly (1.29–1.37) | `make e2e E2E_MINOR=1.31` | see below |
 | `envtest` | PRs touching more than docs, push, weekly, dispatch, release (Kubernetes 1.24–1.28) | `make envtest` (`ENVTEST_MINOR=1.24` for one minor) | the live collector and engine against a real kube-apiserver and etcd, for the minors kind has no node images for: GA-only objects give no removed-API finding or blocker, a second scan of an unchanged cluster is identical, an object written through a still-served beta API blocks at its removal minor, and unavailable or partial capabilities are reported as not assessed; see below |
 | `action` | PRs touching the action or anything the binary is built from (`cmd/`, `internal/`, `registry/`, `go.mod`/`go.sum`); weekly (Linux, macOS) | `make action-test` (offline); the rest needs a published release | `action/run.sh` offline (input validation, checksum-verified install, outputs, annotations, step summary, an injection payload); then both `action.yml` paths for real: the latest release archive, this tree's binary on removed and clean fixtures, with an ignore rule (`config`) and against a baseline (`baseline`, `write-baseline`) |
 | `registry` | PRs touching `registry/` | `go test ./registry/ && make eol-check` | registry entries are valid and in sync with endoflife.date |
 | `kb-freshness` | PR, push, weekly | `make gen-kb && git status` | the generated KB matches `tools/gen-kb`'s pinned `k8s.io/api` |
 | `ci-ok` | always | (aggregates the rest) | every other job passed or was skipped for this event; the one stable check to require on `main` |
+
+`pr-lint.yml` is a separate workflow, not a `ci.yml` job: on every PR, and again when its title or description is edited, `hack/check-breaking.sh` fails a title, description or commit with a `BREAKING CHANGE:` footer whose subject has no `!` (see [Commit conventions](#commit-conventions)). It is not part of `ci-ok`; the repository ruleset decides whether it blocks a merge.
 
 The `kube` job (`hack/e2e.sh`) runs per Kubernetes minor from
 `hack/kind-node-images.txt`, each pinned to a kind node image digest. It
@@ -268,10 +270,30 @@ table.
 ## Commit conventions
 
 - Use [Conventional Commits](https://www.conventionalcommits.org/) subjects:
-  `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `ci:`, `chore:`, with an
-  optional scope such as `fix(agent):` or `feat(registry):`. Release notes
-  are generated from these, and `docs`, `chore` and `test` commits are left
-  out of them.
+  `feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `test:`, `ci:`, `build:`,
+  `style:`, `chore:`, with an optional scope such as `fix(agent):` or
+  `feat(registry):`. The type is lowercase: GoReleaser matches it
+  case-sensitively, so `Feat:` lands under Other changes.
+- Release notes are generated from the subjects. `feat` goes under Features,
+  `fix` under Bug fixes, `perf` under Performance, and `refactor` (or any
+  other type) under Other changes. `docs`, `chore`, `test`, `ci`, `build`
+  and `style` commits are left out, unless they are marked breaking.
+- **Mark a breaking change with `!` in the subject**: `feat!:`,
+  `fix(server)!:`, `chore(deps)!:`. Only the subject is read for the release
+  notes, so `!` is what puts a change under Breaking changes, whatever its
+  type. A `BREAKING CHANGE:` (or `BREAKING-CHANGE:`) footer is welcome for the
+  explanation and the migration, but it does not mark the change by itself:
+  the `pr-lint` check fails a PR whose title, description or commits have the
+  footer without `!` in the subject (`hack/check-breaking.sh`). A squash
+  merge uses the PR title as the subject, so put the `!` there. The check
+  also reads each commit on the branch, so a branch commit with a footer
+  needs its own `!` even when the squash merge drops that subject (the
+  squash body can carry the commit messages). A line that starts with
+  `BREAKING CHANGE:` counts as a footer wherever it is, a fenced code block
+  included; indent an example. The type must be lowercase here as well:
+  `Feat!:` is refused, because the release notes would not group it as
+  breaking. List the change under **Changed** in `CHANGELOG.md` too; that
+  file is the reviewed record.
 - Use the body to explain **why**. The diff already shows what changed.
 - Reference the issue in the footer: `Refs #123`, or `Fixes #123` when the PR
   meets all of that issue's acceptance criteria.

@@ -1,0 +1,39 @@
+name: pr-lint
+
+# Release notes are built from commit subjects (.goreleaser.yml, changelog:),
+# which see `!` but not a BREAKING CHANGE footer. This fails a PR whose title,
+# description or commits say BREAKING CHANGE while the subject has no `!`
+# (hack/check-breaking.sh; CONTRIBUTING.md, "Commit conventions"). The
+# description counts because a squash merge uses the title as the subject and
+# the description as the body. `edited` re-runs it when the title or
+# description changes, which ci.yml's pull_request triggers do not.
+#
+# It reads only text and runs on pull_request (never pull_request_target), so
+# a fork's PR gets a read-only token and no secrets. Title and description
+# reach the script through env, never interpolated into the shell.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-lint-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  breaking-change:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the commit range needs the base's history
+          persist-credentials: false
+      - name: BREAKING CHANGE needs '!' in the subject
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          COMMIT_RANGE: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+        run: hack/check-breaking.sh

@@ -40,6 +40,16 @@ What this means for maintainers:
   assets of a published release, but it stops a half-failed release from
   being re-run in place. Make that trade-off before enabling it.
 
+## The `main` ruleset: required checks
+
+No JSON is kept for the `main` ruleset. It requires `ci-ok`, the one check
+that aggregates the `ci.yml` jobs. `pr-lint.yml` is a separate workflow and
+is not part of `ci-ok`, so a failing `pr-lint / breaking-change` check does
+not block a merge on its own. To make the BREAKING CHANGE rule binding, add
+`pr-lint / breaking-change` to the ruleset's required status checks
+(Settings → Rules → the `main` ruleset → Require status checks to pass).
+That is a setting for the repository admin; no file here applies it.
+
 ## `major-tag.json`: not applied
 
 `v0` is the floating major tag that `uses: abd-ulbasit/upgradescope@v0`

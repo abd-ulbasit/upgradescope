@@ -103,10 +103,14 @@ archives:
 # (and covered by checksums.txt and its signature). Named by nfpm's
 # per-format convention (upgradescope_X.Y.Z_amd64.deb, ...): unlike the
 # archives, nothing downloads them from releases/latest by a fixed name.
+# The name is written without nfpm's `~` (0.2.0~rc.2 for a pre-release):
+# GitHub serves a `~` as `.`, so checksums.txt would list a name nobody
+# downloads and `sha256sum --ignore-missing -c` would skip the package
+# (hack/check-asset-names.sh, run by release-check).
 nfpms:
   - id: packages
     package_name: upgradescope
-    file_name_template: '{{ .ConventionalFileName }}'
+    file_name_template: '{{ replace .ConventionalFileName "~" "." }}'
     vendor: upgradescope
     homepage: https://github.com/abd-ulbasit/upgradescope
     maintainer: Abdul Basit <basit@basit.engineer>
@@ -121,6 +125,11 @@ nfpms:
     formats: [deb, rpm, apk]
     bindir: /usr/bin
     mtime: '{{ .CommitDate }}'
+    # Reproducible: unless told what to write, nfpm records the build
+    # machine's host name in the rpm header (Build Host), and a rebuild
+    # elsewhere gets different bytes (#198).
+    rpm:
+      buildhost: upgradescope
     contents:
       - src: packaging/generated/completions/upgradescope.bash
         dst: /usr/share/bash-completion/completions/upgradescope
@@ -299,11 +308,14 @@ release:
   replace_existing_artifacts: true
   # The contracts listed under checksum: (#60).
   extra_files: *contracts
+  # The Homebrew line is stable-only: the tap pulls stable releases on a
+  # schedule and skips pre-releases (hack/release-footer_test.sh renders
+  # this for both). It must stay the last key of the file for that test.
   footer: |
     ## Install
 
-    - Homebrew: `brew install abd-ulbasit/tap/upgradescope`
-    - krew: `kubectl krew install upgradescope` (once the plugin is in krew-index)
+    {{ if not .Prerelease }}- Homebrew: `brew install abd-ulbasit/tap/upgradescope` (the tap pulls each stable release within about 6 hours)
+    {{ end }}- krew: `kubectl krew install upgradescope` (once the plugin is in krew-index)
     - Debian/Ubuntu, Fedora/RHEL, Alpine: the `.deb`, `.rpm` and `.apk` packages below. The packages themselves are unsigned (verify them with `checksums.txt`), so Alpine needs `apk add --allow-untrusted ./upgradescope_*.apk`.
     - Binary: download the archive for your platform below; it includes shell completions and man pages.
     - Image: `ghcr.io/abd-ulbasit/upgradescope:{{ .Version }}` (linux/amd64, linux/arm64)

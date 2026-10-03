@@ -307,6 +307,12 @@ hack-test:
 	./hack/kb-refresh-ci_test.sh
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh
+	./hack/check-asset-names_test.sh
+	./hack/check-host-leak_test.sh
+	./hack/release-footer_test.sh
+	./hack/check-breaking_test.sh
+	./hack/check-release-ancestry_test.sh
+	./hack/release-preflight_test.sh
 	./hack/flags-diff_test.sh
 	./hack/check-doc-sizes_test.sh
 	./hack/chart-release-annotations_test.sh
