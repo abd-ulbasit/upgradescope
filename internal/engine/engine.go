@@ -126,9 +126,9 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 //   - deprecated, removal beyond the window or unset → info, deprecated-api;
 //     a deprecation after the target is titled as such, and "projected"
 //     past the KB horizon
-//   - not in the KB, in a built-in group (one the KB has entries for;
-//     the generated KB covers core and every k8s.io/api group) → info,
-//     unknown-api: the KB cannot say whether the target serves it
+//   - not in the KB, in a built-in group (core, or any group k8s.io/api
+//     registers: the KB's BuiltinGroups and the groups of its entries) →
+//     info, unknown-api: the KB cannot say whether the target serves it
 //     (upstream may have deleted it), and dropping it would read as
 //     ready. Other groups (CRDs, aggregated APIs) are never in the KB and
 //     produce nothing.
@@ -137,6 +137,9 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 	builtin := map[string]bool{}
 	for _, e := range k.APILifecycle {
 		builtin[e.Group] = true
+	}
+	for _, g := range k.BuiltinGroups {
+		builtin[g.Group] = true
 	}
 	var out []Finding
 	for _, u := range inv.APIUsage {
