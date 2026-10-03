@@ -1,0 +1,22 @@
+# Applies the template to the kinds that carry an upgrade request. Edit
+# match.kinds for what carries the upgradescope.dev/upgrade-target annotation
+# in your cluster (a Cluster API Cluster, a system-upgrade-controller Plan, your
+# own runbook Job).
+#
+# warn lets the request through and shows the message to whoever applied it
+# (and in audit results). Switch to deny only after reading the README.
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: UpgradescopeReadyTarget
+metadata:
+  name: upgradescope-ready-target
+spec:
+  enforcementAction: warn
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+      - apiGroups: ["batch"]
+        kinds: ["Job"]
+  parameters:
+    crName: cluster
+    maxAgeSeconds: 3600

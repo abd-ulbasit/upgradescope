@@ -45,8 +45,9 @@ updates:
   # Workflow actions, batched the same way. The workflows pin every action to
   # a commit SHA with the version in a trailing comment; Dependabot bumps both.
   # Tool versions the workflows pass as inputs (helm) or the hack/ scripts pin
-  # (GoReleaser, govulncheck, staticcheck, kind, kubectl, kubeconform and
-  # their sha256s, the kind node images) are not visible to it and are bumped
+  # (GoReleaser, govulncheck, staticcheck, kind, kubectl, kubeconform,
+  # kyverno and gator, and their sha256s; the kind node images; the Renovate
+  # validator in hack/renovate/package.json and its lockfile) are not visible to it and are bumped
   # by hand. A GoReleaser bump goes in the Makefile and release.yml together,
   # and only to a version whose go.mod needs no newer Go than ours
   # (make check-toolchain).

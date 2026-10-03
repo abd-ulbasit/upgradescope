@@ -1,0 +1,8 @@
+{
+  "name": "upgradescope-renovate-validator",
+  "private": true,
+  "description": "Pins the Renovate release whose renovate-config-validator checks examples/renovate/upgradescope.json (hack/examples-test.sh). Dev-only (Renovate is AGPL-3.0-only and is never shipped) and bumped by hand: .github/dependabot.yml has no npm entry for this directory. Bump the version and the lockfile together: cd hack/renovate && npm install --package-lock-only --ignore-scripts.",
+  "dependencies": {
+    "renovate": "44.132.2"
+  }
+}

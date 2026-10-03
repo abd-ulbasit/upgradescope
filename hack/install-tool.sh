@@ -7,7 +7,8 @@
 # upstream publishes for that release (kind: the .sha256sum assets;
 # kubectl: dl.k8s.io/.../kubectl.sha256; kubeconform: the release's
 # CHECKSUMS file; oras: the release's oras_<v>_checksums.txt; helm-docs: the
-# release's checksums.txt), written down here so a tampered or substituted download
+# release's checksums.txt; kyverno: the release's checksums.txt; gator: the
+# release's sha256sums.txt), written down here so a tampered or substituted download
 # fails instead of running — in CI, kind and kubectl run with root-equivalent
 # access to the runner's Docker. Bump version and every checksum together,
 # from the upstream release page, never from a download of your own.
@@ -32,6 +33,8 @@ KUBECTL_VERSION=v1.37.1
 KUBECONFORM_VERSION=v0.8.0
 ORAS_VERSION=v1.3.4 # release.yml pushes the Artifact Hub metadata with it
 HELM_DOCS_VERSION=v1.14.2 # make helm-docs: the chart values tables
+KYVERNO_VERSION=v1.19.1 # make examples-test: the Kyverno CLI that tests the example policy
+GATOR_VERSION=v3.23.1 # make examples-test: Gatekeeper's offline policy verifier
 
 # sha256 <tool> <os/arch>
 sha256_for() {
@@ -56,6 +59,14 @@ sha256_for() {
     "helm-docs linux/arm64") echo c3787212332386dcd122debef7848feb165aa701467ae3e3442df7638f3ac4e4 ;;
     "helm-docs darwin/amd64") echo b2f1ffd0feef8dc0901a38a2053481d1d67b63ca30da4ac774166c6b52fa2245 ;;
     "helm-docs darwin/arm64") echo 2d8399db5b33d240d5f8985241bcf5483563150b968e3229823822979f3e4b8b ;;
+    "kyverno linux/amd64") echo b38228f367fc0fdc2b08f4c83ea50ac5f16c60ff8d62d76a66157c33c47b70ae ;;
+    "kyverno linux/arm64") echo d78fecd183e1e6749c653fdb744c88d065e6737ec6856c97c4efac84bec54554 ;;
+    "kyverno darwin/amd64") echo d9d7a857755ccd027cba8b2a5146a515c1590d65b38cb37a2170809329e4f393 ;;
+    "kyverno darwin/arm64") echo 2cf5febbedaafca5d3c7819925a49f9723bf4c3337a1327b6f72970480af385a ;;
+    "gator linux/amd64") echo c268d7b809c9fe59a110ab0bf7c296ab00b0b6c894c209cd15e94194590291bb ;;
+    "gator linux/arm64") echo 2d4bd0e28e708c2893a66fdca652f1d775b23fc5a3c07571fd314ba06d19ff2b ;;
+    "gator darwin/amd64") echo 4318b3ce4bc115ed861ff4a1df26ad1ddf3ae0c7907f20caac85affd400af39e ;;
+    "gator darwin/arm64") echo dc96df4a0bad0427b36d2b10473801528ca5bdb00f2addb34d17bb7d706ed99b ;;
   esac
 }
 
@@ -69,7 +80,9 @@ case "$tool" in
   kubeconform) version=$KUBECONFORM_VERSION ;;
   oras) version=$ORAS_VERSION ;;
   helm-docs) version=$HELM_DOCS_VERSION ;;
-  *) bad "unknown tool '$tool' (kind, kubectl, kubeconform, oras, helm-docs)" ;;
+  kyverno) version=$KYVERNO_VERSION ;;
+  gator) version=$GATOR_VERSION ;;
+  *) bad "unknown tool '$tool' (kind, kubectl, kubeconform, oras, helm-docs, kyverno, gator)" ;;
 esac
 
 platform=${UPGRADESCOPE_TOOL_PLATFORM:-$(uname -s | tr '[:upper:]' '[:lower:]')/$(uname -m)}
@@ -91,6 +104,11 @@ case "$tool" in
     hd_arch=${arch/amd64/x86_64}
     url="https://github.com/norwoodj/helm-docs/releases/download/$version/helm-docs_${version#v}_${hd_os}_$hd_arch.tar.gz"
     ;;
+  kyverno)
+    # Asset names spell the architecture x86_64.
+    url="https://github.com/kyverno/kyverno/releases/download/$version/kyverno-cli_${version}_${os}_${arch/amd64/x86_64}.tar.gz"
+    ;;
+  gator) url="https://github.com/open-policy-agent/gatekeeper/releases/download/$version/gator-$version-$os-$arch.tar.gz" ;;
 esac
 url=${UPGRADESCOPE_TOOL_URL:-$url}
 
@@ -125,6 +143,14 @@ case "$tool" in
   helm-docs)
     tar -xzf "$work/download" -C "$work" helm-docs || die "no helm-docs in the $version archive"
     mv "$work/helm-docs" "$work/bin"
+    ;;
+  kyverno)
+    tar -xzf "$work/download" -C "$work" kyverno || die "no kyverno in the $version archive"
+    mv "$work/kyverno" "$work/bin"
+    ;;
+  gator)
+    tar -xzf "$work/download" -C "$work" gator || die "no gator in the $version archive"
+    mv "$work/gator" "$work/bin"
     ;;
   *) mv "$work/download" "$work/bin" ;;
 esac

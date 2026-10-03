@@ -79,6 +79,7 @@ nav:
       - Managed clusters: guides/managed-clusters.md
       - Upgrade plans: guides/upgrade-plan.md
       - GitOps with Argo CD and Flux: guides/gitops-argo-flux.md
+      - Acting on readiness: guides/acting-on-readiness.md
       - Prometheus and Grafana: guides/prometheus-grafana.md
       - Suppressions and baselines: guides/suppressions-and-baselines.md
       - Other CI systems: guides/other-ci.md

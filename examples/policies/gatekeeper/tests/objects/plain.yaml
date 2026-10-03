@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plain
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: plain}
+  template:
+    metadata:
+      labels: {app: plain}
+    spec:
+      containers:
+        - name: app
+          image: registry.example/app:1

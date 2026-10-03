@@ -1,0 +1,46 @@
+# Run by `make examples-test` (hack/examples-test.sh), or by hand:
+#   gator verify examples/policies/gatekeeper/tests/suite.yaml
+#
+# The inventory is what Gatekeeper's sync would have replicated. "Fresh" in
+# inventory/fresh.yaml is a lastEvaluated in the year 2200: gator has no clock
+# to set, so a date that is never in the past stands for "just evaluated".
+# A lastEvaluated in the future (clock skew) counts as fresh by design: the
+# policy only fails open on data that is too old.
+# inventory/stale.yaml is 2020, always more than an hour ago.
+kind: Suite
+apiVersion: test.gatekeeper.sh/v1alpha1
+tests:
+  - name: upgradescope-ready-target
+    template: ../template.yaml
+    constraint: ../constraint.yaml
+    cases:
+      - name: ready target is allowed
+        object: objects/upgrade-to-1-36.yaml
+        inventory: [inventory/fresh.yaml]
+        assertions:
+          - violations: no
+      - name: not-ready target with fresh readiness is a violation
+        object: objects/upgrade-to-1-37.yaml
+        inventory: [inventory/fresh.yaml]
+        assertions:
+          - violations: 1
+            message: "Kubernetes 1.37 is not ready"
+      - name: not-ready target with stale readiness fails open
+        object: objects/upgrade-to-1-37.yaml
+        inventory: [inventory/stale.yaml]
+        assertions:
+          - violations: no
+      - name: target the agent never assessed fails open
+        object: objects/upgrade-to-1-38.yaml
+        inventory: [inventory/fresh.yaml]
+        assertions:
+          - violations: no
+      - name: no ClusterReadiness fails open
+        object: objects/upgrade-to-1-37.yaml
+        assertions:
+          - violations: no
+      - name: workload without the annotation is not an upgrade request
+        object: objects/plain.yaml
+        inventory: [inventory/fresh.yaml]
+        assertions:
+          - violations: no

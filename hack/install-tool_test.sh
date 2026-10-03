@@ -43,7 +43,12 @@ expect "oras tarball checksum mismatch fails" 1 "sha256 mismatch for oras" oras 
   UPGRADESCOPE_TOOL_URL="file://$work/junk"
 expect "helm-docs tarball checksum mismatch fails" 1 "sha256 mismatch for helm-docs" helm-docs \
   UPGRADESCOPE_TOOL_URL="file://$work/junk"
-
+expect "kyverno tarball checksum mismatch fails" 1 "sha256 mismatch for kyverno" kyverno \
+  UPGRADESCOPE_TOOL_URL="file://$work/junk"
+expect "gator tarball checksum mismatch fails" 1 "sha256 mismatch for gator" gator \
+  UPGRADESCOPE_TOOL_URL="file://$work/junk"
+expect "gator has no windows pin" 2 "no pinned gator for windows/amd64" gator \
+  UPGRADESCOPE_TOOL_PLATFORM=windows/amd64
 
 # The printed path must work from any directory: release.yml cds into
 # packaging/artifacthub before running the oras it installed. A relative
