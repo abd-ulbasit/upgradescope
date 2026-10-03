@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +47,7 @@ type pusher struct {
 	url   string // base server URL, trailing slash trimmed
 	token string
 	hc    *http.Client
+	log   *slog.Logger                                     // nil = slog.Default()
 	wait  func(ctx context.Context, d time.Duration) error // injectable for deterministic tests
 
 	mu      sync.Mutex
@@ -72,8 +75,14 @@ func newPusher(serverURL, token string) *pusher {
 	return &pusher{
 		url:   strings.TrimRight(serverURL, "/"),
 		token: token,
-		hc:    &http.Client{Timeout: 30 * time.Second},
-		wait:  waitFor,
+		hc: &http.Client{
+			Timeout: 30 * time.Second,
+			// Never follow a redirect: Go turns a 301/302/303 POST into a
+			// body-less GET, which a login page or SPA can answer 200 and the
+			// push would count as delivered. send reports any 3xx instead.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		wait: waitFor,
 	}
 }
 
@@ -88,6 +97,13 @@ func waitFor(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+func (p *pusher) logger() *slog.Logger {
+	if p.log != nil {
+		return p.log
+	}
+	return slog.Default()
 }
 
 // offer replaces any pending snapshot with the newer one.
@@ -114,7 +130,7 @@ func (p *pusher) flush(ctx context.Context) error {
 	}
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		permanent, err := p.send(ctx, *pl)
+		permanent, retryAfter, err := p.send(ctx, *pl)
 		if err == nil {
 			p.clear(pl)
 			return nil
@@ -127,11 +143,33 @@ func (p *pusher) flush(ctx context.Context) error {
 		if attempt == pushRetries {
 			break
 		}
-		if werr := p.wait(ctx, backoff(attempt)); werr != nil {
+		if werr := p.wait(ctx, retryDelay(attempt, retryAfter)); werr != nil {
 			return werr
 		}
 	}
 	return fmt.Errorf("push snapshot after %d attempts (kept buffered): %w", pushRetries+1, lastErr)
+}
+
+// retryDelay is the wait before retry n: the backoff step, or the server's
+// Retry-After when that asks for longer, never beyond maxPushBackoff.
+func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	return min(max(backoff(attempt), retryAfter), maxPushBackoff)
+}
+
+// parseRetryAfter reads a Retry-After value, delta-seconds or an HTTP-date
+// (RFC 9110 §10.2.3); 0 when absent, malformed or not in the future.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(min(secs, int64(maxPushBackoff/time.Second))) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		return max(t.Sub(now), 0)
+	}
+	return 0
 }
 
 // clear drops pl iff it is still the pending payload — a newer offer made
@@ -144,49 +182,61 @@ func (p *pusher) clear(pl *pushPayload) {
 	}
 }
 
-func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, err error) {
+// send makes one attempt. retryAfter is the server's Retry-After on a
+// transient failure (0 = none).
+func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, retryAfter time.Duration, err error) {
 	body, err := json.Marshal(pl)
 	if err != nil {
-		return true, fmt.Errorf("marshal snapshot: %w", err)
+		return true, 0, fmt.Errorf("marshal snapshot: %w", err)
 	}
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	if _, err := zw.Write(body); err != nil {
-		return true, fmt.Errorf("gzip snapshot: %w", err)
+		return true, 0, fmt.Errorf("gzip snapshot: %w", err)
 	}
 	if err := zw.Close(); err != nil {
-		return true, fmt.Errorf("gzip snapshot: %w", err)
+		return true, 0, fmt.Errorf("gzip snapshot: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url+"/api/v1/snapshots", &buf)
 	if err != nil {
-		return true, fmt.Errorf("build push request: %w", err)
+		return true, 0, fmt.Errorf("build push request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+p.token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	resp, err := p.hc.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("push snapshot: %w", err)
+		return false, 0, fmt.Errorf("push snapshot: %w", err)
 	}
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusOK: // 202 accepted, 200 duplicate
 		// Drain (bounded) so the keep-alive connection can be reused.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return false, nil
+		return false, 0, nil
 	case resp.StatusCode == http.StatusUnauthorized:
-		return true, fmt.Errorf("server rejected push (401): check --server-token")
+		return true, 0, fmt.Errorf("server rejected push (401): check --server-token")
 	case resp.StatusCode == http.StatusUnprocessableEntity:
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return true, fmt.Errorf("server rejected snapshot (422): %s", strings.TrimSpace(string(msg)))
-	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests:
+		return true, 0, fmt.Errorf("server rejected snapshot (422): %s", strings.TrimSpace(string(msg)))
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// Never followed (see newPusher): resending the body to the Location
+		// could leak it, and a body-less GET can "succeed" without delivering
+		// anything. The URL is wrong, so identical retries cannot succeed.
+		loc := resp.Header.Get("Location")
+		err := fmt.Errorf("server redirected the push (%s) to %q: the push is never sent to a redirect target; use the final URL in --server-url", resp.Status, loc)
+		p.logger().Error("snapshot push refused: the server answered with a redirect", "status", resp.Status, "location", loc, "serverUrl", p.url, "hint", "use the final URL in --server-url")
+		return true, 0, err
+	case resp.StatusCode == http.StatusRequestTimeout:
 		// Retryable by definition despite being 4xx.
-		return false, fmt.Errorf("server returned %s", resp.Status)
+		return false, 0, fmt.Errorf("server returned %s", resp.Status)
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable:
+		return false, parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()), fmt.Errorf("server returned %s", resp.Status)
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
 		// Any other 4xx: the request itself is wrong; identical retries cannot succeed.
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return true, fmt.Errorf("server rejected push (%s): %s", resp.Status, strings.TrimSpace(string(msg)))
+		return true, 0, fmt.Errorf("server rejected push (%s): %s", resp.Status, strings.TrimSpace(string(msg)))
 	default: // 5xx and anything unexpected: transient
-		return false, fmt.Errorf("server returned %s", resp.Status)
+		return false, 0, fmt.Errorf("server returned %s", resp.Status)
 	}
 }

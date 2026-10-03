@@ -395,3 +395,33 @@ func TestTickReportsPushResult(t *testing.T) {
 		t.Errorf("tick report = %+v, want push failed with pushErr and no tick error", r.last)
 	}
 }
+
+// A redirect on the push is a failed push every tick, never push=ok then
+// push=unchanged (#190): the redirected GET a login page answers 200 must
+// not advance the hash gate, and each failure feeds the push-error metric.
+func TestTickRedirectedPushFailsEveryTick(t *testing.T) {
+	ctx := context.Background()
+	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(dest.Close)
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, dest.URL+"/login", http.StatusFound)
+	}))
+	t.Cleanup(src.Close)
+	r := testRunner(t, fakeDyn(), src.URL)
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	o := newTestObserver(t, &now)
+	for i := 1; i <= 2; i++ {
+		if err := r.tick(ctx); err == nil {
+			t.Fatalf("tick %d: want the redirected push reported as an error", i)
+		}
+		if r.last.push != pushFailed || r.last.pushErr == nil {
+			t.Fatalf("tick %d report = %+v, want push failed", i, r.last)
+		}
+		o.record(r.last)
+	}
+	if _, body := serve(t, o.handler(), "/metrics"); !strings.Contains(body, "upgradescope_agent_push_errors_total 2\n") {
+		t.Errorf("/metrics does not show two push errors:\n%s", body)
+	}
+}

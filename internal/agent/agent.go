@@ -162,6 +162,7 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 	}
 	if cfg.ServerURL != "" {
 		r.pusher = newPusher(cfg.ServerURL, cfg.ServerToken)
+		r.pusher.log = cfg.Logger
 	}
 	return r
 }
