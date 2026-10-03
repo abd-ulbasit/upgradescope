@@ -9,7 +9,10 @@
 # Usage: hack/check-host-leak.sh <package>...
 # Scans for this machine's host name (full and short) and each newline-
 # separated name in UPGRADESCOPE_LEAK_NAMES (build paths). Names under four
-# characters are ignored: they match too much to mean anything.
+# characters are ignored: they match too much to mean anything, and so is a
+# name equal to the pinned build host. A generic host name such as localhost
+# can still match package text, and fails the scan: a raw substring match
+# cannot tell an rpm header from file content.
 # UPGRADESCOPE_LEAK_HOSTNAME replaces `hostname` (hack/check-host-leak_test.sh).
 # Offline.
 set -euo pipefail
@@ -17,6 +20,7 @@ set -euo pipefail
 die() { echo "::error::host-leak: $*" >&2; exit 1; }
 [ "$#" -gt 0 ] || die "usage: $0 <package>..."
 
+pinned=upgradescope # nfpms[].rpm.buildhost in .goreleaser.yml
 host=${UPGRADESCOPE_LEAK_HOSTNAME:-$(hostname)}
 names=$(
   printf '%s\n' "$host" "${host%%.*}"
@@ -27,6 +31,8 @@ for f in "$@"; do
   [ -f "$f" ] || die "$f: no such file"
   while IFS= read -r name; do
     [ "${#name}" -ge 4 ] || continue
+    # A host named like the pinned build host writes the same header anyway.
+    [ "$name" != "$pinned" ] || continue
     if grep -aqF -- "$name" "$f"; then
       if [ "$name" = "$host" ] || [ "$name" = "${host%%.*}" ]; then
         die "$f carries the build host name '$name': pin it (.goreleaser.yml nfpms[].rpm.buildhost) so a rebuild elsewhere matches"

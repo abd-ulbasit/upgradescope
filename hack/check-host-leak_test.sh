@@ -38,6 +38,8 @@ UPGRADESCOPE_LEAK_NAMES=/tmp/build-a expect "an extra name (a build path) is ref
 UPGRADESCOPE_LEAK_NAMES=/tmp/build-a expect "an extra name absent from the package passes" 0 "no build-machine names" "$work/clean.rpm"
 expect "a missing file fails" 1 "no such file" "$work/absent.rpm"
 UPGRADESCOPE_LEAK_HOSTNAME=ab expect "a name under 4 characters is ignored (too common to mean anything)" 0 "no build-machine names" "$work/clean.rpm"
+printf 'RPM\0\0header\0%s\0payload' upgradescope >"$work/pinned.rpm"
+UPGRADESCOPE_LEAK_HOSTNAME=upgradescope expect "a host named like the pinned build host is no leak (the header is the same either way)" 0 "no build-machine names" "$work/pinned.rpm"
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)
