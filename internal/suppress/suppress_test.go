@@ -242,7 +242,8 @@ func TestApplyLegacyAnnotationsWarnDeprecated(t *testing.T) {
 	want := []string{
 		": ignore[0] (category kb-stale) expired on 2020-01-01 and no longer applies",
 		apigroup.LegacyIgnoreWarning([]string{"shop/web (app.yaml:3)", "internal/api (app.yaml:9)"}),
-		"object internal/api (app.yaml:9): " + apigroup.IgnoreAnnotation + " annotation without " + apigroup.IgnoreReasonAnnotation + " is not applied",
+		// Names the keys the object carries, not the new ones it was never given.
+		"object internal/api (app.yaml:9): " + apigroup.LegacyIgnoreAnnotation + " annotation without " + apigroup.LegacyIgnoreReasonAnnotation + " is not applied",
 	}
 	if !reflect.DeepEqual(warnings, want) {
 		t.Errorf("warnings =\n%s\nwant\n%s", strings.Join(warnings, "\n"), strings.Join(want, "\n"))

@@ -348,7 +348,13 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (kept *engine.Fi
 			}
 			reason := strings.TrimSpace(o.IgnoreReason)
 			if reason == "" {
-				warnings = append(warnings, fmt.Sprintf("object %s: %s annotation without %s is not applied", objectName(o), apigroup.IgnoreAnnotation, apigroup.IgnoreReasonAnnotation))
+				// Name the keys the object carries: an object still on the
+				// pre-v0.2.0 keys never had the new ones.
+				ignoreKey, reasonKey := apigroup.IgnoreAnnotation, apigroup.IgnoreReasonAnnotation
+				if o.IgnoreLegacyKey {
+					ignoreKey, reasonKey = apigroup.LegacyIgnoreAnnotation, apigroup.LegacyIgnoreReasonAnnotation
+				}
+				warnings = append(warnings, fmt.Sprintf("object %s: %s annotation without %s is not applied", objectName(o), ignoreKey, reasonKey))
 				return false
 			}
 			g, ok := byReason[reason]
