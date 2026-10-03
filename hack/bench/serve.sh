@@ -82,7 +82,9 @@ start_postgres() { # sets PG_DSN (as the machine running the benchmark reaches i
   docker info >/dev/null 2>&1 || die "no Docker engine reachable (needed for the postgres backend)"
   local addr password port
   addr=$(docker_host_address)
-  password=$(LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 24)
+  # od reads a fixed amount: a `tr </dev/urandom | head` pipeline dies of SIGPIPE
+  # under pipefail, and set -e ends the script without a word.
+  password=$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')
   container=upgradescope-bench-pg-$$
   # Published on the engine host's address only (not every interface).
   docker run -d --name "$container" -e POSTGRES_PASSWORD="$password" -e POSTGRES_DB=upgradescope \
@@ -95,11 +97,9 @@ start_postgres() { # sets PG_DSN (as the machine running the benchmark reaches i
   done
   [ -n "$ready" ] || { docker logs "$container" | tail -20 >&2; die "postgres did not become ready"; }
   PG_VERSION_STRING=$(docker exec "$container" psql -U postgres -At -c 'SHOW server_version')
-  if [ "$BENCH_RUN_ON" = local ]; then
-    PG_DSN="postgres://postgres:$password@$addr:$port/upgradescope?sslmode=disable"
-  else
-    PG_DSN="postgres://postgres:$password@127.0.0.1:$port/upgradescope?sslmode=disable"
-  fi
+  # The port is published on $addr only, which the Docker host reaches
+  # itself as well as anyone else does (not on its loopback).
+  PG_DSN="postgres://postgres:$password@$addr:$port/upgradescope?sslmode=disable"
   echo "bench-serve: postgres $PG_VERSION_STRING ($container) published at $addr:$port" >&2
 }
 

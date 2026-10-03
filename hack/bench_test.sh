@@ -125,6 +125,24 @@ expect "agent-report.sh: no file is a usage error" 2 "usage" -- hack/bench/agent
 expect "serve.sh: an unknown backend is refused" 1 "unknown backend mysql" -- env BENCH_BACKENDS=mysql BENCH_BIN="$work/bin" GO_STUB_RC=0 hack/bench/serve.sh
 expect "serve.sh: postgres without a Docker engine is refused" 1 "no Docker engine reachable" -- env BENCH_BACKENDS=postgres BENCH_BIN="$work/bin" GO_STUB_RC=0 hack/bench/serve.sh
 
+# A Docker engine that answers: serve.sh starts its throwaway Postgres (a
+# password drawn under pipefail once ended it silently) and gets as far as
+# running the benchmark (127: the go stub built no binary to run).
+mkdir -p "$work/stubs-docker"
+cat >"$work/stubs-docker/docker" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  info) exit 0 ;;
+  context) echo "unix:///var/run/docker.sock" ;;
+  run) echo "container-id" ;;
+  port) echo "127.0.0.1:55432" ;;
+  exec) echo "17.0" ;;
+  rm) exit 0 ;;
+esac
+STUB
+chmod +x "$work/stubs-docker/docker"
+expect "serve.sh: a Docker engine that answers gets a postgres, with a password drawn" 127 "published at 127.0.0.1:55432" -- env PATH="$work/stubs-docker:$PATH" BENCH_BACKENDS=postgres BENCH_BIN="$work/bin2" GO_STUB_RC=0 hack/bench/serve.sh
+
 round() { # round <backend> <pushers> <name> <pushes/s> <p99>
   jq -nc --arg b "$1" --argjson c "$2" --arg r "$3" --argjson tps "$4" --argjson p99 "$5" '{
     backend: $b, concurrency: $c, round: $r, clusters: 200, targets: 3, pushes: 200, accepted: 200, duplicates: 0, failed: 0,
