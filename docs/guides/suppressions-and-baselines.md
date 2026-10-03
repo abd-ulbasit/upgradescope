@@ -250,6 +250,7 @@ becomes "2 objects"). Examples:
 | Version skew | `version-skew/kubelet-post-upgrade`, `version-skew/<component>-newer` or `-behind`, `version-skew/upgrade-path` |
 | Unknown built-in API | `unknown-api/<group>/<version>/<kind>` |
 | CRD version | `crd-version/unserved/<group>/<version>/<kind>`, `crd-version/deprecated/…`, `crd-version/stored-unserved/…` |
+| Managed-provider support | `support-lifecycle/<provider>/<minor>`, e.g. `support-lifecycle/eks/1.34` |
 | Knowledge base behind the target | `kb-stale` |
 
 `--output json` shows the key of every finding, and the SARIF output uses

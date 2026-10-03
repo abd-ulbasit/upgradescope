@@ -48,6 +48,11 @@ Served: true. Storage version: true.
 | `status.kbVersion` | string | — | — |
 | `status.lastEvaluated` | string | — | format date-time |
 | `status.agentVersion` | string | — | — |
+| `status.supportPhase` | string | Where the cluster's Kubernetes minor stands in its managed provider's (EKS, GKE, AKS) support calendar - standard, ending (standard support ends within 90 days), extended (past standard support, before the provider stops supporting it) or ended. Absent when the provider is not one of the three or its dates for the minor are not in the knowledge base. The same for every target. | one of `standard`, `ending`, `extended`, `ended` |
+| `status.extendedSupportFrom` | string | The day (UTC, YYYY-MM-DD) standard support for the cluster's minor ends and extended support begins. Set with supportPhase. | pattern `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` |
+| `status.annualCostDelta` | string | What extended support adds per cluster per year at the provider's published list price, (extended - standard) x 8760 cluster-hours, as a decimal string in currency. A list price as of priceAsOf, not the bill. Set only for a provider whose price the knowledge base cites, while the minor can still be in extended support. | pattern `^[0-9]+\.[0-9]{2}$` |
+| `status.currency` | string | The currency of annualCostDelta. | one of `USD` |
+| `status.priceAsOf` | string | The day (YYYY-MM-DD) the list price behind annualCostDelta was read from the provider's pricing page. | pattern `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` |
 | `status.observedGeneration` | integer | The metadata.generation (spec version) the status was evaluated for. | format int64; minimum 0 |
 | `status.conditions` | array | Standard conditions. Ready summarizes the first target's verdict: True (ready), False (reason Blocked), or Unknown (reason NotAssessed: a required check was not assessed, or no target was evaluated). | — |
 | `status.conditions[]` | object | — | — |

@@ -850,7 +850,8 @@ components:
       description: |
         One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`,
         `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`,
-        `kb-stale`, `addon-no-data`, `unknown-api`, `crd-version`. A release may add
+        `kb-stale`, `addon-no-data`, `unknown-api`, `crd-version`,
+        `support-lifecycle`. A release may add
         categories under `/api/v1`, so this is not an enum: treat one you do
         not know by its severity.
       example: removed-api
@@ -1047,6 +1048,44 @@ components:
           items: {type: string}
           description: "Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200."
         unrecognizedImagesOmitted: {type: integer, minimum: 1, description: Unrecognized image repositories beyond the 200 listed.}
+        support: {$ref: "#/components/schemas/SupportStatus"}
+    SupportStatus:
+      type: object
+      description: |
+        A cluster on EKS, GKE or AKS whose Kubernetes minor the knowledge base
+        dates: where that minor stands in the provider's support calendar,
+        whether or not it is a finding (see the `support-lifecycle` category).
+        Absent for other clusters and when the provider's dates for the minor
+        are not known. The same for every target.
+      required: [provider, minor, phase, extendedSupportFrom]
+      properties:
+        provider: {type: string, enum: [eks, gke, aks], description: The managed Kubernetes service the collector inferred from the server version suffix and the nodes' managed node pool labels.}
+        minor: {type: string, pattern: '^[0-9]+\.[0-9]+$', description: The control plane's Kubernetes minor.}
+        phase:
+          type: string
+          enum: [standard, ending, extended, ended]
+          description: |
+            `standard`: standard support, not ending within 90 days. `ending`:
+            standard support ends within 90 days. `extended`: past standard
+            support, before the provider stops supporting the minor (EKS and
+            GKE bill it; AKS offers platform support, or Long Term Support on
+            the Premium tier). `ended`: past the end of extended support, or
+            past standard support for a minor with no extended support.
+        extendedSupportFrom: {type: string, format: date, description: The day (UTC) standard support ends and extended support begins. EKS bills extended support from the start of this day.}
+        extendedSupportEnds: {type: string, format: date, description: The day extended support ends; absent when the provider offered none for the minor.}
+        annualCostDelta:
+          type: string
+          pattern: '^[0-9]+\.[0-9]{2}$'
+          description: |
+            What extended support adds per cluster per year at the provider's
+            published list price, (extended - standard) x 8760 cluster-hours,
+            as a decimal string in `currency`. A list price as of
+            `priceAsOf`, not the customer's bill: prices change and vary by
+            contract. Present only when the knowledge base cites the
+            provider's price and the minor can still be in extended support
+            (not in phase `ended`); never inferred.
+        currency: {type: string, enum: [USD], description: The currency of `annualCostDelta`.}
+        priceAsOf: {type: string, format: date, description: The day the list price behind `annualCostDelta` was read from the provider's pricing page.}
     ReportMeta:
       type: object
       required: [evaluatedAt, snapshotId, source]
@@ -1287,6 +1326,7 @@ components:
         namespaces: {type: array, items: {type: object}}
         unrecognizedImages: {type: array, items: {type: string}, description: "Image repositories no add-on image matcher claims; sorted, deduplicated, at most 200."}
         unrecognizedImagesOmitted: {type: integer, description: Unrecognized image repositories the cap dropped.}
+        provider: {type: string, enum: [eks, gke, aks, other], description: "The managed Kubernetes service the collector inferred, or `other` when the cluster shows none of the three; absent when it could not tell (the nodes were unreadable and the server version names no provider). Refused (422) when it is another value."}
         crds: {type: array, items: {type: object}, description: "CustomResourceDefinitions: versions, status.storedVersions, and the custom resources at a deprecated or unserved version."}
         apiServerStartTime: {type: string, format: date-time, description: "process_start_time_seconds of the kube-apiserver whose /metrics deprecatedCalls were read from, in whole seconds: apiserver_requested_deprecated_apis counts requests since then. Absent when the scrape did not report it. Not part of the snapshot's identity, like collectedAt: a push that differs only in it is a duplicate. The server ignores one before 2014 or more than 10 minutes after collectedAt."}
     PushAccepted:

@@ -83,10 +83,13 @@ target.
 | `kb-stale` | — | The cluster or the target is newer than the knowledge base's horizon. | — |
 | `addon-no-data` | — | — | A detected add-on whose version has no lifecycle data. |
 | `unknown-api` | — | — | An object of a built-in API group (core, or any group the generator's scheme registers (`k8s.io/api` plus the apiextensions and apiregistration schemes), such as `imagepolicy.k8s.io`) at a version or kind the knowledge base does not know, such as the typo `apps/v1beta9`: whether the target serves it was not assessed. API groups of CRDs produce nothing. |
+| `support-lifecycle` | A cluster on EKS, GKE or AKS whose Kubernetes minor is past the provider's standard support (in extended support, or out of support). **Whatever the target.** | Standard support for the minor ends within 90 days. | — |
 | `crd-version` | Custom resources at a version their CRD does not serve (`served: false`, or no longer listed): the apiserver rejects them. **Whatever the target.** | Custom resources written through a version the CRD marks `deprecated: true`; a `status.storedVersions` entry the CRD no longer serves. | A deprecated CRD version nothing was found using. |
 
 [Version skew](version-skew.md) has the skew rules; the
-[add-on registry](addon-registry.md) the EOL data.
+[add-on registry](addon-registry.md) the EOL data, and
+[managed-provider support](support-lifecycle.md) the `support-lifecycle` finding
+and its cost line.
 
 ## The score
 

@@ -75,6 +75,7 @@ nav:
       - Add-on registry: concepts/addon-registry.md
       - Deprecated-API detection: concepts/api-usage-detection.md
       - Version skew: concepts/version-skew.md
+      - Managed-provider support: concepts/support-lifecycle.md
   - Guides:
       - Managed clusters: guides/managed-clusters.md
       - Upgrade plans: guides/upgrade-plan.md

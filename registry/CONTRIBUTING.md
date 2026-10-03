@@ -154,6 +154,52 @@ per-version lifecycle source.
   comment where the day comes from (see `ingress-nginx.yaml`,
   `aks-app-routing-nginx.yaml`).
 
+## Managed-provider support calendars
+
+`registry/data/providers/{eks,gke,aks}.yaml` are a dataset of their own
+(`schema_version: 1`, `registry.ProviderSupport`): for each Kubernetes
+minor of a managed service, when standard support ends and when extended
+support ends. `internal/engine` uses them for the `support-lifecycle`
+finding (see [managed-provider
+support](https://abd-ulbasit.github.io/upgradescope/concepts/support-lifecycle/)).
+
+```yaml
+schema_version: 1
+id: eks                          # eks | gke | aks, = file name
+display_name: Amazon EKS
+endoflife_product: amazon-eks    # optional: tools/eol-sync owns `versions`
+extended_support_note: One sentence on what extended support means here.
+citations: [https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html]
+pricing:                         # optional, hand-entered, USD per cluster-hour
+  currency: USD
+  standard_per_cluster_hour: 0.10
+  extended_per_cluster_hour: 0.60   # the whole price in extended support
+  as_of: "2026-10-03"               # the day you read the pricing page
+  note: charged only for ...        # optional: whom the price applies to
+  citations: [https://aws.amazon.com/eks/pricing/]
+versions:                        # newest first
+  - {minor: "1.34", standard_end: "2026-12-02", extended_end: "2027-12-02"}
+  - {minor: "1.20", standard_end: "2022-11-01"}   # no extended support offered
+```
+
+- `standard_end` is the day extended support begins (EKS bills from the
+  start of that day, UTC); `extended_end` is the day the provider stops
+  supporting the minor, and must be later. Quote every minor.
+- `endoflife_product` is set for EKS and AKS: `tools/eol-sync` (`make
+  eol-sync`) rewrites `versions` from the API, mapping `eol` to
+  `standard_end` and `extendedSupport` to `extended_end`, and `make
+  eol-check` reports drift. GKE has no slug (endoflife.date has no extended
+  end for it and its standard dates differ from Google's) and is read by
+  hand from Google's release schedule; leave out minors whose dates are
+  still a month or quarter estimate.
+- **A price is entered only when the provider's own pricing page states it
+  unambiguously**, with that page as the citation and the day you read it
+  as `as_of`. Leave `pricing` out otherwise (AKS): the finding then has
+  dates and no cost line. Never derive a number. Prices are list prices;
+  the finding labels them so.
+- A minor missing from `versions` gets no finding. Files in
+  `registry/data/providers` must be `<id>.yaml`.
+
 ## Adding an add-on, step by step
 
 1. Create `registry/data/<id>.yaml` (file name = `id`, `.yaml` extension;

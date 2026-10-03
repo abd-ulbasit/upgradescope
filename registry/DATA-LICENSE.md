@@ -31,6 +31,14 @@ with its end-of-life date and the Kubernetes range it supports, is synced by
 (`https://endoflife.date/api/<slug>.json`), one cycle at a time. eol-sync
 never writes `support.status` or `support.eol_date`: a person records those.
 
+The managed-provider calendars in `registry/data/providers` follow the same
+rule. The `versions` of `eks.yaml` (`amazon-eks`) and `aks.yaml`
+(`azure-kubernetes-service`) are synced from endoflife.date, and are the
+same kind of dated fact. `gke.yaml` is read by hand from Google's release
+schedule, and the prices are read by hand from the providers' pricing pages;
+each cites the page and, for a price, the day it was read. A price is a list
+price, not a quote.
+
 endoflife.date is published under the
 [MIT License](https://github.com/endoflife-date/endoflife.date/blob/master/LICENSE),
 Copyright 2020 endoflife.date contributors. We confirmed this on 2026-10-02
