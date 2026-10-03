@@ -649,24 +649,30 @@ func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.I
 		errs = append(errs, terr)
 	} else {
 		// spec.ignore and object annotations apply per report; their
-		// warnings (expired or invalid rules, reason-less annotations) are
-		// the same for every target, so each is noted once.
+		// warnings (expired or invalid rules, deprecated annotation keys,
+		// reason-less annotations) are mostly the same for every target,
+		// so each is noted once.
 		reports := make([]engine.Report, 0, len(targets))
+		var ignoreNotes []string
 		for _, target := range targets {
 			report, warnings := suppress.Apply(engine.Evaluate(inv, r.kb, target, r.now()), spec.Ignore,
 				suppress.Options{Now: r.now(), Source: ignoreSource})
 			for _, w := range warnings {
-				if !slices.Contains(notes, w) {
-					notes = append(notes, w)
+				if !slices.Contains(ignoreNotes, w) {
+					ignoreNotes = append(ignoreNotes, w)
 				}
 			}
 			reports = append(reports, report)
 		}
 		st = crd.StatusFromReports(reports, inv.ServerVersion, AgentVersion, r.now())
-		// Target-selection notes lead: WriteStatus keeps only the first
-		// maxNotAssessed entries, and "N targets not assessed" must not be
-		// the one folded into "… and N more".
-		st.NotAssessed = append(notes, st.NotAssessed...)
+		// WriteStatus keeps only the first maxNotAssessed entries, so
+		// order is priority. Target-selection notes lead: "N targets not
+		// assessed" must not be the one folded into "… and N more". The
+		// report's capability gaps follow, which the Ready condition
+		// sends readers here for. The ignore warnings come last: there
+		// can be one per annotated object (a cluster moving from v0.1.x
+		// has many), and they must not push a gap out of the list (#68).
+		st.NotAssessed = slices.Concat(notes, st.NotAssessed, ignoreNotes)
 		r.last.reports = reports
 	}
 

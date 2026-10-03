@@ -208,10 +208,12 @@ type Options struct {
 // removed API may not be the one that wrote the suppressed objects.
 //
 // The returned warnings name expired rules (which do not apply), invalid
-// rules (skipped), and annotations without a reason (not applied). Last
-// comes one warning for all the objects on the deprecated pre-v0.2.0
-// annotation keys that annotate a finding of r (see
-// apigroup.LegacyIgnoreWarning), however many there are.
+// rules (skipped), and annotations without a reason (not applied), in
+// that order. Between the rule and the annotation warnings comes one
+// warning for all the objects on the deprecated pre-v0.2.0 annotation
+// keys that annotate a finding of r (see apigroup.LegacyIgnoreWarning),
+// however many there are: a consumer that keeps only the first few
+// warnings still keeps it.
 func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string) {
 	var warnings []string
 	var active []Rule
@@ -230,6 +232,8 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 		}
 		active = append(active, rule)
 	}
+
+	ruleWarnings := len(warnings)
 
 	findings := make([]engine.Finding, 0, len(r.Findings))
 	var suppressed []engine.SuppressedFinding
@@ -262,7 +266,7 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 		}
 	}
 	if len(legacy) > 0 {
-		warnings = append(warnings, apigroup.LegacyIgnoreWarning(legacy))
+		warnings = slices.Insert(warnings, ruleWarnings, apigroup.LegacyIgnoreWarning(legacy))
 	}
 	if len(suppressed) == 0 {
 		return r, warnings
