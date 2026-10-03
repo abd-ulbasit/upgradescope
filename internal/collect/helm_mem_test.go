@@ -353,36 +353,82 @@ func withEmptyGzipMember(t testing.TB, payload []byte) []byte {
 }
 
 // maxManifestHeap is what parsing one worst-case manifest may add to the
-// heap: TestCollectHelmManifestParsingIsBounded enforces it, under the
-// memory limit limitMemory sets.
+// live heap: TestCollectHelmManifestParsingIsBounded enforces it.
 const maxManifestHeap = 64 << 20
 
-// limitMemory models the agent's GOMEMLIMIT: for the rest of t it sets the
-// soft memory limit to the heap now (after a GC) plus bound/2, and leaves
-// GOGC at its default, as the chart does. The agent's limit makes the
-// collector work whenever the heap nears it: the runtime paces the cycle
-// to the limit and makes every allocating goroutine do GC work (assists),
-// so the heap follows the live data however far the GC's own workers fall
-// behind on a starved CPU. A low GOGC only makes cycles frequent, not
-// forced: at GOGC=10 a case that is 44 MiB live read 66-97 MiB on a loaded
-// machine (and 162 MiB once at a load average of 280), #213.
+// peakLiveHeap runs f while a goroutine forces a full collection back to
+// back (runtime.GC returns once the cycle is marked and swept) and reads
+// the heap objects after each, and returns the largest, above the heap
+// measured (after a GC) before f started. What a collection leaves is the
+// live data (plus what f allocated while it marked), whatever the GC's
+// pacing; peakHeap's reading also holds the garbage the pacing has not yet
+// collected, which on a starved CPU can be most of the figure. A proof
+// that the collector holds at most so much is a proof about live data:
+// garbage is what GOMEMLIMIT makes the runtime shed, live data is not.
 //
-// Half the bound, not the bound: the limit counts all the memory the
-// runtime holds, and a concurrent cycle overshoots its goal by what is
-// allocated while it marks, so a limit at base+bound let the same cases
-// read 70-120 MiB at a load average of 45, as the cycle ended just past
-// it. At half the bound the heap is past the limit for the whole parse
-// (these cases are 24-47 MiB live), so assists work throughout, and the
-// overshoot lands inside the bound the test still asserts in full. The
-// limit is soft: a live heap above it still grows past it, so an input
-// that needs more than the bound still fails the test's own check.
-func limitMemory(t *testing.T, bound uint64) {
-	t.Helper()
-	debug.FreeOSMemory()
+// Sampling is by collection, not by time, so a starved CPU spaces the
+// samples further apart, and can miss a peak held through none, but cannot
+// inflate one beyond what is allocated while a cycle marks, which a low
+// GOGC (10, set here) holds to about a tenth of the live heap: the same
+// 47 MiB-live case read up to 59 MiB at GOGC=100, 46 MiB at 10, at a load
+// average of 80 at the default GOMAXPROCS.
+//
+// What it catches: parsing in no runs at all (a 64 MiB run, no node bound)
+// reads 104-202 MiB and fails the test; a byte bound for runs of 4 or 16
+// MiB instead of 1 reads as before (16-47 MiB), so a moderate regression of
+// that bound alone is not seen: the cases are 24-47 MiB live with it, most
+// of it the release itself, and the bound is 64.
+//
+// Not the ways tried first (#213). GOGC=10 with peakHeap's sampling by
+// time, which read the heap between collections: a case that is 44 MiB
+// live read 66-97 MiB on a loaded machine, 162 MiB once at a load average
+// of 280, as the collector fell behind and the garbage piled up before the
+// next cycle. debug.SetMemoryLimit(heap + bound), the agent's
+// GOMEMLIMIT: 67.6 MiB for a 47 MiB-live case on an idle GitHub-hosted
+// runner (CI run 37145724345), the concurrent cycle ending past a limit
+// that counts all the memory the runtime holds. A limit of heap + bound/2:
+// 82.8-106.9 MiB at a load average of 80-145 at the default GOMAXPROCS (and
+// 38-44 MiB with GOMAXPROCS=1 and six CPU burners, where the mark workers
+// and the parser share a P, which hid it). The heap stays above that limit
+// for the whole parse, and a collector that is over its limit is held to
+// half the CPU by the GC CPU limiter, which stops the assists too.
+func peakLiveHeap(f func()) (peak uint64) {
 	sample := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
-	metrics.Read(sample)
-	prev := debug.SetMemoryLimit(int64(sample[0].Value.Uint64() + bound/2))
-	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+	read := func() uint64 {
+		metrics.Read(sample)
+		return sample[0].Value.Uint64()
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(10)) // floating garbage: what f allocates while a cycle marks, at most a tenth of the live heap more
+	runtime.GC()
+	base := read()
+	var max uint64
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			runtime.GC()
+			if v := read(); v > max {
+				max = v
+			}
+			select {
+			case <-done:
+				return
+			default:
+			}
+		}
+	}()
+	f()
+	close(done)
+	<-stopped
+	runtime.GC()
+	if v := read(); v > max {
+		max = v
+	}
+	if max < base {
+		return 0
+	}
+	return max - base
 }
 
 // TestCollectHelmManifestParsingIsBounded guards the rest of #168: a
@@ -395,10 +441,12 @@ func limitMemory(t *testing.T, bound uint64) {
 // agent at its 256Mi limit; one 1 MiB document of "- -" lines alone
 // reached 240 MiB. Now the cap is 16 MiB, the manifest is parsed in runs
 // bounded in bytes and YAML nodes, and lines are counted without the
-// index: every case is 24–47 MiB of live heap. The test runs under a memory
-// limit (limitMemory), as the agent runs under GOMEMLIMIT, so the heap it
-// reads follows the live data even on a starved CPU: with no limit it
-// varies with GC timing, 24–93 MiB at GOGC=100. Each case is a valid
+// index: every case is 24–47 MiB of live heap. The test measures the live
+// heap (peakLiveHeap), the data a GOMEMLIMIT cannot shed: read as the heap
+// a time-sampler sees, which includes garbage not yet collected, the same
+// cases varied with GC timing and CPU load, 24–93 MiB at GOGC=100 and
+// more at a low GOGC or under a memory limit (peakLiveHeap says what was
+// tried). Each case is a valid
 // release whose manifest, JSON-escaped, fills the cap, with ConfigMaps
 // flagged as a real KB flags some kinds, and every object a ConfigMap. Under the race
 // detector, which slows parsing about tenfold, the manifests are 4 MiB.
@@ -438,9 +486,8 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 			manifest = nil
 			var inv inventory.Inventory
 			var err error
-			limitMemory(t, maxManifestHeap) // with the release built: the limit adds the bound to it
-			peak := peakHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
-			t.Logf("stored %d KiB decoding to %d MiB; peak heap above baseline %.1f MiB", len(s.Data["release"])>>10, fits>>20, float64(peak)/(1<<20))
+			peak := peakLiveHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
+			t.Logf("stored %d KiB decoding to %d MiB; live heap peak above baseline %.1f MiB", len(s.Data["release"])>>10, fits>>20, float64(peak)/(1<<20))
 			if pe := (partialError{}); !errors.As(err, &pe) || pe.incomplete {
 				t.Fatalf("err = %v, want the release read whole", err)
 			}
@@ -452,7 +499,7 @@ func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
 				t.Errorf("manifest APIs = %+v, want %d flagged ConfigMaps", apis, n)
 			}
 			if peak > maxManifestHeap {
-				t.Errorf("peak heap %.1f MiB, want ≤ %d MiB", float64(peak)/(1<<20), maxManifestHeap>>20)
+				t.Errorf("live heap peak %.1f MiB, want ≤ %d MiB", float64(peak)/(1<<20), maxManifestHeap>>20)
 			}
 		})
 	}
