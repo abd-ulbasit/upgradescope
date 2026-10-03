@@ -1,0 +1,27 @@
+# Lets Gatekeeper's sync read the ClusterReadiness. The chart grants those
+# verbs to the agent only. Gatekeeper's stock manifests already let its manager
+# read every kind, so this is a no-op there; apply it when your install
+# (a hardened Helm values file, a restricted manager role) does not. Sync lists
+# and watches, hence all three verbs. Read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gatekeeper-upgradescope-clusterreadiness-reader
+rules:
+  - apiGroups: ["upgradescope.dev"]
+    resources: ["clusterreadinesses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gatekeeper-upgradescope-clusterreadiness-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: gatekeeper-upgradescope-clusterreadiness-reader
+subjects:
+  # The service account of Gatekeeper's stock install.
+  - kind: ServiceAccount
+    name: gatekeeper-admin
+    namespace: gatekeeper-system

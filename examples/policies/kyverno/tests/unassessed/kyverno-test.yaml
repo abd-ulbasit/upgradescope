@@ -1,0 +1,28 @@
+# Case: fresh readiness that has no entry for 1.38 (the agent was never asked
+# to assess it). Nothing is known, so the policy fails open.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: unassessed
+policies:
+  - ../../upgradescope-ready-target.yaml
+resources:
+  - ../resources.yaml
+apiCallResponses:
+  - urlPath: /apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster
+    method: GET
+    response:
+      body:
+        apiVersion: upgradescope.dev/v1alpha1
+        kind: ClusterReadiness
+        metadata: {name: cluster}
+        status:
+          lastEvaluated: "2200-01-01T00:00:00Z"
+          targets:
+            - {target: "1.37", score: 62, ready: false, verdict: blocked, blockers: 3, warnings: 2, infos: 0}
+results:
+  - policy: upgradescope-ready-target
+    rule: target-is-ready
+    kind: Deployment
+    resources: [upgrade-to-1-38]
+    result: pass

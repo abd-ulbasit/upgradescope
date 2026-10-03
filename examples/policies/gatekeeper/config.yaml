@@ -1,0 +1,19 @@
+# Replicates the ClusterReadiness into Gatekeeper's data cache, where the
+# template reads it as data.inventory.cluster. Gatekeeper reads only a
+# Config named "config" in its own namespace. If you already have one, add
+# this entry to its spec.sync.syncOnly instead of applying a second.
+#
+# The cache fills after the sync starts and tracks the object by watch: a verdict
+# can lag the agent by a moment, and an empty cache (Gatekeeper just started)
+# is the "not there" case the template allows.
+apiVersion: config.gatekeeper.sh/v1alpha1
+kind: Config
+metadata:
+  name: config
+  namespace: gatekeeper-system
+spec:
+  sync:
+    syncOnly:
+      - group: upgradescope.dev
+        version: v1alpha1
+        kind: ClusterReadiness

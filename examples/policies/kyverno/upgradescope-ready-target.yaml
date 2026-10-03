@@ -1,0 +1,87 @@
+# Audits (or, once you switch failureAction to Enforce, blocks) a workload
+# that asks for an upgrade to a Kubernetes minor upgradescope has not cleared.
+#
+# An "upgrade request" here is any Job, Deployment, StatefulSet or DaemonSet
+# annotated
+#
+#     upgradescope.dev/upgrade-target: "1.37"
+#
+# Edit match.kinds for whatever carries that annotation in your cluster (a
+# Cluster API Cluster, a system-upgrade-controller Plan, your own runbook
+# Job). The rule reads the ClusterReadiness the agent keeps (default name
+# "cluster", the chart's agent.crName) and denies when
+# status.targets[target=<annotation value>].ready is false.
+#
+# Fails open, on purpose, when it cannot tell: no ClusterReadiness, no entry
+# for the target (it was never assessed), or status.lastEvaluated older than
+# an hour (the default agent interval is 10m; the agent withdraws its verdict
+# after two intervals plus 12m of failed ticks). A guardrail that blocks on
+# data nobody has refreshed is worse than none. Change the "1h" below to tune.
+#
+# In-cluster operations only: an upgrade started through a cloud provider's
+# API (GKE, EKS, AKS) never reaches this cluster's apiserver and is not seen
+# here. See README.md next to this file.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: upgradescope-ready-target
+  annotations:
+    policies.kyverno.io/title: Require a ready upgradescope target
+    policies.kyverno.io/category: Upgrade readiness
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      An upgrade request annotated upgradescope.dev/upgrade-target must name a
+      Kubernetes minor that the ClusterReadiness reports as ready. Fails open
+      when the readiness data is missing, does not cover the target, or is
+      older than an hour.
+spec:
+  # Also scans existing annotated objects and writes them to the policy report.
+  background: true
+  rules:
+    - name: target-is-ready
+      match:
+        any:
+          - resources:
+              kinds: [Job, Deployment, StatefulSet, DaemonSet]
+              operations: [CREATE, UPDATE]
+              annotations:
+                upgradescope.dev/upgrade-target: "?*"
+      context:
+        - name: readiness
+          apiCall:
+            # The agent's object. Needs the reader role in rbac.yaml.
+            urlPath: /apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster
+            jmesPath: "@"
+            # No ClusterReadiness (agent not installed, another --cr-name):
+            # an empty object, so the rule fails open instead of erroring.
+            default: {}
+        - name: requested
+          variable:
+            jmesPath: request.object.metadata.annotations."upgradescope.dev/upgrade-target"
+        - name: entry
+          variable:
+            jmesPath: "readiness.status.targets[?target=='{{ requested }}'] | [0]"
+            default: {}
+        # How long ago the agent last evaluated; a missing timestamp counts as
+        # the epoch, so as stale.
+        - name: age
+          variable:
+            jmesPath: "time_since('', (readiness.status.lastEvaluated || '1970-01-01T00:00:00Z'), '')"
+      validate:
+        # Audit records the violation in the policy report and lets the
+        # request through. Switch to Enforce only after reading the README.
+        failureAction: Audit
+        message: >-
+          upgradescope: Kubernetes {{ requested }} is not ready
+          (score {{ entry.score }}, {{ entry.blockers }} blockers, verdict
+          {{ entry.verdict || 'not reported' }}). Run
+          `kubectl get ucr cluster -o yaml` for the findings.
+        deny:
+          conditions:
+            all:
+              - key: "{{ to_string(entry.ready) }}"
+                operator: Equals
+                value: "false"
+              - key: "{{ age }}"
+                operator: LessThanOrEquals
+                value: 1h

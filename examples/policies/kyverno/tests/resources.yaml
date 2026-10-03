@@ -1,0 +1,58 @@
+# Three upgrade requests, one per Kubernetes minor the cases below give a
+# different verdict.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upgrade-to-1-36
+  namespace: default
+  annotations:
+    upgradescope.dev/upgrade-target: "1.36"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: upgrade-runner}
+  template:
+    metadata:
+      labels: {app: upgrade-runner}
+    spec:
+      containers:
+        - name: runner
+          image: registry.example/upgrade-runner:1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upgrade-to-1-37
+  namespace: default
+  annotations:
+    upgradescope.dev/upgrade-target: "1.37"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: upgrade-runner}
+  template:
+    metadata:
+      labels: {app: upgrade-runner}
+    spec:
+      containers:
+        - name: runner
+          image: registry.example/upgrade-runner:1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upgrade-to-1-38
+  namespace: default
+  annotations:
+    upgradescope.dev/upgrade-target: "1.38"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: upgrade-runner}
+  template:
+    metadata:
+      labels: {app: upgrade-runner}
+    spec:
+      containers:
+        - name: runner
+          image: registry.example/upgrade-runner:1
