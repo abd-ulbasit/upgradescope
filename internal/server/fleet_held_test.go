@@ -32,10 +32,11 @@ const (
 // fleet: the summaries they read, the responses and their encodings (for
 // /metrics, the gathered metric families too).
 //
-// The test's peaks (57-127 MiB on a GitHub-hosted ubuntu-latest runner, #212)
+// The test's peaks (59-125 MiB on a GitHub-hosted ubuntu-latest runner, #212)
 // are the whole heap, held responses included, against the 168 MiB this and
-// the 40 MiB held budget allow together; the slot's own share of them is
-// about 80-87 MiB, not 127 against 128.
+// the 40 MiB held budget allow together; the slot's own share of the
+// largest is at most 125 less what was held (32 MiB, so about 93 MiB for
+// two builds), not 125 against 128.
 const maxFleetSlotHeap = 128 << 20
 
 // pushedFleet is a SQLite server holding one push from each of n

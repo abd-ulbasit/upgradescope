@@ -227,11 +227,11 @@ of 16 KiB with 64 KiB reasons and long skipped lists: with the gaps
 listed whole but for 1 KiB reasons and 10 skipped entries of 512 bytes,
 50 such clusters made `/fleet` answer 108 MB and grow the heap 516 MiB;
 now 500 of them, each evaluated at five targets (the default and four
-`--targets`, the most a server takes), grow it 12.1 MiB for `/fleet` (a
-1.3 MB answer), 3.1 for `/clusters` and 9.7 for `/metrics`, on a
-GitHub-hosted `ubuntu-latest` runner; half of those clusters push as a
-v0.1.x agent does, unmarked, whose summaries are 24-31% larger
-(`TestFleetReadsOfTheWidestGapsAreBounded`). Their responses do
+`--targets`, the most a server takes), grow it 12.4 MiB for `/fleet` (a
+1.5 MB answer), 3.1 for `/clusters` and 8.8 for `/metrics`, on a
+GitHub-hosted `ubuntu-latest` runner (CI run 37160469086); every one of
+those clusters pushes as a v0.1.x agent does, unmarked, whose summaries
+are 24-31% larger (`TestFleetReadsOfTheWidestGapsAreBounded`). Their responses do
 grow with the fleet: at 500 clusters `/clusters` is ~230 KB, `/fleet`
 ~480 KB (~590 KB with 16 `?targets=`) and `/metrics` ~740 KB, and
 building one adds up to ~5 MiB to the heap (`/metrics` the most, about
@@ -239,7 +239,8 @@ five times its response; ~12 MiB for the `/fleet` of the widest gaps
 above); at 2000 clusters with 200-byte names, from a v0.1.x agent
 (unmarked, so each evaluation lists the gaps it is given), with two
 `--targets`, they are 2.1, 4.6 (5.0 with 16 `?targets=`) and 9.0 MB, and
-`/metrics` adds ~47 MiB. `/fleet?targets=` takes at most 16 distinct
+and `/metrics` builds in ~46 MiB of heap in each of its two slots (the
+125 MiB peak below, less the 32 MiB held, over two). `/fleet?targets=` takes at most 16 distinct
 minors (`422` above): each is a column and a store query per cluster,
 and unbounded but for the 64 KiB URL, 8,718 of them against 500 clusters
 held a fleet slot for 2m13s, grew the heap 418 MiB and answered 57 MiB.
@@ -260,9 +261,10 @@ that 2000-cluster fleet, and 30 held 433 MiB of `/metrics`, whose handler
 keeps the gathered metric families until its write returns; now 100 of
 any of them, a 16-target `/fleet` included, leave at most the 40 MiB
 budget live, and the heap peaks at most 168 MiB above idle with the two
-builds in their slots: 57, 86, 90 and 127 MiB for `/clusters`, `/fleet`,
+builds in their slots: 59, 84, 90 and 125 MiB for `/clusters`, `/fleet`,
 the 16-target `/fleet` and `/metrics`, measured on a GitHub-hosted
-`ubuntu-latest` runner (`TestUnreadFleetResponsesAreBounded`). A
+`ubuntu-latest` runner, CI run 37160469086
+(`TestUnreadFleetResponsesAreBounded`). A
 Prometheus scrape or a dashboard poll that gets `503` is retried at its
 next interval.
 
@@ -290,7 +292,10 @@ the reports it stores included) plus one read in the read slot
 (~133 MiB, the HTML export of a report at the report limit, its
 response included) plus two reads of the whole fleet in their slots
 (up to ~16 MiB each for 500 clusters, a `/fleet` of evaluations that
-list the most of what they could not assess) plus the read, fleet read
+list the most of what they could not assess: 12.4 MiB measured above for
+the fleet that `TestFleetReadsOfTheWidestGapsAreBounded` pushes, 16.4
+measured before #207, and 20 MiB is the test's bound; the
+sum keeps the older figure, an allowance, not a measurement) plus the read, fleet read
 and `/gate` responses held for their clients (the one 40 MiB budget) plus the
 background re-evaluation pass, which takes clusters one at a time
 (~198 MiB for such a snapshot when every finding of its five reports
@@ -343,9 +348,9 @@ What is outside these bounds, and what it costs:
   holds, and a holder of the shared ingest token registers a new one
   with each new name it pushes. What a fleet read costs grows with the
   fleet (above): up to ~16 MiB for 500 clusters evaluated at five
-  targets (the `/fleet` of the widest gaps), ~47 MiB for a
-  `/metrics` of 2000 clusters with 200-byte names, twice that with both
-  fleet slots busy.
+  targets (the `/fleet` of the widest gaps, 12.4 MiB measured), ~46 MiB
+  for a `/metrics` of 2000 clusters with 200-byte names, twice that with
+  both fleet slots busy.
 - **Snapshots stored by v0.1.** A snapshot a v0.1 server stored before
   the budgets existed (up to 20 MiB of any shape) is decoded without a
   node count when `/gate?cluster=`, the re-evaluation pass or a what-if
