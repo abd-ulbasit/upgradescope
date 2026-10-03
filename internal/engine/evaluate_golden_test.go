@@ -16,7 +16,10 @@ var update = flag.Bool("update", false, "rewrite golden expected.json files")
 
 // target and now per case; fixed so goldens are stable forever.
 var goldenParams = map[string]struct{ target, now string }{
-	"clean-cluster":         {"1.34", "2026-06-10T00:00:00Z"},
+	"clean-cluster": {"1.34", "2026-06-10T00:00:00Z"},
+	// A target more than three minors ahead (1.29 to 1.36): the upgrade-path
+	// title shows the ends of the path, not every step (#191).
+	"upgrade-path-long":     {"1.36", "2026-06-10T00:00:00Z"},
 	"removed-api-at-target": {"1.22", "2026-06-10T00:00:00Z"},
 	"eol-ingress-nginx":     {"1.30", "2026-06-10T00:00:00Z"},
 	"mixed-everything":      {"1.38", "2026-06-10T00:00:00Z"},
