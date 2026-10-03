@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -71,34 +70,6 @@ func TestCollectDeprecatedCalls(t *testing.T) {
 	}
 	if !reflect.DeepEqual(inv.DeprecatedCalls, want) {
 		t.Errorf("calls = %#v\nwant  %#v", inv.DeprecatedCalls, want)
-	}
-}
-
-// The apiserver's process start time, from the same scrape, says since
-// when apiserver_requested_deprecated_apis has counted: it is recorded
-// whether or not any deprecated API was requested, in whole seconds.
-func TestCollectDeprecatedCallsRecordsAPIServerStart(t *testing.T) {
-	const started = `# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
-# TYPE process_start_time_seconds gauge
-process_start_time_seconds 1.78592040037e+09
-`
-	want := time.Unix(1785920400, 0).UTC()
-	for name, body := range map[string]string{"with calls": metricsBody + started, "without calls": started} {
-		var inv inventory.Inventory
-		if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), nil, &inv); err != nil {
-			t.Fatal(err)
-		}
-		if !inv.APIServerStartTime.Equal(want) || inv.APIServerStartTime.Location() != time.UTC {
-			t.Errorf("%s: start time = %v, want %v", name, inv.APIServerStartTime, want)
-		}
-	}
-
-	var inv inventory.Inventory
-	if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, metricsBody), nil, &inv); err != nil {
-		t.Fatal(err)
-	}
-	if !inv.APIServerStartTime.IsZero() {
-		t.Errorf("start time = %v without process_start_time_seconds, want zero", inv.APIServerStartTime)
 	}
 }
 

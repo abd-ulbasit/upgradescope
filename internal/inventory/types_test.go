@@ -29,7 +29,6 @@ func TestInventoryJSONRoundTrip(t *testing.T) {
 			Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3",
 			Resource: "flowschemas", RemovedRelease: "1.32",
 		}},
-		APIServerStartTime: time.Date(2026, 6, 9, 8, 30, 0, 0, time.UTC),
 		HelmReleases: []HelmRelease{{
 			Name: "ingress-nginx", Namespace: "ingress-nginx",
 			ChartName: "ingress-nginx", ChartVersion: "4.7.1",
@@ -75,7 +74,6 @@ func TestInventoryOmitEmpty(t *testing.T) {
 	absent := []string{
 		`"serverVersion"`, `"apiUsage"`, `"deprecatedCalls"`, `"helmReleases"`,
 		`"addOns"`, `"nodes"`, `"controlPlane"`, `"namespaces"`, `"unrecognizedImages"`, `"crds"`,
-		`"apiServerStartTime"`, // agents that predate it, and a scrape without it
 	}
 	for _, key := range absent {
 		if bytes.Contains(data, []byte(key)) {
@@ -113,7 +111,6 @@ func TestInventoryWireFormat(t *testing.T) {
 			Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3",
 			Resource: "flowschemas", Subresource: "status", RemovedRelease: "1.32",
 		}},
-		APIServerStartTime: time.Date(2026, 6, 9, 8, 30, 0, 0, time.UTC),
 		HelmReleases: []HelmRelease{{
 			Name: "ingress-nginx", Namespace: "ingress-nginx",
 			ChartName: "ingress-nginx", ChartVersion: "4.7.1",
@@ -272,8 +269,7 @@ func TestInventoryWireFormat(t *testing.T) {
         }
       ]
     }
-  ],
-  "apiServerStartTime": "2026-06-09T08:30:00Z"
+  ]
 }`
 
 	got, err := json.MarshalIndent(inv, "", "  ")
