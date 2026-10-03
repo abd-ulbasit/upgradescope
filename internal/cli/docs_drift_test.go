@@ -87,3 +87,18 @@ func TestDocsTokenStorage(t *testing.T) {
 		t.Errorf("docs/getting-started/fleet.md does not show the line `tokens create` prints: want it to end %q", " created — "+printed)
 	}
 }
+
+// TestDocsSecurityHeadersScope: the headers are on every response the
+// server's handler writes, not on the ones net/http writes before any
+// handler runs (SE-06; server.go's securityHeaders comment is exact).
+func TestDocsSecurityHeadersScope(t *testing.T) {
+	const page = "docs/operations/security-model-and-rbac.md"
+	doc := strings.Join(strings.Fields(readDoc(t, page)), " ")
+	lower := strings.ToLower(doc)
+	if strings.Contains(doc, "Every response carries") {
+		t.Errorf("%s claims every response carries the security headers; net/http's own 400, 431 and 501 carry none", page)
+	}
+	if !strings.Contains(lower, "every response the server's handler writes") || !strings.Contains(lower, "before routing") {
+		t.Errorf("%s must say the headers are on every response the server's handler writes, and that responses net/http writes before routing carry none", page)
+	}
+}
