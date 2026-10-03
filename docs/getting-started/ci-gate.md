@@ -75,9 +75,11 @@ the older "latest" release, which GitHub never sets to a release candidate.
 At any other ref (a branch, a commit SHA, `v0`) it is `latest`, so give a
 SHA its release in `version`.
 
-If the scan itself fails (exit 1), the action sets no `sarif-file`, so the
+The action sets `sarif-file` only when the gate exits 0 or 2, which leaves a
+complete SARIF, a failed gate included. After a scan error (exit 1) or any
+other exit, such as an out-of-memory kill, it sets no `sarif-file`, so the
 `sarif-file != ''` guard above skips the upload instead of failing on an
-empty file. Any other exit, a failed gate included, leaves a complete SARIF.
+empty file.
 
 **Targets past the horizon.** A `target` newer than the knowledge base's
 horizon makes the verdict `unknown`, which fails the gate. Target a minor the

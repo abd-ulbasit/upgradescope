@@ -545,6 +545,53 @@ expect "a failing JSON pass still gates" 2 "::warning::upgradescope --output jso
 expect "a failing Markdown pass warns" 2 "cannot write the step summary (it predates --output markdown, added after v0.1.1): it broke%0A"
 if grep -q '^::error::forged' "$work/out"; then fail "stderr cannot start a workflow command" "$work/out"; else ok "stderr cannot start a workflow command"; fi
 
+# The gate pass's stderr repeats input values (the path, a file name under it)
+# and the contents of files a fork PR controls. It reaches the log line by
+# line behind a prefix, so none of it can start a workflow command (#197
+# AC-05b), and it is printed whatever the exit status.
+mkdir -p "$work/loud"
+cat >"$work/loud/upgradescope" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"--output sarif"*)
+    printf 'gate says hi\n::error::forged by the gate\n::add-mask::secret\r::warning::cr\n100%% sure\n' >&2
+    exec "$work/real/upgradescope" "\$@" ;;
+  *) exec "$work/real/upgradescope" "\$@" ;;
+esac
+EOF
+chmod +x "$work/loud/upgradescope"
+loud_ok() { # <name>: the gate's stderr is in the log and starts no command
+  if grep -qF 'gate says hi' "$work/out" && grep -qF '| ::error::forged by the gate' "$work/out" &&
+    grep -qF '%0D::warning::cr' "$work/out" && ! grep -q '^::\(error\|warning\|add-mask\)::\(forged\|secret\|cr\)' "$work/out"; then ok "$1"; else fail "$1" "$work/out"; fi
+}
+run scan "$work/loud:"
+loud_ok "the gate's stderr cannot start a workflow command (gate failed, exit 2)"
+run scan "$work/loud:" INPUT_PATH=action/testdata/clean
+loud_ok "the gate's stderr cannot start a workflow command (gate passed)"
+# A directory name with a line break, holding no manifests: the binary's
+# "No Kubernetes manifests found under <path>" repeats the name.
+evil="$work/evil${nl}::warning title=FORGED::y"
+mkdir -p "$evil" && echo readme >"$evil/README"
+run scan "$work/real:" INPUT_PATH="$evil"
+if [ "$code" = 1 ] && grep -qF '| ::warning title=FORGED::y' "$work/out" && grep -qF 'no Kubernetes manifests found' "$work/out" &&
+  [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -q '^::error::upgradescope scan failed (exit 1)' "$work/out"; then
+  ok "a path with a line break cannot start a command through the binary's error"
+else fail "a path with a line break cannot start a command through the binary's error" "$work/out"; fi
+# A file name a fork PR controls, in a malformed manifest.
+badname="$work/bad"
+mkdir -p "$badname" && printf 'a: [\n' >"$badname/b${nl}::warning title=FORGEDBAD::q.yaml"
+run scan "$work/real:" INPUT_PATH="$badname"
+if grep -q '^::warning title=FORGEDBAD' "$work/out"; then fail "a file name with a line break cannot start a command through the binary's warning" "$work/out"; else
+  ok "a file name with a line break cannot start a command through the binary's warning"; fi
+# The same file name in a finding: annotations and the Markdown report
+# carry it too, escaped or with the line break turned into a space.
+mdname="$work/md"
+mkdir -p "$mdname" && cp action/testdata/removed/all.yaml "$mdname/m${nl}::warning title=FORGEDMD::z.yaml"
+run scan "$work/real:" INPUT_PATH="$mdname"
+if [ "$code" = 2 ] && ! grep -q '^::warning title=FORGEDMD' "$work/out"; then
+  ok "a file name with a line break in a finding cannot start a command"
+else fail "a file name with a line break in a finding cannot start a command" "$work/out"; fi
+
 mkdir -p "$work/broken"
 printf '#!/bin/sh\necho "load knowledge base: boom" >&2\nexit 1\n' >"$work/broken/upgradescope"
 chmod +x "$work/broken/upgradescope"

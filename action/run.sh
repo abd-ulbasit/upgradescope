@@ -11,8 +11,10 @@
 # INPUT_BASELINE, INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
 # the runner pastes an expression's value into the script text, so a value
 # holding `"; cmd` would run cmd (GitHub's script-injection guidance).
-# ACTION_REF is the ref the action was used at (github.action_ref). A value
-# echoed to the log is escaped (esc), so it cannot start a workflow command.
+# ACTION_REF is the ref the action was used at (github.action_ref). Text that
+# reaches the log from an input, a file name or the binary cannot start a
+# workflow command: a value in a message is escaped (esc), and the gate's
+# stderr is printed by logged, which defangs any line that would be one.
 # hack/action_test.sh (make action-test) covers every path here offline.
 set -euo pipefail
 
@@ -220,6 +222,17 @@ escaped() {
   awk '{ gsub(/%/, "%25"); gsub(/\r/, "%0D"); printf "%s%s", (NR > 1 ? "%0A" : ""), $0 }' "$1"
 }
 
+# logged <file>: the file to the log, unchanged except that no line can be a
+# workflow command. The runner reads a command after trimming leading
+# whitespace and treats a carriage return as a line break, so a line that
+# then starts with :: (or ##[) gets a "| " in front and a CR is written %0D.
+# The binary's messages repeat the path input and file names from the
+# scanned tree, which a fork PR chooses. (The Markdown report is not run
+# through it: the renderer turns a line break in a path into a space.)
+logged() {
+  awk '{ gsub(/\r/, "%0D"); if ($0 ~ /^[ \t]*(::|##\[)/) $0 = "| " $0; print }' "$1"
+}
+
 scan() {
   # Its own directory per scan: RUNNER_TEMP is shared by every step of the
   # job, and a later use of the action must not overwrite the reports an
@@ -244,9 +257,12 @@ scan() {
 
   # The gate. exit 0: passed; 2: scan worked, gate failed (the SARIF is
   # still complete: upload it with `if: ${{ !cancelled() && ... }}`);
-  # 1: the scan broke, and the SARIF is empty or cut short.
+  # anything else (1: the scan broke; 137: killed): the SARIF is empty or cut short.
   local status=0
-  upgradescope scan "${gate[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" ${allow[@]+"${allow[@]}"} >"$sarif" || status=$?
+  upgradescope scan "${gate[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" ${allow[@]+"${allow[@]}"} >"$sarif" 2>"$out/gate.err" || status=$?
+  # Its messages (the scan error, a skipped file) are the log's account of
+  # why the gate went as it did, whatever the exit status.
+  logged "$out/gate.err"
   if [ "$status" != 0 ] && [ "$status" != 2 ]; then
     printf '### upgradescope: scan failed (exit %s)\n\nThe job log has the error.\n' "$status" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
     echo "::error::upgradescope scan failed (exit $status)"

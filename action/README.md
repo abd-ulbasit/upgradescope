@@ -20,8 +20,9 @@ step when findings reach `fail-on`, and it reports in three places:
   Suppressed findings are not annotated.
 - **SARIF and outputs.** The SARIF file is complete even when the gate fails,
   so you can upload it to code scanning. When the scan itself fails (exit
-  1), there is no complete SARIF and `sarif-file` is not set. The action
-  also sets the verdict, score and counts as outputs for later steps.
+  1) or is killed (any exit but 0 or 2), there is no complete SARIF and
+  `sarif-file` is not set. The action also sets the verdict, score and
+  counts as outputs for later steps.
 
 ## Usage
 
@@ -231,7 +232,12 @@ a file, or a `write-baseline` whose directory does not exist fails the
 step with an error that names the input. The error shows the value with
 `%`, carriage returns and line breaks escaped (as `%25`, `%0D` and `%0A`),
 so a value holding a line break and `::warning::` cannot forge an
-annotation or a log mask. Earlier versions of
+annotation or a log mask. The scan's own messages repeat the `path` input
+and the names of files under it, which a pull request from a fork chooses.
+The action prints them to the log line by line, and a line that would
+start a workflow command (`::` or `##[` after any leading whitespace) gets
+a `| ` in front, a carriage return is written `%0D`, and the rest is
+unchanged. Earlier versions of
 the action passed any other `version` to `go install`, so a branch name or
 commit worked there; now it must be a release tag, `latest` or
 `preinstalled`.
@@ -240,7 +246,7 @@ commit worked there; now it must be a release tag, `latest` or
 
 | Output | |
 |---|---|
-| `sarif-file` | Path to the SARIF report. It is complete when the gate fails, so upload it with `if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}`. It is not set when the scan itself failed (exit 1), so that guard skips the upload instead of failing on an empty file. |
+| `sarif-file` | Path to the SARIF report. It is complete when the gate fails, so upload it with `if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}`. It is set only when the gate exits 0 or 2, and not when the scan itself failed (exit 1) or was killed, so that guard skips the upload instead of failing on an empty file. |
 | `report-json` | Path to the JSON report, the same as `upgradescope scan --output json`. |
 | `verdict` | `ready`, `blocked` or `unknown`. `unknown` means no blocker was found but a required check could not run. |
 | `ready` | `true` when the verdict is `ready`, otherwise `false`. |
