@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 
@@ -31,7 +33,61 @@ const (
 	// helmObjectPrefix starts the name of every object Helm v3 stores a
 	// revision in: "sh.helm.release.v1.<release>.v<revision>".
 	helmObjectPrefix = "sh.helm.release.v1."
+
+	// maxStoredReleaseBytes bounds a stored payload before it is base64
+	// decoded. Kubernetes caps a Secret's or ConfigMap's data at 1 MiB, so
+	// only a misbehaving apiserver serves more.
+	maxStoredReleaseBytes = 4 << 20
+	// maxReleaseJSONBytes bounds one release's decompressed JSON (#168): a
+	// gzip of 700 MiB of whitespace fits a 951 KB Secret, and decompressing
+	// it whole took a scan to 1.93 GB and OOM-killed the agent. Real releases
+	// are a few MiB (measured with helm install --dry-run=client -o json:
+	// kube-prometheus-stack 91.9.0 2.6 MiB, base 1.30.5 2.0 MiB,
+	// cert-manager v1.21.2 1.7 MiB, istiod 1.30.5 0.4 MiB, each gzipping
+	// about 7–9×), and at that ratio the 768 KiB of gzip a 1 MiB Secret can
+	// hold decodes to under 7 MiB. The largest chart found, kyverno 3.9.1
+	// (5.6 MiB of CRDs rendered from templates), comes to about 14 MiB of
+	// JSON but 2 MiB of gzip, more than a Secret holds. 16 MiB leaves over
+	// 2× headroom; a release past it is not decodable, a gap the report
+	// shows. The cap is also what a release's decoding costs: the JSON
+	// read whole plus the manifest decoded from it.
+	maxReleaseJSONBytes = 16 << 20
+	// manifestChunkBytes bounds how much of a release's manifest is parsed
+	// at once (see manifestAPIs): parsing amplifies its input, up to about
+	// 26× for a manifest of tiny objects.
+	manifestChunkBytes = 1 << 20
+	// maxManifestDocBytes bounds one document of a release's manifest,
+	// which is parsed whole: about 11× its size in heap for a document of
+	// newlines or comments. The largest real one found is 1.4 MiB (kyverno's
+	// policies.kyverno.io CRD; kube-prometheus-stack's largest, the
+	// prometheuses CRD, is 0.8 MiB), and etcd by default refuses a write
+	// over 1.5 MiB. A larger document is not parsed.
+	maxManifestDocBytes = 2 << 20
+	// maxManifestNodes bounds the YAML nodes (see yamlNodeBound) parsed at
+	// once, in one run of documents or one document: each costs about 550
+	// bytes of heap, so 64Ki nodes is about 35 MiB. Measured on the
+	// manifests Helm stores (helm template, no crds/ directory), the
+	// largest real document bounds at 48,550: argo-cd 10.9.6's
+	// applicationsets.argoproj.io CRD, rendered from templates/crds. The
+	// densest is external-secrets 2.11.0's clustersecretstores CRD, 43,220
+	// in 688 KiB; then kyverno 3.9.1's policies CRD 44,746,
+	// kube-prometheus-stack's prometheuses CRD 31,078,
+	// opentelemetry-operator's collectors CRD 28,146, and keda, cnpg,
+	// strimzi and istio base under 22,000. crossplane 2.4.2 and
+	// tigera-operator store no CRDs in the release. Doubling the bound
+	// would double what a planted run costs; a document over it is not
+	// parsed, a gap the report shows.
+	maxManifestNodes = 1 << 16
 )
+
+// errReleaseTooLarge marks a release payload over maxStoredReleaseBytes
+// stored or maxReleaseJSONBytes decompressed: not decodable, never read
+// whole.
+var errReleaseTooLarge = errors.New("release payload too large")
+
+// errManifestDocTooLarge marks a release manifest with a document over
+// maxManifestDocBytes or maxManifestNodes, which is not parsed.
+var errManifestDocTooLarge = errors.New("manifest document too large")
 
 // helmReleaseDoc is the minimal slice of Helm's release JSON we decode.
 // No Helm SDK dependency.
@@ -113,6 +169,14 @@ type helmRevision struct {
 // only that one object is fetched and decoded. Each release payload is a
 // gzipped JSON document that holds the whole chart, so decoding every
 // revision OOM-killed the agent on clusters with long histories (#24).
+// One release is bounded too (#168), against anyone who can create a
+// Secret or ConfigMap in one namespace and so plant a release:
+// decodeHelmRelease stops decompressing past maxReleaseJSONBytes, so a gzip
+// bomb is a release not decodable (payload too large), and manifestAPIs
+// parses the manifest in runs bounded in bytes and YAML nodes, so a
+// manifest built to amplify is parsed in bounded memory, and a document too
+// large for one run is not parsed. Either is a gap naming the release, not
+// an OOM-killed agent.
 //
 // Drivers degrade independently for reads: a driver whose list fails is
 // skipped and named in the reason, and the releases the others hold are
@@ -131,8 +195,10 @@ type helmRevision struct {
 // counted in the reason, and when none can be (list but no get), the
 // capability is unavailable; a release whose payload cannot be decoded is
 // skipped and counted too — one corrupt release must not fail the
-// capability. Any of these failures leaves an available capability
-// Partial, naming the drivers and releases it skipped.
+// capability — and a release whose manifest is not fully parsed is
+// recorded with what the rest holds, and counted. Any of these failures
+// leaves an available capability Partial, naming the drivers and releases
+// it skipped.
 func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
 	type releaseKey struct{ namespace, name string }
 	drivers := helmDrivers(kube)
@@ -172,6 +238,7 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 	var rels []inventory.HelmRelease
 	unread, firstUnread := 0, ""
 	undecodable, firstUndecodable := 0, ""
+	unparsed, firstUnparsed := 0, ""
 	var skippedReleases []string
 	for _, k := range keys {
 		// One driver's history per release: revision numbers of two
@@ -206,6 +273,13 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 		if status == "" {
 			status = doc.Info.Status
 		}
+		apis, err := manifestAPIs(doc.Manifest, flagged)
+		if err != nil { // recorded with what the rest of its manifest holds
+			if unparsed++; unparsed == 1 {
+				firstUnparsed = fmt.Sprintf("%s/%s: %v", k.namespace, k.name, err)
+			}
+			skippedReleases = append(skippedReleases, k.namespace+"/"+k.name)
+		}
 		perDriver[r.driver]++
 		rels = append(rels, inventory.HelmRelease{
 			Name:         k.name,
@@ -216,7 +290,7 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 			KubeVersion:  doc.Chart.Metadata.KubeVersion,
 			Status:       status,
 			Revision:     r.revision,
-			ManifestAPIs: manifestAPIs(doc.Manifest, flagged),
+			ManifestAPIs: apis,
 		})
 	}
 	if unread > 0 {
@@ -227,6 +301,9 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 	}
 	if undecodable > 0 {
 		failed = append(failed, fmt.Sprintf("%d release(s) not decodable, first %s", undecodable, firstUndecodable))
+	}
+	if unparsed > 0 {
+		failed = append(failed, fmt.Sprintf("%d release manifest(s) not fully parsed, first %s", unparsed, firstUnparsed))
 	}
 	skipped = append(skipped, skippedReleases...) // keys are sorted
 	if len(rels) > 0 {
@@ -318,15 +395,120 @@ func installedRevision(revs []helmRevision) (helmRevision, bool) {
 // and returns, per GVK, the objects at a flagged group/version/kind.
 // Documents that do not parse are skipped: the manifest is what Helm
 // applied, and a partial result beats none.
-func manifestAPIs(manifest string, flagged map[gvk]bool) []inventory.APIUsage {
+//
+// The manifest is parsed a run of documents at a time (see
+// splitManifest), each run's flagged objects counted before the next is
+// read, because parsing amplifies its input (#168): the parser keeps every
+// object of a stream before the flagged ones are picked, and builds about
+// 550 bytes of heap per YAML node: parsed whole, a 32 MiB manifest of tiny
+// ConfigMaps took 564 MiB, and one 1 MiB document of "- -" lines 240 MiB.
+// A document over maxManifestDocBytes or maxManifestNodes is not parsed:
+// err (errManifestDocTooLarge) names the first, and the objects of the
+// other documents are still returned.
+func manifestAPIs(manifest string, flagged map[gvk]bool) (rows []inventory.APIUsage, err error) {
 	if len(flagged) == 0 || manifest == "" {
-		return nil
+		return nil, nil
 	}
-	objs, _, _, _ := parseManifestStream(strings.NewReader(manifest)) // a strings.Reader never fails
-	objs = slices.DeleteFunc(objs, func(o manifestObject) bool { return !flagged[gvk{o.group, o.version, o.kind}] })
 	counts := map[gvk]*inventory.APIUsage{}
-	accumulate(counts, objs)
-	return usageRows(counts)
+	tooLarge, firstLine := 0, 0
+	splitManifest(manifest, func(text string, line int, whole bool) {
+		if strings.TrimSpace(text) == "" {
+			return // blank: holds nothing
+		}
+		if !whole {
+			if tooLarge++; tooLarge == 1 {
+				firstLine = line
+			}
+			return
+		}
+		objs, _, _, _ := parseManifestStream(strings.NewReader(text)) // a strings.Reader never fails
+		objs = slices.DeleteFunc(objs, func(o manifestObject) bool { return !flagged[gvk{o.group, o.version, o.kind}] })
+		for i := range objs {
+			objs[i].ref.Line += line - 1 // lines of the run → lines of the manifest
+		}
+		accumulate(counts, objs)
+	})
+	if tooLarge > 0 {
+		err = fmt.Errorf("%w: %d document(s) over %d MiB or %d YAML nodes not parsed, first at manifest line %d",
+			errManifestDocTooLarge, tooLarge, maxManifestDocBytes>>20, maxManifestNodes, firstLine)
+	}
+	return usageRows(counts), err
+}
+
+// splitManifest cuts a release manifest at its document separators (lines
+// starting with "---", where the --files parser splits it too) into runs
+// of whole documents of at most manifestChunkBytes and maxManifestNodes
+// YAML nodes, or one larger document, and calls fn with each run and the
+// manifest line it starts on. A document over maxManifestDocBytes or
+// maxManifestNodes is passed alone with whole false, to be skipped rather
+// than parsed. Splitting stops at an invalid separator ("---" followed by
+// more than a comment), where the parser stops reading the stream too. A
+// manifest that opens as JSON, which Helm never writes, is not split (the
+// parser reads JSON values across lines): it is one document.
+func splitManifest(manifest string, fn func(text string, line int, whole bool)) {
+	if utilyaml.IsJSONBuffer([]byte(manifest[:min(len(manifest), jsonPeek)])) {
+		fn(manifest, 1, len(manifest) <= maxManifestDocBytes && yamlNodeBound(manifest) <= maxManifestNodes)
+		return
+	}
+	// span is a stretch of the manifest from offset start, which begins
+	// line line, bounding nodes YAML nodes (see yamlNodeBound).
+	type span struct{ start, line, nodes int }
+	run := span{0, 1, 0} // whole documents not yet passed to fn
+	doc := span{0, 1, 2} // the document being read: its root and document nodes
+	// endDoc ends the document at offset end, which begins line endLine.
+	endDoc := func(end, endLine int) {
+		if doc.start > run.start && (end-run.start > manifestChunkBytes || run.nodes+doc.nodes > maxManifestNodes) {
+			fn(manifest[run.start:doc.start], run.line, true) // the run is full without it
+			run = span{doc.start, doc.line, 0}
+		}
+		if end-doc.start > maxManifestDocBytes || doc.nodes > maxManifestNodes {
+			fn(manifest[doc.start:end], doc.line, false)
+			run = span{end, endLine, 0}
+		} else {
+			run.nodes += doc.nodes
+		}
+		doc = span{end, endLine, 2}
+	}
+	line, invalid := 1, false
+	for off := 0; off < len(manifest) && !invalid; line++ {
+		end := len(manifest)
+		if i := strings.IndexByte(manifest[off:], '\n'); i >= 0 {
+			end = off + i + 1
+		}
+		if rest, ok := strings.CutPrefix(manifest[off:end], "---"); ok {
+			endDoc(off, line)
+			t := strings.TrimSpace(rest)
+			invalid = t != "" && t[0] != '#' // the parser reads nothing past it
+		} else {
+			doc.nodes += yamlNodeBound(manifest[off:end])
+		}
+		off = end
+	}
+	if !invalid {
+		endDoc(len(manifest), line)
+	}
+	if run.start < doc.start {
+		fn(manifest[run.start:doc.start], run.line, true)
+	}
+}
+
+// yamlNodeBound bounds the YAML nodes text adds to a document. Every node
+// but a document's root is introduced by one of : - , [ { ? (a mapping
+// entry, a sequence item, a flow collection's entries), and none
+// introduces more than two (a mapping entry's key and value), so twice
+// their count is a bound: loose for real manifests, whose descriptions are
+// full of these characters, and tight for a planted one ("- -" lines).
+// Parsing costs about 500 bytes of heap per node, whatever the bytes
+// holding it.
+func yamlNodeBound(text string) int {
+	n := 0
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case ':', '-', ',', '[', '{', '?':
+			n += 2
+		}
+	}
+	return n
 }
 
 // releaseRevision parses N from "sh.helm.release.v1.<name>.v<N>"; 0 if absent.
@@ -345,27 +527,92 @@ func releaseRevision(secretName string) int {
 // decodeHelmRelease decodes a stored release payload: the Secret's
 // Data["release"] (client-go has already removed the Secret's own base64)
 // or the ConfigMap's Data["release"]. Either is a base64 string wrapping
-// gzip(JSON). Order: base64 → gzip magic check → gunzip → JSON.
+// gzip(JSON). Order: size check → base64 → gzip magic check → gunzip,
+// stopped past maxReleaseJSONBytes → JSON. Every layer is bounded: the
+// stored payload by maxStoredReleaseBytes, its base64 decoding (which only
+// shrinks it) by that, and the gzip, the one layer that expands, by
+// maxReleaseJSONBytes. An over-cap payload is errReleaseTooLarge, which
+// collectHelm counts as not decodable.
+//
+// The JSON is read whole into one buffer sized by the gzip trailer's
+// decompressed size, then unmarshalled: a json.Decoder buffers a value
+// whole too, doubling its buffer to get there, which took decoding a 32
+// MiB release to over 100 MiB of heap. The buffer never grows, so the
+// trailer is trusted only as far as it can be checked. Helm writes one
+// gzip member, and only one member's trailer is the payload's last 4
+// bytes, so the reader stops after the first member and anything after it
+// is an error. Decompression stops past what the trailer says, so a
+// trailer that understates the size (forged, or an empty second member's)
+// is an error before it costs more than the buffer. One that overstates it
+// costs a buffer of at most maxReleaseJSONBytes, and the gzip reader then
+// fails it with the CRC at the end of the stream, which is always read.
 func decodeHelmRelease(data []byte) (helmReleaseDoc, error) {
 	var doc helmReleaseDoc
-	raw, err := base64.StdEncoding.DecodeString(string(data))
+	if len(data) > maxStoredReleaseBytes {
+		return doc, fmt.Errorf("%w: over %d MiB stored", errReleaseTooLarge, maxStoredReleaseBytes>>20)
+	}
+	raw := make([]byte, base64.StdEncoding.DecodedLen(len(data)))
+	n, err := base64.StdEncoding.Decode(raw, data)
 	if err != nil {
 		return doc, fmt.Errorf("base64: %w", err)
 	}
+	raw = raw[:n]
 	if len(raw) < 3 || raw[0] != 0x1f || raw[1] != 0x8b || raw[2] != 0x08 {
 		return doc, fmt.Errorf("release payload is not gzip")
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	br := bytes.NewReader(raw)
+	zr, err := gzip.NewReader(br)
 	if err != nil {
 		return doc, fmt.Errorf("gunzip: %w", err)
 	}
 	defer zr.Close()
-	jsonBytes, err := io.ReadAll(zr)
-	if err != nil {
+	zr.Multistream(false)
+	size := min(int(binary.LittleEndian.Uint32(raw[len(raw)-4:])), maxReleaseJSONBytes) // ISIZE: gzip's last 4 bytes
+	buf := bytes.NewBuffer(make([]byte, 0, size+bytes.MinRead))
+	if _, err := buf.ReadFrom(&boundedReader{r: zr, left: int64(size)}); err != nil {
+		switch {
+		case errors.Is(err, errReleaseTooLarge) && size == maxReleaseJSONBytes:
+			return doc, fmt.Errorf("%w: over %d MiB decompressed", errReleaseTooLarge, maxReleaseJSONBytes>>20)
+		case errors.Is(err, errReleaseTooLarge):
+			return doc, errors.New("gunzip: decompresses past its size trailer")
+		}
 		return doc, fmt.Errorf("gunzip read: %w", err)
 	}
-	if err := json.Unmarshal(jsonBytes, &doc); err != nil {
+	if br.Len() > 0 { // gzip reads its flate.Reader byte by byte, never past the member
+		return doc, errors.New("gunzip: data after the gzip stream")
+	}
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
 		return doc, fmt.Errorf("release json: %w", err)
 	}
 	return doc, nil
+}
+
+// boundedReader reads at most left more bytes from r and fails with
+// errReleaseTooLarge, rather than ending as io.LimitReader does, when r
+// holds more: a truncated document must not pass for a whole one. It reads
+// one byte past the cap to tell the two apart, and keeps r's first error
+// other than io.EOF in err.
+type boundedReader struct {
+	r    io.Reader
+	left int64
+	err  error
+}
+
+func (b *boundedReader) Read(p []byte) (int, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
+	if int64(len(p)) > b.left+1 {
+		p = p[:b.left+1]
+	}
+	n, err := b.r.Read(p)
+	if int64(n) > b.left {
+		b.err = errReleaseTooLarge
+		return 0, b.err
+	}
+	b.left -= int64(n)
+	if err != nil && err != io.EOF {
+		b.err = err
+	}
+	return n, err
 }

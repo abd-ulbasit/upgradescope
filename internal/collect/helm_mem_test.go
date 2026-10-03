@@ -6,6 +6,8 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -13,6 +15,7 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"runtime/metrics"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -244,6 +247,175 @@ func TestCollectHelmPeakHeapIsBoundedByOneRelease(t *testing.T) {
 			}
 			if peak > tc.maxPeakMiB<<20 {
 				t.Errorf("peak heap %.1f MiB, want ≤ %d MiB", float64(peak)/(1<<20), tc.maxPeakMiB)
+			}
+		})
+	}
+}
+
+// TestCollectHelmGzipBombIsBounded guards #168: one release Secret whose
+// gzip held 700 MiB of whitespace (951 KB stored) took a CLI scan to
+// 1.93 GB RSS and OOM-killed the agent at its 256Mi limit, because the
+// payload was decompressed whole before it was parsed. Decompression now
+// stops past maxReleaseJSONBytes: the release is skipped as too large, the
+// reason is on the helm capability, and the other releases are still read.
+// Measured on this harness with a 256 MiB bomb: 828 MiB peak before; 112
+// MiB stopped at a 32 MiB cap but read by a json.Decoder, whose buffer
+// doubles up to the cap; 17 MiB read into one buffer stopped at the 16 MiB
+// cap. The buffer is sized by the gzip size trailer, so a trailer that
+// lies must not make it grow: one understating the size (forged, or the
+// empty member's of a stream with a second, empty member appended) let the
+// buffer double to the cap, 56 MiB for the bomb and 64 MiB for a release
+// at the cap. Decompression now stops past what the trailer says, and a
+// stream of more than one member is not decodable; the worst a trailer can
+// do is overstate the size, which costs the cap's buffer before the CRC
+// fails it: every case peaks at 17 MiB at most. ConfigMaps are flagged,
+// so the release that is read has its manifest parsed as in a real scan.
+// Under the race detector, which slows compressing the bomb about
+// thirtyfold, the bomb decodes to 48 MiB, still past the cap.
+func TestCollectHelmGzipBombIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compresses a 256 MiB release")
+	}
+	decoded := 256 << 20
+	if raceEnabled {
+		decoded = 48 << 20
+	}
+	const head, tail = `{"chart":{"metadata":{"name":"ingress-nginx","version":"4.7.1","appVersion":"1.8.1"}},"manifest":"`, `"}`
+	bomb := helmBomb(t, head, "a", decoded, tail)
+	atCap := helmBomb(t, head, "a", maxReleaseJSONBytes-len(head)-len(tail), tail)
+	const tooLarge = "release payload too large: over 16 MiB decompressed"
+	const lies = "gunzip: decompresses past its size trailer"
+	for _, tc := range []struct {
+		name, reason string
+		payload      []byte
+	}{
+		{"bomb", tooLarge, bomb},
+		{"bomb with a forged size trailer", lies, withGzipTrailerSize(t, bomb, 0)},
+		{"bomb with an empty second member", lies, withEmptyGzipMember(t, bomb)},
+		{"release at the cap with an empty second member", lies, withEmptyGzipMember(t, atCap)},
+		{"small release whose size trailer claims the cap", "gunzip read: gzip: invalid checksum",
+			withGzipTrailerSize(t, helmBomb(t, head, "a", 1<<10, tail), maxReleaseJSONBytes)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := helmSecret(t, helmRev{ns: "a-bomb", release: "bomb", rev: 1, status: "deployed"})
+			s.Data["release"] = tc.payload
+			valid := helmSecret(t, helmRev{ns: "cert-manager", release: "cert-manager", rev: 1, status: "deployed", chart: "cert-manager", chartVersion: "v1.13.0", appVersion: "v1.13.0"})
+			kube, meta := helmClients(t, s, valid)
+			lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
+			var inv inventory.Inventory
+			var err error
+			peak := peakHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
+			t.Logf("stored %d KiB; peak heap above baseline %.1f MiB", len(tc.payload)>>10, float64(peak)/(1<<20))
+			var pe partialError
+			if !errors.As(err, &pe) {
+				t.Fatalf("a gzip bomb must not fail the capability: %v", err)
+			}
+			if !pe.incomplete || !slices.Equal(pe.skipped, []string{"a-bomb/bomb"}) ||
+				!strings.Contains(pe.msg, "1 release(s) not decodable, first a-bomb/bomb: "+tc.reason) {
+				t.Errorf("partial = %v, skipped = %q, reason = %q; want incomplete, skipping a-bomb/bomb: %s", pe.incomplete, pe.skipped, pe.msg, tc.reason)
+			}
+			if len(inv.HelmReleases) != 1 || inv.HelmReleases[0].Name != "cert-manager" {
+				t.Errorf("releases = %+v, want cert-manager only", inv.HelmReleases)
+			}
+			if peak > 32<<20 {
+				t.Errorf("peak heap %.1f MiB, want ≤ 32 MiB (the decompression cap, read into one buffer that never grows)", float64(peak)/(1<<20))
+			}
+		})
+	}
+}
+
+// withGzipTrailerSize returns a helmBomb payload with its gzip size
+// trailer (ISIZE, the last 4 bytes) set to size.
+func withGzipTrailerSize(t testing.TB, payload []byte, size uint32) []byte {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(string(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint32(raw[len(raw)-4:], size)
+	return []byte(base64.StdEncoding.EncodeToString(raw))
+}
+
+// withEmptyGzipMember returns a helmBomb payload with a second, empty gzip
+// member appended: still a valid gzip stream, whose last 4 bytes are the
+// empty member's size, 0.
+func withEmptyGzipMember(t testing.TB, payload []byte) []byte {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(string(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Close()
+	return []byte(base64.StdEncoding.EncodeToString(append(raw, gz.Bytes()...)))
+}
+
+// TestCollectHelmManifestParsingIsBounded guards the rest of #168: a
+// release under the decompression cap is still a bomb when its manifest
+// is, because parsing amplifies it. The --files parser indexes every
+// newline (8 bytes each) and keeps every object of the stream before the
+// flagged ones are picked, so a release that only just fit the cap
+// peaked at 390 MiB (a manifest of newlines, 42 KiB stored) and 564 MiB
+// (tiny ConfigMaps, 127 KiB stored) on this harness, and OOM-killed the
+// agent at its 256Mi limit; one 1 MiB document of "- -" lines alone
+// reached 240 MiB. Now the cap is 16 MiB, the manifest is parsed in runs
+// bounded in bytes and YAML nodes, and lines are counted without the
+// index: every case peaks at up to about 70 MiB (24–68 MiB over eight
+// runs, varying with GC timing). Each case is a valid release whose
+// manifest, JSON-escaped, fills the cap, with ConfigMaps flagged as a real
+// KB flags some kinds, and every object a ConfigMap. Under the race
+// detector, which slows parsing about tenfold, the manifests are 4 MiB.
+func TestCollectHelmManifestParsingIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("parses manifests of up to the decompression cap")
+	}
+	lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
+	const head, tail = `{"chart":{"metadata":{"name":"bomb","version":"1.0.0"}},"manifest":`, `}`
+	const object = "---\napiVersion: v1\nkind: ConfigMap\n"
+	fits := maxReleaseJSONBytes - len(head) - len(tail) - 2 // the manifest's quotes
+	if raceEnabled {
+		fits = 4 << 20
+	}
+	// A mapping at the node bound, two nodes a line: the keys repeat, as
+	// they must to compress into a Secret.
+	keys := object + "data:\n"
+	keys += strings.Repeat(" k: v\n", (maxManifestNodes-2-yamlNodeBound(keys))/2)
+	for _, tc := range []struct {
+		name, doc string
+		objects   bool // each doc is a ConfigMap
+	}{
+		{name: "newlines", doc: "\n"},
+		{name: "tiny flagged objects", doc: object, objects: true},
+		{name: "documents that are not objects", doc: "---\nx\n"},
+		{name: "objects of newlines at the size bound", doc: object + strings.Repeat("\n", min(maxManifestDocBytes, fits/4)-64), objects: true},
+		{name: "objects at the node bound", doc: keys, objects: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// JSON escapes each newline to two bytes; nothing else in doc
+			// is escaped.
+			n := fits / (len(tc.doc) + strings.Count(tc.doc, "\n"))
+			manifest, _ := json.Marshal(strings.Repeat(tc.doc, n))
+			s := helmSecret(t, helmRev{ns: "a-bomb", release: "bomb", rev: 1, status: "deployed"})
+			s.Data["release"] = helmBomb(t, head+string(manifest)+tail, "", 0, "")
+			kube, meta := helmClients(t, s)
+			manifest = nil
+			var inv inventory.Inventory
+			var err error
+			peak := peakHeap(func() { err = collectHelm(context.Background(), kube, meta, lifecycle, &inv) })
+			t.Logf("stored %d KiB decoding to %d MiB; peak heap above baseline %.1f MiB", len(s.Data["release"])>>10, fits>>20, float64(peak)/(1<<20))
+			if pe := (partialError{}); !errors.As(err, &pe) || pe.incomplete {
+				t.Fatalf("err = %v, want the release read whole", err)
+			}
+			if len(inv.HelmReleases) != 1 {
+				t.Fatalf("releases = %+v, want the one", inv.HelmReleases)
+			}
+			apis := inv.HelmReleases[0].ManifestAPIs
+			if !tc.objects && len(apis) != 0 || tc.objects && (len(apis) != 1 || apis[0].Count != n || len(apis[0].Objects) != min(n, inventory.MaxObjectRefs)) {
+				t.Errorf("manifest APIs = %+v, want %d flagged ConfigMaps", apis, n)
+			}
+			if peak > 80<<20 {
+				t.Errorf("peak heap %.1f MiB, want ≤ 80 MiB", float64(peak)/(1<<20))
 			}
 		})
 	}

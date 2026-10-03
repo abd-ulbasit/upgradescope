@@ -112,11 +112,6 @@ func parseManifestStream(r io.Reader) (objs []manifestObject, ev addOnEvidence, 
 		return nil, addOnEvidence{}, nil, err
 	}
 	p := &streamParser{data: data}
-	for i, c := range data {
-		if c == '\n' {
-			p.newlines = append(p.newlines, i)
-		}
-	}
 	yamlFrom := 0
 	if utilyaml.IsJSONBuffer(data[:min(len(data), jsonPeek)]) {
 		yamlFrom = p.jsonStream()
@@ -129,11 +124,13 @@ func parseManifestStream(r io.Reader) (objs []manifestObject, ev addOnEvidence, 
 
 // streamParser holds one stream being decoded and what was found in it.
 type streamParser struct {
-	data     []byte
-	newlines []int // offsets of '\n' in data
-	objs     []manifestObject
-	ev       addOnEvidence
-	bad      []docError
+	data []byte
+	// newlines counts the newlines in data before lineOff, the offset line
+	// was last asked for.
+	lineOff, newlines int
+	objs              []manifestObject
+	ev                addOnEvidence
+	bad               []docError
 }
 
 // addEvidence adds the add-on evidence of objects kubectl's decoder
@@ -149,9 +146,17 @@ func (p *streamParser) addEvidence(kubectl []manifestObject) {
 	}
 }
 
-// line returns the 1-based line of byte offset off.
+// line returns the 1-based line of byte offset off. Offsets are asked for
+// in stream order, so it counts the newlines since the last one asked for
+// rather than indexing every newline up front, which took 8 bytes of heap
+// per newline: a Helm manifest of newlines grew eightfold (#168).
 func (p *streamParser) line(off int) int {
-	return 1 + sort.SearchInts(p.newlines, off)
+	if off < p.lineOff {
+		p.lineOff, p.newlines = 0, 0
+	}
+	p.newlines += bytes.Count(p.data[p.lineOff:off], []byte{'\n'})
+	p.lineOff = off
+	return 1 + p.newlines
 }
 
 // jsonStream decodes the JSON values the stream starts with, as

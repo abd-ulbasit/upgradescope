@@ -11,6 +11,7 @@ so one may have been missed. The report's `NOT ASSESSED` section (JSON
 | `kb-coverage (required)` | The target is newer than the knowledge base's horizon (`upgradescope version` prints it). | Target the horizon or lower, upgrade to a release with a newer knowledge base, or accept the gap with `--allow-incomplete`. |
 | `api-usage (required)` | The scan could not list resources (RBAC, an unavailable API group), or a partial list skipped an API removed by the target. | Fix the access the reason names. |
 | `versions (required)` | `/version` or nodes could not be read, or the server version did not parse. | Fix the access; a version string that does not parse is a bug, please report it. |
+| `versions (partial, required)` | A component pod in `kube-system` whose version upstream would have told was not read: the reason names the first pod and its image, an upstream-named image under a digest or a tag that is not a version (`kube-proxy@sha256:…`, `kube-scheduler:latest`), or a kube-apiserver, kube-controller-manager or kube-scheduler pod on a vendor image. | Pin the image to a version tag (`kube-proxy:v1.33.4`, `…:v1.33.4@sha256:…` reads too) so its skew is judged, or accept the gap with `--allow-incomplete`. A `versions (partial)` gap without `required` (a vendor kube-proxy image such as Oracle OKE's) leaves the verdict alone. |
 | `addons (required)` | Pods could not be listed. | Grant `list` on pods. |
 
 `--allow-incomplete` (CLI), or `allow-incomplete: true` in the GitHub
