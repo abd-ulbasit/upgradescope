@@ -396,6 +396,20 @@ func TestGateDecodeHeapIsBounded(t *testing.T) {
 	// does the same here, so what is measured is the live heap the
 	// requests need, not how much garbage GOGC=100 lets pile up (up to as
 	// much again) before the next collection.
+	//
+	// The server's heap tests (this one, and those that say "as in
+	// TestGateDecodeHeapIsBounded") keep GOGC=10 and sample the heap by
+	// time; #213 changed the Helm collector's test (peakLiveHeap) and not
+	// these, for a reason each: a memory limit did not make that test
+	// robust (a limit under the bound turned the GC CPU limiter on, and
+	// the readings rose under load), so there is no method to copy; their
+	// bounds and the figures docs/operations.md sums into the server's
+	// worst case are peaks with their garbage, each at least 10% above
+	// the worst of several loaded runs, so reading live data after forced
+	// collections would change what every figure means; and none is known
+	// to fail (CI's test-heap job is green), though only some were run on
+	// a loaded machine. If one does fail there, convert it as peakLiveHeap
+	// converts the Helm test, and re-derive its figure.
 	defer debug.SetGCPercent(debug.SetGCPercent(10))
 	for name, shape := range gateHeapShapes() {
 		t.Run(name, func(t *testing.T) {
