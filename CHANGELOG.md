@@ -259,7 +259,7 @@ a CI gate.
   refuses (422) an inventory whose `source` is set to anything but
   `cluster`, or whose `collectorSchema` this server does not know. In an
   inventory without `collectorSchema` from an agent reporting 0.2.0-0 or
-  later (the v0.2.0 release candidates), a usage count that names no object
+  later (v0.2.0-rc.1 and v0.2.0-rc.2), a usage count that names no object
   is not judged: api-usage is partial over that API, a required gap when
   the target removes it, so the verdict is `unknown`, not `blocked` (#194).
 - A team's `ready` is true only when its verdict is `ready`: a required gap
@@ -270,10 +270,12 @@ a CI gate.
   `maxItems`). An agent reading an older object with more evaluates the
   first 8 distinct valid targets, in spec order, and counts the rest in one
   `status.notAssessed` note that names the first left out. Given more than
-  8 distinct `--targets`, the agent refuses to start. Finding titles in the
-  status are clipped to 512 bytes and remediation to 1024, as stored (JSON
-  escapes counted); past 3 hops, the version-skew upgrade-path title names
-  only the first and last. The worst-case status is about 273 KiB (#191).
+  8 distinct minors in `--targets`, the agent refuses to start. Finding
+  titles in the status are clipped to 512 bytes and remediation to 1024,
+  as stored (JSON escapes counted). Past 3 hops, the version-skew
+  upgrade-path title, in every output, shows only the start, the first
+  step and the end of the path (`1.29 → 1.30 → … → 1.36`). The worst-case
+  status is about 273 KiB (#191).
 - The agent refuses at startup `--interval 0`, which used to mean the 10m
   default (minimum 1m, as for any other value below it), and a `--cr-name`
   that is not an RFC 1123 subdomain, which used to fail every tick (#192).
@@ -298,10 +300,10 @@ a CI gate.
   under the decoded name before upgrading. A path containing `?` or `#`,
   which rc.2 refused, now opens that exact file, and a NUL byte is refused
   (#195).
-- An object of a flagged kind with nothing `managedFields` or the
-  last-applied annotation can attribute is an info finding, `authorship
-  unknown`, which never changes the verdict or score; it used to be
-  missed. Inventories record such objects in `apiAuthorshipUnknown`
+- An object of a flagged kind that neither `managedFields` nor the
+  last-applied annotation attributes to a writer is an info finding,
+  `authorship unknown`, which never changes the verdict or score; it used
+  to be missed. Inventories record such objects in `apiAuthorshipUnknown`
   (#199).
 - The hand-written `supplement.json` is gone: the four entries it held
   (autoscaling HPA v2beta1 and v2beta2, both PodSecurityPolicy versions)
@@ -547,11 +549,15 @@ a CI gate.
   the final URL in `--server-url`. A 301, 302 or 303 used to turn the push
   into a body-less GET that could read as delivered. `Retry-After` on 429
   and 503 is honoured, up to 1 minute (#190).
-- When the cluster-wide pod list fails, Helm-installed add-ons are still
-  matched from their releases and IngressClass controllers, and the
-  `addons` capability is partial with the reason (#199). Upgrade the server
-  before the agent of a cluster whose agent role cannot list pods: an older
-  server reads its partial add-ons as `ready`.
+- When the cluster-wide pod list fails, add-ons are still matched from Helm
+  releases and IngressClass controllers. The `addons` capability is then
+  partial with the reason, and a required gap, so the verdict stays
+  `unknown` unless a blocker is found; when no Helm release was read and
+  the IngressClass list could not be read either, `addons` is not
+  assessed, as before (#199). Upgrade the server before the agent of a
+  cluster whose agent role cannot list pods: an older server takes that
+  partial `addons` for an optional gap, so a cluster it read as `unknown`
+  can read `ready`.
 - The Action sets `sarif-file` only after a scan that completed (exit 0 or
   2). After a scan error it used to point at an empty or partial file, so
   the documented upload step guarded on `sarif-file != ''` failed with
@@ -570,7 +576,8 @@ a CI gate.
   from a chart Secret written by this version or later, which writes it
   under `data`. A Secret written by v0.2.0-rc.2 or earlier keeps the key:
   remove it once with the `kubectl patch` that the
-  `server.sharedIngestToken` comment gives (#200).
+  `server.sharedIngestToken` comment gives. Checked by rendering; not yet
+  on a live API server (#200).
 - A control-plane or kube-proxy pod whose version upstream would have
   told but cannot be read makes the verdict `unknown`, not `ready`: an
   upstream-named component image under a digest or a tag that is not a
