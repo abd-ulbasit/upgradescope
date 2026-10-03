@@ -960,19 +960,30 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 		// first tick back. A check that times out is retried every tick.
 		sctx, scancel := context.WithTimeout(ctx, startupCRDTimeout)
 		err := ensure(sctx)
-		// The group moved (#68): say once that the old CRD can go. Its
-		// objects are the owner's to delete, so the agent never does. The
-		// check shares the startup bound.
-		if legacy, lerr := crd.LegacyCRDInstalled(sctx, apiext); lerr != nil {
+		// The group moved (#68): look for the old CRD, which only reads.
+		// The check shares the startup bound.
+		legacy, lerr := crd.LegacyCRDInstalled(sctx, apiext)
+		scancel()
+		if lerr != nil {
 			log.Info("could not check for the pre-v0.2.0 ClusterReadiness CRD", "crd", crd.LegacyCRDName, "err", lerr)
-		} else if legacy {
+		}
+		if errors.Is(err, crd.ErrCRDNotInstalled) {
+			// Every tick would 404; say why once, clearly. With only the
+			// old CRD installed, the cause is a chart upgraded across the
+			// group move: Helm does not install crds/ on upgrade.
+			if legacy {
+				return fmt.Errorf("%w; only %s, on the old group, is installed: the API group moved to %s and helm upgrade does not install the new CRD, so install it first (%s)",
+					err, crd.LegacyCRDName, crd.Group, crd.UpgradeGuideURL)
+			}
+			return err
+		}
+		if legacy {
+			// Say once that the old CRD can go, now that the new one is
+			// in place. Its objects are the owner's to delete, so the
+			// agent never does.
 			log.Warn(msgLegacyCRD, "crd", crd.LegacyCRDName, "group", crd.Group, "cleanup", crd.LegacyCRDCleanup)
 		}
-		scancel()
 		if err != nil {
-			if errors.Is(err, crd.ErrCRDNotInstalled) {
-				return err // every tick would 404; say why once, clearly
-			}
 			// Non-fatal otherwise: the CRD exists, the schema upgrade did
 			// not land (a transient fault, or a narrower custom role that
 			// denies patch). Every tick tries again until it succeeds.

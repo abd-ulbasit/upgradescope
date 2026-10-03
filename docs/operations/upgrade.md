@@ -401,7 +401,11 @@ per cluster.
     ```
 
     An agent run with `--manage-crd` and a kubeconfig that may create
-    CRDs (outside the chart) installs it itself.
+    CRDs (outside the chart) installs it itself. The chart's agent may
+    not: upgraded without this step, it exits at startup with an error
+    that names the group move and this page, its pod restarts, and
+    `helm upgrade --wait` times out. Install the CRD then; the next
+    restart picks it up.
 
 2. **Carry over the old object's spec**, if you set `spec.targets` or
    `spec.ignore` on it (the agent creates the new object empty on its

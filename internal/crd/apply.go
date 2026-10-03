@@ -138,6 +138,10 @@ const LegacyCRDName = Plural + "." + apigroup.LegacyGroup
 // every ClusterReadiness object stored under the old group.
 const LegacyCRDCleanup = "kubectl delete crd " + LegacyCRDName
 
+// UpgradeGuideURL is the migration guide from the legacy group: what to
+// install, carry over, rename and delete, in order.
+const UpgradeGuideURL = "https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-api-group-moved"
+
 // LegacyCRDInstalled reports whether the legacy CRD is still installed. It
 // only reads: deleting the CRD deletes the objects under it, which is the
 // cluster owner's call. A failed read is returned, not taken for "absent".

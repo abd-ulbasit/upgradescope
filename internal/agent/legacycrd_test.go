@@ -2,11 +2,18 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
 )
@@ -49,5 +56,28 @@ func TestRunNoLegacyCRDNoWarning(t *testing.T) {
 	runOneTick(t, fakeAPIExt(), Config{Logger: slog.New(slog.NewJSONHandler(logs, nil))})
 	if warned := linesWithMsg(logs.lines(t), msgLegacyCRD); len(warned) != 0 {
 		t.Errorf("legacy CRD lines = %v, want none", warned)
+	}
+}
+
+// The chart upgraded without installing the new CRD first (Helm does not
+// install crds/ on upgrade): the agent may not create it and exits. With
+// the old CRD still installed, the cause is the group move, so the error
+// says that and where the migration steps are, not only that a CRD is
+// missing.
+func TestRunNamesTheGroupMoveWhenOnlyTheLegacyCRDIsInstalled(t *testing.T) {
+	apiext := apiextfake.NewClientset(&apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: crd.LegacyCRDName}})
+	apiext.PrependReactor("create", "customresourcedefinitions",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, "x", errors.New("RBAC"))
+		})
+	err := Run(context.Background(), fakeClients(t, "v1.35.2"), fakeDyn(), apiext, mustKB(t), Config{})
+	if !errors.Is(err, crd.ErrCRDNotInstalled) {
+		t.Fatalf("Run err = %v, want crd.ErrCRDNotInstalled", err)
+	}
+	for _, want := range []string{crd.LegacyCRDName, crd.Group, "helm upgrade", crd.UpgradeGuideURL} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Run err = %v\nwant it to name %q", err, want)
+		}
 	}
 }
