@@ -81,8 +81,14 @@ func (e *providerEvidence) addNode(n *corev1.Node) {
 // contradiction, are other. A cluster nothing claims is other too, but only
 // when its nodes were read: without them an AKS cluster, which has no
 // version suffix, cannot be told from a vanilla one, so it is left
-// undetermined ("").
+// undetermined (""). When the node list failed partway the pages read are
+// not evidence either: a label on one page could claim a service that a
+// providerID on a page not read would contradict, so only the version
+// suffix is used then.
 func (e providerEvidence) provider(serverVersion string) inventory.Provider {
+	if !e.nodesRead {
+		e = providerEvidence{}
+	}
 	var claimed []providerRule
 	for _, r := range providerRules {
 		if r.version != nil && r.version.MatchString(serverVersion) || e.labelled[r.provider] {

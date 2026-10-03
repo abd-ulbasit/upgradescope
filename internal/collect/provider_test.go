@@ -151,9 +151,51 @@ func TestCollectVersionsProviderWithoutNodes(t *testing.T) {
 // calendars for (plus other).
 func TestProviderNamesMatchRegistry(t *testing.T) {
 	got := []string{string(inventory.ProviderEKS), string(inventory.ProviderGKE), string(inventory.ProviderAKS)}
+	if len(got) != len(registry.ProviderIDs) {
+		t.Fatalf("registry.ProviderIDs = %v, inventory names %v: keep them in step", registry.ProviderIDs, got)
+	}
 	for i, id := range registry.ProviderIDs {
 		if got[i] != id {
 			t.Errorf("registry.ProviderIDs[%d] = %q, inventory has %q", i, id, got[i])
 		}
+	}
+}
+
+// When the node list fails after its first page, the pages read are not
+// evidence: an AKS label on page one could claim a provider that a
+// providerID on page two would contradict. Only the version suffix, which
+// needs no nodes, still names the provider; otherwise it is undetermined.
+func TestCollectVersionsProviderNodeListFailsMidway(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		server string
+		want   inventory.Provider
+	}{
+		{"label on the pages read, no suffix", "v1.34.2", ""},
+		{"suffix names it whatever was read", "v1.34.2-eks-3abc123", inventory.ProviderEKS},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := kubefake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-1")}})
+			disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+			disc.FakedServerVersion = &version.Info{GitVersion: tt.server}
+			calls := 0
+			cs.PrependReactor("list", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+				calls++
+				if calls > 1 {
+					return true, nil, errors.New("etcd timeout")
+				}
+				return true, &corev1.NodeList{
+					ListMeta: metav1.ListMeta{Continue: "page-2"},
+					Items:    []corev1.Node{*providerNode("n1", "azure:///x", map[string]string{"kubernetes.azure.com/cluster": "MC_rg_aks_eastus"})},
+				}, nil
+			})
+			var inv inventory.Inventory
+			if err := collectVersions(context.Background(), disc, cs, "team", &inv); err == nil {
+				t.Fatal("collectVersions succeeded, want the second page's error")
+			}
+			if inv.Provider != tt.want {
+				t.Errorf("Provider = %q, want %q", inv.Provider, tt.want)
+			}
+		})
 	}
 }
