@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -316,6 +317,13 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"reg.kyverno.io/kyverno/kyverno:v1.14.1", "kyverno", "1.14.1"},
 		{"quay.io/argoproj/argocd:v2.12.3", "argo-cd", "2.12.3"},
 		{"registry.k8s.io/etcd:3.5.15-0", "etcd", "3.5.15"},
+		{"bitnami/etcd:3.5.15-debian-12-r3", "etcd", "3.5.15"},
+		{"quay.io/coreos/etcd:v3.5.15", "etcd", "3.5.15"},
+		{"gcr.io/etcd-development/etcd:v3.5.15", "etcd", "3.5.15"},
+		// A one-segment matcher is no mirror suffix: "etcd" names the
+		// repository etcd and nothing that merely ends in it.
+		{"someone/etcd:3.5.15", "", ""},
+		{"myregistry/mirror/etcd:3.5.15", "", ""},
 		{"registry.k8s.io/external-dns/external-dns:v0.14.2", "external-dns", "0.14.2"},
 		{"bitnami/external-dns:0.14.2-debian-12-r4", "external-dns", "0.14.2"},
 		{"registry.k8s.io/metrics-server/metrics-server:v0.7.2", "metrics-server", "0.7.2"},
@@ -404,6 +412,50 @@ func TestMatchAddOnsRealWorldCharts(t *testing.T) {
 		if len(got) != 1 || got[0].ID != wantID || got[0].Source != "chart" || got[0].Version != "1.2.3" {
 			t.Errorf("chart %s: got %+v, want %s from the chart at 1.2.3", chart, got, wantID)
 		}
+	}
+}
+
+// Mirror matching is by a path suffix of at least two segments (#49): a
+// one-segment matcher is an exact repository, so an operator entry (or the
+// embedded etcd) cannot claim the same-named repository of another product.
+func TestImageMatchersNeedTwoSegmentsToSuffixMatch(t *testing.T) {
+	for _, tc := range []struct {
+		image, matcher string
+		want           bool
+	}{
+		{"quay.io/cilium/operator:v1.16.1", "operator", false},
+		{"registry.k8s.io/ingress-nginx/controller:v1.11.3", "controller", false},
+		{"myregistry/mirror/ingress-nginx/controller:v1.11.3", "controller", false},
+		{"myregistry.example.com/operator:v1", "operator", true},
+		{"quay.io/cilium/operator:v1.16.1", "cilium/operator", true},
+		{"myregistry/mirror/cilium/operator:v1.16.1", "cilium/operator", true},
+		{"quay.io/xcilium/operator:v1.16.1", "cilium/operator", false},
+	} {
+		if got := imageMatches(parseImage(tc.image), tc.matcher); got != tc.want {
+			t.Errorf("imageMatches(%s, %q) = %v, want %v", tc.image, tc.matcher, got, tc.want)
+		}
+	}
+}
+
+// The reported failure: an operator's entry with the bare matcher "operator"
+// made quay.io/cilium/operator Cilium and the operator's product at once.
+func TestExtraSingleSegmentMatcherLeavesEmbeddedImagesAlone(t *testing.T) {
+	base, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine := registry.AddOn{ID: "my-operator", Matchers: registry.Matchers{Images: []string{"operator", "controller"}}}
+	addons := registry.Merge(base, []registry.AddOn{mine})
+	if errs := registry.ClaimConflicts(addons); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	for _, image := range []string{"quay.io/cilium/operator:v1.16.1", "registry.k8s.io/ingress-nginx/controller:v1.11.3", "myregistry/mirror/ingress-nginx/controller:v1.11.3"} {
+		if ids := imageAddOns(parseImage(image), addons); slices.Contains(ids, "my-operator") {
+			t.Errorf("%s claimed by %v: the one-segment matcher reached another product", image, ids)
+		}
+	}
+	if ids := imageAddOns(parseImage("myregistry.example.com/operator:v1"), addons); !slices.Equal(ids, []string{"my-operator"}) {
+		t.Errorf("the exact repository operator: claimed by %v, want my-operator", ids)
 	}
 }
 
