@@ -122,6 +122,11 @@ per-version lifecycle source.
   `localhost`, a single-label host, any IP address). It cannot tell a wrong
   real URL from a right one: CI does not fetch citations, so the checklist
   below is yours.
+- `eol_date` of a product retired as a whole is a date a vendor page states
+  (Promtail, Grafana Agent) or, for a project with no end-of-support notice,
+  the day its repository was archived as the repository page shows it
+  (Kubernetes Dashboard, Weave Net). Where neither is available, leave the
+  date out rather than infer one: `status: eol` alone is a blocker.
 - A date is a claim, so `eol_date` needs `status: supported` or `eol`;
   `status: unknown` (which needs no citation) with a date is rejected, since
   it would print an uncited end-of-life blocker.

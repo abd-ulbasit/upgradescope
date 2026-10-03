@@ -11,8 +11,12 @@ matchers:
     # A one-segment matcher is an exact repository, not a mirror suffix, so
     # the other published paths are listed: gcr.io/etcd-development/etcd,
     # quay.io/coreos/etcd, bitnami/etcd. "etcd" itself is registry.k8s.io/etcd
-    # (and k8s.gcr.io/etcd), where kubeadm pulls it.
+    # (and k8s.gcr.io/etcd), where kubeadm pulls it. registry-k8s-io/etcd is
+    # the ECR pull-through cache of registry.k8s.io; a kubeadm
+    # imageRepository mirror (myregistry.corp/k8s/etcd) is not recognized,
+    # list its path in an entry of your own (--registry-dir).
     - etcd
+    - registry-k8s-io/etcd
     - etcd-development/etcd
     - coreos/etcd
     - bitnami/etcd
