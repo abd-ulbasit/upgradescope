@@ -55,8 +55,10 @@ kubectl wait clusterreadiness/cluster --for=condition=Ready --timeout=15m
 ```
 
 The object is named by `agent.crName` (`--cr-name`), which must be an RFC
-1123 subdomain: lowercase letters, digits, `-` and `.`, at most 253 bytes.
-The agent refuses to start under any other name. Changing it creates a new
+1123 subdomain: dot-separated labels of lowercase letters, digits and `-`, each
+starting and ending with a letter or digit, at most 253 bytes. The agent
+refuses to start under any other name, and the chart's schema refuses it at
+`helm install`. Changing it creates a new
 object and leaves the old one at its last verdict, because the agent's role
 has no delete permission and Helm does not own the object. Delete the old
 one yourself:

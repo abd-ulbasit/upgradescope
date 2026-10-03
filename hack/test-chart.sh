@@ -503,11 +503,15 @@ echo "== values.schema.json rejects bad values"
 # agent.interval: Go durations of at least 1m render in any spelling v0.1
 # (which had no schema) let through, e.g. 300s or 1.5h; under 1m or a bare
 # number fails. server.targets takes at most 4 minors, as serve --targets
-# does: the server's memory limit is sized for that many.
+# does: the server's memory limit is sized for that many. agent.targets takes
+# at most 8, the CRD's spec.targets maxItems. agent.crName is an RFC 1123
+# subdomain, as the agent requires at start.
 for bad in 'server.enable=true' 'agent.interval=30s' 'agent.interval=59s' 'agent.interval=59.9s' \
   'agent.interval=0.5m' 'agent.interval=100ms' 'agent.interval=10' 'agent.targets={latest}' \
   'agent.targets={v1.38}' 'agent.targets={1.37.2}' 'rbac.helmSecret=false' \
-  'server.targets={1.36,1.37,1.38,1.39,1.40}'; do
+  'server.targets={1.36,1.37,1.38,1.39,1.40}' \
+  'agent.targets={1.30,1.31,1.32,1.33,1.34,1.35,1.36,1.37,1.38}' \
+  'agent.crName=a..b' 'agent.crName=a.-b' 'agent.crName=Prod'; do
   if helm template upgradescope "$CHART" --set "$bad" >/dev/null 2>&1; then
     fail "schema accepted --set $bad"
   else
@@ -517,13 +521,27 @@ done
 for good in 'agent.interval=1m' 'agent.interval=1h30m' 'agent.interval=10m0s' 'agent.interval=60s' \
   'agent.interval=90s' 'agent.interval=300s' 'agent.interval=1.5h' 'agent.interval=0.5h' \
   'agent.interval=1.5m' 'agent.interval=2m30.5s' 'agent.targets={1.37,1.38}' \
-  'server.targets={1.36,1.37,1.38,1.39}'; do
+  'server.targets={1.36,1.37,1.38,1.39}' \
+  'agent.targets={1.30,1.31,1.32,1.33,1.34,1.35,1.36,1.37}' \
+  'agent.crName=prod.eu-west-1'; do
   if helm template upgradescope "$CHART" --set "$good" >/dev/null 2>&1; then
     pass "schema accepts --set $good"
   else
     fail "schema rejected --set $good"
   fi
 done
+# agent.crName takes 253 bytes, the most an object name has, and not 254.
+name253=$(printf 'a%.0s' $(seq 1 253))
+if helm template upgradescope "$CHART" --set "agent.crName=$name253" >/dev/null 2>&1; then
+  pass "schema accepts a 253-byte agent.crName"
+else
+  fail "schema rejected a 253-byte agent.crName"
+fi
+if helm template upgradescope "$CHART" --set "agent.crName=${name253}a" >/dev/null 2>&1; then
+  fail "schema accepted a 254-byte agent.crName"
+else
+  pass "schema rejects a 254-byte agent.crName"
+fi
 
 [ "$FAILED" -eq 0 ] || { echo "chart-test: FAILED" >&2; exit 1; }
 echo "chart-test: all assertions passed"

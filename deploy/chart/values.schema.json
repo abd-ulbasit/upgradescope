@@ -61,11 +61,15 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "interval": { "$ref": "#/definitions/duration" },
-        "crName": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253 },
+        "crName": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$", "maxLength": 253 },
         "teamLabel": { "type": "string", "minLength": 1 },
         "clusterName": { "type": "string" },
         "manageCRD": { "type": "boolean" },
-        "targets": { "$ref": "#/definitions/crTargets" },
+        "targets": {
+          "description": "At most 8, as the CRD's spec.targets: the agent refuses a longer --targets at start.",
+          "allOf": [{ "$ref": "#/definitions/crTargets" }],
+          "maxItems": 8
+        },
         "serverUrl": { "type": "string", "pattern": "^(https?://.+)?$" },
         "serverToken": { "type": "string" },
         "existingSecret": { "$ref": "#/definitions/secretName" },

@@ -280,6 +280,7 @@ store and the push protocol read it. It is JSON on the wire and at rest.
 ```jsonc
 {
   "schemaVersion": 1,
+  "collectorSchema": 1,
   "clusterId": "…kube-system UID, or \"files\" / \"manifests\"",
   "collectedAt": "RFC 3339",
   "serverVersion": "v1.34.2",
@@ -309,7 +310,23 @@ Rules for changing it:
   does not know.
 - `capabilities` must contain an entry for every capability the collector
   attempted. An absent slice with `available: true` means "looked, found
-  nothing". `available: false` means "could not look".
+  nothing". `available: false` means "could not look". A capability that
+  is not in the map at all was not collected, and for a required one it is
+  the same as `available: false`: `api-usage` always, `versions` and (when
+  the knowledge base has add-ons) `addons` in a cluster inventory are
+  required gaps when absent, so an inventory that leaves them out, or has
+  no `capabilities` map, reads `unknown` at best, never `ready`. The
+  server refuses with 422 an inventory whose `source` is anything but
+  `cluster` (an absent `source` is a v0.1.x agent's, also a cluster
+  inventory): a files inventory is judged without versions or add-ons, and
+  only the agent pushes.
+- `collectorSchema` is the generation of field meanings the collector
+  filled the inventory with (`inventory.CurrentCollectorSchema`, 1 since
+  v0.2.0). An inventory without it comes from a v0.1.x agent or a v0.2.0
+  release candidate, which the server tells apart by `agentVersion`, and
+  judges a v0.1.x agent's by what its collectors then meant (see
+  [Running the server](operations.md)). A server refuses with 422 a
+  generation it does not know, whose meanings it would misread.
 
 ## Evaluation rules
 
@@ -400,7 +417,13 @@ Per-team scores (`engine.TeamScores`) apply the same formula to each team's
 subset of findings. Teams come from a namespace label (`--team-label`,
 default `team`), optionally overridden by the server's `--team-map`. A
 finding that spans N teams counts for each of them, and an unattributed
-finding is grouped under `""`.
+finding is grouped under `""`. Each team also has a `verdict`: `blocked`
+by a blocker of its own or an unattributed one (which cannot be ruled out
+as the team's), otherwise `unknown` when the report has a required
+not-assessed gap, otherwise `ready`. A team's `ready` is `verdict == "ready"`,
+so no team reads ready while the cluster is `unknown`; another team's
+blocker leaves it ready. Its score, blockers and warnings count only its
+own findings, and a team with no findings is not listed.
 
 The formula is part of the public contract: users compare scores over time.
 Changing it is a breaking change that goes in the changelog.
