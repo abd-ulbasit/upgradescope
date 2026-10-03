@@ -14,7 +14,8 @@ import (
 // report the read API serves carries the support calendar and the
 // support-lifecycle finding, judged with the server's clock (pinned to
 // 2026-06-10, 175 days before EKS 1.34 leaves standard support: a status,
-// no finding yet). A provider this build does not know is refused.
+// no finding yet). A provider this build does not know (a newer agent's) is accepted and
+// has no calendar; one that is not a bounded name is refused.
 func TestSupportLifecycleThroughTheServer(t *testing.T) {
 	k := testKB()
 	k.Providers = []registry.ProviderSupport{{
@@ -43,9 +44,17 @@ func TestSupportLifecycleThroughTheServer(t *testing.T) {
 		t.Fatalf("report support = %+v, want the EKS 1.34 calendar with the list-price delta", s)
 	}
 
+	// A newer agent that learned a fourth provider is not refused: the
+	// snapshot is judged, with no support calendar for the provider.
+	future := testInventory()
+	future.Provider = "oke"
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, future), true); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("future provider: status = %d (body %v), want 202", resp.StatusCode, out)
+	}
+
 	bad := testInventory()
-	bad.Provider = "oke"
+	bad.Provider = "<script>"
 	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, bad), true); resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("unknown provider: status = %d (body %v), want 422", resp.StatusCode, out)
+		t.Fatalf("unbounded provider: status = %d (body %v), want 422", resp.StatusCode, out)
 	}
 }
