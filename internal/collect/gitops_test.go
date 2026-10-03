@@ -147,9 +147,42 @@ func TestGitOpsArgoApplicationSingleSource(t *testing.T) {
 	if !reflect.DeepEqual(inv.GitOpsCharts, want) {
 		t.Errorf("gitops charts = %#v\nwant            %#v", inv.GitOpsCharts, want)
 	}
-	// Helm releases exist and the Application was read: nothing is missing.
-	if pe.incomplete || len(pe.skipped) != 0 || !strings.Contains(pe.Error(), "1 via Argo CD") {
-		t.Errorf("partial = %+v, want a complete note counting 1 chart via Argo CD", pe)
+	// The cluster has a Helm release, but the Application's chart has none:
+	// helm template leaves nothing to assess, so that is a gap whether or
+	// not other releases exist (Argo CD is usually installed with Helm).
+	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"argocd"}) || !strings.Contains(pe.Error(), "1 via Argo CD") {
+		t.Errorf("partial = %+v, want a gap skipping argocd, counting 1 chart via Argo CD", pe)
+	}
+	for _, want := range []string{"1 Argo CD chart(s) read from Applications", "helm template", "not assessed"} {
+		if !strings.Contains(pe.Error(), want) {
+			t.Errorf("reason %q lacks %q", pe.Error(), want)
+		}
+	}
+}
+
+// Argo CD Applications with no chart (a path in Git) read nothing and add
+// no gap on a cluster that has Helm releases: nothing is known to be
+// missing.
+func TestGitOpsArgoApplicationWithoutChartsIsNoGapWhenReleasesExist(t *testing.T) {
+	app := argoApp("config", map[string]any{
+		"destination": inCluster("config"),
+		"source":      map[string]any{"repoURL": "https://github.com/acme/config.git", "path": "charts/app", "targetRevision": "main"},
+	})
+	f := newGitOpsFixture(t, []*metav1.APIResourceList{argoServed()}, []runtime.Object{app},
+		helmSecret(t, helmRev{ns: "kube-system", release: "dns", rev: 1, status: "deployed", chart: "coredns", chartVersion: "1.0.0"}))
+	_, err := f.helmStep()
+	if pe := partial(t, err); pe.incomplete || len(pe.skipped) != 0 {
+		t.Errorf("partial = %+v, want no gap", pe)
+	}
+}
+
+// A Flux whose HelmRelease list is served and empty (Flux used for
+// Kustomizations only) deploys no chart: there is nothing to not assess.
+func TestGitOpsFluxWithoutHelmReleasesIsNoGap(t *testing.T) {
+	f := newGitOpsFixture(t, []*metav1.APIResourceList{resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases)}, nil)
+	_, err := f.helmStep()
+	if pe := partial(t, err); pe.incomplete || len(pe.skipped) != 0 {
+		t.Errorf("partial = %+v, want no gap", pe)
 	}
 }
 
@@ -293,7 +326,11 @@ func TestGitOpsMarkersWithoutHelmReleasesAreAGap(t *testing.T) {
 		{"flux", resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases), "flux", "Flux"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newGitOpsFixture(t, []*metav1.APIResourceList{tc.served}, nil)
+			// Flux needs a HelmRelease to have anything to not assess.
+			hr := fluxRelease("v2", "flux-system", "podinfo", map[string]any{
+				"chart": map[string]any{"spec": map[string]any{"chart": "podinfo", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "podinfo"}}},
+			})
+			f := newGitOpsFixture(t, []*metav1.APIResourceList{tc.served}, []runtime.Object{hr})
 			_, err := f.helmStep()
 			pe := partial(t, err)
 			if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{tc.tool}) {
@@ -558,6 +595,13 @@ func TestGitOpsDeployedIngressNginxIsFoundEndToEnd(t *testing.T) {
 		"chart": map[string]any{"spec": map[string]any{"chart": "ingress-nginx", "version": "4.11.3",
 			"sourceRef": map[string]any{"kind": "HelmRepository", "name": "ingress-nginx"}}},
 	})
+	multiSource := argoApp("platform", map[string]any{
+		"destination": inCluster("ingress-nginx"),
+		"sources": []any{
+			map[string]any{"repoURL": "https://github.com/acme/config.git", "targetRevision": "main", "ref": "values"},
+			map[string]any{"repoURL": "https://kubernetes.github.io/ingress-nginx", "chart": "ingress-nginx", "targetRevision": "4.11.3"},
+		},
+	})
 	for _, tc := range []struct {
 		name   string
 		served *metav1.APIResourceList
@@ -565,6 +609,7 @@ func TestGitOpsDeployedIngressNginxIsFoundEndToEnd(t *testing.T) {
 		tool   string
 	}{
 		{"argo cd", argoServed(), ingressNginxApp(), "argocd"},
+		{"argo cd multiple sources", argoServed(), multiSource, "argocd"},
 		{"flux", resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases), flux, "flux"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

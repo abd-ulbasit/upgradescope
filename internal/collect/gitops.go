@@ -90,6 +90,12 @@ type gitopsTool struct {
 	// helm.toolkit.fluxcd.io/name; kustomize-controller's labels say nothing
 	// about charts.
 	tracks func(metav1.PartialObjectMetadata) bool
+	// rendersOnly marks a tool that renders charts with helm template and
+	// leaves no Helm release at all (Argo CD): each chart read from it is
+	// known to have nothing for the release checks to assess. A tool that
+	// does leave releases (Flux's helm-controller) is a gap only while the
+	// cluster shows no release.
+	rendersOnly bool
 	// note says what the tool not leaving a Helm release means for checks.
 	note string
 }
@@ -100,7 +106,8 @@ var gitopsTools = []gitopsTool{
 		tracks: func(m metav1.PartialObjectMetadata) bool {
 			return m.Annotations["argocd.argoproj.io/tracking-id"] != "" || m.Labels["argocd.argoproj.io/instance"] != ""
 		},
-		note: "it renders charts with helm template and leaves no release object",
+		rendersOnly: true,
+		note:        "it renders charts with helm template and leaves no release object",
 	},
 	{
 		id: inventory.GitOpsFlux, label: fluxLabel, group: fluxGroup, versions: fluxVersions, resource: "helmreleases",
@@ -114,6 +121,7 @@ type gitopsToolState struct {
 	gvr     schema.GroupVersionResource // zero when the resource is not served
 	marked  bool                        // workloads carry its tracking metadata
 	read    int                         // charts recorded
+	seen    int                         // custom resources listed, whatever became of them
 	foreign int                         // chart sources for other clusters, not recorded
 	invalid int                         // chart sources deploying to a name that is no namespace, not recorded
 	// unresolved counts Flux chartRefs that could not be resolved to a
@@ -121,6 +129,7 @@ type gitopsToolState struct {
 	unresolved    int
 	unresolvedWhy string
 	failure       string // why its resources could not be read, or ""
+	listed        bool   // its resources were listed without error
 }
 
 func (s gitopsToolState) served() bool { return s.gvr != (schema.GroupVersionResource{}) }
@@ -157,7 +166,9 @@ func collectHelmStep(ctx context.Context, c Clients, lifecycle []kb.APILifecycle
 // its release storage: a count of the charts read, and the gaps. The
 // capability is partial, naming each tool in Skipped, when a tool's
 // resources could not be read, or when the cluster has no Helm release but
-// shows the tool (see collectGitOps).
+// shows the tool (see collectGitOps). Charts read from a tool that only
+// renders (Argo CD) are a gap whether or not the cluster has other
+// releases, since each is known to have none.
 func (pe partialError) withGitOps(states []gitopsToolState, noReleases bool) error {
 	msgs := []string{pe.msg}
 	var counts []string
@@ -189,7 +200,14 @@ func (pe partialError) withGitOps(states []gitopsToolState, noReleases bool) err
 			msgs = append(msgs, msg)
 			skip = true
 		}
-		if evidence, ok := s.present(); ok && noReleases {
+		// (With no release at all, the presence gap below says it already.)
+		if s.rendersOnly && s.read > 0 && !noReleases {
+			msgs = append(msgs, fmt.Sprintf("%d %s chart(s) read from Applications leave no Helm release: chart kubeVersion and stored-manifest checks were not assessed for them; %s", s.read, s.label, s.note))
+			skip = true
+		}
+		// A tool whose resources were listed and are none deploys no chart.
+		nothingDeployed := !s.rendersOnly && s.listed && s.seen == 0
+		if evidence, ok := s.present(); ok && noReleases && !nothingDeployed {
 			msg := fmt.Sprintf("no Helm releases read, but %s is present (%s): chart kubeVersion and stored-manifest checks were not assessed for the charts it deploys", s.label, evidence)
 			if s.note != "" {
 				msg += "; " + s.note
@@ -278,6 +296,7 @@ func collectGitOps(ctx context.Context, c Clients, noReleases bool, inv *invento
 			s.failure = fmt.Sprintf("%s chart sources not read: %v", s.label, err)
 			continue
 		}
+		s.listed = true
 		s.read = len(charts)
 		inv.GitOpsCharts = append(inv.GitOpsCharts, charts...)
 	}
@@ -369,6 +388,7 @@ func listCustomResources(ctx context.Context, dyn dynamic.Interface, gvr schema.
 func readArgoApplications(ctx context.Context, dyn dynamic.Interface, s *gitopsToolState) ([]inventory.GitOpsChart, error) {
 	var out []inventory.GitOpsChart
 	err := listCustomResources(ctx, dyn, s.gvr, func(app *unstructured.Unstructured) {
+		s.seen++
 		spec := mapAt(app.Object, "spec")
 		// spec.sources, when set, replaces spec.source: Argo CD ignores a
 		// source beside it.
@@ -442,6 +462,7 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 	var pending []int     // indexes into out of charts awaiting an OCIRepository
 	refs := map[int]ref{} // …and the OCIRepository each awaits
 	err := listCustomResources(ctx, dyn, s.gvr, func(hr *unstructured.Unstructured) {
+		s.seen++
 		spec := mapAt(hr.Object, "spec")
 		if mapAt(spec, "kubeConfig") != nil {
 			s.foreign++

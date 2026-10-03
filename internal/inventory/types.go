@@ -266,10 +266,12 @@ const (
 
 // GitOpsChart is a Helm chart a GitOps tool deploys into the cluster, read
 // from the tool's own custom resource: an Argo CD Application source with
-// chart set, or a Flux HelmRelease. Neither leaves a release the Helm
-// collector can read (Argo CD renders with helm template), so this is all
-// that is known of the chart: no appVersion, no stored manifest. Only
-// resources that deploy into the scanned cluster are listed.
+// chart set, or a Flux HelmRelease. Argo CD renders with helm template and
+// leaves no release the Helm collector can read, so this is all that is
+// known of its chart: no appVersion, no stored manifest. (Flux's
+// helm-controller does leave a release Secret, which the Helm collector
+// reads on its own.) Only resources that deploy into the scanned cluster
+// are listed.
 type GitOpsChart struct {
 	Tool string `json:"tool"` // GitOpsArgoCD or GitOpsFlux
 	// Name and Namespace are the Application's or HelmRelease's own.
