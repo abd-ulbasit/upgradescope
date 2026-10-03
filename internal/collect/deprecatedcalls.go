@@ -62,7 +62,9 @@ func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, selfListed [
 	// Since when the gauge has counted: kube-apiserver exposes its process
 	// start time beside it. Whole seconds; left zero when absent, when
 	// there is not exactly one series, or when the value is not a time
-	// (NaN, ±Inf, not after the epoch, beyond year 5000).
+	// (NaN, ±Inf, not after the epoch, beyond year 5000). It is read from a
+	// gauge or untyped series, as client_golang exposes it; any other type
+	// is not the standard metric and is treated as absent.
 	if fam, ok := families[processStartMetric]; ok && len(fam.GetMetric()) == 1 {
 		m := fam.GetMetric()[0]
 		sec := m.GetGauge().GetValue()
