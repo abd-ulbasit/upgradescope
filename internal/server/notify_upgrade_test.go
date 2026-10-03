@@ -48,7 +48,7 @@ func atVersion(serverVersion string, usage ...inventory.APIUsage) inventory.Inve
 		CollectorSchema: inventory.CurrentCollectorSchema,
 		CollectedAt:     time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
 		ServerVersion:   serverVersion,
-		Capabilities:    map[inventory.Capability]inventory.CapabilityStatus{},
+		Capabilities:    collectedCaps(),
 		APIUsage:        usage,
 	}
 }

@@ -106,7 +106,7 @@ func TestWebhookPayloadMatchesSchema(t *testing.T) {
 		CollectorSchema: inventory.CurrentCollectorSchema,
 		CollectedAt:     time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
 		ServerVersion:   "v1.35.0",
-		Capabilities:    map[inventory.Capability]inventory.CapabilityStatus{},
+		Capabilities:    collectedCaps(),
 	}
 	withPSP := clean
 	withPSP.APIUsage = []inventory.APIUsage{{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Count: 1}}

@@ -26,6 +26,61 @@ func pushEnvelope(t *testing.T, inventory string) []byte {
 	return b
 }
 
+// TestIngestCapabilityLessInventoryNeverReady (#194 SV-04, NEW-ingest-1):
+// a push whose inventory is schema-valid but reports no capabilities, or
+// an empty map, was accepted and judged on what it did not contain:
+// blocked prod (a PodSecurityPolicy, removed in 1.35) read ready/100,
+// only crds not assessed. Such a push is still stored (it is valid under
+// the published schema), and judged unknown: the required capabilities
+// it does not report are required gaps.
+func TestIngestCapabilityLessInventoryNeverReady(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	push := func(cluster, agentVersion, inventory string) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{
+			"schemaVersion": 1, "clusterName": cluster, "agentVersion": agentVersion, "kbVersion": "x",
+			"inventory": json.RawMessage(inventory),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp, out := postSnapshot(t, h.ts, "ingest-tok", body, false); resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("%s push as %q = %d %v", cluster, agentVersion, resp.StatusCode, out)
+		}
+	}
+	// "x" is the finding's repro (an unmarked inventory, so also legacy);
+	// 0.2.0-rc.2 is judged as current, so only the missing capabilities
+	// keep it from ready.
+	for i, agent := range []string{"x", "0.2.0-rc.2"} {
+		prod := "prod-" + itoa(int64(i))
+		if code, out := h.pushAs(prod, "v0.2.0", testInventoryWithPSP()); code != http.StatusAccepted {
+			t.Fatalf("seed push = %d %v", code, out)
+		}
+		if c := h.fleetCell(prod, "1.35"); c == nil || c.Verdict != "blocked" {
+			t.Fatalf("seed: cell = %+v, want blocked", c)
+		}
+		push(prod, agent, `{"schemaVersion":1,"serverVersion":"v1.34.2","clusterId":"uid-123"}`)
+		if c := h.fleetCell(prod, "1.35"); c == nil || c.Ready || c.Verdict != "unknown" {
+			t.Errorf("agent %q, no capabilities: cell = %+v, want unknown, not ready", agent, c)
+		}
+		if reason, required := h.report(prod, "1.35").gap("api-usage"); !required {
+			t.Errorf("agent %q, no capabilities: api-usage gap %q not required", agent, reason)
+		}
+
+		clean := "clean-" + itoa(int64(i))
+		push(clean, agent, `{"schemaVersion":1,"serverVersion":"v1.34.2","clusterId":"uid-`+clean+`","capabilities":{}}`)
+		rep := h.report(clean, "1.35")
+		if rep.Verdict != "unknown" {
+			t.Errorf("agent %q, capabilities {}: verdict %s, want unknown", agent, rep.Verdict)
+		}
+		for _, c := range []string{"api-usage", "versions"} {
+			if _, required := rep.gap(c); !required {
+				t.Errorf("agent %q, capabilities {}: %s not a required gap (%+v)", agent, c, rep.NotAssessed)
+			}
+		}
+	}
+}
+
 // TestIngestRejectsMalformedInventory: an inventory the server cannot
 // judge is refused with 422 before anything is written. Accepting one
 // made it the cluster's latest snapshot, which blanked a blocked

@@ -1043,7 +1043,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `source` | `cluster` \| `files` | no | — |
 | `collectedAt` | string (date-time) | no | — |
 | `serverVersion` | string | no | The apiserver's gitVersion, e.g. v1.34.2-gke.100. |
-| `capabilities` | map of [CapabilityStatus](#capabilitystatus) | no | — |
+| `capabilities` | map of [CapabilityStatus](#capabilitystatus) | no | Every capability the collector has, by name. In a cluster inventory (source cluster or absent) one the verdict requires and the map does not report — api-usage, versions, and addons when the knowledge base has add-ons — is a required not-assessed gap, so an inventory without this map is never ready. |
 | `apiUsage` | array of object | no | — |
 | `deprecatedCalls` | array of object | no | — |
 | `helmReleases` | array of object | no | — |

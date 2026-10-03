@@ -227,10 +227,11 @@ func TestFleetSummariesAreBoundedPerEvaluation(t *testing.T) {
 	defer ts.Close()
 	inv := testInventory()
 	inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
+		inventory.CapAPIUsage: {Available: true},
 		inventory.CapCRDs:     {Available: true},
 		inventory.CapVersions: {Available: false, Reason: strings.Repeat("v", 2000)}, // required: listed first
 	}
-	for c := range inventory.MaxCapabilities - 2 {
+	for c := range inventory.MaxCapabilities - 3 {
 		var skipped []string
 		for k := range 10 {
 			skipped = append(skipped, fmt.Sprint(k)+strings.Repeat("s", 600))
@@ -239,7 +240,7 @@ func TestFleetSummariesAreBoundedPerEvaluation(t *testing.T) {
 			Available: true, Partial: true, Reason: strings.Repeat("é", 1000), Skipped: skipped}
 	}
 	pushCluster(t, ts, "wide", inv)
-	const gapsInAll = inventory.MaxCapabilities - 1 // crds is available
+	const gapsInAll = inventory.MaxCapabilities - 2 // api-usage and crds are available
 
 	type gap struct {
 		Capability     string   `json:"capability"`
