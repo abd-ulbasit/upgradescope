@@ -184,14 +184,18 @@ func TestEvalSupportWithoutPrice(t *testing.T) {
 func TestEvalSupportUnknown(t *testing.T) {
 	now := day("2027-06-01")
 	for name, inv := range map[string]inventory.Inventory{
-		"other":                  supportInv(inventory.ProviderOther, "v1.34.2"),
-		"not determined":         supportInv("", "v1.34.2"),
-		"a provider not in KB":   supportInv("oke", "v1.34.2"),
-		"minor not in dataset":   supportInv(inventory.ProviderEKS, "v1.99.0-eks-3abc123"),
-		"unparseable version":    supportInv(inventory.ProviderEKS, "not-a-version"),
-		"no server version":      supportInv(inventory.ProviderEKS, ""),
-		"files inventory":        {SchemaVersion: 1, Source: inventory.SourceFiles, Provider: inventory.ProviderEKS, ServerVersion: "v1.34.2"},
-		"a minor older than all": supportInv(inventory.ProviderEKS, "v1.10.0-eks-3abc123"),
+		"other":          supportInv(inventory.ProviderOther, "v1.34.2"),
+		"not determined": supportInv("", "v1.34.2"),
+		// The engine never infers the provider from the version itself:
+		// the collector names it, and an absent or other one is final.
+		"not determined, EKS-looking version": supportInv("", "v1.34.2-eks-3abc123"),
+		"other, GKE-looking version":          supportInv(inventory.ProviderOther, "v1.34.2-gke.100"),
+		"a provider not in KB":                supportInv("oke", "v1.34.2"),
+		"minor not in dataset":                supportInv(inventory.ProviderEKS, "v1.99.0-eks-3abc123"),
+		"unparseable version":                 supportInv(inventory.ProviderEKS, "not-a-version"),
+		"no server version":                   supportInv(inventory.ProviderEKS, ""),
+		"files inventory":                     {SchemaVersion: 1, Source: inventory.SourceFiles, Provider: inventory.ProviderEKS, ServerVersion: "v1.34.2"},
+		"a minor older than all":              supportInv(inventory.ProviderEKS, "v1.10.0-eks-3abc123"),
 	} {
 		if st, fs := evalSupport(inv, supportKB(), now); st != nil || len(fs) != 0 {
 			t.Errorf("%s: status %+v, findings %+v; want neither", name, st, fs)

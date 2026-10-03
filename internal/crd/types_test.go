@@ -42,7 +42,7 @@ func TestManifestStatusListsEveryStatusField(t *testing.T) {
 			t.Errorf("Status.%s is serialized as status.%s, which the manifest's status schema does not list (the apiserver would prune it)", typ.Field(i).Name, name)
 		}
 	}
-	for _, name := range []string{"supportPhase", "extendedSupportFrom", "annualCostDelta", "currency", "priceAsOf", "annualCostNote", "extendedSupportCondition"} {
+	for _, name := range []string{"supportPhase", "extendedSupportFrom", "extendedSupportEnds", "annualCostDelta", "currency", "priceAsOf", "annualCostNote", "extendedSupportCondition"} {
 		if p := status.Properties[name]; p.Type != "string" {
 			t.Errorf("status.%s schema type = %q, want string (a decimal string, never a float)", name, p.Type)
 		}

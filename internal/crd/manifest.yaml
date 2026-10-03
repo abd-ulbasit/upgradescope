@@ -106,6 +106,10 @@ spec:
                   description: The day (UTC, YYYY-MM-DD) standard support for the cluster's minor ends and extended support begins. Set with supportPhase.
                   type: string
                   pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                extendedSupportEnds:
+                  description: The day (UTC, YYYY-MM-DD) the provider's extended support for the cluster's minor ends and it stops supporting the minor. Absent when the provider offered no extended support for the minor. Where extended support is opt-in (GKE, AKS) it is the provider's window, not the cluster's (see extendedSupportCondition).
+                  type: string
+                  pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
                 annualCostDelta:
                   description: What extended support adds per cluster per year at the provider's published list price, (extended - standard) x 8760 cluster-hours, as a decimal string in currency. A list price as of priceAsOf, not the bill. Set only for a provider whose price the knowledge base cites, while the minor can still be in extended support.
                   type: string

@@ -197,6 +197,9 @@ func TestStatusFromReportsSupport(t *testing.T) {
 		{Target: inventory.Version{Major: 1, Minor: 35}, Support: support},
 		{Target: inventory.Version{Major: 1, Minor: 36}, Support: support},
 	}, "v1.34.2-eks-3abc123", "v0.3.0", now)
+	if st.ExtendedSupportEnds != "2027-12-02" {
+		t.Errorf("status.extendedSupportEnds = %q, want 2027-12-02", st.ExtendedSupportEnds)
+	}
 	if st.SupportPhase != "ending" || st.ExtendedSupportFrom != "2026-12-02" || st.AnnualCostDelta != "4380.00" || st.Currency != "USD" || st.PriceAsOf != "2026-10-03" {
 		t.Errorf("status support = %q %q %q %q %q", st.SupportPhase, st.ExtendedSupportFrom, st.AnnualCostDelta, st.Currency, st.PriceAsOf)
 	}
@@ -214,6 +217,9 @@ func TestStatusFromReportsSupport(t *testing.T) {
 	// A provider with no cited price: the dates, no cost fields.
 	st = StatusFromReports([]engine.Report{{Target: inventory.Version{Major: 1, Minor: 35},
 		Support: &engine.SupportStatus{Provider: "aks", Minor: "1.34", Phase: engine.SupportStandard, ExtendedSupportFrom: "2026-11-30"}}}, "v1.34.2", "v0.3.0", now)
+	if st.ExtendedSupportEnds != "" {
+		t.Errorf("no extended window: extendedSupportEnds = %q, want none", st.ExtendedSupportEnds)
+	}
 	if st.SupportPhase != "standard" || st.ExtendedSupportFrom != "2026-11-30" || st.AnnualCostDelta != "" || st.Currency != "" || st.PriceAsOf != "" {
 		t.Errorf("no price: %+v", st)
 	}
@@ -224,7 +230,7 @@ func TestStatusFromReportsSupport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"supportPhase", "extendedSupportFrom", "annualCostDelta", "priceAsOf", "currency", "annualCostNote", "extendedSupportCondition"} {
+	for _, key := range []string{"supportPhase", "extendedSupportFrom", "extendedSupportEnds", "annualCostDelta", "priceAsOf", "currency", "annualCostNote", "extendedSupportCondition"} {
 		if strings.Contains(string(raw), key) {
 			t.Errorf("a cluster with no support calendar marshals %s: %s", key, raw)
 		}

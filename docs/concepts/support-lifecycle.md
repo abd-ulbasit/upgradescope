@@ -72,15 +72,16 @@ same inventory gives the same report on the same date. Its title carries the
 date, never "in N days", so a stored report does not change every day.
 
 Extended support begins **on the date shown, at the start of that day
-(UTC)**. EKS documents billing as starting then; GKE and AKS publish the date
-of the last day of standard support, so for them the finding can be a day
-early.
+(UTC)**. EKS documents billing as starting then; GKE and AKS state the date
+standard support ends and do not state the hour, so for them the finding can
+be off by a day.
 
 The status is also reported when there is no finding: `scan` prints a
 `Support:` line under `Server:` in every phase, `--output json` carries it as
 `support` (see the [JSON report](../reference/json-report.md)), and the
 agent writes it to the `ClusterReadiness` status as `supportPhase`,
-`extendedSupportFrom`, and, with a price, `annualCostDelta`, `currency`,
+`extendedSupportFrom`, `extendedSupportEnds` where the provider offers
+extended support, and, with a price, `annualCostDelta`, `currency`,
 `priceAsOf` and `annualCostNote`, plus `extendedSupportCondition` where
 extended support is opt-in (see the [CRD reference](../reference/crd.md)). The server's
 report endpoint carries `support` and the finding too. Those fields are the
@@ -141,11 +142,13 @@ from signals only the provider produces, and never guesses:
 A node's `providerID` scheme (`aws://`, `gce://`, `azure://`) is never a
 claim, because kubeadm on EC2 or on Azure VMs has the same: it can only
 contradict one (a `-gke.` version on vSphere nodes is GKE on-prem, not GKE).
-Two providers' claims, a contradiction, or no claim at all give `other`. When
-the nodes could not be listed, or the list failed partway (the pages read
-are not evidence), an EKS or GKE version suffix still names the provider,
-and a cluster the version does not name is left undetermined rather than
-called `other`. Manifests (`--files`) have no provider.
+A node with no `providerID` at all contradicts nothing, so a `-gke.` version
+on nodes that carry none (some Google Distributed Cloud bare-metal clusters)
+is claimed as GKE. Two providers' claims, a contradiction, or no claim at
+all give `other`. When the nodes could not be listed, or the list failed
+partway (the pages read are not evidence), an EKS or GKE version suffix
+still names the provider, and a cluster the version does not name is left
+undetermined rather than called `other`. Manifests (`--files`) have no provider.
 
 Only an agent that sends `provider` gets a support status from the server:
 agents from v0.1.x and v0.2.0's release candidates push none, so for their

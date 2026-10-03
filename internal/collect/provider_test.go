@@ -61,6 +61,9 @@ func TestCollectVersionsProvider(t *testing.T) {
 		{"GKE: version suffix and node pool label", "v1.34.2-gke.1234000", []*corev1.Node{
 			providerNode("n1", "gce://proj/us-central1-a/n1", L{"cloud.google.com/gke-nodepool": "default-pool"}),
 		}, false, inventory.ProviderGKE},
+		{"GKE version on nodes with no providerID (some bare-metal clusters): nothing contradicts it, so it is GKE", "v1.34.2-gke.1234000", []*corev1.Node{
+			providerNode("n1", "", nil),
+		}, false, inventory.ProviderGKE},
 		{"GKE-versioned cluster whose nodes run on vSphere is not GKE", "v1.30.2-gke.100", []*corev1.Node{
 			providerNode("n1", "vsphere://4237", nil),
 		}, false, inventory.ProviderOther},
