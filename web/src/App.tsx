@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { getToken, isTokenRemembered, setToken } from "./api";
-import { useHashRoute } from "./hooks";
+import { clearScope, getToken, isTokenRemembered, setToken } from "./api";
+import { useHashRoute, useScope } from "./hooks";
 import { SET_TOKEN_LABEL } from "./ui";
 import { Cluster } from "./views/Cluster";
 import { Fleet } from "./views/Fleet";
@@ -60,6 +60,7 @@ export function App() {
         </nav>
         <TokenSettings onSaved={() => setAuthEpoch((e) => e + 1)} />
       </header>
+      <ScopeNote />
       <main key={authEpoch}>
         {route.view === "fleet" && <Fleet />}
         {route.view === "teams" && <Teams key={route.target ?? ""} target={route.target} />}
@@ -86,6 +87,28 @@ export function App() {
   );
 }
 
+// ScopeNote says that the view is filtered when the server answered for a
+// team-scoped credential: other teams' clusters, findings and scores are
+// left out by the server, not hidden here.
+function ScopeNote() {
+  const scope = useScope();
+  if (scope === null) return null;
+  return (
+    <p className="scope-note" role="note">
+      Showing{" "}
+      {scope.length === 1 ? "team " : "teams "}
+      {scope.map((t, i) => (
+        <span key={t}>
+          {i > 0 && ", "}
+          <strong>{t}</strong>
+        </span>
+      ))}{" "}
+      only: this read token does not see other teams' clusters, findings or
+      scores.
+    </p>
+  );
+}
+
 // TokenSettings: the optional read token (serve --read-token), sent as a
 // bearer header by the API client. Kept in sessionStorage (this tab, until
 // it closes) unless "remember" puts it in localStorage.
@@ -107,6 +130,7 @@ function TokenSettings({ onSaved }: { onSaved: () => void }) {
 
   const save = () => {
     setToken(value.trim(), { remember });
+    clearScope();
     close();
     onSaved();
   };
@@ -160,7 +184,9 @@ function TokenSettings({ onSaved }: { onSaved: () => void }) {
             Remember on this device
           </label>
           <p className="muted">
-            Matches <code>serve --read-token</code>. Kept for this tab only
+            <code>serve --read-token</code>, or a token from{" "}
+            <code>tokens create --read</code>, which may read only some
+            teams. Kept for this tab only
             (sessionStorage) unless remembered, which stores it in this
             browser's localStorage.
           </p>

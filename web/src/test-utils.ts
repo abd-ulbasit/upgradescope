@@ -4,6 +4,7 @@
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 import type { Mock } from "vitest";
+import { clearScope } from "./api";
 
 afterEach(() => {
   cleanup();
@@ -12,12 +13,17 @@ afterEach(() => {
   window.location.hash = "";
   sessionStorage.clear();
   localStorage.clear();
+  clearScope();
 });
 
-export function jsonResponse(status: number, body: unknown): Response {
+export function jsonResponse(
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 }
 

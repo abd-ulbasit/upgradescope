@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { getScope, subscribeScope } from "./api";
 
 export interface Async<T> {
   data?: T;
@@ -51,4 +52,10 @@ export function useHashRoute(): string {
   }, []);
   const route = hash.replace(/^#/, "");
   return route === "" ? "/" : route;
+}
+
+// useScope is the read scope of the latest answer (api.getScope): the
+// teams a scoped token reads, or null for the whole fleet.
+export function useScope(): string[] | null {
+  return useSyncExternalStore(subscribeScope, getScope, getScope);
 }

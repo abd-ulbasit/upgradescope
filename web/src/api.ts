@@ -65,6 +65,47 @@ export function setToken(token: string, opts: { remember?: boolean } = {}): void
   }
 }
 
+// The read scope: the teams a team-scoped read token (or an authenticating
+// proxy's team header) reads, as the server names them in SCOPE_HEADER on
+// every scoped answer; null for a fleet-wide view, which carries none. The
+// server has already filtered what it answers; this only lets the
+// dashboard say so.
+export const SCOPE_HEADER = "X-Upgradescope-Teams";
+
+let scope: string[] | null = null;
+const scopeListeners = new Set<() => void>();
+
+export function getScope(): string[] | null {
+  return scope;
+}
+
+// subscribeScope calls fn whenever the scope changes; it returns the
+// unsubscribe function (useSyncExternalStore's contract).
+export function subscribeScope(fn: () => void): () => void {
+  scopeListeners.add(fn);
+  return () => scopeListeners.delete(fn);
+}
+
+function setScope(next: string[] | null): void {
+  const same =
+    next === scope || (next !== null && scope !== null && next.join(",") === scope.join(","));
+  if (same) return;
+  scope = next;
+  for (const fn of scopeListeners) fn();
+}
+
+// clearScope forgets the scope until the next answer names one: after the
+// token changes, the old token's scope says nothing about the new one.
+export function clearScope(): void {
+  setScope(null);
+}
+
+// noteScope records the scope an answer was given for.
+function noteScope(res: Response): void {
+  const h = res.headers.get(SCOPE_HEADER);
+  setScope(h === null ? null : h.split(",").filter((t) => t !== ""));
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -87,6 +128,10 @@ async function request(path: string): Promise<Response> {
   } catch (err) {
     throw new ApiError(0, `network error: ${(err as Error).message}`);
   }
+  // A scoped answer names its teams, a 404 for another team's cluster
+  // included; a 401 reads nothing.
+  if (res.status === 401) setScope(null);
+  else if (res.ok || res.status === 404) noteScope(res);
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try {

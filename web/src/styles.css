@@ -109,6 +109,20 @@ select:focus-visible {
   border-bottom: 2px solid var(--accent);
 }
 
+/* ----- read scope ----- */
+
+.scope-note {
+  margin: -16px 0 24px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--info) 45%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--info) 8%, var(--panel));
+  color: var(--muted);
+}
+.scope-note strong {
+  color: var(--text);
+}
+
 /* ----- token settings ----- */
 
 .token-settings {
