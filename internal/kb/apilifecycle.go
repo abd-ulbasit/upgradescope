@@ -29,7 +29,9 @@ type APILifecycleEntry struct {
 	RemovedInferred bool `json:"removedInferred,omitempty"`
 }
 
-// BuiltinGroup is a group k8s.io/api registers, with its versions.
+// BuiltinGroup is a built-in API group (one gen-kb's scheme registers),
+// with its versions. The engine matches on the group alone; Versions is
+// informational.
 type BuiltinGroup struct {
 	Group    string   `json:"group"` // "" for core
 	Versions []string `json:"versions"`
@@ -47,7 +49,8 @@ type lifecycleFile struct {
 	GeneratedFrom string              `json:"generatedFrom"` // e.g. "k8s.io/api v0.36.1"
 	MaxKnownK8s   string              `json:"maxKnownK8s"`   // e.g. "1.36"
 	Entries       []APILifecycleEntry `json:"entries"`
-	// BuiltinGroups is every group k8s.io/api registers, including those
+	// BuiltinGroups is every group gen-kb's scheme registers (k8s.io/api
+	// plus the apiextensions and apiregistration schemes), including those
 	// with no entry (internal.apiserver.k8s.io, imagepolicy.k8s.io). Absent
 	// in a dataset written before #172: the built-in groups are then only
 	// those of Entries.
