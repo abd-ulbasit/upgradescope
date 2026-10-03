@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,8 +119,13 @@ func TestServeTLSReloadsRotatedKeyPair(t *testing.T) {
 }
 
 // The TLS listener offers TLS 1.2 at the oldest: a client capped at 1.1
-// is refused.
+// is refused by the server. The client must lower its own minimum (Go's
+// client default is 1.2, which would fail locally before any ClientHello),
+// and GODEBUG=tls10server=1 drops Go's server default to 1.0, so only the
+// explicit MinVersion refuses the handshake. The error must be the server's
+// protocol_version alert, not a local failure.
 func TestServeTLSMinimumVersion(t *testing.T) {
+	t.Setenv("GODEBUG", "tls10server=1")
 	certFile, keyFile, cert := writeSelfSignedCert(t)
 	captureLog(t)
 	s := newTestServer(t, newFakeStore(), func(c *Config) {
@@ -130,9 +136,12 @@ func TestServeTLSMinimumVersion(t *testing.T) {
 	startServer(t, s)
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
-	conn, err := tls.Dial("tcp", s.Addr(), &tls.Config{RootCAs: pool, MaxVersion: tls.VersionTLS11})
+	conn, err := tls.Dial("tcp", s.Addr(), &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11})
 	if err == nil {
 		conn.Close()
 		t.Fatal("TLS 1.1 handshake succeeded, want it refused")
+	}
+	if !strings.Contains(err.Error(), "remote error: tls: protocol version not supported") {
+		t.Fatalf("handshake error = %v, want the server's protocol version alert", err)
 	}
 }
