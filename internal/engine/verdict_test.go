@@ -391,3 +391,72 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 		})
 	}
 }
+
+// #194 (SV-04, NEW-ingest-1): a cluster inventory that does not report a
+// capability the verdict requires was not assessed for it. A capability-less
+// push ({schemaVersion, serverVersion}) or capabilities:{} read ready/100
+// over a blocked cluster; it is unknown, and never ready. Files inventories,
+// whose required set is api-usage alone, are judged as before.
+func TestEvaluateUnreportedRequiredCapabilities(t *testing.T) {
+	now := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	t135 := inventory.Version{Major: 1, Minor: 35}
+	withRegistry := testKB()
+	withRegistry.AddOns = []registry.AddOn{{ID: "ingress-nginx"}}
+	crds := CapabilityGap{Capability: inventory.CapCRDs,
+		Reason: "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"}
+	unreported := func(c inventory.Capability) CapabilityGap {
+		return CapabilityGap{Capability: c, Required: true,
+			Reason: "not reported in the inventory, so nothing it covers was assessed"}
+	}
+	all := []CapabilityGap{unreported(inventory.CapAddOns), unreported(inventory.CapAPIUsage), crds, unreported(inventory.CapVersions)}
+	with := func(caps map[inventory.Capability]inventory.CapabilityStatus, source inventory.Source) inventory.Inventory {
+		return inventory.Inventory{Source: source, ServerVersion: "v1.34.2", Capabilities: caps}
+	}
+	without := func(cs ...inventory.Capability) inventory.Inventory {
+		inv := clusterInv()
+		for _, c := range cs {
+			delete(inv.Capabilities, c)
+		}
+		return inv
+	}
+	blocked := with(nil, inventory.SourceCluster) // extensions/v1beta1 Ingress: removed 1.22
+	blocked.APIUsage = []inventory.APIUsage{{Group: "extensions", Version: "v1beta1", Kind: "Ingress", Count: 1}}
+
+	cases := []struct {
+		name    string
+		inv     inventory.Inventory
+		kb      kb.KB
+		verdict Verdict
+		gaps    []CapabilityGap
+	}{
+		{"no capabilities map", with(nil, inventory.SourceCluster), withRegistry, VerdictUnknown, all},
+		{"empty capabilities map", with(map[inventory.Capability]inventory.CapabilityStatus{}, inventory.SourceCluster), withRegistry, VerdictUnknown, all},
+		{"empty source is a cluster", with(nil, ""), withRegistry, VerdictUnknown, all},
+		{"addons not required with an empty registry", with(nil, inventory.SourceCluster), testKB(), VerdictUnknown,
+			[]CapabilityGap{unreported(inventory.CapAPIUsage), crds, unreported(inventory.CapVersions)}},
+		{"api-usage alone unreported", without(inventory.CapAPIUsage), withRegistry, VerdictUnknown,
+			[]CapabilityGap{unreported(inventory.CapAPIUsage)}},
+		{"versions alone unreported", without(inventory.CapVersions), withRegistry, VerdictUnknown,
+			[]CapabilityGap{unreported(inventory.CapVersions)}},
+		{"optional capabilities unreported stay ready", without(inventory.CapHelm, inventory.CapDeprecatedCalls), withRegistry, VerdictReady, nil},
+		{"a blocker it does report still blocks", blocked, withRegistry, VerdictBlocked, all},
+		// Files collectors since v0.1.0 report api-usage, which a files
+		// inventory is judged on as well; it needs no versions or add-ons.
+		{"files mode requires api-usage", with(nil, inventory.SourceFiles), withRegistry, VerdictUnknown,
+			[]CapabilityGap{unreported(inventory.CapAPIUsage), crds}},
+		{"files mode reporting api-usage is judged as before",
+			with(map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}}, inventory.SourceFiles),
+			withRegistry, VerdictReady, []CapabilityGap{crds}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Evaluate(tc.inv, tc.kb, t135, now)
+			if r.Verdict != tc.verdict || r.Ready != (tc.verdict == VerdictReady) {
+				t.Errorf("Verdict = %q (ready %v), want %q (gaps %+v)", r.Verdict, r.Ready, tc.verdict, r.NotAssessed)
+			}
+			if !reflect.DeepEqual(r.NotAssessed, tc.gaps) {
+				t.Errorf("NotAssessed = %+v\nwant %+v", r.NotAssessed, tc.gaps)
+			}
+		})
+	}
+}

@@ -1455,15 +1455,22 @@ func evalUpgradePath(inv inventory.Inventory, target inventory.Version) []Findin
 // versions is already unavailable), a kb-coverage gap when the target is
 // beyond the KB horizon, and a target gap when the target is not an
 // upgrade of the cluster (see upgradeFrom). Required is set per the
-// verdict rules on CapabilityGap. A capability absent from
-// inv.Capabilities is not a gap: collectors always report all of theirs,
-// so absence only occurs in hand-built inventories. The exception is crds,
-// which collectors older than it do not report: an inventory without it
-// (an older agent's, or a files inventory an older CLI saved) is a crds
-// gap, so its CRD versions read as not assessed rather than clean.
+// verdict rules on CapabilityGap. Collectors report every capability they
+// have, so one absent from inv.Capabilities was not collected at all.
+// A required one (api-usage; in a cluster inventory versions and addons
+// too) is a required gap: every collector since v0.1.0 reports them, and
+// an inventory without them — hand-built, a third-party or a regressed
+// collector's, or one with no capabilities map — must not read ready on
+// evidence it does not carry (#194). The source is the inventory's own
+// claim, so ingest accepts only cluster ones. An absent optional one is
+// no gap, except crds, which
+// collectors older than it do not report: an inventory without it (an
+// older agent's, or a files inventory an older CLI saved) is a crds gap,
+// so its CRD versions read as not assessed rather than clean.
 func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
 	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
-	if inv.Source != inventory.SourceFiles { // "" = cluster (v0.1 agents)
+	cluster := inv.Source != inventory.SourceFiles // "" = cluster (v0.1 agents)
+	if cluster {
 		required[inventory.CapVersions] = true
 		if len(k.AddOns) > 0 {
 			required[inventory.CapAddOns] = true
@@ -1471,6 +1478,12 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 	}
 	idx := kb.NewIndex(k.APILifecycle)
 	var gaps []CapabilityGap
+	for _, c := range []inventory.Capability{inventory.CapAPIUsage, inventory.CapVersions, inventory.CapAddOns} {
+		if _, ok := inv.Capabilities[c]; !ok && required[c] {
+			gaps = append(gaps, CapabilityGap{Capability: c, Required: true,
+				Reason: "not reported in the inventory, so nothing it covers was assessed"})
+		}
+	}
 	for c, st := range inv.Capabilities {
 		switch {
 		case !st.Available:
@@ -1500,7 +1513,7 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 		gaps = append(gaps, CapabilityGap{Capability: inventory.CapCRDs,
 			Reason: "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"})
 	}
-	if st, ok := inv.Capabilities[inventory.CapVersions]; !ok || st.Available {
+	if st, ok := inv.Capabilities[inventory.CapVersions]; (!ok && !cluster) || (ok && st.Available) {
 		const notEvaluated = "kubelet and control-plane skew were not evaluated"
 		if inv.ServerVersion == "" {
 			gaps = append(gaps, CapabilityGap{Capability: inventory.CapVersions, Reason: "server version not reported; " + notEvaluated,

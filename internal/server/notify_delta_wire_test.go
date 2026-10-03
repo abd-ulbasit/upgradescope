@@ -122,11 +122,12 @@ func TestIngestSurvivesCorruptStoredReport(t *testing.T) {
 	defer ts.Close()
 
 	base := inventory.Inventory{
-		SchemaVersion: 1,
-		ClusterID:     "uid-1",
-		CollectedAt:   time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
-		ServerVersion: "v1.35.0", // default target = next minor = 1.36
-		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{},
+		SchemaVersion:   1,
+		ClusterID:       "uid-1",
+		CollectorSchema: inventory.CurrentCollectorSchema,
+		CollectedAt:     time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+		ServerVersion:   "v1.35.0", // default target = next minor = 1.36
+		Capabilities:    collectedCaps(),
 	}
 	withPSP := base
 	withPSP.APIUsage = []inventory.APIUsage{
@@ -194,11 +195,12 @@ func TestIngestEmitsDeltaNotifications(t *testing.T) {
 	defer ts.Close()
 
 	base := inventory.Inventory{
-		SchemaVersion: 1,
-		ClusterID:     "uid-1",
-		CollectedAt:   time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
-		ServerVersion: "v1.35.0", // default target = next minor = 1.36
-		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{},
+		SchemaVersion:   1,
+		ClusterID:       "uid-1",
+		CollectorSchema: inventory.CurrentCollectorSchema,
+		CollectedAt:     time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+		ServerVersion:   "v1.35.0", // default target = next minor = 1.36
+		Capabilities:    collectedCaps(),
 	}
 
 	withPSP := base

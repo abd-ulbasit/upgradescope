@@ -759,7 +759,8 @@ const supportedInventorySchema = 1
 
 // decodePushedInventory parses and checks a pushed inventory, returning a
 // 422 message for one the server cannot judge: absent or null, another
-// schemaVersion (which includes {} and a missing one), or a serverVersion
+// schemaVersion (which includes {} and a missing one), a source other
+// than a cluster, a collectorSchema this server does not know, a serverVersion
 // that is not a Kubernetes 1.x version, an identifier (a namespace,
 // object, node or Helm release name, a team label value) that is not
 // valid for what it names, or a value beyond the limits collectors keep
@@ -777,6 +778,19 @@ func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
 	}
 	if inv.SchemaVersion != supportedInventorySchema {
 		return inv, fmt.Sprintf("unsupported inventory schemaVersion %d (want %d)", inv.SchemaVersion, supportedInventorySchema)
+	}
+	// The source decides what the engine requires before it calls a
+	// cluster ready: a files inventory needs no versions or add-ons. Only
+	// the agent pushes, and it collects from a cluster ("" from v0.1.x),
+	// so another source is a claim that would turn a blocked cluster
+	// ready on evidence the push does not carry (#194).
+	if inv.Source != "" && inv.Source != inventory.SourceCluster {
+		return inv, fmt.Sprintf("unsupported inventory source %q (snapshots are cluster inventories: want %q or none)", inv.Source, inventory.SourceCluster)
+	}
+	// A later collector schema means field meanings this server would
+	// judge as its own, the mistake legacyView exists to avoid.
+	if inv.CollectorSchema < 0 || inv.CollectorSchema > inventory.CurrentCollectorSchema {
+		return inv, fmt.Sprintf("unsupported inventory collectorSchema %d (want %d, or none from collectors that predate it)", inv.CollectorSchema, inventory.CurrentCollectorSchema)
 	}
 	if inv.ServerVersion != "" {
 		if _, err := inventory.ParseTarget(inv.ServerVersion); err != nil {
@@ -967,14 +981,18 @@ func (s *Server) latestHead(ctx context.Context, clusterID int64) (store.Snapsho
 	if err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, err
 	}
+	// Source and CollectorSchema decide how legacyView judges the head, so
+	// it is judged exactly as decodeInventory judges the whole (#194).
 	var head struct {
-		ServerVersion string                                              `json:"serverVersion"`
-		Capabilities  map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities"`
+		Source          inventory.Source                                    `json:"source"`
+		CollectorSchema int                                                 `json:"collectorSchema"`
+		ServerVersion   string                                              `json:"serverVersion"`
+		Capabilities    map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities"`
 	}
 	if err := json.Unmarshal(snap.Inventory, &head); err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", clusterID, snap.ID, errCorruptInventory, err)
 	}
-	inv := inventory.Inventory{ServerVersion: head.ServerVersion, Capabilities: head.Capabilities}
+	inv := inventory.Inventory{Source: head.Source, CollectorSchema: head.CollectorSchema, ServerVersion: head.ServerVersion, Capabilities: head.Capabilities}
 	inv.CutFreeText()
 	return snap, legacyView(inv, snap.AgentVersion), nil
 }
@@ -1204,7 +1222,7 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 		if err != nil {
 			return engine.Report{}, reportMeta{}, err
 		}
-		now := s.now()
+		now := s.now().UTC() // as stored evaluations read back
 		meta.EvaluatedAt, meta.SnapshotID, meta.Source = now, snap.ID, sourceWhatIf
 		rep, err := s.evaluateWhatIf(inv, target, now)
 		return rep, meta, err

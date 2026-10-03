@@ -14,9 +14,40 @@ import (
 	"time"
 )
 
-// pushHead opens a schemaVersion 1 push whose inventory a shape fills in.
-const pushHead = `{"schemaVersion":1,"clusterName":"prod-eu-1","agentVersion":"t","kbVersion":"k","inventory":{` +
-	`"schemaVersion":1,"clusterId":"uid-123","serverVersion":"v1.34.2","capabilities":{"versions":{"available":true}},`
+// pushHead opens a schemaVersion 1 push whose inventory a shape fills in:
+// a current agent's, stamped with the collector schema and reporting
+// every capability (pushHeadCapabilities of them), so the server judges
+// what the shape carries as a current collector's and decides a verdict
+// on it. An unmarked inventory, or one with a required capability not
+// reported, is judged otherwise (#194: legacyView, assessmentGaps), and a
+// heap proof built on one would not measure the reports, notifications
+// and re-evaluations it claims to; unmarkedPush rewrites a push into one
+// on purpose.
+const pushHead = `{"schemaVersion":1,"clusterName":"prod-eu-1","agentVersion":"` + pushHeadAgent + `","kbVersion":"k","inventory":{` +
+	`"schemaVersion":1,"collectorSchema":1,"clusterId":"uid-123","serverVersion":"v1.34.2","capabilities":{` +
+	`"api-usage":{"available":true},"deprecated-calls":{"available":true},"helm":{"available":true},` +
+	`"addons":{"available":true},"versions":{"available":true},"crds":{"available":true}},`
+
+// pushHeadAgent is pushHead's agentVersion, and pushHeadCapabilities how
+// many capabilities it reports.
+const (
+	pushHeadAgent        = "0.2.0"
+	pushHeadCapabilities = 6
+)
+
+// unmarkedPush is push, a pushHead push, as an agent reporting agent
+// that does not stamp the collector schema sends it: a v0.1.x one
+// (legacyView judges neither its API usage nor its deprecated calls) or
+// a v0.2.0 release candidate (unattributedUsageView sets aside the usage
+// counts that name no object).
+func unmarkedPush(push, agent string) string {
+	if !strings.HasPrefix(push, pushHead) {
+		panic("unmarkedPush: not a pushHead push")
+	}
+	head := strings.Replace(pushHead, `"collectorSchema":1,`, "", 1)
+	head = strings.Replace(head, `"agentVersion":"`+pushHeadAgent+`"`, `"agentVersion":"`+agent+`"`, 1)
+	return head + push[len(pushHead):]
+}
 
 // ingestHeapShapes builds snapshot pushes of about size bytes in the
 // shapes that cost the most to decode per byte (#121): every element of a
@@ -174,6 +205,67 @@ func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {
 	s.Handler().ServeHTTP(w, req)
 }
 
+// ingestVariant is how a push of an ingestHeapShapes shape is sent:
+// rewritten by push from pushHead's marked, current inventory, plain or
+// gzipped (gzip), and, within the snapshot budget, answered as judged:
+// status overrides afterDecode for a shape this variant's view judges
+// otherwise.
+type ingestVariant struct {
+	name   string
+	push   func(string) string
+	gzip   []bool
+	status map[string]int
+}
+
+// ingestVariants are a push as each kind of agent sends it. The node
+// budget is counted on the bytes as they arrive, before anything is
+// decoded, so each is refused at the same size; what the server then
+// judges differs (#194). A v0.2.0 release candidate's unmarked usage
+// counts that name no object are not judged (unattributedUsageView), so
+// the namespace map's findings, and its report past the limit, are not
+// built; nor are a v0.1.x agent's API usage findings (legacyView), the
+// long-named PSP objects' among them. Their Helm releases are judged,
+// and still refused. The marker changes nothing gzip does, so only the
+// marked push is also sent gzipped.
+var ingestVariants = []ingestVariant{
+	{name: "marked", push: func(b string) string { return b }, gzip: []bool{false, true}},
+	{
+		name: "unmarked, v0.2.0-rc.2", push: func(b string) string { return unmarkedPush(b, "0.2.0-rc.2") }, gzip: []bool{false},
+		status: map[string]int{"namespace map, 100 per usage": http.StatusAccepted},
+	},
+	{
+		name: "unmarked, v0.1.1", push: func(b string) string { return unmarkedPush(b, "0.1.1") }, gzip: []bool{false},
+		status: map[string]int{"namespace map, 100 per usage": http.StatusAccepted, "PSP usages, long names of <": http.StatusAccepted},
+	},
+}
+
+// The node budget is counted on the pushed bytes as they arrive, before
+// the inventory is decoded and long before the server decides whose
+// collector wrote it (legacyView), so the same bytes are refused with 413
+// whether the inventory is stamped with the collector schema or not, and
+// whichever agent sent it; just within the budget, each is decoded and
+// checked alike (an object list no collector writes: 422). This is the
+// cheap half of TestIngestDecodeHeapIsBounded, run by every go test.
+func TestSnapshotNodeBudgetPrecedesTheCollectorView(t *testing.T) {
+	over, within := ingestObjectRefs(400<<10), ingestObjectRefs(300<<10)
+	if snapshotUnits(over) <= maxSnapshotUnits || snapshotUnits(within) > maxSnapshotUnits {
+		t.Fatalf("fixture: %d and %d units, want over and within the %d budget", snapshotUnits(over), snapshotUnits(within), maxSnapshotUnits)
+	}
+	for _, v := range ingestVariants {
+		for body, want := range map[string]int{over: http.StatusRequestEntityTooLarge, within: http.StatusUnprocessableEntity} {
+			s := newTestServer(t, newFakeStore())
+			rec := httptest.NewRecorder()
+			serveIngest(s, rec, []byte(v.push(body)), false)
+			if rec.Code != want {
+				t.Fatalf("%s, %d bytes: status = %d (%.300s), want %d", v.name, len(body), rec.Code, rec.Body, want)
+			}
+			if want == http.StatusRequestEntityTooLarge && !strings.Contains(rec.Body.String(), "too large to evaluate") {
+				t.Fatalf("%s: %s; want the node budget's refusal", v.name, rec.Body)
+			}
+		}
+	}
+}
+
 // Snapshot decode cost follows the JSON's structure, not its size: 20 MiB
 // of `{}` ObjectRefs decoded to ~2.6 GB of heap, from any per-cluster
 // agent token (#121). Each shape at the size cap and at the largest size
@@ -183,6 +275,9 @@ func serveIngest(s *Server, w http.ResponseWriter, body []byte, gzipped bool) {
 // maxIngestDecodeHeap; within the budget it is accepted unless no
 // collector writes it (422) or its report would be over the report
 // limit (413, afterDecode), and the body budget is given back either way.
+// So it is for the same bytes from an agent that does not stamp the
+// collector schema (ingestVariants): the budget refuses them alike, and
+// what is decoded is judged as that agent's within the same bound.
 func TestIngestDecodeHeapIsBounded(t *testing.T) {
 	if testing.Short() || raceEnabled || !heapRun {
 		t.Skip("decodes several 20 MiB snapshots; make test-heap runs it, without the race detector")
@@ -195,32 +290,41 @@ func TestIngestDecodeHeapIsBounded(t *testing.T) {
 			if fits := atSnapshotBudget(shape); fits != full {
 				bodies = append(bodies, fits)
 			}
-			for _, body := range bodies {
-				decode := snapshotUnits(body) <= maxSnapshotUnits
-				for _, gz := range []bool{false, true} {
-					payload := []byte(body)
-					if gz {
-						payload = gzipBytes(t, payload)
+			for _, v := range ingestVariants {
+				t.Run(v.name, func(t *testing.T) {
+					for _, marked := range bodies {
+						decode := snapshotUnits(marked) <= maxSnapshotUnits
+						body := v.push(marked)
+						if (snapshotUnits(body) <= maxSnapshotUnits) != decode {
+							t.Fatalf("fixture: %d bytes are within the node budget marked (%v) but not as %s; want the same bytes either way",
+								len(marked), decode, v.name)
+						}
+						for _, gz := range v.gzip {
+							payload := []byte(body)
+							if gz {
+								payload = gzipBytes(t, payload)
+							}
+							s := newSQLiteTestServer(t, atTargetCap)
+							rec := httptest.NewRecorder()
+							grew := heapPeak(func() { serveIngest(s, rec, payload, gz) })
+							want := http.StatusRequestEntityTooLarge
+							if decode {
+								want = cmp.Or(v.status[name], afterDecode[name], http.StatusAccepted)
+							}
+							if rec.Code != want {
+								t.Fatalf("%d bytes, gzip %v: status = %d (%.300s), want %d", len(body), gz, rec.Code, rec.Body, want)
+							}
+							if grew > maxIngestDecodeHeap {
+								t.Fatalf("%d bytes, gzip %v: status %d; the heap grew %d MiB, want at most %d MiB",
+									len(body), gz, rec.Code, grew>>20, maxIngestDecodeHeap>>20)
+							}
+							if used := s.ingestBuffered.inUse(); used != 0 {
+								t.Fatalf("%d bytes, gzip %v: %d body bytes still charged", len(body), gz, used)
+							}
+							t.Logf("%d bytes (%d units), gzip %v: status %d, heap grew %d MiB", len(body), snapshotUnits(body), gz, rec.Code, grew>>20)
+						}
 					}
-					s := newSQLiteTestServer(t, atTargetCap)
-					rec := httptest.NewRecorder()
-					grew := heapPeak(func() { serveIngest(s, rec, payload, gz) })
-					want := http.StatusRequestEntityTooLarge
-					if decode {
-						want = cmp.Or(afterDecode[name], http.StatusAccepted)
-					}
-					if rec.Code != want {
-						t.Fatalf("%d bytes, gzip %v: status = %d (%.300s), want %d", len(body), gz, rec.Code, rec.Body, want)
-					}
-					if grew > maxIngestDecodeHeap {
-						t.Fatalf("%d bytes, gzip %v: status %d; the heap grew %d MiB, want at most %d MiB",
-							len(body), gz, rec.Code, grew>>20, maxIngestDecodeHeap>>20)
-					}
-					if used := s.ingestBuffered.inUse(); used != 0 {
-						t.Fatalf("%d bytes, gzip %v: %d body bytes still charged", len(body), gz, used)
-					}
-					t.Logf("%d bytes (%d units), gzip %v: status %d, heap grew %d MiB", len(body), snapshotUnits(body), gz, rec.Code, grew>>20)
-				}
+				})
 			}
 		})
 	}

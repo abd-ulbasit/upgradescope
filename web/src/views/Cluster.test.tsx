@@ -235,6 +235,35 @@ describe("Cluster view", () => {
     expect(within(gaps).getByText("networking.k8s.io/v1 ingresses")).toBeTruthy();
   });
 
+  it("shows each team's own verdict from the server", async () => {
+    // A blocked cluster (payments' blocker) with a required gap: platform,
+    // with only a warning, is unknown — not ready, and not blocked.
+    await openCluster("#/cluster/1", {
+      "api/v1/clusters/1/report": report("1.35", {
+        notAssessed: [{ capability: "api-usage", reason: "metrics endpoint forbidden", required: true }],
+        teams: {
+          payments: { score: 75, ready: false, verdict: "blocked", blockers: 1, warnings: 0 },
+          platform: { score: 95, ready: false, verdict: "unknown", blockers: 0, warnings: 1 },
+        },
+      }),
+    });
+    const teams = screen.getByRole("heading", { name: "Teams" }).closest(".card") as HTMLElement;
+    const row = (name: string) => within(teams).getByRole("link", { name }).closest("tr") as HTMLElement;
+    expect(within(row("payments")).getByText("blocked")).toBeTruthy();
+    expect(within(row("platform")).getByText("unknown")).toBeTruthy();
+  });
+
+  it("derives a team's verdict from an older server's ready and the cluster's verdict", async () => {
+    await openCluster("#/cluster/1", {
+      "api/v1/clusters/1/report": report("1.35", {
+        verdict: "unknown",
+        teams: { platform: { score: 95, ready: true, blockers: 0, warnings: 1 } },
+      }),
+    });
+    const teams = screen.getByRole("heading", { name: "Teams" }).closest(".card") as HTMLElement;
+    expect(within(teams).getByText("unknown")).toBeTruthy();
+  });
+
   it("counts suppressed findings when present", async () => {
     await openCluster("#/cluster/1", {
       "api/v1/clusters/1/report": report("1.35", {

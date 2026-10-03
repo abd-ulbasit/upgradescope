@@ -400,6 +400,26 @@ per-cluster reads waiting, and some of them get `503`. A read token
 limits both to token holders; the same holds for pushes and the ingest
 tokens.
 
+## CPU and fleet read latency
+
+The bounds above are on memory; fleet read latency is bound by CPU. `make
+bench-server` (500 clusters of ~35 KiB inventories on SQLite, 10
+concurrent `/fleet` readers) passes its 1 s p95 with at least one full
+core of an Apple M1 Pro-class CPU: in October 2026, p95 0.33 to 0.36 s
+unconstrained (8 cores) and 0.56 to 0.68 s with `GOMAXPROCS=1`, across
+runs. `GOMAXPROCS=1` caps the Go scheduler at one thread; it is not a
+cgroup CPU quota, which also throttles the garbage collector and the
+runtime's other threads, and ran about 1.26 times slower than
+`GOMAXPROCS=1` on the red-team's host (`--cpus 1`, #196); 0.68 s scaled
+so is about 0.86 s, still under 1 s, but with less margin. It does not hold
+at the chart's default `server.resources.limits.cpu` of 500m: the
+red-team round 2 measured p95 3.9 s at `--cpus 0.5` on a 2017 dual-core
+i3, about twice its single-core figure on the same host, which would put
+even an M1 Pro near 1.2 s (#196). The heap stays far below its 512 MiB
+bound in every case (about 7 to 25 MiB). For a fleet of hundreds of clusters
+read by several dashboards at once, give the server a CPU limit of at
+least one core.
+
 ## What a push is judged as
 
 - **Stored as sent.** A snapshot keeps the inventory bytes the agent pushed,
@@ -409,25 +429,37 @@ tokens.
   duplicate (`200`), and the duplicate's `agentVersion` and `kbVersion` are
   recorded on the latest snapshot.
 - **Refused before anything is written** (`422`): a missing or `null`
-  inventory, an inventory `schemaVersion` other than 1 (including `{}`), or
-  a `serverVersion` that is not a Kubernetes 1.x version.
+  inventory, an inventory `schemaVersion` other than 1 (including `{}`), a
+  `source` other than `cluster` (a files inventory is judged without
+  versions or add-ons, and only the agent pushes), a `collectorSchema`
+  this server does not know (a later one means field meanings it would
+  misread), or a `serverVersion` that is not a Kubernetes 1.x version.
+- **Capabilities not reported** (an inventory without api-usage, versions
+  or, when the KB has add-ons, addons in its `capabilities` map, or with
+  no map at all) are stored and judged with each as a required
+  not-assessed gap: `unknown` at best, never `ready`. Every collector
+  since v0.1.0 reports them.
 - **Degraded pushes** (no `serverVersion`: the agent could not read
   `/version`) are judged at the version the cluster last reported, so its
   fleet cells, default target and report stay. The versions capability is
   required, so such a cell is `unknown` at best (`blocked` when the push
   shows a blocker), and the report's `notAssessed` says why. A cluster's
   very first push without a version is judged only at `--targets`.
-- **v0.1.x agents** (`agentVersion` 0.1.0, 0.1.1 or earlier, their
-  pre-releases and Go pseudo-versions) collected two signals with meanings
-  this server no longer judges: api-usage counted every object the
-  apiserver *serves* at a deprecated version (APF FlowSchemas became
-  removed-API blockers) and their own requests landed in the
-  deprecated-calls metric; a Helm-chart-found add-on's version was the
-  chart version. Their api-usage and deprecated-calls are reported as not
-  assessed, with the reason, and a chart version is kept as evidence only,
-  so such a cluster is `unknown` until its agent is upgraded. Builds from
-  later source (`dev`, a 0.1.2 pseudo-version or snapshot) are judged
-  normally.
+- **v0.1.x agents** collected two signals with meanings this server no
+  longer judges: api-usage counted every object the apiserver *serves* at
+  a deprecated version (APF FlowSchemas became removed-API blockers) and
+  their own requests landed in the deprecated-calls metric; a
+  Helm-chart-found add-on's version was the chart version. Collectors from
+  v0.2.0 on stamp `collectorSchema` in the inventory and are judged
+  normally whatever their `agentVersion`. An inventory without it is from
+  a v0.1.x agent unless its `agentVersion` is a semantic version at or
+  after `0.2.0-0` (v0.2.0's release candidates report `0.2.0-rc.N`): so
+  `0.1.1`, `dev`, an empty or `unknown` version and a pre-0.2 pseudo-version
+  all count, since a v0.1.x agent built the default way (its Dockerfile,
+  chart image tag, `go install`) reports `dev`. Its api-usage and
+  deprecated-calls are reported as not assessed, with the reason, and a
+  chart version is kept as evidence only, so such a cluster is `unknown`
+  until its agent is upgraded.
 - **Outdated verdicts.** A stored verdict depends on the date (EOL windows),
   the KB and the team map. The background pass re-evaluates hourly and just
   after each UTC midnight; until it has, every read of a stored verdict

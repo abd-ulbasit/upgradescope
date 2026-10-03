@@ -152,7 +152,7 @@ Request body (`application/json`): [PushRequest](#pushrequest)
 | 409 | `application/json` | [Error](#error) | An error. |
 | 413 | `application/json` | [Error](#error) | Over the byte cap (on the wire or after decompression) or over the node budget, before anything is decoded; or, once decoded, a report for one of the targets would be over `--max-snapshot-bytes`, and nothing is stored. |
 | 415 | `application/json` | [Error](#error) | An error. |
-| 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no `clusterName` or one that is not an RFC 1123 subdomain of at most 253 bytes, a missing or `null` inventory, an inventory `schemaVersion` other than 1, a `serverVersion` that is not a Kubernetes 1.x version, an identifier that is not valid for what it names, or a value beyond the limits collectors keep to (see above). The message names the field and the rule. |
+| 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no `clusterName` or one that is not an RFC 1123 subdomain of at most 253 bytes, a missing or `null` inventory, an inventory `schemaVersion` other than 1, a `source` other than `cluster`, a `collectorSchema` other than 1 (or none), a `serverVersion` that is not a Kubernetes 1.x version, an identifier that is not valid for what it names, or a value beyond the limits collectors keep to (see above). The message names the field and the rule. |
 | 500 | `application/json` | [Error](#error) | An error. |
 | 503 | `application/json` | [Error](#error) | The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`. |
 
@@ -753,7 +753,8 @@ whole.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `score` | integer | yes | — |
-| `ready` | boolean | yes | No blocker among this team's findings. It counts only the team's findings: the cluster's not-assessed gaps and unattributed blockers do not lower it, so gate on the report's verdict, not on a team's ready. |
+| `ready` | boolean | yes | verdict == ready. |
+| `verdict` | `ready` \| `blocked` \| `unknown` | no | The team's readiness, by the report's rules over what can concern it: blocked by a blocker of its own or by an unattributed one (which cannot be ruled out as the team's); otherwise unknown when the report has a required not-assessed gap, which may hide any team's blocker; otherwise ready. Another team's blocker does not lower it; score, blockers and warnings count only the team's own findings. |
 | `blockers` | integer | yes | — |
 | `warnings` | integer | yes | — |
 
@@ -1039,10 +1040,11 @@ sent, unknown fields included, so a newer server can judge them.
 |---|---|---|---|
 | `schemaVersion` | `1` | yes | — |
 | `clusterId` | string | no | The kube-system namespace UID. |
-| `source` | `cluster` \| `files` | no | — |
+| `collectorSchema` | integer | no | The generation of field meanings the collector filled this inventory with (1 from v0.2.0). Absent from inventories of collectors before it — v0.1.x and v0.2.0's release candidates — which are judged by the push's agentVersion: one that is not a release at or after 0.2.0-0 (including "dev" and empty) is a v0.1.x agent, whose api-usage and deprecated-calls are not assessed and whose chart-found add-on version is evidence only. A later generation, whose meanings this server would misread, is 422. |
+| `source` | `cluster` | no | Absent from v0.1.x agents' inventories, which are cluster ones too. A files inventory (`scan --files`) is judged without versions or add-ons, so a push claiming one is 422: only the agent pushes, and it collects from a cluster. A files snapshot stored before ingest refused them is judged as a cluster one. |
 | `collectedAt` | string (date-time) | no | — |
 | `serverVersion` | string | no | The apiserver's gitVersion, e.g. v1.34.2-gke.100. |
-| `capabilities` | map of [CapabilityStatus](#capabilitystatus) | no | — |
+| `capabilities` | map of [CapabilityStatus](#capabilitystatus) | no | Every capability the collector has, by name. One the verdict requires and the map does not report — api-usage, versions, and addons when the knowledge base has add-ons — is a required not-assessed gap, so an inventory without this map is never ready. |
 | `apiUsage` | array of object | no | — |
 | `apiAuthorshipUnknown` | array of object | no | Objects of a flagged API with no managedFields entry outside the status subresource and the control plane, and no usable last-applied annotation, so nothing says which version wrote them; shaped like apiUsage, once per kind. Reported as info, never as use of the API. |
 | `deprecatedCalls` | array of object | no | — |

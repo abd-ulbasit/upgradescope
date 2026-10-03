@@ -430,10 +430,12 @@ function FindingItem({ f }: { f: Finding }) {
   );
 }
 
-// teamVerdict: a team with blockers is blocked; otherwise it is only as
-// ready as the cluster's assessment — an unknown cluster verdict means the
-// team's blockers may have been missed too.
+// teamVerdict: the server's verdict for the team (blocked by its own or an
+// unattributed blocker, unknown on a required gap). An older server sends
+// only ready, which counted the team's own findings: a team with blockers
+// is blocked; otherwise it is only as ready as the cluster's assessment.
 function teamVerdict(ts: TeamScore, cluster: Verdict): Verdict {
+  if (ts.verdict) return ts.verdict;
   if (!ts.ready) return "blocked";
   return cluster === "unknown" ? "unknown" : "ready";
 }

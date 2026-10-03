@@ -48,7 +48,8 @@ func TestFleetDefaultColumnsAreMeasured(t *testing.T) {
 	for i := range fleetMinors {
 		body, err := json.Marshal(map[string]any{
 			"schemaVersion": 1, "clusterName": fmt.Sprintf("cluster-%03d", i), "agentVersion": "test", "kbVersion": "agent-kb",
-			"inventory": inventory.Inventory{SchemaVersion: 1, ClusterID: fmt.Sprintf("uid-%d", i), ServerVersion: fmt.Sprintf("v1.%d.0", i)},
+			"inventory": inventory.Inventory{SchemaVersion: 1, CollectorSchema: inventory.CurrentCollectorSchema, ClusterID: fmt.Sprintf("uid-%d", i),
+				ServerVersion: fmt.Sprintf("v1.%d.0", i), Capabilities: collectedCaps()},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -129,7 +130,8 @@ func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 	for i := range fleetMinors {
 		body, err := json.Marshal(map[string]any{
 			"schemaVersion": 1, "clusterName": fmt.Sprintf("cluster-%03d", i), "agentVersion": "test", "kbVersion": "agent-kb",
-			"inventory": inventory.Inventory{SchemaVersion: 1, ClusterID: fmt.Sprintf("uid-%d", i), ServerVersion: "v1.34.2", Capabilities: caps},
+			"inventory": inventory.Inventory{SchemaVersion: 1, CollectorSchema: inventory.CurrentCollectorSchema, ClusterID: fmt.Sprintf("uid-%d", i),
+				ServerVersion: "v1.34.2", Capabilities: caps},
 		})
 		if err != nil {
 			t.Fatal(err)

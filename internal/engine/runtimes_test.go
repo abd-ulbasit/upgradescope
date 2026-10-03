@@ -75,7 +75,7 @@ func TestEvalUncoveredNodeRuntimes(t *testing.T) {
 	crio := nodes("cri-o://1.30.4")
 	crio.ServerVersion = "v1.35.2"
 	crio.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
-		inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true},
+		inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true}, inventory.CapAddOns: {Available: true},
 	}
 	r := Evaluate(crio, runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 36}, day("2026-10-02"))
 	if summary := summarize(r.Findings); !reflect.DeepEqual(summary, []string{"info addon-no-data addon-no-data/cri-o no lifecycle data for container runtime cri-o"}) || r.Score != 100 || r.Verdict != VerdictReady {

@@ -185,13 +185,13 @@ func deprecatedCalls(size int) string {
 }
 
 // capabilityGaps are the most capabilities a push may report
-// (inventory.MaxCapabilities, versions in pushHead among them), the rest
-// partial, each a gap the report repeats for every target: a reason of
+// (inventory.MaxCapabilities, pushHead's pushHeadCapabilities among
+// them), the rest partial, each a gap the report repeats for every target: a reason of
 // the longest a push may send and a list of what it skipped to about size
 // bytes in all, all escapes, which the HTML export lists. The evaluation
 // summaries keep a bounded part of each.
 func capabilityGaps(size int) string {
-	const n = inventory.MaxCapabilities - 1
+	const n = inventory.MaxCapabilities - pushHeadCapabilities
 	per := max(size/n-inventory.MaxReasonBytes, 0)
 	var b strings.Builder
 	b.WriteString(pushHead + `"capabilities":{`)

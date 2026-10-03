@@ -101,11 +101,12 @@ func TestWebhookPayloadMatchesSchema(t *testing.T) {
 	defer ts.Close()
 
 	clean := inventory.Inventory{
-		SchemaVersion: 1,
-		ClusterID:     "uid-1",
-		CollectedAt:   time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
-		ServerVersion: "v1.35.0",
-		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{},
+		SchemaVersion:   1,
+		ClusterID:       "uid-1",
+		CollectorSchema: inventory.CurrentCollectorSchema,
+		CollectedAt:     time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+		ServerVersion:   "v1.35.0",
+		Capabilities:    collectedCaps(),
 	}
 	withPSP := clean
 	withPSP.APIUsage = []inventory.APIUsage{{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Count: 1}}

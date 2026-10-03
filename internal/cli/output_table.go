@@ -238,11 +238,7 @@ func writeTeamsSection(w io.Writer, r engine.Report) {
 		if label == "" {
 			label = "unattributed"
 		}
-		ready := "no"
-		if ts.Ready {
-			ready = "yes"
-		}
-		fmt.Fprintf(w, "  %-*s  %3d/100  ready %-3s  blockers %d  warnings %d\n",
-			width, label, ts.Score, ready, ts.Blockers, ts.Warnings)
+		fmt.Fprintf(w, "  %-*s  %3d/100  %-7s  blockers %d  warnings %d\n",
+			width, label, ts.Score, ts.Verdict, ts.Blockers, ts.Warnings)
 	}
 }

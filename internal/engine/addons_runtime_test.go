@@ -89,7 +89,7 @@ func TestEvaluateNodeRuntimeVerdict(t *testing.T) {
 	inv := nodes("containerd://1.7.27")
 	inv.ServerVersion = "v1.35.2"
 	inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{
-		inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true},
+		inventory.CapAPIUsage: {Available: true}, inventory.CapVersions: {Available: true}, inventory.CapAddOns: {Available: true},
 	}
 	for target, want := range map[string]Verdict{"1.36": VerdictReady, "1.37": VerdictReady, "1.38": VerdictBlocked} {
 		v, err := inventory.ParseVersion(target)

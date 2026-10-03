@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
 // pushEnvelope wraps a raw inventory JSON in a schemaVersion 1 push for
@@ -24,6 +26,83 @@ func pushEnvelope(t *testing.T, inventory string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// TestIngestCapabilityLessInventoryNeverReady (#194 SV-04, NEW-ingest-1):
+// a push whose inventory is schema-valid but reports no capabilities, or
+// an empty map, was accepted and judged on what it did not contain:
+// blocked prod (a PodSecurityPolicy, removed in 1.35) read ready/100,
+// only crds not assessed. Such a push is still stored (it is valid under
+// the published schema), and judged unknown: the required capabilities
+// it does not report are required gaps.
+func TestIngestCapabilityLessInventoryNeverReady(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	push := func(cluster, agentVersion, inventory string) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{
+			"schemaVersion": 1, "clusterName": cluster, "agentVersion": agentVersion, "kbVersion": "x",
+			"inventory": json.RawMessage(inventory),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp, out := postSnapshot(t, h.ts, "ingest-tok", body, false); resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("%s push as %q = %d %v", cluster, agentVersion, resp.StatusCode, out)
+		}
+	}
+	// "x" is the finding's repro (an unmarked inventory, so also legacy);
+	// 0.2.0-rc.2 is judged as current, so only the missing capabilities
+	// keep it from ready.
+	for i, agent := range []string{"x", "0.2.0-rc.2"} {
+		prod := "prod-" + itoa(int64(i))
+		if code, out := h.pushAs(prod, "v0.2.0", testInventoryWithPSP()); code != http.StatusAccepted {
+			t.Fatalf("seed push = %d %v", code, out)
+		}
+		if c := h.fleetCell(prod, "1.35"); c == nil || c.Verdict != "blocked" {
+			t.Fatalf("seed: cell = %+v, want blocked", c)
+		}
+		// Claiming files as the source (with the marker too) had the
+		// engine judge it without versions or add-ons, which read
+		// ready/100. No agent pushes one, so it is refused, and the cell
+		// stays blocked.
+		for _, inv := range []string{
+			`{"schemaVersion":1,"source":"files","serverVersion":"v1.34.2","clusterId":"uid-123"}`,
+			`{"schemaVersion":1,"source":"files","collectorSchema":1,"serverVersion":"v1.34.2","clusterId":"uid-123"}`,
+		} {
+			body, err := json.Marshal(map[string]any{
+				"schemaVersion": 1, "clusterName": prod, "agentVersion": agent, "kbVersion": "x",
+				"inventory": json.RawMessage(inv),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp, out := postSnapshot(t, h.ts, "ingest-tok", body, false); resp.StatusCode != http.StatusUnprocessableEntity {
+				t.Errorf("agent %q, %s: status %d %v, want 422", agent, inv, resp.StatusCode, out)
+			}
+			if c := h.fleetCell(prod, "1.35"); c == nil || c.Ready || c.Verdict != "blocked" {
+				t.Errorf("agent %q, after %s: cell = %+v, want blocked", agent, inv, c)
+			}
+		}
+		push(prod, agent, `{"schemaVersion":1,"serverVersion":"v1.34.2","clusterId":"uid-123"}`)
+		if c := h.fleetCell(prod, "1.35"); c == nil || c.Ready || c.Verdict != "unknown" {
+			t.Errorf("agent %q, no capabilities: cell = %+v, want unknown, not ready", agent, c)
+		}
+		if reason, required := h.report(prod, "1.35").gap("api-usage"); !required {
+			t.Errorf("agent %q, no capabilities: api-usage gap %q not required", agent, reason)
+		}
+
+		clean := "clean-" + itoa(int64(i))
+		push(clean, agent, `{"schemaVersion":1,"serverVersion":"v1.34.2","clusterId":"uid-`+clean+`","capabilities":{}}`)
+		rep := h.report(clean, "1.35")
+		if rep.Verdict != "unknown" {
+			t.Errorf("agent %q, capabilities {}: verdict %s, want unknown", agent, rep.Verdict)
+		}
+		for _, c := range []string{"api-usage", "versions"} {
+			if _, required := rep.gap(c); !required {
+				t.Errorf("agent %q, capabilities {}: %s not a required gap (%+v)", agent, c, rep.NotAssessed)
+			}
+		}
+	}
 }
 
 // TestIngestRejectsMalformedInventory: an inventory the server cannot
@@ -61,6 +140,15 @@ func TestIngestRejectsMalformedInventory(t *testing.T) {
 		"schemaVersion missing": inv(func(m map[string]any) { delete(m, "schemaVersion") }),
 		"garbage serverVersion": inv(func(m map[string]any) { m["serverVersion"] = "garbage" }),
 		"major 2 serverVersion": inv(func(m map[string]any) { m["serverVersion"] = "v2.0.0" }),
+		// Only the agent pushes, and it collects from a cluster: a files
+		// inventory is judged without versions or add-ons (#194).
+		"source files": inv(func(m map[string]any) { m["source"] = "files" }),
+		"source gate":  inv(func(m map[string]any) { m["source"] = "gate" }),
+		"source FILES": inv(func(m map[string]any) { m["source"] = "FILES" }),
+		// A later collector schema means field meanings this server would
+		// misread as its own; a negative one no collector writes.
+		"collectorSchema beyond current": inv(func(m map[string]any) { m["collectorSchema"] = inventory.CurrentCollectorSchema + 1 }),
+		"collectorSchema negative":       inv(func(m map[string]any) { m["collectorSchema"] = -1 }),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

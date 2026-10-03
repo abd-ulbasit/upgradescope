@@ -659,6 +659,7 @@ func TestCollectAPIUsageAPFBootstrapObjectsAreNotBlockers(t *testing.T) {
 
 	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true}
 	inv.Capabilities[inventory.CapVersions] = inventory.CapabilityStatus{Available: true}
+	inv.Capabilities[inventory.CapAddOns] = inventory.CapabilityStatus{Available: true}
 	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 32}, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
 	if !rep.Ready {
 		t.Errorf("1.31 → 1.32 with only bootstrap APF objects: ready=false, findings %+v", rep.Findings)

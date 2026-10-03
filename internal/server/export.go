@@ -412,7 +412,7 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
 <h2>team scores</h2>
 <table>
   <tr><th>team</th><th>score</th><th>verdict</th><th>blockers</th><th>warnings</th></tr>
-  {{range .}}<tr><td>{{.Team}}</td><td>{{.Score}}/100</td><td>{{if .Ready}}ready{{else}}not ready{{end}}</td><td>{{.Blockers}}</td><td>{{.Warnings}}</td></tr>
+  {{range .}}<tr><td>{{.Team}}</td><td>{{.Score}}/100</td><td>{{.Verdict}}</td><td>{{.Blockers}}</td><td>{{.Warnings}}</td></tr>
   {{end}}
 </table>
 {{end}}

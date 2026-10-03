@@ -182,7 +182,7 @@ func TestExportHTMLGolden(t *testing.T) {
 		}
 	}
 	// Per-team scores (#125 SV-09): payments owns the PSP blocker.
-	for _, want := range []string{"<svg", "payments", "score 75/100", "@media print", "<h2>team scores</h2>", "<td>payments</td><td>75/100</td><td>not ready</td><td>1</td><td>0</td>"} {
+	for _, want := range []string{"<svg", "payments", "score 75/100", "@media print", "<h2>team scores</h2>", "<td>payments</td><td>75/100</td><td>blocked</td><td>1</td><td>0</td>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("HTML missing %q", want)
 		}

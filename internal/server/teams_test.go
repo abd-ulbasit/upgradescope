@@ -70,7 +70,7 @@ func TestTeamsEndpoint(t *testing.T) {
 	if got.Target != "1.35" {
 		t.Fatalf("target = %q, want 1.35", got.Target)
 	}
-	want := map[string]engine.TeamScore{"payments": {Score: 75, Ready: false, Blockers: 1}}
+	want := map[string]engine.TeamScore{"payments": {Score: 75, Ready: false, Verdict: engine.VerdictBlocked, Blockers: 1}}
 	if !reflect.DeepEqual(got.Teams, want) {
 		t.Fatalf("teams = %+v, want %+v (cluster %d)", got.Teams, want, id)
 	}
@@ -78,6 +78,58 @@ func TestTeamsEndpoint(t *testing.T) {
 	// Unknown cluster → 404.
 	if resp := getJSON(t, ts, "/api/v1/clusters/99/teams", "", nil); resp.StatusCode != 404 {
 		t.Fatalf("unknown cluster status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestTeamVerdictFollowsTheCluster (#196 VS-14): a team was scored over
+// its own findings only, so payments read ready:true on a cluster whose
+// verdict was unknown (versions not assessed) or blocked by kubelet skew
+// no team owns. Its verdict now says so, on /report and /teams alike, and
+// ready is true only when that verdict is ready.
+func TestTeamVerdictFollowsTheCluster(t *testing.T) {
+	base := testInventory()
+	base.ServerVersion = "v1.33.4"
+	base.Nodes = []inventory.NodeInfo{{Name: "n1", KubeletVersion: "v1.33.4"}}
+	base.Namespaces = []inventory.NamespaceInfo{{Name: "shop", Team: "payments"}, {Name: "web", Team: "frontend"}}
+	base.APIUsage = []inventory.APIUsage{{ // a warning at 1.34: removed in 1.35
+		Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Count: 1, Namespaces: map[string]int{"shop": 1},
+	}}
+	unknown := base
+	unknown.Capabilities = collectedCaps()
+	unknown.Capabilities[inventory.CapVersions] = inventory.CapabilityStatus{Reason: "list nodes: forbidden"}
+	skewed := base
+	skewed.Nodes = []inventory.NodeInfo{{Name: "n1", KubeletVersion: "v1.30.4"}}
+
+	for _, tc := range []struct {
+		name    string
+		inv     inventory.Inventory
+		verdict engine.Verdict
+	}{
+		{"required gap", unknown, engine.VerdictUnknown},
+		{"unattributed blocker", skewed, engine.VerdictBlocked},
+		{"clean", base, engine.VerdictReady},
+	} {
+		ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler()) // the cluster is id 1
+		pushCluster(t, ts, "vs14", tc.inv)
+		var rep struct {
+			Verdict engine.Verdict              `json:"verdict"`
+			Teams   map[string]engine.TeamScore `json:"teams"`
+		}
+		getJSON(t, ts, "/api/v1/clusters/1/report?target=1.34", "", &rep)
+		var teams struct {
+			Teams map[string]engine.TeamScore `json:"teams"`
+		}
+		getJSON(t, ts, "/api/v1/clusters/1/teams?target=1.34", "", &teams)
+		if rep.Verdict != tc.verdict {
+			t.Errorf("%s: cluster verdict %s, want %s", tc.name, rep.Verdict, tc.verdict)
+		}
+		want := engine.TeamScore{Score: 95, Ready: tc.verdict == engine.VerdictReady, Verdict: tc.verdict, Warnings: 1}
+		for what, got := range map[string]engine.TeamScore{"/report": rep.Teams["payments"], "/teams": teams.Teams["payments"]} {
+			if got != want {
+				t.Errorf("%s: %s payments = %+v, want %+v", tc.name, what, got, want)
+			}
+		}
+		ts.Close()
 	}
 }
 
@@ -101,7 +153,7 @@ func TestReportIncludesTeams(t *testing.T) {
 	if got.Score != 75 {
 		t.Fatalf("score = %d, want 75", got.Score)
 	}
-	want := map[string]engine.TeamScore{"payments": {Score: 75, Ready: false, Blockers: 1}}
+	want := map[string]engine.TeamScore{"payments": {Score: 75, Ready: false, Verdict: engine.VerdictBlocked, Blockers: 1}}
 	if !reflect.DeepEqual(got.Teams, want) {
 		t.Fatalf("report teams = %+v, want %+v", got.Teams, want)
 	}
