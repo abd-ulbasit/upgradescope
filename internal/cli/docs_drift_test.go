@@ -132,6 +132,8 @@ func TestDocsRound2Gaps(t *testing.T) {
 			[]string{"committed", "pull request's diff", "rendered/"}},
 		{"action/README.md", "an alert reaches a pull request's diff only for a file committed to the repository (FS-03)",
 			[]string{"committed", "pull request's diff", "rendered/"}},
+		{"docs/operations/retention-and-backup.md", "/history is a change log: what adds a row, what refreshes one in place, what `at` is (AG-12)",
+			[]string{"change log", "refreshed in place", "server's clock", "team attribution"}},
 	} {
 		doc := strings.Join(strings.Fields(strings.ToLower(readDoc(t, tc.page))), " ")
 		for _, w := range tc.want {
