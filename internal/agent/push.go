@@ -119,8 +119,8 @@ func (p *pusher) offer(pl pushPayload) {
 // practice the runner re-offers a fresh payload on the next push-worthy
 // tick). Permanent failures (any other 4xx: bad token, invalid body, ...)
 // drop the payload — resending identical bytes cannot succeed — and return
-// the error for logging. A context cancel during backoff returns promptly
-// with ctx's error, payload kept.
+// the error for logging. A context cancel or deadline during backoff
+// returns promptly, wrapping ctx's error and the last attempt's, payload kept.
 func (p *pusher) flush(ctx context.Context) error {
 	p.mu.Lock()
 	pl := p.pending
@@ -144,7 +144,10 @@ func (p *pusher) flush(ctx context.Context) error {
 			break
 		}
 		if werr := p.wait(ctx, retryDelay(attempt, retryAfter)); werr != nil {
-			return werr
+			// A Retry-After can outlast the tick deadline; keep the server's
+			// status so the log says why the push was failing, not just that
+			// the tick ran out of time.
+			return fmt.Errorf("push snapshot (kept buffered): %w; last attempt: %w", werr, lastErr)
 		}
 	}
 	return fmt.Errorf("push snapshot after %d attempts (kept buffered): %w", pushRetries+1, lastErr)
@@ -223,9 +226,10 @@ func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, retr
 		// Never followed (see newPusher): resending the body to the Location
 		// could leak it, and a body-less GET can "succeed" without delivering
 		// anything. The URL is wrong, so identical retries cannot succeed.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		loc := resp.Header.Get("Location")
 		err := fmt.Errorf("server redirected the push (%s) to %q: the push is never sent to a redirect target; use the final URL in --server-url", resp.Status, loc)
-		p.logger().Error("snapshot push refused: the server answered with a redirect", "status", resp.Status, "location", loc, "serverUrl", p.url, "hint", "use the final URL in --server-url")
+		p.logger().Error("snapshot push refused: the server answered with a redirect", "status", resp.Status, "location", loc, "server", p.url, "hint", "use the final URL in --server-url")
 		return true, 0, err
 	case resp.StatusCode == http.StatusRequestTimeout:
 		// Retryable by definition despite being 4xx.

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -359,6 +360,75 @@ func TestFlushHonoursRetryAfter(t *testing.T) {
 				t.Errorf("slept %v, want %v", slept[0], tc.want)
 			}
 		})
+	}
+}
+
+// Retry-After repeated on every retry: each wait is the larger of the backoff
+// step and the server's ask (3s, 3s, then the 4s step), and a huge ask is
+// capped at the backoff maximum on every attempt.
+func TestFlushRetryAfterOnEveryAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   []time.Duration
+	}{
+		{"mixed with the backoff steps", "3", []time.Duration{3 * time.Second, 3 * time.Second, 4 * time.Second}},
+		{"capped every time", "3600", []time.Duration{maxPushBackoff, maxPushBackoff, maxPushBackoff}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.Header().Set("Retry-After", tc.header)
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}))
+			defer srv.Close()
+			p := newPusher(srv.URL, "sekret")
+			var slept []time.Duration
+			p.wait = func(_ context.Context, d time.Duration) error {
+				slept = append(slept, d)
+				return nil
+			}
+			p.offer(testPayload("c"))
+			err := p.flush(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "503") {
+				t.Fatalf("err = %v, want the 503 after exhausting retries", err)
+			}
+			if calls != pushRetries+1 {
+				t.Errorf("requests = %d, want %d", calls, pushRetries+1)
+			}
+			if !slices.Equal(slept, tc.want) {
+				t.Errorf("waits = %v, want %v", slept, tc.want)
+			}
+		})
+	}
+}
+
+// A Retry-After longer than the time the tick has left must not hide why the
+// push was failing: the deadline ends the wait, and the error still names the
+// server's status (and wraps the context error).
+func TestFlushDeadlineDuringRetryAfterKeepsStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	p := newPusher(srv.URL, "sekret")
+	p.offer(testPayload("c"))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := p.flush(ctx)
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("err = %v, want it to name the 503", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+	p.mu.Lock()
+	kept := p.pending != nil
+	p.mu.Unlock()
+	if !kept {
+		t.Error("payload dropped on a deadline during backoff, want it kept buffered")
 	}
 }
 
