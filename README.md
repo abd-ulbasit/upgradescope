@@ -191,8 +191,9 @@ More, with sizes per platform: [Install](https://abd-ulbasit.github.io/upgradesc
 
 ## Scale and cost
 
-Measured on 3 October 2026 with the harness in `hack/bench/` (branch
-`feat/scale-harness`, `91a4e74`; the server benchmark at `a735fcb`). The
+Measured on 3 October 2026 with the harness in `hack/bench/` (main
+`5d65958` plus the commits of this work through `c4b7721`; the server
+benchmark through `e69b68a`). The
 cluster was a kind control plane (Kubernetes 1.37.0) on a ThinkPad with an
 Intel Core i3-7100U (2 cores, 4 threads) and 7.3 GiB of RAM, filled by
 [KWOK](https://kwok.sigs.k8s.io/) v0.8.0 with 2,000 fake nodes, 10,000 pods

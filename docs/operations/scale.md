@@ -38,7 +38,7 @@ them.
 | Driver | MacBook Pro (`MacBookPro18,3`, Apple M1 Pro, 16 GiB, `sysctl hw.model`), Go 1.26.8, client-go 0.37.1. It seeded the cluster and cross-compiled the benchmarks; the measured agent ticks and the server benchmark ran on the ThinkPad |
 | Postgres | 17.11 (`postgres:17-alpine`), a throwaway container on the ThinkPad's Docker engine, 0.1 ms round trip from the benchmark |
 | SQLite | the embedded `modernc.org/sqlite` v1.60.1, in a temporary directory on the ThinkPad's SSD |
-| upgradescope | branch `feat/scale-harness` at `91a4e74` for the agent (the "before" table is the same commit with the Helm cache commit `e1ef4ca` reverted) and `a735fcb` for the server; the server code is unchanged by this work |
+| upgradescope | main `5d65958` plus this work through `c4b7721` for the agent (the "before" table is the same tree with the Helm cache commit `06499dd` reverted) and through `e69b68a` for the server, the server code being unchanged by this work. These commits were measured before they were rebased onto main `4c8ae57`, which changed version-skew and the engine (#184 to #186): the request and byte counts do not depend on it, the CPU figures were not measured again |
 | Also running | two other idle kind clusters on the same ThinkPad, and for the agent runs the lab's own KWOK controller keeping 2,000 nodes alive |
 
 ### What is simulated
