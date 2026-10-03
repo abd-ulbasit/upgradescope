@@ -630,6 +630,15 @@ hourly syncs, nightly CronJobs and daily jobs. A genuine fix is held
 too, but it only ever shows after a restart: the gauge does not forget a
 caller while its apiserver runs.
 
+A control-plane upgrade is a restart too, and is the one case that is not
+held when it removes the API. A caller of an API that the upgraded
+apiserver no longer serves (the knowledge base removes it at or before the
+scrape's server version, such as a `servicecidrs` `v1beta1` caller after
+an upgrade from v1.34 to v1.35) can never be counted again, so it is
+resolved at once, as without a start time, and `became-ready` is not
+delayed by the window. An upgrade within a version that still serves the
+API, a patch upgrade for one, is held as any restart is.
+
 The hold ends 24 hours after that apiserver started (a later restart
 inside the window moves the end to the new apiserver's), and is measured
 on the scrape, the agent's `collectedAt` against the apiserver's start
@@ -651,14 +660,22 @@ or more than 10 minutes after the scrape's `collectedAt` (a buggy or
 skewed clock), so a far-future start time holds nothing. A clock that is
 ahead on both sides at once (a single-node cluster booted with its clock
 years ahead, whose agent and apiserver share it) passes that check and
-records a hold end in its future; a later scrape drops a recorded end
+records a hold end in its future; a later push drops a recorded end
 more than 24 hours and 10 minutes after its own `collectedAt`, which no
 scrape at or before it could have recorded, so once the clock is
 corrected the hold is the corrected scrape's own and ends within that
-bound (plus `--force-sync-every`) of it. Without a start
+bound (plus `--force-sync-every`) of it. The server's background passes
+judge the stored snapshot, older than the pushes that may have moved the
+end, so they keep a recorded end and leave dropping it to the next push.
+A push with no `collectedAt` (no real agent sends one) has nothing to
+measure the window on: it holds nothing, and ends any hold it meets.
+Without a start
 time (an agent that predates it, a scrape that did not report it) a
 missing deprecated-call blocker is resolved at once, and can send
-`became-ready` while the caller still exists. With several
+`became-ready` while the caller still exists, unless a scrape with a
+start time already recorded a hold on it: a later push without one (an
+older agent after a rollback, say) honours that recorded end, and the
+hold still ends at it. With several
 kube-apiservers (HA control planes, most managed ones), each counts its
 own requests, and the agent scrapes whichever one its connection
 reaches. The start time is not part of the snapshot's identity, so a
