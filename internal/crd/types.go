@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -128,9 +129,13 @@ func ReadyCondition(st Status) metav1.Condition {
 // The status is bounded by construction, so a status write can never grow
 // past the apiserver's request limit (3 MiB) and wedge (issue #191). Four
 // numbers hold it: MaxTargets rows, maxTopFindings findings per row, each
-// title and remediation clipped, and a capped notAssessed. At the limits
-// that is about 8 × 20 × (512 + 1024) bytes of finding text plus 32 × 512 of
-// notes: ~270 KiB. The full finding list lives in the server and CLI.
+// title and remediation clipped to a budget of encoded bytes (see clip), and
+// a capped notAssessed. At the limits that is 8 × 20 × (512 + 1024) bytes of
+// finding text plus 32 × 512 of notes: ~280 KiB whatever the characters are,
+// because the budgets count what the text costs in the stored JSON, not
+// characters (counted in characters, a title of '<' costs six bytes each and
+// the worst case is 1.5 MiB). The full finding list lives in the server and
+// CLI.
 const (
 	// MaxTargets is the most targets a ClusterReadiness evaluates, and the
 	// maxItems of spec.targets in manifest.yaml (a test holds the two
@@ -142,23 +147,37 @@ const (
 	MaxTargets = 8
 
 	maxTopFindings    = 20
-	maxTitleLen       = 512  // runes; real titles run to about 200
-	maxRemediationLen = 1024 // runes
-	maxNoteLen        = 512  // runes, per notAssessed entry
+	maxTitleLen       = 512  // encoded bytes; a title that names objects can pass it
+	maxRemediationLen = 1024 // encoded bytes
+	maxNoteLen        = 512  // encoded bytes, per notAssessed entry
 	maxNotAssessed    = 32   // entries; one summary line follows if more
 )
 
-// clip cuts s to at most n runes, marking the cut with an ellipsis.
+// jsonCost is what r takes up in a JSON string as the apiserver stores it,
+// never less: Go's encoder writes < > & and U+2028/9 as \uXXXX, control
+// characters as at most six bytes, and bytes that are not UTF-8 as �.
+func jsonCost(r rune) int {
+	switch {
+	case r == '"' || r == '\\':
+		return 2
+	case r < 0x20, r == '<', r == '>', r == '&', r == ' ', r == ' ', r == utf8.RuneError:
+		return 6
+	}
+	return utf8.RuneLen(r)
+}
+
+// clip cuts s to at most n bytes of JSON encoding (see jsonCost), on a rune
+// boundary, marking the cut with an ellipsis (3 bytes more).
 func clip(s string, n int) string {
-	if len(s) <= n { // fewer bytes than the limit, so fewer runes too
+	if len(s)*6 <= n { // even all six-byte characters fit
 		return s
 	}
-	i := 0
-	for pos := range s {
-		if i == n {
+	cost := 0
+	for pos, r := range s {
+		cost += jsonCost(r)
+		if cost > n {
 			return s[:pos] + "…"
 		}
-		i++
 	}
 	return s
 }
