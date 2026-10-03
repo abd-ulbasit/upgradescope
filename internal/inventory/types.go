@@ -44,7 +44,9 @@ type CapabilityStatus struct {
 	//     cannot be told apart from its own requests;
 	//   - helm: storage drivers not read ("configmaps") and releases not
 	//     read, not decodable or whose manifest was not fully parsed
-	//     ("namespace/name");
+	//     ("namespace/name"); GitOps tools that deploy charts without
+	//     leaving a Helm release the scan can read, or whose custom
+	//     resources it could not read (GitOpsArgoCD, GitOpsFlux);
 	//   - versions: the control-plane components with a kube-system pod
 	//     whose version could not be read where upstream would have told
 	//     it ("kube-proxy", "kube-scheduler"): an upstream-named image
@@ -101,6 +103,7 @@ type Inventory struct {
 	APIUsage           []APIUsage                      `json:"apiUsage,omitempty"`
 	DeprecatedCalls    []DeprecatedCall                `json:"deprecatedCalls,omitempty"`
 	HelmReleases       []HelmRelease                   `json:"helmReleases,omitempty"`
+	GitOpsCharts       []GitOpsChart                   `json:"gitopsCharts,omitempty"`
 	AddOns             []AddOnInstance                 `json:"addOns,omitempty"`
 	Nodes              []NodeInfo                      `json:"nodes,omitempty"`
 	ControlPlane       []ComponentVersion              `json:"controlPlane,omitempty"`
@@ -254,6 +257,38 @@ type HelmRelease struct {
 	ManifestAPIs []APIUsage `json:"manifestApis,omitempty"`
 }
 
+// The GitOps tools whose chart sources the helm capability reads, as
+// GitOpsChart.Tool and a helm capability's Skipped name them.
+const (
+	GitOpsArgoCD = "argocd"
+	GitOpsFlux   = "flux"
+)
+
+// GitOpsChart is a Helm chart a GitOps tool deploys into the cluster, read
+// from the tool's own custom resource: an Argo CD Application source with
+// chart set, or a Flux HelmRelease. Neither leaves a release the Helm
+// collector can read (Argo CD renders with helm template), so this is all
+// that is known of the chart: no appVersion, no stored manifest. Only
+// resources that deploy into the scanned cluster are listed.
+type GitOpsChart struct {
+	Tool string `json:"tool"` // GitOpsArgoCD or GitOpsFlux
+	// Name and Namespace are the Application's or HelmRelease's own.
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	// Target is the namespace the chart deploys into: an Application's
+	// destination.namespace, a HelmRelease's targetNamespace or else its
+	// own namespace; "" when the resource leaves it to the manifests.
+	Target string `json:"target,omitempty"`
+	Chart  string `json:"chart"`
+	// Version is the chart version as the resource spells it, which may be
+	// a constraint ("4.*", ">=4.0.0") or a tag; "" when it names none.
+	Version string `json:"version,omitempty"`
+	// Repo is an Application's repoURL, a HelmRelease's chart source
+	// ("HelmRepository/flux-system/ingress-nginx") or the URL of the
+	// OCIRepository it references.
+	Repo string `json:"repo,omitempty"`
+}
+
 // AddOnInstance is one install of a registry add-on. Collectors emit one
 // per add-on and namespace (two where a Helm release's pods run images on
 // another release line than its appVersion), so an ID can appear several
@@ -271,7 +306,8 @@ type AddOnInstance struct {
 	// IngressClass.
 	Namespaces []string `json:"namespaces"`
 	// Source is the strongest evidence found: "chart" (a Helm release),
-	// "image" (an image matcher), "labels" (pod labels naming the add-on)
+	// "image" (an image matcher), "gitops" (a GitOps tool's chart source,
+	// which gives no app version), "labels" (pod labels naming the add-on)
 	// or "ingressclass" (an IngressClass controller; no version).
 	Source string `json:"source"`
 }

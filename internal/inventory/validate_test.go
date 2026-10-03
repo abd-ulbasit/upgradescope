@@ -25,6 +25,7 @@ func validInventory() Inventory {
 		APIUsage:             []APIUsage{usage()},
 		APIAuthorshipUnknown: []APIUsage{usage()},
 		HelmReleases:         []HelmRelease{{Name: "ingress-nginx", Namespace: "ingress", ManifestAPIs: []APIUsage{usage()}}},
+		GitOpsCharts:         []GitOpsChart{{Tool: GitOpsArgoCD, Name: "ingress-nginx", Namespace: "argocd", Target: "ingress", Chart: "ingress-nginx", Version: "4.11.3", Repo: "https://kubernetes.github.io/ingress-nginx"}},
 		AddOns:               []AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"ingress"}}, {ID: "x"}},
 		Nodes:                []NodeInfo{{Name: "ip-10-0-0-1.ec2.internal"}},
 		ControlPlane:         []ComponentVersion{{Component: "kube-proxy", Version: "v1.33.0", Node: "ip-10-0-0-1.ec2.internal"}, {Component: "kube-apiserver", Version: "v1.33.0"}},
@@ -73,6 +74,9 @@ func TestValidateIdentifiersRefusesInvalid(t *testing.T) {
 		{"authorship unknown object", func(inv *Inventory) { inv.APIAuthorshipUnknown[0].Objects[0].Name = "a/b" }, "apiAuthorshipUnknown[0].objects[0].name"},
 		{"helm release name", func(inv *Inventory) { inv.HelmReleases[0].Name = "Ingress" }, "helmReleases[0].name"},
 		{"helm release namespace", func(inv *Inventory) { inv.HelmReleases[0].Namespace = "<x>" }, "helmReleases[0].namespace"},
+		{"gitops chart name", func(inv *Inventory) { inv.GitOpsCharts[0].Name = "Ingress" }, "gitopsCharts[0].name"},
+		{"gitops chart namespace", func(inv *Inventory) { inv.GitOpsCharts[0].Namespace = "<x>" }, "gitopsCharts[0].namespace"},
+		{"gitops chart target namespace", func(inv *Inventory) { inv.GitOpsCharts[0].Target = "a_b" }, "gitopsCharts[0].target"},
 		{"helm manifest object", func(inv *Inventory) {
 			inv.HelmReleases[0].ManifestAPIs[0].Objects[1].Namespace = "a_b"
 		}, "helmReleases[0].manifestApis[0].objects[1].namespace"},

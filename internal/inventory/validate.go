@@ -143,6 +143,18 @@ func (inv Inventory) ValidateIdentifiers() error {
 			}
 		}
 	}
+	for i, c := range inv.GitOpsCharts {
+		at := func() string { return fmt.Sprintf("gitopsCharts[%d]", i) }
+		if p := problemsWith(c.Name, subdomainProblems); p != nil {
+			return &IdentifierError{Field: at() + ".name", Value: c.Name, Rule: ruleSubdomain, Problems: p}
+		}
+		if p := problemsWith(c.Namespace, namespaceProblems); p != nil {
+			return &IdentifierError{Field: at() + ".namespace", Value: c.Namespace, Rule: ruleNamespace, Problems: p}
+		}
+		if p := problemsWith(c.Target, namespaceProblems); p != nil {
+			return &IdentifierError{Field: at() + ".target", Value: c.Target, Rule: ruleNamespace, Problems: p}
+		}
+	}
 	for i, a := range inv.AddOns {
 		for j, ns := range a.Namespaces {
 			if p := problemsWith(ns, namespaceProblems); p != nil {

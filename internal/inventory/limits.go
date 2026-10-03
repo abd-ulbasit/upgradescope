@@ -103,7 +103,9 @@ const cutMark = " …(cut)"
 //   - an object's Ignore and IgnoreReason, the upgradescope.dev/ignore
 //     and ignore-reason annotations (up to 256 KiB), to MaxStringBytes:
 //     Ignore to the comma-separated tokens that fit whole, IgnoreReason
-//     ending in cutMark.
+//     ending in cutMark;
+//   - a GitOps chart's Chart, Version and Repo, copied from a custom
+//     resource's spec, to MaxStringBytes, ending in cutMark.
 //
 // Each cut keeps whole UTF-8 characters. Collect calls it, and the server
 // calls it on every push before ValidateLimits, so older agents' pushes
@@ -144,6 +146,14 @@ func (inv *Inventory) CutFreeText() bool {
 	refs(inv.APIAuthorshipUnknown)
 	for i := range inv.HelmReleases {
 		refs(inv.HelmReleases[i].ManifestAPIs)
+	}
+	for i := range inv.GitOpsCharts {
+		c := &inv.GitOpsCharts[i]
+		for _, s := range []*string{&c.Chart, &c.Version, &c.Repo} { // a custom resource's free text
+			if r, ok := cutText(*s, MaxStringBytes); ok {
+				*s, cut = r, true
+			}
+		}
 	}
 	for i := range inv.CRDs {
 		refs(inv.CRDs[i].Usage)
