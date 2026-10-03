@@ -252,3 +252,49 @@ func TestHelmCacheCoversTheConfigMapDriver(t *testing.T) {
 		t.Errorf("cache holds %s", got)
 	}
 }
+
+// A driver whose list failed this tick says nothing about its objects, so
+// the entries it holds survive to the tick that lists it again: nothing is
+// refetched because of a flaky list.
+func TestHelmCacheKeepsADriversEntriesWhenItsListFails(t *testing.T) {
+	cm := helmConfigMap(t, helmRev{ns: "apps", release: "web", rev: 1, status: "deployed", chart: "web", chartVersion: "1.0.0", uid: "c1", rv: "5"})
+	sec := helmSecret(t, helmRev{ns: "cert-manager", release: "cert-manager", rev: 1, status: "deployed", chart: "cert-manager", chartVersion: "v1.13.0", uid: "u2", rv: "101"})
+	cache := NewHelmCache()
+	collectHelmCached(t, cache, nil, cm, sec)
+	if cache.Len() != 2 {
+		t.Fatalf("cache holds %d after the first tick, want 2", cache.Len())
+	}
+
+	// The ConfigMap list fails: its release is not seen, and must not be
+	// forgotten either.
+	kube, meta := helmClients(t, cm, sec)
+	failList := true
+	meta.PrependReactor("list", "configmaps", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if failList {
+			return true, nil, errors.New("etcdserver: request timed out")
+		}
+		return false, nil, nil
+	})
+	var inv inventory.Inventory
+	err := collectHelmWith(context.Background(), kube, meta, nil, cache, &inv)
+	if !errors.As(err, new(partialError)) || len(inv.HelmReleases) != 1 {
+		t.Fatalf("err = %v, %d releases: want a partial result with the Secret release", err, len(inv.HelmReleases))
+	}
+	if cache.Len() != 2 {
+		t.Fatalf("cache holds %d after the ConfigMap list failed, want the ConfigMap entry kept (2)", cache.Len())
+	}
+
+	// The list works again: the release comes back without a GET.
+	failList = false
+	kube.ClearActions()
+	inv = inventory.Inventory{}
+	if err := collectHelmWith(context.Background(), kube, meta, nil, cache, &inv); err != nil && !errors.As(err, new(partialError)) {
+		t.Fatal(err)
+	}
+	if got := helmGets(kube); len(got) != 0 {
+		t.Errorf("GETs %v, want none: the entry survived the failed list", got)
+	}
+	if len(inv.HelmReleases) != 2 {
+		t.Errorf("%d releases, want both", len(inv.HelmReleases))
+	}
+}
