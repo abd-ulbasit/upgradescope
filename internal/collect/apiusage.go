@@ -44,7 +44,7 @@ const (
 // withIgnore returns ref with the ignore annotations of an object whose
 // annotations are ann.
 func withIgnore(ref inventory.ObjectRef, ann map[string]string) inventory.ObjectRef {
-	ref.Ignore, ref.IgnoreReason, ref.IgnoreLegacyKey = apigroup.ReadIgnore(func(k string) (string, bool) {
+	ref.Ignore, ref.IgnoreReason, ref.IgnoreLegacyKey, ref.IgnoreReasonLegacyKey = apigroup.ReadIgnore(func(k string) (string, bool) {
 		v, ok := ann[k]
 		return v, ok
 	})

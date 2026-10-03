@@ -97,7 +97,7 @@ metadata:
 		t.Fatal(err)
 	}
 	want := []inventory.ObjectRef{
-		{Name: "old", File: "all.yaml", Line: 1, Ignore: "removed-api", IgnoreReason: "decommissioned with the old cluster", IgnoreLegacyKey: true},
+		{Name: "old", File: "all.yaml", Line: 1, Ignore: "removed-api", IgnoreReason: "decommissioned with the old cluster", IgnoreLegacyKey: true, IgnoreReasonLegacyKey: true},
 		{Name: "both", File: "all.yaml", Line: 9, Ignore: "removed-api", IgnoreReason: "new reason"},
 	}
 	if len(inv.APIUsage) != 1 || !reflect.DeepEqual(inv.APIUsage[0].Objects, want) {
@@ -125,7 +125,7 @@ func TestCollectAPIUsageReadsLegacyIgnoreAnnotations(t *testing.T) {
 	if _, err := collectAPIUsage(context.Background(), disc, meta, lifecycle, &inv); err != nil {
 		t.Fatal(err)
 	}
-	want := []inventory.ObjectRef{{Name: "accepted", Manager: "kubectl-client-side-apply", Ignore: "removed-api", IgnoreReason: "owned by vendor", IgnoreLegacyKey: true}}
+	want := []inventory.ObjectRef{{Name: "accepted", Manager: "kubectl-client-side-apply", Ignore: "removed-api", IgnoreReason: "owned by vendor", IgnoreLegacyKey: true, IgnoreReasonLegacyKey: true}}
 	if len(inv.APIUsage) != 1 || !reflect.DeepEqual(inv.APIUsage[0].Objects, want) {
 		t.Errorf("api usage = %#v\nwant objects %#v", inv.APIUsage, want)
 	}

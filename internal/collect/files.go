@@ -702,7 +702,7 @@ func (d *objectReader) object(n *yaml.Node, av, k string, line int) error {
 		}
 		if ann.value != nil && deref(ann.value).Kind == yaml.MappingNode {
 			var lerr error
-			ref.Ignore, ref.IgnoreReason, ref.IgnoreLegacyKey = apigroup.ReadIgnore(func(key string) (string, bool) {
+			ref.Ignore, ref.IgnoreReason, ref.IgnoreLegacyKey, ref.IgnoreReasonLegacyKey = apigroup.ReadIgnore(func(key string) (string, bool) {
 				h, err := d.lookup(deref(ann.value), key)
 				if err != nil && lerr == nil {
 					lerr = err

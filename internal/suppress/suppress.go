@@ -343,16 +343,21 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (kept *engine.Fi
 			if !annotated(o, f) {
 				return false
 			}
-			if o.IgnoreLegacyKey {
+			if o.LegacyIgnore() {
 				legacy = append(legacy, objectName(o))
 			}
 			reason := strings.TrimSpace(o.IgnoreReason)
 			if reason == "" {
-				// Name the keys the object carries: an object still on the
-				// pre-v0.2.0 keys never had the new ones.
+				// Name the keys the object carries, each by its own
+				// generation: an object can mix the new ignore key with the
+				// old ignore-reason key. An absent reason follows the ignore
+				// key's generation.
 				ignoreKey, reasonKey := apigroup.IgnoreAnnotation, apigroup.IgnoreReasonAnnotation
 				if o.IgnoreLegacyKey {
-					ignoreKey, reasonKey = apigroup.LegacyIgnoreAnnotation, apigroup.LegacyIgnoreReasonAnnotation
+					ignoreKey = apigroup.LegacyIgnoreAnnotation
+				}
+				if o.IgnoreReasonLegacyKey || o.IgnoreLegacyKey && o.IgnoreReason == "" {
+					reasonKey = apigroup.LegacyIgnoreReasonAnnotation
 				}
 				warnings = append(warnings, fmt.Sprintf("object %s: %s annotation without %s is not applied", objectName(o), ignoreKey, reasonKey))
 				return false

@@ -20,12 +20,14 @@ const (
 // ReadIgnore returns an object's ignore and ignore-reason annotation
 // values, reading each current key and, when the current one is absent,
 // its pre-v0.2.0 key: the current key wins when both are set, even set
-// empty. legacy reports that a value came from an old key. get returns an
-// annotation's value and whether the object has it.
-func ReadIgnore(get func(key string) (string, bool)) (ignore, reason string, legacy bool) {
-	ignore, oldIgnore := read(get, IgnoreAnnotation, LegacyIgnoreAnnotation)
-	reason, oldReason := read(get, IgnoreReasonAnnotation, LegacyIgnoreReasonAnnotation)
-	return ignore, reason, oldIgnore || oldReason
+// empty. ignoreLegacy and reasonLegacy report, for each value apart, that
+// it came from an old key: an object can carry the new ignore key with the
+// old ignore-reason key. get returns an annotation's value and whether the
+// object has it.
+func ReadIgnore(get func(key string) (string, bool)) (ignore, reason string, ignoreLegacy, reasonLegacy bool) {
+	ignore, ignoreLegacy = read(get, IgnoreAnnotation, LegacyIgnoreAnnotation)
+	reason, reasonLegacy = read(get, IgnoreReasonAnnotation, LegacyIgnoreReasonAnnotation)
+	return ignore, reason, ignoreLegacy, reasonLegacy
 }
 
 func read(get func(string) (string, bool), current, old string) (value string, legacy bool) {

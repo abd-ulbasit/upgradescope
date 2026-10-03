@@ -228,7 +228,7 @@ func TestApplyAnnotations(t *testing.T) {
 // comes before the per-object warnings, and after the rule ones.
 func TestApplyLegacyAnnotationsWarnDeprecated(t *testing.T) {
 	accepted := shopWeb
-	accepted.Ignore, accepted.IgnoreReason, accepted.IgnoreLegacyKey = "removed-api, kb-stale", "replaced by HTTPRoute", true
+	accepted.Ignore, accepted.IgnoreReason, accepted.IgnoreLegacyKey, accepted.IgnoreReasonLegacyKey = "removed-api, kb-stale", "replaced by HTTPRoute", true, true
 	noReason := internal
 	noReason.Ignore, noReason.IgnoreLegacyKey = "removed-api", true
 
@@ -250,6 +250,28 @@ func TestApplyLegacyAnnotationsWarnDeprecated(t *testing.T) {
 	}
 	if len(warnings) < 2 || !strings.Contains(warnings[1], "deprecated") || !strings.Contains(warnings[1], apigroup.IgnoreAnnotation) {
 		t.Errorf("the deprecation warning does not say deprecated and name the new key: %v", warnings)
+	}
+}
+
+// An object that mixes the generations of keys is refused by name: each
+// warning names the key the object carries, the new ignore with the old
+// (empty) ignore-reason, or the old ignore with a new but blank reason.
+// Both objects are still named by the one deprecation notice, since one
+// of their keys is old.
+func TestApplyMixedKeysNameEachKeyExactly(t *testing.T) {
+	newIgnoreOldReason := shopWeb
+	newIgnoreOldReason.Ignore, newIgnoreOldReason.IgnoreReasonLegacyKey = "removed-api", true
+	oldIgnoreNewReason := internal
+	oldIgnoreNewReason.Ignore, oldIgnoreNewReason.IgnoreReason, oldIgnoreNewReason.IgnoreLegacyKey = "removed-api", "  ", true
+
+	_, warnings := Apply(report(removedIngress(newIgnoreOldReason, oldIgnoreNewReason)), nil, Options{Now: now})
+	want := []string{
+		apigroup.LegacyIgnoreWarning([]string{"shop/web (app.yaml:3)", "internal/api (app.yaml:9)"}),
+		"object shop/web (app.yaml:3): " + apigroup.IgnoreAnnotation + " annotation without " + apigroup.LegacyIgnoreReasonAnnotation + " is not applied",
+		"object internal/api (app.yaml:9): " + apigroup.LegacyIgnoreAnnotation + " annotation without " + apigroup.IgnoreReasonAnnotation + " is not applied",
+	}
+	if !reflect.DeepEqual(warnings, want) {
+		t.Errorf("warnings =\n%s\nwant\n%s", strings.Join(warnings, "\n"), strings.Join(want, "\n"))
 	}
 }
 

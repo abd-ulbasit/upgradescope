@@ -284,9 +284,10 @@ const MaxObjectRefs = 100
 // kubectl.kubernetes.io/last-applied-configuration annotation names it.
 // Ignore and IgnoreReason are the object's ignore and ignore-reason
 // annotation values (apigroup.IgnoreAnnotation, IgnoreReasonAnnotation),
-// verbatim (see internal/suppress). IgnoreLegacyKey marks values read
-// from the pre-v0.2.0 keys (apigroup.ReadIgnore), for suppress's
-// deprecation warning; it never leaves the process (json "-"), so the
+// verbatim (see internal/suppress). IgnoreLegacyKey and
+// IgnoreReasonLegacyKey mark the ignore and the ignore-reason value as read
+// from a pre-v0.2.0 key (apigroup.ReadIgnore), each apart, for suppress's
+// deprecation warning; they never leave the process (json "-"), so the
 // wire format and the report keep no field that v0.3.0 drops.
 type ObjectRef struct {
 	Namespace    string `json:"namespace,omitempty"`
@@ -298,8 +299,13 @@ type ObjectRef struct {
 	Ignore       string `json:"ignore,omitempty"`
 	IgnoreReason string `json:"ignoreReason,omitempty"`
 
-	IgnoreLegacyKey bool `json:"-"`
+	IgnoreLegacyKey       bool `json:"-"`
+	IgnoreReasonLegacyKey bool `json:"-"`
 }
+
+// LegacyIgnore reports that either ignore annotation came from a
+// pre-v0.2.0 key.
+func (r ObjectRef) LegacyIgnore() bool { return r.IgnoreLegacyKey || r.IgnoreReasonLegacyKey }
 
 type DeprecatedCall struct { // one row of apiserver_requested_deprecated_apis
 	Group          string `json:"group"`
