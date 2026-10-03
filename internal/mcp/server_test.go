@@ -252,6 +252,27 @@ func TestGetReportReturnsTheDocument(t *testing.T) {
 	}
 }
 
+// TestAnInventoryReportOutsideTheSchemaIsAToolError: a report judged from
+// an inventory_file is checked against the report schema as one read from
+// a file is, so an evaluation that broke it would be a tool error with the
+// reason, never a protocol error from the SDK's output check.
+func TestAnInventoryReportOutsideTheSchemaIsAToolError(t *testing.T) {
+	cfg := localConfig()
+	cfg.Inventory = func(context.Context, string, string) (json.RawMessage, error) {
+		return json.RawMessage(`{"schemaVersion":1}`), nil
+	}
+	cs := connect(t, cfg)
+	for _, tool := range []string{ToolGetReport, ToolListFindings} {
+		res, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: tool, Arguments: map[string]any{"inventory_file": "/inv.json", "target": "1.37"}})
+		if err != nil {
+			t.Fatalf("%s: a protocol error: %v", tool, err)
+		}
+		if !res.IsError || !strings.Contains(text(res), "does not follow api/report.schema.json") {
+			t.Errorf("%s: isError=%v %q", tool, res.IsError, text(res))
+		}
+	}
+}
+
 func TestSourceErrorsAreToolErrors(t *testing.T) {
 	path, _ := goldenReport(t, "clean-cluster")
 	notReport := filepath.Join(t.TempDir(), "x.json")

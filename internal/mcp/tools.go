@@ -310,7 +310,16 @@ func (s *server) report(ctx context.Context, in sourceInput) (json.RawMessage, s
 			return nil, "", errors.New("inventory_file needs target, the minor to judge it at")
 		}
 		doc, err := s.cfg.Inventory(ctx, in.InventoryFile, in.Target)
-		return doc, "", err
+		if err != nil {
+			return nil, "", err
+		}
+		// The engine's report follows the schema; checked all the same, so
+		// one that did not is the tool's error, never the SDK's protocol
+		// error.
+		if err := checkReport(doc); err != nil {
+			return nil, "", fmt.Errorf("the report judged from %s is not an upgradescope report of schemaVersion 1: %w", in.InventoryFile, err)
+		}
+		return doc, "", nil
 	case in.Cluster != "":
 		if s.cfg.Fleet == nil {
 			return nil, "", errors.New("cluster needs fleet mode: start the server with --server-url (and a read token if the server requires one)")
