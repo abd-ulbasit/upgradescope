@@ -137,7 +137,8 @@ func newTokensCmd() *cobra.Command {
 		Short: "Manage per-cluster ingest tokens for agent snapshot pushes",
 		Long: `Manage per-cluster ingest tokens. Each token authenticates snapshot
 pushes for one cluster name only, so a leaked token cannot write another
-cluster's history. Tokens are stored hashed in the server database.`,
+cluster's history. The server database keeps each token's sha256 hash and
+its first 8 characters (which "tokens list" shows), never the token.`,
 	}
 	cmd.AddCommand(newTokensCreateCmd())
 	cmd.AddCommand(newTokensListCmd())
@@ -151,8 +152,9 @@ func newTokensCreateCmd() *cobra.Command {
 		Use:   "create <cluster>",
 		Short: "Mint an ingest token bound to one cluster",
 		Long: `Mint an ingest token bound to one cluster. The plaintext token is printed
-once, to stdout; only its hash is stored. Give it to that cluster's agent
-(--server-token-file, or the chart's agent.existingSecret).`,
+once, to stdout. The server stores its sha256 hash and its first 8
+characters (which "tokens list" shows), never the token. Give it to that
+cluster's agent (--server-token-file, or the chart's agent.existingSecret).`,
 		Example: `  upgradescope tokens create prod-eu --db upgradescope.db
   upgradescope tokens create prod-eu --db-url-file /secrets/db-url > prod-eu.token`,
 		Args:          cobra.ExactArgs(1),

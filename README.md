@@ -76,6 +76,10 @@ its SHA; the floating `v0` tag moves with every release):
         with: {sarif_file: "${{ steps.gate.outputs.sarif-file }}"}
 ```
 
+Code scanning places an alert on a pull request's diff only when its file is
+committed. Alerts for a render like `rendered/` above appear in the Security
+tab, not on the diff.
+
 [CI gate](https://abd-ulbasit.github.io/upgradescope/getting-started/ci-gate/)
 also covers the server's gate endpoint. GitLab CI, Jenkins and Azure
 Pipelines have templates in [`ci/`](ci/) that publish JUnit and GitLab Code

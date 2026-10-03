@@ -6,7 +6,8 @@ Manage per-cluster ingest tokens for agent snapshot pushes
 
 Manage per-cluster ingest tokens. Each token authenticates snapshot
 pushes for one cluster name only, so a leaked token cannot write another
-cluster's history. Tokens are stored hashed in the server database.
+cluster's history. The server database keeps each token's sha256 hash and
+its first 8 characters (which "tokens list" shows), never the token.
 
 ### Options
 

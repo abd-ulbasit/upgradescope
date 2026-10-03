@@ -48,6 +48,40 @@ or a 512 MiB heap peak. On an arm64 Mac (October 2026): p95 about 0.5s,
 peak live heap 15 MiB (it was 1.1 GiB and 1.2s while every request
 decoded every inventory).
 
+## What the history records
+
+`GET /api/v1/clusters/{id}/history` is a change log, not a sample taken at
+every evaluation: it returns one point (`at`, `score`, `ready`) per stored
+evaluation of the target, and a row is stored only when the result is new.
+
+- **A row is added** when a pushed snapshot differs from the cluster's
+  latest (one row per target, whatever its score), when a re-evaluation
+  changes the result, or when a target has no evaluation yet (a new
+  `serve --targets` minor). A re-evaluation runs on a duplicate push and in
+  the background pass, hourly and at UTC midnight, for a stored evaluation
+  whose knowledge-base version or team map differs from the server's, or
+  that was evaluated before today (EOL dates are day-granular). The result
+  has changed when its verdict, its score or its set of findings (severity
+  and finding key) differs from the stored row's.
+- **A row is refreshed in place** when the re-evaluation gives the same
+  result. Its report, knowledge-base version, team-map hash and
+  `evaluatedAt` are rewritten and no point is added, so `evaluatedAt` in
+  `/report` and the exports moves on while `/history` shows nothing new.
+- **`at` is the server's clock** when the row was first stored, at ingest or
+  at the re-evaluation that found the change. It is not when the agent
+  observed the cluster, and it does not follow a later refresh. A change
+  made while the server was down is recorded when the server next hears of
+  it.
+
+Team attribution is part of the stored report, not of what is compared. A
+team-map change that leaves every verdict, score and finding as it was
+rewrites the row's report in place with the new teams: the earlier
+attribution is gone from the database as well as from the API, and
+`/history` keeps only `at`, `score` and `ready`. `/report`, `/teams` and the
+exports always read the latest stored evaluation, so they cannot answer
+which team owned a blocker at an earlier time. An auditor who needs that
+keeps the exports from the time (`GET /api/v1/clusters/{id}/export`).
+
 ## Backup and restore
 
 The database holds each cluster's registration (name bound to its cluster

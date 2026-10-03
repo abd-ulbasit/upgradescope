@@ -5,8 +5,9 @@ Mint an ingest token bound to one cluster
 ### Synopsis
 
 Mint an ingest token bound to one cluster. The plaintext token is printed
-once, to stdout; only its hash is stored. Give it to that cluster's agent
-(--server-token-file, or the chart's agent.existingSecret).
+once, to stdout. The server stores its sha256 hash and its first 8
+characters (which "tokens list" shows), never the token. Give it to that
+cluster's agent (--server-token-file, or the chart's agent.existingSecret).
 
 ```
 upgradescope tokens create <cluster> [flags]

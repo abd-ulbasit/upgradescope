@@ -172,7 +172,14 @@ server:
   # leaves only per-cluster tokens (`upgradescope tokens create <cluster>`,
   # each bound to one cluster name): the chart Secret holds no ingestToken,
   # serve gets none, and the in-chart agent needs its own token
-  # (agent.existingSecret or agent.serverToken).
+  # (agent.existingSecret or agent.serverToken). A Secret written by chart
+  # v0.2.0-rc.2 or earlier keeps its ingestToken key after you switch this
+  # off (those versions wrote it as stringData, which the API server turns
+  # into data and never removes); the server no longer accepts that token,
+  # but remove the key once with `kubectl -n <namespace> patch secret
+  # <fullname>-server-tokens --type=json -p
+  # '[{"op":"remove","path":"/data/ingestToken"}]'`. Later versions remove it
+  # on upgrade; check with `kubectl get secret ... -o jsonpath='{.data}'`.
   sharedIngestToken: true
   # -- Optional bearer token for the read API. EMPTY = READ API IS OPEN —
   # acceptable behind a ClusterIP Service on a private cluster, but set one

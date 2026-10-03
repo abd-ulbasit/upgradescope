@@ -167,9 +167,14 @@ cannot read is reported as not assessed.
   the in-chart agent then pushes over HTTPS) or at an Ingress. The agent
   warns at startup when it would send its token over plain HTTP to a host
   that is not loopback.
-- **Browser hardening.** Every response carries a Content-Security-Policy
-  that forbids inline and third-party script, plus `nosniff`,
-  `no-referrer` and `DENY` framing.
+- **Browser hardening.** Every response the server's handler writes (the
+  dashboard, its assets, the API, exports and their errors, `/healthz`)
+  carries a Content-Security-Policy that forbids inline and third-party
+  script, plus `nosniff`, `no-referrer` and `DENY` framing. The few
+  responses Go's `net/http` writes before routing a request (a 400 for a
+  malformed request or `Host`, a 431 for oversized headers, a 501 for an
+  unknown `Transfer-Encoding`) carry none of them; their bodies are fixed
+  plain text.
 - **Network.** `networkPolicy.enabled=true` admits traffic to the server
   only from this release's agent and the peers you list.
 

@@ -19,7 +19,7 @@ rules:
     resources: ["namespaces", "nodes", "pods"]
     verbs: ["get", "list"]
   # /version (server version) and /metrics (apiserver_requested_deprecated_apis:
-  # who still calls deprecated APIs).
+  # whether any client still calls deprecated APIs, not which).
   - nonResourceURLs: ["/version", "/metrics"]
     verbs: ["get"]
   {{- if .Values.rbac.helmSecrets }}
