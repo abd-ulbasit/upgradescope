@@ -1053,6 +1053,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `unrecognizedImages` | array of string | no | Image repositories no add-on image matcher claims; sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories the cap dropped. |
 | `crds` | array of object | no | CustomResourceDefinitions: versions, status.storedVersions, and the custom resources at a deprecated or unserved version. |
+| `apiServerStartTime` | string (date-time) | no | The process start time of the kube-apiserver whose /metrics deprecatedCalls were read from: apiserver_requested_deprecated_apis counts requests since then. Absent when the scrape did not report it. |
 
 ### PushAccepted
 

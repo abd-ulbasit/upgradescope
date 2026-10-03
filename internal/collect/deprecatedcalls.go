@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -15,14 +16,19 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
-const deprecatedAPIsMetric = "apiserver_requested_deprecated_apis"
+const (
+	deprecatedAPIsMetric = "apiserver_requested_deprecated_apis"
+	processStartMetric   = "process_start_time_seconds"
+)
 
 // collectDeprecatedCalls scrapes the apiserver /metrics endpoint
 // (RBAC: nonResourceURLs ["/metrics"], verb get) and extracts
 // apiserver_requested_deprecated_apis rows — deprecated APIs some client
 // requested, the blind spot of manifest-only scanners. The metric does not
 // say which client. Known limits (spec §4): gauge resets on apiserver
-// restart; HA apiservers report independently.
+// restart; HA apiservers report independently. The scraped apiserver's
+// process_start_time_seconds is recorded as Inventory.APIServerStartTime,
+// so a reader can tell a reset from a fix.
 //
 // The scanner feeds this metric itself only through selfListed: the
 // resources api-usage listed at a deprecated version, because nothing
@@ -51,6 +57,14 @@ func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, selfListed [
 	families, err := parser.TextToMetricFamilies(bytes.NewReader(raw))
 	if err != nil {
 		return fmt.Errorf("parse metrics exposition: %w", err)
+	}
+	// When the gauge started counting: kube-apiserver exposes its process
+	// start time beside it. Whole seconds; left zero when absent or not a
+	// plausible time.
+	if fam, ok := families[processStartMetric]; ok && len(fam.GetMetric()) == 1 {
+		if sec := fam.GetMetric()[0].GetGauge().GetValue(); sec > 0 && sec < 1e12 {
+			inv.APIServerStartTime = time.Unix(int64(sec), 0).UTC()
+		}
 	}
 	fam, ok := families[deprecatedAPIsMetric]
 	if !ok {

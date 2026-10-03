@@ -91,6 +91,13 @@ type Inventory struct {
 	UnrecognizedImagesOmitted int `json:"unrecognizedImagesOmitted,omitempty"`
 
 	CRDs []CRD `json:"crds,omitempty"` // sorted by Group, then Kind
+
+	// APIServerStartTime is the process_start_time_seconds of the
+	// kube-apiserver whose /metrics DeprecatedCalls were read from, in
+	// whole seconds: apiserver_requested_deprecated_apis counts requests
+	// since then. Zero when the scrape did not report it, and in
+	// inventories from collectors that predate it.
+	APIServerStartTime time.Time `json:"apiServerStartTime,omitzero"`
 }
 
 // CRD is one CustomResourceDefinition (apiextensions.k8s.io/v1): the
