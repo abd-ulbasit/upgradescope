@@ -263,11 +263,10 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 	return d
 }
 
-// unassessedIn reports which baseline findings rep, evaluated from inv,
-// could not have seen: those a capability rep did not assess hides
-// (engine.HiddenBy of its gaps) that the pass that last saw them did
-// assess (findingHead.SeenWithout), and deprecated callers while inv's
-// apiserver was warming up (callsWarmingUp).
+// unassessedIn reports which baseline findings rep could not have seen:
+// those a capability rep did not assess hides (engine.HiddenBy of its
+// gaps) that the pass that last saw them did assess
+// (findingHead.SeenWithout).
 //
 // A capability the finding was seen without cannot hide it: then the
 // finding came from the others, and its absence from them is as much
@@ -275,58 +274,18 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 // went away since the finding was seen (#189) from one a supported
 // install never has, such as helm with rbac.helmSecrets=false, whose
 // add-on findings are then resolved and announced again as usual.
-func unassessedIn(rep engine.Report, inv inventory.Inventory) func(findingHead) bool {
-	warming := callsWarmingUp(inv)
+//
+// A deprecated caller missing from a scrape of a restarted apiserver is
+// not unassessed: apiserver_requested_deprecated_apis starts empty at
+// every apiserver start, and the scrape cannot tell that from a fix, so
+// the caller is resolved and announced again when it next calls (the
+// documented limit, docs/operations.md, Notifications).
+func unassessedIn(rep engine.Report) func(findingHead) bool {
 	return func(h findingHead) bool {
-		if warming && h.Category == engine.CatDeprecatedAPIInUse {
-			return true
-		}
 		return slices.ContainsFunc(engine.HiddenBy(rep.NotAssessed, h.Category, h.key()), func(c inventory.Capability) bool {
 			return !slices.Contains(h.SeenWithout, c)
 		})
 	}
-}
-
-// deprecatedCallsWarmup is how long an apiserver must have been up when
-// its /metrics were scraped before a deprecated caller missing from the
-// scrape counts as gone. apiserver_requested_deprecated_apis starts empty
-// at every apiserver start, and a client is counted again at its next
-// request: within seconds for one that holds a watch (it reconnects), at
-// its schedule for one that calls periodically. A day covers the common
-// schedules (an hourly sync, a nightly CronJob, a daily CI deploy) and
-// fits a readiness signal, which is not urgent; its cost is that after an
-// apiserver restart a caller that really went away is resolved, and the
-// cluster announced ready, up to a day late. A client that calls less
-// often than daily is the documented limit (docs/operations.md,
-// Notifications).
-const deprecatedCallsWarmup = 24 * time.Hour
-
-// callsWarmingUp reports whether inv's deprecated calls were scraped from
-// an apiserver up for less than deprecatedCallsWarmup. It reads the
-// current scrape alone, not whether the apiserver restarted since the
-// baseline's: deliberately broader, since the metric only ever starts
-// empty at a start, so a scrape this young misses what the apiserver
-// has not been asked yet, restart or new cluster. An inventory
-// without the apiserver's start time (an older agent's, a scrape that did
-// not report it) or a collection time is judged as before it existed:
-// not warming.
-func callsWarmingUp(inv inventory.Inventory) bool {
-	start := inv.APIServerStartTime
-	return !start.IsZero() && !inv.CollectedAt.IsZero() && inv.CollectedAt.Before(start.Add(deprecatedCallsWarmup))
-}
-
-// warmupEnded reports whether e, an evaluation of inv's snapshot, was
-// made before inv's apiserver had been up for deprecatedCallsWarmup,
-// while inv was scraped after: a force-sync push, a duplicate of the
-// snapshot that is the only news a quiet cluster sends. e may hold
-// deprecated callers that inv resolves, so it is re-evaluated.
-func warmupEnded(e store.Evaluation, inv inventory.Inventory) bool {
-	start := inv.APIServerStartTime
-	if start.IsZero() || inv.CollectedAt.IsZero() {
-		return false
-	}
-	end := start.Add(deprecatedCallsWarmup)
-	return e.EvaluatedAt.Before(end) && !inv.CollectedAt.Before(end)
 }
 
 // keepCarried stores what e's baseline carries forward in its report
@@ -427,7 +386,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		if err != nil {
 			return 0, false, err
 		}
-		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep, evalInv))
+		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep))
 		d.carried = s.keepCarried(&e, d.carried)
 		batch.Insert = append(batch.Insert, e)
 		deltas.add(d)
@@ -475,7 +434,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			log.Printf("server: re-evaluation of cluster %d skipped: snapshot %d is no longer the latest", cluster.ID, snapID)
 			return nil
 		}
-		if found && !s.stale(cur, now) && !warmupEnded(cur, evalInv) {
+		if found && !s.stale(cur, now) {
 			continue
 		}
 		// What sameResult and deltaFor read of the stored report: its
@@ -507,7 +466,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		// Without sinks nothing is carried, and what the row carried is
 		// not compared: no notification reads that baseline.
 		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
-		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, evalInv))
+		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep))
 		d.carried = s.keepCarried(&e, d.carried)
 		batch.Current[target.String()] = cur.ID // 0 when not found
 		if decoded && sameResult(cur, stored.Findings, rep) && (len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {

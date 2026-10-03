@@ -271,75 +271,27 @@ func TestWithCarriedIsJSON(t *testing.T) {
 	}
 }
 
-// scrapedAt is inv as scraped at collected from an apiserver started at
-// started.
-func scrapedAt(inv inventory.Inventory, started, collected time.Time) inventory.Inventory {
-	inv.APIServerStartTime, inv.CollectedAt = started, collected
-	return inv
-}
-
-// TestAPIServerRestartHoldsDeprecatedCallers: apiserver_requested_deprecated_apis
-// starts empty when the apiserver restarts, so a caller missing from a
-// scrape of an apiserver up for less than deprecatedCallsWarmup is not
-// resolved, and its return is not news (#189, the red-team's case a).
-func TestAPIServerRestartHoldsDeprecatedCallers(t *testing.T) {
+// TestAPIServerResetResolvesVanishedCaller pins a documented limit
+// (docs/operations.md, Notifications; NT-01):
+// apiserver_requested_deprecated_apis starts empty when the apiserver
+// restarts, and the scrape after it cannot tell that from a fix. A
+// deprecated caller that has not called since is resolved, with
+// became-ready if it was the only blocker, while it still exists, and is
+// announced again as a new blocker when it next calls.
+func TestAPIServerResetResolvesVanishedCaller(t *testing.T) {
 	h := newHarness(t, Config{KB: testKB()}, aug1)
-	booted := aug1.Add(-72 * time.Hour)
-	h.push("prod", scrapedAt(withServiceCIDRCaller(testInventoryWithPSP()), booted, aug1))
+	h.push("prod", withServiceCIDRCaller(testInventory()))
 	expectNoEvents(t, h, "first evaluation")
-
-	restarted := aug1.Add(30 * time.Minute)
-	h.clock.set(restarted.Add(10 * time.Minute))
-	h.push("prod", scrapedAt(callsScraped(testInventoryWithPSP()), restarted, h.clock.now()))
-	expectNoEvents(t, h, "scrape after the restart")
-
-	h.clock.set(restarted.Add(20 * time.Minute))
-	h.push("prod", scrapedAt(withServiceCIDRCaller(testInventoryWithPSP()), restarted, h.clock.now()))
-	expectNoEvents(t, h, "caller back after the restart")
-}
-
-// TestAPIServerRestartIsNotBecameReady: with a deprecated caller as the
-// only blocker, an apiserver restart is not readiness (case c). The
-// caller is resolved once a scrape of the restarted apiserver, up for
-// deprecatedCallsWarmup, still does not show it: here the agent's hourly
-// force-sync, a duplicate of the stored snapshot, after a midnight
-// re-evaluation that still held it. Once, whatever is pushed after.
-func TestAPIServerRestartIsNotBecameReady(t *testing.T) {
-	h := newHarness(t, Config{KB: testKB()}, aug1)
-	booted := aug1.Add(-72 * time.Hour)
-	h.push("prod", scrapedAt(withServiceCIDRCaller(testInventory()), booted, aug1))
-	expectNoEvents(t, h, "first evaluation")
-
-	restarted := aug1.Add(time.Hour)
-	h.clock.set(restarted.Add(10 * time.Minute))
-	quiet := callsScraped(testInventory())
-	h.push("prod", scrapedAt(quiet, restarted, h.clock.now()))
-	expectNoEvents(t, h, "scrape after the restart")
-
-	h.clock.set(time.Date(2026, 8, 2, 0, 30, 0, 0, time.UTC))
-	h.tick()
-	expectNoEvents(t, h, "midnight re-evaluation within the window")
-
-	h.clock.set(restarted.Add(deprecatedCallsWarmup + time.Hour))
-	h.push("prod", scrapedAt(quiet, restarted, h.clock.now()))
-	expectBecameReady(t, h, "force-sync past the window")
-
-	h.clock.set(h.clock.now().Add(time.Hour))
-	h.push("prod", scrapedAt(quiet, restarted, h.clock.now()))
-	h.tick()
-	expectNoEvents(t, h, "after became-ready")
-}
-
-// TestAPIServerUpLongEnoughResolvesCallers: a scrape of an apiserver up
-// for deprecatedCallsWarmup is evidence, restart or not.
-func TestAPIServerUpLongEnoughResolvesCallers(t *testing.T) {
-	h := newHarness(t, Config{KB: testKB()}, aug1)
-	h.push("prod", scrapedAt(withServiceCIDRCaller(testInventory()), aug1.Add(-72*time.Hour), aug1))
-	h.drain()
 
 	h.clock.set(aug1.Add(time.Hour))
-	h.push("prod", scrapedAt(callsScraped(testInventory()), h.clock.now().Add(-deprecatedCallsWarmup), h.clock.now()))
-	expectBecameReady(t, h, "scrape of an apiserver up for the window")
+	h.push("prod", callsScraped(testInventory())) // the gauge reset; the caller has not called since
+	expectBecameReady(t, h, "scrape after the reset")
+
+	h.clock.set(aug1.Add(2 * time.Hour))
+	h.push("prod", withServiceCIDRCaller(testInventory())) // the caller calls again
+	if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
+		t.Fatalf("caller back: events = %+v, want exactly one new-blocker", evs)
+	}
 }
 
 // TestStaleCarriedEvaluationWithoutSinksRefreshes: with no sinks, a pass
@@ -474,7 +426,6 @@ func TestHelmOutageAfterHelmlessSighting(t *testing.T) {
 // call the pass with versions partial unknown (and the server compute no
 // delta for it); the rule does not depend on that.
 func TestCarriedFindingKeepsWhatItWasSeenWithout(t *testing.T) {
-	inv := persistentGaps[0].gap(testInventory())
 	prev := []findingHead{{Category: engine.CatEOLAddon, Severity: engine.SevBlocker, Key: "eol-addon/argo-cd/2.10",
 		SeenWithout: []inventory.Capability{inventory.CapHelm}}}
 
@@ -482,13 +433,13 @@ func TestCarriedFindingKeepsWhatItWasSeenWithout(t *testing.T) {
 	both := engine.Report{Target: target, Verdict: engine.VerdictReady, NotAssessed: []engine.CapabilityGap{
 		{Capability: inventory.CapHelm}, {Capability: inventory.CapVersions, Partial: true, Skipped: []string{"kube-proxy"}},
 	}}
-	changes, carried := computeDelta(prev, both, unassessedIn(both, inv))
+	changes, carried := computeDelta(prev, both, unassessedIn(both))
 	if len(changes) != 0 || len(carried) != 1 || !slices.Equal(carried[0].SeenWithout, prev[0].SeenWithout) {
 		t.Fatalf("versions not assessed: changes %+v, carried %+v; want the finding carried as last seen", changes, carried)
 	}
 
 	helmOnly := engine.Report{Target: target, Verdict: engine.VerdictReady, NotAssessed: []engine.CapabilityGap{{Capability: inventory.CapHelm}}}
-	changes, carried = computeDelta(carried, helmOnly, unassessedIn(helmOnly, inv))
+	changes, carried = computeDelta(carried, helmOnly, unassessedIn(helmOnly))
 	if len(carried) != 0 || len(changes) != 1 || changes[0].Kind != notify.KindBecameReady {
 		t.Fatalf("versions back: changes %+v, carried %+v; want became-ready", changes, carried)
 	}
