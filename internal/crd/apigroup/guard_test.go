@@ -23,8 +23,10 @@ var legacyAllowed = []string{
 	"internal/server/gate_suppress_test.go",
 	"internal/agent/legacycrd_test.go",
 	"internal/crd/apigroup/guard_test.go", // this test's own spellings of it
-	// The migration: which annotations to rewrite, which CRD to delete.
+	// The migration: which annotations to rewrite, which CRD to delete
+	// (on upgrade, and on uninstall).
 	"docs/operations/upgrade.md",
+	"docs/operations/uninstall.md",
 	// History.
 	"CHANGELOG.md",
 	"docs/research.md",

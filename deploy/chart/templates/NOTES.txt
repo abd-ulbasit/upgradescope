@@ -1,4 +1,7 @@
 upgradescope {{ .Chart.AppVersion }} installed.
+{{- /* On upgrade the pre-v0.2.0 CRD may still be installed, and then
+       "clusterreadiness" and "ucr" match both CRDs: name ours in full. */}}
+{{- $ucr := ternary "clusterreadinesses.upgradescope.basit.engineer" "clusterreadiness" .Release.IsUpgrade }}
 {{- if .Release.IsUpgrade }}
 
 Upgrading from v0.1.x or a v0.2.0 release candidate? The ClusterReadiness
@@ -8,12 +11,15 @@ ignore annotations to the upgradescope.basit.engineer/ keys (the old ones are
 read, deprecated, until v0.3.0), and point GitOps health checks and policies
 at the new group:
   https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-api-group-moved
+While the old CRD is installed, "kubectl get clusterreadiness" and "kubectl
+get ucr" may read the old object, whose status no longer changes; the
+commands below name the new resource in full.
 {{- end }}
 {{- if .Values.agent.enabled }}
 
 Watch readiness (the agent creates the object on its first tick):
-  kubectl get clusterreadiness {{ .Values.agent.crName }}
-  kubectl get clusterreadiness {{ .Values.agent.crName }} -o jsonpath='{.status.targets[0].score}'
+  kubectl get {{ $ucr }} {{ .Values.agent.crName }}
+  kubectl get {{ $ucr }} {{ .Values.agent.crName }} -o jsonpath='{.status.targets[0].score}'
 {{- if .Values.agent.targets }}
 
 Targets come from agent.targets ({{ join ", " .Values.agent.targets }}): the agent resets
@@ -21,7 +27,7 @@ spec.targets to them every tick, so change them with helm upgrade, not kubectl.
 {{- else }}
 
 Pin target versions without Helm:
-  kubectl patch clusterreadiness {{ .Values.agent.crName }} --type merge -p '{"spec":{"targets":["1.37"]}}'
+  kubectl patch {{ $ucr }} {{ .Values.agent.crName }} --type merge -p '{"spec":{"targets":["1.37"]}}'
 {{- end }}
 {{- end }}
 {{- if .Values.server.enabled }}
