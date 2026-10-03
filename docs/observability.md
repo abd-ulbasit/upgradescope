@@ -108,7 +108,12 @@ gauges, since a verdict that old is not current (the ClusterReadiness it
 could not update carries the `upgradescope.dev/status-error` annotation). The
 first successful tick brings them back. An alert on `blocked` or `unknown`
 therefore resolves while the agent is failing; the
-`UpgradescopeAgentNotTicking` alert is the one that fires.
+`UpgradescopeAgentNotTicking` alert is the one that fires. It fires
+`2 × interval + 10m` after the last success (its condition plus its `for`),
+the gauges are withdrawn at `3 × interval`: with an interval under 10m the
+verdict alerts resolve before it fires, and for that window (at a 1m
+interval, from about 3m to 12m after the last success) nothing alerts. At
+the default 10m interval the two coincide.
 A target removed from `spec.targets` drops its series at the next tick.
 
 Go runtime and process metrics (`go_*`, `process_*`) are included.

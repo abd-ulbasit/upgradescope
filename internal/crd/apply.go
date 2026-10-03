@@ -216,6 +216,11 @@ func stringsToInterfaces(ss []string) []interface{} {
 	return out
 }
 
+// ErrStatusErrorNotCleared is what WriteStatus returns, wrapped, when the
+// status was written but the StatusErrorAnnotation of an earlier failure
+// could not be removed: the status is current, only the marker outlived it.
+var ErrStatusErrorNotCleared = errors.New("status written, marker not cleared")
+
 // WriteStatus replaces the status subresource, retrying on conflict with a
 // fresh read each attempt. st.ObservedGeneration should be the generation
 // whose spec was evaluated (from ReadSpec or SetTargets), so a spec edited
@@ -256,7 +261,7 @@ func WriteStatus(ctx context.Context, dyn dynamic.Interface, name string, st Sta
 		// The status is current again: drop the marker of an earlier
 		// failure. A failure here is retried by the next tick's write.
 		if err := patchStatusError(ctx, dyn, name, nil); err != nil {
-			return fmt.Errorf("clear clusterreadiness %q %s annotation: %w", name, StatusErrorAnnotation, err)
+			return fmt.Errorf("clear clusterreadiness %q %s annotation: %w: %w", name, StatusErrorAnnotation, ErrStatusErrorNotCleared, err)
 		}
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
@@ -82,5 +83,40 @@ func TestMarkStatusErrorForbidden(t *testing.T) {
 	})
 	if err := MarkStatusError(context.Background(), dyn, DefaultName, errors.New("x"), time.Now()); err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Errorf("err = %v, want the forbidden patch", err)
+	}
+}
+
+// A status write that succeeded but could not clear the marker of an
+// earlier failure has still written the status: the error says which of
+// the two failed, so the caller does not treat a current status as a
+// failed write.
+func TestWriteStatusTellsAFailedClearFromAFailedWrite(t *testing.T) {
+	ctx := context.Background()
+	dyn := newDynFake(newCRObject(DefaultName))
+	if err := MarkStatusError(ctx, dyn, DefaultName, errors.New("earlier"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	dyn.PrependReactor("patch", Plural, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: Group, Resource: Plural}, DefaultName, errors.New("RBAC"))
+	})
+
+	err := WriteStatus(ctx, dyn, DefaultName, Status{AgentVersion: "v0.2.0"})
+	if !errors.Is(err, ErrStatusErrorNotCleared) || !strings.Contains(err.Error(), StatusErrorAnnotation) {
+		t.Fatalf("err = %v, want ErrStatusErrorNotCleared naming the annotation", err)
+	}
+	obj, gerr := dyn.Resource(GVR()).Get(ctx, DefaultName, metav1.GetOptions{})
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	if v, _, _ := unstructured.NestedString(obj.Object, "status", "agentVersion"); v != "v0.2.0" {
+		t.Errorf("status.agentVersion = %q, want the status written despite the failed clear", v)
+	}
+
+	// A failed status write is not that error.
+	dyn.PrependReactor("update", Plural, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: Group, Resource: Plural + "/status"}, DefaultName, errors.New("RBAC"))
+	})
+	if err := WriteStatus(ctx, dyn, DefaultName, Status{}); err == nil || errors.Is(err, ErrStatusErrorNotCleared) {
+		t.Errorf("err = %v, want the write error, not ErrStatusErrorNotCleared", err)
 	}
 }

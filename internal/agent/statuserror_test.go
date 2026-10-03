@@ -93,6 +93,51 @@ func TestTickMarksTheCRWhenTheStatusWriteFails(t *testing.T) {
 	}
 }
 
+// A status write that succeeded is a current status, even when the marker
+// of an earlier failure could not be cleared afterwards: the tick is not
+// failed (the gauges stay, /readyz stays up), the CR is not marked as
+// failing again, and the stuck marker is reported on its own for the next
+// tick to retry.
+func TestTickWithAFailedMarkerClearIsNotAFailedTick(t *testing.T) {
+	ctx := context.Background()
+	dyn := fakeDyn().(*dynamicfake.FakeDynamicClient)
+	failing, patchDenied := false, false
+	var patches []string
+	dyn.PrependReactor("update", crd.Plural, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if failing && a.GetSubresource() == "status" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: crd.Group, Resource: crd.Plural + "/status"}, crd.DefaultName, errors.New("RBAC"))
+		}
+		return false, nil, nil
+	})
+	dyn.PrependReactor("patch", crd.Plural, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if patchDenied {
+			patches = append(patches, string(a.(k8stesting.PatchAction).GetPatch()))
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: crd.Group, Resource: crd.Plural}, crd.DefaultName, errors.New("RBAC"))
+		}
+		return false, nil, nil
+	})
+	r := testRunner(t, dyn, "")
+
+	failing = true
+	if err := r.tick(ctx); err == nil {
+		t.Fatal("tick with the status write forbidden succeeded")
+	}
+	if _, ok := statusErrorAnnotation(t, dyn); !ok {
+		t.Fatal("CR not marked after the failed status write")
+	}
+
+	failing, patchDenied = false, true
+	if err := r.tick(ctx); err != nil {
+		t.Fatalf("tick whose status write succeeded: %v, want it not failed over the marker", err)
+	}
+	if r.last.err != nil || r.last.markerErr == nil || !strings.Contains(r.last.markerErr.Error(), crd.StatusErrorAnnotation) {
+		t.Errorf("last.err = %v, last.markerErr = %v; want no failure and the marker error reported separately", r.last.err, r.last.markerErr)
+	}
+	if len(patches) != 1 || !strings.Contains(patches[0], "null") {
+		t.Errorf("patches = %q, want the one attempt to clear the marker and no new marking", patches)
+	}
+}
+
 // The gauges describe the last successful tick. A verdict that old is no
 // longer current once staleAfterFailedTicks ticks in a row have failed:
 // the verdict, score, findings and capability series then drop, so an

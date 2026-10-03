@@ -38,12 +38,15 @@ const (
 // push failure is reported on its own and never fails the tick, because
 // the agent's local value does not depend on the server (spec §3).
 type tickReport struct {
-	err      error
-	push     string
-	pushErr  error
-	duration time.Duration
-	caps     map[inventory.Capability]inventory.CapabilityStatus
-	reports  []engine.Report // one per evaluated target, in target order
+	err     error
+	push    string
+	pushErr error
+	// markerErr is a status-error marker that could not be cleared after a
+	// status write that succeeded: reported, but not a failed tick.
+	markerErr error
+	duration  time.Duration
+	caps      map[inventory.Capability]inventory.CapabilityStatus
+	reports   []engine.Report // one per evaluated target, in target order
 }
 
 // tickTimeout bounds one tick: half the interval, at most 5m. client-go's
@@ -138,11 +141,16 @@ func (o *observer) record(rep tickReport) {
 		capabilityAttr(rep.caps),
 		targetsAttr(rep.reports),
 	}
+	if rep.markerErr != nil {
+		attrs = append(attrs, "statusErrorMarker", rep.markerErr.Error())
+	}
 	switch {
 	case rep.err != nil:
 		o.log.Error(msgTickFailed, append([]any{"err", rep.err}, attrs...)...)
 	case rep.pushErr != nil:
 		o.log.Warn(msgTickComplete, append(attrs, "pushError", rep.pushErr.Error())...)
+	case rep.markerErr != nil:
+		o.log.Warn(msgTickComplete, attrs...)
 	default:
 		o.log.Info(msgTickComplete, attrs...)
 	}
@@ -253,10 +261,13 @@ func (o *observer) Describe(ch chan<- *prometheus.Desc) {
 	}
 }
 
-// Collect emits the state gauges from the last successful tick. Built at
-// scrape time, so a target or category that disappears drops its series
-// instead of leaving a stale one behind. Labels are targets, verdicts,
-// severities, categories and capabilities: all small fixed sets.
+// Collect emits the state gauges from the last successful tick, except
+// that the verdict, score, findings and capability gauges are withdrawn once
+// staleAfterFailedTicks ticks in a row have failed (the timestamp, interval
+// and KB series stay). Built at scrape time, so a target or category that
+// disappears drops its series instead of leaving a stale one behind. Labels
+// are targets, verdicts, severities, categories and capabilities: all small
+// fixed sets.
 func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	o.mu.Lock()
 	last, good, failures := o.lastSuccess, o.good, o.failures
