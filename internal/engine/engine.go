@@ -1463,13 +1463,9 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 // is one the KB removes at or before target. An API the KB does not know
 // could not have produced a finding either way.
 func removedBy(idx kb.Index, api string, target inventory.Version) bool {
-	gv, kind, ok := strings.Cut(api, " ")
+	group, version, kind, ok := splitAPI(api)
 	if !ok {
 		return false
-	}
-	group, version := "", gv
-	if i := strings.LastIndex(gv, "/"); i >= 0 {
-		group, version = gv[:i], gv[i+1:]
 	}
 	e, ok := idx.Lookup(group, version, kind)
 	return ok && e.Removed != nil && e.Removed.Compare(target) <= 0
