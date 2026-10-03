@@ -115,7 +115,7 @@ func ValidateClusterName(name string) error {
 // the rule the apiserver applies to it, and returns the first that fails
 // as an *IdentifierError: namespace names (API usage namespaces and object
 // refs, Helm releases, add-on installs, the namespace list), object names,
-// node and Helm release names, and team label values. Fields that are not
+// node names (a kube-proxy's too) and Helm release names, and team label values. Fields that are not
 // identifiers (versions, image repositories, field managers, annotation
 // values) are not checked.
 func (inv Inventory) ValidateIdentifiers() error {
@@ -153,6 +153,11 @@ func (inv Inventory) ValidateIdentifiers() error {
 	for i, n := range inv.Nodes {
 		if p := problemsWith(n.Name, subdomainProblems); p != nil {
 			return &IdentifierError{Field: fmt.Sprintf("nodes[%d].name", i), Value: n.Name, Rule: ruleSubdomain, Problems: p}
+		}
+	}
+	for i, cv := range inv.ControlPlane {
+		if p := problemsWith(cv.Node, subdomainProblems); cv.Node != "" && p != nil {
+			return &IdentifierError{Field: fmt.Sprintf("controlPlane[%d].node", i), Value: cv.Node, Rule: ruleSubdomain, Problems: p}
 		}
 	}
 	for i, n := range inv.Namespaces {

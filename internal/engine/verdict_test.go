@@ -300,6 +300,7 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 	const noPods = "list pods: forbidden; add-ons were detected from Helm releases and IngressClasses only"
 	const helmReason = "helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip"
 	const unreadProxy = "version not read from 1 control-plane pod(s) (kube-proxy), first kube-system/kube-proxy-x: tag latest; their skew was not evaluated"
+	const noNodes = "no nodes listed: kubelet skew and node runtimes not assessed"
 	const vendorProxy = "version not read from 1 control-plane pod(s) (kube-proxy), first kube-system/kube-proxy-x: labelled kube-proxy but runs a vendor image whose version is not read (iad.ocir.io/ns/oke-public-kube-proxy@sha256:1755); their skew was not evaluated"
 
 	cases := []struct {
@@ -332,6 +333,10 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 			partially(on124, inventory.CapVersions, unreadProxy, "kube-proxy"), k, t125, VerdictUnknown,
 			[]CapabilityGap{{Capability: inventory.CapVersions, Reason: unreadProxy, Partial: true,
 				Skipped: []string{"kube-proxy"}, Required: true}}},
+		{"partial versions with no nodes listed is required: kubelet skew was not assessed, as when the Node list is forbidden", // #174
+			partially(on124, inventory.CapVersions, noNodes, "nodes"), k, t125, VerdictUnknown,
+			[]CapabilityGap{{Capability: inventory.CapVersions, Reason: noNodes, Partial: true,
+				Skipped: []string{"nodes"}, Required: true}}},
 		{"partial versions naming no component is optional: a vendor kube-proxy image (OKE) upstream would not have told", // #169
 			partially(on124, inventory.CapVersions, vendorProxy), k, t125, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapVersions, Reason: vendorProxy, Partial: true}}},
