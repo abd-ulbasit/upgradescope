@@ -583,8 +583,8 @@ inventory and resolved: a `became-ready` if it was the last blocker,
 then a `new-blocker` when helm returns.
 
 **Apiserver restarts.** Deprecated callers are not carried over an
-apiserver restart. `apiserver_requested_deprecated_apis` counts requests
-since the apiserver started, so a restart empties it, and a scrape after
+apiserver restart. `apiserver_requested_deprecated_apis` records, per deprecated API, that it
+was requested since the apiserver started, so a restart empties it, and a scrape after
 the restart cannot tell a caller that has not called since from one that
 went away. A deprecated-call blocker missing from that scrape is
 resolved, and if it was the cluster's last blocker the pass sends
