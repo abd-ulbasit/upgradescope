@@ -648,7 +648,14 @@ Limits: a client that calls less often than daily is resolved when the
 hold ends, and announced again as a `new-blocker` when it next calls. A
 start time the server cannot trust is treated as absent: one before 2014,
 or more than 10 minutes after the scrape's `collectedAt` (a buggy or
-skewed clock), so a far-future start time holds nothing. Without a start
+skewed clock), so a far-future start time holds nothing. A clock that is
+ahead on both sides at once (a single-node cluster booted with its clock
+years ahead, whose agent and apiserver share it) passes that check and
+records a hold end in its future; a later scrape drops a recorded end
+more than 24 hours and 10 minutes after its own `collectedAt`, which no
+scrape at or before it could have recorded, so once the clock is
+corrected the hold is the corrected scrape's own and ends within that
+bound (plus `--force-sync-every`) of it. Without a start
 time (an agent that predates it, a scrape that did not report it) a
 missing deprecated-call blocker is resolved at once, and can send
 `became-ready` while the caller still exists. With several

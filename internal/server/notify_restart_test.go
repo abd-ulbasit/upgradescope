@@ -129,6 +129,9 @@ func TestRestartHoldKeepsCallerWithOtherBlocker(t *testing.T) {
 // TestRestartHoldSurvivesKBRefresh: a knowledge-base update inside the
 // window re-evaluates the stored snapshot on the server's startup pass:
 // still held, and the first scrape after the window end resolves it once.
+// The refresh and every push after it are on one UTC day, so the row is
+// never stale by date after the refresh: only the hold's end
+// (holdChanged) re-evaluates it.
 func TestRestartHoldSurvivesKBRefresh(t *testing.T) {
 	h := newHarness(t, Config{KB: testKB()}, aug1)
 	h.pushAt(aug1, scrapedAt(withServiceCIDRCaller(testInventory()), aug1, oldStart))
@@ -143,7 +146,11 @@ func TestRestartHoldSurvivesKBRefresh(t *testing.T) {
 
 	refreshed := testKB()
 	refreshed.Version = "test-kb-2"
-	h.clock.set(restart.Add(3 * time.Hour))
+	refreshAt, after := end.Add(-2*time.Hour), end.Add(30*time.Minute)
+	if day := 24 * time.Hour; !refreshAt.Truncate(day).Equal(after.Truncate(day)) {
+		t.Fatalf("test timeline: the refresh at %v and the push at %v are on different UTC days", refreshAt, after)
+	}
+	h.clock.set(refreshAt)
 	h.restart(Config{KB: refreshed})
 	h.tick() // the startup pass: every row is stale for the new KB
 	expectNoEvents(t, h, "KB refresh inside the window")
@@ -152,12 +159,11 @@ func TestRestartHoldSurvivesKBRefresh(t *testing.T) {
 		t.Fatalf("current evaluation after the refresh = %+v, %v; want one under %s", cur, err, refreshed.Version)
 	}
 
-	at = restart.Add(4 * time.Hour)
+	at = end.Add(-time.Hour)
 	h.pushAt(at, scrapedAt(gone, at, restart))
 	expectNoEvents(t, h, "force-sync inside the window, after the refresh")
 
-	at = end.Add(30 * time.Minute)
-	h.pushAt(at, scrapedAt(gone, at, restart))
+	h.pushAt(after, scrapedAt(gone, after, restart))
 	expectBecameReady(t, h, "first force-sync after the window end")
 }
 
@@ -226,12 +232,15 @@ func (h *harness) latestSnapshotID() int64 {
 // scrape (beyond startTimeTolerance) or before Kubernetes existed is
 // treated as absent, so it holds nothing: the caller is resolved as for
 // an agent that does not report it. One just after the scrape, within the
-// tolerance, is an apiserver that started while the agent collected.
+// tolerance, is an apiserver that started while the agent collected. The
+// pre-2014 scrape is an hour after its start, so only that check keeps it
+// from holding.
 func TestImplausibleAPIServerStartIsIgnored(t *testing.T) {
-	for name, start := range map[string]func(scraped time.Time) time.Time{
-		"a day after the scrape": func(s time.Time) time.Time { return s.Add(24 * time.Hour) },
-		"years after the scrape": func(s time.Time) time.Time { return s.Add(10 * 365 * 24 * time.Hour) },
-		"before 2014":            func(time.Time) time.Time { return time.Date(2013, 12, 31, 0, 0, 0, 0, time.UTC) },
+	pre2014 := time.Date(2013, 12, 31, 0, 0, 0, 0, time.UTC)
+	for name, scrape := range map[string]func(pushed time.Time) (collected, start time.Time){
+		"a day after the scrape": func(p time.Time) (time.Time, time.Time) { return p, p.Add(24 * time.Hour) },
+		"years after the scrape": func(p time.Time) (time.Time, time.Time) { return p, p.Add(10 * 365 * 24 * time.Hour) },
+		"before 2014":            func(time.Time) (time.Time, time.Time) { return pre2014.Add(time.Hour), pre2014 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, Config{KB: testKB()}, aug1)
@@ -239,7 +248,8 @@ func TestImplausibleAPIServerStartIsIgnored(t *testing.T) {
 			expectNoEvents(t, h, "first evaluation")
 
 			at := aug1.Add(time.Hour)
-			h.pushAt(at, scrapedAt(callsScraped(testInventory()), at, start(at)))
+			collected, start := scrape(at)
+			h.pushAt(at, scrapedAt(callsScraped(testInventory()), collected, start))
 			expectBecameReady(t, h, "scrape with an implausible start time")
 		})
 	}
@@ -290,5 +300,47 @@ func TestRestartHoldCarriesItsEnd(t *testing.T) {
 	h.pushAt(at.Add(time.Hour), scrapedAt(withServiceCIDRCaller(testInventoryWithPSP()), at.Add(time.Hour), second))
 	if evs := h.drain(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker {
 		t.Fatalf("the caller calls after the window: events = %+v, want exactly one new-blocker", evs)
+	}
+}
+
+// TestRestartHoldFromAFutureClockEnds: a single-node cluster boots with
+// its clock years ahead, so one scrape's collectedAt and apiserver start
+// agree, pass the start-time check and record a hold end years away. Once
+// the clock is corrected, a later scrape cannot have recorded that end
+// (none ends more than deprecatedCallsHold plus startTimeTolerance after
+// its scrape), so it is dropped: the caller, PSP gone, is resolved with
+// exactly one became-ready within deprecatedCallsHold plus one
+// force-sync interval of the real restart.
+func TestRestartHoldFromAFutureClockEnds(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.pushAt(aug1, scrapedAt(withServiceCIDRCaller(testInventoryWithPSP()), aug1, oldStart))
+	expectNoEvents(t, h, "first evaluation")
+
+	future := aug1.Add(4 * 365 * 24 * time.Hour)
+	h.pushAt(aug1.Add(time.Hour), scrapedAt(callsScraped(testInventoryWithPSP()), future.Add(5*time.Minute), future))
+	expectNoEvents(t, h, "scrape by a clock years ahead")
+
+	restart := aug1.Add(time.Hour)
+	bound := restart.Add(deprecatedCallsHold + time.Hour)
+	gone := callsScraped(testInventory())
+	ready := 0
+	for at := restart.Add(10 * time.Minute); at.Before(restart.Add(72 * time.Hour)); at = at.Add(time.Hour) {
+		if at.Hour() == 0 { // the UTC midnight pass first
+			h.clock.set(at.Truncate(24 * time.Hour).Add(time.Second))
+			h.tick()
+		}
+		h.pushAt(at, scrapedAt(gone, at, restart))
+		for _, ev := range h.drain() {
+			if ev.Kind != notify.KindBecameReady {
+				t.Fatalf("push at %v: event %+v, want only a became-ready", at, ev)
+			}
+			if at.Before(restart.Add(deprecatedCallsHold)) || at.After(bound) {
+				t.Fatalf("became-ready at %v, want one between the window end %v and %v", at, restart.Add(deprecatedCallsHold), bound)
+			}
+			ready++
+		}
+	}
+	if ready != 1 {
+		t.Fatalf("became-ready events after the clock was corrected = %d, want exactly 1", ready)
 	}
 }

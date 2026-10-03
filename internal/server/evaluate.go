@@ -356,7 +356,8 @@ func apiServerStart(inv inventory.Inventory) (time.Time, bool) {
 // without stamping anything that would stop the next push from ending it
 // (holdChanged reads the recorded end, not EvaluatedAt). The bound is
 // deprecatedCallsHold after the last apiserver start the agent scraped,
-// plus the time to the agent's next push.
+// plus the time to the agent's next push; an end recorded by a clock that
+// was ahead is bounded by the later scrapes too (until).
 type callsHold struct {
 	scraped time.Time // the inventory's collectedAt
 	young   time.Time // its apiserver's start + deprecatedCallsHold, when after scraped; else zero
@@ -374,11 +375,23 @@ func callsHoldOf(inv inventory.Inventory) callsHold {
 // ends: the later of the end f carries and this scrape's own, or zero
 // when f is not a deprecated caller, when the hold ended at or before
 // this scrape, or when the scrape has no time to judge it by.
+//
+// The end f carries is dropped when it is more than deprecatedCallsHold
+// plus startTimeTolerance after this scrape: no scrape at or before this
+// one could have recorded it. It came from a clock that was ahead, such
+// as a single-node cluster booted with its clock years ahead, whose
+// collectedAt and apiserver start agree and so pass apiServerStart; kept,
+// it would hold the caller until that clock's future once the clock is
+// corrected. Dropped, the hold is this scrape's own, so it ends at most
+// that bound after the first corrected scrape.
 func (c callsHold) until(f findingHead) time.Time {
 	if f.Category != engine.CatDeprecatedAPIInUse || c.scraped.IsZero() {
 		return time.Time{}
 	}
 	end := f.HoldUntil
+	if end.After(c.scraped.Add(deprecatedCallsHold + startTimeTolerance)) {
+		end = time.Time{}
+	}
 	if c.young.After(end) {
 		end = c.young
 	}
