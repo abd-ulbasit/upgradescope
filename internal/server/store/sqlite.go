@@ -31,11 +31,12 @@ var _ Store = (*SQLite)(nil)
 // embedded migrations. Every pooled connection gets WAL journaling, a 5s
 // busy timeout and foreign-key enforcement via DSN pragmas.
 //
-// path must not contain '?' or '#' — it is interpolated into a SQLite URI,
-// where either character corrupts the path — and is refused if it does.
+// The file opened is exactly path: the driver takes a "file:" URI, where '%',
+// '?' and '#' are special, so sqliteDSN escapes them. A path with a NUL byte
+// is refused, since SQLite would stop reading it at the NUL.
 func Open(path string) (*SQLite, error) {
-	if strings.ContainsAny(path, "?#") {
-		return nil, fmt.Errorf("open sqlite %s: the path must not contain '?' or '#'", path)
+	if strings.ContainsRune(path, 0) {
+		return nil, fmt.Errorf("open sqlite %q: the path must not contain a NUL byte", path)
 	}
 	// _txlock=immediate makes every transaction start as BEGIN IMMEDIATE,
 	// taking the write lock up front. Without it, a deferred transaction
@@ -49,8 +50,7 @@ func Open(path string) (*SQLite, error) {
 	if err := restrictDBFiles(path); err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
@@ -64,6 +64,20 @@ func Open(path string) (*SQLite, error) {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
 	return &SQLite{db: db}, nil
+}
+
+// sqliteDSN is the "file:" URI SQLite opens for path. SQLite decodes %XX in
+// a URI path and ends it at '?' or '#', so those three are escaped: a path
+// like `a%3Fb.db` would otherwise open `a?b.db`, not the file restrictDBFiles
+// made 0600. An absolute path takes an empty authority ("file:///x"), so
+// that one starting "//" is not read as a host.
+func sqliteDSN(path string) string {
+	esc := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(path)
+	scheme := "file:"
+	if strings.HasPrefix(path, "/") {
+		scheme = "file://"
+	}
+	return scheme + esc + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 }
 
 // restrictDBFiles makes the database at path readable by its owner only:

@@ -69,7 +69,26 @@ stable release, is not, and with `version: latest` the binary and its
 knowledge base move too, so a release can change the verdict on an
 unchanged pull request. For a gate that changes only when you change it, pin
 the action to `@vX.Y.Z` or its commit SHA, and `version` to the same
-release.
+release. Left unset, `version` follows the ref when it is a release tag
+(`@vX.Y.Z` or `@vX.Y.Z-rc.N`), so `@v0.2.0-rc.2` runs v0.2.0-rc.2 and not
+the older "latest" release, which GitHub never sets to a release candidate.
+At a full 40-character commit SHA, the action looks the commit up with
+`git ls-remote --tags https://github.com/abd-ulbasit/upgradescope` (an
+annotated tag counts at the commit it points at) and runs the release tag,
+`vX.Y.Z` or `vX.Y.Z-rc.N`, that points at it, the newest if several do. If
+no release tag points at the commit, or the lookup fails, it runs `latest`
+and logs one `::warning` that says which. At any other ref (a branch, `v0`)
+it is `latest`. The ref counts only when `github.action_repository` is
+`abd-ulbasit/upgradescope` (in any letter case): inside a composite action
+that wraps this one, GitHub reports the wrapper's repository and ref
+([actions/runner#2473](https://github.com/actions/runner/issues/2473)), so
+there the default is `latest`, and the wrapper should set `version`.
+
+The action sets `sarif-file` only when the gate exits 0 or 2, which leaves a
+complete SARIF, a failed gate included. After a scan error (exit 1) or any
+other exit, such as an out-of-memory kill, it sets no `sarif-file`, so the
+`sarif-file != ''` guard above skips the upload instead of failing on an
+empty file.
 
 **Targets past the horizon.** A `target` newer than the knowledge base's
 horizon makes the verdict `unknown`, which fails the gate. Target a minor the

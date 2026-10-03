@@ -11,20 +11,111 @@
 # INPUT_BASELINE, INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
 # the runner pastes an expression's value into the script text, so a value
 # holding `"; cmd` would run cmd (GitHub's script-injection guidance).
+# ACTION_REF is the ref the action was used at (github.action_ref), and
+# ACTION_REPOSITORY the repository that ref is in (github.action_repository),
+# which is this one unless another action wraps this one. Text that
+# reaches the log from an input, a file name or the binary cannot start a
+# workflow command: a value in a message is escaped (esc), and the gate's
+# stderr and the Markdown report are printed by logged, which puts "| " in
+# front of every line and defangs a ##[ anywhere in it.
 # hack/action_test.sh (make action-test) covers every path here offline.
 set -euo pipefail
 
-releases=https://github.com/abd-ulbasit/upgradescope/releases
-module=github.com/abd-ulbasit/upgradescope/cmd/upgradescope
+repo=abd-ulbasit/upgradescope
+releases=https://github.com/$repo/releases
+module=github.com/$repo/cmd/upgradescope
+
+# esc <text>: the text as one workflow-command value (% and line breaks
+# escaped), so no line of it can start a command of its own. An input
+# echoed to the log goes through it: a value holding a newline and
+# "::warning::" would otherwise forge an annotation, or "::add-mask::" a
+# log mask. A ##[ is written "# #[": the runner reads that legacy command
+# anywhere in a line that is not a :: command, and esc is also used in plain
+# echoes.
+esc() {
+  local s=$1
+  s=${s//\%/%25}
+  s=${s//$'\r'/%0D}
+  s=${s//$'\n'/%0A}
+  s=${s//'##['/'# #['}
+  printf '%s' "$s"
+}
 
 die() {
-  echo "::error::upgradescope action: $*"
+  echo "::error::$(esc "upgradescope action: $*")"
   exit 1
+}
+
+# An action ref that is a release tag: vX.Y.Z or vX.Y.Z-rc.N.
+release_tag='^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'
+
+# release_older <a> <b>: whether release tag a is older than b. Semver
+# order: the core numerically, then a candidate (-rc.N) before its release.
+release_older() {
+  local a=${1#v} b=${2#v} ac bc ap bp i
+  ac=${a%%-*} bc=${b%%-*}
+  ap=${a#"$ac"} bp=${b#"$bc"}
+  if [ "$ac" != "$bc" ]; then
+    local IFS=.
+    local x=($ac) y=($bc)
+    for i in 0 1 2; do
+      ((10#${x[i]} == 10#${y[i]})) || return $((10#${x[i]} < 10#${y[i]} ? 0 : 1))
+    done
+  fi
+  [ "$ap" != "$bp" ] || return 1
+  [ -n "$ap" ] || return 1
+  [ -n "$bp" ] || return 0
+  ap=${ap##*.} bp=${bp##*.}
+  [[ $ap =~ ^[0-9]+$ ]] || ap=0
+  [[ $bp =~ ^[0-9]+$ ]] || bp=0
+  ((10#$ap < 10#$bp))
+}
+
+# A full commit SHA, what pinning the action by commit gives github.action_ref.
+commit_sha='^[0-9a-fA-F]{40}$'
+
+# release_at <sha>: the release tags (vX.Y.Z, vX.Y.Z-rc.N) of this
+# repository at commit sha (lower case), one per line, from git ls-remote.
+# An annotated tag lists its own object on refs/tags/<tag> and the commit
+# it points at on refs/tags/<tag>^{}; the ^{} line is the one that counts.
+# Exit 1: no git on the runner; 2: the lookup failed.
+# The lookup runs from an empty directory of its own, never the workspace: a
+# fork's tree there without a .git could form a bare repository whose config
+# redirects the lookup (url.insteadOf) or runs a credential helper. Discovery
+# stops at that directory and no inherited GIT_DIR or GIT_WORK_TREE applies.
+# Once connected, a transfer slower than 1 KB/s for 30 s is abandoned as a
+# failed lookup; connection setup is bounded only by curl's own timeout.
+release_at() {
+  command -v git >/dev/null || return 1
+  local base=${RUNNER_TEMP:-${TMPDIR:-/tmp}} dir refs rc=0
+  base=${base%/}
+  dir=$(mktemp -d "$base/upgradescope-tags.XXXXXX") || return 2
+  refs=$(cd "$dir" && env -u GIT_DIR -u GIT_WORK_TREE GIT_TERMINAL_PROMPT=0 \
+    GIT_CEILING_DIRECTORIES="$base" \
+    git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote --tags "https://github.com/$repo") || rc=$?
+  rmdir "$dir" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || return 2
+  printf '%s\n' "$refs" | awk -v sha="$1" '
+    NF == 2 && sub(/^refs\/tags\//, "", $2) {
+      if (sub(/\^\{\}$/, "", $2)) peeled[$2] = $1; else direct[$2] = $1
+    }
+    END { for (t in direct) if (tolower((t in peeled) ? peeled[t] : direct[t]) == sha) print t }
+  ' | { grep -E "$release_tag" || true; }
+}
+
+# newest <tag>...: the newest of the release tags.
+newest() {
+  local best= t
+  for t in "$@"; do
+    if [ -z "$best" ] || release_older "$best" "$t"; then best=$t; fi
+  done
+  printf '%s' "$best"
 }
 
 validate() {
   local v=${INPUT_VERSION-} t=${INPUT_TARGET-} f=${INPUT_FAIL_ON-} p=${INPUT_PATH-}
-  [[ $v =~ ^(latest|preinstalled|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] ||
+  # Empty is the default: the action ref's release, else latest.
+  [ -z "$v" ] || [[ $v =~ ^(latest|preinstalled|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] ||
     die "invalid version '$v' (want latest, preinstalled or a release tag like v0.2.0)"
   [[ $t =~ ^v?1\.[0-9]+(\.[0-9]+)?$ ]] ||
     die "invalid target '$t' (want a Kubernetes minor version like 1.36)"
@@ -88,7 +179,52 @@ install() {
   # deliberately omits the version (hack/release-check.sh checks this line).
   asset="upgradescope_${os}_${arch}.tar.gz"
 
-  local tag=$INPUT_VERSION
+  # No version: the release the action itself is pinned at, so
+  # @v0.2.0-rc.2 runs v0.2.0-rc.2. GitHub's latest skips prereleases, and
+  # would run an older release's engine (it missed removals added since)
+  # and pass what this one blocks. At a full commit SHA, the release tag
+  # that points at that commit (the newest, if several do); a SHA that no
+  # release tag points at, or one that cannot be looked up, gets latest and
+  # a warning that says why. Any other ref (a branch, v0) has no release of
+  # its own: latest.
+  # ACTION_REF is this action's ref only when ACTION_REPOSITORY
+  # (github.action_repository) is this repository: in a composite action
+  # that uses this one, both are the outer action's (actions/runner#2473),
+  # and a wrapper pinned at its own v0.1.1 would otherwise install this
+  # action's v0.1.1. GitHub compares owner and repository names
+  # case-insensitively; tr, not ${,,}, for macOS's bash 3.2.
+  local tag=$INPUT_VERSION ref=
+  if [ "$(printf '%s' "${ACTION_REPOSITORY-}" | tr '[:upper:]' '[:lower:]')" = "$repo" ]; then
+    ref=${ACTION_REF-}
+  fi
+  if [ -z "$tag" ]; then
+    if [[ $ref =~ $release_tag ]]; then
+      tag=$ref
+      echo "version defaults to the action ref $tag"
+    elif [[ $ref =~ $commit_sha ]]; then
+      local sha at rc=0 why
+      sha=$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')
+      at=$(release_at "$sha") || rc=$?
+      # Tags match release_tag, so word splitting is safe.
+      at=$(newest $at)
+      if [ -n "$at" ]; then
+        tag=$at
+        echo "version defaults to $tag, the release at the action ref $sha"
+      else
+        tag=latest
+        case $rc in
+          1) why="git is not installed, so its release tag cannot be looked up" ;;
+          2) why="git ls-remote --tags https://github.com/$repo failed, so its release tag is unknown" ;;
+          *) why="no release tag (vX.Y.Z or vX.Y.Z-rc.N) of $repo points at it" ;;
+        esac
+        echo "::warning::version defaults to latest at the action ref $sha: $why. Set version: to the release this commit belongs to"
+      fi
+    else
+      tag=latest
+      [ -z "${ACTION_REF-}" ] || [ -n "$ref" ] ||
+        echo "version defaults to latest: the action ref is in '$(esc "${ACTION_REPOSITORY-}")' (github.action_repository), not $repo"
+    fi
+  fi
   if [ "$tag" = latest ]; then
     # Pin "latest" to one tag first, so the archive and checksums.txt come
     # from the same release even if one is published in between.
@@ -96,11 +232,14 @@ install() {
     url=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' "$releases/latest") || url=
     tag=${url##*/}
     if [[ ! $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-      echo "cannot resolve the latest release (got '$url')"
+      echo "cannot resolve the latest release (got '$(esc "$url")')"
       go_install latest
       return
     fi
     echo "latest release is $tag"
+    if [[ $ref =~ $release_tag ]] && release_older "$tag" "$ref"; then
+      echo "::warning::version latest is $tag, older than this action's own release $ref: GitHub's latest skips prereleases, and an older engine can pass what $ref blocks. Set version: $ref"
+    fi
   fi
 
   local dl
@@ -163,6 +302,22 @@ escaped() {
   awk '{ gsub(/%/, "%25"); gsub(/\r/, "%0D"); printf "%s%s", (NR > 1 ? "%0A" : ""), $0 }' "$1"
 }
 
+# logged <file>: the file to the log, every line with "| " in front, so that
+# none can be a workflow command. The runner reads a line as a command when
+# it starts with :: after .NET's TrimStart, which strips all Unicode
+# whitespace (\f, \v, U+0085, U+00A0, U+3000, ...), not only space and tab:
+# no pattern for "a line that would be a command" is safe, a prefix on every
+# line is. The runner also treats a carriage return as a line break, so a CR
+# is written %0D, and it reads the legacy form ##[name] anywhere in a line
+# that is not a :: command (and runs ##[warning], ##[error] and
+# ##[add-mask]), so each ##[ is written "# #[". The binary's messages repeat
+# the path input and file names from the scanned tree, which a fork PR
+# chooses, and so does the Markdown report (the renderer turns a line break
+# in a path into a space, but leaves the rest).
+logged() {
+  awk '{ gsub(/\r/, "%0D"); gsub(/##\[/, "# #["); print "| " $0 }' "$1"
+}
+
 scan() {
   # Its own directory per scan: RUNNER_TEMP is shared by every step of the
   # job, and a later use of the action must not overwrite the reports an
@@ -184,17 +339,23 @@ scan() {
   # never, where an unknown verdict already passes.
   local allow=()
   [ "${INPUT_ALLOW_INCOMPLETE:-false}" != true ] || allow=(--allow-incomplete)
-  echo "sarif-file=$sarif" >>"$GITHUB_OUTPUT"
 
   # The gate. exit 0: passed; 2: scan worked, gate failed (the SARIF is
-  # still complete: upload it with `if: always()`); 1: the scan broke.
+  # still complete: upload it with `if: ${{ !cancelled() && ... }}`);
+  # anything else (1: the scan broke; 137: killed): the SARIF is empty or cut short.
   local status=0
-  upgradescope scan "${gate[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" ${allow[@]+"${allow[@]}"} >"$sarif" || status=$?
+  upgradescope scan "${gate[@]}" --output sarif --fail-on="$INPUT_FAIL_ON" ${allow[@]+"${allow[@]}"} >"$sarif" 2>"$out/gate.err" || status=$?
+  # Its messages (the scan error, a skipped file) are the log's account of
+  # why the gate went as it did, whatever the exit status.
+  logged "$out/gate.err"
   if [ "$status" != 0 ] && [ "$status" != 2 ]; then
     printf '### upgradescope: scan failed (exit %s)\n\nThe job log has the error.\n' "$status" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
     echo "::error::upgradescope scan failed (exit $status)"
     exit "$status"
   fi
+  # Only a complete SARIF is an output: after a scan error, an upload step
+  # guarded on sarif-file != '' skips, and does not fail on an empty file.
+  echo "sarif-file=$sarif" >>"$GITHUB_OUTPUT"
 
   # The same scan as JSON (outputs, annotations) and Markdown (summary,
   # log). --fail-on never: the gate above already decided the exit code.
@@ -222,7 +383,7 @@ scan() {
   fi
   if upgradescope scan "${args[@]}" --output markdown --fail-on never >"$md" 2>"$out/md.err"; then
     echo "summary-file=$md" >>"$GITHUB_OUTPUT"
-    cat "$md"
+    logged "$md"
     cat "$md" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
   else
     echo "::warning::this upgradescope cannot write the step summary (it predates --output markdown, added after v0.1.1): $(escaped "$out/md.err")"

@@ -339,6 +339,35 @@ func TestTokensCreateMessage(t *testing.T) {
 	}
 }
 
+// --db is the file opened, whatever escapes it holds (#195): `x%20y.db` was
+// created as `x y.db` 0644 beside an empty decoy named as given.
+func TestTokensCreateDBPathIsExact(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"x%20y.db", "a%3Fb.db", "c%23d.db", "e?f#g.db"} {
+		if _, stderr, err := execTokens(t, "create", "c1", "--db", filepath.Join(dir, name)); err != nil {
+			t.Fatalf("tokens create --db %q: %v (stderr %q)", name, err, stderr)
+		}
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Size() == 0 || fi.Mode().Perm()&0o077 != 0 {
+			t.Errorf("%s: size %d mode %o, want the database itself, owner-only", name, fi.Size(), fi.Mode().Perm())
+		}
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 4 {
+		var names []string
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Errorf("directory holds %q, want exactly the 4 databases named", names)
+	}
+}
+
 // The database directory openStore creates is the owner's only, like the
 // database in it.
 func TestOpenStoreCreatesPrivateDirectory(t *testing.T) {

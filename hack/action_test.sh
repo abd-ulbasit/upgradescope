@@ -10,7 +10,9 @@
 #     only with a Go toolchain, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
 #     summary on action/testdata, the allow-incomplete, config, baseline
-#     and write-baseline inputs, and an injection payload as data.
+#     and write-baseline inputs, and an injection payload as data;
+#   - every run: the log holds no workflow command but run.sh's own, as the
+#     runner reads them (leading Unicode whitespace stripped).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -51,6 +53,20 @@ for i in $inputs; do
   else
     grep -n "$var\|inputs\.$i" action.yml >"$work/out" || true
     fail "action.yml passes input $i to both steps as $var" "$work/out"
+  fi
+done
+# run.sh's install reads the ref the action was used at (ACTION_REF), and
+# the repository that ref belongs to (ACTION_REPOSITORY), to default
+# version to the ref's release; the empty version default is what tells
+# "unset" from an explicit latest.
+for yml in action.yml action/action.yml; do
+  if [ "$(grep -cxF '        ACTION_REF: ${{ github.action_ref }}' "$yml")" = 1 ] &&
+    [ "$(grep -cxF '        ACTION_REPOSITORY: ${{ github.action_repository }}' "$yml")" = 1 ] &&
+    awk '/^  version:$/ { on = 1; next } on && /^  [a-z-]+:$/ { on = 0 } on && /^    default: ""$/ { found = 1 } END { exit !found }' "$yml"; then
+    ok "$yml passes github.action_ref and github.action_repository and leaves version unset by default"
+  else
+    grep -n 'ACTION_RE\|default:' "$yml" >"$work/out" || true
+    fail "$yml passes github.action_ref and github.action_repository and leaves version unset by default" "$work/out"
   fi
 done
 for var in $(grep -o 'INPUT_[A-Z_]*' action/run.sh | sort -u); do
@@ -109,7 +125,7 @@ fi
 # A sandbox PATH with the tools run.sh uses and no go; stub dirs are put in
 # front of it per case.
 mkdir -p "$work/sys"
-for t in bash sh env cat chmod cp mkdir mktemp rm tar gzip awk sed grep head tr uname jq sha256sum shasum perl; do
+for t in bash sh env cat chmod cp mkdir mktemp rm rmdir tar gzip awk sed grep head tr uname jq sha256sum shasum perl; do
   p=$(command -v "$t" || true)
   [ -z "$p" ] || ln -s "$p" "$work/sys/$t"
 done
@@ -151,7 +167,43 @@ case "\$1 \${2:-}" in
   install*) mkdir -p "$work/gobin" && printf '#!/bin/sh\necho built from source\n' >"$work/gobin/upgradescope" && chmod +x "$work/gobin/upgradescope" ;;
 esac
 EOF
-chmod +x "$work/stub-curl/curl" "$work/stub-go/go"
+# git: answers only `git ls-remote --tags <this repository>`, with
+# $work/ls-remote, or fails as an unreachable host with STUB_GIT_FAIL=1.
+mkdir -p "$work/stub-git"
+cat >"$work/stub-git/git" <<EOF
+#!/usr/bin/env bash
+echo "git \$*" >>"$work/calls"
+echo "git-env cwd=\$PWD ceiling=\${GIT_CEILING_DIRECTORIES-} gitdir=\${GIT_DIR-unset} worktree=\${GIT_WORK_TREE-unset}" >>"$work/calls"
+[ "\$*" = "-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote --tags https://github.com/abd-ulbasit/upgradescope" ] || exit 129
+if [ -n "\${STUB_GIT_FAIL:-}" ]; then
+  echo "fatal: unable to access 'https://github.com/abd-ulbasit/upgradescope/': Could not resolve host: github.com" >&2
+  exit 128
+fi
+cat "$work/ls-remote"
+EOF
+chmod +x "$work/stub-curl/curl" "$work/stub-go/go" "$work/stub-git/git"
+# The tags at each commit, as git ls-remote --tags lists them: an annotated
+# tag's own object on refs/tags/<tag>, the commit it points at on
+# refs/tags/<tag>^{}; a lightweight tag only the commit.
+sha_rc=cccccccccccccccccccccccccccccccccccccccc    # v0.2.0-rc.2, annotated
+sha_rc_tag=1111111111111111111111111111111111111111 # v0.2.0-rc.2's tag object
+sha_light=dddddddddddddddddddddddddddddddddddddddd # v9.9.4, lightweight
+sha_two=ffffffffffffffffffffffffffffffffffffffff   # v9.9.9-rc.1 and v9.9.9
+sha_float=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb # only v0 and nightly, no release
+sha_none=0123456789abcdef0123456789abcdef01234567  # no tag at all
+tab=$'\t'
+cat >"$work/ls-remote" <<EOF
+2222222222222222222222222222222222222222${tab}refs/tags/v0
+$sha_float${tab}refs/tags/v0^{}
+$sha_float${tab}refs/tags/nightly
+$sha_rc_tag${tab}refs/tags/v0.2.0-rc.2
+$sha_rc${tab}refs/tags/v0.2.0-rc.2^{}
+$sha_light${tab}refs/tags/v9.9.4
+3333333333333333333333333333333333333333${tab}refs/tags/v9.9.9
+$sha_two${tab}refs/tags/v9.9.9^{}
+4444444444444444444444444444444444444444${tab}refs/tags/v9.9.9-rc.1
+$sha_two${tab}refs/tags/v9.9.9-rc.1^{}
+EOF
 
 # release <tag> <checksums-mode: ok|bad|missing|none> [no-archive]
 release() {
@@ -173,6 +225,9 @@ release v9.9.8 bad
 release v9.9.7 missing
 release v9.9.6 none no-archive
 release v9.9.5 none
+release v9.9.4 ok
+release v9.9.9-rc.1 ok
+release v0.2.0-rc.2 ok
 
 # The real binary, for the scan cases.
 mkdir -p "$work/real"
@@ -194,8 +249,27 @@ run() {
     GITHUB_OUTPUT="$rt/output" GITHUB_PATH="$rt/path" GITHUB_STEP_SUMMARY="$rt/summary" \
     INPUT_PATH=action/testdata/removed INPUT_TARGET=1.36 INPUT_FAIL_ON=blocker INPUT_VERSION=v9.9.9 \
     "$@" bash action/run.sh "$cmd" >"$work/out" 2>&1 || code=$?
+  forged "$work/out" | sed "s/^/run $n ($cmd): /" >>"$work/forged"
 }
 n=0
+: >"$work/forged"
+# forged <file>: each line of the log that the runner would read as a
+# workflow command but that is not one run.sh writes. The runner splits the
+# log at line breaks, strips all leading Unicode whitespace (.NET's
+# TrimStart: \f, \v, U+0085, U+00A0, U+2000-U+200A, U+3000 and the rest, not
+# only space and tab) and reads a line that then starts with :: as a
+# command. run.sh's own commands start at the line's first character and
+# are ::error or ::warning, with properties only from annotations(), whose
+# values have : and , escaped.
+forged() {
+  perl -CSD -0777 -ne '
+    for (split /\r\n|\r|\n/) {
+      (my $t = $_) =~ s/^\p{White_Space}+//;
+      next unless $t =~ /^::/;
+      next if $t eq $_ && /^::(?:error|warning)(?: (?:file=[^:,]*,line=\d+,)?title=upgradescope (?:blocker|warning) \([^:,]*\))?::/;
+      print "$_\n";
+    }' "$1"
+}
 # expect <name> <want-exit> <want-substring>: checks the last run.
 expect() {
   if [ "$code" = "$2" ] && grep -qF -- "$3" "$work/out"; then ok "$1"; else
@@ -239,7 +313,133 @@ expect "write-baseline into a missing directory is rejected" 1 "write-baseline '
 run install "$work/stub-curl:" INPUT_WRITE_BASELINE=action/testdata
 expect "a directory as write-baseline is rejected" 1 "write-baseline 'action/testdata' is a directory"
 
+# A value that reaches the log must not start a workflow command of its own
+# (#197 AC-05b): its line breaks and % are escaped, so the only line that
+# starts with :: is die()'s own ::error. Every input that die() echoes.
+nl=$'\n'
+for pair in \
+  "INPUT_VERSION=v1.0.0${nl}::warning title=FORGED::x" \
+  "INPUT_TARGET=1.36${nl}::warning title=FORGED::x" \
+  "INPUT_FAIL_ON=never${nl}::add-mask::upgradescope" \
+  "INPUT_ALLOW_INCOMPLETE=true${nl}::notice::x" \
+  "INPUT_PATH=action/testdata/removed${nl}::error title=FORGED-PATH::x" \
+  "INPUT_CONFIG=ci/x.yaml${nl}::notice::x" \
+  "INPUT_BASELINE=ci/x.json${nl}::notice::x" \
+  "INPUT_WRITE_BASELINE=ci/${nl}::notice::x/y.json"; do
+  var=${pair%%=*}
+  run install "$work/stub-curl:" "$pair"
+  if [ "$code" = 1 ] && [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -q '^::error::upgradescope action: ' "$work/out" &&
+    grep -qF '%0A::' "$work/out"; then ok "a line break in $var cannot start a workflow command"; else
+    fail "a line break in $var cannot start a workflow command" "$work/out"
+  fi
+done
+run install "$work/stub-curl:" INPUT_TARGET=$'1.36\r::warning::x'
+if [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -qF '%0D::warning::x' "$work/out"; then ok "a CR in an input cannot start a workflow command"; else
+  fail "a CR in an input cannot start a workflow command" "$work/out"
+fi
+# % is escaped too, so an input cannot spell %0A for the runner to decode.
+run install "$work/stub-curl:" INPUT_TARGET='1.36%0A::set-output name=x::y'
+expect "a % in an input is escaped, not decoded by the runner" 1 "invalid target '1.36%250A::set-output name=x::y'"
+hasnt "no GITHUB_OUTPUT write for a bad input" "$rt/output" "x="
+
 # --- install ----------------------------------------------------------------
+
+# With no version, an action at a release tag runs that release (#197
+# AC-03b): GitHub's latest skips prereleases, so @v0.2.0-rc.2 would
+# otherwise run an older stable release's engine and pass what it blocks.
+# The ref is this repository's only when github.action_repository says so:
+# in a composite action that uses this one, github.action_ref is the outer
+# action's ref (actions/runner#2473).
+own=ACTION_REPOSITORY=abd-ulbasit/upgradescope
+run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "no version at a release tag ref installs that tag" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+has "the default version is logged" "$work/out" "version defaults to the action ref v9.9.9"
+hasnt "no version at a tag ref does not ask for the latest release" "$work/calls" "$releases/latest"
+run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4
+expect "no version at a release candidate tag ref installs that tag" 0 "installed upgradescope v9.9.9-rc.1 from $releases/download/v9.9.9-rc.1/$asset"
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.9 "$own" ACTION_REF=v9.9.9-rc.1
+expect "an explicit version wins over the ref" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+for ref in main v0 v9.9 0123456789abcdef v9.9.9-beta.1 "v9.9.9${nl}::x"; do
+  run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF="$ref" STUB_LATEST=v9.9.4
+  expect "no version at ref ${ref%%$nl*} installs the latest release" 0 "latest release is v9.9.4"
+  hasnt "no version at ref ${ref%%$nl*} is not read as a tag" "$work/out" "defaults to the action ref"
+done
+run install "$work/stub-curl:" INPUT_VERSION= STUB_LATEST=v9.9.4
+expect "no version and no ref installs the latest release" 0 "latest release is v9.9.4"
+# Another repository's ref: a wrapper action pinned at its own v9.9.9 must
+# not pick this action's v9.9.9.
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "a release tag ref of another repository installs the latest release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
+hasnt "another repository's ref is not read as this action's release" "$work/out" "defaults to the action ref"
+has "another repository's ref is logged as the reason for latest" "$work/out" "the action ref is in 'other/wrapper' (github.action_repository), not abd-ulbasit/upgradescope"
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "a release tag ref without a repository installs the latest release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=abd-ulbasit/upgradescope-fork ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "a repository whose name only starts with this one's installs the latest release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+if grep -q '^::warning' "$work/out"; then fail "another repository's release is not compared with latest" "$work/out"; else ok "another repository's release is not compared with latest"; fi
+# Owner and repository names are case-insensitive on GitHub.
+run install "$work/stub-curl:" INPUT_VERSION= ACTION_REPOSITORY=abd-ulbasit/UpgradeScope ACTION_REF=v9.9.9 STUB_LATEST=v9.9.4
+expect "a mixed-case repository name is this repository" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+
+# At a full commit SHA of this repository, the release tag that points at
+# it (#197): git ls-remote --tags, an annotated tag peeled to its commit.
+# Not a release, or no answer: latest, and one ::warning that says why.
+# warned <name> <reason>: the last run installed latest with one warning.
+warned() {
+  if [ "$code" = 0 ] && grep -qF "latest release is v9.9.4" "$work/out" && [ "$(grep -c '^::warning' "$work/out")" = 1 ] &&
+    grep -q "^::warning::version defaults to latest at the action ref .*$2" "$work/out"; then ok "$1"; else fail "$1" "$work/out"; fi
+}
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4 GIT_DIR="$PWD/.git" GIT_WORK_TREE="$PWD"
+expect "no version at a release candidate's commit SHA installs that release" 0 "installed upgradescope v0.2.0-rc.2 from $releases/download/v0.2.0-rc.2/$asset"
+has "the release at the SHA is logged" "$work/out" "version defaults to v0.2.0-rc.2, the release at the action ref $sha_rc"
+has "the SHA is looked up with git ls-remote --tags" "$work/calls" "ls-remote --tags https://github.com/abd-ulbasit/upgradescope"
+has "the lookup gives up on a stalled transfer" "$work/calls" "git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 ls-remote"
+hasnt "the lookup does not run in the workspace" "$work/calls" "cwd=$PWD "
+has "the lookup runs in its own directory under RUNNER_TEMP" "$work/calls" "cwd=$tmp/upgradescope-tags."
+has "repository discovery stops at RUNNER_TEMP" "$work/calls" "ceiling=$tmp gitdir="
+has "an inherited GIT_DIR or GIT_WORK_TREE does not reach the lookup" "$work/calls" "gitdir=unset worktree=unset"
+hasnt "every tool the lookup runs is on PATH" "$work/out" "command not found"
+if compgen -G "$tmp/upgradescope-tags.*" >/dev/null; then fail "the lookup removes its directory"; else ok "the lookup removes its directory"; fi
+hasnt "a release at the SHA does not ask for the latest release" "$work/calls" "$releases/latest"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF="$(tr 'a-f' 'A-F' <<<"$sha_rc")" STUB_LATEST=v9.9.4
+expect "an upper-case commit SHA finds its release" 0 "installed upgradescope v0.2.0-rc.2 from"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_light STUB_LATEST=v9.9.9
+expect "a lightweight release tag's SHA installs that release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
+hasnt "a lightweight release tag's SHA does not warn" "$work/out" "::warning"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_LATEST=v9.9.4
+expect "a SHA with a candidate and its release installs the release" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc_tag STUB_LATEST=v9.9.4
+warned "an annotated tag's own object is not the commit it tags" "no release tag"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_float STUB_LATEST=v9.9.4
+warned "a SHA with only non-release tags (v0, nightly) installs latest and warns" "no release tag (vX.Y.Z or vX.Y.Z-rc.N) of abd-ulbasit/upgradescope points at it"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_none STUB_LATEST=v9.9.4
+warned "an unknown SHA installs latest and warns" "no release tag"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4 STUB_GIT_FAIL=1
+warned "a failed lookup installs latest and warns" "git ls-remote --tags https://github.com/abd-ulbasit/upgradescope failed"
+if compgen -G "$tmp/upgradescope-tags.*" >/dev/null; then fail "a failed lookup removes its directory"; else ok "a failed lookup removes its directory"; fi
+run install "$work/stub-curl:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc STUB_LATEST=v9.9.4
+warned "no git to look the SHA up installs latest and warns" "git is not installed"
+# Only this repository's SHA is looked up, and only for an unset version.
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= ACTION_REPOSITORY=other/wrapper ACTION_REF=$sha_rc STUB_LATEST=v9.9.4
+expect "another repository's SHA installs the latest release" 0 "installed upgradescope v9.9.4 from"
+hasnt "another repository's SHA is not looked up" "$work/calls" "git "
+hasnt "another repository's SHA does not warn" "$work/out" "::warning"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION=v9.9.9 "$own" ACTION_REF=$sha_rc
+expect "an explicit version wins over the SHA" 0 "installed upgradescope v9.9.9 from"
+hasnt "an explicit version does not look the SHA up" "$work/calls" "git "
+# An explicit latest at a tag ref still floats, and says when that is
+# older than the ref's own release.
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.4
+expect "latest older than the ref's release warns" 0 "::warning::version latest is v9.9.4, older than this action's own release v9.9.9-rc.1"
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v9.9.9-rc.1
+expect "a release candidate is older than its release" 0 "::warning::version latest is v9.9.9-rc.1, older than this action's own release v9.9.9"
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9-rc.1 STUB_LATEST=v9.9.9
+if grep -q '^::warning' "$work/out"; then fail "latest newer than the ref's release does not warn" "$work/out"; else ok "latest newer than the ref's release does not warn"; fi
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v9.9.9
+if grep -q '^::warning' "$work/out"; then fail "latest equal to the ref's release does not warn" "$work/out"; else ok "latest equal to the ref's release does not warn"; fi
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=main STUB_LATEST=v9.9.4
+if grep -q '^::warning' "$work/out"; then fail "a branch ref has no release to compare with" "$work/out"; else ok "a branch ref has no release to compare with"; fi
 
 run install "$work/stub-curl:"
 expect "release install verifies the checksum" 0 "sha256 OK: $asset"
@@ -471,12 +671,149 @@ expect "a failing JSON pass still gates" 2 "::warning::upgradescope --output jso
 expect "a failing Markdown pass warns" 2 "cannot write the step summary (it predates --output markdown, added after v0.1.1): it broke%0A"
 if grep -q '^::error::forged' "$work/out"; then fail "stderr cannot start a workflow command" "$work/out"; else ok "stderr cannot start a workflow command"; fi
 
+# The gate pass's stderr repeats input values (the path, a file name under it)
+# and the contents of files a fork PR controls. It reaches the log line by
+# line behind a prefix, so none of it can start a workflow command (#197
+# AC-05b), and it is printed whatever the exit status.
+mkdir -p "$work/loud"
+cat >"$work/loud/upgradescope" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"--output sarif"*)
+    printf 'gate says hi\n::error::forged by the gate\n::add-mask::secret\r::warning::cr\n100%% sure\n' >&2
+    exec "$work/real/upgradescope" "\$@" ;;
+  *) exec "$work/real/upgradescope" "\$@" ;;
+esac
+EOF
+chmod +x "$work/loud/upgradescope"
+loud_ok() { # <name>: the gate's stderr is in the log and starts no command
+  if grep -qF 'gate says hi' "$work/out" && grep -qF '| ::error::forged by the gate' "$work/out" &&
+    grep -qF '%0D::warning::cr' "$work/out" && ! grep -q '^::\(error\|warning\|add-mask\)::\(forged\|secret\|cr\)' "$work/out"; then ok "$1"; else fail "$1" "$work/out"; fi
+}
+run scan "$work/loud:"
+loud_ok "the gate's stderr cannot start a workflow command (gate failed, exit 2)"
+run scan "$work/loud:" INPUT_PATH=action/testdata/clean
+loud_ok "the gate's stderr cannot start a workflow command (gate passed)"
+# A directory name with a line break, holding no manifests: the binary's
+# "No Kubernetes manifests found under <path>" repeats the name.
+evil="$work/evil${nl}::warning title=FORGED::y"
+mkdir -p "$evil" && echo readme >"$evil/README"
+run scan "$work/real:" INPUT_PATH="$evil"
+if [ "$code" = 1 ] && grep -qF '| ::warning title=FORGED::y' "$work/out" && grep -qF 'no Kubernetes manifests found' "$work/out" &&
+  [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -q '^::error::upgradescope scan failed (exit 1)' "$work/out"; then
+  ok "a path with a line break cannot start a command through the binary's error"
+else fail "a path with a line break cannot start a command through the binary's error" "$work/out"; fi
+# A file name a fork PR controls, in a malformed manifest.
+badname="$work/bad"
+mkdir -p "$badname" && printf 'a: [\n' >"$badname/b${nl}::warning title=FORGEDBAD::q.yaml"
+run scan "$work/real:" INPUT_PATH="$badname"
+if grep -q '^::warning title=FORGEDBAD' "$work/out"; then fail "a file name with a line break cannot start a command through the binary's warning" "$work/out"; else
+  ok "a file name with a line break cannot start a command through the binary's warning"; fi
+# The same file name in a finding: annotations and the Markdown report
+# carry it too, escaped or with the line break turned into a space.
+mdname="$work/md"
+mkdir -p "$mdname" && cp action/testdata/removed/all.yaml "$mdname/m${nl}::warning title=FORGEDMD::z.yaml"
+run scan "$work/real:" INPUT_PATH="$mdname"
+if [ "$code" = 2 ] && ! grep -q '^::warning title=FORGEDMD' "$work/out"; then
+  ok "a file name with a line break in a finding cannot start a command"
+else fail "a file name with a line break in a finding cannot start a command" "$work/out"; fi
+
+# Line breaks followed by whitespace other than space and tab: the runner's
+# TrimStart strips all Unicode whitespace before it looks for ::, so a
+# pattern for "a line that would start a command" misses some of it, and
+# every line of the gate's stderr and of the Markdown report gets the
+# prefix instead (#197 AC-05b). Each in a skipped file's name, in a finding's
+# file name, and in the path input (the binary's error, and validate's).
+i=0
+for label in FF VT NBSP U+3000 U+0085; do
+  case $label in
+    FF) ws=$'\f' ;;
+    VT) ws=$'\v' ;;
+    NBSP) ws=$'\xc2\xa0' ;;
+    U+3000) ws=$'\xe3\x80\x80' ;;
+    U+0085) ws=$'\xc2\x85' ;;
+  esac
+  i=$((i + 1))
+  d="$work/ws$i"
+  mkdir -p "$d" && printf 'a: [\n' >"$d/b${nl}${ws}::warning title=FORGED::q.yaml"
+  cp action/testdata/removed/all.yaml "$d/m${nl}${ws}::warning title=FORGED::z.yaml"
+  run scan "$work/real:" INPUT_PATH="$d"
+  forged "$work/out" >"$work/forged.case"
+  if [ "$code" = 2 ] && grep -qF "| ${ws}::warning title=FORGED::q.yaml" "$work/out" &&
+    grep -qF 'skipped' "$work/out" && [ ! -s "$work/forged.case" ]; then
+    ok "a line break and $label in a file name cannot start a workflow command"
+  else
+    cat "$work/forged.case" >>"$work/out"
+    fail "a line break and $label in a file name cannot start a workflow command" "$work/out"
+  fi
+  p="$work/wsp$i${nl}${ws}::warning title=FORGED::y"
+  mkdir -p "$p" && echo readme >"$p/README"
+  run scan "$work/real:" INPUT_PATH="$p"
+  forged "$work/out" >"$work/forged.case"
+  if [ "$code" = 1 ] && grep -qF 'no Kubernetes manifests found' "$work/out" && [ ! -s "$work/forged.case" ]; then
+    ok "a line break and $label in the path input cannot start a workflow command"
+  else
+    cat "$work/forged.case" >>"$work/out"
+    fail "a line break and $label in the path input cannot start a workflow command" "$work/out"
+  fi
+  run install "$work/stub-curl:" INPUT_PATH="does/not/exist${nl}${ws}::warning title=FORGED::y"
+  forged "$work/out" >"$work/forged.case"
+  if [ "$code" = 1 ] && grep -qF "path 'does/not/exist%0A${ws}::warning" "$work/out" && [ ! -s "$work/forged.case" ]; then
+    ok "a line break and $label in a missing path input cannot start a workflow command"
+  else
+    cat "$work/forged.case" >>"$work/out"
+    fail "a line break and $label in a missing path input cannot start a workflow command" "$work/out"
+  fi
+done
+
+# The runner also reads a legacy command, ##[name], anywhere in a line that
+# is not a :: command. So no line that is not a :: annotation may hold a ##[
+# at all, wherever in the line a path or file name put it (#197 AC-05b). (A
+# :: line is parsed whole as its own command first, so a ##[ in one of its
+# values is inert.)
+nolegacy() { # <name>: the log has no ##[ outside a :: line
+  if grep -v '^::' "$work/out" | grep -qF '##['; then fail "$1" "$work/out"; else ok "$1"; fi
+}
+mkdir -p "$work/hash1/d##[add-mask]upgradescope" && echo readme >"$work/hash1/d##[add-mask]upgradescope/README"
+run scan "$work/real:" INPUT_PATH="$work/hash1/d##[add-mask]upgradescope"
+expect "a ##[ in the path input is still reported in the error" 1 "no Kubernetes manifests found under"
+nolegacy "a ##[ in the path input cannot start a legacy command through the binary's error"
+mkdir -p "$work/hash2" && printf 'a: [\n' >"$work/hash2/x##[warning title=FORGED]y.yaml"
+run scan "$work/real:" INPUT_PATH="$work/hash2"
+expect "a ##[ in a malformed file's name is still reported" 1 "skipped"
+nolegacy "a ##[ in a skipped file's name cannot start a legacy command"
+mkdir -p "$work/hash3" && cp action/testdata/removed/all.yaml "$work/hash3/m##[error title=MD]z.yaml"
+run scan "$work/real:" INPUT_PATH="$work/hash3"
+expect "a finding in a ##[ file is still in the Markdown report" 2 "### upgradescope: blocked"
+nolegacy "a ##[ in a finding's file name cannot start a legacy command through the Markdown report"
+has "the Markdown report in the step summary is unchanged" "$rt/summary" '##[error title=MD]'
+# An echo of a value outside the gate's stderr: the latest release's tag
+# from the redirect, when it is not a version.
+run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST='x##[add-mask]y'
+has "the unresolvable release is still reported" "$work/out" "cannot resolve the latest release (got '"
+nolegacy "a ##[ in a release URL cannot start a legacy command"
+
 mkdir -p "$work/broken"
 printf '#!/bin/sh\necho "load knowledge base: boom" >&2\nexit 1\n' >"$work/broken/upgradescope"
 chmod +x "$work/broken/upgradescope"
 run scan "$work/broken:"
 expect "a scan error is exit 1" 1 "load knowledge base: boom"
 has "a scan error is in the summary" "$rt/summary" "upgradescope: scan failed (exit 1)"
+# sarif-file means a complete SARIF (exit 0 or 2); after a scan error the
+# file is empty, and an upload step guarded on sarif-file != '' must skip
+# it, not fail with "Invalid SARIF" (#197 AC-02b).
+hasnt "a scan error sets no sarif-file" "$rt/output" "sarif-file="
+run scan "$work/real:" INPUT_PATH=action/testdata/clean
+[ -s "$(output sarif-file)" ] && jq -e '.runs' "$(output sarif-file)" >/dev/null &&
+  ok "a passing gate sets sarif-file to a complete SARIF" || fail "a passing gate sets sarif-file to a complete SARIF" "$rt/output"
+run scan "$work/real:" INPUT_PATH=action/testdata/clean INPUT_CONFIG=action/testdata/baseline-cronjob.json
+[ "$code" != 0 ] && [ -z "$(output sarif-file)" ] &&
+  ok "a config that cannot load sets no sarif-file" || fail "a config that cannot load sets no sarif-file" "$work/out"
+
+# Every run above: whatever the inputs, file names and binary printed, the
+# only workflow commands in the log are run.sh's own.
+if [ -s "$work/forged" ]; then fail "no run's log holds a workflow command run.sh did not write" "$work/forged"; else
+  ok "no run's log holds a workflow command run.sh did not write"; fi
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)
