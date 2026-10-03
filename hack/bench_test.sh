@@ -123,6 +123,15 @@ expect "agent-report.sh: no file is a usage error" 2 "usage" -- hack/bench/agent
 
 # --- serve.sh and serve-report.sh --------------------------------------------
 expect "serve.sh: an unknown backend is refused" 1 "unknown backend mysql" -- env BENCH_BACKENDS=mysql BENCH_BIN="$work/bin" GO_STUB_RC=0 hack/bench/serve.sh
+# Every backend name is checked before anything is built or run: a typo in the
+# second must not cost the whole first benchmark (the go stub would say so).
+rc=0
+env BENCH_BACKENDS="sqlite bogus" BENCH_BIN="$work/bin" GO_STUB_RC=0 hack/bench/serve.sh >"$work/out" 2>&1 || rc=$?
+if [ "$rc" = 1 ] && grep -qF "unknown backend bogus" "$work/out" && ! grep -qF "go stub" "$work/out"; then
+  ok "serve.sh: a bad backend name is refused before the build, not after the first backend ran"
+else
+  fail "serve.sh: backend names are validated before the build (exit $rc)" "$work/out"
+fi
 expect "serve.sh: postgres without a Docker engine is refused" 1 "no Docker engine reachable" -- env BENCH_BACKENDS=postgres BENCH_BIN="$work/bin" GO_STUB_RC=0 hack/bench/serve.sh
 
 # A Docker engine that answers: serve.sh starts its throwaway Postgres (a
@@ -134,14 +143,21 @@ cat >"$work/stubs-docker/docker" <<'STUB'
 case "$1" in
   info) exit 0 ;;
   context) echo "unix:///var/run/docker.sock" ;;
-  run) echo "container-id" ;;
+  run) echo "$*" >"$DOCKER_RUN_LOG"; echo "container-id" ;;
   port) echo "127.0.0.1:55432" ;;
   exec) echo "17.0" ;;
   rm) exit 0 ;;
 esac
 STUB
 chmod +x "$work/stubs-docker/docker"
-expect "serve.sh: a Docker engine that answers gets a postgres, with a password drawn" 127 "published at 127.0.0.1:55432" -- env PATH="$work/stubs-docker:$PATH" BENCH_BACKENDS=postgres BENCH_BIN="$work/bin2" GO_STUB_RC=0 hack/bench/serve.sh
+expect "serve.sh: a Docker engine that answers gets a postgres, with a password drawn" 127 "published at 127.0.0.1:55432" -- env PATH="$work/stubs-docker:$PATH" DOCKER_RUN_LOG="$work/docker-run" BENCH_BACKENDS=postgres BENCH_BIN="$work/bin2" GO_STUB_RC=0 hack/bench/serve.sh
+# The password reaches the container through the environment, not as a value
+# on a command line that `ps` would list.
+if grep -qF -- "POSTGRES_PASSWORD" "$work/docker-run" && ! grep -qE -- "POSTGRES_PASSWORD=" "$work/docker-run"; then
+  ok "serve.sh: the Postgres password is not on the docker command line"
+else
+  fail "serve.sh: the Postgres password is on the docker command line" "$work/docker-run"
+fi
 
 round() { # round <backend> <pushers> <name> <pushes/s> <p99>
   jq -nc --arg b "$1" --argjson c "$2" --arg r "$3" --argjson tps "$4" --argjson p99 "$5" '{

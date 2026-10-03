@@ -38,7 +38,7 @@ them.
 | Driver | MacBook Pro (`MacBookPro18,3`, Apple M1 Pro, 16 GiB, `sysctl hw.model`), Go 1.26.8, client-go 0.37.1. It seeded the cluster and cross-compiled the benchmarks; the measured agent ticks and the server benchmark ran on the ThinkPad |
 | Postgres | 17.11 (`postgres:17-alpine`), a throwaway container on the ThinkPad's Docker engine, 0.1 ms round trip from the benchmark |
 | SQLite | the embedded `modernc.org/sqlite` v1.60.1, in a temporary directory on the ThinkPad's SSD |
-| upgradescope | main `5d65958` plus this work through `c4b7721` for the agent (the "before" table is the same tree with the Helm cache commit `06499dd` reverted) and through `e69b68a` for the server, the server code being unchanged by this work. These commits were measured before they were rebased onto main `4c8ae57`, which changed version-skew and the engine (#184 to #186): the request and byte counts do not depend on it, the CPU figures were not measured again |
+| upgradescope | measured on main `5d65958` plus this work (the "before" table is the same tree with the Helm cache commit reverted; the server code is unchanged by this work). Those trees existed only locally: this work was then rebased onto main `4c8ae57`, so none of the commit hashes in this branch names a tree that was measured. The rebase brought in #184 to #186, among them #185, which keeps `kube-proxy` once per node (about 2,000 more control-plane entries at full size). **Request counts and bytes are not affected** (an empty-cluster run at the rebased tree made the same 17 requests); **heap, RSS and CPU were not measured again** and can differ, the control-plane entries being held and evaluated each tick |
 | Also running | two other idle kind clusters on the same ThinkPad, and for the agent runs the lab's own KWOK controller keeping 2,000 nodes alive |
 
 ### What is simulated
@@ -132,8 +132,8 @@ far, so it only grows.
 Everything is linear; nothing was superlinear. Each list is paged at 500
 objects, so a tick makes ceil(N / 500) requests per resource: 38 are pod
 requests (14,000 pods in all namespaces, then 4,000 in `kube-system`), 5 are
-nodes, 3 are the metadata list of Helm Secrets. The rest is constant, about
-15 requests. [Architecture](../architecture.md#api-cost-per-tick) states the
+nodes, 3 are the metadata list of Helm Secrets. The rest is constant, 13
+requests. [Architecture](../architecture.md#api-cost-per-tick) states the
 formula.
 
 ### CPU and the chart limit
@@ -156,9 +156,9 @@ the agent 500m to 1 CPU, or expect its first ticks to be partial.
 | What | Found | Status |
 |---|---|---|
 | One GET per Helm release on every tick: 1,000 of 1,059 requests, 90 MiB, 29 s and 24 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (59 requests, 4.4 s). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
-| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 35 s and 24 CPU-seconds here; reaches the step deadline at 200m or over a slow link | Open: bounded-concurrency fetching, see the follow-up in the pull request |
-| `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here, 9 requests each time; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | Open |
-| The all-pods list is the steady tick's largest cost | 38 of 59 requests; whole pod objects are needed for their images, and the agent keeps no watch | Open: needs a decision on frequency, see the follow-up |
+| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 35 s and 24 CPU-seconds here; reaches the step deadline at 200m or over a slow link | Open: bounded-concurrency fetching (follow-up: "Fetch Helm releases with bounded concurrency on the first tick and in `scan`") |
+| `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | Open (follow-up: "List kube-system pods once per tick") |
+| The all-pods list is the steady tick's largest cost | 38 of 59 requests; whole pod objects are needed for their images, and the agent keeps no watch | Open: needs a decision on frequency (follow-up: "Decide how often the agent lists all pods, or keep a watch") |
 
 ## The server
 

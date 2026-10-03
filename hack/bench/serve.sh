@@ -39,6 +39,14 @@ BENCH_BIN=$(cd "$BENCH_BIN" && pwd -P)
 
 die() { echo "bench-serve: $*" >&2; exit 1; }
 command -v jq >/dev/null || die "jq is required"
+# Every name before the build: a typo in the last must not cost the first
+# backend's whole run.
+for backend in $BENCH_BACKENDS; do
+  case "$backend" in
+    sqlite | postgres) ;;
+    *) die "unknown backend $backend (sqlite or postgres)" ;;
+  esac
+done
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 results=$BENCH_BIN/serve-$BENCH_RUN_ON-$stamp.jsonl
@@ -87,7 +95,10 @@ start_postgres() { # sets PG_DSN (as the machine running the benchmark reaches i
   password=$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')
   container=upgradescope-bench-pg-$$
   # Published on the engine host's address only (not every interface).
-  docker run -d --name "$container" -e POSTGRES_PASSWORD="$password" -e POSTGRES_DB=upgradescope \
+  # The password goes by name (-e NAME, read from this process's environment),
+  # so it is on no command line `ps` would list; the engine host still holds it
+  # in the container's configuration, which dies with the container.
+  POSTGRES_PASSWORD=$password docker run -d --name "$container" -e POSTGRES_PASSWORD -e POSTGRES_DB=upgradescope \
     -p "$addr::5432" "postgres:${BENCH_PG_VERSION}-alpine" >/dev/null
   port=$(docker port "$container" 5432/tcp | head -1 | sed 's/.*://')
   local ready=""
@@ -141,7 +152,6 @@ for backend in $BENCH_BACKENDS; do
   case "$backend" in
     sqlite) run_backend sqlite ;;
     postgres) start_postgres; run_backend postgres "$PG_DSN"; docker rm -f "$container" >/dev/null; container="" ;;
-    *) die "unknown backend $backend (sqlite or postgres)" ;;
   esac
 done
 
