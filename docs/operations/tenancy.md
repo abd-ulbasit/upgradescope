@@ -21,7 +21,7 @@ The server has five credentials, each optional except where noted:
 | Credential | Authorizes | Configured with |
 |---|---|---|
 | read token | every `GET /api/v1/*` endpoint (clusters, reports, findings, history, team rollups, exports, registry), `POST /api/v1/gate`, `/metrics`, for the whole fleet | `--read-token`; with none of the read credentials the read API is open, which `serve` refuses unless the address it binds is loopback or `--allow-anonymous-read` is set |
-| team-scoped read tokens | the same reads, for some teams (or `*`, the fleet); `/metrics` takes a fleet-wide one only | `upgradescope tokens create --read --teams <team,...>`; see [Read access](auth.md) |
+| team-scoped read tokens | the same reads, for some teams (or `*`, the fleet); `/metrics` takes a fleet-wide one only | `upgradescope tokens create --read --teams payments --teams checkout` (one team per flag); see [Read access](auth.md) |
 | per-cluster ingest tokens | `POST /api/v1/snapshots` as one cluster name | `upgradescope tokens create <cluster>` |
 | shared ingest token | `POST /api/v1/snapshots` as **any** cluster | `--ingest-token` |
 | admin token | deleting and renaming clusters, plus reads | `--admin-token`; empty = both refused |

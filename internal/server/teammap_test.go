@@ -1,11 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -28,17 +32,36 @@ func TestParseTeamMapRejectsBadInput(t *testing.T) {
 		"empty pattern": "- pattern: \"\"\n  team: x\n",
 		"empty team":    "- pattern: \"a-*\"\n  team: \"\"\n",
 		"bad glob":      "- pattern: \"[\"\n  team: x\n",
-		// Read scopes list teams comma separated (X-Upgradescope-Teams, the
-		// trusted-proxy header, tokens create --teams), and '*' there is
-		// the whole fleet: a team must be nameable in them.
-		"comma in team":      "- pattern: \"a-*\"\n  team: \"pay,web\"\n",
-		"whitespace in team": "- pattern: \"a-*\"\n  team: \"pay ments\"\n",
-		"team named *":       "- pattern: \"a-*\"\n  team: \"*\"\n",
 	}
 	for name, in := range cases {
 		if _, err := ParseTeamMap([]byte(in)); err == nil {
 			t.Errorf("%s: ParseTeamMap(%q): want error, got nil", name, in)
 		}
+	}
+}
+
+// A team is free text, as it was before read scopes (#72): a map that
+// names "Platform Team", a team with a comma or a non-ASCII one still
+// loads. A team called "*", the fleet-wide read scope, is read as
+// StarTeam, with a warning, and serve keeps starting.
+func TestParseTeamMapKeepsFreeTextTeams(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	tm, err := ParseTeamMap([]byte("- pattern: \"plat-*\"\n  team: Platform Team\n" +
+		"- pattern: \"fr-*\"\n  team: \"Équipe, Paris\"\n- pattern: \"star-*\"\n  team: \"*\"\n"))
+	if err != nil {
+		t.Fatalf("ParseTeamMap: %v", err)
+	}
+	var teams []string
+	for _, r := range tm {
+		teams = append(teams, r.Team)
+	}
+	if want := []string{"Platform Team", "Équipe, Paris", StarTeam}; !slices.Equal(teams, want) {
+		t.Errorf("teams = %q, want %q", teams, want)
+	}
+	if !strings.Contains(logged.String(), `"(*)"`) {
+		t.Errorf("no warning that team \"*\" is read as %q: %q", StarTeam, logged.String())
 	}
 }
 

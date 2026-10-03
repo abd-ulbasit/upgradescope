@@ -77,6 +77,16 @@ describe("read scope", () => {
     expect(note.textContent).not.toMatch(/token/i);
   });
 
+  it("decodes free-text team names", async () => {
+    mockApi({
+      "api/v1/fleet": () =>
+        jsonResponse(200, { targets: [], clusters: [] }, { "X-Upgradescope-Teams": "%C3%89quipe%2C%20Paris,Platform%20Team" }),
+    });
+    render(<App />);
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toContain("Showing teams Équipe, Paris, Platform Team only");
+  });
+
   it("shows no note for a fleet-wide answer", async () => {
     mockApi({ "api/v1/fleet": { targets: [], clusters: [] } });
     render(<App />);

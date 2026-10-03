@@ -43,10 +43,17 @@ helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
   evaluation once, in its startup pass: about the cost of one knowledge
   base change across the fleet. Until the pass reaches a cluster, its
   evaluations read `outdated: true` and no team-scoped token sees it;
-  fleet-wide reads are unaffected. `serve` decides whether its read API is
-  open only after opening (and so migrating) the database, since minted
-  read tokens live there: a first start that refuses an open read API on
-  an exposed address has already migrated it.
+  fleet-wide reads still see every cluster. `serve` decides whether its
+  read API is open only after opening (and so migrating) the database,
+  since minted read tokens live there: a first start that refuses an open
+  read API on an exposed address has already migrated it. A `--team-map`
+  keeps loading as before: a team is free text (`Platform Team` is a
+  team), and a token names one per `--teams` flag. The one change is a
+  team called `*`, the scope of a fleet-wide read token: it is now read
+  as the team `(*)`, and `serve` logs a warning at startup naming the
+  rule. Its findings, team scores and `/fleet/teams` row say `(*)` from
+  the first re-evaluation on; rename the team in the map if that matters
+  to you ([Read access](auth.md)).
 - **Agents and servers** can be upgraded in either order (from v0.1.x,
   upgrade the server first when a cluster name is invalid, and run both
   `clusters list` and `clusters rename` from the upgraded binary:

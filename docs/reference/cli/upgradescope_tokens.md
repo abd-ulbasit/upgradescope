@@ -10,7 +10,7 @@ Ingest tokens (the default) authenticate snapshot pushes for one cluster
 name only, so a leaked token cannot write another cluster's history.
 
 Read tokens (--read) authenticate the read API, the dashboard's data,
-/api/v1/gate and /metrics, each for a set of teams (--teams a,b) or for the
+/api/v1/gate and /metrics, each for a set of teams (--teams a --teams b) or for the
 whole fleet (--teams '*'). A team-scoped token reads only the clusters its
 teams own a namespace in, and of those only its teams' findings and team
 scores: any other cluster answers 404, as an unknown one does, and is left

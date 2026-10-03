@@ -58,7 +58,7 @@ upgradescope serve [flags]
       --team-map string              YAML file of {pattern, team} namespace globs overriding team labels (first match wins)
       --tls-cert-file string         PEM certificate (chain) to serve HTTPS directly, TLS 1.2 minimum; requires --tls-key-file; a new handshake re-reads the pair when either file changed (checked at most once a second), so a renewal needs no restart
       --tls-key-file string          PEM private key for --tls-cert-file
-      --trust-team-header string     DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated (an authenticating proxy's group header, e.g. X-Forwarded-Groups; never the whole fleet, '*' included); needs --trusted-proxy-cidr
+      --trust-team-header string     DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated and each percent-encoded where it must be (an authenticating proxy's group header, e.g. X-Forwarded-Groups; never the whole fleet, '*' included); needs --trusted-proxy-cidr
       --trusted-proxy-cidr strings   with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16
       --webhook string               generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in api/webhook.schema.json) (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_URL or --webhook-file)
       --webhook-file string          read --webhook from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)

@@ -13,11 +13,15 @@ import (
 
 // createReadTokenCLI mints a read token via the CLI and returns its
 // plaintext and the id reported on stderr.
-func createReadTokenCLI(t *testing.T, db string, teams string) (token, id string) {
+func createReadTokenCLI(t *testing.T, db string, teams ...string) (token, id string) {
 	t.Helper()
-	stdout, stderr, err := execTokens(t, "create", "--read", "--teams", teams, "--db", db)
+	args := []string{"create", "--read", "--db", db}
+	for _, team := range teams {
+		args = append(args, "--teams", team)
+	}
+	stdout, stderr, err := execTokens(t, args...)
 	if err != nil {
-		t.Fatalf("tokens create --read --teams %s: %v", teams, err)
+		t.Fatalf("tokens create --read --teams %q: %v", teams, err)
 	}
 	token = strings.TrimSpace(stdout)
 	if !hexToken.MatchString(token) {
@@ -37,7 +41,7 @@ func createReadTokenCLI(t *testing.T, db string, teams string) (token, id string
 // one that is not an ingest token.
 func TestTokensCreateRead(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "tokens.db")
-	payTok, _ := createReadTokenCLI(t, db, "web,payments,web")
+	payTok, _ := createReadTokenCLI(t, db, "web", "payments", "web")
 	fleetTok, _ := createReadTokenCLI(t, db, "*")
 
 	st, err := store.Open(db)
@@ -68,9 +72,9 @@ func TestTokensCreateReadRejectsBadScopes(t *testing.T) {
 	}{
 		{[]string{"create", "--read"}, "--teams"},
 		{[]string{"create", "--read", "--teams", ""}, "--teams"},
-		{[]string{"create", "--read", "--teams", "a,,b"}, "non-empty"},
-		{[]string{"create", "--read", "--teams", "*,payments"}, "alone"},
-		{[]string{"create", "--read", "--teams", "pay ments"}, "whitespace"},
+		{[]string{"create", "--read", "--teams", "a", "--teams", ""}, "non-empty"},
+		{[]string{"create", "--read", "--teams", "*", "--teams", "payments"}, "alone"},
+		{[]string{"create", "--read", "--teams", "pay\nments"}, "printable"},
 		{[]string{"create", "--read", "--teams", "payments", "prod"}, "unknown command"},
 		{[]string{"create", "prod", "--teams", "payments"}, "--read"},
 	} {
@@ -143,5 +147,37 @@ func TestTokensListAndRevokeRead(t *testing.T) {
 		if _, _, err := execTokens(t, append(tc.args, "--db", db)...); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: err = %v, want one naming %q", tc.args, err, tc.want)
 		}
+	}
+}
+
+// A team is free text (#72): one --teams flag is one team, never split
+// or trimmed, so a --team-map team like "Platform Team", one with a comma
+// or a non-ASCII one can be given a token. A comma draws a note, since it
+// is most likely a list passed to one flag; list --read quotes the names
+// that need it.
+func TestTokensCreateReadFreeTextTeams(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "tokens.db")
+	_, stderr, err := execTokens(t, "create", "--read", "--teams", "Platform Team", "--teams", "Équipe, Paris", "--teams", "équipe", "--db", db)
+	if err != nil {
+		t.Fatalf("tokens create: %v", err)
+	}
+	if !strings.Contains(stderr, "repeat the flag") {
+		t.Errorf("no note for a team with a comma: %q", stderr)
+	}
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toks, err := st.ListReadTokens(context.Background())
+	_ = st.Close()
+	if want := []string{"Platform Team", "Équipe, Paris", "équipe"}; err != nil || len(toks) != 1 || !slices.Equal(toks[0].Teams, want) {
+		t.Fatalf("read tokens = %+v, %v, want one for %q", toks, err, want)
+	}
+	stdout, _, err := execTokens(t, "list", "--read", "--db", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `"Platform Team","Équipe, Paris",équipe`; !strings.Contains(stdout, want) {
+		t.Errorf("list --read = %q, want teams %s", stdout, want)
 	}
 }

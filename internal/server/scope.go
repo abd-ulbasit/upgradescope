@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -381,7 +382,7 @@ func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if !sc.fleet() {
-			w.Header().Set(scopeHeader, strings.Join(sc.names(), ","))
+			w.Header().Set(scopeHeader, encodeTeams(sc.names()))
 			w.Header().Set("Cache-Control", "private, no-store")
 		}
 		next(w, withScope(r, sc))
@@ -453,9 +454,9 @@ func (s *Server) readOpen(ctx context.Context) (bool, error) {
 
 // proxyScope is the trusted-proxy mode (Config.TrustTeamHeader): a request
 // whose TCP peer, never a forwarded-for header, is in Config.TrustedProxies
-// and that carries the team header reads as the teams it lists, comma
-// separated, every copy of the header counted (oauth2-proxy sends one per
-// group). Anywhere else the header is ignored: a client that reaches the
+// and that carries the team header reads as the teams it lists, in the
+// team list encoding (decodeTeams), every copy of the header counted
+// (oauth2-proxy sends one per group). Anywhere else the header is ignored: a client that reaches the
 // server directly cannot spoof it. Only a proxy that strips the header from
 // what clients send makes it safe. The header always names teams: "*" in it
 // is a team called "*", never the whole fleet, so whoever can name an
@@ -467,11 +468,7 @@ func (s *Server) proxyScope(r *http.Request) (readScope, bool) {
 	}
 	var teams []string
 	for _, v := range r.Header.Values(s.cfg.TrustTeamHeader) {
-		for _, t := range strings.Split(v, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				teams = append(teams, t)
-			}
-		}
+		teams = append(teams, decodeTeams(v)...)
 	}
 	if len(teams) == 0 {
 		return readScope{}, false
@@ -481,6 +478,43 @@ func (s *Server) proxyScope(r *http.Request) (readScope, bool) {
 		m[t] = true
 	}
 	return readScope{teams: m}, true
+}
+
+// The team list encoding, of the trusted-proxy header and of scopeHeader:
+// team names separated by commas, each percent-encoded as a URL path
+// segment is (url.PathEscape: a comma, percent sign, space, control or
+// non-ASCII byte as %XX, UTF-8). A team name is free text (a --team-map
+// team can be "Platform Team" or "Équipe, Paris"), so it is encoded to
+// be named in a list unambiguously and in an ASCII header value.
+
+// encodeTeams is teams in the team list encoding.
+func encodeTeams(teams []string) string {
+	enc := make([]string, len(teams))
+	for i, t := range teams {
+		enc[i] = url.PathEscape(t)
+	}
+	return strings.Join(enc, ",")
+}
+
+// decodeTeams is the teams v lists in the team list encoding. Whitespace
+// around an entry is a list's optional whitespace and is trimmed (a name
+// that starts or ends with a space spells it %20); an empty entry names
+// no team. An entry that is not valid percent-encoding ("50%off") names
+// no team the server could know, so it is dropped: read as written, it
+// could be a team whose encoded name it is not. A name sent unencoded
+// reads as itself when it holds no comma or percent sign ("Platform
+// Team", raw UTF-8).
+func decodeTeams(v string) []string {
+	var teams []string
+	for _, e := range strings.Split(v, ",") {
+		if e = strings.TrimSpace(e); e == "" {
+			continue
+		}
+		if t, err := url.PathUnescape(e); err == nil && t != "" {
+			teams = append(teams, t)
+		}
+	}
+	return teams
 }
 
 // trustedPeer reports whether remoteAddr (http.Request.RemoteAddr) is in a

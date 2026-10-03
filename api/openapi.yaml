@@ -43,7 +43,8 @@ info:
     unknown one, on every per-cluster endpoint and for `/api/v1/gate`'s
     `?cluster=`, and is absent from the cluster list and fleet rollups.
     `/metrics` answers a team-scoped read 403. A scoped answer carries
-    `X-Upgradescope-Teams: <team,...>` and `Cache-Control: private,
+    `X-Upgradescope-Teams: <team,...>` (each team percent-encoded, as a
+    URL path segment is: `Platform%20Team,payments`) and `Cache-Control: private,
     no-store`; a fleet-wide one carries neither. In the trusted-proxy mode
     every read answer carries `Vary: <header>, Authorization`. A finding
     whose namespace list was capped is always cut for a scoped read. See

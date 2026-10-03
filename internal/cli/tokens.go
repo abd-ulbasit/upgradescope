@@ -5,13 +5,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -143,7 +146,7 @@ Ingest tokens (the default) authenticate snapshot pushes for one cluster
 name only, so a leaked token cannot write another cluster's history.
 
 Read tokens (--read) authenticate the read API, the dashboard's data,
-/api/v1/gate and /metrics, each for a set of teams (--teams a,b) or for the
+/api/v1/gate and /metrics, each for a set of teams (--teams a --teams b) or for the
 whole fleet (--teams '*'). A team-scoped token reads only the clusters its
 teams own a namespace in, and of those only its teams' findings and team
 scores: any other cluster answers 404, as an unknown one does, and is left
@@ -168,10 +171,11 @@ func newTokensCreateCmd() *cobra.Command {
 		teams []string
 	)
 	cmd := &cobra.Command{
-		Use:   "create (<cluster> | --read --teams <team,...|*>)",
+		Use:   "create (<cluster> | --read --teams <team|*> [--teams <team>]...)",
 		Short: "Mint an ingest token bound to one cluster, or a read token scoped to teams",
 		Long: `Mint an ingest token bound to one cluster, or with --read a read token
-scoped to the teams --teams lists ('*' alone: the whole fleet). The
+scoped to the teams the --teams flags name, one team per flag, taken as
+written ('*' alone: the whole fleet). The
 plaintext token is printed once, to stdout. The server stores its sha256
 hash and its first 8 characters (which "tokens list" shows), never the
 token. Give an ingest token to that cluster's agent (--server-token-file,
@@ -179,7 +183,8 @@ or the chart's agent.existingSecret), and a read token to the team's
 dashboard users or CI.`,
 		Example: `  upgradescope tokens create prod-eu --db upgradescope.db
   upgradescope tokens create prod-eu --db-url-file /secrets/db-url > prod-eu.token
-  upgradescope tokens create --read --teams payments,checkout > payments.token
+  upgradescope tokens create --read --teams payments --teams checkout > payments.token
+  upgradescope tokens create --read --teams 'Platform Team' > platform.token
   upgradescope tokens create --read --teams '*' > fleet.token`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if read {
@@ -228,25 +233,30 @@ dashboard users or CI.`,
 		},
 	}
 	cmd.Flags().BoolVar(&read, "read", false, "mint a read token for the read API, dashboard, /api/v1/gate and /metrics instead of an ingest token; needs --teams")
-	cmd.Flags().StringSliceVar(&teams, "teams", nil, "with --read: the teams the token reads, comma separated, or '*' alone for the whole fleet")
+	cmd.Flags().StringArrayVar(&teams, "teams", nil, "with --read: a team the token reads, as the team label or --team-map names it (repeat the flag for more; the value is never split), or '*' alone for the whole fleet")
 	flags.register(cmd)
 	return cmd
 }
 
 // readTokenTeams validates --teams: at least one team, none empty or
-// holding a comma or whitespace (the trusted-proxy header and --teams are
-// comma separated), and '*' only alone. The result is sorted, deduplicated.
-func readTokenTeams(teams []string) ([]string, error) {
+// over maxTeamName, and '*' only alone. Each flag is one team, taken as
+// written: a team is free text ("Platform Team", "Équipe, Paris"), so a
+// value is never split or trimmed. A team with a comma is most likely a
+// list passed to one flag, so it is warned about on stderr; the token is
+// minted for the team so named all the same. The result is sorted and
+// deduplicated.
+func readTokenTeams(teams []string, stderr io.Writer) ([]string, error) {
 	out := make([]string, 0, len(teams))
 	for _, t := range teams {
-		t = strings.TrimSpace(t)
 		switch {
 		case t == "":
 			return nil, errors.New("--teams: a team name must be non-empty")
-		case strings.ContainsFunc(t, unicode.IsSpace):
-			return nil, fmt.Errorf("--teams: team %q contains whitespace", t)
 		case len(t) > maxTeamName:
 			return nil, fmt.Errorf("--teams: team %q is longer than %d characters", t, maxTeamName)
+		case !utf8.ValidString(t) || strings.ContainsFunc(t, unicode.IsControl):
+			return nil, fmt.Errorf("--teams: team %q is not printable UTF-8 text", t)
+		case strings.Contains(t, ","):
+			fmt.Fprintf(stderr, "note: --teams %q is one team whose name holds a comma; for several teams repeat the flag (--teams a --teams b)\n", t)
 		}
 		out = append(out, t)
 	}
@@ -256,9 +266,23 @@ func readTokenTeams(teams []string) ([]string, error) {
 	slices.Sort(out)
 	out = slices.Compact(out)
 	if slices.Contains(out, store.ReadScopeFleet) && len(out) > 1 {
-		return nil, fmt.Errorf("--teams: '%s' is the whole fleet and stands alone, got %s", store.ReadScopeFleet, strings.Join(out, ","))
+		return nil, fmt.Errorf("--teams: '%s' is the whole fleet and stands alone, got %s", store.ReadScopeFleet, teamList(out))
 	}
 	return out, nil
+}
+
+// teamList prints teams for a person: comma separated, each quoted when
+// it holds a comma, a quote, a space or anything not printable, so a list
+// of free-text team names reads unambiguously.
+func teamList(teams []string) string {
+	out := make([]string, len(teams))
+	for i, t := range teams {
+		out[i] = t
+		if t == "" || strings.ContainsFunc(t, func(r rune) bool { return r == ',' || r == '"' || unicode.IsSpace(r) || !unicode.IsPrint(r) }) {
+			out[i] = strconv.Quote(t)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // maxTeamName bounds a --teams entry: a team label value is at most 63
@@ -267,7 +291,7 @@ const maxTeamName = 253
 
 // createReadToken is `tokens create --read --teams ...`.
 func createReadToken(cmd *cobra.Command, flags dbFlags, raw []string) error {
-	teams, err := readTokenTeams(raw)
+	teams, err := readTokenTeams(raw, cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -287,7 +311,7 @@ func createReadToken(cmd *cobra.Command, flags dbFlags, raw []string) error {
 	if err != nil {
 		return fmt.Errorf("create read token: %w", err)
 	}
-	scope := "teams " + strings.Join(teams, ",")
+	scope := "teams " + teamList(teams)
 	if teams[0] == store.ReadScopeFleet {
 		scope = "the whole fleet"
 	}
@@ -369,7 +393,7 @@ func listReadTokens(cmd *cobra.Command, st store.Store) error {
 			revoked = tk.RevokedAt.Format(time.RFC3339)
 		}
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n",
-			tk.ID, strings.Join(tk.Teams, ","), tk.Prefix, tk.CreatedAt.Format(time.RFC3339), revoked)
+			tk.ID, teamList(tk.Teams), tk.Prefix, tk.CreatedAt.Format(time.RFC3339), revoked)
 	}
 	return tw.Flush()
 }

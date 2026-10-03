@@ -88,7 +88,7 @@ export function subscribeScope(fn: () => void): () => void {
 
 function setScope(next: string[] | null): void {
   const same =
-    next === scope || (next !== null && scope !== null && next.join(",") === scope.join(","));
+    next === scope || (next !== null && scope !== null && JSON.stringify(next) === JSON.stringify(scope));
   if (same) return;
   scope = next;
   for (const fn of scopeListeners) fn();
@@ -100,10 +100,28 @@ export function clearScope(): void {
   setScope(null);
 }
 
+// decodeTeams reads SCOPE_HEADER's team list encoding: comma-separated
+// team names, each percent-encoded (UTF-8), since a team name is free
+// text ("Platform Team", "Équipe, Paris"). An entry that does not decode
+// is shown as sent.
+export function decodeTeams(h: string): string[] {
+  return h
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t !== "")
+    .map((t) => {
+      try {
+        return decodeURIComponent(t);
+      } catch {
+        return t;
+      }
+    });
+}
+
 // noteScope records the scope an answer was given for.
 function noteScope(res: Response): void {
   const h = res.headers.get(SCOPE_HEADER);
-  setScope(h === null ? null : h.split(",").filter((t) => t !== ""));
+  setScope(h === null ? null : decodeTeams(h));
 }
 
 export class ApiError extends Error {

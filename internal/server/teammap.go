@@ -2,14 +2,14 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path"
-	"strings"
-	"unicode"
 
 	"sigs.k8s.io/yaml"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 // TeamMapRule maps namespaces matching a glob Pattern (path.Match grammar)
@@ -24,6 +24,11 @@ type TeamMapRule struct {
 // inventory at evaluation time — a matching rule replaces the label; a
 // namespace matching no rule keeps its label. A nil/empty TeamMap is a no-op.
 type TeamMap []TeamMapRule
+
+// StarTeam is what a --team-map team called "*" is read as. "*" is the
+// scope of a fleet-wide read token, so no token could name a team called
+// that; this name a team-scoped token can.
+const StarTeam = "(*)"
 
 // LoadTeamMap reads and parses a --team-map YAML file.
 func LoadTeamMap(p string) (TeamMap, error) {
@@ -44,7 +49,11 @@ func LoadTeamMap(p string) (TeamMap, error) {
 //     team: payments
 //
 // Every rule must have a non-empty pattern (valid path.Match glob) and a
-// team that a read scope can name: no comma or whitespace, and not "*".
+// non-empty team. A team is free text ("Platform Team", "Équipe, Paris"):
+// read scopes name it in the team list encoding (decodeTeams) or one per
+// tokens create --teams flag. The one exception is a team called "*",
+// which is read as StarTeam (logged), since "*" is a read token's scope
+// of the whole fleet.
 func ParseTeamMap(data []byte) (TeamMap, error) {
 	var tm TeamMap
 	if err := yaml.UnmarshalStrict(data, &tm); err != nil {
@@ -57,12 +66,13 @@ func ParseTeamMap(data []byte) (TeamMap, error) {
 		if r.Team == "" {
 			return nil, fmt.Errorf("team map rule %d (%q): team is required", i+1, r.Pattern)
 		}
-		// Read scopes name teams comma separated (the X-Upgradescope-Teams
-		// answer header, the trusted-proxy header, tokens create --teams,
-		// each entry trimmed), and "*" there is the whole fleet, so a team
-		// a scope could not name is refused here, not silently unreadable.
-		if strings.ContainsFunc(r.Team, func(c rune) bool { return c == ',' || unicode.IsSpace(c) }) || r.Team == "*" {
-			return nil, fmt.Errorf("team map rule %d (%q): team %q must not contain a comma or whitespace, nor be '*'", i+1, r.Pattern, r.Team)
+		// A read token's scope of "*" is the whole fleet, so a team called
+		// "*" could not be given a token of its own: it is read as the
+		// team StarTeam, which one can name, and serve says so.
+		if r.Team == store.ReadScopeFleet {
+			tm[i].Team = StarTeam
+			log.Printf("serve: --team-map rule %d (%q): team %q is read as the team %q: a read token for %q reads the whole fleet, so mint one with --teams %q for this team",
+				i+1, r.Pattern, r.Team, StarTeam, store.ReadScopeFleet, StarTeam)
 		}
 		// path.Match validates the pattern syntax regardless of the name
 		// matched against; bad globs must fail at load, not silently never
