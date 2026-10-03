@@ -981,14 +981,18 @@ func (s *Server) latestHead(ctx context.Context, clusterID int64) (store.Snapsho
 	if err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, err
 	}
+	// Source and CollectorSchema decide how legacyView judges the head, so
+	// it is judged exactly as decodeInventory judges the whole (#194).
 	var head struct {
-		ServerVersion string                                              `json:"serverVersion"`
-		Capabilities  map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities"`
+		Source          inventory.Source                                    `json:"source"`
+		CollectorSchema int                                                 `json:"collectorSchema"`
+		ServerVersion   string                                              `json:"serverVersion"`
+		Capabilities    map[inventory.Capability]inventory.CapabilityStatus `json:"capabilities"`
 	}
 	if err := json.Unmarshal(snap.Inventory, &head); err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", clusterID, snap.ID, errCorruptInventory, err)
 	}
-	inv := inventory.Inventory{ServerVersion: head.ServerVersion, Capabilities: head.Capabilities}
+	inv := inventory.Inventory{Source: head.Source, CollectorSchema: head.CollectorSchema, ServerVersion: head.ServerVersion, Capabilities: head.Capabilities}
 	inv.CutFreeText()
 	return snap, legacyView(inv, snap.AgentVersion), nil
 }

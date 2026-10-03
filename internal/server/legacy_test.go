@@ -316,3 +316,33 @@ func TestLegacyViewJudgesSnapshotsAsCluster(t *testing.T) {
 		}
 	}
 }
+
+// TestClusterDetailJudgesMarkerLikeReport (#194 SV-12): the cluster
+// detail decodes only the snapshot's head, and must judge it as the
+// report judges the whole inventory. A current agent built the default
+// way reports agentVersion "dev" (hack/e2e.sh: "e2e"); its inventory
+// carries the collector marker, so it is not legacy, and its api-usage
+// and deprecated-calls must not read as an old agent's.
+func TestClusterDetailJudgesMarkerLikeReport(t *testing.T) {
+	h := newHarness(t, Config{KB: legacyKB()}, aug1)
+	for i, agent := range []string{"dev", "e2e", ""} {
+		cluster := "marked-" + itoa(int64(i))
+		if code, out := h.pushAs(cluster, agent, testInventory()); code != http.StatusAccepted {
+			t.Fatalf("push as %q = %d %v", agent, code, out)
+		}
+		var detail struct {
+			Capabilities map[string]inventory.CapabilityStatus `json:"capabilities"`
+		}
+		if code := h.get("/api/v1/clusters/"+itoa(h.clusterID(cluster)), &detail); code != http.StatusOK {
+			t.Fatalf("GET %s = %d", cluster, code)
+		}
+		for _, capability := range []string{"api-usage", "deprecated-calls"} {
+			if st := detail.Capabilities[capability]; !st.Available || st.Reason != "" {
+				t.Errorf("agent %q: cluster detail %s = %+v, want available with no legacy reason", agent, capability, st)
+			}
+		}
+		if rep := h.report(cluster, "1.35"); rep.Verdict != "ready" || len(rep.NotAssessed) != 0 {
+			t.Errorf("agent %q: report = %s, notAssessed %+v, want ready with none", agent, rep.Verdict, rep.NotAssessed)
+		}
+	}
+}
