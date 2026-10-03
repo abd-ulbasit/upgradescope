@@ -360,7 +360,7 @@ has "the gate command is found in the CI gate page" "$work/summary" "- PASS — 
 has "the clean-manifest gate passes" "$work/summary" "- PASS — $gate_clean"
 has "the removed-API gate passes" "$work/summary" "- PASS — $gate_removed"
 has "the documented command is posted at the next minor to the agent's cluster, the page's way" "$work/log" \
-  "curl -sS --fail-with-body -X POST http://127.0.0.1:18080/api/v1/gate?target=1.32&cluster=kind&format=sarif&path=rendered.yaml -H Authorization: Bearer"
+  "curl -sS --fail-with-body --retry 5 -X POST http://127.0.0.1:18080/api/v1/gate?target=1.32&cluster=kind&format=sarif&path=rendered.yaml -H Authorization: Bearer"
 has "the clean manifest is posted" "$work/log" "--data-binary @rendered.yaml"
 gate_at=$(grep -n -- '/api/v1/gate' "$work/log" | head -1 | cut -d: -f1 || true)
 pf_at=$(grep -n -- 'port-forward' "$work/log" | head -1 | cut -d: -f1 || true)
