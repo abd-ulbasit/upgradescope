@@ -162,11 +162,17 @@ cannot read is reported as not assessed.
   are created 0600 (an existing one is tightened on open).
 - **CSV exports** guard every place a spreadsheet could start a cell
   against formula injection, past leading white space too.
-- **TLS** directly (`--tls-cert-file`, `--tls-key-file`, TLS 1.2 minimum),
-  from the chart (`server.tls`: a Secret or a cert-manager `Certificate`;
-  the in-chart agent then pushes over HTTPS) or at an Ingress. The agent
-  warns at startup when it would send its token over plain HTTP to a host
-  that is not loopback.
+- **TLS** directly (`--tls-cert-file`, `--tls-key-file`, TLS 1.2 minimum,
+  Go's default cipher suites), from the chart (`server.tls`: a Secret or a
+  cert-manager `Certificate`; the in-chart agent then pushes over HTTPS)
+  or at an Ingress (`server.ingress`). `serve` re-reads the key pair when
+  its files change, so a renewal needs no restart. Over plain HTTP, agent
+  bearer tokens and full cluster inventories cross the network in
+  cleartext: the agent warns at startup when it would send its token over
+  plain HTTP to a host that is not loopback. For a server behind a
+  private CA, the agent's `--server-ca-file` (chart: `agent.serverCA`)
+  adds that CA to the system roots; nothing skips certificate
+  verification ([Exposing the server to remote agents](../getting-started/fleet.md#exposing-the-server-to-remote-agents)).
 - **Browser hardening.** Every response the server's handler writes (the
   dashboard, its assets, the API, exports and their errors, `/healthz`)
   carries a Content-Security-Policy that forbids inline and third-party

@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,10 @@ type Config struct {
 	CRName         string        // default crd.DefaultName
 	TeamLabel      string        // default "team"
 	ForceSyncEvery time.Duration // default 1h: push even if hash unchanged
+	// ServerRootCAs verifies the server's certificate on pushes (from
+	// LoadServerCAs: the system roots plus a private CA); nil = the system
+	// roots.
+	ServerRootCAs *x509.CertPool
 	// Targets, when non-empty, are the source of truth for spec.targets:
 	// every tick reconciles the CR to them, overriding kubectl edits. Empty
 	// leaves spec.targets to whoever edits the CR. applyDefaults normalizes
@@ -211,7 +216,7 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 		return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel})
 	}
 	if cfg.ServerURL != "" {
-		r.pusher = newPusher(cfg.ServerURL, cfg.ServerToken)
+		r.pusher = newPusher(cfg.ServerURL, cfg.ServerToken, cfg.ServerRootCAs)
 		r.pusher.log = cfg.Logger
 	}
 	return r

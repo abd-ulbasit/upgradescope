@@ -1,6 +1,7 @@
 {{- if .Values.agent.enabled }}
 {{- $memLimit := include "upgradescope.goMemLimit" (dict "resources" .Values.agent.resources "extraEnv" .Values.agent.extraEnv) }}
 {{- $serverCA := include "upgradescope.agentTrustsServerCA" . }}
+{{- $caFile := include "upgradescope.agentServerCA" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,6 +54,10 @@ spec:
             {{- if include "upgradescope.pushEnabled" . }}
             - {{ printf "--server-url=%s" (include "upgradescope.serverUrl" .) | quote }}
             {{- end }}
+            {{- if $caFile }}
+            # agent.serverCA, trusted for pushes on top of the image's roots.
+            - "--server-ca-file=/etc/upgradescope/server-ca/ca.crt"
+            {{- end }}
             {{- range .Values.agent.extraArgs }}
             - {{ . | quote }}
             {{- end }}
@@ -104,9 +109,9 @@ spec:
           securityContext: {{- toYaml . | nindent 12 }}
           {{- end }}
           resources: {{- toYaml .Values.agent.resources | nindent 12 }}
-          {{- if or $serverCA .Values.agent.extraVolumeMounts }}
+          {{- if or $serverCA $caFile .Values.agent.extraVolumeMounts }}
           volumeMounts:
-            {{- if $serverCA }}
+            {{- if or $serverCA $caFile }}
             - name: server-ca
               mountPath: /etc/upgradescope/server-ca
               readOnly: true
@@ -115,8 +120,23 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or $serverCA .Values.agent.extraVolumes }}
+      {{- if or $serverCA $caFile .Values.agent.extraVolumes }}
       volumes:
+        {{- with .Values.agent.serverCA }}
+        {{- if .configMap }}
+        - name: server-ca
+          configMap:
+            name: {{ .configMap }}
+            items:
+              - {key: {{ .key | quote }}, path: ca.crt}
+        {{- else if .secret }}
+        - name: server-ca
+          secret:
+            secretName: {{ .secret }}
+            items:
+              - {key: {{ .key | quote }}, path: ca.crt}
+        {{- end }}
+        {{- end }}
         {{- if $serverCA }}
         # Only the CA: the agent never sees the server's private key.
         - name: server-ca
