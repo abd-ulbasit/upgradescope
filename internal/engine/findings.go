@@ -128,7 +128,9 @@ type SuppressedFinding struct {
 //     before the target (an unchecked object of it would be a blocker);
 //   - a partial versions, for cluster inventories, when Skipped names a
 //     component whose version upstream would have told but was not read
-//     (it may be the one past the skew policy).
+//     (it may be the one past the skew policy), or "nodes", when no Node
+//     was listed (a kubelet past the policy would be a blocker; a
+//     forbidden Node list makes versions unavailable, required too).
 //
 // Other gaps only narrow what the report covers: a partial api-usage that
 // skipped only APIs removed later or never (their findings are warnings

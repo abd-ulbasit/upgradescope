@@ -45,6 +45,8 @@ func fakeClients(t *testing.T, serverVersion string) collect.Clients {
 	t.Helper()
 	cs := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}},
+		// One node: with none the versions capability is partial and required (#174).
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: serverVersion}}},
 	)
 	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
 	disc.FakedServerVersion = &version.Info{GitVersion: serverVersion}

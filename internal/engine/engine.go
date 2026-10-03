@@ -1380,6 +1380,70 @@ func evalControlPlaneSkew(inv inventory.Inventory, k kb.KB, target inventory.Ver
 	return out
 }
 
+// evalKubeProxyKubeletSkew evaluates the one skew rule that pairs two
+// components on the same node: kube-proxy may be up to
+// k.Skew.KubeProxyMaxBehind minors older or newer than the kubelet it runs
+// alongside (2 for a kube-proxy older than 1.25). Each kube-proxy that
+// names its node (ComponentVersion.Node) is paired with that node's
+// kubelet; one that names none, or whose node or kubelet version is not
+// known, is not paired and gives nothing. The result is one warning per
+// node, keyed version-skew/kube-proxy-kubelet/<node> (a node name is
+// unique, and a rolling DaemonSet update can leave two kube-proxy versions
+// on one), listing the kube-proxy versions out of policy.
+//
+// Neither component moves when the control plane does, so unlike the
+// kubelet and kube-proxy rules against the apiserver there is no
+// post-upgrade form of this rule: the target does not enter into it.
+func evalKubeProxyKubeletSkew(inv inventory.Inventory, k kb.KB) []Finding {
+	kubelets := map[string]inventory.Version{}
+	rawKubelets := map[string]string{}
+	for _, n := range inv.Nodes {
+		if kv, err := inventory.ParseVersion(n.KubeletVersion); err == nil {
+			kubelets[n.Name], rawKubelets[n.Name] = kv, n.KubeletVersion
+		}
+	}
+	type bad struct {
+		kubelet string
+		proxies []string
+		legacy  bool
+	}
+	byNode := map[string]*bad{}
+	for _, cv := range inv.ControlPlane {
+		if cv.Component != "kube-proxy" || cv.Node == "" {
+			continue
+		}
+		kv, ok := kubelets[cv.Node]
+		pv, err := inventory.ParseVersion(cv.Version)
+		if !ok || err != nil {
+			continue
+		}
+		limit := legacyMaxBehind(k.Skew.KubeProxyMaxBehind, pv)
+		if minorsBehind(kv, pv) <= limit && minorsBehind(pv, kv) <= limit {
+			continue
+		}
+		b := byNode[cv.Node]
+		if b == nil {
+			b = &bad{kubelet: rawKubelets[cv.Node]}
+			byNode[cv.Node] = b
+		}
+		b.proxies = append(b.proxies, cv.Version)
+		b.legacy = b.legacy || limit < k.Skew.KubeProxyMaxBehind
+	}
+	var out []Finding
+	for _, node := range slices.Sorted(maps.Keys(byNode)) {
+		b := byNode[node]
+		sort.Strings(b.proxies)
+		out = append(out, Finding{
+			Category: CatVersionSkew, Severity: SevWarning,
+			Key:       string(CatVersionSkew) + "/kube-proxy-kubelet/" + node,
+			Title:     fmt.Sprintf("kube-proxy on node %s exceeds version skew vs its kubelet", node),
+			Detail:    fmt.Sprintf("kube-proxy %s on node %s is more than %d minor version(s) older or newer than the kubelet on that node (%s).", strings.Join(b.proxies, ", "), node, k.Skew.KubeProxyMaxBehind, b.kubelet) + legacyNote("kube-proxy versions", b.legacy),
+			Citations: []string{skewPolicyURL + "#kube-proxy"},
+		})
+	}
+	return out
+}
+
 // evalKBStale: the cluster (current control plane) or the upgrade target is
 // newer than anything the embedded KB knows about → the scan itself may be
 // missing removals → warning. Evaluated against max(serverVersion, target);
@@ -1485,7 +1549,9 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 				// could not be read (#169), which collect names in Skipped,
 				// may be the one past the skew policy: never READY on that.
 				// Partial naming none (a vendor kube-proxy image, OKE's) is
-				// disclosed, optional.
+				// disclosed, optional. "nodes" (no Node listed, #174) is
+				// required like a forbidden Node list: no kubelet was
+				// judged, and one past the policy would block.
 				g.Required = required[c] && len(st.Skipped) > 0
 			case inventory.CapAddOns:
 				// Without pods only Helm releases and IngressClasses speak:
@@ -1778,6 +1844,7 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 		func() { findings = append(findings, evalHelmReleases(inv, k, target, b)...) },
 		func() { b.addAll(&findings, evalSkew(inv, k, target)) },
 		func() { b.addAll(&findings, evalControlPlaneSkew(inv, k, target)) },
+		func() { b.addAll(&findings, evalKubeProxyKubeletSkew(inv, k)) },
 		func() { b.addAll(&findings, evalKBStale(inv, k, target)) },
 		func() { b.addAll(&findings, evalUpgradePath(inv, target)) },
 		func() { findings = append(findings, evalCRDVersions(inv, target, b)...) },

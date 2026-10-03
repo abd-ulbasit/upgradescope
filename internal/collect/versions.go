@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -73,7 +74,39 @@ func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kub
 	}
 	sort.Slice(inv.Namespaces, func(i, j int) bool { return inv.Namespaces[i].Name < inv.Namespaces[j].Name })
 
-	return collectControlPlane(ctx, kube, inv)
+	err = collectControlPlane(ctx, kube, inv)
+	if len(inv.Nodes) > 0 {
+		return err
+	}
+	return withNoNodes(err)
+}
+
+// noNodesReason is the reason of a versions capability that listed no Node.
+const noNodesReason = "no nodes listed: kubelet skew and node runtimes not assessed"
+
+// withNoNodes adds the empty Node list (#174) to err, collectControlPlane's
+// outcome. An empty list is no error, but the kubelet-skew and node-runtime
+// checks then had nothing to check, which must read as not assessed, not as
+// passing: the capability is partial, "nodes" in Skipped. Skipped is what
+// makes the engine require the gap, as it does for a forbidden Node list,
+// which makes versions unavailable, a required gap too: a kubelet past the
+// skew policy would be a blocker. An error that is not a partialError (the
+// kube-system pods could not be listed) stands, the capability then being
+// unavailable.
+func withNoNodes(err error) error {
+	gap := partialError{msg: noNodesReason, incomplete: true, skipped: []string{"nodes"}}
+	if err == nil {
+		return gap
+	}
+	var pe partialError
+	if !errors.As(err, &pe) {
+		return err
+	}
+	return partialError{
+		msg:        pe.msg + "; " + gap.msg,
+		incomplete: true,
+		skipped:    slices.Sorted(slices.Values(append(slices.Clone(pe.skipped), gap.skipped...))),
+	}
 }
 
 // controlPlaneComponents are the components detected from kube-system pods.
@@ -88,7 +121,9 @@ var controlPlaneComponents = []string{
 // component version is the pod's image tag (the container whose image is
 // the component's, see componentImageTag), normalized (build suffix after
 // "-"/"+" stripped) and kept only if inventory.ParseVersion accepts it. The
-// result is (Component, Version)-deduped and sorted.
+// result is (Component, Version)-deduped and sorted, except kube-proxy,
+// which is kept per node (the pod's spec.nodeName) so the engine can pair
+// it with that node's kubelet (#148).
 //
 // A component pod whose version cannot be read is never dropped silently
 // (#169): its skew cannot be judged, so the capability is returned partial
@@ -143,7 +178,11 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 			}
 			switch {
 			case tag != "":
-				seen[inventory.ComponentVersion{Component: comp, Version: tag}] = true
+				cv := inventory.ComponentVersion{Component: comp, Version: tag}
+				if comp == "kube-proxy" {
+					cv.Node = p.Spec.NodeName
+				}
+				seen[cv] = true
 			case why != "":
 				unread[p.Name] = why
 				unreadComps[comp] = true
@@ -166,7 +205,10 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 		if a.Component != b.Component {
 			return a.Component < b.Component
 		}
-		return a.Version < b.Version
+		if a.Version != b.Version {
+			return a.Version < b.Version
+		}
+		return a.Node < b.Node
 	})
 	if len(unread) == 0 {
 		return nil

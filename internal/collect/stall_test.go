@@ -104,8 +104,9 @@ func TestCollectAPIUsageHonoursContextOnStalledDiscovery(t *testing.T) {
 }
 
 // fakeAPIServer answers what the live sub-collectors ask with an empty
-// cluster: a version, the kube-system namespace, no other objects, an
-// API surface with nothing flagged, and an apiserver /metrics.
+// cluster: a version, the kube-system namespace, one node (no node would
+// leave versions partial, #174), no other objects, an API surface with
+// nothing flagged, and an apiserver /metrics.
 func fakeAPIServer() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -121,6 +122,8 @@ func fakeAPIServer() http.Handler {
 			body = `{"kind":"APIResourceList","groupVersion":"v1","resources":[]}`
 		case r.URL.Path == "/api/v1/namespaces/kube-system":
 			body = `{"metadata":{"name":"kube-system","uid":"uid-1"}}`
+		case r.URL.Path == "/api/v1/nodes":
+			body = `{"metadata":{},"items":[{"metadata":{"name":"node-a"},"status":{"nodeInfo":{"kubeletVersion":"v1.34.2","containerRuntimeVersion":"containerd://2.0.5"}}}]}`
 		case r.URL.Path == "/metrics":
 			w.Header().Set("Content-Type", "text/plain")
 			body = "# TYPE apiserver_request_total counter\napiserver_request_total{code=\"200\",verb=\"LIST\"} 1\n" // no deprecated API requested
