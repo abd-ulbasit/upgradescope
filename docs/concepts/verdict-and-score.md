@@ -42,7 +42,9 @@ Required checks:
   with a digest or `latest` for a tag, or any unread kube-apiserver,
   kube-controller-manager or kube-scheduler pod): that component may be
   the one past the skew policy. A kube-proxy pod on a vendor image of
-  another name (Oracle OKE's) is an optional gap. See
+  another name (Oracle OKE's) is an optional gap. A *partial* `versions`
+  that skipped `nodes` (no Node was listed, so kubelet skew and node
+  runtimes were not assessed) is required too. See
   [Version skew](version-skew.md).
 - **`addons`**, for live clusters: add-on detection from images, labels,
   IngressClasses and charts. Without the cluster-wide pod list the

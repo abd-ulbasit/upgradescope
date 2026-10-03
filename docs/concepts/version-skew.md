@@ -13,7 +13,7 @@ once the control plane runs the target.
 | kube-apiserver | `/version`, plus `kube-apiserver` pods in `kube-system` when the control plane runs as pods | HA replicas within 1 minor of each other |
 | kubelet | each node's `status.nodeInfo.kubeletVersion` | not newer than the oldest apiserver; at most 3 minors behind the newest (2 for kubelets older than 1.25) |
 | kube-controller-manager, kube-scheduler | `kube-system` pod image tags | not newer than the oldest apiserver; at most 1 minor behind the newest |
-| kube-proxy | `kube-system` pod image tags | not newer than the oldest apiserver; at most 3 minors behind (2 before 1.25) |
+| kube-proxy | `kube-system` pod image tags, one per node (`spec.nodeName`) | not newer than the oldest apiserver; at most 3 minors behind (2 before 1.25); within 3 minors (2 before 1.25), older or newer, of the kubelet on the same node |
 
 A component pod is one labelled `component=<name>` or `k8s-app=<name>`
 (the kube-proxy DaemonSet, kOps and Talos static pods), or one named
@@ -65,6 +65,7 @@ appear only in apiserver audit logs, which upgradescope does not read.
 | `version-skew/kubelet-current`: kubelets too far behind today | warning |
 | `version-skew/kubelet-newer-than-apiserver` | warning |
 | `version-skew/kube-proxy-newer`: kube-proxy newer than the oldest apiserver | warning |
+| `version-skew/kube-proxy-kubelet/<node>`: a kube-proxy more than 3 minors (2 before 1.25) older or newer than the kubelet on the same node; names the node and cites the [policy](https://kubernetes.io/releases/version-skew-policy/#kube-proxy) | warning |
 | `version-skew/apiserver-ha-spread` | warning |
 | `version-skew/kube-controller-manager-behind`, `version-skew/kube-scheduler-behind` (more than 1 minor behind the newest apiserver), `version-skew/kube-proxy-behind` | warning |
 | `version-skew/kubelet-unparseable` | info |
@@ -72,6 +73,24 @@ appear only in apiserver audit logs, which upgradescope does not read.
 
 One component can be both newer and behind at once (HA replicas
 mid-upgrade), so each direction has its own key.
+
+The kube-proxy and kubelet pairing is the only rule between two components
+on one node, and it does not depend on the target: neither moves when the
+control plane does. It adds clarity rather than detection, since a pair
+more than 3 minors apart already breaks a rule against the apiserver; the
+finding names the node, which makes a mixed node pool easier to fix. A
+kube-proxy pod that names no node (not scheduled yet, or from an agent
+that predates the field) or whose node is not listed is not paired, and
+gives no finding.
+
+## When no node is listed
+
+With an empty Node list there is no kubelet to judge and no node runtime
+to check, and a cluster does not read as clean on them: the `versions`
+capability is reported partial, with the reason `no nodes listed: kubelet
+skew and node runtimes not assessed` and `nodes` in `skipped`. The gap is
+*required* on a live cluster, so the verdict is `unknown`, exactly as when
+the Node list is forbidden: a kubelet past the policy would be a blocker.
 
 ## A target that is not an upgrade
 
