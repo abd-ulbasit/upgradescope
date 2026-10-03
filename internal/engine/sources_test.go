@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 // TestEveryCategoryHasSources: every Category constant declared in
@@ -178,6 +179,56 @@ func TestUnassessed(t *testing.T) {
 			if got := Unassessed(tc.gaps, c.cat, c.key); got != c.want {
 				t.Errorf("%s: Unassessed(%s) = %v, want %v", tc.name, c.key, got, c.want)
 			}
+		}
+	}
+}
+
+// TestFoldsInto: a caller row whose API has a usage finding folds into it
+// (foldDeprecatedCalls), and FoldsInto names that pair from the keys
+// alone: the caller's key in a report without the usage finding, the
+// usage finding's key in a report with it.
+func TestFoldsInto(t *testing.T) {
+	k := testKB()
+	k.APILifecycle = append(k.APILifecycle, kb.APILifecycleEntry{
+		Version: "v1", Kind: "Endpoints", Introduced: inventory.Version{Major: 1}, Deprecated: vp(1, 33),
+	})
+	target := inventory.Version{Major: 1, Minor: 34}
+	for _, tc := range []struct {
+		usage inventory.APIUsage
+		call  inventory.DeprecatedCall
+	}{
+		{inventory.APIUsage{Version: "v1", Kind: "ComponentStatus", Count: 1, Namespaces: map[string]int{"": 1}},
+			inventory.DeprecatedCall{Version: "v1", Resource: "componentstatuses"}},
+		{inventory.APIUsage{Version: "v1", Kind: "Endpoints", Count: 1, Namespaces: map[string]int{"default": 1}},
+			inventory.DeprecatedCall{Version: "v1", Resource: "endpoints", Subresource: "status"}},
+	} {
+		with := Evaluate(inventory.Inventory{APIUsage: []inventory.APIUsage{tc.usage}, DeprecatedCalls: []inventory.DeprecatedCall{tc.call}}, k, target, testNow)
+		without := Evaluate(inventory.Inventory{DeprecatedCalls: []inventory.DeprecatedCall{tc.call}}, k, target, testNow)
+		if len(with.Findings) != 1 || len(without.Findings) != 1 || without.Findings[0].Category != CatDeprecatedAPIInUse {
+			t.Fatalf("%s: findings with usage %+v, without %+v; want one each, the caller's alone", tc.usage.Kind, with.Findings, without.Findings)
+		}
+		if call, usage := without.Findings[0].Key, with.Findings[0].Key; !FoldsInto(call, usage) {
+			t.Errorf("FoldsInto(%s, %s) = false, want true", call, usage)
+		}
+	}
+	const pspCall = "deprecated-api-in-use/policy/v1beta1/podsecuritypolicies"
+	for _, tc := range []struct {
+		call, usage string
+		want        bool
+	}{
+		{pspCall, "removed-api/policy/v1beta1/PodSecurityPolicy", true},
+		{pspCall, "deprecated-api/policy/v1beta1/PodSecurityPolicy", true},
+		{pspCall, "unknown-api/policy/v1beta1/PodSecurityPolicy", true},
+		{"deprecated-api-in-use/policy/v1/podsecuritypolicies", "removed-api/policy/v1beta1/PodSecurityPolicy", false},
+		{"deprecated-api-in-use/extensions/v1beta1/podsecuritypolicies", "removed-api/policy/v1beta1/PodSecurityPolicy", false},
+		{"deprecated-api-in-use/policy/v1beta1/poddisruptionbudgets", "removed-api/policy/v1beta1/PodSecurityPolicy", false},
+		{"deprecated-api-in-use/helm-release/shop/webs", "removed-api/helm-release/shop/web", false},
+		{pspCall, "eol-addon/policy/v1beta1/PodSecurityPolicy", false},
+		{"removed-api/policy/v1beta1/podsecuritypolicies", "removed-api/policy/v1beta1/PodSecurityPolicy", false},
+		{"deprecated-api-in-use/policy", "removed-api/policy/v1beta1/PodSecurityPolicy", false},
+	} {
+		if got := FoldsInto(tc.call, tc.usage); got != tc.want {
+			t.Errorf("FoldsInto(%s, %s) = %v, want %v", tc.call, tc.usage, got, tc.want)
 		}
 	}
 }

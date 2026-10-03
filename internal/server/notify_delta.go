@@ -68,7 +68,9 @@ func ComputeDelta(prev *engine.Report, curr engine.Report) []notify.Change {
 // (unassessedIn). A blocker or eol-approaching finding of prev that is
 // gone from curr but unassessed is carried: neither resolved by this pass
 // nor news when its capability returns, and no became-ready while a
-// carried blocker remains. carried is what the new evaluation's baseline
+// carried blocker remains. Nor is a deprecated caller that folds into a
+// carried usage finding (engine.FoldsInto) news: it is that finding, seen
+// without api-usage. carried is what the new evaluation's baseline
 // keeps of prev, until a pass that assessed it shows it gone.
 func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findingHead) bool) (changes []notify.Change, carried []findingHead) {
 	target := []string{curr.Target.String()}
@@ -101,7 +103,10 @@ func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findin
 			continue
 		}
 		seenBlockers[k] = true
-		if !prevBlockers[k] {
+		// A caller folded into a usage finding of prev splits out of it
+		// when api-usage did not see that API: the carried finding,
+		// seen through the /metrics scrape.
+		if !prevBlockers[k] && !slices.ContainsFunc(carried, func(h findingHead) bool { return engine.FoldsInto(k, h.key()) }) {
 			changes = append(changes, change(notify.KindNewBlocker, f, target))
 		}
 	}

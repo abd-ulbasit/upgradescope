@@ -173,7 +173,8 @@ func (g CapabilityGap) Label() string {
 // findings are keyed category/helm-release/…, and come from helm alone
 // (Sources). deprecated-api-in-use comes from the /metrics scrape only: a
 // caller row that folds into its API's usage finding leaves no key of its
-// own behind.
+// own behind, and has one while api-usage does not see that API
+// (FoldsInto).
 var categorySources = map[Category][]inventory.Capability{
 	CatRemovedAPI:         {inventory.CapAPIUsage},
 	CatDeprecatedAPI:      {inventory.CapAPIUsage},
@@ -247,6 +248,26 @@ func (g CapabilityGap) skips(key string) bool {
 		})
 	}
 	return len(g.Skipped) > 0
+}
+
+// FoldsInto reports whether call, the key of a deprecated-api-in-use
+// finding, names the API of usage, the key of an API usage finding
+// (removed-api, deprecated-api, unknown-api): the match
+// foldDeprecatedCalls folds a caller row by. A report with both findings
+// has usage's key alone, so call's is a finding of its own in a report
+// whose api-usage did not see that API, without anything having changed.
+func FoldsInto(call, usage string) bool {
+	cat, tail, _ := strings.Cut(usage, "/")
+	switch Category(cat) {
+	case CatRemovedAPI, CatDeprecatedAPI, CatUnknownAPI:
+	default:
+		return false
+	}
+	u := strings.Split(tail, "/") // group/version/Kind
+	cat, tail, _ = strings.Cut(call, "/")
+	c := strings.SplitN(tail, "/", 4) // group/version/resource[/subresource]
+	return Category(cat) == CatDeprecatedAPIInUse && len(u) == 3 && u[0] != "helm-release" && len(c) >= 3 &&
+		c[0] == u[0] && c[1] == u[1] && kindMatchesResource(u[2], c[2])
 }
 
 // splitAPI splits an API as a partial capability names it in Skipped,

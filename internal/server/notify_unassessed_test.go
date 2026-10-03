@@ -141,6 +141,42 @@ func TestRequiredCapabilityOutageKeepsItsBlockers(t *testing.T) {
 	expectNoEvents(t, h, "api-usage back, PSP unchanged")
 }
 
+// withPSPCaller adds a deprecated-calls row for the PSP objects of
+// testInventoryWithPSP: with them, the engine folds it into the PSP
+// finding, which keeps its key; without them, it is a finding of its own.
+func withPSPCaller(inv inventory.Inventory) inventory.Inventory {
+	inv.Capabilities[inventory.CapDeprecatedCalls] = inventory.CapabilityStatus{Available: true}
+	inv.DeprecatedCalls = []inventory.DeprecatedCall{{Group: "policy", Version: "v1beta1", Resource: "podsecuritypolicies", RemovedRelease: "1.25"}}
+	return inv
+}
+
+// TestAPIUsageOutageKeepsFoldedCaller: a controller that both stores and
+// calls a removed API is one blocker, the usage finding with the caller
+// folded in. With api-usage unavailable the caller is a blocker of its
+// own; it is the carried usage finding seen through the other
+// capability, not news, and nor is the fold again when api-usage returns.
+func TestAPIUsageOutageKeepsFoldedCaller(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.push("prod", withPSPCaller(testInventoryWithPSP()))
+	expectNoEvents(t, h, "first evaluation")
+
+	broken := withPSPCaller(testInventory())
+	broken.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: false, Reason: "forbidden"}
+	h.push("prod", broken)
+	if c := h.fleetCell("prod", "1.35"); c == nil || c.Verdict != "blocked" {
+		t.Fatalf("cell with api-usage unavailable = %+v, want blocked by the caller", c)
+	}
+	expectNoEvents(t, h, "api-usage failure")
+	h.push("prod", broken)
+	expectNoEvents(t, h, "second pass of the outage")
+
+	h.push("prod", withPSPCaller(testInventoryWithPSP()))
+	expectNoEvents(t, h, "api-usage back, PSP and its caller unchanged")
+
+	h.push("prod", callsScraped(testInventory()))
+	expectBecameReady(t, h, "PSP and its caller resolved")
+}
+
 // TestHelmOutageKeepsChartFoundAddOn: an add-on found through its Helm
 // chart alone is gone from the inventory while helm is not assessed. That
 // is not its resolution, and its return is not news (#189).
