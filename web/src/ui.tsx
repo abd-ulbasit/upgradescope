@@ -43,7 +43,7 @@ export function ErrorState({
       )}
       {hidden && (
         <p className="state-hint">
-          It does not exist, or it is outside the teams this read token reads.
+          It does not exist, or it is outside the teams this view is scoped to.
         </p>
       )}
       {onRetry && (

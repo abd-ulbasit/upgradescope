@@ -73,6 +73,8 @@ describe("read scope", () => {
     render(<App />);
     const note = await screen.findByRole("note");
     expect(note.textContent).toContain("Showing teams checkout, payments only");
+    // A scope can come from a proxy's team header, with no token at all.
+    expect(note.textContent).not.toMatch(/token/i);
   });
 
   it("shows no note for a fleet-wide answer", async () => {
@@ -91,6 +93,6 @@ describe("read scope", () => {
     });
     navigate("#/cluster/7");
     render(<App />);
-    expect(await screen.findByText(/outside the teams this read token reads/)).toBeTruthy();
+    expect(await screen.findByText(/outside the teams this view is scoped to/)).toBeTruthy();
   });
 });

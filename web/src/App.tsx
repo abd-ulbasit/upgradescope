@@ -103,7 +103,7 @@ function ScopeNote() {
           <strong>{t}</strong>
         </span>
       ))}{" "}
-      only: this read token does not see other teams' clusters, findings or
+      only: this view does not include other teams' clusters, findings or
       scores.
     </p>
   );
