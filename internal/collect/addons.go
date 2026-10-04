@@ -96,8 +96,8 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 // labels, once versions has listed all of them. The control-plane
 // components are found in that list, and at 2,000 nodes kube-system holds
 // about 4,000 pods (a CNI and a kube-proxy pod per node), so listing them
-// again with the other namespaces' read the same share of the response
-// twice a tick. Where versions did not list them (it failed before or in
+// again in the all-namespaces list read that share of the response twice a
+// tick. Where versions did not list them (it failed before or in
 // the list, or ran no step), read is false and the add-ons list them
 // themselves.
 type kubeSystemPods struct {
@@ -121,8 +121,10 @@ func podContainerImages(p *corev1.Pod) []string {
 // when versions listed them, and then listing the other namespaces only:
 // the server leaves kube-system out of the response, and a server that did
 // not would still not count its pods twice. A list of the other namespaces
-// that fails is a failure of the pods as before: partial, skipping pods,
-// the evidence of kube-system and of the pages read kept.
+// that fails on its first page is a failure of the pods exactly as before:
+// the kube-system evidence is dropped, so the gap reason, the add-ons and
+// the unavailable check are those of a list of every pod that failed. A
+// later page failing keeps the pages read, as it always did.
 func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory, sysPods *kubeSystemPods) error {
 	ev := addOnEvidence{releases: inv.HelmReleases, gitops: inv.GitOpsCharts}
 	var failures, skipped []string
@@ -137,6 +139,9 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		pods, err := kube.CoreV1().Pods(metav1.NamespaceAll).List(ctx, opts)
 		if err != nil {
 			podErr = err
+			if opts.Continue == "" {
+				ev.images, ev.labelled = nil, nil // no pod was read, kube-system's included
+			}
 			failures = append(failures, fmt.Sprintf("list pods: %v", err))
 			skipped = append(skipped, inventory.SkippedPods)
 			break
@@ -186,8 +191,6 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 	var read []string // what the add-ons were detected from
 	if podErr == nil {
 		read = append(read, "pods")
-	} else if sysPods.read {
-		read = append(read, "kube-system pods")
 	}
 	if len(ev.releases) > 0 || inv.Capabilities[inventory.CapHelm].Available {
 		read = append(read, "Helm releases")

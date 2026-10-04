@@ -155,8 +155,12 @@ func roundShare(d time.Duration) time.Duration {
 // custom resources only at versions that are not deprecated, so it adds
 // no metric rows; the /metrics scrape stays last.
 func steps(c Clients, k kb.KB, opts Options) []step {
-	var selfListed []string       // api-usage's own deprecated LISTs
-	var kubeSystem kubeSystemPods // versions' kube-system pods, which addons does not list again (#227)
+	var selfListed []string // api-usage's own deprecated LISTs
+	// versions' kube-system pods, which addons does not list again (#227).
+	// Not one shared all-namespaces list: versions would then fail with it
+	// under the narrow kube-system-only role (#122) or when a cluster-wide
+	// list stalls, where today it still succeeds.
+	var kubeSystem kubeSystemPods
 	return []step{
 		{cap: inventory.CapVersions, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Kube == nil || c.Discovery == nil {

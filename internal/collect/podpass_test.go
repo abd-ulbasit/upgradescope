@@ -229,8 +229,10 @@ func TestCollectKubeSystemPodsFailingOnLaterPage(t *testing.T) {
 
 // The role may read the kube-system pods and not the others (the audit's
 // narrow role, #122): versions is unaffected, and the add-ons are partial
-// as when they listed every pod, with the kube-system pods they matched.
-func TestCollectOtherNamespacesForbiddenKeepsVersionsAndKubeSystemAddOns(t *testing.T) {
+// exactly as when they listed every pod and that list failed: no pod was
+// read, so the add-ons come from the IngressClasses alone and the reason
+// says so.
+func TestCollectOtherNamespacesForbiddenKeepsVersionsAndAddOnGapSemantics(t *testing.T) {
 	class := &networkingv1.IngressClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx"},
 		Spec:       networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"},
@@ -256,10 +258,42 @@ func TestCollectOtherNamespacesForbiddenKeepsVersionsAndKubeSystemAddOns(t *test
 	if !st.Available || !st.Partial || !reflect.DeepEqual(st.Skipped, []string{inventory.SkippedPods}) || !strings.HasPrefix(st.Reason, "list pods: ") {
 		t.Errorf("addons capability = %+v, want partial, skipping pods, the reason the list error", st)
 	}
-	if !strings.HasSuffix(st.Reason, "add-ons were detected from kube-system pods and IngressClasses only") {
-		t.Errorf("addons reason = %q, want the kube-system pods named among what was read", st.Reason)
+	if !strings.HasSuffix(st.Reason, "add-ons were detected from IngressClasses only") {
+		t.Errorf("addons reason = %q, want the unchanged one: from IngressClasses only", st.Reason)
 	}
-	if got := addOnIDs(inv); !reflect.DeepEqual(got, []string{"cilium", "ingress-nginx"}) {
-		t.Errorf("add-ons = %v, want cilium (kube-system pod) and ingress-nginx (IngressClass)", got)
+	if got := addOnIDs(inv); !reflect.DeepEqual(got, []string{"ingress-nginx"}) {
+		t.Errorf("add-ons = %v, want ingress-nginx (IngressClass) alone: the failed list read no pod", got)
+	}
+}
+
+// Every add-on source unreadable: the pods of the other namespaces and the
+// IngressClasses are forbidden, and there are no Helm releases. The add-ons
+// capability is not assessed and holds no add-on although versions read the
+// kube-system pods: the engine reads inv.AddOns without asking whether the
+// capability is available.
+func TestCollectNothingReadForAddOnsLeavesNoAddOns(t *testing.T) {
+	cs, disc := podFixture()
+	srv := servePods(cs, tickPods()...)
+	srv.failList = func(_ int, ns string, _ metav1.ListOptions) error {
+		if ns == "" {
+			return apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New("RBAC denied"))
+		}
+		return nil
+	}
+	cs.PrependReactor("list", "ingressclasses", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingressclasses"}, "", errors.New("RBAC denied"))
+	})
+
+	inv := Collect(context.Background(), Clients{Kube: cs, Discovery: disc}, loadKB(t), Options{})
+
+	if st := inv.Capabilities[inventory.CapVersions]; !st.Available || st.Partial {
+		t.Errorf("versions capability = %+v, want available and complete", st)
+	}
+	st := inv.Capabilities[inventory.CapAddOns]
+	if st.Available || !strings.HasPrefix(st.Reason, "list pods: ") {
+		t.Errorf("addons capability = %+v, want unavailable with the list pods reason", st)
+	}
+	if len(inv.AddOns) != 0 {
+		t.Errorf("add-ons = %v, want none for a capability that was not assessed", addOnIDs(inv))
 	}
 }
