@@ -207,9 +207,9 @@ has the tables, the simulation's limits and the open hotspots.
 
 | What | Measured | How |
 |---|---|---|
-| A steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm releases | 61 API requests, 68 MiB read (4.3 MiB on the wire), 5.5 s, 3.5 CPU-seconds; peak live heap 27 MiB, peak RSS 54 MiB | median of the 4 ticks after the first, `make bench-agent` |
+| A steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm releases | 61 API requests, 68 MiB read (4.3 MiB on the wire), 5.6 s, 3.6 CPU-seconds; peak live heap 27 MiB, peak RSS 54 MiB | median of the 4 ticks after the first (the mean of the middle two; the heap is their maximum), `make bench-agent` |
 | The first tick after the agent starts (reads each Helm release once) | 1,061 requests, 90 MiB, 36 s, 24 CPU-seconds | the first of 5 ticks, same run |
-| The same steady tick before #71 (a GET per release every tick) | 1,061 requests, 90 MiB, 31 s, 23 CPU-seconds | 4 ticks, same harness with the Helm step given no cache |
+| The same steady tick before #71 (a GET per release every tick) | 1,061 requests, 90 MiB, 33 s, 23.5 CPU-seconds | median of 4 ticks, same harness with the Helm step given no cache |
 | `serve` taking 200 clusters x 3 targets, all pushing at once | SQLite 56 new snapshots a second (p99 3.5 s); Postgres 17: 40 a second (p99 4.8 s); no failed push or retry | 200 pushers, `make bench-ingest`; 25 CPU-ms a snapshot on either |
 | Storage per changed snapshot (3 evaluations) | at most about 100 KiB on SQLite (WAL and page overhead included), 19 KiB on Postgres | database growth over 200 new snapshots averaging 28 KiB |
 

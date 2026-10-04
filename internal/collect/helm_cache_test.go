@@ -18,9 +18,10 @@ import (
 
 // The agent asks the apiserver again on every tick, and the Helm collector's
 // one GET per release was the cost that grew with releases: 1,000 releases
-// took 50 to 80 s of a tick on an apiserver on the same host (#71,
-// docs/operations/scale.md), enough to reach the step deadline. A Helm
-// storage object's payload does not change once written, so a long-running
+// took about 33 s of a tick on an apiserver on the same host (#71,
+// docs/operations/scale.md), and an earlier trial with about 1,360 releases
+// took 40 to 78 s, enough to reach the step deadline. A Helm storage
+// object's payload does not change once written, so a long-running
 // caller (the agent) keeps what it decoded, keyed by the object's UID and
 // resourceVersion, and a tick fetches only objects it has not decoded.
 

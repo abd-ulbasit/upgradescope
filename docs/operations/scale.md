@@ -13,7 +13,7 @@ them.
 
 - **A steady agent tick on a cluster of 2,001 nodes, about 14,000 pods and
   1,000 Helm releases made 61 API requests** and read 68 MiB of responses
-  (4.3 MiB on the wire, compressed). It took 5.5 s and 3.5 CPU-seconds, with
+  (4.3 MiB on the wire, compressed). It took 5.6 s and 3.6 CPU-seconds, with
   a peak live heap of 27 MiB and a peak RSS of 54 MiB. At the default
   interval of 10 minutes that is 0.1 requests a second.
 - **The first tick after the agent starts costs more**: it reads each Helm
@@ -86,8 +86,9 @@ half, all of it) and runs the agent's real tick, five times at each: collect,
 evaluate, write the `ClusterReadiness` status. The clients are the ones the
 agent builds, wrapped to count requests by verb and resource; a TCP forwarder
 counts the bytes on the wire. Each row is the median of the ticks after the
-first (the peak heap is their maximum); the first, which fills the Helm cache,
-is beside it.
+first (with the default 5 ticks, 4: the mean of the two middle values; the
+peak heap is the maximum of them); the first, which fills the Helm cache, is
+beside it.
 
 Full size is 2,001 nodes (2,000 fake and the control plane), 10,000 seeded
 pods plus the 4,000 DaemonSet pods, 6,000 ConfigMaps, 4,000 Deployments, 100
@@ -96,12 +97,12 @@ namespaces and 1,000 Helm release Secrets.
 **Steady tick, after the fix** (Helm releases fetched only when new or
 changed):
 
-| Fill | Nodes | Helm releases | Requests | Of them LIST pods | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB | First tick: requests, wall s, CPU s |
+| Fill | Nodes | Helm releases | Requests | Of them LIST pods | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB | First tick: requests, response MiB, wall s, CPU s |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| empty | 1 | 0 | 22 | 2 | 4.0 | 0.4 | 0.5 | 0.4 | 21.7 | 54.2 | 22, 2.5, 0.4 |
-| 1/4 | 501 | 250 | 29 | 11 | 19.8 | 1.5 | 1.3 | 1.1 | 23.6 | 58.5 | 279, 5.6, 5.5 |
-| 1/2 | 1,001 | 500 | 40 | 20 | 35.7 | 2.4 | 2.4 | 1.9 | 23.2 | 48.8 | 540, 14.1, 12.2 |
-| full | 2,001 | 1,000 | 61 | 38 | 67.7 | 4.3 | 5.5 | 3.5 | 27.1 | 54.4 | 1,061, 36.1, 24.4 |
+| empty | 1 | 0 | 22 | 2 | 4.0 | 0.4 | 0.5 | 0.4 | 21.7 | 54.2 | 22, 4.0, 2.5, 0.4 |
+| 1/4 | 501 | 250 | 29 | 11 | 19.8 | 1.5 | 1.3 | 1.2 | 23.6 | 58.5 | 279, 24.8, 5.6, 5.5 |
+| 1/2 | 1,001 | 500 | 40 | 20 | 35.7 | 2.4 | 2.5 | 1.9 | 23.2 | 48.8 | 540, 46.8, 14.1, 12.2 |
+| full | 2,001 | 1,000 | 61 | 38 | 67.7 | 4.3 | 5.6 | 3.6 | 27.1 | 54.4 | 1,061, 90.0, 36.1, 24.4 |
 
 **The same ticks before the fix** (a GET per release on every tick). These
 rows were measured with a local patch that gave the Helm step no cache. The
@@ -112,9 +113,9 @@ reproduce them; no published number was taken with it:
 | Fill | Requests | GET Secrets | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB |
 |---|---|---|---|---|---|---|---|---|
 | empty | 22 | 0 | 4.1 | 0.4 | 0.5 | 0.4 | 22.0 | 54.5 |
-| 1/4 | 279 | 250 | 25.0 | 6.3 | 5.5 | 5.4 | 21.2 | 47.9 |
-| 1/2 | 540 | 500 | 47.0 | 12.8 | 12.2 | 11.6 | 25.2 | 48.4 |
-| full | 1,061 | 1,000 | 90.3 | 25.1 | 31.2 | 23.4 | 27.9 | 55.3 |
+| 1/4 | 279 | 250 | 25.0 | 6.3 | 5.7 | 5.5 | 21.2 | 47.9 |
+| 1/2 | 540 | 500 | 47.1 | 12.8 | 12.4 | 11.7 | 25.2 | 48.4 |
+| full | 1,061 | 1,000 | 90.3 | 25.1 | 32.9 | 23.5 | 27.9 | 55.3 |
 
 "Response MiB" is what client-go read, decompressed (the typed client asks
 for protobuf, which `TestNewClientsAskForProtobuf` pins). "Wire MiB" is what
@@ -144,15 +145,18 @@ requests (4,000 pods in `kube-system` first, for the version check, then 14,000 
 nodes, 3 are the metadata list of Helm Secrets. The rest is constant, 15
 requests. Four of them are API discovery, two more than before #218, whose
 GitOps detection asks the apiserver which API groups it serves every tick.
-A cluster with no Helm release (the empty row: 22 requests, not 17) also
-lists Deployments, StatefulSets and DaemonSets, metadata only, to look for
-the tracking labels of Argo CD and Flux. [Architecture](../architecture.md#api-cost-per-tick) states the
+A cluster with no Helm release (the empty row: 22 requests) also lists
+Deployments, StatefulSets and DaemonSets, metadata only, to look for the
+tracking labels of Argo CD and Flux. Those three lists are 3 of the 22:
+without them the row would be 2 + 1 + 1 + 15 = 19 (pod, node and Secret
+lists, then the constant 15), and before #218's two extra discovery calls it
+was 17. [Architecture](../architecture.md#api-cost-per-tick) states the
 formula.
 
 ### CPU and the chart limit
 
 The tick is CPU-bound in the agent (the process also runs the benchmark's
-byte counter, a small share): 3.5 CPU-seconds in 5.5 s of wall time when
+byte counter, a small share): 3.6 CPU-seconds in 5.6 s of wall time when
 steady, 24.4 in 36.1 when it reads 1,000 releases. The chart's default limit
 for the agent is 200m (`agent.resources.limits.cpu`), which allows 0.2
 CPU-seconds a second, so those ticks last at least 18 s and 2 minutes there
@@ -169,7 +173,7 @@ the agent 500m to 1 CPU, or expect its first ticks to be partial.
 
 | What | Found | Status |
 |---|---|---|
-| One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 31 s and 23 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests, 5.5 s). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
+| One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 33 s and 23.5 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests, 5.6 s). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
 | The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36 s and 24 CPU-seconds here; reaches the step deadline at 200m or over a slow link | Open: bounded-concurrency fetching ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)) |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | Open ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227)) |
 | Argo CD Applications and Flux HelmReleases are listed whole (page size 50) every tick, plus a GET per distinct OCIRepository (#218) | **Not measured**: the lab has neither tool installed, so the harness never makes these requests. ceil(N / 50) per tool grows faster than a metadata list (whole objects, small pages) | Open (follow-up: "Add an Argo CD and Flux fill step to the agent benchmark") |
