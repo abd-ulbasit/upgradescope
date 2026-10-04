@@ -177,11 +177,12 @@ func annotatedIngresses(n int, blocker bool) string {
 	return b.String()
 }
 
-// A PR's objects at an API take the room the collector's cap leaves the
-// cluster's refs (upsertUsage), but the refs they push out of the listing
-// are still live objects, which a Helm release's stored copy is left to
-// (#72). Ninety-nine PR Ingresses that accept their own finding leave
-// room for one of payments' two; were p1 then unmatched, the release's
+// A PR's objects at an API take the room the cap leaves the cluster's
+// refs in the answer's listing (capObjects), but the refs they push out
+// of it are still live objects, which the engine leaves a Helm release's
+// stored copy to (upsertUsage lists them all, #72). Ninety-nine PR
+// Ingresses that accept their own finding leave room for one of
+// payments' two; were p1 then unmatched, the release's
 // manifest blocker would be new in the proposed state, blamed on the PR
 // (fail closed), and the gate would answer 422 where p0 and p1 are listed
 // but 200 where web's hundred left them unlisted (the baseline has the
@@ -224,6 +225,15 @@ func TestGateHelmVerdictIgnoresTheRefsThePRPushesOut(t *testing.T) {
 			}
 		}
 	}
+	// On cap-none p0 and p1 are listed, and the PR's refs do not push p1
+	// out of what the engine matches the release's stored copy against:
+	// the release has no finding at all, neither the PR's nor the
+	// cluster's.
+	for _, token := range []string{"pay-tok", "fleet-tok"} {
+		if src := source(gate("cap-none", token, false), helm); src != "" {
+			t.Errorf("%s on cap-none: %s is in the answer (source %q): p1 was not matched", token, helm, src)
+		}
+	}
 	// Fleet-wide on cap-web, web's hundred leave payments' two unlisted:
 	// the release's blocker is in the answer, the cluster's, as without
 	// the PR.
@@ -235,6 +245,152 @@ func TestGateHelmVerdictIgnoresTheRefsThePRPushesOut(t *testing.T) {
 			if s := gate(cluster, token, true); s.Status != "422 Unprocessable Entity" || s.Header != "blocked" || s.Verdict != "blocked" {
 				t.Errorf("%s on %s: the PR's own blocker does not block: %+v", token, cluster, s)
 			}
+		}
+	}
+}
+
+// acceptingCapInventory is capInventory(web) with payments' p0 and p1
+// accepting their removed-api finding by annotation.
+func acceptingCapInventory(web bool) inventory.Inventory {
+	inv := capInventory(web)
+	for i, o := range inv.APIUsage[0].Objects {
+		if o.Namespace == "pay-prod" {
+			inv.APIUsage[0].Objects[i].Ignore, inv.APIUsage[0].Objects[i].IgnoreReason = "removed-api", "migrated with the upgrade"
+		}
+	}
+	return inv
+}
+
+// The room a PR's objects take in a listing (upsertUsage) decides which
+// of the cluster's refs the answer lists, never what suppression sees
+// (#72): payments' p0 and p1 accept their finding by annotation, as do
+// the PR's Ingresses. Were the refs the PR pushes out of the listing
+// unseen by suppression, 99 or 100 such Ingresses would leave p1, or
+// both, open: a cluster blocker, a blocked cluster verdict and a lower
+// score that only the number of objects the PR posts decides. With 98,
+// 99 and 100, payments-scoped and fleet-wide, the answer is ready with
+// nothing open and the same score, and the suppressed finding lists the
+// PR's Ingresses before the cluster's, at most MaxObjectRefs of them,
+// the rest counted as omitted.
+func TestGateSuppressionIgnoresTheRoomThePRTakes(t *testing.T) {
+	_, st, ts, _ := scopeServer(t)
+	mintReadToken(t, st, "pay-tok", "payments")
+	pushScopeCluster(t, ts, "accept", acceptingCapInventory(false))
+	type suppressed struct {
+		Key            string
+		Objects        []inventory.ObjectRef
+		ObjectsOmitted int
+	}
+	for _, token := range []string{"pay-tok", "fleet-tok"} {
+		var first *gateSummary
+		for _, n := range []int{inventory.MaxObjectRefs - 2, inventory.MaxObjectRefs - 1, inventory.MaxObjectRefs} {
+			resp, raw := postGate(t, ts, "?target=1.35&cluster=accept", token, annotatedIngresses(n, false), "application/x-yaml")
+			s := summarize(t, resp, raw)
+			if s.Status != "200 OK" || s.Verdict != "ready" || s.ClusterVerdict != "ready" || len(s.Findings) != 0 {
+				t.Errorf("%s, %d accepting Ingresses: want ready with nothing open: %+v", token, n, s)
+			}
+			if first == nil {
+				first = &s
+			} else if s.Score != first.Score {
+				t.Errorf("%s, %d accepting Ingresses: score %d, want %d as with %d", token, n, s.Score, first.Score, inventory.MaxObjectRefs-2)
+			}
+			var body struct {
+				Suppressed []suppressed `json:"suppressed"`
+			}
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			listed, omitted, pr := 0, 0, 0
+			for _, sf := range body.Suppressed {
+				if sf.Key != "removed-api/extensions/v1beta1/Ingress" {
+					continue
+				}
+				listed, omitted = listed+len(sf.Objects), omitted+sf.ObjectsOmitted
+				if len(sf.Objects) > inventory.MaxObjectRefs {
+					t.Errorf("%s, %d: a suppressed finding lists %d objects", token, n, len(sf.Objects))
+				}
+				for _, o := range sf.Objects {
+					if strings.HasPrefix(o.Name, "pr") {
+						pr++
+					}
+				}
+			}
+			if pr != n || listed+omitted != n+2 {
+				t.Errorf("%s, %d: suppressed lists %d of the PR's, %d listed + %d omitted; want all %d of the PR's, %d in all",
+					token, n, pr, listed, omitted, n, n+2)
+			}
+		}
+	}
+}
+
+// What the collector's cap decides of suppression, as the docs say (#72):
+// payments' p0 and p1 accept their finding by annotation. Where they are
+// listed, a payments-scoped gate of a ConfigMap has nothing open, a ready
+// cluster verdict and a full score; where web's hundred sort first and
+// leave them unlisted, their annotations are not in the share, so the
+// finding stays open, the cluster's: a blocked cluster verdict and a
+// lower score. The verdict, its header and the status are the same on
+// both.
+func TestScopedGateSuppressionFollowsTheCollectorsCap(t *testing.T) {
+	_, st, ts, _ := scopeServer(t)
+	mintReadToken(t, st, "pay-tok", "payments")
+	got := map[bool]gateSummary{}
+	for _, web := range []bool{true, false} {
+		name := fmt.Sprintf("accept-%v", web)
+		pushScopeCluster(t, ts, name, acceptingCapInventory(web))
+		resp, raw := postGate(t, ts, "?target=1.35&cluster="+name, "pay-tok",
+			"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: pr, namespace: pay-prod}\n", "application/x-yaml")
+		got[web] = summarize(t, resp, raw)
+	}
+	web, none := got[true], got[false]
+	if web.Status != none.Status || web.Header != none.Header || web.Verdict != none.Verdict || web.Verdict != "ready" {
+		t.Errorf("the cap reaches the verdict or status:\n%+v\n%+v", web, none)
+	}
+	if len(none.Findings) != 0 || none.ClusterVerdict != "ready" {
+		t.Errorf("listed, payments' annotations do not accept the finding: %+v", none)
+	}
+	const key = "removed-api/extensions/v1beta1/Ingress"
+	if len(web.Findings) != 1 || web.Findings[0].Key != key || web.Findings[0].Source != sourceCluster ||
+		web.ClusterVerdict != "blocked" || web.Score >= none.Score {
+		t.Errorf("unlisted behind web's hundred, want the cluster's %s open, a blocked cluster verdict and a lower score:\n%+v\n%+v", key, web, none)
+	}
+}
+
+// The answer lists at most MaxObjectRefs objects per finding, the PR's
+// first (capObjects): a hundred PR Ingresses beside payments' two list
+// the hundred, count p0 and p1 as omitted and word the detail from all
+// 102, payments-scoped and fleet-wide.
+func TestGateAnswerListsThePRsRefsFirst(t *testing.T) {
+	_, st, ts, _ := scopeServer(t)
+	mintReadToken(t, st, "pay-tok", "payments")
+	pushScopeCluster(t, ts, "cap-none", capInventory(false))
+	var b strings.Builder
+	for i := range inventory.MaxObjectRefs {
+		fmt.Fprintf(&b, "---\napiVersion: extensions/v1beta1\nkind: Ingress\nmetadata: {name: pr%d, namespace: pay-prod}\n", i)
+	}
+	for _, token := range []string{"pay-tok", "fleet-tok"} {
+		_, raw := postGate(t, ts, "?target=1.35&fail-on=never&cluster=cap-none", token, b.String(), "application/x-yaml")
+		var a struct {
+			Findings []struct {
+				Key, Detail    string
+				Objects        []inventory.ObjectRef
+				ObjectsOmitted int
+			} `json:"findings"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil || len(a.Findings) != 1 {
+			t.Fatalf("%s: want the Ingress finding alone (%v): %s", token, err, raw)
+		}
+		f := a.Findings[0]
+		pr := 0
+		for _, o := range f.Objects {
+			if o.Line > 0 {
+				pr++
+			}
+		}
+		if len(f.Objects) != inventory.MaxObjectRefs || pr != inventory.MaxObjectRefs || f.ObjectsOmitted != 2 ||
+			!strings.HasPrefix(f.Detail, "102 object(s) ") {
+			t.Errorf("%s: lists %d (%d of the PR's) +%d omitted, detail %q; want the PR's %d, +2, worded from all 102",
+				token, len(f.Objects), pr, f.ObjectsOmitted, f.Detail, inventory.MaxObjectRefs)
 		}
 	}
 }

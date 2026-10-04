@@ -604,9 +604,11 @@ func clusterTeams(inv inventory.Inventory, rep engine.Report) []string {
 // namespace order, so which of the scope's objects a row lists (and
 // counts as omitted) depends on how many objects at that API sort before
 // them. The engine's findings follow what is listed (their objects and
-// detail, a Helm release's manifest finding, so the score and cluster
-// verdict); what the PR introduces does not. docs/operations/auth.md
-// says what a scoped caller can learn from it.
+// detail, a Helm release's manifest finding), and so does suppression,
+// which accepts listed objects only (an unlisted object's ignore
+// annotation is not in the share), and with them the findings left open,
+// the score and the cluster verdict; what the PR introduces does not.
+// docs/operations/auth.md says what a scoped caller can learn from it.
 func (sc readScope) clusterShare(inv inventory.Inventory) inventory.Inventory {
 	if sc.fleet() {
 		return inv

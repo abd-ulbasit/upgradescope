@@ -257,6 +257,7 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	}
 
 	rep, warnings := s.suppressGate(ev.full, g.rules)
+	rep = capObjects(rep, ev.mine.objects) // after suppression, which sees every ref (upsertUsage)
 	resp := gateResult(rep, ev.baseline, ev.introduced)
 	if cut != nil { // without ?cluster= the answer is all the caller's own
 		resp.scope(sc, *cut)
@@ -588,27 +589,30 @@ func usageKeys(rep engine.Report) map[string]bool {
 // the engine folds apiserver caller evidence into is the same row in the
 // baseline and the proposed state: the fold is identical on both sides,
 // and caller evidence never resurfaces as standalone findings blamed on
-// the PR. Manifest refs keep their place under the MaxObjectRefs cap
-// (cluster refs are dropped first), so SARIF can still place them; a row
-// that then lists only manifest refs while it counts the cluster's objects
-// too is worded as both, not as manifests alone (engine.listedObjects).
-// The cluster refs dropped from the listing stay in Unlisted, still live:
-// a Helm release's stored copy of one is left to the live finding as in
-// the baseline. Otherwise the room the manifests take could make a
+// the PR. A row lists every cluster ref it had (they come first, so the
+// engine words a row by them as in the baseline, engine.listedObjects)
+// and every manifest ref, which can be more than inventory.MaxObjectRefs:
+// the engine and suppression see them all, so a Helm release's stored
+// copy of a cluster object is left to the live finding, and an object's
+// upgradescope.dev/ignore annotation or a ?config= rule naming it accepts
+// it, however many objects the PR posts, as in the baseline. The cap is
+// applied to the answer after suppression (capObjects), the manifests'
+// refs kept. Otherwise the room the manifests take could make a
 // release's manifest finding new in the proposed state, which gateResult
-// blames on the PR (fail closed), and the verdict would turn on how many
-// of the cluster's refs at that API the collector listed. What
-// the manifests delete or move to another API stays invisible: a stream
-// says what it applies, not what it removes. Identity is the exact
-// namespace and name, so a rendered manifest without a namespace (applied
-// to kubectl's default) does not replace its namespaced twin in the
-// cluster and is counted beside it: Count and Namespaces overstate by one.
+// blames on the PR (fail closed), or leave a cluster object's accepted
+// finding open, and the verdict, cluster verdict or score would turn on
+// how many objects the PR posts. What the manifests delete or move to
+// another API stays invisible: a stream says what it applies, not what
+// it removes. Identity is the exact namespace and name, so a rendered
+// manifest without a namespace (applied to kubectl's default) does not
+// replace its namespaced twin in the cluster and is counted beside it:
+// Count and Namespaces overstate by one.
 func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 	type gvk struct{ group, version, kind string }
 	out := make([]inventory.APIUsage, 0, len(cluster)+len(manifests))
 	at := map[gvk]int{}
 	for _, u := range cluster {
-		u.Objects, u.Unlisted, u.Namespaces = slices.Clone(u.Objects), slices.Clone(u.Unlisted), maps.Clone(u.Namespaces)
+		u.Objects, u.Namespaces = slices.Clone(u.Objects), maps.Clone(u.Namespaces)
 		at[gvk{u.Group, u.Version, u.Kind}] = len(out)
 		out = append(out, u)
 	}
@@ -638,15 +642,53 @@ func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 		for ns, n := range m.Namespaces {
 			u.Namespaces[ns] += n
 		}
-		if room := max(0, inventory.MaxObjectRefs-len(m.Objects)); len(kept) > room {
-			u.ObjectsOmitted += len(kept) - room
-			u.Unlisted = append(u.Unlisted, kept[room:]...)
-			kept = kept[:room]
-		}
 		u.Objects = append(kept, m.Objects...)
 		u.ObjectsOmitted += m.ObjectsOmitted
 	}
 	return out
+}
+
+// capObjects is rep with each finding's and suppressed finding's objects
+// cut to inventory.MaxObjectRefs, which upsertUsage leaves the proposed
+// state's rows over so that the engine and suppression see every ref:
+// the manifests' refs (mine) are kept, so SARIF can still place them, and
+// the cluster's fill the room left, in the finding's order; the ones cut
+// are counted in ObjectsOmitted. Only the listing and the omitted count
+// change: everything else was decided from every ref. rep is not
+// modified.
+func capObjects(rep engine.Report, mine map[inventory.ObjectRef]bool) engine.Report {
+	trim := func(f *engine.Finding) {
+		if len(f.Objects) <= inventory.MaxObjectRefs {
+			return
+		}
+		own := 0
+		for _, o := range f.Objects {
+			if mine[o] {
+				own++
+			}
+		}
+		room := max(0, inventory.MaxObjectRefs-own)
+		kept := make([]inventory.ObjectRef, 0, inventory.MaxObjectRefs)
+		for _, o := range f.Objects {
+			switch {
+			case mine[o] && len(kept) < inventory.MaxObjectRefs:
+				kept = append(kept, o)
+			case !mine[o] && room > 0:
+				kept, room = append(kept, o), room-1
+			}
+		}
+		f.ObjectsOmitted += len(f.Objects) - len(kept)
+		f.Objects = kept
+	}
+	rep.Findings = slices.Clone(rep.Findings)
+	for i := range rep.Findings {
+		trim(&rep.Findings[i])
+	}
+	rep.Suppressed = slices.Clone(rep.Suppressed)
+	for i := range rep.Suppressed {
+		trim(&rep.Suppressed[i].Finding)
+	}
+	return rep
 }
 
 // gateFails applies ?fail-on: never never fails (the v0.1 always-200

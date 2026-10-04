@@ -232,9 +232,8 @@ const (
 	// mixedObjects: manifest objects listed in a cluster's row that also
 	// counts objects it does not list, which may be the cluster's: the
 	// gate's proposed state, where the cluster's refs were past the
-	// collector's cap, dropped to make room for the manifests', or not
-	// recorded, or a team-scoped share's were past the cap
-	// (readScope.clusterShare).
+	// collector's cap or not recorded, or a team-scoped share's were past
+	// the cap (readScope.clusterShare).
 	mixedObjects
 )
 
@@ -1711,8 +1710,7 @@ func helmReleaseRef(rel inventory.HelmRelease) string {
 //     — "helm-release" is no API group, so these keys never collide with
 //     the per-API keys of live findings. Objects the live scan already
 //     flags (same API, name and namespace, an unset manifest namespace
-//     standing for the release's; listed, or dropped from the listing by
-//     a merge, APIUsage.Unlisted) are left to the live finding, so no
+//     standing for the release's) are left to the live finding, so no
 //     object is counted twice; a release whose objects are all flagged
 //     live gets no manifest finding.
 func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
@@ -1720,7 +1718,7 @@ func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version
 	live := map[string][]inventory.ObjectRef{} // apiKey → live objects
 	for _, u := range inv.APIUsage {
 		key := apiKey(u.Group, u.Version, u.Kind)
-		live[key] = append(append(live[key], u.Objects...), u.Unlisted...)
+		live[key] = append(live[key], u.Objects...)
 	}
 	var out []Finding
 	for _, rel := range inv.HelmReleases {

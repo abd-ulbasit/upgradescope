@@ -198,27 +198,6 @@ func TestEvalHelmManifestNotDoubleCounted(t *testing.T) {
 	}
 }
 
-// A live object a merge dropped from the listing to make room for others'
-// refs (APIUsage.Unlisted, the gate's proposed state) is still live: the
-// release's stored copy of it is left to the live finding, which neither
-// lists nor details it.
-func TestEvalHelmManifestMatchesUnlistedLiveObjects(t *testing.T) {
-	live := inventory.APIUsage{
-		Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3", Kind: "FlowSchema", Count: 2,
-		Namespaces: map[string]int{"": 2}, ObjectsOmitted: 1,
-		Objects:  []inventory.ObjectRef{{Name: "pr", Line: 1}},
-		Unlisted: []inventory.ObjectRef{{Name: "batch-jobs", Manager: "helm"}},
-	}
-	inv := inventory.Inventory{APIUsage: []inventory.APIUsage{live}, HelmReleases: []inventory.HelmRelease{flowSchemaRelease()}}
-	rep := Evaluate(inv, helmTestKB(), inventory.Version{Major: 1, Minor: 32}, testNow)
-	if got := findingKeys(rep.Findings); !slices.Equal(got, []string{"removed-api/flowcontrol.apiserver.k8s.io/v1beta3/FlowSchema"}) {
-		t.Fatalf("finding keys = %v, want only the live finding", got)
-	}
-	if f := rep.Findings[0]; !reflect.DeepEqual(f.Objects, live.Objects) || f.ObjectsOmitted != 1 {
-		t.Errorf("live finding lists %+v (+%d), want the listed object alone (+1)", f.Objects, f.ObjectsOmitted)
-	}
-}
-
 // One finding per release and severity, whatever the number of APIs.
 func TestEvalHelmManifestOneFindingPerReleaseAndSeverity(t *testing.T) {
 	rel := flowSchemaRelease()
