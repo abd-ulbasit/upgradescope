@@ -503,8 +503,11 @@ pss=$work/stubs-podsample
 mkdir -p "$pss"
 cat >"$pss/kubectl" <<'STUB'
 #!/usr/bin/env bash
+echo "$*" >>"$KUBECTL_LOG"
 case "$*" in
-  *"get pods -o json"*) cat "$PODS_JSON" ;;
+  *"get deployment "*"-o json"*) echo '{"spec":{"selector":{"matchLabels":{"app":"agent","tier":"edge"}}}}' ;;
+  # The selector is applied as the apiserver would: only the pods labelled so.
+  *"get pods -l app=agent,tier=edge -o json"*) jq '.items |= map(select(.metadata.labels.app == "agent" and .metadata.labels.tier == "edge"))' "$PODS_JSON" ;;
   *"get pod "*"containerStatuses"*) echo "containerd://abc123" ;;
   *) echo "kubectl stub: unexpected $*" >&2; exit 99 ;;
 esac
@@ -514,14 +517,19 @@ cat >"$pss/docker" <<'STUB'
 printf '1000000\t100\t40\t3000000\t50000000\t60000000\t70000000\n'
 STUB
 chmod +x "$pss"/*
-# An old pod still terminating beside the new one: the new one is sampled.
+# An old pod still terminating beside the new one: the new one is sampled, and
+# not the newer pod of the deployment agent-foo, whose name starts with "agent-".
 jq -n '{items: [
-  {metadata: {name: "agent-old-1", creationTimestamp: "2026-10-04T01:00:00Z", deletionTimestamp: "2026-10-04T02:00:00Z"}, status: {phase: "Running"}},
-  {metadata: {name: "agent-new-2", creationTimestamp: "2026-10-04T02:00:00Z"}, status: {phase: "Running"}},
-  {metadata: {name: "other-3", creationTimestamp: "2026-10-04T03:00:00Z"}, status: {phase: "Running"}}]}' >"$work/pods.json"
+  {metadata: {name: "agent-old-1", labels: {app: "agent", tier: "edge"}, creationTimestamp: "2026-10-04T01:00:00Z", deletionTimestamp: "2026-10-04T02:00:00Z"}, status: {phase: "Running"}},
+  {metadata: {name: "agent-new-2", labels: {app: "agent", tier: "edge"}, creationTimestamp: "2026-10-04T02:00:00Z"}, status: {phase: "Running"}},
+  {metadata: {name: "agent-foo-3", labels: {app: "agent-foo", tier: "edge"}, creationTimestamp: "2026-10-04T03:00:00Z"}, status: {phase: "Running"}}]}' >"$work/pods.json"
 rc=0
-env PATH="$pss:$PATH" "KUBECONFIG=$lab" NODE_CONTAINER=node PODS_JSON="$work/pods.json" BENCH_SAMPLE_INTERVAL=1 "$ps" ns agent 2 >"$work/samples.tsv" 2>"$work/samples.err" || rc=$?
+: >"$work/kubectl.log"
+env PATH="$pss:$PATH" "KUBECONFIG=$lab" NODE_CONTAINER=node PODS_JSON="$work/pods.json" KUBECTL_LOG="$work/kubectl.log" BENCH_SAMPLE_INTERVAL=1 "$ps" ns agent 2 >"$work/samples.tsv" 2>"$work/samples.err" || rc=$?
+# The pods are the deployment's own, by its selector: a name prefix would also
+# take a deployment called agent-foo.
 if [ "$rc" = 0 ] && grep -qF "agent-new-2 container abc123" "$work/samples.err" &&
+  grep -qF -- "get pods -l app=agent,tier=edge -o json" "$work/kubectl.log" &&
   [ "$(head -1 "$work/samples.tsv" | cut -f2-)" = "usage_usec	nr_periods	nr_throttled	throttled_usec	mem_current	mem_peak	rss_peak" ] &&
   [ "$(sed -n 2p "$work/samples.tsv" | cut -f2-)" = "1000000	100	40	3000000	50000000	60000000	70000000" ]; then
   ok "pod-sample.sh: samples the newest running pod that is not terminating, one TSV line per sample"

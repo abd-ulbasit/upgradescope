@@ -303,7 +303,9 @@ func TestTheCollectorReadsEveryGitOpsObject(t *testing.T) {
 // (seen at 2,000 fake nodes beside KWOK's heartbeats, #233): the GitOps fill
 // retries those, and gives up on anything that is not transient.
 func TestSeedGitOpsRetriesTransientFailures(t *testing.T) {
+	old := retryDelay
 	retryDelay = 0
+	t.Cleanup(func() { retryDelay = old })
 	cfg := config{Namespaces: 2, ArgoApps: 3, FluxHelmReleases: 2, Seed: 1}
 	dyn := newDyn()
 	fails := map[string]int{}
@@ -343,5 +345,61 @@ func TestSeedGitOpsRetriesTransientFailures(t *testing.T) {
 	_, err := seedGitOps(context.Background(), dyn, config{Namespaces: 1, ArgoApps: 1}, 1, io.Discard)
 	if !apierrors.IsForbidden(err) || calls != 1 {
 		t.Errorf("a forbidden create: err %v after %d calls, want it returned at once", err, calls)
+	}
+}
+
+// A create that times out at the server may still have gone through: the
+// retry then meets AlreadyExists, and the object must not be left without the
+// status its size and the collector's reading depend on (#233).
+func TestCreateWithStatusFillsAnObjectThatHasNone(t *testing.T) {
+	cfg := config{Namespaces: 2, FluxHelmReleases: 2, Seed: 1}
+	dyn := newDyn()
+	ctx := context.Background()
+	o := fluxHelmReleaseObjects(0, cfg)
+	res := dyn.Resource(fluxHelmReleaseGVR).Namespace(o.release.GetNamespace())
+
+	// The server made the object but the client was told it timed out: the
+	// first create fails after storing, the retry finds it.
+	timedOut := false
+	dyn.PrependReactor("create", "helmreleases", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if timedOut {
+			return false, nil, nil
+		}
+		timedOut = true
+		obj := a.(ktesting.CreateAction).GetObject()
+		if err := dyn.Tracker().Create(fluxHelmReleaseGVR, obj, o.release.GetNamespace()); err != nil {
+			t.Fatal(err)
+		}
+		return true, nil, errors.New("etcdserver: request timed out")
+	})
+	old := retryDelay
+	retryDelay = 0
+	t.Cleanup(func() { retryDelay = old })
+
+	if err := createWithStatus(ctx, res, o.release, o.status); err != nil {
+		t.Fatal(err)
+	}
+	got, err := res.Get(ctx, o.release.GetName(), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := unstructured.NestedSlice(got.Object, "status", "history"); !found {
+		t.Errorf("an object whose create timed out but went through has no status: %v", got.Object["status"])
+	}
+
+	// An object that has a status keeps it: a rerun does not rewrite it.
+	kept := fluxHelmReleaseObjects(1, cfg)
+	existing := kept.release.DeepCopy()
+	existing.Object["status"] = map[string]any{"observedGeneration": int64(7)}
+	res1 := dyn.Resource(fluxHelmReleaseGVR).Namespace(kept.release.GetNamespace())
+	if _, err := res1.Create(ctx, existing, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := createWithStatus(ctx, res1, kept.release, kept.status); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = res1.Get(ctx, kept.release.GetName(), metav1.GetOptions{})
+	if g, _, _ := unstructured.NestedInt64(got.Object, "status", "observedGeneration"); g != 7 {
+		t.Errorf("an object that had a status was rewritten: %v", got.Object["status"])
 	}
 }

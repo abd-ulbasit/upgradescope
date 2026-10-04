@@ -375,7 +375,9 @@ func seedGitOps(ctx context.Context, dyn dynamic.Interface, cfg config, workers 
 
 // createWithStatus creates obj and then sets its status, which is a
 // subresource, retrying what fails transiently. An object that already exists
-// is left as it is.
+// keeps the status it has; one without a status (a rerun after a failure
+// between the create and the status update, or a create that timed out at the
+// server but went through, whose retry finds the object) gets it.
 func createWithStatus(ctx context.Context, res dynamic.ResourceInterface, obj *unstructured.Unstructured, status map[string]any) error {
 	var got *unstructured.Unstructured
 	err := retried(ctx, func() error {
@@ -383,8 +385,20 @@ func createWithStatus(ctx context.Context, res dynamic.ResourceInterface, obj *u
 		got, err = res.Create(ctx, obj, metav1.CreateOptions{})
 		return err
 	})
-	if err != nil {
-		return created(got, err)
+	if apierrors.IsAlreadyExists(err) {
+		err = retried(ctx, func() error {
+			var err error
+			got, err = res.Get(ctx, obj.GetName(), metav1.GetOptions{})
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if s, _ := got.Object["status"].(map[string]any); len(s) > 0 {
+			return nil
+		}
+	} else if err != nil {
+		return err
 	}
 	got.Object["status"] = status
 	return retried(ctx, func() error {

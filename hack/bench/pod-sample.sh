@@ -31,8 +31,13 @@ docker_cmd=${BENCH_DOCKER:-docker}
 kc() { kubectl --kubeconfig "$KUBECONFIG" "$@"; }
 
 # The newest pod of the deployment that is running and not being deleted (a
-# rollout leaves the old one terminating beside the new one).
-pod=$(kc -n "$ns" get pods -o json | jq -r --arg d "$deploy" '[.items[] | select(.metadata.name | startswith($d + "-")) | select(.metadata.deletionTimestamp == null and .status.phase == "Running")] | sort_by(.metadata.creationTimestamp) | last | .metadata.name // empty')
+# rollout leaves the old one terminating beside the new one). The pods are
+# the deployment's own selector's, not those whose name starts with its
+# name, which would also take a deployment called <deploy>-foo.
+selector=$(kc -n "$ns" get deployment "$deploy" -o json | jq -r '(.spec.selector.matchLabels // {}) | to_entries | map("\(.key)=\(.value)") | join(",")') ||
+  die "deployment $deploy not found in $ns"
+[ -n "$selector" ] || die "deployment $deploy in $ns has no matchLabels selector"
+pod=$(kc -n "$ns" get pods -l "$selector" -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running")] | sort_by(.metadata.creationTimestamp) | last | .metadata.name // empty')
 [ -n "$pod" ] || die "no running pod of $deploy in $ns"
 cid=$(kc -n "$ns" get pod "$pod" -o jsonpath='{.status.containerStatuses[0].containerID}')
 cid=${cid#containerd://}
