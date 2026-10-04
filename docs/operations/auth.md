@@ -150,8 +150,11 @@ else of them: not their names, namespaces or teams. Concretely:
   gives judge only what the PR introduces, and do not depend on the
   caps.
 
-A test pins this: payments' two Ingresses unlisted behind web's hundred
-in `a-web`, against a cluster of payments' two alone.
+Two tests pin this, with payments' two Ingresses unlisted behind web's
+hundred in `a-web` against a cluster of payments' two alone: the finding
+lists only the PR's Ingress there, and where payments' Helm release
+stores the two, the release gets a blocker of its own there and the
+share's score drops, while the verdict and status stay the same.
 
 **What stays.** What describes the cluster as a whole: its name, version,
 score, verdict, blocker and warning counts, capability gaps, and score

@@ -110,3 +110,47 @@ metadata: {name: pr, namespace: pay-prod}
 		t.Errorf("the cap reaches past the finding's object list and detail:\n%+v\n%+v", web, none)
 	}
 }
+
+// The cap reaches a scoped gate's score too, as the docs say: payments'
+// Helm release stores its two Ingresses at extensions/v1beta1. Where the
+// share lists them live, the release's manifest is left to the live
+// finding; where web's hundred left them unlisted, the engine cannot
+// match them, and the release gets a blocker of its own, which lowers
+// the share's score. What the PR introduces, and so the verdict, its
+// header and the status, is the same on both.
+func TestScopedGateScoreFollowsTheCollectorsCap(t *testing.T) {
+	_, st, ts, _ := scopeServer(t)
+	mintReadToken(t, st, "pay-tok", "payments")
+	got := map[bool]gateSummary{}
+	for _, web := range []bool{true, false} {
+		inv := capInventory(web)
+		inv.HelmReleases = []inventory.HelmRelease{{
+			Name: "pay", Namespace: "pay-prod", ChartName: "pay", ChartVersion: "1.0.0", Status: "deployed", Revision: 1,
+			ManifestAPIs: []inventory.APIUsage{{
+				Group: "extensions", Version: "v1beta1", Kind: "Ingress", Count: 2, Namespaces: map[string]int{"": 2},
+				Objects: []inventory.ObjectRef{{Name: "p0", Line: 3}, {Name: "p1", Line: 9}},
+			}},
+		}}
+		name := fmt.Sprintf("helm-%v", web)
+		pushScopeCluster(t, ts, name, inv)
+		resp, raw := postGate(t, ts, "?target=1.35&cluster="+name, "pay-tok",
+			"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: pr, namespace: pay-prod}\n", "application/x-yaml")
+		got[web] = summarize(t, resp, raw)
+	}
+	web, none := got[true], got[false]
+	if web.Status != none.Status || web.Header != none.Header || web.Verdict != none.Verdict || web.ClusterVerdict != none.ClusterVerdict {
+		t.Errorf("the cap reaches the verdict or status:\n%+v\n%+v", web, none)
+	}
+	const helm = "removed-api/helm-release/pay-prod/pay"
+	has := func(s gateSummary) bool {
+		for _, f := range s.Findings {
+			if f.Key == helm {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(web) || has(none) || web.Score >= none.Score {
+		t.Errorf("want %s, and a lower score, only behind web's hundred (the documented cap dependence):\n%+v\n%+v", helm, web, none)
+	}
+}
