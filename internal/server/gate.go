@@ -56,7 +56,10 @@ var yamlContentTypes = map[string]bool{
 // resource they write at a version the CRDs do not serve are always
 // introduced, even when the cluster already has the same (see
 // introducedKeys and gateResult). Without it, the manifests are evaluated
-// standalone, like scan --files (API usage, add-ons and CRDs).
+// standalone, like scan --files (API usage, add-ons and CRDs). A
+// team-scoped read's cluster is the scope's share of it
+// (readScope.clusterShare), for every part of the answer, verdict and
+// status included (gateResponse.scope).
 //
 // ?fail-on=blocker|warning|never makes the gate fail like `scan --fail-on`,
 // whose default it shares (blocker): an introduced finding at or above the
@@ -219,55 +222,46 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	}
 
 	target := g.target
-	inv := manifests
-	var baseline *engine.Report
-	var introduced gateSide
+	sc := scopeOf(r)
+	var ev gateEval
+	var cut *gateCut // a team-scoped ?cluster= gate's: what its caller may see of the share
 	if ref := r.URL.Query().Get("cluster"); ref != "" {
 		clusterInv, ok := s.gateClusterContext(w, r, ref)
 		if !ok {
 			return
 		}
 		clusterInv.Namespaces = s.cfg.TeamMap.Apply(clusterInv.Namespaces)
-		// Baseline: the cluster as it is, so findings it already has are
-		// not blamed on the PR.
-		base, err := s.evaluateWithin(clusterInv, target, s.now())
-		if err != nil {
-			errJSON(w, http.StatusRequestEntityTooLarge, "?cluster="+ref+": "+err.Error())
+		// A team-scoped gate evaluates the manifests within the scope's
+		// share of the cluster only, never the whole cluster: the engine
+		// counts and words every finding, and the answer's verdict,
+		// status, cluster verdict and score are decided, from the scope's
+		// evidence and the PR's alone (readScope.clusterShare). Not even
+		// a 413 from the whole cluster's evaluation can tell the caller
+		// of another team's. The fleet-wide share is the cluster.
+		clusterInv = sc.clusterShare(clusterInv)
+		if ev, ok = s.gateWithin(w, clusterInv, manifests, target, g.rules, ref); !ok {
 			return
 		}
-		baseline = &base
-		// Merge: cluster context + manifest API usage. The manifest objects
-		// are upserted into the cluster's API usage (see upsertUsage), and
-		// every other signal (server version, nodes, deprecated calls,
-		// namespaces) stays.
-		inv = clusterInv
-		inv.APIUsage = upsertUsage(clusterInv.APIUsage, manifests.APIUsage)
-		inv.Capabilities = maps.Clone(clusterInv.Capabilities)
-		if inv.Capabilities == nil {
-			inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{}
+		if !sc.fleet() {
+			cut = &gateCut{namespaces: namespaceTeamsOf(clusterInv.Namespaces), mine: ev.mine}
 		}
-		inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true}
-		// The manifests' add-ons and CRDs are merged too (mergeManifests),
-		// and the findings the manifests' own content produces, once
-		// suppressed, are introduced by the PR (suppressSide).
-		side := mergeManifests(&inv, manifests)
-		sideRep, err := s.evaluateWithin(side, target, s.now())
+	} else {
+		inv := manifests
+		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
+		full, err := s.evaluateWithin(inv, target, s.now())
 		if err != nil {
 			errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
-		introduced = s.suppressSide(sideRep, g.rules)
-	} else {
-		inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
+		ev.full = full
 	}
 
-	full, err := s.evaluateWithin(inv, target, s.now())
-	if err != nil {
-		errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
-		return
+	rep, warnings := s.suppressGate(ev.full, g.rules)
+	rep = capObjects(rep, ev.mine.objects) // after suppression, which sees every ref (upsertUsage)
+	resp := gateResult(rep, ev.baseline, ev.introduced)
+	if cut != nil { // without ?cluster= the answer is all the caller's own
+		resp.scope(sc, *cut)
 	}
-	rep, warnings := s.suppressGate(full, g.rules)
-	resp := gateResult(rep, baseline, introduced)
 	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings
 	bound := gateAnswerBound(resp, g.format)
@@ -289,19 +283,19 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	if g.format == "sarif" {
 		w.Header().Set("Content-Type", "application/sarif+json")
 		w.WriteHeader(status)
-		_ = sarif.Write(w, sarifReport(rep, resp), s.cfg.Version)
+		_ = sarif.Write(w, sarifReport(resp.Report, resp), s.cfg.Version)
 		return
 	}
 	if g.format == "junit" {
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(status)
-		_ = junit.Write(w, sarifReport(rep, resp), junit.Options{FailOn: g.failOn, AllowIncomplete: g.allowIncomplete})
+		_ = junit.Write(w, sarifReport(resp.Report, resp), junit.Options{FailOn: g.failOn, AllowIncomplete: g.allowIncomplete})
 		return
 	}
 	if g.format == "gitlab-codequality" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_ = codequality.Write(w, sarifReport(rep, resp))
+		_ = codequality.Write(w, sarifReport(resp.Report, resp))
 		return
 	}
 	writeJSON(w, status, resp)
@@ -324,7 +318,9 @@ type gateFinding struct {
 // shadow the report's, and ClusterVerdict keeps the whole proposed state's.
 // Score stays the whole proposed state's, cluster findings included: gate
 // on verdict (or fail-on), not on score. Suppressed findings (the report's
-// suppressed, counted in SuppressedCount) count toward none of them.
+// suppressed, counted in SuppressedCount) count toward none of them. For
+// a team-scoped read the proposed state is the scope's share of the
+// cluster with the manifests (gateResponse.scope).
 type gateResponse struct {
 	reportWithTeams
 	Findings        []gateFinding  `json:"findings"`
@@ -389,6 +385,161 @@ func gateResult(rep engine.Report, baseline *engine.Report, introduced gateSide)
 	return resp
 }
 
+// gateCut is what scope needs of a team-scoped ?cluster= gate: the
+// share's namespace teams and what the manifests themselves hold.
+type gateCut struct {
+	namespaces map[string]string
+	mine       manifestContent
+}
+
+// manifestContent is what a gate's manifests hold: their objects, the
+// namespaces they name and their unrecognized images.
+type manifestContent struct {
+	objects    map[inventory.ObjectRef]bool
+	namespaces map[string]bool
+	images     map[string]bool
+}
+
+// manifestsOwn collects the objects and namespaces of the manifests and of
+// their side of the merge (mergeManifests), whose CRD usage holds the
+// manifests' custom resources.
+func manifestsOwn(invs ...inventory.Inventory) manifestContent {
+	m := manifestContent{objects: map[inventory.ObjectRef]bool{}, namespaces: map[string]bool{}, images: map[string]bool{}}
+	usage := func(us []inventory.APIUsage) {
+		for _, u := range us {
+			for ns := range u.Namespaces {
+				m.namespaces[ns] = true
+			}
+			for _, o := range u.Objects {
+				m.objects[o], m.namespaces[o.Namespace] = true, true
+			}
+		}
+	}
+	for _, inv := range invs {
+		usage(inv.APIUsage)
+		for _, c := range inv.CRDs {
+			usage(c.Usage)
+		}
+		for _, a := range inv.AddOns {
+			for _, ns := range a.Namespaces {
+				m.namespaces[ns] = true
+			}
+		}
+		for _, n := range inv.Namespaces {
+			m.namespaces[n.Name] = true
+		}
+		for _, img := range inv.UnrecognizedImages {
+			m.images[img] = true
+		}
+	}
+	delete(m.namespaces, "")
+	return m
+}
+
+// scope makes g, the answer to a ?cluster= gate over the scope's share of
+// the cluster (readScope.clusterShare), the answer sc reads. The share
+// holds only the scope's evidence and what describes the cluster as a
+// whole (its version, nodes, control plane, CRD definitions and
+// capabilities), and the manifests are the caller's own, so all of g is
+// decided from those alone: every finding is counted, titled and
+// detailed from the scope's evidence and the PR's, never merged with
+// another team's, one no team owns or the cluster's apiserver callers,
+// and the gate's verdict (with its status and ?fail-on), the cluster
+// verdict and the score judge the share with the PR, never the whole
+// cluster. A CI status therefore depends on who asks: a PR that breaks
+// only another team's workloads (say a shared CRD that stops serving a
+// version only they write) passes a team-scoped gate, and fails the
+// fleet-wide one. Of g's findings, one of the cluster's own is kept when
+// sc owns it; the verdict, which judges only what the manifests
+// introduce, is unchanged by that. Each is still cut (keep.cut) to sc's
+// teams, the namespaces the cluster attributes to them and the
+// manifests' namespaces and objects, which leaves the share's as they
+// are: the cut is a second line, for evidence a share would let through.
+// The team scores are sc's teams', the capability gaps have the helm
+// collector's own words withheld (readScope.withholds), and the
+// unrecognized images are the ones the manifests carry.
+func (g *gateResponse) scope(sc readScope, c gateCut) {
+	if sc.fleet() {
+		return
+	}
+	cluster := sc.clusterKeep(c.namespaces)
+	k := keep{
+		team:      cluster.team,
+		namespace: func(ns string) bool { return cluster.namespace(ns) || c.mine.namespaces[ns] },
+		object:    func(o inventory.ObjectRef) bool { return cluster.object(o) || c.mine.objects[o] },
+	}
+	introduced := map[string]bool{}
+	for _, f := range g.introducedSuppressed {
+		introduced[findingKey(f.Finding)] = true
+	}
+	g.Teams = sc.renderedTeams(g.Report)
+	findings := g.Findings
+	g.Findings, g.Report.Findings = []gateFinding{}, []engine.Finding{}
+	for _, f := range findings {
+		if f.Source == sourceCluster && !sc.owns(f.Teams) {
+			continue
+		}
+		f.Finding, _ = k.cut(f.Finding)
+		g.Findings = append(g.Findings, f)
+		g.Report.Findings = append(g.Report.Findings, f.Finding)
+	}
+	g.Report.Suppressed = sc.suppressed(g.Report.Suppressed, k, func(f engine.Finding) bool { return introduced[findingKey(f)] })
+	g.SuppressedCount = len(g.Report.Suppressed)
+	g.introducedSuppressed = sc.suppressed(g.introducedSuppressed, k, func(engine.Finding) bool { return true })
+	g.Report.UnrecognizedImages = slices.DeleteFunc(slices.Clone(g.Report.UnrecognizedImages), func(img string) bool { return !c.mine.images[img] })
+	g.Report.UnrecognizedImagesOmitted = 0
+	g.Report.NotAssessed = sc.scopeGaps(g.Report.NotAssessed)
+}
+
+// gateEval is a gate's evaluations of the manifests within one cluster
+// inventory (gateWithin): the proposed state's, unsuppressed; the
+// baseline, the cluster as it is; what the manifests introduce; and what
+// they hold. Without ?cluster=, full alone is set.
+type gateEval struct {
+	full       engine.Report
+	baseline   *engine.Report
+	introduced gateSide
+	mine       manifestContent
+}
+
+// gateWithin evaluates the manifests within clusterInv (of the cluster
+// ref names, its namespaces' teams applied), writing the 413 itself when
+// an evaluation is over the report limit. Baseline: the cluster as it
+// is, so findings it already has are not blamed on the PR. Merge: the
+// manifest objects are upserted into the cluster's API usage (see
+// upsertUsage), and every other signal (server version, nodes,
+// deprecated calls, namespaces) stays; the manifests' add-ons and CRDs
+// are merged too (mergeManifests), and the findings the manifests' own
+// content produces, once suppressed, are introduced by the PR
+// (suppressSide). clusterInv is not modified.
+func (s *Server) gateWithin(w http.ResponseWriter, clusterInv, manifests inventory.Inventory, target inventory.Version,
+	rules []suppress.Rule, ref string) (gateEval, bool) {
+	base, err := s.evaluateWithin(clusterInv, target, s.now())
+	if err != nil {
+		errJSON(w, http.StatusRequestEntityTooLarge, "?cluster="+ref+": "+err.Error())
+		return gateEval{}, false
+	}
+	inv := clusterInv
+	inv.APIUsage = upsertUsage(clusterInv.APIUsage, manifests.APIUsage)
+	inv.Capabilities = maps.Clone(clusterInv.Capabilities)
+	if inv.Capabilities == nil {
+		inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{}
+	}
+	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true}
+	side := mergeManifests(&inv, manifests)
+	sideRep, err := s.evaluateWithin(side, target, s.now())
+	if err != nil {
+		errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
+		return gateEval{}, false
+	}
+	full, err := s.evaluateWithin(inv, target, s.now())
+	if err != nil {
+		errJSON(w, http.StatusRequestEntityTooLarge, err.Error())
+		return gateEval{}, false
+	}
+	return gateEval{full: full, baseline: &base, introduced: s.suppressSide(sideRep, rules), mine: manifestsOwn(manifests, side)}, true
+}
+
 // sarifReport is what the SARIF answer carries. SARIF becomes code-scanning
 // alerts on the PR, so it holds only the findings the manifests introduce,
 // with the gate's verdict; findings the cluster already has stay in the
@@ -438,13 +589,24 @@ func usageKeys(rep engine.Report) map[string]bool {
 // the engine folds apiserver caller evidence into is the same row in the
 // baseline and the proposed state: the fold is identical on both sides,
 // and caller evidence never resurfaces as standalone findings blamed on
-// the PR. Manifest refs keep their place under the MaxObjectRefs cap
-// (cluster refs are dropped first), so SARIF can still place them. What
-// the manifests delete or move to another API stays invisible: a stream
-// says what it applies, not what it removes. Identity is the exact
-// namespace and name, so a rendered manifest without a namespace (applied
-// to kubectl's default) does not replace its namespaced twin in the
-// cluster and is counted beside it: Count and Namespaces overstate by one.
+// the PR. A row lists every cluster ref it had (they come first, so the
+// engine words a row by them as in the baseline, engine.listedObjects)
+// and every manifest ref, which can be more than inventory.MaxObjectRefs:
+// the engine and suppression see them all, so a Helm release's stored
+// copy of a cluster object is left to the live finding, and an object's
+// upgradescope.dev/ignore annotation or a ?config= rule naming it accepts
+// it, however many objects the PR posts, as in the baseline. The cap is
+// applied to the answer after suppression (capObjects), the manifests'
+// refs kept. Otherwise the room the manifests take could make a
+// release's manifest finding new in the proposed state, which gateResult
+// blames on the PR (fail closed), or leave a cluster object's accepted
+// finding open, and the verdict, cluster verdict or score would turn on
+// how many objects the PR posts. What the manifests delete or move to
+// another API stays invisible: a stream says what it applies, not what
+// it removes. Identity is the exact namespace and name, so a rendered
+// manifest without a namespace (applied to kubectl's default) does not
+// replace its namespaced twin in the cluster and is counted beside it:
+// Count and Namespaces overstate by one.
 func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 	type gvk struct{ group, version, kind string }
 	out := make([]inventory.APIUsage, 0, len(cluster)+len(manifests))
@@ -480,14 +642,53 @@ func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 		for ns, n := range m.Namespaces {
 			u.Namespaces[ns] += n
 		}
-		if room := max(0, inventory.MaxObjectRefs-len(m.Objects)); len(kept) > room {
-			u.ObjectsOmitted += len(kept) - room
-			kept = kept[:room]
-		}
 		u.Objects = append(kept, m.Objects...)
 		u.ObjectsOmitted += m.ObjectsOmitted
 	}
 	return out
+}
+
+// capObjects is rep with each finding's and suppressed finding's objects
+// cut to inventory.MaxObjectRefs, which upsertUsage leaves the proposed
+// state's rows over so that the engine and suppression see every ref:
+// the manifests' refs (mine) are kept, so SARIF can still place them, and
+// the cluster's fill the room left, in the finding's order; the ones cut
+// are counted in ObjectsOmitted. Only the listing and the omitted count
+// change: everything else was decided from every ref. rep is not
+// modified.
+func capObjects(rep engine.Report, mine map[inventory.ObjectRef]bool) engine.Report {
+	trim := func(f *engine.Finding) {
+		if len(f.Objects) <= inventory.MaxObjectRefs {
+			return
+		}
+		own := 0
+		for _, o := range f.Objects {
+			if mine[o] {
+				own++
+			}
+		}
+		room := max(0, inventory.MaxObjectRefs-own)
+		kept := make([]inventory.ObjectRef, 0, inventory.MaxObjectRefs)
+		for _, o := range f.Objects {
+			switch {
+			case mine[o] && len(kept) < inventory.MaxObjectRefs:
+				kept = append(kept, o)
+			case !mine[o] && room > 0:
+				kept, room = append(kept, o), room-1
+			}
+		}
+		f.ObjectsOmitted += len(f.Objects) - len(kept)
+		f.Objects = kept
+	}
+	rep.Findings = slices.Clone(rep.Findings)
+	for i := range rep.Findings {
+		trim(&rep.Findings[i])
+	}
+	rep.Suppressed = slices.Clone(rep.Suppressed)
+	for i := range rep.Suppressed {
+		trim(&rep.Suppressed[i].Finding)
+	}
+	return rep
 }
 
 // gateFails applies ?fail-on: never never fails (the v0.1 always-200
@@ -526,22 +727,34 @@ func gateFails(resp gateResponse, failOn string, allowIncomplete bool) bool {
 // gateClusterContext resolves ?cluster=<name|id> to the cluster's latest
 // stored inventory, writing the error response (404/500) itself on failure.
 // A name wins over an id, so a cluster named "1" is never mistaken for
-// cluster id 1.
+// cluster id 1. A scoped request resolves ref among the scope's clusters
+// only: a name matches an in-scope cluster's, so an out-of-scope cluster
+// named like an in-scope id neither shadows that id nor shows by a 404
+// that it exists, and an id outside the scope is never looked up.
 func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref string) (inventory.Inventory, bool) {
 	ctx := r.Context()
+	// The scope first, whatever ref names, so a cluster outside it costs
+	// what an unknown one does.
+	scoped, err := s.scopeClusters(ctx, scopeOf(r))
+	if err != nil {
+		internalErr(w, "resolving gate cluster", err)
+		return inventory.Inventory{}, false
+	}
+	in := func(id int64) bool { return scoped == nil || scoped[id] }
 	cluster, err := func() (store.Cluster, error) {
 		clusters, lerr := s.cfg.Store.ListClusters(ctx)
 		if lerr != nil {
 			return store.Cluster{}, lerr
 		}
 		for _, c := range clusters {
-			if c.Name == ref {
+			if c.Name == ref && in(c.ID) {
 				return c, nil
 			}
 		}
-		if id, perr := strconv.ParseInt(ref, 10, 64); perr == nil {
+		if id, perr := strconv.ParseInt(ref, 10, 64); perr == nil && in(id) {
 			return s.cfg.Store.GetCluster(ctx, id)
 		}
+		// Outside the scope: as unknown as a cluster that does not exist.
 		return store.Cluster{}, store.ErrNotFound
 	}()
 	if errors.Is(err, store.ErrNotFound) {

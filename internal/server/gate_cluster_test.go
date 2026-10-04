@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
@@ -141,8 +142,11 @@ func TestGateClusterRerenderedObject(t *testing.T) {
 	}
 }
 
-// The cluster's refs make room under the MaxObjectRefs cap for the
-// manifests' refs, which SARIF needs to place results; counts stay exact.
+// The proposed state's row lists every cluster ref and every manifest
+// ref, so the engine and suppression see them all; the answer's
+// findings are cut to the MaxObjectRefs cap after suppression
+// (capObjects), the cluster's refs making room for the manifests',
+// which SARIF needs to place results. Counts stay exact.
 func TestUpsertUsageKeepsManifestRefs(t *testing.T) {
 	cluster := inventory.APIUsage{Group: "batch", Version: "v1beta1", Kind: "CronJob", Namespaces: map[string]int{"shop": inventory.MaxObjectRefs + 2}}
 	for i := range inventory.MaxObjectRefs {
@@ -157,16 +161,33 @@ func TestUpsertUsageKeepsManifestRefs(t *testing.T) {
 		t.Fatalf("rows = %+v, want one", got)
 	}
 	u := got[0]
-	// job-0 is replaced, new is added: 102 - 1 + 2.
-	if u.Count != inventory.MaxObjectRefs+3 || u.Namespaces["shop"] != u.Count || len(u.Objects) != inventory.MaxObjectRefs ||
+	// job-0 is replaced, new is added: 102 - 1 + 2, of which the 99
+	// cluster refs left and both manifest refs are listed.
+	if u.Count != inventory.MaxObjectRefs+3 || u.Namespaces["shop"] != u.Count || len(u.Objects) != inventory.MaxObjectRefs+1 ||
 		len(u.Objects)+u.ObjectsOmitted != u.Count {
-		t.Errorf("count %d namespaces %v objects %d omitted %d, want %d in all, %d listed", u.Count, u.Namespaces, len(u.Objects), u.ObjectsOmitted, inventory.MaxObjectRefs+3, inventory.MaxObjectRefs)
+		t.Errorf("count %d namespaces %v objects %d omitted %d, want %d in all, %d listed", u.Count, u.Namespaces, len(u.Objects), u.ObjectsOmitted, inventory.MaxObjectRefs+3, inventory.MaxObjectRefs+1)
 	}
 	if last := u.Objects[len(u.Objects)-2:]; last[0].Line != 1 || last[1].Line != 6 {
 		t.Errorf("listed objects end %+v, want both manifest refs", last)
 	}
 	if len(cluster.Objects) != inventory.MaxObjectRefs || cluster.Namespaces["shop"] != inventory.MaxObjectRefs+2 {
 		t.Error("the cluster's inventory must not be modified")
+	}
+
+	mine := map[inventory.ObjectRef]bool{manifest.Objects[0]: true, manifest.Objects[1]: true}
+	f := engine.Finding{Key: "k", Objects: u.Objects, ObjectsOmitted: u.ObjectsOmitted}
+	rep := engine.Report{Findings: []engine.Finding{f}, Suppressed: []engine.SuppressedFinding{{Finding: f}}}
+	capped := capObjects(rep, mine)
+	for _, c := range []engine.Finding{capped.Findings[0], capped.Suppressed[0].Finding} {
+		if len(c.Objects) != inventory.MaxObjectRefs || c.ObjectsOmitted != 3 {
+			t.Errorf("capped to %d listed (+%d), want %d (+3)", len(c.Objects), c.ObjectsOmitted, inventory.MaxObjectRefs)
+		}
+		if last := c.Objects[len(c.Objects)-2:]; !mine[last[0]] || !mine[last[1]] || c.Objects[len(c.Objects)-3].Name != "job-98" {
+			t.Errorf("capped listing ends %+v, want job-98 and both manifest refs", c.Objects[len(c.Objects)-3:])
+		}
+	}
+	if len(rep.Findings[0].Objects) != inventory.MaxObjectRefs+1 || len(rep.Suppressed[0].Objects) != inventory.MaxObjectRefs+1 {
+		t.Error("capObjects must not modify its report")
 	}
 }
 

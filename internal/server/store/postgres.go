@@ -359,7 +359,7 @@ func scanEvaluationPg(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
 	var gaps sql.NullString
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps, &e.TeamsUnknown); err != nil {
 		return Evaluation{}, err
 	}
 	e.NotAssessed = notAssessedBytes(gaps)
@@ -385,10 +385,10 @@ func insertEvaluationPg(ctx context.Context, x sqlExecer, e Evaluation) (int64, 
 	}
 	var id int64
 	err := x.QueryRowContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report)).Scan(&id)
+		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams)).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -545,9 +545,9 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, blockers = $5, warnings = $6, evaluated_at = $7
-			WHERE id = $8 AND cluster_id = $9`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, e.Blockers, e.Warnings, evaluated, e.ID, b.ClusterID); err != nil {
+			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, teams = $5, blockers = $6, warnings = $7, evaluated_at = $8
+			WHERE id = $9 AND cluster_id = $10`,
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}
@@ -722,6 +722,104 @@ func (p *Postgres) RevokeToken(ctx context.Context, clusterName string) error {
 		return fmt.Errorf("no active tokens for cluster %q: %w", clusterName, ErrNotFound)
 	}
 	return nil
+}
+
+// CreateReadToken stores a new active read token scoped to teams and
+// returns its id; only the sha256 of token (plus TokenPrefix) is persisted.
+func (p *Postgres) CreateReadToken(ctx context.Context, teams []string, token string) (int64, error) {
+	if token == "" {
+		return 0, errors.New("create read token: the token must be non-empty")
+	}
+	scope, err := readTokenTeams(teams)
+	if err != nil {
+		return 0, fmt.Errorf("create read token: %w", err)
+	}
+	var id int64
+	if err := p.db.QueryRowContext(ctx,
+		`INSERT INTO read_tokens (teams, token_hash, token_prefix, created_at) VALUES ($1, $2, $3, $4) RETURNING id`,
+		scope, HashToken(token), TokenPrefix(token), time.Now().UTC()).Scan(&id); err != nil {
+		return 0, fmt.Errorf("create read token: %w", err)
+	}
+	return id, nil
+}
+
+// ValidReadToken resolves a presented plaintext read token to its teams.
+// Unknown or revoked tokens are (nil, false, nil) — not an error.
+func (p *Postgres) ValidReadToken(ctx context.Context, token string) ([]string, bool, error) {
+	var raw string
+	err := p.db.QueryRowContext(ctx,
+		`SELECT teams FROM read_tokens WHERE token_hash = $1 AND revoked_at IS NULL`,
+		HashToken(token)).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("validate read token: %w", err)
+	}
+	teams, err := decodeTeams(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("validate read token: %w", err)
+	}
+	return teams, true, nil
+}
+
+// ListReadTokens returns every read token's metadata, ascending by id.
+func (p *Postgres) ListReadTokens(ctx context.Context) ([]ReadToken, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT id, teams, token_prefix, created_at, revoked_at FROM read_tokens ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list read tokens: %w", err)
+	}
+	defer rows.Close()
+	var out []ReadToken
+	for rows.Next() {
+		var tk ReadToken
+		var teams string
+		var revoked sql.NullTime
+		if err := rows.Scan(&tk.ID, &teams, &tk.Prefix, &tk.CreatedAt, &revoked); err != nil {
+			return nil, fmt.Errorf("list read tokens: %w", err)
+		}
+		if tk.Teams, err = decodeTeams(teams); err != nil {
+			return nil, fmt.Errorf("list read tokens: %w", err)
+		}
+		tk.CreatedAt = tk.CreatedAt.UTC()
+		if revoked.Valid {
+			at := revoked.Time.UTC()
+			tk.RevokedAt = &at
+		}
+		out = append(out, tk)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list read tokens: %w", err)
+	}
+	return out, nil
+}
+
+// RevokeReadToken revokes the active read token id, or ErrNotFound when
+// there is none (unknown id, or already revoked).
+func (p *Postgres) RevokeReadToken(ctx context.Context, id int64) error {
+	return execOne(ctx, p.db, fmt.Sprintf("revoke read token %d", id),
+		`UPDATE read_tokens SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL`, time.Now().UTC(), id)
+}
+
+// ClustersOfTeams returns the clusters whose current evaluations, written
+// with teamMapHash, name one of teams, in one query; the teams travel as
+// one JSON parameter, as the SQLite store's do.
+func (p *Postgres) ClustersOfTeams(ctx context.Context, teams []string, teamMapHash string) ([]int64, error) {
+	if len(teams) == 0 {
+		return nil, nil
+	}
+	return scanIDs(p.db.QueryContext(ctx, `
+		SELECT DISTINCT e.cluster_id FROM evaluations e
+		WHERE e.id IN (
+			SELECT MAX(id) FROM evaluations
+			WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+			GROUP BY snapshot_id, target)
+		AND e.team_map_hash = $2
+		AND EXISTS (
+			SELECT 1 FROM jsonb_array_elements_text(e.teams::jsonb) AS t(team)
+			WHERE t.team IN (SELECT jsonb_array_elements_text($1::jsonb)))
+		ORDER BY e.cluster_id`, teamsColumn(teams), teamMapHash))
 }
 
 // ScoreHistory returns score points for (cluster, target), oldest-first

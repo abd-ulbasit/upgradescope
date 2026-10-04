@@ -297,8 +297,9 @@ old-version entry in place: Helm computes a patch against the live object,
 finds no change and skips the write, so no newer entry is recorded. The
 finding then stays until the object is next changed through the new
 version. The finding names at most `inventory.MaxObjectRefs` (100) objects,
-and its "written by" list comes from those. When objects were left out, the
-detail says so: "Written by (first 100 of 250 objects)".
+and its "written by" list comes from the objects identified. When objects
+were left out, the detail says so without claiming how many it names:
+"Written by (of 250 objects, not all identified)".
 The `deprecated-calls` metric covers live callers. When both signals point at
 the same group/version/kind, the engine emits one finding that carries
 both pieces of evidence.
@@ -668,8 +669,10 @@ first.
 - **No audit-log ingestion.** Active callers come from the apiserver metric.
   Audit logs would add kubectl client skew and caller identity, but they are
   operationally heavy and often unavailable on managed control planes.
-- **Single-tenant auth.** The server uses static bearer tokens. SSO and
-  multi-tenancy are out of scope for now.
+- **Token auth, no identities.** The server uses bearer tokens, fleet-wide
+  or scoped to teams, and can take the team scope from an authenticating
+  proxy's header. Built-in OIDC sessions are out of scope: an SSO proxy in
+  front covers it without an identity dependency in the binary.
 - **Clean-room data.** Every dataset comes from upstream source or public
   pages, and every registry claim carries a citation. Other scanners'
   datasets are never copied.

@@ -10,7 +10,11 @@ and the dashboard at /, and sends Slack or webhook notifications when a
 cluster's readiness changes.
 
 It listens on loopback by default. On any other address, the read API needs
---read-token, or an explicit --allow-anonymous-read.
+a credential: --read-token (fleet-wide), read tokens minted with
+'upgradescope tokens create --read --teams ...' (each scoped to teams, or
+'*' for the fleet), or an authenticating proxy's team header
+(--trust-team-header with --trusted-proxy-cidr); or an explicit
+--allow-anonymous-read.
 
 ```
 upgradescope serve [flags]
@@ -54,6 +58,8 @@ upgradescope serve [flags]
       --team-map string              YAML file of {pattern, team} namespace globs overriding team labels (first match wins)
       --tls-cert-file string         PEM certificate (chain) to serve HTTPS directly, TLS 1.2 minimum; requires --tls-key-file; a new handshake re-reads the pair when either file changed (checked at most once a second), so a renewal needs no restart
       --tls-key-file string          PEM private key for --tls-cert-file
+      --trust-team-header string     DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated and each percent-encoded where it must be (an authenticating proxy's group header, e.g. X-Forwarded-Groups; never the whole fleet, '*' included); needs --trusted-proxy-cidr
+      --trusted-proxy-cidr strings   with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16
       --webhook string               generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in api/webhook.schema.json) (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_URL or --webhook-file)
       --webhook-file string          read --webhook from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
       --webhook-secret string        sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key> (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_SECRET or --webhook-secret-file)

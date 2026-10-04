@@ -5,11 +5,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -134,11 +139,24 @@ func generateToken() (string, error) {
 func newTokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tokens",
-		Short: "Manage per-cluster ingest tokens for agent snapshot pushes",
-		Long: `Manage per-cluster ingest tokens. Each token authenticates snapshot
-pushes for one cluster name only, so a leaked token cannot write another
-cluster's history. The server database keeps each token's sha256 hash and
-its first 8 characters (which "tokens list" shows), never the token.`,
+		Short: "Manage per-cluster ingest tokens and team-scoped read tokens",
+		Long: `Manage the tokens the server keeps in its database.
+
+Ingest tokens (the default) authenticate snapshot pushes for one cluster
+name only, so a leaked token cannot write another cluster's history.
+
+Read tokens (--read) authenticate the read API, the dashboard's data,
+/api/v1/gate and /metrics, each for a set of teams (--teams a --teams b) or for the
+whole fleet (--teams '*'). A team-scoped token reads only the clusters its
+teams own a namespace in, and of those only its teams' findings and team
+scores: any other cluster answers 404, as an unknown one does, and is left
+out of every list and rollup. /metrics takes a fleet-wide token only. Once
+one read token has been minted, the read API needs a credential.
+
+The server database keeps each token's sha256 hash and its first 8
+characters (which "tokens list" shows), never the token. The server reads
+the tokens from the database on every request: one minted or revoked
+here takes effect without a restart.`,
 	}
 	cmd.AddCommand(newTokensCreateCmd())
 	cmd.AddCommand(newTokensListCmd())
@@ -147,20 +165,42 @@ its first 8 characters (which "tokens list" shows), never the token.`,
 }
 
 func newTokensCreateCmd() *cobra.Command {
-	var flags dbFlags
+	var (
+		flags dbFlags
+		read  bool
+		teams []string
+	)
 	cmd := &cobra.Command{
-		Use:   "create <cluster>",
-		Short: "Mint an ingest token bound to one cluster",
-		Long: `Mint an ingest token bound to one cluster. The plaintext token is printed
-once, to stdout. The server stores its sha256 hash and its first 8
-characters (which "tokens list" shows), never the token. Give it to that
-cluster's agent (--server-token-file, or the chart's agent.existingSecret).`,
+		Use:   "create (<cluster> | --read --teams <team|*> [--teams <team>]...)",
+		Short: "Mint an ingest token bound to one cluster, or a read token scoped to teams",
+		Long: `Mint an ingest token bound to one cluster, or with --read a read token
+scoped to the teams the --teams flags name, one team per flag, taken as
+written ('*' alone: the whole fleet). The
+plaintext token is printed once, to stdout. The server stores its sha256
+hash and its first 8 characters (which "tokens list" shows), never the
+token. Give an ingest token to that cluster's agent (--server-token-file,
+or the chart's agent.existingSecret), and a read token to the team's
+dashboard users or CI.`,
 		Example: `  upgradescope tokens create prod-eu --db upgradescope.db
-  upgradescope tokens create prod-eu --db-url-file /secrets/db-url > prod-eu.token`,
-		Args:          cobra.ExactArgs(1),
+  upgradescope tokens create prod-eu --db-url-file /secrets/db-url > prod-eu.token
+  upgradescope tokens create --read --teams payments --teams checkout > payments.token
+  upgradescope tokens create --read --teams 'Platform Team' > platform.token
+  upgradescope tokens create --read --teams '*' > fleet.token`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if read {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if read {
+				return createReadToken(cmd, flags, teams)
+			}
+			if cmd.Flags().Changed("teams") {
+				return errors.New("--teams scopes a read token: pass --read too")
+			}
 			cluster := args[0]
 			// The server refuses pushes under any other name, so a token
 			// bound to one could never be used.
@@ -192,21 +232,111 @@ cluster's agent (--server-token-file, or the chart's agent.existingSecret).`,
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&read, "read", false, "mint a read token for the read API, dashboard, /api/v1/gate and /metrics instead of an ingest token; needs --teams")
+	cmd.Flags().StringArrayVar(&teams, "teams", nil, "with --read: a team the token reads, as the team label or --team-map names it (repeat the flag for more; the value is never split), or '*' alone for the whole fleet")
 	flags.register(cmd)
 	return cmd
+}
+
+// readTokenTeams validates --teams: at least one team, none empty or
+// over maxTeamName, and '*' only alone. Each flag is one team, taken as
+// written: a team is free text ("Platform Team", "Équipe, Paris"), so a
+// value is never split or trimmed. A team with a comma is most likely a
+// list passed to one flag, so it is warned about on stderr; the token is
+// minted for the team so named all the same. The result is sorted and
+// deduplicated.
+func readTokenTeams(teams []string, stderr io.Writer) ([]string, error) {
+	out := make([]string, 0, len(teams))
+	for _, t := range teams {
+		switch {
+		case t == "":
+			return nil, errors.New("--teams: a team name must be non-empty")
+		case len(t) > maxTeamName:
+			return nil, fmt.Errorf("--teams: team %q is longer than %d characters", t, maxTeamName)
+		case !utf8.ValidString(t) || strings.ContainsFunc(t, unicode.IsControl):
+			return nil, fmt.Errorf("--teams: team %q is not printable UTF-8 text", t)
+		case strings.Contains(t, ","):
+			fmt.Fprintf(stderr, "note: --teams %q is one team whose name holds a comma; for several teams repeat the flag (--teams a --teams b)\n", t)
+		}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("--read needs --teams: the teams the token reads, or '%s' for the whole fleet", store.ReadScopeFleet)
+	}
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if slices.Contains(out, store.ReadScopeFleet) && len(out) > 1 {
+		return nil, fmt.Errorf("--teams: '%s' is the whole fleet and stands alone, got %s", store.ReadScopeFleet, teamList(out))
+	}
+	return out, nil
+}
+
+// teamList prints teams for a person: comma separated, each quoted when
+// it holds a comma, a quote, a space or anything not printable, so a list
+// of free-text team names reads unambiguously.
+func teamList(teams []string) string {
+	out := make([]string, len(teams))
+	for i, t := range teams {
+		out[i] = t
+		if t == "" || strings.ContainsFunc(t, func(r rune) bool { return r == ',' || r == '"' || unicode.IsSpace(r) || !unicode.IsPrint(r) }) {
+			out[i] = strconv.Quote(t)
+		}
+	}
+	return strings.Join(out, ",")
+}
+
+// maxTeamName bounds a --teams entry: a team label value is at most 63
+// characters, and a --team-map team is free text, so allow more.
+const maxTeamName = 253
+
+// createReadToken is `tokens create --read --teams ...`.
+func createReadToken(cmd *cobra.Command, flags dbFlags, raw []string) error {
+	teams, err := readTokenTeams(raw, cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
+	token, err := generateToken()
+	if err != nil {
+		return err
+	}
+	if err := flags.resolve(cmd); err != nil {
+		return err
+	}
+	st, err := flags.openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	id, err := st.CreateReadToken(cmd.Context(), teams, token)
+	if err != nil {
+		return fmt.Errorf("create read token: %w", err)
+	}
+	scope := "teams " + teamList(teams)
+	if teams[0] == store.ReadScopeFleet {
+		scope = "the whole fleet"
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), token)
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"read token id %d (prefix %s) for %s created — shown once: the server stores its sha256 hash and its first 8 characters, never the token; "+
+			"from now on the server's read API needs a credential\n",
+		id, store.TokenPrefix(token), scope)
+	return nil
 }
 
 func newTokensListCmd() *cobra.Command {
 	var (
 		flags   dbFlags
 		cluster string
+		read    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List ingest tokens; never prints a token",
-		Long:  "List ingest tokens: id, cluster, prefix, created and revoked times. A token itself is never shown.",
+		Short: "List ingest tokens, or read tokens with --read; never prints a token",
+		Long: "List ingest tokens: id, cluster, prefix, created and revoked times; or with --read the read tokens:\n" +
+			"id, teams ('*' = the whole fleet), prefix, created and revoked times. A token itself is never shown.",
 		Example: `  upgradescope tokens list --db upgradescope.db
-  upgradescope tokens list --cluster prod-eu`,
+  upgradescope tokens list --cluster prod-eu
+  upgradescope tokens list --read`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -219,6 +349,9 @@ func newTokensListCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			if read {
+				return listReadTokens(cmd, st)
+			}
 			toks, err := st.ListTokens(cmd.Context(), cluster)
 			if err != nil {
 				return fmt.Errorf("list tokens: %w", err)
@@ -240,8 +373,29 @@ func newTokensListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&cluster, "cluster", "", "only list this cluster's tokens")
+	cmd.Flags().BoolVar(&read, "read", false, "list the read tokens instead of the ingest tokens")
+	cmd.MarkFlagsMutuallyExclusive("cluster", "read")
 	flags.register(cmd)
 	return cmd
+}
+
+// listReadTokens is `tokens list --read`.
+func listReadTokens(cmd *cobra.Command, st store.Store) error {
+	toks, err := st.ListReadTokens(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("list read tokens: %w", err)
+	}
+	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tTEAMS\tPREFIX\tCREATED\tREVOKED")
+	for _, tk := range toks {
+		revoked := "-"
+		if tk.RevokedAt != nil {
+			revoked = tk.RevokedAt.Format(time.RFC3339)
+		}
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n",
+			tk.ID, teamList(tk.Teams), tk.Prefix, tk.CreatedAt.Format(time.RFC3339), revoked)
+	}
+	return tw.Flush()
 }
 
 func newTokensRevokeCmd() *cobra.Command {
@@ -249,21 +403,32 @@ func newTokensRevokeCmd() *cobra.Command {
 		flags dbFlags
 		id    int64
 		all   bool
+		read  bool
 	)
 	cmd := &cobra.Command{
-		Use:   "revoke <cluster> (--id <id> | --all)",
-		Short: "Revoke one ingest token of a cluster by id, or all of them with --all",
+		Use:   "revoke (<cluster> (--id <id> | --all) | --read --id <id>)",
+		Short: "Revoke ingest tokens of a cluster (--id or --all), or a read token (--read --id)",
 		Example: `  upgradescope tokens revoke prod-eu --id 3
-  upgradescope tokens revoke prod-eu --all`,
+  upgradescope tokens revoke prod-eu --all
+  upgradescope tokens revoke --read --id 2`,
 		Long: "Revoke one ingest token by id (see 'tokens list'), or every active token of the cluster with --all.\n" +
 			"Zero-downtime rotation: 'tokens create <cluster>', roll the new token out to the agent, then\n" +
 			"'tokens revoke <cluster> --id <old id>'. The agent reads its token at startup, so rolling it out\n" +
-			"means restarting the agent after updating its Secret (kubectl rollout restart deploy/<release>-agent).",
-		Args:          cobra.ExactArgs(1),
+			"means restarting the agent after updating its Secret (kubectl rollout restart deploy/<release>-agent).\n\n" +
+			"With --read, revoke the read token --id names (see 'tokens list --read'). The server refuses it\n" +
+			"from its next request on. Revoking the last read token does not open the read API again.",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if read {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cluster := args[0]
+			if read && all {
+				return errors.New("--read revokes one read token: pass --id, not --all")
+			}
 			if err := flags.resolve(cmd); err != nil {
 				return err
 			}
@@ -272,6 +437,17 @@ func newTokensRevokeCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			if read {
+				if err := st.RevokeReadToken(cmd.Context(), id); err != nil {
+					if errors.Is(err, store.ErrNotFound) {
+						return fmt.Errorf("no active read token %d", id)
+					}
+					return fmt.Errorf("revoke read token: %w", err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "revoked read token %d\n", id)
+				return nil
+			}
+			cluster := args[0]
 			if !all {
 				if err := st.RevokeTokenID(cmd.Context(), cluster, id); err != nil {
 					if errors.Is(err, store.ErrNotFound) {
@@ -294,6 +470,7 @@ func newTokensRevokeCmd() *cobra.Command {
 	}
 	cmd.Flags().Int64Var(&id, "id", 0, "revoke only the token with this id (from 'tokens list' or 'tokens create')")
 	cmd.Flags().BoolVar(&all, "all", false, "revoke every active token of the cluster")
+	cmd.Flags().BoolVar(&read, "read", false, "revoke the read token --id names instead of an ingest token")
 	cmd.MarkFlagsOneRequired("id", "all")
 	cmd.MarkFlagsMutuallyExclusive("id", "all")
 	flags.register(cmd)

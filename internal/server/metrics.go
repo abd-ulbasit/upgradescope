@@ -170,7 +170,7 @@ func (c clusterCollector) Collect(ch chan<- prometheus.Metric) {
 	// Only the server version decides the targets, and clusterStates reads
 	// it from the snapshot heads, and the series come from evaluation
 	// summaries, so a scrape loads no inventory and no report.
-	states, err := s.clusterStates(ctx)
+	states, err := s.clusterStates(ctx, fleetScope)
 	if err != nil {
 		ch <- prometheus.NewInvalidMetric(descClusterScore, err)
 		return

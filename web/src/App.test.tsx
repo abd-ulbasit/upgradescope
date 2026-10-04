@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { TOKEN_KEY } from "./api";
@@ -60,5 +60,49 @@ describe("navigation", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { level: 1, name: "Teams" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Teams" }).getAttribute("aria-current")).toBe("page");
+  });
+});
+
+describe("read scope", () => {
+  const scoped = { "X-Upgradescope-Teams": "checkout,payments" };
+
+  it("says the view is filtered when the server answered for teams", async () => {
+    mockApi({
+      "api/v1/fleet": () => jsonResponse(200, { targets: [], clusters: [] }, scoped),
+    });
+    render(<App />);
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toContain("Showing teams checkout, payments only");
+    // A scope can come from a proxy's team header, with no token at all.
+    expect(note.textContent).not.toMatch(/token/i);
+  });
+
+  it("decodes free-text team names", async () => {
+    mockApi({
+      "api/v1/fleet": () =>
+        jsonResponse(200, { targets: [], clusters: [] }, { "X-Upgradescope-Teams": "%C3%89quipe%2C%20Paris,Platform%20Team" }),
+    });
+    render(<App />);
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toContain("Showing teams Équipe, Paris, Platform Team only");
+  });
+
+  it("shows no note for a fleet-wide answer", async () => {
+    mockApi({ "api/v1/fleet": { targets: [], clusters: [] } });
+    render(<App />);
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("says a missing cluster may be another team's", async () => {
+    const hidden = () => jsonResponse(404, { error: "cluster not found" }, scoped);
+    mockApi({
+      "api/v1/clusters/7": hidden,
+      "api/v1/clusters/7/report": hidden,
+      "api/v1/clusters/7/history": hidden,
+    });
+    navigate("#/cluster/7");
+    render(<App />);
+    expect(await screen.findByText(/outside the teams this view is scoped to/)).toBeTruthy();
   });
 });

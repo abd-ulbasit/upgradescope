@@ -298,7 +298,7 @@ server:
     # -- The render fails when the Ingress would publish a read API with no
     # read token. Set true only when an authenticating layer (oauth2-proxy
     # through ingress annotations, an identity-aware proxy) fronts it; see
-    # docs/operations/tenancy.md.
+    # docs/operations/auth.md.
     allowAnonymousRead: false
     tls:
       # -- TLS for host, from a kubernetes.io/tls Secret (e.g. one cert-manager

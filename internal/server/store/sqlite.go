@@ -427,19 +427,19 @@ type sqlExecer interface {
 }
 
 // evaluationColumns is the SELECT list scanEvaluation reads.
-const evaluationColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed`
+const evaluationColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL`
 
 // summaryColumns is evaluationColumns without the report: NULL scans to a
 // nil Report, and the other columns are all a summary needs. Both drivers
 // use it.
-const summaryColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, NULL, created_at, evaluated_at, team_map_hash, not_assessed`
+const summaryColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, NULL, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL`
 
 func scanEvaluation(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
 	var created, evaluated string
 	var gaps sql.NullString
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &created, &evaluated, &e.TeamMapHash, &gaps); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &created, &evaluated, &e.TeamMapHash, &gaps, &e.TeamsUnknown); err != nil {
 		return Evaluation{}, err
 	}
 	e.NotAssessed = notAssessedBytes(gaps)
@@ -475,10 +475,10 @@ func insertEvaluationSQLite(ctx context.Context, x sqlExecer, e Evaluation) (int
 		evaluated = created
 	}
 	res, err := x.ExecContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report))
+		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams))
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -629,9 +629,9 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = ?, not_assessed = ?, kb_version = ?, team_map_hash = ?, blockers = ?, warnings = ?, evaluated_at = ?
+			UPDATE evaluations SET report = ?, not_assessed = ?, kb_version = ?, team_map_hash = ?, teams = ?, blockers = ?, warnings = ?, evaluated_at = ?
 			WHERE id = ? AND cluster_id = ?`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, e.Blockers, e.Warnings, formatTime(evaluated), e.ID, b.ClusterID); err != nil {
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, formatTime(evaluated), e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}
@@ -835,6 +835,132 @@ func (s *SQLite) RevokeToken(ctx context.Context, clusterName string) error {
 		return fmt.Errorf("no active tokens for cluster %q: %w", clusterName, ErrNotFound)
 	}
 	return nil
+}
+
+// CreateReadToken stores a new active read token scoped to teams and
+// returns its id; only the sha256 of token (plus TokenPrefix) is persisted.
+func (s *SQLite) CreateReadToken(ctx context.Context, teams []string, token string) (int64, error) {
+	if token == "" {
+		return 0, errors.New("create read token: the token must be non-empty")
+	}
+	scope, err := readTokenTeams(teams)
+	if err != nil {
+		return 0, fmt.Errorf("create read token: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO read_tokens (teams, token_hash, token_prefix, created_at) VALUES (?, ?, ?, ?)`,
+		scope, HashToken(token), TokenPrefix(token), formatTime(time.Now()))
+	if err != nil {
+		return 0, fmt.Errorf("create read token: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("create read token: %w", err)
+	}
+	return id, nil
+}
+
+// ValidReadToken resolves a presented plaintext read token to its teams.
+// Unknown or revoked tokens are (nil, false, nil) — not an error.
+func (s *SQLite) ValidReadToken(ctx context.Context, token string) ([]string, bool, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT teams FROM read_tokens WHERE token_hash = ? AND revoked_at IS NULL`,
+		HashToken(token)).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("validate read token: %w", err)
+	}
+	teams, err := decodeTeams(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("validate read token: %w", err)
+	}
+	return teams, true, nil
+}
+
+// ListReadTokens returns every read token's metadata, ascending by id.
+func (s *SQLite) ListReadTokens(ctx context.Context) ([]ReadToken, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, teams, token_prefix, created_at, revoked_at FROM read_tokens ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list read tokens: %w", err)
+	}
+	defer rows.Close()
+	var out []ReadToken
+	for rows.Next() {
+		var tk ReadToken
+		var teams, created string
+		var revoked sql.NullString
+		if err := rows.Scan(&tk.ID, &teams, &tk.Prefix, &created, &revoked); err != nil {
+			return nil, fmt.Errorf("list read tokens: %w", err)
+		}
+		if tk.Teams, err = decodeTeams(teams); err != nil {
+			return nil, fmt.Errorf("list read tokens: %w", err)
+		}
+		if tk.CreatedAt, err = parseStoredTime(created); err != nil {
+			return nil, fmt.Errorf("list read tokens: %w", err)
+		}
+		if revoked.Valid {
+			at, err := parseStoredTime(revoked.String)
+			if err != nil {
+				return nil, fmt.Errorf("list read tokens: %w", err)
+			}
+			tk.RevokedAt = &at
+		}
+		out = append(out, tk)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list read tokens: %w", err)
+	}
+	return out, nil
+}
+
+// RevokeReadToken revokes the active read token id, or ErrNotFound when
+// there is none (unknown id, or already revoked).
+func (s *SQLite) RevokeReadToken(ctx context.Context, id int64) error {
+	return execOne(ctx, s.db, fmt.Sprintf("revoke read token %d", id),
+		`UPDATE read_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, formatTime(time.Now()), id)
+}
+
+// ClustersOfTeams returns the clusters whose current evaluations, written
+// with teamMapHash, name one of teams, in one query: the teams travel as
+// one JSON parameter, so their number is not bound by SQLite's parameter
+// limit.
+func (s *SQLite) ClustersOfTeams(ctx context.Context, teams []string, teamMapHash string) ([]int64, error) {
+	if len(teams) == 0 {
+		return nil, nil
+	}
+	return scanIDs(s.db.QueryContext(ctx, `
+		SELECT DISTINCT e.cluster_id FROM evaluations e
+		WHERE e.id IN (
+			SELECT MAX(id) FROM evaluations
+			WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+			GROUP BY snapshot_id, target)
+		AND e.team_map_hash = ?
+		AND EXISTS (SELECT 1 FROM json_each(e.teams) t WHERE t.value IN (SELECT value FROM json_each(?)))
+		ORDER BY e.cluster_id`, teamMapHash, teamsColumn(teams)))
+}
+
+// scanIDs reads a one-column result of ids.
+func scanIDs(rows *sql.Rows, err error) ([]int64, error) {
+	if err != nil {
+		return nil, fmt.Errorf("clusters of teams: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("clusters of teams: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("clusters of teams: %w", err)
+	}
+	return out, nil
 }
 
 // ScoreHistory returns score points for (cluster, target), oldest-first

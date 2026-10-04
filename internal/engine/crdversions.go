@@ -81,7 +81,7 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budge
 			case inUse:
 				f.Severity = SevWarning
 				f.Title += fmt.Sprintf(" (%s)", pluralObjects(u.Count))
-				f.Detail = crdUsage(&f, u, inv.Namespaces)
+				f.Detail = crdUsage(&f, u, inv)
 			case unchecked[gv+" "+c.Kind]:
 				f.Detail = "Custom resources written through this version were not checked (see the crds gap)."
 			default:
@@ -121,7 +121,7 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budge
 				Title:     fmt.Sprintf("%s %s is not served by its CRD (%s)", gv, c.Kind, pluralObjects(u.Count)),
 				Citations: []string{crdVersioningURL},
 			}
-			f.Detail = crdUsage(&f, u, inv.Namespaces)
+			f.Detail = crdUsage(&f, u, inv)
 			if ok {
 				f.Detail += fmt.Sprintf(" CRD %s marks %s served: false (it serves %s), so the apiserver rejects these objects at %s.", name, u.Version, servedText, u.Version)
 			} else {
@@ -169,16 +169,20 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budge
 
 // crdUsage fills f's teams, namespaces and objects from u and returns the
 // detail sentences on who uses the version, worded as evalAPIUsage words
-// them: manifest objects (refs with a line), or live objects and the
-// managers writing them.
-func crdUsage(f *Finding, u inventory.APIUsage, nsInfo []inventory.NamespaceInfo) string {
-	manifests := len(u.Objects) > 0 && u.Objects[0].Line > 0
-	emptyNS, detail := "cluster-scoped", "%d object(s) written through this version"
-	if manifests {
-		emptyNS, detail = "namespace unset", "%d manifest object(s) use this version"
+// them (listedObjects): manifest objects (refs with a line), a cluster's
+// row the gate listed only manifests of, or live objects and the managers
+// writing them.
+func crdUsage(f *Finding, u inventory.APIUsage, inv inventory.Inventory) string {
+	listed := listedObjects(inv.Source, u)
+	detail := "%d object(s) written through this version"
+	switch listed {
+	case manifestObjects:
+		detail = "%d manifest object(s) use this version"
+	case mixedObjects:
+		detail = "%d object(s) use this version"
 	}
-	nsDetail, nsNames := namespaceBreakdown(u.Namespaces, emptyNS)
-	f.Teams, f.Namespaces = teamsFor(nsNames, nsInfo), nsNames
+	nsDetail, nsNames := namespaceBreakdown(u.Namespaces, listed.emptyNamespace())
+	f.Teams, f.Namespaces = teamsFor(nsNames, inv.Namespaces), nsNames
 	f.Objects, f.ObjectsOmitted = sortedObjects(u.Objects), u.ObjectsOmitted
 	if nsDetail == "" {
 		detail = fmt.Sprintf(detail+".", u.Count)

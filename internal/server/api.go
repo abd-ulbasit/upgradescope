@@ -471,15 +471,6 @@ func bearerToken(r *http.Request) string {
 	return h[len(prefix):]
 }
 
-// bearerOK does a constant-time check of "Authorization: Bearer <token>".
-func bearerOK(r *http.Request, token string) bool {
-	presented := bearerToken(r)
-	if presented == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1
-}
-
 // authIngest authorizes a snapshot push. Two token kinds are accepted:
 // the optional shared Config.IngestToken (fleet-wide; single-cluster/dev
 // setups — when it is "" only per-cluster tokens work) and per-cluster
@@ -824,19 +815,7 @@ func writeUIDConflict(w http.ResponseWriter, conflict *store.ClusterUIDConflictE
 
 // ----- read API -----
 
-// readAuth gates a read handler behind Config.ReadToken when configured;
-// an empty ReadToken leaves the read API open (the CLI documents this loudly).
-// The admin token reads too, so one credential can list and then delete.
-func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.ReadToken != "" && !bearerOK(r, s.cfg.ReadToken) &&
-			(s.cfg.AdminToken == "" || !bearerOK(r, s.cfg.AdminToken)) {
-			errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
-			return
-		}
-		next(w, r)
-	}
-}
+// readAuth (scope.go) gates every read handler and gives it its scope.
 
 // handleHealthz is always unauthenticated: liveness probes carry no tokens.
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -854,13 +833,24 @@ func (s *Server) pathClusterID(w http.ResponseWriter, r *http.Request) (int64, b
 }
 
 // requireCluster 404s (JSON) for unknown clusters so every per-cluster
-// endpoint shares one existence check.
+// endpoint shares one existence check. A cluster outside the request's
+// scope is answered exactly as an unknown one, so its id says nothing:
+// the scope is looked up first, whether the id exists or not, and an id
+// outside it is never looked up, so both cost the same one query.
 func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.Cluster, bool) {
 	id, ok := s.pathClusterID(w, r)
 	if !ok {
 		return store.Cluster{}, false
 	}
-	c, err := s.cfg.Store.GetCluster(r.Context(), id)
+	in, err := s.inScope(r.Context(), scopeOf(r), id)
+	var c store.Cluster
+	switch {
+	case err != nil:
+	case !in:
+		err = store.ErrNotFound
+	default:
+		c, err = s.cfg.Store.GetCluster(r.Context(), id)
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "cluster not found")
 		return store.Cluster{}, false
@@ -1097,7 +1087,7 @@ type clusterSummary struct {
 // fleet pushed.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	states, err := s.clusterStates(ctx)
+	states, err := s.clusterStates(ctx, scopeOf(r))
 	if err != nil {
 		internalErr(w, "listing clusters", err)
 		return
@@ -1110,6 +1100,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 			target := server.Next()
 			if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, target.String()); err == nil {
 				sum := s.summarize(e, now, fleetSummaryBytes)
+				sum.NotAssessed = scopeOf(r).summaryGaps(sum.NotAssessed)
 				cs.Latest = &sum
 			}
 		}
@@ -1140,14 +1131,16 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	var targets []inventory.Version
 	if snap, head, err := s.latestHead(ctx, c.ID); err == nil {
 		detail.ServerVersion = judgedAt(snap, head)
-		detail.Capabilities = head.Capabilities
+		detail.Capabilities = scopeOf(r).capabilities(head.Capabilities)
 		targets = s.evalTargets(detail.ServerVersion)
 	} else {
 		targets = s.extraTargets
 	}
 	for _, t := range targets {
 		if e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, t.String()); err == nil {
-			detail.Evaluations = append(detail.Evaluations, s.summarize(e, now, 0))
+			sum := s.summarize(e, now, 0)
+			sum.NotAssessed = scopeOf(r).summaryGaps(sum.NotAssessed)
+			detail.Evaluations = append(detail.Evaluations, sum)
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)
@@ -1170,6 +1163,9 @@ type reportMeta struct {
 	ServerVersion string    `json:"serverVersion,omitempty"` // the version the latest snapshot is judged at (judgedVersion)
 	NotApplicable bool      `json:"notApplicable,omitempty"` // target at or below ServerVersion
 	Outdated      bool      `json:"outdated,omitempty"`      // a stored evaluation the next pass replaces (evalSummary.Outdated)
+	// nsTeams is the evaluated inventory's namespace teams
+	// (namespaceTeams), for a scoped read only: what readScope cuts by.
+	nsTeams map[string]string
 }
 
 // loadOrComputeReport returns the current stored evaluation's report for
@@ -1178,14 +1174,20 @@ type reportMeta struct {
 // through to the what-if path — any other store failure is returned, never
 // masked by a recompute that would hide a broken store behind a 200.
 // A store.ErrNotFound result means the cluster has no snapshots at all.
-// Only a what-if decodes the whole inventory.
-func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version) (engine.Report, reportMeta, error) {
+// Only a what-if decodes the whole inventory; a read scoped to teams
+// decodes its namespaces too (reportMeta.nsTeams).
+func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version, sc readScope) (engine.Report, reportMeta, error) {
 	snap, head, err := s.latestHead(ctx, clusterID)
 	if err != nil {
 		return engine.Report{}, reportMeta{}, err
 	}
 	version := judgedAt(snap, head)
 	meta := reportMeta{ServerVersion: version, NotApplicable: notApplicable(version, target)}
+	if !sc.fleet() {
+		if meta.nsTeams, err = s.namespaceTeams(snap); err != nil {
+			return engine.Report{}, reportMeta{}, err
+		}
+	}
 	e, err := s.cfg.Store.CurrentEvaluation(ctx, clusterID, target.String())
 	switch {
 	case err == nil:
@@ -1221,7 +1223,7 @@ func (s *Server) reportForRequest(w http.ResponseWriter, r *http.Request) (engin
 	if !ok {
 		return engine.Report{}, reportMeta{}, false
 	}
-	rep, meta, err := s.loadOrComputeReport(r.Context(), c.ID, target)
+	rep, meta, err := s.loadOrComputeReport(r.Context(), c.ID, target, scopeOf(r))
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
 		return engine.Report{}, reportMeta{}, false
@@ -1253,7 +1255,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, reportResponse{s.versioned(withTeams(rep)), meta})
+	writeJSON(w, http.StatusOK, reportResponse{s.versioned(withTeamsIn(rep, scopeOf(r), meta.nsTeams)), meta})
 }
 
 // handleFindings: GET /api/v1/clusters/{id}/findings?target=&severity=&category=
@@ -1267,7 +1269,7 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	severity := r.URL.Query().Get("severity")
 	category := r.URL.Query().Get("category")
 	findings := []engine.Finding{} // non-nil so JSON renders []
-	for _, f := range rep.Findings {
+	for _, f := range scopeOf(r).findings(rep.Findings, meta.nsTeams) {
 		if severity != "" && string(f.Severity) != severity {
 			continue
 		}

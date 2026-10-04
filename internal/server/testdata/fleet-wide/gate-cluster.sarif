@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "upgradescope",
+          "informationUri": "https://github.com/abd-ulbasit/upgradescope",
+          "rules": []
+        }
+      },
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "toolExecutionNotifications": [
+            {
+              "level": "error",
+              "message": {
+                "text": "Not reported as a result (no file location): extensions/v1beta1 Ingress removed in 1.22 (4 objects). 4 object(s) still stored/served at this version: pay-prod (1), pr-new-ns (1), shared-tools (1), web-secret-ns (1). 1 object(s) suppressed (see suppressed). Objects: pay-prod/pay-ingress, shared-tools/tools-ingress, pr-new-ns/pr-ingress (line 1)."
+              },
+              "properties": {
+                "category": "removed-api",
+                "findingKey": "removed-api/extensions/v1beta1/Ingress",
+                "severity": "blocker"
+              }
+            },
+            {
+              "level": "note",
+              "message": {
+                "text": "Not assessed: helm (partial): 1 release(s) not read, first web-secret-ns/secret-release. Skipped: web-secret-ns/secret-release."
+              },
+              "properties": {
+                "capability": "helm"
+              }
+            }
+          ]
+        }
+      ],
+      "results": [],
+      "properties": {
+        "ready": false,
+        "verdict": "blocked",
+        "score": 75,
+        "findings": 1,
+        "omittedFindings": 1,
+        "notAssessed": [
+          {
+            "capability": "helm",
+            "reason": "1 release(s) not read, first web-secret-ns/secret-release",
+            "partial": true,
+            "skipped": [
+              "web-secret-ns/secret-release"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+cluster,target,evaluatedAt,kbVersion,verdict,score,severity,category,key,title,detail,remediation,teams,namespaces,citations
+shared,1.35,2026-06-10T12:00:00Z,test-kb,blocked,75,summary,,,blocked for 1.35: score 75/100,"1 blockers, 0 warnings, 1 capabilities not assessed",,,,
+shared,1.35,2026-06-10T12:00:00Z,test-kb,blocked,75,blocker,removed-api,removed-api/extensions/v1beta1/Ingress,extensions/v1beta1 Ingress removed in 1.22 (3 objects),"3 object(s) still stored/served at this version: pay-prod (1), shared-tools (1), web-secret-ns (1).",,payments;web,pay-prod;shared-tools;web-secret-ns,https://kubernetes.io/docs/reference/using-api/deprecation-guide/
+shared,1.35,2026-06-10T12:00:00Z,test-kb,blocked,75,not-assessed,capability,helm,helm not assessed,"1 release(s) not read, first web-secret-ns/secret-release",,,,

@@ -3,7 +3,7 @@
 // the target picker and citation labels.
 
 import { useId, useState } from "react";
-import { ApiError } from "./api";
+import { ApiError, getScope } from "./api";
 import type { Severity, Verdict } from "./types";
 
 // SET_TOKEN_LABEL is the header button's text when no token is set; the
@@ -27,6 +27,8 @@ export function ErrorState({
   onRetry?: () => void;
 }) {
   const unauthorized = error instanceof ApiError && error.status === 401;
+  // A scoped token's clusters of other teams answer 404, as unknown ones do.
+  const hidden = error instanceof ApiError && error.status === 404 && getScope() !== null;
   return (
     <div className="state state-error" role="alert">
       <p className="state-title">
@@ -37,6 +39,11 @@ export function ErrorState({
         <p className="state-hint">
           This server requires a read token — set it with the “{SET_TOKEN_LABEL}”
           button in the header.
+        </p>
+      )}
+      {hidden && (
+        <p className="state-hint">
+          It does not exist, or it is outside the teams this view is scoped to.
         </p>
       )}
       {onRetry && (

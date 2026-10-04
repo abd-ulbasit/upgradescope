@@ -1,11 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -32,6 +36,56 @@ func TestParseTeamMapRejectsBadInput(t *testing.T) {
 	for name, in := range cases {
 		if _, err := ParseTeamMap([]byte(in)); err == nil {
 			t.Errorf("%s: ParseTeamMap(%q): want error, got nil", name, in)
+		}
+	}
+}
+
+// A team is free text, as it was before read scopes (#72): a map that
+// names "Platform Team", a team with a comma or a non-ASCII one still
+// loads. A team called "*", the fleet-wide read scope, is read as
+// StarTeam, with a warning, and serve keeps starting.
+func TestParseTeamMapKeepsFreeTextTeams(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	tm, err := ParseTeamMap([]byte("- pattern: \"plat-*\"\n  team: Platform Team\n" +
+		"- pattern: \"fr-*\"\n  team: \"Équipe, Paris\"\n- pattern: \"star-*\"\n  team: \"*\"\n"))
+	if err != nil {
+		t.Fatalf("ParseTeamMap: %v", err)
+	}
+	var teams []string
+	for _, r := range tm {
+		teams = append(teams, r.Team)
+	}
+	if want := []string{"Platform Team", "Équipe, Paris", StarTeam}; !slices.Equal(teams, want) {
+		t.Errorf("teams = %q, want %q", teams, want)
+	}
+	if !strings.Contains(logged.String(), `"(*)"`) {
+		t.Errorf("no warning that team \"*\" is read as %q: %q", StarTeam, logged.String())
+	}
+}
+
+// A map that names both "*" and "(*)" makes them one team, StarTeam:
+// serve says so at load, and keeps starting. A map with only one of them
+// gets no such warning.
+func TestParseTeamMapWarnsWhenStarTeamIsTaken(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	const collision = "are now one team"
+	if _, err := ParseTeamMap([]byte("- pattern: \"star-*\"\n  team: \"*\"\n- pattern: \"paren-*\"\n  team: \"(*)\"\n")); err != nil {
+		t.Fatalf("ParseTeamMap: %v", err)
+	}
+	if !strings.Contains(logged.String(), collision) {
+		t.Errorf("no warning that teams \"*\" and %q are one: %q", StarTeam, logged.String())
+	}
+	for _, only := range []string{"\"*\"", "\"(*)\""} {
+		logged.Reset()
+		if _, err := ParseTeamMap([]byte("- pattern: \"a-*\"\n  team: " + only + "\n")); err != nil {
+			t.Fatalf("ParseTeamMap: %v", err)
+		}
+		if strings.Contains(logged.String(), collision) {
+			t.Errorf("team %s alone warned of a collision: %q", only, logged.String())
 		}
 	}
 }

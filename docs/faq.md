@@ -53,9 +53,14 @@ into your registry; `image.repository` and `imagePullSecrets` point the
 chart at it.
 
 **Can teams see only their own clusters on the server?**
-No. The read token covers the whole fleet; teams split findings, they are
-not an access boundary. Run one server per tenant, or put an authenticating
-proxy in front. [Tenancy](operations/tenancy.md).
+Yes. A read token minted with
+`upgradescope tokens create --read --teams payments` reads only the clusters payments owns a namespace in, and only
+payments' findings and team scores; a finding that also covers other
+teams' namespaces is cut to payments' namespaces and objects, and any other
+cluster answers 404. An
+authenticating proxy's group header can set the scope instead. Tenants
+that must not share a database still need one server each.
+[Read access](operations/auth.md).
 
 **Does it support kubectl client skew, CRD versions, feature gates?**
 CRD versions yes: a scan reports deprecated, unserved and

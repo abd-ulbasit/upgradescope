@@ -151,6 +151,8 @@ other reads share ([memory and request limits](operations.md#memory-and-request-
 With a read token (`--read-token`, chart `server.readToken` or
 `server.readTokenFromSecret`), `/metrics` needs it like the rest of the
 read API. The chart's ServiceMonitor sends it from the server's Secret.
+Its series name every cluster, so a team-scoped read token gets `403`
+there: scrape with `--read-token` or a read token minted for `*`.
 
 `/healthz`, `/readyz`, `/livez`, `/metrics`, any path below them, and
 everything under `/api/` never fall through to the dashboard: an

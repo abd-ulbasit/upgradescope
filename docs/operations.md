@@ -7,7 +7,8 @@ is in the [chart README](https://github.com/abd-ulbasit/upgradescope/blob/main/d
 Elsewhere:
 
 - storage, pruning and backups: [Retention and backup](operations/retention-and-backup.md);
-- tokens, SSO and who can read what: [Tenancy and access control](operations/tenancy.md);
+- tokens, SSO and who can read what: [Tenancy and access control](operations/tenancy.md)
+  and [Read access: tokens, teams and SSO](operations/auth.md);
 - metrics, probes and logs: [Metrics, logs and probes](observability.md);
 - every endpoint: the [REST API reference](reference/api.md).
 

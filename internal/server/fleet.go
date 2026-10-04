@@ -63,12 +63,17 @@ type clusterState struct {
 	hasSnapshot bool
 }
 
-// clusterStates loads every cluster's latest snapshot head in one store
-// call. Fleet views never decode inventories up front: at 500 clusters
-// that held hundreds of MiB per request (#125 SV-14); only a row stored
-// before snapshots.server_version is read whole, for its version.
-func (s *Server) clusterStates(ctx context.Context) ([]clusterState, error) {
+// clusterStates loads the latest snapshot head of every cluster sc reads
+// in one store call (and one more for a team scope's clusters). Fleet
+// views never decode inventories up front: at 500 clusters that held
+// hundreds of MiB per request (#125 SV-14); only a row stored before
+// snapshots.server_version is read whole, for its version.
+func (s *Server) clusterStates(ctx context.Context, sc readScope) ([]clusterState, error) {
 	clusters, err := s.cfg.Store.ListClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	inScope, err := s.scopeClusters(ctx, sc)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +83,9 @@ func (s *Server) clusterStates(ctx context.Context) ([]clusterState, error) {
 	}
 	out := make([]clusterState, 0, len(clusters))
 	for _, c := range clusters {
+		if inScope != nil && !inScope[c.ID] {
+			continue
+		}
 		cs := clusterState{Cluster: c}
 		if head, ok := heads[c.ID]; ok {
 			cs.snap, cs.version, cs.hasSnapshot = head, head.ServerVersion, true
@@ -109,7 +117,7 @@ func (s *Server) clusterStates(ctx context.Context) ([]clusterState, error) {
 // are as many at most, the rest counted in targetsOmitted.
 func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	states, err := s.clusterStates(ctx)
+	states, err := s.clusterStates(ctx, scopeOf(r))
 	if err != nil {
 		internalErr(w, "listing clusters", err)
 		return
@@ -154,6 +162,7 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case err == nil:
 				gaps, gapsOmitted := gapsOf(e, fleetSummaryBytes)
+				gaps = scopeOf(r).summaryGaps(gaps)
 				row.Cells[t.String()] = &fleetCell{
 					Score: e.Score, Ready: e.Ready, Verdict: verdictOf(e), Blockers: e.Blockers,
 					EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID, Source: sourceStored, Outdated: s.outdated(e, now),
@@ -292,7 +301,7 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	states, err := s.clusterStates(ctx)
+	states, err := s.clusterStates(ctx, scopeOf(r))
 	if err != nil {
 		internalErr(w, "listing clusters", err)
 		return
@@ -324,7 +333,7 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		evaluated = append(evaluated, src)
-		for team, ts := range renderTeamScores(engine.TeamScores(rep)) {
+		for team, ts := range scopeOf(r).renderedTeams(rep) {
 			agg := teams[team]
 			if agg == nil {
 				agg = &fleetTeam{WorstScore: ts.Score}

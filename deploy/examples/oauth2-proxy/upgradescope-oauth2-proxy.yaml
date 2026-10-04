@@ -1,0 +1,246 @@
+# upgradescope serve behind oauth2-proxy, with team-scoped reads from the
+# proxy's group header (docs/operations/auth.md).
+#
+# The header mode is safe only when both hold, and this example holds
+# both (deploy/examples/examples_test.go checks them):
+#   1. serve is reachable only through the proxy: it listens on
+#      127.0.0.1:8080 inside the pod, and the one Service exposes the
+#      proxy's port, never serve's;
+#   2. the proxy removes every client-supplied copy of the header before
+#      it forwards a request. oauth2-proxy v7.15.5 strips the headers it
+#      injects (X-Forwarded-Groups here, in any case, with - or _) from
+#      the client's request first when --skip-auth-strip-headers is true,
+#      on authenticated and skip-auth routes alike, then sets
+#      X-Forwarded-Groups from the session only: one header, the
+#      session's groups joined by commas.
+#
+# Machines go through the proxy too, on routes it does not authenticate
+# (with the header stripped, so they read as the token they present):
+# agents push to http://upgradescope.upgradescope.svc/api/v1/snapshots
+# with their ingest tokens, CI posts to /api/v1/gate?target=... and
+# Prometheus scrapes /metrics with read tokens. v7.15.5 matches a
+# --skip-auth-route against the request's path without its query, so
+# ^/api/v1/gate$ matches every gate call. The proxy's sign-in is not what
+# guards the data: with --reverse-proxy it takes the path it matches from
+# the client's X-Forwarded-Uri (from any client, unless --trusted-proxy-ip
+# names the proxies allowed to send it), so a client can make it skip
+# authentication on any path. On such a request it still strips the
+# group header, so serve reads it as the token it presents, and answers
+# 401 without one. Operators reach serve itself with kubectl port-forward
+# to port 8080 and the admin or a read token.
+#
+# WARNING: serve trusts every connection that arrives over loopback, and
+# not only the sidecar's arrive that way:
+#   - kubectl port-forward to this pod connects from 127.0.0.1, so anyone
+#     allowed pods/portforward in this namespace can send the header and
+#     read any team (never the whole fleet). Grant it only to people who
+#     may read every team.
+#   - a service-mesh sidecar that delivers inbound traffic over localhost
+#     makes every client 127.0.0.1. The pod opts out of Istio and Linkerd
+#     injection below; keep any other mesh out of it too.
+#
+# Before applying, in namespace upgradescope:
+#   - a Secret oauth2-proxy with client-id, client-secret and cookie-secret
+#     (32 random bytes, base64: openssl rand -base64 32 | tr -- '+/' '-_');
+#   - the issuer URL, and an OIDC client whose ID token carries a groups
+#     claim (--oidc-groups-claim) holding team names;
+#   - optionally a Secret upgradescope-server with readToken (a fleet-wide
+#     token for CI and Prometheus) and ingestToken (or mint per-cluster
+#     ingest tokens: kubectl exec deploy/upgradescope-server -c server --
+#     /upgradescope tokens create <cluster> --db /data/upgradescope.sqlite;
+#     the image is distroless, so the binary is called by its path).
+#
+# kubectl create namespace upgradescope
+# kubectl apply -n upgradescope -f upgradescope-oauth2-proxy.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: upgradescope-data
+  labels:
+    app.kubernetes.io/name: upgradescope
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upgradescope-server
+  labels:
+    app.kubernetes.io/name: upgradescope
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # One SQLite writer on a ReadWriteOnce volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: upgradescope
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: upgradescope
+        app.kubernetes.io/component: server
+      annotations:
+        # No mesh sidecar: it would deliver every client over loopback,
+        # where the team header is trusted.
+        sidecar.istio.io/inject: "false"
+        linkerd.io/inject: disabled
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: ghcr.io/abd-ulbasit/upgradescope:v0.2.0-rc.2
+          args:
+            - serve
+            # Loopback only: nothing outside the pod reaches serve except
+            # through the proxy (kubectl port-forward aside, see above).
+            - --listen=127.0.0.1:8080
+            - --db=/data/upgradescope.sqlite
+            # Reads from the sidecar carry the user's groups: they read as
+            # those teams. From any other address the header is ignored.
+            - --trust-team-header=X-Forwarded-Groups
+            - --trusted-proxy-cidr=127.0.0.1/32
+          env:
+            # Fleet-wide, for CI (/api/v1/gate), Prometheus (/metrics) and
+            # operators.
+            - name: UPGRADESCOPE_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: upgradescope-server
+                  key: readToken
+                  optional: true
+            - name: UPGRADESCOPE_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: upgradescope-server
+                  key: ingestToken
+                  optional: true
+            - name: GOMEMLIMIT
+              value: "921MiB"
+          # The kubelet probes the pod's address, where serve does not
+          # listen: it probes serve through the proxy's port (4180; a
+          # probe's named port is looked up in its own container).
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 4180
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 4180
+            # A proxy restart must not restart serve.
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        - name: oauth2-proxy
+          # Pin the release you have vetted: what makes the header mode
+          # safe is this version's --skip-auth-strip-headers behaviour,
+          # and its path-only --skip-auth-route matching is what lets CI
+          # reach the gate.
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+          args:
+            - --provider=oidc
+            - --oidc-issuer-url=https://sso.example.com
+            - --oidc-groups-claim=groups
+            - --email-domain=*
+            - --http-address=0.0.0.0:4180
+            - --upstream=http://127.0.0.1:8080/
+            # Behind your Ingress. Add --trusted-proxy-ip=<the ingress
+            # controller's addresses> so that only it may send
+            # X-Forwarded-* (X-Forwarded-Uri decides the skip-auth routes
+            # below); serve's token check guards the data either way.
+            - --reverse-proxy=true
+            # X-Forwarded-User, -Email and -Groups, from the session.
+            - --pass-user-headers=true
+            # Remove the client's own copies of every header the proxy
+            # injects before forwarding, on every route: without it a
+            # client could name any team in X-Forwarded-Groups.
+            - --skip-auth-strip-headers=true
+            # Leave Authorization as the client sent it: the server reads
+            # read tokens from it. (Basic credentials replace it only with
+            # a --basic-auth-password, and --pass-authorization-header
+            # would send the ID token; neither is set.)
+            - --pass-basic-auth=false
+            # Machines, with the tokens they present and no group header:
+            # agents' pushes, the CI gate, Prometheus, and the kubelet's
+            # probes of serve. Matched against the path alone (the gate's
+            # ?target= is not part of it).
+            - --skip-auth-route=POST=^/api/v1/snapshots$
+            - --skip-auth-route=POST=^/api/v1/gate$
+            - --skip-auth-route=GET=^/metrics$
+            - --skip-auth-route=GET=^/readyz$
+            - --skip-auth-route=GET=^/healthz$
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: oauth2-proxy, key: client-id}
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: oauth2-proxy, key: client-secret}
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef: {name: oauth2-proxy, key: cookie-secret}
+          ports:
+            - name: proxy
+              containerPort: 4180
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: upgradescope-data
+---
+# The only way in: the proxy. Point your Ingress (and the OIDC client's
+# redirect URL, https://<host>/oauth2/callback) here; agents, CI and
+# Prometheus use it too (http://upgradescope.upgradescope.svc).
+apiVersion: v1
+kind: Service
+metadata:
+  name: upgradescope
+  labels:
+    app.kubernetes.io/name: upgradescope
+spec:
+  selector:
+    app.kubernetes.io/name: upgradescope
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: proxy

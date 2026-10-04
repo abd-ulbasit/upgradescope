@@ -222,6 +222,7 @@ func TestEvalAPIUsageCoreGroupRendering(t *testing.T) {
 // object is cluster-scoped, and nothing is "stored/served" yet.
 func TestEvalAPIUsageManifestObjects(t *testing.T) {
 	inv := inventory.Inventory{
+		Source: inventory.SourceFiles,
 		APIUsage: []inventory.APIUsage{{
 			Group: "batch", Version: "v1beta1", Kind: "CronJob",
 			Count: 4, Namespaces: map[string]int{"": 2, "shop": 1, "jobs": 1},
@@ -252,6 +253,49 @@ func TestEvalAPIUsageManifestObjects(t *testing.T) {
 	// The finding owns its slice: sorting must not reorder the inventory.
 	if inv.APIUsage[0].Objects[0].Name != "z" {
 		t.Error("evalAPIUsage mutated the inventory's Objects")
+	}
+}
+
+// A cluster's row the gate upserted manifest objects into can list only
+// manifests while it counts cluster objects it does not list (the
+// collector's cap, or a team-scoped share whose objects were past it): it
+// is not worded as manifests alone, nor as stored objects alone. Every
+// counted object listed, or a files-mode row, is manifests' as before.
+func TestEvalAPIUsageManifestsInAClusterRow(t *testing.T) {
+	row := inventory.APIUsage{
+		Group: "extensions", Version: "v1beta1", Kind: "Ingress",
+		Count: 3, Namespaces: map[string]int{"pay-prod": 3},
+		Objects:        []inventory.ObjectRef{{Namespace: "pay-prod", Name: "pr", File: "", Line: 1}},
+		ObjectsOmitted: 2,
+	}
+	target := inventory.Version{Major: 1, Minor: 35}
+	for _, c := range []struct {
+		name string
+		src  inventory.Source
+		mod  func(*inventory.APIUsage)
+		want string
+	}{
+		{"cluster objects unlisted", inventory.SourceCluster, func(*inventory.APIUsage) {}, "3 object(s) use this API: pay-prod (3)."},
+		{"v0.1 push, no source", "", func(*inventory.APIUsage) {}, "3 object(s) use this API: pay-prod (3)."},
+		{"cluster objects unidentified", inventory.SourceCluster, func(u *inventory.APIUsage) { u.ObjectsOmitted = 0 }, "3 object(s) use this API: pay-prod (3)."},
+		{"every object listed", inventory.SourceCluster, func(u *inventory.APIUsage) {
+			u.Count, u.Namespaces, u.ObjectsOmitted = 1, map[string]int{"pay-prod": 1}, 0
+		}, "1 manifest object(s) use this API: pay-prod (1)."},
+		{"files mode over the cap", inventory.SourceFiles, func(*inventory.APIUsage) {}, "3 manifest object(s) use this API: pay-prod (3)."},
+	} {
+		u := row
+		c.mod(&u)
+		fs := evalAPIUsage(inventory.Inventory{Source: c.src, APIUsage: []inventory.APIUsage{u}}, testKB(), target, nil)
+		if len(fs) != 1 || fs[0].Detail != c.want {
+			t.Errorf("%s: findings %+v, want one with detail %q", c.name, fs, c.want)
+		}
+	}
+	// Its unset namespace may be either.
+	u := row
+	u.Namespaces = map[string]int{"": 3}
+	fs := evalAPIUsage(inventory.Inventory{Source: inventory.SourceCluster, APIUsage: []inventory.APIUsage{u}}, testKB(), target, nil)
+	if want := "3 object(s) use this API: cluster-scoped or namespace unset (3)."; len(fs) != 1 || fs[0].Detail != want {
+		t.Errorf("findings %+v, want one with detail %q", fs, want)
 	}
 }
 
@@ -297,7 +341,7 @@ func TestEvalAPIUsageAuthoredObjectsOmittedRefs(t *testing.T) {
 	if len(fs) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
-	if want := "5 object(s) written through this API version: default (5). Written by (first 2 of 5 objects): helm."; fs[0].Detail != want {
+	if want := "5 object(s) written through this API version: default (5). Written by (of 5 objects, not all identified): helm."; fs[0].Detail != want {
 		t.Errorf("detail = %q, want %q", fs[0].Detail, want)
 	}
 }

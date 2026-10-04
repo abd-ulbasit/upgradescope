@@ -147,16 +147,8 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		if !known && !builtin[u.Group] {
 			continue
 		}
-		// Manifest objects (refs read from text carry a line) are proposed
-		// state, not stored objects, and an empty namespace there means
-		// metadata.namespace is unset — helm template output usually omits
-		// it — not that the object is cluster-scoped.
-		manifests := len(u.Objects) > 0 && u.Objects[0].Line > 0
-		emptyNS := "cluster-scoped"
-		if manifests {
-			emptyNS = "namespace unset"
-		}
-		nsDetail, nsNames := namespaceBreakdown(u.Namespaces, emptyNS)
+		listed := listedObjects(inv.Source, u)
+		nsDetail, nsNames := namespaceBreakdown(u.Namespaces, listed.emptyNamespace())
 		f := Finding{
 			Teams:          teamsFor(nsNames, inv.Namespaces),
 			Namespaces:     nsNames,
@@ -202,8 +194,10 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		managers := objectManagers(u.Objects)
 		detail := "%d object(s) still stored/served at this version"
 		switch {
-		case manifests:
+		case listed == manifestObjects:
 			detail = "%d manifest object(s) use this API"
+		case listed == mixedObjects:
+			detail = "%d object(s) use this API"
 		case len(managers) > 0:
 			detail = "%d object(s) written through this API version"
 		}
@@ -221,6 +215,52 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		}
 	}
 	return out
+}
+
+// objectsListed is what an API usage row's listed objects say its
+// objects are (listedObjects).
+type objectsListed int
+
+const (
+	// storedObjects: a cluster's objects (or none listed).
+	storedObjects objectsListed = iota
+	// manifestObjects: manifest objects (refs read from text carry a
+	// line), proposed state rather than stored objects; an empty
+	// namespace there means metadata.namespace is unset (helm template
+	// output usually omits it), not that the object is cluster-scoped.
+	manifestObjects
+	// mixedObjects: manifest objects listed in a cluster's row that also
+	// counts objects it does not list, which may be the cluster's: the
+	// gate's proposed state, where the cluster's refs were past the
+	// collector's cap or not recorded, or a team-scoped share's were past
+	// the cap (readScope.clusterShare).
+	mixedObjects
+)
+
+// listedObjects says what u's objects are, from its first listed ref (the
+// gate lists the cluster's refs before the manifests', upsertUsage):
+// manifests' when every counted object is listed, or in a files-mode
+// inventory, where every object is a manifest's; mixed in a cluster's
+// inventory whose row counts objects it does not list.
+func listedObjects(src inventory.Source, u inventory.APIUsage) objectsListed {
+	switch {
+	case len(u.Objects) == 0 || u.Objects[0].Line == 0:
+		return storedObjects
+	case src == inventory.SourceFiles || len(u.Objects) >= u.Count:
+		return manifestObjects
+	}
+	return mixedObjects
+}
+
+// emptyNamespace names the "" key of the row's namespace counts.
+func (l objectsListed) emptyNamespace() string {
+	switch l {
+	case manifestObjects:
+		return "namespace unset"
+	case mixedObjects:
+		return "cluster-scoped or namespace unset"
+	}
+	return "cluster-scoped"
 }
 
 // authorshipUnknownKey is the Key suffix of an authorship-unknown finding,
@@ -271,8 +311,11 @@ func evalAuthorshipUnknown(inv inventory.Inventory, k kb.KB, b *budget) []Findin
 
 // writtenBy renders the managers of u's objects as a detail sentence with
 // a leading space, or "" when no object names one. Refs are capped
-// (inventory.MaxObjectRefs): it names the subset the managers come from
-// when some were dropped.
+// (inventory.MaxObjectRefs), and a /gate's engine sees more than the answer
+// lists (the PR's refs and the cluster's, before capObjects cuts the
+// listing): when refs were dropped it says only that not all of the M
+// objects are identified, never how many it names, which no listing is
+// guaranteed to show.
 func writtenBy(u inventory.APIUsage) string {
 	managers := objectManagers(u.Objects)
 	if len(managers) == 0 {
@@ -280,7 +323,7 @@ func writtenBy(u inventory.APIUsage) string {
 	}
 	by := " Written by: "
 	if u.ObjectsOmitted > 0 {
-		by = fmt.Sprintf(" Written by (first %d of %d objects): ", len(u.Objects), len(u.Objects)+u.ObjectsOmitted)
+		by = fmt.Sprintf(" Written by (of %d objects, not all identified): ", len(u.Objects)+u.ObjectsOmitted)
 	}
 	return by + strings.Join(managers, ", ") + "."
 }
