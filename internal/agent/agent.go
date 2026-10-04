@@ -212,11 +212,13 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 		cfg: cfg,
 		now: time.Now,
 	}
-	// The cache outlives the ticks: a release already decoded is not fetched
-	// again until its storage object changes (#71).
+	// The caches outlive the ticks: a release already decoded is not fetched
+	// again until its storage object changes (#71), and API discovery is
+	// asked again only under collect.DiscoveryCache's staleness rules (#228).
 	helmCache := collect.NewHelmCache()
+	discoveryCache := collect.NewDiscoveryCache()
 	r.collectFn = func(ctx context.Context) inventory.Inventory {
-		return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache})
+		return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache})
 	}
 	if cfg.ServerURL != "" {
 		r.pusher = newPusher(cfg.ServerURL, cfg.ServerToken, cfg.ServerRootCAs)
@@ -236,13 +238,17 @@ func (r *runner) tick(ctx context.Context) error {
 	inv := r.collectFn(ctx)
 	r.last.caps = inv.Capabilities
 
-	// The CR may have been deleted between ticks; recreate, then read spec.
-	if err := crd.EnsureObject(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); err != nil {
-		errs = append(errs, err)
+	// Read the spec, and the object the status is written over (one GET,
+	// #228). The CR may have been deleted between ticks: recreate it, then
+	// read it again. gen is the generation whose spec this tick evaluates; 0
+	// (unknown) lets WriteStatus stamp the current one.
+	spec, gen, obj, err := crd.ReadSpecObject(ctx, r.dyn, r.cfg.CRName)
+	if err == nil && obj == nil {
+		if cerr := crd.EnsureObject(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); cerr != nil {
+			errs = append(errs, cerr)
+		}
+		spec, gen, obj, err = crd.ReadSpecObject(ctx, r.dyn, r.cfg.CRName)
 	}
-	// gen is the generation whose spec this tick evaluates; 0 (unknown)
-	// lets WriteStatus stamp the current one.
-	spec, gen, _, err := crd.ReadSpec(ctx, r.dyn, r.cfg.CRName)
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -252,7 +258,7 @@ func (r *runner) tick(ctx context.Context) error {
 			if serr != nil {
 				errs = append(errs, serr)
 			}
-			gen = g
+			gen, obj = g, nil // patched: the status write reads it again
 		}
 		spec.Targets = r.cfg.Targets // evaluate what was configured either way
 	}
@@ -294,7 +300,7 @@ func (r *runner) tick(ctx context.Context) error {
 	}
 
 	st.ObservedGeneration = gen
-	if err := crd.WriteStatus(ctx, r.dyn, r.cfg.CRName, st); errors.Is(err, crd.ErrStatusErrorNotCleared) {
+	if err := crd.WriteStatusOver(ctx, r.dyn, r.cfg.CRName, st, obj); errors.Is(err, crd.ErrStatusErrorNotCleared) {
 		// The status is current; only the marker of an earlier failure
 		// stayed. Not a failed tick, and not a reason to mark the CR again:
 		// the next write retries the clearing.

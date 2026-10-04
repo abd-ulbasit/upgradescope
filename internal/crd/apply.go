@@ -141,26 +141,40 @@ func createCRD(ctx context.Context, crds apiextensionsv1typed.CustomResourceDefi
 // error) means the object does not exist; callers typically EnsureObject
 // then.
 func ReadSpec(ctx context.Context, dyn dynamic.Interface, name string) (spec Spec, generation int64, found bool, err error) {
-	obj, err := dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
+	spec, generation, obj, err := ReadSpecObject(ctx, dyn, name)
+	return spec, generation, obj != nil, err
+}
+
+// ReadSpecObject is ReadSpec returning the object read as well (nil when
+// it does not exist, with a nil error), for WriteStatusOver to write the
+// status over without reading it again.
+func ReadSpecObject(ctx context.Context, dyn dynamic.Interface, name string) (spec Spec, generation int64, obj *unstructured.Unstructured, err error) {
+	obj, err = dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return Spec{}, 0, false, nil
+		return Spec{}, 0, nil, nil
 	}
 	if err != nil {
-		return Spec{}, 0, false, fmt.Errorf("get clusterreadiness %q: %w", name, err)
+		return Spec{}, 0, nil, fmt.Errorf("get clusterreadiness %q: %w", name, err)
 	}
+	spec, generation, err = specOf(obj, name)
+	return spec, generation, obj, err
+}
+
+// specOf decodes obj's spec.
+func specOf(obj *unstructured.Unstructured, name string) (Spec, int64, error) {
 	gen := obj.GetGeneration()
 	raw, found, err := unstructured.NestedMap(obj.Object, "spec")
 	if err != nil {
-		return Spec{}, gen, true, fmt.Errorf("read spec of clusterreadiness %q: %w", name, err)
+		return Spec{}, gen, fmt.Errorf("read spec of clusterreadiness %q: %w", name, err)
 	}
 	if !found {
-		return Spec{}, gen, true, nil
+		return Spec{}, gen, nil
 	}
 	var s Spec
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &s); err != nil {
-		return Spec{}, gen, true, fmt.Errorf("decode spec of clusterreadiness %q: %w", name, err)
+		return Spec{}, gen, fmt.Errorf("decode spec of clusterreadiness %q: %w", name, err)
 	}
-	return s, gen, true, nil
+	return s, gen, nil
 }
 
 // EnsureObject creates the ClusterReadiness CR if absent, with spec.targets
@@ -230,12 +244,28 @@ var ErrStatusErrorNotCleared = errors.New("status written, marker not cleared")
 // Whatever st holds, notAssessed is bounded here (boundNotAssessed), the
 // one place every source of notes passes.
 func WriteStatus(ctx context.Context, dyn dynamic.Interface, name string, st Status) error {
+	return WriteStatusOver(ctx, dyn, name, st, nil)
+}
+
+// WriteStatusOver is WriteStatus whose first attempt writes over current,
+// the object as the caller read it moments before (ReadSpecObject), instead
+// of reading it again (#228): the update carries current's resourceVersion,
+// so an object changed since is a conflict, and the retry reads it fresh.
+// A nil current reads it first, as WriteStatus does.
+func WriteStatusOver(ctx context.Context, dyn dynamic.Interface, name string, st Status, current *unstructured.Unstructured) error {
 	st.NotAssessed = boundNotAssessed(st.NotAssessed)
 	marked := false
+	if current != nil {
+		current = current.DeepCopy()
+	}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		obj, gerr := dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{})
-		if gerr != nil {
-			return gerr
+		obj := current
+		current = nil // a retry reads it again
+		if obj == nil {
+			var gerr error
+			if obj, gerr = dyn.Resource(GVR()).Get(ctx, name, metav1.GetOptions{}); gerr != nil {
+				return gerr
+			}
 		}
 		_, marked = obj.GetAnnotations()[StatusErrorAnnotation]
 		out := st

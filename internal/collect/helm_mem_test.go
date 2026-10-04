@@ -40,8 +40,21 @@ import (
 // "team-<r mod 10>"; the newest revision is deployed, older ones superseded.
 func helmAPIServer(t testing.TB, releases, revisions int, payload string) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
-	data := base64.StdEncoding.EncodeToString([]byte(payload)) // Secret.data is base64 on the wire
-	var gets atomic.Int64
+	srv, gets, _ := helmAPIServerWith(t, releases, revisions, []string{payload}, 0)
+	return srv, gets
+}
+
+// helmAPIServerWith is helmAPIServer serving release r's revisions with
+// payloads[r mod len(payloads)], and answering every request after delay
+// (a round trip to a distant apiserver). The third result is the most
+// Secret GETs it ever served at once.
+func helmAPIServerWith(t testing.TB, releases, revisions int, payloads []string, delay time.Duration) (*httptest.Server, *atomic.Int64, *atomic.Int64) {
+	t.Helper()
+	encoded := make([]string, len(payloads))
+	for i, p := range payloads {
+		encoded[i] = base64.StdEncoding.EncodeToString([]byte(p)) // Secret.data is base64 on the wire
+	}
+	var gets, inflight, maxInflight atomic.Int64
 	ident := func(i int) (ns, rel string, rev int, status string) {
 		r := i / revisions
 		rev = i%revisions + 1
@@ -60,11 +73,20 @@ func helmAPIServer(t testing.TB, releases, revisions int, payload string) (*http
 		w.WriteString(`{"kind":"Secret","apiVersion":"v1","metadata":`)
 		meta(w, i)
 		w.WriteString(`,"type":"helm.sh/release.v1","data":{"release":"`)
-		w.WriteString(data)
+		w.WriteString(encoded[(i/revisions)%len(encoded)])
 		w.WriteString(`"}}`)
 	}
 	total := releases * revisions
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/") { // a GET of one Secret, from its start
+			if n := inflight.Add(1); n > maxInflight.Load() {
+				maxInflight.Store(n) // a lost race under-reports by one at most
+			}
+			defer inflight.Add(-1)
+		}
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 		rw.Header().Set("Content-Type", "application/json")
 		w := bufio.NewWriter(rw)
 		defer w.Flush()
@@ -121,7 +143,7 @@ func helmAPIServer(t testing.TB, releases, revisions int, payload string) (*http
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &gets
+	return srv, &gets, &maxInflight
 }
 
 // realisticReleasePayload builds a Helm release payload whose stored
@@ -197,12 +219,23 @@ func peakHeap(f func()) (peak uint64) {
 	return max.Load() - base
 }
 
-// TestCollectHelmPeakHeapIsBoundedByOneRelease guards #24: the collector
+// TestCollectHelmPeakHeapIsBoundedByOneRelease bounds what the Helm step
+// holds at once: since #226, one release's decoding plus up to 7 fetched
+// payloads, not one release alone (the name is older; docs, scripts and
+// the changelog refer to the test by it). It guards #24: the collector
 // decoded every revision's full payload, 500 Secrets per page, so peak heap
 // grew with the cluster's Helm history and OOM-killed the agent at its
-// 256Mi limit. Only one release's payload may be in flight at a time now.
+// 256Mi limit. Only the installed revision is fetched now, and one release
+// is decoded at a time; since #226 up to helmFetchWorkers (8) are fetched
+// at once, so beside the release being decoded at most 7 more payloads are
+// held, fetched or being fetched: each, while it is read, its response and
+// the object decoded from it (at most etcd's 1.5 MiB each), and once
+// fetched the 1 MiB of data a Secret may hold, so at most 7 × 3 MiB = 21
+// MiB above one release's decoding (computed).
 // Measured on this harness: 300×10×150KiB peaked at 279 MiB and
-// 50×10×450KiB at 869–947 MiB before; 17 MiB and 8 MiB after.
+// 50×10×450KiB at 869–947 MiB before #24; 17 MiB and 8 MiB after it,
+// fetching one at a time; 19.7 MiB and 17.5 MiB fetching 8 at a time (Apple
+// M1 Pro, 4 October 2026, at 5da764e).
 //
 // The manifest is parsed as in production, with every ConfigMap flagged so
 // each release also keeps MaxObjectRefs object refs: the worst case for

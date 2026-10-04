@@ -210,6 +210,15 @@ func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.I
 // collectHelmWith is collectHelm with a cache of what earlier calls decoded
 // (nil reads every release, as a one-shot scan does).
 func collectHelmWith(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, cache *HelmCache, inv *inventory.Inventory) error {
+	return collectHelmFetching(ctx, kube, meta, lifecycle, cache, helmFetchWorkers, inv)
+}
+
+// collectHelmFetching is collectHelmWith fetching the releases the cache
+// does not hold on up to workers goroutines (see startFetching); 1 fetches
+// them one at a time, as before #226. Whatever workers is, the releases are
+// decoded one at a time, in the order of their keys, on the caller's
+// goroutine, so the inventory, the reasons and the cache come out the same.
+func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, cache *HelmCache, workers int, inv *inventory.Inventory) error {
 	type releaseKey struct{ namespace, name string }
 	drivers := helmDrivers(kube)
 	revisions := map[releaseKey][]helmRevision{}
@@ -252,6 +261,18 @@ func collectHelmWith(ctx context.Context, kube kubernetes.Interface, meta metada
 	undecodable, firstUndecodable := 0, ""
 	unparsed, firstUnparsed := 0, ""
 	var skippedReleases []string
+	// The installed revision of each release, in key order, and whether
+	// the cache holds it: the cache is read here, before any fetch, and
+	// written only below, on this goroutine.
+	type installed struct {
+		key   releaseKey
+		rev   helmRevision
+		ck    helmCacheKey
+		entry helmCacheEntry
+		hit   bool
+	}
+	var todo []installed
+	var misses []int // indexes into todo of the releases to fetch, in key order
 	for _, k := range keys {
 		// One driver's history per release: revision numbers of two
 		// histories (HELM_DRIVER changed) are not comparable, so the first
@@ -263,10 +284,24 @@ func collectHelmWith(ctx context.Context, kube kubernetes.Interface, meta metada
 			continue
 		}
 		ck := helmCacheKey{driver: r.driver, namespace: k.namespace, object: r.object, uid: r.uid, rv: r.rv}
-		seen[ck] = true
 		entry, hit := cache.get(ck)
 		if !hit {
-			data, err := drivers[r.driver].payload(ctx, k.namespace, r.object)
+			misses = append(misses, len(todo))
+		}
+		todo = append(todo, installed{key: k, rev: r, ck: ck, entry: entry, hit: hit})
+	}
+	// The payloads come back in the order of misses, so the releases are
+	// visited exactly as when they were fetched one at a time.
+	fetcher := startFetching(ctx, len(misses), workers, func(ctx context.Context, m int) ([]byte, error) {
+		t := todo[misses[m]]
+		return drivers[t.rev.driver].payload(ctx, t.key.namespace, t.rev.object)
+	})
+	defer fetcher.stop()
+	for _, t := range todo {
+		k, r, ck, entry := t.key, t.rev, t.ck, t.entry
+		seen[ck] = true
+		if !t.hit {
+			data, err := fetcher.next()
 			if err != nil {
 				if apierrors.IsNotFound(err) {
 					continue // deleted since the list: Helm pruned history

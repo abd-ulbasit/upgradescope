@@ -93,7 +93,7 @@ expect "agent.sh: a vanilla cluster, even a seeded one (fake nodes, bench namesp
 tick() { # tick <label> <n> <nodes> <requests> <wallMs> <getSecrets>
   jq -nc --arg label "$1" --argjson tick "$2" --argjson nodes "$3" --argjson req "$4" --argjson wall "$5" --argjson gets "$6" '{
     label: $label, tick: $tick, wallMs: $wall, collectMs: ($wall - 100), cpuMs: ($wall / 2), requests: $req,
-    byVerbResource: [{verb: "GET", resource: "secrets", count: $gets}, {verb: "LIST", resource: "pods", count: 5}],
+    byVerbResource: [{verb: "GET", resource: "secrets", count: $gets, bytes: ($gets * 1048576), ms: ($wall / 4)}, {verb: "LIST", resource: "pods", count: 5}],
     bodyBytes: 10485760, wireDownBytes: 2097152, wireUpBytes: 1048576, connections: 1,
     peakHeapBytes: 52428800, peakRuntimeBytes: 83886080, maxRssBytes: (104857600 + $tick * 1048576),
     nodes: $nodes, namespaces: 3, helmReleases: $gets, addOns: 0, apiUsage: 0, targets: 1, capabilities: {}}'
@@ -129,7 +129,16 @@ if grep -qF "| 0 | 1 | 0 | 17 | 5 | 0 | 10 | 3 | 1 | 0.5 |" "$work/report" &&
 else
   fail "agent-report.sh table" "$work/report"
 fi
-grep -qF "| GET | secrets | 1500 |" "$work/report" && ok "agent-report.sh: requests by verb and resource at the last level" || fail "agent-report.sh breakdown" "$work/report"
+# Per resource: requests, response MiB and summed seconds of a steady tick (the
+# first after the cold one: 4000 ms / 4) and of the cold tick (50000 ms / 4);
+# results without bytes or time show "-".
+if grep -qF "| GET | secrets | 1500 | 1500 | 1 |" "$work/report" &&
+  grep -qF "| GET | secrets | 1500 | 1500 | 12.5 |" "$work/report" &&
+  grep -qF "| LIST | pods | 5 | - | - |" "$work/report"; then
+  ok "agent-report.sh: requests, bytes and time by verb and resource at the last level, steady and cold"
+else
+  fail "agent-report.sh breakdown" "$work/report"
+fi
 BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/agent.jsonl" >"$work/report.json" 2>&1 || true
 [ "$(jq 'length' "$work/report.json" 2>/dev/null)" = 3 ] && ok "agent-report.sh: BENCH_REPORT_FORMAT=json" || fail "agent-report.sh json" "$work/report.json"
 expect "agent-report.sh: no file is a usage error" 2 "usage" -- hack/bench/agent-report.sh
@@ -142,10 +151,12 @@ if grep -qF "GitOps reads per tick" "$work/report"; then fail "agent-report.sh: 
 # resource. Steady ticks after the first: Applications 20, 22, 24 and 26
 # requests (the mean of the middle two is 23), 1, 2, 3 and 4 MiB (2.5 MiB);
 # HelmReleases 20 requests at 2 MiB; 5 OCIRepository GETs of 0.5 MiB in all.
+# Applications also carry their time (10 ms a request); the other resources
+# none, as a result recorded without it would.
 gtick() { # gtick <fill> <n> <charts> <app requests> <app MiB>
   jq -nc --arg label "fill=$1 nodes=10 argocd=100 flux=100" --argjson tick "$2" --argjson charts "$3" --argjson areq "$4" --argjson amib "$5" '{
     label: $label, tick: $tick, wallMs: 2000, collectMs: 1900, cpuMs: 1000, requests: ($areq + 40),
-    byVerbResource: [{verb: "LIST", resource: "applications", count: $areq, bytes: ($amib * 1048576)},
+    byVerbResource: [{verb: "LIST", resource: "applications", count: $areq, bytes: ($amib * 1048576), ms: ($areq * 10)},
       {verb: "LIST", resource: "helmreleases", count: 20, bytes: 2097152},
       {verb: "GET", resource: "ocirepositories", count: 5, bytes: 524288},
       {verb: "LIST", resource: "pods", count: 5, bytes: 1048576}],
@@ -171,7 +182,15 @@ else
 fi
 # The empty level belongs in the table of a run that had GitOps charts, with none read.
 grep -qE '^\| 0 \| 0 \| 1, 0 \|' "$work/gitops-report" && ok "agent-report.sh: the empty level is in the GitOps table, with no charts" || fail "agent-report.sh GitOps table lacks the empty level" "$work/gitops-report"
-grep -qF "| LIST | applications | 20 | 1024 |" "$work/gitops-report" && ok "agent-report.sh: the breakdown shows each resource's response KiB" || fail "agent-report.sh breakdown bytes" "$work/gitops-report"
+# The one recorder's bytes and time per verb and resource feed the breakdowns
+# of the same run: the steady tick (tick 2 of fill 1) and the cold one.
+if grep -qF "| LIST | applications | 20 | 1 | 0.2 |" "$work/gitops-report" &&
+  grep -qF "| LIST | applications | 99 | 9 | 0.99 |" "$work/gitops-report" &&
+  grep -qF "| LIST | helmreleases | 20 | 2 | - |" "$work/gitops-report"; then
+  ok "agent-report.sh: the breakdowns of a GitOps run show each resource's response MiB and time, steady and cold"
+else
+  fail "agent-report.sh breakdown bytes and time of a GitOps run" "$work/gitops-report"
+fi
 BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/gitops.jsonl" 2>&1 | jq -e ".[0].gitops.charts == 0 and .[1].gitops.charts == 200 and .[1].gitops.requests == 48" >/dev/null && ok "agent-report.sh: json carries the GitOps summary" || fail "agent-report.sh json gitops" "$work/gitops-report"
 
 # --- serve.sh and serve-report.sh --------------------------------------------

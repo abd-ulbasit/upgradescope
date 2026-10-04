@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // The scale benchmark (bench_load_test.go, #71) counts what one agent tick
@@ -80,34 +81,48 @@ func classifyRequest(method, path, query, accept string) (verb, resource string)
 	return verb, resource
 }
 
-// requestStat is the count of one verb and resource.
+// requestStat is the count of one verb and resource, the response bytes
+// client-go read for them (decompressed), and the time they took in all,
+// each from sending the request to the end of its body. The bytes make a
+// resource's cost visible by itself (#233: the GitOps lists; #228: pods
+// and nodes), not only as part of the tick's total; the time splits a cold
+// tick between waiting on the network and decoding (#226). The time is a
+// sum: requests in flight at once each count their own.
 type requestStat struct {
 	Verb     string `json:"verb"`
 	Resource string `json:"resource"`
 	Count    int    `json:"count"`
-	// Bytes are the response bodies of these requests as client-go read
-	// them (decompressed), so a resource's cost is visible by itself (#233:
-	// the GitOps lists), not only as part of the tick's total.
-	Bytes int64 `json:"bytes"`
+	Bytes    int64  `json:"bytes"`
+	Millis   int64  `json:"ms"`
 }
 
-// requestRecorder counts requests and response body bytes. Safe for
-// concurrent use; reset between ticks.
+// requestEntry accumulates one verb and resource. Count is guarded by the
+// recorder's mutex; bytes and millis are added without it, by the bodies
+// of requests already counted, so a body still being read when the
+// recorder is reset adds to the entry of the tick that sent it.
+type requestEntry struct {
+	count  int
+	bytes  atomic.Int64
+	millis atomic.Int64
+}
+
+// requestRecorder counts requests, response body bytes, and the time
+// requests took, per verb and resource. Safe for concurrent use; reset
+// between ticks.
 type requestRecorder struct {
 	mu        sync.Mutex
-	counts    map[[2]string]int
-	bytes     map[[2]string]*atomic.Int64 // response body bytes by verb and resource
+	entries   map[[2]string]*requestEntry
 	total     int
 	bodyBytes atomic.Int64
 }
 
 func newRequestRecorder() *requestRecorder {
-	return &requestRecorder{counts: map[[2]string]int{}, bytes: map[[2]string]*atomic.Int64{}}
+	return &requestRecorder{entries: map[[2]string]*requestEntry{}}
 }
 
 func (r *requestRecorder) reset() {
 	r.mu.Lock()
-	r.counts, r.bytes, r.total = map[[2]string]int{}, map[[2]string]*atomic.Int64{}, 0
+	r.entries, r.total = map[[2]string]*requestEntry{}, 0
 	r.mu.Unlock()
 	r.bodyBytes.Store(0)
 }
@@ -118,18 +133,22 @@ func (r *requestRecorder) transport(rt http.RoundTripper) http.RoundTripper {
 		verb, res := classifyRequest(req.Method, req.URL.Path, req.URL.RawQuery, req.Header.Get("Accept"))
 		key := [2]string{verb, res}
 		r.mu.Lock()
-		r.counts[key]++
+		e := r.entries[key]
+		if e == nil {
+			e = &requestEntry{}
+			r.entries[key] = e
+		}
+		e.count++
 		r.total++
-		perResource := r.bytes[key]
-		if perResource == nil {
-			perResource = new(atomic.Int64)
-			r.bytes[key] = perResource
-		}
 		r.mu.Unlock()
+		start := time.Now()
 		resp, err := rt.RoundTrip(req)
-		if err == nil && resp.Body != nil {
-			resp.Body = &countingBody{ReadCloser: resp.Body, n: &r.bodyBytes, perResource: perResource}
+		if err != nil || resp.Body == nil {
+			e.millis.Add(time.Since(start).Milliseconds())
+			return resp, err
 		}
+		resp.Body = &countingBody{ReadCloser: resp.Body, n: &r.bodyBytes, perResource: &e.bytes,
+			done: func() { e.millis.Add(time.Since(start).Milliseconds()) }}
 		return resp, err
 	})
 }
@@ -138,12 +157,8 @@ func (r *requestRecorder) transport(rt http.RoundTripper) http.RoundTripper {
 func (r *requestRecorder) stats() (stats []requestStat, total int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for k, n := range r.counts {
-		stat := requestStat{Verb: k[0], Resource: k[1], Count: n}
-		if b := r.bytes[k]; b != nil {
-			stat.Bytes = b.Load()
-		}
-		stats = append(stats, stat)
+	for k, e := range r.entries {
+		stats = append(stats, requestStat{Verb: k[0], Resource: k[1], Count: e.count, Bytes: e.bytes.Load(), Millis: e.millis.Load()})
 	}
 	sort.Slice(stats, func(i, j int) bool {
 		if stats[i].Count != stats[j].Count {
@@ -158,19 +173,36 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+// countingBody adds what is read of a body to n (the tick's total) and to
+// perResource (its verb and resource's), as it is read, and calls done once,
+// at the body's end or when it is closed.
 type countingBody struct {
 	io.ReadCloser
 	n           *atomic.Int64
-	perResource *atomic.Int64 // the same bytes, for the request's verb and resource
+	perResource *atomic.Int64
+	done        func()
+	once        sync.Once
 }
 
 func (b *countingBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	b.n.Add(int64(n))
-	if b.perResource != nil {
-		b.perResource.Add(int64(n))
+	b.perResource.Add(int64(n))
+	if err != nil {
+		b.finish()
 	}
 	return n, err
+}
+
+func (b *countingBody) Close() error {
+	b.finish()
+	return b.ReadCloser.Close()
+}
+
+func (b *countingBody) finish() {
+	if b.done != nil {
+		b.once.Do(b.done)
+	}
 }
 
 // wireProxy forwards TCP to an upstream and counts the bytes each way. The

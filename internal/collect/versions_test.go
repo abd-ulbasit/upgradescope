@@ -318,9 +318,10 @@ func TestCollectWiresVersionsCapability(t *testing.T) {
 	}
 }
 
-// Nodes, namespaces and kube-system pods are listed in pages of
-// listPageSize, following the Continue token, so a large cluster never
-// returns one unbounded list (PF-02 in docs/claims.md).
+// Nodes, namespaces and kube-system pods are listed in pages, following the
+// Continue token, so a large cluster never returns one unbounded list
+// (PF-02 in docs/claims.md): listPageSize objects, and for nodes and pods,
+// after the first page, as many as pageLimit allows.
 func TestCollectVersionsFollowsListPagination(t *testing.T) {
 	cs := kubefake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}})
 	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
@@ -357,8 +358,11 @@ func TestCollectVersionsFollowsListPagination(t *testing.T) {
 	if err := collectVersions(context.Background(), disc, cs, "team", &inv); err != nil {
 		t.Fatal(err)
 	}
-	want := []metav1.ListOptions{{Limit: listPageSize}, {Limit: listPageSize, Continue: "page-2"}}
+	// The second page of nodes and pods is sized by the first (pageLimit):
+	// one small object, so as many as the page may hold.
+	next := map[string]int64{"nodes": nodePageSize, "namespaces": listPageSize, "pods": podPageSize}
 	for resource := range pages {
+		want := []metav1.ListOptions{{Limit: listPageSize}, {Limit: next[resource], Continue: "page-2"}}
 		if !reflect.DeepEqual(opts[resource], want) {
 			t.Errorf("%s list options = %+v, want %+v (paged, Continue token followed)", resource, opts[resource], want)
 		}
@@ -366,6 +370,83 @@ func TestCollectVersionsFollowsListPagination(t *testing.T) {
 	if len(inv.Nodes) != 2 || len(inv.Namespaces) != 2 || len(inv.ControlPlane) != 2 {
 		t.Errorf("nodes %+v, namespaces %+v, control plane %+v: want 2 of each (items from every page count)", inv.Nodes, inv.Namespaces, inv.ControlPlane)
 	}
+}
+
+// The pod and node pages after the first are sized by the largest object
+// of the page before, not its average (#228): one large object among small
+// ones sizes the next page as if every object were that large, so a page
+// holds at most wholePageBytes of objects that size. The lists: nodes and
+// kube-system pods (versions), every other pod (add-ons).
+func TestListPagesAreSizedByTheirLargestObject(t *testing.T) {
+	big := strings.Repeat("x", 12<<10)
+	bigMeta := func(name string) metav1.ObjectMeta {
+		return metav1.ObjectMeta{Name: name, Namespace: "kube-system", Annotations: map[string]string{"example.com/large": big}}
+	}
+	smallNode := corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
+	bigNode := corev1.Node{ObjectMeta: bigMeta("node-b")}
+	bigNode.Namespace = ""
+	smallPod := *cpPod("kube-apiserver-cp", map[string]string{"component": "kube-apiserver"}, "registry.k8s.io/kube-apiserver:v1.34.2")
+	bigPod := *cpPod("kube-scheduler-cp", map[string]string{"component": "kube-scheduler"}, "registry.k8s.io/kube-scheduler:v1.34.2")
+	bigPod.ObjectMeta.Annotations = bigMeta("").Annotations
+	pages := map[string][2]runtime.Object{
+		"nodes": {
+			&corev1.NodeList{ListMeta: metav1.ListMeta{Continue: "page-2"}, Items: []corev1.Node{smallNode, bigNode}},
+			&corev1.NodeList{Items: []corev1.Node{{ObjectMeta: metav1.ObjectMeta{Name: "node-c"}}}},
+		},
+		"pods": {
+			&corev1.PodList{ListMeta: metav1.ListMeta{Continue: "page-2"}, Items: []corev1.Pod{smallPod, bigPod}},
+			&corev1.PodList{Items: []corev1.Pod{*cpPod("kube-proxy-a", map[string]string{"k8s-app": "kube-proxy"}, "registry.k8s.io/kube-proxy:v1.34.2")}},
+		},
+	}
+	want := map[string]int64{"nodes": wholePageBytes / int64(bigNode.Size()), "pods": wholePageBytes / int64(bigPod.Size())}
+	for resource, n := range want {
+		// the average of the page would size it at the most
+		if n <= listPageSize || n >= podPageSize {
+			t.Fatalf("%s: the fixture sizes the next page at %d, want one between %d and %d", resource, n, listPageSize, podPageSize)
+		}
+	}
+	reactor := func(cs *kubefake.Clientset, opts map[string][]metav1.ListOptions) {
+		for resource, page := range pages {
+			cs.PrependReactor("list", resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+				o := a.(interface{ GetListOptions() metav1.ListOptions }).GetListOptions()
+				opts[resource] = append(opts[resource], o)
+				if o.Continue == "" {
+					return true, page[0], nil
+				}
+				return true, page[1], nil
+			})
+		}
+	}
+	check := func(list, resource string, got []metav1.ListOptions) {
+		t.Helper()
+		if len(got) != 2 || got[0].Limit != listPageSize || got[1].Limit != want[resource] || got[1].Continue != "page-2" {
+			t.Errorf("%s: list options %+v, want limits %d then %d (the largest object of the first page)", list, got, listPageSize, want[resource])
+		}
+	}
+
+	cs := kubefake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}})
+	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+	disc.FakedServerVersion = &version.Info{GitVersion: "v1.34.2"}
+	opts := map[string][]metav1.ListOptions{}
+	reactor(cs, opts)
+	var inv inventory.Inventory
+	if err := collectVersions(context.Background(), disc, cs, "team", &inv); err != nil {
+		t.Fatal(err)
+	}
+	check("nodes", "nodes", opts["nodes"])
+	check("kube-system pods", "pods", opts["pods"])
+	if len(inv.Nodes) != 3 {
+		t.Errorf("nodes %+v, want 3 (items from every page count)", inv.Nodes)
+	}
+
+	cs = kubefake.NewClientset()
+	opts = map[string][]metav1.ListOptions{}
+	reactor(cs, opts)
+	inv = inventory.Inventory{}
+	if err := collectAddOns(context.Background(), cs, testRegistry(), &inv); err != nil {
+		t.Fatal(err)
+	}
+	check("every pod (add-ons)", "pods", opts["pods"])
 }
 
 // cpPodOn is cpPod scheduled on node.

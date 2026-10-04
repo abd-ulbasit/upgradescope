@@ -43,11 +43,61 @@ type Options struct {
 	// changed instead of one per release. A long-running caller (the agent)
 	// keeps one across calls; a one-shot scan leaves it nil.
 	HelmCache *HelmCache
+	// DiscoveryCache, when set, keeps API discovery across calls under the
+	// staleness rules DiscoveryCache states, so a steady tick does not ask
+	// for it again. The agent keeps one; a one-shot scan leaves it nil.
+	DiscoveryCache *DiscoveryCache
 }
 
 // listPageSize bounds every cluster-wide list call: large clusters must
 // never be read in one unbounded request.
 const listPageSize = 500
+
+// The pod and node lists, which a large cluster's tick spends most of its
+// requests on (#228: at 2,001 nodes and 14,000 pods, 500-object pages were
+// 35 of a steady tick's 53 requests), are paged by size rather than by
+// count alone: the first page is listPageSize objects, and each later one
+// as many as fit wholePageBytes at the size of the LARGEST object of the
+// page before (pageLimit), between listPageSize and podPageSize or
+// nodePageSize. A page is what one request holds: client-go reads its
+// response whole and decodes it whole, about three times its encoded size
+// in live heap.
+//
+// No limit set before a page is read can bound its bytes: the objects it
+// will hold are unseen. So the worst case of a page is its limit times the
+// largest object, and the most a page may hold is what bounds it: 1,000,
+// twice listPageSize, so no page holds more than twice the objects a page
+// held before #228. It happens when small objects are followed by large
+// ones (pods are listed by namespace, so a namespace of small pods before
+// one of large pods): 500 pods of 137 bytes, then 1,000 of up to 41,685
+// bytes (39.4 MiB encoded), measured 124.5 to 125.5 MiB of live heap
+// (TestPodPagePeakHeapIsBounded), under half the chart's 256Mi; at the
+// 2,000 a page of an earlier draft, 249.4 to 250.0 MiB, past the agent's
+// GOMEMLIMIT. Objects as large as those of the page before (a run of such
+// pods) are read 500 a page, 63.2 to 63.7 MiB, as before. Small objects
+// (the scale lab's KWOK pods and nodes, about 3 KiB each) are read 1,000 a
+// page, a production cluster's pods of about 8 KiB some 990, and anything
+// of 16,744 bytes or more (a Node listing many images) 500, as before;
+// between 16 KiB and that, 501 to 511. One page past the agent's
+// GOMEMLIMIT (90% of 256Mi) takes 1,000 pods of about 70 KiB after a page
+// of small ones, at the 3.2 bytes of live heap per encoded byte measured
+// above, where pages of 500 took about 145 KiB (computed).
+const (
+	wholePageBytes = 8 << 20
+	podPageSize    = 1000
+	nodePageSize   = 1000
+)
+
+// pageLimit is the limit of the page after one whose largest object
+// encodes to largest bytes (a Pod's or Node's Size, its protobuf
+// encoding): as many as fit wholePageBytes at that size, at least
+// listPageSize and at most most. An empty page (largest 0) says nothing.
+func pageLimit(largest int, most int64) int64 {
+	if largest <= 0 {
+		return listPageSize
+	}
+	return max(listPageSize, min(most, wholePageBytes/int64(largest)))
+}
 
 // clientQPS and clientBurst replace client-go's client-side rate limit
 // (5 QPS, burst 10) when the caller sets none: the Helm collector makes
@@ -81,7 +131,10 @@ func Collect(ctx context.Context, c Clients, k kb.KB, opts Options) inventory.In
 		CollectedAt:     time.Now().UTC(),
 		Capabilities:    map[inventory.Capability]inventory.CapabilityStatus{},
 	}
+	opts.DiscoveryCache.begin()
+	c.Discovery = opts.DiscoveryCache.client(c.Discovery)
 	runSteps(ctx, &inv, steps(c, k, opts))
+	opts.DiscoveryCache.end(&inv)
 	return inv
 }
 
@@ -171,7 +224,9 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Kube == nil || c.Discovery == nil {
 				return errors.New("kubernetes client not configured")
 			}
-			return collectVersionsFrom(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv, &kubeSystem)
+			err := collectVersionsFrom(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv, &kubeSystem)
+			opts.DiscoveryCache.observeVersion(inv.ServerVersion) // before any step reads discovery
+			return err
 		}},
 		{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Kube == nil || c.Metadata == nil {
