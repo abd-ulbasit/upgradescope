@@ -397,12 +397,19 @@ func createWithStatus(ctx context.Context, res dynamic.ResourceInterface, obj *u
 var retryDelay = 500 * time.Millisecond
 
 // transient reports whether an error is one a retry can cure: a timeout (the
-// lab's etcd answers "request timed out" under KWOK's heartbeats), throttling
-// or an unavailable server.
+// lab's etcd answers "request timed out" under KWOK's heartbeats), throttling,
+// an unavailable server, or a connection the loaded host dropped.
 func transient(err error) bool {
-	return apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || apierrors.IsTooManyRequests(err) ||
-		apierrors.IsServiceUnavailable(err) || apierrors.IsInternalError(err) ||
-		strings.Contains(err.Error(), "request timed out")
+	if apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || apierrors.IsTooManyRequests(err) ||
+		apierrors.IsServiceUnavailable(err) || apierrors.IsInternalError(err) {
+		return true
+	}
+	for _, s := range []string{"request timed out", "client connection lost", "connection reset", "unexpected EOF", "TLS handshake timeout"} {
+		if strings.Contains(err.Error(), s) {
+			return true
+		}
+	}
+	return false
 }
 
 // retried runs f, again after a pause when it fails transiently, up to six

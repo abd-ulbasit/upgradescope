@@ -327,6 +327,15 @@ func TestSeedGitOpsRetriesTransientFailures(t *testing.T) {
 		t.Errorf("%d Applications after the retries, want 3", len(l.Items))
 	}
 
+	for _, msg := range []string{`Post "https://lab:16438/apis/x": http2: client connection lost`, "read tcp: connection reset by peer", "unexpected EOF"} {
+		if !transient(errors.New(msg)) {
+			t.Errorf("%q is not retried: a dropped connection is cured by a retry", msg)
+		}
+	}
+	if transient(errors.New("the server could not find the requested resource")) {
+		t.Error("a missing CRD is retried: it will not appear")
+	}
+
 	dyn = newDyn()
 	denied := apierrors.NewForbidden(schema.GroupResource{Resource: "applications"}, "x", errors.New("no"))
 	calls := 0
