@@ -9,23 +9,23 @@ them.
 ## The short answers
 
 - **A steady agent tick on a cluster of 2,001 nodes, about 14,000 pods and
-  1,000 Helm releases made 59 API requests** and read 68 MiB of responses
-  (4.3 MiB on the wire, compressed). It took 4.4 s and 3.4 CPU-seconds, with
+  1,000 Helm releases made 61 API requests** and read 68 MiB of responses
+  (4.3 MiB on the wire, compressed). It took 5.5 s and 3.5 CPU-seconds, with
   a peak live heap of 27 MiB and a peak RSS of 54 MiB. At the default
   interval of 10 minutes that is 0.1 requests a second.
 - **The first tick after the agent starts costs more**: it reads each Helm
-  release once, 1,059 requests in all, 35 s and 24 CPU-seconds here. Before
+  release once, 1,061 requests in all, 36 s and 24 CPU-seconds here. Before
   [#71](https://github.com/abd-ulbasit/upgradescope/issues/71) every tick
   cost that, because the agent fetched every release again each time: it was
   the one cost that grew with releases rather than with pages (1,000 GETs of
-  1,059 requests).
+  1,061 requests).
 - **Memory fits the chart's defaults** (64Mi request, 256Mi limit) with room:
   the peak RSS never passed 59 MiB at any size measured, the first tick
   included. CPU is what a large cluster uses: see
   [CPU](#cpu-and-the-chart-limit).
 - **One `serve` ingested 200 clusters with three targets each, all pushing at
-  once, with no failed push and no retry**: 57 new snapshots a second on
-  SQLite and 42 on Postgres, on a 2017 dual-core i3 that also ran the
+  once, with no failed push and no retry**: 56 new snapshots a second on
+  SQLite and 40 on Postgres, on a 2017 dual-core i3 that also ran the
   database. A real fleet of 200 clusters pushes at most 0.33 times a second
   (one change per cluster per 10-minute tick).
 
@@ -38,7 +38,7 @@ them.
 | Driver | MacBook Pro (`MacBookPro18,3`, Apple M1 Pro, 16 GiB, `sysctl hw.model`), Go 1.26.8, client-go 0.37.1. It seeded the cluster and cross-compiled the benchmarks; the measured agent ticks and the server benchmark ran on the ThinkPad |
 | Postgres | 17.11 (`postgres:17-alpine`), a throwaway container on the ThinkPad's Docker engine, 0.1 ms round trip from the benchmark |
 | SQLite | the embedded `modernc.org/sqlite` v1.60.1, in a temporary directory on the ThinkPad's SSD |
-| upgradescope | measured on main `5d65958` plus this work (the "before" table is the same tree with the Helm cache commit reverted; the server code is unchanged by this work). Those trees existed only locally: this work was then rebased onto main `4c8ae57`, so none of the commit hashes in this branch names a tree that was measured. The rebase brought in #184 to #186, among them #185, which keeps `kube-proxy` once per node (about 2,000 more control-plane entries at full size). **Request counts and bytes are not affected** (an empty-cluster run at the rebased tree made the same 17 requests); **heap, RSS and CPU were not measured again** and can differ, the control-plane entries being held and evaluated each tick |
+| upgradescope | the agent runs: main `a3e72ea` (#218, GitOps charts) plus this work; the "before" table is the same tree with the Helm step given no cache, which is what #71 changed. The server runs: main `f195ba5` plus this work (the server code is unchanged by this work; #217 is examples and tooling). The branch was rebased between the two, so its commit hashes name neither tree exactly. The numbers include #218's per-tick discovery and workload requests, but **its Argo CD and Flux lists are not measured**: the lab has neither tool's CRDs, so those lists are never made (see [Hotspots](#hotspots)) |
 | Also running | two other idle kind clusters on the same ThinkPad, and for the agent runs the lab's own KWOK controller keeping 2,000 nodes alive |
 
 ### What is simulated
@@ -48,8 +48,8 @@ them.
   container runtime or CNI exists, so the apiserver does none of the work
   real kubelets cause (heartbeats from 2,000 machines, status patches of
   real pods, watches). KWOK's own heartbeats keep the control-plane
-  container busy: 1.1 to 2.7 cores and 2.8 to 3.0 GiB at full size, before
-  the agent's ticks.
+  container busy: 2.4 to 3.6 cores and 2.9 to 3.0 GiB at full size (sampled
+  once, at the end of the level).
 - **There is one apiserver, one etcd member, and a kind control plane.** No
   HA control plane, no load balancer in front, no priority-and-fairness
   contention with other clients, no admission webhooks, and the agent talks
@@ -83,7 +83,8 @@ half, all of it) and runs the agent's real tick, five times at each: collect,
 evaluate, write the `ClusterReadiness` status. The clients are the ones the
 agent builds, wrapped to count requests by verb and resource; a TCP forwarder
 counts the bytes on the wire. Each row is the median of the ticks after the
-first; the first, which fills the Helm cache, is beside it.
+first (the peak heap is their maximum); the first, which fills the Helm cache,
+is beside it.
 
 Full size is 2,001 nodes (2,000 fake and the control plane), 10,000 seeded
 pods plus the 4,000 DaemonSet pods, 6,000 ConfigMaps, 4,000 Deployments, 100
@@ -94,19 +95,19 @@ changed):
 
 | Fill | Nodes | Helm releases | Requests | Of them LIST pods | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB | First tick: requests, wall s, CPU s |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| empty | 1 | 0 | 17 | 2 | 4.0 | 0.4 | 0.5 | 0.4 | 22.9 | 55.2 | 17, 2.5, 0.4 |
-| 1/4 | 501 | 250 | 27 | 11 | 19.8 | 1.5 | 1.3 | 1.1 | 23.3 | 58.5 | 277, 5.6, 5.4 |
-| 1/2 | 1,001 | 500 | 38 | 20 | 36.0 | 2.4 | 2.0 | 1.8 | 25.0 | 49.4 | 538, 12.9, 11.5 |
-| full | 2,001 | 1,000 | 59 | 38 | 67.9 | 4.3 | 4.4 | 3.4 | 27.1 | 54.4 | 1,059, 35.1, 24.4 |
+| empty | 1 | 0 | 22 | 2 | 4.0 | 0.4 | 0.5 | 0.4 | 21.7 | 54.2 | 22, 2.5, 0.4 |
+| 1/4 | 501 | 250 | 29 | 11 | 19.8 | 1.5 | 1.3 | 1.1 | 23.6 | 58.5 | 279, 5.6, 5.5 |
+| 1/2 | 1,001 | 500 | 40 | 20 | 35.7 | 2.4 | 2.4 | 1.9 | 23.2 | 48.8 | 540, 14.1, 12.2 |
+| full | 2,001 | 1,000 | 61 | 38 | 67.7 | 4.3 | 5.5 | 3.5 | 27.1 | 54.4 | 1,061, 36.1, 24.4 |
 
 **The same ticks before the fix** (a GET per release on every tick):
 
 | Fill | Requests | GET Secrets | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB |
 |---|---|---|---|---|---|---|---|---|
-| empty | 17 | 0 | 3.9 | 0.4 | 0.5 | 0.4 | 22.7 | 55.8 |
-| 1/4 | 277 | 250 | 25.0 | 6.3 | 5.3 | 5.3 | 20.5 | 57.2 |
-| 1/2 | 538 | 500 | 47.3 | 12.8 | 13.3 | 11.4 | 25.2 | 51.7 |
-| full | 1,059 | 1,000 | 90.1 | 25.1 | 29.2 | 23.8 | 26.4 | 56.8 |
+| empty | 22 | 0 | 4.1 | 0.4 | 0.5 | 0.4 | 22.0 | 54.5 |
+| 1/4 | 279 | 250 | 25.0 | 6.3 | 5.5 | 5.4 | 21.2 | 47.9 |
+| 1/2 | 540 | 500 | 47.0 | 12.8 | 12.2 | 11.6 | 25.2 | 48.4 |
+| full | 1,061 | 1,000 | 90.3 | 25.1 | 31.2 | 23.4 | 27.9 | 55.3 |
 
 "Response MiB" is what client-go read, decompressed (the typed client asks
 for protobuf, which `TestNewClientsAskForProtobuf` pins). "Wire MiB" is what
@@ -121,7 +122,8 @@ far, so it only grows.
 | LIST | pods | 38 |
 | LIST | nodes | 5 |
 | LIST | secrets (metadata) | 3 |
-| GET | `clusterreadinesses`, API discovery | 2 each |
+| GET | API discovery | 4 |
+| GET | `clusterreadinesses` | 2 |
 | CREATE | `clusterreadinesses` | 1 |
 | GET | `/metrics`, `/version`, `kube-system` namespace | 1 each |
 | LIST | configmaps (metadata), CRDs, IngressClasses, namespaces | 1 each |
@@ -131,18 +133,22 @@ far, so it only grows.
 
 Everything is linear; nothing was superlinear. Each list is paged at 500
 objects, so a tick makes ceil(N / 500) requests per resource: 38 are pod
-requests (14,000 pods in all namespaces, then 4,000 in `kube-system`), 5 are
-nodes, 3 are the metadata list of Helm Secrets. The rest is constant, 13
-requests. [Architecture](../architecture.md#api-cost-per-tick) states the
+requests (4,000 pods in `kube-system` first, for the version check, then 14,000 in all namespaces), 5 are
+nodes, 3 are the metadata list of Helm Secrets. The rest is constant, 15
+requests. Four of them are API discovery, two more than before #218, whose
+GitOps detection asks the apiserver which API groups it serves every tick.
+A cluster with no Helm release (the empty row: 22 requests, not 17) also
+lists Deployments, StatefulSets and DaemonSets, metadata only, to look for
+the tracking labels of Argo CD and Flux. [Architecture](../architecture.md#api-cost-per-tick) states the
 formula.
 
 ### CPU and the chart limit
 
 The tick is CPU-bound in the agent (the process also runs the benchmark's
-byte counter, a small share): 3.4 CPU-seconds in 4.4 s of wall time when
-steady, 24.4 in 35.1 when it reads 1,000 releases. The chart's default limit
+byte counter, a small share): 3.5 CPU-seconds in 5.5 s of wall time when
+steady, 24.4 in 36.1 when it reads 1,000 releases. The chart's default limit
 for the agent is 200m (`agent.resources.limits.cpu`), which allows 0.2
-CPU-seconds a second, so those ticks last at least 17 s and 2 minutes there
+CPU-seconds a second, so those ticks last at least 18 s and 2 minutes there
 (computed from the CPU time, not measured under a cgroup quota). The tick
 deadline is half the interval, 5 minutes at the default, and the Helm step,
 the second of six, gets a fifth of the time left, about a minute, so a first
@@ -155,10 +161,11 @@ the agent 500m to 1 CPU, or expect its first ticks to be partial.
 
 | What | Found | Status |
 |---|---|---|
-| One GET per Helm release on every tick: 1,000 of 1,059 requests, 90 MiB, 29 s and 24 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (59 requests, 4.4 s). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
-| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 35 s and 24 CPU-seconds here; reaches the step deadline at 200m or over a slow link | Open: bounded-concurrency fetching (follow-up: "Fetch Helm releases with bounded concurrency on the first tick and in `scan`") |
+| One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 31 s and 23 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests, 5.5 s). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
+| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36 s and 24 CPU-seconds here; reaches the step deadline at 200m or over a slow link | Open: bounded-concurrency fetching (follow-up: "Fetch Helm releases with bounded concurrency on the first tick and in `scan`") |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | Open (follow-up: "List kube-system pods once per tick") |
-| The all-pods list is the steady tick's largest cost | 38 of 59 requests; whole pod objects are needed for their images, and the agent keeps no watch | Open: needs a decision on frequency (follow-up: "Decide how often the agent lists all pods, or keep a watch") |
+| Argo CD Applications and Flux HelmReleases are listed whole (page size 50) every tick, plus a GET per distinct OCIRepository (#218) | **Not measured**: the lab has neither tool installed, so the harness never makes these requests. ceil(N / 50) per tool grows faster than a metadata list (whole objects, small pages) | Open (follow-up: "Add an Argo CD and Flux fill step to the agent benchmark") |
+| The all-pods list is the steady tick's largest cost | 38 of 61 requests; whole pod objects are needed for their images, and the agent keeps no watch | Open: needs a decision on frequency (follow-up: "Decide how often the agent lists all pods, or keep a watch") |
 
 ## The server
 
@@ -172,28 +179,31 @@ nothing). With 1 pusher, 16, and 200 (every cluster at the same moment).
 
 Throughput is pushes a second, latency is what the pusher sees from sending
 to the answer, database growth is the file (SQLite, with its WAL) or
-`pg_database_size` (Postgres) over the new snapshots.
+`pg_database_size` (Postgres) over the new snapshots. The SQLite figure counts
+the WAL and page allocation along with the data, so it reads high on a small
+fleet (a 20-cluster trial read 135 to 210 KiB a snapshot): treat the
+extrapolations below as upper estimates.
 
 | Backend | Pushers | Round | Pushes/s | p50 ms | p99 ms | CPU ms/push | Peak heap MiB | DB KiB/snapshot |
 |---|---|---|---|---|---|---|---|---|
-| SQLite | 1 | new | 52.5 | 10.5 | 99.7 | 25.8 | 8 | 105.6 |
-| SQLite | 1 | changed | 51.9 | 13.0 | 100.3 | 25.9 | 9 | 98.7 |
-| SQLite | 1 | duplicate | 162.9 | 4.5 | 27.2 | 7.3 | 6 | 0 |
-| SQLite | 16 | new | 54.7 | 298.5 | 361.9 | 25.2 | 11 | 105.6 |
-| SQLite | 16 | changed | 53.6 | 302.6 | 376.3 | 25.6 | 12 | 99.1 |
-| SQLite | 16 | duplicate | 177.7 | 88.9 | 114.7 | 7.1 | 9 | 0 |
-| SQLite | 200 | new | 57.4 | 1,531 | 3,352 | 23.4 | 33 | 103.1 |
-| SQLite | 200 | changed | 57.1 | 1,611 | 3,477 | 23.8 | 33 | 97.6 |
-| SQLite | 200 | duplicate | 173.1 | 574 | 1,134 | 7.3 | 26 | 0 |
-| Postgres | 1 | new | 37.4 | 17.7 | 122.6 | 27.1 | 10 | 19.6 |
-| Postgres | 1 | changed | 37.9 | 17.3 | 119.7 | 27.5 | 9 | 18.9 |
-| Postgres | 1 | duplicate | 105.0 | 7.5 | 31.2 | 7.7 | 8 | 0 |
-| Postgres | 16 | new | 40.1 | 399 | 485 | 26.8 | 11 | 19.6 |
-| Postgres | 16 | changed | 40.4 | 404 | 478 | 27.1 | 11 | 18.8 |
-| Postgres | 16 | duplicate | 117.2 | 134 | 161 | 7.7 | 10 | 0 |
-| Postgres | 200 | new | 41.5 | 2,296 | 4,587 | 25.4 | 32 | 19.4 |
-| Postgres | 200 | changed | 41.9 | 2,286 | 4,616 | 25.6 | 33 | 18.6 |
-| Postgres | 200 | duplicate | 117.7 | 840 | 1,652 | 7.8 | 29 | 0 |
+| SQLite | 1 | new | 51.8 | 9.8 | 101.6 | 26.1 | 9 | 106.1 |
+| SQLite | 1 | changed | 49.6 | 8.4 | 109.1 | 26.7 | 10 | 99.1 |
+| SQLite | 1 | duplicate | 162.5 | 4.5 | 27.3 | 7.2 | 7 | 0 |
+| SQLite | 16 | new | 53.6 | 306.6 | 377.2 | 25.8 | 10 | 106.1 |
+| SQLite | 16 | changed | 52.6 | 312.9 | 379.7 | 26.2 | 10 | 99.4 |
+| SQLite | 16 | duplicate | 176.2 | 89.2 | 114.6 | 7.1 | 9 | 0 |
+| SQLite | 200 | new | 56.0 | 1,623 | 3,526 | 24.0 | 32 | 105.3 |
+| SQLite | 200 | changed | 55.0 | 1,731 | 3,619 | 24.6 | 34 | 96.0 |
+| SQLite | 200 | duplicate | 171.9 | 582 | 1,127 | 7.4 | 27 | 0 |
+| Postgres | 1 | new | 38.6 | 18.8 | 120.5 | 27.8 | 10 | 19.6 |
+| Postgres | 1 | changed | 38.3 | 16.6 | 118.5 | 28.1 | 10 | 18.9 |
+| Postgres | 1 | duplicate | 111.7 | 7.3 | 32.0 | 7.8 | 7 | 0 |
+| Postgres | 16 | new | 40.6 | 402.9 | 478.2 | 27.1 | 11 | 19.6 |
+| Postgres | 16 | changed | 39.8 | 408.2 | 504.1 | 27.6 | 11 | 18.9 |
+| Postgres | 16 | duplicate | 118.6 | 133.1 | 163.7 | 7.5 | 10 | 0 |
+| Postgres | 200 | new | 40.4 | 2,293 | 4,816 | 26.2 | 33 | 19.4 |
+| Postgres | 200 | changed | 41.0 | 2,180 | 4,756 | 26.3 | 33 | 18.8 |
+| Postgres | 200 | duplicate | 113.2 | 884 | 1,722 | 8.1 | 29 | 0 |
 
 No push failed or was retried in any round; the harness output also gives
 the maximum latency and the attempts.
@@ -207,7 +217,7 @@ the maximum latency and the attempts.
   about 20 snapshots a second at 25 CPU-ms each (computed, not measured).
 - **A fleet is far below that.** 200 clusters push at most once per tick
   (0.33 a second at the 10-minute default); even if every inventory changed
-  every tick, that is under 1% of the 57 a second measured. The bottleneck of
+  every tick, that is under 1% of the 56 a second measured. The bottleneck of
   a fleet is the dashboard's reads, not ingest: see
   [Running the server](../operations.md#cpu-and-fleet-read-latency).
 - **Postgres grows 5 times more slowly**: 19 KiB a snapshot against about
@@ -216,9 +226,9 @@ the maximum latency and the attempts.
   them as they are and Postgres compresses values over 2 KiB. Plan storage
   with [Retention and backup](retention-and-backup.md#retention-and-sizing):
   200 clusters whose inventory changes four times a day, kept 90 days, are
-  72,000 snapshots, about 7 GiB on SQLite and 1.3 GiB on Postgres at these
-  inventory sizes.
-- **Postgres took about 30% less throughput here** (42 against 57 pushes a
+  72,000 snapshots, at most about 7 GiB on SQLite (an upper estimate) and 1.3 GiB on Postgres at
+  these inventory sizes.
+- **Postgres took about 30% less throughput here** (40 against 56 pushes a
   second) with the database a tenth of a millisecond away and sharing the
   same two cores. A database across a network adds its round trip to every
   statement.
