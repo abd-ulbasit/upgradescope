@@ -457,8 +457,9 @@ func (s *Server) readOpen(ctx context.Context) (bool, error) {
 // whose TCP peer, never a forwarded-for header, is in Config.TrustedProxies
 // and that carries the team header reads as the teams it lists, in the
 // team list encoding (decodeTeams), every copy of the header counted
-// (oauth2-proxy sends one per group). Anywhere else the header is ignored: a client that reaches the
-// server directly cannot spoof it. Only a proxy that strips the header from
+// (oauth2-proxy sends one, its groups joined by commas; other proxies
+// may send one per group). Anywhere else the header is ignored: a
+// client that reaches the server directly cannot spoof it. Only a proxy that strips the header from
 // what clients send makes it safe. The header always names teams: "*" in it
 // is a team called "*", never the whole fleet, so whoever can name an
 // identity-provider group cannot grant fleet-wide reads with it; a person

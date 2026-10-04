@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -148,13 +150,14 @@ func TestOAuth2ProxyExample(t *testing.T) {
 	}
 
 	// (2) the proxy strips what a client sends in the header it sets.
-	// oauth2-proxy v7.8.1 removes a client's copies of the headers it
-	// injects (X-Forwarded-Groups with --pass-user-headers) on every route
-	// when --skip-auth-strip-headers is true, which this pins (it is the
+	// oauth2-proxy v7.15.5 removes a client's copies of the headers it
+	// injects (X-Forwarded-Groups with --pass-user-headers), whatever
+	// their case or underscores, on every route when
+	// --skip-auth-strip-headers is true, which this pins (it is the
 	// default, so a later default change cannot undo it), on the version
 	// that behaviour was verified against.
-	if !strings.HasSuffix(proxy.Image, ":v7.8.1") {
-		t.Errorf("oauth2-proxy image %s, want the pinned, verified v7.8.1", proxy.Image)
+	if !strings.HasSuffix(proxy.Image, ":"+oauth2ProxyVersion) {
+		t.Errorf("oauth2-proxy image %s, want the pinned, verified %s", proxy.Image, oauth2ProxyVersion)
 	}
 	for _, want := range []string{"--pass-user-headers=true", "--skip-auth-strip-headers=true", "--pass-basic-auth=false"} {
 		if !slices.Contains(proxy.Args, want) {
@@ -176,4 +179,57 @@ func TestOAuth2ProxyExample(t *testing.T) {
 			t.Errorf("oauth2-proxy arg %s", a)
 		}
 	}
+	// The routes match the requests machines make, query string and all,
+	// and no read a person makes through the dashboard.
+	for _, r := range []struct {
+		method, uri string
+		skip        bool
+	}{
+		{"POST", "/api/v1/gate?target=1.35&cluster=x&fail-on=warning&format=sarif", true},
+		{"POST", "/api/v1/gate?target=1.35", true},
+		{"POST", "/api/v1/snapshots", true},
+		{"GET", "/metrics", true},
+		{"GET", "/readyz", true},
+		{"GET", "/healthz", true},
+		{"GET", "/", false},
+		{"GET", "/api/v1/clusters", false},
+		{"GET", "/api/v1/clusters/1/report?target=1.35", false},
+		{"GET", "/api/v1/fleet/teams?target=1.35", false},
+		{"GET", "/metrics/x", false},
+		{"GET", "/api/v1/gate?target=1.35", false},
+		{"POST", "/api/v1/gate/x?target=1.35", false},
+	} {
+		if got := skipsAuth(t, skips, r.method, r.uri); got != r.skip {
+			t.Errorf("%s %s: the proxy skips authentication = %v, want %v", r.method, r.uri, got, r.skip)
+		}
+	}
+}
+
+// oauth2ProxyVersion is the oauth2-proxy release the example pins and
+// whose behaviour the docs and skipsAuth describe.
+const oauth2ProxyVersion = "v7.15.5"
+
+// skipsAuth reports whether oauth2-proxy v7.15.5 skips authentication
+// for a request with routes (--skip-auth-route=METHOD=regex), as its
+// isAllowedRoute decides (oauthproxy.go): the method must be the
+// route's, and the regex must match the decoded path of the request
+// target, without its query (requestutil.GetRequestPath). Before
+// v7.11.0 (CVE-2025-54576) the regex was matched against the request
+// URI, query included, so ^/api/v1/gate$ never matched a gate call.
+func skipsAuth(t *testing.T, routes []string, method, uri string) bool {
+	t.Helper()
+	u, err := url.ParseRequestURI(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range routes {
+		m, re, ok := strings.Cut(strings.TrimPrefix(r, "--skip-auth-route="), "=")
+		if !ok {
+			t.Fatalf("route %s is not METHOD=regex", r)
+		}
+		if m == method && regexp.MustCompile(re).MatchString(u.Path) {
+			return true
+		}
+	}
+	return false
 }

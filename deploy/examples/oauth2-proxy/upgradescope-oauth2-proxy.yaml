@@ -7,19 +7,27 @@
 #      127.0.0.1:8080 inside the pod, and the one Service exposes the
 #      proxy's port, never serve's;
 #   2. the proxy removes every client-supplied copy of the header before
-#      it forwards a request. oauth2-proxy v7.8.1 strips the headers it
-#      injects (X-Forwarded-Groups here) from the client's request first
-#      when --skip-auth-strip-headers is true, on authenticated and
-#      skip-auth routes alike, and adds one X-Forwarded-Groups line per
-#      group of the session.
+#      it forwards a request. oauth2-proxy v7.15.5 strips the headers it
+#      injects (X-Forwarded-Groups here, in any case, with - or _) from
+#      the client's request first when --skip-auth-strip-headers is true,
+#      on authenticated and skip-auth routes alike, then sets
+#      X-Forwarded-Groups from the session only: one header, the
+#      session's groups joined by commas.
 #
 # Machines go through the proxy too, on routes it does not authenticate
 # (with the header stripped, so they read as the token they present):
 # agents push to http://upgradescope.upgradescope.svc/api/v1/snapshots
-# with their ingest tokens, CI posts to /api/v1/gate and Prometheus
-# scrapes /metrics with read tokens. Every other read through the proxy
-# needs a signed-in person. Operators reach serve itself with kubectl
-# port-forward to port 8080 and the admin or a read token.
+# with their ingest tokens, CI posts to /api/v1/gate?target=... and
+# Prometheus scrapes /metrics with read tokens. v7.15.5 matches a
+# --skip-auth-route against the request's path without its query, so
+# ^/api/v1/gate$ matches every gate call. The proxy's sign-in is not what
+# guards the data: with --reverse-proxy it takes the path it matches from
+# the client's X-Forwarded-Uri (from any client, unless --trusted-proxy-ip
+# names the proxies allowed to send it), so a client can make it skip
+# authentication on any path. On such a request it still strips the
+# group header, so serve reads it as the token it presents, and answers
+# 401 without one. Operators reach serve itself with kubectl port-forward
+# to port 8080 and the admin or a read token.
 #
 # WARNING: serve trusts every connection that arrives over loopback, and
 # not only the sidecar's arrive that way:
@@ -150,8 +158,10 @@ spec:
               mountPath: /data
         - name: oauth2-proxy
           # Pin the release you have vetted: what makes the header mode
-          # safe is this version's --skip-auth-strip-headers behaviour.
-          image: quay.io/oauth2-proxy/oauth2-proxy:v7.8.1
+          # safe is this version's --skip-auth-strip-headers behaviour,
+          # and its path-only --skip-auth-route matching is what lets CI
+          # reach the gate.
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
           args:
             - --provider=oidc
             - --oidc-issuer-url=https://sso.example.com
@@ -159,6 +169,10 @@ spec:
             - --email-domain=*
             - --http-address=0.0.0.0:4180
             - --upstream=http://127.0.0.1:8080/
+            # Behind your Ingress. Add --trusted-proxy-ip=<the ingress
+            # controller's addresses> so that only it may send
+            # X-Forwarded-* (X-Forwarded-Uri decides the skip-auth routes
+            # below); serve's token check guards the data either way.
             - --reverse-proxy=true
             # X-Forwarded-User, -Email and -Groups, from the session.
             - --pass-user-headers=true
@@ -173,7 +187,8 @@ spec:
             - --pass-basic-auth=false
             # Machines, with the tokens they present and no group header:
             # agents' pushes, the CI gate, Prometheus, and the kubelet's
-            # probes of serve.
+            # probes of serve. Matched against the path alone (the gate's
+            # ?target= is not part of it).
             - --skip-auth-route=POST=^/api/v1/snapshots$
             - --skip-auth-route=POST=^/api/v1/gate$
             - --skip-auth-route=GET=^/metrics$
