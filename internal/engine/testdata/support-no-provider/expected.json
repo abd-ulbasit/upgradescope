@@ -1,0 +1,10 @@
+{
+  "clusterId": "44444444-4444-4444-4444-444444444444",
+  "findings": [],
+  "kbVersion": "test-kb-1",
+  "ready": true,
+  "score": 100,
+  "serverVersion": "v1.34.2-eks-3abc123",
+  "target": "1.35",
+  "verdict": "ready"
+}

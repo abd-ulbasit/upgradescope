@@ -36,6 +36,11 @@ const (
 	// deprecates (warning; info when none is in use), or a
 	// status.storedVersions entry it no longer serves (warning).
 	CatCRDVersion Category = "crd-version"
+	// CatSupportLifecycle: the cluster's Kubernetes minor is about to
+	// leave (warning), or has left (blocker), its managed provider's
+	// standard support (EKS, GKE, AKS), dated and, where the provider's
+	// price is cited, with what extended support adds per year.
+	CatSupportLifecycle Category = "support-lifecycle"
 )
 
 type Severity string
@@ -195,7 +200,10 @@ var categorySources = map[Category][]inventory.Capability{
 	CatChartIncompat:      {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
 	CatVersionSkew:        {inventory.CapVersions},
 	CatCRDVersion:         {inventory.CapCRDs},
-	CatKBStale:            {}, // the knowledge base's own date
+	// The provider is inferred in the versions step, from the server
+	// version and the nodes it lists.
+	CatSupportLifecycle: {inventory.CapVersions},
+	CatKBStale:          {}, // the knowledge base's own date
 }
 
 // Sources lists the inventory capabilities a finding of category c and
@@ -363,6 +371,11 @@ type Report struct {
 	Verdict     Verdict         `json:"verdict"`
 	Findings    []Finding       `json:"findings"`              // sorted: severity desc, category, title
 	NotAssessed []CapabilityGap `json:"notAssessed,omitempty"` // sorted by capability
+	// Support places the cluster's Kubernetes minor in its managed
+	// provider's support calendar (see SupportStatus); nil when the
+	// provider is not EKS, GKE or AKS or its dates for the minor are not
+	// known. It is the same for every target.
+	Support *SupportStatus `json:"support,omitempty"`
 	// Suppressed lists what ignore rules took out of Findings (see
 	// internal/suppress); Evaluate never sets it.
 	Suppressed []SuppressedFinding `json:"suppressed,omitempty"`

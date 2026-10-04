@@ -19,8 +19,9 @@ import (
 )
 
 // collectVersions fills server version, cluster ID (kube-system namespace
-// UID), node kubelet and container runtime versions, namespaces with team
-// labels, and observed control-plane component versions. Writes are
+// UID), node kubelet and container runtime versions, the managed provider
+// (providerEvidence), namespaces with team labels, and observed
+// control-plane component versions. Writes are
 // best-effort: fields populated before an error persist even though the
 // capability degrades.
 func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kube kubernetes.Interface, teamLabel string, inv *inventory.Inventory) error {
@@ -36,10 +37,14 @@ func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kub
 	}
 	inv.ClusterID = string(ks.UID)
 
+	var evidence providerEvidence
 	nodeOpts := metav1.ListOptions{Limit: listPageSize}
 	for {
 		nodes, err := kube.CoreV1().Nodes().List(ctx, nodeOpts)
 		if err != nil {
+			// Nodes unread: the version suffix alone may still name the
+			// provider; a cluster it does not name is left undetermined.
+			inv.Provider = evidence.provider(inv.ServerVersion)
 			return fmt.Errorf("list nodes: %w", err)
 		}
 		for i := range nodes.Items {
@@ -49,12 +54,15 @@ func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kub
 				KubeletVersion:   n.Status.NodeInfo.KubeletVersion,
 				ContainerRuntime: n.Status.NodeInfo.ContainerRuntimeVersion,
 			})
+			evidence.addNode(n)
 		}
 		if nodes.Continue == "" {
 			break
 		}
 		nodeOpts.Continue = nodes.Continue
 	}
+	evidence.nodesRead = true
+	inv.Provider = evidence.provider(inv.ServerVersion)
 	sort.Slice(inv.Nodes, func(i, j int) bool { return inv.Nodes[i].Name < inv.Nodes[j].Name })
 
 	nsOpts := metav1.ListOptions{Limit: listPageSize}

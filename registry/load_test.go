@@ -191,6 +191,9 @@ func TestDataDirHoldsOnlyYAMLEntries(t *testing.T) {
 		if f.Name() == ".DS_Store" { // macOS Finder litter, not a data file
 			continue
 		}
+		if f.IsDir() && f.Name() == "providers" { // the managed-provider dataset, embedded on its own (support.go)
+			continue
+		}
 		if f.IsDir() || !strings.HasSuffix(f.Name(), ".yaml") {
 			t.Errorf("registry/data/%s: only <id>.yaml files are embedded and loaded; rename it to .yaml or move it out of registry/data", f.Name())
 		}

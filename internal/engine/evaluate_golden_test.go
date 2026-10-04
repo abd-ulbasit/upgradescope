@@ -95,6 +95,29 @@ var goldenParams = map[string]struct{ target, now string }{
 	// blocked by the finding, not unknown.
 	"gitops-argocd": {"1.30", "2026-06-10T00:00:00Z"},
 	"gitops-flux":   {"1.30", "2026-06-10T00:00:00Z"},
+	// #77 support lifecycle, one EKS 1.34 cluster (standard support ends
+	// 2026-12-02, extended 2027-12-02) at five instants: 175 days before
+	// the end of standard support (no finding, but the status carries the
+	// date and the figure), 48 days before (warning), the first instant of
+	// extended support (blocker, costed), after extended support ended
+	// (blocker, no cost), and a cluster whose provider is other (nothing).
+	"support-before-window":    {"1.35", "2026-06-10T00:00:00Z"},
+	"support-warning-window":   {"1.35", "2026-10-15T00:00:00Z"},
+	"support-extended":         {"1.35", "2026-12-02T00:00:00Z"},
+	"support-ended":            {"1.35", "2028-01-10T00:00:00Z"},
+	"support-unknown-provider": {"1.35", "2026-12-02T00:00:00Z"},
+	// An older agent's inventory: no provider field, though the version
+	// looks like EKS and the date is inside the extended window. Nothing is
+	// inferred from the version here: no finding, no support status.
+	"support-no-provider": {"1.35", "2026-12-02T00:00:00Z"},
+	// AKS publishes no price the dataset can cite: the dates and no cost line.
+	"support-no-price": {"1.35", "2026-10-15T00:00:00Z"},
+	// Opt-in extended support (AKS, GKE): the finding states the provider's
+	// window conditionally instead of asserting this cluster is in it, and
+	// GKE's price carries its Extended-channel caveat.
+	"support-aks-extended": {"1.35", "2026-12-15T00:00:00Z"},
+	"support-gke-warning":  {"1.35", "2026-12-15T00:00:00Z"},
+	"support-gke-extended": {"1.35", "2027-02-01T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte

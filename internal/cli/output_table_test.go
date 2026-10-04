@@ -257,6 +257,37 @@ func TestWriteTableReadyNamesGaps(t *testing.T) {
 	}
 }
 
+// #77: a managed cluster's header carries its support calendar: the dates
+// and, where the price is cited, the annual cost as a list price with its
+// as-of date. A cluster with no calendar (other providers, files scans) has
+// no Support line, and so no cost line.
+func TestWriteTableSupportLine(t *testing.T) {
+	r := engine.Report{ClusterID: "uid-1", ServerVersion: "v1.34.2-eks-3abc123", Target: inventory.Version{Major: 1, Minor: 35}, KBVersion: "kb",
+		Support: &engine.SupportStatus{
+			Provider: "eks", Minor: "1.34", Phase: engine.SupportStandard,
+			ExtendedSupportFrom: "2026-12-02", ExtendedSupportEnds: "2027-12-02",
+			AnnualCostDelta: "4380.00", Currency: "USD", PriceAsOf: "2026-10-03",
+		}}
+	var buf bytes.Buffer
+	if err := WriteTable(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	const want = "Server:   v1.34.2-eks-3abc123\nSupport:  EKS 1.34: standard support ends 2026-12-02, extended support until 2027-12-02; " +
+		"extended support adds $4,380/yr per cluster (list price as of 2026-10-03)\nTarget:   1.35\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("table lacks %q:\n%s", want, buf.String())
+	}
+
+	r.Support = nil
+	buf.Reset()
+	if err := WriteTable(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "Support:") || strings.Contains(buf.String(), "list price") {
+		t.Errorf("no support calendar: table has a Support or cost line:\n%s", buf.String())
+	}
+}
+
 // #94: a live scan's header says which cluster it read, by kubeconfig
 // context and API server; a files scan has neither.
 func TestWriteTableNamesTheCluster(t *testing.T) {

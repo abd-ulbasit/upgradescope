@@ -1,0 +1,14 @@
+[
+  {
+    "description": "Kubernetes 1.34 leaves Amazon EKS standard support on 2026-12-02. Amazon EKS ends standard support for Kubernetes 1.34 on 2026-12-02; extended support then runs until 2027-12-02, when Amazon EKS stops supporting it. Extended support costs $4,380 more per cluster per year at list price ($0.60 against $0.10 per cluster-hour, over 8,760 hours; list price as of 2026-10-03, not your bill). Extended support is on by default and billed per cluster-hour. Fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.35.",
+    "check_name": "support-lifecycle/eks/1.34",
+    "fingerprint": "ef4e79ab715972b4181139b4c6436678dea03a82f32dcaa4757540bdfb94d41a",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/support-lifecycle/eks/1.34",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

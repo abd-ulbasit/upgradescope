@@ -43,6 +43,9 @@ func TestLoad(t *testing.T) {
 	if len(k.AddOns) == 0 {
 		t.Error("AddOns is empty — registry.Load() returned nothing")
 	}
+	if _, ok := k.Provider("eks"); !ok || len(k.Providers) != len(registry.ProviderIDs) {
+		t.Errorf("Providers = %d entries (eks found: %v), want one per managed provider", len(k.Providers), ok)
+	}
 	if k.Skew != DefaultSkewPolicy() {
 		t.Errorf("Skew = %+v, want DefaultSkewPolicy()", k.Skew)
 	}
@@ -150,13 +153,16 @@ func TestDatasetVersion(t *testing.T) {
 		return []registry.AddOn{{SchemaVersion: 1, ID: "istio",
 			Support: registry.Support{Status: "supported", EOLDate: "2026-11-30"}}}
 	}
+	providers := func() []registry.ProviderSupport {
+		return []registry.ProviderSupport{{SchemaVersion: 1, ID: "eks", Versions: []registry.SupportWindow{{Minor: "1.34", StandardEnd: "2026-12-02"}}}}
+	}
 	const from = "k8s.io/api v0.37.1"
 
-	base, err := datasetVersion(from, entries(), nil, addons())
+	base, err := datasetVersion(from, entries(), nil, addons(), providers())
 	if err != nil {
 		t.Fatalf("datasetVersion() error = %v", err)
 	}
-	again, _ := datasetVersion(from, entries(), nil, addons())
+	again, _ := datasetVersion(from, entries(), nil, addons(), providers())
 	if base != again {
 		t.Errorf("datasetVersion not deterministic: %q vs %q", base, again)
 	}
@@ -171,19 +177,24 @@ func TestDatasetVersion(t *testing.T) {
 
 	synced := addons()
 	synced[0].Support.EOLDate = "2027-02-28" // what an eol-sync run changes
+	shifted := providers()
+	shifted[0].Versions[0].StandardEnd = "2027-01-02" // what an eol-sync run changes
 	e := entries()
 	e[0].Removed = ver(26)
 	tomb := entries()
 	tomb[0].RemovedInferred = true
 
 	for name, got := range map[string]func() (string, error){
-		"registry eol_date": func() (string, error) { return datasetVersion(from, entries(), nil, synced) },
-		"lifecycle entry":   func() (string, error) { return datasetVersion(from, e, nil, addons()) },
-		"tombstone flag":    func() (string, error) { return datasetVersion(from, tomb, nil, addons()) },
+		"registry eol_date": func() (string, error) { return datasetVersion(from, entries(), nil, synced, providers()) },
+		"provider date":     func() (string, error) { return datasetVersion(from, entries(), nil, addons(), shifted) },
+		"lifecycle entry":   func() (string, error) { return datasetVersion(from, e, nil, addons(), providers()) },
+		"tombstone flag":    func() (string, error) { return datasetVersion(from, tomb, nil, addons(), providers()) },
 		"builtin group": func() (string, error) {
-			return datasetVersion(from, entries(), []BuiltinGroup{{Group: "imagepolicy.k8s.io", Versions: []string{"v1alpha1"}}}, addons())
+			return datasetVersion(from, entries(), []BuiltinGroup{{Group: "imagepolicy.k8s.io", Versions: []string{"v1alpha1"}}}, addons(), providers())
 		},
-		"generatedFrom": func() (string, error) { return datasetVersion("k8s.io/api v0.37.2", entries(), nil, addons()) },
+		"generatedFrom": func() (string, error) {
+			return datasetVersion("k8s.io/api v0.37.2", entries(), nil, addons(), providers())
+		},
 	} {
 		v, err := got()
 		if err != nil {

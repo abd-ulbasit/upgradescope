@@ -1,0 +1,20 @@
+{
+  "clusterId": "22222222-2222-2222-2222-222222222222",
+  "findings": [],
+  "kbVersion": "test-kb-1",
+  "ready": true,
+  "score": 100,
+  "serverVersion": "v1.34.2-eks-3abc123",
+  "support": {
+    "annualCostDelta": "4380.00",
+    "currency": "USD",
+    "extendedSupportEnds": "2027-12-02",
+    "extendedSupportFrom": "2026-12-02",
+    "minor": "1.34",
+    "phase": "standard",
+    "priceAsOf": "2026-10-03",
+    "provider": "eks"
+  },
+  "target": "1.35",
+  "verdict": "ready"
+}

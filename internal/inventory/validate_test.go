@@ -22,6 +22,7 @@ func validInventory() Inventory {
 	}
 	return Inventory{
 		SchemaVersion:        1,
+		Provider:             ProviderEKS,
 		APIUsage:             []APIUsage{usage()},
 		APIAuthorshipUnknown: []APIUsage{usage()},
 		HelmReleases:         []HelmRelease{{Name: "ingress-nginx", Namespace: "ingress", ManifestAPIs: []APIUsage{usage()}}},
@@ -86,6 +87,8 @@ func TestValidateIdentifiersRefusesInvalid(t *testing.T) {
 		{"namespace list name", func(inv *Inventory) { inv.Namespaces[1].Name = strings.Repeat("k", 64) }, "namespaces[1].name"},
 		{"team label value", func(inv *Inventory) { inv.Namespaces[0].Team = "payments team" }, "namespaces[0].team"},
 		{"team label value too long", func(inv *Inventory) { inv.Namespaces[0].Team = strings.Repeat("t", 64) }, "namespaces[0].team"},
+		{"provider with a payload", func(inv *Inventory) { inv.Provider = Provider(strings.Repeat("x", 200)) }, "provider"},
+		{"provider that is not a name", func(inv *Inventory) { inv.Provider = Provider("<script>") }, "provider"},
 		{"CRD usage namespace key", func(inv *Inventory) { inv.CRDs[0].Usage[0].Namespaces[" "] = 1 }, "crds[0].usage[0].namespaces"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -88,6 +88,20 @@ const (
 // meaning changes without a schemaVersion bump.
 const CurrentCollectorSchema = 1
 
+// Provider is the managed Kubernetes service a cluster's control plane is
+// bought from, inferred by the collector from signals only that service
+// produces (see collect.providerEvidence). It is never guessed: a cluster
+// that does not show one of the three is ProviderOther, and one whose
+// evidence could not be read is left empty (undetermined), not ProviderOther.
+type Provider string
+
+const (
+	ProviderEKS   Provider = "eks"
+	ProviderGKE   Provider = "gke"
+	ProviderAKS   Provider = "aks"
+	ProviderOther Provider = "other"
+)
+
 type Inventory struct {
 	SchemaVersion int    `json:"schemaVersion"` // 1
 	ClusterID     string `json:"clusterId"`     // kube-system ns UID, or "files"
@@ -95,10 +109,15 @@ type Inventory struct {
 	// package collects. It is absent (0) from those of collectors that
 	// predate it — v0.1.x and v0.2.0's release candidates — which the
 	// server tells apart by the pushing agent's version.
-	CollectorSchema    int                             `json:"collectorSchema,omitempty"`
-	Source             Source                          `json:"source,omitempty"`
-	CollectedAt        time.Time                       `json:"collectedAt"`
-	ServerVersion      string                          `json:"serverVersion,omitempty"` // raw GitVersion, e.g. "v1.34.2", "v1.34.2-gke.100"
+	CollectorSchema int       `json:"collectorSchema,omitempty"`
+	Source          Source    `json:"source,omitempty"`
+	CollectedAt     time.Time `json:"collectedAt"`
+	ServerVersion   string    `json:"serverVersion,omitempty"` // raw GitVersion, e.g. "v1.34.2", "v1.34.2-gke.100"
+	// Provider is eks, gke, aks, or other when the cluster shows none of
+	// them; empty when it was not determined: a files inventory, one from
+	// a collector that predates the field, or a live cluster whose nodes
+	// could not be listed and whose server version names no provider.
+	Provider           Provider                        `json:"provider,omitempty"`
 	Capabilities       map[Capability]CapabilityStatus `json:"capabilities"`
 	APIUsage           []APIUsage                      `json:"apiUsage,omitempty"`
 	DeprecatedCalls    []DeprecatedCall                `json:"deprecatedCalls,omitempty"`

@@ -29,8 +29,11 @@ type KB struct {
 	// APILifecycle.
 	BuiltinGroups []BuiltinGroup
 	AddOns        []registry.AddOn
-	Skew          SkewPolicy
-	MaxKnownK8s   inventory.Version // newest minor the lifecycle data covers
+	// Providers are the managed Kubernetes providers' support calendars
+	// (EKS, GKE, AKS), one per registry.ProviderIDs.
+	Providers   []registry.ProviderSupport
+	Skew        SkewPolicy
+	MaxKnownK8s inventory.Version // newest minor the lifecycle data covers
 	// UpgradeSteps are control-plane upgrades allowed to skip minors;
 	// upgrade plans take them in place of the one-minor hops they span
 	// (engine.HopTargets). Upstream has none, since the control plane is
@@ -91,7 +94,11 @@ func loadWith(lifecycle []byte, extra string) (KB, error) {
 			return KB{}, fmt.Errorf("kb: extra registry %s: %w", extra, errors.Join(errs...))
 		}
 	}
-	version, err := datasetVersion(f.GeneratedFrom, f.Entries, f.BuiltinGroups, addons)
+	providers, err := registry.LoadProviders()
+	if err != nil {
+		return KB{}, fmt.Errorf("kb: loading managed-provider support calendars: %w", err)
+	}
+	version, err := datasetVersion(f.GeneratedFrom, f.Entries, f.BuiltinGroups, addons, providers)
 	if err != nil {
 		return KB{}, err
 	}
@@ -100,6 +107,7 @@ func loadWith(lifecycle []byte, extra string) (KB, error) {
 		APILifecycle:  f.Entries,
 		BuiltinGroups: f.BuiltinGroups,
 		AddOns:        addons,
+		Providers:     providers,
 		Skew:          DefaultSkewPolicy(),
 		MaxKnownK8s:   maxKnown,
 	}, nil
@@ -112,11 +120,11 @@ func loadWith(lifecycle []byte, extra string) (KB, error) {
 //
 // generatedFrom names the upstream release ("k8s.io/api v0.37.1"); each
 // digest is the first 8 hex digits of the SHA-256 of the canonical JSON of
-// the lifecycle entries and built-in groups or the parsed add-on registry.
-// Any change to either dataset (an eol-sync date flip, a regenerated entry,
-// a new built-in group) changes the label; YAML comments and formatting do
-// not.
-func datasetVersion(generatedFrom string, entries []APILifecycleEntry, groups []BuiltinGroup, addons []registry.AddOn) (string, error) {
+// the lifecycle entries and built-in groups or the parsed registry (the
+// add-ons and the managed providers' support calendars). Any change to
+// either dataset (an eol-sync date flip, a regenerated entry, a new
+// built-in group) changes the label; YAML comments and formatting do not.
+func datasetVersion(generatedFrom string, entries []APILifecycleEntry, groups []BuiltinGroup, addons []registry.AddOn, providers []registry.ProviderSupport) (string, error) {
 	// Without built-in groups the digest is over the bare entries, so a
 	// dataset that predates the field keeps the label it always had.
 	var lifecycleData any = entries
@@ -130,11 +138,25 @@ func datasetVersion(generatedFrom string, entries []APILifecycleEntry, groups []
 	if err != nil {
 		return "", fmt.Errorf("kb: digest lifecycle data: %w", err)
 	}
-	reg, err := digest(addons)
+	reg, err := digest(struct {
+		AddOns    []registry.AddOn
+		Providers []registry.ProviderSupport
+	}{addons, providers})
 	if err != nil {
 		return "", fmt.Errorf("kb: digest registry: %w", err)
 	}
 	return fmt.Sprintf("%s; lifecycle %s; registry %s", generatedFrom, lifecycle, reg), nil
+}
+
+// Provider returns the support calendar of the managed provider id, one of
+// registry.ProviderIDs.
+func (k KB) Provider(id string) (registry.ProviderSupport, bool) {
+	for _, p := range k.Providers {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return registry.ProviderSupport{}, false
 }
 
 func digest(v any) (string, error) {

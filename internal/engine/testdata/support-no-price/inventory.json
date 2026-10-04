@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "44444444-4444-4444-4444-444444444444",
+  "collectedAt": "2026-10-15T00:00:00Z",
+  "serverVersion": "v1.34.2",
+  "provider": "aks",
+  "capabilities": {
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "nodes": [{"name": "aks-nodepool1-12345678-vmss000000", "kubeletVersion": "v1.34.2"}],
+  "namespaces": [{"name": "default"}]
+}

@@ -582,7 +582,8 @@ Type: `blocker`, `warning`, `info`.
 
 One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`,
 `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`,
-`kb-stale`, `addon-no-data`, `unknown-api`, `crd-version`. A release may add
+`kb-stale`, `addon-no-data`, `unknown-api`, `crd-version`,
+`support-lifecycle`. A release may add
 categories under `/api/v1`, so this is not an enum: treat one you do
 not know by its severity.
 
@@ -805,6 +806,7 @@ The engine's report, as `scan --output json` writes it.
 | `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
+| `support` | [SupportStatus](#supportstatus) | no | — |
 | `findings` | array of [Finding](#finding) | yes | — |
 
 ### ReportBase
@@ -826,6 +828,28 @@ The report's fields other than its findings.
 | `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
+| `support` | [SupportStatus](#supportstatus) | no | — |
+
+### SupportStatus
+
+A cluster on EKS, GKE or AKS whose Kubernetes minor the knowledge base
+dates: where that minor stands in the provider's support calendar,
+whether or not it is a finding (see the `support-lifecycle` category).
+Absent for other clusters and when the provider's dates for the minor
+are not known. The same for every target.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `provider` | `eks` \| `gke` \| `aks` | yes | The managed Kubernetes service the collector inferred from the server version suffix and the nodes' managed node pool labels. |
+| `minor` | string | yes | The control plane's Kubernetes minor. |
+| `phase` | `standard` \| `ending` \| `extended` \| `ended` | yes | `standard`: standard support, not ending within 90 days. `ending`: standard support ends within 90 days. `extended`: past standard support, before the provider's extended window ends (EKS bills it by default; on GKE and AKS it is opt-in, see `extendedSupportCondition`, and the cluster may not be enrolled). `ended`: past the end of extended support, or past standard support for a minor with no extended support. |
+| `extendedSupportFrom` | string (date) | yes | The day (UTC) standard support ends and extended support begins. EKS bills extended support from the start of this day. |
+| `extendedSupportEnds` | string (date) | no | The day extended support ends; absent when the provider offered none for the minor. |
+| `annualCostDelta` | string | no | What extended support adds per cluster per year at the provider's published list price, (extended - standard) x 8760 cluster-hours, as a decimal string in `currency`. A list price as of `priceAsOf`, not the customer's bill: prices change and vary by contract. Present only when the knowledge base cites the provider's price and the minor can still be in extended support (not in phase `ended`); never inferred. |
+| `currency` | `USD` | no | The currency of `annualCostDelta`. |
+| `priceAsOf` | string (date) | no | The day the list price behind `annualCostDelta` was read from the provider's pricing page. |
+| `annualCostNote` | string | no | The provider's caveat on whom `annualCostDelta` is charged to (GKE: only clusters on the Extended release channel). Present with `annualCostDelta` when the knowledge base records one; show it beside the figure. |
+| `extendedSupportCondition` | string | no | Where the provider's extended support is opt-in (GKE, AKS): the configuration under which it applies, as a clause completing "only if ..." ("Long Term Support is enabled"). The scanner cannot see the cluster's configuration, so phases `ending` and `extended` describe the provider's window, not a confirmed enrolment. Absent for EKS and when the provider offered no extended support for the minor. |
 
 ### ReportMeta
 
@@ -857,6 +881,7 @@ The report's fields other than its findings.
 | `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
+| `support` | [SupportStatus](#supportstatus) | no | — |
 | `findings` | array of [Finding](#finding) | yes | — |
 | `evaluatedAt` | string (date-time) | yes | — |
 | `snapshotId` | integer (int64) | yes | — |
@@ -1000,6 +1025,7 @@ The report's fields other than its findings.
 | `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
+| `support` | [SupportStatus](#supportstatus) | no | — |
 | `findings` | array of [GateFinding](#gatefinding) | yes | — |
 | `teams` | [TeamScores](#teamscores) | no | — |
 | `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included. |
@@ -1067,6 +1093,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `namespaces` | array of object | no | — |
 | `unrecognizedImages` | array of string | no | Image repositories no add-on image matcher claims; sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories the cap dropped. |
+| `provider` | string | no | Known values: eks, gke, aks, other. The managed Kubernetes service the collector inferred, or `other` when the cluster shows none of the three; absent when it could not tell (the nodes were unreadable and the server version names no provider). A name this build does not know is accepted and has no support calendar (a newer agent may learn more providers); a value that is not a name of at most 63 bytes of letters, digits, `-`, `_` or `.` is refused (422). |
 | `crds` | array of object | no | CustomResourceDefinitions: versions, status.storedVersions, and the custom resources at a deprecated or unserved version. |
 | `apiServerStartTime` | string (date-time) | no | process_start_time_seconds of the kube-apiserver whose /metrics deprecatedCalls were read from, in whole seconds: apiserver_requested_deprecated_apis counts requests since then. Absent when the scrape did not report it. Not part of the snapshot's identity, like collectedAt: a push that differs only in it is a duplicate. The server ignores one before 2014 or more than 10 minutes after collectedAt. |
 

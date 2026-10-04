@@ -69,6 +69,30 @@ type Status struct {
 	Targets               []TargetStatus `json:"targets,omitempty"`
 	NotAssessed           []string       `json:"notAssessed,omitempty"` // "helm: secrets list forbidden"
 	AgentVersion          string         `json:"agentVersion,omitempty"`
+	// SupportPhase, ExtendedSupportFrom, ExtendedSupportEnds,
+	// AnnualCostDelta, Currency, PriceAsOf, AnnualCostNote and
+	// ExtendedSupportCondition are the engine's Report.Support for a cluster on EKS, GKE
+	// or AKS whose Kubernetes minor the provider dataset dates: where
+	// the minor stands in the provider's support calendar (standard,
+	// ending, extended, ended), the day extended support begins
+	// (YYYY-MM-DD) and, where the provider offers any, the day it ends, and, only where the provider's price is cited, what
+	// extended support adds per cluster per year at list price and the day
+	// that price was read. Phases ending and extended are the provider's
+	// calendar: where extended support is opt-in (GKE, AKS) it applies to
+	// this cluster only if ExtendedSupportCondition holds, and
+	// AnnualCostNote says whom the price is charged to. They are the
+	// cluster's, the same for every target, and absent otherwise.
+	SupportPhase        string `json:"supportPhase,omitempty"`
+	ExtendedSupportFrom string `json:"extendedSupportFrom,omitempty"`
+	ExtendedSupportEnds string `json:"extendedSupportEnds,omitempty"`
+	AnnualCostDelta     string `json:"annualCostDelta,omitempty"`
+	Currency            string `json:"currency,omitempty"`
+	PriceAsOf           string `json:"priceAsOf,omitempty"`
+	// AnnualCostNote and ExtendedSupportCondition are the provider's
+	// caveats, carried so a status reader does not take the figure or the
+	// phase for a fact about this cluster's configuration.
+	AnnualCostNote           string `json:"annualCostNote,omitempty"`
+	ExtendedSupportCondition string `json:"extendedSupportCondition,omitempty"`
 	// ObservedGeneration is the metadata.generation whose spec was
 	// evaluated (WriteStatus stamps the current one when it is zero), and
 	// Conditions carry the Ready condition (ReadyCondition): the standard
@@ -270,6 +294,11 @@ func StatusFromReports(reports []engine.Report, observedServerVersion, agentVers
 	}
 	if len(reports) > 0 {
 		st.KBVersion = reports[0].KBVersion
+		if s := reports[0].Support; s != nil {
+			st.SupportPhase, st.ExtendedSupportFrom, st.ExtendedSupportEnds = string(s.Phase), s.ExtendedSupportFrom, s.ExtendedSupportEnds
+			st.AnnualCostDelta, st.Currency, st.PriceAsOf = s.AnnualCostDelta, s.Currency, s.PriceAsOf
+			st.AnnualCostNote, st.ExtendedSupportCondition = s.AnnualCostNote, s.ExtendedSupportCondition
+		}
 	}
 	return st
 }

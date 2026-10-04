@@ -1845,6 +1845,7 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 			cmp.Compare(x.RemovedRelease, y.RemovedRelease))
 	})
 	findings := []Finding{} // non-nil so JSON renders "findings": []
+	support, supportFindings := evalSupport(inv, k, now)
 	b.charge(reportBaseSize(inv, k))
 	usage := evalAPIUsage(inv, k, target, b)
 	var calls []Finding
@@ -1867,6 +1868,7 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 		func() { b.addAll(&findings, evalKubeProxyKubeletSkew(inv, k)) },
 		func() { b.addAll(&findings, evalKBStale(inv, k, target)) },
 		func() { b.addAll(&findings, evalUpgradePath(inv, target)) },
+		func() { b.addAll(&findings, supportFindings) },
 		func() { findings = append(findings, evalCRDVersions(inv, target, b)...) },
 	}
 	for _, step := range steps {
@@ -1905,6 +1907,7 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 		Verdict:       verdict,
 		Findings:      findings,
 		NotAssessed:   gaps,
+		Support:       support,
 
 		UnrecognizedImages:        unrecognized,
 		UnrecognizedImagesOmitted: omitted,

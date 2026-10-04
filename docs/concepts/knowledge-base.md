@@ -1,7 +1,7 @@
 # Knowledge base
 
 The knowledge base (KB) is what upgradescope knows about Kubernetes and the
-add-ons around it. It has three parts, all **compiled into the binary**:
+add-ons around it. It has four parts, all **compiled into the binary**:
 nothing is fetched at runtime, and a KB update reaches you only through a
 new release.
 
@@ -10,6 +10,7 @@ new release.
 | API lifecycle: for each group/version/kind, when it was introduced, deprecated and removed, and its replacement | generated from `k8s.io/api` source (`internal/kb/data/apilifecycle.json`), and nothing else: no hand-written overlay. The few facts the source lacks are fixups in the generator, each with a citation | `tools/gen-kb` |
 | Add-on registry: end of life, release lines and Kubernetes compatibility of common add-ons | one YAML file per add-on in `registry/data/`, every claim cited | hand-curated, and synced with endoflife.date where it has the product ([Add-on registry](addon-registry.md)) |
 | Version-skew policy | the upstream [version skew policy](https://kubernetes.io/releases/version-skew-policy/) | `internal/kb/skew.go` ([Version skew](version-skew.md)) |
+| Managed-provider support calendars: for EKS, GKE and AKS, when each Kubernetes minor leaves standard support and when extended support ends, and where the provider publishes it, the extended-support list price | one YAML file per provider in `registry/data/providers/`, every date and price cited | EKS and AKS synced with endoflife.date, GKE and the prices hand-curated ([Managed-provider support](support-lifecycle.md)) |
 
 `upgradescope version` prints what a binary carries:
 
@@ -21,8 +22,11 @@ $ upgradescope version
   registry date: 2026-10-01
 ```
 
-The KB version names the `k8s.io/api` release and a digest of each dataset,
-so two binaries with the same KB version judge identically. Reports carry it
+The KB version names the `k8s.io/api` release and a digest of each dataset (the registry digest covers the add-ons and the provider calendars),
+so two binaries with the same KB version judge identically. The digests
+shown in this documentation's examples are illustrative: a digest changes
+with any edit to its dataset, so run `upgradescope version` for your
+build's. Reports carry it
 too (`kbVersion`). The registry date (the last change to the registry data)
 is stamped into release builds; a `go install` build prints `unknown`.
 
