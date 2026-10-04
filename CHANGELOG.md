@@ -52,6 +52,10 @@ a CI gate.
   opt-in, the wording is conditional. The inventory gains `provider` (`eks`,
   `gke`, `aks` or `other`), set from server-version suffixes and managed
   node-pool labels; a `providerID` scheme alone never claims a provider.
+  Ingest accepts a `provider` this build does not know, but refuses (422)
+  one that is not a label value: longer than 63 bytes, with characters
+  outside letters, digits, `-`, `_` and `.`, or not starting and ending with
+  a letter or digit.
   `scan` prints a `Support:` line, the JSON report and the server's report
   carry `support`, and the `ClusterReadiness` status gains `supportPhase`,
   `extendedSupportFrom`, `extendedSupportEnds`, `annualCostDelta`,
@@ -86,10 +90,10 @@ a CI gate.
   changes, checked at most once a second on a new handshake, so a renewed
   certificate (cert-manager rewriting a mounted Secret) needs no restart. A
   pair that does not load is logged and the previous certificate stays in
-  service. TLS 1.2 is the minimum. The README's Fleet mode section and
-  *Exposing the server to remote agents* in the fleet guide say how to serve
-  over TLS, and that plain `http` sends the ingest token and the inventories
-  in the clear (#65).
+  service. TLS 1.2 is the minimum. The README's quickstart (the Fleet
+  paragraph) and *Exposing the server to remote agents* in the fleet guide
+  say how to serve over TLS, and that plain `http` sends the ingest token
+  and the inventories in the clear (#65).
 - `POST /api/v1/gate?allow-incomplete=true`, as `scan --allow-incomplete`:
   an `unknown` verdict with no finding at the `fail-on` threshold answers
   200. A blocker, a warning under `fail-on=warning`, and a target that is
@@ -142,16 +146,16 @@ a CI gate.
   not listed, is not paired. Ingest refuses (422) a `controlPlane[].node`
   that is not an RFC 1123 subdomain (#148).
 - `make bench-agent KUBECONFIG=<lab kubeconfig>` measures the agent's tick
-  on a disposable lab cluster it fills with 2,001 KWOK nodes, about 14,000
-  pods and 1,000 Helm release Secrets (requests by verb and resource, bytes,
-  wall time, CPU, peak heap and RSS); it refuses a kubeconfig taken only
-  from the environment and a cluster with more than 3 real nodes. `make
-  bench-ingest` measures `serve` ingesting 200 clusters with three targets
-  each, on SQLite and on a throwaway Postgres. The results, hardware and
-  what is simulated are in `docs/operations/scale.md`: there, all 200
-  pushing at once, one `serve` took 56 new snapshots a second on SQLite and
-  40 on Postgres 17, on a dual-core i3-7100U that also ran the database
-  (#71).
+  on a disposable lab cluster it fills with 2,000 KWOK nodes (2,001 with the
+  control plane), about 14,000 pods and 1,000 Helm release Secrets (requests
+  by verb and resource, bytes, wall time, CPU, peak heap and RSS); it
+  refuses a kubeconfig taken only from the environment and a cluster with
+  more than 3 real nodes. `make bench-ingest` measures `serve` ingesting 200
+  clusters with three targets each, on SQLite and on a throwaway Postgres.
+  The results, hardware and what is simulated are in
+  `docs/operations/scale.md`: there, all 200 pushing at once, one `serve`
+  took 56 new snapshots a second on SQLite and 40 on Postgres 17, on a
+  dual-core i3-7100U that also ran the database (#71).
 - Each team in a report and on the dashboard has a `verdict` (`blocked`,
   `unknown` or `ready`). A team is `blocked` by a blocker of its own or by
   one no team is attributed, which cannot be ruled out as its own;
@@ -383,21 +387,33 @@ a CI gate.
   reports support only for agents that send `provider`: v0.1.x agents and
   v0.2.0's release candidates send none. With `agent.manageCRD=false`, apply
   the new `deploy/chart/crds/` before the agent starts, or the new status
-  fields are pruned (#77).
+  fields are pruned. The knowledge base version label changes (#77).
+- A cluster where a node's kube-proxy is more than 3 minors (2 for a
+  kube-proxy older than 1.25) older or newer than that node's kubelet now
+  has a `version-skew/kube-proxy-kubelet/<node>` warning, which lowers the
+  score and fails `--fail-on warning`. It appears only for inventories that
+  record kube-proxy's node, from agents and CLIs of this release. Bring the
+  kube-proxy DaemonSet's version within the policy, or accept it with an
+  ignore rule (`key: version-skew/kube-proxy-kubelet/<node>`) (#148).
 - The `helm` capability is partial, naming `argocd` or `flux` in `skipped`,
   when a GitOps tool deploys charts it cannot read releases for: on a
   cluster with no Helm release that serves the tool's CRD or has workloads
   with its tracking metadata; for every chart read from an Argo CD
   Application, whether or not the cluster has Helm releases (`helm template`
   leaves none, so `kubeVersion` and stored-manifest checks did not run);
-  when the tool's list is forbidden; and, for both tools, when API discovery
-  fails. A Flux whose HelmRelease list is served and empty adds no gap.
+  when the tool's list is forbidden; when a HelmRelease `chartRef` does not
+  resolve to a chart; and, for both tools, when API discovery fails. A Flux
+  whose HelmRelease list is served and empty adds no gap.
   `helm` is optional, so this alone never makes the verdict `unknown`, but a
   partial `helm` holds add-on and Helm-release findings in the notification
-  baseline instead of resolving them. A cluster that serves either CRD keeps
-  `helm` partial until `rbac.gitops.argocd` or `rbac.gitops.flux` is set for
-  the tool it runs; this includes upgrading the chart on a Flux cluster
-  whose releases were read in full before (#70).
+  baseline instead of resolving them. Without the grant for the tool it
+  runs (`rbac.gitops.argocd` or `rbac.gitops.flux`), a cluster that serves
+  either CRD reports `helm` partial, since the list is forbidden; this
+  includes upgrading the chart on a Flux cluster whose releases were read in
+  full before. With `rbac.gitops.flux`, the Flux gap clears once its Helm
+  releases are read and its chartRefs resolve. On Argo CD, `helm` stays
+  partial, grant or not, whenever an Application deploys a chart or the
+  cluster has no Helm release (#70).
 - Clusters that run Kubernetes Dashboard, Promtail, Grafana Agent or Weave
   Net, or the `bitnamilegacy` Ingress NGINX image, now have an `eol-addon`
   blocker, so their verdict is `blocked` and `--fail-on blocker` gates fail.
@@ -443,15 +459,15 @@ a CI gate.
 - The agent keeps what it decoded from each Helm release, keyed by the
   storage object's namespace, name, UID and resourceVersion, so a tick
   fetches only releases that are new or changed; a one-shot `scan` keeps
-  nothing. Measured in `docs/operations/scale.md` on a kind lab with 2,001
-  KWOK nodes, about 14,000 pods and 1,000 Helm releases, before the
-  `kube-system` change below: a steady tick went from 1,061 to 61 API
-  requests, 90 to 68 MiB read (4.3 MiB on the wire), 33 to 5.6 s and 23.5 to
-  3.6 CPU-seconds. The first tick after a start still reads every release
-  (1,061 requests, 36 s there). At the chart's default 200m CPU limit such a
-  first tick probably reaches the Helm step's deadline and leaves some
-  releases for the next tick (computed, not measured): give the agent 500m
-  to 1 CPU on a cluster that size (#71).
+  nothing. Measured in `docs/operations/scale.md` on a kind lab with 2,000
+  KWOK nodes (2,001 with the control plane), about 14,000 pods and 1,000
+  Helm releases, before the `kube-system` change below: a steady tick went
+  from 1,061 to 61 API requests, 90 to 68 MiB read (4.3 MiB on the wire), 33
+  to 5.6 s and 23.5 to 3.6 CPU-seconds. The first tick after a start still
+  reads every release (1,061 requests, 36 s there). At the chart's default
+  200m CPU limit such a first tick probably reaches the Helm step's deadline
+  and leaves some releases for the next tick (computed, not measured): give
+  the agent 500m to 1 CPU on a cluster that size (#71).
 - Each `kube-system` pod is read once per tick: the add-ons take the
   `kube-system` pods' images and labels from the control-plane version
   check's read and list the other namespaces with the field selector
@@ -477,11 +493,13 @@ a CI gate.
   that pass and not *new* when the capability returns, and `became-ready`
   waits while one is carried. A capability that a finding was already seen
   without cannot hide it later, so a steady gap such as
-  `rbac.helmSecrets=false` still resolves and re-alerts. An apiserver
-  restart empties `apiserver_requested_deprecated_apis`, so a deprecated
-  caller that has not called since is resolved, which can send
-  `became-ready`, and is announced again when it calls; #204 tracks telling
-  the two apart (#189).
+  `rbac.helmSecrets=false` still resolves and re-alerts. For an agent that
+  does not report `apiServerStartTime` (v0.1.x, v0.2.0's release
+  candidates), an apiserver restart empties
+  `apiserver_requested_deprecated_apis`, so a deprecated caller that has not
+  called since is resolved, which can send `became-ready`, and is announced
+  again when it calls; newer agents get the hold described above (#189,
+  #204).
 - A cluster inventory that does not report a required capability
   (`api-usage`, `versions`, and `addons` when the knowledge base lists
   add-ons) has a required gap, so it reads `unknown` unless it holds a
@@ -904,13 +922,15 @@ a CI gate.
 
 - Argo CD `repoURL`s and Flux OCIRepository URLs are recorded in the
   inventory without userinfo, query string or fragment: everything up to the
-  last `@` is dropped whether or not the value parses as a URL, and a URL
-  with a `?` or `#` before its last `@` is recorded empty. A token embedded
-  in the URL path (a Cloudsmith entitlement URL) cannot be told from a path
-  and is kept. The agent does not read repository credential Secrets. GitOps
-  chart references are written by whoever can create an Application or
-  HelmRelease, who can therefore raise a false `eol-addon` finding; the
-  GitOps guide says so (#70).
+  last `@` before any trailing OCI digest is dropped, whether or not the
+  value parses as a URL (an OCI reference pinned by digest, such as
+  `ghcr.io/acme/chart@sha256:…`, keeps its digest), and a URL with a `?` or
+  `#` before that `@` is recorded empty. A token embedded in the URL path (a
+  Cloudsmith entitlement URL) cannot be told from a path and is kept. The
+  agent does not read repository credential Secrets. GitOps chart references
+  are written by whoever can create an Application or HelmRelease, who can
+  therefore raise a false `eol-addon` finding; the GitOps guide says so
+  (#70).
 - The Action prefixes every line of the gate's stderr and of the Markdown
   summary it echoes to the log (both carry the scanned tree's file names)
   with `| `, and writes a CR in them as `%0D` and a `##[` as `# #[`; the
