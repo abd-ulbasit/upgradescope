@@ -17,7 +17,9 @@ import (
 // there; docs/operations/scale.md has the measurements the number was
 // picked from. It is also what a cold step may hold beside the release
 // being decoded: at most helmFetchWorkers payloads, each at most the 1 MiB
-// of data Kubernetes allows a Secret or ConfigMap (see startFetching).
+// of data Kubernetes allows a Secret or ConfigMap once fetched, and while
+// it is read its response and the object decoded from it, at most etcd's
+// 1.5 MiB each (see startFetching).
 const helmFetchWorkers = 8
 
 // fetcher hands out the results of fetch(0), fetch(1), … in that order,

@@ -77,7 +77,11 @@ const listPageSize = 500
 // pods) are read 500 a page, 63.2 to 63.7 MiB, as before. Small objects
 // (the scale lab's KWOK pods and nodes, about 3 KiB each) are read 1,000 a
 // page, a production cluster's pods of about 8 KiB some 990, and anything
-// over 16 KiB (a Node listing many images) 500, as before.
+// of 16,744 bytes or more (a Node listing many images) 500, as before;
+// between 16 KiB and that, 501 to 511. One page past the agent's
+// GOMEMLIMIT (90% of 256Mi) takes 1,000 pods of about 70 KiB after a page
+// of small ones, at the 3.2 bytes of live heap per encoded byte measured
+// above, where pages of 500 took about 140 KiB (computed).
 const (
 	wholePageBytes = 8 << 20
 	podPageSize    = 1000
