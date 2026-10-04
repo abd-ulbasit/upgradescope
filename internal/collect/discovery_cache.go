@@ -40,8 +40,10 @@ const DiscoveryMaxAge = time.Hour
 //   - it is DiscoveryMaxAge (an hour) old;
 //   - the tick's CustomResourceDefinitions (their groups, kinds and served
 //     versions, read by the crds step) differ from those of the tick it
-//     was filled in, or the crds step could not read them: a CRD added,
-//     removed or changed is seen one tick later;
+//     was filled in, or the crds step could not list them: a CRD added,
+//     removed or changed is seen one tick later. Custom resources that
+//     could not be listed (the crds capability partial) are not a reason:
+//     the CRDs were still read;
 //
 // so discovery is at most one tick behind a CRD change, and an hour behind
 // any other change of the APIs served at the same version (an APIService
@@ -95,6 +97,11 @@ func (c *DiscoveryCache) observeVersion(v string) {
 
 // end ends a collection: CRDs that differ from those of the tick the answer
 // was filled in, or that could not be read, make it stale for the next.
+// The CRDs were read when the crds capability is available, partial or
+// not: it is partial when a CRD's custom resources could not be listed
+// (an agent is granted none) or a CRD serves no version to list them at,
+// and either leaves every CRD recorded (collectCRDs). Only a CRD list that
+// failed makes the capability unavailable.
 func (c *DiscoveryCache) end(inv *inventory.Inventory) {
 	if c == nil {
 		return
@@ -102,7 +109,7 @@ func (c *DiscoveryCache) end(inv *inventory.Inventory) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	fp := ""
-	if st, ok := inv.Capabilities[inventory.CapCRDs]; ok && st.Available && !st.Partial {
+	if st, ok := inv.Capabilities[inventory.CapCRDs]; ok && st.Available {
 		fp = crdFingerprint(inv.CRDs)
 	}
 	switch {
