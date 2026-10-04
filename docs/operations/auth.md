@@ -126,13 +126,18 @@ engine lists at most 100 namespaces per finding, in name order. So where
 a cap left some of the scope's objects or namespaces at an API unlisted,
 which of them are listed depends on how many objects (or namespaces) at
 that API sort before them, in any team's namespaces. This is the one way
-a scoped answer depends on other teams' evidence, and a scoped caller can
-read it. From how many of its own objects at an API are listed, it learns
-how many objects at that API other namespaces hold that sort before the
-first of its own left unlisted (exactly, when some of its own are listed;
-"100 or more", when none is), and from a read's cut finding whether the
-API's objects across the cluster number more than 100. It learns nothing
-else of them: not their names, namespaces or teams. Concretely:
+the scope's own findings depend on other teams' evidence, and a scoped
+caller can read it. From how many of its own objects at an API are
+listed, it learns how many objects at that API other namespaces hold that
+sort before the first of its own left unlisted (exactly, when some of its
+own are listed; "100 or more", when none is), and from a read's cut
+finding whether the API's objects across the cluster number more than
+100. Where the scope's namespaces holding objects at that API are not
+contiguous in that order, that number is a sum over every stretch of
+other namespaces before that object, the gaps between the scope's
+namespaces included, so the caller learns the sum, not how many sort
+before any one of its namespaces. It learns nothing else of them: not
+their names, namespaces or teams. Concretely:
 
 - **In reads**, a cut finding lists the scope's objects and namespaces
   that made the cut, drops its title's count and says its lists were
@@ -143,18 +148,30 @@ else of them: not their names, namespaces or teams. Concretely:
   object(s) use this API" where only the PR's are, the managers that
   wrote the listed ones. So do the CRD-version remediation's note on
   managers, and whether a Helm release's stored-manifest object is
-  matched to the live object the scan lists; when it is not, the release
-  gets a finding of its own, which counts toward the score and the
-  cluster verdict, and with all of these the answer's size changes. The
-  gate's verdict, `X-Upgradescope-Verdict` and the status `?fail-on`
-  gives judge only what the PR introduces, and do not depend on the
-  caps.
+  matched to its live object, which it is only when the collector listed
+  that object; when it is not, the release gets a finding of its own,
+  with and without the PR alike, so the cluster's: it counts toward the
+  score and the cluster verdict, and with all of these the answer's size
+  changes. The PR's own objects take room in a listing too: the cap
+  holds for the proposed state, and the share's refs are dropped first
+  so the PR's stay listed. Where the PR posts many objects at an API,
+  that changes which of the scope's objects are listed, `objectsOmitted`
+  and what is worded from the listed objects, and nothing else: a ref
+  the PR pushes out of the listing is still matched to a release's stored
+  copy, as without the PR, so the room the PR takes cannot give a
+  release a finding the baseline lacks. The gate's verdict,
+  `X-Upgradescope-Verdict` and the status `?fail-on` gives judge only
+  what the PR introduces, and do not depend on the caps.
 
-Two tests pin this, with payments' two Ingresses unlisted behind web's
+Three tests pin this, with payments' two Ingresses unlisted behind web's
 hundred in `a-web` against a cluster of payments' two alone: the finding
-lists only the PR's Ingress there, and where payments' Helm release
-stores the two, the release gets a blocker of its own there and the
-share's score drops, while the verdict and status stay the same.
+lists only the PR's Ingress there; where payments' Helm release stores
+the two, the release gets a blocker of its own there and the share's
+score drops, while the verdict and status stay the same; and a PR of 99
+Ingresses that accept their own finding, which leaves room for one of
+payments' two, is `ready` and `200` on both, payments-scoped and
+fleet-wide, with the release's blocker, where the answer has it, the
+cluster's.
 
 **What stays.** What describes the cluster as a whole: its name, version,
 score, verdict, blocker and warning counts, capability gaps, and score
@@ -216,11 +233,13 @@ answer, status, verdict and score included, byte for byte, in every
 format, except where the collector's 100-objects-per-API cap, which lists
 objects across the cluster in namespace order, left some of the scope's
 objects unlisted. Then which of them are listed, `objectsOmitted`, the
-finding's detail, and what the engine derives from the listed objects
-(Helm releases' findings, and with them the score, the cluster verdict
-and the answer's size) depend on how many objects at that API sort before
-them ([what the caps still decide](#what-a-team-scoped-read-sees)); the
-verdict, `X-Upgradescope-Verdict` and the status never do. The whole
+finding's detail, and what the engine derives from the objects the
+collector listed (Helm releases' findings, and with them the score, the
+cluster verdict and the answer's size) depend on how many objects at that
+API sort before them ([what the caps still decide](#what-a-team-scoped-read-sees));
+the verdict, `X-Upgradescope-Verdict` and the status never do. Where the
+PR's own objects take the listing's room, only the listing,
+`objectsOmitted` and what is worded from them change. The whole
 cluster is never evaluated for that request, so a `413` from evaluating
 it depends on another team's workloads only through that size.
 
