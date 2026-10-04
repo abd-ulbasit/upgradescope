@@ -37,8 +37,11 @@ type fetcher struct {
 // at a time.
 //
 // fetch gets ctx as it is: when ctx is done, each fetch not yet started
-// fails at once with ctx's error, as the one-at-a-time loop's did, so the
-// caller sees the same failures in the same order. stop, which the caller
+// fails at once with ctx's error, as the one-at-a-time loop's did, and
+// next hands over ctx's error in place of a payload fetched ahead (which
+// the loop would only now have fetched), so the caller sees the same
+// failures in the same order, and decodes nothing after the deadline that
+// the loop would not have. stop, which the caller
 // must call (deferred) however it leaves, stops starting fetches and waits
 // for the ones in flight to return, so no goroutine outlives the step.
 //
@@ -105,6 +108,9 @@ func startFetching(ctx context.Context, n, workers int, fetch func(ctx context.C
 			r := <-results[next]
 			results[next] = nil
 			next, held = next+1, true
+			if err := ctx.Err(); err != nil {
+				return nil, err // fetched ahead, but the loop would fetch it only now
+			}
 			return r.data, r.err
 		},
 		stop: func() {
