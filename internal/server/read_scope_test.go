@@ -217,13 +217,6 @@ func findingTeams(t *testing.T, raw []byte) []string {
 	return out
 }
 
-func cmpOr(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
-}
-
 // teamKeys lists the keys of a body's teams object.
 func teamKeys(t *testing.T, raw []byte) []string {
 	t.Helper()
