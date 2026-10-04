@@ -43,6 +43,10 @@ type Options struct {
 	// changed instead of one per release. A long-running caller (the agent)
 	// keeps one across calls; a one-shot scan leaves it nil.
 	HelmCache *HelmCache
+	// DiscoveryCache, when set, keeps API discovery across calls under the
+	// staleness rules DiscoveryCache states, so a steady tick does not ask
+	// for it again. The agent keeps one; a one-shot scan leaves it nil.
+	DiscoveryCache *DiscoveryCache
 }
 
 // listPageSize bounds every cluster-wide list call: large clusters must
@@ -112,7 +116,10 @@ func Collect(ctx context.Context, c Clients, k kb.KB, opts Options) inventory.In
 		CollectedAt:     time.Now().UTC(),
 		Capabilities:    map[inventory.Capability]inventory.CapabilityStatus{},
 	}
+	opts.DiscoveryCache.begin()
+	c.Discovery = opts.DiscoveryCache.client(c.Discovery)
 	runSteps(ctx, &inv, steps(c, k, opts))
+	opts.DiscoveryCache.end(&inv)
 	return inv
 }
 
@@ -202,7 +209,9 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Kube == nil || c.Discovery == nil {
 				return errors.New("kubernetes client not configured")
 			}
-			return collectVersionsFrom(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv, &kubeSystem)
+			err := collectVersionsFrom(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv, &kubeSystem)
+			opts.DiscoveryCache.observeVersion(inv.ServerVersion) // before any step reads discovery
+			return err
 		}},
 		{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Kube == nil || c.Metadata == nil {
