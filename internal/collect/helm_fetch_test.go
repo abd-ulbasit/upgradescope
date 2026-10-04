@@ -157,6 +157,54 @@ func TestStartFetchingHandsOverNothingOnceDone(t *testing.T) {
 	}
 }
 
+// Once ctx is done, next fails each payload with the error fetch itself
+// gives, as the one-at-a-time loop's fetch would, not with an error of its
+// own: a fetch in flight when ctx was done as it failed (client-go's
+// "Get …: context deadline exceeded"), and a payload fetched ahead by
+// fetching it again, which fails at once (client-go answers a request
+// begun after the deadline with the context's error itself). So the first
+// unread release's reason is worded as the loop would word it in the same
+// case, whichever way the payloads were fetched.
+func TestStartFetchingFailsAsTheLoopDoesOnceDone(t *testing.T) {
+	const n = 20
+	for _, workers := range []int{1, 8} {
+		ctx, cancel := context.WithCancel(context.Background())
+		var entered atomic.Int64
+		f := startFetching(ctx, n, workers, func(ctx context.Context, i int) ([]byte, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("get release-%d: %w", i, err) // a client checks its context before it sends
+			}
+			entered.Add(1)
+			if i%2 == 1 { // a request that answers only when ctx is done
+				<-ctx.Done()
+				return nil, fmt.Errorf("get release-%d in flight: %w", i, ctx.Err())
+			}
+			return []byte{byte(i)}, nil
+		})
+		if data, err := f.next(); err != nil || data[0] != 0 {
+			t.Fatalf("workers=%d: next 0 = %v, %v", workers, data, err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for entered.Load() < int64(workers) && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond) // the workers fill the room ahead of the caller: 1 to 7, the odd ones in flight
+		}
+		if workers > 1 && entered.Load() != int64(workers) {
+			t.Fatalf("workers=%d: %d fetches started, want %d", workers, entered.Load(), workers)
+		}
+		cancel()
+		for i := 1; i < n; i++ {
+			want := fmt.Sprintf("get release-%d: %v", i, context.Canceled)
+			if workers > 1 && i < workers && i%2 == 1 {
+				want = fmt.Sprintf("get release-%d in flight: %v", i, context.Canceled)
+			}
+			if data, err := f.next(); err == nil || err.Error() != want || data != nil {
+				t.Fatalf("workers=%d: next %d after the cancel = %v, %v; want %q", workers, i, data, err, want)
+			}
+		}
+		f.stop()
+	}
+}
+
 // helmFetchFixture is a cluster of Helm releases with every outcome a
 // release can have: read, from either driver; deleted since the list; GET
 // refused; payload not decodable; manifest not fully parsed; uninstalled;

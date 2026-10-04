@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -37,13 +38,20 @@ type fetcher struct {
 // at a time.
 //
 // fetch gets ctx as it is: when ctx is done, each fetch not yet started
-// fails at once with ctx's error, as the one-at-a-time loop's did, and
-// next hands over ctx's error in place of a payload fetched ahead (which
-// the loop would only now have fetched), so the caller sees the same
-// failures in the same order, and decodes nothing after the deadline that
-// the loop would not have. stop, which the caller
-// must call (deferred) however it leaves, stops starting fetches and waits
-// for the ones in flight to return, so no goroutine outlives the step.
+// fails at once with ctx's error, as the one-at-a-time loop's did. Once
+// ctx is done, next hands over no payload: a fetch that failed because ctx
+// was done (it was in flight) is handed over as it failed, and a payload a
+// worker fetched ahead, which the loop would only now fetch, is dropped
+// for what fetch returns now, on the caller's goroutine. Either way the
+// error is fetch's own, worded as the loop's would be in the same case:
+// client-go's "Get …: context deadline exceeded" for a GET in flight at
+// the deadline, and the context's own error for one begun after it (which
+// client-go returns before it sends), ctx's error too should fetch answer
+// anyway. So the caller sees the same failures, worded as the loop words
+// them, in the same order, and decodes nothing after the deadline that the
+// loop would not have. stop, which the caller must call (deferred) however
+// it leaves, stops starting fetches and waits for the ones in flight to
+// return, so no goroutine outlives the step.
 //
 // workers ≤ 1 fetches on the caller's goroutine, one payload per next call:
 // the loop as it was before #226.
@@ -107,9 +115,17 @@ func startFetching(ctx context.Context, n, workers int, fetch func(ctx context.C
 			}
 			r := <-results[next]
 			results[next] = nil
+			i := next
 			next, held = next+1, true
 			if err := ctx.Err(); err != nil {
-				return nil, err // fetched ahead, but the loop would fetch it only now
+				if r.err != nil && errors.Is(r.err, err) {
+					return nil, r.err // in flight when ctx was done: fetch's own words for it
+				}
+				// Fetched ahead, but the loop would fetch it only now, and fail.
+				if _, ferr := fetch(ctx, i); ferr != nil {
+					return nil, ferr
+				}
+				return nil, err
 			}
 			return r.data, r.err
 		},
