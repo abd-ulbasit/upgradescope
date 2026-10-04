@@ -239,7 +239,7 @@ five times its response; ~12 MiB for the `/fleet` of the widest gaps
 above); at 2000 clusters with 200-byte names, from a v0.1.x agent
 (unmarked, so each evaluation lists the gaps it is given), with two
 `--targets`, they are 2.1, 4.6 (5.0 with 16 `?targets=`) and 9.0 MB, and
-and `/metrics` builds in ~46 MiB of heap in each of its two slots (the
+`/metrics` builds in ~46 MiB of heap in each of its two slots (the
 125 MiB peak below, less the 32 MiB held, over two). `/fleet?targets=` takes at most 16 distinct
 minors (`422` above): each is a column and a store query per cluster,
 and unbounded but for the 64 KiB URL, 8,718 of them against 500 clusters

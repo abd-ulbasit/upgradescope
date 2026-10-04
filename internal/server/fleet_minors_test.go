@@ -103,7 +103,9 @@ const maxWideGapsFleetHeap = 20 << 20 // measured 12.4 MiB for /fleet, at five t
 // the server adds its required api-usage and deprecated-calls gaps to
 // theirs, and its summaries are 24-31% larger (727 against 586 bytes per
 // cluster in /clusters, 2963 against 2258 in /fleet), so the fixture keeps
-// the dearest input a push can be (#212). 500 such clusters, each
+// the dearest input a push can be (#212); a marked push, the current
+// collector's, is smaller, and TestFleetDefaultColumnsAreMeasured measures
+// those at 500 clusters. 500 such clusters, each
 // evaluated at five targets (the default and heapTargets, the most a
 // server evaluates), are read within maxWideGapsFleetHeap by each of
 // /clusters, /fleet and /metrics; the test logs the figures
