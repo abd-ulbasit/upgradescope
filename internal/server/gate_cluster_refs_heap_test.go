@@ -42,7 +42,7 @@ func deprecatedRefsCluster(k kb.KB, name string) inventory.Inventory {
 // of up to 200 bytes and a ?path=, before capObjects cuts each listing
 // back to a hundred (the PR's first). The engine evaluates, the gate
 // suppresses and encodes from those lists, and the heap stays within
-// maxGateDecodeHeap, the bound SE-05b states (measured ~21-30 MiB). The
+// maxGateDecodeHeap, the bound SE-05b states (measured ~21-32 MiB). The
 // answer lists a hundred objects and counts the other hundred as omitted.
 // The cluster's names are always 199 bytes; the PR's are the longest
 // whose answer is within the answer limit (all 199 of "x", fewer of `"`,
