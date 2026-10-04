@@ -197,7 +197,7 @@ agent:
   # CPU. For scheduling it costs nothing while the agent idles (the request
   # is what the scheduler reserves), but a ResourceQuota on limits.cpu still
   # counts the limit, and a LimitRange whose max CPU is below 1 rejects it:
-  # in such a namespace set limits.cpu yourself (it was 200m in v0.1.x and
+  # in such a namespace set limits.cpu yourself (it was 200m through
   # v0.2.0-rc.2, so 800m more quota). The Helm step took about 28 s of those
   # 35 s, so by that arithmetic (computed, not measured) 1 CPU holds to
   # about 2,000 releases, fewer with rbac.gitops.* on; give a larger cluster

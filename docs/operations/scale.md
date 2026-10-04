@@ -291,14 +291,14 @@ cgroup's peak memory (page cache included) 98 MiB at most, against the
 
 - **At 200m the first tick did not finish its Helm step.** The tick used
   12.0 CPU-seconds in its 73 s, against the 14.7 that 0.2 CPU allows over
-  that time, and left 132 releases unread; the status said so (`helm (partial)`, the first release
-  not read, "step deadline: gave up after 59s"). The following tick
-  completed the step, in 105 s, using 13.0 CPU-seconds, more than 132
-  releases explain (about 3 for them, 3 for the rest): the tick after a
-  partial one seems to decode again some of what the partial one had
-  decoded. That is not investigated here. A steady tick took 21 s against
-  the 4 s it takes without a quota, throttled in 58 to 80% of the CFS
-  periods it ran in.
+  that time, and left 132 releases unread; the status said so (`helm
+  (partial)`, the first release not read, "step deadline: gave up after
+  59s"). The following tick completed the step, in 105 s, using 13.0
+  CPU-seconds, more than 132 releases explain (about 3 for them, 3 for the
+  rest): the tick after a partial one seems to decode again some of what the
+  partial one had decoded. That is not investigated here. A steady tick took
+  21 s against the 4 s it takes without a quota, throttled in 58 to 80% of
+  the CFS periods it ran in.
 - **At 500m the first tick finished, in 48 s, and so did its Helm step,
   inside the 59 s it is given** (the tick's own timeout is 5 minutes, and the
   Helm step is the second of its six). The step's own wall time was not
