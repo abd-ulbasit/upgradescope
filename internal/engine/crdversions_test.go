@@ -239,3 +239,22 @@ func TestEvaluateCRDsGap(t *testing.T) {
 		t.Errorf("Verdict = %s, want blocked", r.Verdict)
 	}
 }
+
+// A custom resource row the gate listed only manifests of, while it
+// counts the cluster's objects too, is worded as both
+// (TestEvalAPIUsageManifestsInAClusterRow).
+func TestCRDUsageManifestsInAClusterRow(t *testing.T) {
+	u := inventory.APIUsage{
+		Group: "cert-manager.io", Version: "v1beta1", Kind: "Certificate", Count: 3, Namespaces: map[string]int{"pay-prod": 3},
+		Objects: []inventory.ObjectRef{{Namespace: "pay-prod", Name: "pr", Line: 1}}, ObjectsOmitted: 2,
+	}
+	var f Finding
+	if got, want := crdUsage(&f, u, clusterInv()), "3 object(s) use this version: pay-prod (3)."; got != want {
+		t.Errorf("crdUsage = %q, want %q", got, want)
+	}
+	files := clusterInv()
+	files.Source = inventory.SourceFiles
+	if got, want := crdUsage(&f, u, files), "3 manifest object(s) use this version: pay-prod (3)."; got != want {
+		t.Errorf("files-mode crdUsage = %q, want %q", got, want)
+	}
+}

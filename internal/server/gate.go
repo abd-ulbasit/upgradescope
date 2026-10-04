@@ -589,7 +589,9 @@ func usageKeys(rep engine.Report) map[string]bool {
 // baseline and the proposed state: the fold is identical on both sides,
 // and caller evidence never resurfaces as standalone findings blamed on
 // the PR. Manifest refs keep their place under the MaxObjectRefs cap
-// (cluster refs are dropped first), so SARIF can still place them. What
+// (cluster refs are dropped first), so SARIF can still place them; a row
+// that then lists only manifest refs while it counts the cluster's objects
+// too is worded as both, not as manifests alone (engine.listedObjects). What
 // the manifests delete or move to another API stays invisible: a stream
 // says what it applies, not what it removes. Identity is the exact
 // namespace and name, so a rendered manifest without a namespace (applied
