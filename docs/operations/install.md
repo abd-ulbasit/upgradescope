@@ -126,6 +126,23 @@ What the chart installs, and the agent-only, combined and fleet-hub setups:
 [chart README](https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/chart/README.md)
 and [Helm values](../reference/helm-values.md).
 
+### Sizing the agent
+
+The agent's defaults are 50m CPU and 64Mi requested, with limits of 1 CPU and
+256Mi (`agent.resources`). The CPU limit is a quota, not a reservation, and
+the first tick after every start reads each Helm release once, which takes
+about 23 CPU-seconds per 1,000 releases: measured against 2,000 fake nodes
+and 1,000 releases, that tick took 35 s at 1 CPU, 48 s at 500m (its Helm step
+has about a minute) and did not finish its Helm step at 200m, the chart's
+default through v0.2.0-rc.2 (it left 132 releases unread, and the report's
+`notAssessed` said so). If you set a lower limit on a cluster with many
+releases, expect the first ticks to report `helm (partial)` until the cache
+fills; above about 2,500 releases (arithmetic, not measured) give the agent
+more than 1 CPU or a longer `agent.interval`. With `rbac.gitops.*` on, each
+tick also lists Argo CD Applications and Flux HelmReleases and reads their
+OCIRepositories: 540 requests and 3 more CPU-seconds for 1,000 of each. The
+measurements, and their limits, are in [Scale and cost](scale.md#cpu-and-the-chart-limit).
+
 ## Sizes
 
 What a release ships, from a GoReleaser v2.17.1 snapshot (`make

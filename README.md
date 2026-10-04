@@ -192,24 +192,27 @@ More, with sizes per platform: [Install](https://abd-ulbasit.github.io/upgradesc
 ## Scale and cost
 
 Measured on 4 October 2026 (04:30 to 05:00 in UTC+5, which is 3 October in
-UTC) with the harness in `hack/bench/` (agent: main
-`a3e72ea` plus this work; server: main `f195ba5` plus this work). The
+UTC) with the harness in `hack/bench/` (server: main `f195ba5` plus this
+work; the agent was re-measured later that day, 03:02 to 05:42 UTC, on main
+`735751d`, which the agent rows below are from). The
 cluster was a kind control plane (Kubernetes 1.37.0) on a ThinkPad with an
 Intel Core i3-7100U (2 cores, 4 threads) and 7.3 GiB of RAM, filled by
 [KWOK](https://kwok.sigs.k8s.io/) v0.8.0 with 2,000 fake nodes, 10,000 pods
 (plus 4,000 DaemonSet pods), 6,000 ConfigMaps, 4,000 Deployments and 1,000
 real `helm.sh/release.v1` Secrets; the agent ran on the same host. A MacBook
 Pro (`MacBookPro18,3`, M1 Pro) drove the seeding. **The nodes are fake**: no
-kubelet load, one kind apiserver, and generated objects; the Argo CD and
-Flux request cost is not measured.
+kubelet load, one kind apiserver, and generated objects, including the
+Argo CD and Flux ones.
 [Scale and cost](https://abd-ulbasit.github.io/upgradescope/operations/scale/)
 has the tables, the simulation's limits and the open hotspots.
 
 | What | Measured | How |
 |---|---|---|
-| A steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm releases | 61 API requests, 68 MiB read (4.3 MiB on the wire), 5.6 s, 3.6 CPU-seconds; peak live heap 27 MiB, peak RSS 54 MiB | median of the 4 ticks after the first (the mean of the middle two; the heap is their maximum), `make bench-agent` |
-| The first tick after the agent starts (reads each Helm release once) | 1,061 requests, 90 MiB, 36 s, 24 CPU-seconds | the first of 5 ticks, same run |
-| The same steady tick before #71 (a GET per release every tick) | 1,061 requests, 90 MiB, 33 s, 23.5 CPU-seconds | median of 4 ticks, same harness with the Helm step given no cache |
+| A steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm releases | 53 API requests, 50 MiB read (3.4 MiB on the wire), 4.1 s, 3.0 CPU-seconds; peak live heap 28 MiB, peak RSS 56 MiB | median of the 4 ticks after the first (the mean of the middle two; the heap is their maximum), `make bench-agent`, main `735751d` |
+| The first tick after the agent starts (reads each Helm release once) | 1,053 requests, 73 MiB, 36.7 s, 23.5 CPU-seconds | the first of 5 ticks, same run |
+| The same steady tick with 1,000 Argo CD Applications and 1,000 Flux HelmReleases (500 chartRefs) | 596 API requests (543 more), 63 MiB, 12.8 s, 6.2 CPU-seconds | median of 4 ticks, `BENCH_GITOPS=1`, main `735751d`; a loaded host, so the wall time is a range (11.0 to 18.1 s) |
+| The first tick as a pod under the chart's limit, 1,000 Helm releases | 200m (the old default): 73 s, gave up at its Helm step with 132 releases unread; 500m: 48 s; 1 CPU (the default now): 35 s | one first tick each, `hack/bench/pod-sample.sh`, main `735751d`; a steady tick took 21 s at 200m and 7 s at 1 CPU |
+| The same steady tick before #71 (a GET per release every tick) | 1,061 requests, 90 MiB, 33 s, 23.5 CPU-seconds | median of 4 ticks, the first session's run (main `a3e72ea`), same harness with the Helm step given no cache |
 | `serve` taking 200 clusters x 3 targets, all pushing at once | SQLite 56 new snapshots a second (p99 3.5 s); Postgres 17: 40 a second (p99 4.8 s); no failed push or retry | 200 pushers, `make bench-ingest`; 25 CPU-ms a snapshot on either |
 | Storage per changed snapshot (3 evaluations) | at most about 100 KiB on SQLite (WAL and page overhead included), 19 KiB on Postgres | database growth over 200 new snapshots averaging 28 KiB |
 
