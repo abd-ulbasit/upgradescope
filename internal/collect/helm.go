@@ -214,7 +214,7 @@ func collectHelmWith(ctx context.Context, kube kubernetes.Interface, meta metada
 }
 
 // collectHelmFetching is collectHelmWith fetching the releases the cache
-// does not hold on up to workers goroutines (see fetchInOrder); 1 fetches
+// does not hold on up to workers goroutines (see startFetching); 1 fetches
 // them one at a time, as before #226. Whatever workers is, the releases are
 // decoded one at a time, in the order of their keys, on the caller's
 // goroutine, so the inventory, the reasons and the cache come out the same.
