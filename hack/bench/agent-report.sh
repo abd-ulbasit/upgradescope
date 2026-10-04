@@ -2,7 +2,8 @@
 # agent-report.sh <results.jsonl> — the tables of hack/bench/agent.sh from its
 # per-tick results: one line per fill level (the median of its ticks after the
 # first, the mean of the two middle ones when their count is even, with the first tick, the cold one, beside it), then the requests by
-# verb and resource at the last level. Needs jq. Knob: BENCH_REPORT_FORMAT=json
+# verb and resource at the last level, with their response bytes and time, of
+# a steady tick and of the first. Needs jq. Knob: BENCH_REPORT_FORMAT=json
 # prints the summary as JSON instead.
 set -euo pipefail
 
@@ -55,10 +56,25 @@ jq -rs "$defs"'
   levels | map(summary)[] |
   "| \(.fill) | \(.nodes) | \(.helmReleases) | \(.requests) | \(.listPods) | \(.getSecrets) | \(.bodyMiB) | \(.wireMiB) | \(.wallS) | \(.cpuS) | \(.peakHeapMiB) | \(.maxRssMiB) | \(.firstTick.requests), \(.firstTick.bodyMiB), \(.firstTick.wallS), \(.firstTick.cpuS) |"' "$1"
 
+# breakdown <jq selecting one tick>: its requests by verb and resource, with
+# the response bytes client-go read for them and the time they took, summed
+# over the requests (requests in flight at once each count their own; results
+# recorded before #228 have neither, shown as -).
+breakdown() {
+  echo "| Verb | Resource | Requests | Response MiB | Time s (summed) |"
+  echo "|---|---|---|---|---|"
+  jq -rs "$defs"'
+    def mibs: if . == null then "-" else (. / 1048576 * 100 | round / 100 | tostring) end;
+    def secs: if . == null then "-" else (. / 1000 * 100 | round / 100 | tostring) end;
+    '"$1"' | .byVerbResource[] | "| \(.verb) | \(.resource) | \(.count) | \(.bytes | mibs) | \(.ms | secs) |"' "$2"
+}
+
 echo
 echo "Requests by verb and resource at the last fill level (a steady tick):"
 echo
-echo "| Verb | Resource | Requests |"
-echo "|---|---|---|"
-jq -rs "$defs"'
-  levels | last | steady | .[0] | .byVerbResource[] | "| \(.verb) | \(.resource) | \(.count) |"' "$1"
+breakdown 'levels | last | steady | .[0]' "$1"
+
+echo
+echo "Requests by verb and resource at the last fill level (the first tick, the cold one):"
+echo
+breakdown 'levels | last | .[0]' "$1"

@@ -93,7 +93,7 @@ expect "agent.sh: a vanilla cluster, even a seeded one (fake nodes, bench namesp
 tick() { # tick <label> <n> <nodes> <requests> <wallMs> <getSecrets>
   jq -nc --arg label "$1" --argjson tick "$2" --argjson nodes "$3" --argjson req "$4" --argjson wall "$5" --argjson gets "$6" '{
     label: $label, tick: $tick, wallMs: $wall, collectMs: ($wall - 100), cpuMs: ($wall / 2), requests: $req,
-    byVerbResource: [{verb: "GET", resource: "secrets", count: $gets}, {verb: "LIST", resource: "pods", count: 5}],
+    byVerbResource: [{verb: "GET", resource: "secrets", count: $gets, bytes: ($gets * 1048576), ms: ($wall / 4)}, {verb: "LIST", resource: "pods", count: 5}],
     bodyBytes: 10485760, wireDownBytes: 2097152, wireUpBytes: 1048576, connections: 1,
     peakHeapBytes: 52428800, peakRuntimeBytes: 83886080, maxRssBytes: (104857600 + $tick * 1048576),
     nodes: $nodes, namespaces: 3, helmReleases: $gets, addOns: 0, apiUsage: 0, targets: 1, capabilities: {}}'
@@ -129,7 +129,16 @@ if grep -qF "| 0 | 1 | 0 | 17 | 5 | 0 | 10 | 3 | 1 | 0.5 |" "$work/report" &&
 else
   fail "agent-report.sh table" "$work/report"
 fi
-grep -qF "| GET | secrets | 1500 |" "$work/report" && ok "agent-report.sh: requests by verb and resource at the last level" || fail "agent-report.sh breakdown" "$work/report"
+# Per resource: requests, response MiB and summed seconds of a steady tick (the
+# first after the cold one: 4000 ms / 4) and of the cold tick (50000 ms / 4);
+# results without bytes or time show "-".
+if grep -qF "| GET | secrets | 1500 | 1500 | 1 |" "$work/report" &&
+  grep -qF "| GET | secrets | 1500 | 1500 | 12.5 |" "$work/report" &&
+  grep -qF "| LIST | pods | 5 | - | - |" "$work/report"; then
+  ok "agent-report.sh: requests, bytes and time by verb and resource at the last level, steady and cold"
+else
+  fail "agent-report.sh breakdown" "$work/report"
+fi
 BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/agent.jsonl" >"$work/report.json" 2>&1 || true
 [ "$(jq 'length' "$work/report.json" 2>/dev/null)" = 3 ] && ok "agent-report.sh: BENCH_REPORT_FORMAT=json" || fail "agent-report.sh json" "$work/report.json"
 expect "agent-report.sh: no file is a usage error" 2 "usage" -- hack/bench/agent-report.sh
