@@ -56,7 +56,10 @@ var yamlContentTypes = map[string]bool{
 // resource they write at a version the CRDs do not serve are always
 // introduced, even when the cluster already has the same (see
 // introducedKeys and gateResult). Without it, the manifests are evaluated
-// standalone, like scan --files (API usage, add-ons and CRDs).
+// standalone, like scan --files (API usage, add-ons and CRDs). A
+// team-scoped read's cluster is the scope's share of it
+// (readScope.clusterShare), for every part of the answer, verdict and
+// status included (gateResponse.scope).
 //
 // ?fail-on=blocker|warning|never makes the gate fail like `scan --fail-on`,
 // whose default it shares (blocker): an introduced finding at or above the
@@ -221,29 +224,26 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	target := g.target
 	sc := scopeOf(r)
 	var ev gateEval
-	var share *gateEval // a team-scoped ?cluster= gate's: its findings come from the scope's share
-	var cut gateCut     // with ?cluster=: what a team-scoped caller may see of it
+	var cut *gateCut // a team-scoped ?cluster= gate's: what its caller may see of the share
 	if ref := r.URL.Query().Get("cluster"); ref != "" {
 		clusterInv, ok := s.gateClusterContext(w, r, ref)
 		if !ok {
 			return
 		}
 		clusterInv.Namespaces = s.cfg.TeamMap.Apply(clusterInv.Namespaces)
-		cut.namespaces = namespaceTeamsOf(clusterInv.Namespaces)
+		// A team-scoped gate evaluates the manifests within the scope's
+		// share of the cluster only, never the whole cluster: the engine
+		// counts and words every finding, and the answer's verdict,
+		// status, cluster verdict and score are decided, from the scope's
+		// evidence and the PR's alone (readScope.clusterShare). Not even
+		// a 413 from the whole cluster's evaluation can tell the caller
+		// of another team's. The fleet-wide share is the cluster.
+		clusterInv = sc.clusterShare(clusterInv)
 		if ev, ok = s.gateWithin(w, clusterInv, manifests, target, g.rules, ref); !ok {
 			return
 		}
-		cut.mine = ev.mine
 		if !sc.fleet() {
-			// The cluster as the scope sees it, evaluated with the
-			// manifests as the whole cluster is: the engine counts and
-			// words every finding from the scope's evidence and the PR's
-			// alone (readScope.clusterShare).
-			sev, ok := s.gateWithin(w, sc.clusterShare(clusterInv), manifests, target, g.rules, ref)
-			if !ok {
-				return
-			}
-			share = &sev
+			cut = &gateCut{namespaces: namespaceTeamsOf(clusterInv.Namespaces), mine: ev.mine}
 		}
 	} else {
 		inv := manifests
@@ -258,10 +258,8 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 
 	rep, warnings := s.suppressGate(ev.full, g.rules)
 	resp := gateResult(rep, ev.baseline, ev.introduced)
-	if share != nil { // without ?cluster= the answer is all the caller's own
-		srep, swarnings := s.suppressGate(share.full, g.rules)
-		resp.scope(sc, gateResult(srep, share.baseline, share.introduced), cut)
-		warnings = swarnings // the whole cluster's name its objects, of any team
+	if cut != nil { // without ?cluster= the answer is all the caller's own
+		resp.scope(sc, *cut)
 	}
 	resp.reportWithTeams = s.versioned(resp.reportWithTeams)
 	resp.Warnings = warnings
@@ -319,7 +317,9 @@ type gateFinding struct {
 // shadow the report's, and ClusterVerdict keeps the whole proposed state's.
 // Score stays the whole proposed state's, cluster findings included: gate
 // on verdict (or fail-on), not on score. Suppressed findings (the report's
-// suppressed, counted in SuppressedCount) count toward none of them.
+// suppressed, counted in SuppressedCount) count toward none of them. For
+// a team-scoped read the proposed state is the scope's share of the
+// cluster with the manifests (gateResponse.scope).
 type gateResponse struct {
 	reportWithTeams
 	Findings        []gateFinding  `json:"findings"`
@@ -384,8 +384,8 @@ func gateResult(rep engine.Report, baseline *engine.Report, introduced gateSide)
 	return resp
 }
 
-// gateCut is what scope needs of a ?cluster= gate: the cluster's
-// namespace teams and what the manifests themselves hold.
+// gateCut is what scope needs of a team-scoped ?cluster= gate: the
+// share's namespace teams and what the manifests themselves hold.
 type gateCut struct {
 	namespaces map[string]string
 	mine       manifestContent
@@ -435,25 +435,29 @@ func manifestsOwn(invs ...inventory.Inventory) manifestContent {
 	return m
 }
 
-// scope makes g, the answer to a ?cluster= gate over the whole cluster,
-// the answer sc reads, given share: the same gate over the scope's share
-// of the cluster (readScope.clusterShare). What the manifests hold is the
-// caller's own: their objects and the namespaces they name. Of the
-// cluster, sc reads only its share, so every finding and suppressed
-// finding is share's: a finding the cluster's objects join the
-// manifests' at is counted, titled and detailed from the scope's evidence
-// and the PR's alone, never merged with another team's, one no team owns
-// or the cluster's apiserver callers. Of share's findings, one of the
-// cluster's own is kept when sc owns it. Each is still cut (keep.cut) to
-// sc's teams, the namespaces the cluster attributes to them and the
-// manifests' namespaces and objects, which leaves share's as they are:
-// the cut is a second line, for evidence a share would let through.
-// From the whole cluster's answer stays what judges or describes it as a
-// whole: the gate's verdict (so a CI status never depends on who asks),
-// the cluster verdict and score, the team scores of sc's teams, the
-// capability gaps with the helm collector's own words withheld
-// (readScope.withholds), and the unrecognized images the manifests carry.
-func (g *gateResponse) scope(sc readScope, share gateResponse, c gateCut) {
+// scope makes g, the answer to a ?cluster= gate over the scope's share of
+// the cluster (readScope.clusterShare), the answer sc reads. The share
+// holds only the scope's evidence and what describes the cluster as a
+// whole (its version, nodes, control plane, CRD definitions and
+// capabilities), and the manifests are the caller's own, so all of g is
+// decided from those alone: every finding is counted, titled and
+// detailed from the scope's evidence and the PR's, never merged with
+// another team's, one no team owns or the cluster's apiserver callers,
+// and the gate's verdict (with its status and ?fail-on), the cluster
+// verdict and the score judge the share with the PR, never the whole
+// cluster. A CI status therefore depends on who asks: a PR that breaks
+// only another team's workloads (say a shared CRD that stops serving a
+// version only they write) passes a team-scoped gate, and fails the
+// fleet-wide one. Of g's findings, one of the cluster's own is kept when
+// sc owns it; the verdict, which judges only what the manifests
+// introduce, is unchanged by that. Each is still cut (keep.cut) to sc's
+// teams, the namespaces the cluster attributes to them and the
+// manifests' namespaces and objects, which leaves the share's as they
+// are: the cut is a second line, for evidence a share would let through.
+// The team scores are sc's teams', the capability gaps have the helm
+// collector's own words withheld (readScope.withholds), and the
+// unrecognized images are the ones the manifests carry.
+func (g *gateResponse) scope(sc readScope, c gateCut) {
 	if sc.fleet() {
 		return
 	}
@@ -464,12 +468,13 @@ func (g *gateResponse) scope(sc readScope, share gateResponse, c gateCut) {
 		object:    func(o inventory.ObjectRef) bool { return cluster.object(o) || c.mine.objects[o] },
 	}
 	introduced := map[string]bool{}
-	for _, f := range share.introducedSuppressed {
+	for _, f := range g.introducedSuppressed {
 		introduced[findingKey(f.Finding)] = true
 	}
 	g.Teams = sc.renderedTeams(g.Report)
+	findings := g.Findings
 	g.Findings, g.Report.Findings = []gateFinding{}, []engine.Finding{}
-	for _, f := range share.Findings {
+	for _, f := range findings {
 		if f.Source == sourceCluster && !sc.owns(f.Teams) {
 			continue
 		}
@@ -477,9 +482,9 @@ func (g *gateResponse) scope(sc readScope, share gateResponse, c gateCut) {
 		g.Findings = append(g.Findings, f)
 		g.Report.Findings = append(g.Report.Findings, f.Finding)
 	}
-	g.Report.Suppressed = sc.suppressed(share.Report.Suppressed, k, func(f engine.Finding) bool { return introduced[findingKey(f)] })
+	g.Report.Suppressed = sc.suppressed(g.Report.Suppressed, k, func(f engine.Finding) bool { return introduced[findingKey(f)] })
 	g.SuppressedCount = len(g.Report.Suppressed)
-	g.introducedSuppressed = sc.suppressed(share.introducedSuppressed, k, func(engine.Finding) bool { return true })
+	g.introducedSuppressed = sc.suppressed(g.introducedSuppressed, k, func(engine.Finding) bool { return true })
 	g.Report.UnrecognizedImages = slices.DeleteFunc(slices.Clone(g.Report.UnrecognizedImages), func(img string) bool { return !c.mine.images[img] })
 	g.Report.UnrecognizedImagesOmitted = 0
 	g.Report.NotAssessed = sc.scopeGaps(g.Report.NotAssessed)

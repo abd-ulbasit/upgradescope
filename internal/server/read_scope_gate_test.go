@@ -25,25 +25,29 @@ func pushScopeCluster(t *testing.T, ts *httptest.Server, name string, inv invent
 	}
 }
 
-// leakyInventory is a cluster with payments' Ingress in pay-prod and, in
-// two variants that differ only in what is not payments', other teams'
-// and no team's evidence at every API a PR can join: Ingresses in web's
-// namespaces and in ops (no team), CronJobs in web-prod only, cluster-
-// scoped PodSecurityPolicies, and (variant a only) an apiserver caller
-// row the engine folds into the Ingress finding. Each variant has the
-// same findings, so the same score and verdicts: a payments-scoped gate
-// answer that differs between them tells payments something of web's.
+// leakyInventory is a cluster with payments' Ingress in pay-prod and a
+// Widget CRD that serves v1alpha1 and v1. Its variants differ only in
+// what is not payments': other teams' and no team's evidence at every API
+// a PR can join, in a and b: Ingresses in web's namespaces and in ops (no
+// team), CronJobs in web-prod only, cluster-scoped PodSecurityPolicies,
+// and (a only) an apiserver caller row the engine folds into the Ingress
+// finding; a and b have the same findings, so the same score and
+// verdicts. c is b with web's Widget at v1alpha1, which a PR that stops
+// serving it makes a blocker of the whole cluster's gate; d has no other
+// team, no unowned namespace and nothing cluster scoped, so the whole
+// cluster scores better there. A payments-scoped gate answer that
+// differs between any two tells payments something of another team's.
 func leakyInventory(variant string) inventory.Inventory {
 	inv := testInventory()
 	webTeam, webOther := "web", "web-alpha"
-	if variant == "b" {
+	if variant != "a" {
 		webTeam, webOther = "webteam", "web-beta"
 	}
 	inv.Namespaces = []inventory.NamespaceInfo{
 		{Name: "pay-prod", Team: "payments"}, {Name: "web-prod", Team: webTeam}, {Name: webOther, Team: webTeam}, {Name: "ops"},
 	}
 	n := 1
-	if variant == "b" {
+	if variant != "a" {
 		n = 3
 	}
 	objs := func(ns, prefix string, count int) []inventory.ObjectRef {
@@ -68,6 +72,20 @@ func leakyInventory(variant string) inventory.Inventory {
 		Namespaces: map[string]int{"": 2 * n}, Objects: objs("", "psp-leak", 2*n),
 	}
 	inv.APIUsage = []inventory.APIUsage{ingress, cron, psp}
+	crd := widgetCRD()
+	crd.Versions[0].Served = true
+	if variant == "c" {
+		crd.Usage = []inventory.APIUsage{{
+			Group: "example.com", Version: "v1alpha1", Kind: "Widget", Count: 1,
+			Namespaces: map[string]int{"web-prod": 1}, Objects: objs("web-prod", "widget-leak", 1),
+		}}
+	}
+	inv.CRDs = []inventory.CRD{crd}
+	if variant == "d" {
+		inv.Namespaces = inv.Namespaces[:1]
+		ingress.Count, ingress.Namespaces, ingress.Objects = 1, map[string]int{"pay-prod": 1}, ingress.Objects[:1]
+		inv.APIUsage = []inventory.APIUsage{ingress}
+	}
 	if variant == "a" {
 		inv.DeprecatedCalls = []inventory.DeprecatedCall{{Group: "extensions", Version: "v1beta1", Resource: "ingresses", RemovedRelease: "1.22"}}
 	}
@@ -107,7 +125,7 @@ metadata: {name: pr-cron, namespace: pay-prod}
 // none of it may reach a payments-scoped answer. (web-prod and ops are
 // not here: the PR names them itself.)
 var leakySecrets = []string{
-	"web-leak", "ops-leak", "cron-leak", "psp-leak", "web-alpha", "web-beta", `"web"`, `"webteam"`,
+	"web-leak", "ops-leak", "cron-leak", "psp-leak", "widget-leak", "web-alpha", "web-beta", `"web"`, `"webteam"`,
 	"also records requests to", // the folded apiserver caller row
 }
 
@@ -115,48 +133,74 @@ var leakySecrets = []string{
 // the cluster and the PR alone (#72). The cluster's evidence in another
 // team's namespace, in one no team owns, cluster-scoped or from its
 // apiserver metrics never reaches the answer, not even through a finding
-// the PR's own objects are in: two clusters that differ only there give
-// payments the same answer, byte for byte, in every format, while the
-// fleet-wide token sees them differ.
+// the PR's own objects are in, nor through its status, verdicts or
+// score: clusters that differ only there give payments the same answer,
+// byte for byte, in every format, even where the whole cluster's
+// findings, score and verdict differ; the fleet-wide token sees them
+// differ.
 func TestScopedGateAnswersFromTheScopesShareOnly(t *testing.T) {
 	_, st, ts, _ := scopeServer(t)
 	mintReadToken(t, st, "pay-tok", "payments")
-	pushScopeCluster(t, ts, "leaky-a", leakyInventory("a"))
-	pushScopeCluster(t, ts, "leaky-b", leakyInventory("b"))
-	norm := func(raw []byte) []byte {
-		raw = bytes.ReplaceAll(raw, []byte("uid-leaky-a"), []byte("uid-leaky-x"))
-		return bytes.ReplaceAll(raw, []byte("uid-leaky-b"), []byte("uid-leaky-x"))
+	variants := []string{"a", "b", "c", "d"}
+	for _, v := range variants {
+		pushScopeCluster(t, ts, "leaky-"+v, leakyInventory(v))
 	}
-	for _, format := range []string{"", "&format=sarif", "&format=junit", "&format=gitlab-codequality"} {
-		q := "?target=1.35&fail-on=never" + format + "&cluster="
-		respA, a := postGate(t, ts, q+"leaky-a", "pay-tok", leakyManifest, "application/x-yaml")
-		respB, b := postGate(t, ts, q+"leaky-b", "pay-tok", leakyManifest, "application/x-yaml")
-		if respA.StatusCode != http.StatusOK || respB.StatusCode != http.StatusOK {
-			t.Fatalf("gate %s = %d %s / %d %s", q, respA.StatusCode, a, respB.StatusCode, b)
-		}
-		if !bytes.Equal(norm(a), norm(b)) {
-			t.Errorf("payments-scoped gate %s differs between clusters that differ only in what is not payments':\n%s\n%s", q, a, b)
-		}
-		for _, raw := range [][]byte{a, b} {
-			for _, s := range leakySecrets {
-				if bytes.Contains(raw, []byte(s)) {
-					t.Errorf("payments-scoped gate %s names %s:\n%s", q, s, raw)
+	// The leaky PR joins every API the cluster has evidence at; the CRD
+	// PR stops serving v1alpha1 of the Widgets only web has (c), which
+	// fails the whole cluster's gate there and nowhere else.
+	unservedCRD := widgetsCRD("served: false")
+	for _, manifest := range []string{leakyManifest, unservedCRD} {
+		for _, format := range gateFormats {
+			for _, failOn := range []string{"never", "warning"} {
+				q := "?target=1.35&fail-on=" + failOn + format + "&cluster="
+				respA, a := postGate(t, ts, q+"leaky-a", "pay-tok", manifest, "application/x-yaml")
+				_, fa := postGate(t, ts, q+"leaky-a", "fleet-tok", manifest, "application/x-yaml")
+				for _, v := range variants {
+					resp, raw := postGate(t, ts, q+"leaky-"+v, "pay-tok", manifest, "application/x-yaml")
+					if resp.StatusCode != respA.StatusCode || resp.Header.Get("X-Upgradescope-Verdict") != respA.Header.Get("X-Upgradescope-Verdict") ||
+						!bytes.Equal(normUID(a), normUID(raw)) {
+						t.Errorf("payments-scoped gate %s differs between clusters a (%d) and %s (%d), which differ only in what is not payments':\n%s\n%s",
+							q, respA.StatusCode, v, resp.StatusCode, a, raw)
+					}
+					for _, s := range leakySecrets {
+						if bytes.Contains(raw, []byte(s)) {
+							t.Errorf("payments-scoped gate %s names %s:\n%s", q+"leaky-"+v, s, raw)
+						}
+					}
+					// The CI formats hold only what the PR introduces: the
+					// JSON answer shows the fixture's differences.
+					if v == "a" || format != "" || manifest == unservedCRD && v != "c" && v != "d" {
+						continue
+					}
+					if _, fv := postGate(t, ts, q+"leaky-"+v, "fleet-tok", manifest, "application/x-yaml"); bytes.Equal(normUID(fa), normUID(fv)) {
+						t.Errorf("fleet-wide gate %s is the same for clusters a and %s: the fixture does not test the scope", q, v)
+					}
+				}
+				if manifest != leakyManifest || format != "" {
+					continue
+				}
+				for _, own := range []string{"pr-pay", "pr-web", "pr-ops", "pr-new", "pr-psp", "pr-cron"} {
+					if !bytes.Contains(a, []byte(own)) {
+						t.Errorf("payments-scoped gate %s lost the PR's own %s:\n%s", q, own, a)
+					}
+				}
+				if !bytes.Contains(a, []byte("pay-ingress")) {
+					t.Errorf("payments-scoped gate %s lost payments' own cluster object:\n%s", q, a)
 				}
 			}
 		}
-		for _, own := range []string{"pr-pay", "pr-web", "pr-ops", "pr-new", "pr-psp", "pr-cron"} {
-			if format == "" && !bytes.Contains(a, []byte(own)) {
-				t.Errorf("payments-scoped gate %s lost the PR's own %s:\n%s", q, own, a)
-			}
-		}
-		if format == "" && !bytes.Contains(a, []byte("pay-ingress")) {
-			t.Errorf("payments-scoped gate %s lost payments' own cluster object:\n%s", q, a)
-		}
-		_, fa := postGate(t, ts, q+"leaky-a", "fleet-tok", leakyManifest, "application/x-yaml")
-		_, fb := postGate(t, ts, q+"leaky-b", "fleet-tok", leakyManifest, "application/x-yaml")
-		if bytes.Equal(norm(fa), norm(fb)) {
-			t.Errorf("fleet-wide gate %s is the same for both clusters: the fixture does not test the scope", q)
-		}
+	}
+	// What the whole cluster's answers to the CRD PR differ in: findings,
+	// score, verdict and status, none of which the payments-scoped answers
+	// above do.
+	whole := map[string]gateSummary{}
+	for _, v := range variants {
+		resp, raw := postGate(t, ts, "?target=1.35&cluster=leaky-"+v, "fleet-tok", unservedCRD, "application/x-yaml")
+		whole[v] = summarize(t, resp, raw)
+	}
+	if whole["c"].Verdict == whole["a"].Verdict || whole["c"].Status == whole["a"].Status ||
+		len(whole["c"].Findings) == len(whole["b"].Findings) || whole["d"].Score == whole["a"].Score {
+		t.Errorf("the whole cluster's verdicts, statuses, findings and scores do not differ between variants: %+v", whole)
 	}
 
 	// What payments reads of each finding: counts and evidence of its own
