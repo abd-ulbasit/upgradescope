@@ -25,8 +25,10 @@ const (
 type config struct {
 	Nodes, Namespaces, Pods, ConfigMaps, Deployments int
 	HelmReleases, HelmRevisions                      int
-	KubeletVersion                                   string
-	Seed                                             uint64
+	// The opt-in GitOps fill (gitops.go, #233): zero seeds none.
+	ArgoApps, FluxHelmReleases int
+	KubeletVersion             string
+	Seed                       uint64
 }
 
 func nsName(i int) string   { return fmt.Sprintf("bench-ns-%03d", i) }
