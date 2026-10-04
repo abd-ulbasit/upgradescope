@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,15 @@ func TestMCPInventoryFileIsJudgedAsIngestJudgesIt(t *testing.T) {
 		{"a serverVersion that is not 1.x", func(inv map[string]any) {
 			inv["serverVersion"] = "v2.0.0"
 		}, "inventory.serverVersion is not a Kubernetes 1.x version"},
+		// schemaVersion is already known to be right by the time Admit
+		// speaks, so the refusal must not say it is wrong; the integer is
+		// safe to quote.
+		{"a later collectorSchema", func(inv map[string]any) {
+			inv["collectorSchema"] = inventory.CurrentCollectorSchema + 1
+		}, fmt.Sprintf("inventory.collectorSchema %d is not one this build knows", inventory.CurrentCollectorSchema+1)},
+		{"a negative collectorSchema", func(inv map[string]any) {
+			inv["collectorSchema"] = -3
+		}, "inventory.collectorSchema -3 is not one this build knows"},
 	}
 	cs := startMCP(t)
 	for _, tc := range refused {
@@ -82,6 +92,9 @@ func TestMCPInventoryFileIsJudgedAsIngestJudgesIt(t *testing.T) {
 				msg := mcpText(res)
 				if !res.IsError || !strings.Contains(msg, tc.want) || !strings.Contains(msg, path) {
 					t.Errorf("%s: isError=%v %.300q, want a tool error naming the file and %q", tool, res.IsError, msg, tc.want)
+				}
+				if strings.Contains(msg, "schemaVersion") {
+					t.Errorf("%s blames schemaVersion, which was right: %.300q", tool, msg)
 				}
 				if strings.Contains(msg, marker) || strings.Contains(msg, "xxxx") {
 					t.Errorf("%s quotes the file: %.300q", tool, msg)
