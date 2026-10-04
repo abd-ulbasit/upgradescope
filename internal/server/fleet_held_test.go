@@ -17,7 +17,7 @@ import (
 
 // The fleet TestUnreadFleetResponsesAreBounded reads: unreadFleetSize
 // clusters with names of unreadFleetNameLen bytes, each evaluated for its
-// next minor and two serve --targets minors. Its responses (1.3-4 MB) are
+// next minor and two serve --targets minors. Its responses (2.1-9.0 MB) are
 // several times what a kernel buffers for a client that does not read (a
 // few KiB on Linux with the test's small buffers, ~520 KiB on macOS
 // loopback whatever they are set to), so they wait in the server's heap.
@@ -31,13 +31,23 @@ const (
 // slots (maxConcurrentFleetReads at once) may add to the heap for that
 // fleet: the summaries they read, the responses and their encodings (for
 // /metrics, the gathered metric families too).
+//
+// The test's peaks (59-125 MiB on a GitHub-hosted ubuntu-latest runner, #212)
+// are the whole heap, held responses included, against the 168 MiB this and
+// the 40 MiB held budget allow together; the slot's own share of the
+// largest is at most 125 less what was held (32 MiB, so about 93 MiB for
+// two builds), not 125 against 128.
 const maxFleetSlotHeap = 128 << 20
 
 // pushedFleet is a SQLite server holding one push from each of n
-// clusters, named with nameLen bytes, at v1.34 with no other signal: a
-// current collector's inventory reporting every capability, so each
-// evaluation is decided as a real agent's would be, not unknown (#194);
-// it evaluates 1.35 and the serve --targets 1.36 and 1.37.
+// clusters, named with nameLen bytes, at v1.34 with no other signal, from
+// a v0.1.x agent: an unmarked inventory (no collectorSchema) reporting
+// every capability. Each of its evaluations lists the required api-usage
+// and deprecated-calls gaps a legacy agent is given, the larger summaries
+// the server accepts from a push of this size: the fleet's answers are
+// several times those of a current collector's, and the held-response
+// peak (SE-05c) is measured on them (#212). It evaluates 1.35 and the
+// serve --targets 1.36 and 1.37.
 func pushedFleet(t *testing.T, n, nameLen int) *Server {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "upgradescope.db"))
@@ -55,7 +65,7 @@ func pushedFleet(t *testing.T, n, nameLen int) *Server {
 		name += strings.Repeat("x", nameLen-len(name))
 		body, err := json.Marshal(map[string]any{
 			"schemaVersion": 1, "clusterName": name, "agentVersion": "test", "kbVersion": "agent-kb",
-			"inventory": inventory.Inventory{SchemaVersion: 1, CollectorSchema: inventory.CurrentCollectorSchema, ClusterID: fmt.Sprintf("uid-%d", i),
+			"inventory": inventory.Inventory{SchemaVersion: 1, ClusterID: fmt.Sprintf("uid-%d", i),
 				ServerVersion: "v1.34.2", Capabilities: collectedCaps()},
 		})
 		if err != nil {

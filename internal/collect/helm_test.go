@@ -532,6 +532,58 @@ func TestManifestAPIsInRunsMatchesWholeParse(t *testing.T) {
 	}
 }
 
+// splitManifest's runs are as large as the bounds let them be and no
+// larger (#168, #213): 1 MiB and 64Ki YAML nodes, written here as numbers,
+// not as the constants, so changing manifestChunkBytes or maxManifestNodes
+// fails this test whatever the heap tests read. Those cannot see a byte
+// bound of 4 MiB instead of 1: the release itself is most of their figure.
+// Each manifest is of identical documents, one bound by bytes and one by
+// nodes, so every run but the last holds exactly as many documents as fit
+// the bound that binds it, and one more would not.
+func TestSplitManifestRunsHoldTheBounds(t *testing.T) {
+	const runBytes, runNodes = 1 << 20, 1 << 16
+	for _, tc := range []struct {
+		name, body string // a document, after its "---" line
+	}{
+		{"bound by bytes", "apiVersion: v1\nkind: ConfigMap\ndata:\n  k: " + strings.Repeat("x", 4000) + "\n"},
+		{"bound by nodes", "apiVersion: v1\nkind: ConfigMap\ndata:\n" + strings.Repeat(" k: v\n", 100)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := "---\n" + tc.body
+			nodes := 2 + yamlNodeBound(tc.body) // its root and document nodes, and what its lines bound
+			perRun := min(runBytes/len(doc), runNodes/nodes)
+			const docs = 2000
+			if perRun >= docs/3 {
+				t.Fatalf("%d documents a run: the manifest must span several runs", perRun)
+			}
+			var runs []int // documents in each run
+			splitManifest(strings.Repeat(doc, docs), func(text string, line int, whole bool) {
+				n := strings.Count(text, "---\n")
+				if !whole || len(text) != n*len(doc) {
+					t.Fatalf("run %d at line %d: whole %v, %d bytes of %d documents; want whole documents", len(runs), line, whole, len(text), n)
+				}
+				if len(text) > runBytes || n*nodes > runNodes {
+					t.Errorf("run %d: %d bytes and %d nodes, over %d bytes or %d nodes", len(runs), len(text), n*nodes, runBytes, runNodes)
+				}
+				runs = append(runs, n)
+			})
+			if len(runs) < 2 {
+				t.Fatalf("%d runs, want several", len(runs))
+			}
+			total := 0
+			for i, n := range runs {
+				total += n
+				if i < len(runs)-1 && n != perRun {
+					t.Errorf("run %d holds %d documents, want %d: as many as fit %d bytes and %d nodes", i, n, perRun, runBytes, runNodes)
+				}
+			}
+			if total != docs {
+				t.Errorf("runs hold %d documents, want %d", total, docs)
+			}
+		})
+	}
+}
+
 // A document over maxManifestDocBytes or maxManifestNodes is not parsed,
 // whatever it holds (#168): the release is still recorded with the objects
 // of its other documents, and the capability is Partial, naming the

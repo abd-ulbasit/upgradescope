@@ -90,7 +90,7 @@ func TestFleetDefaultColumnsAreMeasured(t *testing.T) {
 // maxWideGapsFleetHeap is what one fleet-wide read of 500 clusters whose
 // evaluations carry the most gaps a push may name may add to the heap:
 // docs/operations.md counts two of them in the server's worst case.
-const maxWideGapsFleetHeap = 20 << 20 // measured 16.4 MiB for /fleet, at five targets
+const maxWideGapsFleetHeap = 20 << 20 // measured 11.4 MiB for /fleet, at five targets, half the clusters unmarked, on a GitHub-hosted ubuntu-latest runner (CI run 37152753746, #212)
 
 // What an evaluation could not assess is in every fleet-wide read, for
 // every cluster and target, and a push within the inventory limits may
@@ -99,10 +99,16 @@ const maxWideGapsFleetHeap = 20 << 20 // measured 16.4 MiB for /fleet, at five t
 // answer 108 MB; the store's column now keeps each gap cut and the reads
 // list at most fleetSummaryBytes of them per evaluation. Each gap here,
 // cut, is just under that, so every summary lists one: the dearest
-// summaries. 500 such clusters, each evaluated at five targets (the
-// default and heapTargets, the most a server evaluates), are read within
-// maxWideGapsFleetHeap by each of /clusters, /fleet and /metrics; the
-// test logs the figures docs/operations.md quotes.
+// summaries. Every other cluster pushes as a v0.1.x agent would,
+// unmarked: the server adds its required api-usage and deprecated-calls
+// gaps to theirs, and its summaries are larger (729 against 588 bytes per
+// cluster in /clusters, 2910 against 2205 in /fleet), which the test
+// checks, so the fixture keeps the dearest input a push can be while the
+// current collector's marked push is read too (#212). 500 such clusters,
+// each evaluated at five targets (the default and heapTargets, the most a
+// server evaluates), are read within maxWideGapsFleetHeap by each of
+// /clusters, /fleet and /metrics; the test logs the figures
+// docs/operations.md quotes.
 func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 	if testing.Short() || raceEnabled || !heapRun {
 		t.Skip("seeds 500 clusters of 770 KB pushes; make test-heap runs it, without the race detector")
@@ -128,10 +134,14 @@ func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 			Available: true, Partial: true, Reason: strings.Repeat("é", 1000), Skipped: skipped}
 	}
 	for i := range fleetMinors {
+		inv := inventory.Inventory{SchemaVersion: 1, CollectorSchema: inventory.CurrentCollectorSchema, ClusterID: fmt.Sprintf("uid-%d", i),
+			ServerVersion: "v1.34.2", Capabilities: caps}
+		if i%2 == 1 {
+			inv = unmarked(inv) // a v0.1.x agent's push, with no collectorSchema: its summaries are the larger (#212)
+		}
 		body, err := json.Marshal(map[string]any{
 			"schemaVersion": 1, "clusterName": fmt.Sprintf("cluster-%03d", i), "agentVersion": "test", "kbVersion": "agent-kb",
-			"inventory": inventory.Inventory{SchemaVersion: 1, CollectorSchema: inventory.CurrentCollectorSchema, ClusterID: fmt.Sprintf("uid-%d", i),
-				ServerVersion: "v1.34.2", Capabilities: caps},
+			"inventory": inv,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -143,18 +153,60 @@ func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 		}
 	}
 	for _, path := range []string{"/api/v1/clusters", "/api/v1/fleet", "/metrics"} {
-		var size int
+		var body []byte
 		grew := heapPeak(func() {
 			rec := httptest.NewRecorder()
 			s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("%s: status = %d (%.300s)", path, rec.Code, rec.Body)
 			}
-			size = rec.Body.Len()
+			body = rec.Body.Bytes()
 		})
 		if grew > maxWideGapsFleetHeap {
 			t.Errorf("%s grew the heap %d MiB, want at most %d MiB", path, grew>>20, maxWideGapsFleetHeap>>20)
 		}
-		t.Logf("%d clusters of 31 gaps each: %s grew the heap %.1f MiB, answered %d bytes", fleetMinors, path, float64(grew)/(1<<20), size)
+		t.Logf("%d clusters of 31 gaps each: %s grew the heap %.1f MiB, answered %d bytes", fleetMinors, path, float64(grew)/(1<<20), len(body))
+		if path == "/metrics" {
+			continue // per cluster and target, not per cluster
+		}
+		marked, legacy := clusterEntryBytes(t, path, body)
+		t.Logf("%s: %d bytes per marked cluster, %d per unmarked", path, marked, legacy)
+		if legacy <= marked {
+			t.Errorf("%s: an unmarked cluster's entry is %d bytes, a marked one's %d: the unmarked push must be the dearer, or the fixture no longer holds the dearest input", path, legacy, marked)
+		}
 	}
+}
+
+// clusterEntryBytes is the mean size of the entries of a /clusters or
+// /fleet answer for the clusters TestFleetReadsOfTheWidestGapsAreBounded
+// pushes marked (even-numbered) and unmarked (odd-numbered).
+func clusterEntryBytes(t *testing.T, path string, body []byte) (marked, unmarked int) {
+	t.Helper()
+	var entries []json.RawMessage
+	if path == "/api/v1/fleet" {
+		var fleet struct{ Clusters []json.RawMessage }
+		if err := json.Unmarshal(body, &fleet); err != nil {
+			t.Fatal(err)
+		}
+		entries = fleet.Clusters
+	} else if err := json.Unmarshal(body, &entries); err != nil {
+		t.Fatal(err)
+	}
+	var sum, n [2]int
+	for _, e := range entries {
+		var c struct{ Name string }
+		if err := json.Unmarshal(e, &c); err != nil {
+			t.Fatal(err)
+		}
+		var i int
+		if _, err := fmt.Sscanf(c.Name, "cluster-%d", &i); err != nil {
+			t.Fatalf("%s: cluster %q: %v", path, c.Name, err)
+		}
+		sum[i%2] += len(e)
+		n[i%2]++
+	}
+	if len(entries) != fleetMinors || n[0] != n[1] {
+		t.Fatalf("%s: %d clusters, %d marked and %d unmarked; want %d, half of each", path, len(entries), n[0], n[1], fleetMinors)
+	}
+	return sum[0] / n[0], sum[1] / n[1]
 }
