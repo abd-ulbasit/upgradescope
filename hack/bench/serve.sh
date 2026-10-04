@@ -26,7 +26,10 @@
 #   BENCH_BIN           results directory, default bin/bench
 # Needs: go, jq, and for Postgres a reachable Docker engine.
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+# Absolute, before anything changes directory: the script runs from wherever it
+# is started (the report script is found beside it).
+script_dir=$(cd "$(dirname "$0")" && pwd -P)
+cd "$script_dir/../.."
 
 BENCH_BACKENDS=${BENCH_BACKENDS:-sqlite postgres}
 BENCH_CONCURRENCY=${BENCH_CONCURRENCY:-1,16,200}
@@ -103,7 +106,10 @@ start_postgres() { # sets PG_DSN (as the machine running the benchmark reaches i
   port=$(docker port "$container" 5432/tcp | head -1 | sed 's/.*://')
   local ready=""
   for _ in $(seq 1 90); do
-    if docker exec "$container" psql -U postgres -d upgradescope -c 'SELECT 1' >/dev/null 2>&1; then ready=1; break; fi
+    # Over TCP: while the image initialises the database its temporary server
+    # listens on the unix socket only, so a probe through the socket (psql with
+    # no -h) would answer before the real server is up.
+    if docker exec "$container" pg_isready -q -h 127.0.0.1 -U postgres -d upgradescope >/dev/null 2>&1; then ready=1; break; fi
     sleep 0.5
   done
   [ -n "$ready" ] || { docker logs "$container" | tail -20 >&2; die "postgres did not become ready"; }
@@ -130,7 +136,11 @@ run_backend() { # run_backend <backend> [PG_DSN]
     UPGRADESCOPE_BENCH_CLUSTERS="$BENCH_CLUSTERS")
   [ -z "$dsn" ] || vars+=(UPGRADESCOPE_BENCH_PG_DSN="$dsn")
   if [ "$BENCH_RUN_ON" = local ]; then
-    env "${vars[@]}" UPGRADESCOPE_BENCH_OUT="$out" "${runner[@]}" -test.run '^TestBenchServeIngest$' -test.v -test.timeout 60m >&2
+    # Exported, not given to `env` on its command line: the DSN holds the
+    # throwaway database's password, which `ps` would list.
+    export "${vars[@]}" UPGRADESCOPE_BENCH_OUT="$out"
+    "${runner[@]}" -test.run '^TestBenchServeIngest$' -test.v -test.timeout 60m >&2
+    unset "${vars[@]%%=*}" UPGRADESCOPE_BENCH_OUT
   else
     local remote_out=$remote_dir/out.jsonl
     # The environment goes over stdin into a private file: the DSN holds the
@@ -155,5 +165,5 @@ for backend in $BENCH_BACKENDS; do
   esac
 done
 
-"$(dirname "$0")/serve-report.sh" "$results"
+"$script_dir/serve-report.sh" "$results"
 echo "bench-serve: raw per-round results: $results" >&2

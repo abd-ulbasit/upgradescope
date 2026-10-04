@@ -27,6 +27,8 @@
 #   BENCH_HELM_REVISIONS  stored revisions per Helm release, default 1
 #   BENCH_BIN        where tools and results go, default bin/bench (gitignored)
 #   BENCH_RESET_CMD  a command run before and after (a cluster-recreate script)
+#   BENCH_NO_HELM_CACHE  set to 1 to measure with no Helm release cache, as every
+#                    tick did before #71 (the "before" rows of docs/operations/scale.md)
 #   BENCH_RUN_ON     an ssh host to run the measured agent tick on (default: this
 #                    machine). Set it to the lab's host: the benchmark binary is
 #                    cross-compiled for linux/amd64 and copied there with the
@@ -39,7 +41,14 @@
 # Needs: go, kubectl, jq, curl, shasum or sha256sum, and a cluster that can
 # pull registry.k8s.io/kwok/kwok.
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+# The script's own directory, absolute, before anything changes directory: it
+# finds the report script and the repository root from wherever it is run, and
+# a relative KUBECONFIG means a file relative to the caller's directory.
+script_dir=$(cd "$(dirname "$0")" && pwd -P)
+if [ -n "${KUBECONFIG:-}" ]; then
+  case "$KUBECONFIG" in /* | *:*) ;; *) KUBECONFIG=$PWD/$KUBECONFIG ;; esac
+fi
+cd "$script_dir/../.."
 
 die() { echo "bench-agent: $*" >&2; exit 1; }
 
@@ -129,6 +138,7 @@ fi
 measure() {
   local vars=(UPGRADESCOPE_BENCH_TICKS="$BENCH_TICKS" UPGRADESCOPE_BENCH_LABEL="$1"
     UPGRADESCOPE_BENCH_EXPECT_NODES="$2" UPGRADESCOPE_BENCH_EXPECT_HELM="$3")
+  [ -z "${BENCH_NO_HELM_CACHE:-}" ] || vars+=(UPGRADESCOPE_BENCH_NO_HELM_CACHE="$BENCH_NO_HELM_CACHE")
   if [ "$BENCH_RUN_ON" = local ]; then
     env "${vars[@]}" UPGRADESCOPE_BENCH_KUBECONFIG="$KUBECONFIG" UPGRADESCOPE_BENCH_OUT="$results" \
       "$BENCH_BIN/agent-bench.test" -test.run '^TestBenchAgentTick$' -test.v -test.timeout 30m >&2
@@ -185,7 +195,7 @@ for f in $BENCH_STEPS; do
     $((nodes + $(kc get nodes -o json | jq '[.items[] | select(.metadata.annotations["kwok.x-k8s.io/node"] != "fake")] | length'))) "$helm" || failed=1
 done
 
-"$(dirname "$0")/agent-report.sh" "$results"
+"$script_dir/agent-report.sh" "$results"
 echo "bench-agent: raw per-tick results: $results" >&2
 reset_hook
 [ -z "$failed" ] || die "a measurement failed (ticks with an error or an incomplete capability are not valid numbers): see the output above"

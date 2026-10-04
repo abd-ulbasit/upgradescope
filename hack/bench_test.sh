@@ -136,10 +136,11 @@ expect "serve.sh: postgres without a Docker engine is refused" 1 "no Docker engi
 
 # A Docker engine that answers: serve.sh starts its throwaway Postgres (a
 # password drawn under pipefail once ended it silently) and gets as far as
-# running the benchmark (127: the go stub built no binary to run).
+# running the benchmark.
 mkdir -p "$work/stubs-docker"
 cat >"$work/stubs-docker/docker" <<'STUB'
 #!/usr/bin/env bash
+echo "$*" >>"${DOCKER_LOG:-/dev/null}"
 case "$1" in
   info) exit 0 ;;
   context) echo "unix:///var/run/docker.sock" ;;
@@ -150,7 +151,51 @@ case "$1" in
 esac
 STUB
 chmod +x "$work/stubs-docker/docker"
-expect "serve.sh: a Docker engine that answers gets a postgres, with a password drawn" 127 "published at 127.0.0.1:55432" -- env PATH="$work/stubs-docker:$PATH" DOCKER_RUN_LOG="$work/docker-run" BENCH_BACKENDS=postgres BENCH_BIN="$work/bin2" GO_STUB_RC=0 hack/bench/serve.sh
+# The go stub builds a fake benchmark binary (exit status FAKE_BENCH_RC, else
+# it appends $ROUND_FIXTURE to the results as the real one would). A stub env
+# on the PATH records what serve.sh asks it to run.
+okbin=$work/stubs-ok
+mkdir -p "$okbin"
+cp "$work/stubs-docker/docker" "$okbin/docker"
+cat >"$okbin/go" <<'STUB'
+#!/usr/bin/env bash
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = -o ]; then out=$2; shift; fi
+  shift
+done
+cat >"$out" <<'BIN'
+#!/usr/bin/env bash
+echo "$*" >>"${ARGV_LOG:-/dev/null}"
+[ -z "${UPGRADESCOPE_BENCH_PG_DSN:-}" ] || echo seen >>"${DSN_LOG:-/dev/null}"
+[ -z "${FAKE_BENCH_RC:-}" ] || exit "$FAKE_BENCH_RC"
+cat "$ROUND_FIXTURE" >>"$UPGRADESCOPE_BENCH_OUT"
+BIN
+chmod +x "$out"
+STUB
+cat >"$okbin/env" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"${ENV_LOG:-/dev/null}"
+exec /usr/bin/env "$@"
+STUB
+chmod +x "$okbin"/*
+# The benchmark fails (exit 7): the run still got as far as a started Postgres.
+expect "serve.sh: a Docker engine that answers gets a postgres, with a password drawn" 7 "published at 127.0.0.1:55432" -- env PATH="$okbin:$PATH" DOCKER_LOG="$work/docker-log" DOCKER_RUN_LOG="$work/docker-run" FAKE_BENCH_RC=7 BENCH_BACKENDS=postgres BENCH_BIN="$work/bin2" hack/bench/serve.sh
+# The throwaway Postgres is removed when the script ends, even when the run
+# fails: the container the script started is the one it removed.
+pg_name=$(sed -n 's/.*--name \([^ ]*\).*/\1/p' "$work/docker-run")
+if [ -n "$pg_name" ] && grep -qxF -- "rm -f $pg_name" "$work/docker-log"; then
+  ok "serve.sh: the throwaway Postgres is removed when the run fails (trap)"
+else
+  fail "serve.sh: no 'rm -f ${pg_name:-<container>}' after a failed run" "$work/docker-log"
+fi
+# Readiness is probed over TCP: while the image initialises the database its
+# temporary server listens on the unix socket only.
+if grep -qE -- '^exec .* pg_isready .*-h 127\.0\.0\.1' "$work/docker-log"; then
+  ok "serve.sh: Postgres readiness is probed over TCP, not the unix socket"
+else
+  fail "serve.sh: readiness is not probed with pg_isready -h 127.0.0.1" "$work/docker-log"
+fi
 # The password reaches the container through the environment, not as a value
 # on a command line that `ps` would list.
 if grep -qF -- "POSTGRES_PASSWORD" "$work/docker-run" && ! grep -qE -- "POSTGRES_PASSWORD=" "$work/docker-run"; then
@@ -173,6 +218,51 @@ if grep -qF "| sqlite | 1 | new | 20.6 | 10 | 352.2 | 500 | 2 (1 / 3) | 9.5 | 42
 else
   fail "serve-report.sh table" "$work/serve-report"
 fi
+
+# A run that succeeds: the container is removed on the normal path too, and
+# the DSN, which holds the password, reaches the benchmark through its
+# environment, never as an argument of any process serve.sh starts (the stub
+# env recorded what it was asked to run).
+round postgres 1 new 38.6 120.5 >"$work/pg-round.jsonl"
+rm -f "$work/docker-log" "$work/docker-run"
+: >"$work/argv-log" && : >"$work/dsn-log" && : >"$work/env-log"
+expect "serve.sh: a successful postgres run ends in the report" 0 "raw per-round results" -- env PATH="$okbin:$PATH" DOCKER_LOG="$work/docker-log" DOCKER_RUN_LOG="$work/docker-run" ARGV_LOG="$work/argv-log" DSN_LOG="$work/dsn-log" ENV_LOG="$work/env-log" ROUND_FIXTURE="$work/pg-round.jsonl" BENCH_BACKENDS=postgres BENCH_BIN="$work/bin3" hack/bench/serve.sh
+pg_name=$(sed -n 's/.*--name \([^ ]*\).*/\1/p' "$work/docker-run")
+if [ -n "$pg_name" ] && grep -qxF -- "rm -f $pg_name" "$work/docker-log"; then
+  ok "serve.sh: the throwaway Postgres is removed when the run succeeds"
+else
+  fail "serve.sh: no 'rm -f ${pg_name:-<container>}' after a successful run" "$work/docker-log"
+fi
+if [ -s "$work/dsn-log" ] && ! grep -qF -- "postgres://" "$work/argv-log" "$work/env-log"; then
+  ok "serve.sh: the Postgres DSN reaches the benchmark in its environment, not on any command line"
+else
+  fail "serve.sh: the DSN was missing from the benchmark's environment or was on a command line" "$work/env-log"
+fi
+
+# --- make bench-agent ----------------------------------------------------------
+# The Makefile target refuses before running anything unless KUBECONFIG is on
+# make's command line: a KUBECONFIG that is only in the environment (the
+# shell's default, an exported variable) is never enough.
+expect "make bench-agent: no KUBECONFIG at all is refused" 2 "on the command line" -- env -u KUBECONFIG make bench-agent
+expect "make bench-agent: KUBECONFIG only in the environment is refused" 2 "on the command line" -- env "KUBECONFIG=$lab" make bench-agent
+if grep -qE "bench-agent: cluster|building the seeder|go stub|kubectl stub" "$work/out"; then
+  fail "make bench-agent: the refusal came after the script started work" "$work/out"
+else
+  ok "make bench-agent: the refusal runs nothing (no kubectl, no go)"
+fi
+nodes 1 >"$NODES_JSON"
+namespaces "${vanilla_ns[@]}" >"$NS_JSON"
+expect "make bench-agent: KUBECONFIG on the command line reaches agent.sh (make reports its failure as 2)" 2 "building the seeder and the agent benchmark" -- env -u KUBECONFIG "BENCH_BIN=$work/bin" GO_STUB_RC=7 make bench-agent "KUBECONFIG=$lab"
+
+# --- agent.sh and serve.sh from any directory --------------------------------
+# A relative KUBECONFIG is relative to the caller, and the scripts find the
+# repository when started from their own directory. (The scripts change
+# directory to the repository root, so a relative path to the kubeconfig
+# would not exist any more if it were resolved after that.)
+cp "$lab" "$work/rel-kubeconfig"
+expect "agent.sh: a relative KUBECONFIG is resolved against the caller's directory" 7 "building the seeder and the agent benchmark" -- bash -c 'cd "$1" && KUBECONFIG=rel-kubeconfig BENCH_BIN="$1/bin" GO_STUB_RC=7 "$2/hack/bench/agent.sh"' _ "$work" "$repo"
+expect "agent.sh: started from its own directory it finds the repository" 7 "building the seeder and the agent benchmark" -- bash -c 'cd "$1/hack/bench" && KUBECONFIG="$2" BENCH_BIN="$3/bin" GO_STUB_RC=7 ./agent.sh' _ "$repo" "$lab" "$work"
+expect "serve.sh: started from its own directory it finds the repository" 1 "unknown backend nope" -- bash -c 'cd "$1/hack/bench" && BENCH_BACKENDS=nope BENCH_BIN="$2/bin" ./serve.sh' _ "$repo" "$work"
 
 # --- syntax -----------------------------------------------------------------
 for f in hack/bench/*.sh; do
