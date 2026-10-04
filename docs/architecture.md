@@ -176,7 +176,7 @@ release, not a copy of the cluster. The requests of one tick are:
 
 - **One paged list per resource type, ceil(N / 500) requests for N
   objects, and at least one.** The types are nodes, namespaces, pods in
-  `kube-system`, pods in all namespaces, IngressClasses,
+  `kube-system`, pods in the other namespaces, IngressClasses,
   CustomResourceDefinitions, the `owner=helm` Secrets and the `owner=helm`
   ConfigMaps (both are still attempted with `rbac.helmSecrets=false`, and
   the API server refuses them), and a metadata-only list for each resource
@@ -188,6 +188,15 @@ release, not a copy of the cluster. The requests of one tick are:
   HelmRelease references; a cluster with no Helm release also lists
   Deployments, StatefulSets and DaemonSets metadata-only, until it finds
   a tracking label or annotation of either tool, if the role lets it.
+- **Each pod is listed once.** The `kube-system` pods are read for the
+  control-plane components, and the add-ons take their images and labels
+  from that same read, then list the other namespaces with the field
+  selector `metadata.namespace!=kube-system`, which keeps the `kube-system`
+  pods out of the response. At 2,000 nodes, with a CNI and a kube-proxy pod
+  per node, those are about 4,000 pods that cross the wire once, not twice.
+  The API server still evaluates the selector against every pod it scans.
+  If the `kube-system` list fails, the add-ons list every pod, as if
+  versions had not run.
 - **One GET per decoded Helm release**: the full Secret (or ConfigMap) of its
   installed revision, up to the 1 MiB Kubernetes allows. It is fetched again
   on every tick, even when nothing changed. This is the one cost that scales
