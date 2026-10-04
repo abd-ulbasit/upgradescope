@@ -36,9 +36,10 @@ a CI gate.
   token from `--read-token-file`, `$UPGRADESCOPE_READ_TOKEN` or
   `--read-token`. Results follow `api/report.schema.json`. No
   `.upgradescope.yaml` is read; `upgradescope.dev/ignore` annotations still
-  apply. A refused file is named by field and rule, never quoted. The binary
-  grows by about 2 MiB (2.00 MiB on linux/amd64, stripped, measured at
-  `67f30be`) (#76).
+  apply. A refused `report_file` or `inventory_file` is answered with the
+  field and the rule broken, quoting nothing of the file except an unknown
+  `collectorSchema` number. The binary grows by about 2 MiB (2.00 MiB on
+  linux/amd64, stripped, measured at `67f30be`) (#76).
 - A `support-lifecycle` finding for clusters on EKS, GKE and AKS, from
   provider calendars in `registry/data/providers/` (EKS and AKS synced from
   endoflife.date, GKE curated from Google's release schedule): a warning
@@ -55,12 +56,11 @@ a CI gate.
   Ingest accepts a `provider` this build does not know, but refuses (422)
   one that is not a label value: longer than 63 bytes, with characters
   outside letters, digits, `-`, `_` and `.`, or not starting and ending with
-  a letter or digit.
-  `scan` prints a `Support:` line, the JSON report and the server's report
-  carry `support`, and the `ClusterReadiness` status gains `supportPhase`,
-  `extendedSupportFrom`, `extendedSupportEnds`, `annualCostDelta`,
-  `currency`, `priceAsOf`, `annualCostNote` and `extendedSupportCondition`
-  (#77).
+  a letter or digit. `scan` prints a `Support:` line, the JSON report and
+  the server's report carry `support`, and the `ClusterReadiness` status
+  gains `supportPhase`, `extendedSupportFrom`, `extendedSupportEnds`,
+  `annualCostDelta`, `currency`, `priceAsOf`, `annualCostNote` and
+  `extendedSupportCondition` (#77).
 - Add-ons that Argo CD and Flux deploy are found from the charts those tools
   declare: each Argo CD Application source that sets `chart`, for
   Applications whose destination is this cluster, and each Flux
@@ -403,14 +403,14 @@ a CI gate.
   leaves none, so `kubeVersion` and stored-manifest checks did not run);
   when the tool's list is forbidden; when a HelmRelease `chartRef` does not
   resolve to a chart; and, for both tools, when API discovery fails. A Flux
-  whose HelmRelease list is served and empty adds no gap.
-  `helm` is optional, so this alone never makes the verdict `unknown`, but a
-  partial `helm` holds add-on and Helm-release findings in the notification
-  baseline instead of resolving them. Without the grant for the tool it
-  runs (`rbac.gitops.argocd` or `rbac.gitops.flux`), a cluster that serves
-  either CRD reports `helm` partial, since the list is forbidden; this
-  includes upgrading the chart on a Flux cluster whose releases were read in
-  full before. With `rbac.gitops.flux`, the Flux gap clears once its Helm
+  whose HelmRelease list is served and empty adds no gap. `helm` is
+  optional, so this alone never makes the verdict `unknown`, but a partial
+  `helm` holds add-on and Helm-release findings in the notification baseline
+  instead of resolving them. Without the grant for the tool it runs
+  (`rbac.gitops.argocd` or `rbac.gitops.flux`), a cluster that serves either
+  CRD reports `helm` partial, since the list is forbidden; this includes
+  upgrading the chart on a Flux cluster whose releases were read in full
+  before. With `rbac.gitops.flux`, the Flux gap clears once its Helm
   releases are read and its chartRefs resolve. On Argo CD, `helm` stays
   partial, grant or not, whenever an Application deploys a chart or the
   cluster has no Helm release (#70).
@@ -921,16 +921,17 @@ a CI gate.
 ### Security
 
 - Argo CD `repoURL`s and Flux OCIRepository URLs are recorded in the
-  inventory without userinfo, query string or fragment: everything up to the
-  last `@` before any trailing OCI digest is dropped, whether or not the
-  value parses as a URL (an OCI reference pinned by digest, such as
+  inventory without userinfo, query string or fragment: everything between
+  the scheme (or the start, where there is none) and the last `@` (before
+  any trailing OCI digest) is dropped, whether or not the value parses as a
+  URL (an OCI reference pinned by digest, such as
   `ghcr.io/acme/chart@sha256:…`, keeps its digest), and a URL with a `?` or
-  `#` before that `@` is recorded empty. A token embedded in the URL path (a
-  Cloudsmith entitlement URL) cannot be told from a path and is kept. The
-  agent does not read repository credential Secrets. GitOps chart references
-  are written by whoever can create an Application or HelmRelease, who can
-  therefore raise a false `eol-addon` finding; the GitOps guide says so
-  (#70).
+  `#` before that `@`, or with a scheme and no host, is recorded empty. A
+  token embedded in the URL path (a Cloudsmith entitlement URL) cannot be
+  told from a path and is kept. The agent does not read repository
+  credential Secrets. GitOps chart references are written by whoever can
+  create an Application or HelmRelease, who can therefore raise a false
+  `eol-addon` finding; the GitOps guide says so (#70).
 - The Action prefixes every line of the gate's stderr and of the Markdown
   summary it echoes to the log (both carry the scanned tree's file names)
   with `| `, and writes a CR in them as `%0D` and a `##[` as `# #[`; the
