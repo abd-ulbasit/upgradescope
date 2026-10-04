@@ -148,8 +148,9 @@ Helm step's minute, so the ceiling is lower (about 1,750 releases by the
 same arithmetic, taking the 8.7 s the GitOps reads added to a tick with no
 quota).
 
-Memory: the agent's peak RSS was 66 to 71 MiB as a pod at that size. A pod
-page holds up to 1,000 pods, so 1,000 pods of about 70 KiB each, after a
+Memory: the agent's peak RSS was 66 to 71 MiB as a pod at that size (main
+`735751d`, before #228's larger pod pages, which raised the benchmark's peak
+RSS by about 8 MiB). A pod page holds up to 1,000 pods, so 1,000 pods of about 70 KiB each, after a
 page of small ones, would take the agent past its `GOMEMLIMIT` at the
 256Mi limit (computed, see
 [the tick after #226 and #228](scale.md#the-tick-after-226-and-228)). Raise
