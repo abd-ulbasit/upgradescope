@@ -212,11 +212,13 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 		cfg: cfg,
 		now: time.Now,
 	}
-	// The cache outlives the ticks: a release already decoded is not fetched
-	// again until its storage object changes (#71).
+	// The caches outlive the ticks: a release already decoded is not fetched
+	// again until its storage object changes (#71), and API discovery is
+	// asked again only under collect.DiscoveryCache's staleness rules (#228).
 	helmCache := collect.NewHelmCache()
+	discoveryCache := collect.NewDiscoveryCache()
 	r.collectFn = func(ctx context.Context) inventory.Inventory {
-		return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache})
+		return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache})
 	}
 	if cfg.ServerURL != "" {
 		r.pusher = newPusher(cfg.ServerURL, cfg.ServerToken, cfg.ServerRootCAs)

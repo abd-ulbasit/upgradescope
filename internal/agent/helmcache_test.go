@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -83,6 +84,46 @@ func TestTicksFetchHelmReleasesOnlyWhenTheyChange(t *testing.T) {
 		}
 		if n := fmt.Sprint(r.last.caps["helm"].Available); n != "true" {
 			t.Errorf("tick %d: helm capability %+v", tick+1, r.last.caps["helm"])
+		}
+	}
+}
+
+// The agent keeps API discovery across ticks (#228): a steady tick asks the
+// apiserver for its version, never again for its groups and resources. This
+// pins the wiring; the staleness rules are tested in internal/collect.
+func TestTicksAskForDiscoveryOnce(t *testing.T) {
+	clients := fakeClients(t, "v1.35.2")
+	scheme := runtime.NewScheme()
+	utilruntime.Must(metav1.AddMetaToScheme(scheme))
+	clients.Metadata = metadatafake.NewSimpleMetadataClient(scheme)
+	clients.APIExtensions = apiextensionsfake.NewClientset() // a CRD list read: the cache is kept
+	disc := clients.Discovery.(*discoveryfake.FakeDiscovery)
+	disc.Resources = []*metav1.APIResourceList{{GroupVersion: "v1", APIResources: []metav1.APIResource{{Name: "pods", Kind: "Pod", Namespaced: true, Verbs: metav1.Verbs{"list"}}}}}
+	cfg := Config{}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	r := newRunner(clients, fakeDyn(), mustKB(t), cfg)
+	asked := func() (groups, version int) {
+		for _, a := range disc.Actions() {
+			switch a.GetResource().Resource {
+			case "group", "resource":
+				groups++
+			case "version":
+				version++
+			}
+		}
+		disc.ClearActions()
+		return groups, version
+	}
+	for tick := range 3 {
+		r.runTick(context.Background())
+		groups, version := asked()
+		if tick == 0 && groups == 0 || tick > 0 && groups != 0 {
+			t.Errorf("tick %d asked for groups or resources %d times, want them asked on the first tick only", tick+1, groups)
+		}
+		if version == 0 {
+			t.Errorf("tick %d did not ask for the server version: it is never cached", tick+1)
 		}
 	}
 }
