@@ -55,6 +55,9 @@ func TestClassifyRequest(t *testing.T) {
 
 func TestRequestRecorderCountsRequestsAndBodyBytes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			time.Sleep(20 * time.Millisecond)
+		}
 		fmt.Fprint(w, strings.Repeat("x", 100))
 	}))
 	defer srv.Close()
@@ -72,8 +75,16 @@ func TestRequestRecorderCountsRequestsAndBodyBytes(t *testing.T) {
 	if total != 4 || rec.bodyBytes.Load() != 400 {
 		t.Errorf("total = %d, body bytes = %d; want 4 requests and 400 bytes", total, rec.bodyBytes.Load())
 	}
-	if len(stats) != 3 || stats[0] != (requestStat{"LIST", "nodes", 2}) {
-		t.Errorf("stats = %+v, want LIST nodes x2 first, then GET secrets and GET /version", stats)
+	if len(stats) != 3 || stats[0].Verb != "LIST" || stats[0].Resource != "nodes" || stats[0].Count != 2 || stats[0].Bytes != 200 {
+		t.Errorf("stats = %+v, want LIST nodes x2 (200 bytes) first, then GET secrets and GET /version", stats)
+	}
+	for _, st := range stats[1:] {
+		if st.Count != 1 || st.Bytes != 100 {
+			t.Errorf("%s %s: %d requests, %d bytes; want 1 and 100", st.Verb, st.Resource, st.Count, st.Bytes)
+		}
+		if st.Resource == "/version" && st.Millis < 20 {
+			t.Errorf("GET /version took %d ms, want at least the server's 20", st.Millis)
+		}
 	}
 	rec.reset()
 	if _, total := rec.stats(); total != 0 || rec.bodyBytes.Load() != 0 {

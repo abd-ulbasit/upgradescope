@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // The scale benchmark (bench_load_test.go, #71) counts what one agent tick
@@ -80,31 +81,47 @@ func classifyRequest(method, path, query, accept string) (verb, resource string)
 	return verb, resource
 }
 
-// requestStat is the count of one verb and resource.
+// requestStat is the count of one verb and resource, the response bytes
+// client-go read for them (decompressed), and the time they took in all,
+// each from sending the request to the end of its body (#228). The time is
+// a sum: requests in flight at once each count their own.
 type requestStat struct {
 	Verb     string `json:"verb"`
 	Resource string `json:"resource"`
 	Count    int    `json:"count"`
+	Bytes    int64  `json:"bytes"`
+	Millis   int64  `json:"ms"`
 }
 
-// requestRecorder counts requests and response body bytes. Safe for
-// concurrent use; reset between ticks.
+// requestRecorder counts requests, response body bytes, and the time
+// requests took, per verb and resource. Safe for concurrent use; reset
+// between ticks.
 type requestRecorder struct {
 	mu        sync.Mutex
-	counts    map[[2]string]int
+	counts    map[[2]string]*requestStat
 	total     int
 	bodyBytes atomic.Int64
 }
 
 func newRequestRecorder() *requestRecorder {
-	return &requestRecorder{counts: map[[2]string]int{}}
+	return &requestRecorder{counts: map[[2]string]*requestStat{}}
 }
 
 func (r *requestRecorder) reset() {
 	r.mu.Lock()
-	r.counts, r.total = map[[2]string]int{}, 0
+	r.counts, r.total = map[[2]string]*requestStat{}, 0
 	r.mu.Unlock()
 	r.bodyBytes.Store(0)
+}
+
+// stat returns the entry of one verb and resource; r.mu must be held.
+func (r *requestRecorder) stat(verb, res string) *requestStat {
+	st := r.counts[[2]string{verb, res}]
+	if st == nil {
+		st = &requestStat{Verb: verb, Resource: res}
+		r.counts[[2]string{verb, res}] = st
+	}
+	return st
 }
 
 // transport wraps rt (the shape of rest.Config.WrapTransport).
@@ -112,23 +129,35 @@ func (r *requestRecorder) transport(rt http.RoundTripper) http.RoundTripper {
 	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		verb, res := classifyRequest(req.Method, req.URL.Path, req.URL.RawQuery, req.Header.Get("Accept"))
 		r.mu.Lock()
-		r.counts[[2]string{verb, res}]++
+		r.stat(verb, res).Count++
 		r.total++
 		r.mu.Unlock()
+		start := time.Now()
 		resp, err := rt.RoundTrip(req)
-		if err == nil && resp.Body != nil {
-			resp.Body = &countingBody{ReadCloser: resp.Body, n: &r.bodyBytes}
+		if err != nil || resp.Body == nil {
+			r.done(verb, res, 0, time.Since(start))
+			return resp, err
 		}
+		resp.Body = &countingBody{ReadCloser: resp.Body, n: &r.bodyBytes, done: func(n int64) { r.done(verb, res, n, time.Since(start)) }}
 		return resp, err
 	})
+}
+
+// done adds one finished request's body bytes and time.
+func (r *requestRecorder) done(verb, res string, n int64, d time.Duration) {
+	r.mu.Lock()
+	st := r.stat(verb, res)
+	st.Bytes += n
+	st.Millis += d.Milliseconds()
+	r.mu.Unlock()
 }
 
 // stats returns the counts, most requests first.
 func (r *requestRecorder) stats() (stats []requestStat, total int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for k, n := range r.counts {
-		stats = append(stats, requestStat{Verb: k[0], Resource: k[1], Count: n})
+	for _, st := range r.counts {
+		stats = append(stats, *st)
 	}
 	sort.Slice(stats, func(i, j int) bool {
 		if stats[i].Count != stats[j].Count {
@@ -143,15 +172,35 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+// countingBody counts what is read of a body into n, and reports the
+// body's own count to done once, at its end or when it is closed.
 type countingBody struct {
 	io.ReadCloser
-	n *atomic.Int64
+	n    *atomic.Int64
+	read int64
+	done func(read int64)
+	once sync.Once
 }
 
 func (b *countingBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	b.n.Add(int64(n))
+	b.read += int64(n)
+	if err != nil {
+		b.finish()
+	}
 	return n, err
+}
+
+func (b *countingBody) Close() error {
+	b.finish()
+	return b.ReadCloser.Close()
+}
+
+func (b *countingBody) finish() {
+	if b.done != nil {
+		b.once.Do(func() { b.done(b.read) })
+	}
 }
 
 // wireProxy forwards TCP to an upstream and counts the bytes each way. The
