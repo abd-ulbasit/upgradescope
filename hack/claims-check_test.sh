@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for hack/claims-check.sh (make hack-test) on fixture ledgers that
-# point at this repository: one whose every reference exists passes, and
-# each kind of dangling reference fails, naming it. Offline; needs bash.
+# point at this repository: one whose every reference exists passes, each
+# kind of dangling reference fails, naming it, and so does an ID given to
+# more than one claim row. Offline; needs bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -51,6 +52,26 @@ expect "an unknown reference form fails" 1 "XX-05: unknown reference 'go test ./
 | XX-05 | Vague | \`go test ./...\` |"
 expect "a claim with neither a test nor an issue fails" 1 "XX-05: names no test and no tracking issue" "$good
 | XX-05 | Trust me | soon |"
+# A claim ID names one claim: two rows with the same ID fail, wherever they
+# are (here in another table, as a claim and its row under repair would be),
+# and so does an ID one row lists among others or inside a range. A suffixed
+# ID (XX-01b) is another ID.
+expect "two rows with one ID fail" 1 "XX-02: the ID of more than one claim row" "$good
+
+## Under repair
+
+| ID | Claim | Proven by |
+|---|---|---|
+| XX-02 | Another claim given the same ID | not true yet: #127 |"
+expect "an ID among several in a row fails" 1 "XX-03: the ID of more than one claim row" "$good
+| XX-05, XX-03 | Two IDs, one taken | not true yet: #127 |"
+expect "an ID inside a range fails" 1 "XX-10: the ID of more than one claim row" "$good
+| XX-10 | A claim | not true yet: #127 |
+| XX-03b, XX-09 to XX-11 | A range over XX-10 | not true yet: #127 |"
+expect "distinct IDs, suffixed and in ranges, pass" 0 "7 claims" "$good
+| XX-01b | A suffixed ID is another claim | not true yet: #127 |
+| XX-05 to XX-07, XX-08 | A range and a list, all new | not true yet: #127 |
+| XX-09 | Nothing shared | not true yet: #127 |"
 expect "a ledger with no claim rows fails" 1 "no claim rows" "# Claims
 
 Nothing here."

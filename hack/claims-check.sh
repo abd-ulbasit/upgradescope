@@ -13,6 +13,12 @@
 # Anything else in backticks there is an error, and every claim row must name
 # at least one reference or a tracking issue (#N): "not automated: #99".
 #
+# A claim ID names one claim: an ID in the first column of two rows fails,
+# wherever they are in the ledger, so a new claim cannot take an ID already
+# given (the audit's, or another branch's). A row may list several IDs,
+# separated by commas, and a range ("IR-07 to IR-09" is IR-07, IR-08 and
+# IR-09); each of them counts.
+#
 # Knob: CLAIMS_FILE (default docs/claims.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -50,13 +56,36 @@ ref_error() {
   esac
 }
 
-rows=0 refs=0 bad=0
+# row_ids <first column>: the claim IDs a row names, one a line, ranges
+# expanded ("IR-07 to IR-09": IR-07, IR-08, IR-09, at the first's width).
+row_ids() {
+  local t prefix from to width n
+  while IFS= read -r t; do
+    t=$(xargs <<<"$t")
+    [ -n "$t" ] || continue
+    if [[ "$t" =~ ^([A-Z]+)-([0-9]+)\ to\ ([A-Z]+)-([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[3]}" ]; then
+      prefix=${BASH_REMATCH[1]} from=${BASH_REMATCH[2]} to=${BASH_REMATCH[4]} width=${#BASH_REMATCH[2]}
+      for ((n = 10#$from; n <= 10#$to; n++)); do printf '%s-%0*d\n' "$prefix" "$width" "$n"; done
+    else
+      echo "$t"
+    fi
+  done < <(tr ',' '\n' <<<"$1")
+}
+
+rows=0 refs=0 bad=0 seen=""
 while IFS= read -r line; do
   [[ "$line" == '|'* ]] || continue
   [[ "$line" =~ ^\|[-:\ \|]+$ ]] && continue # header separator
   id=$(cut -d'|' -f2 <<<"$line" | xargs)
   [ "$id" != ID ] || continue # header
   rows=$((rows + 1))
+  while IFS= read -r one; do
+    if grep -qxF -- "$one" <<<"$seen"; then
+      echo "claims-check: $file: $one: the ID of more than one claim row" >&2
+      bad=$((bad + 1))
+    fi
+    seen+="$one"$'\n'
+  done < <(row_ids "$id")
   proof=${line%|}
   proof=${proof##*|}
   found=0
@@ -77,5 +106,5 @@ while IFS= read -r line; do
 done <"$file"
 
 [ "$rows" -gt 0 ] || { echo "claims-check: $file has no claim rows (| ID | Claim | Proven by |)" >&2; exit 1; }
-[ "$bad" = 0 ] || { echo "claims-check: $bad dangling reference(s) in $file" >&2; exit 1; }
+[ "$bad" = 0 ] || { echo "claims-check: $bad dangling reference(s) or duplicate ID(s) in $file" >&2; exit 1; }
 echo "claims-check: $rows claims, $refs references, all resolve"
