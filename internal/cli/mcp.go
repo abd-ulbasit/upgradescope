@@ -431,6 +431,7 @@ func inventoryRefusal(path string, err error) error {
 		ie *inventory.IdentifierError
 		le *inventory.LimitError
 		ve *inventory.ServerVersionError
+		ce *inventory.CollectorSchemaError
 	)
 	switch {
 	case errors.As(err, &ie):
@@ -439,6 +440,9 @@ func inventoryRefusal(path string, err error) error {
 		return fmt.Errorf(lead, path, le.Unquoted())
 	case errors.As(err, &ve):
 		return fmt.Errorf(lead, path, "serverVersion is not a Kubernetes 1.x version")
+	case errors.As(err, &ce):
+		// An integer, so safe to quote; schemaVersion was checked before Admit.
+		return fmt.Errorf(lead, path, fmt.Sprintf("collectorSchema %d is not one this build knows (it judges %d, or none from a collector that predates it)", ce.Got, inventory.CurrentCollectorSchema))
 	default:
 		return fmt.Errorf("%s is not an upgradescope inventory of schemaVersion %d", path, inventory.SupportedSchemaVersion)
 	}
