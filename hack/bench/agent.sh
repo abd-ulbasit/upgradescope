@@ -27,8 +27,10 @@
 #   BENCH_HELM_REVISIONS  stored revisions per Helm release, default 1
 #   BENCH_BIN        where tools and results go, default bin/bench (gitignored)
 #   BENCH_RESET_CMD  a command run before and after (a cluster-recreate script)
-#   BENCH_NO_HELM_CACHE  set to 1 to measure with no Helm release cache, as every
-#                    tick did before #71 (the "before" rows of docs/operations/scale.md)
+#   BENCH_NO_HELM_CACHE  1 measures with no Helm release cache, as every
+#                    tick did before #71 (the "before" rows of
+#                    docs/operations/scale.md); unset keeps it, anything else
+#                    is refused
 #   BENCH_RUN_ON     an ssh host to run the measured agent tick on (default: this
 #                    machine). Set it to the lab's host: the benchmark binary is
 #                    cross-compiled for linux/amd64 and copied there with the
@@ -66,6 +68,9 @@ BENCH_STEPS=${BENCH_STEPS:-0 0.25 0.5 1}
 BENCH_TICKS=${BENCH_TICKS:-5}
 BENCH_HELM_REVISIONS=${BENCH_HELM_REVISIONS:-1}
 BENCH_RUN_ON=${BENCH_RUN_ON:-local}
+# The benchmark itself refuses anything but 1, but only after a build and a
+# fill of the lab; refuse here, before either.
+case "${BENCH_NO_HELM_CACHE:-}" in "" | 1) ;; *) die "BENCH_NO_HELM_CACHE=$BENCH_NO_HELM_CACHE: set it to 1 or leave it unset" ;; esac
 mkdir -p "$BENCH_BIN"
 BENCH_BIN=$(cd "$BENCH_BIN" && pwd -P)
 

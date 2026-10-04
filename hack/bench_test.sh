@@ -106,19 +106,32 @@ tick() { # tick <label> <n> <nodes> <requests> <wallMs> <getSecrets>
   tick "fill=1 nodes=2000" 2 2001 1310 20000 1000
   tick "fill=1 nodes=2000" 3 2001 1312 22000 1000
   tick "fill=1 nodes=2000" 4 2001 1308 21000 1000
+  # Four steady ticks, the count of a default run (BENCH_TICKS=5), in no
+  # particular order: the median of an even count is the mean of the two middle
+  # values, not the lower of them.
+  tick "fill=2 nodes=3000" 1 3001 900 50000 1500
+  tick "fill=2 nodes=3000" 2 3001 70 4000 1500
+  tick "fill=2 nodes=3000" 3 3001 40 1000 1500
+  tick "fill=2 nodes=3000" 4 3001 60 3000 1500
+  tick "fill=2 nodes=3000" 5 3001 50 2000 1500
 } >"$work/agent.jsonl"
 "hack/bench/agent-report.sh" "$work/agent.jsonl" >"$work/report" 2>&1 || true
-# The median of the steady ticks (after the first), the levels in order of size.
-if grep -qF "| 0 | 1 | 0 | 17 | 5 | 0 | 10 | 3 | 0.9 | 0.5 |" "$work/report" &&
+# The median of the steady ticks (after the first), the levels in order of size:
+# two steady ticks (the mean of both: 0.9 s and 1.1 s give 1.0), three (the
+# middle one) and four (the mean of the middle two: 40, 50, 60 and 70 requests
+# give 55, and 1, 2, 3 and 4 s give 2.5, not the lower median 2).
+if grep -qF "| 0 | 1 | 0 | 17 | 5 | 0 | 10 | 3 | 1 | 0.5 |" "$work/report" &&
   grep -qF "| 1 | 2001 | 1000 | 1310 | 5 | 1000 | 10 | 3 | 21 | 10.5 |" "$work/report" &&
+  grep -qF "| 2 | 3001 | 1500 | 55 | 5 | 1500 | 10 | 3 | 2.5 | 1.3 |" "$work/report" &&
+  grep -qF "| 900, 10, 50, 25 |" "$work/report" &&
   [ "$(grep -n '^| 0 |' "$work/report" | head -1 | cut -d: -f1)" -lt "$(grep -n '^| 1 |' "$work/report" | head -1 | cut -d: -f1)" ]; then
   ok "agent-report.sh: medians of the ticks after the first, one row per level, smallest first"
 else
   fail "agent-report.sh table" "$work/report"
 fi
-grep -qF "| GET | secrets | 1000 |" "$work/report" && ok "agent-report.sh: requests by verb and resource at the last level" || fail "agent-report.sh breakdown" "$work/report"
+grep -qF "| GET | secrets | 1500 |" "$work/report" && ok "agent-report.sh: requests by verb and resource at the last level" || fail "agent-report.sh breakdown" "$work/report"
 BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/agent.jsonl" >"$work/report.json" 2>&1 || true
-[ "$(jq 'length' "$work/report.json" 2>/dev/null)" = 2 ] && ok "agent-report.sh: BENCH_REPORT_FORMAT=json" || fail "agent-report.sh json" "$work/report.json"
+[ "$(jq 'length' "$work/report.json" 2>/dev/null)" = 3 ] && ok "agent-report.sh: BENCH_REPORT_FORMAT=json" || fail "agent-report.sh json" "$work/report.json"
 expect "agent-report.sh: no file is a usage error" 2 "usage" -- hack/bench/agent-report.sh
 
 # --- serve.sh and serve-report.sh --------------------------------------------
@@ -263,6 +276,88 @@ cp "$lab" "$work/rel-kubeconfig"
 expect "agent.sh: a relative KUBECONFIG is resolved against the caller's directory" 7 "building the seeder and the agent benchmark" -- bash -c 'cd "$1" && KUBECONFIG=rel-kubeconfig BENCH_BIN="$1/bin" GO_STUB_RC=7 "$2/hack/bench/agent.sh"' _ "$work" "$repo"
 expect "agent.sh: started from its own directory it finds the repository" 7 "building the seeder and the agent benchmark" -- bash -c 'cd "$1/hack/bench" && KUBECONFIG="$2" BENCH_BIN="$3/bin" GO_STUB_RC=7 ./agent.sh' _ "$repo" "$lab" "$work"
 expect "serve.sh: started from its own directory it finds the repository" 1 "unknown backend nope" -- bash -c 'cd "$1/hack/bench" && BENCH_BACKENDS=nope BENCH_BIN="$2/bin" ./serve.sh' _ "$repo" "$work"
+
+# --- agent.sh: BENCH_NO_HELM_CACHE -------------------------------------------
+# The knob that gives the Helm step no cache (the "before" rows of
+# docs/operations/scale.md) is 1 or unset; anything else is refused before a
+# build or a cluster call, not after the lab was seeded. And when it is set, the
+# benchmark process gets it (UPGRADESCOPE_BENCH_NO_HELM_CACHE=1); when it is
+# not, the benchmark gets nothing, so the cache is on.
+nodes 1 2000 >"$NODES_JSON"
+namespaces "${vanilla_ns[@]}" bench-ns-001 >"$NS_JSON"
+for bad in 0 true yes; do
+  expect "agent.sh: BENCH_NO_HELM_CACHE=$bad is refused, before the build" 1 "BENCH_NO_HELM_CACHE" -- env "KUBECONFIG=$lab" "BENCH_BIN=$work/bin" "BENCH_NO_HELM_CACHE=$bad" GO_STUB_RC=0 "$agent"
+  if grep -qE "go stub|bench-agent: cluster" "$work/out"; then
+    fail "agent.sh: BENCH_NO_HELM_CACHE=$bad was refused after the script started work" "$work/out"
+  else
+    ok "agent.sh: BENCH_NO_HELM_CACHE=$bad is refused before anything is built or any cluster is contacted"
+  fi
+done
+# A run that gets as far as the measured process, with everything it would
+# download or build stubbed: the go stub makes a fake benchmark binary that
+# records the knob's value, kubectl accepts the KWOK install, curl "downloads"
+# files and sha256sum answers with the digests agent.sh pins.
+nc=$work/stubs-nocache
+mkdir -p "$nc"
+cat >"$nc/kubectl" <<'STUB'
+#!/usr/bin/env bash
+args="$*"
+case "$args" in
+  *"config view"*) echo "https://lab.example:6443" ;;
+  *"config current-context"*) echo "kind-lab" ;;
+  *"get nodes -o json"*) cat "$NODES_JSON" ;;
+  *"get ns -o json"*) cat "$NS_JSON" ;;
+  *apply* | *rollout* | *wait*) exit 0 ;;
+  *) echo "kubectl stub: unexpected $args" >&2; exit 99 ;;
+esac
+STUB
+cat >"$nc/go" <<'STUB'
+#!/usr/bin/env bash
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = -o ]; then out=$2; shift; fi
+  shift
+done
+cat >"$out" <<'BIN'
+#!/usr/bin/env bash
+echo "knob=${UPGRADESCOPE_BENCH_NO_HELM_CACHE-unset}" >>"$KNOB_LOG"
+BIN
+chmod +x "$out"
+STUB
+cat >"$nc/curl" <<'STUB'
+#!/usr/bin/env bash
+while [ $# -gt 0 ]; do
+  if [ "$1" = -o ]; then echo stub >"$2"; shift; fi
+  shift
+done
+STUB
+cat >"$nc/sha256sum" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in *stage-fast*) echo "$SHA_STAGE  $1" ;; *) echo "$SHA_KWOK  $1" ;; esac
+STUB
+cp "$nc/sha256sum" "$nc/shasum"
+chmod +x "$nc"/*
+sha_kwok=$(sed -n 's/^KWOK_SHA256_kwok_yaml=//p' hack/bench/agent.sh)
+sha_stage=$(sed -n 's/^KWOK_SHA256_stage_fast_yaml=//p' hack/bench/agent.sh)
+run_nocache() { # run_nocache <log> [<BENCH_NO_HELM_CACHE value>]: one tick at the vanilla fill
+  : >"$1"
+  local vars=(env -u UPGRADESCOPE_BENCH_NO_HELM_CACHE -u BENCH_NO_HELM_CACHE PATH="$nc:$PATH" "KUBECONFIG=$lab" "BENCH_BIN=$work/bin-nc" BENCH_STEPS=0 BENCH_TICKS=1 "KNOB_LOG=$1" "SHA_KWOK=$sha_kwok" "SHA_STAGE=$sha_stage")
+  [ $# -lt 2 ] || vars+=("BENCH_NO_HELM_CACHE=$2")
+  # The report that follows finds no results (the fake binary writes none): exit 2.
+  "${vars[@]}" "$agent" >"$work/out" 2>&1 || true
+}
+run_nocache "$work/knob-set" 1
+if [ "$(cat "$work/knob-set")" = "knob=1" ]; then
+  ok "agent.sh: BENCH_NO_HELM_CACHE=1 reaches the benchmark as UPGRADESCOPE_BENCH_NO_HELM_CACHE=1"
+else
+  fail "agent.sh: BENCH_NO_HELM_CACHE=1 did not reach the benchmark" "$work/out"
+fi
+run_nocache "$work/knob-unset"
+if [ "$(cat "$work/knob-unset")" = "knob=unset" ]; then
+  ok "agent.sh: without BENCH_NO_HELM_CACHE the benchmark's variable is unset (the cache is on)"
+else
+  fail "agent.sh: the benchmark got a no-cache variable nobody asked for" "$work/out"
+fi
 
 # --- syntax -----------------------------------------------------------------
 for f in hack/bench/*.sh; do
