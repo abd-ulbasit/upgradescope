@@ -490,6 +490,45 @@ else
   cat "$work/gs-off.knob" "$work/gs-off.kubectl" >&2
 fi
 
+# --- pod-sample.sh ----------------------------------------------------------------
+# Reads the one kubeconfig it is given, never the default, and changes nothing;
+# its sampling is checked against stubbed kubectl and docker.
+ps=hack/bench/pod-sample.sh
+expect "pod-sample.sh: no KUBECONFIG is refused" 1 "KUBECONFIG is required" -- env -u KUBECONFIG NODE_CONTAINER=n "$ps" ns d 1
+expect "pod-sample.sh: a list of kubeconfigs is refused" 1 "single file" -- env "KUBECONFIG=$lab:$lab" NODE_CONTAINER=n "$ps" ns d 1
+expect "pod-sample.sh: ~/.kube/config is refused" 1 "is ~/.kube/config" -- env "HOME=$work/home" "KUBECONFIG=$work/home/.kube/config" NODE_CONTAINER=n "$ps" ns d 1
+expect "pod-sample.sh: no node container is refused" 1 "NODE_CONTAINER is required" -- env -u NODE_CONTAINER "KUBECONFIG=$lab" "$ps" ns d 1
+expect "pod-sample.sh: seconds must be a number" 1 "whole number" -- env "KUBECONFIG=$lab" NODE_CONTAINER=n "$ps" ns d soon
+pss=$work/stubs-podsample
+mkdir -p "$pss"
+cat >"$pss/kubectl" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  *"get pods -o json"*) cat "$PODS_JSON" ;;
+  *"get pod "*"containerStatuses"*) echo "containerd://abc123" ;;
+  *) echo "kubectl stub: unexpected $*" >&2; exit 99 ;;
+esac
+STUB
+cat >"$pss/docker" <<'STUB'
+#!/usr/bin/env bash
+printf '1000000\t100\t40\t3000000\t50000000\t60000000\t70000000\n'
+STUB
+chmod +x "$pss"/*
+# An old pod still terminating beside the new one: the new one is sampled.
+jq -n '{items: [
+  {metadata: {name: "agent-old-1", creationTimestamp: "2026-10-04T01:00:00Z", deletionTimestamp: "2026-10-04T02:00:00Z"}, status: {phase: "Running"}},
+  {metadata: {name: "agent-new-2", creationTimestamp: "2026-10-04T02:00:00Z"}, status: {phase: "Running"}},
+  {metadata: {name: "other-3", creationTimestamp: "2026-10-04T03:00:00Z"}, status: {phase: "Running"}}]}' >"$work/pods.json"
+rc=0
+env PATH="$pss:$PATH" "KUBECONFIG=$lab" NODE_CONTAINER=node PODS_JSON="$work/pods.json" BENCH_SAMPLE_INTERVAL=1 "$ps" ns agent 2 >"$work/samples.tsv" 2>"$work/samples.err" || rc=$?
+if [ "$rc" = 0 ] && grep -qF "agent-new-2 container abc123" "$work/samples.err" &&
+  [ "$(head -1 "$work/samples.tsv" | cut -f2-)" = "usage_usec	nr_periods	nr_throttled	throttled_usec	mem_current	mem_peak	rss_peak" ] &&
+  [ "$(sed -n 2p "$work/samples.tsv" | cut -f2-)" = "1000000	100	40	3000000	50000000	60000000	70000000" ]; then
+  ok "pod-sample.sh: samples the newest running pod that is not terminating, one TSV line per sample"
+else
+  fail "pod-sample.sh sampling (exit $rc)" "$work/samples.err"
+fi
+
 # --- syntax -----------------------------------------------------------------
 for f in hack/bench/*.sh; do
   if bash -n "$f" 2>"$work/syntax"; then ok "bash -n $f"; else fail "bash -n $f" "$work/syntax"; fi
