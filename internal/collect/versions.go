@@ -44,7 +44,7 @@ func collectVersionsFrom(ctx context.Context, disc discovery.DiscoveryInterface,
 	inv.ClusterID = string(ks.UID)
 
 	var evidence providerEvidence
-	nodeOpts := metav1.ListOptions{Limit: listPageSize}
+	nodeOpts := metav1.ListOptions{Limit: listPageSize} // then sized by pageLimit
 	for {
 		nodes, err := kube.CoreV1().Nodes().List(ctx, nodeOpts)
 		if err != nil {
@@ -53,8 +53,10 @@ func collectVersionsFrom(ctx context.Context, disc discovery.DiscoveryInterface,
 			inv.Provider = evidence.provider(inv.ServerVersion)
 			return fmt.Errorf("list nodes: %w", err)
 		}
+		size := 0
 		for i := range nodes.Items {
 			n := &nodes.Items[i]
+			size += n.Size()
 			inv.Nodes = append(inv.Nodes, inventory.NodeInfo{
 				Name:             n.Name,
 				KubeletVersion:   n.Status.NodeInfo.KubeletVersion,
@@ -65,7 +67,7 @@ func collectVersionsFrom(ctx context.Context, disc discovery.DiscoveryInterface,
 		if nodes.Continue == "" {
 			break
 		}
-		nodeOpts.Continue = nodes.Continue
+		nodeOpts.Continue, nodeOpts.Limit = nodes.Continue, pageLimit(len(nodes.Items), size, nodePageSize)
 	}
 	evidence.nodesRead = true
 	inv.Provider = evidence.provider(inv.ServerVersion)
@@ -178,14 +180,16 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 	requiredComps := map[string]bool{} // the Skipped ones, see above
 	var requiredPods []string          // the unread pods of requiredComps
 	var ev addOnEvidence
-	podOpts := metav1.ListOptions{Limit: listPageSize}
+	podOpts := metav1.ListOptions{Limit: listPageSize} // then sized by pageLimit
 	for {
 		pods, err := kube.CoreV1().Pods(metav1.NamespaceSystem).List(ctx, podOpts)
 		if err != nil {
 			return fmt.Errorf("list kube-system pods: %w", err)
 		}
+		size := 0
 		for i := range pods.Items {
 			p := &pods.Items[i]
+			size += p.Size()
 			ev.addPod(p.Namespace, p.Labels, podContainerImages(p))
 			comp, labelled := classifyControlPlanePod(p.Name, p.Labels)
 			if comp == "" {
@@ -216,7 +220,7 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 		if pods.Continue == "" {
 			break
 		}
-		podOpts.Continue = pods.Continue
+		podOpts.Continue, podOpts.Limit = pods.Continue, pageLimit(len(pods.Items), size, podPageSize)
 	}
 	sysPods.ev, sysPods.read = ev, true
 	for cv := range seen {

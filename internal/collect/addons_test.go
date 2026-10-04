@@ -529,8 +529,15 @@ func TestCollectAddOnsFollowsListPagination(t *testing.T) {
 	}
 	cs := kubefake.NewClientset()
 	calls := 0
-	cs.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+	cs.PrependReactor("list", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		calls++
+		want := int64(listPageSize) // then sized by the first page's pods: small ones, so the most a page may hold
+		if calls > 1 {
+			want = podPageSize
+		}
+		if l := a.(interface{ GetListOptions() metav1.ListOptions }).GetListOptions().Limit; l != want {
+			t.Errorf("pod list %d asked for pages of %d, want %d", calls, l, want)
+		}
 		switch calls {
 		case 1:
 			return true, &corev1.PodList{
