@@ -591,7 +591,13 @@ func usageKeys(rep engine.Report) map[string]bool {
 // the PR. Manifest refs keep their place under the MaxObjectRefs cap
 // (cluster refs are dropped first), so SARIF can still place them; a row
 // that then lists only manifest refs while it counts the cluster's objects
-// too is worded as both, not as manifests alone (engine.listedObjects). What
+// too is worded as both, not as manifests alone (engine.listedObjects).
+// The cluster refs dropped from the listing stay in Unlisted, still live:
+// a Helm release's stored copy of one is left to the live finding as in
+// the baseline. Otherwise the room the manifests take could make a
+// release's manifest finding new in the proposed state, which gateResult
+// blames on the PR (fail closed), and the verdict would turn on how many
+// of the cluster's refs at that API the collector listed. What
 // the manifests delete or move to another API stays invisible: a stream
 // says what it applies, not what it removes. Identity is the exact
 // namespace and name, so a rendered manifest without a namespace (applied
@@ -602,7 +608,7 @@ func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 	out := make([]inventory.APIUsage, 0, len(cluster)+len(manifests))
 	at := map[gvk]int{}
 	for _, u := range cluster {
-		u.Objects, u.Namespaces = slices.Clone(u.Objects), maps.Clone(u.Namespaces)
+		u.Objects, u.Unlisted, u.Namespaces = slices.Clone(u.Objects), slices.Clone(u.Unlisted), maps.Clone(u.Namespaces)
 		at[gvk{u.Group, u.Version, u.Kind}] = len(out)
 		out = append(out, u)
 	}
@@ -634,6 +640,7 @@ func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 		}
 		if room := max(0, inventory.MaxObjectRefs-len(m.Objects)); len(kept) > room {
 			u.ObjectsOmitted += len(kept) - room
+			u.Unlisted = append(u.Unlisted, kept[room:]...)
 			kept = kept[:room]
 		}
 		u.Objects = append(kept, m.Objects...)

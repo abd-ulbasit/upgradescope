@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -33,6 +34,20 @@ func capInventory(web bool) inventory.Inventory {
 		ingress.ObjectsOmitted = 2
 	}
 	inv.APIUsage = []inventory.APIUsage{ingress}
+	return inv
+}
+
+// capHelmInventory is capInventory(web) with payments' Helm release pay,
+// whose stored manifest holds p0 and p1, the two live Ingresses.
+func capHelmInventory(web bool) inventory.Inventory {
+	inv := capInventory(web)
+	inv.HelmReleases = []inventory.HelmRelease{{
+		Name: "pay", Namespace: "pay-prod", ChartName: "pay", ChartVersion: "1.0.0", Status: "deployed", Revision: 1,
+		ManifestAPIs: []inventory.APIUsage{{
+			Group: "extensions", Version: "v1beta1", Kind: "Ingress", Count: 2, Namespaces: map[string]int{"": 2},
+			Objects: []inventory.ObjectRef{{Name: "p0", Line: 3}, {Name: "p1", Line: 9}},
+		}},
+	}}
 	return inv
 }
 
@@ -123,16 +138,8 @@ func TestScopedGateScoreFollowsTheCollectorsCap(t *testing.T) {
 	mintReadToken(t, st, "pay-tok", "payments")
 	got := map[bool]gateSummary{}
 	for _, web := range []bool{true, false} {
-		inv := capInventory(web)
-		inv.HelmReleases = []inventory.HelmRelease{{
-			Name: "pay", Namespace: "pay-prod", ChartName: "pay", ChartVersion: "1.0.0", Status: "deployed", Revision: 1,
-			ManifestAPIs: []inventory.APIUsage{{
-				Group: "extensions", Version: "v1beta1", Kind: "Ingress", Count: 2, Namespaces: map[string]int{"": 2},
-				Objects: []inventory.ObjectRef{{Name: "p0", Line: 3}, {Name: "p1", Line: 9}},
-			}},
-		}}
 		name := fmt.Sprintf("helm-%v", web)
-		pushScopeCluster(t, ts, name, inv)
+		pushScopeCluster(t, ts, name, capHelmInventory(web))
 		resp, raw := postGate(t, ts, "?target=1.35&cluster="+name, "pay-tok",
 			"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: pr, namespace: pay-prod}\n", "application/x-yaml")
 		got[web] = summarize(t, resp, raw)
@@ -152,5 +159,82 @@ func TestScopedGateScoreFollowsTheCollectorsCap(t *testing.T) {
 	}
 	if !has(web) || has(none) || web.Score >= none.Score {
 		t.Errorf("want %s, and a lower score, only behind web's hundred (the documented cap dependence):\n%+v\n%+v", helm, web, none)
+	}
+}
+
+// annotatedIngresses is a stream of n extensions/v1beta1 Ingresses in
+// pay-prod that accept their own removed-api finding and, with blocker,
+// one more that does not.
+func annotatedIngresses(n int, blocker bool) string {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, "---\napiVersion: extensions/v1beta1\nkind: Ingress\nmetadata:\n  name: pr%d\n  namespace: pay-prod\n"+
+			"  annotations:\n    upgradescope.dev/ignore: removed-api\n    upgradescope.dev/ignore-reason: deleted with the upgrade\n", i)
+	}
+	if blocker {
+		b.WriteString("---\napiVersion: extensions/v1beta1\nkind: Ingress\nmetadata: {name: pr-live, namespace: pay-prod}\n")
+	}
+	return b.String()
+}
+
+// A PR's objects at an API take the room the collector's cap leaves the
+// cluster's refs (upsertUsage), but the refs they push out of the listing
+// are still live objects, which a Helm release's stored copy is left to
+// (#72). Ninety-nine PR Ingresses that accept their own finding leave
+// room for one of payments' two; were p1 then unmatched, the release's
+// manifest blocker would be new in the proposed state, blamed on the PR
+// (fail closed), and the gate would answer 422 where p0 and p1 are listed
+// but 200 where web's hundred left them unlisted (the baseline has the
+// blocker): one bit of web's evidence for payments, and a false red
+// fleet-wide. The status, header and verdict are the same on both, for
+// payments and fleet-wide; where the release's blocker is in the answer
+// it is the cluster's; and an Ingress of the PR's that does not accept
+// its finding still blocks.
+func TestGateHelmVerdictIgnoresTheRefsThePRPushesOut(t *testing.T) {
+	_, st, ts, _ := scopeServer(t)
+	mintReadToken(t, st, "pay-tok", "payments")
+	pushScopeCluster(t, ts, "cap-web", capHelmInventory(true))
+	pushScopeCluster(t, ts, "cap-none", capHelmInventory(false))
+	const helm = "removed-api/helm-release/pay-prod/pay"
+	gate := func(cluster, token string, blocker bool) gateSummary {
+		t.Helper()
+		resp, raw := postGate(t, ts, "?target=1.35&cluster="+cluster, token,
+			annotatedIngresses(inventory.MaxObjectRefs-1, blocker), "application/x-yaml")
+		return summarize(t, resp, raw)
+	}
+	source := func(s gateSummary, key string) string {
+		for _, f := range s.Findings {
+			if f.Key == key {
+				return f.Source
+			}
+		}
+		return ""
+	}
+	for _, token := range []string{"pay-tok", "fleet-tok"} {
+		web, none := gate("cap-web", token, false), gate("cap-none", token, false)
+		if web.Status != none.Status || web.Header != none.Header || web.Verdict != none.Verdict {
+			t.Errorf("%s: the refs the PR pushes out decide the answer:\n%+v\n%+v", token, web, none)
+		}
+		for cluster, s := range map[string]gateSummary{"cap-web": web, "cap-none": none} {
+			if s.Status != "200 OK" || s.Header != "ready" || s.Verdict != "ready" {
+				t.Errorf("%s on %s: a PR whose objects accept their own finding is not ready: %+v", token, cluster, s)
+			}
+			if src := source(s, helm); src != "" && src != sourceCluster {
+				t.Errorf("%s on %s: %s is blamed on the PR: %+v", token, cluster, helm, s)
+			}
+		}
+	}
+	// Fleet-wide on cap-web, web's hundred leave payments' two unlisted:
+	// the release's blocker is in the answer, the cluster's, as without
+	// the PR.
+	if src := source(gate("cap-web", "fleet-tok", false), helm); src != sourceCluster {
+		t.Errorf("fleet-wide on cap-web: %s source = %q, want %q", helm, src, sourceCluster)
+	}
+	for _, token := range []string{"pay-tok", "fleet-tok"} {
+		for _, cluster := range []string{"cap-web", "cap-none"} {
+			if s := gate(cluster, token, true); s.Status != "422 Unprocessable Entity" || s.Header != "blocked" || s.Verdict != "blocked" {
+				t.Errorf("%s on %s: the PR's own blocker does not block: %+v", token, cluster, s)
+			}
+		}
 	}
 }

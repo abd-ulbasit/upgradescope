@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -164,6 +165,12 @@ func TestUpsertUsageKeepsManifestRefs(t *testing.T) {
 	}
 	if last := u.Objects[len(u.Objects)-2:]; last[0].Line != 1 || last[1].Line != 6 {
 		t.Errorf("listed objects end %+v, want both manifest refs", last)
+	}
+	// The cluster refs dropped for them are still live objects, which a
+	// Helm release's stored copy is matched against: job-99 alone (job-0
+	// is replaced).
+	if want := []inventory.ObjectRef{{Namespace: "shop", Name: "job-99"}}; !reflect.DeepEqual(u.Unlisted, want) {
+		t.Errorf("unlisted = %+v, want %+v", u.Unlisted, want)
 	}
 	if len(cluster.Objects) != inventory.MaxObjectRefs || cluster.Namespaces["shop"] != inventory.MaxObjectRefs+2 {
 		t.Error("the cluster's inventory must not be modified")

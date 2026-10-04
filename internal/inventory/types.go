@@ -223,6 +223,15 @@ type APIUsage struct {
 	// the cap. Collectors that cannot identify objects leave both empty.
 	Objects        []ObjectRef `json:"objects,omitempty"`
 	ObjectsOmitted int         `json:"objectsOmitted,omitempty"`
+	// Unlisted are objects a merge dropped from Objects, under the cap,
+	// to make room for refs it lists instead (the server's gate lists a
+	// PR's refs before the cluster's), and counts in ObjectsOmitted: live
+	// objects that are never reported, which the engine still leaves a
+	// Helm release's stored copy of to the live finding, so what a merge
+	// chooses to list cannot change the findings. Never encoded, and
+	// empty in a collected inventory (the refs a collector's cap omits
+	// are not known).
+	Unlisted []ObjectRef `json:"-"`
 }
 
 // MaxObjectRefs caps APIUsage.Objects so a render with thousands of objects

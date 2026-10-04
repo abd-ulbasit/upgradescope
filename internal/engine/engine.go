@@ -1711,7 +1711,8 @@ func helmReleaseRef(rel inventory.HelmRelease) string {
 //     — "helm-release" is no API group, so these keys never collide with
 //     the per-API keys of live findings. Objects the live scan already
 //     flags (same API, name and namespace, an unset manifest namespace
-//     standing for the release's) are left to the live finding, so no
+//     standing for the release's; listed, or dropped from the listing by
+//     a merge, APIUsage.Unlisted) are left to the live finding, so no
 //     object is counted twice; a release whose objects are all flagged
 //     live gets no manifest finding.
 func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
@@ -1719,7 +1720,7 @@ func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version
 	live := map[string][]inventory.ObjectRef{} // apiKey → live objects
 	for _, u := range inv.APIUsage {
 		key := apiKey(u.Group, u.Version, u.Kind)
-		live[key] = append(live[key], u.Objects...)
+		live[key] = append(append(live[key], u.Objects...), u.Unlisted...)
 	}
 	var out []Finding
 	for _, rel := range inv.HelmReleases {
