@@ -19,11 +19,26 @@
 # deletes anything: reset the cluster by recreating it (BENCH_RESET_CMD runs
 # before and after if set, e.g. your cluster-recreate script).
 #
+# Opt-in GitOps fill (BENCH_GITOPS=1, #233): also installs the upstream Argo
+# CD Application CRD and the Flux HelmRelease and OCIRepository CRDs (pinned
+# by version and sha256, into the lab only), and fills it with Argo CD
+# Applications (single- and multi-source) and Flux HelmReleases (chart
+# sources and chartRefs to OCIRepositories) at each level, so the report also
+# shows what the agent's GitOps lists cost a tick. Off by default: nothing
+# of it runs, and the numbers are those of a cluster without the tools.
+#
 # Knobs (environment):
 #   BENCH_STEPS      fill levels as fractions of the full seed, default "0 0.25 0.5 1"
 #                    (0 is the vanilla cluster; 1 is 2000 nodes, 10000 pods,
 #                    6000 ConfigMaps, 4000 Deployments, 1000 Helm releases)
 #   BENCH_TICKS      ticks measured per level, default 5
+#   BENCH_GITOPS     1 adds the GitOps fill above; unset (or anything else is
+#                    refused) leaves it out
+#   BENCH_GITOPS_APPS, BENCH_GITOPS_HELMRELEASES  Argo CD Applications and Flux
+#                    HelmReleases at full size (default 1000 each; the
+#                    levels scale them like everything else)
+#   BENCH_SETTLE_SECONDS  how long to let KWOK's heartbeats settle after each
+#                    fill step, default 30
 #   BENCH_HELM_REVISIONS  stored revisions per Helm release, default 1
 #   BENCH_BIN        where tools and results go, default bin/bench (gitignored)
 #   BENCH_RESET_CMD  a command run before and after (a cluster-recreate script)
@@ -68,6 +83,13 @@ BENCH_STEPS=${BENCH_STEPS:-0 0.25 0.5 1}
 BENCH_TICKS=${BENCH_TICKS:-5}
 BENCH_HELM_REVISIONS=${BENCH_HELM_REVISIONS:-1}
 BENCH_RUN_ON=${BENCH_RUN_ON:-local}
+BENCH_SETTLE_SECONDS=${BENCH_SETTLE_SECONDS:-30}
+BENCH_GITOPS_APPS=${BENCH_GITOPS_APPS:-1000}
+BENCH_GITOPS_HELMRELEASES=${BENCH_GITOPS_HELMRELEASES:-1000}
+case "${BENCH_GITOPS:-}" in "" | 1) ;; *) die "BENCH_GITOPS=$BENCH_GITOPS: set it to 1 or leave it unset" ;; esac
+for v in BENCH_SETTLE_SECONDS BENCH_GITOPS_APPS BENCH_GITOPS_HELMRELEASES; do
+  case "${!v}" in "" | *[!0-9]*) die "$v=${!v}: set it to a whole number" ;; esac
+done
 # The benchmark itself refuses anything but 1, but only after a build and a
 # fill of the lab; refuse here, before either.
 case "${BENCH_NO_HELM_CACHE:-}" in "" | 1) ;; *) die "BENCH_NO_HELM_CACHE=$BENCH_NO_HELM_CACHE: set it to 1 or leave it unset" ;; esac
@@ -84,14 +106,42 @@ sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
-fetch_pinned() { # fetch_pinned <asset> <sha256>
-  local f=$BENCH_BIN/kwok-$KWOK_VERSION-$1
-  if [ ! -f "$f" ] || [ "$(sha256_of "$f")" != "$2" ]; then
-    curl -fsSL -o "$f.tmp" "https://github.com/kubernetes-sigs/kwok/releases/download/$KWOK_VERSION/$1" || die "download of kwok $1 failed"
-    [ "$(sha256_of "$f.tmp")" = "$2" ] || { rm -f "$f.tmp"; die "kwok $1 does not match its pinned sha256"; }
+# fetch_url <file name in BENCH_BIN> <url> <sha256>: a download that must match
+# its pinned digest, kept (and verified again) for the next run.
+fetch_url() {
+  local f=$BENCH_BIN/$1
+  if [ ! -f "$f" ] || [ "$(sha256_of "$f")" != "$3" ]; then
+    curl -fsSL -o "$f.tmp" "$2" || die "download of $2 failed"
+    [ "$(sha256_of "$f.tmp")" = "$3" ] || { rm -f "$f.tmp"; die "$2 does not match its pinned sha256"; }
     mv "$f.tmp" "$f"
   fi
   echo "$f"
+}
+
+fetch_pinned() { # fetch_pinned <asset> <sha256>
+  fetch_url "kwok-$KWOK_VERSION-$1" "https://github.com/kubernetes-sigs/kwok/releases/download/$KWOK_VERSION/$1" "$2"
+}
+
+# --- the GitOps CRDs (BENCH_GITOPS=1), upstream manifests pinned the same way.
+# Only the CRDs the agent's GitOps collector reads are installed: Argo CD's
+# Application, Flux's HelmRelease and OCIRepository. The source-controller
+# manifest holds six CRDs; the one wanted is cut out of it after the whole
+# file matched its digest.
+ARGOCD_VERSION=v3.5.3
+ARGOCD_SHA256_application_crd=5dde0e229249b6b707beb98674c1deae3949d5c319a6c45b9f5a80c99618e40c
+FLUX_HELM_CONTROLLER_VERSION=v1.6.5
+FLUX_SHA256_helm_controller_crds=8af19966e63cccde7d2c62e24c7bd3466010dd53e9d063e2ce22d1391e11f272
+FLUX_SOURCE_CONTROLLER_VERSION=v1.9.6
+FLUX_SHA256_source_controller_crds=5acf3b01c24f15647a162f2d43b1287f0d0156fab0026f4afb9865874cdbe16d
+
+# extract_crd <manifest> <crd name>: the one document of a multi-document
+# manifest whose metadata.name is <crd name> (documents are separated by a
+# line holding only ---).
+extract_crd() {
+  awk -v want="  name: $2" '
+    /^---$/ { if (hit) { done = 1; exit } doc = ""; next }
+    { doc = doc $0 "\n"; if ($0 == want) hit = 1 }
+    END { if (hit) printf "%s", doc }' "$1"
 }
 
 # --- refuse a cluster that is not a lab ---------------------------------
@@ -137,12 +187,13 @@ else
   echo "bench-agent: the measured ticks run on $BENCH_RUN_ON, next to the apiserver" >&2
 fi
 
-# measure <label> <expected nodes> <expected helm releases>: the tick
-# benchmark at the cluster's current fill, appending one JSON line per tick
-# to $results.
+# measure <label> <expected nodes> <expected helm releases> <expected GitOps
+# charts>: the tick benchmark at the cluster's current fill, appending one JSON
+# line per tick to $results. The GitOps count is checked only with BENCH_GITOPS.
 measure() {
   local vars=(UPGRADESCOPE_BENCH_TICKS="$BENCH_TICKS" UPGRADESCOPE_BENCH_LABEL="$1"
     UPGRADESCOPE_BENCH_EXPECT_NODES="$2" UPGRADESCOPE_BENCH_EXPECT_HELM="$3")
+  [ -z "${BENCH_GITOPS:-}" ] || vars+=(UPGRADESCOPE_BENCH_GITOPS=1 UPGRADESCOPE_BENCH_EXPECT_GITOPS="$4")
   [ -z "${BENCH_NO_HELM_CACHE:-}" ] || vars+=(UPGRADESCOPE_BENCH_NO_HELM_CACHE="$BENCH_NO_HELM_CACHE")
   if [ "$BENCH_RUN_ON" = local ]; then
     env "${vars[@]}" UPGRADESCOPE_BENCH_KUBECONFIG="$KUBECONFIG" UPGRADESCOPE_BENCH_OUT="$results" \
@@ -173,6 +224,19 @@ kc -n kube-system rollout status deploy/kwok-controller --timeout=300s >&2
 kc wait --for=condition=Established crd/stages.kwok.x-k8s.io --timeout=60s >&2
 kc apply --server-side --force-conflicts -f "$stage" >&2
 
+if [ -n "${BENCH_GITOPS:-}" ]; then
+  argo_crd=$(fetch_url "argocd-$ARGOCD_VERSION-application-crd.yaml" "https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_VERSION/manifests/crds/application-crd.yaml" "$ARGOCD_SHA256_application_crd")
+  helm_crds=$(fetch_url "flux-helm-controller-$FLUX_HELM_CONTROLLER_VERSION-crds.yaml" "https://github.com/fluxcd/helm-controller/releases/download/$FLUX_HELM_CONTROLLER_VERSION/helm-controller.crds.yaml" "$FLUX_SHA256_helm_controller_crds")
+  source_crds=$(fetch_url "flux-source-controller-$FLUX_SOURCE_CONTROLLER_VERSION-crds.yaml" "https://github.com/fluxcd/source-controller/releases/download/$FLUX_SOURCE_CONTROLLER_VERSION/source-controller.crds.yaml" "$FLUX_SHA256_source_controller_crds")
+  oci_crd=$BENCH_BIN/flux-ocirepositories-crd-$FLUX_SOURCE_CONTROLLER_VERSION.yaml
+  extract_crd "$source_crds" ocirepositories.source.toolkit.fluxcd.io >"$oci_crd"
+  [ -s "$oci_crd" ] || die "no ocirepositories CRD in the source-controller manifest"
+  echo "bench-agent: installing the Argo CD $ARGOCD_VERSION Application CRD and the Flux HelmRelease ($FLUX_HELM_CONTROLLER_VERSION) and OCIRepository ($FLUX_SOURCE_CONTROLLER_VERSION) CRDs in the lab" >&2
+  # Server-side: the Application CRD is too large for client-side apply's annotation.
+  kc apply --server-side --force-conflicts -f "$argo_crd" -f "$helm_crds" -f "$oci_crd" >&2
+  kc wait --for=condition=Established crd/applications.argoproj.io crd/helmreleases.helm.toolkit.fluxcd.io crd/ocirepositories.source.toolkit.fluxcd.io --timeout=120s >&2
+fi
+
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 results=$BENCH_BIN/agent-$stamp.jsonl
 : >"$results"
@@ -184,20 +248,25 @@ full_nodes=2000 full_pods=10000 full_cms=6000 full_deps=4000 full_helm=1000 full
 for f in $BENCH_STEPS; do
   nodes=$(scale $full_nodes "$f") pods=$(scale $full_pods "$f") cms=$(scale $full_cms "$f")
   deps=$(scale $full_deps "$f") helm=$(scale $full_helm "$f")
+  apps=0 hrs=0
+  if [ -n "${BENCH_GITOPS:-}" ]; then apps=$(scale "$BENCH_GITOPS_APPS" "$f") hrs=$(scale "$BENCH_GITOPS_HELMRELEASES" "$f"); fi
   nss=$full_ns # constant: an object is placed by its number modulo this, so a step adds only the difference
   if [ "$f" != 0 ]; then
-    echo "bench-agent: seeding to $f of full: $nodes nodes, $pods pods, $cms ConfigMaps, $deps Deployments, $helm Helm releases ($BENCH_HELM_REVISIONS revision each)" >&2
+    echo "bench-agent: seeding to $f of full: $nodes nodes, $pods pods, $cms ConfigMaps, $deps Deployments, $helm Helm releases ($BENCH_HELM_REVISIONS revision each)${BENCH_GITOPS:+, $apps Argo CD Applications, $hrs Flux HelmReleases}" >&2
+    gitops_flags=()
+    [ -z "${BENCH_GITOPS:-}" ] || gitops_flags=(--argocd-apps "$apps" --flux-helmreleases "$hrs")
     "$BENCH_BIN/bench-seed" --kubeconfig "$KUBECONFIG" --nodes "$nodes" --pods "$pods" --configmaps "$cms" \
-      --deployments "$deps" --helm-releases "$helm" --helm-revisions "$BENCH_HELM_REVISIONS" --namespaces "$nss" >>"$steps_file"
+      --deployments "$deps" --helm-releases "$helm" --helm-revisions "$BENCH_HELM_REVISIONS" --namespaces "$nss" \
+      ${gitops_flags[@]+"${gitops_flags[@]}"} >>"$steps_file"
     echo "bench-agent: letting KWOK heartbeats settle" >&2
-    sleep 30
+    sleep "$BENCH_SETTLE_SECONDS"
   fi
   if [ -n "${BENCH_CP_STATS_CMD:-}" ]; then
     echo "bench-agent: control plane at $f: $(bash -c "$BENCH_CP_STATS_CMD" 2>&1 | tr '\n' ' ')" >&2
   fi
   echo "bench-agent: measuring $BENCH_TICKS ticks at fill $f" >&2
-  measure "fill=$f nodes=$nodes pods=$pods configmaps=$cms deployments=$deps helm=$helm" \
-    $((nodes + $(kc get nodes -o json | jq '[.items[] | select(.metadata.annotations["kwok.x-k8s.io/node"] != "fake")] | length'))) "$helm" || failed=1
+  measure "fill=$f nodes=$nodes pods=$pods configmaps=$cms deployments=$deps helm=$helm${BENCH_GITOPS:+ argocd=$apps flux=$hrs}" \
+    $((nodes + $(kc get nodes -o json | jq '[.items[] | select(.metadata.annotations["kwok.x-k8s.io/node"] != "fake")] | length'))) "$helm" "$((apps + hrs))" || failed=1
 done
 
 "$script_dir/agent-report.sh" "$results"

@@ -43,6 +43,12 @@ import (
 // a benchmark of a cluster that was not seeded measures nothing), and
 // UPGRADESCOPE_BENCH_NO_HELM_CACHE=1 (collect with no Helm release cache, as
 // every tick did before #71: the "before" rows of docs/operations/scale.md).
+// With the GitOps fill (#233, hack/bench/agent.sh BENCH_GITOPS=1) the lab
+// has the Argo CD and Flux CRDs: UPGRADESCOPE_BENCH_GITOPS=1 accepts the
+// one gap that brings (a partial helm capability that skips only Argo CD:
+// it renders charts and leaves no release), and
+// UPGRADESCOPE_BENCH_EXPECT_GITOPS fails unless the inventory holds that
+// many GitOps charts, which is what shows the collector read the objects.
 func TestBenchAgentTick(t *testing.T) {
 	kubeconfig := os.Getenv("UPGRADESCOPE_BENCH_KUBECONFIG")
 	if kubeconfig == "" {
@@ -50,6 +56,7 @@ func TestBenchAgentTick(t *testing.T) {
 	}
 	ticks := envInt(t, "UPGRADESCOPE_BENCH_TICKS", 5)
 	label := os.Getenv("UPGRADESCOPE_BENCH_LABEL")
+	gitopsLab := os.Getenv("UPGRADESCOPE_BENCH_GITOPS") == "1"
 
 	cfg, proxy, rec, err := benchRESTConfig(kubeconfig)
 	if err != nil {
@@ -129,7 +136,7 @@ func TestBenchAgentTick(t *testing.T) {
 			WireDownBytes: proxy.down.Load(), WireUpBytes: proxy.up.Load(), Connections: proxy.conns.Load(),
 			PeakHeapBytes: heap, PeakRuntimeBytes: sys, MaxRSSBytes: maxRSSBytes(),
 			Nodes: len(last.Nodes), Namespaces: len(last.Namespaces), HelmReleases: len(last.HelmReleases),
-			AddOns: len(last.AddOns), APIUsage: len(last.APIUsage), Targets: len(rep.reports),
+			GitOpsCharts: len(last.GitOpsCharts), AddOns: len(last.AddOns), APIUsage: len(last.APIUsage), Targets: len(rep.reports),
 			Capabilities: map[string]string{},
 		}
 		if rep.err != nil {
@@ -156,9 +163,12 @@ func TestBenchAgentTick(t *testing.T) {
 			t.Errorf("tick %d failed: %v", n, rep.err)
 		}
 		for c, s := range last.Capabilities {
-			if !s.Available || s.Partial {
+			if !benchCapabilityOK(c, s, gitopsLab) {
 				t.Errorf("tick %d: capability %s is not fully available (%s), so the tick did not do the work being measured", n, c, s.Reason)
 			}
+		}
+		if want := envInt(t, "UPGRADESCOPE_BENCH_EXPECT_GITOPS", -1); want >= 0 && res.GitOpsCharts != want {
+			t.Errorf("tick %d: inventory has %d GitOps charts, want %d: the collector did not read what was seeded (are rbac and the CRDs there?)", n, res.GitOpsCharts, want)
 		}
 		if want := envInt(t, "UPGRADESCOPE_BENCH_EXPECT_NODES", -1); want >= 0 && res.Nodes != want {
 			t.Errorf("tick %d: inventory has %d nodes, want %d: the cluster is not seeded as expected", n, res.Nodes, want)
@@ -188,11 +198,25 @@ type benchTick struct {
 	Nodes            int               `json:"nodes"`
 	Namespaces       int               `json:"namespaces"`
 	HelmReleases     int               `json:"helmReleases"`
+	GitOpsCharts     int               `json:"gitopsCharts"` // charts read from Argo CD Applications and Flux HelmReleases
 	AddOns           int               `json:"addOns"`
 	APIUsage         int               `json:"apiUsage"`
 	Targets          int               `json:"targets"`
 	Capabilities     map[string]string `json:"capabilities"`
 	Error            string            `json:"error,omitempty"`
+}
+
+// benchCapabilityOK reports whether a capability read as fully as the
+// benchmark needs. With the GitOps fill, the helm capability may also be
+// partial with only Argo CD skipped (see TestBenchAgentTick).
+func benchCapabilityOK(c inventory.Capability, s inventory.CapabilityStatus, gitopsLab bool) bool {
+	if !s.Available {
+		return false
+	}
+	if !s.Partial {
+		return true
+	}
+	return gitopsLab && c == inventory.CapHelm && len(s.Skipped) == 1 && s.Skipped[0] == inventory.GitOpsArgoCD
 }
 
 func envInt(t *testing.T, name string, def int) int {

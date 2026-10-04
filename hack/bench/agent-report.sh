@@ -18,10 +18,30 @@ def median: sort | length as $n |
   else (.[$n / 2 - 1] + .[$n / 2]) / 2 end;
 def mib: . / 1048576;
 def r1: . * 10 | round / 10;
+def r2: . * 100 | round / 100;
 def levels: group_by(.label) | map(sort_by(.tick)) | sort_by(.[0].nodes);
 def steady: if length > 1 then .[1:] else . end;
 def get(res): (.byVerbResource | map(select(.verb == "GET" and .resource == res) | .count) | add) // 0;
 def lst(res): (.byVerbResource | map(select(.verb == "LIST" and .resource == res) | .count) | add) // 0;
+# Requests and response bytes of every verb on one resource (the GitOps
+# resources: applications, helmreleases, ocirepositories), in a tick.
+def reqs(res): (.byVerbResource | map(select(.resource == res) | .count) | add) // 0;
+def bytes(res): (.byVerbResource | map(select(.resource == res) | .bytes // 0) | add) // 0;
+def gitops: ["applications", "helmreleases", "ocirepositories"] as $rs |
+  (steady | map([$rs[] as $r | reqs($r)] | add) | median) as $req |
+  (steady | map([$rs[] as $r | bytes($r)] | add) | median) as $b |
+  {
+    charts: (.[0].gitopsCharts // 0),
+    applications: (steady | map(reqs("applications")) | median),
+    applicationsMiB: (steady | map(bytes("applications")) | median | mib | r2),
+    helmReleases: (steady | map(reqs("helmreleases")) | median),
+    helmReleasesMiB: (steady | map(bytes("helmreleases")) | median | mib | r2),
+    ociRepositories: (steady | map(reqs("ocirepositories")) | median),
+    ociRepositoriesMiB: (steady | map(bytes("ocirepositories")) | median | mib | r2),
+    requests: $req, bodyMiB: ($b | mib | r2),
+    firstTickRequests: (.[0] | [$rs[] as $r | reqs($r)] | add)
+  };
+def hasGitops: any(.[]; (.gitopsCharts // 0) > 0);
 def summary: {
   fill: (.[0].label | capture("fill=(?<f>[^ ]+)").f),
   label: .[0].label,
@@ -38,7 +58,8 @@ def summary: {
   peakHeapMiB: (steady | map(.peakHeapBytes) | max | mib | r1),
   maxRssMiB: (map(.maxRssBytes) | max | mib | r1),
   firstTick: (.[0] | {requests, wallS: (.wallMs / 1000 | r1), cpuS: ((.cpuMs // 0) / 1000 | r1), bodyMiB: (.bodyBytes | mib | r1), wireMiB: ((.wireDownBytes + .wireUpBytes) | mib | r1), peakHeapMiB: (.peakHeapBytes | mib | r1)}),
-  errors: (map(select(.error != null and .error != "")) | length)
+  errors: (map(select(.error != null and .error != "")) | length),
+  gitops: (if hasGitops then gitops else null end)
 };'
 
 if [ "${BENCH_REPORT_FORMAT:-}" = json ]; then
@@ -55,10 +76,24 @@ jq -rs "$defs"'
   levels | map(summary)[] |
   "| \(.fill) | \(.nodes) | \(.helmReleases) | \(.requests) | \(.listPods) | \(.getSecrets) | \(.bodyMiB) | \(.wireMiB) | \(.wallS) | \(.cpuS) | \(.peakHeapMiB) | \(.maxRssMiB) | \(.firstTick.requests), \(.firstTick.bodyMiB), \(.firstTick.wallS), \(.firstTick.cpuS) |"' "$1"
 
+# The GitOps fill (BENCH_GITOPS=1): what the lists of Argo CD Applications
+# and Flux HelmReleases, and the GETs of the OCIRepositories their chartRefs
+# name, cost a steady tick. Printed only when the run had GitOps charts.
+if jq -es "$defs"' [.[] | select((.gitopsCharts // 0) > 0)] | length > 0' "$1" >/dev/null; then
+  echo
+  echo "GitOps reads per tick, by fill level (medians over the ticks after the first; response MiB are bodies as client-go read them, decompressed; the tick's own requests are in the table above):"
+  echo
+  echo "| Fill | GitOps charts read | LIST Applications: requests, MiB | LIST HelmReleases: requests, MiB | GET OCIRepositories: requests, MiB | GitOps total: requests, MiB | First tick: GitOps requests |"
+  echo "|---|---|---|---|---|---|---|"
+  jq -rs "$defs"'
+    levels | map(summary | select(.gitops != null))[] |
+    "| \(.fill) | \(.gitops.charts) | \(.gitops.applications), \(.gitops.applicationsMiB) | \(.gitops.helmReleases), \(.gitops.helmReleasesMiB) | \(.gitops.ociRepositories), \(.gitops.ociRepositoriesMiB) | \(.gitops.requests), \(.gitops.bodyMiB) | \(.gitops.firstTickRequests) |"' "$1"
+fi
+
 echo
 echo "Requests by verb and resource at the last fill level (a steady tick):"
 echo
-echo "| Verb | Resource | Requests |"
-echo "|---|---|---|"
+echo "| Verb | Resource | Requests | Response KiB |"
+echo "|---|---|---|---|"
 jq -rs "$defs"'
-  levels | last | steady | .[0] | .byVerbResource[] | "| \(.verb) | \(.resource) | \(.count) |"' "$1"
+  levels | last | steady | .[0] | .byVerbResource[] | "| \(.verb) | \(.resource) | \(.count) | \((.bytes // 0) / 1024 | r1) |"' "$1"
