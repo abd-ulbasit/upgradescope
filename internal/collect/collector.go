@@ -55,19 +55,20 @@ const listPageSize = 500
 
 // The pod and node lists, which a large cluster's tick spends most of its
 // requests on (#228: at 2,001 nodes and 14,000 pods, 500-object pages were
-// 34 of a steady tick's requests), are paged by size rather than by count
-// alone: the first page is listPageSize objects, and each later one as many
-// as fit wholePageBytes encoded at the average size of the page before
-// (pageLimit), between listPageSize and podPageSize or nodePageSize. A
-// page is what one request holds: client-go reads its response whole and
-// decodes it whole, about 4.3 times its encoded size in live heap for
-// production-sized pods (TestPodPagePeakHeapIsBounded: 2,000 pods of 8 KiB
-// each, managedFields included, 71 MiB), so a page costs at most about 70
-// MiB whatever the size of the objects, and a cluster of small pods is read
-// in a quarter of the requests. A Node is larger than a pod (its status
-// lists the images it holds), so its pages hold fewer.
+// 35 of a steady tick's 53 requests), are paged by size rather than by
+// count alone: the first page is listPageSize objects, and each later one
+// as many as fit wholePageBytes encoded at the average size of the page
+// before (pageLimit), between listPageSize and podPageSize or
+// nodePageSize. A page is what one request holds: client-go reads its
+// response whole and decodes it whole, about four times its encoded size
+// in live heap (TestPodPagePeakHeapIsBounded), so a page after the first
+// costs about 32 MiB at most whatever the size of the objects, and no page
+// costs more than a page of listPageSize did before. Small objects (the
+// scale lab's KWOK pods and nodes, about 3 KiB each) are read 2,000 a page,
+// a production cluster's pods of about 8 KiB some 1,000, and anything over
+// 16 KiB (a Node listing many images) 500, as before.
 const (
-	wholePageBytes = 16 << 20
+	wholePageBytes = 8 << 20
 	podPageSize    = 2000
 	nodePageSize   = 2000
 )
