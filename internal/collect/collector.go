@@ -57,32 +57,43 @@ const listPageSize = 500
 // requests on (#228: at 2,001 nodes and 14,000 pods, 500-object pages were
 // 35 of a steady tick's 53 requests), are paged by size rather than by
 // count alone: the first page is listPageSize objects, and each later one
-// as many as fit wholePageBytes encoded at the average size of the page
-// before (pageLimit), between listPageSize and podPageSize or
+// as many as fit wholePageBytes at the size of the LARGEST object of the
+// page before (pageLimit), between listPageSize and podPageSize or
 // nodePageSize. A page is what one request holds: client-go reads its
-// response whole and decodes it whole, about four times its encoded size
-// in live heap (TestPodPagePeakHeapIsBounded), so a page after the first
-// costs about 32 MiB at most whatever the size of the objects, and no page
-// costs more than a page of listPageSize did before. Small objects (the
-// scale lab's KWOK pods and nodes, about 3 KiB each) are read 2,000 a page,
-// a production cluster's pods of about 8 KiB some 1,000, and anything over
-// 16 KiB (a Node listing many images) 500, as before.
+// response whole and decodes it whole, about three times its encoded size
+// in live heap.
+//
+// No limit set before a page is read can bound its bytes: the objects it
+// will hold are unseen. So the worst case of a page is its limit times the
+// largest object, and the most a page may hold is what bounds it: 1,000,
+// twice listPageSize, so no page holds more than twice the objects a page
+// held before #228. It happens when small objects are followed by large
+// ones (pods are listed by namespace, so a namespace of small pods before
+// one of large pods): 500 pods of 137 bytes, then 1,000 of up to 41,685
+// bytes (39.4 MiB encoded), measured 124.7 to 125.5 MiB of live heap
+// (TestPodPagePeakHeapIsBounded), under half the chart's 256Mi; at the
+// 2,000 a page of an earlier draft, 250 MiB, past the agent's GOMEMLIMIT.
+// Objects as large as those of the page before (a run of such pods) are
+// read 500 a page, 63.2 to 63.7 MiB, as before.
+// Small objects (the scale lab's KWOK pods and nodes, about 3 KiB each)
+// are read 1,000 a page, a production cluster's pods of about 8 KiB some
+// 990, and anything over 16 KiB (a Node listing many images) 500, as
+// before.
 const (
 	wholePageBytes = 8 << 20
-	podPageSize    = 2000
-	nodePageSize   = 2000
+	podPageSize    = 1000
+	nodePageSize   = 1000
 )
 
-// pageLimit is the limit of the page after one that held n objects
-// encoding to size bytes in all (a Pod's or Node's Size, its protobuf
-// encoding): as many as fit wholePageBytes at that average, at least
-// listPageSize and at most most.
-func pageLimit(n, size int, most int64) int64 {
-	if n == 0 || size <= 0 {
+// pageLimit is the limit of the page after one whose largest object
+// encodes to largest bytes (a Pod's or Node's Size, its protobuf
+// encoding): as many as fit wholePageBytes at that size, at least
+// listPageSize and at most most. An empty page (largest 0) says nothing.
+func pageLimit(largest int, most int64) int64 {
+	if largest <= 0 {
 		return listPageSize
 	}
-	per := int64((size + n - 1) / n)
-	return max(listPageSize, min(most, wholePageBytes/per))
+	return max(listPageSize, min(most, wholePageBytes/int64(largest)))
 }
 
 // clientQPS and clientBurst replace client-go's client-side rate limit

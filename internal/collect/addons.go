@@ -156,10 +156,10 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		}
 		// Extract images and labels per page so only those are retained —
 		// never the accumulated PodList of a large cluster.
-		size := 0
+		largest := 0
 		for i := range pods.Items {
 			p := &pods.Items[i]
-			size += p.Size()
+			largest = max(largest, p.Size())
 			if sysPods.read && p.Namespace == metav1.NamespaceSystem {
 				continue // already counted from versions' list
 			}
@@ -168,7 +168,7 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		if pods.Continue == "" {
 			break
 		}
-		opts.Continue, opts.Limit = pods.Continue, pageLimit(len(pods.Items), size, podPageSize)
+		opts.Continue, opts.Limit = pods.Continue, pageLimit(largest, podPageSize)
 	}
 	opts = metav1.ListOptions{Limit: listPageSize}
 	for {

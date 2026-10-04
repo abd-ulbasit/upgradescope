@@ -104,32 +104,39 @@ func productionPod(i, envVars int) corev1.Pod {
 	}
 }
 
-// podPageServer serves pods production pods with envVars environment
-// variables per container in protobuf, as an apiserver does, in the pages
-// the collector asks for (listPageSize, then what pageLimit gives), and
-// returns the encoded size of one pod and the page limits it served. The
-// pages are encoded before it starts, so serving them adds next to nothing
-// to the heap the client is measured by; a request for another page fails.
-func podPageServer(t testing.TB, pods, envVars int) (*httptest.Server, int, []int64) {
+// smallPod is a pod of about 140 bytes in protobuf: a batch job's, with no
+// probes, environment or status to speak of.
+func smallPod(i int) corev1.Pod {
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("job-%05d", i), Namespace: "batch"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "job", Image: "ghcr.io/example/job:1.0.0"}}},
+	}
+}
+
+// podPageServer serves pods pods, pod(i) the i-th, in protobuf, as an
+// apiserver does, in the pages the collector asks for (listPageSize, then
+// what pageLimit gives for the page before), and returns the encoded size
+// of the largest pod and the page limits it served. The pages are encoded
+// before it starts, so serving them adds next to nothing to the heap the
+// client is measured by; a request for another page fails.
+func podPageServer(t testing.TB, pods int, pod func(i int) corev1.Pod) (*httptest.Server, int, []int64) {
 	t.Helper()
 	enc := protobuf.NewSerializer(kubescheme.Scheme, kubescheme.Scheme)
-	one := productionPod(0, envVars)
 	type page struct {
 		limit int64
 		body  []byte
 	}
 	pages := map[int]page{} // first pod's index → the page
 	var limits []int64
+	most := 0
 	for start, limit := 0, int64(listPageSize); start < pods; {
 		end := min(pods, start+int(limit))
 		list := &corev1.PodList{}
 		if end < pods {
 			list.Continue = strconv.Itoa(end)
 		}
-		size := 0
 		for i := start; i < end; i++ {
-			list.Items = append(list.Items, productionPod(i, envVars))
-			size += list.Items[len(list.Items)-1].Size()
+			list.Items = append(list.Items, pod(i))
 		}
 		var b bytes.Buffer
 		if err := enc.Encode(list, &b); err != nil {
@@ -137,7 +144,9 @@ func podPageServer(t testing.TB, pods, envVars int) (*httptest.Server, int, []in
 		}
 		pages[start] = page{limit, b.Bytes()}
 		limits = append(limits, limit)
-		start, limit = end, pageLimit(end-start, size, podPageSize)
+		largest := largestPod(list.Items)
+		most = max(most, largest)
+		start, limit = end, pageLimit(largest, podPageSize)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start, _ := strconv.Atoi(r.URL.Query().Get("continue"))
@@ -154,38 +163,58 @@ func podPageServer(t testing.TB, pods, envVars int) (*httptest.Server, int, []in
 		w.Write(p.body)
 	}))
 	t.Cleanup(srv.Close)
-	return srv, one.Size(), limits
+	return srv, most, limits
+}
+
+// largestPod is the encoded size of the largest of pods.
+func largestPod(pods []corev1.Pod) int {
+	n := 0
+	for i := range pods {
+		n = max(n, pods[i].Size())
+	}
+	return n
 }
 
 // TestPodPagePeakHeapIsBounded bounds what one page of the pod list holds
 // (#228): client-go reads a page's response whole and decodes it whole, so
-// the page size sets the heap of the pod pass. Production pods
-// (productionPod: about 8 KiB each in protobuf, managedFields included,
-// about three times the scale lab's KWOK pods) fill pages of about 1,000
-// after the first; pods with ten times the environment (about 40 KiB) stay
-// at listPageSize, the page every list had before #228. Either is listed through the agent's clients, the add-ons
-// keeping only images and labels, and the live heap above the baseline
-// must stay under 128 MiB, half the chart's 256Mi limit. A heap figure, run
-// by hack/test-heap.sh (UPGRADESCOPE_HEAP=1) only. Under the race detector
-// it lists one page's worth.
+// the page size sets the heap of the pod pass, and a page holds at most
+// podPageSize pods of any size. Its worst case is a page of small pods
+// followed by large ones: the small ones size the next page at the most,
+// and the large ones fill it. The cases: production pods (productionPod:
+// about 8 KiB each in protobuf, managedFields included, about three times
+// the scale lab's KWOK pods); pods with ten times the environment (39 to
+// 41 KiB), which stay at listPageSize, the page every list had before
+// #228; and 500 small pods (137 bytes) followed by those large ones, the
+// worst case: a whole page of podPageSize large pods, 39.4 MiB encoded.
+// Each is listed through the agent's clients, the add-ons keeping only
+// images and labels, and the live heap above the baseline must stay under
+// 128 MiB, half the chart's 256Mi limit. A heap figure, run by hack/test-heap.sh
+// (UPGRADESCOPE_HEAP=1) only. Under the race detector it lists fewer.
 func TestPodPagePeakHeapIsBounded(t *testing.T) {
 	if testing.Short() || !heapRun {
 		t.Skip("lists 6,000 production-sized pods; a heap figure, run by hack/test-heap.sh (UPGRADESCOPE_HEAP=1)")
 	}
+	large := func(i int) corev1.Pod { return productionPod(i, 240) }
 	for _, tc := range []struct {
-		name    string
-		envVars int // per container
-		pods    int
+		name string
+		pod  func(i int) corev1.Pod
+		pods int
 	}{
-		{"production pods", 24, 1 + 3*podPageSize},
-		{"pods with large environments", 240, 4 * listPageSize},
+		{"production pods", func(i int) corev1.Pod { return productionPod(i, 24) }, 6001},
+		{"pods with large environments", large, 4 * listPageSize},
+		{"small pods, then a page of pods with large environments", func(i int) corev1.Pod {
+			if i < listPageSize {
+				return smallPod(i)
+			}
+			return large(i)
+		}, listPageSize + podPageSize + listPageSize},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pods := tc.pods
 			if raceEnabled {
-				pods = podPageSize
+				pods = min(pods, listPageSize+podPageSize)
 			}
-			srv, size, limits := podPageServer(t, pods, tc.envVars)
+			srv, size, limits := podPageServer(t, pods, tc.pod)
 			c, err := NewClients(&rest.Config{Host: srv.URL})
 			if err != nil {
 				t.Fatal(err)
@@ -196,7 +225,7 @@ func TestPodPagePeakHeapIsBounded(t *testing.T) {
 			for attempt := 1; ; attempt++ {
 				inv = inventory.Inventory{}
 				peak = peakLiveHeap(func() { cerr = collectAddOns(context.Background(), c.Kube, testRegistry(), &inv) })
-				t.Logf("%d pods of %d B each in protobuf, pages of %v: live heap peak above baseline %.1f MiB (attempt %d)", pods, size, limits, float64(peak)/(1<<20), attempt)
+				t.Logf("%d pods, the largest %d B in protobuf, pages of %v: live heap peak above baseline %.1f MiB (attempt %d)", pods, size, limits, float64(peak)/(1<<20), attempt)
 				if peak <= 128<<20 || attempt == maxManifestAttempts {
 					break
 				}
@@ -215,23 +244,27 @@ func TestPodPagePeakHeapIsBounded(t *testing.T) {
 }
 
 // A page after the first holds as many objects as fit wholePageBytes at the
-// average size of the page before, within listPageSize and the resource's
-// most (#228).
+// size of the largest object of the page before, within listPageSize and
+// the resource's most (#228).
 func TestPageLimit(t *testing.T) {
 	for _, tc := range []struct {
-		n, size int
+		largest int
 		most    int64
 		want    int64
 	}{
-		{0, 0, podPageSize, listPageSize},                          // an empty page says nothing
-		{500, 500 * 3 << 10, podPageSize, podPageSize},             // KWOK-sized pods (3 KiB): 2,730 fit, past the most
-		{500, 500 * 8 << 10, podPageSize, 1024},                    // production pods (8 KiB)
-		{500, 500 * 40 << 10, podPageSize, listPageSize},           // 40 KiB pods: never under listPageSize
-		{500, 500 * 20 << 10, nodePageSize, listPageSize},          // production nodes (20 KiB, the images they hold)
-		{3, 3*(10<<10) + 1, podPageSize, (8 << 20) / (10<<10 + 1)}, // the average rounds up: 819 at 10 KiB, 818 a byte over
+		{0, podPageSize, listPageSize},         // an empty page says nothing
+		{150, podPageSize, podPageSize},        // small pods: past the most
+		{3 << 10, podPageSize, podPageSize},    // KWOK-sized pods (3 KiB): 2,730 fit, past the most
+		{10 << 10, podPageSize, 819},           // a production pod of 10 KiB
+		{8388, nodePageSize, 1000},             // 8 MiB / 8,388 B is 1,000.07
+		{8389, nodePageSize, 999},              // a byte more: 999.95, rounded down
+		{40 << 10, podPageSize, listPageSize},  // 40 KiB pods: never under listPageSize
+		{20 << 10, nodePageSize, listPageSize}, // production nodes (20 KiB, the images they hold)
+		{1 << 20, podPageSize, listPageSize},   // one pod of 1 MiB: listPageSize, as before
+		{(8 << 20) / 600, nodePageSize, 600},   // in between
 	} {
-		if got := pageLimit(tc.n, tc.size, tc.most); got != tc.want {
-			t.Errorf("pageLimit(%d, %d, %d) = %d, want %d", tc.n, tc.size, tc.most, got, tc.want)
+		if got := pageLimit(tc.largest, tc.most); got != tc.want {
+			t.Errorf("pageLimit(%d, %d) = %d, want %d", tc.largest, tc.most, got, tc.want)
 		}
 	}
 }
