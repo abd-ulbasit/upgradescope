@@ -132,7 +132,7 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 	var failures, skipped []string
 	var podErr error
 	classesRead := false
-	opts := metav1.ListOptions{Limit: listPageSize}
+	opts := metav1.ListOptions{Limit: listPageSize} // then sized by pageLimit
 	if sysPods.read {
 		ev.images, ev.labelled = sysPods.ev.images, sysPods.ev.labelled
 		opts.FieldSelector = "metadata.namespace!=" + metav1.NamespaceSystem
@@ -156,8 +156,10 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		}
 		// Extract images and labels per page so only those are retained —
 		// never the accumulated PodList of a large cluster.
+		size := 0
 		for i := range pods.Items {
 			p := &pods.Items[i]
+			size += p.Size()
 			if sysPods.read && p.Namespace == metav1.NamespaceSystem {
 				continue // already counted from versions' list
 			}
@@ -166,7 +168,7 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		if pods.Continue == "" {
 			break
 		}
-		opts.Continue = pods.Continue
+		opts.Continue, opts.Limit = pods.Continue, pageLimit(len(pods.Items), size, podPageSize)
 	}
 	opts = metav1.ListOptions{Limit: listPageSize}
 	for {

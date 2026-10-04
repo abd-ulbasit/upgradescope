@@ -49,6 +49,37 @@ type Options struct {
 // never be read in one unbounded request.
 const listPageSize = 500
 
+// The pod and node lists, which a large cluster's tick spends most of its
+// requests on (#228: at 2,001 nodes and 14,000 pods, 500-object pages were
+// 34 of a steady tick's requests), are paged by size rather than by count
+// alone: the first page is listPageSize objects, and each later one as many
+// as fit wholePageBytes encoded at the average size of the page before
+// (pageLimit), between listPageSize and podPageSize or nodePageSize. A
+// page is what one request holds: client-go reads its response whole and
+// decodes it whole, about 4.3 times its encoded size in live heap for
+// production-sized pods (TestPodPagePeakHeapIsBounded: 2,000 pods of 8 KiB
+// each, managedFields included, 71 MiB), so a page costs at most about 70
+// MiB whatever the size of the objects, and a cluster of small pods is read
+// in a quarter of the requests. A Node is larger than a pod (its status
+// lists the images it holds), so its pages hold fewer.
+const (
+	wholePageBytes = 16 << 20
+	podPageSize    = 2000
+	nodePageSize   = 2000
+)
+
+// pageLimit is the limit of the page after one that held n objects
+// encoding to size bytes in all (a Pod's or Node's Size, its protobuf
+// encoding): as many as fit wholePageBytes at that average, at least
+// listPageSize and at most most.
+func pageLimit(n, size int, most int64) int64 {
+	if n == 0 || size <= 0 {
+		return listPageSize
+	}
+	per := int64((size + n - 1) / n)
+	return max(listPageSize, min(most, wholePageBytes/per))
+}
+
 // clientQPS and clientBurst replace client-go's client-side rate limit
 // (5 QPS, burst 10) when the caller sets none: the Helm collector makes
 // one GET per release, which at 5 QPS adds a minute for 300 releases.

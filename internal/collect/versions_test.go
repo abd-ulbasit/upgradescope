@@ -318,9 +318,10 @@ func TestCollectWiresVersionsCapability(t *testing.T) {
 	}
 }
 
-// Nodes, namespaces and kube-system pods are listed in pages of
-// listPageSize, following the Continue token, so a large cluster never
-// returns one unbounded list (PF-02 in docs/claims.md).
+// Nodes, namespaces and kube-system pods are listed in pages, following the
+// Continue token, so a large cluster never returns one unbounded list
+// (PF-02 in docs/claims.md): listPageSize objects, and for nodes and pods,
+// after the first page, as many as pageLimit allows.
 func TestCollectVersionsFollowsListPagination(t *testing.T) {
 	cs := kubefake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-123")}})
 	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
@@ -357,8 +358,11 @@ func TestCollectVersionsFollowsListPagination(t *testing.T) {
 	if err := collectVersions(context.Background(), disc, cs, "team", &inv); err != nil {
 		t.Fatal(err)
 	}
-	want := []metav1.ListOptions{{Limit: listPageSize}, {Limit: listPageSize, Continue: "page-2"}}
+	// The second page of nodes and pods is sized by the first (pageLimit):
+	// one small object, so as many as the page may hold.
+	next := map[string]int64{"nodes": nodePageSize, "namespaces": listPageSize, "pods": podPageSize}
 	for resource := range pages {
+		want := []metav1.ListOptions{{Limit: listPageSize}, {Limit: next[resource], Continue: "page-2"}}
 		if !reflect.DeepEqual(opts[resource], want) {
 			t.Errorf("%s list options = %+v, want %+v (paged, Continue token followed)", resource, opts[resource], want)
 		}
