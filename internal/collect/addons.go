@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -87,15 +88,68 @@ func (ev *addOnEvidence) addPod(namespace string, labels map[string]string, imag
 // inventory.SkippedPods keeps the gap required; IngressClasses only add
 // evidence.
 func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory) error {
+	return collectAddOnsFrom(ctx, kube, addons, inv, &kubeSystemPods{})
+}
+
+// kubeSystemPods is what the add-ons capability takes from the versions
+// capability's list of the kube-system pods (#227): their images and
+// labels, once versions has listed all of them. The control-plane
+// components are found in that list, and at 2,000 nodes kube-system holds
+// about 4,000 pods (a CNI and a kube-proxy pod per node), so listing them
+// again in the all-namespaces list read that share of the response twice a
+// tick. Where versions did not list them (it failed before or in
+// the list, or ran no step), read is false and the add-ons list them
+// themselves.
+type kubeSystemPods struct {
+	read bool
+	ev   addOnEvidence // images and labelled only
+}
+
+// podContainerImages lists a pod's init-container and container images.
+func podContainerImages(p *corev1.Pod) []string {
+	var images []string
+	for _, c := range p.Spec.InitContainers {
+		images = append(images, c.Image)
+	}
+	for _, c := range p.Spec.Containers {
+		images = append(images, c.Image)
+	}
+	return images
+}
+
+// collectAddOnsFrom is collectAddOns taking the kube-system pods from sysPods
+// when versions listed them, and then listing the other namespaces only:
+// the server leaves kube-system out of the response, and a server that did
+// not would still not count its pods twice. A list of the other namespaces
+// that fails on its first page is a failure of the pods exactly as before:
+// the kube-system evidence is dropped, so the gap reason, the add-ons and
+// the unavailable check are those of a list of every pod that failed. A
+// later page failing keeps the pages read, as it always did. A server or
+// proxy that rejects the field selector with a 400 is asked once more
+// without it, and its kube-system pods are skipped here.
+func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory, sysPods *kubeSystemPods) error {
 	ev := addOnEvidence{releases: inv.HelmReleases, gitops: inv.GitOpsCharts}
 	var failures, skipped []string
 	var podErr error
 	classesRead := false
 	opts := metav1.ListOptions{Limit: listPageSize}
+	if sysPods.read {
+		ev.images, ev.labelled = sysPods.ev.images, sysPods.ev.labelled
+		opts.FieldSelector = "metadata.namespace!=" + metav1.NamespaceSystem
+	}
 	for {
 		pods, err := kube.CoreV1().Pods(metav1.NamespaceAll).List(ctx, opts)
+		if err != nil && opts.Continue == "" && opts.FieldSelector != "" && apierrors.IsBadRequest(err) {
+			// A server or proxy that refuses the field selector: list every
+			// pod as before, skipping kube-system's below.
+			opts.FieldSelector = ""
+			continue
+		}
 		if err != nil {
 			podErr = err
+			if opts.Continue == "" {
+				ev.images, ev.labelled = nil, nil // no pod was read, kube-system's included
+			}
 			failures = append(failures, fmt.Sprintf("list pods: %v", err))
 			skipped = append(skipped, inventory.SkippedPods)
 			break
@@ -104,14 +158,10 @@ func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []regi
 		// never the accumulated PodList of a large cluster.
 		for i := range pods.Items {
 			p := &pods.Items[i]
-			var images []string
-			for _, c := range p.Spec.InitContainers {
-				images = append(images, c.Image)
+			if sysPods.read && p.Namespace == metav1.NamespaceSystem {
+				continue // already counted from versions' list
 			}
-			for _, c := range p.Spec.Containers {
-				images = append(images, c.Image)
-			}
-			ev.addPod(p.Namespace, p.Labels, images)
+			ev.addPod(p.Namespace, p.Labels, podContainerImages(p))
 		}
 		if pods.Continue == "" {
 			break

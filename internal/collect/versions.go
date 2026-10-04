@@ -25,6 +25,12 @@ import (
 // best-effort: fields populated before an error persist even though the
 // capability degrades.
 func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kube kubernetes.Interface, teamLabel string, inv *inventory.Inventory) error {
+	return collectVersionsFrom(ctx, disc, kube, teamLabel, inv, &kubeSystemPods{})
+}
+
+// collectVersionsFrom is collectVersions leaving the add-on evidence of the
+// kube-system pods it lists in sysPods, for the add-ons capability (#227).
+func collectVersionsFrom(ctx context.Context, disc discovery.DiscoveryInterface, kube kubernetes.Interface, teamLabel string, inv *inventory.Inventory, sysPods *kubeSystemPods) error {
 	sv, err := discovery.ToServerVersionInterfaceWithContext(disc).ServerVersionWithContext(ctx)
 	if err != nil {
 		return fmt.Errorf("server version: %w", err)
@@ -82,7 +88,7 @@ func collectVersions(ctx context.Context, disc discovery.DiscoveryInterface, kub
 	}
 	sort.Slice(inv.Namespaces, func(i, j int) bool { return inv.Namespaces[i].Name < inv.Namespaces[j].Name })
 
-	err = collectControlPlane(ctx, kube, inv)
+	err = collectControlPlane(ctx, kube, inv, sysPods)
 	if len(inv.Nodes) > 0 {
 		return err
 	}
@@ -160,20 +166,27 @@ var controlPlaneComponents = []string{
 // manager, and scheduler outside the cluster: no matching pods exist, which
 // is NOT an error — inv.ControlPlane stays empty and the engine emits no
 // control-plane skew findings.
-func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *inventory.Inventory) error {
+//
+// The same list is the add-ons' read of the kube-system pods (#227): the
+// images and labels of every pod it lists are left in sysPods once it has
+// listed them all, and the add-ons then list the other namespaces only. A
+// list that fails leaves sysPods empty, and the add-ons list kube-system too.
+func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *inventory.Inventory, sysPods *kubeSystemPods) error {
 	seen := map[inventory.ComponentVersion]bool{}
 	unread := map[string]string{} // pod name → why its version was not read
 	unreadComps := map[string]bool{}
 	requiredComps := map[string]bool{} // the Skipped ones, see above
 	var requiredPods []string          // the unread pods of requiredComps
+	var ev addOnEvidence
 	podOpts := metav1.ListOptions{Limit: listPageSize}
 	for {
-		pods, err := kube.CoreV1().Pods("kube-system").List(ctx, podOpts)
+		pods, err := kube.CoreV1().Pods(metav1.NamespaceSystem).List(ctx, podOpts)
 		if err != nil {
 			return fmt.Errorf("list kube-system pods: %w", err)
 		}
 		for i := range pods.Items {
 			p := &pods.Items[i]
+			ev.addPod(p.Namespace, p.Labels, podContainerImages(p))
 			comp, labelled := classifyControlPlanePod(p.Name, p.Labels)
 			if comp == "" {
 				continue
@@ -205,6 +218,7 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 		}
 		podOpts.Continue = pods.Continue
 	}
+	sysPods.ev, sysPods.read = ev, true
 	for cv := range seen {
 		inv.ControlPlane = append(inv.ControlPlane, cv)
 	}
