@@ -53,13 +53,16 @@ func LoadTeamMap(p string) (TeamMap, error) {
 // read scopes name it in the team list encoding (decodeTeams) or one per
 // tokens create --teams flag. The one exception is a team called "*",
 // which is read as StarTeam (logged), since "*" is a read token's scope
-// of the whole fleet.
+// of the whole fleet; a map that also names StarTeam itself is warned that
+// the two are now one team.
 func ParseTeamMap(data []byte) (TeamMap, error) {
 	var tm TeamMap
 	if err := yaml.UnmarshalStrict(data, &tm); err != nil {
 		return nil, fmt.Errorf("parse team map: %w", err)
 	}
+	star, named := false, false // a team "*" and a team named StarTeam: they become one
 	for i, r := range tm {
+		star, named = star || r.Team == store.ReadScopeFleet, named || r.Team == StarTeam
 		if r.Pattern == "" {
 			return nil, fmt.Errorf("team map rule %d: pattern is required", i+1)
 		}
@@ -80,6 +83,10 @@ func ParseTeamMap(data []byte) (TeamMap, error) {
 		if _, err := path.Match(r.Pattern, ""); err != nil {
 			return nil, fmt.Errorf("team map rule %d: invalid glob %q: %w", i+1, r.Pattern, err)
 		}
+	}
+	if star && named {
+		log.Printf("serve: --team-map names both the team %q and the team %q: they are now one team, %q, and read as one; rename one of them to keep them apart",
+			store.ReadScopeFleet, StarTeam, StarTeam)
 	}
 	return tm, nil
 }

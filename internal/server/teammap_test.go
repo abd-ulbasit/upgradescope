@@ -65,6 +65,31 @@ func TestParseTeamMapKeepsFreeTextTeams(t *testing.T) {
 	}
 }
 
+// A map that names both "*" and "(*)" makes them one team, StarTeam:
+// serve says so at load, and keeps starting. A map with only one of them
+// gets no such warning.
+func TestParseTeamMapWarnsWhenStarTeamIsTaken(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	const collision = "are now one team"
+	if _, err := ParseTeamMap([]byte("- pattern: \"star-*\"\n  team: \"*\"\n- pattern: \"paren-*\"\n  team: \"(*)\"\n")); err != nil {
+		t.Fatalf("ParseTeamMap: %v", err)
+	}
+	if !strings.Contains(logged.String(), collision) {
+		t.Errorf("no warning that teams \"*\" and %q are one: %q", StarTeam, logged.String())
+	}
+	for _, only := range []string{"\"*\"", "\"(*)\""} {
+		logged.Reset()
+		if _, err := ParseTeamMap([]byte("- pattern: \"a-*\"\n  team: " + only + "\n")); err != nil {
+			t.Fatalf("ParseTeamMap: %v", err)
+		}
+		if strings.Contains(logged.String(), collision) {
+			t.Errorf("team %s alone warned of a collision: %q", only, logged.String())
+		}
+	}
+}
+
 func TestLoadTeamMap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "teams.yaml")
 	if err := os.WriteFile(path, []byte("- pattern: \"db-*\"\n  team: data\n"), 0o644); err != nil {
