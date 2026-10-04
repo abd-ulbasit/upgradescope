@@ -161,9 +161,9 @@ func podPageServer(t testing.TB, pods, envVars int) (*httptest.Server, int, []in
 // (#228): client-go reads a page's response whole and decodes it whole, so
 // the page size sets the heap of the pod pass. Production pods
 // (productionPod: about 8 KiB each in protobuf, managedFields included,
-// several times the scale lab's KWOK pods) fill pages of podPageSize after
-// the first; pods with ten times the environment (about 40 KiB) stay at
-// listPageSize. Either is listed through the agent's clients, the add-ons
+// about three times the scale lab's KWOK pods) fill pages of about 1,000
+// after the first; pods with ten times the environment (about 40 KiB) stay
+// at listPageSize, the page every list had before #228. Either is listed through the agent's clients, the add-ons
 // keeping only images and labels, and the live heap above the baseline
 // must stay under 128 MiB, half the chart's 256Mi limit. A heap figure, run
 // by hack/test-heap.sh (UPGRADESCOPE_HEAP=1) only. Under the race detector
@@ -223,13 +223,12 @@ func TestPageLimit(t *testing.T) {
 		most    int64
 		want    int64
 	}{
-		{0, 0, podPageSize, listPageSize},                           // an empty page says nothing
-		{500, 500 * 2 << 10, podPageSize, podPageSize},              // KWOK-sized pods (2 KiB): the most
-		{500, 500 * 8 << 10, podPageSize, podPageSize},              // production pods (8 KiB): 2,048 fit, past the most
-		{500, 500 * 10 << 10, podPageSize, 1638},                    // 10 KiB pods: 1,638 a page
-		{500, 500 * 40 << 10, podPageSize, listPageSize},            // 40 KiB pods: never under listPageSize
-		{500, 500 * 20 << 10, nodePageSize, 819},                    // production nodes (20 KiB, the images they hold)
-		{3, 3*(10<<10) + 1, podPageSize, (16 << 20) / (10<<10 + 1)}, // the average rounds up: 1,638 at 10 KiB, 1,637 a byte over
+		{0, 0, podPageSize, listPageSize},                          // an empty page says nothing
+		{500, 500 * 3 << 10, podPageSize, podPageSize},             // KWOK-sized pods (3 KiB): 2,730 fit, past the most
+		{500, 500 * 8 << 10, podPageSize, 1024},                    // production pods (8 KiB)
+		{500, 500 * 40 << 10, podPageSize, listPageSize},           // 40 KiB pods: never under listPageSize
+		{500, 500 * 20 << 10, nodePageSize, listPageSize},          // production nodes (20 KiB, the images they hold)
+		{3, 3*(10<<10) + 1, podPageSize, (8 << 20) / (10<<10 + 1)}, // the average rounds up: 819 at 10 KiB, 818 a byte over
 	} {
 		if got := pageLimit(tc.n, tc.size, tc.most); got != tc.want {
 			t.Errorf("pageLimit(%d, %d, %d) = %d, want %d", tc.n, tc.size, tc.most, got, tc.want)
