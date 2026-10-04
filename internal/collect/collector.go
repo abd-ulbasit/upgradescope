@@ -155,13 +155,14 @@ func roundShare(d time.Duration) time.Duration {
 // custom resources only at versions that are not deprecated, so it adds
 // no metric rows; the /metrics scrape stays last.
 func steps(c Clients, k kb.KB, opts Options) []step {
-	var selfListed []string // api-usage's own deprecated LISTs
+	var selfListed []string       // api-usage's own deprecated LISTs
+	var kubeSystem kubeSystemPods // versions' kube-system pods, which addons does not list again (#227)
 	return []step{
 		{cap: inventory.CapVersions, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Kube == nil || c.Discovery == nil {
 				return errors.New("kubernetes client not configured")
 			}
-			return collectVersions(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv)
+			return collectVersionsFrom(ctx, c.Discovery, c.Kube, opts.TeamLabel, inv, &kubeSystem)
 		}},
 		{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Kube == nil || c.Metadata == nil {
@@ -173,7 +174,7 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Kube == nil {
 				return errors.New("kubernetes client not configured")
 			}
-			return collectAddOns(ctx, c.Kube, k.AddOns, inv)
+			return collectAddOnsFrom(ctx, c.Kube, k.AddOns, inv, &kubeSystem)
 		}},
 		{cap: inventory.CapAPIUsage, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Discovery == nil || c.Metadata == nil {
