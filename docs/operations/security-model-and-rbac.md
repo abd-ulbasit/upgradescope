@@ -107,16 +107,17 @@ read. Measured on the test harness, above the collector's baseline: the
 gzip bomb peaks at 17 MiB of heap, also when its size trailer lies or a
 second gzip member follows (`TestCollectHelmGzipBombIsBounded`;
 its test process at 71 MB resident), and the worst manifests that fit
-the cap at up to 47 MiB of live heap (`TestCollectHelmManifestParsingIsBounded`:
-all newlines, tiny objects, documents that are not objects, documents at
-the size and at the node bound; the test enforces 64 MiB of heap). The
-test sets a memory limit 64 MiB above the baseline, as the chart's
-GOMEMLIMIT bounds the agent, but the runtime paces the heap up to that
-limit, so it reads the limit and not the live heap: 40–74 MiB, over the
-bound in some runs on an idle Mac or a busy one; on a GitHub-hosted
-runner 67.6 MiB once (CI run 37145724345) and 40–62 MiB another time
-(run 37163826961). It fails when it is over (#213); the
-figures, with GOGC off and under CPU burners, are in the test's comments.
+the cap at 32–46 MiB of live heap on a GitHub-hosted runner, CI run
+37160469086 (`TestCollectHelmManifestParsingIsBounded`: all newlines, tiny
+objects, documents that are not objects, documents at the size and at the
+node bound; the test enforces 64 MiB). Under the chart's GOMEMLIMIT the
+runtime sheds garbage as the heap nears the limit, so live heap is what
+must fit: the test reads the heap objects after collections forced back
+to back at GOGC=10, and runs in `make test-heap`, CI's test-heap job, not
+in a plain `go test`, since a busy machine inflates the reading. Read as
+a heap that holds garbage, at the default GOGC=100, the same cases peaked
+at 24–93 MiB. The run bounds, 1 MiB and 64Ki YAML nodes, are held by
+`TestSplitManifestRunsHoldTheBounds`, which reads no heap figure (#213).
 Before the bounds, a 951 KB Secret that
 decompressed to 700 MiB took a scan to 1.93 GB and OOM-killed the agent at
 its 256Mi limit, and a 127 KiB one of tiny ConfigMaps still could (#168).

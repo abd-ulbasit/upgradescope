@@ -397,8 +397,8 @@ const maxManifestAttempts = 3
 // read with peakHeap: the runtime paces the heap up to the limit, so the
 // reading is the limit less what the runtime holds outside the heap, plus
 // how far the cycle that ends the parse overshoots it, not what the parse
-// costs. It read 40-74 MiB on an idle Mac, up to 99.9 MiB under load with
-// GOGC off, and 67.6 MiB for a 47 MiB-live case on an idle GitHub-hosted
+// costs. It read 40-69 MiB on an idle Mac, up to 73 MiB under CPU burners
+// (99.9 with GOGC off), and 67.6 MiB for a 47 MiB-live case on an idle GitHub-hosted
 // runner (CI run 37145724345): over the bound now and then with the live
 // heap well under it. A limit of heap + 32 MiB: 82.8-106.9 MiB at a load
 // average of 80-145 at the default GOMAXPROCS (and 38-44 MiB with

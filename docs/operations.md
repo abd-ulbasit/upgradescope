@@ -227,20 +227,23 @@ of 16 KiB with 64 KiB reasons and long skipped lists: with the gaps
 listed whole but for 1 KiB reasons and 10 skipped entries of 512 bytes,
 50 such clusters made `/fleet` answer 108 MB and grow the heap 516 MiB;
 now 500 of them, each evaluated at five targets (the default and four
-`--targets`, the most a server takes), grow it 12.4 MiB for `/fleet` (a
-1.5 MB answer), 3.1 for `/clusters` and 8.8 for `/metrics`, on a
-GitHub-hosted `ubuntu-latest` runner (CI run 37160469086); every one of
-those clusters pushes as a v0.1.x agent does, unmarked, whose summaries
-are 24-31% larger (`TestFleetReadsOfTheWidestGapsAreBounded`). Their responses do
+`--targets`, the most a server takes), grow it 11.4 MiB for `/fleet` (a
+1.3 MB answer), 3.2 for `/clusters` and 8.9 for `/metrics`, on a
+GitHub-hosted `ubuntu-latest` runner (CI run 37152753746); half of those
+clusters push as a v0.1.x agent does, unmarked, and the test checks
+their entries are the larger: 729 against 588 bytes per cluster in
+`/clusters`, 2910 against 2205 in `/fleet`
+(`TestFleetReadsOfTheWidestGapsAreBounded`). Their responses do
 grow with the fleet: at 500 clusters `/clusters` is ~230 KB, `/fleet`
 ~480 KB (~590 KB with 16 `?targets=`) and `/metrics` ~740 KB, and
 building one adds up to ~5 MiB to the heap (`/metrics` the most, about
-five times its response; ~12 MiB for the `/fleet` of the widest gaps
+five times its response; ~11 MiB for the `/fleet` of the widest gaps
 above); at 2000 clusters with 200-byte names, from a v0.1.x agent
 (unmarked, so each evaluation lists the gaps it is given), with two
-`--targets`, they are 2.1, 4.6 (5.0 with 16 `?targets=`) and 9.0 MB, and
-`/metrics` builds in ~46 MiB of heap in each of its two slots (the
-125 MiB peak below, less the 32 MiB held, over two). `/fleet?targets=` takes at most 16 distinct
+`--targets`, they are 2.1, 4.6 (5.0 with 16 `?targets=`) and 9.0 MB,
+and 100 clients that never read `/metrics` peak the heap at 125 MiB
+above idle, both fleet slots and the responses held included (below).
+`/fleet?targets=` takes at most 16 distinct
 minors (`422` above): each is a column and a store query per cluster,
 and unbounded but for the 64 KiB URL, 8,718 of them against 500 clusters
 held a fleet slot for 2m13s, grew the heap 418 MiB and answered 57 MiB.
@@ -292,7 +295,7 @@ the reports it stores included) plus one read in the read slot
 (~133 MiB, the HTML export of a report at the report limit, its
 response included) plus two reads of the whole fleet in their slots
 (up to ~16 MiB each for 500 clusters, a `/fleet` of evaluations that
-list the most of what they could not assess: 12.4 MiB measured above for
+list the most of what they could not assess: 11.4 MiB measured above for
 the fleet that `TestFleetReadsOfTheWidestGapsAreBounded` pushes, 16.4
 measured before #207, and 20 MiB is the test's bound; the
 sum keeps the older figure, an allowance, not a measurement) plus the read, fleet read
@@ -348,9 +351,10 @@ What is outside these bounds, and what it costs:
   holds, and a holder of the shared ingest token registers a new one
   with each new name it pushes. What a fleet read costs grows with the
   fleet (above): up to ~16 MiB for 500 clusters evaluated at five
-  targets (the `/fleet` of the widest gaps, 12.4 MiB measured), ~46 MiB
-  for a `/metrics` of 2000 clusters with 200-byte names, twice that with
-  both fleet slots busy.
+  targets (the `/fleet` of the widest gaps, 11.4 MiB measured), and
+  for 2000 clusters with 200-byte names a 125 MiB heap peak above idle
+  with 100 `/metrics` clients that never read, both fleet slots busy
+  and the held responses included (measured).
 - **Snapshots stored by v0.1.** A snapshot a v0.1 server stored before
   the budgets existed (up to 20 MiB of any shape) is decoded without a
   node count when `/gate?cluster=`, the re-evaluation pass or a what-if

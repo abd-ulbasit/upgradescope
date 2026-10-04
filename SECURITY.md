@@ -143,8 +143,10 @@ In scope:
   of the pod's memory until a write deadline closes it; nothing caps how
   many clusters the server holds (a shared ingest token registers one
   per new name), and a fleet read costs more as the fleet grows (up to
-  ~16 MiB for 500 clusters evaluated at five targets, ~47 MiB for
-  `/metrics` of 2000 clusters with 200-byte names); and a snapshot a
+  ~16 MiB for 500 clusters evaluated at five targets, 11.4 MiB measured;
+  for 2000 clusters with 200-byte names, 100 `/metrics` clients that
+  never read peak the heap at 125 MiB, both fleet slots and the held
+  responses included); and a snapshot a
   v0.1 server stored before these
   budgets existed is decoded without a node count when `/gate?cluster=`,
   re-evaluation or a what-if read reads it, and, having no stored server
