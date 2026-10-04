@@ -129,8 +129,9 @@ and [Helm values](../reference/helm-values.md).
 ## Sizes
 
 What a release ships, from a GoReleaser v2.17.1 snapshot (`make
-release-check`, the build the release workflow runs) of main `2e497c1`,
-with Go 1.26.8, on 2026-10-02, on an Apple M1 Pro. The binary is stripped
+release-check`, the build the release workflow runs) of `b507114` (with
+the MCP server, #76), with Go 1.26.8, on 2026-10-03, on an Apple M1 Pro.
+The binary is stripped
 (`CGO_ENABLED=0 -trimpath -ldflags "-s -w"`); the archive is the download,
 with the licenses, README, completions and man pages beside the binary.
 Every platform is cross-compiled without cgo, so the build host does not
@@ -138,12 +139,12 @@ change a size; the Go version and the commit do. 1 MiB is 1,048,576 bytes.
 
 | Platform | Binary | Archive |
 |---|---|---|
-| linux/amd64 | 57.5 MiB | 17.4 MiB |
-| linux/arm64 | 54.1 MiB | 15.6 MiB |
-| darwin/amd64 | 58.5 MiB | 17.6 MiB |
-| darwin/arm64 | 55.4 MiB | 16.3 MiB |
-| windows/amd64 | 58.6 MiB | 17.7 MiB |
-| windows/arm64 | 54.3 MiB | 15.6 MiB |
+| linux/amd64 | 59.9 MiB | 18.1 MiB |
+| linux/arm64 | 56.3 MiB | 16.3 MiB |
+| darwin/amd64 | 60.9 MiB | 18.4 MiB |
+| darwin/arm64 | 57.7 MiB | 17.0 MiB |
+| windows/amd64 | 61.0 MiB | 18.5 MiB |
+| windows/arm64 | 56.5 MiB | 16.3 MiB |
 
 Archives are `.tar.gz`, `.zip` on Windows. The release check
 (`hack/check-doc-sizes.sh`, after the snapshot) fails when a size here or

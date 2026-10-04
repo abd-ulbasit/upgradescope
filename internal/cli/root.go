@@ -100,6 +100,7 @@ a fleet with 'serve'.`,
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newTokensCmd())
 	root.AddCommand(newClustersCmd())
+	root.AddCommand(newMCPCmd())
 	root.AddCommand(newVersionCmd())
 	return root
 }

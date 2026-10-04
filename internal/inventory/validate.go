@@ -65,6 +65,11 @@ func (e *IdentifierError) Error() string {
 	return fmt.Sprintf("%s: %s is not %s (%s)", e.Field, quoteShort(e.Value), e.Rule, strings.Join(e.Problems, "; "))
 }
 
+// Unquoted says which field holds an identifier that is not what it must
+// be, and nothing of the identifier: what may be shown where the
+// inventory's contents must not be. Field holds no map key.
+func (e *IdentifierError) Unquoted() string { return e.Field + " is not " + e.Rule }
+
 // quoteShort quotes at most the first 64 bytes of s, saying how long it
 // is when it is longer: an identifier refused for its length can be
 // megabytes.

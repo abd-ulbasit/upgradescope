@@ -757,19 +757,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"snapshotId": snapID})
 }
 
-// supportedInventorySchema is the inventory.schemaVersion this server
-// judges. Another version means fields this server would misread.
-const supportedInventorySchema = 1
-
 // decodePushedInventory parses and checks a pushed inventory, returning a
-// 422 message for one the server cannot judge: absent or null, another
-// schemaVersion (which includes {} and a missing one), a source other
-// than a cluster, a collectorSchema this server does not know, a serverVersion
-// that is not a Kubernetes 1.x version, an identifier (a namespace,
-// object, node or Helm release name, a team label value) that is not
-// valid for what it names, or a value beyond the limits collectors keep
-// to (inventory.ValidateLimits), once the free text collectors copy whole
-// is cut to them (inventory.CutFreeText). A degraded inventory with no
+// 422 message for one the server cannot judge: absent or null, a source
+// other than a cluster, or refused by inventory.Admit, which the MCP
+// server's inventory_file shares: another schemaVersion (which includes {}
+// and a missing one), a collectorSchema this server does not know, a
+// serverVersion that is not a Kubernetes 1.x version, an identifier (a
+// namespace, object, node or Helm release name, a team label value) that
+// is not valid for what it names, or a value beyond the limits collectors
+// keep to (inventory.ValidateLimits), once the free text collectors copy
+// whole is cut to them (inventory.CutFreeText). A degraded inventory with no
 // serverVersion at all (the versions collector failed) is accepted and
 // judged at the cluster's last reported version (ingestSnapshot).
 func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
@@ -780,44 +777,22 @@ func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
 	if err := json.Unmarshal(raw, &inv); err != nil {
 		return inv, "invalid inventory: " + err.Error()
 	}
-	if inv.SchemaVersion != supportedInventorySchema {
-		return inv, fmt.Sprintf("unsupported inventory schemaVersion %d (want %d)", inv.SchemaVersion, supportedInventorySchema)
-	}
 	// The source decides what the engine requires before it calls a
 	// cluster ready: a files inventory needs no versions or add-ons. Only
 	// the agent pushes, and it collects from a cluster ("" from v0.1.x),
 	// so another source is a claim that would turn a blocked cluster
-	// ready on evidence the push does not carry (#194).
+	// ready on evidence the push does not carry (#194). This is ingest's
+	// alone: the MCP server judges files inventories too.
 	if inv.Source != "" && inv.Source != inventory.SourceCluster {
 		return inv, fmt.Sprintf("unsupported inventory source %q (snapshots are cluster inventories: want %q or none)", inv.Source, inventory.SourceCluster)
 	}
-	// A later collector schema means field meanings this server would
-	// judge as its own, the mistake legacyView exists to avoid.
-	if inv.CollectorSchema < 0 || inv.CollectorSchema > inventory.CurrentCollectorSchema {
-		return inv, fmt.Sprintf("unsupported inventory collectorSchema %d (want %d, or none from collectors that predate it)", inv.CollectorSchema, inventory.CurrentCollectorSchema)
-	}
-	if inv.ServerVersion != "" {
-		if _, err := inventory.ParseTarget(inv.ServerVersion); err != nil {
-			return inv, "invalid inventory serverVersion: " + err.Error()
+	if err := inv.Admit(); err != nil {
+		var ie *inventory.IdentifierError
+		var le *inventory.LimitError
+		if errors.As(err, &ie) || errors.As(err, &le) {
+			return inv, "invalid inventory: inventory." + err.Error()
 		}
-	}
-	// Collectors read identifiers from objects the apiserver validated, so
-	// one that is not a valid Kubernetes identifier is not from a genuine
-	// inventory; reports repeat them, so they are refused before anything
-	// is stored or evaluated.
-	if err := inv.ValidateIdentifiers(); err != nil {
-		return inv, "invalid inventory: inventory." + err.Error()
-	}
-	// So are values beyond what any collector records (a string over
-	// 16 KiB, an object list over 100, a group/version/kind counted
-	// twice): the engine repeats them in what it builds. The free text a
-	// collector copies whole, which Kubernetes lets be longer (capability
-	// reasons, the ignore annotations), is cut to the limits first, as
-	// collectors since CutFreeText do themselves: an older agent's push
-	// is not refused for it.
-	inv.CutFreeText()
-	if err := inv.ValidateLimits(); err != nil {
-		return inv, "invalid inventory: inventory." + err.Error()
+		return inv, err.Error()
 	}
 	return inv, ""
 }

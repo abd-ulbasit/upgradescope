@@ -143,11 +143,12 @@ jobs:
               - '.github/workflows/ci.yml'
               - 'Makefile'
               # run.sh drives the whole binary, so anything it is built from:
-              # every package it links, the KB and registry data embedded in
+              # every package it links, the KB, registry and api/ schema data embedded in
               # it, and the module graph. hack/action_test.sh checks this
               # list against `go list -deps ./cmd/upgradescope`.
               - 'cmd/**'
               - 'internal/**'
+              - 'api/**'
               - 'registry/**'
               - 'go.mod'
               - 'go.sum'

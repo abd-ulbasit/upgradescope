@@ -116,6 +116,20 @@ func TestIdentifierErrorQuotesAShortPrefix(t *testing.T) {
 	}
 }
 
+// TestIdentifierErrorUnquoted: Unquoted names the field and the rule, and
+// nothing of the value or of why it fails the rule.
+func TestIdentifierErrorUnquoted(t *testing.T) {
+	inv := validInventory()
+	inv.Nodes[0].Name = "MARKER Not/A Name"
+	var ie *IdentifierError
+	if err := inv.ValidateIdentifiers(); !errors.As(err, &ie) {
+		t.Fatalf("ValidateIdentifiers() = %v", err)
+	}
+	if u := ie.Unquoted(); u != "nodes[0].name is not "+ruleSubdomain {
+		t.Errorf("Unquoted() = %q", u)
+	}
+}
+
 // Of several invalid namespace keys the least is named, whatever the map
 // order.
 func TestValidateIdentifiersIsDeterministic(t *testing.T) {

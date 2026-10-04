@@ -69,6 +69,7 @@ nav:
       - CI gate: getting-started/ci-gate.md
       - In-cluster agent: getting-started/in-cluster.md
       - Fleet server: getting-started/fleet.md
+      - AI assistants (MCP): getting-started/mcp.md
   - Concepts:
       - Verdict and score: concepts/verdict-and-score.md
       - Knowledge base: concepts/knowledge-base.md
@@ -102,6 +103,7 @@ nav:
           - clusters list: reference/cli/upgradescope_clusters_list.md
           - clusters delete: reference/cli/upgradescope_clusters_delete.md
           - clusters rename: reference/cli/upgradescope_clusters_rename.md
+          - mcp: reference/cli/upgradescope_mcp.md
           - tokens: reference/cli/upgradescope_tokens.md
           - tokens create: reference/cli/upgradescope_tokens_create.md
           - tokens list: reference/cli/upgradescope_tokens_list.md
