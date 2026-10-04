@@ -125,9 +125,9 @@ func TestWireProxyCountsBytesBothWays(t *testing.T) {
 	if p.up.Load() != 4 || p.down.Load() != 1000 || p.conns.Load() != 1 {
 		t.Errorf("up %d, down %d, conns %d; want 4, 1000, 1", p.up.Load(), p.down.Load(), p.conns.Load())
 	}
-	p.resetBytes()
-	if p.up.Load() != 0 || p.down.Load() != 0 {
-		t.Error("resetBytes left counts")
+	p.resetCounts()
+	if p.up.Load() != 0 || p.down.Load() != 0 || p.conns.Load() != 0 {
+		t.Errorf("resetCounts left up %d, down %d, conns %d; a tick's connection count is the connections opened during it", p.up.Load(), p.down.Load(), p.conns.Load())
 	}
 	c.Close()
 }

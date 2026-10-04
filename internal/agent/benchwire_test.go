@@ -183,7 +183,9 @@ func newWireProxy(upstream string) (*wireProxy, error) {
 
 func (p *wireProxy) addr() string { return p.ln.Addr().String() }
 
-func (p *wireProxy) resetBytes() { p.up.Store(0); p.down.Store(0) }
+// resetCounts zeroes the byte and connection counts, so the next reading is
+// what crossed the wire, and the connections opened, since this call.
+func (p *wireProxy) resetCounts() { p.up.Store(0); p.down.Store(0); p.conns.Store(0) }
 
 func (p *wireProxy) serve() {
 	defer p.wg.Done()

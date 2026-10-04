@@ -40,7 +40,9 @@ import (
 // name for the cluster's fill level), UPGRADESCOPE_BENCH_OUT (a file that
 // gets one JSON line per tick), UPGRADESCOPE_BENCH_EXPECT_NODES and
 // UPGRADESCOPE_BENCH_EXPECT_HELM (fail unless the inventory holds that many:
-// a benchmark of a cluster that was not seeded measures nothing).
+// a benchmark of a cluster that was not seeded measures nothing), and
+// UPGRADESCOPE_BENCH_NO_HELM_CACHE=1 (collect with no Helm release cache, as
+// every tick did before #71: the "before" rows of docs/operations/scale.md).
 func TestBenchAgentTick(t *testing.T) {
 	kubeconfig := os.Getenv("UPGRADESCOPE_BENCH_KUBECONFIG")
 	if kubeconfig == "" {
@@ -86,6 +88,17 @@ func TestBenchAgentTick(t *testing.T) {
 		last       inventory.Inventory
 	)
 	realCollect := r.collectFn
+	switch v := os.Getenv("UPGRADESCOPE_BENCH_NO_HELM_CACHE"); v {
+	case "":
+	case "1":
+		// What every tick cost before #71: the agent's collection with the
+		// Helm step given no cache, so every release is fetched again.
+		realCollect = func(ctx context.Context) inventory.Inventory {
+			return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: acfg.TeamLabel})
+		}
+	default:
+		t.Fatalf("UPGRADESCOPE_BENCH_NO_HELM_CACHE=%q: set it to 1 or leave it unset", v)
+	}
 	r.collectFn = func(ctx context.Context) inventory.Inventory {
 		start := time.Now()
 		last = realCollect(ctx)
@@ -102,7 +115,7 @@ func TestBenchAgentTick(t *testing.T) {
 	}
 	for n := 1; n <= ticks; n++ {
 		rec.reset()
-		proxy.resetBytes()
+		proxy.resetCounts()
 		runtime.GC()
 		sampler := startBenchSampler()
 		cpu0 := cpuTime()
@@ -168,7 +181,7 @@ type benchTick struct {
 	BodyBytes        int64             `json:"bodyBytes"`        // response bodies as client-go read them (decompressed)
 	WireDownBytes    int64             `json:"wireDownBytes"`    // apiserver to agent on the wire, TLS included
 	WireUpBytes      int64             `json:"wireUpBytes"`      // agent to apiserver
-	Connections      int64             `json:"connections"`      // TCP connections opened
+	Connections      int64             `json:"connections"`      // TCP connections opened during this tick (a kept-alive connection from an earlier tick is not counted again)
 	PeakHeapBytes    uint64            `json:"peakHeapBytes"`    // live heap objects, peak during the tick
 	PeakRuntimeBytes uint64            `json:"peakRuntimeBytes"` // all memory the Go runtime held, peak during the tick
 	MaxRSSBytes      int64             `json:"maxRssBytes"`      // process peak RSS so far (cumulative over ticks)
