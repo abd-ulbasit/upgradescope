@@ -17,7 +17,9 @@ rest of the fleet. A team name is free text: a `--team-map` team can be
 cannot hold is `*`, a token's scope of the whole fleet: a `--team-map`
 team called `*` is read as the team `(*)` (serve logs a warning at
 startup and keeps serving), so mint its token with `--teams '(*)'`. A
-namespace label value cannot be `*`.
+map that also names a team `(*)` makes the two one team, and the
+warning says so: rename one to keep them apart. A namespace label value
+cannot be `*`.
 
 ## Read credentials
 
@@ -153,13 +155,44 @@ scoped caller is the cluster's name and data.
 | `GET /api/v1/clusters/{id}/export` (CSV, HTML) | `404` outside the scope; the scope's findings, cut to it, and teams |
 | `GET /api/v1/fleet` | in-scope clusters only |
 | `GET /api/v1/fleet/teams` | in-scope clusters, the scope's teams |
-| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope. The findings are evaluated from the scope's share of the cluster and the manifests alone: the API usage, custom resources, Helm releases, GitOps charts and add-ons in the namespaces of the scope's teams, never another team's, a namespace no team owns, cluster-scoped usage or the apiserver's deprecated-call rows. So a finding the PR's objects are in counts, titles and details only the PR's objects and the scope's, even when the PR names another team's namespace (its objects there are attributed to no team). Of the cluster's own findings, the scope's; the scope's team scores; the manifests' unrecognized images only; suppression warnings of the share only. The gate's verdict, which judges only what the manifests introduce, and the cluster verdict and score are the whole cluster's, so a CI status does not depend on who asks |
+| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope. Otherwise the gate runs on the scope's share of the cluster, never on the whole cluster: the API usage, custom resources, Helm releases, GitOps charts and add-ons in the namespaces of the scope's teams, and what describes the cluster as a whole (version, nodes, control plane, CRD definitions, capabilities); never another team's evidence, a namespace no team owns, cluster-scoped usage or the apiserver's deprecated-call rows. Everything in the answer is decided from that share and the manifests: the findings (a finding the PR's objects are in counts, titles and details only the PR's objects and the scope's, even when the PR names another team's namespace, where its objects are attributed to no team), the verdict and `X-Upgradescope-Verdict`, the status `?fail-on` gives, the cluster verdict, the score and the scope's team scores. Of the share's own findings, the scope's; the manifests' unrecognized images only; suppression warnings of the share only. So a CI status depends on who asks ([the gate with a team-scoped token](#the-gate-with-a-team-scoped-token)) |
 | `GET /api/v1/registry` | as fleet-wide: the public knowledge base |
 | `GET /metrics` | `403`: its per-cluster series name every cluster, so it takes a fleet-wide credential (Prometheus gets `--read-token` or a `*` token) |
 
 Every scoped answer carries `X-Upgradescope-Teams: <team,...>`, and the
 dashboard says "Showing teams ... only" while it is set. A fleet-wide
 answer carries no such header.
+
+### The gate with a team-scoped token
+
+`POST /api/v1/gate?cluster=` with a team-scoped credential judges the PR
+against the scope's share of the cluster (the table above), and nothing
+else: two clusters that differ only outside the scope give the same
+answer, status, verdict and score included, byte for byte, in every
+format. The whole cluster is never evaluated for that request, so not
+even a `413` from evaluating it can depend on another team's workloads.
+
+The price is that **a PR that breaks only another team's workloads
+passes a team-scoped gate.** Say a PR changes a CRD that several teams
+use so that it stops serving `v1alpha1`, and only web's custom resources
+are still at `v1alpha1`: the payments-scoped gate answers `ready` and
+`200`, the fleet-wide gate `blocked` and `422`. The answer does not hint
+that something outside the scope would fail either. Any such marker,
+even a single bit with no count, team, namespace or title, would let a
+team probe the rest of the cluster one request per API: post one object
+at a removed API, or a CRD that stops serving a version, and read
+whether someone else uses it. The score is the share's for the same
+reason: were it the whole cluster's, a PR that adds one object at an API
+where another team already has a finding would leave it unchanged.
+
+So pick the gate's credential by what the repository can break:
+
+- only a team's own workloads (its namespaces): the team's scoped token
+  is enough, and its CI reads nothing of other teams;
+- anything shared (CRDs, cluster-scoped objects, add-ons, another team's
+  namespaces): a fleet-wide token (`--read-token` or a `*` token), which
+  judges the PR against the whole cluster, as the gate did before read
+  scopes.
 
 Every read that presents a bearer other than `--read-token` or the admin
 token looks it up in the store (an indexed query on its hash), and while
@@ -231,7 +264,8 @@ upgradescope serve --listen 127.0.0.1:8080 \
 A read whose TCP peer is in a `--trusted-proxy-cidr` range and that
 carries the header reads as the teams it lists, in the
 [team list encoding](#the-team-list-encoding), every copy of the header
-counted (oauth2-proxy sends one per group). A bearer token, when one is
+counted (oauth2-proxy sends one header, the session's groups joined by
+commas; other proxies may send one per group). A bearer token, when one is
 presented and valid, takes precedence. The peer is the connection's
 source address, never `X-Forwarded-For`. From any other address the
 header is ignored: a client that reaches the server directly cannot
@@ -266,19 +300,25 @@ The two flags go together, and the mode is off by default.
        only. A proxy that passes a client's `X-Forwarded-Groups` on (or
        appends to it) lets that client read any team it names.
 
-    oauth2-proxy v7.8.1, which the example pins, does both halves of
+    oauth2-proxy v7.15.5, which the example pins, does both halves of
     (2) with `--pass-user-headers=true --skip-auth-strip-headers=true`:
     it deletes the request's copies of each header it injects
-    (`X-Forwarded-Groups` among them) before injecting it, one line per
-    group of the session, and on routes it does not authenticate
-    (`--skip-auth-route`) it strips them without setting them
-    ([flag reference](https://oauth2-proxy.github.io/oauth2-proxy/7.8.x/configuration/overview);
+    (`X-Forwarded-Groups` among them), whatever their case and whether
+    they are written with `-` or `_`, then sets it from the session
+    only: one header, the session's groups joined by commas. On routes
+    it does not authenticate (`--skip-auth-route`) it strips them too,
+    and sets them only from a valid session cookie the request carries
+    ([flag reference](https://oauth2-proxy.github.io/oauth2-proxy/7.15.x/configuration/overview);
     in its source, `getRequestHeaders` in
-    [`pkg/apis/options/legacy_options.go`](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.8.1/pkg/apis/options/legacy_options.go)
-    sets `PreserveRequestValue` to `!SkipAuthStripHeaders`, and
-    `newStripHeaders` in
-    [`pkg/middleware/headers.go`](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.8.1/pkg/middleware/headers.go)
-    deletes those headers before the injector runs). With the alpha
+    [`pkg/apis/options/legacy_options.go`](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.15.5/pkg/apis/options/legacy_options.go)
+    sets `PreserveRequestValue` to `!SkipAuthStripHeaders`;
+    `newStripHeaders` and `stripNormalizedHeader` in
+    [`pkg/middleware/headers.go`](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.15.5/pkg/middleware/headers.go)
+    delete those headers before the injector runs, and
+    `injectRequestHeaders` there joins what it injects with
+    `flattenHeaders`; `getAuthenticatedSession` in
+    [`oauthproxy.go`](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.15.5/oauthproxy.go)
+    returns the request's session on a skip-auth route). With the alpha
     configuration, the same holds only for headers whose
     `preserveRequestValue` is false. Any other proxy must be checked for
     the same: it strips the client's copies, whatever their case, before
@@ -343,7 +383,7 @@ it as is, and `a,b` would read as the teams `a` and `b`.
 ### Example: oauth2-proxy as a sidecar
 
 [`deploy/examples/oauth2-proxy/upgradescope-oauth2-proxy.yaml`](https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/examples/oauth2-proxy/upgradescope-oauth2-proxy.yaml)
-runs oauth2-proxy v7.8.1 in the server's pod and holds both conditions
+runs oauth2-proxy v7.15.5 in the server's pod and holds both conditions
 above (its test, `deploy/examples/examples_test.go`, fails if one goes):
 
 - `serve` listens on `127.0.0.1:8080`, so it is reachable only from
@@ -357,14 +397,32 @@ above (its test, `deploy/examples/examples_test.go`, fails if one goes):
 
 Machines use the same Service, on the routes the proxy does not
 authenticate: agents push to `POST /api/v1/snapshots` with their ingest
-tokens, CI posts to `POST /api/v1/gate` and Prometheus scrapes
+tokens, CI posts to `POST /api/v1/gate?target=...` and Prometheus scrapes
 `GET /metrics` with read tokens, and the kubelet probes `/readyz` and
-`/healthz` through it (serve does not listen on the pod's address). The
-proxy strips the group header on those routes too, so each request reads
-as the token it presents and nothing else: without one, `401`. Every
-other read through the proxy needs a signed-in person; operators reach
-the server itself with `kubectl port-forward` to port 8080 and a token
-(the danger box above says what that permission allows). What reaches
+`/healthz` through it (serve does not listen on the pod's address).
+v7.15.5 matches a `--skip-auth-route` against the request's decoded path
+without its query (`isAllowedRoute` in `oauthproxy.go`, `GetRequestPath`
+in `pkg/requests/util/util.go`), so `POST=^/api/v1/gate$` matches every
+gate call, whatever its query. Versions before v7.11.0 (the CVE-2025-54576 fix) match the request
+URI, query included: there the same route never matches a gate call, and
+CI gets the proxy's sign-in answer instead of the server's. The
+example's test checks the routes against the requests machines make.
+The proxy strips the group header on those routes too, so each request
+reads as the token it presents and nothing else: without one, `401`.
+
+The proxy's sign-in is not what guards the data; the server's token
+check is. With `--reverse-proxy`, oauth2-proxy matches the skip-auth
+routes against the path in the client's `X-Forwarded-Uri`, from any
+client unless `--trusted-proxy-ip` names the proxies allowed to send
+`X-Forwarded-*` headers. So `GET /api/v1/clusters` with
+`X-Forwarded-Uri: /metrics` gets past the proxy without signing in. It
+reaches the server with the group header stripped and reads as the token
+it presents: without one, `401`. Set `--trusted-proxy-ip` to your
+ingress controller's addresses, and have the ingress overwrite or drop a
+client's `X-Forwarded-Uri`, if signing in must be the only way past the
+proxy. Operators reach the server itself with `kubectl port-forward` to
+port 8080 and a token (the danger box above says what that permission
+allows). What reaches
 the server over loopback is trusted with the header, which is why the
 pod opts out of Istio and Linkerd sidecar injection.
 
