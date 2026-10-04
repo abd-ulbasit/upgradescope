@@ -72,13 +72,12 @@ const listPageSize = 500
 // one of large pods): 500 pods of 137 bytes, then 1,000 of up to 41,685
 // bytes (39.4 MiB encoded), measured 124.7 to 125.5 MiB of live heap
 // (TestPodPagePeakHeapIsBounded), under half the chart's 256Mi; at the
-// 2,000 a page of an earlier draft, 250 MiB, past the agent's GOMEMLIMIT.
-// Objects as large as those of the page before (a run of such pods) are
-// read 500 a page, 63.2 to 63.7 MiB, as before.
-// Small objects (the scale lab's KWOK pods and nodes, about 3 KiB each)
-// are read 1,000 a page, a production cluster's pods of about 8 KiB some
-// 990, and anything over 16 KiB (a Node listing many images) 500, as
-// before.
+// 2,000 a page of an earlier draft, 249.4 to 250.0 MiB, past the agent's
+// GOMEMLIMIT. Objects as large as those of the page before (a run of such
+// pods) are read 500 a page, 63.2 to 63.7 MiB, as before. Small objects
+// (the scale lab's KWOK pods and nodes, about 3 KiB each) are read 1,000 a
+// page, a production cluster's pods of about 8 KiB some 990, and anything
+// over 16 KiB (a Node listing many images) 500, as before.
 const (
 	wholePageBytes = 8 << 20
 	podPageSize    = 1000

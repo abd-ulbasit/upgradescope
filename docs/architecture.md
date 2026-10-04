@@ -179,13 +179,20 @@ cluster. The requests of one tick are:
 
 - **One paged list per resource type, ceil(N / 500) requests for N
   objects, and at least one; fewer for pods and nodes.** The pod and node
-  lists (#228) start with a page of 500, then size each page by the one
-  before: as many objects as fit 8 MiB encoded at its average size, at
-  least 500 and at most 2,000. Small pods and nodes (the scale lab's, about
-  3 KiB) are read 2,000 a page, a production cluster's pods of about 8 KiB
-  some 1,000, and objects over 16 KiB 500, as before. client-go decodes a
-  page whole, so a later page costs about 32 MiB of live heap at most, and
-  no page more than a page of 500 did (`TestPodPagePeakHeapIsBounded`).
+  lists (#228) start with a page of 500, then size each page by the
+  largest object of the one before: as many objects as fit 8 MiB encoded
+  at that size, at least 500 and at most 1,000. Small pods and nodes (the
+  scale lab's, about 3 KiB) are read 1,000 a page, a production cluster's
+  pods of about 8 KiB some 990, and objects over 16 KiB 500, as before.
+  client-go decodes a page whole, about three times its encoded size in
+  live heap, and no limit set before a page is read can bound the size of
+  the objects it will hold, so a page's worst case is 1,000 times the
+  largest object: small objects followed by large ones (pods are listed
+  by namespace). 500 pods of 137 bytes followed by 1,000 of up to 41,685
+  bytes (39.4 MiB encoded) peaked at 124.7 to 125.5 MiB of live heap, and
+  a run of such pods, read 500 a page, at 63.2 to 63.7 MiB, as before
+  (`TestPodPagePeakHeapIsBounded`, which enforces 128 MiB). So no page
+  holds more than twice the objects a page held before #228.
   The types are nodes, namespaces, pods in
   `kube-system`, pods in the other namespaces, IngressClasses,
   CustomResourceDefinitions, the `owner=helm` Secrets and the `owner=helm`
@@ -242,8 +249,11 @@ cluster. The requests of one tick are:
   asks for `/version` only, and asks for the groups and resources again
   (4 requests) when the server version changed (on that tick, before any
   step reads them), on the tick after the CRDs' groups, kinds or served
-  versions changed or could not be listed, when the answer is an hour old,
-  or when the last answer had an error, which is never kept. A one-shot
+  versions changed or the CRD list failed, when the answer is an hour old,
+  or when the last answer had an error, which is never kept. Custom
+  resources that could not be listed (the agent is granted none, so a CRD
+  with a deprecated or unserved version always makes the `crds` capability
+  partial) are not a reason: the CRDs themselves were read. A one-shot
   `scan` asks every time.
 
 So a tick sends about the sum of the page counts, plus the Helm releases not
