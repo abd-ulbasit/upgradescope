@@ -297,3 +297,78 @@ func TestCollectNothingReadForAddOnsLeavesNoAddOns(t *testing.T) {
 		t.Errorf("add-ons = %v, want none for a capability that was not assessed", addOnIDs(inv))
 	}
 }
+
+// A server or proxy may refuse the metadata.namespace field selector with a
+// 400. The add-ons then list every pod, as before the shared read, and skip
+// the kube-system pods client-side: the add-ons are those of main.
+func TestCollectFieldSelectorRejectedFallsBackToUnfilteredList(t *testing.T) {
+	cs, disc := podFixture()
+	srv := servePods(cs, tickPods()...)
+	srv.perPage = 1
+	srv.failList = func(_ int, _ string, o metav1.ListOptions) error {
+		if o.FieldSelector != "" {
+			return apierrors.NewBadRequest("field label not supported: metadata.namespace")
+		}
+		return nil
+	}
+
+	inv := Collect(context.Background(), Clients{Kube: cs, Discovery: disc}, loadKB(t), Options{})
+
+	if st := inv.Capabilities[inventory.CapVersions]; !st.Available || st.Partial {
+		t.Errorf("versions capability = %+v, want available and complete", st)
+	}
+	if !reflect.DeepEqual(inv.ControlPlane, wantTickControlPlane()) {
+		t.Errorf("ControlPlane = %+v, want %+v", inv.ControlPlane, wantTickControlPlane())
+	}
+	if st := inv.Capabilities[inventory.CapAddOns]; !st.Available || st.Partial {
+		t.Errorf("addons capability = %+v, want available and complete", st)
+	}
+	if got := addOnIDs(inv); !reflect.DeepEqual(got, []string{"cilium", "ingress-nginx"}) {
+		t.Errorf("add-ons = %v, want cilium and ingress-nginx as on main", got)
+	}
+	var selected, retried int
+	for _, c := range srv.calls {
+		if c.namespace != "" {
+			continue
+		}
+		if c.fieldSelector != "" {
+			selected++
+		} else {
+			retried++
+		}
+	}
+	if selected != 1 || retried != 4 {
+		t.Errorf("cluster-wide requests = %d with the selector, %d without (%+v), want one refused, then every pod in 4 unfiltered pages", selected, retried, srv.calls)
+	}
+}
+
+// The other-namespaces list failing on a later page keeps what was read: the
+// kube-system evidence from versions and the pages already listed. The
+// capability is partial, with the unchanged "list pods" reason.
+func TestCollectOtherNamespacesFailingOnLaterPageKeepsEvidence(t *testing.T) {
+	cs, disc := podFixture()
+	srv := servePods(cs, append(tickPods(), appPod("nginx-2", "example.com/app:v1"))...)
+	srv.perPage = 1
+	srv.failList = func(_ int, ns string, o metav1.ListOptions) error {
+		if ns == "" && o.Continue != "" {
+			return errors.New("etcdserver: request timed out")
+		}
+		return nil
+	}
+
+	inv := Collect(context.Background(), Clients{Kube: cs, Discovery: disc}, loadKB(t), Options{})
+
+	if st := inv.Capabilities[inventory.CapVersions]; !st.Available || st.Partial {
+		t.Errorf("versions capability = %+v, want available and complete", st)
+	}
+	st := inv.Capabilities[inventory.CapAddOns]
+	if !st.Available || !st.Partial || !reflect.DeepEqual(st.Skipped, []string{inventory.SkippedPods}) {
+		t.Errorf("addons capability = %+v, want partial, skipping pods", st)
+	}
+	if !strings.HasPrefix(st.Reason, "list pods: ") || !strings.Contains(st.Reason, "etcdserver: request timed out") {
+		t.Errorf("addons reason = %q, want the unchanged list pods reason", st.Reason)
+	}
+	if got := addOnIDs(inv); !reflect.DeepEqual(got, []string{"cilium", "ingress-nginx"}) {
+		t.Errorf("add-ons = %v, want cilium (kube-system, from versions) and ingress-nginx (the page read before the failure)", got)
+	}
+}

@@ -124,7 +124,9 @@ func podContainerImages(p *corev1.Pod) []string {
 // that fails on its first page is a failure of the pods exactly as before:
 // the kube-system evidence is dropped, so the gap reason, the add-ons and
 // the unavailable check are those of a list of every pod that failed. A
-// later page failing keeps the pages read, as it always did.
+// later page failing keeps the pages read, as it always did. A server or
+// proxy that rejects the field selector with a 400 is asked once more
+// without it, and its kube-system pods are skipped here.
 func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory, sysPods *kubeSystemPods) error {
 	ev := addOnEvidence{releases: inv.HelmReleases, gitops: inv.GitOpsCharts}
 	var failures, skipped []string
@@ -137,6 +139,12 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 	}
 	for {
 		pods, err := kube.CoreV1().Pods(metav1.NamespaceAll).List(ctx, opts)
+		if err != nil && opts.Continue == "" && opts.FieldSelector != "" && apierrors.IsBadRequest(err) {
+			// A server or proxy that refuses the field selector: list every
+			// pod as before, skipping kube-system's below.
+			opts.FieldSelector = ""
+			continue
+		}
 		if err != nil {
 			podErr = err
 			if opts.Continue == "" {
