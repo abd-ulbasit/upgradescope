@@ -69,7 +69,10 @@ func TestTeamMapChangeLeavesTheOldTeamsScope(t *testing.T) {
 // A scoped read of a cluster outside its scope never looks the cluster
 // up, so it costs what an unknown id does (one scope query) and its
 // timing does not say the id exists. A broken GetCluster shows it: the
-// out-of-scope id still answers 404, and an in-scope one the 500.
+// out-of-scope id still answers 404, and an in-scope one the 500, on
+// /clusters/{id} and /gate?cluster= alike. The gate matches a name among
+// the scope's clusters only, so an out-of-scope cluster named like an
+// in-scope id neither shadows it nor is told apart by a 404.
 func TestOutOfScopeClusterIsNeverLookedUp(t *testing.T) {
 	st := newFakeStore()
 	s := newTestServer(t, st)
@@ -84,6 +87,23 @@ func TestOutOfScopeClusterIsNeverLookedUp(t *testing.T) {
 	for _, c := range st.clusters {
 		ids[c.Name] = fmt.Sprint(c.ID)
 	}
+	// A cluster outside the scope named like the scope's id: the gate
+	// matches names among the scope's clusters, so payments' id still
+	// names payments' cluster, and the other's existence does not show.
+	shadow := payInventory()
+	shadow.Namespaces[0].Team = "web"
+	pushScopeCluster(t, ts, ids["pay"], shadow)
+	mintReadToken(t, st, "fleet-tok", "*")
+	const gateQ = "?target=1.35&fail-on=never&cluster="
+	if resp, raw := postGate(t, ts, gateQ+ids["pay"], "pay-tok", ingressManifest, "application/x-yaml"); resp.StatusCode != http.StatusOK ||
+		!bytes.Contains(raw, []byte(`"clusterId":"uid-pay"`)) {
+		t.Errorf("gate ?cluster=<payments' id> = %d %s, want payments' cluster: an out-of-scope cluster named %s shadows it", resp.StatusCode, raw, ids["pay"])
+	}
+	if resp, raw := postGate(t, ts, gateQ+ids["pay"], "fleet-tok", ingressManifest, "application/x-yaml"); resp.StatusCode != http.StatusOK ||
+		!bytes.Contains(raw, []byte(`"clusterId":"uid-`+ids["pay"]+`"`)) {
+		t.Errorf("fleet-wide gate ?cluster=%s = %d %s, want the cluster of that name, which wins over the id", ids["pay"], resp.StatusCode, raw)
+	}
+
 	st.mu.Lock()
 	st.errs["GetCluster"] = errors.New("GetCluster called")
 	st.mu.Unlock()
@@ -92,6 +112,12 @@ func TestOutOfScopeClusterIsNeverLookedUp(t *testing.T) {
 	}
 	if resp, _ := fetch(t, ts, "/api/v1/clusters/"+ids["pay"], "pay-tok"); resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("in-scope id = %d, want the broken lookup's 500: the fixture does not test the order", resp.StatusCode)
+	}
+	if resp, raw := postGate(t, ts, gateQ+ids["web"], "pay-tok", ingressManifest, "application/x-yaml"); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("gate ?cluster=<out-of-scope id> = %d %s, want 404 without a cluster lookup", resp.StatusCode, raw)
+	}
+	if resp, _ := postGate(t, ts, gateQ+"web", "pay-tok", ingressManifest, "application/x-yaml"); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("gate ?cluster=<out-of-scope name> = %d, want 404", resp.StatusCode)
 	}
 }
 

@@ -678,7 +678,10 @@ func gateFails(resp gateResponse, failOn string, allowIncomplete bool) bool {
 // gateClusterContext resolves ?cluster=<name|id> to the cluster's latest
 // stored inventory, writing the error response (404/500) itself on failure.
 // A name wins over an id, so a cluster named "1" is never mistaken for
-// cluster id 1.
+// cluster id 1. A scoped request resolves ref among the scope's clusters
+// only: a name matches an in-scope cluster's, so an out-of-scope cluster
+// named like an in-scope id neither shadows that id nor shows by a 404
+// that it exists, and an id outside the scope is never looked up.
 func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref string) (inventory.Inventory, bool) {
 	ctx := r.Context()
 	// The scope first, whatever ref names, so a cluster outside it costs
@@ -688,24 +691,23 @@ func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref 
 		internalErr(w, "resolving gate cluster", err)
 		return inventory.Inventory{}, false
 	}
+	in := func(id int64) bool { return scoped == nil || scoped[id] }
 	cluster, err := func() (store.Cluster, error) {
 		clusters, lerr := s.cfg.Store.ListClusters(ctx)
 		if lerr != nil {
 			return store.Cluster{}, lerr
 		}
 		for _, c := range clusters {
-			if c.Name == ref {
+			if c.Name == ref && in(c.ID) {
 				return c, nil
 			}
 		}
-		if id, perr := strconv.ParseInt(ref, 10, 64); perr == nil {
+		if id, perr := strconv.ParseInt(ref, 10, 64); perr == nil && in(id) {
 			return s.cfg.Store.GetCluster(ctx, id)
 		}
+		// Outside the scope: as unknown as a cluster that does not exist.
 		return store.Cluster{}, store.ErrNotFound
 	}()
-	if err == nil && scoped != nil && !scoped[cluster.ID] {
-		err = store.ErrNotFound // outside the scope, as unknown as a cluster that does not exist
-	}
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "cluster not found")
 		return inventory.Inventory{}, false
