@@ -185,12 +185,29 @@ agent:
   # override. Without a memory limit, or with one the chart cannot read
   # (e.g. "100m"), the chart sets none; the binary then takes 90% of its
   # cgroup limit itself, when it has one.
+  # The CPU limit is a cgroup quota, and a tick is CPU-bound: the first tick
+  # after a start reads every Helm release once (the whole first tick took
+  # about 23 CPU-seconds at 1,000 releases) and must finish that step in
+  # about a minute (the GitOps reads, with rbac.gitops.* on, share that
+  # minute). Measured against 2,000 fake nodes and 1,001 releases (1,000 and
+  # the chart's own; docs/operations/scale.md): at 200m the first tick
+  # stopped at that deadline with 132 releases unread and a steady tick took
+  # 21 s; at 500m the first tick took 48 s, its Helm step within the minute;
+  # at 1 CPU the tick took 35 s and a steady tick 7 s. So the limit is 1
+  # CPU. For scheduling it costs nothing while the agent idles (the request
+  # is what the scheduler reserves), but a ResourceQuota on limits.cpu still
+  # counts the limit, and a LimitRange whose max CPU is below 1 rejects it:
+  # in such a namespace set limits.cpu yourself (it was 200m through
+  # v0.2.0-rc.2, so 800m more quota). The Helm step took about 28 s of those
+  # 35 s, so by that arithmetic (computed, not measured) 1 CPU holds to
+  # about 2,000 releases, fewer with rbac.gitops.* on; give a larger cluster
+  # more, or a longer agent.interval.
   resources:
     requests:
       cpu: 50m
       memory: 64Mi
     limits:
-      cpu: 200m
+      cpu: "1"
       memory: 256Mi
 
 server:

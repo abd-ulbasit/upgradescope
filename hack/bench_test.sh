@@ -133,6 +133,46 @@ grep -qF "| GET | secrets | 1500 |" "$work/report" && ok "agent-report.sh: reque
 BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/agent.jsonl" >"$work/report.json" 2>&1 || true
 [ "$(jq 'length' "$work/report.json" 2>/dev/null)" = 3 ] && ok "agent-report.sh: BENCH_REPORT_FORMAT=json" || fail "agent-report.sh json" "$work/report.json"
 expect "agent-report.sh: no file is a usage error" 2 "usage" -- hack/bench/agent-report.sh
+# A run without the GitOps fill prints no GitOps table (its ticks have no
+# gitopsCharts), and the json summary says gitops: null.
+if grep -qF "GitOps reads per tick" "$work/report"; then fail "agent-report.sh: a run without the GitOps fill printed a GitOps table" "$work/report"; else ok "agent-report.sh: no GitOps table without the GitOps fill"; fi
+[ "$(jq '[.[] | .gitops] | unique' "$work/report.json" 2>/dev/null | tr -d ' \n')" = "[null]" ] && ok "agent-report.sh: json gitops is null without the fill" || fail "agent-report.sh json gitops without the fill" "$work/report.json"
+
+# With it: ticks that read GitOps charts and record the bytes of each
+# resource. Steady ticks after the first: Applications 20, 22, 24 and 26
+# requests (the mean of the middle two is 23), 1, 2, 3 and 4 MiB (2.5 MiB);
+# HelmReleases 20 requests at 2 MiB; 5 OCIRepository GETs of 0.5 MiB in all.
+gtick() { # gtick <fill> <n> <charts> <app requests> <app MiB>
+  jq -nc --arg label "fill=$1 nodes=10 argocd=100 flux=100" --argjson tick "$2" --argjson charts "$3" --argjson areq "$4" --argjson amib "$5" '{
+    label: $label, tick: $tick, wallMs: 2000, collectMs: 1900, cpuMs: 1000, requests: ($areq + 40),
+    byVerbResource: [{verb: "LIST", resource: "applications", count: $areq, bytes: ($amib * 1048576)},
+      {verb: "LIST", resource: "helmreleases", count: 20, bytes: 2097152},
+      {verb: "GET", resource: "ocirepositories", count: 5, bytes: 524288},
+      {verb: "LIST", resource: "pods", count: 5, bytes: 1048576}],
+    bodyBytes: 10485760, wireDownBytes: 2097152, wireUpBytes: 1048576, connections: 1,
+    peakHeapBytes: 52428800, peakRuntimeBytes: 83886080, maxRssBytes: 104857600,
+    nodes: 11, namespaces: 3, helmReleases: 10, gitopsCharts: $charts, addOns: 0, apiUsage: 0, targets: 1, capabilities: {}}'
+}
+{
+  gtick 0 1 0 1 0
+  gtick 0 2 0 1 0
+  gtick 1 1 200 99 9
+  gtick 1 2 200 20 1
+  gtick 1 3 200 26 4
+  gtick 1 4 200 22 2
+  gtick 1 5 200 24 3
+} >"$work/gitops.jsonl"
+"hack/bench/agent-report.sh" "$work/gitops.jsonl" >"$work/gitops-report" 2>&1 || true
+if grep -qF "GitOps reads per tick" "$work/gitops-report" &&
+  grep -qF "| 1 | 200 | 23, 2.5 | 20, 2 | 5, 0.5 | 48, 5 | 124 |" "$work/gitops-report"; then
+  ok "agent-report.sh: the GitOps table, medians of requests and response MiB per resource"
+else
+  fail "agent-report.sh GitOps table" "$work/gitops-report"
+fi
+# The empty level belongs in the table of a run that had GitOps charts, with none read.
+grep -qE '^\| 0 \| 0 \| 1, 0 \|' "$work/gitops-report" && ok "agent-report.sh: the empty level is in the GitOps table, with no charts" || fail "agent-report.sh GitOps table lacks the empty level" "$work/gitops-report"
+grep -qF "| LIST | applications | 20 | 1024 |" "$work/gitops-report" && ok "agent-report.sh: the breakdown shows each resource's response KiB" || fail "agent-report.sh breakdown bytes" "$work/gitops-report"
+BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/gitops.jsonl" 2>&1 | jq -e ".[0].gitops.charts == 0 and .[1].gitops.charts == 200 and .[1].gitops.requests == 48" >/dev/null && ok "agent-report.sh: json carries the GitOps summary" || fail "agent-report.sh json gitops" "$work/gitops-report"
 
 # --- serve.sh and serve-report.sh --------------------------------------------
 expect "serve.sh: an unknown backend is refused" 1 "unknown backend mysql" -- env BENCH_BACKENDS=mysql BENCH_BIN="$work/bin" GO_STUB_RC=0 hack/bench/serve.sh
@@ -357,6 +397,144 @@ if [ "$(cat "$work/knob-unset")" = "knob=unset" ]; then
   ok "agent.sh: without BENCH_NO_HELM_CACHE the benchmark's variable is unset (the cache is on)"
 else
   fail "agent.sh: the benchmark got a no-cache variable nobody asked for" "$work/out"
+fi
+
+
+# --- agent.sh: BENCH_GITOPS ---------------------------------------------------
+# The opt-in GitOps fill (#233): anything but 1 is refused before a build or a
+# cluster call; unset, nothing of it happens (no CRD installed, no seeder flag,
+# no benchmark variable), so existing runs are unchanged; set, the pinned CRDs
+# (and only the OCIRepository one of source-controller's six) are applied, the
+# seeder gets counts scaled by the fill, and the benchmark is told how many
+# GitOps charts the collector must read back.
+for bad in 0 true yes; do
+  expect "agent.sh: BENCH_GITOPS=$bad is refused, before the build" 1 "BENCH_GITOPS" -- env "KUBECONFIG=$lab" "BENCH_BIN=$work/bin" "BENCH_GITOPS=$bad" GO_STUB_RC=0 "$agent"
+  if grep -qE "go stub|bench-agent: cluster" "$work/out"; then fail "agent.sh: BENCH_GITOPS=$bad was refused after the script started work" "$work/out"; else ok "agent.sh: BENCH_GITOPS=$bad is refused before anything is built or any cluster is contacted"; fi
+done
+expect "agent.sh: BENCH_GITOPS_APPS must be a number" 1 "BENCH_GITOPS_APPS" -- env "KUBECONFIG=$lab" "BENCH_BIN=$work/bin" BENCH_GITOPS=1 BENCH_GITOPS_APPS=ten GO_STUB_RC=0 "$agent"
+gs=$work/stubs-gitops
+mkdir -p "$gs"
+cp "$nc/kubectl" "$gs/kubectl"
+sed -i.bak 's|^args="\$\*"$|args="$*"; echo "$args" >>"${KUBECTL_LOG:-/dev/null}"|' "$gs/kubectl"
+rm -f "$gs/kubectl.bak"
+cat >"$gs/go" <<'STUB'
+#!/usr/bin/env bash
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = -o ]; then out=$2; shift; fi
+  shift
+done
+cat >"$out" <<'BIN'
+#!/usr/bin/env bash
+echo "args=$* gitops=${UPGRADESCOPE_BENCH_GITOPS-unset} expect=${UPGRADESCOPE_BENCH_EXPECT_GITOPS-unset}" >>"$KNOB_LOG"
+BIN
+chmod +x "$out"
+STUB
+cat >"$gs/curl" <<'STUB'
+#!/usr/bin/env bash
+out="" url=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = -o ]; then out=$2; shift; else url=$1; fi
+  shift
+done
+case "$url" in
+  *source-controller*) printf -- '---\nkind: CustomResourceDefinition\nmetadata:\n  name: buckets.source.toolkit.fluxcd.io\n---\nkind: CustomResourceDefinition\nmetadata:\n  name: ocirepositories.source.toolkit.fluxcd.io\n---\nkind: CustomResourceDefinition\nmetadata:\n  name: gitrepositories.source.toolkit.fluxcd.io\n' >"$out" ;;
+  *) echo stub >"$out" ;;
+esac
+STUB
+cat >"$gs/sha256sum" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  *stage-fast*) d=$SHA_STAGE ;;
+  *kwok.yaml*) d=$SHA_KWOK ;;
+  *application-crd*) d=$SHA_ARGO ;;
+  *helm-controller*) d=$SHA_HELM ;;
+  *source-controller*) d=$SHA_SRC ;;
+  *) d=unknown ;;
+esac
+echo "$d  $1"
+STUB
+cp "$gs/sha256sum" "$gs/shasum"
+chmod +x "$gs"/*
+pin() { sed -n "s/^$1=//p" hack/bench/agent.sh; }
+run_gitops() { # run_gitops <log prefix> [BENCH_GITOPS value]: half of full, no settle, one tick
+  : >"$1.knob"; : >"$1.kubectl"
+  local vars=(env -u BENCH_GITOPS PATH="$gs:$PATH" "KUBECONFIG=$lab" "BENCH_BIN=$work/bin-gs-$$-$RANDOM" BENCH_STEPS=0.5 BENCH_TICKS=1 BENCH_SETTLE_SECONDS=0
+    "KNOB_LOG=$1.knob" "KUBECTL_LOG=$1.kubectl" "SHA_KWOK=$sha_kwok" "SHA_STAGE=$sha_stage"
+    "SHA_ARGO=$(pin ARGOCD_SHA256_application_crd)" "SHA_HELM=$(pin FLUX_SHA256_helm_controller_crds)" "SHA_SRC=$(pin FLUX_SHA256_source_controller_crds)")
+  [ $# -lt 2 ] || vars+=("BENCH_GITOPS=$2")
+  "${vars[@]}" "$agent" >"$work/out" 2>&1 || true
+}
+run_gitops "$work/gs-on" 1
+if grep -qF -- "--argocd-apps 500 --flux-helmreleases 500" "$work/gs-on.knob" &&
+  grep -qF "gitops=1 expect=1000" "$work/gs-on.knob" &&
+  grep -q "apply --server-side.*application-crd.*helm-controller.*ocirepositories-crd" "$work/gs-on.kubectl" &&
+  grep -q "wait --for=condition=Established crd/applications.argoproj.io crd/helmreleases.helm.toolkit.fluxcd.io crd/ocirepositories.source.toolkit.fluxcd.io" "$work/gs-on.kubectl"; then
+  ok "agent.sh: BENCH_GITOPS=1 installs the pinned CRDs, seeds counts scaled by the fill, and tells the benchmark what to expect"
+else
+  fail "agent.sh: BENCH_GITOPS=1 did not install the CRDs, seed 500 and 500, and expect 1000 charts" "$work/out"
+  cat "$work/gs-on.knob" "$work/gs-on.kubectl" >&2
+fi
+oci=$(ls "$work"/bin-gs-*/flux-ocirepositories-crd-*.yaml | head -1)
+if [ "$(grep -c '^kind: CustomResourceDefinition' "$oci")" = 1 ] && grep -qF "ocirepositories.source.toolkit.fluxcd.io" "$oci" && ! grep -qE "buckets|gitrepositories" "$oci"; then
+  ok "agent.sh: only the OCIRepository CRD is cut out of source-controller's manifest"
+else
+  fail "agent.sh: the extracted CRD file is not the OCIRepository CRD alone" "$oci"
+fi
+run_gitops "$work/gs-off"
+if ! grep -qE -- "--argocd-apps|--flux-helmreleases" "$work/gs-off.knob" && ! grep -q "gitops=1" "$work/gs-off.knob" &&
+  ! grep -qE "application-crd|helm-controller|ocirepositories" "$work/gs-off.kubectl" && grep -q "gitops=unset expect=unset" "$work/gs-off.knob"; then
+  ok "agent.sh: without BENCH_GITOPS no CRD is installed, no seeder flag is passed and the benchmark is told nothing"
+else
+  fail "agent.sh: the GitOps fill leaked into a run that did not ask for it" "$work/out"
+  cat "$work/gs-off.knob" "$work/gs-off.kubectl" >&2
+fi
+
+# --- pod-sample.sh ----------------------------------------------------------------
+# Reads the one kubeconfig it is given, never the default, and changes nothing;
+# its sampling is checked against stubbed kubectl and docker.
+ps=hack/bench/pod-sample.sh
+expect "pod-sample.sh: no KUBECONFIG is refused" 1 "KUBECONFIG is required" -- env -u KUBECONFIG NODE_CONTAINER=n "$ps" ns d 1
+expect "pod-sample.sh: a list of kubeconfigs is refused" 1 "single file" -- env "KUBECONFIG=$lab:$lab" NODE_CONTAINER=n "$ps" ns d 1
+expect "pod-sample.sh: ~/.kube/config is refused" 1 "is ~/.kube/config" -- env "HOME=$work/home" "KUBECONFIG=$work/home/.kube/config" NODE_CONTAINER=n "$ps" ns d 1
+expect "pod-sample.sh: no node container is refused" 1 "NODE_CONTAINER is required" -- env -u NODE_CONTAINER "KUBECONFIG=$lab" "$ps" ns d 1
+expect "pod-sample.sh: seconds must be a number" 1 "whole number" -- env "KUBECONFIG=$lab" NODE_CONTAINER=n "$ps" ns d soon
+pss=$work/stubs-podsample
+mkdir -p "$pss"
+cat >"$pss/kubectl" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$KUBECTL_LOG"
+case "$*" in
+  *"get deployment "*"-o json"*) echo '{"spec":{"selector":{"matchLabels":{"app":"agent","tier":"edge"}}}}' ;;
+  # The selector is applied as the apiserver would: only the pods labelled so.
+  *"get pods -l app=agent,tier=edge -o json"*) jq '.items |= map(select(.metadata.labels.app == "agent" and .metadata.labels.tier == "edge"))' "$PODS_JSON" ;;
+  *"get pod "*"containerStatuses"*) echo "containerd://abc123" ;;
+  *) echo "kubectl stub: unexpected $*" >&2; exit 99 ;;
+esac
+STUB
+cat >"$pss/docker" <<'STUB'
+#!/usr/bin/env bash
+printf '1000000\t100\t40\t3000000\t50000000\t60000000\t70000000\n'
+STUB
+chmod +x "$pss"/*
+# An old pod still terminating beside the new one: the new one is sampled, and
+# not the newer pod of the deployment agent-foo, whose name starts with "agent-".
+jq -n '{items: [
+  {metadata: {name: "agent-old-1", labels: {app: "agent", tier: "edge"}, creationTimestamp: "2026-10-04T01:00:00Z", deletionTimestamp: "2026-10-04T02:00:00Z"}, status: {phase: "Running"}},
+  {metadata: {name: "agent-new-2", labels: {app: "agent", tier: "edge"}, creationTimestamp: "2026-10-04T02:00:00Z"}, status: {phase: "Running"}},
+  {metadata: {name: "agent-foo-3", labels: {app: "agent-foo", tier: "edge"}, creationTimestamp: "2026-10-04T03:00:00Z"}, status: {phase: "Running"}}]}' >"$work/pods.json"
+rc=0
+: >"$work/kubectl.log"
+env PATH="$pss:$PATH" "KUBECONFIG=$lab" NODE_CONTAINER=node PODS_JSON="$work/pods.json" KUBECTL_LOG="$work/kubectl.log" BENCH_SAMPLE_INTERVAL=1 "$ps" ns agent 2 >"$work/samples.tsv" 2>"$work/samples.err" || rc=$?
+# The pods are the deployment's own, by its selector: a name prefix would also
+# take a deployment called agent-foo.
+if [ "$rc" = 0 ] && grep -qF "agent-new-2 container abc123" "$work/samples.err" &&
+  grep -qF -- "get pods -l app=agent,tier=edge -o json" "$work/kubectl.log" &&
+  [ "$(head -1 "$work/samples.tsv" | cut -f2-)" = "usage_usec	nr_periods	nr_throttled	throttled_usec	mem_current	mem_peak	rss_peak" ] &&
+  [ "$(sed -n 2p "$work/samples.tsv" | cut -f2-)" = "1000000	100	40	3000000	50000000	60000000	70000000" ]; then
+  ok "pod-sample.sh: samples the newest running pod that is not terminating, one TSV line per sample"
+else
+  fail "pod-sample.sh sampling (exit $rc)" "$work/samples.err"
 fi
 
 # --- syntax -----------------------------------------------------------------

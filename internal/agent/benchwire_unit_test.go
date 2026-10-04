@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
 func TestClassifyRequest(t *testing.T) {
@@ -72,8 +74,19 @@ func TestRequestRecorderCountsRequestsAndBodyBytes(t *testing.T) {
 	if total != 4 || rec.bodyBytes.Load() != 400 {
 		t.Errorf("total = %d, body bytes = %d; want 4 requests and 400 bytes", total, rec.bodyBytes.Load())
 	}
-	if len(stats) != 3 || stats[0] != (requestStat{"LIST", "nodes", 2}) {
-		t.Errorf("stats = %+v, want LIST nodes x2 first, then GET secrets and GET /version", stats)
+	if len(stats) != 3 || stats[0] != (requestStat{Verb: "LIST", Resource: "nodes", Count: 2, Bytes: 200}) {
+		t.Errorf("stats = %+v, want LIST nodes x2 (200 bytes) first, then GET secrets and GET /version", stats)
+	}
+	// The bytes of each verb and resource add up to the body total.
+	var sum int64
+	for _, s := range stats {
+		sum += s.Bytes
+		if s.Bytes != int64(100*s.Count) {
+			t.Errorf("%s %s: %d bytes for %d requests of 100 bytes each", s.Verb, s.Resource, s.Bytes, s.Count)
+		}
+	}
+	if sum != rec.bodyBytes.Load() {
+		t.Errorf("per-resource bytes add up to %d, the total is %d", sum, rec.bodyBytes.Load())
 	}
 	rec.reset()
 	if _, total := rec.stats(); total != 0 || rec.bodyBytes.Load() != 0 {
@@ -196,5 +209,36 @@ func TestEnvIntAndBenchSampler(t *testing.T) {
 	runtime.KeepAlive(keep)
 	if maxRSSBytes() == 0 && runtime.GOOS != "windows" {
 		t.Error("maxRSSBytes = 0 on a platform that reports it")
+	}
+}
+
+// The benchmark refuses a tick whose capability was not fully read, since
+// it did not do the work being measured. With the GitOps fill (#233) one
+// gap is expected and not a defect: Argo CD renders charts with helm
+// template and leaves no release, so the helm capability is partial with
+// argocd skipped. Anything else stays an error.
+func TestBenchCapabilityOK(t *testing.T) {
+	full := inventory.CapabilityStatus{Available: true}
+	argoGap := inventory.CapabilityStatus{Available: true, Partial: true, Skipped: []string{inventory.GitOpsArgoCD}, Reason: "1 Argo CD chart(s) read from Applications leave no Helm release"}
+	fluxGap := inventory.CapabilityStatus{Available: true, Partial: true, Skipped: []string{inventory.GitOpsFlux}, Reason: "1 HelmRelease chartRef(s) not resolved to a chart"}
+	both := inventory.CapabilityStatus{Available: true, Partial: true, Skipped: []string{inventory.GitOpsArgoCD, "ns/rel"}}
+	for _, tc := range []struct {
+		name   string
+		c      inventory.Capability
+		s      inventory.CapabilityStatus
+		gitops bool
+		want   bool
+	}{
+		{"full", inventory.CapHelm, full, false, true},
+		{"unavailable", inventory.CapHelm, inventory.CapabilityStatus{Reason: "forbidden"}, true, false},
+		{"partial without the fill", inventory.CapHelm, argoGap, false, false},
+		{"argocd gap with the fill", inventory.CapHelm, argoGap, true, true},
+		{"flux gap with the fill (a chartRef did not resolve)", inventory.CapHelm, fluxGap, true, false},
+		{"argocd and a release not read", inventory.CapHelm, both, true, false},
+		{"another capability partial with the fill", inventory.CapAPIUsage, argoGap, true, false},
+	} {
+		if got := benchCapabilityOK(tc.c, tc.s, tc.gitops); got != tc.want {
+			t.Errorf("%s: benchCapabilityOK = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

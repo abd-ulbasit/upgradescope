@@ -2,7 +2,9 @@
 // (hack/bench/agent.sh, #71): KWOK fake nodes that report Ready with a
 // kubelet version, pods placed on them, ConfigMaps, zero-replica
 // Deployments, and Helm release Secrets with real helm.sh/release.v1
-// payloads (base64 of gzip of JSON) of realistic sizes.
+// payloads (base64 of gzip of JSON) of realistic sizes. With --argocd-apps
+// and --flux-helmreleases it also creates Argo CD Applications and Flux
+// HelmReleases (gitops.go); their CRDs must be installed first.
 //
 // It reads the kubeconfig it is given and never the default one: the file
 // must be named with --kubeconfig. It creates objects only; the lab is reset
@@ -23,6 +25,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -36,6 +39,8 @@ type summary struct {
 	HelmByClass                    map[string]int
 	NodesReady, PodsRunning        int
 	Seconds                        float64
+	// GitOps is set only when the opt-in GitOps fill ran.
+	GitOps *gitopsSummary `json:",omitempty"`
 }
 
 func main() {
@@ -53,6 +58,8 @@ func main() {
 	flag.IntVar(&cfg.Deployments, "deployments", 4000, "Deployments at zero replicas")
 	flag.IntVar(&cfg.HelmReleases, "helm-releases", 1000, "Helm releases")
 	flag.IntVar(&cfg.HelmRevisions, "helm-revisions", 1, "stored revisions per release (Secrets = releases x revisions)")
+	flag.IntVar(&cfg.ArgoApps, "argocd-apps", 0, "Argo CD Applications, half with spec.source and half with spec.sources (needs the Argo CD CRD; off by default)")
+	flag.IntVar(&cfg.FluxHelmReleases, "flux-helmreleases", 0, "Flux HelmReleases, half with a chart source and half with a chartRef to an OCIRepository of their own (needs the Flux HelmRelease and OCIRepository CRDs; off by default)")
 	flag.StringVar(&cfg.KubeletVersion, "kubelet-version", "v1.37.0", "kubelet version the fake nodes report")
 	flag.Uint64Var(&cfg.Seed, "seed", 1, "random seed: the same seed creates the same objects")
 	flag.IntVar(&workers, "workers", 32, "concurrent creates")
@@ -78,6 +85,19 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "seed:", err)
 		os.Exit(1)
+	}
+	if cfg.ArgoApps > 0 || cfg.FluxHelmReleases > 0 {
+		dyn, err := dynamic.NewForConfig(rc)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "seed:", err)
+			os.Exit(1)
+		}
+		gs, err := seedGitOps(context.Background(), dyn, cfg, workers, os.Stderr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "seed:", err)
+			os.Exit(1)
+		}
+		sum.GitOps = &gs
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(sum)
 }
