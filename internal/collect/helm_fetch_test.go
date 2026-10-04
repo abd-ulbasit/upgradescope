@@ -125,6 +125,38 @@ func TestStartFetchingStopsPromptlyOnCancel(t *testing.T) {
 	}
 }
 
+// A payload fetched ahead of the caller is not handed over once ctx is
+// done: the one-at-a-time loop would only then have fetched it, and failed,
+// so after the step's deadline no prefetched release is decoded, and the
+// step does not run past its share by up to workers decodes.
+func TestStartFetchingHandsOverNothingOnceDone(t *testing.T) {
+	const n, workers = 20, 8
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var fetched atomic.Int64
+	f := startFetching(ctx, n, workers, func(_ context.Context, i int) ([]byte, error) {
+		fetched.Add(1)
+		return []byte{byte(i)}, nil // answers whatever ctx is: fetched before it was done
+	})
+	defer f.stop()
+	if data, err := f.next(); err != nil || data[0] != 0 {
+		t.Fatalf("next 0 = %v, %v", data, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for fetched.Load() < workers && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond) // the workers fill the room ahead of the caller
+	}
+	if got := fetched.Load(); got < 2 {
+		t.Fatalf("%d payloads fetched ahead, want some", got)
+	}
+	cancel()
+	for i := 1; i < n; i++ {
+		if data, err := f.next(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("next %d after the cancel = %v, %v; want context.Canceled", i, data, err)
+		}
+	}
+}
+
 // helmFetchFixture is a cluster of Helm releases with every outcome a
 // release can have: read, from either driver; deleted since the list; GET
 // refused; payload not decodable; manifest not fully parsed; uninstalled;
@@ -331,18 +363,28 @@ func TestCollectHelmFetchesConcurrentlyWithinItsBound(t *testing.T) {
 	if m := maxInflight.Load(); m != 1 {
 		t.Errorf("one worker had %d GETs in flight, want 1", m)
 	}
-	maxInflight.Store(0)
-	gets.Store(0)
-	conInv, con := coldHelmStep(t, srv, helmFetchWorkers)
-	t.Logf("%d releases at %v: one at a time %v, %d workers %v (%.1fx)", releases, rtt, seq.Round(time.Millisecond), helmFetchWorkers, con.Round(time.Millisecond), seq.Seconds()/con.Seconds())
-	if !reflect.DeepEqual(conInv, seqInv) {
-		t.Errorf("the concurrent fetch read other releases than the sequential one")
-	}
-	if g := gets.Load(); g != releases {
-		t.Errorf("%d GETs, want one per release (%d)", g, releases)
-	}
-	if m := maxInflight.Load(); m > helmFetchWorkers || m < 2 {
-		t.Errorf("%d GETs in flight at most, want 2 to %d", m, helmFetchWorkers)
+	// About 8x is expected; a machine busy enough to cut that under 2x
+	// (decoding takes the CPU the sleeping sequential run did not need) is
+	// given up to three tries, as the heap tests are.
+	var con time.Duration
+	for attempt := 1; attempt <= 3; attempt++ {
+		maxInflight.Store(0)
+		gets.Store(0)
+		var conInv inventory.Inventory
+		conInv, con = coldHelmStep(t, srv, helmFetchWorkers)
+		t.Logf("%d releases at %v: one at a time %v, %d workers %v (%.1fx, attempt %d)", releases, rtt, seq.Round(time.Millisecond), helmFetchWorkers, con.Round(time.Millisecond), seq.Seconds()/con.Seconds(), attempt)
+		if !reflect.DeepEqual(conInv, seqInv) {
+			t.Errorf("the concurrent fetch read other releases than the sequential one")
+		}
+		if g := gets.Load(); g != releases {
+			t.Errorf("%d GETs, want one per release (%d)", g, releases)
+		}
+		if m := maxInflight.Load(); m > helmFetchWorkers || m < 2 {
+			t.Errorf("%d GETs in flight at most, want 2 to %d", m, helmFetchWorkers)
+		}
+		if con*2 <= seq {
+			break
+		}
 	}
 	if con*2 > seq {
 		t.Errorf("concurrent %v, sequential %v: want at least 2x faster", con, seq)
