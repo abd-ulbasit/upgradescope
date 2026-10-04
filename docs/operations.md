@@ -614,22 +614,82 @@ through the chart of a release that was read, it is gone from the
 inventory and resolved: a `became-ready` if it was the last blocker,
 then a `new-blocker` when helm returns.
 
-**Apiserver restarts.** Deprecated callers are not carried over an
-apiserver restart. `apiserver_requested_deprecated_apis` records, per deprecated API, that it
-was requested since the apiserver started, so a restart empties it, and a scrape after
-the restart cannot tell a caller that has not called since from one that
-went away. A deprecated-call blocker missing from that scrape is
-resolved, and if it was the cluster's last blocker the pass sends
-`became-ready` while the caller still exists. It is announced again as a
-`new-blocker` once the caller calls again, on the agent's next scrape
-after that: a client that holds a watch reconnects at once, one that
-calls periodically (an hourly sync, a nightly CronJob) at its schedule. The
-same holds with several kube-apiservers (HA control planes, most managed
-ones): each counts its own requests, and the agent scrapes whichever one
-its connection reaches, so a caller that the scraped apiserver never
-served looks gone. It is resolved, and announced again when a scrape
-shows it. So a `became-ready` that follows an apiserver restart or a
-control plane upgrade may come from this reset rather than a fix. API
+**Apiserver restarts.** `apiserver_requested_deprecated_apis` records,
+per deprecated API, that it was requested since the apiserver started, so
+a restart empties it, and a scrape soon after the restart cannot tell a
+caller that has not called yet from one that went away. The agent
+records the scraped apiserver's start time (`process_start_time_seconds`,
+from the same `/metrics` response) as the inventory's
+`apiServerStartTime`. A deprecated-call blocker of the baseline that is
+missing from a scrape of an apiserver that had been up for less than 24
+hours is **held**: carried forward like a blocker of a capability that
+was not assessed, so it is not resolved, there is no `became-ready`
+while it is held, and it is not a `new-blocker` when the caller calls
+again. A day covers clients that hold a watch (they reconnect at once),
+hourly syncs, nightly CronJobs and daily jobs. A genuine fix is held
+too, but it only ever shows after a restart: the gauge does not forget a
+caller while its apiserver runs.
+
+A control-plane upgrade is a restart too, and is the one case that is not
+held when it removes the API. A caller of an API that the upgraded
+apiserver no longer serves (the knowledge base removes it at or before the
+scrape's server version, such as a `flowschemas` `v1beta3` caller after
+an upgrade from v1.31 to v1.32) can never be counted again, so it is
+resolved at once, as without a start time, and `became-ready` is not
+delayed by the window. An upgrade within a version that still serves the
+API, a patch upgrade for one, is held as any restart is, and so is an
+upgrade to a release before the knowledge base's removal (a `servicecidrs`
+`v1beta1` caller is held through v1.36 and resolved at once from v1.37).
+With a rolling upgrade of several apiservers, `/version` and `/metrics`
+can be answered by different ones, so a scrape whose server version comes
+from an upgraded replica may resolve a caller at once while an older
+replica still serves the API; the window is short, and the caller starts
+failing on the upgraded replicas anyway.
+
+The hold ends 24 hours after that apiserver started (a later restart
+inside the window moves the end to the new apiserver's), and is measured
+on the scrape, the agent's `collectedAt` against the apiserver's start
+time, never on the server's clock. The first scrape after the end that
+still lacks the caller resolves it, and sends `became-ready` if it was
+the last blocker. On a quiet cluster that is the agent's next force-sync
+push (`--force-sync-every`, default 1h), a duplicate that the server
+re-judges with its own `collectedAt`; the server's background passes
+(hourly, at UTC midnight, after a knowledge-base update) judge the stored
+snapshot, scraped inside the window, and keep the hold. So a vanished
+caller is resolved within 24 hours plus `--force-sync-every` (and one
+`--interval`) of the restart. The hold is in the notification baseline
+only: the report and the fleet view show the scrape as it is.
+
+Limits: a client that calls less often than daily is resolved when the
+hold ends, and announced again as a `new-blocker` when it next calls. A
+start time the server cannot trust is treated as absent: one before 2014,
+or more than 10 minutes after the scrape's `collectedAt` (a buggy or
+skewed clock), so a far-future start time holds nothing. A clock that is
+ahead on both sides at once (a single-node cluster booted with its clock
+years ahead, whose agent and apiserver share it) passes that check and
+records a hold end in its future; a later push drops a recorded end
+more than 24 hours and 10 minutes after its own `collectedAt`, which no
+scrape at or before it could have recorded, so once the clock is
+corrected the hold is the corrected scrape's own and ends within that
+bound (plus `--force-sync-every`) of it. The server's background passes
+judge the stored snapshot, older than the pushes that may have moved the
+end, so they keep a recorded end and leave dropping it to the next push.
+A push with no `collectedAt` (no real agent sends one) has nothing to
+measure the window on: it holds nothing, and ends any hold it meets.
+Without a start
+time (an agent that predates it, a scrape that did not report it) a
+missing deprecated-call blocker is resolved at once, and can send
+`became-ready` while the caller still exists, unless a scrape with a
+start time already recorded a hold on it: a later push without one (an
+older agent after a rollback, say) honours that recorded end, and the
+hold still ends at it. With several
+kube-apiservers (HA control planes, most managed ones), each counts its
+own requests, and the agent scrapes whichever one its connection
+reaches. The start time is not part of the snapshot's identity, so a
+move between them stores no new snapshot or history point. A caller
+missing from an apiserver up for less than a day is held as after a
+restart; one that an apiserver up for longer never served looks gone: it
+is resolved, and announced again when a scrape shows it. API
 usage findings (objects stored at a removed version) are read from the
 objects themselves and do not have this limit.
 

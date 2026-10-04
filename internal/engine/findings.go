@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 type Category string
@@ -281,6 +282,31 @@ func FoldsInto(call, usage string) bool {
 	c := strings.SplitN(tail, "/", 4) // group/version/resource[/subresource]
 	return Category(cat) == CatDeprecatedAPIInUse && len(u) == 3 && u[0] != "helm-release" && len(c) >= 3 &&
 		c[0] == u[0] && c[1] == u[1] && kindMatchesResource(u[2], c[2])
+}
+
+// RemovalOfCall is the release in which k removes the API a
+// deprecated-calls finding key names ("deprecated-api-in-use/group/
+// version/resource[/subresource]", the group "core" for the core one): the
+// removal of the lifecycle entry for that group and version whose kind has
+// that REST resource. It reports false for any other key and for an API
+// the knowledge base does not know, or knows without a removal; the
+// metric's own removedRelease is not in the key.
+func RemovalOfCall(k kb.KB, key string) (inventory.Version, bool) {
+	cat, tail, _ := strings.Cut(key, "/")
+	c := strings.SplitN(tail, "/", 4)
+	if Category(cat) != CatDeprecatedAPIInUse || len(c) < 3 {
+		return inventory.Version{}, false
+	}
+	group := c[0]
+	if group == "core" {
+		group = ""
+	}
+	for _, e := range k.APILifecycle {
+		if e.Group == group && e.Version == c[1] && e.Removed != nil && kindMatchesResource(e.Kind, c[2]) {
+			return *e.Removed, true
+		}
+	}
+	return inventory.Version{}, false
 }
 
 // splitAPI splits an API as a partial capability names it in Skipped,

@@ -686,12 +686,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// Struct fields marshal in declared order; map keys marshal sorted.
 	// CollectedAt is zeroed to match the agent's snapshotHash canonical
 	// form (it changes every tick; hashing it would make force-sync pushes
-	// never dedup to 200 duplicate). The snapshot itself stores the
-	// inventory as pushed, so collectedAt and fields this server does not
-	// know (a newer agent's) are kept for a server that does; a push that
-	// differs only in those is a duplicate, since nothing judged changed.
+	// never dedup to 200 duplicate). APIServerStartTime is zeroed too: it
+	// says which apiserver answered the /metrics scrape, and an agent whose
+	// connection moves between HA apiservers would otherwise store a new
+	// snapshot and history point at every move (#204). The snapshot itself
+	// stores the inventory as pushed, so collectedAt, the start time and
+	// fields this server does not know (a newer agent's) are kept for a
+	// server that does; a push that differs only in those is a duplicate,
+	// since nothing judged changed.
 	hashed := inv
-	hashed.CollectedAt = time.Time{}
+	hashed.CollectedAt, hashed.APIServerStartTime = time.Time{}, time.Time{}
 	hash, err := canonicalHash(hashed)
 	if err != nil {
 		internalErr(w, "canonicalizing inventory", err)

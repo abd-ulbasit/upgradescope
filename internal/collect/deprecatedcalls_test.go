@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -70,6 +71,48 @@ func TestCollectDeprecatedCalls(t *testing.T) {
 	}
 	if !reflect.DeepEqual(inv.DeprecatedCalls, want) {
 		t.Errorf("calls = %#v\nwant  %#v", inv.DeprecatedCalls, want)
+	}
+}
+
+// The apiserver's process start time, from the same scrape, says since
+// when apiserver_requested_deprecated_apis has counted: it is recorded
+// whether or not any deprecated API was requested, in whole seconds. A
+// value that is not a time (none, several series, zero, NaN, beyond any
+// date) is not recorded; whether a time is plausible for the scrape is the
+// server's to judge (apiServerStart, internal/server).
+func TestCollectDeprecatedCallsRecordsAPIServerStart(t *testing.T) {
+	const started = `# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.78592040037e+09
+`
+	want := time.Unix(1785920400, 0).UTC()
+	for name, body := range map[string]string{"with calls": metricsBody + started, "without calls": started} {
+		var inv inventory.Inventory
+		if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), nil, &inv); err != nil {
+			t.Fatal(err)
+		}
+		if !inv.APIServerStartTime.Equal(want) || inv.APIServerStartTime.Location() != time.UTC {
+			t.Errorf("%s: start time = %v, want %v", name, inv.APIServerStartTime, want)
+		}
+	}
+
+	const gauge = "# TYPE process_start_time_seconds gauge\n"
+	for name, body := range map[string]string{
+		"absent":   metricsBody,
+		"zero":     gauge + "process_start_time_seconds 0\n",
+		"negative": gauge + "process_start_time_seconds -5\n",
+		"NaN":      gauge + "process_start_time_seconds NaN\n",
+		"+Inf":     gauge + "process_start_time_seconds +Inf\n",
+		"huge":     gauge + "process_start_time_seconds 1e300\n",
+		"two":      gauge + "process_start_time_seconds{a=\"1\"} 1.7e+09\nprocess_start_time_seconds{a=\"2\"} 1.7e+09\n",
+	} {
+		var inv inventory.Inventory
+		if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), nil, &inv); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !inv.APIServerStartTime.IsZero() {
+			t.Errorf("%s: start time = %v, want none recorded", name, inv.APIServerStartTime)
+		}
 	}
 }
 

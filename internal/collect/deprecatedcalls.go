@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -15,14 +16,20 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
-const deprecatedAPIsMetric = "apiserver_requested_deprecated_apis"
+const (
+	deprecatedAPIsMetric = "apiserver_requested_deprecated_apis"
+	processStartMetric   = "process_start_time_seconds"
+)
 
 // collectDeprecatedCalls scrapes the apiserver /metrics endpoint
 // (RBAC: nonResourceURLs ["/metrics"], verb get) and extracts
 // apiserver_requested_deprecated_apis rows — deprecated APIs some client
 // requested, the blind spot of manifest-only scanners. The metric does not
 // say which client. Known limits (spec §4): gauge resets on apiserver
-// restart; HA apiservers report independently.
+// restart; HA apiservers report independently. The scraped apiserver's
+// process_start_time_seconds is recorded as Inventory.APIServerStartTime,
+// so the server can tell a caller missing because the gauge reset from
+// one that is gone (evaluate.go, deprecatedCallsHold).
 //
 // The scanner feeds this metric itself only through selfListed: the
 // resources api-usage listed at a deprecated version, because nothing
@@ -51,6 +58,22 @@ func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, selfListed [
 	families, err := parser.TextToMetricFamilies(bytes.NewReader(raw))
 	if err != nil {
 		return fmt.Errorf("parse metrics exposition: %w", err)
+	}
+	// Since when the gauge has counted: kube-apiserver exposes its process
+	// start time beside it. Whole seconds; left zero when absent, when
+	// there is not exactly one series, or when the value is not a time
+	// (NaN, ±Inf, not after the epoch, beyond year 5000). It is read from a
+	// gauge or untyped series, as client_golang exposes it; any other type
+	// is not the standard metric and is treated as absent.
+	if fam, ok := families[processStartMetric]; ok && len(fam.GetMetric()) == 1 {
+		m := fam.GetMetric()[0]
+		sec := m.GetGauge().GetValue()
+		if m.GetGauge() == nil {
+			sec = m.GetUntyped().GetValue()
+		}
+		if sec >= 1 && sec < 1e11 {
+			inv.APIServerStartTime = time.Unix(int64(sec), 0).UTC()
+		}
 	}
 	fam, ok := families[deprecatedAPIsMetric]
 	if !ok {
