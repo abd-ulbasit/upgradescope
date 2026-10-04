@@ -219,7 +219,10 @@ func peakHeap(f func()) (peak uint64) {
 	return max.Load() - base
 }
 
-// TestCollectHelmPeakHeapIsBoundedByOneRelease guards #24: the collector
+// TestCollectHelmPeakHeapIsBoundedByOneRelease bounds what the Helm step
+// holds at once: since #226, one release's decoding plus up to 7 fetched
+// payloads, not one release alone (the name is older; docs, scripts and
+// the changelog refer to the test by it). It guards #24: the collector
 // decoded every revision's full payload, 500 Secrets per page, so peak heap
 // grew with the cluster's Helm history and OOM-killed the agent at its
 // 256Mi limit. Only the installed revision is fetched now, and one release

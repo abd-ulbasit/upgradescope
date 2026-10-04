@@ -70,7 +70,7 @@ const listPageSize = 500
 // held before #228. It happens when small objects are followed by large
 // ones (pods are listed by namespace, so a namespace of small pods before
 // one of large pods): 500 pods of 137 bytes, then 1,000 of up to 41,685
-// bytes (39.4 MiB encoded), measured 124.7 to 125.5 MiB of live heap
+// bytes (39.4 MiB encoded), measured 124.5 to 125.5 MiB of live heap
 // (TestPodPagePeakHeapIsBounded), under half the chart's 256Mi; at the
 // 2,000 a page of an earlier draft, 249.4 to 250.0 MiB, past the agent's
 // GOMEMLIMIT. Objects as large as those of the page before (a run of such
@@ -81,7 +81,7 @@ const listPageSize = 500
 // between 16 KiB and that, 501 to 511. One page past the agent's
 // GOMEMLIMIT (90% of 256Mi) takes 1,000 pods of about 70 KiB after a page
 // of small ones, at the 3.2 bytes of live heap per encoded byte measured
-// above, where pages of 500 took about 140 KiB (computed).
+// above, where pages of 500 took about 145 KiB (computed).
 const (
 	wholePageBytes = 8 << 20
 	podPageSize    = 1000

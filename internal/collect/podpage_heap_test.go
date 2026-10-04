@@ -188,8 +188,14 @@ func largestPod(pods []corev1.Pod) int {
 // worst case: a whole page of podPageSize large pods, 39.4 MiB encoded.
 // Each is listed through the agent's clients, the add-ons keeping only
 // images and labels, and the live heap above the baseline must stay under
-// 128 MiB, half the chart's 256Mi limit. A heap figure, run by hack/test-heap.sh
-// (UPGRADESCOPE_HEAP=1) only. Under the race detector it lists fewer.
+// 128 MiB, half the chart's 256Mi limit. The margin is thin on purpose: the
+// worst case measured 124.5 to 125.5 MiB (Apple M1 Pro, 4 October 2026;
+// the other cases about 35 and 64 MiB), 2.5 to 3.5 MiB under the limit, so
+// a change that makes a page's decoding about 3% larger fails here. Smaller
+// large pods would give it room only by testing less than the 1,000 a page
+// may hold of them; docs/claims.md (PF-02) states the same margin. A heap
+// figure, run by hack/test-heap.sh (UPGRADESCOPE_HEAP=1) only. Under the
+// race detector it lists fewer.
 func TestPodPagePeakHeapIsBounded(t *testing.T) {
 	if testing.Short() || !heapRun {
 		t.Skip("lists 6,000 production-sized pods; a heap figure, run by hack/test-heap.sh (UPGRADESCOPE_HEAP=1)")
