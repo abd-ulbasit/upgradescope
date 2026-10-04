@@ -191,7 +191,8 @@ More, with sizes per platform: [Install](https://abd-ulbasit.github.io/upgradesc
 
 ## Scale and cost
 
-Measured on 3 and 4 October 2026 with the harness in `hack/bench/` (agent: main
+Measured on 4 October 2026 (04:30 to 05:00 in UTC+5, which is 3 October in
+UTC) with the harness in `hack/bench/` (agent: main
 `a3e72ea` plus this work; server: main `f195ba5` plus this work). The
 cluster was a kind control plane (Kubernetes 1.37.0) on a ThinkPad with an
 Intel Core i3-7100U (2 cores, 4 threads) and 7.3 GiB of RAM, filled by

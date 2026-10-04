@@ -1,9 +1,12 @@
 # Scale and cost
 
 What the agent costs a Kubernetes API server on a large cluster, and what
-one `serve` can take from a fleet. Measured on 3 October 2026 with the
-harness in `hack/bench/`, which you can run against your own lab to get your
-own numbers. Read [What is simulated](#what-is-simulated) before you quote
+one `serve` can take from a fleet. Every table here comes from the final
+runs of one session on 4 October 2026, between 04:30 and 05:00 in UTC+5
+(the agent "before" table at 04:32, the agent "after" table at 04:45, the
+server table at 04:58; the raw result files are stamped in UTC, which is the
+evening of 3 October). The harness is in `hack/bench/`; you can run it
+against your own lab to get your own numbers. Read [What is simulated](#what-is-simulated) before you quote
 them.
 
 ## The short answers
@@ -100,7 +103,11 @@ changed):
 | 1/2 | 1,001 | 500 | 40 | 20 | 35.7 | 2.4 | 2.4 | 1.9 | 23.2 | 48.8 | 540, 14.1, 12.2 |
 | full | 2,001 | 1,000 | 61 | 38 | 67.7 | 4.3 | 5.5 | 3.5 | 27.1 | 54.4 | 1,061, 36.1, 24.4 |
 
-**The same ticks before the fix** (a GET per release on every tick):
+**The same ticks before the fix** (a GET per release on every tick). These
+rows were measured with a local patch that gave the Helm step no cache. The
+shipped `BENCH_NO_HELM_CACHE=1 make bench-agent KUBECONFIG=...` (the
+benchmark's `UPGRADESCOPE_BENCH_NO_HELM_CACHE=1`) does the same, so you can
+reproduce them; no published number was taken with it:
 
 | Fill | Requests | GET Secrets | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB |
 |---|---|---|---|---|---|---|---|---|
@@ -149,7 +156,8 @@ byte counter, a small share): 3.5 CPU-seconds in 5.5 s of wall time when
 steady, 24.4 in 36.1 when it reads 1,000 releases. The chart's default limit
 for the agent is 200m (`agent.resources.limits.cpu`), which allows 0.2
 CPU-seconds a second, so those ticks last at least 18 s and 2 minutes there
-(computed from the CPU time, not measured under a cgroup quota). The tick
+(computed from the CPU time, not measured under a cgroup quota; measuring it
+is [#229](https://github.com/abd-ulbasit/upgradescope/issues/229)). The tick
 deadline is half the interval, 5 minutes at the default, and the Helm step,
 the second of six, gets a fifth of the time left, about a minute, so a first
 tick of 1,000 releases at 200m will probably reach the step's deadline and
@@ -162,10 +170,10 @@ the agent 500m to 1 CPU, or expect its first ticks to be partial.
 | What | Found | Status |
 |---|---|---|
 | One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 31 s and 23 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests, 5.5 s). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
-| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36 s and 24 CPU-seconds here; reaches the step deadline at 200m or over a slow link | Open: bounded-concurrency fetching (follow-up: "Fetch Helm releases with bounded concurrency on the first tick and in `scan`") |
-| `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | Open (follow-up: "List kube-system pods once per tick") |
+| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36 s and 24 CPU-seconds here; reaches the step deadline at 200m or over a slow link | Open: bounded-concurrency fetching ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)) |
+| `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | Open ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227)) |
 | Argo CD Applications and Flux HelmReleases are listed whole (page size 50) every tick, plus a GET per distinct OCIRepository (#218) | **Not measured**: the lab has neither tool installed, so the harness never makes these requests. ceil(N / 50) per tool grows faster than a metadata list (whole objects, small pages) | Open (follow-up: "Add an Argo CD and Flux fill step to the agent benchmark") |
-| The all-pods list is the steady tick's largest cost | 38 of 61 requests; whole pod objects are needed for their images, and the agent keeps no watch | Open: needs a decision on frequency (follow-up: "Decide how often the agent lists all pods, or keep a watch") |
+| The all-pods list is the steady tick's largest cost | 38 of 61 requests; whole pod objects are needed for their images, and the agent keeps no watch | Open: needs a decision on frequency ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)) |
 
 ## The server
 
@@ -253,7 +261,7 @@ BENCH_BACKENDS=sqlite make bench-ingest   # no Docker needed
 ```
 
 `hack/bench/agent.sh` documents its knobs (`BENCH_STEPS`, `BENCH_TICKS`,
-`BENCH_HELM_REVISIONS`, `BENCH_RESET_CMD`); both scripts print their tables
+`BENCH_HELM_REVISIONS`, `BENCH_RESET_CMD`, `BENCH_NO_HELM_CACHE`); both scripts print their tables
 as above and keep the raw per-tick and per-round JSON lines in `bin/bench/`.
 It needs `go`, `kubectl`, `jq` and `curl`. The KWOK controller is installed
 into `kube-system` of the lab only, from release assets whose sha256 are
@@ -268,7 +276,8 @@ pinned in the script.
   control plane, with real kubelets, controllers and other clients. The
   counts apply; the latencies will differ either way.
 - The agent was not run under a cgroup CPU quota or a memory limit; the
-  figures for the chart's limits are computed from CPU time and peak memory.
+  figures for the chart's limits are computed from CPU time and peak memory
+  ([#229](https://github.com/abd-ulbasit/upgradescope/issues/229)).
 - The server benchmark generates inventories: real ones differ in the size
   of their Helm releases and the findings they carry. The per-snapshot
   storage scales with the inventory.
