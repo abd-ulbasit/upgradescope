@@ -35,6 +35,9 @@ Sizing: the October 2026 audit measured about 35 KB per changed snapshot
 for a realistic inventory (60 nodes, 250 namespaces, 80 Helm releases),
 plus one report per target. Plan for
 `clusters × changes per day × retention days × (snapshot + targets × report)`.
+The [scale benchmark](scale.md#the-server) measured, for 200 generated
+clusters averaging 28 KiB and three targets, about 100 KiB per changed
+snapshot on SQLite and 19 KiB on Postgres, which compresses large values.
 SQLite reuses the pages pruning frees, but the file does not shrink; run
 `sqlite3 upgradescope.sqlite VACUUM` with the server stopped to return the
 space. A large or busy fleet belongs on Postgres (`--db-url`, chart value

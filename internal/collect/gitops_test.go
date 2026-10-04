@@ -111,7 +111,7 @@ func (f gitopsFixture) clients() Clients {
 
 func (f gitopsFixture) helmStep() (inventory.Inventory, error) {
 	var inv inventory.Inventory
-	err := collectHelmStep(context.Background(), f.clients(), nil, &inv)
+	err := collectHelmStep(context.Background(), f.clients(), nil, nil, &inv)
 	return inv, err
 }
 
@@ -579,7 +579,7 @@ func TestGitOpsWithoutDynamicClientStillReportsTheGap(t *testing.T) {
 	c := f.clients()
 	c.Dynamic = nil
 	var inv inventory.Inventory
-	err := collectHelmStep(context.Background(), c, nil, &inv)
+	err := collectHelmStep(context.Background(), c, nil, nil, &inv)
 	pe := partial(t, err)
 	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"argocd"}) || inv.GitOpsCharts != nil {
 		t.Errorf("partial = %+v, charts %v; want the gap and no charts", pe, inv.GitOpsCharts)

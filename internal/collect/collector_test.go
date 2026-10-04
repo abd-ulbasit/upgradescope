@@ -10,9 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer/protobuf"
 	"k8s.io/client-go/kubernetes"
+	kubescheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -221,5 +224,43 @@ func TestNewClientsDiscardsAPIWarnings(t *testing.T) {
 	}
 	if cfg.WarningHandler != nil || cfg.WarningHandlerWithContext != nil {
 		t.Error("NewClients must not modify the caller's rest.Config")
+	}
+}
+
+// The typed client reads whole Pods, Nodes, Namespaces and Secrets, and the
+// byte counts in docs/operations/scale.md are protobuf's (#71): client-go
+// asks for it by default, falling back to JSON where the apiserver has none.
+// This pins that nothing in NewClients switches it off. /metrics is text and
+// keeps its own Accept header.
+func TestNewClientsAskForProtobuf(t *testing.T) {
+	gotAccept := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAccept[r.URL.Path] = r.Header.Get("Accept")
+		if r.URL.Path != "/api/v1/pods" {
+			http.NotFound(w, r)
+			return
+		}
+		list := &corev1.PodList{Items: []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "x"}}, {ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "x"}}}}
+		w.Header().Set("Content-Type", "application/vnd.kubernetes.protobuf")
+		if err := protobuf.NewSerializer(kubescheme.Scheme, kubescheme.Scheme).Encode(list, w); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer srv.Close()
+	c, err := NewClients(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	pods, err := c.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil || len(pods.Items) != 2 || pods.Items[1].Name != "b" {
+		t.Fatalf("a protobuf PodList read back as %+v, err %v", pods, err)
+	}
+	if a := gotAccept["/api/v1/pods"]; !strings.HasPrefix(a, "application/vnd.kubernetes.protobuf") || !strings.Contains(a, "application/json") {
+		t.Errorf("pods Accept = %q, want protobuf first and JSON as the fallback", a)
+	}
+	_, _ = c.RESTClient.Get().AbsPath("/metrics").DoRaw(ctx)
+	if a := gotAccept["/metrics"]; strings.Contains(a, "protobuf") {
+		t.Errorf("/metrics Accept = %q, want no protobuf: it is a text endpoint", a)
 	}
 }
