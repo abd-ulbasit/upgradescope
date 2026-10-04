@@ -222,9 +222,16 @@ func peakHeap(f func()) (peak uint64) {
 // TestCollectHelmPeakHeapIsBoundedByOneRelease guards #24: the collector
 // decoded every revision's full payload, 500 Secrets per page, so peak heap
 // grew with the cluster's Helm history and OOM-killed the agent at its
-// 256Mi limit. Only one release's payload may be in flight at a time now.
+// 256Mi limit. Only the installed revision is fetched now, and one release
+// is decoded at a time; since #226 up to helmFetchWorkers (8) are fetched
+// at once, so beside the release being decoded at most 7 more payloads are
+// held, fetched or being fetched: each at most the 1 MiB of data a Secret
+// may hold, plus, while it is read, its response (at most etcd's 1.5 MiB),
+// about 7 × 2.5 MiB ≈ 18 MiB above one release's decoding (computed).
 // Measured on this harness: 300×10×150KiB peaked at 279 MiB and
-// 50×10×450KiB at 869–947 MiB before; 17 MiB and 8 MiB after.
+// 50×10×450KiB at 869–947 MiB before #24; 17 MiB and 8 MiB after it,
+// fetching one at a time; 19.7 MiB and 17.5 MiB fetching 8 at a time (Apple
+// M1 Pro, 4 October 2026, at 5da764e).
 //
 // The manifest is parsed as in production, with every ConfigMap flagged so
 // each release also keeps MaxObjectRefs object refs: the worst case for

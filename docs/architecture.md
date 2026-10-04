@@ -158,14 +158,15 @@ ones after it. client-go's `rest.Config.Timeout` (`--request-timeout`, default
 | Capability | What it reads | Notes |
 |---|---|---|
 | `versions` | `/version`, nodes (kubelet versions), namespaces (team label), kube-system control-plane pods (image tags) | The cluster ID is the `kube-system` namespace UID. Managed control planes expose no control-plane pods, so that list is empty there. |
-| `helm` | Secrets of type `helm.sh/release.v1` | Decodes base64, gunzip and JSON into a minimal struct, keeping the latest revision per release. No Helm SDK. |
+| `helm` | Secrets of type `helm.sh/release.v1` | Decodes base64, gunzip and JSON into a minimal struct, keeping the latest revision per release. No Helm SDK. The releases not yet decoded are fetched 8 at a time and decoded one at a time, in order (see [API cost per tick](#api-cost-per-tick)). |
 | `deprecated-calls` | apiserver `/metrics`, `apiserver_requested_deprecated_apis` | The runtime-caller signal: which deprecated APIs some client requested since the apiserver started, which manifest scanners cannot see. It does not say which client (audit logs do). The gauge resets when the apiserver restarts, HA apiservers report independently, and managed planes often deny access. |
 | `addons` | pod container and init-container images and labels (the `kube-system` pods from the `versions` step's read, the other namespaces from its own list), `networking.k8s.io/v1` IngressClasses, plus the Helm releases from the `helm` step | Matches registry matchers. An image matcher of two or more segments is a repository-path suffix on whole segments of the normalised reference (a one-segment matcher is that repository exactly, unless an entry writes it `"*/name"` to match under any registry prefix, which only a distinctive name may), so mirrors and pull-through caches match; provider builds (GKE, AKS) match only entries written for them. A chart matcher names a Helm release's chart or a pod's `helm.sh/chart` label. A pod running an image no matcher claims, whose `app.kubernetes.io/name`, `helm.sh/chart` chart name or `app.kubernetes.io/part-of` names an add-on, is that add-on, at its `app.kubernetes.io/version` when the name label (or, without one, the chart label) named it. An IngressClass with controller `k8s.io/ingress-nginx` is ingress-nginx, without a version, unless ingress-nginx, a vendor build of it or Traefik (which can serve that class) was found otherwise. Each namespace is its own install: a Helm release's `appVersion` wins there over image tags and labels on its release line (major.minor), and otherwise the oldest version its image tags and labels give; image tags and labels on another line than every release in the namespace are a second install there, at their oldest version, so an older canary revision beside a newer release is judged (#165). Image repositories no image matcher claims go to `unrecognizedImages` and never become findings. In files mode the same matcher runs over manifest pod templates and IngressClasses. |
 | `api-usage` | discovery, then one **metadata-only, paged** list per resource that still serves a version the knowledge base flags, at a non-deprecated version | Detects *authorship*, not servability. See below. |
 | `crds` | `apiextensions.k8s.io/v1` CustomResourceDefinitions, then, for each CRD with a deprecated or unserved version, one **metadata-only, paged** list of its custom resources at a served version that is not deprecated | Records `spec.versions` and `status.storedVersions`, and the custom resources a field manager still writes through a deprecated or unserved version (the same authorship rules as `api-usage`). A forbidden custom-resource list (the agent is granted none) makes it partial. In files mode, CRD manifests give the versions and every custom resource in the files counts; one without its CRD in the files makes it partial. See [CRD versions](concepts/api-usage-detection.md#crd-versions). |
 
-Every cluster-wide list is paged (`limit=500`). The collectors are
-read-only.
+Every cluster-wide list is paged (`limit=500`; the pod and node lists size
+their later pages, see [API cost per tick](#api-cost-per-tick)). The
+collectors are read-only.
 
 ### API cost per tick
 
@@ -173,10 +174,19 @@ The agent holds no watch and no informer cache of the cluster, so it lists the A
 every tick, and the number of requests grows with the cluster (the one thing it remembers
 between ticks is what it decoded from each Helm release, below). What stays
 bounded is the work held at once: one page of a list and one decoded Helm
-release, not a copy of the cluster. The requests of one tick are:
+release (with at most 7 more fetched payloads waiting), not a copy of the
+cluster. The requests of one tick are:
 
 - **One paged list per resource type, ceil(N / 500) requests for N
-  objects, and at least one.** The types are nodes, namespaces, pods in
+  objects, and at least one; fewer for pods and nodes.** The pod and node
+  lists (#228) start with a page of 500, then size each page by the one
+  before: as many objects as fit 8 MiB encoded at its average size, at
+  least 500 and at most 2,000. Small pods and nodes (the scale lab's, about
+  3 KiB) are read 2,000 a page, a production cluster's pods of about 8 KiB
+  some 1,000, and objects over 16 KiB 500, as before. client-go decodes a
+  page whole, so a later page costs about 32 MiB of live heap at most, and
+  no page more than a page of 500 did (`TestPodPagePeakHeapIsBounded`).
+  The types are nodes, namespaces, pods in
   `kube-system`, pods in the other namespaces, IngressClasses,
   CustomResourceDefinitions, the `owner=helm` Secrets and the `owner=helm`
   ConfigMaps (both are still attempted with `rbac.helmSecrets=false`, and
@@ -208,7 +218,12 @@ release, not a copy of the cluster. The requests of one tick are:
   response.
 - **One GET per Helm release the agent has not decoded yet**: the full Secret
   (or ConfigMap) of its installed revision, up to the 1 MiB Kubernetes
-  allows. The agent keeps what it decoded, keyed by the object's UID and
+  allows. Up to 8 are in flight at once (#226), and the step holds at most
+  8 payloads, the one it is decoding included; it decodes them one at a
+  time, in the order of the releases, so the result is that of fetching
+  them one after another. The client's rate limit (below) is shared by
+  those GETs, so 1,000 releases take at least 14 s whatever the round trip
+  (computed from the limit; 14.27 s measured, `TestCollectHelmColdFetchAtRoundTrip`). The agent keeps what it decoded, keyed by the object's UID and
   resourceVersion from the metadata-only list it makes anyway, so a tick
   fetches only the releases that are new or changed: the first tick after
   a start fetches every release, and a steady tick fetches none. A one-shot
@@ -221,7 +236,15 @@ release, not a copy of the cluster. The requests of one tick are:
 - **A few calls that do not grow with the cluster**: `/version`, the
   `kube-system` namespace, `/metrics`, API discovery (it depends on the
   number of API groups, not objects) and the agent's own `ClusterReadiness`
-  (a few reads and one status update).
+  (one read and one status update; a create only when it is missing, and
+  a second read only when the status write conflicts). The agent keeps API
+  discovery between ticks (#228, `collect.DiscoveryCache`): a steady tick
+  asks for `/version` only, and asks for the groups and resources again
+  (4 requests) when the server version changed (on that tick, before any
+  step reads them), on the tick after the CRDs' groups, kinds or served
+  versions changed or could not be listed, when the answer is an hour old,
+  or when the last answer had an error, which is never kept. A one-shot
+  `scan` asks every time.
 
 So a tick sends about the sum of the page counts, plus the Helm releases not
 yet decoded, plus that constant. Listing, not decoding, is what the page size bounds. The
@@ -231,9 +254,10 @@ never sends a `watch`, and the chart's role grants none
 ([pinned by a test](operations/security-model-and-rbac.md#the-agents-clusterrole)).
 `--interval` sets how often this repeats.
 `TestCollectAPIUsageFollowsListPagination` pins the paging,
-`TestCollectHelmPeakHeapIsBoundedByOneRelease` the one GET per release read
-and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` that a steady tick makes
-none.
+`TestCollectHelmPeakHeapIsBoundedByOneRelease` the one GET per release read,
+`TestTicksFetchHelmReleasesOnlyWhenTheyChange` that a steady tick makes
+none, `TestTicksAskForDiscoveryOnce` and `TestTickReadsTheClusterReadinessOnce`
+the constant part.
 
 ### API usage: authorship, not residency
 

@@ -191,9 +191,10 @@ More, with sizes per platform: [Install](https://abd-ulbasit.github.io/upgradesc
 
 ## Scale and cost
 
-Measured on 4 October 2026 (04:30 to 05:00 in UTC+5, which is 3 October in
-UTC) with the harness in `hack/bench/` (agent: main
-`a3e72ea` plus this work; server: main `f195ba5` plus this work). The
+Measured on 4 October 2026 with the harness in `hack/bench/`: the agent
+between 03:24 and 03:51 UTC at the commits each row names, the server
+earlier (04:30 to 05:00 in UTC+5, which is 3 October in UTC) at main
+`f195ba5` plus #71's work. The
 cluster was a kind control plane (Kubernetes 1.37.0) on a ThinkPad with an
 Intel Core i3-7100U (2 cores, 4 threads) and 7.3 GiB of RAM, filled by
 [KWOK](https://kwok.sigs.k8s.io/) v0.8.0 with 2,000 fake nodes, 10,000 pods
@@ -207,9 +208,9 @@ has the tables, the simulation's limits and the open hotspots.
 
 | What | Measured | How |
 |---|---|---|
-| A steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm releases | 61 API requests, 68 MiB read (4.3 MiB on the wire), 5.6 s, 3.6 CPU-seconds; peak live heap 27 MiB, peak RSS 54 MiB | median of the 4 ticks after the first (the mean of the middle two; the heap is their maximum), `make bench-agent` |
-| The first tick after the agent starts (reads each Helm release once) | 1,061 requests, 90 MiB, 36 s, 24 CPU-seconds | the first of 5 ticks, same run |
-| The same steady tick before #71 (a GET per release every tick) | 1,061 requests, 90 MiB, 33 s, 23.5 CPU-seconds | median of 4 ticks, same harness with the Helm step given no cache |
+| A steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm releases | 23 API requests (53 before #228), 51 MiB read (3.3 MiB on the wire), 3.0 CPU-seconds, 5.7 s with 60 ms added to every round trip; peak heap 69 MiB, peak RSS 95 MiB | median of the 2 ticks after the first (the heap is their maximum), `make bench-agent` at `5da764e`, 4 October 2026 |
+| The first tick after the agent starts (reads each Helm release once, 8 at a time since #226) | 1,027 requests, 72.9 MiB, 29.6 s, 22.8 CPU-seconds at a 60 ms round trip (`5da764e`); with #226 alone (`06cdf7a`) 30.0 s and 22.3 CPU-seconds beside the apiserver and 30.4 s at 60 ms. Before (main `735751d`): 36.1 s and 23.1 CPU-seconds beside it, and at 60 ms the Helm step's deadline after 67.6 s with 231 of 1,000 releases unread | the first tick of each run |
+| The same steady tick before #71 (a GET per release every tick) | 1,061 requests, 90 MiB, 33 s, 23.5 CPU-seconds | median of 4 ticks, same harness with the Helm step given no cache, main `a3e72ea` plus #71, an earlier session the same day |
 | `serve` taking 200 clusters x 3 targets, all pushing at once | SQLite 56 new snapshots a second (p99 3.5 s); Postgres 17: 40 a second (p99 4.8 s); no failed push or retry | 200 pushers, `make bench-ingest`; 25 CPU-ms a snapshot on either |
 | Storage per changed snapshot (3 evaluations) | at most about 100 KiB on SQLite (WAL and page overhead included), 19 KiB on Postgres | database growth over 200 new snapshots averaging 28 KiB |
 
