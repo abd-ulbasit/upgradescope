@@ -290,8 +290,8 @@ cgroup's peak memory (page cache included) 98 MiB at most, against the
 256Mi limit.
 
 - **At 200m the first tick did not finish its Helm step.** The tick used
-  12.0 CPU-seconds in its 73 s, which is all 0.2 CPU gives, and left 132
-  releases unread; the status said so (`helm (partial)`, the first release
+  12.0 CPU-seconds in its 73 s, against the 14.7 that 0.2 CPU allows over
+  that time, and left 132 releases unread; the status said so (`helm (partial)`, the first release
   not read, "step deadline: gave up after 59s"). The following tick
   completed the step, in 105 s, using 13.0 CPU-seconds, more than 132
   releases explain (about 3 for them, 3 for the rest): the tick after a
