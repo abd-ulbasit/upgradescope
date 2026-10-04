@@ -3,8 +3,9 @@
 What the agent costs a Kubernetes API server on a large cluster, and what
 one `serve` can take from a fleet. The agent's current numbers, and the
 before and after of the first tick (#226) and of the steady tick (#228),
-come from runs on 4 October 2026 between 03:24 and 03:51 UTC, at the
-commits [The tick after #226 and #228](#the-tick-after-226-and-228) names.
+come from runs on 4 October 2026 between 03:24 and 03:51 UTC and between
+06:01 and 06:09 UTC, at the commits
+[The tick after #226 and #228](#the-tick-after-226-and-228) names.
 The older tables (#71's fix of the Helm releases, and the server) come from
 the final runs of an earlier session the same day, between 04:30 and 05:00
 in UTC+5 (the agent "before" table at 04:32, the agent "after" table at
@@ -16,25 +17,25 @@ run it against your own lab to get your own numbers. Read
 ## The short answers
 
 - **A steady agent tick on a cluster of 2,001 nodes, about 14,000 pods and
-  1,000 Helm releases makes 23 API requests** (53 before
+  1,000 Helm releases makes 24 API requests** (53 before
   [#228](https://github.com/abd-ulbasit/upgradescope/issues/228)) and reads
-  51 MiB of responses (3.3 MiB on the wire, compressed) in 3.0
-  CPU-seconds: the same bytes and CPU as before, because the requests are
-  fewer but the pods to decode are not. Beside the apiserver it took 4.0 s
-  before; with 60 ms added to every round trip, 5.7 s after. At the default
-  interval of 10 minutes that is 0.04 requests a second.
+  50.3 MiB of responses (3.3 MiB on the wire, compressed) in 4.4 s and 3.1
+  CPU-seconds (4.0 s and 3.0 before): the same bytes and CPU, because the
+  requests are fewer but the pods to decode are not. A tick that asks API
+  discovery again (at least hourly) makes 4 more. At the default interval
+  of 10 minutes that is 0.04 requests a second.
 - **The first tick after the agent starts costs more**: it reads each Helm
-  release once, 1,027 requests in all. Since
+  release once, 1,030 requests in all. Since
   [#226](https://github.com/abd-ulbasit/upgradescope/issues/226) it fetches
-  8 at a time: 30.0 s and 22.3 CPU-seconds beside the apiserver (36.1 s and
-  23.1 before), and with 60 ms added to every round trip 30.4 s, where
+  8 at a time: 27.1 s and 22.8 CPU-seconds beside the apiserver (36.1 s and
+  23.1 before), and with 60 ms added to every round trip 29.6 s, where
   main's first tick reached the Helm step's deadline after 67.6 s with 231
   of the 1,000 releases unread. Before
   [#71](https://github.com/abd-ulbasit/upgradescope/issues/71) every tick
   cost that, because the agent fetched every release again each time.
-- **Memory fits the chart's limit** (256Mi) with room: the peak RSS was 95
-  MiB at full size, the first tick included, and the peak heap 68.5 MiB; the
-  pod pages of 2,000 that cut the requests cost that (57.1 MiB of RSS and
+- **Memory fits the chart's limit** (256Mi) with room: the peak RSS was 85.2
+  MiB at full size, the first tick included, and the peak heap 58.5 MiB; the
+  larger pod pages that cut the requests cost that (57.1 MiB of RSS and
   29.3 MiB of heap before). It is over the chart's memory request (64Mi), which
   is what the scheduler reserves, not a limit. CPU is what a large cluster
   uses: see [CPU](#cpu-and-the-chart-limit).
@@ -53,7 +54,7 @@ run it against your own lab to get your own numbers. Read
 | Driver | MacBook Pro (`MacBookPro18,3`, Apple M1 Pro, 16 GiB, `sysctl hw.model`), Go 1.26.8, client-go 0.37.1. It seeded the cluster and cross-compiled the benchmarks; the measured agent ticks and the server benchmark ran on the ThinkPad |
 | Postgres | 17.11 (`postgres:17-alpine`), a throwaway container on the ThinkPad's Docker engine, 0.1 ms round trip from the benchmark |
 | SQLite | the embedded `modernc.org/sqlite` v1.60.1, in a temporary directory on the ThinkPad's SSD |
-| upgradescope, #226 and #228 | the "before" runs: main `735751d` plus the recorder's per-resource bytes and time (`70d16ab`, which changes only the benchmark); #226 alone: `06cdf7a`; #226 and #228: `5da764e`. Each run filled a freshly reset lab, or measured the fill a run before it left, with `BENCH_STEPS=1` (the full fill only) and the ticks run on the ThinkPad (`BENCH_RUN_ON`) |
+| upgradescope, #226 and #228 | the "before" runs: main `735751d` plus the recorder's per-resource bytes and time (`70d16ab`, which changes only the benchmark); #226 alone: `06cdf7a`; #226 and #228: `5da764e`, and `59d8561` (the final code: pages sized at 8 MiB rather than 16). Each run filled a freshly reset lab, or measured the fill a run before it left, with `BENCH_STEPS=1` (the full fill only) and the ticks run on the ThinkPad (`BENCH_RUN_ON`) |
 | upgradescope, the older tables | the agent runs: main `a3e72ea` (#218, GitOps charts) plus this work; the "before" table is the same tree with the Helm step given no cache, which is what #71 changed. The server runs: main `f195ba5` plus this work (the server code is unchanged by this work; #217 is examples and tooling). The branch was rebased between the two, so its commit hashes name neither tree exactly. The numbers include #218's per-tick discovery and workload requests, but **its Argo CD and Flux lists are not measured**: the lab has neither tool's CRDs, so those lists are never made (see [Hotspots](#hotspots)) |
 | Also running | for the older tables, two other idle kind clusters on the same ThinkPad; for #226 and #228, the same two (`bookstore`, and the other agent's lab `us-lab-137b`, which held no fill: 11 to 22% of a core and 530 to 840 MiB, `docker stats` before and after every run), at a host load average of 7 to 12 (4 threads), most of it lab A's KWOK controller (110 to 335% of a core at full size). For every run the lab's own KWOK controller kept 2,000 nodes alive |
 
@@ -110,20 +111,25 @@ namespaces and 1,000 Helm release Secrets.
 ### The tick after #226 and #228
 
 Each run here is `BENCH_STEPS=1 BENCH_TICKS=5` (3 at the 60 ms round trip)
-at the full fill, on lab A, on 4 October 2026 between 03:24 and 03:51 UTC,
-under the measurement lock (lab B was up and held no fill, see
+at the full fill, on lab A, on 4 October 2026 between 03:24 and 03:51 UTC
+(and the `59d8561` row between 06:01 and 06:09 UTC), under the measurement
+lock (lab B was up and held no fill, see
 [What was measured](#what-was-measured-and-on-what)). "Before" is main
 `735751d` with the recorder's per-resource counts (`70d16ab`), "#226" is
 `06cdf7a`, "#226 + #228" is `5da764e`, whose pages were sized at 16 MiB rather
-than the 8 MiB of `59d8561` (the lab's 3 KiB pods and nodes fill pages of
-2,000 at either, so its requests are the same). The 60 ms rows were measured with
+than the 8 MiB of `59d8561`, the final code: at 8 MiB the first page of
+`kube-system`'s pods, whose average is larger than the other namespaces',
+sized the next ones under 2,000, one pod request more. The 60 ms rows were measured with
 `tc qdisc add dev eth0 root netem delay 60ms` in lab A's control-plane
 container, which delays every packet it sends to the agent (so every
 response) and nothing of lab B's; it was removed after the last of them.
-The #226 + #228 run beside the apiserver did not run (the download of the
-pinned KWOK manifests failed for that checkout), so its wall time is the 60
-ms one; its requests, bytes and CPU do not depend on the round trip (compare
-the before and #226 rows at both).
+A `5da764e` run beside the apiserver did not run (the download of the
+pinned KWOK manifests failed for that checkout). A first attempt at the
+`59d8561` rows (05:46 to 05:54 UTC) failed while seeding: the host's load
+average reached 53 and lab B used 1.3 to 1.8 cores meanwhile, the seeder
+lost its connection, and nothing of it is used. The rerun at 06:01 had lab B
+idle again (12 to 21% of a core). Requests, bytes and CPU do not depend on
+the round trip (compare the before and #226 rows at both).
 
 | Tree | Round trip | Steady: requests | LIST pods | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB | First tick: requests, wall s, CPU s, Helm releases read |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -131,13 +137,14 @@ the before and #226 rows at both).
 | #226 | beside it | 53 | 30 | 50.3 | 3.4 | 6.4 | 3.1 | 27.0 | 54.3 | 1,053, 30.0, 22.3, 1,000 |
 | before | +60 ms | 53 | 30 | 50.7 | 3.4 | 7.4 | 3.0 | 26.7 | 52.7 | 821, 67.6, 10.6, **769** (the Helm step's deadline) |
 | #226 | +60 ms | 53 | 30 | 50.7 | 3.4 | 8.3 | 3.0 | 29.3 | 53.6 | 1,053, 30.4, 22.2, 1,000 |
-| #226 + #228 | +60 ms | 23 | 9 | 50.6 | 3.3 | 5.7 | 3.0 | 68.5 | 95.2 | 1,027, 29.6, 22.8, 1,000 |
+| #226 + #228 (`5da764e`) | +60 ms | 23 | 9 | 50.6 | 3.3 | 5.7 | 3.0 | 68.5 | 95.2 | 1,027, 29.6, 22.8, 1,000 |
+| #226 + #228 (`59d8561`) | beside it | 24 | 10 | 50.3 | 3.3 | 4.4 | 3.1 | 58.0 | 85.2 | 1,030, 27.1, 22.8, 1,000 |
 
 The steady columns are the median of the ticks after the first, as above
 (the mean of the middle two of four; of two at 60 ms; the "before +60 ms"
 row has one, its third tick, because its second read the 231 releases the
 first had left). The wall times of steady ticks move with the host's load
-(load average 7 to 12 on 4 threads, most of it lab A's KWOK at full size):
+(load average 7 to 16 on 4 threads, most of it lab A's KWOK at full size):
 the #226 ticks beside the apiserver took 4.0 to 9.7 s for the same 53
 requests and 3.0 CPU-seconds, which #226 does not change. The peak heap is
 the heap objects the benchmark samples, garbage not yet collected included.
@@ -203,16 +210,18 @@ them without a watch (AG-01) and without reading pods less often:
 
 - The pod and node lists size their pages: 500, then as many as fit 8 MiB
   encoded at the size of the page before, at most 2,000 (the lab's pods and
-  nodes are about 3 KiB, so 2,000). Pods: 30 requests to 9 (`kube-system`'s
-  4,009 in 3, the other 10,000 in 6); nodes: 5 to 2. The bound restated: a
+  nodes are about 3 KiB, so up to 2,000). Pods: 30 requests to 10; nodes: 5
+  to 2. The bound restated: a
   page after the first holds at most 8 MiB of objects as the page before
   measured them, which `TestPodPagePeakHeapIsBounded` reads as 34 MiB of
   live heap for production-sized pods (8 KiB in protobuf, managedFields
   included; about 1,000 a page) and 64 MiB for 40 KiB pods, which stay at
   500 a page as before. Here the larger pages raised the sampled heap peak
-  from 29 to 69 MiB and the RSS from 57 to 95 MiB.
+  from 29.3 to 58.0 MiB and the RSS from 57.1 to 85.2 MiB (to 68.5 and 95.2
+  at 16 MiB).
 - API discovery is kept between ticks (`collect.DiscoveryCache`, PF-14):
-  4 requests to 0 on a steady tick. It is asked again (4 requests) when the
+  4 requests to 0 on a steady tick. It is asked again (4 requests, so 28
+  on that tick) when the
   server version changed (seen on the tick, before any step reads
   discovery), on the tick after the CRDs' groups, kinds or served versions
   changed or could not be listed, when it is an hour old, or when the last
@@ -229,19 +238,19 @@ them without a watch (AG-01) and without reading pods less often:
 The other requests are unchanged: `/metrics`, `/version`, the `kube-system`
 namespace, and the metadata lists of the Helm Secrets (3), ConfigMaps,
 CRDs, IngressClasses and namespaces. The bytes and the CPU are what they
-were (50.6 MiB, 3.0 CPU-seconds): every pod is still decoded every tick,
-which a pass every Nth tick (#228's option b) would change, and which 23
-requests did not need. The after split at 60 ms:
+were (50.3 MiB, 3.1 CPU-seconds): every pod is still decoded every tick,
+which a pass every Nth tick (#228's option b) would change, and which 24
+requests did not need. The split after, at `59d8561`:
 
-| Verb | Resource | Requests | Response MiB |
-|---|---|---|---|
-| LIST | pods | 9 | 40.09 |
-| LIST | secrets (metadata) | 3 | 0.42 |
-| LIST | nodes | 2 | 5.39 |
-| GET | `/metrics` | 1 | 4.55 |
-| GET | `/version`, `clusterreadinesses`, `kube-system` namespace | 1 each | 0, 0.01, 0 |
-| LIST | configmaps (metadata), CRDs, IngressClasses, namespaces | 1 each | 0, 0.08, 0, 0.04 |
-| UPDATE | `clusterreadinesses/status` | 1 | 0.01 |
+| Verb | Resource | Requests | Response MiB | Time s (summed) |
+|---|---|---|---|---|
+| LIST | pods | 10 | 39.91 | 2.42 |
+| LIST | secrets (metadata) | 3 | 0.43 | 0.04 |
+| LIST | nodes | 2 | 5.32 | 0.14 |
+| GET | `/metrics` | 1 | 4.52 | 0.24 |
+| GET | `/version`, `clusterreadinesses`, `kube-system` namespace | 1 each | 0, 0.01, 0 | 0.01 or less each |
+| LIST | configmaps (metadata), CRDs, IngressClasses, namespaces | 1 each | 0, 0.08, 0, 0.04 | 0.02 or less each |
+| UPDATE | `clusterreadinesses/status` | 1 | 0.01 | 0.02 |
 
 ### The older tables (#71)
 
@@ -317,11 +326,11 @@ twice (#227).
 
 The tick is CPU-bound in the agent (the process also runs the benchmark's
 byte counter, a small share): 3.0 CPU-seconds in 4.0 to 6 s of wall time
-when steady, 22.3 in 30.0 s when it reads 1,000 releases (after #226; 23.1
+when steady, 22.8 in 27.1 s when it reads 1,000 releases (after #226; 23.1
 in 36.1 s before; the older tables' 3.6 and 24.4 include the `kube-system`
 pods decoded twice). The chart's default limit
 for the agent is 200m (`agent.resources.limits.cpu`), which allows 0.2
-CPU-seconds a second, so those ticks last at least 15 s and 111 s there
+CPU-seconds a second, so those ticks last at least 15.5 s and 114 s there
 (computed from the CPU time, not measured under a cgroup quota; measuring it
 is [#229](https://github.com/abd-ulbasit/upgradescope/issues/229)). The tick
 deadline is half the interval, 5 minutes at the default, and the Helm step,
@@ -338,10 +347,10 @@ the agent 500m to 1 CPU, or expect its first ticks to be partial.
 | What | Found | Status |
 |---|---|---|
 | One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 33 s and 23.5 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests then, 23 after #228). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
-| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 s and 23.1 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread | **Fixed** ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 30.0 s here, 30.4 s at 60 ms with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now. `TestCollectHelmConcurrentMatchesSequential` |
+| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 s and 23.1 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread | **Fixed** ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 27.1 s here, 29.6 s at 60 ms with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now. `TestCollectHelmConcurrentMatchesSequential` |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | **Fixed** ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227), #232): the add-ons take them from the version check's list |
 | Argo CD Applications and Flux HelmReleases are listed whole (page size 50) every tick, plus a GET per distinct OCIRepository (#218) | **Not measured**: the lab has neither tool installed, so the harness never makes these requests. ceil(N / 50) per tool grows faster than a metadata list (whole objects, small pages) | Open, #233 |
-| The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by bytes, discovery kept between ticks, the agent's object read once: 53 to 23 requests. The bytes (51 MiB) and CPU (3.0 s) are unchanged, since every pod is still decoded every tick; reading pods less often (#228's option b) would cut those, and was not needed for the request count |
+| The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by bytes, discovery kept between ticks, the agent's object read once: 53 to 24 requests. The bytes (50 MiB) and CPU (3 s) are unchanged, since every pod is still decoded every tick; reading pods less often (#228's option b) would cut those, and was not needed for the request count |
 
 ## The server
 
