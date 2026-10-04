@@ -129,10 +129,11 @@ and [Helm values](../reference/helm-values.md).
 ### Sizing the agent
 
 The agent's defaults are 50m CPU and 64Mi requested, with limits of 1 CPU and
-256Mi (`agent.resources`). The CPU limit is a quota, not a reservation, and
-the first tick after every start reads each Helm release once, which takes
-about 23 CPU-seconds per 1,000 releases: measured against 2,000 fake nodes
-and 1,000 releases (1,001 with the chart's own), that tick took 35 s at 1
+256Mi (`agent.resources`). The CPU limit is a quota, not a scheduling reservation (a namespace
+`ResourceQuota` on `limits.cpu` still counts it), and
+the first tick after every start reads each Helm release once: measured
+against 2,000 fake nodes and 1,000 releases (1,001 with the chart's own),
+the whole first tick took about 23 CPU-seconds, 35 s at 1
 CPU and 48 s at 500m, both finishing the Helm step (which has about a
 minute), and did not finish its Helm step at 200m, the chart's default
 through v0.2.0-rc.2 (it left 132 releases unread, and the report's

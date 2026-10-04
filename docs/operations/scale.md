@@ -61,7 +61,7 @@ them.
 | Postgres | 17.11 (`postgres:17-alpine`), a throwaway container on the ThinkPad's Docker engine, 0.1 ms round trip from the benchmark |
 | SQLite | the embedded `modernc.org/sqlite` v1.60.1, in a temporary directory on the ThinkPad's SSD |
 | upgradescope | the agent runs: main `a3e72ea` (#218, GitOps charts) plus this work; the "before" table is the same tree with the Helm step given no cache, which is what #71 changed. The server runs: main `f195ba5` plus this work (the server code is unchanged by this work; #217 is examples and tooling). The branch was rebased between the two, so its commit hashes name neither tree exactly. The numbers include #218's per-tick discovery and workload requests, but **not its Argo CD and Flux lists**: the lab of that session had neither tool's CRDs, so those lists were never made. The later runs measure them (see [Re-measured on main](#re-measured-on-main-with-and-without-argo-cd-and-flux)) |
-| The later runs | main `735751d` for the agent, chart and collector (main has since moved to `a93ba31`, which changes `internal/engine` and `internal/suppress`, the evaluate step, and the server; not the collector, the agent or the chart), with this branch's harness (`hack/bench/`, the GitOps fill, `pod-sample.sh`). The pod runs used a `linux/amd64` binary cross-compiled on the Mac with the same flags as `Dockerfile` (`CGO_ENABLED=0`, `-trimpath`, `-s -w`), packed with `Dockerfile.release` by `docker build` on the ThinkPad's engine and loaded with `kind load docker-image`: the dashboard bundle it embeds is the committed one, not a rebuilt one. Lab `us-lab-137b` (kind 1.37.0, a second cluster beside the first on the same ThinkPad), Argo CD Application CRD v3.5.3, Flux helm-controller CRDs v1.6.5 and source-controller v1.9.6 (OCIRepository only), pinned by sha256 in `hack/bench/agent.sh` |
+| The later runs | main `735751d` for the agent, chart and collector (main has since moved to `a93ba31`, which changes `internal/engine` and `internal/suppress`, the evaluate step, and the server; not the collector, the agent or the chart's agent values: it edits a docs-link comment under `server.ingress` in `values.yaml`, and the chart README), with this branch's harness (`hack/bench/`, the GitOps fill, `pod-sample.sh`). The pod runs used a `linux/amd64` binary cross-compiled on the Mac with the same flags as `Dockerfile` (`CGO_ENABLED=0`, `-trimpath`, `-s -w`), packed with `Dockerfile.release` by `docker build` on the ThinkPad's engine and loaded with `kind load docker-image`: the dashboard bundle it embeds is the committed one, not a rebuilt one. Lab `us-lab-137b` (kind 1.37.0, a second cluster beside the first on the same ThinkPad), Argo CD Application CRD v3.5.3, Flux helm-controller CRDs v1.6.5 and source-controller v1.9.6 (OCIRepository only), pinned by sha256 in `hack/bench/agent.sh` |
 | Also running | two other idle kind clusters on the same ThinkPad, and for the agent runs the lab's own KWOK controller keeping 2,000 nodes alive |
 | Also running, later runs | the lab's KWOK controller, and a second lab that another session used on the same ThinkPad. Its control-plane container used 11 to 19% of one core and 565 to 945 MiB whenever it was sampled (`docker stats`, at each fill level and at the start and end of the pod runs): the idle figure of a kind control plane, not a 2,000-node fill, which takes 2.4 to 3.6 cores. The ThinkPad's load average was 2.4 at the start of the GitOps run, and 9 to 25 during its fills and the pod runs (4 threads), so the wall times of the later runs are noisier than the counts and CPU-seconds, and are given as ranges |
 
@@ -221,7 +221,7 @@ first; the first tick makes the same GitOps requests, they have no cache):
 - **The bytes are small beside the pods**: 12 MiB of the 63. A list response
   was 7.6 KiB per Application, 3.7 KiB per HelmRelease and 1.9 KiB per
   OCIRepository. These objects are generated (the seeder's own sizes are
-  6.6, 2.7 and 1.1 KiB as JSON): an Application's status lists every object
+  6.4, 2.6 and 1.1 KiB as JSON, which is 6,588, 2,681 and 1,083 bytes): an Application's status lists every object
   it manages (8 to 20 here) and a real one is often larger, so scale the
   bytes by the size of yours; the request counts do not depend on it.
 - **The tick gained 3.2 CPU-seconds** (6.2 against 3.0), decoding the JSON.
@@ -326,9 +326,13 @@ cgroup's peak memory (page cache included) 98 MiB at most, against the
 **The chart's default is now 1 CPU** (`agent.resources.limits.cpu`),
 requests unchanged at 50m. The old default could not read 1,000 Helm
 releases in a first tick, and said so only in the report's list of what was
-not assessed; 500m just did. A limit reserves nothing (the request does),
-so a small cluster, whose tick uses well under one core-second, is not
-charged for it.
+not assessed; 500m just did. For scheduling, a limit reserves nothing (the
+request does), so a small cluster, whose tick uses well under one
+core-second, is not charged for it. A namespace quota is different: a
+ResourceQuota on `limits.cpu` counts the limit (800m more than before), and
+a LimitRange whose max CPU is below 1 rejects it, so a `helm upgrade` on
+default values can fail pod admission there; set `agent.resources.limits.cpu`
+yourself in such a namespace (see [Upgrade](upgrade.md)).
 
 How far 1 CPU goes is **computed from these runs, not measured**. The
 Helm step is the wall time of the first tick less the steady tick that

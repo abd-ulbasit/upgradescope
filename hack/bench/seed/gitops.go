@@ -379,32 +379,47 @@ func seedGitOps(ctx context.Context, dyn dynamic.Interface, cfg config, workers 
 // between the create and the status update, or a create that timed out at the
 // server but went through, whose retry finds the object) gets it.
 func createWithStatus(ctx context.Context, res dynamic.ResourceInterface, obj *unstructured.Unstructured, status map[string]any) error {
-	var got *unstructured.Unstructured
+	var got *unstructured.Unstructured // the stored object, when this call made it
 	err := retried(ctx, func() error {
 		var err error
 		got, err = res.Create(ctx, obj, metav1.CreateOptions{})
 		return err
 	})
-	if apierrors.IsAlreadyExists(err) {
-		err = retried(ctx, func() error {
-			var err error
-			got, err = res.Get(ctx, obj.GetName(), metav1.GetOptions{})
-			return err
-		})
-		if err != nil {
-			return err
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	if err != nil {
+		got = nil // made by an earlier call: read it
+	}
+	// The object exists now, made by this call or by an earlier one (or by
+	// a create that timed out after storing). Set its status unless it has
+	// one. An update that timed out but was applied makes its retry fail
+	// with a Conflict (the resourceVersion moved), so on a Conflict read it
+	// again and look: a status there is the retry's own, already done.
+	for range 3 {
+		if got == nil {
+			if err := retried(ctx, func() error {
+				var err error
+				got, err = res.Get(ctx, obj.GetName(), metav1.GetOptions{})
+				return err
+			}); err != nil {
+				return err
+			}
 		}
 		if s, _ := got.Object["status"].(map[string]any); len(s) > 0 {
 			return nil
 		}
-	} else if err != nil {
-		return err
+		got.Object["status"] = status
+		err = retried(ctx, func() error {
+			_, err := res.UpdateStatus(ctx, got, metav1.UpdateOptions{})
+			return err
+		})
+		if !apierrors.IsConflict(err) {
+			return err
+		}
+		got = nil // stale: read it again
 	}
-	got.Object["status"] = status
-	return retried(ctx, func() error {
-		_, err := res.UpdateStatus(ctx, got, metav1.UpdateOptions{})
-		return err
-	})
+	return err
 }
 
 // retryDelay is the pause before a retry, times the attempt number.

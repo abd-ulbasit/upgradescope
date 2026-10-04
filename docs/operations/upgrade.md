@@ -130,6 +130,14 @@ database. The chart's server memory limit is 1Gi, up from 512Mi, which
 the worst case measured on SQLite no longer fit; if you set
 `server.resources` yourself, see
 [Memory and request limits](../operations.md#memory-and-request-limits).
+The chart's agent CPU limit is 1, up from 200m, because a first tick on
+1,000 Helm releases did not finish at 200m. For scheduling it costs
+nothing (the request, 50m, is what is reserved), but a ResourceQuota on
+`limits.cpu` counts it (800m more per agent pod) and a LimitRange whose max
+CPU is below 1 rejects it, so a `helm upgrade` on default values can fail
+pod admission in such a namespace: give the quota the room, or set
+`agent.resources.limits.cpu` yourself (see
+[Sizing the agent](install.md#sizing-the-agent)).
 `serve --targets` (chart `server.targets`) takes at most 4 minors now,
 the count that worst case is measured at: a server started with more
 refuses to start, so trim the list before you upgrade.

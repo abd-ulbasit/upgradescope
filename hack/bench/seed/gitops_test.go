@@ -403,3 +403,64 @@ func TestCreateWithStatusFillsAnObjectThatHasNone(t *testing.T) {
 		t.Errorf("an object that had a status was rewritten: %v", got.Object["status"])
 	}
 }
+
+// An UpdateStatus that timed out at the client but was applied makes its
+// retry fail with a Conflict (the resourceVersion moved). That is not a
+// failure of the fill: the object has its status, so the call reads it again
+// and is done, and an object that still has none gets another try.
+func TestCreateWithStatusSurvivesAConflictAfterATimedOutStatusUpdate(t *testing.T) {
+	old := retryDelay
+	retryDelay = 0
+	t.Cleanup(func() { retryDelay = old })
+	cfg := config{Namespaces: 2, FluxHelmReleases: 2, Seed: 1}
+	ctx := context.Background()
+
+	dyn := newDyn()
+	o := fluxHelmReleaseObjects(0, cfg)
+	ns := o.release.GetNamespace()
+	res := dyn.Resource(fluxHelmReleaseGVR).Namespace(ns)
+	updates := 0
+	dyn.PrependReactor("update", "helmreleases", func(a ktesting.Action) (bool, runtime.Object, error) {
+		updates++
+		if updates == 1 { // applied, but the answer was lost
+			if err := dyn.Tracker().Update(fluxHelmReleaseGVR, a.(ktesting.UpdateAction).GetObject(), ns); err != nil {
+				t.Fatal(err)
+			}
+			return true, nil, errors.New("etcdserver: request timed out")
+		}
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "helmreleases"}, o.release.GetName(), errors.New("the object has been modified"))
+	})
+	if err := createWithStatus(ctx, res, o.release, o.status); err != nil {
+		t.Fatalf("a conflict after an applied status update aborted the fill: %v", err)
+	}
+	got, err := res.Get(ctx, o.release.GetName(), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := unstructured.NestedSlice(got.Object, "status", "history"); !found {
+		t.Errorf("the status is missing after the timed-out update: %v", got.Object["status"])
+	}
+	if updates != 2 {
+		t.Errorf("%d status updates, want 2 (the timed-out one and its retry)", updates)
+	}
+
+	// A conflict that did not apply the status is tried again, and ends.
+	dyn = newDyn()
+	o = fluxHelmReleaseObjects(1, cfg)
+	res = dyn.Resource(fluxHelmReleaseGVR).Namespace(o.release.GetNamespace())
+	conflicts := 0
+	dyn.PrependReactor("update", "helmreleases", func(ktesting.Action) (bool, runtime.Object, error) {
+		if conflicts < 1 {
+			conflicts++
+			return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "helmreleases"}, o.release.GetName(), errors.New("stale"))
+		}
+		return false, nil, nil
+	})
+	if err := createWithStatus(ctx, res, o.release, o.status); err != nil {
+		t.Fatalf("a one-off conflict was not retried: %v", err)
+	}
+	got, _ = res.Get(ctx, o.release.GetName(), metav1.GetOptions{})
+	if _, found, _ := unstructured.NestedSlice(got.Object, "status", "history"); !found {
+		t.Errorf("no status after a retried conflict: %v", got.Object["status"])
+	}
+}
