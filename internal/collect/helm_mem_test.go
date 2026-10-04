@@ -40,8 +40,21 @@ import (
 // "team-<r mod 10>"; the newest revision is deployed, older ones superseded.
 func helmAPIServer(t testing.TB, releases, revisions int, payload string) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
-	data := base64.StdEncoding.EncodeToString([]byte(payload)) // Secret.data is base64 on the wire
-	var gets atomic.Int64
+	srv, gets, _ := helmAPIServerWith(t, releases, revisions, []string{payload}, 0)
+	return srv, gets
+}
+
+// helmAPIServerWith is helmAPIServer serving release r's revisions with
+// payloads[r mod len(payloads)], and answering every request after delay
+// (a round trip to a distant apiserver). The third result is the most
+// Secret GETs it ever served at once.
+func helmAPIServerWith(t testing.TB, releases, revisions int, payloads []string, delay time.Duration) (*httptest.Server, *atomic.Int64, *atomic.Int64) {
+	t.Helper()
+	encoded := make([]string, len(payloads))
+	for i, p := range payloads {
+		encoded[i] = base64.StdEncoding.EncodeToString([]byte(p)) // Secret.data is base64 on the wire
+	}
+	var gets, inflight, maxInflight atomic.Int64
 	ident := func(i int) (ns, rel string, rev int, status string) {
 		r := i / revisions
 		rev = i%revisions + 1
@@ -60,11 +73,20 @@ func helmAPIServer(t testing.TB, releases, revisions int, payload string) (*http
 		w.WriteString(`{"kind":"Secret","apiVersion":"v1","metadata":`)
 		meta(w, i)
 		w.WriteString(`,"type":"helm.sh/release.v1","data":{"release":"`)
-		w.WriteString(data)
+		w.WriteString(encoded[(i/revisions)%len(encoded)])
 		w.WriteString(`"}}`)
 	}
 	total := releases * revisions
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/") { // a GET of one Secret, from its start
+			if n := inflight.Add(1); n > maxInflight.Load() {
+				maxInflight.Store(n) // a lost race under-reports by one at most
+			}
+			defer inflight.Add(-1)
+		}
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 		rw.Header().Set("Content-Type", "application/json")
 		w := bufio.NewWriter(rw)
 		defer w.Flush()
@@ -121,7 +143,7 @@ func helmAPIServer(t testing.TB, releases, revisions int, payload string) (*http
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &gets
+	return srv, &gets, &maxInflight
 }
 
 // realisticReleasePayload builds a Helm release payload whose stored
