@@ -183,7 +183,8 @@ cluster. The requests of one tick are:
   largest object of the one before: as many objects as fit 8 MiB encoded
   at that size, at least 500 and at most 1,000. Small pods and nodes (the
   scale lab's, about 3 KiB) are read 1,000 a page, a production cluster's
-  pods of about 8 KiB some 990, and objects over 16 KiB 500, as before.
+  pods of about 8 KiB some 990, and objects of 16,744 bytes (about 16.4 KiB)
+  or more 500, as before (those between 16 KiB and that, 501 to 511).
   client-go decodes a page whole, about three times its encoded size in
   live heap, and no limit set before a page is read can bound the size of
   the objects it will hold, so a page's worst case is 1,000 times the
@@ -191,8 +192,14 @@ cluster. The requests of one tick are:
   by namespace). 500 pods of 137 bytes followed by 1,000 of up to 41,685
   bytes (39.4 MiB encoded) peaked at 124.7 to 125.5 MiB of live heap, and
   a run of such pods, read 500 a page, at 63.2 to 63.7 MiB, as before
-  (`TestPodPagePeakHeapIsBounded`, which enforces 128 MiB). So no page
-  holds more than twice the objects a page held before #228.
+  (`TestPodPagePeakHeapIsBounded`, which enforces 128 MiB). That is one
+  example, not the bound: at its rate, about 3.2 bytes of live heap per
+  encoded byte, a page of 1,000 pods of about 70 KiB after a page of small
+  ones would pass the agent's `GOMEMLIMIT` (90% of 256Mi, about 230 MiB),
+  and pages of at most 500, before #228, at about 140 KiB (computed, not
+  measured). So no page holds more than twice the objects a page held
+  before #228, and the pod size at which one page fills the agent's memory
+  is half what it was.
   The types are nodes, namespaces, pods in
   `kube-system`, pods in the other namespaces, IngressClasses,
   CustomResourceDefinitions, the `owner=helm` Secrets and the `owner=helm`
@@ -250,7 +257,11 @@ cluster. The requests of one tick are:
   (4 requests) when the server version changed (on that tick, before any
   step reads them), on the tick after the CRDs' groups, kinds or served
   versions changed or the CRD list failed, when the answer is an hour old,
-  or when the last answer had an error, which is never kept. Custom
+  or when the last answer had an error, which is never kept. The CRDs it is
+  compared with are read by the `crds` step, after `api-usage` has asked
+  for discovery, so a CRD changed between those two steps of the tick that
+  asks is taken as what discovery saw, and that change is seen only when
+  the answer is dropped for another reason, at the latest an hour later. Custom
   resources that could not be listed (the agent is granted none, so a CRD
   with a deprecated or unserved version always makes the `crds` capability
   partial) are not a reason: the CRDs themselves were read. A one-shot

@@ -225,9 +225,10 @@ func peakHeap(f func()) (peak uint64) {
 // 256Mi limit. Only the installed revision is fetched now, and one release
 // is decoded at a time; since #226 up to helmFetchWorkers (8) are fetched
 // at once, so beside the release being decoded at most 7 more payloads are
-// held, fetched or being fetched: each at most the 1 MiB of data a Secret
-// may hold, plus, while it is read, its response (at most etcd's 1.5 MiB),
-// about 7 × 2.5 MiB ≈ 18 MiB above one release's decoding (computed).
+// held, fetched or being fetched: each, while it is read, its response and
+// the object decoded from it (at most etcd's 1.5 MiB each), and once
+// fetched the 1 MiB of data a Secret may hold, so at most 7 × 3 MiB = 21
+// MiB above one release's decoding (computed).
 // Measured on this harness: 300×10×150KiB peaked at 279 MiB and
 // 50×10×450KiB at 869–947 MiB before #24; 17 MiB and 8 MiB after it,
 // fetching one at a time; 19.7 MiB and 17.5 MiB fetching 8 at a time (Apple

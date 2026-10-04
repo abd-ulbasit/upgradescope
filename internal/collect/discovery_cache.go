@@ -47,7 +47,12 @@ const DiscoveryMaxAge = time.Hour
 //
 // so discovery is at most one tick behind a CRD change, and an hour behind
 // any other change of the APIs served at the same version (an APIService
-// registered, an API enabled by a restart with other flags).
+// registered, an API enabled by a restart with other flags). One exception:
+// the CRDs of the tick that fills the cache are read by the crds step,
+// after api-usage asked for discovery, so a CRD changed between those two
+// steps is recorded as the CRDs discovery saw, and is seen only when the
+// answer is dropped for another reason, at the latest when it is an hour
+// old.
 //
 // The zero value is not usable; a nil *DiscoveryCache caches nothing, which
 // is what a one-shot scan has. One collection at a time.
