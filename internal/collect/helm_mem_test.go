@@ -387,13 +387,14 @@ const maxManifestHeap = 64 << 20
 //	  default GOMAXPROCS, burners              40.1-99.9 MiB, 8 over
 //	  GOMAXPROCS=1, burners                    40.1-90.7 MiB, 8 over
 //
-// and 67.6 MiB for a 47 MiB-live case on an idle GitHub-hosted runner
-// (CI run 37145724345, GOGC=100): over the bound, the live heap well under
-// it. Past its limit the heap does not get back under it, and the GC CPU
+// and on an idle GitHub-hosted runner (GOGC=100) 67.6 MiB for a 47
+// MiB-live case (CI run 37145724345), over the bound with the live heap
+// well under it, and 40.1-62.3 MiB in the five cases another time (run
+// 37163826961), 1.7 MiB under. Past its limit the heap does not get back under it, and the GC CPU
 // limiter holds the collector to half the CPU and stops the assists. The
 // bound is not changed, so this proof fails, now and then, for a reason
-// that is not the manifest's: #213's second criterion (it passes idle and
-// under load) is not met. 34a6895 has the alternative that held on CI and
+// that is not the manifest's, and passes by a hair when it does not:
+// #213's second criterion (it passes idle and under load) is not met. 34a6895 has the alternative that held on CI and
 // under load, peakLiveHeap, which reads the heap objects after
 // collections forced back to back (16-54 MiB on a loaded Mac, 32-46 MiB
 // on CI): a different measurement from the one #213 asks for.

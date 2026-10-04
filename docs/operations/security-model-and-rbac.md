@@ -113,8 +113,9 @@ the size and at the node bound; the test enforces 64 MiB of heap). The
 test sets a memory limit 64 MiB above the baseline, as the chart's
 GOMEMLIMIT bounds the agent, but the runtime paces the heap up to that
 limit, so it reads the limit and not the live heap: 40–74 MiB, over the
-bound in some runs on an idle Mac or a busy one, and 67.6 MiB on an idle
-GitHub-hosted runner (CI run 37145724345). It fails then (#213); the
+bound in some runs on an idle Mac or a busy one; on a GitHub-hosted
+runner 67.6 MiB once (CI run 37145724345) and 40–62 MiB another time
+(run 37163826961). It fails when it is over (#213); the
 figures, with GOGC off and under CPU burners, are in the test's comments.
 Before the bounds, a 951 KB Secret that
 decompressed to 700 MiB took a scan to 1.93 GB and OOM-killed the agent at
