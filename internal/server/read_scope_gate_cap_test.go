@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -276,32 +277,69 @@ func TestGateSuppressionIgnoresTheRoomThePRTakes(t *testing.T) {
 	_, st, ts, _ := scopeServer(t)
 	mintReadToken(t, st, "pay-tok", "payments")
 	pushScopeCluster(t, ts, "accept", acceptingCapInventory(false))
+	checkSuppressionIgnoresTheRoom(t, ts, []string{"pay-tok", "fleet-tok"}, "",
+		func(n int) string { return annotatedIngresses(n, false) })
+}
+
+// plainIngresses is n Ingresses at extensions/v1beta1 in pay-prod named
+// pr0 to pr<n-1>, with no ignore annotation.
+func plainIngresses(n int) string {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, "---\napiVersion: extensions/v1beta1\nkind: Ingress\nmetadata: {name: pr%d, namespace: pay-prod}\n", i)
+	}
+	return b.String()
+}
+
+// The same, for a ?config= name rule (#72), fleet-wide: payments' p0 and
+// p1, with no annotation, and the PR's pr0 to pr<n-1>, none annotated
+// either, are accepted by one rule on the name p*. Were the refs the PR
+// pushes out of the listing unseen by it, 99 or 100 such Ingresses would
+// leave p1, or both, open; with 98, 99 and 100 the answer is ready with
+// nothing open and the same score, and the suppressed finding lists the
+// PR's Ingresses before the cluster's.
+func TestGateConfigNameRuleIgnoresTheRoomThePRTakes(t *testing.T) {
+	_, _, ts, _ := scopeServer(t)
+	pushScopeCluster(t, ts, "accept", capInventory(false))
+	rule := withConfig("ignore:\n  - key: removed-api/extensions/v1beta1/Ingress\n    name: 'p*'\n    reason: deleted with the upgrade\n")
+	checkSuppressionIgnoresTheRoom(t, ts, []string{"fleet-tok"}, rule, plainIngresses)
+}
+
+// checkSuppressionIgnoresTheRoom posts, for each token, the n PR
+// Ingresses of body(n) for n of 98, 99 and 100 against cluster "accept",
+// whose p0 and p1 are accepted along with them (by annotation or by the
+// rule in query, a ?config= suffix), and checks that the answer is ready
+// with nothing open and the same score whatever n, and that the
+// suppressed finding lists every one of the PR's n, the cluster's after
+// them, and at most MaxObjectRefs in all.
+func checkSuppressionIgnoresTheRoom(t *testing.T, ts *httptest.Server, tokens []string, query string, body func(n int) string) {
+	t.Helper()
 	type suppressed struct {
 		Key            string
 		Objects        []inventory.ObjectRef
 		ObjectsOmitted int
 	}
-	for _, token := range []string{"pay-tok", "fleet-tok"} {
+	for _, token := range tokens {
 		var first *gateSummary
 		for _, n := range []int{inventory.MaxObjectRefs - 2, inventory.MaxObjectRefs - 1, inventory.MaxObjectRefs} {
-			resp, raw := postGate(t, ts, "?target=1.35&cluster=accept", token, annotatedIngresses(n, false), "application/x-yaml")
+			resp, raw := postGate(t, ts, "?target=1.35&cluster=accept"+query, token, body(n), "application/x-yaml")
 			s := summarize(t, resp, raw)
 			if s.Status != "200 OK" || s.Verdict != "ready" || s.ClusterVerdict != "ready" || len(s.Findings) != 0 {
-				t.Errorf("%s, %d accepting Ingresses: want ready with nothing open: %+v", token, n, s)
+				t.Errorf("%s, %d accepted Ingresses: want ready with nothing open: %+v", token, n, s)
 			}
 			if first == nil {
 				first = &s
 			} else if s.Score != first.Score {
-				t.Errorf("%s, %d accepting Ingresses: score %d, want %d as with %d", token, n, s.Score, first.Score, inventory.MaxObjectRefs-2)
+				t.Errorf("%s, %d accepted Ingresses: score %d, want %d as with %d", token, n, s.Score, first.Score, inventory.MaxObjectRefs-2)
 			}
-			var body struct {
+			var answer struct {
 				Suppressed []suppressed `json:"suppressed"`
 			}
-			if err := json.Unmarshal(raw, &body); err != nil {
+			if err := json.Unmarshal(raw, &answer); err != nil {
 				t.Fatal(err)
 			}
 			listed, omitted, pr := 0, 0, 0
-			for _, sf := range body.Suppressed {
+			for _, sf := range answer.Suppressed {
 				if sf.Key != "removed-api/extensions/v1beta1/Ingress" {
 					continue
 				}
