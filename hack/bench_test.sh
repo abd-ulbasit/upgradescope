@@ -154,6 +154,8 @@ gtick() { # gtick <fill> <n> <charts> <app requests> <app MiB>
     nodes: 11, namespaces: 3, helmReleases: 10, gitopsCharts: $charts, addOns: 0, apiUsage: 0, targets: 1, capabilities: {}}'
 }
 {
+  gtick 0 1 0 1 0
+  gtick 0 2 0 1 0
   gtick 1 1 200 99 9
   gtick 1 2 200 20 1
   gtick 1 3 200 26 4
@@ -167,8 +169,10 @@ if grep -qF "GitOps reads per tick" "$work/gitops-report" &&
 else
   fail "agent-report.sh GitOps table" "$work/gitops-report"
 fi
+# The empty level belongs in the table of a run that had GitOps charts, with none read.
+grep -qE '^\| 0 \| 0 \| 1, 0 \|' "$work/gitops-report" && ok "agent-report.sh: the empty level is in the GitOps table, with no charts" || fail "agent-report.sh GitOps table lacks the empty level" "$work/gitops-report"
 grep -qF "| LIST | applications | 20 | 1024 |" "$work/gitops-report" && ok "agent-report.sh: the breakdown shows each resource's response KiB" || fail "agent-report.sh breakdown bytes" "$work/gitops-report"
-BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/gitops.jsonl" 2>&1 | jq -e '.[0].gitops.charts == 200 and .[0].gitops.requests == 48' >/dev/null && ok "agent-report.sh: json carries the GitOps summary" || fail "agent-report.sh json gitops" "$work/gitops-report"
+BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/gitops.jsonl" 2>&1 | jq -e ".[0].gitops.charts == 0 and .[1].gitops.charts == 200 and .[1].gitops.requests == 48" >/dev/null && ok "agent-report.sh: json carries the GitOps summary" || fail "agent-report.sh json gitops" "$work/gitops-report"
 
 # --- serve.sh and serve-report.sh --------------------------------------------
 expect "serve.sh: an unknown backend is refused" 1 "unknown backend mysql" -- env BENCH_BACKENDS=mysql BENCH_BIN="$work/bin" GO_STUB_RC=0 hack/bench/serve.sh

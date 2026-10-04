@@ -41,7 +41,6 @@ def gitops: ["applications", "helmreleases", "ocirepositories"] as $rs |
     requests: $req, bodyMiB: ($b | mib | r2),
     firstTickRequests: (.[0] | [$rs[] as $r | reqs($r)] | add)
   };
-def hasGitops: any(.[]; (.gitopsCharts // 0) > 0);
 def summary: {
   fill: (.[0].label | capture("fill=(?<f>[^ ]+)").f),
   label: .[0].label,
@@ -59,11 +58,14 @@ def summary: {
   maxRssMiB: (map(.maxRssBytes) | max | mib | r1),
   firstTick: (.[0] | {requests, wallS: (.wallMs / 1000 | r1), cpuS: ((.cpuMs // 0) / 1000 | r1), bodyMiB: (.bodyBytes | mib | r1), wireMiB: ((.wireDownBytes + .wireUpBytes) | mib | r1), peakHeapMiB: (.peakHeapBytes | mib | r1)}),
   errors: (map(select(.error != null and .error != "")) | length),
-  gitops: (if hasGitops then gitops else null end)
-};'
+  gitops: gitops
+};
+# The GitOps columns only when some level of the run read GitOps charts (the
+# empty level has none, and still belongs in a table of a run that had them).
+def withGitops: (any(.[]; .gitops.charts > 0)) as $any | map(if $any then . else .gitops = null end);'
 
 if [ "${BENCH_REPORT_FORMAT:-}" = json ]; then
-  jq -s "$defs levels | map(summary)" "$1"
+  jq -s "$defs levels | map(summary) | withGitops" "$1"
   exit 0
 fi
 
@@ -79,14 +81,14 @@ jq -rs "$defs"'
 # The GitOps fill (BENCH_GITOPS=1): what the lists of Argo CD Applications
 # and Flux HelmReleases, and the GETs of the OCIRepositories their chartRefs
 # name, cost a steady tick. Printed only when the run had GitOps charts.
-if jq -es "$defs"' [.[] | select((.gitopsCharts // 0) > 0)] | length > 0' "$1" >/dev/null; then
+if jq -es '[.[] | select((.gitopsCharts // 0) > 0)] | length > 0' "$1" >/dev/null; then
   echo
   echo "GitOps reads per tick, by fill level (medians over the ticks after the first; response MiB are bodies as client-go read them, decompressed; the tick's own requests are in the table above):"
   echo
   echo "| Fill | GitOps charts read | LIST Applications: requests, MiB | LIST HelmReleases: requests, MiB | GET OCIRepositories: requests, MiB | GitOps total: requests, MiB | First tick: GitOps requests |"
   echo "|---|---|---|---|---|---|---|"
   jq -rs "$defs"'
-    levels | map(summary | select(.gitops != null))[] |
+    levels | map(summary) | withGitops | .[] |
     "| \(.fill) | \(.gitops.charts) | \(.gitops.applications), \(.gitops.applicationsMiB) | \(.gitops.helmReleases), \(.gitops.helmReleasesMiB) | \(.gitops.ociRepositories), \(.gitops.ociRepositoriesMiB) | \(.gitops.requests), \(.gitops.bodyMiB) | \(.gitops.firstTickRequests) |"' "$1"
 fi
 
