@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -295,5 +296,43 @@ func TestTheCollectorReadsEveryGitOpsObject(t *testing.T) {
 	// collector names; the harness (agent.sh, the agent benchmark) expects it.
 	if !slices.Equal(helm.Skipped, []string{inventory.GitOpsArgoCD}) {
 		t.Errorf("helm skipped = %v, want only argocd", helm.Skipped)
+	}
+}
+
+// A loaded lab's etcd answers "request timed out" to a create now and then
+// (seen at 2,000 fake nodes beside KWOK's heartbeats, #233): the GitOps fill
+// retries those, and gives up on anything that is not transient.
+func TestSeedGitOpsRetriesTransientFailures(t *testing.T) {
+	retryDelay = 0
+	cfg := config{Namespaces: 2, ArgoApps: 3, FluxHelmReleases: 2, Seed: 1}
+	dyn := newDyn()
+	fails := map[string]int{}
+	timeout := errors.New("etcdserver: request timed out")
+	dyn.PrependReactor("*", "*", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if a.GetVerb() != "create" && a.GetVerb() != "update" {
+			return false, nil, nil
+		}
+		key := a.GetVerb() + "/" + a.GetResource().Resource + "/" + a.GetSubresource()
+		if fails[key] < 2 { // each kind of call fails twice, then works
+			fails[key]++
+			return true, nil, timeout
+		}
+		return false, nil, nil
+	})
+	if _, err := seedGitOps(context.Background(), dyn, cfg, 1, io.Discard); err != nil {
+		t.Fatalf("transient failures were not retried: %v", err)
+	}
+	l, _ := dyn.Resource(argoApplicationGVR).Namespace("").List(context.Background(), metav1.ListOptions{})
+	if len(l.Items) != 3 {
+		t.Errorf("%d Applications after the retries, want 3", len(l.Items))
+	}
+
+	dyn = newDyn()
+	denied := apierrors.NewForbidden(schema.GroupResource{Resource: "applications"}, "x", errors.New("no"))
+	calls := 0
+	dyn.PrependReactor("create", "applications", func(ktesting.Action) (bool, runtime.Object, error) { calls++; return true, nil, denied })
+	_, err := seedGitOps(context.Background(), dyn, config{Namespaces: 1, ArgoApps: 1}, 1, io.Discard)
+	if !apierrors.IsForbidden(err) || calls != 1 {
+		t.Errorf("a forbidden create: err %v after %d calls, want it returned at once", err, calls)
 	}
 }

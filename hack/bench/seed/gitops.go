@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -319,7 +321,9 @@ func seedGitOps(ctx context.Context, dyn dynamic.Interface, cfg config, workers 
 	}
 	if err := phase("argo applications", cfg.ArgoApps, func(ctx context.Context, i int) error {
 		app := argoApplicationObject(i, cfg)
-		return created(dyn.Resource(argoApplicationGVR).Namespace(app.GetNamespace()).Create(ctx, app, metav1.CreateOptions{}))
+		return retried(ctx, func() error {
+			return created(dyn.Resource(argoApplicationGVR).Namespace(app.GetNamespace()).Create(ctx, app, metav1.CreateOptions{}))
+		})
 	}); err != nil {
 		return sum, err
 	}
@@ -332,27 +336,13 @@ func seedGitOps(ctx context.Context, dyn dynamic.Interface, cfg config, workers 
 		if o.oci == nil {
 			return nil
 		}
-		res := dyn.Resource(fluxOCIRepoGVR).Namespace(o.oci.GetNamespace())
-		got, err := res.Create(ctx, o.oci, metav1.CreateOptions{})
-		if err != nil {
-			return created(got, err)
-		}
-		got.Object["status"] = o.ociStat
-		_, err = res.UpdateStatus(ctx, got, metav1.UpdateOptions{})
-		return err
+		return createWithStatus(ctx, dyn.Resource(fluxOCIRepoGVR).Namespace(o.oci.GetNamespace()), o.oci, o.ociStat)
 	}); err != nil {
 		return sum, err
 	}
 	if err := phase("flux helmreleases", cfg.FluxHelmReleases, func(ctx context.Context, i int) error {
 		o := fluxHelmReleaseObjects(i, cfg)
-		res := dyn.Resource(fluxHelmReleaseGVR).Namespace(o.release.GetNamespace())
-		got, err := res.Create(ctx, o.release, metav1.CreateOptions{})
-		if err != nil {
-			return created(got, err)
-		}
-		got.Object["status"] = o.status
-		_, err = res.UpdateStatus(ctx, got, metav1.UpdateOptions{})
-		return err
+		return createWithStatus(ctx, dyn.Resource(fluxHelmReleaseGVR).Namespace(o.release.GetNamespace()), o.release, o.status)
 	}); err != nil {
 		return sum, err
 	}
@@ -381,6 +371,55 @@ func seedGitOps(ctx context.Context, dyn dynamic.Interface, cfg config, workers 
 	sum.ExpectedCharts = counts.ExpectedCharts
 	sum.Seconds = time.Since(start).Seconds()
 	return sum, nil
+}
+
+// createWithStatus creates obj and then sets its status, which is a
+// subresource, retrying what fails transiently. An object that already exists
+// is left as it is.
+func createWithStatus(ctx context.Context, res dynamic.ResourceInterface, obj *unstructured.Unstructured, status map[string]any) error {
+	var got *unstructured.Unstructured
+	err := retried(ctx, func() error {
+		var err error
+		got, err = res.Create(ctx, obj, metav1.CreateOptions{})
+		return err
+	})
+	if err != nil {
+		return created(got, err)
+	}
+	got.Object["status"] = status
+	return retried(ctx, func() error {
+		_, err := res.UpdateStatus(ctx, got, metav1.UpdateOptions{})
+		return err
+	})
+}
+
+// retryDelay is the pause before a retry, times the attempt number.
+var retryDelay = 500 * time.Millisecond
+
+// transient reports whether an error is one a retry can cure: a timeout (the
+// lab's etcd answers "request timed out" under KWOK's heartbeats), throttling
+// or an unavailable server.
+func transient(err error) bool {
+	return apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || apierrors.IsTooManyRequests(err) ||
+		apierrors.IsServiceUnavailable(err) || apierrors.IsInternalError(err) ||
+		strings.Contains(err.Error(), "request timed out")
+}
+
+// retried runs f, again after a pause when it fails transiently, up to six
+// tries in all.
+func retried(ctx context.Context, f func() error) error {
+	var err error
+	for attempt := range 6 {
+		if err = f(); err == nil || !transient(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt+1) * retryDelay):
+		}
+	}
+	return err
 }
 
 func avgSize(n int, size func(i int) int) int {
