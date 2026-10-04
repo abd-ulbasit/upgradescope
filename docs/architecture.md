@@ -198,8 +198,13 @@ release, not a copy of the cluster. The requests of one tick are:
   and a list with a limit and no resource version may be served from etcd,
   so its scan work is not halved: the bytes on the wire and the decoding
   are. If the other namespaces' list is refused, the add-ons are as if every
-  pod had been refused, whatever `versions` read. If the `kube-system` list fails, the add-ons list every pod, as if
-  versions had not run.
+  pod had been refused, whatever `versions` read. If `versions` fails
+  before it has read the `kube-system` pods (the server version, the
+  `kube-system` namespace, the nodes or the namespaces, or the pod list
+  itself), the add-ons list every pod, as if `versions` had not run. A
+  server or proxy that rejects the field selector with a 400 is asked
+  again without it, and the add-ons skip the `kube-system` pods in the
+  response.
 - **One GET per decoded Helm release**: the full Secret (or ConfigMap) of its
   installed revision, up to the 1 MiB Kubernetes allows. It is fetched again
   on every tick, even when nothing changed. This is the one cost that scales
