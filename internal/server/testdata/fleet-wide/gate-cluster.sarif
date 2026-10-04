@@ -17,7 +17,7 @@
             {
               "level": "error",
               "message": {
-                "text": "Not reported as a result (no file location): extensions/v1beta1 Ingress removed in 1.22 (4 objects). 4 object(s) still stored/served at this version: pay-prod (1), pr-new-ns (1), shared-tools (1), web-secret-ns (1). 1 listed object(s) suppressed (see suppressed). Objects: pay-prod/pay-ingress, shared-tools/tools-ingress, pr-new-ns/pr-ingress (line 1)."
+                "text": "Not reported as a result (no file location): extensions/v1beta1 Ingress removed in 1.22 (4 objects). 4 object(s) still stored/served at this version: pay-prod (1), pr-new-ns (1), shared-tools (1), web-secret-ns (1). 1 object(s) suppressed (see suppressed). Objects: pay-prod/pay-ingress, shared-tools/tools-ingress, pr-new-ns/pr-ingress (line 1)."
               },
               "properties": {
                 "category": "removed-api",

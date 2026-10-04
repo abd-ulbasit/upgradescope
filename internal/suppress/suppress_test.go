@@ -116,7 +116,7 @@ func TestApplyObjectSelectorsPartial(t *testing.T) {
 	if !reflect.DeepEqual(f.Objects, []inventory.ObjectRef{internal}) {
 		t.Errorf("remaining objects = %+v", f.Objects)
 	}
-	if !strings.HasSuffix(f.Detail, "2 listed object(s) suppressed (see suppressed).") {
+	if !strings.HasSuffix(f.Detail, "2 object(s) suppressed (see suppressed).") {
 		t.Errorf("detail = %q", f.Detail)
 	}
 	if got.Verdict != engine.VerdictBlocked {

@@ -318,7 +318,11 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 		return nil, out, warnings
 	}
 	f.Objects = remaining
-	f.Detail = strings.TrimSpace(fmt.Sprintf("%s %d listed object(s) suppressed (see suppressed).", f.Detail, listed))
+	// listed counts what the rules and annotations took from the refs f
+	// holds here, which a /gate's capObjects cuts to MaxObjectRefs only
+	// afterwards: the sentence says how many objects were suppressed, not
+	// how many of them the answer lists.
+	f.Detail = strings.TrimSpace(fmt.Sprintf("%s %d object(s) suppressed (see suppressed).", f.Detail, listed))
 	return &f, out, warnings
 }
 
