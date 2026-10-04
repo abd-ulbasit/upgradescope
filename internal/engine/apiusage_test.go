@@ -341,7 +341,7 @@ func TestEvalAPIUsageAuthoredObjectsOmittedRefs(t *testing.T) {
 	if len(fs) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
-	if want := "5 object(s) written through this API version: default (5). Written by (first 2 of 5 objects): helm."; fs[0].Detail != want {
+	if want := "5 object(s) written through this API version: default (5). Written by (of 5 objects, not all identified): helm."; fs[0].Detail != want {
 		t.Errorf("detail = %q, want %q", fs[0].Detail, want)
 	}
 }

@@ -311,8 +311,11 @@ func evalAuthorshipUnknown(inv inventory.Inventory, k kb.KB, b *budget) []Findin
 
 // writtenBy renders the managers of u's objects as a detail sentence with
 // a leading space, or "" when no object names one. Refs are capped
-// (inventory.MaxObjectRefs): it names the subset the managers come from
-// when some were dropped.
+// (inventory.MaxObjectRefs), and a /gate's engine sees more than the answer
+// lists (the PR's refs and the cluster's, before capObjects cuts the
+// listing): when refs were dropped it says only that not all of the M
+// objects are identified, never how many it names, which no listing is
+// guaranteed to show.
 func writtenBy(u inventory.APIUsage) string {
 	managers := objectManagers(u.Objects)
 	if len(managers) == 0 {
@@ -320,7 +323,7 @@ func writtenBy(u inventory.APIUsage) string {
 	}
 	by := " Written by: "
 	if u.ObjectsOmitted > 0 {
-		by = fmt.Sprintf(" Written by (first %d of %d objects): ", len(u.Objects), len(u.Objects)+u.ObjectsOmitted)
+		by = fmt.Sprintf(" Written by (of %d objects, not all identified): ", len(u.Objects)+u.ObjectsOmitted)
 	}
 	return by + strings.Join(managers, ", ") + "."
 }
