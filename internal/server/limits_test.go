@@ -401,10 +401,11 @@ func TestGateDecodeHeapIsBounded(t *testing.T) {
 	// TestGateDecodeHeapIsBounded") keep GOGC=10 and sample the heap by
 	// time. #213 asks to convert them to debug.SetMemoryLimit only if that
 	// makes them robust without loosening a bound, and it does not: the
-	// Helm collector's test, converted, reads its 64 MiB bound as the limit
-	// plus the collector's overshoot, 40-74 MiB against it, and fails now
-	// and then (limitMemory in internal/collect/helm_mem_test.go has the
-	// figures), so there is no method here to copy. Their bounds and the
+	// Helm collector's test, converted, read the limit plus the collector's
+	// overshoot, 40-74 MiB against its 64 MiB bound, and failed now and
+	// then, so it was rejected and that test went back to reading the live
+	// heap after forced collections (peakLiveHeap in
+	// internal/collect/helm_mem_test.go has the figures). Their bounds and the
 	// figures docs/operations.md sums into the server's worst case are peaks
 	// with their garbage, each at least 10% above the worst of several
 	// loaded runs; none is known to fail (CI's test-heap job is green),

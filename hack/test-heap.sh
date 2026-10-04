@@ -13,8 +13,10 @@
 # script, and one cannot be cited yet silently never run.
 #
 # The server's heap tests take about ten minutes, past go test's default
-# timeout, so they also skip unless UPGRADESCOPE_HEAP=1, which this sets:
-# a plain `go test ./...` passes without them.
+# timeout, and the Helm manifest test's live-heap reading is inflated by a
+# machine busy with every other package's tests, so they also skip unless
+# UPGRADESCOPE_HEAP=1, which this sets: a plain `go test ./...` passes
+# without them.
 #
 # --list prints "<package dir> <TestName>" per test and runs nothing.
 set -euo pipefail
