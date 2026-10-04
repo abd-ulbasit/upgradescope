@@ -40,7 +40,8 @@ import (
 //     view does. A finding that spans teams is cut to the scope's teams,
 //     their namespaces and the objects in them (keep.cut). What
 //     describes the cluster as a whole stays: its score, verdict, blocker
-//     and warning counts, capability gaps, history; but not its
+//     and warning counts (the whole cluster's, other teams' findings
+//     included), capability gaps, history; but not its
 //     unrecognized images, which name any team's workloads, nor the helm
 //     capability's reason and skipped list, which name releases
 //     (readScope.withholds).
@@ -597,6 +598,15 @@ func clusterTeams(inv inventory.Inventory, rep engine.Report) []string {
 // What describes the cluster as a whole stays: its version, nodes,
 // control plane, CRD definitions and capabilities. inv is not modified.
 // The fleet-wide scope's share is inv.
+//
+// One thing of other teams' still reaches it: a collector lists at most
+// inventory.MaxObjectRefs objects per API across the cluster, in
+// namespace order, so which of the scope's objects a row lists (and
+// counts as omitted) depends on how many objects at that API sort before
+// them. The engine's findings follow what is listed (their objects and
+// detail, a Helm release's manifest finding, so the score and cluster
+// verdict); what the PR introduces does not. docs/operations/auth.md
+// says what a scoped caller can learn from it.
 func (sc readScope) clusterShare(inv inventory.Inventory) inventory.Inventory {
 	if sc.fleet() {
 		return inv

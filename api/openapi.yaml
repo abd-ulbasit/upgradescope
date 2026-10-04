@@ -585,6 +585,15 @@ paths:
         deploy, and a custom resource they write at a version the CRDs do
         not serve are always the manifests'.
 
+        With a team-scoped credential, `cluster` is judged as the scope's
+        share of it only (its teams' namespaces, and what describes the
+        cluster as a whole): the findings, verdict, status, score and
+        `clusterVerdict` are the share's, so a PR that breaks only
+        another team's workloads passes. Repositories that can break
+        shared or other teams' resources gate with a fleet-wide
+        credential. See
+        https://abd-ulbasit.github.io/upgradescope/operations/auth/#the-gate-with-a-team-scoped-token
+
         `fail-on` works like `scan --fail-on` (default `blocker`): when an
         introduced finding reaches it, or the verdict is `unknown`, the
         status is 422 with the full body, so `curl --fail-with-body` fails
@@ -1255,7 +1264,7 @@ components:
             teams: {$ref: "#/components/schemas/TeamScores"}
             clusterVerdict:
               $ref: "#/components/schemas/Verdict"
-              description: With `cluster`, the verdict of the cluster plus the manifests, existing findings included.
+              description: With `cluster`, the verdict of the cluster plus the manifests, existing findings included; with a team-scoped credential, of the scope's share of the cluster plus the manifests.
             suppressedCount: {type: integer, minimum: 0, description: "The number of `suppressed` entries."}
             warnings:
               type: array

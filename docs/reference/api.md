@@ -381,6 +381,15 @@ deprecated API a posted object uses, an add-on the manifests
 deploy, and a custom resource they write at a version the CRDs do
 not serve are always the manifests'.
 
+With a team-scoped credential, `cluster` is judged as the scope's
+share of it only (its teams' namespaces, and what describes the
+cluster as a whole): the findings, verdict, status, score and
+`clusterVerdict` are the share's, so a PR that breaks only
+another team's workloads passes. Repositories that can break
+shared or other teams' resources gate with a fleet-wide
+credential. See
+https://abd-ulbasit.github.io/upgradescope/operations/auth/#the-gate-with-a-team-scoped-token
+
 `fail-on` works like `scan --fail-on` (default `blocker`): when an
 introduced finding reaches it, or the verdict is `unknown`, the
 status is 422 with the full body, so `curl --fail-with-body` fails
@@ -1057,7 +1066,7 @@ are not known. The same for every target.
 | `support` | [SupportStatus](#supportstatus) | no | — |
 | `findings` | array of [GateFinding](#gatefinding) | yes | — |
 | `teams` | [TeamScores](#teamscores) | no | — |
-| `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included. |
+| `clusterVerdict` | [Verdict](#verdict) | no | With `cluster`, the verdict of the cluster plus the manifests, existing findings included; with a team-scoped credential, of the scope's share of the cluster plus the manifests. |
 | `suppressedCount` | integer | yes | The number of `suppressed` entries. |
 | `warnings` | array of string | no | Suppression warnings: rules in `config` that expired (they no longer apply), and `upgradescope.dev/ignore` annotations without a reason (not applied). |
 

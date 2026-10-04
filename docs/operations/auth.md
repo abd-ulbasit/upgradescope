@@ -118,9 +118,48 @@ unchanged. A suppressed finding is cut the same way, and one whose
 accepted objects are all another team's is left out. A finding wholly the
 scope's is served exactly as the fleet-wide view serves it.
 
+**What the caps still decide.** The caps are applied before any scope,
+and they do not divide by team. A collector lists at most 100 objects per
+API across the whole cluster, in the order a live List returns them
+(namespace, then name), and counts the rest in `objectsOmitted`; the
+engine lists at most 100 namespaces per finding, in name order. So where
+a cap left some of the scope's objects or namespaces at an API unlisted,
+which of them are listed depends on how many objects (or namespaces) at
+that API sort before them, in any team's namespaces. This is the one way
+a scoped answer depends on other teams' evidence, and a scoped caller can
+read it. From how many of its own objects at an API are listed, it learns
+how many objects at that API other namespaces hold that sort before the
+first of its own left unlisted (exactly, when some of its own are listed;
+"100 or more", when none is), and from a read's cut finding whether the
+API's objects across the cluster number more than 100. It learns nothing
+else of them: not their names, namespaces or teams. Concretely:
+
+- **In reads**, a cut finding lists the scope's objects and namespaces
+  that made the cut, drops its title's count and says its lists were
+  capped whenever the finding's lists were, whoever's objects filled them.
+- **In the gate**, the share holds the scope's objects the collector
+  listed. A finding lists those and the PR's, counts the scope's others
+  in `objectsOmitted`, and its detail follows what is listed: "3
+  object(s) use this API" where only the PR's are, the managers that
+  wrote the listed ones. So do the CRD-version remediation's note on
+  managers, and whether a Helm release's stored-manifest object is
+  matched to the live object the scan lists; when it is not, the release
+  gets a finding of its own, which counts toward the score and the
+  cluster verdict, and with all of these the answer's size changes. The
+  gate's verdict, `X-Upgradescope-Verdict` and the status `?fail-on`
+  gives judge only what the PR introduces, and do not depend on the
+  caps.
+
+A test pins this: payments' two Ingresses unlisted behind web's hundred
+in `a-web`, against a cluster of payments' two alone.
+
 **What stays.** What describes the cluster as a whole: its name, version,
 score, verdict, blocker and warning counts, capability gaps, and score
-history. Two parts of the cluster's description name workloads and are
+history. These are the whole cluster's, other teams' findings included:
+subtracting the scope's own blockers and warnings from the cluster's
+counts gives how many the other teams (and no team) have, per target
+(reads at `?target=` included). The gate does not show them: its score,
+counts and cluster verdict are the share's. Two parts of the cluster's description name workloads and are
 not shown:
 
 - **Unrecognized images** (`unrecognizedImages`): image repositories no
@@ -137,7 +176,9 @@ not shown:
 **Everything else is hidden.** A cluster outside the scope answers `404`
 with the same body as a cluster id that does not exist, on every
 per-cluster endpoint and for `/api/v1/gate?cluster=`, so its name cannot
-be probed by its answer. It is absent from `/clusters`, `/fleet` and
+be probed by its answer: `?cluster=` matches a name among the scope's
+clusters only, so a cluster outside it named like an in-scope cluster's
+id does not shadow that id. It is absent from `/clusters`, `/fleet` and
 `/fleet/teams`. The server looks the scope up first and never looks up a
 cluster outside it, so an id that exists but is out of scope costs the
 same store query as an unknown one. Cluster ids are sequential and say
@@ -155,7 +196,7 @@ scoped caller is the cluster's name and data.
 | `GET /api/v1/clusters/{id}/export` (CSV, HTML) | `404` outside the scope; the scope's findings, cut to it, and teams |
 | `GET /api/v1/fleet` | in-scope clusters only |
 | `GET /api/v1/fleet/teams` | in-scope clusters, the scope's teams |
-| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope. Otherwise the gate runs on the scope's share of the cluster, never on the whole cluster: the API usage, custom resources, Helm releases, GitOps charts and add-ons in the namespaces of the scope's teams, and what describes the cluster as a whole (version, nodes, control plane, CRD definitions, capabilities); never another team's evidence, a namespace no team owns, cluster-scoped usage or the apiserver's deprecated-call rows. Everything in the answer is decided from that share and the manifests: the findings (a finding the PR's objects are in counts, titles and details only the PR's objects and the scope's, even when the PR names another team's namespace, where its objects are attributed to no team), the verdict and `X-Upgradescope-Verdict`, the status `?fail-on` gives, the cluster verdict, the score and the scope's team scores. Of the share's own findings, the scope's; the manifests' unrecognized images only; suppression warnings of the share only. So a CI status depends on who asks ([the gate with a team-scoped token](#the-gate-with-a-team-scoped-token)) |
+| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope. Otherwise the gate runs on the scope's share of the cluster, never on the whole cluster: the API usage, custom resources, Helm releases, GitOps charts and add-ons in the namespaces of the scope's teams, and what describes the cluster as a whole (version, nodes, control plane, CRD definitions, capabilities); never another team's evidence, a namespace no team owns, cluster-scoped usage or the apiserver's deprecated-call rows. Everything in the answer is decided from that share and the manifests: the findings (a finding the PR's objects are in counts, titles and details only the PR's objects and the scope's, even when the PR names another team's namespace, where its objects are attributed to no team), the verdict and `X-Upgradescope-Verdict`, the status `?fail-on` gives, the cluster verdict, the score and the scope's team scores. Of the share's own findings, the scope's; the manifests' unrecognized images only; suppression warnings of the share only. The exception is which of the scope's objects the share lists where the collector's 100-objects-per-API cap left some unlisted, and what follows from that, never the verdict, its header or the status ([what the caps still decide](#what-a-team-scoped-read-sees)). So a CI status depends on who asks ([the gate with a team-scoped token](#the-gate-with-a-team-scoped-token)) |
 | `GET /api/v1/registry` | as fleet-wide: the public knowledge base |
 | `GET /metrics` | `403`: its per-cluster series name every cluster, so it takes a fleet-wide credential (Prometheus gets `--read-token` or a `*` token) |
 
@@ -169,8 +210,16 @@ answer carries no such header.
 against the scope's share of the cluster (the table above), and nothing
 else: two clusters that differ only outside the scope give the same
 answer, status, verdict and score included, byte for byte, in every
-format. The whole cluster is never evaluated for that request, so not
-even a `413` from evaluating it can depend on another team's workloads.
+format, except where the collector's 100-objects-per-API cap, which lists
+objects across the cluster in namespace order, left some of the scope's
+objects unlisted. Then which of them are listed, `objectsOmitted`, the
+finding's detail, and what the engine derives from the listed objects
+(Helm releases' findings, and with them the score, the cluster verdict
+and the answer's size) depend on how many objects at that API sort before
+them ([what the caps still decide](#what-a-team-scoped-read-sees)); the
+verdict, `X-Upgradescope-Verdict` and the status never do. The whole
+cluster is never evaluated for that request, so a `413` from evaluating
+it depends on another team's workloads only through that size.
 
 The price is that **a PR that breaks only another team's workloads
 passes a team-scoped gate.** Say a PR changes a CRD that several teams

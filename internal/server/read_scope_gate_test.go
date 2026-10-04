@@ -137,7 +137,8 @@ var leakySecrets = []string{
 // score: clusters that differ only there give payments the same answer,
 // byte for byte, in every format, even where the whole cluster's
 // findings, score and verdict differ; the fleet-wide token sees them
-// differ.
+// differ. (Within the collector's 100-objects-per-API cap: past it, see
+// TestScopedGateObjectListingFollowsTheCollectorsCap.)
 func TestScopedGateAnswersFromTheScopesShareOnly(t *testing.T) {
 	_, st, ts, _ := scopeServer(t)
 	mintReadToken(t, st, "pay-tok", "payments")
