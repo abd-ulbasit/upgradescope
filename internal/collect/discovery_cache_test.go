@@ -90,37 +90,55 @@ func TestDiscoveryCacheServesSteadyTicks(t *testing.T) {
 
 // What drops the cache: an apiserver of another version (seen before any
 // step reads discovery, in the same tick), a CRD change (the tick after),
-// a CRD list that fails (the tick after), and age.
+// a CRD list that fails (the tick after, and every tick it fails), and
+// age. A CRD whose custom resources cannot be listed (the crds capability
+// partial, the CRDs themselves read) is a change on the tick it appears,
+// and no reason to ask again after it: the agent is granted no custom
+// resources, so on a cluster with a CRD that deprecates a version that is
+// every tick.
 func TestDiscoveryCacheStaleness(t *testing.T) {
 	crd := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: "widgets.example.com"},
 		Spec: apiextensionsv1.CustomResourceDefinitionSpec{Group: "example.com", Names: apiextensionsv1.CustomResourceDefinitionNames{Plural: "widgets", Kind: "Widget"},
 			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Storage: true}}},
 	}
+	deprecated := crd.DeepCopy()
+	deprecated.Spec.Versions = append([]apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1beta1", Served: true, Deprecated: true}}, deprecated.Spec.Versions...)
+	create := func(t *testing.T, ext *apiextensionsfake.Clientset, crd *apiextensionsv1.CustomResourceDefinition) {
+		if _, err := ext.ApiextensionsV1().CustomResourceDefinitions().Create(context.Background(), crd, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
 		name   string
-		change func(*testing.T, *discoveryfake.FakeDiscovery, *apiextensionsfake.Clientset)
-		// asked on the tick of the change and on the one after it
-		thisTick, nextTick bool
+		change func(*testing.T, Clients, *discoveryfake.FakeDiscovery, *apiextensionsfake.Clientset)
+		// asked on the tick of the change, on the one after it, and on the
+		// one after that
+		thisTick, nextTick, later bool
+		crdsPartial               bool // the crds capability, on the last tick
 	}{
-		{"nothing changes", func(*testing.T, *discoveryfake.FakeDiscovery, *apiextensionsfake.Clientset) {}, false, false},
-		{"the apiserver is upgraded", func(_ *testing.T, d *discoveryfake.FakeDiscovery, _ *apiextensionsfake.Clientset) {
+		{"nothing changes", func(*testing.T, Clients, *discoveryfake.FakeDiscovery, *apiextensionsfake.Clientset) {}, false, false, false, false},
+		{"the apiserver is upgraded", func(_ *testing.T, _ Clients, d *discoveryfake.FakeDiscovery, _ *apiextensionsfake.Clientset) {
 			d.FakedServerVersion = &version.Info{GitVersion: "v1.36.0"}
-		}, true, false},
-		{"a CRD is installed", func(t *testing.T, _ *discoveryfake.FakeDiscovery, ext *apiextensionsfake.Clientset) {
-			if _, err := ext.ApiextensionsV1().CustomResourceDefinitions().Create(context.Background(), crd, metav1.CreateOptions{}); err != nil {
-				t.Fatal(err)
-			}
-		}, false, true},
-		{"the CRDs cannot be listed", func(_ *testing.T, _ *discoveryfake.FakeDiscovery, ext *apiextensionsfake.Clientset) {
+		}, true, false, false, false},
+		{"a CRD is installed", func(t *testing.T, _ Clients, _ *discoveryfake.FakeDiscovery, ext *apiextensionsfake.Clientset) {
+			create(t, ext, crd)
+		}, false, true, false, false},
+		{"a CRD whose deprecated version's custom resources cannot be listed is installed", func(t *testing.T, c Clients, _ *discoveryfake.FakeDiscovery, ext *apiextensionsfake.Clientset) {
+			create(t, ext, deprecated)
+			c.Metadata.(*metadatafake.FakeMetadataClient).PrependReactor("list", "widgets", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, errors.New("forbidden")
+			})
+		}, false, true, false, true},
+		{"the CRDs cannot be listed", func(_ *testing.T, _ Clients, _ *discoveryfake.FakeDiscovery, ext *apiextensionsfake.Clientset) {
 			ext.PrependReactor("list", "customresourcedefinitions", func(k8stesting.Action) (bool, runtime.Object, error) {
 				return true, nil, errors.New("forbidden")
 			})
-		}, false, true},
-		{"an hour passes", func(*testing.T, *discoveryfake.FakeDiscovery, *apiextensionsfake.Clientset) {
+		}, false, true, true, false},
+		{"an hour passes", func(*testing.T, Clients, *discoveryfake.FakeDiscovery, *apiextensionsfake.Clientset) {
 			now = now.Add(DiscoveryMaxAge)
-		}, true, false},
+		}, true, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, disc, ext, asked := discoveryTicks(t)
@@ -131,14 +149,17 @@ func TestDiscoveryCacheStaleness(t *testing.T) {
 			if n := asked(); n == 0 {
 				t.Fatal("the first tick asked for no discovery")
 			}
-			tc.change(t, disc, ext)
-			collectWith(t, c, dc)
-			if got := asked() > 0; got != tc.thisTick {
-				t.Errorf("the tick of the change asked for discovery: %v, want %v", got, tc.thisTick)
-			}
-			collectWith(t, c, dc)
-			if got := asked() > 0; got != tc.nextTick {
-				t.Errorf("the tick after the change asked for discovery: %v, want %v", got, tc.nextTick)
+			tc.change(t, c, disc, ext)
+			for i, want := range []bool{tc.thisTick, tc.nextTick, tc.later} {
+				inv := collectWith(t, c, dc)
+				if got := asked() > 0; got != want {
+					t.Errorf("tick %d from the change asked for discovery: %v, want %v", i, got, want)
+				}
+				if i == 2 {
+					if st := inv.Capabilities[inventory.CapCRDs]; st.Partial != tc.crdsPartial {
+						t.Errorf("crds %+v, want partial %v", st, tc.crdsPartial)
+					}
+				}
 			}
 		})
 	}
