@@ -19,6 +19,26 @@ a CI gate.
 
 ### Added
 
+- Team-scoped read tokens: `upgradescope tokens create --read --teams
+  <team>` (repeatable, a team name taken as written; `--teams '*'` for the
+  whole fleet), `tokens list --read` and `tokens revoke --read --id <n>`. A
+  read token is printed once; the database keeps its sha256 hash and first 8
+  characters, and the server looks it up on every request, so one minted or
+  revoked takes effect without a restart. A team-scoped token reads only the
+  clusters one of its teams owns a namespace in (as the cluster's current
+  evaluations attribute namespaces, after `--team-map`), and of those only
+  its teams' findings, suppressed findings and team scores. Any other
+  cluster answers `404`, as an unknown one does, and is left out of
+  `/clusters`, `/fleet` and `/fleet/teams`. `/metrics` answers `403` to a
+  scoped credential. A scoped `POST /api/v1/gate?cluster=` judges the pull
+  request on the scope's share of the cluster. The dashboard says which
+  teams it shows. See docs/operations/auth.md (#72).
+- `serve --trust-team-header <header>`, which needs `--trusted-proxy-cidr
+  <cidr>`, scopes a read from a proxy at that TCP peer address (never
+  `X-Forwarded-For`) to the comma-separated, percent-encoded teams the
+  header lists; `*` there is never the whole fleet. It is safe only behind a
+  proxy that strips client-supplied copies of the header:
+  `deploy/examples/oauth2-proxy/` runs oauth2-proxy as such a sidecar (#72).
 - `upgradescope mcp`, a read-only Model Context Protocol server for AI
   assistants. It speaks MCP on stdio; `--http ADDR` serves streamable HTTP
   at `http://ADDR/mcp` instead (a bare port binds 127.0.0.1, an address that
@@ -378,6 +398,14 @@ a CI gate.
 
 ### Changed
 
+- Minting the first read token closes an open read API: a server run without
+  `--read-token` (on loopback, or with `--allow-anonymous-read`) answers
+  `401` from then on to a request without a valid credential, as it does
+  once `--trust-team-header` is set. Revoking the last read token does not
+  open it again. `--read-token` still reads the whole fleet and answers
+  exactly as before. A `--team-map` team named `*` is read as the team
+  `(*)`, with a warning at startup, since `*` is the whole-fleet scope
+  (#72).
 - A managed cluster (EKS, GKE, AKS) whose minor is past the provider's
   standard support now has a `support-lifecycle` blocker, so its verdict is
   `blocked` and a `--fail-on blocker` gate fails; within 90 days of the end
@@ -791,6 +819,13 @@ a CI gate.
 
 ### Fixed
 
+- `POST /api/v1/gate` made room for the pull request's objects under the
+  100-object listing cap before it evaluated, so a cluster object pushed out
+  of the listing could no longer be accepted by its annotation or a
+  `?config=` rule, and a pull request that posted many objects could turn
+  the gate red, or lower the score, for findings it did not cause. The gate
+  now evaluates and suppresses with every object, then cuts each listing to
+  100, counting the rest in `objectsOmitted` (#72).
 - The agent no longer follows a redirect when it pushes: a 3xx answer is a
   permanent failure that names the status and `Location` and says to use
   the final URL in `--server-url`. A 301, 302 or 303 used to turn the push
