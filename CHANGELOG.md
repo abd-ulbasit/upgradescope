@@ -27,18 +27,24 @@ a CI gate.
   revoked takes effect without a restart. A team-scoped token reads only the
   clusters one of its teams owns a namespace in (as the cluster's current
   evaluations attribute namespaces, after `--team-map`), and of those only
-  its teams' findings, suppressed findings and team scores. Any other
-  cluster answers `404`, as an unknown one does, and is left out of
-  `/clusters`, `/fleet` and `/fleet/teams`. `/metrics` answers `403` to a
-  scoped credential. A scoped `POST /api/v1/gate?cluster=` judges the pull
-  request on the scope's share of the cluster. The dashboard says which
-  teams it shows. See docs/operations/auth.md (#72).
+  its teams' findings and suppressed findings (one spanning teams cut to
+  theirs) and team scores; the cluster's score, verdict and counts stay the
+  whole cluster's. Any other cluster answers `404`, as an unknown one does,
+  and is left out of `/clusters`, `/fleet` and `/fleet/teams`. `/metrics`
+  answers `403` to a scoped credential. A scoped `POST
+  /api/v1/gate?cluster=` judges the pull request on the scope's share of the
+  cluster. The dashboard says which teams it shows. A scoped answer names
+  its teams in `X-Upgradescope-Teams` and is sent `Cache-Control: private,
+  no-store`. See `docs/operations/auth.md` (#72).
 - `serve --trust-team-header <header>`, which needs `--trusted-proxy-cidr
-  <cidr>`, scopes a read from a proxy at that TCP peer address (never
+  <cidr>`, scopes a read from a TCP peer in those ranges (never
   `X-Forwarded-For`) to the comma-separated, percent-encoded teams the
-  header lists; `*` there is never the whole fleet. It is safe only behind a
-  proxy that strips client-supplied copies of the header:
-  `deploy/examples/oauth2-proxy/` runs oauth2-proxy as such a sidecar (#72).
+  header lists; `*` there is never the whole fleet. It is safe only when
+  nothing but the proxy can reach the server from those addresses (on
+  loopback, mind `kubectl port-forward` and mesh sidecars) and the proxy
+  strips client-supplied copies of the header:
+  `deploy/examples/oauth2-proxy/` runs oauth2-proxy v7.15.5 as such a proxy,
+  in a sidecar. The chart has no values for this mode yet (#72).
 - `upgradescope mcp`, a read-only Model Context Protocol server for AI
   assistants. It speaks MCP on stdio; `--http ADDR` serves streamable HTTP
   at `http://ADDR/mcp` instead (a bare port binds 127.0.0.1, an address that
@@ -406,6 +412,14 @@ a CI gate.
   exactly as before. A `--team-map` team named `*` is read as the team
   `(*)`, with a warning at startup, since `*` is the whole-fleet scope
   (#72).
+- Server database: migration 0008 (SQLite and Postgres) adds the
+  `read_tokens` table and `evaluations.teams`. The first start re-evaluates
+  every stored evaluation once; until its pass reaches a cluster, that
+  cluster's evaluations read `outdated: true` and no team-scoped read sees
+  it. `serve` now opens, and so migrates, the database before it refuses an
+  open read API on an address that is not loopback. A server rolled back
+  past it ignores read tokens, so a read API closed only by minted tokens is
+  open again (#72).
 - A managed cluster (EKS, GKE, AKS) whose minor is past the provider's
   standard support now has a `support-lifecycle` blocker, so its verdict is
   `blocked` and a `--fail-on blocker` gate fails; within 90 days of the end
@@ -821,8 +835,8 @@ a CI gate.
 
 - `POST /api/v1/gate` made room for the pull request's objects under the
   100-object listing cap before it evaluated, so a cluster object pushed out
-  of the listing could no longer be accepted by its annotation or a
-  `?config=` rule, and a pull request that posted many objects could turn
+  of the listing could not be accepted by its annotation or a `?config=`
+  rule selecting it, and a pull request that posted many objects could turn
   the gate red, or lower the score, for findings it did not cause. The gate
   now evaluates and suppresses with every object, then cuts each listing to
   100, counting the rest in `objectsOmitted` (#72).
