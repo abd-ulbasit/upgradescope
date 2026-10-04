@@ -57,6 +57,9 @@ func TestClassifyRequest(t *testing.T) {
 
 func TestRequestRecorderCountsRequestsAndBodyBytes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			time.Sleep(20 * time.Millisecond)
+		}
 		fmt.Fprint(w, strings.Repeat("x", 100))
 	}))
 	defer srv.Close()
@@ -74,15 +77,19 @@ func TestRequestRecorderCountsRequestsAndBodyBytes(t *testing.T) {
 	if total != 4 || rec.bodyBytes.Load() != 400 {
 		t.Errorf("total = %d, body bytes = %d; want 4 requests and 400 bytes", total, rec.bodyBytes.Load())
 	}
-	if len(stats) != 3 || stats[0] != (requestStat{Verb: "LIST", Resource: "nodes", Count: 2, Bytes: 200}) {
+	if len(stats) != 3 || stats[0].Verb != "LIST" || stats[0].Resource != "nodes" || stats[0].Count != 2 || stats[0].Bytes != 200 {
 		t.Errorf("stats = %+v, want LIST nodes x2 (200 bytes) first, then GET secrets and GET /version", stats)
 	}
-	// The bytes of each verb and resource add up to the body total.
+	// The bytes of each verb and resource add up to the body total, and
+	// each request's time is counted from sending it to the end of its body.
 	var sum int64
 	for _, s := range stats {
 		sum += s.Bytes
 		if s.Bytes != int64(100*s.Count) {
 			t.Errorf("%s %s: %d bytes for %d requests of 100 bytes each", s.Verb, s.Resource, s.Bytes, s.Count)
+		}
+		if s.Resource == "/version" && s.Millis < 20 {
+			t.Errorf("GET /version took %d ms, want at least the server's 20", s.Millis)
 		}
 	}
 	if sum != rec.bodyBytes.Load() {
