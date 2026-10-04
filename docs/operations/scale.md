@@ -47,22 +47,22 @@ quote them.
   (at least hourly) makes 4 more. At the default interval of 10 minutes,
   31 requests are 0.052 requests a second (53 were 0.088).
 - **The first tick after the agent starts costs more**: it reads each Helm
-  release once. On main `735751d` that was 1,053 requests in all, 36.7 s
-  and 23.5 CPU-seconds. Since
+  release once. On main `735751d` that was 1,053 requests in all, 36.7 s and
+  23.5 CPU-seconds. Since
   [#226](https://github.com/abd-ulbasit/upgradescope/issues/226) the agent
   fetches 8 at a time: 1,037 requests, 42.4 s and 22.0 CPU-seconds beside
-  the apiserver at `9810fb6`, on a host whose load average rose from 1.9
-  to 15.4 while it ran, where the 1,000 GETs waited 99.0 s in all (36.1 s
-  and 23.1 in this branch's run of `735751d`, at a load of 7 to 12; 27.1 s
-  and 22.8 at the draft `59d8561`, at that load too, where the GETs waited
-  48.5 s). With 60 ms added to every round trip it took 30.4 s at
-  `06cdf7a` (#226 alone) and 29.6 s at the draft `5da764e`, where main's
-  first tick reached the Helm step's deadline after 67.6 s with 231 of the
-  1,000 releases unread. Before
+  the apiserver at `9810fb6`, on a host whose load average rose from 1.9 to
+  15.4 while it ran, where the 1,000 GETs waited 99.0 s in all (36.1 s and
+  23.1 in the #226/#228 runs of `735751d` (with the recorder, `70d16ab`), at
+  a load of 7 to 12; 27.1 s and 22.8 at the draft `59d8561`, at that load
+  too, where the GETs waited 48.5 s). With 60 ms added to every round trip
+  it took 30.4 s at `06cdf7a` (#226 alone) and 29.6 s at the draft
+  `5da764e`, where main's first tick reached the Helm step's deadline after
+  67.6 s with 231 of the 1,000 releases unread. Before
   [#71](https://github.com/abd-ulbasit/upgradescope/issues/71) every tick
-  cost that, because the agent fetched every release again each time: it
-  was the one cost that grew with releases rather than with pages (1,000
-  GETs of 1,061 requests).
+  cost that, because the agent fetched every release again each time: it was
+  the one cost that grew with releases rather than with pages (1,000 GETs of
+  1,061 requests).
 - **Argo CD and Flux add a request per fifty objects and one per
   OCIRepository**: with 1,000 Applications and 1,000 HelmReleases (half of
   them with a `chartRef` to an OCIRepository of their own) a steady tick
@@ -71,22 +71,22 @@ quote them.
   #228 does not change the GitOps lists or GETs, and its code was not run
   with them.
 - **Memory fits the chart's defaults** (64Mi request, 256Mi limit) with room
-  at this fill: on main `735751d` the peak RSS of the benchmark never
-  passed 61 MiB, and the agent as a pod reached 71 MiB (`VmHWM`), the first
-  tick included. At #228's code the benchmark's peak RSS was 65.0 MiB and
-  its peak heap 39.2 MiB (57.1 and 29.3 MiB in this branch's run of
-  `735751d`): the larger pod pages that cut the requests cost that; no pod
-  was run at that code. That is above the 64Mi request, which only informs
-  scheduling. A pod page is bounded by its count only, at most 1,000 pods,
-  so its worst case is 1,000 times the largest pod, whatever its size,
-  reached when small pods are followed by large ones. 1,000 pods of about
-  40 KiB after small ones measured 124.5 to 125.5 MiB of live heap in a
-  test (`TestPodPagePeakHeapIsBounded`, which allows 128 MiB); at that
-  rate, about 3.2 bytes of live heap per encoded byte, pods of about 70 KiB
-  after small ones would take one page past the agent's `GOMEMLIMIT`
-  (about 230 MiB) and likely past the limit, where the pages of 500 before
-  #228 would have reached it at about 145 KiB (computed, not measured; see
-  [the steady tick](#the-tick-after-226-and-228)).
+  at this fill: on main `735751d` the peak RSS of the benchmark never passed
+  61 MiB, and the agent as a pod reached 71 MiB (`VmHWM`), the first tick
+  included. At #228's code the benchmark's peak RSS was 65.0 MiB and its
+  peak heap 39.2 MiB (57.1 and 29.3 MiB in the #226/#228 runs of `735751d`
+  (with the recorder, `70d16ab`)): the larger pod pages that cut the
+  requests cost that; no pod was run at that code. That is above the 64Mi
+  request, which only informs scheduling. A pod page is bounded by its count
+  only, at most 1,000 pods, so its worst case is 1,000 times the largest
+  pod, whatever its size, reached when small pods are followed by large
+  ones. 1,000 pods of about 40 KiB after small ones measured 124.5 to 125.5
+  MiB of live heap in a test (`TestPodPagePeakHeapIsBounded`, which allows
+  128 MiB); at that rate, about 3.2 bytes of live heap per encoded byte,
+  pods of about 70 KiB after small ones would take one page past the agent's
+  `GOMEMLIMIT` (about 230 MiB) and likely past the limit, where the pages of
+  500 before #228 would have reached it at about 145 KiB (computed, not
+  measured; see [the steady tick](#the-tick-after-226-and-228)).
 - **The chart's default CPU limit was too low for such a cluster, and is now
   1 CPU.** As a pod at the old 200m the first tick gave up at its Helm
   step's deadline with 132 of 1,001 releases unread, and a steady tick took
@@ -109,7 +109,7 @@ quote them.
 | Postgres | 17.11 (`postgres:17-alpine`), a throwaway container on the ThinkPad's Docker engine, 0.1 ms round trip from the benchmark |
 | SQLite | the embedded `modernc.org/sqlite` v1.60.1, in a temporary directory on the ThinkPad's SSD |
 | upgradescope | the agent runs: main `a3e72ea` (#218, GitOps charts) plus this work; the "before" table is the same tree with the Helm step given no cache, which is what #71 changed. The server runs: main `f195ba5` plus this work (the server code is unchanged by this work; #217 is examples and tooling). The branch was rebased between the two, so its commit hashes name neither tree exactly. The numbers include #218's per-tick discovery and workload requests, but **not its Argo CD and Flux lists**: the lab of that session had neither tool's CRDs, so those lists were never made. The later runs measure them (see [Re-measured on main](#re-measured-on-main-with-and-without-argo-cd-and-flux)) |
-| The later runs | main `735751d` for the agent, chart and collector (main has since moved to `a93ba31`, which changes `internal/engine` and `internal/suppress`, the evaluate step, and the server; not the collector, the agent or the chart's agent values: it edits a docs-link comment under `server.ingress` in `values.yaml`, and the chart README), with this branch's harness (`hack/bench/`, the GitOps fill, `pod-sample.sh`). The pod runs used a `linux/amd64` binary cross-compiled on the Mac with the same flags as `Dockerfile` (`CGO_ENABLED=0`, `-trimpath`, `-s -w`), packed with `Dockerfile.release` by `docker build` on the ThinkPad's engine and loaded with `kind load docker-image`: the dashboard bundle it embeds is the committed one, not a rebuilt one. Lab `us-lab-137b` (kind 1.37.0, a second cluster beside the first on the same ThinkPad), Argo CD Application CRD v3.5.3, Flux helm-controller CRDs v1.6.5 and source-controller v1.9.6 (OCIRepository only), pinned by sha256 in `hack/bench/agent.sh` |
+| The later runs | main `735751d` for the agent, chart and collector (main has since moved to `a93ba31`, which changes `internal/engine` and `internal/suppress`, the evaluate step, and the server; not the collector, the agent or the chart's agent values: it edits a docs-link comment under `server.ingress` in `values.yaml`, and the chart README), with #249's harness (`hack/bench/`, the GitOps fill, `pod-sample.sh`). The pod runs used a `linux/amd64` binary cross-compiled on the Mac with the same flags as `Dockerfile` (`CGO_ENABLED=0`, `-trimpath`, `-s -w`), packed with `Dockerfile.release` by `docker build` on the ThinkPad's engine and loaded with `kind load docker-image`: the dashboard bundle it embeds is the committed one, not a rebuilt one. Lab `us-lab-137b` (kind 1.37.0, a second cluster beside the first on the same ThinkPad), Argo CD Application CRD v3.5.3, Flux helm-controller CRDs v1.6.5 and source-controller v1.9.6 (OCIRepository only), pinned by sha256 in `hack/bench/agent.sh` |
 | upgradescope, #226 and #228 | the "before" runs: main `735751d` plus the recorder's per-resource bytes and time (`70d16ab`, which changes only the benchmark); #226 alone: `06cdf7a`; #226 and #228: `5da764e` and `59d8561` (drafts: pages sized from the average object, up to 2,000; at 16 MiB and at 8 MiB), and `9810fb6`, the final code (pages sized from the largest object, up to 1,000, after review). These are the branch's commits as measured, on `735751d`; rebased onto main `a0d9652` (#249) they are `3c1fe6f`, `ba33886`, `13901f4` and `419d624`, the same collector and agent with main's changes since `735751d` (#235's server and engine, #249's harness and the chart's 1 CPU default), which the runs did not have. Each run filled a freshly reset lab (lab A, the first of the two), or measured the fill a run before it left, with `BENCH_STEPS=1` (the full fill only) and the ticks run on the ThinkPad (`BENCH_RUN_ON`) |
 | Also running | two other idle kind clusters on the same ThinkPad, and for the agent runs the lab's own KWOK controller keeping 2,000 nodes alive |
 | Also running, later runs | the lab's KWOK controller, and a second lab that another session used on the same ThinkPad. Its control-plane container used 11 to 19% of one core and 565 to 945 MiB whenever it was sampled (`docker stats`, at each fill level and at the start and end of the pod runs): the idle figure of a kind control plane, not a 2,000-node fill, which takes 2.4 to 3.6 cores. The ThinkPad's load average was 2.4 at the start of the GitOps run, and 9 to 25 during its fills and the pod runs (4 threads), so the wall times of the later runs are noisier than the counts and CPU-seconds, and are given as ranges |
@@ -290,33 +290,33 @@ them without a watch (AG-01) and without reading pods less often:
   1,000 (the lab's pods and nodes are about 3 KiB, so 1,000). Pods: 30
   requests to 16; nodes: 5 to 3. A page's limit is set before its objects
   are seen, so nothing bounds its bytes but the count: its worst case is
-  1,000 times the largest object, reached when small objects are followed
-  by large ones (pods are listed by namespace).
-  `TestPodPagePeakHeapIsBounded` measures it: 500 pods of 137 bytes, then
-  1,000 of up to 41,685 bytes (39.4 MiB encoded), peaked at 124.5 to 125.5
-  MiB of live heap, under half the chart's 256Mi but only 2.5 to 3.5 MiB
-  under the test's own limit of 128 MiB, so a change that makes a page's
-  decoding about 3% larger fails it; a run of those pods, which stays at
-  500 a page as before, at 63.2 to 63.7 MiB; production-sized pods (about
-  8 KiB in protobuf, managedFields included; about 990 a page) at 34.5 to
-  35.4 MiB (Apple M1 Pro, 4 October 2026). The 40 KiB pods are an example,
-  not the bound: at the rate they measured, about 3.2 bytes of live heap
-  per encoded byte (125.5 MiB for 39.4 MiB), one page of 1,000 pods passes
-  the agent's `GOMEMLIMIT` (90% of 256Mi, about 230 MiB) at pods of about
-  70 KiB after a page of small ones (230 MiB / 3.2 / 1,000 is 74 KiB, less
-  what the rest of the agent holds), where pages of at most 500, before
-  #228, would have reached it at about 145 KiB (230 MiB / 3.2 / 500 is
-  147 KiB; computed, not measured). Pods that large exist: Argo Workflows
-  pods carry their template, for example. The drafts sized a page from the
-  average object of the page before, up to 2,000: 10 pod and 2 node
-  requests, 24 in all, but they ask for 2,000 of the large pods after the
-  small ones, and the same test with pages of 500, 2,000 and 500 peaked at
-  249.4 to 250.0 MiB of live heap, past the agent's `GOMEMLIMIT` (90% of
-  256Mi), and likely past the 256Mi limit (inferred from the live heap: no
-  agent was run at that limit). At most 1,000 a page, no page holds more
-  than twice the objects a page held before #228. Here the larger pages
-  raised the sampled heap peak from 29.3 to 39.2 MiB and the RSS from 57.1
-  to 65.0 MiB (58.0 and 85.2 at `59d8561`, 68.5 and 95.2 at `5da764e`).
+  1,000 times the largest object, reached when small objects are followed by
+  large ones (pods are listed by namespace). `TestPodPagePeakHeapIsBounded`
+  measures it: 500 pods of 137 bytes, then 1,000 of up to 41,685 bytes (39.4
+  MiB encoded), peaked at 124.5 to 125.5 MiB of live heap, under half the
+  chart's 256Mi but only 2.5 to 3.5 MiB under the test's own limit of 128
+  MiB, so a change that makes a page's decoding about 2 to 3% larger fails
+  it; a run of those pods, which stays at 500 a page as before, at 63.2 to
+  63.7 MiB; production-sized pods (about 8 KiB in protobuf, managedFields
+  included; about 990 a page) at 34.5 to 35.4 MiB (Apple M1 Pro, 4 October
+  2026). The 40 KiB pods are an example, not the bound: at the rate they
+  measured, about 3.2 bytes of live heap per encoded byte (125.5 MiB for
+  39.4 MiB), one page of 1,000 pods passes the agent's `GOMEMLIMIT` (90% of
+  256Mi, about 230 MiB) at pods of about 70 KiB after a page of small ones
+  (230 MiB / 3.2 / 1,000 is 74 KiB, less what the rest of the agent holds),
+  where pages of at most 500, before #228, would have reached it at about
+  145 KiB (230 MiB / 3.2 / 500 is 147 KiB; computed, not measured). Pods
+  that large exist: Argo Workflows pods carry their template, for example.
+  The drafts sized a page from the average object of the page before, up to
+  2,000: 10 pod and 2 node requests, 24 in all, but they ask for 2,000 of
+  the large pods after the small ones, and the same test with pages of 500,
+  2,000 and 500 peaked at 249.4 to 250.0 MiB of live heap, past the agent's
+  `GOMEMLIMIT` (90% of 256Mi), and likely past the 256Mi limit (inferred
+  from the live heap: no agent was run at that limit). At most 1,000 a page,
+  no page holds more than twice the objects a page held before #228. Here
+  the larger pages raised the sampled heap peak from 29.3 to 39.2 MiB and
+  the RSS from 57.1 to 65.0 MiB (58.0 and 85.2 at `59d8561`, 68.5 and 95.2
+  at `5da764e`).
 - API discovery is kept between ticks (`collect.DiscoveryCache`, PF-16):
   4 requests to 0 on a steady tick. It is asked again (4 requests more on
   that tick) when the server version changed (seen on the tick, before any
@@ -650,7 +650,7 @@ at all:
 | What | Found | Status |
 |---|---|---|
 | One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 33 s and 23.5 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests then, 53 on `735751d` and 31 after #228). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
-| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 to 36.7 s and 23.1 to 23.5 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread; as a pod at the old 200m default it reached it with 132 unread (measured, [above](#cpu-and-the-chart-limit)) | **Fixed** for the round trip ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 42.4 s here at `9810fb6`, on a host whose load rose to 15 (27.1 s at the draft `59d8561`, at a load of 7 to 12), and at 60 ms 30.4 s at `06cdf7a` and 29.6 s at `5da764e`, with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now, so under a CPU quota #226 does not help (computed, [above](#cpu-and-the-chart-limit)); the chart's default limit is now 1 CPU, at which main's first tick read all 1,000. `TestCollectHelmConcurrentMatchesSequential` |
+| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 to 36.7 s and 23.1 to 23.5 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread; as a pod at the old 200m default it reached it with 132 unread (measured, [above](#cpu-and-the-chart-limit)) | **Fixed** for the round trip ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 42.4 s here at `9810fb6`, on a host whose load rose to 15 (27.1 s at the draft `59d8561`, at a load of 7 to 12), and at 60 ms 30.4 s at `06cdf7a` and 29.6 s at `5da764e`, with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now, so under a CPU quota #226 does not help at 200m and saves at most the 13.4 s the GETs waited at 1 CPU (computed, [above](#cpu-and-the-chart-limit)); the chart's default limit is now 1 CPU, at which main's first tick read all 1,000. `TestCollectHelmConcurrentMatchesSequential` |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | **Fixed** ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227), #232): the add-ons take them from the version check's list; 30 pod list requests a tick instead of 38 in the runs on `735751d` |
 | Argo CD Applications and Flux HelmReleases are listed whole (page size 50) every tick, plus a GET per distinct OCIRepository (#218) | **Measured** (`BENCH_GITOPS=1`, main `735751d`): 540 of the 596 requests of a steady tick at 1,000 Applications and 1,000 HelmReleases, 500 of them sequential OCIRepository GETs; 12 MiB of 63; 8.7 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Open: the OCIRepository GETs could be a list per namespace ([#248](https://github.com/abd-ulbasit/upgradescope/issues/248)); #228 does not change them |
 | The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by their largest object (at most 1,000), discovery kept between ticks, the agent's object read once: 53 to 31 requests, short of the target of under 25. The bytes (50 MiB) and CPU (3 s) are unchanged, since every pod is still decoded every tick; reading pods less often (#228's option b) would cut those and the pod requests, and is not done |

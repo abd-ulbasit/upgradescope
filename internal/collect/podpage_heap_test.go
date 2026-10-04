@@ -191,9 +191,9 @@ func largestPod(pods []corev1.Pod) int {
 // 128 MiB, half the chart's 256Mi limit. The margin is thin on purpose: the
 // worst case measured 124.5 to 125.5 MiB (Apple M1 Pro, 4 October 2026;
 // the other cases about 35 and 64 MiB), 2.5 to 3.5 MiB under the limit, so
-// a change that makes a page's decoding about 3% larger fails here. Smaller
-// large pods would give it room only by testing less than the 1,000 a page
-// may hold of them; docs/claims.md (PF-02) states the same margin. A heap
+// a change that makes a page's decoding about 2 to 3% larger fails here.
+// Smaller large pods would give it room only by testing a smaller page in
+// bytes; docs/claims.md (PF-02) states the same margin. A heap
 // figure, run by hack/test-heap.sh (UPGRADESCOPE_HEAP=1) only. Under the
 // race detector it lists fewer.
 func TestPodPagePeakHeapIsBounded(t *testing.T) {
