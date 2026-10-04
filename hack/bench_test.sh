@@ -59,7 +59,7 @@ chmod +x "$stubs"/*
 export PATH="$stubs:$PATH"
 
 nodes() { # nodes <real> [<fake>] -> a node list
-  jq -n --argjson real "$1" --argjson fake "${2:-0}" '{items: ([range($real)] | map({metadata: {name: "real-\(.)"}})) + ([range($fake)] | map({metadata: {name: "fake-\(.)", annotations: {"kwok.x-k8s.io/node": "fake"}}}))}'
+  jq -n --argjson real "$1" --argjson fake "${2:-0}" '{items: (([range($real)] | map({metadata: {name: "real-\(.)"}})) + ([range($fake)] | map({metadata: {name: "fake-\(.)", annotations: {"kwok.x-k8s.io/node": "fake"}}})))}'
 }
 namespaces() { jq -n --args '{items: ($ARGS.positional | map({metadata: {name: .}}))}' "$@"; }
 vanilla_ns=(default kube-system kube-public kube-node-lease local-path-storage)
