@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -318,22 +320,28 @@ func TestTickStampsTheGenerationItEvaluated(t *testing.T) {
 		"spec":       map[string]interface{}{"targets": []interface{}{"1.36"}},
 	}}
 	dyn := fakeDyn(cr).(*dynamicfake.FakeDynamicClient)
-	gets := 0
-	dyn.PrependReactor("get", crd.Plural, func(k8stesting.Action) (bool, runtime.Object, error) {
-		gets++
-		if gets == 2 { // the status write's read: someone edited the spec since
+	updates := 0
+	dyn.PrependReactor("update", crd.Plural, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != "status" {
+			return false, nil, nil
+		}
+		if updates++; updates == 1 { // someone edited the spec since the tick read it: the stale write is refused
 			edited := cr.DeepCopy()
 			edited.SetGeneration(5)
 			_ = unstructured.SetNestedStringSlice(edited.Object, []string{"1.37"}, "spec", "targets")
 			if err := dyn.Tracker().Update(crd.GVR(), edited, ""); err != nil {
 				t.Errorf("simulate the edit: %v", err)
 			}
+			return true, nil, apierrors.NewConflict(crd.GVR().GroupResource(), crd.DefaultName, errors.New("the object has been modified"))
 		}
 		return false, nil, nil
 	})
 	r := testRunner(t, dyn, "")
 	if err := r.tick(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if updates != 2 {
+		t.Errorf("%d status writes, want 2: the refused one and its retry over a fresh read", updates)
 	}
 	st := readCRStatus(t, dyn, crd.DefaultName)
 	if st.ObservedGeneration != 4 || len(st.Targets) != 1 || st.Targets[0].Target != "1.36" {
@@ -537,5 +545,43 @@ func TestTickWritesFlagTargetsTheCRDAccepts(t *testing.T) {
 			}
 			requireCRValidAgainstCRD(t, dyn, crd.DefaultName)
 		})
+	}
+}
+
+// A tick reads its ClusterReadiness once and writes the status over what it
+// read (#228): a steady tick asks for one GET and one status UPDATE, and
+// creates the object only on the tick that finds it missing.
+func TestTickReadsTheClusterReadinessOnce(t *testing.T) {
+	dyn := fakeDyn().(*dynamicfake.FakeDynamicClient)
+	r := testRunner(t, dyn, "")
+	verbs := func() string {
+		var out []string
+		for _, a := range dyn.Actions() {
+			v := a.GetVerb()
+			if a.GetSubresource() != "" {
+				v += "/" + a.GetSubresource()
+			}
+			out = append(out, v)
+		}
+		dyn.ClearActions()
+		return strings.Join(out, " ")
+	}
+	for tick, want := range []string{"get create get update/status", "get update/status", "get update/status"} {
+		if err := r.tick(context.Background()); err != nil {
+			t.Fatalf("tick %d: %v", tick+1, err)
+		}
+		if got := verbs(); got != want {
+			t.Errorf("tick %d: ClusterReadiness requests %q, want %q", tick+1, got, want)
+		}
+	}
+	if err := dyn.Resource(crd.GVR()).Delete(context.Background(), crd.DefaultName, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	dyn.ClearActions()
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := verbs(), "get create get update/status"; got != want {
+		t.Errorf("after the object was deleted: %q, want %q (recreated)", got, want)
 	}
 }

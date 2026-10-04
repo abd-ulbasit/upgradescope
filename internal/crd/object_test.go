@@ -218,3 +218,45 @@ func TestWriteStatusMissingObject(t *testing.T) {
 		t.Fatal("WriteStatus on absent object: want error, got nil")
 	}
 }
+
+// WriteStatusOver writes over the object the caller read, with no read of
+// its own, and a conflict (the object changed since) reads it again (#228).
+func TestWriteStatusOverReadsOnlyOnConflict(t *testing.T) {
+	ctx := context.Background()
+	for _, conflict := range []bool{false, true} {
+		dyn := newDynFake(newCRObject(DefaultName))
+		_, _, obj, err := ReadSpecObject(ctx, dyn, DefaultName)
+		if err != nil || obj == nil {
+			t.Fatalf("ReadSpecObject: %v, %v", obj, err)
+		}
+		refused := false
+		dyn.PrependReactor("update", Plural, func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if a.GetSubresource() == "status" && conflict && !refused {
+				refused = true
+				return true, nil, apierrors.NewConflict(schema.GroupResource{Group: Group, Resource: Plural}, DefaultName, errors.New("rv mismatch"))
+			}
+			return false, nil, nil
+		})
+		dyn.ClearActions()
+		if err := WriteStatusOver(ctx, dyn, DefaultName, Status{AgentVersion: "v0.2.0"}, obj); err != nil {
+			t.Fatalf("conflict %v: %v", conflict, err)
+		}
+		var verbs []string
+		for _, a := range dyn.Actions() {
+			verbs = append(verbs, a.GetVerb())
+		}
+		want := []string{"update"}
+		if conflict {
+			want = []string{"update", "get", "update"}
+		}
+		if !reflect.DeepEqual(verbs, want) {
+			t.Errorf("conflict %v: requests %v, want %v", conflict, verbs, want)
+		}
+		if _, _, got, _ := ReadSpecObject(ctx, dyn, DefaultName); got.Object["status"] == nil {
+			t.Errorf("conflict %v: no status written", conflict)
+		}
+		if obj.Object["status"] != nil {
+			t.Errorf("conflict %v: the caller's object was modified", conflict)
+		}
+	}
+}
