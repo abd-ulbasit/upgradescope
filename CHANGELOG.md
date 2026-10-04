@@ -481,12 +481,11 @@ a CI gate.
   ./...`, where a busy machine inflated its reading. The quoted memory
   figures are re-measured on a GitHub-hosted `ubuntu-latest` runner: the
   worst Helm releases peak at 32 to 46 MiB of live heap against the 64 MiB
-  bound (CI run 37160469086), so read the #168 entry's 47 MiB as that; the
-  `/fleet` of the widest gaps grows the heap 11.4 MiB against a 20 MiB bound
-  (CI run 37152753746); and for 2000 clusters with 200-byte names, 100
-  `/metrics` clients that never read peak the heap at 125 MiB above idle,
-  both fleet slots and the held responses included (CI run 37160469086). No
-  bound changed (#212, #213).
+  bound (CI run 37160469086); the `/fleet` of the widest gaps grows the heap
+  11.4 MiB against a 20 MiB bound (CI run 37152753746); and for 2000
+  clusters with 200-byte names, 100 `/metrics` clients that never read peak
+  the heap at 125 MiB above idle, both fleet slots and the held responses
+  included (CI run 37160469086). No bound changed (#212, #213).
 - Notifications: a blocker or EOL warning that came from a capability the
   current pass did not assess (unavailable, or partial over it; required or
   optional) is carried forward in the baseline. It is not *resolved* in
@@ -1009,19 +1008,19 @@ a CI gate.
   SQLite database and its WAL and SHM files are created 0600. The agent
   warns when it would push its token over plain HTTP to a host that is
   not loopback (#126).
-- One Helm release object can no longer exhaust the agent's memory. A
-  951 KB release Secret whose gzip held 700 MiB took a scan to 1.93 GB and
-  OOM-killed the agent at its 256Mi limit; anyone who can create a Secret
-  or ConfigMap in one namespace could plant one, and a valid release built
-  to amplify parsing (a 127 KiB Secret of tiny ConfigMaps took 564 MiB)
-  could too. Each release payload is now decoded within 4 MiB stored and
-  16 MiB decompressed (real releases decode to under 7 MiB), and its
-  manifest is parsed in runs of at most 1 MiB and 64Ki YAML nodes; a
-  single document over 2 MiB or 64Ki nodes is not parsed. The worst
-  releases now peak at up to 47 MiB of live heap. A release over a bound is
+- One Helm release object can no longer exhaust the agent's memory. A 951 KB
+  release Secret whose gzip held 700 MiB took a scan to 1.93 GB and
+  OOM-killed the agent at its 256Mi limit; anyone who can create a Secret or
+  ConfigMap in one namespace could plant one, and a valid release built to
+  amplify parsing (a 127 KiB Secret of tiny ConfigMaps took 564 MiB) could
+  too. Each release payload is now decoded within 4 MiB stored and 16 MiB
+  decompressed (real releases decode to under 7 MiB), and its manifest is
+  parsed in runs of at most 1 MiB and 64Ki YAML nodes; a single document
+  over 2 MiB or 64Ki nodes is not parsed. The worst releases that fit the
+  bounds peak at 32 to 46 MiB of live heap against a 64 MiB bound, on a
+  GitHub-hosted runner (CI run 37160469086). A release over a bound is
   skipped (`release payload too large`) or recorded without that document,
-  named on a partial `helm` capability, and the rest are still read
-  (#168).
+  named on a partial `helm` capability, and the rest are still read (#168).
 - The security model documents that Helm release Secrets, pod images and
   labels are tenant-controlled evidence: findings are only as trustworthy
   as namespace write access. A forged release can raise a finding in its
