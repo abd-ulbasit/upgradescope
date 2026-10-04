@@ -132,15 +132,20 @@ The agent's defaults are 50m CPU and 64Mi requested, with limits of 1 CPU and
 256Mi (`agent.resources`). The CPU limit is a quota, not a reservation, and
 the first tick after every start reads each Helm release once, which takes
 about 23 CPU-seconds per 1,000 releases: measured against 2,000 fake nodes
-and 1,000 releases, that tick took 35 s at 1 CPU, 48 s at 500m (its Helm step
-has about a minute) and did not finish its Helm step at 200m, the chart's
-default through v0.2.0-rc.2 (it left 132 releases unread, and the report's
+and 1,000 releases (1,001 with the chart's own), that tick took 35 s at 1
+CPU and 48 s at 500m, both finishing the Helm step (which has about a
+minute), and did not finish its Helm step at 200m, the chart's default
+through v0.2.0-rc.2 (it left 132 releases unread, and the report's
 `notAssessed` said so). If you set a lower limit on a cluster with many
 releases, expect the first ticks to report `helm (partial)` until the cache
-fills; above about 2,500 releases (arithmetic, not measured) give the agent
-more than 1 CPU or a longer `agent.interval`. With `rbac.gitops.*` on, each
-tick also lists Argo CD Applications and Flux HelmReleases and reads their
-OCIRepositories: 540 requests and 3 more CPU-seconds for 1,000 of each. The
+fills. At 1 CPU the Helm step took about 28 s of the 35, so above about
+2,000 releases (arithmetic, not measured) give the agent more than 1 CPU or
+a longer `agent.interval`. With `rbac.gitops.*` on, each tick also lists Argo
+CD Applications and Flux HelmReleases and reads their OCIRepositories: 540
+requests and 3 more CPU-seconds for 1,000 of each. These reads share the
+Helm step's minute, so the ceiling is lower (about 1,750 releases by the
+same arithmetic, taking the 8.7 s the GitOps reads added to a tick with no
+quota). The
 measurements, and their limits, are in [Scale and cost](scale.md#cpu-and-the-chart-limit).
 
 ## Sizes

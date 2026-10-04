@@ -43,7 +43,7 @@ them.
   request, which only informs scheduling.
 - **The chart's default CPU limit was too low for such a cluster, and is now
   1 CPU.** As a pod at the old 200m the first tick gave up at its Helm
-  step's deadline with 132 of 1,000 releases unread, and a steady tick took
+  step's deadline with 132 of 1,001 releases unread, and a steady tick took
   21 s instead of 4. See [CPU](#cpu-and-the-chart-limit).
 - **One `serve` ingested 200 clusters with three targets each, all pushing at
   once, with no failed push and no retry**: 56 new snapshots a second on
@@ -257,7 +257,8 @@ counter, a small share). The chart's limit for the agent
 (`agent.resources.limits.cpu`) is a cgroup CPU quota, which no benchmark in
 a test binary applies, so the agent was run as a pod: the chart installed
 with `helm` into the lab (and nothing else), the image above, 2,001 nodes and
-1,000 Helm releases and no Argo CD or Flux objects, and the default interval
+1,000 Helm releases (the lab held 1,001: the chart's own release is the extra
+one) and no Argo CD or Flux objects, and the default interval
 of 10 minutes, so that the tick timeout is 5 minutes and the Helm step, the
 second of six, gets the share it gives in production (the agent's own
 status says "gave up after 59s"). The limit was changed with
@@ -271,7 +272,7 @@ kernel's own count, not the kubelet's cAdvisor.
 
 | Limit | Tick | Wall s | CPU s | Helm step | Throttled periods | Throttled s |
 |---|---|---|---|---|---|---|
-| 200m (old default) | first | 73.4 | 12.0 | **gave up at its deadline**: 869 of 1,000 read, 132 not (and the Argo CD and Flux discovery after it gave up too) | 511 of 689 (74%) | 37.1 |
+| 200m (old default) | first | 73.4 | 12.0 | **gave up at its deadline**: 869 of 1,001 read, 132 not (and the Argo CD and Flux discovery after it gave up too) | 511 of 689 (74%) | 37.1 |
 | 200m | second | 105.5 | 13.0 | complete | 601 of 800 (75%) | 47.7 |
 | 200m | steady | 21.7 | 2.8 | complete | 114 of 198 (58%) | 8.9 |
 | 200m | steady | 21.1 | 2.8 | complete | 129 of 162 (80%) | 10.3 |
@@ -298,10 +299,14 @@ cgroup's peak memory (page cache included) 98 MiB at most, against the
   decoded. That is not investigated here. A steady tick took 21 s against
   the 4 s it takes without a quota, throttled in 58 to 80% of the CFS
   periods it ran in.
-- **At 500m the first tick finished, in 48 s of its 59.** That is the margin
-  of one run on a ThinkPad that was also doing other things, and the tick had
-  Argo CD and Flux still to read (they are not in this table): a cluster
-  with more releases or a slower apiserver would give up here too. The steady
+- **At 500m the first tick finished, in 48 s, and so did its Helm step,
+  inside the 59 s it is given** (the tick's own timeout is 5 minutes, and the
+  Helm step is the second of its six). The step's own wall time was not
+  logged, so the margin is not known; it is the margin of one run on a
+  ThinkPad that was also doing other things, and the tick had Argo CD and
+  Flux still to read, which share the Helm step's 59 s (they are not in this
+  table): a cluster with more releases or a slower apiserver would give up
+  here too. The steady
   ticks used 3.0 CPU-seconds and were throttled for only 1.5 to 1.7 s; their
   17 and 29 s are the apiserver and the host, whose load average was about 9
   when sampled after them (4 threads) and whose lab control plane was using
@@ -313,7 +318,7 @@ cgroup's peak memory (page cache included) 98 MiB at most, against the
   (the kubelet restarted the agent for a failed liveness probe and the
   apiserver had restarted; the cause was not investigated, and the host had
   290 MiB of memory free, with 2,000 fake nodes on it). The first tick after it
-  (93 s, 700 of 1,000 releases read, none of its periods throttled) and
+  (93 s, 700 of 1,001 releases read, none of its periods throttled) and
   the one after (27 s, 16.6 CPU-seconds) are the lab failing, not the
   quota, and are left out of the table; the first tick at 1 CPU is from
   before it, and the steady one from after.
@@ -323,11 +328,25 @@ requests unchanged at 50m. The old default could not read 1,000 Helm
 releases in a first tick, and said so only in the report's list of what was
 not assessed; 500m just did. A limit reserves nothing (the request does),
 so a small cluster, whose tick uses well under one core-second, is not
-charged for it. By this arithmetic, not measured, the first tick holds
-to about 2,500 releases at 1 CPU (23.5 CPU-seconds per 1,000 releases
-against a minute), and a cluster with Argo CD and Flux adds the 3.2
-CPU-seconds above to every tick; beyond that, give the agent more CPU or a
-longer interval (`agent.interval`, whose half is the tick timeout). A
+charged for it.
+
+How far 1 CPU goes is **computed from these runs, not measured**. The
+Helm step is the wall time of the first tick less the steady tick that
+follows (35.2 s less 6.9 s, about 28 s for 1,001 releases, one sequential
+GET each), and it must finish within its 59 s: 59 / 28.3 x 1,001 is about
+2,100, so "about 2,000 releases". It is not the 23.5 CPU-seconds per 1,000
+releases of the first tick as a whole (that is CPU, not the step's wall
+time, and the whole tick took 35 s). The Argo CD and Flux reads run inside
+the same step and so share its 59 s: they added 8.7 s to a steady tick with
+no quota (12.8 s against 4.1 s, [above](#re-measured-on-main-with-and-without-argo-cd-and-flux))
+and 3.2 CPU-seconds, so with them the same arithmetic gives
+(59 - 8.7) / 28.3 x 1,001, about 1,750 releases at 1,000 Applications and
+1,000 HelmReleases. Both assume the step scales with the number of releases
+and that a slower apiserver does not stretch it, and neither was run. Beyond
+that, give the agent more CPU or a longer interval (`agent.interval`, whose
+half is the tick timeout; the Helm step gets a fifth of what is left of it
+after the first step, `runSteps`, so a longer interval also lengthens the
+step's deadline). A
 quota does not help the branch that makes the Helm step concurrent: that
 spends the same CPU-seconds sooner, on more cores.
 
@@ -338,7 +357,7 @@ spends the same CPU-seconds sooner, on more cores.
 | One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 33 s and 23.5 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests, 5.6 s). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
 | The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36 s and 24 CPU-seconds here; reached the step deadline at the old 200m default (measured, [above](#cpu-and-the-chart-limit)) or over a slow link; a concurrent fetch spends the same CPU-seconds | Open (the chart's default limit is now 1 CPU, so it no longer gives up on 1,000 releases): bounded-concurrency fetching ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)) |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | **Fixed** by #232 (each pod is read once): 30 pod list requests a tick instead of 38 in the runs on `735751d` ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227)) |
-| Argo CD Applications and Flux HelmReleases are listed whole (page size 50) every tick, plus a GET per distinct OCIRepository (#218) | **Measured** (`BENCH_GITOPS=1`): 540 of the 596 requests of a steady tick at 1,000 Applications and 1,000 HelmReleases, 500 of them sequential OCIRepository GETs; 12 MiB of 63; 8 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Open: the OCIRepository GETs could be a list per namespace; not filed |
+| Argo CD Applications and Flux HelmReleases are listed whole (page size 50) every tick, plus a GET per distinct OCIRepository (#218) | **Measured** (`BENCH_GITOPS=1`): 540 of the 596 requests of a steady tick at 1,000 Applications and 1,000 HelmReleases, 500 of them sequential OCIRepository GETs; 12 MiB of 63; 8.7 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Open: the OCIRepository GETs could be a list per namespace; not filed |
 | The all-pods list is the steady tick's largest cost | 30 of 53 requests (38 of 61 before #232); whole pod objects are needed for their images, and the agent keeps no watch | Open: needs a decision on frequency ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)) |
 
 ## The server
