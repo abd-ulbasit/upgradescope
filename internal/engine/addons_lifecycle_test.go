@@ -663,3 +663,25 @@ func TestEvalAddOnsSplitSupport(t *testing.T) {
 		}
 	}
 }
+
+// The embedded RKE2 Ingress NGINX entry carries SUSE's split support
+// (#265): community builds ended in March 2026, Prime LTS support runs
+// through November 2027.
+func TestEvalAddOnsRKE2IngressNginxSupportEnd(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 99}}
+	target := inventory.Version{Major: 1, Minor: 33}
+	inv := addOnAt("rke2-ingress-nginx", "1.12.6")
+	for now, want := range map[string]string{
+		"2026-10-09": "warning eol-approaching eol-approaching/rke2-ingress-nginx RKE2 Ingress NGINX is supported until 2027-11-30 only if the cluster has a SUSE Rancher Prime LTS subscription",
+		"2027-09-15": "warning eol-approaching eol-approaching/rke2-ingress-nginx RKE2 Ingress NGINX reaches end-of-life on 2027-11-30",
+		"2027-12-01": "blocker eol-addon eol-addon/rke2-ingress-nginx RKE2 Ingress NGINX is end-of-life since 2027-11-30",
+	} {
+		if got := strings.Join(summarize(evalAddOns(inv, k, target, day(now))), "\n"); got != want {
+			t.Errorf("%s:\n got %s\nwant %s", now, got, want)
+		}
+	}
+}

@@ -17,6 +17,22 @@ display_name: Kubernetes Dashboard
 matchers:
   images:
     - kubernetesui/dashboard # v2.x
+    # v1.x, one repository per architecture on k8s.gcr.io (now
+    # registry.k8s.io), gcr.io/google_containers before v1.8: v1.10.1's
+    # recommended manifest runs k8s.gcr.io/kubernetes-dashboard-amd64:v1.10.1
+    # (https://raw.githubusercontent.com/kubernetes/dashboard/v1.10.1/src/deploy/recommended/kubernetes-dashboard.yaml),
+    # v1.6.3's gcr.io/google_containers/kubernetes-dashboard-amd64:v1.6.3.
+    # The whole product is retired, the v1 line with it.
+    - kubernetes-dashboard-amd64
+    - kubernetes-dashboard-arm
+    - kubernetes-dashboard-arm64
+    - kubernetes-dashboard-ppc64le
+    - kubernetes-dashboard-s390x
+    - google_containers/kubernetes-dashboard-amd64
+    - google_containers/kubernetes-dashboard-arm
+    - google_containers/kubernetes-dashboard-arm64
+    - google_containers/kubernetes-dashboard-ppc64le
+    - google_containers/kubernetes-dashboard-s390x
     - kubernetesui/dashboard-api # v7+ chart
     - kubernetesui/dashboard-auth
     - kubernetesui/dashboard-web

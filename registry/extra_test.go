@@ -209,6 +209,14 @@ func TestClaimConflicts(t *testing.T) {
 		{"same chart", entry("mine", []string{"acme/thing"}, []string{"cert-manager"}), `chart "cert-manager"`},
 		{"a provider build is not an upstream claim", entry("mine", []string{"mcr.microsoft.com/oss/calico/node"}, nil), ""},
 		{"a replacement of the claiming entry itself", entry("cilium", []string{"cilium/operator"}, nil), ""},
+		// Component images are claims too (#265).
+		{"a component image of another entry", entry("mine", []string{"fluxcd/source-controller"}, nil), `"fluxcd/source-controller"`},
+		{"a mirror path of a component image", entry("mine", []string{"corp/fluxcd/helm-controller"}, nil), `"fluxcd/helm-controller"`},
+		{"a component image claimed as a component again", AddOn{ID: "mine", Matchers: Matchers{Components: []ComponentImage{{Image: "fluxcd/kustomize-controller"}}}}, `"fluxcd/kustomize-controller"`},
+		// A tag-qualified matcher takes the tags it names from a path-only
+		// one; two tag-qualified matchers on one repository are refused.
+		{"a tag-qualified matcher on a repository claimed without one", entry("mine", []string{"ingress-nginx/controller:*-mine*"}, nil), ""},
+		{"a second tag-qualified matcher on a repository", entry("mine", []string{"rancher/nginx-ingress-controller:*-mine*"}, nil), "rke2-ingress-nginx"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			errs := ClaimConflicts(Merge(base, []AddOn{tc.extra}))

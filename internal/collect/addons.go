@@ -261,8 +261,14 @@ func parseImage(image string) imageRef {
 // (registry.ProviderBuildPrefixes: GKE's and AKS's own builds of Calico,
 // Cilium, Istio, …) follows the provider's support policy, so host-less
 // upstream matchers never claim it; only a matcher naming the provider
-// location does, on the full reference or a mirror path ending with it.
+// location does, on the full reference or a mirror path ending with it. A
+// matcher with a tag pattern (registry.SplitTagPattern) matches only the
+// tags it names.
 func imageMatches(ref imageRef, matcher string) bool {
+	matcher, pattern := registry.SplitTagPattern(matcher)
+	if pattern != "" && !registry.TagMatches(ref.tag, pattern) {
+		return false
+	}
 	full := ref.host + "/" + ref.path
 	if registry.IsProviderBuild(matcher) {
 		return registry.PathMatches(full, matcher)
@@ -325,14 +331,53 @@ func olderVersion(cur, v string) string {
 	return cur
 }
 
+// imageClaim is an add-on an image belongs to, and the add-on's version
+// the image gives.
+type imageClaim struct {
+	id, version string
+}
+
+// imageClaims returns the add-ons whose image matchers claim ref, in
+// registry order, each with the version ref gives it: the tag's, or, for a
+// component image (registry.ComponentImage), the product line that ships
+// the tag's line ("" when the entry does not map it). A matcher with a
+// tag pattern claims ref ahead of path-only matchers: when one matches,
+// only the entries matching that way claim it, so RKE2's "-hardenedN"
+// build is not also upstream ingress-nginx's (#265).
+func imageClaims(ref imageRef, addons []registry.AddOn) []imageClaim {
+	var tagged, plain []imageClaim
+	tagVersion := versionFromTag(ref.tag)
+	for _, a := range addons {
+		byTag, byPath := false, false
+		for _, m := range a.Matchers.Images {
+			if imageMatches(ref, m) {
+				_, pattern := registry.SplitTagPattern(m)
+				byTag, byPath = byTag || pattern != "", byPath || pattern == ""
+			}
+		}
+		switch {
+		case byTag:
+			tagged = append(tagged, imageClaim{a.ID, tagVersion})
+		case byPath:
+			plain = append(plain, imageClaim{a.ID, tagVersion})
+		default:
+			if i := slices.IndexFunc(a.Matchers.Components, func(c registry.ComponentImage) bool { return imageMatches(ref, c.Image) }); i >= 0 {
+				plain = append(plain, imageClaim{a.ID, a.Matchers.Components[i].ProductLine(tagVersion)})
+			}
+		}
+	}
+	if len(tagged) > 0 {
+		return tagged
+	}
+	return plain
+}
+
 // imageAddOns returns the IDs of the add-ons whose image matchers claim
-// ref, in registry order.
+// ref (imageClaims), in registry order.
 func imageAddOns(ref imageRef, addons []registry.AddOn) []string {
 	var ids []string
-	for _, a := range addons {
-		if slices.ContainsFunc(a.Matchers.Images, func(m string) bool { return imageMatches(ref, m) }) {
-			ids = append(ids, a.ID)
-		}
+	for _, c := range imageClaims(ref, addons) {
+		ids = append(ids, c.id)
 	}
 	return ids
 }
@@ -411,7 +456,8 @@ var ingressClassAddOns = map[string][]string{
 // Evidence, strongest first, each a Source:
 //   - "chart": a Helm release of a chart matcher; its appVersion is the
 //     install's version.
-//   - "image": an image matcher; the version is the tag's.
+//   - "image": an image matcher; the version is the tag's, or for a
+//     component image the product line its tag's line ships in.
 //   - "labels": the pod's labels name the add-on (see labelAddOn), for a
 //     pod none of whose images that add-on's matchers claim but one of
 //     which no matcher claims at all: the container the labels are about
@@ -460,12 +506,12 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 
 	for _, img := range ev.images {
 		ref := parseImage(img.Image)
-		ids := imageAddOns(ref, addons)
-		for _, id := range ids {
-			in := install{id, img.Namespace}
-			byInstall[in] = append(byInstall[in], evidence{source: "image", version: versionFromTag(ref.tag)})
+		claims := imageClaims(ref, addons)
+		for _, c := range claims {
+			in := install{c.id, img.Namespace}
+			byInstall[in] = append(byInstall[in], evidence{source: "image", version: c.version})
 		}
-		if len(ids) == 0 {
+		if len(claims) == 0 {
 			unmatched[ref.host+"/"+ref.path] = true
 		}
 	}
