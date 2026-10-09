@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -200,6 +201,10 @@ type runner struct {
 	collectFn func(ctx context.Context) inventory.Inventory
 	// tickBudget is the tick deadline runTick sets: tickTimeout(Interval).
 	tickBudget time.Duration
+	// ensureCRD, while not nil, brings the CRD up to date with this binary:
+	// set when the check at startup failed, it runs every tick until it
+	// succeeds.
+	ensureCRD func(ctx context.Context) error
 
 	lastHash string    // hash of the last successfully pushed inventory
 	lastPush time.Time // when it was pushed
@@ -276,6 +281,19 @@ func (r *runner) tick(ctx context.Context) error {
 // but left an old marker in place is left in r.last.markerErr instead.
 func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.Inventory) []error {
 	var errs []error
+	// An older schema the startup check could not upgrade prunes the
+	// status fields it lacks from every write: try again (one GET when in
+	// step), and say so in the status meanwhile.
+	var crdNote string
+	if r.ensureCRD != nil {
+		if err := r.ensureCRD(ctx); err != nil {
+			r.last.crdErr = err
+			crdNote = "crd: the ClusterReadiness CRD could not be brought up to date with this agent, retried every tick " +
+				"(status fields the installed schema lacks are dropped by the apiserver): " + oneLine(err, maxCRDNoteReason)
+		} else {
+			r.ensureCRD = nil
+		}
+	}
 	// Read the spec, and the object the status is written over (one GET,
 	// #228). The CR may have been deleted between ticks: recreate it, then
 	// read it again. gen is the generation whose spec this tick evaluates; 0
@@ -308,6 +326,9 @@ func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.I
 	}
 
 	targets, notes, terr := resolveTargets(spec, inv)
+	if crdNote != "" {
+		notes = append([]string{crdNote}, notes...)
+	}
 	var st crd.Status
 	if terr != nil {
 		st = crd.Status{
@@ -358,6 +379,18 @@ func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.I
 		}
 	}
 	return errs
+}
+
+// maxCRDNoteReason bounds the error quoted in the CRD note.
+const maxCRDNoteReason = 240
+
+// oneLine is err on one line, cut to at most n runes.
+func oneLine(err error, n int) string {
+	s := strings.Join(strings.Fields(err.Error()), " ")
+	if r := []rune(s); len(r) > n {
+		s = string(r[:n]) + "…"
+	}
+	return s
 }
 
 // statusNotWritten marks the CR's status as not current, for a tick that
@@ -553,17 +586,20 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 		"tickReserve", tickReserve(tickTimeout(cfg.Interval)).String(),
 		"crName", cfg.CRName, "server", server, "healthAddr", healthAddr)
 
+	r := newRunner(clients, dyn, k, cfg)
 	if !cfg.SkipCRDManagement {
-		if err := crd.EnsureCRD(ctx, apiext); err != nil {
+		ensure := func(ctx context.Context) error { return crd.EnsureCRD(ctx, apiext) }
+		if err := ensure(ctx); err != nil {
 			if errors.Is(err, crd.ErrCRDNotInstalled) {
 				return err // every tick would 404; say why once, clearly
 			}
 			// Non-fatal otherwise: the CRD exists, the schema upgrade did
-			// not land (e.g. a narrower custom role denies patch).
-			log.Warn("could not bring the ClusterReadiness CRD up to date; continuing with the installed schema", "err", err)
+			// not land (a transient fault, or a narrower custom role that
+			// denies patch). Every tick tries again until it succeeds.
+			log.Warn("could not bring the ClusterReadiness CRD up to date; continuing with the installed schema, retried every tick", "err", err)
+			r.ensureCRD = ensure
 		}
 	}
-	r := newRunner(clients, dyn, k, cfg)
 	for {
 		rep := r.runTick(ctx)
 		if ctx.Err() != nil && (rep.err != nil || rep.pushErr != nil) {
