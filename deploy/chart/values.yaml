@@ -293,6 +293,8 @@ server:
   # -- History older than this is pruned at startup and daily, except each
   # cluster's latest snapshot and its evaluations: whole days (90d) or a
   # Go duration (2160h); 0 keeps everything (as "0" or --set ...retention=0).
+  # A prune that fails is counted (upgradescope_retention_prune_failures_total)
+  # and, with metrics.prometheusRule, alerted on; /readyz is not affected.
   retention: 90d
   # -- A cluster whose agent has not pushed for this long is marked stale in
   # the API, the dashboard data and /metrics. Empty = the larger of 2h and
@@ -523,7 +525,9 @@ metrics:
   prometheusRule:
     # -- Render a monitoring.coreos.com/v1 PrometheusRule: upgrade blocked,
     # verdict unknown for over 1h, agent not ticking and (with
-    # server.enabled) a cluster that stopped pushing. Scrape the metrics
+    # server.enabled) a cluster that stopped pushing and, unless
+    # server.retention is 0, no retention prune completed for 2 days
+    # (UpgradescopeRetentionStale). Scrape the metrics
     # with serviceMonitor or your own config: the rules select the jobs
     # serviceMonitor produces, <fullname>-agent-metrics and
     # <fullname>-server (shortened to fit 63 characters for long release
