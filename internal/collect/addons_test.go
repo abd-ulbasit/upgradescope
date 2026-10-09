@@ -310,6 +310,14 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"rancher/nginx-ingress-controller:nginx-1.9.4-rancher1", "ingress-nginx", "1.9.4"},
 		{"rancher/nginx-ingress-controller:0.21.0-rancher1", "ingress-nginx", "0.21.0"},
 		{"rancher/nginx-ingress-controller:0.16.2-rancher1", "ingress-nginx", "0.16.2"},
+		// RKE2's first releases shipped "-rancherN" builds too (the
+		// rke2-images.linux-amd64.txt of v1.20.11+rke2r1 and v1.21.2+rke2r1),
+		// long out of support: Ingress NGINX alike.
+		{"docker.io/rancher/nginx-ingress-controller:nginx-0.30.0-rancher1", "ingress-nginx", "0.30.0"},
+		{"docker.io/rancher/nginx-ingress-controller:nginx-0.46.0-rancher1", "ingress-nginx", "0.46.0"},
+		// A digest-only reference has no tag: on its own, the path-only
+		// entry (labels and releases: TestMatchAddOnsUntaggedImageNamedByLabelsOrRelease).
+		{"rancher/nginx-ingress-controller@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "ingress-nginx", ""},
 		{"myregistry.example.com:5000/mirror/rancher/nginx-ingress-controller:nginx-1.9.4-rancher1", "ingress-nginx", "1.9.4"},
 		{"rancher/nginx-ingress-controller", "ingress-nginx", ""},
 		{"mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller:v1.11.5", "aks-app-routing-nginx", "1.11.5"},
@@ -410,7 +418,8 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"fluxcd/helm-operator:1.4.4", "", ""}, // Flux v1's Helm Operator, versioned on its own
 		// Flux v2's controllers carry their own versions: each line maps
 		// to the Flux line whose release ships it (#265, the flux2
-		// releases' install.yaml), never read as a Flux version.
+		// releases' install.yaml and Components changelog), never read as
+		// a Flux version.
 		{"ghcr.io/fluxcd/source-controller:v1.5.0", "flux", "2.5"},
 		{"ghcr.io/fluxcd/kustomize-controller:v1.5.1", "flux", "2.5"},
 		{"ghcr.io/fluxcd/helm-controller:v1.2.0", "flux", "2.5"},
@@ -418,6 +427,8 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"ghcr.io/fluxcd/image-reflector-controller:v0.35.2", "flux", "2.6"},
 		{"ghcr.io/fluxcd/image-automation-controller:v1.0.4", "flux", "2.7"},
 		{"ghcr.io/fluxcd/source-watcher:v2.2.4", "flux", "2.9"},
+		{"ghcr.io/fluxcd/source-watcher:v2.0.1", "flux", "2.7"},  // an extra component in Flux 2.7 (flux2 v2.7.0 notes)
+		{"ghcr.io/fluxcd/source-controller:v0.36.1", "flux", ""}, // Flux v2 pre-GA (0.x): deliberately unmapped
 		{"docker.io/fluxcd/helm-controller:v0.37.4", "flux", "2.2"},
 		{"harbor.corp.example/ghcr/fluxcd/source-controller:v1.4.1@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "flux", "2.4"},
 		{"ghcr.io/fluxcd/source-controller:v1.99.0", "flux", ""}, // a line not mapped yet: Flux, version unknown
@@ -462,6 +473,67 @@ func TestImageTagPatternTakesPrecedence(t *testing.T) {
 		if ids := imageAddOns(parseImage(image), addons); !slices.Equal(ids, []string{want}) {
 			t.Errorf("%s: claimed by %v, want [%s]", image, ids, want)
 		}
+	}
+}
+
+// An image pinned by digest alone has no tag for a tag pattern to match, so
+// on its own a digest-only rancher/nginx-ingress-controller is RKE1's build
+// as much as RKE2's. The pod's own labels, or a Helm release in its
+// namespace, naming the entry whose tag-qualified matcher covers that
+// repository settle it (#265): an RKE2 ingress pod pinned by digest is
+// rke2-ingress-nginx, not a false end-of-life blocker. A tag always
+// decides over labels, and without such evidence the path-only entry keeps
+// the image.
+func TestMatchAddOnsUntaggedImageNamedByLabelsOrRelease(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const digest = "rancher/nginx-ingress-controller@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3"
+	rke2Labels := map[string]string{
+		"helm.sh/chart":             "rke2-ingress-nginx-4.12.401",
+		"app.kubernetes.io/name":    "rke2-ingress-nginx",
+		"app.kubernetes.io/version": "1.12.4",
+	}
+	rke2Release := []inventory.HelmRelease{{Name: "rke2-ingress-nginx", Namespace: "kube-system", ChartName: "rke2-ingress-nginx", ChartVersion: "4.12.401", AppVersion: "1.12.4", Status: "deployed"}}
+	pod := func(labels map[string]string, image string) addOnEvidence {
+		var ev addOnEvidence
+		ev.addPod("kube-system", labels, []string{image})
+		return ev
+	}
+	withReleases := func(ev addOnEvidence, rels []inventory.HelmRelease) addOnEvidence {
+		ev.releases = rels
+		return ev
+	}
+	for _, tc := range []struct {
+		name string
+		ev   addOnEvidence
+		want []inventory.AddOnInstance
+	}{
+		{"digest-only, RKE2 chart labels", pod(rke2Labels, digest),
+			[]inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.12.4", Namespaces: []string{"kube-system"}, Source: "image"}}},
+		{"digest-only, an rke2-ingress-nginx release in the namespace", withReleases(pod(nil, digest), rke2Release),
+			[]inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.12.4", ChartVersion: "4.12.401", Namespaces: []string{"kube-system"}, Source: "chart"}}},
+		{"digest-only, no labels or release: the path-only entry", pod(nil, digest),
+			[]inventory.AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"}}},
+		{"digest-only, upstream's labels: the path-only entry", pod(nginxLabels, digest),
+			[]inventory.AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"}}},
+		{"the release is in another namespace", withReleases(pod(nil, digest), []inventory.HelmRelease{{Name: "x", Namespace: "edge", ChartName: "rke2-ingress-nginx", AppVersion: "1.12.4", Status: "deployed"}}),
+			[]inventory.AddOnInstance{
+				{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"},
+				{ID: "rke2-ingress-nginx", Version: "1.12.4", Namespaces: []string{"edge"}, Source: "chart"},
+			}},
+		// A tag decides: RKE1's (or early RKE2's) "-rancherN" build is
+		// ingress-nginx whatever the labels say.
+		{"a -rancherN tag with RKE2 labels", pod(rke2Labels, "rancher/nginx-ingress-controller:nginx-0.30.0-rancher1"),
+			[]inventory.AddOnInstance{{ID: "ingress-nginx", Version: "0.30.0", Namespaces: []string{"kube-system"}, Source: "image"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := matchAddOns(tc.ev, addons)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 

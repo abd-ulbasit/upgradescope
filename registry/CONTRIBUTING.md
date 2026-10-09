@@ -97,6 +97,10 @@ recommendation: Optional one-line remediation hint shown with findings.
   `ingress-nginx.yaml`). Two matchers with patterns on one repository are
   refused as a double claim, whatever their patterns. A bare tag
   (`org/app:v1`) is still rejected: one tag is one release, not a product.
+  An image pinned by digest alone has no tag for a pattern to match: it
+  goes to the entry with the pattern when its pod's labels or a Helm
+  release in its namespace name that entry (an RKE2 ingress pod labelled
+  `rke2-ingress-nginx`), and to the matcher without a pattern otherwise.
 - **Component images (`components`)** — images of a product's parts that
   carry their own version (Flux's `source-controller` v1.5.0 ships in Flux
   2.5.1) map the major.minor of their tag to the product release line
