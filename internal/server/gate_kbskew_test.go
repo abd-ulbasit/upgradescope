@@ -91,3 +91,61 @@ func TestGateClusterSkewIsNeverReady(t *testing.T) {
 		})
 	}
 }
+
+// The views that mark a cluster's api-usage a gap (an agent before v0.2.0,
+// whose counts cover objects nobody wrote through the deprecated version; an
+// unmarked inventory's count-only rows) hold for the CI gate too. The
+// proposed state's api-usage is available because the PR supplies it, but
+// the cluster's own objects stay unassessed: the gate is never ready on
+// them, where it was blocked on the raw rows before judging them.
+func TestGateClusterViewedUsageIsNeverReady(t *testing.T) {
+	k := embeddedKB(t)
+	psp := func(objects []inventory.ObjectRef) inventory.Inventory {
+		inv := testInventory()
+		inv.CollectorSchema = 0
+		inv.APIUsage = []inventory.APIUsage{{
+			Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy",
+			Count: 2, Namespaces: map[string]int{"": 2}, Objects: objects,
+		}}
+		return inv
+	}
+	named := []inventory.ObjectRef{{Name: "restricted"}, {Name: "privileged"}}
+	h := newHarness(t, Config{KB: k}, aug1)
+	for _, tc := range []struct {
+		cluster, agent string
+		objects        []inventory.ObjectRef
+		verdict        string // the cluster's
+		ready          bool   // the gate's: the PR introduces nothing, and no required gap
+		gap            bool   // a required api-usage gap
+	}{
+		{"legacy-agent", "0.1.0", nil, "unknown", false, true},
+		{"count-only-rows", "0.2.0-rc.2", nil, "unknown", false, true},
+		// A cluster that is already blocked is not blamed on a PR that adds nothing.
+		{"rows-name-their-objects", "0.2.0-rc.2", named, "blocked", true, false},
+	} {
+		t.Run(tc.cluster, func(t *testing.T) {
+			h.pushKB(tc.cluster, tc.agent, k.Version, psp(tc.objects))
+			if rep := h.report(tc.cluster, "1.35"); rep.Verdict != tc.verdict {
+				t.Fatalf("report verdict = %s, want %s", rep.Verdict, tc.verdict)
+			}
+			resp, raw := postGate(t, h.ts, "?target=1.35&fail-on=never&cluster="+tc.cluster, "", deploymentManifest, "application/x-yaml")
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("gate = %d %s", resp.StatusCode, raw)
+			}
+			var b gateSkewResponse
+			if err := json.Unmarshal(raw, &b); err != nil {
+				t.Fatal(err)
+			}
+			if b.Ready != tc.ready || b.ClusterVerdict != tc.verdict {
+				t.Errorf("gate = ready %v verdict %q clusterVerdict %q, want ready %v and clusterVerdict %s", b.Ready, b.Verdict, b.ClusterVerdict, tc.ready, tc.verdict)
+			}
+			required := false
+			for _, g := range b.NotAssessed {
+				required = required || (g.Capability == "api-usage" && g.Required)
+			}
+			if required != tc.gap {
+				t.Errorf("required api-usage gap = %v, want %v: %+v", required, tc.gap, b.NotAssessed)
+			}
+		})
+	}
+}

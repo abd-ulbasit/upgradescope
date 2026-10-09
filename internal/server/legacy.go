@@ -126,10 +126,7 @@ func unattributedUsageView(inv inventory.Inventory) inventory.Inventory {
 		return inv
 	}
 	reason := fmt.Sprintf("%d API usage count(s) name no object, as a v0.1.x collector's did, so who writes through the deprecated version is unknown; they were not judged", len(unattributed))
-	if st.Reason != "" {
-		reason = st.Reason + "; " + reason
-	}
-	st.Reason, st.Partial = reason, true
+	st.Reason, st.Partial = inventory.AppendReason(st.Reason, reason), true
 	st.Skipped = slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(st.Skipped), unattributed...))))
 	caps := maps.Clone(inv.Capabilities)
 	caps[inventory.CapAPIUsage] = st

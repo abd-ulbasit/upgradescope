@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -230,7 +231,7 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 	var ev gateEval
 	var cut *gateCut // a team-scoped ?cluster= gate's: what its caller may see of the share
 	if ref := r.URL.Query().Get("cluster"); ref != "" {
-		clusterInv, ok := s.gateClusterContext(w, r, ref)
+		clusterInv, viewed, ok := s.gateClusterContext(w, r, ref)
 		if !ok {
 			return
 		}
@@ -243,7 +244,7 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 		// a 413 from the whole cluster's evaluation can tell the caller
 		// of another team's. The fleet-wide share is the cluster.
 		clusterInv = sc.clusterShare(clusterInv)
-		if ev, ok = s.gateWithin(w, clusterInv, manifests, target, g.rules, ref); !ok {
+		if ev, ok = s.gateWithin(w, clusterInv, viewed, manifests, target, g.rules, ref); !ok {
 			return
 		}
 		if !sc.fleet() {
@@ -516,7 +517,7 @@ type gateEval struct {
 // are merged too (mergeManifests), and the findings the manifests' own
 // content produces, once suppressed, are introduced by the PR
 // (suppressSide). clusterInv is not modified.
-func (s *Server) gateWithin(w http.ResponseWriter, clusterInv, manifests inventory.Inventory, target inventory.Version,
+func (s *Server) gateWithin(w http.ResponseWriter, clusterInv inventory.Inventory, viewed bool, manifests inventory.Inventory, target inventory.Version,
 	rules []suppress.Rule, ref string) (gateEval, bool) {
 	base, err := s.evaluateWithin(clusterInv, target, s.now())
 	if err != nil {
@@ -530,13 +531,14 @@ func (s *Server) gateWithin(w http.ResponseWriter, clusterInv, manifests invento
 		inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{}
 	}
 	// The manifests are API usage the PR supplies, so the proposed state's is
-	// available even where the cluster's was not read. A cluster's usage
-	// listed under another knowledge base than this server's is still
-	// partial over what the server's data would have collected (#268), and
-	// stays a gap: the PR cannot make the cluster's other objects assessed.
+	// available even where the cluster's was not read. Where the server's
+	// judgement of the snapshot marked the cluster's usage a gap (viewed:
+	// listed under another knowledge base than this server's, #268; by an
+	// agent before v0.2.0 or as counts naming no object, #194), the gap
+	// stays: the PR cannot make the cluster's other objects assessed.
 	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true}
-	if st := clusterInv.Capabilities[inventory.CapAPIUsage]; st.Available && slices.Contains(st.Skipped, inventory.SkippedNewerKB) {
-		inv.Capabilities[inventory.CapAPIUsage] = st
+	if viewed {
+		inv.Capabilities[inventory.CapAPIUsage] = clusterInv.Capabilities[inventory.CapAPIUsage]
 	}
 	side := mergeManifests(&inv, manifests)
 	sideRep, err := s.evaluateWithin(side, target, s.now())
@@ -742,15 +744,17 @@ func gateFails(resp gateResponse, failOn string, allowIncomplete bool) bool {
 // cluster id 1. A scoped request resolves ref among the scope's clusters
 // only: a name matches an in-scope cluster's, so an out-of-scope cluster
 // named like an in-scope id neither shadows that id nor shows by a 404
-// that it exists, and an id outside the scope is never looked up.
-func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref string) (inventory.Inventory, bool) {
+// that it exists, and an id outside the scope is never looked up. viewed
+// is whether judging the snapshot (judgedView) changed the cluster's
+// api-usage status, which the gate then keeps (gateWithin).
+func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref string) (inv inventory.Inventory, viewed, ok bool) {
 	ctx := r.Context()
 	// The scope first, whatever ref names, so a cluster outside it costs
 	// what an unknown one does.
 	scoped, err := s.scopeClusters(ctx, scopeOf(r))
 	if err != nil {
 		internalErr(w, "resolving gate cluster", err)
-		return inventory.Inventory{}, false
+		return inventory.Inventory{}, false, false
 	}
 	in := func(id int64) bool { return scoped == nil || scoped[id] }
 	cluster, err := func() (store.Cluster, error) {
@@ -771,29 +775,30 @@ func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref 
 	}()
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "cluster not found")
-		return inventory.Inventory{}, false
+		return inventory.Inventory{}, false, false
 	}
 	if err != nil {
 		internalErr(w, "resolving gate cluster", err)
-		return inventory.Inventory{}, false
+		return inventory.Inventory{}, false, false
 	}
 
 	snap, err := s.cfg.Store.LatestSnapshot(ctx, cluster.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
-		return inventory.Inventory{}, false
+		return inventory.Inventory{}, false, false
 	}
 	if err != nil {
 		internalErr(w, "loading gate cluster snapshot", err)
-		return inventory.Inventory{}, false
+		return inventory.Inventory{}, false, false
 	}
-	var inv inventory.Inventory
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
 		internalErr(w, "decoding gate cluster inventory", fmt.Errorf("snapshot %d: %w", snap.ID, err))
-		return inventory.Inventory{}, false
+		return inventory.Inventory{}, false, false
 	}
 	inv.CutFreeText() // as ingest judged it (decodeInventory)
 	// And as the report judges it: a snapshot collected with another
 	// knowledge base than this server's is never ready here either (#268).
-	return judgedView(inv, snap.AgentVersion, snap.KBVersion, s.cfg.KB), true
+	judged := judgedView(inv, snap.AgentVersion, snap.KBVersion, s.cfg.KB)
+	viewed = !reflect.DeepEqual(inv.Capabilities[inventory.CapAPIUsage], judged.Capabilities[inventory.CapAPIUsage])
+	return judged, viewed, true
 }

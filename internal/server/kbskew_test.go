@@ -112,6 +112,36 @@ func TestKBSkewView(t *testing.T) {
 	}
 }
 
+// K1: the reasons kbSkewView extends stay within the bound admission applies
+// (inventory.MaxReasonBytes) even when the snapshot's own reason already
+// fills it, which admission allows. It is the old text that is cut, so the
+// sentence naming the skew is whole at the end.
+func TestKBSkewViewKeepsReasonsWithinTheBound(t *testing.T) {
+	k := embeddedKB(t)
+	full := strings.Repeat("x", inventory.MaxReasonBytes)
+	inv := testInventory()
+	for _, c := range []inventory.Capability{inventory.CapAPIUsage, inventory.CapHelm, inventory.CapAddOns} {
+		inv.Capabilities[c] = inventory.CapabilityStatus{Available: true, Partial: true, Reason: full}
+	}
+	got := kbSkewView(inv, withDigests(t, k.Version, "00000000", "00000000"), k)
+	for c, tail := range map[inventory.Capability]string{
+		inventory.CapAPIUsage: "upgrade the agent to the server's version to assess them",
+		inventory.CapHelm:     "upgrade the agent to the server's version",
+		inventory.CapAddOns:   "give the server the same entries as the agent",
+	} {
+		r := got.Capabilities[c].Reason
+		if len(r) > inventory.MaxReasonBytes {
+			t.Errorf("%s reason is %d bytes, want at most %d", c, len(r), inventory.MaxReasonBytes)
+		}
+		if !strings.HasSuffix(r, tail) || !strings.Contains(r, "knowledge base skew: ") {
+			t.Errorf("%s reason does not end with the whole skew sentence: ...%.80q", c, r[max(0, len(r)-120):])
+		}
+		if !strings.HasPrefix(r, "xxxx") {
+			t.Errorf("%s reason lost the start of the snapshot's own reason", c)
+		}
+	}
+}
+
 func (h *harness) pushKB(cluster, agentVersion, kbVersion string, inv inventory.Inventory) {
 	h.t.Helper()
 	body, err := json.Marshal(map[string]any{
@@ -421,5 +451,18 @@ func TestKBSkewMovesNoNotifications(t *testing.T) {
 	}
 	if events := h.drain(); len(events) != 0 {
 		t.Errorf("the agent catching up sent %d notification(s), want none: %+v", len(events), events)
+	}
+}
+
+// The sentence unattributedUsageView adds stays within the bound too when
+// the snapshot's own api-usage reason fills it, and is whole at the end.
+func TestUnattributedUsageViewKeepsTheReasonWithinTheBound(t *testing.T) {
+	inv := testInventory()
+	inv.CollectorSchema = 0
+	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true, Reason: strings.Repeat("x", inventory.MaxReasonBytes)}
+	inv.APIUsage = []inventory.APIUsage{{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Count: 2}}
+	r := judgedView(inv, "0.2.0-rc.2", "", testKB()).Capabilities[inventory.CapAPIUsage].Reason
+	if len(r) > inventory.MaxReasonBytes || !strings.HasSuffix(r, "they were not judged") {
+		t.Errorf("reason is %d bytes, ...%.60q", len(r), r[max(0, len(r)-60):])
 	}
 }
