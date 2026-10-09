@@ -103,3 +103,45 @@ func TestServerAllowedHostsSchema(t *testing.T) {
 		}
 	}
 }
+
+// The Service's fully qualified name ends in the cluster's DNS domain,
+// which is not cluster.local in every cluster: clusterDomain sets it for
+// the --allowed-host list and the cert-manager Certificate alike, so a
+// client using the full name is neither refused (421) nor shown a
+// certificate without it. Any case and a trailing dot are accepted; a
+// value that is not a DNS name fails the render.
+func TestServerAllowedHostsClusterDomain(t *testing.T) {
+	for _, tc := range []struct {
+		set, want string
+	}{
+		{"", "upgradescope-server.upgradescope.svc.cluster.local"},
+		{"clusterDomain=Corp.Internal.", "upgradescope-server.upgradescope.svc.corp.internal"},
+	} {
+		sets := []string{"server.enabled=true", "server.ingestToken=t", "server.readToken=r", "server.tls.certManager.issuerRef.name=ca-issuer"}
+		if tc.set != "" {
+			sets = append(sets, tc.set)
+		}
+		objs := render(t, sets...)
+		cert := find(objs, "Certificate", "upgradescope-server")
+		if cert == nil {
+			t.Fatalf("%s: no Certificate rendered", tc.set)
+		}
+		dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+		for what, names := range map[string][]string{
+			"--allowed-host":       allowedHosts(t, container(t, objs, "upgradescope-server")),
+			"Certificate dnsNames": dnsNames,
+		} {
+			if !slices.Contains(names, tc.want) {
+				t.Errorf("%q: %s %v lacks %s", tc.set, what, names, tc.want)
+			}
+			if tc.set != "" && slices.ContainsFunc(names, func(n string) bool { return strings.HasSuffix(n, ".cluster.local") }) {
+				t.Errorf("%q: %s %v still names cluster.local", tc.set, what, names)
+			}
+		}
+	}
+	for _, bad := range []string{"", "https://cluster.local", "cluster.local:53", "a/b", "*.local", ".cluster.local", "cluster..local"} {
+		if msg := renderErr(t, "server.enabled=true", "server.ingestToken=t", "server.readToken=r", "clusterDomain="+bad); msg == "" {
+			t.Errorf("clusterDomain %q rendered", bad)
+		}
+	}
+}

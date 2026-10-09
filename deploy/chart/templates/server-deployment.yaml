@@ -91,7 +91,7 @@ spec:
             # server.allowedHosts. Probes and scrapes of the pod's IP need
             # none: the guard answers for the address a request arrives on.
             {{- $svc := include "upgradescope.serverFullname" . }}
-            {{- $hosts := list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace) (printf "%s.%s.svc.cluster.local" $svc .Release.Namespace) }}
+            {{- $hosts := list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace) (include "upgradescope.serverFQDN" .) }}
             {{- if and .Values.server.ingress.enabled .Values.server.ingress.host }}
             {{- $hosts = append $hosts (lower .Values.server.ingress.host) }}
             {{- end }}

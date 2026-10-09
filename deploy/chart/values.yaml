@@ -23,6 +23,13 @@ image:
 # e.g. [{name: regcred}].
 imagePullSecrets: []
 
+# -- The cluster's DNS domain (the kubelet's clusterDomain): the server
+# Service's fully qualified name, <fullname>-server.<namespace>.svc.<this>,
+# is passed to the server as an --allowed-host and named in the
+# cert-manager Certificate. Set it when your cluster does not use
+# cluster.local.
+clusterDomain: cluster.local
+
 serviceAccount:
   # -- Create the agent ServiceAccount. Set false to bring your own (set name).
   create: true

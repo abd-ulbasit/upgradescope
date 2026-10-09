@@ -39,6 +39,11 @@
       "type": "array",
       "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } }
     },
+    "clusterDomain": {
+      "description": "The cluster's DNS domain, e.g. cluster.local: a DNS name, without a scheme, port or wildcard.",
+      "type": "string",
+      "pattern": "^([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\\.)*[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\\.?$"
+    },
     "serviceAccount": {
       "type": "object",
       "additionalProperties": false,

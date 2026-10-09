@@ -86,6 +86,13 @@ affinity: {{- toYaml . | nindent 2 }}
 {{- printf "%s-server" (include "upgradescope.fullname" .) -}}
 {{- end -}}
 
+{{/* The server Service's fully qualified DNS name:
+<fullname>-server.<namespace>.svc.<clusterDomain>, the domain lowercased
+and without a trailing dot. */}}
+{{- define "upgradescope.serverFQDN" -}}
+{{- printf "%s.%s.svc.%s" (include "upgradescope.serverFullname" .) .Release.Namespace (.Values.clusterDomain | lower | trimSuffix ".") -}}
+{{- end -}}
+
 {{/* Is the agent pushing to a server at all? Non-empty string = yes. */}}
 {{- define "upgradescope.pushEnabled" -}}
 {{- if or .Values.agent.serverUrl .Values.server.enabled -}}true{{- end -}}
