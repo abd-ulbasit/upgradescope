@@ -320,6 +320,10 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"rancher/nginx-ingress-controller@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3", "ingress-nginx", ""},
 		{"myregistry.example.com:5000/mirror/rancher/nginx-ingress-controller:nginx-1.9.4-rancher1", "ingress-nginx", "1.9.4"},
 		{"rancher/nginx-ingress-controller", "ingress-nginx", ""},
+		// RKE2 ships a default backend beside the controller; its path
+		// differs by a suffix, so it is neither product's controller.
+		{"rancher/nginx-ingress-controller-defaultbackend:1.5-rancher2", "", ""},
+		{"rancher/nginx-ingress-controller-defaultbackend:1.5-hardened1", "", ""},
 		{"mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller:v1.11.5", "aks-app-routing-nginx", "1.11.5"},
 		{"coredns/coredns:1.11.1", "coredns", "1.11.1"},
 		{"registry.k8s.io/coredns/coredns:v1.11.3", "coredns", "1.11.3"},
