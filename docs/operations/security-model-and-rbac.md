@@ -176,11 +176,13 @@ cannot read is reported as not assessed.
   list oauth2-proxy does not encode, so whoever can name an identity
   provider group `interns,payments` reads payments; filter the groups
   claim at the identity provider or connector.
-- **Secrets never in argv.** Every token and the database URL can come from
-  an environment variable or a file (`--read-token-file`, ...); the chart
-  passes them as environment variables from Secrets, never as arguments.
-  Either source is trimmed of surrounding whitespace (a Secret's trailing
-  newline), and a value of whitespace only is refused.
+- **Secrets never in argv.** Every token, the webhook URLs and the database
+  URL can come from an environment variable or a file (`--read-token-file`,
+  ...); the chart passes the tokens, webhook URLs and the webhook key as
+  files mounted from the Secrets (never with `subPath`) and only the database
+  URL as an environment variable, never as arguments. Either source is
+  trimmed of surrounding whitespace (a Secret's trailing newline), and a
+  value of whitespace only is refused.
 - **Webhook URLs are secrets too.** A Slack webhook's path is its
   credential. `serve` refuses to start unless `--slack-webhook` and
   `--webhook` are absolute http(s) URLs, naming the flag and never the
@@ -191,22 +193,34 @@ cannot read is reported as not assessed.
   --server` treat any 3xx as an error naming its status and Location:
   Go would follow a 301 or 302 with a GET, which the admin token reads,
   and report a delete that never happened.
-- **Rotating a secret needs a restart.** The chart passes tokens and
-  webhook URLs as environment variables read once at start. After you change
+- **Rotating a secret needs no restart, and takes up to about two minutes.**
+  `serve` and the agent re-read the files behind `--ingest-token-file`,
+  `--read-token-file`, `--admin-token-file`, `--slack-webhook-file`,
+  `--webhook-file`, `--webhook-secret-file` and `--server-token-file` when
+  they change, checked at most every 5 seconds and only when a request or a
+  push needs the value, and swap the value atomically. After you change
   `server.ingestToken`, `readToken`, `adminToken`, a webhook value,
   `agent.serverToken` or the contents of a `server.existingSecret` or
-  `agent.existingSecret`, run `kubectl -n <ns> rollout restart
+  `agent.existingSecret`, the new value is in use once the kubelet has synced
+  the mounted Secret (up to about 60 to 90 seconds at its default settings:
+  its sync period plus its cache delay, from the Kubernetes documentation,
+  not measured here) plus that check. Until then the old value still works,
+  which matters when you are rotating because a token leaked, so rotate the
+  credential at its source too (`tokens revoke` for stored tokens) if the
+  window matters. A new file that is empty or unreadable, or that would make
+  two of the read, admin and ingest tokens equal, keeps the old value in
+  service and logs an error naming the file and never its contents; the one
+  exception is the shared ingest token of an `existingSecret`, which stops
+  working when its key is deleted. A value from a flag or an environment
+  variable (`server.extraEnv`, `server.extraArgs`, the database URL) is
+  read once at start and still needs `kubectl -n <ns> rollout restart
   deploy/<fullname>-server deploy/<fullname>-agent` (`<fullname>` is the
   release name plus `-upgradescope`, cut to 63 characters, or the release
   name alone when it contains `upgradescope`; the install NOTES print the
-  command with your names): until then the pods keep
-  the old value and the old token still works, which matters when you are
-  rotating because a token leaked. The chart puts no hash of a secret in
-  pod or Deployment metadata to trigger the restart, since everyone who can
-  get pods or Deployments could read it, and a short token could be tested
-  against it offline ([Upgrade](upgrade.md#the-chart)). A follow-up will make
-  `serve` and the agent re-read mounted token files, so that no restart is
-  needed.
+  command with your names). The chart puts no hash of a secret in pod or
+  Deployment metadata, since everyone who can get pods or Deployments could
+  read it, and a short token could be tested against it offline
+  ([Upgrade](upgrade.md#the-chart)).
 - **Bounded input.** Snapshot and gate bodies are capped
   (`--max-snapshot-bytes`, `--max-gate-bytes`), gzip included, and their
   memory is bounded by structure, not only bytes: JSON values and YAML

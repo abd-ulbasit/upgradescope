@@ -70,12 +70,34 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   forgets your settings, so pass `-f values.yaml` with them instead if you
   keep a values file. The two `helm get values` calls show that only your
   own settings carried over.
-- **After changing a token, a webhook value or an `existingSecret`,
-  restart the pods yourself.** The tokens and webhook URLs reach the
-  containers as environment variables, which are read once at start.
-  `helm upgrade --set server.readToken=<new>` changes the Secret and leaves
-  the running pods on the old value, and the old token keeps working until
-  they restart:
+- **Rotating a token, a webhook value or an `existingSecret` needs no
+  restart.** The chart mounts its Secrets as files (never with `subPath`,
+  which would not update) and `serve` and the agent re-read a file when it
+  changes: `helm upgrade --set server.readToken=<new>`, or editing the
+  contents of a Secret you named (`server.existingSecret`,
+  `agent.existingSecret`), takes effect without touching the pods. How
+  long it takes: the kubelet has to sync the mounted Secret into the pod,
+  which at its default settings is up to about 60 to 90 seconds (its sync
+  period plus the delay of its Secret cache, from the Kubernetes
+  documentation, not measured here), then the process notices the changed
+  file at its next check, at most 5 seconds after, and only when a request
+  or a push needs the value. Until then the old value still works, which
+  matters when you rotate because a token leaked: it is not revoked
+  at the moment you save. A push the agent makes in that window with a token
+  the server has already dropped gets a 401 and is retried at the next
+  tick. A new file that is empty or unreadable, or a read, admin or ingest
+  token that would equal one of the others, is not taken: the old value
+  stays in service and the pod logs an error naming the file (never its
+  contents). Deleting the `ingestToken` key from an `existingSecret` stops
+  the shared ingest token working; emptying it keeps the old one.
+
+  Three things still need a restart, because they do not come from the
+  mounted files: the Postgres URL (`server.database.existingSecret`, a
+  connection opened once), any secret you pass through `server.extraEnv`,
+  `agent.extraEnv`, `server.extraArgs` or `agent.extraArgs` (read once at
+  start; the chart's own flags are files), and a Slack or webhook URL that
+  was not set when the server started (the notification sinks are decided
+  at start; changing one that was set does not need a restart):
 
   ```sh
   kubectl -n <ns> rollout restart deploy/<fullname>-server deploy/<fullname>-agent
@@ -84,17 +106,15 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   (`<fullname>` is the release name plus `-upgradescope`, cut to 63
   characters, or the release name alone when it contains `upgradescope`;
   the chart NOTES print the command with your Deployments' names). The
-  same goes for the contents of a Secret you name (`server.existingSecret`,
-  `agent.existingSecret`), and for a rotation you make with `kubectl`
-  rather than Helm. The chart does not restart the pods for you because it
-  cannot do so safely: a checksum of a token in a pod annotation would be
-  readable by everyone who can get pods or Deployments, a wider set than
-  those who can read Secrets, and a short token can be tested against it
-  offline. A follow-up will make `serve` and the agent re-read mounted
-  token files when they change, so that no restart is needed. Every key of
+  chart puts no checksum of a secret in a pod annotation, which would have
+  rolled the pods on every change: a checksum there is readable by everyone
+  who can get pods or Deployments, a wider set than those who can read
+  Secrets, and a short token can be tested against it offline. Upgrading
+  from a chart that passed these values as environment variables rolls the
+  pods once (their spec changes); from then on a rotation does not. Every key of
   the chart's Secrets is written under `data`, so from this chart version
-  on, a value you remove on upgrade is removed from the Secret too (after
-  the restart, the pods run without it). The upgrade to this version is the
+  on, a value you remove on upgrade is removed from the Secret too (the pods
+  roll, since their spec changes, and run without it). The upgrade to this version is the
   exception. Earlier charts wrote `readToken`, `adminToken`, `slackWebhook`,
   `webhook`, `webhookSecret` and the agent's `serverToken` as `stringData`,
   which the API server turned into `data`; Helm works out deletions from the
