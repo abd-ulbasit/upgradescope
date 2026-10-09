@@ -746,6 +746,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		writeUIDConflict(w, conflict)
 		return
 	}
+	if errors.Is(err, store.ErrConflict) {
+		// Other writers replaced the notification baseline maxIngestAttempts
+		// times while this push was evaluated: nothing was stored.
+		w.Header().Set("Retry-After", "10")
+		errJSON(w, http.StatusServiceUnavailable, "the cluster changed while this push was evaluated, and nothing was stored; retry shortly")
+		return
+	}
 	var tooLarge *reportTooLargeError
 	if errors.As(err, &tooLarge) {
 		// Nothing was stored: every target is evaluated before the commit.

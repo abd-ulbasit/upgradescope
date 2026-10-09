@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"slices"
@@ -158,7 +159,8 @@ func (f *fakeStore) RenameCluster(_ context.Context, name, newName string) error
 }
 
 // Prune mirrors the real stores: evaluations before cutoff, then
-// unreferenced snapshots before it, sparing each cluster's latest.
+// unreferenced snapshots before it, sparing each cluster's latest and each
+// (cluster, target)'s newest decided evaluation.
 func (f *fakeStore) Prune(_ context.Context, cutoff time.Time) (store.PruneResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -172,9 +174,15 @@ func (f *fakeStore) Prune(_ context.Context, cutoff time.Time) (store.PruneResul
 			latest[sn.ID] = true
 		}
 	}
+	baseline := map[int64]bool{}
+	for _, e := range f.evals {
+		if k, ok := f.latestKnownLocked(e.ClusterID, e.Target); ok {
+			baseline[k.ID] = true
+		}
+	}
 	var res store.PruneResult
 	f.evals = slices.DeleteFunc(f.evals, func(e store.Evaluation) bool {
-		gone := e.CreatedAt.Before(cutoff) && !latest[e.SnapshotID]
+		gone := e.CreatedAt.Before(cutoff) && !latest[e.SnapshotID] && !baseline[e.ID]
 		if gone {
 			res.Evaluations++
 		}
@@ -341,6 +349,7 @@ func (f *fakeStore) current(ctx context.Context, method string, clusterID int64,
 	}
 	if e, ok := f.currentEvalLocked(snap.ID, target); ok {
 		e.NotAssessed = fakeNotAssessed(e.Report)
+		e.CarriesHold = bytes.Contains(e.Report, store.HoldMarker)
 		return e, nil
 	}
 	return store.Evaluation{}, store.ErrNotFound
@@ -365,13 +374,46 @@ func (f *fakeStore) LatestKnownEvaluation(_ context.Context, clusterID int64, ta
 	if err := f.errs["LatestKnownEvaluation"]; err != nil {
 		return store.Evaluation{}, err
 	}
+	if e, ok := f.latestKnownLocked(clusterID, target); ok {
+		return e, nil
+	}
+	return store.Evaluation{}, store.ErrNotFound
+}
+
+func (f *fakeStore) latestKnownLocked(clusterID int64, target string) (store.Evaluation, bool) {
 	for i := len(f.evals) - 1; i >= 0; i-- {
 		e := f.evals[i]
 		if e.ClusterID == clusterID && e.Target == target && (e.Ready || e.Blockers > 0) {
-			return e, nil
+			return e, true
 		}
 	}
-	return store.Evaluation{}, store.ErrNotFound
+	return store.Evaluation{}, false
+}
+
+// expectationHoldsLocked is the real stores' check of b.Expect.
+func (f *fakeStore) expectationHoldsLocked(b store.EvaluationBatch, latest store.Snapshot, hasLatest bool) bool {
+	if b.Expect == nil {
+		return true
+	}
+	if b.Snapshot != nil {
+		var latestID int64
+		if hasLatest {
+			latestID = latest.ID
+		}
+		if latestID != b.Expect.LatestSnapshotID {
+			return false
+		}
+	}
+	for target, want := range b.Expect.Baselines {
+		var got int64
+		if e, ok := f.latestKnownLocked(b.ClusterID, target); ok {
+			got = e.ID
+		}
+		if got != want {
+			return false
+		}
+	}
+	return true
 }
 
 // CommitEvaluations mirrors the real stores: all-or-nothing, duplicate
@@ -421,6 +463,9 @@ func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBat
 			for i := range f.snapshots {
 				if f.snapshots[i].ID == latest.ID {
 					f.snapshots[i].KBVersion, f.snapshots[i].AgentVersion = b.Snapshot.KBVersion, b.Snapshot.AgentVersion
+					if f.snapshots[i].ServerVersion == "" {
+						f.snapshots[i].ServerVersion = b.Snapshot.ServerVersion
+					}
 				}
 			}
 			return latest.ID, true, nil
@@ -438,6 +483,9 @@ func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBat
 				return 0, false, store.ErrConflict
 			}
 		}
+	}
+	if !f.expectationHoldsLocked(b, latest, hasLatest) {
+		return 0, false, store.ErrConflict
 	}
 	refreshAt := make([]int, len(b.Refresh))
 	for i, r := range b.Refresh {

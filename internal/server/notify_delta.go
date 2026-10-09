@@ -157,17 +157,24 @@ const upgradeLookback = 3
 // one. An extra target's first evaluation stays the silent baseline: a
 // target added to --targets is a new question, and announcing it would
 // page every cluster in the fleet on the restart. ErrNotFound when there
-// is no baseline.
-func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engine.Report) (store.Evaluation, error) {
+// is no baseline. Each lower target it looks up is recorded in read, with
+// the id of its newest decided evaluation (0 for none).
+func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engine.Report, read map[string]int64) (store.Evaluation, error) {
 	server, err := inventory.ParseVersion(cur.ServerVersion)
 	if err != nil || server.Next() != cur.Target {
 		return store.Evaluation{}, store.ErrNotFound
 	}
 	for minor := cur.Target.Minor - 1; minor >= max(cur.Target.Minor-upgradeLookback, 0); minor-- {
-		prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, clusterID, inventory.Version{Major: cur.Target.Major, Minor: minor}.String())
-		if !errors.Is(err, store.ErrNotFound) {
-			return prev, err
+		lower := inventory.Version{Major: cur.Target.Major, Minor: minor}.String()
+		prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, clusterID, lower)
+		if errors.Is(err, store.ErrNotFound) {
+			read[lower] = 0
+			continue
 		}
+		if err == nil {
+			read[lower] = prev.ID
+		}
+		return prev, err
 	}
 	return store.Evaluation{}, store.ErrNotFound
 }
@@ -182,6 +189,12 @@ type targetDelta struct {
 	target  notify.Target
 	changes []notify.Change
 	carried []findingHead
+	// baselines are the baselines deltaFor read from the store: each
+	// target it looked up, the upgrade baseline's lower ones included, to
+	// the id of its newest decided evaluation (0 for none). The commit
+	// checks them (store.Expectation), so the delta is never committed
+	// against a baseline another writer replaced meanwhile.
+	baselines map[string]int64
 }
 
 // kindRank orders a notification's changes: blockers first.

@@ -226,7 +226,8 @@ type baseline struct {
 // baseline's findings from it forward, when the baseline saw them with it
 // (computeDelta, unassessed). known is that baseline when the caller
 // holds it; otherwise deltaFor loads it, and decodes only its findings'
-// heads and its gaps. Failures are logged and never fail the pass.
+// heads and its gaps, recording what it read (targetDelta.baselines) for
+// the commit to check. Failures are logged and never fail the pass.
 func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline, unassessed func(findingHead) bool) targetDelta {
 	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
 	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
@@ -237,11 +238,16 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 		return d
 	}
 	target := cur.Target.String()
+	d.baselines = map[string]int64{}
 	prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, cluster.ID, target)
+	if err == nil {
+		d.baselines[target] = prev.ID
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		// First decided evaluation of this target: after an upgrade, the
 		// previous default target's is the baseline (upgradeBaseline).
-		prev, err = s.upgradeBaseline(ctx, cluster.ID, cur)
+		d.baselines[target] = 0
+		prev, err = s.upgradeBaseline(ctx, cluster.ID, cur, d.baselines)
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		return d // first decided evaluation of this target: no delta
@@ -518,7 +524,41 @@ func (s *Server) outboxFor(cluster store.Cluster, deltas *changeMerger, now time
 // still the cluster under its name, in its transaction
 // (store.ErrTokenRevoked, store.ErrClusterChanged), so a revoke, rename or
 // delete that lands while the push is processed is never undone by it.
+//
+// With notification sinks, the commit also checks that the cluster's
+// latest snapshot and every notification baseline the deltas were
+// computed from are still what the pass read (store.Expectation): another
+// replica's push, or this server's background pass, may land in between.
+// Then nothing is written (store.ErrConflict) and the push is ingested
+// again against what is there now, up to maxIngestAttempts times, so no
+// became-ready or new-blocker is lost or sent twice. The last conflict is
+// returned, and the agent retries the push.
 func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
+	for attempt := 1; ; attempt++ {
+		id, dup, err := s.ingestOnce(ctx, cluster, snap, inv, token)
+		if !errors.Is(err, store.ErrConflict) || attempt == maxIngestAttempts {
+			return id, dup, err
+		}
+		log.Printf("server: push of cluster %q raced another writer (attempt %d), evaluating it again: %v", cluster.Name, attempt, err)
+		if cluster.ID == 0 { // registered by the push that raced this one
+			c, err := s.cfg.Store.ClusterByName(ctx, cluster.Name)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return 0, false, fmt.Errorf("loading cluster %q: %w", cluster.Name, err)
+			}
+			cluster.ID = c.ID
+		}
+	}
+}
+
+// maxIngestAttempts bounds how often one push is evaluated again after
+// its commit met a replaced baseline (ingestSnapshot). Each attempt
+// re-reads what the last one met, so a second conflict needs a third
+// writer inside the same window.
+const maxIngestAttempts = 3
+
+// ingestOnce is one attempt of ingestSnapshot.
+func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
+	var latestID int64 // the latest snapshot this attempt read; 0 for none
 	// A duplicate (the agent's hourly force-sync) is the common push: go
 	// straight to re-evaluating what is stale, instead of evaluating every
 	// target for the commit to discard. The commit still checks the hash,
@@ -530,6 +570,9 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
 		}
+		if err == nil {
+			latestID = latest.ID
+		}
 		if err == nil && snap.ServerVersion == "" {
 			if latest.ServerVersion == "" {
 				if latest, err = s.cfg.Store.LatestSnapshot(ctx, cluster.ID); err != nil {
@@ -539,7 +582,11 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			snap.ServerVersion = judgedVersion(latest)
 		}
 		if err == nil && latest.Hash == snap.Hash {
-			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token})
+			// Not a duplicate after all when another push moved the
+			// cluster on meanwhile: then nothing is written, and the push
+			// is evaluated in full (ingestSnapshot).
+			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token,
+				Expect: &store.Expectation{LatestSnapshotID: latestID}})
 			if err != nil {
 				return 0, false, err
 			}
@@ -558,6 +605,9 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	now := s.now()
 	hold := s.callsHoldOf(inv, snap.ServerVersion, true)
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token}
+	if len(s.sinks) > 0 {
+		batch.Expect = &store.Expectation{LatestSnapshotID: latestID, Baselines: map[string]int64{}}
+	}
 	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(snap.ServerVersion) {
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
@@ -567,6 +617,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep, hold))
 		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Insert = append(batch.Insert, e)
+		expectBaselines(batch.Expect, d)
 		deltas.add(d)
 	}
 	batch.Outbox = s.outboxFor(cluster, &deltas, now)
@@ -651,6 +702,14 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, hold))
 		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Current[target.String()] = cur.ID // 0 when not found
+		if len(d.baselines) > 0 {
+			// An upgrade baseline is another target's, which Current does
+			// not cover.
+			if batch.Expect == nil {
+				batch.Expect = &store.Expectation{Baselines: map[string]int64{}}
+			}
+			expectBaselines(batch.Expect, d)
+		}
 		if decoded && sameResult(cur, stored.Findings, rep) && (len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)
@@ -675,6 +734,17 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		s.kickOutbox()
 	}
 	return nil
+}
+
+// expectBaselines adds the baselines d's delta was computed from to the
+// commit's expectation (nil: none is checked).
+func expectBaselines(x *store.Expectation, d targetDelta) {
+	if x == nil {
+		return
+	}
+	for target, id := range d.baselines {
+		x.Baselines[target] = id
+	}
 }
 
 // reevaluateAll runs reevaluate over every cluster's latest snapshot. One
