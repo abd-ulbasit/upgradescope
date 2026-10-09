@@ -1,16 +1,30 @@
 name: kb-refresh
 
-# Weekly knowledge-base refresh, as two independent jobs so one failing can
-# never hold back the other (a gen-kb build break used to skip the registry
-# sync for weeks):
+# Weekly knowledge-base refresh, as two independent pipelines so one failing
+# can never hold back the other (a gen-kb build break used to skip the
+# registry sync for weeks):
 #  - api-lifecycle: bump tools/gen-kb to the latest tagged k8s.io/api (and the
 #    matching apiextensions-apiserver / kube-aggregator releases), then
 #    `make gen-kb` = `go generate ./...`, which regenerates the import list,
 #    tidies go.mod and rewrites internal/kb/data/apilifecycle.json;
 #  - registry: sync registry entries against the live endoflife.date API.
 # Each opens (or updates) its own PR; CI on the PR re-validates everything.
-# If either job fails, report-failure opens or comments on the
+# If any job fails, report-failure opens or comments on the
 # "kb-refresh is failing" issue, so a broken refresh is never silent.
+#
+# Each pipeline is two jobs (#244). The first runs the code: `go get` pulls
+# the newest k8s.io modules and whatever versions they require, and
+# `make gen-kb` and `go test` link and run them, with no human review of
+# that code before it executes. So that job holds only contents: read, keeps
+# no token in its checkout (persist-credentials: false), uses no Go cache a
+# later job could restore, and hands over nothing but a patch of the paths
+# its PR may change, as an artifact. The second job (*-pr) holds the write
+# permissions and runs no repository or dependency code: it checks the
+# patch touches only those paths (no renames, no symlinks), applies it with
+# git, and runs create-pull-request and the approval step. Code in the first
+# job could otherwise read the job's token from the checkout or the runner's
+# memory and move the floating v0 tag or replace release assets.
+# hack/kb-refresh-ci_test.sh pins this split.
 #
 # How the bot PRs get CI without a PAT or App secret (#11).
 # create-pull-request pushes the bot branch and opens the PR with this run's
@@ -54,17 +68,17 @@ jobs:
   api-lifecycle:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # push the bot branch
-      pull-requests: write # open or update its PR
-      actions: write # approve its PR's held CI runs (see the top of this file)
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
-          cache-dependency-path: |
-            go.sum
-            tools/gen-kb/go.sum
+          # No Go cache: this job builds modules nobody reviewed, and a cache
+          # it saved could be restored by a later job that holds a token.
+          cache: false
 
       - name: Bump gen-kb to the latest k8s.io/api release
         working-directory: tools/gen-kb
@@ -82,6 +96,60 @@ jobs:
         run: |
           go test ./internal/kb/ ./internal/engine/
           cd tools/gen-kb && go test ./...
+
+      - name: Package the regenerated files
+        run: |
+          git add -A -- tools/gen-kb internal/kb/data
+          git diff --cached --binary -- tools/gen-kb internal/kb/data >"$RUNNER_TEMP/kb-refresh-api-lifecycle.patch"
+          git diff --cached --stat -- tools/gen-kb internal/kb/data
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kb-refresh-api-lifecycle
+          path: ${{ runner.temp }}/kb-refresh-api-lifecycle.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  api-lifecycle-pr:
+    needs: api-lifecycle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the bot branch
+      pull-requests: write # open or update its PR
+      actions: write # approve its PR's held CI runs (see the top of this file)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # create-pull-request authenticates with its own token input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kb-refresh-api-lifecycle
+          path: ${{ runner.temp }}/kb-refresh-api-lifecycle
+      # The patch was made by a job that ran unreviewed code: only the
+      # paths this PR may change, no renames or copies (their source could
+      # be anywhere), no symlinks. git applies it; nothing else runs.
+      - name: Apply the regenerated files
+        env:
+          PATCH: ${{ runner.temp }}/kb-refresh-api-lifecycle/kb-refresh-api-lifecycle.patch
+        run: |
+          [ -f "$PATCH" ] || { echo "::error::no patch in the kb-refresh-api-lifecycle artifact"; exit 1; }
+          if [ ! -s "$PATCH" ]; then
+            echo "nothing was regenerated"
+            exit 0
+          fi
+          if grep -nE '^(rename|copy) (from|to) |^(new file |deleted file |old |new )?mode 120000' "$PATCH"; then
+            echo "::error::the patch renames, copies or links a file; refusing it"
+            exit 1
+          fi
+          git apply --numstat "$PATCH" | cut -f3- >"$RUNNER_TEMP/paths"
+          while IFS= read -r path; do
+            case "$path" in
+              tools/gen-kb/*|internal/kb/data/*) ;;
+              *) echo "::error::the patch changes $path, outside tools/gen-kb and internal/kb/data; refusing it"; exit 1 ;;
+            esac
+          done <"$RUNNER_TEMP/paths"
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git status --short
 
       - name: Open PR if anything changed
         id: pr
@@ -170,18 +238,72 @@ jobs:
   registry:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          cache: false # tools/eol-sync has no dependencies; nothing to cache
+
+      - name: Sync registry with endoflife.date
+        run: make eol-sync
+
+      - name: Package the regenerated files
+        run: |
+          git add -A -- registry/data
+          git diff --cached --binary -- registry/data >"$RUNNER_TEMP/kb-refresh-registry.patch"
+          git diff --cached --stat -- registry/data
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kb-refresh-registry
+          path: ${{ runner.temp }}/kb-refresh-registry.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  registry-pr:
+    needs: registry
+    runs-on: ubuntu-latest
+    permissions:
       contents: write # push the bot branch
       pull-requests: write # open or update its PR
       actions: write # approve its PR's held CI runs (see the top of this file)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
-          cache-dependency-path: go.sum # tools/eol-sync has no dependencies
-
-      - name: Sync registry with endoflife.date
-        run: make eol-sync
+          persist-credentials: false # create-pull-request authenticates with its own token input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kb-refresh-registry
+          path: ${{ runner.temp }}/kb-refresh-registry
+      # The patch was made by a job that ran unreviewed code: only the
+      # paths this PR may change, no renames or copies (their source could
+      # be anywhere), no symlinks. git applies it; nothing else runs.
+      - name: Apply the regenerated files
+        env:
+          PATCH: ${{ runner.temp }}/kb-refresh-registry/kb-refresh-registry.patch
+        run: |
+          [ -f "$PATCH" ] || { echo "::error::no patch in the kb-refresh-registry artifact"; exit 1; }
+          if [ ! -s "$PATCH" ]; then
+            echo "nothing was regenerated"
+            exit 0
+          fi
+          if grep -nE '^(rename|copy) (from|to) |^(new file |deleted file |old |new )?mode 120000' "$PATCH"; then
+            echo "::error::the patch renames, copies or links a file; refusing it"
+            exit 1
+          fi
+          git apply --numstat "$PATCH" | cut -f3- >"$RUNNER_TEMP/paths"
+          while IFS= read -r path; do
+            case "$path" in
+              registry/data/*) ;;
+              *) echo "::error::the patch changes $path, outside registry/data; refusing it"; exit 1 ;;
+            esac
+          done <"$RUNNER_TEMP/paths"
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git status --short
 
       - name: Open PR if anything changed
         id: pr
@@ -263,7 +385,7 @@ jobs:
           fi
 
   report-failure:
-    needs: [api-lifecycle, registry]
+    needs: [api-lifecycle, api-lifecycle-pr, registry, registry-pr]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
@@ -272,8 +394,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      API_RESULT: ${{ needs.api-lifecycle.result }}
-      REGISTRY_RESULT: ${{ needs.registry.result }}
+      API_RESULT: ${{ needs.api-lifecycle.result }} / PR ${{ needs.api-lifecycle-pr.result }}
+      REGISTRY_RESULT: ${{ needs.registry.result }} / PR ${{ needs.registry-pr.result }}
     steps:
       - name: Open or update the tracking issue
         run: |

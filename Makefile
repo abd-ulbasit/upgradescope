@@ -125,6 +125,14 @@ vuln-latest:
 vuln-test:
 	./hack/vulncheck_test.sh
 
+# Advisories in hack/renovate/package-lock.json (the CI-only Renovate
+# validator): any not accepted, with a reason and an expiry, in
+# hack/renovate/osv-scanner.toml fails (CI's vuln job). Needs npm and the
+# registry's audit endpoint.
+.PHONY: renovate-audit
+renovate-audit:
+	./hack/renovate-audit.sh
+
 # THIRD_PARTY_NOTICES: the license text of every Go module the binary links
 # (go-licenses, pinned in the script) and every npm package in the dashboard
 # bundle. `make notices` rewrites it (commit the result after a dependency
@@ -330,15 +338,20 @@ hack-test:
 	./hack/cross-build_test.sh
 	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh
+	./hack/renovate-audit_test.sh
 	./hack/check-toolchain_test.sh
 	./hack/install-tool_test.sh
 	./hack/examples-test_test.sh
 	./hack/kind-images_test.sh
+	./hack/pg-images_test.sh
+	./hack/dockerhub-mirror_test.sh
 	./hack/envtest_test.sh
 	./hack/e2e_test.sh
 	./hack/ci-concurrency_test.sh
 	./hack/ci-ok_test.sh
+	./hack/ci-sarif_test.sh
 	./hack/release-ci-permissions_test.sh
+	./hack/release-caches_test.sh
 	./hack/kb-refresh-ci_test.sh
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh
@@ -348,6 +361,8 @@ hack-test:
 	./hack/check-breaking_test.sh
 	./hack/check-release-ancestry_test.sh
 	./hack/release-preflight_test.sh
+	./hack/release-newest_test.sh
+	./hack/ruleset-tags_test.sh
 	./hack/flags-diff_test.sh
 	./hack/check-doc-sizes_test.sh
 	./hack/bench_test.sh

@@ -5,6 +5,14 @@
 # went green on a broken binary (#128, DB-07): a referenced asset missing
 # (blank dashboard behind a 200 index.html), the port already held by
 # another process, and serve exiting early. Offline; needs Go and curl.
+#
+# The port-in-use case holds the port with a second stub and waits for it to
+# have bound before running the check; if it never does, the case fails as
+# "held stub never came up", never as a misleading result of the check
+# (#244: on a loaded runner the held stub bound late and the case went red
+# with "serve exited"). Knobs, to reproduce a slow start:
+#   DASHBOARD_SMOKE_TEST_HELD_DELAY  seconds before the held stub starts (0)
+#   DASHBOARD_SMOKE_TEST_HELD_WAIT   seconds to wait for it to bind (60)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,10 +25,12 @@ cat >"$work/stub/main.go" <<'EOF'
 // A stand-in for `upgradescope serve --listen ADDR ...`: serves $STUB_DIST
 // like the embedded dashboard, /healthz like the server, or exits at once
 // when STUB_EXIT is set. STUB_JS_TYPE overrides the .js Content-Type, as a
-// host's /etc/mime.types can for Go's mime table.
+// host's /etc/mime.types can for Go's mime table. With STUB_READY, it
+// creates that file once it holds the port.
 package main
 
 import (
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -48,7 +58,16 @@ func main() {
 		}
 		files.ServeHTTP(w, r)
 	})
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		os.Exit(1)
+	}
+	if f := os.Getenv("STUB_READY"); f != "" {
+		if err := os.WriteFile(f, nil, 0o644); err != nil {
+			os.Exit(1)
+		}
+	}
+	if err := http.Serve(ln, mux); err != nil {
 		os.Exit(1)
 	}
 }
@@ -110,12 +129,24 @@ mv "$work/index.bak" "$work/dist/index.html"
 expect "serve exiting early fails" 1 "serve exited" STUB_EXIT=1
 
 # Another process already answering on the port: the old check probed it
-# instead of the binary under test, and passed.
+# instead of the binary under test, and passed. The held stub signals once it
+# holds the port (a file, not a poll that gives up quietly), and the case
+# runs only then: started late, it would otherwise race the check's own
+# serve for the port, and the case would test whichever won.
 p=$(port)
-STUB_DIST="$work/dist" "$work/upgradescope" serve --listen "127.0.0.1:$p" &
+delay=${DASHBOARD_SMOKE_TEST_HELD_DELAY:-0}
+wait_s=${DASHBOARD_SMOKE_TEST_HELD_WAIT:-60}
+(sleep "$delay" && exec env STUB_DIST="$work/dist" STUB_READY="$work/held.ready" \
+  "$work/upgradescope" serve --listen "127.0.0.1:$p") &
 held=$!
-for _ in $(seq 1 50); do curl -fsS -o /dev/null "http://127.0.0.1:$p/healthz" 2>/dev/null && break; sleep 0.1; done
-expect "a port already in use fails" 1 "127.0.0.1:$p already answers" DASHBOARD_SMOKE_PORT="$p"
+deadline=$((SECONDS + wait_s))
+while [ ! -e "$work/held.ready" ] && [ "$SECONDS" -lt "$deadline" ] && kill -0 "$held" 2>/dev/null; do sleep 0.1; done
+if [ -e "$work/held.ready" ] && curl -fsS -o /dev/null --max-time 10 "http://127.0.0.1:$p/healthz"; then
+  expect "a port already in use fails" 1 "127.0.0.1:$p already answers" DASHBOARD_SMOKE_PORT="$p"
+else
+  echo "FAIL a port already in use fails: held stub never came up on 127.0.0.1:$p within ${wait_s}s, so the case did not run" >&2
+  echo "FAIL a port already in use fails (held stub never came up)" >>"$work/results"
+fi
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)
