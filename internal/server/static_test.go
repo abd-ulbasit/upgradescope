@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -97,59 +96,128 @@ func TestSPAHandlerFallbackForClientRoutes(t *testing.T) {
 // staticAssetRef finds the script and stylesheet URLs index.html names.
 var staticAssetRef = regexp.MustCompile(`(?:src|href)="([^"]+)"`)
 
-// A path the dashboard is served at must be able to load: every asset its
-// index.html references, resolved against the request path as a browser
-// does, answers 200. A path it cannot load at is a clean JSON 404, never an
-// index.html whose assets 404 (a blank page, #243). It must also hold for
-// the real embedded bundle (dist), whose assets are the hashed ones.
-func TestSPAHandlerNeverServesAPageItsAssetsCannotLoadFrom(t *testing.T) {
+// Every path the dashboard is asked at loads it (#243): a route that is not
+// the root is answered with a relative redirect to the root, so the page's
+// relative asset and API URLs resolve, with or without a proxy path prefix
+// that strips itself. The test follows the redirect as a browser does and
+// asks that each asset the final page references answers 200 and that the
+// page's relative API base lands on the same prefix. It holds for the real
+// embedded bundle (hashed assets) too.
+func TestSPAHandlerLoadsTheDashboardAtEveryRoute(t *testing.T) {
+	// route -> where it lands (below the prefix) and the hash it carries:
+	// the page itself where it can load, otherwise the root.
+	type landing struct{ path, fragment string }
+	routes := map[string]landing{
+		"/": {"/", ""}, "/index.html": {"/index.html", ""}, "/teams": {"/teams", ""}, "/registry": {"/registry", ""},
+		"/index.html/": {"/", ""}, "/teams/": {"/", "/teams"}, "/cluster/3": {"/", "/cluster/3"},
+		"/cluster/3/": {"/", "/cluster/3"}, "/foo/": {"/", "/foo"}, "/a/b/c": {"/", "/a/b/c"},
+	}
 	for name, dist := range map[string]fs.FS{"test bundle": testDist(), "embedded bundle": distFS()} {
 		if _, err := fs.Stat(dist, "index.html"); err != nil {
 			t.Logf("%s: no index.html (run `make web`): skipped", name)
 			continue
 		}
-		ts := httptest.NewServer(spaHandler(dist))
-		for _, p := range []string{"/", "/index.html", "/teams", "/cluster/3", "/cluster/3/", "/foo/", "/teams/", "/a/b/c", "/assets", "/assets/"} {
-			resp, err := ts.Client().Get(ts.URL + p)
-			if err != nil {
-				t.Fatalf("%s GET %s: %v", name, p, err)
+		for _, prefix := range []string{"", "/upgradescope", "/a/b"} {
+			var h http.Handler = spaHandler(dist)
+			if prefix != "" {
+				h = http.StripPrefix(prefix, h)
 			}
-			raw, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				if resp.StatusCode != http.StatusNotFound || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
-					t.Errorf("%s GET %s: status %d %s, want 200 or a JSON 404", name, p, resp.StatusCode, resp.Header.Get("Content-Type"))
+			ts := httptest.NewServer(h)
+			for route, land := range routes {
+				resp, err := ts.Client().Get(ts.URL + prefix + route)
+				if err != nil {
+					t.Fatalf("%s GET %s%s: %v", name, prefix, route, err)
 				}
-				if strings.Contains(string(raw), "<!doctype") {
-					t.Errorf("%s GET %s: 404 with a page body", name, p)
-				}
-				continue
-			}
-			base, _ := url.Parse(ts.URL + p)
-			refs := 0
-			for _, m := range staticAssetRef.FindAllStringSubmatch(string(raw), -1) {
-				if strings.HasPrefix(m[1], "data:") {
+				raw, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+					t.Errorf("%s GET %s%s: status %d %s after redirects, want the page", name, prefix, route, resp.StatusCode, resp.Header.Get("Content-Type"))
 					continue
 				}
-				refs++
-				u, err := base.Parse(m[1])
-				if err != nil {
-					t.Fatalf("resolve %q: %v", m[1], err)
+				final := resp.Request.URL
+				if final.Path != prefix+land.path || final.Fragment != land.fragment {
+					t.Errorf("%s GET %s%s: landed on %s#%s, want %s#%s", name, prefix, route, final.Path, final.Fragment, prefix+land.path, land.fragment)
 				}
-				ar, err := ts.Client().Get(u.String())
-				if err != nil {
-					t.Fatalf("GET %s: %v", u, err)
+				// The page's relative API base is on the same prefix.
+				if api, _ := final.Parse("api/v1/clusters"); api.Path != prefix+"/api/v1/clusters" {
+					t.Errorf("%s GET %s%s: relative API base resolves to %s, want %s", name, prefix, route, api.Path, prefix+"/api/v1/clusters")
 				}
-				ar.Body.Close()
-				if ar.StatusCode != http.StatusOK {
-					t.Errorf("%s: GET %s serves a page whose asset %s answers %d", name, p, u.Path, ar.StatusCode)
+				refs := 0
+				for _, m := range staticAssetRef.FindAllStringSubmatch(string(raw), -1) {
+					if strings.HasPrefix(m[1], "data:") {
+						continue
+					}
+					refs++
+					u, err := final.Parse(m[1])
+					if err != nil {
+						t.Fatalf("resolve %q: %v", m[1], err)
+					}
+					ar, err := ts.Client().Get(u.String())
+					if err != nil {
+						t.Fatalf("GET %s: %v", u, err)
+					}
+					ar.Body.Close()
+					if ar.StatusCode != http.StatusOK {
+						t.Errorf("%s: GET %s%s serves a page whose asset %s answers %d", name, prefix, route, u.Path, ar.StatusCode)
+					}
+				}
+				if refs == 0 {
+					t.Errorf("%s: GET %s%s served a page that names no assets", name, prefix, route)
 				}
 			}
-			if refs == 0 {
-				t.Errorf("%s: GET %s served a page that names no assets", name, p)
-			}
+			ts.Close()
 		}
-		ts.Close()
+	}
+}
+
+// The redirect is a hand-written relative reference (http.Redirect would
+// make it absolute and drop a proxy's prefix), and what is not a route is a
+// JSON 404, never a page or a redirect.
+func TestSPAHandlerRedirectsNestedRoutesRelatively(t *testing.T) {
+	ts := httptest.NewServer(spaHandler(testDist()))
+	defer ts.Close()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for route, want := range map[string]string{
+		"/cluster/3":     "../#/cluster/3",
+		"/cluster/3/":    "../../#/cluster/3",
+		"/foo/":          "../#/foo",
+		"/teams/":        "../#/teams",
+		"/a/b/c":         "../../#/a/b/c",
+		"/index.html/":   "../",
+		"/cluster/a%20b": "../#/cluster/a%20b",
+	} {
+		resp, err := client.Get(ts.URL + route)
+		if err != nil {
+			t.Fatalf("GET %s: %v", route, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != want {
+			t.Errorf("GET %s: %d Location %q, want 302 %q", route, resp.StatusCode, resp.Header.Get("Location"), want)
+		}
+	}
+	for _, route := range []string{"/missing.png", "/cluster/3.png", "/assets", "/assets/", "/assets/missing", "/assets/x/y", "/api/v1/nope"} {
+		resp, err := client.Get(ts.URL + route)
+		if err != nil {
+			t.Fatalf("GET %s: %v", route, err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") ||
+			resp.Header.Get("Location") != "" || strings.Contains(string(raw), "<!doctype") {
+			t.Errorf("GET %s: %d %s Location %q, want a JSON 404", route, resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Location"))
+		}
+	}
+	// Without a built dashboard a nested route is the explaining 404, not
+	// a redirect to a root that is one too.
+	empty := httptest.NewServer(spaHandler(fstest.MapFS{".gitkeep": {}}))
+	defer empty.Close()
+	resp, err := client.Get(empty.URL + "/cluster/3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("no bundle, GET /cluster/3: %d, want 404", resp.StatusCode)
 	}
 }
 
