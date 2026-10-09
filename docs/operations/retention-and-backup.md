@@ -79,7 +79,7 @@ each push reads) and `/history` are read through indexes by evaluation id
 `TestEvaluationReadsDoNotGrowWithHistory` (SQLite, 4,000 history rows of
 one pair with 30 KB reports, the baseline the oldest of them) fails above
 2 ms for the baseline and 5 ms for 100 points of `/history`; on an arm64
-Mac (October 2026, at ee3ba617, best of five) they took 0.04 ms and
+Mac (10 October 2026, at f2dceae5, best of five) they took 0.04 ms and
 0.75 ms. `make bench-server` seeds 500 clusters with ~35 KiB inventories
 on SQLite and runs 10 concurrent `/fleet` readers; it fails above a 1s p95
 or a 512 MiB heap peak. On an arm64 Mac (October 2026): p95 about 0.5s,
