@@ -847,6 +847,7 @@ func TestTrustedTeamHeader(t *testing.T) {
 		// The same request from inside the range is trusted.
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/clusters", nil)
 		req.RemoteAddr = "10.1.2.3:41000"
+		req.Host = "localhost" // a name the Host guard answers for (httptest's default is example.com)
 		req.Header.Set(header, "web")
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)
