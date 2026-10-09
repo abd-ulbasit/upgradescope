@@ -369,7 +369,13 @@ func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.I
 	// step), and say so in the status meanwhile.
 	var crdNote string
 	if r.ensureCRD != nil {
-		if err := r.ensureCRD(ctx); err != nil {
+		// On its own part of the status slice: a check that hangs, or a
+		// re-created CRD's wait for Established (up to 10s), must leave the
+		// spec read and the status write after it their time.
+		cctx, cancel := ph.crdCheck()
+		err := r.ensureCRD(cctx)
+		cancel()
+		if err != nil {
 			r.last.crdErr = err
 			crdNote = "crd: the ClusterReadiness CRD could not be brought up to date with this agent, retried every tick " +
 				"(status fields the installed schema lacks are dropped by the apiserver): " + oneLine(err, maxCRDNoteReason)
@@ -502,7 +508,12 @@ func (r *runner) markStatusError(ph tickPhases, cause error) error {
 // reserve is carved, in order, into
 //   - the status slice: the ClusterReadiness calls (the CRD check, the
 //     spec read, the object's create and spec.targets patch, the status
-//     write) end by the tick deadline - reserve/2;
+//     write) end by the tick deadline - reserve/2. The CRD check, run when
+//     the one at startup failed (runner.ensureCRD), ends 3*reserve/4
+//     before the tick deadline, so neither a check that hangs nor a
+//     re-created CRD's wait for Established leaves the calls after it less
+//     than reserve/4. A CRD Established only later is found in step by
+//     the next tick, which writes the status;
 //   - the marker slice: the status-error marker gets reserve/4 of its own
 //     from when it starts, so it ends by the tick deadline - reserve/4;
 //   - the push, which runs until the tick deadline: at least reserve/4.
@@ -550,6 +561,10 @@ func (p tickPhases) collect() (context.Context, context.CancelFunc) {
 
 func (p tickPhases) status() (context.Context, context.CancelFunc) {
 	return p.endingAhead(p.reserve / 2)
+}
+
+func (p tickPhases) crdCheck() (context.Context, context.CancelFunc) {
+	return p.endingAhead(3 * p.reserve / 4)
 }
 
 func (p tickPhases) marker() (context.Context, context.CancelFunc) {

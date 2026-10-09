@@ -68,7 +68,11 @@ so collection gets 15s). The reserve is the time of the work after
 collection, each part on its own slice, so a collection that runs out its
 time still leaves the status written, or the object marked as stale: the
 `ClusterReadiness` calls (the CRD check, the spec read, the status write)
-must end by half the reserve before the deadline; the
+must end by half the reserve before the deadline, and a CRD check the
+tick retries (the one at startup having failed) by three quarters of it,
+so that a hung check, or the wait for a deleted CRD it creates again to be
+Established, leaves the spec read and the status write at least a
+quarter; the
 `upgradescope.dev/status-error` marker then gets a quarter of the reserve
 of its own; the push runs until the deadline, so it has at least a quarter
 of the reserve. Within a tick, each API request is

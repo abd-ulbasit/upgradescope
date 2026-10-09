@@ -2,17 +2,25 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -22,25 +30,36 @@ import (
 // does (the fake ignores it): a call on a done context fails at once with
 // the context's error, and a call whose verb is in stall blocks until its
 // context is done, like a request to an apiserver that never answers.
+// With served set, every call 404s while it returns false, as the
+// apiserver answers for a CRD that is not Established.
 type ctxDyn struct {
 	dynamic.Interface
-	stall map[string]bool // "get", "create", "update", "update-status", "patch"
+	stall  map[string]bool // "get", "create", "update", "update-status", "patch"
+	served func() bool
 }
 
 func (d ctxDyn) Resource(gvr schema.GroupVersionResource) dynamic.NamespaceableResourceInterface {
-	return ctxRes{d.Interface.Resource(gvr), d.stall}
+	return ctxRes{d.Interface.Resource(gvr), gvr, d.stall, d.served}
 }
 
 type ctxRes struct {
 	dynamic.NamespaceableResourceInterface
-	stall map[string]bool
+	gvr    schema.GroupVersionResource
+	stall  map[string]bool
+	served func() bool
 }
 
 func (r ctxRes) check(ctx context.Context, verb string) error {
 	if r.stall[verb] {
 		<-ctx.Done()
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r.served != nil && !r.served() {
+		return apierrors.NewNotFound(r.gvr.GroupResource(), "")
+	}
+	return nil
 }
 
 func (r ctxRes) Get(ctx context.Context, name string, opts metav1.GetOptions, sub ...string) (*unstructured.Unstructured, error) {
@@ -160,6 +179,115 @@ func TestTickWithAStalledStatusWriteStillMarksTheCR(t *testing.T) {
 	}
 	if rep.pushErr != nil || srv.count() != 1 {
 		t.Errorf("push err = %v, %d pushes; want the push sent", rep.pushErr, srv.count())
+	}
+}
+
+// #238 review: a CRD deleted while the agent runs (the CR goes with it) is
+// created again by the tick's CRD check, the one at startup having failed,
+// which then waits up to 10s for it to be Established: longer than the
+// whole status slice at --interval 1m when collection runs out its time
+// (7.5s), so the spec read used to fail and the CR was only marked. The
+// check now has its own part of the slice and the calls after it keep a
+// quarter of the reserve; a CRD Established within the check's part gets
+// this tick's status written. Scaled down from the 30s tick of --interval
+// 1m, as the other reserve tests are. The CR's endpoint 404s until the
+// CRD is Established.
+func TestTickRecreatingTheCRDStillWritesTheStatus(t *testing.T) {
+	const establishedAfter = 150 * time.Millisecond
+	var createdAt atomic.Int64
+	established := func() bool {
+		at := createdAt.Load()
+		return at != 0 && time.Since(time.Unix(0, at)) >= establishedAfter
+	}
+	apiext := apiextfake.NewSimpleClientset() // the CRD was deleted
+	apiext.PrependReactor("create", "customresourcedefinitions", func(k8stesting.Action) (bool, runtime.Object, error) {
+		createdAt.CompareAndSwap(0, time.Now().UnixNano())
+		return false, nil, nil // stored as created: not Established
+	})
+	apiext.PrependReactor("get", "customresourcedefinitions", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		obj, err := apiext.Tracker().Get(a.GetResource(), "", a.(k8stesting.GetAction).GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		c := obj.(*apiextensionsv1.CustomResourceDefinition).DeepCopy()
+		if established() {
+			c.Status.Conditions = []apiextensionsv1.CustomResourceDefinitionCondition{
+				{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue},
+			}
+		}
+		return true, c, nil
+	})
+
+	fake := fakeDyn().(*dynamicfake.FakeDynamicClient)
+	srv := newSnapServer(t)
+	r := testRunner(t, ctxDyn{Interface: fake, served: established}, srv.srv.URL)
+	const budget = 4 * time.Second // a 2s reserve: the CRD check ends 1.5s before the deadline
+	r.tickBudget = budget
+	slowCollect(r)
+	var checkDeadline time.Time
+	r.ensureCRD = func(ctx context.Context) error {
+		checkDeadline, _ = ctx.Deadline()
+		return crd.EnsureCRD(ctx, apiext)
+	}
+
+	start := time.Now()
+	rep := r.runTick(context.Background())
+	if rep.err != nil || rep.crdErr != nil || rep.pushErr != nil {
+		t.Fatalf("tick err = %v, CRD err = %v, push err = %v; want none once the CRD is Established in time",
+			rep.err, rep.crdErr, rep.pushErr)
+	}
+	if want := 3 * tickReserve(budget) / 4; start.Add(budget).Sub(checkDeadline) < want-50*time.Millisecond {
+		t.Errorf("CRD check deadline %v before the tick deadline, want %v: the status calls keep a quarter of the reserve",
+			start.Add(budget).Sub(checkDeadline), want)
+	}
+	if r.ensureCRD != nil {
+		t.Error("the CRD check is still retried after it succeeded")
+	}
+	st := readCRStatus(t, fake, crd.DefaultName)
+	if len(st.Targets) != 1 {
+		t.Errorf("status targets = %+v, want the evaluated target", st.Targets)
+	}
+	for _, n := range st.NotAssessed {
+		if strings.Contains(n, "ClusterReadiness CRD") {
+			t.Errorf("notAssessed has %q, want no CRD note once it is re-created", n)
+		}
+	}
+	if srv.count() != 1 {
+		t.Errorf("%d pushes, want 1", srv.count())
+	}
+}
+
+// A CRD check that hangs (its patch held by a slow admission webhook, say)
+// runs out only its own part of the status slice: the spec read and the
+// status write still run, on the installed schema, the status says why
+// the CRD is not up to date, and the push is sent.
+func TestTickWithAHungCRDCheckStillWritesTheStatus(t *testing.T) {
+	fake := fakeDyn().(*dynamicfake.FakeDynamicClient)
+	srv := newSnapServer(t)
+	r := testRunner(t, ctxDyn{Interface: fake}, srv.srv.URL)
+	r.tickBudget = 3 * time.Second
+	slowCollect(r)
+	r.ensureCRD = func(ctx context.Context) error {
+		<-ctx.Done()
+		return fmt.Errorf("apply ClusterReadiness CRD: %w", ctx.Err())
+	}
+
+	rep := r.runTick(context.Background())
+	if rep.err != nil || rep.pushErr != nil {
+		t.Fatalf("tick err = %v, push err = %v; want both nil behind a hung CRD check", rep.err, rep.pushErr)
+	}
+	if !errors.Is(rep.crdErr, context.DeadlineExceeded) {
+		t.Errorf("CRD err = %v, want its own deadline", rep.crdErr)
+	}
+	st := readCRStatus(t, fake, crd.DefaultName)
+	if len(st.Targets) != 1 || len(st.NotAssessed) == 0 || !strings.Contains(st.NotAssessed[0], "ClusterReadiness CRD") {
+		t.Errorf("status targets %+v, notAssessed %q; want the evaluated target and the CRD note first", st.Targets, st.NotAssessed)
+	}
+	if v, ok := statusErrorAnnotation(t, fake); ok {
+		t.Errorf("status-error annotation %q on a tick whose status was written", v)
+	}
+	if srv.count() != 1 {
+		t.Errorf("%d pushes, want 1", srv.count())
 	}
 }
 
