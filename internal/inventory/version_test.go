@@ -246,6 +246,19 @@ func TestParseTarget(t *testing.T) {
 		{in: "2.0", wantErr: "major version must be 1"},
 		{in: "0.36", wantErr: "major version must be 1"},
 		{in: "latest", wantErr: "invalid kubernetes version"},
+		{in: "1.16", want: Version{1, 16}},
+		{in: "v1.24.3", want: Version{1, 24}},
+		// What YAML makes of an unquoted 1.30, 1.40, 1.50 and 1.10: the
+		// minor loses its trailing zero and falls below the knowledge
+		// base, and the error says why.
+		{in: "1.3", wantErr: "is this 1.30 written as a YAML number? quote it"},
+		{in: "1.4", wantErr: "is this 1.40 written as a YAML number? quote it"},
+		{in: "1.5", wantErr: `quote it ("1.50")`},
+		{in: "1.1", wantErr: "is this 1.10 written as a YAML number? quote it"},
+		{in: "v1.3.2", wantErr: "is this 1.30 written as a YAML number? quote it"},
+		{in: "1.0", wantErr: "oldest minor the knowledge base covers is 1.16"},
+		// A real minor below the floor is refused too, without the YAML hint.
+		{in: "1.15", wantErr: "oldest minor the knowledge base covers is 1.16"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -260,5 +273,28 @@ func TestParseTarget(t *testing.T) {
 				t.Fatalf("ParseTarget(%q) = %v, %v; want %v", tt.in, got, err, tt.want)
 			}
 		})
+	}
+}
+
+// TestParseTargetFloorHintOnlyForTruncatedMinors: the YAML hint is for
+// minors that lose a trailing zero (one digit), not for 1.15.
+func TestParseTargetFloorHintOnlyForTruncatedMinors(t *testing.T) {
+	_, err := ParseTarget("1.15")
+	if err == nil || strings.Contains(err.Error(), "YAML") {
+		t.Fatalf("ParseTarget(1.15) = %v, want a floor error without the YAML hint", err)
+	}
+}
+
+// TestAdmitServerVersionHasNoFloor: a cluster's own version is not a
+// target, so an inventory from a cluster older than the knowledge base
+// covers is still admitted (it is judged, and a target is what is refused).
+func TestAdmitServerVersionHasNoFloor(t *testing.T) {
+	inv := Inventory{SchemaVersion: SupportedSchemaVersion, ClusterID: "c", ServerVersion: "v1.12.3"}
+	if err := inv.Admit(); err != nil {
+		t.Fatalf("Admit() = %v, want nil for serverVersion v1.12.3", err)
+	}
+	inv.ServerVersion = "v2.0.0"
+	if err := inv.Admit(); err == nil || !strings.Contains(err.Error(), "major version must be 1") {
+		t.Fatalf("Admit() = %v, want a major version error", err)
 	}
 }

@@ -131,6 +131,9 @@ func TestFleetMatrixExplicitTargets(t *testing.T) {
 func TestFleetMatrixBadTargets(t *testing.T) {
 	ts, done := fleetFixture(t)
 	defer done()
+	if resp := getJSON(t, ts, "/api/v1/fleet?targets=1.3", "", nil); resp.StatusCode != 422 {
+		t.Errorf("targets=1.3 (below the knowledge base) status = %d, want 422", resp.StatusCode)
+	}
 	if resp := getJSON(t, ts, "/api/v1/fleet?targets=banana", "", nil); resp.StatusCode != 422 {
 		t.Fatalf("bad targets status = %d, want 422", resp.StatusCode)
 	}

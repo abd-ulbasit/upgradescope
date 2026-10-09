@@ -28,7 +28,7 @@ func (e *CollectorSchemaError) Error() string {
 }
 
 // ServerVersionError is an inventory whose serverVersion is not a
-// Kubernetes 1.x version. Err, from ParseTarget, quotes the value.
+// Kubernetes 1.x version. Err, from parseMajorOne, quotes the value.
 type ServerVersionError struct {
 	Err error
 }
@@ -62,7 +62,7 @@ func (inv *Inventory) Admit() error {
 		return &CollectorSchemaError{Got: inv.CollectorSchema}
 	}
 	if inv.ServerVersion != "" {
-		if _, err := ParseTarget(inv.ServerVersion); err != nil {
+		if _, err := parseMajorOne(inv.ServerVersion); err != nil {
 			return &ServerVersionError{Err: err}
 		}
 	}

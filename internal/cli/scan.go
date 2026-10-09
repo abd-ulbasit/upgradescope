@@ -373,6 +373,9 @@ func newScanCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if opts.filesDir != "" && cmd.Flags().Changed("team-label") {
+				return errTeamLabelNeedsCluster
+			}
 			if err := validateScanOptions(&opts); err != nil {
 				return err
 			}
@@ -445,8 +448,8 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
 	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown|junit|gitlab-codequality")
-	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
-	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never")
+	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution (live scans only: --files mode reads no Namespace objects, so all its findings are unattributed)")
+	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never (never always exits 0, even for a --target that is not an upgrade)")
 	cmd.Flags().BoolVar(&opts.allowIncomplete, "allow-incomplete", false, "with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed); a --target that is not an upgrade still fails")
 	cmd.Flags().StringVar(&opts.configFile, "config", "", "config file with ignore rules (default: "+suppress.ConfigFile+" in the scan root, else at the git repository root)")
 	cmd.Flags().StringVar(&opts.baselineFile, "baseline", "", "JSON report of an earlier scan (--output json or --write-baseline): the gate fails only on findings that are new since")
@@ -456,11 +459,13 @@ func newScanCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("target")
 	cmd.MarkFlagsMutuallyExclusive("files", "kubeconfig")
 	cmd.MarkFlagsMutuallyExclusive("files", "context")
-	cmd.MarkFlagsMutuallyExclusive("files", "team-label")
 	cmd.MarkFlagsMutuallyExclusive("files", "request-timeout")
 
 	return cmd
 }
+
+// errTeamLabelNeedsCluster is the refusal of --team-label with --files.
+var errTeamLabelNeedsCluster = errors.New("--team-label needs a live cluster: team attribution reads the labels of the cluster's Namespace objects, and --files mode reads none, so every finding of a files scan is unattributed (attribute teams with a live scan, the agent, or the server's gate with ?cluster=)")
 
 // manifestBase returns the directory that --files object paths
 // (collect.CollectFiles: relative to the scanned root; a single file's base
@@ -536,7 +541,11 @@ when the gate fails, which includes an unknown verdict.
 The gate (--fail-on) fails when a finding at or above the threshold remains,
 or (unless --allow-incomplete) when a required check was not assessed, so a
 blocker may have been missed. A --target that is not an upgrade of the
-cluster (at or below the minor its kube-apiserver runs) always fails it.
+cluster (at or below the minor its kube-apiserver runs) always fails it,
+--allow-incomplete notwithstanding; only --fail-on never, which always exits
+0, passes it. A --target below the oldest minor the knowledge base covers
+(1.16) is an error (exit 1), not a verdict: quote it in YAML and workflow
+files, where an unquoted 1.30 is the number 1.3.
 
 CI report formats: the exit code is the gate's in every --output format.
 --output junit writes JUnit XML, one test suite per finding category and one
@@ -575,7 +584,11 @@ add-ons: the container and init-container images and labels of Pod, Deployment,
 DaemonSet, StatefulSet, ReplicaSet, Job and CronJob pod templates, and
 IngressClass controllers, matched as a live scan matches them. Images injected
 at admission (a mesh sidecar) are not in the manifests. Version skew, Helm
-releases and deprecated API callers need a cluster and are not assessed.
+releases and deprecated API callers need a cluster and are not assessed, and
+so does team attribution: --files reads no Namespace objects, so every finding
+is unattributed and --team-label is refused. A manifest at an API version the
+target does not serve yet (introduced after it) is a blocker like a removed
+one, since applying it fails the same way; a live scan never reports that.
 
 Suppression: ignore rules in ` + suppress.ConfigFile + ` (found in the scan root,
 i.e. the --files directory or else the working directory, then at the git

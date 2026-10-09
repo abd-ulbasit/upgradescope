@@ -260,13 +260,15 @@ func TestBaselineSeverityIncreaseIsNew(t *testing.T) {
 	}
 }
 
-// --target is compared with the cluster: on a 1.37 cluster, 1.36 and the
-// typo 1.4 are not upgrades (unknown, exit 2, the gap named in the table)
-// and 1.40 is three upgrades (named in an info finding). The table header
-// shows the server version the target was judged against.
+// --target is compared with the cluster: on a 1.37 cluster, 1.36, 1.20 and
+// 1.37 are not upgrades (unknown, exit 2, the gap named in the table) and
+// 1.40 is three upgrades (named in an info finding). The table header shows
+// the server version the target was judged against. A typo below the
+// knowledge base (1.4 for 1.40) never gets that far: it is refused as an
+// input (TestScanRejectsTargetBelowTheKnowledgeBase).
 func TestScanTargetNotAnUpgrade(t *testing.T) {
 	inv := liveInventory("v1.37.0")
-	for _, target := range []string{"1.36", "1.4", "1.37"} {
+	for _, target := range []string{"1.36", "1.20", "1.37"} {
 		out, _, err := execScanStderr(t, []string{"--target", target}, evalStub(t, inv))
 		if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 {
 			t.Errorf("--target %s: err = %v, want ErrTargetNotUpgrade (exit 2)", target, err)
@@ -294,12 +296,58 @@ func TestScanTargetNotAnUpgrade(t *testing.T) {
 	}
 	// A target that is not an upgrade is a user error, not a coverage
 	// limit: --allow-incomplete does not let it pass; --fail-on never does.
-	_, _, err := execScanStderr(t, []string{"--target", "1.4", "--allow-incomplete"}, evalStub(t, inv))
-	if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 || !strings.Contains(err.Error(), "target 1.4 is not an upgrade") {
-		t.Errorf("--allow-incomplete --target 1.4: err = %v, want ErrTargetNotUpgrade naming the target (exit 2)", err)
+	_, _, err := execScanStderr(t, []string{"--target", "1.20", "--allow-incomplete"}, evalStub(t, inv))
+	if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 || !strings.Contains(err.Error(), "target 1.20 is not an upgrade") {
+		t.Errorf("--allow-incomplete --target 1.20: err = %v, want ErrTargetNotUpgrade naming the target (exit 2)", err)
 	}
-	if _, _, err := execScanStderr(t, []string{"--target", "1.4", "--fail-on", "never"}, evalStub(t, inv)); err != nil {
-		t.Errorf("--fail-on never --target 1.4: err = %v, want nil", err)
+	// --fail-on never always exits 0, the not-an-upgrade rule included
+	// (the --help text and the docs say so).
+	if _, _, err := execScanStderr(t, []string{"--target", "1.20", "--fail-on", "never"}, evalStub(t, inv)); err != nil {
+		t.Errorf("--fail-on never --target 1.20: err = %v, want nil", err)
+	}
+	flat := strings.Join(strings.Fields(newScanCmd().Long), " ")
+	if !strings.Contains(flat, "only --fail-on never, which always exits 0, passes it") {
+		t.Errorf("scan --help does not say that only --fail-on never passes a target that is not an upgrade:\n%s", flat)
+	}
+	if usage := newScanCmd().Flag("fail-on").Usage; !strings.Contains(usage, "never always exits 0") {
+		t.Errorf("--fail-on help does not say never always exits 0: %q", usage)
+	}
+}
+
+// A --target below the oldest minor the knowledge base covers is an input
+// error (exit 1), not a verdict, on a live cluster and with --files: it
+// judges nothing, so it would read ready (#237). It is what YAML makes of
+// an unquoted target: 1.30, and the error says to quote it.
+func TestScanRejectsTargetBelowTheKnowledgeBase(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ing.yaml"), []byte("apiVersion: networking.k8s.io/v1beta1\nkind: Ingress\nmetadata: {name: web, namespace: shop}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"--target", "1.3"}, {"--target", "1.4"}, {"--target", "1.0"}, {"--target", "1.15"},
+		{"--files", dir, "--target", "1.3"}, {"--files", dir, "--target", "1.4"},
+		{"--files", dir, "--target", "1.3", "--fail-on", "never"},
+	} {
+		called := false
+		_, _, err := execScanStderr(t, args, func(scanOptions) (engine.Report, error) { called = true; return engine.Report{}, nil })
+		if err == nil || ExitCode(err) != 1 || called {
+			t.Errorf("scan %v: err = %v, scanned = %v; want an input error (exit 1) before any scan", args, err, called)
+			continue
+		}
+		if !strings.Contains(err.Error(), "oldest minor the knowledge base covers is 1.16") {
+			t.Errorf("scan %v: err = %v, want the knowledge-base floor named", args, err)
+		}
+		if args[len(args)-1] == "1.3" && !strings.Contains(err.Error(), `is this 1.30 written as a YAML number? quote it ("1.30")`) {
+			t.Errorf("scan %v: err = %v, want the YAML pitfall named", args, err)
+		}
+	}
+	// 1.16 and above behave as before.
+	if _, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.16"}, real); err != nil {
+		t.Errorf("--target 1.16 with a v1beta1 Ingress: err = %v, want a passing gate (removed in 1.22)", err)
+	}
+	if _, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.30"}, real); !errors.Is(err, ErrGateFailed) {
+		t.Errorf("--target 1.30 with a v1beta1 Ingress: err = %v, want ErrGateFailed", err)
 	}
 }
 

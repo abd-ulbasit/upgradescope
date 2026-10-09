@@ -273,7 +273,12 @@ func TestGateErrors(t *testing.T) {
 	}{
 		{"no token", "?target=1.35", "", pspManifest, "application/x-yaml", 401},
 		{"missing target", "", "read-tok", pspManifest, "application/x-yaml", 422},
-		{"bad target", "?target=banana", "read-tok", pspManifest, "application/x-yaml", 422},
+		// 400, not the gate's own 422: a target the knowledge base cannot
+		// judge is a mistake in the request (#237).
+		{"bad target", "?target=banana", "read-tok", pspManifest, "application/x-yaml", 400},
+		{"truncated target (YAML 1.30)", "?target=1.3", "read-tok", pspManifest, "application/x-yaml", 400},
+		{"target below the knowledge base", "?target=1.15", "read-tok", pspManifest, "application/x-yaml", 400},
+		{"major 2", "?target=2.30", "read-tok", pspManifest, "application/x-yaml", 400},
 		{"bad format", "?target=1.35&format=xml", "read-tok", pspManifest, "application/x-yaml", 422},
 		{"bad yaml", "?target=1.35", "read-tok", "kind: [broken", "application/x-yaml", 422},
 		{"unknown cluster", "?target=1.35&cluster=nope", "read-tok", pspManifest, "application/x-yaml", 404},
@@ -287,5 +292,45 @@ func TestGateErrors(t *testing.T) {
 				t.Fatalf("status = %d, want %d (body %s)", resp.StatusCode, tc.want, raw)
 			}
 		})
+	}
+}
+
+// A truncated target (what YAML makes of target: 1.30) is a 400 that says
+// to quote the version, never a verdict: the manifests would otherwise be
+// judged against a Kubernetes older than anything the knowledge base
+// covers and read ready (#237). 1.16, the oldest minor covered, and above
+// are judged as before.
+func TestGateRefusesTargetBelowTheKnowledgeBase(t *testing.T) {
+	s := newTestServer(t, newFakeStore(), func(*Config) {})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	for _, target := range []string{"1.3", "1.4", "1.5", "1.0", "1.15"} {
+		resp, raw := postGate(t, ts, "?target="+target, "", pspManifest, "application/x-yaml")
+		if resp.StatusCode != http.StatusBadRequest || resp.Header.Get("X-Upgradescope-Verdict") != "" ||
+			!strings.Contains(string(raw), "oldest minor the knowledge base covers is 1.16") {
+			t.Errorf("target %s: status = %d, verdict %q, body %s; want 400, no verdict, the floor named", target, resp.StatusCode, resp.Header.Get("X-Upgradescope-Verdict"), raw)
+		}
+	}
+	_, raw := postGate(t, ts, "?target=1.3", "", pspManifest, "application/x-yaml")
+	if !strings.Contains(string(raw), `is this 1.30 written as a YAML number? quote it`) {
+		t.Errorf("body %s does not name the YAML pitfall", raw)
+	}
+	for target, want := range map[string]int{"1.16": 200, "1.24": 200, "1.35": 422} {
+		if resp, raw := postGate(t, ts, "?target="+target, "", pspManifest, "application/x-yaml"); resp.StatusCode != want {
+			t.Errorf("target %s: status = %d, want %d (body %s)", target, resp.StatusCode, want, raw)
+		}
+	}
+}
+
+// serve --targets (Config.ExtraTargets) below the knowledge base fails the
+// start, naming the value, instead of evaluating every push against a
+// Kubernetes older than anything covered (#237).
+func TestNewRefusesExtraTargetsBelowTheKnowledgeBase(t *testing.T) {
+	_, err := New(Config{Store: newFakeStore(), KB: testKB(), IngestToken: "t", ExtraTargets: []string{"1.37", "1.3"}})
+	if err == nil || !strings.Contains(err.Error(), `"1.3"`) || !strings.Contains(err.Error(), "oldest minor the knowledge base covers is 1.16") {
+		t.Fatalf("New with extra target 1.3: err = %v, want one naming the value and the floor", err)
+	}
+	if _, err := New(Config{Store: newFakeStore(), KB: testKB(), IngestToken: "t", ExtraTargets: []string{"1.16", "1.30"}}); err != nil {
+		t.Fatalf("New with extra targets 1.16 and 1.30: %v", err)
 	}
 }

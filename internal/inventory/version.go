@@ -54,10 +54,45 @@ func ParseVersion(s string) (Version, error) {
 	return Version{Major: nums[0], Minor: nums[1]}, nil
 }
 
+// oldestCoveredMinor is the oldest Kubernetes minor the knowledge base
+// covers: the release of the first API removal it records (1.16, the
+// extensions/v1beta1 and apps/v1beta* workload kinds). A target below it
+// judges nothing: no removal precedes it, so every manifest would read
+// ready. The kb package's dataset test pins it to the shipped dataset.
+const oldestCoveredMinor = 16
+
+// OldestCovered returns the oldest Kubernetes minor the knowledge base
+// covers (see oldestCoveredMinor), the floor of every user-supplied
+// target.
+func OldestCovered() Version { return Version{Major: 1, Minor: oldestCoveredMinor} }
+
 // ParseTarget parses a user-supplied upgrade target (a --target flag, a
-// ClusterReadiness spec target): ParseVersion plus major == 1, since
-// Kubernetes has only ever shipped major 1 and "2.0" is a typo, not a target.
+// ClusterReadiness spec target, a gate's target query parameter):
+// ParseVersion plus major == 1, since Kubernetes has only ever shipped
+// major 1 and "2.0" is a typo, not a target, plus a minor of at least
+// OldestCovered. A minor below it is what YAML makes of a version written
+// as a number: target: 1.30 is the number 1.3, and 1.3 would judge nothing
+// (no API is removed before 1.16) and read ready, so it is refused, with
+// the pitfall named.
 func ParseTarget(s string) (Version, error) {
+	v, err := parseMajorOne(s)
+	if err != nil {
+		return Version{}, err
+	}
+	if floor := OldestCovered(); v.Compare(floor) < 0 {
+		hint := ""
+		if v.Minor < 10 { // 1.30 is read as 1.3: the minor loses its trailing zero
+			hint = fmt.Sprintf("is this %d.%d0 written as a YAML number? quote it (\"%d.%d0\"); ", v.Major, v.Minor, v.Major, v.Minor)
+		}
+		return Version{}, fmt.Errorf("invalid kubernetes version %q: %sthe oldest minor the knowledge base covers is %s, and a target below it would judge nothing", s, hint, floor)
+	}
+	return v, nil
+}
+
+// parseMajorOne is ParseVersion plus major == 1: a Kubernetes 1.x version,
+// of any minor (a cluster's own version, as opposed to a target, has no
+// floor).
+func parseMajorOne(s string) (Version, error) {
 	v, err := ParseVersion(s)
 	if err != nil {
 		return Version{}, err

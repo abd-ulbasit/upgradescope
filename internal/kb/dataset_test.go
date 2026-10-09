@@ -74,3 +74,28 @@ func TestDatasetSanity(t *testing.T) {
 		}
 	}
 }
+
+// TestOldestCoveredMinorIsTheFirstRemoval pins the floor of every target
+// (inventory.OldestCovered) to the dataset: the release of its earliest
+// recorded API removal. A target below it judges nothing, so a truncated
+// one (YAML makes target: 1.30 the number 1.3) must be refused rather
+// than read ready (#237). A refresh that records an earlier removal fails
+// here until the floor follows it.
+func TestOldestCoveredMinorIsTheFirstRemoval(t *testing.T) {
+	f, err := parseLifecycle(apilifecycleJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first *inventory.Version
+	for _, e := range f.Entries {
+		if e.Removed != nil && (first == nil || e.Removed.Compare(*first) < 0) {
+			first = e.Removed
+		}
+	}
+	if first == nil {
+		t.Fatal("dataset records no removal")
+	}
+	if got := inventory.OldestCovered(); got != *first {
+		t.Errorf("inventory.OldestCovered() = %s, but the dataset's earliest removal is %s: update oldestCoveredMinor (and action/run.sh's floor)", got, first)
+	}
+}
