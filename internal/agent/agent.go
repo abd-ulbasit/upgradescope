@@ -734,11 +734,12 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	}
 }
 
-// jitter returns d ±10% (from minTickSpacing(d) to 11/10 of d), so the second and later ticks of agents started at
-// the same moment drift apart instead of reaching the upgradescope server
-// together. The first tick is not jittered: it runs at once so the pod is
-// Ready, and `helm install --wait` gets an answer, as soon as possible.
-// Agents started together therefore push together; their push retries are
+// jitter returns d ±10% (from minTickSpacing(d) to 11/10 of d), so the
+// second and later ticks of agents started at the same moment drift apart
+// instead of reaching the upgradescope server together. The first tick is
+// not jittered: it runs at once so the pod is Ready, and
+// `helm install --wait` gets an answer, as soon as possible. Agents
+// started together therefore push together; their push retries are
 // jittered (retryDelay), so a busy server's 503s do not keep them aligned.
 func jitter(d time.Duration) time.Duration {
 	return jitterBy(d, rand.Int64N(int64(d/5)+1))
