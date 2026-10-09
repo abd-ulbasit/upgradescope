@@ -373,3 +373,25 @@ func (w *stringWalker) walk(v reflect.Value, max int) error {
 	}
 	return nil
 }
+
+// AppendReason returns reason with addition appended after "; ", within
+// MaxReasonBytes: the server builds on a reason a snapshot carries (already
+// cut by CutFreeText) and must stay within the bound admission applies. It
+// is the existing text that is cut, so the addition, which says what the
+// server judged, is always whole; an addition itself over the bound is cut.
+func AppendReason(reason, addition string) string {
+	if r, ok := cutText(addition, MaxReasonBytes); ok {
+		addition = r
+	}
+	if reason == "" {
+		return addition
+	}
+	const sep = "; "
+	if room := MaxReasonBytes - len(addition) - len(sep); len(reason) > room {
+		if room < len(cutMark) {
+			return addition
+		}
+		reason = utf8Prefix(reason, room-len(cutMark)) + cutMark
+	}
+	return reason + sep + addition
+}

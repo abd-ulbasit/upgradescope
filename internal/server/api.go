@@ -668,6 +668,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	// The envelope's labels are agent-controlled text: bounded and printable
+	// before anything is stored or judged from them (kbskew.go, legacy.go).
+	if err := validateEnvelopeLabel("agentVersion", req.AgentVersion, maxAgentVersionBytes); err != nil {
+		errJSON(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if err := validateEnvelopeLabel("kbVersion", req.KBVersion, maxKBVersionBytes); err != nil {
+		errJSON(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	// Per-cluster tokens authenticate exactly one cluster. 403 (not 401):
 	// the token is genuine, the target cluster is what's wrong. Checked
 	// before any store write so a mismatched push registers nothing.

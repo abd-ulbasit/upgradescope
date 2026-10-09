@@ -588,7 +588,11 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 			if err != nil {
 				return 0, false, err
 			}
-			_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+			// A duplicate whose envelope differs (the agent was upgraded to
+			// the server's data, or its version moved) is judged differently
+			// though the inventory is the same: every target is re-judged.
+			changed := latest.KBVersion != snap.KBVersion || latest.AgentVersion != snap.AgentVersion
+			_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true, changed)
 			return snapID, dup, err
 		}
 	}
@@ -629,7 +633,8 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 			}
 			cluster.ID = c.ID
 		}
-		_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+		// The envelope the racing push left is not known here: re-judge.
+		_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true, true)
 		return snapID, true, err
 	}
 	if len(batch.Outbox) > 0 {
@@ -651,11 +656,14 @@ func (e *evaluationError) Unwrap() error { return e.err }
 // scrape ends or moves (holdChanged), are recomputed; unchanged results
 // are refreshed in place, changed ones inserted with their notifications.
 // inv is the snapshot's inventory: on a duplicate push (pushed) the pushed
-// one, whose collectedAt is the new scrape's. A concurrent writer that got
+// one, whose collectedAt is the new scrape's. force recomputes every
+// target whether or not it is stale: a duplicate push whose envelope
+// (kbVersion, agentVersion) differs from the stored one is judged
+// differently (judgedView) though nothing else changed. A concurrent writer that got
 // there first (store.ErrConflict) has done the same work, so the pass is
 // dropped. left is true when a target's report would be over the limit,
 // so what is stored stays, outdated (unrefreshable).
-func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory, pushed bool) (left bool, err error) {
+func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory, pushed, force bool) (left bool, err error) {
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
@@ -673,7 +681,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			log.Printf("server: re-evaluation of cluster %d skipped: snapshot %d is no longer the latest", cluster.ID, snapID)
 			return false, nil
 		}
-		if found && !s.stale(cur, now) && !holdChanged(cur.Report, hold) {
+		if found && !force && !s.stale(cur, now) && !holdChanged(cur.Report, hold) {
 			continue
 		}
 		// What sameResult and deltaFor read of the stored report: its
@@ -806,7 +814,7 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 			}
 			continue
 		}
-		left, err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv, false)
+		left, err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv, false, false)
 		if err != nil {
 			log.Printf("server: re-evaluation of cluster %d: %v", c.ID, err)
 		}

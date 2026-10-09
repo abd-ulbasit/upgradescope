@@ -73,8 +73,10 @@ func kbSkewView(inv inventory.Inventory, agentKB string, k kb.KB) inventory.Inve
 		return inv
 	}
 	what := func(digest, server string) string {
+		// The label is the agent's text and is never quoted: only the
+		// digests kbDigests parsed (8 hex characters each) are.
 		if !known {
-			return fmt.Sprintf("the agent's knowledge base (%q) names no dataset digests", agentKB)
+			return "the agent's knowledge base label names no dataset digests"
 		}
 		return fmt.Sprintf("the agent collected with %s, this server judges with %s", digest, server)
 	}
@@ -84,10 +86,9 @@ func kbSkewView(inv inventory.Inventory, agentKB string, k kb.KB) inventory.Inve
 		if !ok || !st.Available {
 			return // not read at all: already a gap of its own
 		}
-		if st.Reason != "" {
-			st.Reason += "; "
-		}
-		st.Reason += reason
+		// Within the bound admission applies to a capability's reason, whatever
+		// the snapshot carries.
+		st.Reason = inventory.AppendReason(st.Reason, reason)
 		st.Partial = true
 		st.Skipped = slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(st.Skipped), inventory.SkippedNewerKB))))
 		caps[c] = st
@@ -98,7 +99,7 @@ func kbSkewView(inv inventory.Inventory, agentKB string, k kb.KB) inventory.Inve
 		mark(inventory.CapHelm, "knowledge base skew: lifecycle data differs ("+what(agentLifecycle, serverLifecycle)+"), so a release's stored manifest was read only for the APIs the agent's flagged; upgrade the agent to the server's version")
 	}
 	if registrySkew {
-		mark(inventory.CapAddOns, "knowledge base skew: add-on registry differs ("+what(agentRegistry, serverRegistry)+"), so add-ons this server's registry knows that the agent's did not were never matched, and an image no entry of the agent's claimed is listed untagged only; upgrade the agent to the server's version to assess them")
+		mark(inventory.CapAddOns, "knowledge base skew: add-on registry differs ("+what(agentRegistry, serverRegistry)+"), so add-ons this server's registry knows that the agent's did not were never matched, and an image no entry of the agent's claimed is listed untagged only; upgrade the agent to the server's version to assess them. The two can also run different --registry-dir entries (agent.extraRegistry in the chart), which change the registry digest: give the server the same entries as the agent")
 	}
 	inv.Capabilities = caps
 	return inv
