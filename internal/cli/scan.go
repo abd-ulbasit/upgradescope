@@ -23,6 +23,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif"
 	"github.com/abd-ulbasit/upgradescope/internal/suppress"
+	"github.com/abd-ulbasit/upgradescope/internal/textsafe"
 )
 
 // ErrGateFailed signals findings at or above the --fail-on threshold.
@@ -54,6 +55,11 @@ func ExitCode(err error) int {
 		return 1
 	}
 }
+
+// ErrorText is err as the process prints it on stderr. An error can quote
+// a file name or a value from the manifests being scanned, so its control
+// characters are shown as escapes (a multi-line error keeps its line breaks).
+func ErrorText(err error) string { return textsafe.Lines(err.Error()) }
 
 type scanOptions struct {
 	target      string
@@ -119,9 +125,9 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 		for _, w := range sum.Warnings {
 			w.File = path.Join(opts.fileBase, w.File)
 			if w.Unassessed {
-				fmt.Fprintf(stderr, "warning: skipped %s\n", w)
+				fmt.Fprintf(stderr, "warning: skipped %s\n", esc(w.String()))
 			} else {
-				fmt.Fprintf(stderr, "warning: %s\n", w)
+				fmt.Fprintf(stderr, "warning: %s\n", esc(w.String()))
 			}
 		}
 		// Nothing scanned is not "nothing to fix": an empty render, a wrong
@@ -178,7 +184,7 @@ func evaluateScan(inv inventory.Inventory, k kb.KB, opts scanOptions, now time.T
 func planHops(inv inventory.Inventory, k kb.KB, opts scanOptions, now time.Time) []engine.Hop {
 	warn := func(msg string) {
 		if opts.stderr != nil {
-			fmt.Fprintf(opts.stderr, "warning: --plan: %s, so there is no upgrade plan; the report judges the target alone\n", msg)
+			fmt.Fprintf(opts.stderr, "warning: --plan: %s, so there is no upgrade plan; the report judges the target alone\n", esc(msg))
 		}
 	}
 	from := opts.fromVersion
@@ -354,7 +360,7 @@ func newScanCmd() *cobra.Command {
 			}
 			report, warnings := suppress.Apply(report, ignore.rules, suppress.Options{Now: time.Now(), Source: ignore.source, FileBase: ignore.fileBase})
 			for _, w := range warnings {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", esc(w))
 			}
 			if opts.writeBaseline != "" {
 				if err := writeBaselineFile(opts, report); err != nil {

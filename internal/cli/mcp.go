@@ -131,7 +131,7 @@ without it, and the tool shows that error.`,
 					return err
 				}
 				if w := mcp.CleartextWarning(opts.serverURL, opts.readToken); w != "" {
-					fmt.Fprintf(stderr, "warning: %s\n", w)
+					fmt.Fprintf(stderr, "warning: %s\n", esc(w))
 				}
 				cfg.Fleet = fleet
 			}
@@ -347,7 +347,7 @@ func mcpScanner(base mcpOptions, stderr io.Writer) func(context.Context, mcp.Sca
 			r, warnings := suppress.Apply(r, nil, suppress.Options{Now: now})
 			if i == 0 { // the same objects at every target: warn once
 				for _, w := range warnings {
-					fmt.Fprintf(stderr, "warning: %s\n", w)
+					fmt.Fprintf(stderr, "warning: %s\n", esc(w))
 				}
 			}
 			if docs[i], err = reportDocument(r, nil); err != nil {

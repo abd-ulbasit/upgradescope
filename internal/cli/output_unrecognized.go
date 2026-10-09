@@ -36,7 +36,7 @@ func writeUnrecognizedImages(w io.Writer, r engine.Report) {
 	shown, more := unrecognizedShown(r)
 	fmt.Fprintf(w, "\nUNRECOGNIZED IMAGES (%d)\n  %s:\n", total, unrecognizedNote)
 	for _, repo := range shown {
-		fmt.Fprintf(w, "  - %s\n", repo)
+		fmt.Fprintf(w, "  - %s\n", esc(repo))
 	}
 	if more > 0 {
 		fmt.Fprintf(w, "  …and %d more (--output json lists up to %d)\n", more, inventory.MaxUnrecognizedImages)

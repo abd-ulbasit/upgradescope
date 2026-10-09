@@ -8,33 +8,38 @@ import (
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/suppress"
+	"github.com/abd-ulbasit/upgradescope/internal/textsafe"
 )
 
 // WriteTable renders a human-readable plain-text report. No ANSI escape
 // codes are emitted (NO_COLOR-safe by construction). Findings arrive
 // pre-sorted from the engine (severity desc, category, title); we only
-// group them under severity headers. It returns the first write error.
+// group them under severity headers. Every string that a manifest, the
+// cluster or a config file controls goes through esc (textsafe.Escape), so
+// a name holding an escape sequence, a CR or a bidi override is shown as
+// text and cannot repaint or reorder what the reader sees. It returns the
+// first write error.
 func WriteTable(out io.Writer, r engine.Report) error {
 	w := &errWriter{w: out}
 	fmt.Fprintln(w, "upgradescope upgrade readiness report")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "Cluster:  %s\n", r.ClusterID)
+	fmt.Fprintf(w, "Cluster:  %s\n", esc(r.ClusterID))
 	switch { // live scans only: which cluster this was
 	case r.KubeContext != "" && r.APIServer != "":
-		fmt.Fprintf(w, "Context:  %s (API server %s)\n", r.KubeContext, r.APIServer)
+		fmt.Fprintf(w, "Context:  %s (API server %s)\n", esc(r.KubeContext), esc(r.APIServer))
 	case r.KubeContext != "":
-		fmt.Fprintf(w, "Context:  %s\n", r.KubeContext)
+		fmt.Fprintf(w, "Context:  %s\n", esc(r.KubeContext))
 	case r.APIServer != "":
-		fmt.Fprintf(w, "Context:  (API server %s)\n", r.APIServer)
+		fmt.Fprintf(w, "Context:  (API server %s)\n", esc(r.APIServer))
 	}
 	if r.ServerVersion != "" { // files mode has no cluster version
-		fmt.Fprintf(w, "Server:   %s\n", r.ServerVersion)
+		fmt.Fprintf(w, "Server:   %s\n", esc(r.ServerVersion))
 	}
 	if r.Support != nil { // a managed cluster whose provider dates its minor
-		fmt.Fprintf(w, "Support:  %s\n", r.Support.Summary())
+		fmt.Fprintf(w, "Support:  %s\n", esc(r.Support.Summary()))
 	}
 	fmt.Fprintf(w, "Target:   %s\n", r.Target)
-	fmt.Fprintf(w, "KB:       %s\n", r.KBVersion)
+	fmt.Fprintf(w, "KB:       %s\n", esc(r.KBVersion))
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "SCORE  %d/100\n", r.Score)
 	switch {
@@ -44,7 +49,7 @@ func WriteTable(out io.Writer, r engine.Report) error {
 		fmt.Fprintf(w, "READY  unknown (required checks were not assessed)\n")
 		for _, g := range r.NotAssessed {
 			if g.Required {
-				fmt.Fprintf(w, "  %s: %s\n", g.Label(), g.Reason)
+				fmt.Fprintf(w, "  %s: %s\n", esc(g.Label()), esc(g.Reason))
 			}
 		}
 	case r.Ready:
@@ -53,7 +58,7 @@ func WriteTable(out io.Writer, r engine.Report) error {
 		if len(r.NotAssessed) > 0 {
 			labels := make([]string, 0, len(r.NotAssessed))
 			for _, g := range r.NotAssessed {
-				labels = append(labels, g.Label())
+				labels = append(labels, esc(g.Label()))
 			}
 			fmt.Fprintf(w, "       not fully assessed: %s (see NOT ASSESSED)\n", strings.Join(labels, ", "))
 		}
@@ -82,19 +87,19 @@ func WriteTable(out io.Writer, r engine.Report) error {
 			if f.BaselineState == engine.BaselineUnchanged {
 				mark = " (in baseline)"
 			}
-			fmt.Fprintf(w, "  [%s] %s%s\n", f.Category, f.Title, mark)
+			fmt.Fprintf(w, "  [%s] %s%s\n", esc(string(f.Category)), esc(f.Title), mark)
 			if f.Detail != "" {
-				fmt.Fprintf(w, "      %s\n", f.Detail)
+				fmt.Fprintf(w, "      %s\n", esc(f.Detail))
 			}
 			writeObjects(w, f)
 			if len(f.Teams) > 0 {
-				fmt.Fprintf(w, "      teams: %s\n", strings.Join(f.Teams, ", "))
+				fmt.Fprintf(w, "      teams: %s\n", esc(strings.Join(f.Teams, ", ")))
 			}
 			if f.Remediation != "" {
-				fmt.Fprintf(w, "      fix: %s\n", f.Remediation)
+				fmt.Fprintf(w, "      fix: %s\n", esc(f.Remediation))
 			}
 			for _, c := range f.Citations {
-				fmt.Fprintf(w, "      see: %s\n", c)
+				fmt.Fprintf(w, "      see: %s\n", esc(c))
 			}
 		}
 	}
@@ -109,15 +114,19 @@ func WriteTable(out io.Writer, r engine.Report) error {
 	if len(r.NotAssessed) > 0 {
 		fmt.Fprintf(w, "\nNOT ASSESSED\n")
 		for _, g := range r.NotAssessed {
-			fmt.Fprintf(w, "  %s: %s\n", g.Label(), g.Reason)
+			fmt.Fprintf(w, "  %s: %s\n", esc(g.Label()), esc(g.Reason))
 			if len(g.Skipped) > 0 {
-				fmt.Fprintf(w, "      skipped: %s\n", strings.Join(g.Skipped, ", "))
+				fmt.Fprintf(w, "      skipped: %s\n", esc(strings.Join(g.Skipped, ", ")))
 			}
 		}
 	}
 	writeUnrecognizedImages(w, r)
 	return w.err
 }
+
+// esc is textsafe.Escape: the one escape every renderer of text that a
+// manifest or the cluster controls goes through.
+func esc(s string) string { return textsafe.Escape(s) }
 
 // errWriter remembers the first write error and drops every later write,
 // so a renderer can write unchecked and report the failure once at the
@@ -148,21 +157,21 @@ func writeObjects(w io.Writer, f engine.Finding) {
 		shown = shown[:tableObjectLimit]
 	}
 	for _, o := range shown {
-		name := o.Name
+		name := esc(o.Name)
 		if name == "" {
 			name = "(unnamed)"
 		}
 		if o.Namespace != "" {
-			name = o.Namespace + "/" + name
+			name = esc(o.Namespace) + "/" + name
 		}
 		switch {
 		case o.File != "":
-			name += fmt.Sprintf("  %s:%d", o.File, o.Line)
+			name += fmt.Sprintf("  %s:%d", esc(o.File), o.Line)
 		case o.Line > 0:
 			name += fmt.Sprintf("  line %d", o.Line)
 		}
 		if o.RenderedFrom != "" {
-			name += " (rendered from " + o.RenderedFrom + ")"
+			name += " (rendered from " + esc(o.RenderedFrom) + ")"
 		}
 		fmt.Fprintf(w, "      - %s\n", name)
 	}
@@ -187,18 +196,18 @@ func writeSuppressed(w io.Writer, r engine.Report) {
 	}
 	fmt.Fprintf(w, "\nSUPPRESSED (%d)\n", len(r.Suppressed))
 	for _, s := range r.Suppressed {
-		fmt.Fprintf(w, "  [%s] %s\n", s.Category, s.Title)
+		fmt.Fprintf(w, "  [%s] %s\n", esc(string(s.Category)), esc(s.Title))
 		writeObjects(w, s.Finding)
-		reason := "      reason: " + s.Reason
+		reason := "      reason: " + esc(s.Reason)
 		switch {
 		case s.Source == suppress.AnnotationSource:
 			reason += " (annotation)"
 		case s.Expires != "":
-			reason += " (until " + s.Expires + ")"
+			reason += " (until " + esc(s.Expires) + ")"
 		}
 		fmt.Fprintln(w, reason)
 		if s.Source != "" && s.Source != suppress.AnnotationSource {
-			fmt.Fprintf(w, "      from: %s\n", s.Source)
+			fmt.Fprintf(w, "      from: %s\n", esc(s.Source))
 		}
 	}
 }
@@ -230,15 +239,15 @@ func writeTeamsSection(w io.Writer, r engine.Report) {
 		if name == "" {
 			name = engine.UnattributedTeam
 		}
-		if len(name) > width {
+		if name = esc(name); len(name) > width {
 			width = len(name)
 		}
 	}
 	fmt.Fprintf(w, "\nTEAMS\n")
 	for _, name := range names {
 		ts := scores[name]
-		label := name
-		if label == "" {
+		label := esc(name)
+		if name == "" {
 			label = engine.UnattributedTeam
 		}
 		fmt.Fprintf(w, "  %-*s  %3d/100  %-7s  blockers %d  warnings %d\n",
