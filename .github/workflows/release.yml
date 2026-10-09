@@ -187,7 +187,12 @@ jobs:
           # The docker-container builder runs its own BuildKit, which does not
           # read the daemon's registry-mirrors: give it the mirror too (the
           # dockerhub-mirror step above covers the daemon, which pulls the
-          # builder image itself).
+          # builder image itself). That image is pinned by digest, the one
+          # buildx-stable-1 names today: the mirror serves a digest from its
+          # cache, but the first pull of the moving tag in a job went to
+          # Docker Hub and timed out. Bump it by hand, in every workflow
+          # (hack/dockerhub-mirror_test.sh checks they agree).
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]

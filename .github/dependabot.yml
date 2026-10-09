@@ -47,7 +47,8 @@ updates:
   # Tool versions the workflows pass as inputs (helm) or the hack/ scripts pin
   # (GoReleaser, govulncheck, staticcheck, kind, kubectl, kubeconform,
   # kyverno and gator, and their sha256s; the kind node images; the
-  # Postgres service images in hack/pg-images.txt; the Renovate validator in
+  # Postgres service images in hack/pg-images.txt; the BuildKit builder image
+  # in the docker/setup-buildx-action steps; the Renovate validator in
   # hack/renovate/package.json and its lockfile, whose advisories
   # make renovate-audit gates) are not visible to it and are bumped by
   # hand. A GoReleaser bump goes in the Makefile and release.yml together,

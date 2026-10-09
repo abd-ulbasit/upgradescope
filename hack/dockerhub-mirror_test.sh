@@ -16,7 +16,10 @@
 #     day), and none that has services: or container: has it (they start
 #     before the steps and the daemon restart would kill them);
 #   - every docker/setup-buildx-action step points its BuildKit at the mirror
-#     too (a docker-container builder ignores the daemon's mirrors);
+#     too (a docker-container builder ignores the daemon's mirrors), and
+#     pulls its builder image by one digest, the same in every workflow (the
+#     mirror serves a digest from its cache; the first pull of the moving
+#     buildx-stable-1 tag in a job went to Docker Hub and timed out);
 #   - every services: or container: image that Docker Hub would serve is
 #     named mirror.gcr.io/... instead;
 #   - CONTRIBUTING.md documents it.
@@ -122,7 +125,8 @@ fi
 
 # audit <workflow>: "need <job>" for each job with a step that builds an
 # image, creates a kind cluster or otherwise pulls a container image, and
-# "bad <file>:<line>: <job>: <why>" for each violation.
+# "bad <file>:<line>: <job>: <why>" for each violation, and "buildkit
+# <digest>" for each buildx step's builder image.
 audit() {
   awk -v file="$1" '
     # Is this image reference served by Docker Hub (no registry host, or one
@@ -153,9 +157,16 @@ audit() {
       } else if (!need_n && needs(st)) {
         need_n = n; need_line = sn
       }
-      if (st ~ /docker\/setup-buildx-action@/ &&
-          (st !~ /buildkitd-config-inline:/ || st !~ /\[registry\."docker\.io"\]/ || st !~ /mirrors = \["mirror\.gcr\.io"\]/))
-        print "bad " file ":" sn ": " job ": docker/setup-buildx-action without buildkitd-config-inline sending docker.io to mirror.gcr.io (its BuildKit ignores the daemon mirror)"
+      if (st ~ /docker\/setup-buildx-action@/) {
+        if (st !~ /buildkitd-config-inline:/ || st !~ /\[registry\."docker\.io"\]/ || st !~ /mirrors = \["mirror\.gcr\.io"\]/)
+          print "bad " file ":" sn ": " job ": docker/setup-buildx-action without buildkitd-config-inline sending docker.io to mirror.gcr.io (its BuildKit ignores the daemon mirror)"
+        if (match(st, /driver-opts:[ ]*image=moby\/buildkit:buildx-stable-1@sha256:[0-9a-f]+/)) {
+          d = substr(st, RSTART, RLENGTH); sub(/^.*@/, "", d)
+          if (length(d) == 71) print "buildkit " d
+          else print "bad " file ":" sn ": " job ": the BuildKit image digest " d " is not sha256 and 64 hex digits"
+        } else
+          print "bad " file ":" sn ": " job ": docker/setup-buildx-action without driver-opts: image=moby/buildkit:buildx-stable-1@sha256:<digest> (a moving tag is not served from the mirror cache)"
+      }
       sn = 0
     }
     function endjob() {
@@ -203,6 +214,15 @@ for f in .github/workflows/*.yml; do
   [ ! -s "$work/out" ] && ok "$f: every job that pulls from Docker Hub pulls through the mirror" ||
     fail "$f: a job pulls from Docker Hub without the mirror" "$work/out"
 done
+# One builder image digest across every workflow, and the audit sees every
+# buildx step (3: images and release-check in ci.yml, goreleaser in release.yml).
+digests() { local f; for f in "$@"; do audit "$f" | sed -n 's/^buildkit //p'; done | sort | uniq -c | sed 's/^ *//'; }
+digests .github/workflows/*.yml >"$work/out"
+if [ "$(wc -l <"$work/out" | tr -d ' ')" = 1 ] && grep -qE '^3 sha256:[0-9a-f]{64}$' "$work/out"; then
+  ok "the 3 buildx steps pull the BuildKit image by one digest ($(cut -d' ' -f2 "$work/out"))"
+else
+  fail "the buildx steps do not all pull the BuildKit image by the same digest" "$work/out"
+fi
 # The audit has to see the jobs it is there for.
 want_need() {
   local got
@@ -243,6 +263,14 @@ mutant "ci.yml images job: mirror step before checkout" "$ci" -0777 -pe \
   's{(      - uses: actions/checkout\@[^\n]*\n        with:\n          persist-credentials: false\n)(      - uses: \./\.github/actions/dockerhub-mirror[^\n]*\n)}{$2$1}'
 mutant "ci.yml buildx step without buildkitd-config-inline" "$ci" -0777 -pe 's/ {10}buildkitd-config-inline: \|\n( {12,}.*\n)+//'
 mutant "release.yml buildx step without buildkitd-config-inline" "$release" -0777 -pe 's/ {10}buildkitd-config-inline: \|\n( {12,}.*\n)+//'
+mutant "ci.yml buildx step without driver-opts" "$ci" -ne 'print unless m{^          driver-opts: image=} && ++$n == 1'
+mutant "release.yml buildx step without driver-opts" "$release" -ne 'print unless m{^          driver-opts: image=}'
+mutant "buildx step on the moving buildx-stable-1 tag" "$ci" -pe 's{(driver-opts: image=moby/buildkit:buildx-stable-1)\@sha256:[0-9a-f]+}{$1}'
+mutant "buildx step on a truncated digest" "$ci" -pe 's{(driver-opts: image=moby/buildkit:buildx-stable-1\@sha256:[0-9a-f]{12})[0-9a-f]+}{$1}'
+perl -pe '$d ||= s{(driver-opts: image=moby/buildkit:buildx-stable-1\@sha256:)[0-9a-f]{8}}{${1}00000000}' "$ci" >"$work/m.yml"
+digests "$work/m.yml" "$release" >"$work/out"
+[ "$(wc -l <"$work/out" | tr -d ' ')" -gt 1 ] && ok "caught: a buildx step with another builder image digest than the rest" ||
+  fail "not caught: a buildx step with another builder image digest"
 mutant "buildkitd config naming another mirror" "$ci" -pe 's/mirrors = \["mirror\.gcr\.io"\]/mirrors = ["registry.example"]/'
 mutant "buildkitd config for another registry" "$ci" -pe 's/\[registry\."docker\.io"\]/[registry."ghcr.io"]/'
 mutant "pg-conformance service image straight from Docker Hub" "$ci" -pe 's{image: mirror\.gcr\.io/library/\$\{\{ matrix\.image \}\}}{image: \${{ matrix.image }}}'
@@ -259,9 +287,11 @@ extended() {
 co='      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
 mi='      - uses: ./.github/actions/dockerhub-mirror'
 sbx='      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1'
-cfg_inline='          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["mirror.gcr.io"]'
+bk='          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea'
+cfg_inline="$bk
+          buildkitd-config-inline: |
+            [registry.\"docker.io\"]
+              mirrors = [\"mirror.gcr.io\"]"
 # new_job <name> <command>: a new job whose run step is <command>.
 new_job() {
   local verdict=$1 name=$2 cmd=$3

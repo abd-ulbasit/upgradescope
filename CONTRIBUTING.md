@@ -251,7 +251,12 @@ kind cluster or otherwise pulls a container image (`images`, `release-check`,
 mirror to `/etc/docker/daemon.json` and restarts Docker. Two cases that action
 cannot cover are handled by hand: a `docker/setup-buildx-action` builder runs
 its own BuildKit, so it sets `buildkitd-config-inline` with
-`[registry."docker.io"] mirrors = ["mirror.gcr.io"]`, and the `pg-conformance`
+`[registry."docker.io"] mirrors = ["mirror.gcr.io"]` and pulls the BuildKit
+image itself by digest (`driver-opts: image=moby/buildkit:buildx-stable-1@sha256:...`,
+the same in all three buildx steps; the mirror serves a digest from its cache,
+while the first pull of the moving tag in a job went to Docker Hub and timed
+out; bump it by hand with the index digest `docker buildx imagetools inspect
+moby/buildkit:buildx-stable-1` prints), and the `pg-conformance`
 service container starts before any step (a Docker restart would kill it), so
 its image is named `mirror.gcr.io/library/postgres:<major>@sha256:...`, the
 digest from `hack/pg-images.txt`. `hack/dockerhub-mirror_test.sh` (`make
