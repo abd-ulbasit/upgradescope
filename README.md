@@ -65,7 +65,7 @@ newer than the knowledge base knows.
 
 **Gate pull requests** with the GitHub Action (pin it to a release tag or
 its SHA; the floating `v0` tag moves to each newer stable release). For a
-release from v0.2.0 on, it installs the binary only once its build
+release from v0.2.0-rc.2 on, it installs the binary only once its build
 provenance verifies: the release workflow built it at that tag
 ([what is checked](action/README.md#install-and-integrity)).
 

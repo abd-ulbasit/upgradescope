@@ -8,8 +8,11 @@
 #   - action/run.sh install: input validation, sha256 verification against
 #     the release's checksums.txt and the provenance check (gh attestation
 #     verify, or cosign verify-blob; both fail closed, including on a
-#     substituted archive whose checksums.txt matches), the go install
-#     fallback only with a Go toolchain, and version: preinstalled;
+#     substituted archive whose checksums.txt matches), no source build
+#     ever with verify-provenance true (a failed download installs
+#     nothing), the go install fallback only with verify-provenance false
+#     and a Go toolchain, the provenance threshold (v0.2.0-rc.2) and its
+#     version comparator, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
 #     summary on action/testdata, the allow-incomplete, config, baseline
 #     and write-baseline inputs, and an injection payload as data;
@@ -150,11 +153,11 @@ done
 echo "curl \$url" >>"$work/calls"
 case \$url in
   "$releases/latest")
-    [ -n "\${STUB_LATEST:-}" ] || exit 22
+    [ -n "\${STUB_LATEST:-}" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     [ "\$fmt" != '%{url_effective}' ] || printf '%s' "$releases/tag/\$STUB_LATEST" ;;
   "$releases/download/"*)
     f="$work/rel/\${url#"$releases/download/"}"
-    [ -f "\$f" ] || exit 22
+    [ -f "\$f" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     cp "\$f" "\$out" ;;
   *) exit 6 ;;
 esac
@@ -289,6 +292,8 @@ release v9.9.5 none
 release v9.9.4 ok
 release v9.9.9-rc.1 ok
 release v0.2.0-rc.2 ok
+release v0.2.0-rc.1 ok
+release v0.2.0-rc.10 ok
 release v0.1.1 ok
 release v9.9.3 ok && tamper v9.9.3
 release v9.9.1 ok
@@ -350,6 +355,8 @@ output() { sed -n "s/^$1=//p" "$rt/output" | tail -n 1; }
 # has <name> <file> <substring>
 has() { if grep -qF -- "$3" "$2"; then ok "$1"; else fail "$1" "$2"; fi; }
 hasnt() { if grep -qF -- "$3" "$2"; then fail "$1" "$2"; else ok "$1"; fi; }
+# installed_nothing: the last run put no binary on PATH.
+installed_nothing() { [ ! -e "$tmp/upgradescope-bin/upgradescope" ] && [ ! -s "$rt/path" ]; }
 
 # --- input validation -----------------------------------------------------
 
@@ -532,15 +539,48 @@ expect "an archive missing from checksums.txt fails" 1 "checksums.txt for v9.9.7
 run install "$work/stub-curl:" INPUT_VERSION=v9.9.5
 expect "a release without checksums.txt fails" 1 "cannot download checksums.txt for v9.9.5"
 
-run install "$work/stub-curl:" INPUT_VERSION=v9.9.6
-expect "no archive and no Go toolchain fails clearly" 1 "no Go toolchain to build it from source"
+# No archive. With verify-provenance true (the default) nothing is
+# installed, Go or not: a source build cannot be provenance-checked, so a
+# fallback to one would let anything that can make the download fail
+# install an unverified binary (#244, S1).
 run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=v9.9.6
-expect "no archive falls back to go install with Go present" 0 "falling back to go install"
+expect "no archive with verify-provenance true fails, naming the download error" 1 \
+  "cannot download the release archive $releases/download/v9.9.6/$asset (curl: (22) The requested URL returned error: 404); nothing was installed"
+has "no archive: the failure says there is no source-build fallback, and how to opt out" "$work/out" \
+  "there is no fallback to a source build. Use a published release (https://github.com/abd-ulbasit/upgradescope/releases), or set verify-provenance: false"
+hasnt "no archive with verify-provenance true never runs go" "$work/calls" "go "
+installed_nothing && ok "no archive with verify-provenance true installs nothing (no binary, no GITHUB_PATH)" ||
+  fail "no archive with verify-provenance true installs nothing" "$work/out"
+[ "$(grep -c '^::' "$work/out")" = 1 ] && ok "no archive: one error, nothing else" || fail "no archive: one error, nothing else" "$work/out"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=v9.9.6 INPUT_VERIFY_PROVENANCE=true
+expect "no archive with an explicit verify-provenance: true fails" 1 "nothing was installed. verify-provenance is true"
+hasnt "no archive with an explicit verify-provenance: true never runs go" "$work/calls" "go "
+installed_nothing && ok "no archive with an explicit verify-provenance: true installs nothing" ||
+  fail "no archive with an explicit verify-provenance: true installs nothing" "$work/out"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=latest
+expect "an unresolvable latest with verify-provenance true fails, naming the error" 1 \
+  "cannot resolve the latest release (got '') (curl: (22) The requested URL returned error: 404); nothing was installed"
+hasnt "an unresolvable latest with verify-provenance true never runs go" "$work/calls" "go "
+installed_nothing && ok "an unresolvable latest with verify-provenance true installs nothing" ||
+  fail "an unresolvable latest with verify-provenance true installs nothing" "$work/out"
+if compgen -G "$tmp/upgradescope-*.err" >/dev/null || compgen -G "$tmp/upgradescope-dl.*" >/dev/null; then
+  fail "a failed download leaves no scratch files in RUNNER_TEMP" "$work/out"
+else ok "a failed download leaves no scratch files in RUNNER_TEMP"; fi
+
+# verify-provenance: false keeps the source-build fallback, with a warning,
+# and only with a Go toolchain.
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.6 INPUT_VERIFY_PROVENANCE=false
+expect "no archive and no Go toolchain fails clearly (verify-provenance: false)" 1 "no Go toolchain to build it from source"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=v9.9.6 INPUT_VERIFY_PROVENANCE=false
+expect "no archive falls back to go install with Go present (verify-provenance: false)" 0 "falling back to go install"
+has "the fallback warns that the source build is unverified" "$work/out" \
+  "::warning::verify-provenance is false and cannot download the release archive $releases/download/v9.9.6/$asset (curl: (22) The requested URL returned error: 404): building from source with go install, which has no checksums.txt or provenance check"
 has "go install builds the requested version" "$work/calls" "go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@v9.9.6"
 has "go install puts GOBIN on GITHUB_PATH" "$rt/path" "$work/gobin"
-run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=latest
-expect "unresolvable latest falls back to go install" 0 "falling back to go install"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=latest INPUT_VERIFY_PROVENANCE=false
+expect "unresolvable latest falls back to go install (verify-provenance: false)" 0 "falling back to go install"
 has "go install builds @latest" "$work/calls" "cmd/upgradescope@latest"
+has "the @latest fallback warns too" "$work/out" "::warning::verify-provenance is false and cannot resolve the latest release"
 
 run install "$work/real:$work/stub-curl:" INPUT_VERSION=preinstalled
 expect "preinstalled uses the binary on PATH" 0 "using $work/real/upgradescope: upgradescope "
@@ -556,8 +596,6 @@ expect "preinstalled without a binary fails" 1 "no upgradescope on PATH"
 # can replace the release's assets can replace both. From v0.2.0 on, the
 # archive's build-provenance attestation (gh) or checksums.txt's cosign
 # bundle (cosign) must be the release workflow's at that tag (#244).
-# installed_nothing: the last run put no binary on PATH.
-installed_nothing() { [ ! -e "$tmp/upgradescope-bin/upgradescope" ] && [ ! -s "$rt/path" ]; }
 run install "$work/stub-curl:"
 expect "a release's attestation is verified with gh" 0 "provenance OK: $asset (v9.9.9) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (gh attestation verify)"
 has "gh verifies the archive, pinned to the release workflow and the tag, on a GitHub-hosted runner" "$work/calls" \
@@ -625,18 +663,65 @@ if [ "$code" = 1 ] && [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -qF '%0A::w
   ok "a line break in verify-provenance cannot start a workflow command"
 else fail "a line break in verify-provenance cannot start a workflow command" "$work/out"; fi
 
-# Releases before v0.2.0 publish no provenance: the checksum, a warning,
-# and no verifier run (a pre-release of v0.2.0 is before it).
+# Releases before v0.2.0-rc.2, the lowest release with attestations (rc.1
+# was never published as a release), publish no provenance: the checksum, a
+# warning, and no verifier run. From rc.2 on, release candidates included,
+# the provenance is verified (#244, S2).
 verifier= run install "$work/stub-curl:" INPUT_VERSION=v0.1.1
-expect "a release before v0.2.0 installs on the checksum" 0 "installed upgradescope v0.1.1 from"
-has "a release before v0.2.0 warns that only the checksum is checked" "$work/out" \
-  "::warning::provenance is verified for releases from v0.2.0 on: $asset (v0.1.1) is checked only against checksums.txt from the same release"
-[ "$(grep -c '^::warning' "$work/out")" = 1 ] && ok "a release before v0.2.0 warns once" || fail "a release before v0.2.0 warns once" "$work/out"
+expect "a release before v0.2.0-rc.2 installs on the checksum" 0 "installed upgradescope v0.1.1 from"
+has "a release before v0.2.0-rc.2 warns that only the checksum is checked" "$work/out" \
+  "::warning::provenance is verified for releases from v0.2.0-rc.2 on: $asset (v0.1.1) is checked only against checksums.txt from the same release"
+[ "$(grep -c '^::warning' "$work/out")" = 1 ] && ok "a release before v0.2.0-rc.2 warns once" || fail "a release before v0.2.0-rc.2 warns once" "$work/out"
 run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST=v0.1.1
-expect "latest at v0.1.1 (GitHub's latest today) installs with a warning" 0 "::warning::provenance is verified for releases from v0.2.0 on: $asset (v0.1.1)"
-hasnt "a release before v0.2.0 runs no verifier" "$work/calls" "attestation"
+expect "latest at v0.1.1 (GitHub's latest today) installs with a warning" 0 "::warning::provenance is verified for releases from v0.2.0-rc.2 on: $asset (v0.1.1)"
+hasnt "a release before v0.2.0-rc.2 runs no verifier" "$work/calls" "attestation"
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.1
+expect "v0.2.0-rc.1 is before the threshold: checksum only, with a warning" 0 \
+  "::warning::provenance is verified for releases from v0.2.0-rc.2 on: $asset (v0.2.0-rc.1)"
+hasnt "v0.2.0-rc.1 runs no verifier" "$work/calls" "attestation"
 run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
-expect "a v0.2.0 release candidate is before v0.2.0" 0 "::warning::provenance is verified for releases from v0.2.0 on: $asset (v0.2.0-rc.2)"
+expect "v0.2.0-rc.2, the first release with attestations, is verified" 0 \
+  "provenance OK: $asset (v0.2.0-rc.2) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v0.2.0-rc.2"
+has "v0.2.0-rc.2 is verified at its own tag" "$work/calls" "--source-ref refs/tags/v0.2.0-rc.2 --deny-self-hosted-runners"
+hasnt "a verified v0.2.0-rc.2 does not warn" "$work/out" "::warning"
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.10
+expect "v0.2.0-rc.10 (numerically after rc.2) is verified" 0 "provenance OK: $asset (v0.2.0-rc.10)"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+expect "v0.2.0-rc.2 is verified with cosign without gh" 0 "provenance OK: checksums.txt (v0.2.0-rc.2) is signed by"
+# The SHA cases above install rc.2 as published; from here on it is tampered.
+tamper v0.2.0-rc.2
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+expect "a tampered v0.2.0-rc.2 fails closed (gh)" 1 \
+  "provenance check failed: gh attestation verify found no attestation that abd-ulbasit/upgradescope/.github/workflows/release.yml built $asset at refs/tags/v0.2.0-rc.2"
+has "the tampered rc.2's checksum still matched" "$work/out" "sha256 OK: $asset (v0.2.0-rc.2)"
+installed_nothing && ok "a tampered v0.2.0-rc.2 is not installed" || fail "a tampered v0.2.0-rc.2 is not installed" "$work/out"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+expect "a tampered v0.2.0-rc.2 fails closed (cosign)" 1 "provenance check failed: checksums.txt for v0.2.0-rc.2 is not signed by"
+installed_nothing && ok "cosign: a tampered v0.2.0-rc.2 is not installed" || fail "cosign: a tampered v0.2.0-rc.2 is not installed" "$work/out"
+
+# release_older, the comparator behind the threshold, on its own: semver
+# order, the core numerically, a candidate before its release, candidates
+# by number (rc.10 after rc.2).
+eval "$(sed -n '/^release_older() {$/,/^}$/p' action/run.sh)"
+older() { # older <a> <b> <want: yes|no>
+  local got=no
+  if release_older "$1" "$2"; then got=yes; fi
+  if [ "$got" = "$3" ]; then ok "release_older $1 $2: $3"; else fail "release_older $1 $2: got $got, want $3"; fi
+}
+older v0.2.0-rc.1 v0.2.0-rc.2 yes
+older v0.2.0-rc.2 v0.2.0-rc.2 no
+older v0.2.0-rc.10 v0.2.0-rc.2 no
+older v0.2.0-rc.2 v0.2.0-rc.10 yes
+older v0.2.0 v0.2.0-rc.2 no
+older v0.2.0-rc.2 v0.2.0 yes
+older v0.1.1 v0.2.0-rc.2 yes
+older v0.1.9 v0.2.0-rc.2 yes
+older v0.2.1-rc.1 v0.2.0-rc.2 no
+older v0.10.0 v0.9.9 no
+older v0.9.9 v0.10.0 yes
+older v1.0.0-rc.1 v0.2.0-rc.2 no
+grep -qxF 'provenance_since=v0.2.0-rc.2' action/run.sh && ok "the provenance threshold is v0.2.0-rc.2" ||
+  fail "the provenance threshold is not v0.2.0-rc.2"
 
 # The install step passes github.token for gh; the scan step needs none.
 for yml in action.yml action/action.yml; do

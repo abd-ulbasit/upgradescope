@@ -78,7 +78,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read          # actions/checkout
-      attestations: read      # verify-provenance (gh attestation verify)
       security-events: write  # upload-sarif
       actions: read           # upload-sarif, private repositories only
     steps:
@@ -226,14 +225,17 @@ inputs above.
 | Permission | Why |
 |---|---|
 | `contents: read` | `actions/checkout`. Any `permissions:` block sets everything it leaves out to `none`, so list this one. |
-| `attestations: read` | For `verify-provenance` (the default) with gh: `gh attestation verify` reads the release's attestations through the GitHub API with the job's token. |
 | `security-events: write` | Only for `github/codeql-action/upload-sarif`. |
 | `actions: read` | Only for `upload-sarif` in private repositories. |
 
 The action downloads release assets anonymously. Its one GitHub API call is
 `gh attestation verify`, which reads this repository's public attestations
 with `github.token`; the install step passes that token to gh as
-`GH_TOKEN`, and nothing else uses it.
+`GH_TOKEN`, and nothing else uses it. That needs no `attestations:`
+permission in your workflow: the permission scopes the token on your own
+repository, and this repository's attestations are public (on 2026-10-09
+the attestations endpoint answered an unauthenticated request for
+v0.2.0-rc.2's linux/amd64 archive with its attestation).
 
 ## Inputs
 
@@ -244,7 +246,7 @@ with `github.token`; the install step passes that token to gh as
 | `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
 | `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
 | `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag; at a full commit SHA it runs the release tag that points at that commit, or `latest` with a `::warning` when none does or the lookup fails; at any other ref, or inside another action, it runs `latest`. See [Usage](#usage). |
-| `verify-provenance` | no | `true` | `true` or `false`. `true` verifies, for a release from v0.2.0 on, that this repository's release workflow built the archive at that release's tag, with `gh attestation verify` or, without gh, `cosign verify-blob`, and fails the step before installing when it does not verify or neither tool is on `PATH`. `false` checks the archive against `checksums.txt` only and warns. See [Install and integrity](#install-and-integrity). |
+| `verify-provenance` | no | `true` | `true` or `false`. `true` verifies, for a release from v0.2.0-rc.2 on, that this repository's release workflow built the archive at that release's tag, with `gh attestation verify` or, without gh, `cosign verify-blob`, and fails the step before installing when it does not verify, neither tool is on `PATH`, or no archive downloads (there is no source-build fallback). `false` checks the archive against `checksums.txt` only and warns, and falls back to `go install` when no archive downloads. See [Install and integrity](#install-and-integrity). |
 | `config` | no | | Path to an `.upgradescope.yaml` with ignore rules (`scan --config`). Unset, the scan looks for `.upgradescope.yaml` in `path`, then at the repository root. |
 | `baseline` | no | | Path to the JSON report of an earlier scan: the `report-json` output, or a `write-baseline` file (`scan --baseline`). The gate then fails only on findings that are new since. |
 | `write-baseline` | no | | Also write this scan's JSON report, after suppression, to this path, for a later `baseline` (`scan --write-baseline`). |
@@ -322,7 +324,7 @@ cannot write the step summary, so a warning replaces it.
   that can replace a release's assets can replace the archive and
   `checksums.txt` together.
 - **Provenance** (`verify-provenance: true`, the default). For a release
-  from v0.2.0 on, the action then checks that this repository's release
+  from v0.2.0-rc.2 on, the action then checks that this repository's release
   workflow built the archive, before it installs anything:
   - with `gh` on `PATH` (GitHub-hosted runners have it), it runs
     `gh attestation verify <archive> --repo abd-ulbasit/upgradescope
@@ -347,16 +349,28 @@ cannot write the step summary, so a warning replaces it.
   The verifier's output is in the log, each line behind `| `. What is
   verified is the build: which workflow, tag and kind of runner produced
   the archive. Not that the release's code is free of bugs.
-- **Without provenance.** Releases before v0.2.0 (v0.1.1, GitHub's latest
-  until v0.2.0 ships, and the v0.2.0 release candidates) are checked
-  against `checksums.txt` only, with a `::warning` that says so.
-  `verify-provenance: false` does the same for any release, also with a
-  `::warning`. Neither detects a tampered release.
-- **Source build.** If the release has no archive for the runner, the
-  action runs `go install` for that version, but only when a Go toolchain
-  is set up (`actions/setup-go`). Without Go, the step fails and says why.
-  A source build is checked by Go's module checksum database, not by the
-  release's provenance.
+- **Without provenance.** The threshold is a version number: v0.2.0-rc.2
+  is the lowest release that publishes attestations (`gh attestation
+  verify` of its linux/amd64 archive passes at `refs/tags/v0.2.0-rc.2` and
+  fails at `refs/tags/v0.2.0-rc.1`; rc.1 was never published as a
+  release), and every release candidate from it on is verified like a
+  release. Releases before it (v0.1.0 and v0.1.1, GitHub's latest until
+  v0.2.0 ships) are checked against `checksums.txt` only, with a
+  `::warning` that says so. `verify-provenance: false` does the same for
+  any release, also with a `::warning`. Neither detects a tampered
+  release.
+- **No archive, no install.** When the archive cannot be downloaded (the
+  release has none for the runner, the asset is gone, the download fails)
+  or `latest` does not resolve to a tag, the step fails with the download
+  error and installs nothing. It never falls back to a source build while
+  `verify-provenance` is `true`: a `go install` build cannot be checked
+  against the release's provenance, so a fallback would let anything that
+  can make the download fail install an unverified binary.
+- **Source build, opt-in.** Only with `verify-provenance: false` does the
+  action then run `go install` for that version (or `@latest`), with a
+  `::warning` that it is unverified, and only when a Go toolchain is set up
+  (`actions/setup-go`); without Go, the step fails and says why. A source
+  build is checked by Go's module checksum database only.
 - **Runners.** Linux and macOS, amd64 and arm64. Windows runners are not
   supported.
 

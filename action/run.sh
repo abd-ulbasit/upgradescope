@@ -2,7 +2,8 @@
 # The upgradescope GitHub Action's logic. action.yml (repository root) and
 # action/action.yml are thin wrappers that run it twice:
 #   run.sh install   validate the inputs, put a checksum- and provenance-
-#                    verified upgradescope on PATH (via GITHUB_PATH)
+#                    verified upgradescope on PATH (via GITHUB_PATH); with
+#                    verify-provenance true, never anything unverified
 #   run.sh scan      run the gate, set the outputs, annotate, and write the
 #                    step summary
 #
@@ -72,10 +73,15 @@ release_older() {
   ((10#$ap < 10#$bp))
 }
 
-# The first release whose provenance the install verifies: from v0.2.0 on,
-# every release publishes a build-provenance attestation for each archive
-# and a cosign bundle for checksums.txt (release.yml, .goreleaser.yml).
-provenance_since=v0.2.0
+# The first release whose provenance the install verifies, by version
+# number: from v0.2.0-rc.2 on, every release publishes a build-provenance
+# attestation for each archive and a cosign bundle for checksums.txt
+# (release.yml, .goreleaser.yml). v0.2.0-rc.2 is the lowest release that
+# has them: `gh attestation verify` of its linux/amd64 archive passes at
+# refs/tags/v0.2.0-rc.2 and fails at refs/tags/v0.2.0-rc.1, and rc.1 was
+# never published as a release. Never decided by a missing asset: that is
+# what a tampered release would look like.
+provenance_since=v0.2.0-rc.2
 
 # A full commit SHA, what pinning the action by commit gives github.action_ref.
 commit_sha='^[0-9a-fA-F]{40}$'
@@ -204,9 +210,40 @@ provenance() {
   die "verify-provenance is true, but neither gh nor cosign is on PATH to verify $asset ($tag); nothing was installed. GitHub-hosted runners have gh; elsewhere install gh or cosign (sigstore/cosign-installer) before this step, or set verify-provenance: false to install on the checksum alone"
 }
 
-# go_install <version>: the fallback when no release archive downloads.
-# Builds from source, so only with a Go toolchain on the runner.
+# no_archive <what> <error file>: no release archive could be had (none for
+# this runner, a failed download, a latest that does not resolve). With
+# verify-provenance true (the default) that fails the step and installs
+# nothing: a source build cannot be provenance-checked, so falling back to
+# one would let anything that can make the download fail (a deleted or
+# replaced asset, network interference) install an unverified binary
+# (#244). Only verify-provenance: false falls back to go_install, with a
+# ::warning.
+no_archive() {
+  local what=$1 err
+  err=$(sed -n '1,5p' "$2" 2>/dev/null | tr '\n' ' ')
+  err=${err% }
+  rm -f "$2"
+  if [ "${INPUT_VERIFY_PROVENANCE:-true}" != false ]; then
+    die "$what${err:+ ($err)}; nothing was installed. verify-provenance is true, and only a release archive can be verified, so there is no fallback to a source build. Use a published release (https://github.com/$repo/releases), or set verify-provenance: false to build it with go install, unverified"
+  fi
+  echo "::warning::$(esc "verify-provenance is false and $what${err:+ ($err)}: building from source with go install, which has no checksums.txt or provenance check (only Go's module checksum database)")"
+}
+
+# go_install <version>: with verify-provenance: false only (no_archive),
+# the fallback when no release archive downloads. Builds from source, so
+# only with a Go toolchain on the runner.
 go_install() {
+  command -v go >/dev/null ||
+    die "no release archive for $os/$arch at $1 and no Go toolchain to build it from source; use a published release (https://github.com/abd-ulbasit/upgradescope/releases) or add actions/setup-go before this action"
+  echo "falling back to go install $module@$1"
+  go install "$module@$1"
+  local gobin
+  gobin=$(go env GOBIN)
+  [ -n "$gobin" ] || gobin="$(go env GOPATH)/bin"
+  echo "$gobin" >>"$GITHUB_PATH"
+}
+
+install() {
   command -v go >/dev/null ||
     die "no release archive for $os/$arch at $1 and no Go toolchain to build it from source; use a published release (https://github.com/abd-ulbasit/upgradescope/releases) or add actions/setup-go before this action"
   echo "falling back to go install $module@$1"
@@ -287,13 +324,14 @@ install() {
     # Pin "latest" to one tag first, so the archive and checksums.txt come
     # from the same release even if one is published in between.
     local url
-    url=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' "$releases/latest") || url=
+    url=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' "$releases/latest" 2>"$RUNNER_TEMP/upgradescope-latest.err") || url=
     tag=${url##*/}
     if [[ ! $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-      echo "cannot resolve the latest release (got '$(esc "$url")')"
+      no_archive "cannot resolve the latest release (got '$url')" "$RUNNER_TEMP/upgradescope-latest.err"
       go_install latest
       return
     fi
+    rm -f "$RUNNER_TEMP/upgradescope-latest.err"
     echo "latest release is $tag"
     if [[ $ref =~ $release_tag ]] && release_older "$tag" "$ref"; then
       echo "::warning::version latest is $tag, older than this action's own release $ref: GitHub's latest skips prereleases, and an older engine can pass what $ref blocks. Set version: $ref"
@@ -302,12 +340,13 @@ install() {
 
   local dl
   dl=$(mktemp -d "$RUNNER_TEMP/upgradescope-dl.XXXXXX")
-  if ! curl -fsSL --retry 3 -o "$dl/$asset" "$releases/download/$tag/$asset"; then
-    echo "no release archive at $releases/download/$tag/$asset"
+  if ! curl -fsSL --retry 3 -o "$dl/$asset" "$releases/download/$tag/$asset" 2>"$RUNNER_TEMP/upgradescope-download.err"; then
     rm -rf "$dl"
+    no_archive "cannot download the release archive $releases/download/$tag/$asset" "$RUNNER_TEMP/upgradescope-download.err"
     go_install "$tag"
     return
   fi
+  rm -f "$RUNNER_TEMP/upgradescope-download.err"
   # From here on, fail closed: an archive that cannot be verified is never
   # installed, and never swapped for a source build.
   curl -fsSL --retry 3 -o "$dl/checksums.txt" "$releases/download/$tag/checksums.txt" ||
