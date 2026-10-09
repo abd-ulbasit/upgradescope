@@ -29,11 +29,19 @@ matchers:
   # Flux v2's controllers carry their own versions (source-controller
   # v1.5.0 in Flux 2.5.1, helm-controller v1.2.0), so they are component
   # images: each controller line maps to the one Flux line whose releases
-  # ship it, as each release's "Components changelog" and install.yaml list
-  # them. Read from the install.yaml of every v2.x.y release from v2.0.0 to
-  # v2.9.6 on 2026-10-09; no controller line ships in two Flux lines. A
-  # controller line not listed here (a Flux release newer than this table)
-  # reads as Flux with no version: add its row when Flux ships it.
+  # ship it. The default controllers' rows were read from the install.yaml
+  # of every v2.x.y release from v2.0.0 to v2.9.6 on 2026-10-09. source-
+  # watcher was an extra component (flux install --components-extra) from
+  # Flux 2.7 and is in install.yaml only from v2.8.7, so its rows come from
+  # each release's "Components changelog" in the release notes (v2.7.0
+  # lists source-watcher v2.0.0, v2.8.0 v2.1.0, v2.9.0 v2.2.1), checked
+  # against install.yaml where it is there. No controller line ships in two
+  # Flux lines. A controller line not listed here (a Flux release newer than
+  # this table) reads as Flux with no version: add its row when Flux ships
+  # it. Flux v2's pre-GA releases (0.x, 2020-2023, whose controllers were
+  # all 0.x) are deliberately not mapped: they read as Flux with no
+  # version, an info finding, rather than a guess at a line endoflife.date
+  # does not list.
   components:
     - image: fluxcd/source-controller
       lines:
@@ -117,6 +125,7 @@ matchers:
       lines:
         - {component: "2.2", product: "2.9"}
         - {component: "2.1", product: "2.8"}
+        - {component: "2.0", product: "2.7"}
       citations: ["https://github.com/fluxcd/flux2/releases"]
 support:
   status: supported

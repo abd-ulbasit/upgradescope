@@ -104,6 +104,8 @@ func TestComponentProductLine(t *testing.T) {
 		{"1.0.1", "2.3"},
 		{"1.1.0", ""}, // a line the entry does not map: no version, never a guess
 		{"1.2", "2.5"},
+		{"1.2-rc.1", "2.5"}, // a pre-release is its line's (versionFromTag keeps "-rc.1")
+		{"1.0-beta.2", "2.3"},
 		{"1", ""},
 		{"", ""},
 	} {
