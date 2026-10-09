@@ -158,6 +158,10 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		}
 		if r, ok := idx.ResolveReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("migrate to %s %s", gvString(r.Group, r.Version), r.Kind)
+		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
+			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known; %s %s is served from %s", target, gvString(later.Group, later.Version), later.Kind, from)
+		} else if e.Replacement != nil {
+			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known", target)
 		}
 		gv := gvString(u.Group, u.Version)
 		switch {
@@ -366,10 +370,15 @@ func sortedObjects(refs []inventory.ObjectRef) []inventory.ObjectRef {
 
 // evalDeprecatedCalls turns apiserver_requested_deprecated_apis rows into
 // findings, one per row in row order: removal ≤ target → blocker; removal
-// == target+1 → warning; otherwise (incl. missing/unparseable
-// removedRelease) → info. The metric is the runtime-caller signal: it
-// says a deprecated API was requested, not by whom.
-func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version, b *budget) []Finding {
+// == target+1 → warning; otherwise (incl. no removal release known) →
+// info. A row's removal is the knowledge base's when it has a removal for
+// that group/version/resource (an inferred one included: the release
+// kube-apiserver stopped serving the type in, which can be earlier than
+// the upstream lifecycle tag the apiserver labels the row with), else the
+// metric's removed_release label. The metric is the runtime-caller
+// signal: it says a deprecated API was requested, not by whom.
+func evalDeprecatedCalls(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
+	removals := kbRemovals(k)
 	var out []Finding
 	for _, c := range inv.DeprecatedCalls {
 		res := c.Resource
@@ -384,8 +393,23 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version, b *b
 		}
 		const metric = "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; "
 		const anonymous = " The metric does not identify the client; apiserver audit logs do."
-		removed, perr := inventory.ParseVersion(c.RemovedRelease)
-		if c.RemovedRelease == "" || perr != nil {
+		label, perr := inventory.ParseVersion(c.RemovedRelease)
+		labelOK := c.RemovedRelease != "" && perr == nil
+		removed, fromKB := removals[resourceKey(c.Group, c.Version, c.Resource)]
+		var when string
+		switch {
+		case fromKB && labelOK && label.Compare(removed) == 0:
+			when = fmt.Sprintf("it is removed in %s.", removed)
+		case fromKB && labelOK:
+			when = fmt.Sprintf("it is removed in %s per the knowledge base; the apiserver reports %s.", removed, label)
+		case fromKB && c.RemovedRelease == "":
+			when = fmt.Sprintf("it is removed in %s per the knowledge base; the apiserver records no removal release.", removed)
+		case fromKB:
+			when = fmt.Sprintf("it is removed in %s per the knowledge base; the apiserver's removal release %q could not be parsed.", removed, c.RemovedRelease)
+		case labelOK:
+			removed = label
+			when = fmt.Sprintf("it is removed in %s.", removed)
+		default:
 			f.Severity = SevInfo
 			f.Title = fmt.Sprintf("clients still requesting %s %s (deprecated)", gv, res)
 			if c.RemovedRelease == "" {
@@ -399,7 +423,7 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version, b *b
 			continue
 		}
 		f.Title = fmt.Sprintf("clients still requesting %s %s (removed in %s)", gv, res, removed)
-		f.Detail = metric + fmt.Sprintf("it is removed in %s.", removed) + anonymous
+		f.Detail = metric + when + anonymous
 		switch {
 		case removed.Compare(target) <= 0:
 			f.Severity = SevBlocker
@@ -413,6 +437,35 @@ func evalDeprecatedCalls(inv inventory.Inventory, target inventory.Version, b *b
 		}
 	}
 	return out
+}
+
+// kbRemovals maps the REST resources of k's lifecycle entries that have a
+// removal (resourceKey) to it; the first entry wins, as in RemovalOfCall.
+func kbRemovals(k kb.KB) map[string]inventory.Version {
+	m := make(map[string]inventory.Version)
+	for _, e := range k.APILifecycle {
+		if e.Removed == nil || e.Kind == "" {
+			continue
+		}
+		lower, plural := resourceNames(e.Kind)
+		for _, r := range []string{lower, plural} {
+			if key := resourceKey(e.Group, e.Version, r); !hasKey(m, key) {
+				m[key] = *e.Removed
+			}
+		}
+	}
+	return m
+}
+
+func hasKey[V any](m map[string]V, k string) bool {
+	_, ok := m[k]
+	return ok
+}
+
+// resourceKey is the key of a group/version/resource in the fold's and
+// kbRemovals' indexes.
+func resourceKey(group, version, resource string) string {
+	return group + "\x00" + version + "\x00" + resource
 }
 
 // otherCallers returns inv.DeprecatedCalls without the scanner's own
@@ -442,24 +495,38 @@ func otherCallers(inv inventory.Inventory) []inventory.DeprecatedCall {
 // output and calls is evalDeprecatedCalls' (calls[i] judges
 // inv.DeprecatedCalls[i]). A caller row for the group/version/kind of a
 // usage finding becomes evidence on that finding instead of a second
-// finding, so the finding keeps its key. Rows for APIs without flagged
-// objects stay standalone, as do rows more severe than the matching usage
-// finding (the apiserver records a removal the KB does not know).
+// finding, so the finding keeps its key: a sentence of its Detail and,
+// as data, one of its Callers. Rows for APIs without flagged objects stay
+// standalone, as do rows more severe than the matching usage finding (the
+// apiserver records a removal the KB does not know). The first usage
+// entry whose kind has the row's resource decides, through an index built
+// once, so the fold is linear in rows and usage entries.
 func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding, b *budget) []Finding {
 	byAPI := make(map[string]int, len(usage)) // apiKey → index in usage
 	for i, f := range usage {
 		_, api, _ := strings.Cut(f.Key, "/")
 		byAPI[api] = i
 	}
+	byResource := make(map[string]int, 2*len(inv.APIUsage)) // resourceKey → first index in inv.APIUsage
+	for i, u := range inv.APIUsage {
+		if u.Kind == "" {
+			continue
+		}
+		lower, plural := resourceNames(u.Kind)
+		for _, r := range []string{lower, plural} {
+			if key := resourceKey(u.Group, u.Version, r); !hasKey(byResource, key) {
+				byResource[key] = i
+			}
+		}
+	}
 	evidence := map[int][]string{} // usage index → requested resources, in row order
+	var order []int                // usage indexes with evidence, in first-row order
 	var standalone []Finding
 	for i, c := range inv.DeprecatedCalls {
 		j, ok := -1, false
-		for _, u := range inv.APIUsage {
-			if u.Group == c.Group && u.Version == c.Version && kindMatchesResource(u.Kind, c.Resource) {
-				j, ok = byAPI[apiKey(u.Group, u.Version, u.Kind)]
-				break
-			}
+		if ui, found := byResource[resourceKey(c.Group, c.Version, c.Resource)]; found {
+			u := inv.APIUsage[ui]
+			j, ok = byAPI[apiKey(u.Group, u.Version, u.Kind)]
 		}
 		if !ok || severityRank[calls[i].Severity] < severityRank[usage[j].Severity] {
 			standalone = append(standalone, calls[i])
@@ -471,14 +538,24 @@ func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding, b *bud
 		}
 		if len(evidence[j]) == 0 {
 			res = gvString(c.Group, c.Version) + " " + res
+			order = append(order, j)
 		}
 		evidence[j] = append(evidence[j], res)
+		usage[j].Callers = append(usage[j].Callers, Caller{
+			Group: c.Group, Version: c.Version, Resource: c.Resource, Subresource: c.Subresource,
+			Key: calls[i].Key, Severity: calls[i].Severity, Title: calls[i].Title, Detail: calls[i].Detail,
+		})
+		// The row was charged as a finding of its own, whose key, title
+		// and detail its Caller repeats; the Caller also repeats the
+		// requested API, which that charge did not count.
+		if !b.charge(len(c.Group) + len(c.Version) + len(c.Resource) + len(c.Subresource)) {
+			return nil
+		}
 	}
-	for j, rs := range evidence {
-		more := fmt.Sprintf(" apiserver_requested_deprecated_apis also records requests to %s since the last apiserver restart; the metric does not identify the client.", strings.Join(rs, ", "))
+	for _, j := range order {
+		more := fmt.Sprintf(" apiserver_requested_deprecated_apis also records requests to %s since the last apiserver restart; the metric does not identify the client.", strings.Join(evidence[j], ", "))
 		usage[j].Detail += more
-		// The rows were charged as findings of their own; their text may
-		// be longer here, and the budget charges what it adds.
+		// The sentence is charged as what it adds.
 		if !b.charge(len(more)) {
 			return nil
 		}
@@ -486,21 +563,29 @@ func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding, b *bud
 	return append(usage, standalone...)
 }
 
-// kindMatchesResource reports whether resource is kind's REST resource
-// name under the apiserver's default pluralization (lowercase; "s" →
-// "ses", consonant+"y" → "ies", otherwise +"s"), or kind lowercased for
-// kinds that are already plural (Endpoints).
-func kindMatchesResource(kind, resource string) bool {
+// resourceNames returns kind's REST resource names under the apiserver's
+// default pluralization: kind lowercased (for kinds that are already
+// plural, Endpoints) and its plural ("s" → "ses", consonant+"y" → "ies",
+// otherwise +"s").
+func resourceNames(kind string) (lower, plural string) {
 	k := strings.ToLower(kind)
 	switch {
-	case k == "" || resource == k:
-		return k != ""
 	case strings.HasSuffix(k, "s"):
-		return resource == k+"es"
+		return k, k + "es"
 	case strings.HasSuffix(k, "y") && len(k) > 1 && !strings.ContainsRune("aeiou", rune(k[len(k)-2])):
-		return resource == k[:len(k)-1]+"ies"
+		return k, k[:len(k)-1] + "ies"
 	}
-	return resource == k+"s"
+	return k, k + "s"
+}
+
+// kindMatchesResource reports whether resource is one of kind's REST
+// resource names (resourceNames).
+func kindMatchesResource(kind, resource string) bool {
+	if kind == "" {
+		return false
+	}
+	lower, plural := resourceNames(kind)
+	return resource == lower || resource == plural
 }
 
 // addOnInstall is one detected install of a registry add-on: an inventory
@@ -1755,9 +1840,13 @@ func helmReleaseRef(rel inventory.HelmRelease) string {
 //     — "helm-release" is no API group, so these keys never collide with
 //     the per-API keys of live findings. Objects the live scan already
 //     flags (same API, name and namespace, an unset manifest namespace
-//     standing for the release's) are left to the live finding, so no
-//     object is counted twice; a release whose objects are all flagged
-//     live gets no manifest finding.
+//     standing for the release's) are left to the live finding when it is
+//     at least as severe (a removed-api blocker, or a removed-api warning
+//     at a removal in the next minor), so no object is counted twice at
+//     one severity; a release whose objects are all so flagged gets no
+//     manifest finding. A live info (deprecated-api) does not take them:
+//     the manifest's warning stays, so more evidence never lowers the
+//     severity.
 func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
 	idx := kb.NewIndex(k.APILifecycle)
 	live := map[string][]inventory.ObjectRef{} // apiKey → live objects
@@ -1828,6 +1917,7 @@ func evalChartKubeVersion(rel inventory.HelmRelease, target inventory.Version) (
 func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][]inventory.ObjectRef, target inventory.Version) []Finding {
 	type bucket struct {
 		apis, entries, replacements []string
+		unserved                    []string // APIs no served replacement is known for
 		objects                     []inventory.ObjectRef
 		count, omitted              int
 	}
@@ -1841,21 +1931,29 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 		if !ok || e.Deprecated == nil && e.Removed == nil {
 			continue
 		}
-		flagged := live[apiKey(u.Group, u.Version, u.Kind)]
-		objs := slices.DeleteFunc(slices.Clone(u.Objects), func(o inventory.ObjectRef) bool {
-			return slices.ContainsFunc(flagged, func(l inventory.ObjectRef) bool {
-				return l.Name == o.Name && (l.Namespace == o.Namespace || o.Namespace == "" && l.Namespace == rel.Namespace)
-			})
-		})
-		count := u.Count - (len(u.Objects) - len(objs))
-		if count <= 0 {
-			continue
-		}
 		b, when := &deprecated, []string{}
 		if e.Removed != nil && e.Removed.Compare(target) <= 0 {
 			b = &removed
 		} else if e.Deprecated != nil {
 			when = append(when, "deprecated in "+e.Deprecated.String())
+		}
+		// The live finding for this API (evalAPIUsage) is a blocker when
+		// the manifest's is, a removed-api warning at a removal in the
+		// next minor, else an info: only one at least as severe as the
+		// manifest's takes its objects, so more evidence never lowers the
+		// severity.
+		liveAsSevere := b == &removed || e.Removed != nil && e.Removed.Compare(target.Next()) == 0
+		objs := slices.Clone(u.Objects)
+		if flagged := live[apiKey(u.Group, u.Version, u.Kind)]; liveAsSevere {
+			objs = slices.DeleteFunc(objs, func(o inventory.ObjectRef) bool {
+				return slices.ContainsFunc(flagged, func(l inventory.ObjectRef) bool {
+					return l.Name == o.Name && (l.Namespace == o.Namespace || o.Namespace == "" && l.Namespace == rel.Namespace)
+				})
+			})
+		}
+		count := u.Count - (len(u.Objects) - len(objs))
+		if count <= 0 {
+			continue
 		}
 		if e.Removed != nil {
 			when = append(when, "removed in "+e.Removed.String())
@@ -1863,8 +1961,14 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 		api := gvString(u.Group, u.Version) + " " + u.Kind
 		b.apis = append(b.apis, api)
 		b.entries = append(b.entries, fmt.Sprintf("%s (%s; %s)", api, strings.Join(when, ", "), pluralObjects(count)))
+		// As evalAPIUsage words it: only a replacement target serves is
+		// recommended, else the one a later release serves is named.
 		if r, ok := idx.ResolveReplacement(e, target); ok {
 			b.replacements = append(b.replacements, gvString(r.Group, r.Version)+" "+r.Kind)
+		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
+			b.unserved = append(b.unserved, fmt.Sprintf("%s (%s %s is served from %s)", api, gvString(later.Group, later.Version), later.Kind, from))
+		} else if e.Replacement != nil {
+			b.unserved = append(b.unserved, api)
 		}
 		b.objects = append(b.objects, objs...)
 		b.count += count
@@ -1903,6 +2007,9 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 			f.Title = fmt.Sprintf("Helm release %s/%s manifest uses deprecated %s", rel.Namespace, rel.Name, apis)
 			f.Detail = fmt.Sprintf("%s %s at deprecated APIs: %s.", stores, pluralObjects(b.count), entries)
 		}
+		if len(b.unserved) > 0 {
+			f.Remediation += fmt.Sprintf("; no replacement Kubernetes %s serves is known for %s", target, strings.Join(b.unserved, ", "))
+		}
 		out = append(out, f)
 	}
 	return out
@@ -1935,7 +2042,7 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 	usage := evalAPIUsage(inv, k, target, b)
 	var calls []Finding
 	if !b.exceeded() {
-		calls = evalDeprecatedCalls(inv, target, b)
+		calls = evalDeprecatedCalls(inv, k, target, b)
 	}
 	if !b.exceeded() {
 		findings = append(findings, foldDeprecatedCalls(inv, usage, calls, b)...)

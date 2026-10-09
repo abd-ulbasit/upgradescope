@@ -69,6 +69,21 @@ it, even with a glob such as `*` that would match them all; use a rule
 without selectors (by `key`) for it.
 Rules apply in order, and the first one that matches an object takes it.
 
+**Deprecated-API callers.** When the apiserver's
+`apiserver_requested_deprecated_apis` metric shows requests to the API of
+an object finding, the request is folded into that finding (its `callers`
+in JSON). It is evidence about some client, not about the listed objects,
+so it fails closed: when annotations or rules with `namespace`, `name` or
+`file` take every object of the finding, each caller comes back as its own
+`deprecated-api-in-use` finding, at its own severity, and still counts. The
+client still calling a removed API may not be the one that wrote the
+objects. Only a rule without selectors that takes the object finding, or a
+rule without selectors for the caller's own `deprecated-api-in-use` key or
+category, also suppresses the caller: a caller lists no objects or
+namespaces, so a rule for its key with `namespace`, `name` or `file` matches
+nothing.
+{ #deprecated-api-callers }
+
 **Expiry.** On the day after `expires`, the rule stops applying. The finding
 counts again, and the scan prints a warning naming the rule, so an
 acceptance cannot quietly outlive its reason.

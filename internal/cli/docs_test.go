@@ -409,6 +409,11 @@ func TestJSONReportMatchesSchema(t *testing.T) {
 	outs = append(outs, named)
 	liveInv := liveInventory("v1.36.4")
 	liveInv.UnrecognizedImages, liveInv.UnrecognizedImagesOmitted = []string{"registry.example.com/shop/api"}, 3
+	// A stored batch/v1beta1 CronJob and a caller row for it, folded into
+	// its finding as callers.
+	liveInv.APIUsage = []inventory.APIUsage{{Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 1,
+		Namespaces: map[string]int{"shop": 1}, Objects: []inventory.ObjectRef{{Namespace: "shop", Name: "nightly"}}}}
+	liveInv.DeprecatedCalls = []inventory.DeprecatedCall{{Group: "batch", Version: "v1beta1", Resource: "cronjobs", RemovedRelease: "1.25"}}
 	live, _, err := execScanStderr(t, []string{"--target", "1.37", "--output", "json", "--fail-on", "never"}, evalStub(t, liveInv))
 	if err != nil {
 		t.Fatalf("live run: %v", err)
@@ -429,7 +434,7 @@ func TestJSONReportMatchesSchema(t *testing.T) {
 			t.Errorf("the EKS run lacks %s:\n%s", want, eks)
 		}
 	}
-	for _, want := range []string{`"category": "unknown-api"`, `"serverVersion": "v1.36.4"`, `"baselineState"`, `"suppressed"`, `"notAssessed"`, `"kubeContext": "test-ctx"`, `"apiServer"`, `"unrecognizedImages"`, `"unrecognizedImagesOmitted"`} {
+	for _, want := range []string{`"category": "unknown-api"`, `"serverVersion": "v1.36.4"`, `"baselineState"`, `"suppressed"`, `"notAssessed"`, `"kubeContext": "test-ctx"`, `"apiServer"`, `"unrecognizedImages"`, `"unrecognizedImagesOmitted"`, `"callers": [`} {
 		if !strings.Contains(all, want) {
 			t.Errorf("no run produced %s; this test no longer covers it", want)
 		}

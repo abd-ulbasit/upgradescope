@@ -28,6 +28,20 @@ func TestResolveReplacement(t *testing.T) {
 		// cycle
 		{Group: "z", Version: "v1", Kind: "C", Removed: ver(20), Replacement: &GVK{Group: "z", Version: "v2", Kind: "C"}},
 		{Group: "z", Version: "v2", Kind: "C", Removed: ver(20), Replacement: &GVK{Group: "z", Version: "v1", Kind: "C"}},
+		// VolumeAttributesClass: v1alpha1 names v1 (1.34), v1beta1 (1.31) between
+		{Group: "s", Version: "v1alpha1", Kind: "V", Introduced: *ver(29), Removed: ver(35), Replacement: &GVK{Group: "s", Version: "v1", Kind: "V"}},
+		{Group: "s", Version: "v1beta1", Kind: "V", Introduced: *ver(31), Removed: ver(37), Replacement: &GVK{Group: "s", Version: "v1", Kind: "V"}},
+		{Group: "s", Version: "v1", Kind: "V", Introduced: *ver(34)},
+		// ClusterTrustBundle: v1beta1 names v1 (1.37); only the older v1alpha1 is served before
+		{Group: "c", Version: "v1alpha1", Kind: "T", Introduced: *ver(26), Removed: ver(37)},
+		{Group: "c", Version: "v1beta1", Kind: "T", Introduced: *ver(33), Removed: ver(40), Replacement: &GVK{Group: "c", Version: "v1", Kind: "T"}},
+		{Group: "c", Version: "v1", Kind: "T", Introduced: *ver(37)},
+		// v1alpha1 names v1 (1.30); v1beta1 and v1beta2 are both served
+		// before it, listed oldest first
+		{Group: "m", Version: "v1alpha1", Kind: "W", Introduced: *ver(20), Removed: ver(26), Replacement: &GVK{Group: "m", Version: "v1", Kind: "W"}},
+		{Group: "m", Version: "v1beta1", Kind: "W", Introduced: *ver(22), Removed: ver(28), Replacement: &GVK{Group: "m", Version: "v1", Kind: "W"}},
+		{Group: "m", Version: "v1beta2", Kind: "W", Introduced: *ver(24), Replacement: &GVK{Group: "m", Version: "v1", Kind: "W"}},
+		{Group: "m", Version: "v1", Kind: "W", Introduced: *ver(30)},
 	})
 	start := func(g, v, k string) APILifecycleEntry {
 		e, ok := idx.Lookup(g, v, k)
@@ -51,6 +65,16 @@ func TestResolveReplacement(t *testing.T) {
 		{"dead end before target", start("y", "v1alpha1", "B"), *ver(30), ""},
 		{"dead end not yet reached", start("y", "v1alpha1", "B"), *ver(22), "y/v1beta1 B"},
 		{"cycle terminates", start("z", "v1", "C"), *ver(36), ""},
+		// #237: a hop introduced after the target is not served there; the
+		// newest served version of its kind newer than e is recommended
+		// instead, or none.
+		{"hop not yet introduced, served successor", start("s", "v1alpha1", "V"), *ver(33), "s/v1beta1 V"},
+		{"hop introduced at target", start("s", "v1alpha1", "V"), *ver(34), "s/v1 V"},
+		{"hop not yet introduced, nothing newer served", start("c", "v1beta1", "T"), *ver(36), ""},
+		{"hop introduced at target, older alpha ignored", start("c", "v1beta1", "T"), *ver(37), "c/v1 T"},
+		// RM-01: of two served successors, the newest is named, not the
+		// first listed.
+		{"hop not yet introduced, newest of two served successors", start("m", "v1alpha1", "W"), *ver(26), "m/v1beta2 W"},
 	}
 	for _, c := range cases {
 		got, ok := idx.ResolveReplacement(c.e, c.target)
@@ -61,6 +85,24 @@ func TestResolveReplacement(t *testing.T) {
 		if gotS != c.want {
 			t.Errorf("%s: ResolveReplacement(%s/%s %s, %s) = %q, want %q", c.name, c.e.Group, c.e.Version, c.e.Kind, c.target, gotS, c.want)
 		}
+	}
+}
+
+// When no served replacement is known, LaterReplacement names the one the
+// chain reaches that a later release serves, and that release.
+func TestLaterReplacement(t *testing.T) {
+	idx := NewIndex([]APILifecycleEntry{
+		{Group: "c", Version: "v1alpha1", Kind: "T", Introduced: *ver(26), Removed: ver(37)},
+		{Group: "c", Version: "v1beta1", Kind: "T", Introduced: *ver(33), Removed: ver(40), Replacement: &GVK{Group: "c", Version: "v1", Kind: "T"}},
+		{Group: "c", Version: "v1", Kind: "T", Introduced: *ver(37)},
+	})
+	e, _ := idx.Lookup("c", "v1beta1", "T")
+	g, from, ok := idx.LaterReplacement(e, *ver(36))
+	if !ok || g != (GVK{Group: "c", Version: "v1", Kind: "T"}) || from != *ver(37) {
+		t.Errorf("LaterReplacement at 1.36 = %v %s %v, want c/v1 T from 1.37", g, from, ok)
+	}
+	if _, _, ok := idx.LaterReplacement(e, *ver(37)); ok {
+		t.Error("LaterReplacement at 1.37 reports a replacement the target serves")
 	}
 }
 
@@ -189,7 +231,8 @@ func TestRemediationNeverPointsAtRemovedAPI(t *testing.T) {
 				t.Errorf("%s/%s %s: replacement %s %s is not in the KB", e.Group, e.Version, e.Kind, gvString(*e.Replacement), e.Replacement.Kind)
 			}
 		}
-		for minor := 9; minor <= k.MaxKnownK8s.Minor+3; minor++ {
+		for minor := 9; minor <= k.MaxKnownK8s.Minor+3; minor++ { // #237 asks 1.20 onwards; every target is checked
+
 			target := *ver(minor)
 			r, ok := idx.ResolveReplacement(e, target)
 			if !ok {
@@ -203,7 +246,33 @@ func TestRemediationNeverPointsAtRemovedAPI(t *testing.T) {
 			if re.Removed != nil && re.Removed.Compare(target) <= 0 {
 				t.Errorf("%s/%s %s @%s: remediation %s %s is removed in %s", e.Group, e.Version, e.Kind, target, gvString(r), r.Kind, re.Removed)
 			}
+			if re.Introduced.Compare(target) > 0 {
+				t.Errorf("%s/%s %s @%s: remediation %s %s is introduced in %s, after the target", e.Group, e.Version, e.Kind, target, gvString(r), r.Kind, re.Introduced)
+			}
 		}
+	}
+}
+
+// #237's cases on the shipped dataset: at 1.33 VolumeAttributesClass
+// v1alpha1 migrates to v1beta1 (v1 is served from 1.34); at 1.36
+// ClusterTrustBundle v1beta1 has no served replacement, and v1 is served
+// from 1.37.
+func TestResolveReplacementShippedServedOnly(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	vac, _ := idx.Lookup("storage.k8s.io", "v1alpha1", "VolumeAttributesClass")
+	if r, ok := idx.ResolveReplacement(vac, *ver(33)); !ok || r != (GVK{Group: "storage.k8s.io", Version: "v1beta1", Kind: "VolumeAttributesClass"}) {
+		t.Errorf("VolumeAttributesClass v1alpha1 @1.33 = %v %v, want storage.k8s.io/v1beta1", r, ok)
+	}
+	ctb, _ := idx.Lookup("certificates.k8s.io", "v1beta1", "ClusterTrustBundle")
+	if r, ok := idx.ResolveReplacement(ctb, *ver(36)); ok {
+		t.Errorf("ClusterTrustBundle v1beta1 @1.36 = %v, want none served", r)
+	}
+	if g, from, ok := idx.LaterReplacement(ctb, *ver(36)); !ok || g.Version != "v1" || from != *ver(37) {
+		t.Errorf("LaterReplacement(ClusterTrustBundle v1beta1, 1.36) = %v %s %v, want v1 from 1.37", g, from, ok)
 	}
 }
 
