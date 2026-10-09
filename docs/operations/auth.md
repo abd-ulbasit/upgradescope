@@ -61,7 +61,8 @@ answers a request only when its Host names one of:
 - the address the request arrived on, as an IP literal: the kubelet's
   probes and Prometheus' scrapes name the pod's IP, so no endpoint needs
   an exemption;
-- the `--listen` host;
+- the `--listen` host, unless it is `0.0.0.0` or `::` (an address to
+  bind, not one clients reach);
 - a name given with `--allowed-host` (repeatable or comma separated, or
   `$UPGRADESCOPE_ALLOWED_HOSTS` when the flag is not given): the
   Service, Ingress or proxy name clients use.

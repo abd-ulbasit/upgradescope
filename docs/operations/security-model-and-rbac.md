@@ -158,8 +158,8 @@ cannot read is reported as not assessed.
   or its cluster deleted or renamed, stores nothing (`401`, `409`).
 - **Host check (DNS rebinding).** On a loopback listener, or with a
   trusted team header, a request whose Host is not `localhost`, a
-  loopback address, the address it arrived on, the `--listen` host or an
-  `--allowed-host` name gets `421` before any route or credential is
+  loopback address, the address it arrived on, the `--listen` host (not
+  `0.0.0.0` or `::`) or an `--allowed-host` name gets `421` before any route or credential is
   looked at: a web page that rebinds its own name to `127.0.0.1` cannot
   read an open loopback read API, or ride a `kubectl port-forward` into
   header mode ([The Host check](auth.md#the-host-check-dns-rebinding)).

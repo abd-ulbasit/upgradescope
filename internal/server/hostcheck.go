@@ -29,7 +29,8 @@ import (
 //     whose origin is an IP literal was served from that IP, not rebound
 //     to it;
 //   - localhost;
-//   - the --listen host, and every --allowed-host (Config.AllowedHosts):
+//   - the --listen host (unless it is 0.0.0.0 or ::, an address to bind,
+//     not one to reach), and every --allowed-host (Config.AllowedHosts):
 //     the Service, Ingress or proxy names the operator serves it under.
 //
 // The port is not compared. Rebinding needs a name the attacker controls;
@@ -127,7 +128,8 @@ func ParseAllowedHost(raw string) (string, error) {
 }
 
 // allowedHostsOf is what the guard compares a Host with besides loopback
-// and the request's own address: cfg.AllowedHosts and the --listen host.
+// and the request's own address: cfg.AllowedHosts and the --listen host,
+// unless that is localhost, a loopback or an unspecified address.
 func allowedHostsOf(cfg Config) ([]string, error) {
 	var out []string
 	for _, raw := range cfg.AllowedHosts {
@@ -140,16 +142,23 @@ func allowedHostsOf(cfg Config) ([]string, error) {
 		}
 	}
 	if lh, _, err := net.SplitHostPort(cfg.Listen); err == nil && lh != "" {
-		// localhost and loopback literals are allowed already.
-		if h, err := ParseAllowedHost(lh); err == nil && h != "localhost" && !isLoopbackLiteral(h) && !slices.Contains(out, h) {
+		// localhost and loopback literals are allowed already; an
+		// unspecified address (0.0.0.0, ::) is where serve binds, not a
+		// name it is reached under.
+		if h, err := ParseAllowedHost(lh); err == nil && h != "localhost" && !loopbackOrUnspecified(h) && !slices.Contains(out, h) {
 			out = append(out, h)
 		}
 	}
 	return out, nil
 }
 
-// isLoopbackLiteral reports whether h is a loopback IP address.
-func isLoopbackLiteral(h string) bool {
+// loopbackOrUnspecified reports whether h is a loopback or an unspecified
+// IP address.
+func loopbackOrUnspecified(h string) bool {
 	a, err := netip.ParseAddr(h)
-	return err == nil && a.Unmap().IsLoopback()
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	return a.IsLoopback() || a.IsUnspecified()
 }

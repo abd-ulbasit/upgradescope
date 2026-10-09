@@ -239,7 +239,7 @@ a credential: --read-token (fleet-wide), read tokens minted with
 	cmd.MarkFlagsRequiredTogether("trust-team-header", "trusted-proxy-cidr")
 	cmd.Flags().StringSliceVar(&opts.allowedHosts, "allowed-host", nil,
 		"a host name (or IP) requests may name in their Host header, any port, repeatable or comma separated (default $"+allowedHostsEnv+"): "+
-			"on a loopback --listen, or with --trust-team-header, any other Host than localhost, a loopback address, the --listen host "+
+			"on a loopback --listen, or with --trust-team-header, any other Host than localhost, a loopback address, the --listen host (not 0.0.0.0 or ::) "+
 			"or the address the request arrived on gets 421, which stops DNS-rebinding pages; name the Service, Ingress or proxy host the server is reached under")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -171,6 +172,37 @@ func TestHostAllowed(t *testing.T) {
 		req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, net.Addr(local)))
 		if got := s.hostAllowed(req); got != want {
 			t.Errorf("Host %q: allowed = %v, want %v", host, got, want)
+		}
+	}
+}
+
+// An unspecified --listen host (0.0.0.0, ::) is where serve binds, not a
+// name anyone reaches it under, so like a loopback one it adds nothing to
+// the allow-list: a Host of 0.0.0.0 is refused while the guard is on.
+func TestAllowedHostsSkipAnUnspecifiedListenHost(t *testing.T) {
+	for _, listen := range []string{"0.0.0.0:8080", "[::]:8080", "[::ffff:0.0.0.0]:8080", "127.0.0.1:8080", "[::1]:8080", "localhost:8080"} {
+		got, err := allowedHostsOf(Config{Listen: listen, AllowedHosts: []string{"upgradescope.example.com"}})
+		if err != nil {
+			t.Fatalf("--listen %s: %v", listen, err)
+		}
+		if !slices.Equal(got, []string{"upgradescope.example.com"}) {
+			t.Errorf("--listen %s: allowed hosts %v, want only the --allowed-host", listen, got)
+		}
+	}
+	if got, _ := allowedHostsOf(Config{Listen: "10.42.0.7:8080"}); !slices.Equal(got, []string{"10.42.0.7"}) {
+		t.Errorf("--listen 10.42.0.7:8080: allowed hosts %v, want [10.42.0.7]", got)
+	}
+	s := newTestServer(t, newFakeStore(), func(c *Config) {
+		c.Listen = "0.0.0.0:8080"
+		c.TrustTeamHeader, c.TrustedProxies = "X-Forwarded-Groups", []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
+	})
+	local := &net.TCPAddr{IP: net.ParseIP("10.42.0.7"), Port: 8080}
+	for host, want := range map[string]bool{"0.0.0.0:8080": false, "0.0.0.0": false, "[::]:8080": false, "10.42.0.7:8080": true} {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.Host = host
+		req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, net.Addr(local)))
+		if got := s.hostAllowed(req); got != want {
+			t.Errorf("--listen 0.0.0.0:8080, Host %q: allowed = %v, want %v", host, got, want)
 		}
 	}
 }
