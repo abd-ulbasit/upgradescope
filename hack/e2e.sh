@@ -713,7 +713,7 @@ gate_fails_removed_api() {
 # agent as --targets, and the restarted agent reconciles spec.targets, so poll.
 upgrade_with_targets() {
   # --set-string: `--set agent.targets={1.30}` would render the float 1.3.
-  h upgrade "$RELEASE" deploy/chart --namespace "$NS" --reuse-values \
+  h upgrade "$RELEASE" deploy/chart --namespace "$NS" --reset-then-reuse-values \
     --set-string "agent.targets={$NEXT}" --wait --timeout 5m || return 1
   local i
   for i in $(seq 1 60); do

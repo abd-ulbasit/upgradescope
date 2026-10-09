@@ -1,3 +1,5 @@
 # Go tests for the chart (rbac_test.go) are not part of the package.
 *.go
+# Their fixtures neither.
+testdata/
 .DS_Store

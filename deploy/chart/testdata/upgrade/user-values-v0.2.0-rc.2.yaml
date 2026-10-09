@@ -1,0 +1,46 @@
+# User values of a v0.2.0-rc.2 install that used most of the chart: they
+# must still pass the current schema and render, because
+# `helm upgrade --reset-then-reuse-values` carries them onto the new chart.
+# Every key is one the rc.2 chart has: TestUpgradeValuesFilesAreRealUserValues
+# renders this file on the chart at the v0.2.0-rc.2 tag, whose schema refuses
+# any other.
+image:
+  pullPolicy: Always
+imagePullSecrets:
+  - name: regcred
+rbac:
+  helmSecrets: false
+agent:
+  interval: 15m
+  crName: prod
+  clusterName: prod-eu
+  targets: ["1.36", "1.37"]
+  logFormat: json
+  resources:
+    limits:
+      memory: 512Mi
+server:
+  enabled: true
+  ingestToken: rc2-ingest-token
+  readToken: rc2-read-token
+  adminToken: rc2-admin-token
+  retention: 60d
+  staleAfter: 3h
+  targets: ["1.37"]
+  teamMap:
+    - {pattern: "payments-*", team: payments}
+  ingress:
+    enabled: true
+    className: nginx
+    host: upgradescope.example.com
+networkPolicy:
+  enabled: true
+  serverIngressFrom:
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+metrics:
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
+    clusterStaleAfterSeconds: 14400

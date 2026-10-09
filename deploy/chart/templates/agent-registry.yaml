@@ -4,7 +4,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "upgradescope.fullname" . }}-agent-registry
+  name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-agent-registry") }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent

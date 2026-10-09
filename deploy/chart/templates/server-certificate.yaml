@@ -1,13 +1,31 @@
 {{- if and .Values.server.enabled .Values.server.tls.certManager.issuerRef.name (not .Values.server.tls.secretName) }}
-{{- $svc := include "upgradescope.serverFullname" . }}
+{{- $svc := include "upgradescope.serverService" . }}
 # The server's HTTPS certificate, issued by cert-manager into the Secret
 # the server serves (server.tls). With a CA or self-signed issuer, the
 # Secret's ca.crt is what the in-chart agent trusts. It names the Service
 # only: an Ingress serves the public host with its own Secret.
+{{- /*
+The name is <fullname>-server, uncut (up to 70 characters), so a release
+keeps the Certificate it has. Only the dnsNames carry the cut Service
+name. A long name is safe with cert-manager (its source read at v1.12.0,
+v1.21.2 and master, 2026-10): it copies the Certificate's name into no
+label value, only into the cert-manager.io/certificate-name annotation of
+the CertificateRequest and of the issued Secret, and annotation values
+have no 63-character limit. The labels it puts on the CertificateRequest
+and an ACME Order are this object's own. What it names after the
+Certificate is shortened: the CertificateRequest
+(DNSSafeShortenTo52Characters(name) + "-" as generateName; with the
+StableCertificateRequestName gate, up to 233 characters plus the
+revision, within the 253 a custom resource name allows), the next private
+key Secret (generateName "<name>-", which the API server cuts to 58
+characters before adding 5 random ones) and an ACME Order (52 characters
+plus a hash). The issued Secret is spec.secretName,
+<fullname>-server-https, a Secret name of up to 253.
+*/}}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ $svc }}
+  name: {{ include "upgradescope.serverFullname" . }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: server

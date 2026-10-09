@@ -97,7 +97,7 @@ version. To evaluate others, set them in the chart (the agent then resets
 `spec.targets` to this list on every tick):
 
 ```sh
-helm upgrade upgradescope deploy/chart -n upgradescope --reuse-values \
+helm upgrade upgradescope deploy/chart -n upgradescope --reset-then-reuse-values \
   --set-json 'agent.targets=["1.37","1.38"]'
 ```
 

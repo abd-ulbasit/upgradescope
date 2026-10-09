@@ -3,6 +3,16 @@
 {{- /* A rule with no peers would admit every source. */}}
 {{- fail "networkPolicy.enabled with agent.enabled=false needs networkPolicy.serverIngressFrom: the peers allowed to reach the server (ingress controller, agents' egress, Prometheus)" }}
 {{- end }}
+{{- if and .Values.server.ingress.enabled (not .Values.networkPolicy.serverIngressFrom) }}
+{{- /* The policy admits this release's agent only: the Ingress controller,
+       and so every remote agent, dashboard user and CI gate call that
+       arrives through it, would be dropped (a 504 from the controller). */}}
+{{- fail "networkPolicy.enabled with server.ingress.enabled needs networkPolicy.serverIngressFrom: the policy admits only this release's agent, so it would cut off the Ingress controller. List the controller's pods, e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]" }}
+{{- end }}
+{{- if and .Values.metrics.serviceMonitor.enabled (not .Values.networkPolicy.serverIngressFrom) }}
+{{- /* Prometheus scrapes /metrics on the server's port. */}}
+{{- fail "networkPolicy.enabled with metrics.serviceMonitor.enabled needs networkPolicy.serverIngressFrom: the policy admits only this release's agent, so it would block Prometheus from scraping the server. List Prometheus's pods, e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]" }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

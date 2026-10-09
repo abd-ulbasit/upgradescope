@@ -7,7 +7,7 @@ Revoke ingest tokens of a cluster (--id or --all), or a read token (--read --id)
 Revoke one ingest token by id (see 'tokens list'), or every active token of the cluster with --all.
 Zero-downtime rotation: 'tokens create <cluster>', roll the new token out to the agent, then
 'tokens revoke <cluster> --id <old id>'. The agent reads its token at startup, so rolling it out
-means restarting the agent after updating its Secret (kubectl rollout restart deploy/<release>-agent).
+means restarting the agent after updating its Secret (with the chart, kubectl rollout restart deploy/<fullname>-agent).
 
 With --read, revoke the read token --id names (see 'tokens list --read'). The server refuses it
 from its next request on. Revoking the last read token does not open the read API again.
