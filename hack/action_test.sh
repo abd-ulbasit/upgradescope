@@ -270,6 +270,28 @@ forged() {
       print "$_\n";
     }' "$1"
 }
+# inert <file>: the log holds nothing the runner would read as a workflow
+# command but run.sh's own: forged finds no line, and no line that is not a
+# :: command holds a ##[ (the runner reads that legacy form anywhere in
+# one). What forged finds is left in $work/forged.case. This is the security
+# property itself, so it holds whichever of the binary's escaping and
+# run.sh's "| " prefix keeps a hostile name from starting a line; it fails
+# only when neither does.
+inert() {
+  forged "$1" >"$work/forged.case"
+  [ ! -s "$work/forged.case" ] && ! awk '!/^::/ && index($0, "##[") { f = 1 } END { exit !f }' "$1"
+}
+# sameline <file> <needle>...: one line of the file holds every needle. A
+# hostile name that the binary escapes stays on one line, with \n in it.
+sameline() {
+  local f=$1 line n
+  shift
+  while IFS= read -r line; do
+    for n; do case $line in *"$n"*) ;; *) continue 2 ;; esac; done
+    return 0
+  done <"$f"
+  return 1
+}
 # expect <name> <want-exit> <want-substring>: checks the last run.
 expect() {
   if [ "$code" = "$2" ] && grep -qF -- "$3" "$work/out"; then ok "$1"; else
@@ -695,14 +717,26 @@ loud_ok "the gate's stderr cannot start a workflow command (gate failed, exit 2)
 run scan "$work/loud:" INPUT_PATH=action/testdata/clean
 loud_ok "the gate's stderr cannot start a workflow command (gate passed)"
 # A directory name with a line break, holding no manifests: the binary's
-# "No Kubernetes manifests found under <path>" repeats the name.
+# "No Kubernetes manifests found under <path>" repeats the name. Two layers
+# keep it from starting a command: the binary writes the line break as \n
+# (internal/textsafe), so the message is one line, and run.sh's "| " prefix
+# on every line of the binary's stderr would stop even a raw line break.
+# The first case is the property, which holds with either layer and fails
+# only without both; the second pins the binary's, so losing it is named
+# even while run.sh's prefix still covers it.
 evil="$work/evil${nl}::warning title=FORGED::y"
 mkdir -p "$evil" && echo readme >"$evil/README"
 run scan "$work/real:" INPUT_PATH="$evil"
-if [ "$code" = 1 ] && grep -qF '| ::warning title=FORGED::y' "$work/out" && grep -qF 'no Kubernetes manifests found' "$work/out" &&
+if inert "$work/out" && [ "$code" = 1 ] && grep -qF 'no Kubernetes manifests found' "$work/out" && grep -qF 'title=FORGED::y' "$work/out" &&
   [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -q '^::error::upgradescope scan failed (exit 1)' "$work/out"; then
   ok "a path with a line break cannot start a command through the binary's error"
-else fail "a path with a line break cannot start a command through the binary's error" "$work/out"; fi
+else
+  cat "$work/forged.case" >>"$work/out"
+  fail "a path with a line break cannot start a command through the binary's error" "$work/out"
+fi
+if sameline "$work/out" 'no Kubernetes manifests found' 'evil\n::warning title=FORGED::y'; then
+  ok "the binary's error writes a line break in a path as \\n, on one line"
+else fail "the binary's error writes a line break in a path as \\n, on one line" "$work/out"; fi
 # A file name a fork PR controls, in a malformed manifest.
 badname="$work/bad"
 mkdir -p "$badname" && printf 'a: [\n' >"$badname/b${nl}::warning title=FORGEDBAD::q.yaml"
@@ -722,8 +756,12 @@ else fail "a file name with a line break in a finding cannot start a command" "$
 # TrimStart strips all Unicode whitespace before it looks for ::, so a
 # pattern for "a line that would start a command" misses some of it, and
 # every line of the gate's stderr and of the Markdown report gets the
-# prefix instead (#197 AC-05b). Each in a skipped file's name, in a finding's
-# file name, and in the path input (the binary's error, and validate's).
+# prefix instead (#197 AC-05b). The binary also writes the line break as an
+# escape now, so these cases check the property (inert: no line the runner
+# reads as a command, which holds with either layer) and, for the binary's
+# warning, that the escape is there. Each in a skipped file's name, in a
+# finding's file name, and in the path input (the binary's error, and
+# validate's).
 i=0
 for label in FF VT NBSP U+3000 U+0085; do
   case $label in
@@ -738,13 +776,18 @@ for label in FF VT NBSP U+3000 U+0085; do
   mkdir -p "$d" && printf 'a: [\n' >"$d/b${nl}${ws}::warning title=FORGED::q.yaml"
   cp action/testdata/removed/all.yaml "$d/m${nl}${ws}::warning title=FORGED::z.yaml"
   run scan "$work/real:" INPUT_PATH="$d"
-  forged "$work/out" >"$work/forged.case"
-  if [ "$code" = 2 ] && grep -qF "| ${ws}::warning title=FORGED::q.yaml" "$work/out" &&
-    grep -qF 'skipped' "$work/out" && [ ! -s "$work/forged.case" ]; then
+  if inert "$work/out" && [ "$code" = 2 ] && grep -qF 'skipped' "$work/out" && grep -qF 'title=FORGED::q.yaml' "$work/out"; then
     ok "a line break and $label in a file name cannot start a workflow command"
   else
     cat "$work/forged.case" >>"$work/out"
     fail "a line break and $label in a file name cannot start a workflow command" "$work/out"
+  fi
+  # The binary's own layer: the skipped file's name, line break and all, is
+  # one line of its warning.
+  if sameline "$work/out" 'skipped' 'b\n' 'title=FORGED::q.yaml'; then
+    ok "a line break and $label in a file name stay on one line of the binary's warning"
+  else
+    fail "a line break and $label in a file name stay on one line of the binary's warning" "$work/out"
   fi
   p="$work/wsp$i${nl}${ws}::warning title=FORGED::y"
   mkdir -p "$p" && echo readme >"$p/README"
