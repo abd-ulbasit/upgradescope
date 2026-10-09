@@ -458,7 +458,7 @@ paths:
       description: |
         The score formula applied to each team's findings, from the same
         report the report endpoint serves. Findings with no team are under
-        `(unattributed)`, a name no label value can take, so a real team called `unattributed` is a separate row.
+        `(unattributed)`, a name no label value can take and `--team-map` refuses, so a real team called `unattributed` is a separate row.
       responses:
         "200":
           description: Team scores.
@@ -1055,7 +1055,7 @@ components:
         warnings: {type: integer}
     TeamScores:
       type: object
-      description: Team name to score; findings with no team are under `(unattributed)`, a name no label value can take, so a real team called `unattributed` is a separate row.
+      description: Team name to score; findings with no team are under `(unattributed)`, a name no label value can take and `--team-map` refuses, so a real team called `unattributed` is a separate row.
       additionalProperties: {$ref: "#/components/schemas/TeamScore"}
     ReportEnvelope:
       type: object

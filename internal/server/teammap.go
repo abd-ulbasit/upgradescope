@@ -8,6 +8,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
@@ -53,7 +54,8 @@ func LoadTeamMap(p string) (TeamMap, error) {
 // read scopes name it in the team list encoding (decodeTeams) or one per
 // tokens create --teams flag. The one exception is a team called "*",
 // which is read as StarTeam (logged), since "*" is a read token's scope
-// of the whole fleet; a map that also names StarTeam itself is warned that
+// of the whole fleet; a team called engine.UnattributedTeam is refused, being
+// the name of the findings no team owns; a map that also names StarTeam itself is warned that
 // the two are now one team.
 func ParseTeamMap(data []byte) (TeamMap, error) {
 	var tm TeamMap
@@ -68,6 +70,12 @@ func ParseTeamMap(data []byte) (TeamMap, error) {
 		}
 		if r.Team == "" {
 			return nil, fmt.Errorf("team map rule %d (%q): team is required", i+1, r.Pattern)
+		}
+		// The bucket of findings no team owns is shown under this name on
+		// every surface; a team of the same name would be merged into it.
+		if r.Team == engine.UnattributedTeam {
+			return nil, fmt.Errorf("team map rule %d (%q): the team name %q is reserved for findings no team owns; pick another name",
+				i+1, r.Pattern, engine.UnattributedTeam)
 		}
 		// A read token's scope of "*" is the whole fleet, so a team called
 		// "*" could not be given a token of its own: it is read as the

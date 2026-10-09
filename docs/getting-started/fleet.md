@@ -154,8 +154,9 @@ labels with a glob map, first match wins:
 ```
 
 Team scores apply the score formula to each team's findings. Findings with
-no team are grouped as `(unattributed)` (a name no label value can take, so
-it never merges with a team called `unattributed`). A team's verdict is
+no team are grouped as `(unattributed)` (a name no label value can take, and
+`--team-map` refuses it as a team name, so it never merges with a team called
+`unattributed`). A team's verdict is
 `blocked` by a blocker of its own or an unattributed one (kubelet skew, an object in an
 unlabelled namespace), which cannot be ruled out as the team's; otherwise
 it is `unknown` when the cluster's report has a required not-assessed gap,

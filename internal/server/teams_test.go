@@ -38,6 +38,19 @@ func TestRenderTeamScores(t *testing.T) {
 	}
 }
 
+// A team named like the bucket (a map from before the name was reserved)
+// must not lose its score: the two rows become one that keeps both blockers.
+func TestRenderTeamScoresNeverOverwritesATeamOfTheBucketsName(t *testing.T) {
+	got := renderTeamScores(map[string]engine.TeamScore{
+		"":                      {Score: 95, Ready: true, Verdict: engine.VerdictReady, Warnings: 1},
+		engine.UnattributedTeam: {Score: 50, Verdict: engine.VerdictBlocked, Blockers: 2},
+	})
+	want := engine.TeamScore{Score: 50, Verdict: engine.VerdictBlocked, Blockers: 2, Warnings: 1}
+	if len(got) != 1 || got[engine.UnattributedTeam] != want {
+		t.Fatalf("renderTeamScores = %+v, want one row %+v", got, want)
+	}
+}
+
 // seedTeamCluster pushes an inventory with one PSP blocker in a
 // team-labelled namespace and one teamless warning-free info-only usage,
 // then returns the cluster id.

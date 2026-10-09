@@ -296,7 +296,7 @@ Auth: `readToken` (bearer).
 
 **Per-team scores.** The score formula applied to each team's findings, from the same
 report the report endpoint serves. Findings with no team are under
-`(unattributed)`, a name no label value can take, so a real team called `unattributed` is a separate row.
+`(unattributed)`, a name no label value can take and `--team-map` refuses, so a real team called `unattributed` is a separate row.
 
 Auth: `readToken` (bearer).
 
@@ -819,7 +819,7 @@ whole.
 
 ### TeamScores
 
-Team name to score; findings with no team are under `(unattributed)`, a name no label value can take, so a real team called `unattributed` is a separate row.
+Team name to score; findings with no team are under `(unattributed)`, a name no label value can take and `--team-map` refuses, so a real team called `unattributed` is a separate row.
 
 Type: map of [TeamScore](#teamscore).
 

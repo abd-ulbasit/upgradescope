@@ -8,8 +8,13 @@ import (
 
 // renderTeamScores maps engine.TeamScores output for the wire: the
 // empty-string team (findings no team owns) renders as
-// engine.UnattributedTeam, a name no label value can take, so a real team
-// called "unattributed" stays its own row.
+// engine.UnattributedTeam. No label value can take that name (a label value
+// holds no parentheses) and ParseTeamMap refuses it, so a real team called
+// "unattributed" stays its own row and nothing else is keyed the same.
+// Should a team of that very name reach here anyway (a stored map from
+// before the name was reserved), the two are never left to overwrite each
+// other: they are one row that keeps every blocker and warning and takes the
+// lower score and the worse verdict, so nothing disappears.
 func renderTeamScores(m map[string]engine.TeamScore) map[string]engine.TeamScore {
 	ts, ok := m[""]
 	if !ok {
@@ -20,8 +25,24 @@ func renderTeamScores(m map[string]engine.TeamScore) map[string]engine.TeamScore
 		out[k] = v
 	}
 	delete(out, "")
+	if real, clash := out[engine.UnattributedTeam]; clash {
+		ts = mergeTeamScores(real, ts)
+	}
 	out[engine.UnattributedTeam] = ts
 	return out
+}
+
+// mergeTeamScores is two rows that must share one name: the counts add, the
+// score is the lower and the verdict the worse, so neither hides the other.
+func mergeTeamScores(a, b engine.TeamScore) engine.TeamScore {
+	v := worseVerdict(a.Verdict, b.Verdict)
+	return engine.TeamScore{
+		Score:    min(a.Score, b.Score),
+		Verdict:  v,
+		Ready:    v == engine.VerdictReady,
+		Blockers: a.Blockers + b.Blockers,
+		Warnings: a.Warnings + b.Warnings,
+	}
 }
 
 // reportWithTeams decorates an engine.Report with per-team scores at the

@@ -19,7 +19,9 @@ team called `*` is read as the team `(*)` (serve logs a warning at
 startup and keeps serving), so mint its token with `--teams '(*)'`. A
 map that also names a team `(*)` makes the two one team, and the
 warning says so: rename one to keep them apart. A namespace label value
-cannot be `*`.
+cannot be `*`. A `--team-map` team cannot be `(unattributed)` either: that
+is the name of the findings no team owns, and serve refuses a map that uses
+it.
 
 ## Read credentials
 
