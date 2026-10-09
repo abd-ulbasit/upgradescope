@@ -257,6 +257,7 @@ type Server struct {
 	outboxKick         chan struct{} // wakes the delivery worker after a commit
 	holds              sinkHolds     // sinks that asked to be left alone (Retry-After), in memory
 	notifyTimeout      time.Duration // bounds one delivery attempt
+	outboxLease        time.Duration // how long a claimed message is this server's to deliver
 	reevaluateInterval time.Duration // background re-evaluation period
 	reevaluateKick     chan struct{} // starts the next re-evaluation pass early
 	retentionInterval  time.Duration // pruning period after the startup pass
@@ -323,6 +324,7 @@ func New(cfg Config) (*Server, error) {
 	s.outboxKick = make(chan struct{}, 1)
 	s.reevaluateKick = make(chan struct{}, 1)
 	s.notifyTimeout = notifyTimeout
+	s.outboxLease = outboxLease
 	s.reevaluateInterval = reevaluateInterval
 	s.retentionInterval = retentionInterval
 	for _, t := range cfg.ExtraTargets {
