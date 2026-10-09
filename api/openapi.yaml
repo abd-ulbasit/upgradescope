@@ -36,7 +36,8 @@ info:
     after `--team-map`), and of those only their findings, suppressed
     findings and team scores. A finding that spans teams is cut to theirs:
     only their teams, namespaces and objects, its title counting only
-    theirs and its detail replaced by one that names only what is kept.
+    theirs and its detail replaced by one that names only what is kept,
+    without the folded apiserver caller rows (`callers`).
     A scoped report has no `unrecognizedImages`, and the helm
     capability's reason and skipped list (which name releases as
     namespace/name) are withheld. Any other cluster answers the same 404 as an
@@ -1034,7 +1035,8 @@ components:
             deprecated-api-in-use finding it is on its own. Suppressing
             every object of the finding by annotation or an object-scoped
             rule does not suppress them: they then stand as findings of
-            their own.
+            their own. A team-scoped read omits them from a finding it
+            cuts to its teams.
     Caller:
       type: object
       required: [version, resource, key, severity, title, detail]

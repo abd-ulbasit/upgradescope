@@ -23,7 +23,8 @@ them owns a namespace in (by the namespace attribution findings carry,
 after `--team-map`), and of those only their findings, suppressed
 findings and team scores. A finding that spans teams is cut to theirs:
 only their teams, namespaces and objects, its title counting only
-theirs and its detail replaced by one that names only what is kept.
+theirs and its detail replaced by one that names only what is kept,
+without the folded apiserver caller rows (`callers`).
 A scoped report has no `unrecognizedImages`, and the helm
 capability's reason and skipped list (which name releases as
 namespace/name) are withheld. Any other cluster answers the same 404 as an
@@ -767,7 +768,7 @@ whole.
 | `objects` | array of [ObjectRef](#objectref) | no | — |
 | `objectsOmitted` | integer | no | Affected objects not listed. |
 | `baselineState` | `new` \| `unchanged` | no | — |
-| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. |
+| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. A team-scoped read omits them from a finding it cuts to its teams. |
 
 ### FindingFields
 
@@ -786,7 +787,7 @@ whole.
 | `objects` | array of [ObjectRef](#objectref) | no | — |
 | `objectsOmitted` | integer | no | Affected objects not listed. |
 | `baselineState` | `new` \| `unchanged` | no | — |
-| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. |
+| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. A team-scoped read omits them from a finding it cuts to its teams. |
 
 ### Caller
 
@@ -818,7 +819,7 @@ whole.
 | `objects` | array of [ObjectRef](#objectref) | no | — |
 | `objectsOmitted` | integer | no | Affected objects not listed. |
 | `baselineState` | `new` \| `unchanged` | no | — |
-| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. |
+| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. A team-scoped read omits them from a finding it cuts to its teams. |
 | `reason` | string | yes | Why the finding is accepted. |
 | `source` | string | yes | What suppressed it: the config file, annotation, or spec.ignore. |
 | `expires` | string | no | YYYY-MM-DD, as the rule gave it. |
@@ -1078,7 +1079,7 @@ are not known. The same for every target.
 | `objects` | array of [ObjectRef](#objectref) | no | — |
 | `objectsOmitted` | integer | no | Affected objects not listed. |
 | `baselineState` | `new` \| `unchanged` | no | — |
-| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. |
+| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. A team-scoped read omits them from a finding it cuts to its teams. |
 | `source` | `manifest` \| `cluster` | yes | manifest: introduced by the posted manifests; cluster: the cluster already has it. |
 
 ### GateResponse
