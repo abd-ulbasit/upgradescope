@@ -13,7 +13,17 @@ the dashboard.
   as a suffix on whole path segments, so mirrors and pull-through caches
   match too; the version is read from the tag. Images of provider builds
   (`gke.gcr.io/`, `gcr.io/gke-release/`, `mcr.microsoft.com/`) follow the
-  provider's support policy and only match entries written for them.
+  provider's support policy and only match entries written for them. Where
+  one repository publishes two vendors' builds that only the tag tells
+  apart, an entry claims its tags with a tag pattern:
+  `rancher/nginx-ingress-controller` is RKE2's build with a `-hardenedN`
+  tag and RKE1's (Ingress NGINX) with any other.
+- **Component images.** A product whose parts carry their own versions is
+  matched by those images too, each part's release line mapped to the
+  product line that ships it: Flux's `source-controller` v1.5 and
+  `helm-controller` v1.2 are Flux 2.5. A part's line the entry does not map
+  yet (a Flux release newer than the registry) reads as Flux with no
+  version, an `addon-no-data` info.
 - **Helm releases.** A release whose chart name is in an entry's matchers is
   that add-on, at the release's `appVersion` (never the chart version).
   In the release's namespace, the `appVersion` wins over image tags and
@@ -68,6 +78,12 @@ At the installed version, independent of the target unless noted:
   lifecycle pages. endoflife.date stops at some old line, and anything
   older than an ended line has ended too;
 - the end of life is within 90 days → `eol-approaching` warning;
+- split support, where support ends for everyone on one date and lasts to
+  a later one only under a condition upgradescope cannot see (RKE2's
+  Ingress NGINX: SUSE builds for community users ended in March 2026,
+  Prime LTS subscribers are supported through November 2027) → an
+  `eol-approaching` warning that states the condition between the two
+  dates, and an `eol-addon` blocker after the later one;
 - the release line's, or a compatibility row's, Kubernetes range excludes
   the **target** → `chart-incompat` blocker;
 - a node runtime's ended release line, or a runtime older than the oldest
@@ -142,7 +158,7 @@ their own line too: that is the version running.
 | `grafana-agent` | retired as a whole (2025-11-01) | — | — |
 | `weave-net` | retired as a whole (archived 2024-06-20) | — | — |
 | `external-dns` | — | compat rows | — |
-| `rke2-ingress-nginx` | — | compat rows | — |
+| `rke2-ingress-nginx` | community builds ended 2026-03-31; Prime LTS only until 2027-11-30 | compat rows | — |
 | `aks-app-routing-nginx` | product end of life 2026-11-30 | — | — |
 | `coredns` | — | — | — |
 | `kube-state-metrics` | — | — | — |
@@ -154,11 +170,14 @@ So: 14 entries carry release-line EOL data kept in sync with
 [endoflife.date](https://endoflife.date), five are retired as a whole
 (Ingress NGINX, Kubernetes Dashboard, Promtail, Grafana Agent and Weave
 Net, each a blocker at any version), one more carries an end-of-life date
-for the product as a whole (the AKS application routing NGINX build),
+for the product as a whole (the AKS application routing NGINX build), one
+carries an end date for everyone and a later one under a condition (RKE2's
+Ingress NGINX build, supported until 2027-11-30 only with a SUSE Rancher
+Prime LTS subscription),
 6 carry Kubernetes compatibility ranges, and for the 5 entries with
 none of these, a detected install is reported as `addon-no-data` (info)
-rather than judged. ExternalDNS and RKE2's ingress have compatibility
-ranges but no end-of-life data, which is reported the same way. The
+rather than judged. ExternalDNS has compatibility ranges but no
+end-of-life data, which is reported the same way. The
 registry is small on purpose: every row needs a source.
 
 An image is matched by the repository path an entry declares. A path of two
@@ -173,7 +192,19 @@ recognized at `registry.k8s.io/etcd`, `bitnamilegacy/etcd` and behind a kubeadm
 `imageRepository` or a Harbor proxy cache (`myregistry.corp/k8s/etcd`). The
 vendor builds of Ingress NGINX have their own
 entries (`rke2-ingress-nginx`, `aks-app-routing-nginx`) and the Bitnami
-rebuild is in `ingress-nginx`. No image is claimed by two entries.
+rebuild is in `ingress-nginx`, as is RKE1's build (`-rancherN` tags of
+`rancher/nginx-ingress-controller`; RKE1 itself has been end of life since
+2025-07-31). No image is claimed by two entries: a tag-qualified matcher
+takes its tags ahead of another entry's path-only matcher of that
+repository, and two tag-qualified matchers on one repository are refused.
+Flux is found by its v2 controllers (`fluxcd/source-controller`,
+`kustomize-controller`, `helm-controller`, `notification-controller`,
+`image-reflector-controller`, `image-automation-controller`,
+`source-watcher`), however it was installed, by the `flux2` chart, and
+as Flux v1 by `fluxcd/flux` and `weaveworks/flux`. Kubernetes Dashboard is
+found by its v1.x images too (`kubernetes-dashboard-amd64` and the `-arm`,
+`-arm64`, `-ppc64le` and `-s390x` variants, under `k8s.gcr.io` or
+`gcr.io/google_containers`).
 Add-ons that endoflife.date does not track and that no entry covers yet
 (cluster-autoscaler, the AWS Load Balancer Controller and the other EKS
 add-ons) are not judged; the report lists their images as unrecognized.

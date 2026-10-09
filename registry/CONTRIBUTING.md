@@ -13,7 +13,9 @@ traceable to an upstream or public source — that is the whole point.
 - `internal/engine` judges each detected add-on at its installed version:
   - `support.status: eol` (or a past `support.eol_date`) → **blocker**, a
     `support.eol_date` within 90 days → **warning**. These product-level
-    fields are for products retired as a whole (ingress-nginx).
+    fields are for products retired as a whole (ingress-nginx). With split
+    support (`extended_eol_date`, below) the blocker waits for the later
+    date, and between the two dates a **warning** states the condition.
   - otherwise the version is mapped to its release line in `cycles`: a line
     that has ended → **blocker**, one ending within 90 days → **warning**.
     A node runtime's ended line is only a **warning** naming the nodes: the
@@ -32,16 +34,24 @@ schema_version: 2                  # required, must be 2
 id: my-addon                       # required, kebab-case, unique, = file name
 display_name: My Add-on            # required
 endoflife_product: my-addon        # optional: endoflife.date slug (see below)
-matchers:                          # at least one image, chart or runtime
+matchers:                          # at least one image, chart, runtime or component
   images:
     - org/app                      # repository path, no host/tag (see below)
+    - "org/shared:*-mine*"         # optional tag pattern: only these tags (see below)
   charts:
     - my-addon                     # exact Helm chart name
   runtimes:
     - containerd                   # node container runtime name
+  components:                      # images versioned on their own (see below)
+    - image: org/app-controller
+      lines:                       # component MAJOR.MINOR → product release line
+        - {component: "1.5", product: "2.5"}
+      citations: ["https://example.com/releases"]
 support:
   status: supported                # supported | eol | unknown
   eol_date: "2027-01-31"           # optional, YYYY-MM-DD: whole-product EOL only; not with unknown
+  extended_eol_date: "2028-01-31"  # optional, with the condition: support lasts until then only if ...
+  extended_support_condition: the cluster has a vendor subscription   # ... this holds
   citations:                       # ≥1 http(s) URL unless status is unknown; replace the example.com placeholders (rejected)
     - https://example.com/lifecycle
 cycles:                            # release lines of the APP version
@@ -71,8 +81,31 @@ recommendation: Optional one-line remediation hint shown with findings.
   `docker.io/library/traefik`, so the matcher is `library/traefik`. List
   every image whose tag carries the add-on's own version (`istio/proxyv2`,
   `istio/pilot`, …), and leave out images that version separately
-  (`tigera/operator`, Flux's controllers). Vendor forks with their own
-  support (AKS application routing, RKE2) get their own entries.
+  (`tigera/operator`) unless you can cite which product release ships each
+  of their lines: then list them under `components` (Flux's controllers).
+  Vendor forks with their own support (AKS application routing, RKE2) get
+  their own entries.
+- **Tag patterns (`"path:*-hardened*"`)** — when one repository publishes
+  builds of two products that only the tag tells apart (RKE2's
+  `rancher/nginx-ingress-controller:v1.12.6-hardened1` and RKE1's
+  `rancher/nginx-ingress-controller:nginx-1.12.1-rancher4`), the entry for
+  one of them adds a tag pattern to the path: tag characters with `*`
+  standing for any run of them, and at least one other character (quote
+  the matcher). It claims only the tags the pattern matches, and it claims
+  them ahead of another entry's matcher of the same path without a
+  pattern, which keeps every other tag (`rke2-ingress-nginx.yaml` and
+  `ingress-nginx.yaml`). Two matchers with patterns on one repository are
+  refused as a double claim, whatever their patterns. A bare tag
+  (`org/app:v1`) is still rejected: one tag is one release, not a product.
+- **Component images (`components`)** — images of a product's parts that
+  carry their own version (Flux's `source-controller` v1.5.0 ships in Flux
+  2.5.1) map the major.minor of their tag to the product release line
+  through `lines`, with a citation that publishes the mapping (each Flux
+  release lists its controllers' versions). The detected version is then
+  the product line ("2.5"); a line the table does not list gives no
+  version (an info finding), never a guess, so add the row when the
+  product ships a new line. A component image is a path-only matcher and
+  may not also be in the entry's `images`.
 - **Any-prefix opt-in (`"*/name"`)** — a one-segment matcher is exact, so a
   product that is pulled from whatever mirror the operator chose (etcd,
   behind a kubeadm `imageRepository` or a Harbor proxy cache) cannot list
@@ -153,6 +186,15 @@ per-version lifecycle source.
 - When a source gives a month but findings print a day, say in a YAML
   comment where the day comes from (see `ingress-nginx.yaml`,
   `aks-app-routing-nginx.yaml`).
+- **Split support** — when a vendor's own sources say support ends for
+  everyone on one date and continues to a later one only for some users
+  (a subscription tier, an extended channel), set `eol_date` to the first,
+  `extended_eol_date` to the second and `extended_support_condition` to
+  the condition as a bare clause completing "only if ..." (no leading
+  "if", no trailing period), as the provider calendars below do. Both
+  dates need `status: supported` and a citation stating them; the
+  collector cannot see the condition, so findings between the two dates
+  are warnings that state it (see `rke2-ingress-nginx.yaml`).
 
 ## Managed-provider support calendars
 
@@ -253,7 +295,8 @@ single `<id>.yaml` file or a directory of them, in the schema above.
 - [ ] `id` is kebab-case and matches the file name
 - [ ] image matchers are host-less repository paths (a provider-build
       entry: host-qualified) covering every image
-      that carries the add-on's version; no images that version separately
+      that carries the add-on's version; images that version separately
+      only as `components`, with a cited line table
 - [ ] versions, ranges and cycles are app versions, not chart versions
 - [ ] every citation URL opens in a browser (CI does not fetch them; you do)
 - [ ] compat bounds only where upstream publishes them
