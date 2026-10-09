@@ -107,7 +107,14 @@ func (c *clusterTarget) open(cmd *cobra.Command) (clusterAdmin, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("--server %q: want an http(s) URL such as https://upgradescope.example.com", c.server)
 	}
-	return &serverAdmin{base: strings.TrimSuffix(c.server, "/"), token: c.token, client: &http.Client{Timeout: clusterAdminTimeout}}, nil
+	return &serverAdmin{base: strings.TrimSuffix(c.server, "/"), token: c.token, client: &http.Client{
+		Timeout: clusterAdminTimeout,
+		// Never follow a redirect: Go turns a 301, 302 or 303 DELETE or
+		// PATCH into a GET, which the admin token reads, so a load
+		// balancer's http→https redirect made a delete that never happened
+		// look done. do reports any 3xx instead, as the agent's push does.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}, nil
 }
 
 func newClustersListCmd() *cobra.Command {
@@ -310,6 +317,10 @@ func (a *serverAdmin) do(ctx context.Context, method, path string, body, out any
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
 		return fmt.Errorf("%s %s: reading response: %w", method, path, err)
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+		return fmt.Errorf("%s %s: the server answered %s, a redirect to %q, which is never followed "+
+			"(a DELETE or PATCH would arrive as a GET): use that URL as --server", method, path, resp.Status, resp.Header.Get("Location"))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		var e struct {
