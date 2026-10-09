@@ -202,7 +202,10 @@ paths:
         bodies share a budget of twice the cap across requests. One push
         is decoded at a time; a push that waits more than 10s for its
         turn, or finds the body budget full, gets 503 with `Retry-After`.
-        The agent retries 408 and 503.
+        So does a push whose notification baselines other writers (another
+        replica's push, the background re-evaluation) replaced three times
+        while it was evaluated; nothing is stored. The agent retries 408
+        and 503.
       security:
         - ingestToken: []
       parameters:
@@ -265,7 +268,7 @@ paths:
               schema: {$ref: "#/components/schemas/Error"}
         "500": {$ref: "#/components/responses/Error"}
         "503":
-          description: The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`.
+          description: The shared body budget is full, the push waited too long for its turn, or other writers kept replacing its notification baselines (nothing is stored); retry after `Retry-After`.
           headers:
             Retry-After: {$ref: "#/components/headers/RetryAfter"}
           content:
@@ -555,6 +558,16 @@ paths:
         `--max-snapshot-bytes`) or `unreadable` (the stored inventory does
         not decode). Clusters that already run the target are
         `notApplicable`.
+
+        A what-if's `evaluatedAt` is when it was computed: each cluster's
+        contribution is kept for its snapshot (or its stored evaluation),
+        the target, the server's knowledge base and team map and the UTC
+        day, so a later request for the target computes only what changed.
+        Each contribution is computed in the per-cluster read slot, one
+        cluster at a time, so other per-cluster reads wait at most for one
+        cluster's. A rollup still computing after 20s answers 503 with
+        `Retry-After`; what it computed is kept, so the retry goes on from
+        there.
 
         A team's `verdict` is the worst of its verdicts in the clusters
         evaluated: `blocked` over `unknown` over `ready`. Its score and

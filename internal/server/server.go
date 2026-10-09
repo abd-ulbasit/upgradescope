@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
@@ -241,6 +242,9 @@ type Server struct {
 
 	readSlots        chan struct{} // semaphore: one token per read that loads a snapshot
 	readQueueTimeout time.Duration // how long such a read waits for a slot
+	fleetTeamsBudget time.Duration // how long one fleet teams rollup may run
+	teamsSlots       chan struct{} // semaphore: one token per fleet teams rollup
+	fleetTeams       fleetTeamsCache
 
 	fleetSlots          chan struct{} // semaphore: one token per read of the whole fleet being built
 	fleetQueueTimeout   time.Duration // how long such a read waits for a slot
@@ -252,14 +256,19 @@ type Server struct {
 	observeGateBound func(bound int64) // test hook: each /gate answer's gateAnswerBound
 	maxGateAnswer    int64             // test override of gateAnswerLimit; 0 = --max-gate-bytes
 
-	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
-	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
-	outboxKick         chan struct{} // wakes the delivery worker after a commit
-	holds              sinkHolds     // sinks that asked to be left alone (Retry-After), in memory
-	notifyTimeout      time.Duration // bounds one delivery attempt
-	reevaluateInterval time.Duration // background re-evaluation period
-	reevaluateKick     chan struct{} // starts the next re-evaluation pass early
-	retentionInterval  time.Duration // pruning period after the startup pass
+	teamMapHash        string                                                                                     // fingerprint of cfg.TeamMap stored with evaluations
+	sinks              []sink                                                                                     // cfg.Notifier flattened; outbox messages are per sink
+	outboxKick         chan struct{}                                                                              // wakes the delivery worker after a commit
+	holds              sinkHolds                                                                                  // sinks that asked to be left alone (Retry-After), in memory
+	notifyTimeout      time.Duration                                                                              // bounds one delivery attempt
+	outboxLease        time.Duration                                                                              // how long a claimed message is this server's to deliver
+	reevaluateInterval time.Duration                                                                              // background re-evaluation period
+	reevaluateKick     chan struct{}                                                                              // starts the next re-evaluation pass early
+	reevaluateCooldown time.Duration                                                                              // least time from a pass's start to a kicked one
+	unrefreshable      unrefreshable                                                                              // clusters the last pass could not bring up to date
+	runEngine          func(inventory.Inventory, kb.KB, inventory.Version, time.Time, int) (engine.Report, error) // test seam; nil: engine.EvaluateWithin
+	legacyVersions     legacyVersions                                                                             // judged versions of snapshots stored without one
+	retentionInterval  time.Duration                                                                              // pruning period after the startup pass
 	stopBackground     context.CancelFunc
 	backgroundDone     sync.WaitGroup
 	shutDown           bool // set by Shutdown, under mu: a later Start serves nothing
@@ -313,6 +322,8 @@ func New(cfg Config) (*Server, error) {
 	s.ingestBuffered = newByteBudget(maxBufferedSnapshotBodies * s.maxSnapshotBytes())
 	s.readSlots = make(chan struct{}, maxConcurrentReads)
 	s.readQueueTimeout = readQueueTimeout
+	s.fleetTeamsBudget = fleetTeamsBudget
+	s.teamsSlots = make(chan struct{}, maxConcurrentTeamsRollups)
 	s.fleetSlots = make(chan struct{}, maxConcurrentFleetReads)
 	s.fleetQueueTimeout = readQueueTimeout
 	s.metricsQueueTimeout = metricsQueueTimeout
@@ -323,7 +334,9 @@ func New(cfg Config) (*Server, error) {
 	s.outboxKick = make(chan struct{}, 1)
 	s.reevaluateKick = make(chan struct{}, 1)
 	s.notifyTimeout = notifyTimeout
+	s.outboxLease = outboxLease
 	s.reevaluateInterval = reevaluateInterval
+	s.reevaluateCooldown = reevaluateCooldown
 	s.retentionInterval = retentionInterval
 	for _, t := range cfg.ExtraTargets {
 		v, err := inventory.ParseTarget(t)
@@ -384,7 +397,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/history", s.readAuth(s.inReadSlot(s.handleHistory)))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/teams", s.readAuth(s.inReadSlot(s.handleTeams)))
 	s.mux.HandleFunc("GET /api/v1/fleet", s.readAuth(s.inFleetSlot(s.handleFleet)))
-	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.inReadSlot(s.handleFleetTeams)))
+	// The teams rollup takes the read slot per cluster (fleet_teams_cache.go).
+	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.inTeamsSlot(s.handleFleetTeams)))
 	s.mux.HandleFunc("POST /api/v1/gate", s.readAuth(s.handleGate))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/export", s.readAuth(s.inReadSlot(s.handleExport)))
 	s.mux.HandleFunc("GET /api/v1/registry", s.readAuth(s.handleRegistry))
@@ -549,6 +563,17 @@ func (s *Server) inReadSlot(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) inFleetSlot(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.heldIn(w, r, h, s.fleetSlots, s.fleetQueueTimeout, "too many concurrent fleet reads; retry shortly")
+	}
+}
+
+// inTeamsSlot runs h, a fleet teams rollup, in the slot of its own
+// (maxConcurrentTeamsRollups) with its response written to memory, and
+// sends it as send does. The rollup takes the read slot for each
+// cluster's part (fleet_teams_cache.go), so it never holds the fleet
+// reads' slots, nor the read slot for longer than one cluster.
+func (s *Server) inTeamsSlot(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.heldIn(w, r, h, s.teamsSlots, s.readQueueTimeout, "a fleet teams rollup is already running; retry shortly")
 	}
 }
 

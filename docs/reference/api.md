@@ -161,7 +161,10 @@ each object 8) against a budget of 1,000,000 units, and buffered
 bodies share a budget of twice the cap across requests. One push
 is decoded at a time; a push that waits more than 10s for its
 turn, or finds the body budget full, gets 503 with `Retry-After`.
-The agent retries 408 and 503.
+So does a push whose notification baselines other writers (another
+replica's push, the background re-evaluation) replaced three times
+while it was evaluated; nothing is stored. The agent retries 408
+and 503.
 
 Auth: `ingestToken` (bearer).
 
@@ -184,7 +187,7 @@ Request body (`application/json`): [PushRequest](#pushrequest)
 | 415 | `application/json` | [Error](#error) | An error. |
 | 422 | `application/json` | [Error](#error) | Not judgeable, refused before anything is written: invalid JSON or gzip, a body that is not valid UTF-8, an envelope `schemaVersion` other than 1, no `clusterName` or one that is not an RFC 1123 subdomain of at most 253 bytes, a missing or `null` inventory, an inventory `schemaVersion` other than 1, a `source` other than `cluster`, a `collectorSchema` other than 1 (or none), a `serverVersion` that is not a Kubernetes 1.x version, an identifier that is not valid for what it names, or a value beyond the limits collectors keep to (see above). The message names the field and the rule. |
 | 500 | `application/json` | [Error](#error) | An error. |
-| 503 | `application/json` | [Error](#error) | The shared body budget is full, or the push waited too long for its turn; retry after `Retry-After`. |
+| 503 | `application/json` | [Error](#error) | The shared body budget is full, the push waited too long for its turn, or other writers kept replacing its notification baselines (nothing is stored); retry after `Retry-After`. |
 
 ## clusters
 
@@ -352,6 +355,16 @@ one), `too-large` (the what-if report would be over
 `--max-snapshot-bytes`) or `unreadable` (the stored inventory does
 not decode). Clusters that already run the target are
 `notApplicable`.
+
+A what-if's `evaluatedAt` is when it was computed: each cluster's
+contribution is kept for its snapshot (or its stored evaluation),
+the target, the server's knowledge base and team map and the UTC
+day, so a later request for the target computes only what changed.
+Each contribution is computed in the per-cluster read slot, one
+cluster at a time, so other per-cluster reads wait at most for one
+cluster's. A rollup still computing after 20s answers 503 with
+`Retry-After`; what it computed is kept, so the retry goes on from
+there.
 
 A team's `verdict` is the worst of its verdicts in the clusters
 evaluated: `blocked` over `unknown` over `ready`. Its score and

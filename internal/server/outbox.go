@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
@@ -20,6 +22,15 @@ import (
 // with exponential backoff — per sink, so a retry never re-sends to a sink
 // that already succeeded. Delivery is at-least-once: a
 // crash between a successful send and the delete re-sends after the lease.
+//
+// Each sink's messages are delivered in the order they were queued, one at
+// a time, and up to maxConcurrentDeliveries sinks are delivered to at
+// once, each attempt under its own timeout (notifyTimeout), so a sink
+// that never answers delays only its own messages. A delivery starts only
+// when that timeout ends within the message's lease: a message whose
+// lease ends first is put back unattempted for the next claim, so no
+// other claimer (another replica, or this one's next pass) can take it
+// while it is still being delivered.
 //
 // A sink that answers 429 or 503 with Retry-After is held: until the delay
 // has passed (capped at outboxMaxRetryAfter) it is not called for any of
@@ -43,7 +54,10 @@ const (
 	outboxMaxBackoff  = time.Hour
 	outboxPoll        = 30 * time.Second // retry pickup when nothing kicks the worker
 	notifyTimeout     = 30 * time.Second // per delivery, over the notifier's own timeout
-	outboxMaxErrorLen = 1024             // bytes of the last delivery error kept
+	// maxConcurrentDeliveries is how many sinks are delivered to at once
+	// (each sink's messages stay in order, one at a time).
+	maxConcurrentDeliveries = 4
+	outboxMaxErrorLen       = 1024 // bytes of the last delivery error kept
 )
 
 // outboxError is err as stored in last_error: NUL bytes and invalid UTF-8
@@ -115,23 +129,57 @@ func (s *Server) kickOutbox() {
 // is left. Returns when the outbox has nothing due or ctx ends.
 func (s *Server) deliverOutbox(ctx context.Context) {
 	for ctx.Err() == nil {
-		msgs, err := s.cfg.Store.ClaimOutbox(ctx, s.now(), outboxLease, outboxBatch)
+		msgs, err := s.cfg.Store.ClaimOutbox(ctx, s.now(), s.outboxLease, outboxBatch)
 		if err != nil {
 			log.Printf("server: claiming notifications: %v", err)
 			return
 		}
-		for _, m := range msgs {
-			s.deliver(ctx, m)
-		}
-		if len(msgs) < outboxBatch {
+		putBack := s.deliverBatch(ctx, msgs)
+		if len(msgs) < outboxBatch && putBack == 0 {
 			return
 		}
 	}
 }
 
+// deliverBatch delivers one claimed batch: each sink's messages in queue
+// order, one at a time, and up to maxConcurrentDeliveries sinks at once.
+// It returns how many messages were put back for want of lease (deliver).
+func (s *Server) deliverBatch(ctx context.Context, msgs []store.OutboxMessage) int {
+	var sinks []string
+	queues := map[string][]store.OutboxMessage{}
+	for _, m := range msgs { // oldest first
+		if _, ok := queues[m.Sink]; !ok {
+			sinks = append(sinks, m.Sink)
+		}
+		queues[m.Sink] = append(queues[m.Sink], m)
+	}
+	var (
+		wg      sync.WaitGroup
+		putBack atomic.Int64
+		slots   = make(chan struct{}, maxConcurrentDeliveries)
+	)
+	for _, sk := range sinks {
+		slots <- struct{}{}
+		wg.Add(1)
+		go func(queue []store.OutboxMessage) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			for _, m := range queue {
+				if !s.deliver(ctx, m) {
+					putBack.Add(1)
+				}
+			}
+		}(queues[sk])
+	}
+	wg.Wait()
+	return int(putBack.Load())
+}
+
 // deliver sends one claimed message and settles it: deleted when sent (or
-// undeliverable), rescheduled with backoff when the sink failed.
-func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
+// undeliverable), rescheduled with backoff when the sink failed, or put
+// back unattempted (false) when its lease would end before the attempt's
+// timeout.
+func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) bool {
 	settle := func(err error) {
 		if err != nil {
 			log.Printf("server: settling notification %d: %v", m.ID, err)
@@ -146,13 +194,13 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 	if target == nil {
 		log.Printf("server: dropping notification %d: sink %q is no longer configured", m.ID, m.Sink)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
-		return
+		return true
 	}
 	n, err := notificationOf(m)
 	if err != nil {
 		log.Printf("server: dropping notification %d: corrupt payload: %v", m.ID, err)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
-		return
+		return true
 	}
 	// A message that has waited out its lifetime is stale: dropped unsent,
 	// so a sink that stays limited cannot keep a queue growing.
@@ -160,21 +208,29 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		log.Printf("server: giving up on notification %s (cluster %s, sink %s): queued %s ago, past the %s limit",
 			n.DeliveryID, n.Cluster.Name, m.Sink, age.Round(time.Minute), outboxMaxAge)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
-		return
+		return true
 	}
 	// A sink that asked to be left alone (Retry-After) is not called for any
 	// of its messages: they wait out the hold, and the claim that brought
 	// this one here is not an attempt.
 	if until, held := s.holds.heldUntil(m.Sink, s.now()); held {
 		settle(s.cfg.Store.DeferOutbox(ctx, m.ID, expiryCap(m, until)))
-		return
+		return true
+	}
+	// Its lease ends before this attempt could (with a fifth of the
+	// timeout to spare for settling it): another claimer may take it then,
+	// so it is put back for the next claim, unattempted. (A lease no longer
+	// than that would never start one.)
+	if now, need := s.now(), s.notifyTimeout+s.notifyTimeout/5; s.outboxLease > need && now.Add(need).After(m.NextAttemptAt) {
+		settle(s.cfg.Store.DeferOutbox(ctx, m.ID, now))
+		return false
 	}
 	nctx, cancel := context.WithTimeout(ctx, s.notifyTimeout)
 	err = target.Notify(nctx, n)
 	cancel()
 	if err == nil {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
-		return
+		return true
 	}
 	// What is logged and stored never carries the sink's URL: a Slack
 	// webhook's path is its credential. The notifiers redact it already;
@@ -188,12 +244,13 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		log.Printf("server: giving up on notification %s (cluster %s, sink %s) after %d attempts: %s",
 			n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, errText)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
-		return
+		return true
 	}
 	next := expiryCap(m, s.now().Add(retryDelay(m.Attempts, err)))
 	log.Printf("server: notification %s failed (cluster %s, sink %s, attempt %d), retrying at %s: %s",
 		n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), errText)
 	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, outboxError(errors.New(errText))))
+	return true
 }
 
 // scrubSink is err's text with the URL of the sink that returned it

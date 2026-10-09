@@ -74,7 +74,7 @@ func TestPruneRowCounts(t *testing.T) {
 		t.Fatalf("seeded rows (snapshots, evaluations) = %v, want [366 731]", got)
 	}
 
-	res, err := s.Prune(ctx, daysAgo(90))
+	res, err := s.Prune(ctx, daysAgo(90), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -151,9 +151,9 @@ In scope:
   responses included); and a snapshot a
   v0.1 server stored before these
   budgets existed is decoded without a node count when `/gate?cluster=`,
-  re-evaluation or a what-if read reads it, and, having no stored server
-  version, is loaded whole by `/clusters`, `/fleet` and `/metrics` to
-  read it. Availability within them: a client that really sends three
+  re-evaluation or a what-if read reads it, and, if migration 0009
+  could not copy its server version from it, is loaded whole once per
+  server start to read that. Availability within them: a client that really sends three
   times `--max-gate-bytes` and then stalls makes other `/gate` requests
   `503` until the 60s read timeout cuts it off; one that keeps asking for
   what-if reports keeps other per-cluster reads waiting; and because any

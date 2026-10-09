@@ -42,7 +42,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	snap, head, err := s.latestHead(ctx, c.ID)
+	head, err := s.cfg.Store.LatestSnapshotHead(ctx, c.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		errJSON(w, http.StatusNotFound, "no snapshots for cluster")
 		return
@@ -51,7 +51,12 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, "loading latest snapshot", err)
 		return
 	}
-	if version := judgedAt(snap, head); notApplicable(version, target) {
+	version, err := s.versionOf(ctx, head)
+	if err != nil {
+		internalErr(w, "loading latest snapshot", err)
+		return
+	}
+	if notApplicable(version, target) {
 		errJSON(w, http.StatusNotFound, fmt.Sprintf("cluster %s already runs %s: target %s is not applicable", c.Name, version, target))
 		return
 	}
@@ -75,6 +80,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	sc := scopeOf(r)
 	teams := sc.renderedTeams(rep)
 	if !sc.fleet() {
+		snap, err := s.cfg.Store.LatestSnapshot(ctx, c.ID)
+		if err != nil {
+			internalErr(w, "loading latest snapshot", err)
+			return
+		}
 		ns, err := s.namespaceTeams(snap)
 		if err != nil {
 			internalErr(w, "decoding snapshot namespaces", err)
