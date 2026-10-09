@@ -139,6 +139,11 @@ func TestEvaluationReadsDoNotGrowWithHistory(t *testing.T) {
 	})
 	top := best(func() error { _, err := s.LatestKnownEvaluation(ctx, cid2, "1.33"); return err })
 	t.Logf("4,000 rows of 30 KB: LatestKnownEvaluation %v (the baseline 3,999 rows back), %v (on top); ScoreHistory(100) %v", known, top, hist)
+	if raceEnabled {
+		// The race detector slows the reads several-fold: the plans above
+		// pin the absence of a sort; the bounds are for a plain run.
+		return
+	}
 	if known > 2*time.Millisecond || hist > 5*time.Millisecond {
 		t.Errorf("LatestKnownEvaluation %v (want < 2ms), ScoreHistory(100) %v (want < 5ms)", known, hist)
 	}
