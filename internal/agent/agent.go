@@ -198,6 +198,8 @@ type runner struct {
 
 	now       func() time.Time
 	collectFn func(ctx context.Context) inventory.Inventory
+	// tickBudget is the tick deadline runTick sets: tickTimeout(Interval).
+	tickBudget time.Duration
 
 	lastHash string    // hash of the last successfully pushed inventory
 	lastPush time.Time // when it was pushed
@@ -211,6 +213,8 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 		kb:  k,
 		cfg: cfg,
 		now: time.Now,
+
+		tickBudget: tickTimeout(cfg.Interval),
 	}
 	// The caches outlive the ticks: a release already decoded is not fetched
 	// again until its storage object changes (#71), and API discovery is
@@ -235,8 +239,16 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 func (r *runner) tick(ctx context.Context) error {
 	var errs []error
 	r.last = tickReport{push: pushOff}
-	inv := r.collectFn(ctx)
+	ph := newTickPhases(ctx)
+	cctx, cancel := ph.collect()
+	inv := r.collectFn(cctx)
+	cancel()
 	r.last.caps = inv.Capabilities
+	// The ClusterReadiness calls below share the status slice of the
+	// reserve; the push, last, keeps the tick's own context.
+	pushCtx := ctx
+	ctx, cancel = ph.status()
+	defer cancel()
 
 	// Read the spec, and the object the status is written over (one GET,
 	// #228). The CR may have been deleted between ticks: recreate it, then
@@ -309,14 +321,14 @@ func (r *runner) tick(ctx context.Context) error {
 		errs = append(errs, err)
 		// The CR keeps the last verdict it was given: say on the object
 		// itself that it is not current (#199). The next write clears it.
-		if merr := crd.MarkStatusError(ctx, r.dyn, r.cfg.CRName, err, r.now()); merr != nil {
+		if merr := r.markStatusError(ph, err); merr != nil {
 			errs = append(errs, merr)
 		}
 	}
 	r.last.err = errors.Join(errs...)
 
 	if r.pusher != nil {
-		pushed, err := r.maybePush(ctx, inv)
+		pushed, err := r.maybePush(pushCtx, inv)
 		switch {
 		case err != nil:
 			r.last.push, r.last.pushErr = pushFailed, err
@@ -330,9 +342,82 @@ func (r *runner) tick(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// markStatusError marks the CR's status as not current (#199) under the
+// marker's own slice of the tick reserve, so a status write or spec read
+// that ran out the status slice still leaves the marker time to land.
+func (r *runner) markStatusError(ph tickPhases, cause error) error {
+	ctx, cancel := ph.marker()
+	defer cancel()
+	return crd.MarkStatusError(ctx, r.dyn, r.cfg.CRName, cause, r.now())
+}
+
+// The tick reserve is the part of the tick deadline held back from
+// collection for the work that follows it: 30s, or half the tick deadline
+// when that is under a minute (an --interval under 2m: at the 1m minimum
+// the deadline is 30s, so collection gets 15s and the reserve 15s). The
+// reserve is carved, in order, into
+//   - the status slice: the ClusterReadiness calls (the CRD check, the
+//     spec read, the object's create and spec.targets patch, the status
+//     write) end by the tick deadline - reserve/2;
+//   - the marker slice: the status-error marker gets reserve/4 of its own
+//     from when it starts, so it ends by the tick deadline - reserve/4;
+//   - the push, which runs until the tick deadline: at least reserve/4.
+//
+// Each slice is cut from the tick's context, never from the collection's,
+// so a collection that runs out its time leaves each of them its own time
+// (#238), while a stop (SIGTERM) still cancels them all.
+const maxTickReserve = 30 * time.Second
+
+// tickReserve is the reserve of a tick whose deadline is budget away.
+func tickReserve(budget time.Duration) time.Duration {
+	return min(maxTickReserve, budget/2)
+}
+
+// tickPhases carves one tick's deadline into the phase contexts (see
+// maxTickReserve). A context without a deadline (a test calling tick
+// directly) gives no phase a deadline of its own.
+type tickPhases struct {
+	ctx      context.Context
+	deadline time.Time
+	reserve  time.Duration
+	bounded  bool
+}
+
+func newTickPhases(ctx context.Context) tickPhases {
+	d, ok := ctx.Deadline()
+	p := tickPhases{ctx: ctx, deadline: d, bounded: ok}
+	if ok {
+		p.reserve = tickReserve(time.Until(d))
+	}
+	return p
+}
+
+// endingAhead is the tick's context, ending ahead of the tick deadline.
+func (p tickPhases) endingAhead(ahead time.Duration) (context.Context, context.CancelFunc) {
+	if !p.bounded {
+		return context.WithCancel(p.ctx)
+	}
+	return context.WithDeadline(p.ctx, p.deadline.Add(-ahead))
+}
+
+func (p tickPhases) collect() (context.Context, context.CancelFunc) {
+	return p.endingAhead(p.reserve)
+}
+
+func (p tickPhases) status() (context.Context, context.CancelFunc) {
+	return p.endingAhead(p.reserve / 2)
+}
+
+func (p tickPhases) marker() (context.Context, context.CancelFunc) {
+	if !p.bounded {
+		return context.WithCancel(p.ctx)
+	}
+	return context.WithTimeout(p.ctx, p.reserve/4)
+}
+
 // runTick runs one tick under the tick deadline and records its duration.
 func (r *runner) runTick(ctx context.Context) tickReport {
-	ctx, cancel := context.WithTimeout(ctx, tickTimeout(r.cfg.Interval))
+	ctx, cancel := context.WithTimeout(ctx, r.tickBudget)
 	defer cancel()
 	start := time.Now()
 	_ = r.tick(ctx) // the report in r.last carries the errors, split by kind
@@ -437,6 +522,7 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	}
 	log.Info(msgStarting, "version", AgentVersion, "kbVersion", k.Version, "maxKnownK8s", k.MaxKnownK8s.String(),
 		"interval", cfg.Interval.String(), "tickTimeout", tickTimeout(cfg.Interval).String(),
+		"tickReserve", tickReserve(tickTimeout(cfg.Interval)).String(),
 		"crName", cfg.CRName, "server", server, "healthAddr", healthAddr)
 
 	if !cfg.SkipCRDManagement {

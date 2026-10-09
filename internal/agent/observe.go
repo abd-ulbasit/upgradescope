@@ -52,6 +52,8 @@ type tickReport struct {
 // tickTimeout bounds one tick: half the interval, at most 5m. client-go's
 // HTTP/2 health checks and the apiserver's request timeout already bound
 // most calls; this is the backstop that keeps the loop moving regardless.
+// Collection gets this minus the tick reserve (tickReserve), which the
+// status write, its marker and the push keep.
 func tickTimeout(interval time.Duration) time.Duration {
 	return min(interval/2, 5*time.Minute)
 }
