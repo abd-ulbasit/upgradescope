@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -441,5 +442,49 @@ func TestScanFilesRemovedBetaBlockersNameTheirReplacement(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("JSON lacks %s:\n%s", want, out)
 		}
+	}
+}
+
+// #237: team attribution needs a cluster. --files mode reads no Namespace
+// objects, so a rendered Namespace labelled team: payments attributes
+// nothing and every finding is unattributed; --team-label is refused with
+// a message that says why, not cobra's generic one.
+func TestScanFilesAttributesNoTeamsAndRefusesTeamLabel(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	m := "apiVersion: v1\nkind: Namespace\nmetadata: {name: shop, labels: {team: payments, owner: payments}}\n---\n" +
+		"apiVersion: networking.k8s.io/v1beta1\nkind: Ingress\nmetadata: {name: web, namespace: shop}\n"
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.30", "--team-label", "owner"}, func(scanOptions) (engine.Report, error) { called = true; return engine.Report{}, nil })
+	if err == nil || called || ExitCode(err) != 1 || !strings.Contains(err.Error(), "--team-label needs a live cluster") || strings.Contains(err.Error(), "if any flags in the group") {
+		t.Errorf("--files with --team-label: err = %v, scanned = %v; want the specific refusal (exit 1) before any scan", err, called)
+	}
+	out, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.30", "--output", "json"}, real)
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("err = %v, want ErrGateFailed", err)
+	}
+	var rep struct {
+		Teams    map[string]json.RawMessage `json:"teams"`
+		Findings []struct {
+			Teams []string `json:"teams"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Teams) != 1 || rep.Teams["(unattributed)"] == nil {
+		t.Errorf("teams = %v, want only (unattributed): files mode reads no Namespace labels", rep.Teams)
+	}
+	for _, f := range rep.Findings {
+		if len(f.Teams) != 0 {
+			t.Errorf("finding teams = %v, want none", f.Teams)
+		}
+	}
+	// A live scan still takes --team-label.
+	if _, _, err := execScanStderr(t, []string{"--target", "1.37", "--team-label", "owner"}, evalStub(t, liveInventory("v1.36.4"))); err != nil {
+		t.Errorf("live scan with --team-label: %v", err)
 	}
 }
