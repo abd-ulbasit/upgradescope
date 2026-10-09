@@ -34,7 +34,9 @@
 #   - kubectl port-forward to this pod connects from 127.0.0.1, so anyone
 #     allowed pods/portforward in this namespace can send the header and
 #     read any team (never the whole fleet). Grant it only to people who
-#     may read every team.
+#     may read every team. A web page cannot ride a port-forward: serve
+#     answers 421 to any Host but localhost, a loopback or the pod's own
+#     address, so a DNS-rebinding page gets nothing.
 #   - a service-mesh sidecar that delivers inbound traffic over localhost
 #     makes every client 127.0.0.1. The pod opts out of Istio and Linkerd
 #     injection below; keep any other mesh out of it too.
@@ -169,6 +171,13 @@ spec:
             - --email-domain=*
             - --http-address=0.0.0.0:4180
             - --upstream=http://127.0.0.1:8080/
+            # Send serve the upstream's Host (127.0.0.1:8080), not the
+            # client's: in header mode serve answers 421 to a Host it does
+            # not know (its DNS-rebinding guard), and every client here, the
+            # Ingress host, the Service name and the kubelet's pod IP, then
+            # reaches it as loopback. (v7.15.5's default, true, forwards the
+            # client's.)
+            - --pass-host-header=false
             # Behind your Ingress. Add --trusted-proxy-ip=<the ingress
             # controller's addresses> so that only it may send
             # X-Forwarded-* (X-Forwarded-Uri decides the skip-auth routes
