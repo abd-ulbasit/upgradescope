@@ -46,7 +46,7 @@ it is. CI regenerates the file on every change and fails when the committed copy
 differs, and checks that the generator imports every `k8s.io/api`
 group/version package.
 
-Three things the generator adds to what the source says, each in
+Five things the generator adds to what the source says, each in
 `tools/gen-kb` (`history.go`, `merge.go` and `fixups.go`) and tested:
 
 - **Tombstones.** A type `k8s.io/api` deleted stays in the data, removed in
@@ -58,6 +58,23 @@ Three things the generator adds to what the source says, each in
   lifecycle from the Kubernetes release notes, cited in the generator. A
   test fails once upstream tags the type, so the entry cannot go stale
   quietly.
+- **A removal dated by what kube-apiserver served.** `k8s.io/api` tags
+  `storage.k8s.io/v1alpha1` VolumeAttachment for removal in 1.24, but
+  kube-apiserver 1.23 has no storage for it (the registry dropped it with the
+  beta APIs removed in 1.22, kubernetes/kubernetes#104248), so the
+  knowledge base dates it 1.23 and marks the removal inferred. The override
+  is cited in the generator and only applies while it is earlier than the
+  tag.
+- **A migration target for the alpha and beta types that lack one.**
+  `k8s.io/api` tags a replacement on some removed and deprecated types
+  only. A deprecated or removed type with none gets the newest GA version
+  of its kind (`admissionregistration.k8s.io/v1beta1`
+  ValidatingAdmissionPolicy to `v1`, `networking.k8s.io/v1beta1` ServiceCIDR
+  to `v1`), so a removed-API blocker says what to migrate to. The
+  generator logs each one with the migration guide and the changelog of the
+  release that introduced the successor, a test lists all 33, and a
+  successor the target does not serve yet is never recommended
+  ([remediations](../concepts/verdict-and-score.md)).
 - **Non-resources.** An explicit list in the generator, each with its evidence,
   leaves out wrapper, subresource-body and payload types that
   kube-apiserver never stored as resources and that no manifest can create:

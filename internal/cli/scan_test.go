@@ -404,3 +404,42 @@ func TestScanFilesAPINotServedYetIsABlocker(t *testing.T) {
 		t.Errorf("at 1.36, which serves both: err = %v\n%s", err, out)
 	}
 }
+
+// #266: storage.k8s.io/v1alpha1 VolumeAttachment is gone from
+// kube-apiserver 1.23 (its storage was dropped with the beta APIs removed
+// in 1.22), a release before the upstream tag, so at --target 1.23 it is a
+// blocker, not a warning that reads ready; at 1.22 it is the warning.
+func TestScanFilesVolumeAttachmentV1alpha1(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	m := "apiVersion: storage.k8s.io/v1alpha1\nkind: VolumeAttachment\nmetadata: {name: va1}\nspec: {attacher: csi.example.com, nodeName: n1, source: {persistentVolumeName: pv1}}\n"
+	if err := os.WriteFile(filepath.Join(dir, "va.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.23"}, real)
+	if !errors.Is(err, ErrGateFailed) || ExitCode(err) != 2 || !strings.Contains(out, "storage.k8s.io/v1alpha1 VolumeAttachment removed in 1.23") {
+		t.Errorf("--target 1.23: err = %v, want exit 2 with a removed-in-1.23 blocker\n%s", err, out)
+	}
+	out, _, err = execScanStderr(t, []string{"--files", dir, "--target", "1.22"}, real)
+	if err != nil || !strings.Contains(out, "removed in 1.23") {
+		t.Errorf("--target 1.22: err = %v, want a passing gate with the warning\n%s", err, out)
+	}
+}
+
+// #266: the removed-api blockers of recent releases carry the migration:
+// v1beta1 ValidatingAdmissionPolicy at 1.34, v1beta1 ServiceCIDR at 1.37.
+func TestScanFilesRemovedBetaBlockersNameTheirReplacement(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	m := "apiVersion: admissionregistration.k8s.io/v1beta1\nkind: ValidatingAdmissionPolicy\nmetadata: {name: demo}\nspec: {}\n---\n" +
+		"apiVersion: networking.k8s.io/v1beta1\nkind: ServiceCIDR\nmetadata: {name: c}\nspec: {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ := execScanStderr(t, []string{"--files", dir, "--target", "1.37", "--output", "json"}, real)
+	for _, want := range []string{`"remediation": "migrate to admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy"`, `"remediation": "migrate to networking.k8s.io/v1 ServiceCIDR"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("JSON lacks %s:\n%s", want, out)
+		}
+	}
+}

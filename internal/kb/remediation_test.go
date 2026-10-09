@@ -359,3 +359,112 @@ func TestServedAlternativeIsServed(t *testing.T) {
 		t.Fatal("no entry is introduced after a checked target: the test checked nothing")
 	}
 }
+
+// #266: a removed entry whose kind has a GA version carries a remediation
+// at its removal release, so the blockers a user hits when upgrading past a
+// removal say what to migrate to. Where the GA version is introduced after
+// the removal (resource.k8s.io v1alpha1 ResourceClaim, removed 1.27, v1
+// from 1.34), the remediation names the newest version served at the
+// removal, or the release the GA version is served from.
+func TestEveryRemovedEntryWithAGASuccessorHasARemedy(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	checked := 0
+	for _, e := range k.APILifecycle {
+		if e.Removed == nil {
+			continue
+		}
+		var ga *APILifecycleEntry
+		for _, c := range idx.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
+			if c.Deprecated == nil && c.Removed == nil && (ga == nil || c.Introduced.Compare(ga.Introduced) > 0) {
+				ga = &c
+			}
+		}
+		if ga == nil {
+			continue
+		}
+		checked++
+		name := e.Group + "/" + e.Version + " " + e.Kind
+		if e.Replacement == nil {
+			t.Errorf("%s (removed %s) has no replacement, but %s/%s is GA (introduced %s)", name, e.Removed, ga.Group, ga.Version, ga.Introduced)
+			continue
+		}
+		if _, ok := idx.ResolveReplacement(e, *e.Removed); ok {
+			continue
+		}
+		if _, from, ok := idx.LaterReplacement(e, *e.Removed); !ok || from.Compare(*e.Removed) <= 0 {
+			t.Errorf("%s: no remediation at its removal in %s: nothing serves its kind then and no later release is named", name, e.Removed)
+		}
+	}
+	if checked < 30 {
+		t.Errorf("checked only %d removed entries with a GA successor, want at least the 33 #266 lists", checked)
+	}
+}
+
+// The examples of #266: the remediation of a removed beta blocker.
+func TestRemovedBetaBlockersCarryARemediation(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	cases := []struct {
+		group, version, kind string
+		target               int
+		want                 string // group/version, or "" with a later release named
+		later                string
+	}{
+		{"admissionregistration.k8s.io", "v1beta1", "ValidatingAdmissionPolicy", 34, "admissionregistration.k8s.io/v1", ""},
+		{"admissionregistration.k8s.io", "v1beta1", "ValidatingAdmissionPolicyBinding", 34, "admissionregistration.k8s.io/v1", ""},
+		{"admissionregistration.k8s.io", "v1alpha1", "ValidatingAdmissionPolicy", 32, "admissionregistration.k8s.io/v1", ""},
+		{"networking.k8s.io", "v1beta1", "ServiceCIDR", 37, "networking.k8s.io/v1", ""},
+		{"networking.k8s.io", "v1beta1", "IPAddress", 37, "networking.k8s.io/v1", ""},
+		{"authentication.k8s.io", "v1beta1", "SelfSubjectReview", 33, "authentication.k8s.io/v1", ""},
+		{"resource.k8s.io", "v1beta1", "ResourceClaim", 38, "resource.k8s.io/v1", ""},
+		{"batch", "v2alpha1", "CronJob", 21, "batch/v1", ""},
+		// v1 does not exist yet when these were removed: the newest version
+		// served then.
+		{"networking.k8s.io", "v1alpha1", "ServiceCIDR", 31, "networking.k8s.io/v1beta1", ""},
+		{"resource.k8s.io", "v1alpha1", "ResourceClaim", 27, "resource.k8s.io/v1alpha2", ""},
+	}
+	for _, c := range cases {
+		e, ok := idx.Lookup(c.group, c.version, c.kind)
+		if !ok {
+			t.Errorf("KB lacks %s/%s %s", c.group, c.version, c.kind)
+			continue
+		}
+		if e.Removed == nil || *e.Removed != *ver(c.target) {
+			t.Errorf("%s/%s %s: removed %v, want 1.%d", c.group, c.version, c.kind, e.Removed, c.target)
+		}
+		r, ok := idx.ResolveReplacement(e, *ver(c.target))
+		got := ""
+		if ok {
+			got = gvString(r)
+		} else if g, from, ok := idx.LaterReplacement(e, *ver(c.target)); ok {
+			got = ""
+			if later := gvString(g) + " from " + from.String(); later != c.later {
+				t.Errorf("%s/%s %s @1.%d: later replacement %q, want %q", c.group, c.version, c.kind, c.target, later, c.later)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s/%s %s @1.%d: remediation %q, want %q", c.group, c.version, c.kind, c.target, got, c.want)
+		}
+	}
+}
+
+// #266: storage.k8s.io/v1alpha1 VolumeAttachment is dated by the release
+// kube-apiserver stopped serving it, not by the upstream tag (1.24).
+func TestVolumeAttachmentV1alpha1RemovedInTheReleaseItStoppedBeingServed(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	e, ok := NewIndex(k.APILifecycle).Lookup("storage.k8s.io", "v1alpha1", "VolumeAttachment")
+	if !ok || e.Removed == nil || *e.Removed != *ver(23) || !e.RemovedInferred {
+		t.Fatalf("storage.k8s.io/v1alpha1 VolumeAttachment = %+v, want removed 1.23, inferred", e)
+	}
+}

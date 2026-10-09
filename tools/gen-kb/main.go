@@ -191,6 +191,13 @@ func main() {
 			e.Group, e.Version, e.Kind, e.Removed, e.RemovedInferred)
 	}
 
+	defaulted := defaultGAReplacements(entries)
+	sort.Slice(defaulted, func(i, j int) bool { return defaulted[i].less(defaulted[j]) })
+	for _, e := range defaulted {
+		log.Printf("gen-kb: replacement defaulted: %s/%s %s -> %s/%s (see %s)", e.Group, e.Version, e.Kind,
+			e.Replacement.Group, e.Replacement.Version, strings.Join(replacementCitations(entryOf(entries, *e.Replacement)), ", "))
+	}
+
 	sort.Slice(entries, func(i, j int) bool { return entries[i].less(entries[j]) })
 
 	doc := output{
@@ -253,6 +260,7 @@ func extract(scheme *runtime.Scheme) (entries []entry, upstream map[gvkOut]bool,
 			}
 		}
 		fixReplacement(&e)
+		fixRemoval(&e)
 		entries = append(entries, e)
 	}
 	return entries, upstream, noLifecycle

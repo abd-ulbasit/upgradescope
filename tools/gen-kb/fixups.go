@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // replacementFixes overrides upstream APILifecycleReplacement tags that are
 // missing or name a type that does not exist. A nil value clears the tag.
@@ -51,6 +54,27 @@ var removalFixes = map[gvkOut]version{
 	// scheduling.k8s.io/v1alpha1 priorityclasses, v1.23.0 has no v1alpha1
 	// storage. k8s.io/api never tagged it and deleted it in v0.36.
 	{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClass"}: {Major: 1, Minor: 23},
+}
+
+// taggedRemovalFixes overrides the removal tag of types k8s.io/api still
+// registers, when kube-apiserver stopped serving the version in an earlier
+// release than the tag says. Each value is the first release whose
+// kube-apiserver registers no storage for the type at that version, cited
+// per entry; fixRemoval applies it only when it is earlier than the tag
+// (TestTaggedRemovalFixesAreEarlierThanTheTag fails once upstream corrects
+// the tag, when the entry must go) and marks the removal inferred.
+var taggedRemovalFixes = map[gvkOut]version{
+	// pkg/registry/storage/rest/storage_storage.go in kubernetes/kubernetes:
+	// v1.22.0 maps volumeattachments and csistoragecapacities under
+	// v1alpha1, v1.23.0 only csistoragecapacities. The storage was dropped
+	// by "Drop beta REST APIs removed in 1.22" (kubernetes/kubernetes#104248,
+	// commit 39a1293cbc), the PR that removed rbac.authorization.k8s.io/v1alpha1
+	// and scheduling.k8s.io/v1alpha1 in 1.23 (CHANGELOG-1.23.md); the 1.23
+	// changelog does not list this v1alpha1 resource. k8s.io/api still tags
+	// APILifecycleRemoved 1.24 on storage/v1alpha1 VolumeAttachment, the
+	// only removal the KB dated later than kube-apiserver stopped serving it
+	// (checked against api/openapi-spec/swagger.json of v1.17 to v1.37).
+	{Group: "storage.k8s.io", Version: "v1alpha1", Kind: "VolumeAttachment"}: {Major: 1, Minor: 23},
 }
 
 // untaggedLifecycle is the lifecycle of a type k8s.io/api registers without
@@ -184,13 +208,84 @@ func isNonPersisted(g gvkOut) bool {
 	return ok
 }
 
-// fixRemoval applies removalFixes to e: an override earlier than e's
-// removal, or e without one, sets the removal, marked inferred since it is
-// no upstream tag.
+// fixRemoval applies removalFixes (deleted types) and taggedRemovalFixes
+// (types still registered) to e: an override earlier than e's removal, or e
+// without one, sets the removal, marked inferred since it is no upstream
+// tag.
 func fixRemoval(e *entry) {
 	r, ok := removalFixes[e.gvk()]
+	if !ok {
+		r, ok = taggedRemovalFixes[e.gvk()]
+	}
 	if !ok || e.Removed != nil && !r.before(*e.Removed) {
 		return
 	}
 	e.Removed, e.RemovedInferred = &r, true
+}
+
+// deprecationGuideURL is Kubernetes' migration guide for deprecated and
+// removed APIs. It lists the APIs removed up to v1.32 only.
+const deprecationGuideURL = "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+
+// defaultGAReplacements gives a deprecated or removed entry with no
+// replacement the GA version of its kind: the newest version of the same
+// group and kind that is neither deprecated nor removed. k8s.io/api tags a
+// replacement on some alpha and beta types only (v0.38.0-alpha.2 adds the
+// missing ones to v1 for admissionregistration, authentication and
+// certificates), so the blockers users hit when upgrading past a removal,
+// ValidatingAdmissionPolicy v1beta1 at 1.34 or ServiceCIDR v1beta1 at 1.37,
+// carried no "migrate to" advice. The deprecation guide, which ends at
+// v1.32, does not list these APIs: the successor's own release notes do
+// (replacementCitations). An entry with a replacement, upstream's or a
+// replacementFixes override, is left as it is. The successor may be
+// introduced after the removal (resource.k8s.io v1alpha1 ResourceClaim,
+// removed 1.27, v1 from 1.34): internal/kb's ResolveReplacement then names
+// the newest version served at the target, or that the successor is served
+// from its release. It returns the entries it changed, in entries' order.
+func defaultGAReplacements(entries []entry) []entry {
+	ga := map[gvkOut]entry{} // group and kind → the newest GA entry
+	for _, e := range entries {
+		if e.Deprecated != nil || e.Removed != nil {
+			continue
+		}
+		k := gvkOut{Group: e.Group, Kind: e.Kind}
+		if cur, ok := ga[k]; !ok || cur.Introduced.before(e.Introduced) ||
+			cur.Introduced == e.Introduced && cur.Version < e.Version {
+			ga[k] = e
+		}
+	}
+	var changed []entry
+	for i, e := range entries {
+		if e.Replacement != nil || e.Deprecated == nil && e.Removed == nil {
+			continue
+		}
+		succ, ok := ga[gvkOut{Group: e.Group, Kind: e.Kind}]
+		if !ok {
+			continue
+		}
+		entries[i].Replacement = &gvkOut{Group: succ.Group, Version: succ.Version, Kind: succ.Kind}
+		changed = append(changed, entries[i])
+	}
+	return changed
+}
+
+// replacementCitations are the sources for e's defaulted replacement
+// (defaultGAReplacements): the migration guide, and the changelog of the
+// release that introduced the successor, where its GA is announced.
+func replacementCitations(succ entry) []string {
+	return []string{
+		deprecationGuideURL,
+		fmt.Sprintf("https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-%d.%d.md", succ.Introduced.Major, succ.Introduced.Minor),
+	}
+}
+
+// entryOf returns the entry for g in entries; the zero entry when there is
+// none.
+func entryOf(entries []entry, g gvkOut) entry {
+	for _, e := range entries {
+		if e.gvk() == g {
+			return e
+		}
+	}
+	return entry{}
 }
