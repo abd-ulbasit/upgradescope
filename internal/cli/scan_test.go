@@ -352,6 +352,16 @@ func TestScanRejectsTargetBelowTheKnowledgeBase(t *testing.T) {
 	}
 }
 
+// scan --help names the knowledge base's floor from inventory.OldestCovered,
+// not a copy that a refresh of the dataset would leave behind (#237).
+func TestScanHelpNamesTheKnowledgeBaseFloor(t *testing.T) {
+	long := newScanCmd().Long
+	want := "(" + inventory.OldestCovered().String() + ") is an error (exit 1), not a verdict"
+	if !strings.Contains(strings.Join(strings.Fields(long), " "), want) {
+		t.Errorf("scan --help does not say %q:\n%s", want, long)
+	}
+}
+
 // failingWriter fails every write, like stdout on a full disk.
 type failingWriter struct{}
 

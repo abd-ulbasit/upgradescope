@@ -95,6 +95,59 @@ func TestActionFloorIsTheKnowledgeBaseFloor(t *testing.T) {
 	}
 }
 
+// TestStaticFilesNameTheKnowledgeBaseFloor pins the floor the files that
+// cannot compute it say (the Action's metadata and README, the OpenAPI
+// document, the hand-written docs) to inventory.OldestCovered, as
+// TestActionFloorIsTheKnowledgeBaseFloor does for run.sh, so a refresh that
+// moves the floor fails here until they follow (#237). Each pattern has one
+// capture group, the version it states; a pattern that matches nothing
+// fails too, so rewording a sentence cannot silently leave a stale floor
+// unchecked. scan --help and the reference pages generated from it and from
+// the OpenAPI document follow the floor by construction
+// (TestScanHelpNamesTheKnowledgeBaseFloor, the generators' drift checks).
+func TestStaticFilesNameTheKnowledgeBaseFloor(t *testing.T) {
+	floor := inventory.OldestCovered().String()
+	for _, c := range []struct {
+		file     string
+		patterns []string
+	}{
+		{"action.yml", []string{`any\s+target\s+below\s+(1\.\d+),\s+the\s+oldest\s+minor`}},
+		{"action/action.yml", []string{`any\s+target\s+below\s+(1\.\d+),\s+the\s+oldest\s+minor`}},
+		{"action/README.md", []string{
+			`refuses\s+any\s+target\s+below\s+(1\.\d+),\s+the\s+oldest\s+minor`,
+			`or\s+below\s+(1\.\d+)\)`,
+		}},
+		{"api/openapi.yaml", []string{
+			`oldest\s+the\s+knowledge\s+base\s+covers\s+\((1\.\d+)\)`,
+			`from\s+(1\.\d+)\s+\(the\s+oldest`,
+		}},
+		{"docs/concepts/version-skew.md", []string{
+			`covers,\s+(1\.\d+),\s+and`,
+			`between\s+(1\.\d+)\s+and\s+the\s+cluster`,
+		}},
+		{"docs/concepts/verdict-and-score.md", []string{`below\s+(1\.\d+),\s+the\s+oldest\s+minor`}},
+		{"docs/getting-started/ci-gate.md", []string{`below\s+(1\.\d+),\s+the\s+oldest\s+minor`}},
+		{"docs/claims.md", []string{`a\s+minor\s+below\s+(1\.\d+),\s+the\s+oldest`}},
+	} {
+		b, err := os.ReadFile("../../" + c.file)
+		if err != nil {
+			t.Errorf("%s: %v", c.file, err)
+			continue
+		}
+		for _, p := range c.patterns {
+			ms := regexp.MustCompile(p).FindAllSubmatch(b, -1)
+			if len(ms) == 0 {
+				t.Errorf("%s: no match for /%s/: reword the pattern with the sentence that names the floor", c.file, p)
+			}
+			for _, m := range ms {
+				if string(m[1]) != floor {
+					t.Errorf("%s says the knowledge base covers from %s, but inventory.OldestCovered() is %s", c.file, m[1], floor)
+				}
+			}
+		}
+	}
+}
+
 // TestOldestCoveredMinorIsTheFirstRemoval pins the floor of every target
 // (inventory.OldestCovered) to the dataset: the release of its earliest
 // recorded API removal. A target below it judges nothing, so a truncated

@@ -531,8 +531,9 @@ func withFileBase(r engine.Report, base string) engine.Report {
 }
 
 // scanLong is scan's --help text: the gate's exit codes, how --files reads
-// manifests, and how suppression and baselines change what it counts.
-const scanLong = `Scan a cluster (or rendered manifests) for upgrade readiness.
+// manifests, and how suppression and baselines change what it counts. The
+// knowledge base's floor in it is inventory.OldestCovered, not a copy.
+var scanLong = `Scan a cluster (or rendered manifests) for upgrade readiness.
 
 Exit codes: 0 when the gate passes; 1 on an operational error, including an
 invalid config file or baseline and a report that could not be written; 2
@@ -544,7 +545,7 @@ blocker may have been missed. A --target that is not an upgrade of the
 cluster (at or below the minor its kube-apiserver runs) always fails it,
 --allow-incomplete notwithstanding; only --fail-on never, which always exits
 0, passes it. A --target below the oldest minor the knowledge base covers
-(1.16) is an error (exit 1), not a verdict: quote it in YAML and workflow
+(` + inventory.OldestCovered().String() + `) is an error (exit 1), not a verdict: quote it in YAML and workflow
 files, where an unquoted 1.30 is the number 1.3.
 
 CI report formats: the exit code is the gate's in every --output format.
