@@ -32,20 +32,37 @@ name: release
 #   verify     anonymously, on a fresh kind cluster: the image pulls for both
 #              arches, every platform image verifies and carries /licenses,
 #              the published chart installs and runs the pinned image;
-#   major-tag  for a stable tag only, moves the floating major tag (v0) that
-#              `uses: abd-ulbasit/upgradescope@v0` (and .../action@v0)
-#              resolves to; action/README.md tells users to pin @vX.Y.Z or
-#              a SHA instead when they need a reproducible gate;
+#   major-tag  for a stable tag only, and only while it is the highest
+#              stable release of its major, moves the floating major tag
+#              (v0) that `uses: abd-ulbasit/upgradescope@v0` (and
+#              .../action@v0) resolves to; action/README.md tells users to
+#              pin @vX.Y.Z or a SHA instead when they need a reproducible
+#              gate;
 #   krew       for a stable tag only, once the plugin is in krew-index
 #              (repository variable KREW_PLUGIN_IN_INDEX=true): the version
 #              bump PR to kubernetes-sigs/krew-index, rendered from .krew.yaml.
 #
+# Only the highest stable release moves what users follow without pinning
+# (#244): GitHub's Latest release (what the Action's `version: latest` and
+# @v0 install), the image's :latest and the major tag. A run on any other
+# tag (a re-run or re-dispatch of an older release, or the slower of two
+# releases racing) publishes its own assets and leaves all three where they
+# were. hack/release-newest.sh decides, from the published releases, at
+# three points: preflight (whether major-tag runs), just before GoReleaser
+# (make_latest and the :latest image tag, always an explicit true or false)
+# and inside major-tag (re-checked under one repository-wide concurrency
+# group). After publishing, a stable run points Latest and :latest at the
+# highest published stable release, so whichever of two racing runs
+# publishes last, both end on the higher one. hack/release-newest_test.sh
+# runs these steps against a stub gh.
+#
 # The Homebrew tap (abd-ulbasit/homebrew-tap) is not pushed from here: it
 # pulls each stable release on a schedule and verifies checksums.txt against
-# this workflow's signature (packaging/homebrew-tap). Tags v* are protected
-# by .github/rulesets/release-tags.json. It excludes v0 so that the
-# major-tag job can move it; .github/rulesets/README.md says why v0 itself
-# has no ruleset.
+# this workflow's signature (packaging/homebrew-tap). Release tags
+# (vX.Y.Z[-pre], refs/tags/v*.*.*) are protected by
+# .github/rulesets/release-tags.json. Floating major tags (v0, v1, ...) have
+# no dots, so they stay outside it and the major-tag job can move them;
+# .github/rulesets/README.md says why v0 itself has no ruleset.
 #
 # Dry run: ci.yml's release-check job (make release-check) builds the same
 # snapshot on any PR that touches the release inputs, or on workflow_dispatch.
@@ -77,6 +94,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.check.outputs.version }}
+      newest: ${{ steps.newest.outputs.newest }} # the highest stable release
+      major-newest: ${{ steps.newest.outputs.major-newest }} # the highest stable release of its major
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,6 +117,17 @@ jobs:
             exit 1
           fi
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: is this the highest stable release?
+        id: newest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          hack/release-newest.sh published >"$RUNNER_TEMP/releases"
+          newest=$(hack/release-newest.sh is-newest "$GITHUB_REF_NAME" <"$RUNNER_TEMP/releases")
+          major=$(hack/release-newest.sh is-newest --major "$GITHUB_REF_NAME" <"$RUNNER_TEMP/releases")
+          echo "newest=$newest" >>"$GITHUB_OUTPUT"
+          echo "major-newest=$major" >>"$GITHUB_OUTPUT"
+          echo "$GITHUB_REF_NAME: the highest stable release: $newest; the highest of ${GITHUB_REF_NAME%%.*}: $major" >>"$GITHUB_STEP_SUMMARY"
       - name: the tagged commit is on main
         run: hack/check-release-ancestry.sh
       - name: CHANGELOG.md says what this release changes
@@ -156,6 +186,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Re-checked here, not taken from preflight: a newer release may have
+      # published while ci ran. .goreleaser.yml reads it for make_latest and
+      # the :latest image tag.
+      - name: is this still the highest stable release?
+        id: newest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          newest=$(hack/release-newest.sh published | hack/release-newest.sh is-newest "$GITHUB_REF_NAME")
+          echo "newest=$newest" >>"$GITHUB_OUTPUT"
+          echo "GitHub Latest and :latest move to $GITHUB_REF_NAME: $newest" >>"$GITHUB_STEP_SUMMARY"
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -163,12 +204,38 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPGRADESCOPE_NEWEST: ${{ steps.newest.outputs.newest }}
       # checksums.txt names every archive (and package and contract), so one
       # attestation covers them all:
       # `gh attestation verify <archive> -R abd-ulbasit/upgradescope`.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
+      # Two stable releases racing: each decided make_latest before the
+      # other published, so the one that published last took Latest and
+      # :latest, whichever tag it was. Every stable run ends by pointing
+      # both at the highest published stable release; the last run to get
+      # here sees both releases. A no-op when they already name it.
+      - name: GitHub's Latest and the image's :latest name the highest stable release
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          highest=$(hack/release-newest.sh published | hack/release-newest.sh highest)
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name) || latest=
+          if [ "$latest" != "$highest" ]; then
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$highest" --jq .id)
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -f make_latest=true >/dev/null
+            echo "GitHub Latest: ${latest:-none} -> $highest" >>"$GITHUB_STEP_SUMMARY"
+          fi
+          want=$(docker buildx imagetools inspect "$IMAGE:$highest" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$want" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$highest"; exit 1 ;; esac
+          got=$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Manifest}}' | jq -r .digest) || got=
+          if [ "$got" != "$want" ]; then
+            oras="$(hack/install-tool.sh oras)" # pinned, sha256-verified; logged in through docker's config
+            "$oras" tag "$IMAGE@$want" latest
+            echo "$IMAGE:latest: ${got:-none} -> $highest ($want)" >>"$GITHUB_STEP_SUMMARY"
+          fi
 
   chart:
     needs: [preflight, goreleaser]
@@ -315,25 +382,44 @@ jobs:
             | grep -qxF "$IMAGE:$GITHUB_REF_NAME@$digest"
 
   # Actions convention: v0 names the newest stable v0.x.y. Only a stable tag
-  # moves it, and only once the release is published and verified. Through
-  # the API, so no checkout holds a write token.
+  # that is the highest stable release of its major moves it, and only once
+  # the release is published and verified. Through the API, so the checkout
+  # (for hack/release-newest.sh) holds no token.
   major-tag:
-    needs: [verify]
-    if: ${{ !contains(github.ref_name, '-') }}
+    needs: [preflight, verify]
+    if: ${{ !contains(github.ref_name, '-') && needs.preflight.outputs.major-newest == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write # move the tag
+    # One at a time across the repository, and the check repeated inside:
+    # of two releases racing, the lower one finds the higher published and
+    # leaves the tag. (GitHub keeps one pending job per group: a third
+    # release arriving while one runs and one waits cancels the waiting
+    # one, which then needs a re-run if it was the highest.)
+    concurrency:
+      group: release-major-tag
+      cancel-in-progress: false
     # GITHUB_TOKEN moves v0 through the refs API. A tag ruleset that covers
     # v0 without a bypass this token qualifies for makes this job fail after
-    # everything else has published, so release-tags.json (#58) excludes v0
+    # everything else has published, so release-tags.json (#58) protects
+    # only release tags (refs/tags/v*.*.*), never a major tag
     # (.github/rulesets/README.md).
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: point the major tag at this release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           major="${GITHUB_REF_NAME%%.*}"
+          newest=$(hack/release-newest.sh published | hack/release-newest.sh is-newest --major "$GITHUB_REF_NAME")
+          if [ "$newest" != true ]; then
+            echo "::notice::$major stays: a higher $major release than $GITHUB_REF_NAME is published"
+            echo "$major stays: a higher $major release than $GITHUB_REF_NAME is published" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$major" >/dev/null 2>&1; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$major" -f sha="$GITHUB_SHA" -F force=true >/dev/null
           else

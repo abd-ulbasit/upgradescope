@@ -29,8 +29,11 @@ step when findings reach `fail-on`, and it reports in three places:
 Pick how the gate moves:
 
 - **`@v0` follows the newest v0.x release.** The release workflow moves the
-  `v0` tag to every stable release once it is published and verified
-  (from v0.2.0 on). Since `v0` is not a release tag, the default `version`
+  `v0` tag to a stable release once it is published and verified (from
+  v0.2.0 on), and only when no higher v0.x release is published: a re-run
+  of an older release, or the slower of two releases cut close together,
+  leaves `v0`, GitHub's latest release and the image's `:latest` on the
+  higher one. Since `v0` is not a release tag, the default `version`
   is `latest`, and the binary and its knowledge base move with it. This is
   the convenient choice, but a release can change the verdict on an
   unchanged pull request.

@@ -348,6 +348,8 @@ hack-test:
 	./hack/check-breaking_test.sh
 	./hack/check-release-ancestry_test.sh
 	./hack/release-preflight_test.sh
+	./hack/release-newest_test.sh
+	./hack/ruleset-tags_test.sh
 	./hack/flags-diff_test.sh
 	./hack/check-doc-sizes_test.sh
 	./hack/bench_test.sh
