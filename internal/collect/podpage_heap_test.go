@@ -192,8 +192,12 @@ const podPageHeapBound = 144 << 20
 // podPageAttempts is how many times each case is listed. Every attempt
 // lists the same pages and decodes the same objects, so each reading
 // bounds the same peak from above, and the case passes when one of them
-// is within podPageHeapBound.
-const podPageAttempts = 5
+// is within podPageHeapBound. It is 10, not 5: on the runner an attempt's
+// upper bound read 152.6 to 153.8 MiB, garbage included, on 4 of 20
+// attempts in four runs, 3 of 5 in one of them. At that run's rate, 5
+// attempts fail a run about once in 13 (0.6^5), 10 about once in 165
+// (0.6^10); the four runs' rate (0.2^10) makes it about once in 10 million.
+const podPageAttempts = 10
 
 // liveHeapBracket runs f as peakLiveHeap does, a goroutine forcing full
 // collections back to back, and returns two figures above the heap
@@ -286,14 +290,16 @@ func liveHeapBracket(f func()) (low, high uint64) {
 //
 // The worst case's live heap is about 125 MiB on every machine measured,
 // on 9 October 2026: liveHeapBracket put it between 123.0 and 125.2 MiB in
-// three runs on an Intel Core i3-7100U (linux/amd64), and between 124.0
-// and 125.8 MiB on a loaded Apple M1 Pro. GitHub's ubuntu-latest runner
-// reads higher and more spread out: 125.4 to 129.0 MiB on the first
-// attempt of six runs (4 to 9 October), and 153.0 MiB on a second and a
-// third, the garbage liveHeapBracket describes and not a larger live heap.
-// The 128 MiB this test enforced until then was 2.5 to 3.5 MiB above the
-// laptop's readings, and failed on the runner's readings of the same
-// heap; docs/claims.md (PF-02) cites the runner's figures. A heap
+// three runs on an Intel Core i3-7100U (linux/amd64), between 124.0 and
+// 125.8 MiB on a loaded Apple M1 Pro, and between 122.3 and 125.3 MiB in
+// four runs on GitHub's ubuntu-latest runner (at 23f8739 and 04c39fa, five
+// attempts each). Single readings on the runner are higher and spread out:
+// 125.4 to 129.0 MiB on the first attempt of six runs of the earlier test
+// (4 to 9 October), 153.0 MiB on a second and a third, and up to 153.8 MiB
+// in the four runs, the garbage liveHeapBracket describes and not a larger
+// live heap. The 128 MiB this test enforced until then was 2.5 to 3.5 MiB
+// above the laptop's readings, and failed on the runner's readings of the
+// same heap; docs/claims.md (PF-02) cites the runner's figures. A heap
 // figure, run by hack/test-heap.sh (UPGRADESCOPE_HEAP=1) only. Under the
 // race detector it lists fewer.
 func TestPodPagePeakHeapIsBounded(t *testing.T) {
