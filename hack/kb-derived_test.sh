@@ -48,29 +48,43 @@ EOF2
 ./hack/kb-derived.sh unexpected >/dev/null 2>&1 && fail "accepts an unknown argument" || ok "refuses an unknown argument"
 
 
-# Each job that changes the data: `make kb-derived` between the step that
-# changes it and its PR step, and every derived file the data feeds in
-# that PR's add-paths.
+# Each pair of jobs that changes the data (kb-refresh.yml: a read-only job
+# that regenerates and hands over a patch, and a -pr job that applies the
+# patch with the write token and runs no repository code): `make kb-derived`
+# runs in the first, between the step that changes the data and the one
+# that packages the patch; the patch and the PR carry every derived file,
+# and the -pr job runs no make.
 check_job() { # job, the step that changes the data, the data path, derived files...
   local job=$1 step=$2 data=$3; shift 3
-  awk -v j="  $job:" '$0 == j { c = 1; print; next } c && /^  [^ ]/ { exit } c' "$kb" >"$work/$job"
-  line() { { grep -n -- "$1" "$work/$job" || true; } | head -1 | cut -d: -f1; }
-  local sync derive pr
-  sync=$(line "run: $step")
-  derive=$(line 'run: make kb-derived')
-  pr=$(line 'uses: peter-evans/create-pull-request@')
-  if [ -n "$sync" ] && [ -n "$derive" ] && [ -n "$pr" ] && [ "$sync" -lt "$derive" ] && [ "$derive" -lt "$pr" ]; then
-    ok "the $job job runs make kb-derived between $step and its PR"
+  jobtext() { awk -v j="  $1:" '$0 == j { c = 1; print; next } c && /^  [^ ]/ { exit } c' "$kb"; }
+  jobtext "$job" >"$work/$job"
+  jobtext "$job-pr" >"$work/$job-pr"
+  line() { { grep -n -- "$2" "$work/$1" || true; } | head -1 | cut -d: -f1; }
+  local sync derive pack
+  sync=$(line "$job" "run: $step")
+  derive=$(line "$job" 'run: make kb-derived')
+  pack=$(line "$job" 'git add -A --')
+  if [ -n "$sync" ] && [ -n "$derive" ] && [ -n "$pack" ] && [ "$sync" -lt "$derive" ] && [ "$derive" -lt "$pack" ]; then
+    ok "the $job job runs make kb-derived between $step and packaging its patch"
   else
-    fail "the $job job does not run make kb-derived after $step and before create-pull-request (lines ${sync:-none}, ${derive:-none}, ${pr:-none})"
+    fail "the $job job does not run make kb-derived after $step and before packaging (lines ${sync:-none}, ${derive:-none}, ${pack:-none})"
+  fi
+  if grep -q 'run: make' "$work/$job-pr"; then
+    fail "the $job-pr job runs make with the write token"
+  else
+    ok "the $job-pr job runs no make"
   fi
   # add-paths: the block under `add-paths: |`, or its one-line value.
   awk '/^          add-paths:/ { v = $0; sub(/^ *add-paths: */, "", v); if (v != "|") { print v; exit } a = 1; next }
-    a { if ($0 !~ /^            /) exit; sub(/^ +/, ""); print }' "$work/$job" >"$work/$job.add-paths"
+    a { if ($0 !~ /^            /) exit; sub(/^ +/, ""); print }' "$work/$job-pr" >"$work/$job.add-paths"
   local file
   for file in "$data" "$@"; do
     grep -qxF "$file" "$work/$job.add-paths" && ok "the $job PR commits $file" ||
-      fail "the $job job's add-paths lack $file (have: $(paste -sd' ' "$work/$job.add-paths"))"
+      fail "the $job-pr job's add-paths lack $file (have: $(paste -sd' ' "$work/$job.add-paths"))"
+    grep -qF -- "git add -A -- " "$work/$job" && grep -F -- "git add -A -- " "$work/$job" | grep -qF -- "$file" ||
+      fail "the $job job's patch does not package $file"
+    grep -F 'case "$path" in' -A2 "$work/$job-pr" | grep -qF -- "$file" ||
+      fail "the $job-pr job's path allowlist lacks $file"
   done
 }
 check_job registry 'make eol-sync' registry/data docs/concepts/support-lifecycle.md

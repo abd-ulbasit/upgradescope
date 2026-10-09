@@ -103,9 +103,9 @@ jobs:
 
       - name: Package the regenerated files
         run: |
-          git add -A -- tools/gen-kb internal/kb/data
-          git diff --cached --binary -- tools/gen-kb internal/kb/data >"$RUNNER_TEMP/kb-refresh-api-lifecycle.patch"
-          git diff --cached --stat -- tools/gen-kb internal/kb/data
+          git add -A -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md
+          git diff --cached --binary -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md >"$RUNNER_TEMP/kb-refresh-api-lifecycle.patch"
+          git diff --cached --stat -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kb-refresh-api-lifecycle
@@ -147,8 +147,8 @@ jobs:
           git apply --numstat "$PATCH" | cut -f3- >"$RUNNER_TEMP/paths"
           while IFS= read -r path; do
             case "$path" in
-              tools/gen-kb/*|internal/kb/data/*) ;;
-              *) echo "::error::the patch changes $path, outside tools/gen-kb and internal/kb/data; refusing it"; exit 1 ;;
+              tools/gen-kb/*|internal/kb/data/*|deploy/chart/files/kb-rbac-rules.yaml|docs/concepts/support-lifecycle.md) ;;
+              *) echo "::error::the patch changes $path, outside tools/gen-kb, internal/kb/data and the two files derived from them; refusing it"; exit 1 ;;
             esac
           done <"$RUNNER_TEMP/paths"
           git apply --check "$PATCH"
@@ -257,11 +257,15 @@ jobs:
       - name: Sync registry with endoflife.date
         run: make eol-sync
 
+      # The doc examples the registry feeds, in the same patch (hack/kb-derived.sh).
+      - name: Regenerate what the data feeds
+        run: make kb-derived
+
       - name: Package the regenerated files
         run: |
-          git add -A -- registry/data
-          git diff --cached --binary -- registry/data >"$RUNNER_TEMP/kb-refresh-registry.patch"
-          git diff --cached --stat -- registry/data
+          git add -A -- registry/data docs/concepts/support-lifecycle.md
+          git diff --cached --binary -- registry/data docs/concepts/support-lifecycle.md >"$RUNNER_TEMP/kb-refresh-registry.patch"
+          git diff --cached --stat -- registry/data docs/concepts/support-lifecycle.md
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kb-refresh-registry
@@ -303,17 +307,13 @@ jobs:
           git apply --numstat "$PATCH" | cut -f3- >"$RUNNER_TEMP/paths"
           while IFS= read -r path; do
             case "$path" in
-              registry/data/*) ;;
-              *) echo "::error::the patch changes $path, outside registry/data; refusing it"; exit 1 ;;
+              registry/data/*|docs/concepts/support-lifecycle.md) ;;
+              *) echo "::error::the patch changes $path, outside registry/data and docs/concepts/support-lifecycle.md; refusing it"; exit 1 ;;
             esac
           done <"$RUNNER_TEMP/paths"
           git apply --check "$PATCH"
           git apply "$PATCH"
           git status --short
-
-      # The doc examples the registry feeds, in the same commit (hack/kb-derived.sh).
-      - name: Regenerate what the data feeds
-        run: make kb-derived
 
       - name: Open PR if anything changed
         id: pr
