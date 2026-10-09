@@ -98,16 +98,27 @@ func TestRotationIsSeenWithinTheCheckInterval(t *testing.T) {
 
 func TestChecksAtMostOncePerInterval(t *testing.T) {
 	f, path, clk, _ := setup(t, "a-token")
+	prev := "a-token"
 	for i := range 3 {
-		write(t, path, fmt.Sprintf("token-%d", i))
+		want := fmt.Sprintf("token-%d", i)
+		write(t, path, want)
 		clk.advance(DefaultCheckInterval - time.Second)
-		if got := f.Value(); got != "a-token" && i == 0 {
-			t.Fatalf("checked before the interval elapsed: %q", got)
+		if got := f.Value(); got != prev {
+			t.Fatalf("round %d: checked before the interval elapsed: Value = %q, want the old %q", i, got, prev)
 		}
 		clk.advance(time.Second)
-		if got := f.Value(); got != fmt.Sprintf("token-%d", i) {
-			t.Fatalf("round %d: Value = %q", i, got)
+		if got := f.Value(); got != want {
+			t.Fatalf("round %d: Value = %q, want %q", i, got, want)
 		}
+		// However often it is asked, it does not look again within the
+		// interval it just started: a rotation now waits for the next check.
+		write(t, path, want+"-again")
+		for range 5 {
+			if got := f.Value(); got != want {
+				t.Fatalf("round %d: looked again within the interval: Value = %q, want %q", i, got, want)
+			}
+		}
+		prev = want
 	}
 }
 
@@ -342,5 +353,45 @@ func TestOptionalFileMayBeEmptyAtOpen(t *testing.T) {
 	write(t, empty, "")
 	if _, err := Open(empty); err == nil || err.Error() != empty+" is empty" {
 		t.Fatalf("a required empty file: err = %v", err)
+	}
+}
+
+// Files in one reload group never reload at the same time, and a Value that
+// finds the group busy neither waits nor loses its check.
+func TestReloadGroupSerializesReloadsWithoutBlocking(t *testing.T) {
+	var group sync.Mutex
+	inside, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	slow, slowPath, _, _ := setup(t, "slow-1", WithCheckInterval(0), WithReloadGroup(&group),
+		WithValidate(func(v string) error {
+			if v == "slow-2" {
+				once.Do(func() { close(inside) })
+				<-release
+			}
+			return nil
+		}))
+	other, otherPath, _, _ := setup(t, "other-1", WithCheckInterval(0), WithReloadGroup(&group))
+
+	write(t, slowPath, "slow-2")
+	write(t, otherPath, "other-2")
+	done := make(chan string)
+	go func() { done <- slow.Value() }()
+	<-inside // slow is mid-reload, holding the group
+	got := make(chan string)
+	go func() { got <- other.Value() }()
+	select {
+	case v := <-got:
+		if v != "other-1" {
+			t.Fatalf("Value during another file's reload = %q, want the old value, unchecked", v)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Value waited for another file's reload")
+	}
+	close(release)
+	if v := <-done; v != "slow-2" {
+		t.Fatalf("slow = %q", v)
+	}
+	if v := other.Value(); v != "other-2" {
+		t.Fatalf("the skipped check was lost: Value = %q, want other-2", v)
 	}
 }

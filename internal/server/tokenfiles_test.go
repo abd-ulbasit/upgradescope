@@ -281,3 +281,85 @@ func TestTokenRotationUnderConcurrentRequests(t *testing.T) {
 		t.Fatalf("final read token = %d, want 200", got)
 	}
 }
+
+// Whichever of the three token files moves, a value equal to either of the
+// other two is refused and the old one stays in service, as New refuses the
+// same pair at start (all six directions, not only two of them).
+func TestRotationToACollidingTokenIsRefusedInEveryDirection(t *testing.T) {
+	type tok struct {
+		name string
+		path func(*tokenFiles) string
+		get  func(*tokenSources) string
+		one  string
+	}
+	toks := []tok{
+		{"ingest", func(f *tokenFiles) string { return f.ingest }, (*tokenSources).ingest, "ingest-one"},
+		{"read", func(f *tokenFiles) string { return f.read }, (*tokenSources).read, "read-one"},
+		{"admin", func(f *tokenFiles) string { return f.admin }, (*tokenSources).admin, "admin-one"},
+	}
+	for _, mover := range toks {
+		for _, other := range toks {
+			if mover.name == other.name {
+				continue
+			}
+			t.Run(mover.name+"="+other.name, func(t *testing.T) {
+				tf := newTokenFiles(t)
+				var cfg Config
+				tf.apply(&cfg)
+				ts, err := newTokenSources(&cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rotate(t, mover.path(tf), other.one)
+				if got := mover.get(&ts); got != mover.one {
+					t.Fatalf("%s token after a rotation to the %s token's value = %q, want the old one kept", mover.name, other.name, got)
+				}
+				if got := other.get(&ts); got != other.one {
+					t.Fatalf("%s token changed to %q", other.name, got)
+				}
+				if logs := tf.logs(); !strings.Contains(logs, mover.path(tf)) || strings.Contains(logs, "-one") {
+					t.Fatalf("log must name the file and no token: %q", logs)
+				}
+				rotate(t, mover.path(tf), mover.name+"-two") // a distinct value still rotates
+				if got := mover.get(&ts); got != mover.name+"-two" {
+					t.Fatalf("%s token after a distinct rotation = %q", mover.name, got)
+				}
+			})
+		}
+	}
+}
+
+// Two files that come to hold the same value at the same moment (an
+// operator writing equal values into two keys at once) are checked one at a
+// time, so at most one is taken and the server never has two equal tokens, a
+// state New refuses. Run with -race.
+func TestSimultaneousCollidingRotationsNeverLeaveEqualTokens(t *testing.T) {
+	tf := newTokenFiles(t)
+	var cfg Config
+	tf.apply(&cfg)
+	ts, err := newTokenSources(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 300 {
+		same := fmt.Sprintf("same-%d", i)
+		rotate(t, tf.read, same)
+		rotate(t, tf.admin, same)
+		var start, wg sync.WaitGroup
+		start.Add(1)
+		for _, get := range []func() string{ts.read, ts.admin} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				start.Wait()
+				get()
+			}()
+		}
+		start.Done()
+		wg.Wait()
+		// A look the other's reload made it skip is made now.
+		if r, a := ts.read(), ts.admin(); r == a {
+			t.Fatalf("round %d: read and admin tokens are both %q", i, r)
+		}
+	}
+}

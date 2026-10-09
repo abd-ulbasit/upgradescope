@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/abd-ulbasit/upgradescope/internal/secretfile"
 )
@@ -61,8 +62,9 @@ func newTokenSources(cfg *Config) (tokenSources, error) {
 	// A candidate token for one file must not equal either of the others in
 	// service now. The validators run on every reload, so a rotation cannot
 	// produce a configuration New would have refused.
+	group := new(sync.Mutex) // the three reloads compare with each other: one at a time
 	open := func(path string, bad func(v string) error, extra ...secretfile.Option) (*secretfile.File, error) {
-		opts := append([]secretfile.Option{secretfile.WithValidate(bad)}, extra...)
+		opts := append([]secretfile.Option{secretfile.WithValidate(bad), secretfile.WithReloadGroup(group)}, extra...)
 		opts = append(opts, cfg.secretOpts...)
 		return secretfile.Open(path, opts...)
 	}

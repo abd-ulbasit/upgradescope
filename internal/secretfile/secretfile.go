@@ -50,6 +50,7 @@ type File struct {
 	validate      func(string) error
 	optional      bool
 	removalClears bool
+	group         *sync.Mutex // shared by Files whose validators read each other, nil = none
 
 	value atomic.Pointer[string] // the value in service; never nil after Open
 
@@ -86,6 +87,15 @@ func stdLogf(isError bool, format string, args ...any) {
 	}
 	log.Printf(format, args...)
 }
+
+// WithReloadGroup serializes this File's reloads with those of every other File
+// given the same mutex, from the validator's comparison to the swap. For
+// Files whose validators compare a candidate with another File's value (the
+// server's three tokens must stay different): two reloading at once would
+// each pass against the other's old value and leave two equal ones. A Value
+// that finds the group busy returns the current value and looks again on its
+// next call, so a request never waits on another file's reload.
+func WithReloadGroup(mu *sync.Mutex) Option { return func(f *File) { f.group = mu } }
 
 // WithValidate refuses a value validate returns an error for: the first
 // value fails Open, a later one is logged and not taken. Its error is
@@ -143,6 +153,12 @@ func (f *File) Value() string {
 	if now := f.now(); now.UnixNano() >= f.next.Load() && f.check.TryLock() {
 		defer f.check.Unlock()
 		if now.UnixNano() >= f.next.Load() {
+			if f.group != nil {
+				if !f.group.TryLock() {
+					return *f.value.Load() // another file is reloading: look again on the next call
+				}
+				defer f.group.Unlock()
+			}
 			f.next.Store(now.Add(f.interval).UnixNano())
 			f.reloadIfChanged()
 		}
