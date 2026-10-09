@@ -125,6 +125,14 @@ vuln-latest:
 vuln-test:
 	./hack/vulncheck_test.sh
 
+# Advisories in hack/renovate/package-lock.json (the CI-only Renovate
+# validator): any not accepted, with a reason and an expiry, in
+# hack/renovate/osv-scanner.toml fails (CI's vuln job). Needs npm and the
+# registry's audit endpoint.
+.PHONY: renovate-audit
+renovate-audit:
+	./hack/renovate-audit.sh
+
 # THIRD_PARTY_NOTICES: the license text of every Go module the binary links
 # (go-licenses, pinned in the script) and every npm package in the dashboard
 # bundle. `make notices` rewrites it (commit the result after a dependency
@@ -330,6 +338,7 @@ hack-test:
 	./hack/cross-build_test.sh
 	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh
+	./hack/renovate-audit_test.sh
 	./hack/check-toolchain_test.sh
 	./hack/install-tool_test.sh
 	./hack/examples-test_test.sh

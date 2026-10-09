@@ -286,6 +286,14 @@ jobs:
         run: make vuln-test
       - name: govulncheck (binary mode, per-advisory allowlist)
         run: make vuln
+      # The CI-only Renovate validator's lockfile (hack/renovate), bumped by
+      # hand: an advisory not accepted in hack/renovate/osv-scanner.toml,
+      # with a reason and an expiry, fails here, weekly too (#244).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24' # Renovate's engines
+      - name: npm audit of hack/renovate (per-advisory ignore list)
+        run: make renovate-audit
 
   # Dashboard: npm ci, vitest, typecheck + vite build, production advisories,
   # and the committed go:embed copy equals the fresh build.
