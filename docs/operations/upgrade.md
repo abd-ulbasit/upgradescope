@@ -277,6 +277,11 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   `unknown` rather than `ready` until the agent runs the server's data.
   Upgrade the agents with the server, or expect `unknown` in between
   ([what a push is judged as](../operations.md#what-a-push-is-judged-as)).
+  That move sends no notification (a pass whose verdict is unknown is not
+  news and is not a baseline, [Running the server](../operations.md#notifications)),
+  so upgrading the server does not notify every cluster whose agent is still
+  on older data, and neither does the agent catching up. Findings the server's
+  newer data does flag are announced as usual.
   Snapshots from v0.1.x agents are judged with their
   differences named: their API-usage signal meant something else, so those
   clusters read `unknown` until their agents are upgraded

@@ -390,3 +390,36 @@ func TestKBSkewRegistryDirMismatchIsNamed(t *testing.T) {
 		t.Errorf("server with the same --registry-dir: verdict = %s, gaps %+v, want ready", rep.Verdict, rep.NotAssessed)
 	}
 }
+
+// A server upgrade turns every cluster whose agent runs older data from
+// ready to unknown, and that is not news: an unknown pass sends nothing and
+// is not a baseline (operations: notifications), so the upgrade does not
+// notify every such cluster at once, and neither does the agent catching up.
+func TestKBSkewMovesNoNotifications(t *testing.T) {
+	k := embeddedKB(t)
+	_, registry, _ := kbDigests(k.Version)
+	h := newHarness(t, Config{KB: k}, aug1)
+	h.pushKB("fleet-a", "0.2.0", k.Version, testInventory())
+	h.pushKB("fleet-b", "0.2.0", k.Version, testInventory())
+	h.drain()
+	// The server is upgraded to newer data: the agents' snapshots were
+	// collected with the data it replaced.
+	newer := k
+	newer.Version = withDigests(t, k.Version, "deadbeef", registry)
+	h.restart(Config{KB: newer})
+	h.tick()
+	if events := h.drain(); len(events) != 0 {
+		t.Errorf("the server upgrade sent %d notification(s), want none: %+v", len(events), events)
+	}
+	if rep := h.report("fleet-a", "1.35"); rep.Verdict != "unknown" {
+		t.Fatalf("after the server upgrade: verdict = %s, want unknown (the test would prove nothing)", rep.Verdict)
+	}
+	// The agent catches up: a duplicate push, re-judged, is ready again.
+	h.pushKBStatus("fleet-a", "0.2.0", newer.Version, testInventory())
+	if rep := h.report("fleet-a", "1.35"); rep.Verdict != "ready" {
+		t.Fatalf("after the agent catches up: verdict = %s, want ready", rep.Verdict)
+	}
+	if events := h.drain(); len(events) != 0 {
+		t.Errorf("the agent catching up sent %d notification(s), want none: %+v", len(events), events)
+	}
+}

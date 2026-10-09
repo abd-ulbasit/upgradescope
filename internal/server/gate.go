@@ -529,7 +529,15 @@ func (s *Server) gateWithin(w http.ResponseWriter, clusterInv, manifests invento
 	if inv.Capabilities == nil {
 		inv.Capabilities = map[inventory.Capability]inventory.CapabilityStatus{}
 	}
+	// The manifests are API usage the PR supplies, so the proposed state's is
+	// available even where the cluster's was not read. A cluster's usage
+	// listed under another knowledge base than this server's is still
+	// partial over what the server's data would have collected (#268), and
+	// stays a gap: the PR cannot make the cluster's other objects assessed.
 	inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true}
+	if st := clusterInv.Capabilities[inventory.CapAPIUsage]; st.Available && slices.Contains(st.Skipped, inventory.SkippedNewerKB) {
+		inv.Capabilities[inventory.CapAPIUsage] = st
+	}
 	side := mergeManifests(&inv, manifests)
 	sideRep, err := s.evaluateWithin(side, target, s.now())
 	if err != nil {
@@ -785,5 +793,7 @@ func (s *Server) gateClusterContext(w http.ResponseWriter, r *http.Request, ref 
 		return inventory.Inventory{}, false
 	}
 	inv.CutFreeText() // as ingest judged it (decodeInventory)
-	return inv, true
+	// And as the report judges it: a snapshot collected with another
+	// knowledge base than this server's is never ready here either (#268).
+	return judgedView(inv, snap.AgentVersion, snap.KBVersion, s.cfg.KB), true
 }

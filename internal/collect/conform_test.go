@@ -211,3 +211,31 @@ func TestCollectAddOnsWithAHostileImageTagInManyNamespacesAreAdmitted(t *testing
 		}
 	}
 }
+
+// What Collect leaves out so that the server accepts the push is handed to
+// Options.OnConform (the agent logs it every tick); a clean cluster calls
+// nothing. The notes name no identifier.
+func TestCollectReportsWhatConformLeftOut(t *testing.T) {
+	collect := func(secrets ...*corev1.Secret) (notes []string, calls int) {
+		var objs []runtime.Object
+		for _, s := range secrets {
+			objs = append(objs, s)
+		}
+		kube, meta := helmClients(t, objs...)
+		disc := fakeDiscovery()
+		disc.FakedServerVersion = &version.Info{GitVersion: "v1.35.2"}
+		Collect(context.Background(), Clients{Kube: kube, Metadata: meta, Discovery: disc}, loadKB(t),
+			Options{OnConform: func(n []string) { notes, calls = n, calls+1 }})
+		return notes, calls
+	}
+	notes, calls := collect(helmSecret(t, helmRev{ns: "tenant", release: "app", rev: 1, status: "deployed", chart: "app", chartVersion: "1.0.0", manifest: badManifest}))
+	if calls != 1 || !strings.Contains(strings.Join(notes, "\n"), "object(s) of API usage dropped") {
+		t.Errorf("OnConform called %d time(s) with %q, want once, naming what was dropped", calls, notes)
+	}
+	if strings.Contains(strings.Join(notes, "\n"), "Bad/Name") {
+		t.Errorf("notes %q carry the hostile identifier", notes)
+	}
+	if notes, calls := collect(helmSecret(t, helmRev{ns: "tenant", release: "app", rev: 1, status: "deployed", chart: "app", chartVersion: "1.0.0"})); calls != 0 {
+		t.Errorf("a clean cluster called OnConform with %q, want it not called", notes)
+	}
+}

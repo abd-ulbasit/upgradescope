@@ -523,7 +523,14 @@ least one core.
   in that form) names no dataset, so it is not known to be complete
   either. The inventory carries nothing extra for this, so its size stays
   what it was. A server that cannot read its own label (a test knowledge
-  base) judges as before.
+  base) judges as before. The CI gate judges the same way: `POST
+  /api/v1/gate?cluster=` reads the cluster's snapshot through the same
+  view, so a PR against a cluster collected with other data gets
+  `unknown` (and `clusterVerdict` `unknown`), not `ready`. The move to
+  `unknown` sends no notification, so upgrading the server does not notify
+  every cluster whose agent is still on older data. An inventory file given
+  to the MCP server's `inventory_file` has no push envelope, so no such
+  check applies to it ([MCP](getting-started/mcp.md)).
 - **Outdated verdicts.** A stored verdict depends on the date (EOL windows),
   the KB and the team map. The background pass re-evaluates hourly and just
   after each UTC midnight; until it has, every read of a stored verdict

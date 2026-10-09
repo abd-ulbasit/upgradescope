@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
 
@@ -157,5 +160,34 @@ func TestTickLogsWhatConformLeftOut(t *testing.T) {
 	}
 	if strings.Contains(out, "Bad_Name") {
 		t.Errorf("log = %q, want no hostile identifier", out)
+	}
+}
+
+// The collector's own Conform is where an inventory is repaired in
+// production (the tick's second pass then finds nothing): its notes reach
+// the log through collect.Options.OnConform, so the warning really fires
+// with the real collector, not only with an injected one.
+func TestTickLogsWhatTheCollectorLeftOut(t *testing.T) {
+	var logs strings.Builder
+	clients := fakeClients(t, "v1.35.2")
+	huge := "registry.example.com/" + strings.Repeat("r", 17<<10) + ":v1"
+	if _, err := clients.Kube.CoreV1().Pods("tenant").Create(context.Background(), &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "tenant"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: huge}}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	r := newRunner(clients, fakeDyn(), mustKB(t), cfg)
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "inventory conformed") || strings.Contains(out, "rrrrrrrr") {
+		t.Errorf("log = %.400q, want the tick to say what the collector left out, without the image", out)
 	}
 }
