@@ -1792,7 +1792,11 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 			g := CapabilityGap{Capability: c, Reason: st.Reason, Partial: true, Skipped: st.Skipped}
 			switch c {
 			case inventory.CapAPIUsage:
-				g.Required = slices.ContainsFunc(st.Skipped, func(api string) bool { return removedBy(idx, api, target) })
+				// SkippedNewerKB: the agent's knowledge base is not the
+				// server's, so any API the target removes may have gone
+				// unlisted.
+				g.Required = slices.Contains(st.Skipped, inventory.SkippedNewerKB) ||
+					slices.ContainsFunc(st.Skipped, func(api string) bool { return removedBy(idx, api, target) })
 			case inventory.CapVersions:
 				// A component whose version upstream would have told but
 				// could not be read (#169), which collect names in Skipped,
@@ -1806,7 +1810,9 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 				// Without pods only Helm releases and IngressClasses speak:
 				// an add-on installed any other way goes undetected (#199).
 				// IngressClasses alone are supplementary evidence, optional.
-				g.Required = required[c] && slices.Contains(st.Skipped, inventory.SkippedPods)
+				// The same for add-ons the server's registry knows and the
+				// agent's did not (inventory.SkippedNewerKB).
+				g.Required = required[c] && (slices.Contains(st.Skipped, inventory.SkippedPods) || slices.Contains(st.Skipped, inventory.SkippedNewerKB))
 			}
 			gaps = append(gaps, g)
 		}

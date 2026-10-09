@@ -20,6 +20,14 @@ const (
 	CapCRDs Capability = "crds"
 )
 
+// SkippedNewerKB is the Skipped entry of api-usage, helm and addons that
+// the server (never a collector) adds when a snapshot was collected with a
+// knowledge base other than its own: the agent listed API usage and matched
+// add-ons by its own data, so evidence the server's data would have
+// collected is missing. The engine reads it as a required gap for api-usage
+// and addons, so the verdict is unknown.
+const SkippedNewerKB = "knowledge base differs from the agent's"
+
 // SkippedPods is the addons capability's Skipped entry for a cluster-wide
 // pod list that failed: pod images and labels find an add-on whatever
 // installed it, so the engine keeps that gap required.
