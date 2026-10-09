@@ -50,8 +50,14 @@ a CI gate.
   in their Host header, at any port. A port, scheme or wildcard is refused
   at startup. Chart: `server.allowedHosts` (default `[]`) adds names to the
   ones the chart always passes (the server Service's DNS names and
-  `server.ingress.host`); a port or scheme fails the render. What the option
-  is for is under **Changed** (#240).
+  `server.ingress.host`); a port or scheme fails the render. Chart:
+  `clusterDomain` (default `cluster.local`; a DNS name, a trailing dot is
+  dropped) is the domain of the server Service's fully qualified name, which
+  the chart passes to `--allowed-host` and names in the cert-manager
+  Certificate; both were always `.svc.cluster.local`, so set it when your
+  cluster uses another domain, or a client using the full name gets `421`
+  and a certificate without that name. What the option is for is under
+  **Changed** (#240).
 - Team-scoped read tokens: `upgradescope tokens create --read --teams
   <team>` (repeatable, a team name taken as written; `--teams '*'` for the
   whole fleet), `tokens list --read` and `tokens revoke --read --id <n>`. A
@@ -440,43 +446,52 @@ a CI gate.
 - `serve` answers `421` to a request whose Host it does not answer for,
   before any route, credential, team header or scope is looked at, when it
   listens on a loopback address or `--trust-team-header` is set (a routable
-  address with a read credential and no trusted header answers any Host, as
-  before). It answers for `localhost`, a loopback address, the address the
-  request arrived on (probes and scrapes of the pod IP), the `--listen` host
-  (not `0.0.0.0` or `::`) and every `--allowed-host`; the port is never
-  compared. This closes DNS rebinding: a page on a name an attacker
-  controls, resolved to the loopback address, could read an open loopback
-  read API, or a server in header mode through `kubectl port-forward`. If
-  clients reach such a server under another name (an `/etc/hosts` alias, a
-  LoadBalancer IP, a Gateway host), add it with `--allowed-host` or
-  `server.allowedHosts`. The chart always passes `--allowed-host` (the
+  listener without a trusted header answers any Host, as before). It answers
+  for `localhost`, a loopback address, the address the request arrived on
+  (probes and scrapes of the pod IP), the `--listen` host (not `0.0.0.0` or
+  `::`) and every `--allowed-host`; the port is never compared. This closes
+  DNS rebinding: a page on a name an attacker controls, resolved to the
+  loopback address, could read an open loopback read API, or a server in
+  header mode through `kubectl port-forward`. If clients reach such a server
+  under another name (an `/etc/hosts` alias, a LoadBalancer IP, a Gateway
+  host), add it with `--allowed-host` or `server.allowedHosts`. In header
+  mode, a proxy that forwards the client's Host (oauth2-proxy's default, and
+  the earlier example manifest's) now gets `421` for every browser request:
+  set `--pass-host-header=false`, as the example now does, or add that host
+  with `--allowed-host`. The chart always passes `--allowed-host` (the
   Service's DNS names and `server.ingress.host`), so an older server image
   with this chart stops on an unknown flag: upgrade the image with the
   chart. Refusals are counted in
   `upgradescope_http_requests_total{route="host-refused",code="421"}` and
   logged at most once a minute (#240).
 - `serve` refuses to start when `--read-token` equals `--ingest-token`
-  (every agent's push token would read the whole fleet). A secret read from
-  its `$UPGRADESCOPE_*` variable is trimmed of surrounding whitespace, as
-  one read from `--<name>-file` already was, and a variable that holds only
-  whitespace is refused. The trusted team header trims only space and tab
-  from each team name it lists, no other whitespace (#250).
+  (every agent's push token would read the whole fleet). Every command's
+  secret read from its `$UPGRADESCOPE_*` variable (`serve`'s tokens and
+  webhook URLs, the agent's server token, `clusters`, `mcp`, `tokens
+  --db-url`) is trimmed of surrounding whitespace, as one read from
+  `--<name>-file` already was, and a variable that holds only whitespace is
+  now an error. The trusted team header trims only space and tab from each
+  team name it lists, no other whitespace (#250).
 - `unattributed`, the key of the findings no team owns, is now
   `(unattributed)` in the `teams` of `scan -o json`, the report, `GET
   /api/v1/clusters/{id}/teams`, the gate response, `GET /api/v1/fleet/teams`
-  and the HTML export (`schemaVersion` stays 1), because a team called
-  `unattributed` shared its row. That team is now its own row, and `serve
-  --team-map` refuses a team named `(unattributed)`. Update anything that
-  reads the old key (#243).
+  and the HTML export (`schemaVersion` stays 1), and in the `scan` table and
+  the dashboard's team filter (`team=(unattributed)` in the hash), because a
+  team called `unattributed` shared its row. That team is now its own row,
+  and `serve --team-map` refuses a team named `(unattributed)`. Update
+  anything that reads the old key (#243).
 - The dashboard's nested paths (`/cluster/3`, `/teams/`, any extensionless
   path below the root) answer `302` to the root with the route in the hash,
   as a relative `Location` that keeps a proxy's path prefix, where they used
   to serve a page whose assets did not load. A path with a file extension
-  that is not a file, or under `/assets/`, stays a JSON `404` (#243).
+  that is not a file stays a JSON `404`; `/assets/` (which listed the asset
+  files) and any other path under it that is not a file are now a JSON `404`
+  too (#243).
 - Chart: the agent's CPU limit is now `1` CPU
   (`agent.resources.limits.cpu`), not `200m`; the request stays `50m`, so
-  scheduling is unchanged. A ResourceQuota on `limits.cpu`, or a LimitRange
-  whose CPU maximum is below 1, will now refuse the pod: set
+  scheduling is unchanged. A ResourceQuota on `limits.cpu` without room for
+  800m more per agent pod, or a LimitRange whose CPU maximum is below 1,
+  will refuse the pod: give the quota the room or set
   `agent.resources.limits.cpu` to what fits. Measured as a pod against 2,001
   KWOK nodes and 1,001 Helm releases (`docs/operations/scale.md`): at 200m
   the first tick took 73.4 s and its Helm step gave up at its deadline with
@@ -492,19 +507,22 @@ a CI gate.
   the tick deadline (`--interval` / 2, at most 5 minutes) when that is under
   a minute; collection gets the rest. At the default `--interval 10m`
   collection gets 4 min 30 s (was 5 min); at the 1m minimum it gets 15 s
-  (was 30 s). The computed ceiling of the Helm step at 1 CPU is now about
-  1,900 releases, about 1,600 with `rbac.gitops.*` (arithmetic, not
-  measured): give a larger cluster more CPU or a longer `agent.interval`
-  (#238).
+  (was 30 s). The computed ceiling of the Helm step at 1 CPU and the default
+  interval is now about 1,900 releases, about 1,600 with `rbac.gitops.*`
+  (arithmetic, not measured): give a larger cluster more CPU or a longer
+  `agent.interval` (#238).
 - The agent refuses at start what could never work, so it fails fast instead
-  of failing every tick: `--force-sync-every` of 0 or below; a
-  `--server-url` that is not an `http` or `https` URL with a host; and, with
-  `--server-url`, a push token with whitespace inside it (surrounding
-  whitespace is trimmed). `--force-sync-every` at or below `--interval`
-  force-syncs every tick. The chart schema now rejects an `agent.serverUrl`
-  without a host, and is stricter than the agent about non-ASCII host names
-  and whitespace in the path, so a `helm upgrade` with an unusual value can
-  fail the schema (#238).
+  of failing every tick: `--cluster-name ""` given explicitly (leave the
+  flag out to name the cluster by its UID); `--force-sync-every` of 0 or
+  below; a `--server-url` that is not an `http` or `https` URL with a host;
+  and, with `--server-url`, a push token with whitespace inside it
+  (surrounding whitespace is trimmed). `--force-sync-every` at or below
+  `--interval` force-syncs every tick. An agent given one of these
+  crash-loops with `invalid --<flag>` in its log: check `agent.extraArgs`
+  and the token Secret before you upgrade. The chart schema now rejects an
+  `agent.serverUrl` without a host, and is stricter than the agent about
+  non-ASCII host names and whitespace in the path, so a `helm upgrade` with
+  an unusual value can fail the schema (#238).
 - A deprecated-API caller is graded by the knowledge base's removal release
   when the knowledge base has one for that group, version and resource, else
   by the metric's `removed_release` label. A caller the label alone would
@@ -515,7 +533,7 @@ a CI gate.
   source. A remediation names only a replacement the target serves;
   otherwise it says "no replacement Kubernetes X serves is known", naming
   the release a later replacement is served from, for live and Helm manifest
-  findings alike (#236).
+  findings alike (#236, #237).
 - Folding caller rows into findings is indexed: an evaluation of 16,000
   usage entries and 16,000 caller rows takes about 30 ms (27.8 to 31.7 ms
   measured), where it took 12.9 to 18.4 s (#236).
@@ -533,14 +551,16 @@ a CI gate.
 - Chart: upgrade with `helm upgrade --reset-then-reuse-values` (Helm 3.14 or
   later), as the docs now say everywhere, not `--reuse-values`, which pins
   the new chart to the old release's image digest and fails when the chart
-  adds a value. The chart does not restart pods when a secret changes,
-  because no pod annotation carries a function of a secret value (readable
-  by everyone who can get Deployments): after you change a token, a webhook
-  URL or the contents of a Secret you named, run `kubectl rollout restart`
-  on the server and agent Deployments (the install notes print the command).
-  A value you remove in the same upgrade from an earlier chart keeps an
-  inert key in the Secret; `docs/operations/upgrade.md` has the one-time
-  `kubectl patch` (#242).
+  adds a value. The chart never restarted pods when a secret changed, and
+  still does not, because no pod annotation carries a function of a secret
+  value (readable by everyone who can get Deployments): after you change a
+  token, a webhook URL or the contents of a Secret you named, run `kubectl
+  rollout restart` on the server and agent Deployments (the install notes
+  now print the command). Every key of the chart's Secrets is now written
+  under `data`, so from this version on, removing a value removes its key;
+  the one exception is a value you remove in the same upgrade from an
+  earlier chart, which keeps an inert key in the Secret
+  (`docs/operations/upgrade.md` has the one-time `kubectl patch`) (#242).
 - Chart: `server.staleAfter` defaults to empty, which follows
   `agent.interval`: the larger of 2h and three intervals (2h for any
   interval up to 40m). A value you set at or below `agent.interval` fails
@@ -550,12 +570,17 @@ a CI gate.
   the render (#242).
 - Chart: the server's container port is its own value,
   `server.containerPort` (default `8080`), so `server.service.port` may be
-  `80` or `443`; Service names are cut to 63 characters for a long release
-  name, and everything that names a Service follows the cut (other resource
-  names are unchanged). `networkPolicy.enabled` with
-  `server.ingress.enabled` or `metrics.serviceMonitor.enabled` fails the
-  render unless `networkPolicy.serverIngressFrom` lists the ingress
-  controller or Prometheus, which the policy would otherwise cut off.
+  `80` or `443`. Before, the pod listened on `server.service.port`: if you
+  set that to something other than 8080, the pod now listens on 8080 (the
+  Service still answers on your port), so a NetworkPolicy, sidecar or pod
+  port-forward of your own that names the old port must follow it, or set
+  `server.containerPort` to the old value (1024 or above). Service names are
+  cut to 63 characters for a long release name, and everything that names a
+  Service follows the cut (other resource names are unchanged).
+  `networkPolicy.enabled` with `server.ingress.enabled` or
+  `metrics.serviceMonitor.enabled` fails the render while
+  `networkPolicy.serverIngressFrom` is empty: list the ingress controller's
+  or Prometheus's pods there, which the policy would otherwise cut off.
   `server.tmp.sizeLimit` bounds the new SQLite temp volume (#242).
 - A steady agent tick on a cluster of 2,001 nodes, about 14,000 pods and
   1,000 Helm releases makes 31 API requests, down from 53, reading the same
@@ -1030,7 +1055,10 @@ a CI gate.
   failed without it and worked with it. The volume is node ephemeral
   storage, and one that outgrows its limit evicts the pod. A volume of your
   own mounted at `/tmp` (`server.extraVolumeMounts`) is used instead, and a
-  `server.extraVolumes` entry named `sqlite-tmp` fails the render (#242).
+  `server.extraVolumes` entry named `sqlite-tmp` fails the render. If prunes
+  had been failing, the first one after the upgrade deletes the whole
+  backlog at once: raise `server.tmp.sizeLimit` to the size of the database
+  before you upgrade (#242).
 - A push's notifications are diffed against the baseline the push committed
   against, so a push racing another replica's push or the background pass no
   longer loses or repeats a `became-ready` or `new-blocker` notification
@@ -1191,9 +1219,9 @@ a CI gate.
 
 - Built with Go 1.26.9 and `golang.org/x/net` v0.60.0 (`go.mod` requires Go
   1.26.9, and the Dockerfile pins the `golang:1.26.9` image by digest).
-  `govulncheck` reported 12 standard-library and 4 `golang.org/x/net`
-  advisories against Go 1.26.8; it reports no reachable one outside the
-  allowlist now (#259).
+  `govulncheck` reported 12 standard-library advisories against Go 1.26.8
+  and 4 against `golang.org/x/net` v0.59.0; it reports no reachable one now
+  (#259).
 - Slack and generic webhook URLs, which are secrets, never reach the
   server's log or the outbox's `last_error` past `scheme://host/…`, and
   the host is withheld too when the URL holds an `@`. `serve` refuses to
