@@ -244,7 +244,7 @@ func TestNoSecretDerivedValueInPodMetadata(t *testing.T) {
 				"server.slackWebhook=" + slack, "server.webhook=" + hook, "server.webhookSecret=" + sign},
 			"server with a team map and TLS": {"server.enabled=true", "server.ingestToken=" + ingest, "server.readToken=" + read,
 				"server.teamMap[0].pattern=a-*", "server.teamMap[0].team=a", "server.tls.secretName=tls"},
-			"remote agent": {"agent.serverUrl=https://hub.example.com", "agent.serverToken=" + push},
+			"remote agent":                         {"agent.serverUrl=https://hub.example.com", "agent.serverToken=" + push},
 			"server and an agent token of its own": {"server.enabled=true", "server.sharedIngestToken=false", "agent.serverToken=" + push, "server.readToken=" + read},
 			"existing Secrets":                     {"server.enabled=true", "server.existingSecret=ex-" + v, "server.readTokenFromSecret=true", "server.adminTokenFromSecret=true", "agent.existingSecret=agent-" + v},
 			"agent with extra registry":            {"agent.serverUrl=https://hub.example.com", "agent.serverToken=" + push, registryValues},
@@ -318,5 +318,77 @@ func TestNotesWarnOfADefaultThresholdBelowTheForceSync(t *testing.T) {
 	// An unreadable value counts as the agent's default of 1h.
 	if odd := renderNotes(t, "upgradescope", "server.enabled=true", "agent.extraArgs={--force-sync-every=soon}"); strings.Contains(odd, "default stale threshold") {
 		t.Errorf("an unreadable force-sync is warned about:\n%s", odd)
+	}
+}
+
+// When agent.extraArgs sets --force-sync-every to a value the chart cannot
+// read, the warning says it assumed the default 1h; it does not present 3600s
+// as if it had read the flag (RB-22).
+func TestNotesSayWhenTheForceSyncIsAssumed(t *testing.T) {
+	for name, args := range map[string]string{
+		"unreadable value": "{--force-sync-every=soon}",
+		"unreadable pair":  "{--force-sync-every,soon}",
+		"zero":             "{--force-sync-every=0s}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			notes := strings.Join(strings.Fields(renderNotes(t, "upgradescope", "server.enabled=true", "server.staleAfter=1h", "agent.extraArgs="+args)), " ")
+			want := "WARNING: server.staleAfter (1h) is below 4200s, the larger of agent.interval (10m) and the default force-sync of 1h (assumed: agent.extraArgs --force-sync-every is not a duration this chart can read), plus one interval."
+			if !strings.Contains(notes, want) {
+				t.Errorf("NOTES lack %q:\n%s", want, notes)
+			}
+			if strings.Contains(notes, "3600s, agent.extraArgs") {
+				t.Errorf("NOTES present the default as read from the flag:\n%s", notes)
+			}
+		})
+	}
+	// One that reads says so, and a later unreadable one keeps it.
+	notes := strings.Join(strings.Fields(renderNotes(t, "upgradescope", "server.enabled=true", "server.staleAfter=1h", "agent.extraArgs={--force-sync-every=2h,--force-sync-every=soon}")), " ")
+	if want := "the force-sync period (7200s, agent.extraArgs --force-sync-every)"; !strings.Contains(notes, want) {
+		t.Errorf("NOTES lack %q:\n%s", want, notes)
+	}
+	// Not set at all: the plain default, as before.
+	notes = strings.Join(strings.Fields(renderNotes(t, "upgradescope", "server.enabled=true", "server.staleAfter=1h")), " ")
+	if want := "the larger of agent.interval (10m) and 1h, plus one interval."; !strings.Contains(notes, want) {
+		t.Errorf("NOTES lack %q:\n%s", want, notes)
+	}
+}
+
+// A secret passed as a flag in extraArgs beside the --*-file flag the chart
+// now passes for it is refused by serve and the agent (the two flags exclude
+// each other). Before the files, the flag simply won over the environment
+// variable; so the render says what to do instead of the pod failing to start.
+func TestExtraArgsSecretFlagBesideTheChartsFileFlagFailsTheRender(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sets    []string
+		wantErr string
+	}{
+		{"server read token", []string{"server.enabled=true", "server.readToken=t", "server.extraArgs={--read-token=mine}"}, "server.extraArgs sets --read-token"},
+		{"server read token as two arguments", []string{"server.enabled=true", "server.readToken=t", "server.extraArgs={--read-token,mine}"}, "server.extraArgs sets --read-token"},
+		{"server ingest token", []string{"server.enabled=true", "server.extraArgs={--ingest-token=mine}"}, "server.extraArgs sets --ingest-token"},
+		{"server webhook secret", []string{"server.enabled=true", "server.webhookSecret=k", "server.extraArgs={--webhook-secret=mine}"}, "server.extraArgs sets --webhook-secret"},
+		{"agent push token", []string{"server.enabled=true", "agent.extraArgs={--server-token=mine}"}, "agent.extraArgs sets --server-token"},
+		{"agent push token with a remote hub", []string{"agent.serverUrl=https://hub.example.com", "agent.serverToken=t", "agent.extraArgs={--server-token=mine}"}, "agent.extraArgs sets --server-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := renderErr(t, tc.sets...)
+			if !strings.Contains(msg, tc.wantErr) {
+				t.Fatalf("render error = %q, want one containing %q", msg, tc.wantErr)
+			}
+			if strings.Contains(msg, "mine") {
+				t.Errorf("the error repeats the value: %q", msg)
+			}
+		})
+	}
+	// Only a flag the chart also passes a file for conflicts: a token the
+	// chart does not supply stays a flag the user owns.
+	for name, sets := range map[string][]string{
+		"read token the chart does not supply": {"server.enabled=true", "server.extraArgs={--read-token=mine}"},
+		"CRD-only agent has no push token":     {"agent.extraArgs={--server-token=mine}"},
+		"unrelated flag":                       {"server.enabled=true", "server.extraArgs={--stale-after=3h}", "agent.extraArgs={--force-sync-every=2h}"},
+	} {
+		if msg := renderErr(t, sets...); msg != "" {
+			t.Errorf("%s: render error %q", name, msg)
+		}
 	}
 }

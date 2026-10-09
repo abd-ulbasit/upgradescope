@@ -65,7 +65,12 @@ The full rule list and its reasons are in the chart README.
 {{- if and .Values.server.enabled .Values.agent.enabled }}
 {{- $gap := float64 (include "upgradescope.pushGapSeconds" .) }}
 {{- $syncSet := include "upgradescope.agentForceSyncSet" . }}
-{{- $syncText := ternary (printf "the force-sync period (%.0fs, agent.extraArgs --force-sync-every)" (float64 (include "upgradescope.agentForceSyncSeconds" .))) "1h" (ne $syncSet "") }}
+{{- $syncText := "1h" }}
+{{- if include "upgradescope.agentForceSyncRead" . }}
+{{- $syncText = printf "the force-sync period (%.0fs, agent.extraArgs --force-sync-every)" (float64 (include "upgradescope.agentForceSyncSeconds" .)) }}
+{{- else if ne $syncSet "" }}
+{{- $syncText = "the default force-sync of 1h (assumed: agent.extraArgs --force-sync-every is not a duration this chart can read)" }}
+{{- end }}
 {{- if and .Values.server.staleAfter (lt (float64 (include "upgradescope.durationSeconds" .Values.server.staleAfter)) $gap) }}
 
 WARNING: server.staleAfter ({{ .Values.server.staleAfter }}) is below {{ printf "%.0f" $gap }}s, the larger of

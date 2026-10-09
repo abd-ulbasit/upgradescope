@@ -381,6 +381,22 @@ the chart cannot read as a duration counts as the default.
 {{- printf "%f" $seconds -}}
 {{- end -}}
 
+{{/* Could the chart read a force-sync period from agent.extraArgs? Non-empty
+string = yes; empty when it is absent or every one is not a duration, and the
+NOTES then say they assumed the default. */}}
+{{- define "upgradescope.agentForceSyncRead" -}}
+{{- $args := .Values.agent.extraArgs | default list -}}
+{{- range $i, $arg := $args -}}
+{{- $v := "" -}}
+{{- if hasPrefix "--force-sync-every=" (toString $arg) -}}
+{{- $v = trimPrefix "--force-sync-every=" (toString $arg) -}}
+{{- else if and (eq (toString $arg) "--force-sync-every") (lt (add1 $i) (len $args)) -}}
+{{- $v = toString (index $args (add1 $i)) -}}
+{{- end -}}
+{{- if and (regexMatch "^([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h)" $v) (gt (float64 (include "upgradescope.durationSeconds" $v)) 0.0) -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Is the force-sync period set in agent.extraArgs? Non-empty string = yes. */}}
 {{- define "upgradescope.agentForceSyncSet" -}}
 {{- range $arg := .Values.agent.extraArgs | default list -}}

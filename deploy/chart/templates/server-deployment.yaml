@@ -161,6 +161,13 @@ spec:
             - {{ printf "--optional-secret-file=%s" (join "," $names) | quote }}
             {{- end }}
             {{- range .Values.server.extraArgs }}
+            {{- $arg := toString . }}
+            {{- range $key := concat $secretFiles.required $secretFiles.optional }}
+            {{- $flag := include "upgradescope.serverSecretFlag" $key }}
+            {{- if or (eq $arg (printf "--%s" $flag)) (hasPrefix (printf "--%s=" $flag) $arg) }}
+            {{- fail (printf "server.extraArgs sets --%s, but the chart already passes --%s-file for that secret, and serve refuses both. Remove the argument and set server.%s (or that key of server.existingSecret) instead" $flag $flag $key) }}
+            {{- end }}
+            {{- end }}
             - {{ . | quote }}
             {{- end }}
           # The database URL reaches serve through the environment (it reads

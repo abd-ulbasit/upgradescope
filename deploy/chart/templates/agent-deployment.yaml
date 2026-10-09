@@ -79,6 +79,10 @@ spec:
             - "--server-token-file=/etc/upgradescope/push-token/token"
             {{- end }}
             {{- range .Values.agent.extraArgs }}
+            {{- $arg := toString . }}
+            {{- if and $tokenSource (or (eq $arg "--server-token") (hasPrefix "--server-token=" $arg)) }}
+            {{- fail "agent.extraArgs sets --server-token, but the chart already passes --server-token-file for the push token, and the agent refuses both. Remove the argument and set agent.serverToken, agent.existingSecret or the in-chart server's ingest token instead" }}
+            {{- end }}
             - {{ . | quote }}
             {{- end }}
           {{- if or .Values.agent.extraEnv $memLimit $serverCA }}
