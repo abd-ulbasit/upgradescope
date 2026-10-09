@@ -254,6 +254,11 @@ server:
   # need `kubectl rollout restart` (the install notes print it). A
   # Slack or webhook URL is used by the server only if it was set when the
   # server started; one added later needs a restart, one changed does not.
+  # With replicas above 1, each replica's kubelet syncs the Secret on its
+  # own schedule, so for up to that window an agent push can get a 401 from
+  # one replica and a 200 from another. A UPGRADESCOPE_*_TOKEN in extraEnv
+  # no longer overrides the file the chart passes (a file wins over the
+  # environment): set the value in the Secret.
   ingestToken: ""
   # -- Serve the shared ingest token at all. It may push as ANY cluster; false
   # leaves only per-cluster tokens (`upgradescope tokens create <cluster>`,

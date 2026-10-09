@@ -218,7 +218,12 @@ cannot read is reported as not assessed.
   volume whose required item is missing, so the old token stays in service and
   the other rotations in that volume stop arriving until the key is restored
   (reasoned from the kubelet's behaviour, not reproduced on a cluster). To
-  revoke, change the value ([Upgrade](upgrade.md#the-chart)). A value from a flag or an environment
+  revoke, change the value ([Upgrade](upgrade.md#the-chart)). With
+  `server.replicas` above 1 each replica's kubelet syncs the Secret on its own
+  schedule, so for up to that window an agent push can get a 401 from one
+  replica and a 200 from another. A `UPGRADESCOPE_*_TOKEN` in `server.extraEnv`
+  or `agent.extraEnv` no longer overrides the chart's file (a file wins over
+  the environment), so set the value in the Secret. A value from a flag or an environment
   variable (`server.extraEnv`, `server.extraArgs`, the database URL) is
   read once at start and still needs `kubectl -n <ns> rollout restart
   deploy/<fullname>-server deploy/<fullname>-agent` (`<fullname>` is the

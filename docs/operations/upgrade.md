@@ -105,6 +105,23 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   setup, change its value instead (the rotation above), and restart the
   pods if the old one must stop working before the kubelet has synced.
 
+  With `server.replicas` above 1, each replica's kubelet syncs the Secret on
+  its own schedule, so for up to the sync window above the replicas do not
+  all hold the new value: an agent push (or a read) with the new token can
+  get a 401 from one replica and a 200 from another, and one with the old
+  token the other way round. The agent retries at its next tick, so a push
+  that fails in that window is not lost; wait until every replica has synced
+  (every pod's `/etc/upgradescope/secret-files` shows the new value, or one
+  full sync window has passed) before you revoke the old credential at its
+  source.
+
+  A `UPGRADESCOPE_INGEST_TOKEN`, `UPGRADESCOPE_READ_TOKEN`,
+  `UPGRADESCOPE_ADMIN_TOKEN`, `UPGRADESCOPE_SERVER_TOKEN` (or a webhook
+  variable) in `server.extraEnv` or `agent.extraEnv` no longer overrides the
+  chart's file: a flag wins over a file and a file over the environment, and
+  the chart passes the `*-file` flags, so the variable is ignored. Set the
+  value in the Secret (`server.ingestToken`, `existingSecret`) instead.
+
   Three things still need a restart, because they do not come from the
   mounted files: the Postgres URL (`server.database.existingSecret`, a
   connection opened once), any secret you pass through `server.extraEnv`,

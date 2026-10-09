@@ -269,7 +269,12 @@ in use once the kubelet has synced the mounted Secret (up to about 60 to 90
 seconds at its default settings, from the Kubernetes documentation, not
 measured here) plus that check; until then the old value still works. A new
 file that is empty or unreadable keeps the old value, and the pod logs an
-error naming the file. A restart is still needed for what is not a mounted
+error naming the file. With `server.replicas` above 1, each replica's kubelet syncs the Secret on
+its own schedule, so for up to that window an agent push can get a 401 from
+one replica and a 200 from another. A `UPGRADESCOPE_*_TOKEN` in
+`server.extraEnv` or `agent.extraEnv` no longer overrides the chart's file (a
+file wins over the environment): set the value in the Secret. A restart is
+still needed for what is not a mounted
 file: the Postgres URL, anything passed in `server.extraEnv`,
 `agent.extraEnv`, `server.extraArgs` or `agent.extraArgs`, and a Slack or
 webhook URL that was not set when the server started:

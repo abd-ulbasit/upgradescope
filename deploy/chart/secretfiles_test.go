@@ -247,7 +247,10 @@ func TestNoSecretDerivedValueInPodMetadata(t *testing.T) {
 			"remote agent":                         {"agent.serverUrl=https://hub.example.com", "agent.serverToken=" + push},
 			"server and an agent token of its own": {"server.enabled=true", "server.sharedIngestToken=false", "agent.serverToken=" + push, "server.readToken=" + read},
 			"existing Secrets":                     {"server.enabled=true", "server.existingSecret=ex-" + v, "server.readTokenFromSecret=true", "server.adminTokenFromSecret=true", "agent.existingSecret=agent-" + v},
-			"agent with extra registry":            {"agent.serverUrl=https://hub.example.com", "agent.serverToken=" + push, registryValues},
+			// The setup that mounts the optional files (secret-files-optional,
+			// --optional-secret-file): an existing Secret, no agent in the chart.
+			"existing server Secret, no agent": {"server.enabled=true", "server.existingSecret=ex-" + v, "agent.enabled=false"},
+			"agent with extra registry":        {"agent.serverUrl=https://hub.example.com", "agent.serverToken=" + push, registryValues},
 		}
 	}
 	a, b := secrets("one"), secrets("two")

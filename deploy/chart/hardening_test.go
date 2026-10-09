@@ -1252,6 +1252,45 @@ func TestDocsDescribeRotationWithoutARestart(t *testing.T) {
 	}
 }
 
+// Rotation is documented with its two sharp edges: with several server
+// replicas each kubelet syncs the Secret on its own schedule, so for a
+// window one replica answers a push 401 and another 200; and a
+// UPGRADESCOPE_*_TOKEN in extraEnv no longer overrides the chart's file.
+func TestDocsSayReplicasSyncSeparatelyAndExtraEnvNoLongerOverrides(t *testing.T) {
+	for _, f := range []string{
+		"../../docs/operations/upgrade.md",
+		"../../docs/operations/security-model-and-rbac.md",
+		"../../hack/docs/chart-README.md.gotmpl",
+		"values.yaml",
+		"README.md",
+	} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.Join(strings.Fields(strings.ReplaceAll(string(raw), "\n  # ", " ")), " ")
+		text = strings.ReplaceAll(text, "# ", "")
+		for _, want := range []string{"own schedule", "401 from one replica and a 200 from another", "no longer overrides"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q", f, want)
+			}
+		}
+	}
+	one := strings.Join(strings.Fields(renderNotes(t, "upgradescope", "server.enabled=true")), " ")
+	three := strings.Join(strings.Fields(renderNotes(t, "upgradescope", "server.enabled=true", "server.replicas=3", "server.database.existingSecret=pg")), " ")
+	if !strings.Contains(three, "a 401 from one replica and a 200 from another") {
+		t.Errorf("NOTES for 3 replicas do not warn of the split:\n%s", three)
+	}
+	if strings.Contains(one, "from one replica") {
+		t.Errorf("NOTES for 1 replica warn of a split:\n%s", one)
+	}
+	for name, n := range map[string]string{"1 replica": one, "3 replicas": three} {
+		if !strings.Contains(n, "no longer overrides") {
+			t.Errorf("NOTES for %s do not say extraEnv no longer overrides the files", name)
+		}
+	}
+}
+
 // The first upgrade to this chart is the exception to "removing a value
 // removes its key": an earlier chart wrote the keys as stringData, which Helm
 // cannot remove once the API server has turned them into data. The ledger,
