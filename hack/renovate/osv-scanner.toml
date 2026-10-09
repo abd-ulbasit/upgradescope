@@ -1,0 +1,23 @@
+# Accepted advisories in this directory's package-lock.json: the Renovate
+# release whose renovate-config-validator checks examples/renovate (CI's
+# examples job, hack/examples-test.sh). It is dev-only and never shipped.
+#
+# Read by OSV-Scanner (OpenSSF Scorecard's Vulnerabilities check), which
+# takes the osv-scanner.toml next to a lockfile, and by
+# hack/renovate-audit.sh (make renovate-audit, CI's vuln job), the gate
+# that fails on any advisory in the lockfile not listed here, on an entry
+# past its ignoreUntil, and on an entry whose package gained a fix the
+# lockfile can take without a new Renovate major. Each entry: id, an
+# ignoreUntil date (when the reason must be checked again) and the reason.
+# Neither advisory has a patched release: both are affected up to the
+# newest version published (OSV: last_affected), checked on 2026-10-09.
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2027-01-09
+reason = "braces 3.0.3 (via micromatch): stack exhaustion on deeply nested brace patterns. No patched release (3.0.3 is the newest). The validator expands only the globs in examples/renovate/upgradescope.json, in a CI job with a read-only token; the worst case is that job failing."
+
+[[IgnoredVulns]]
+id = "GHSA-hp3w-g68c-fv3c"
+ignoreUntil = 2027-01-09
+reason = "sprintf-js 1.1.3 (via roarr, global-agent): denial of service through unbounded precision specifiers. No patched release (1.1.3 is the newest). Reached only through Renovate's proxy agent logging, with format strings Renovate writes, in a CI job that validates one config file."

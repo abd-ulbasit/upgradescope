@@ -222,6 +222,49 @@ dispatches are fine), so let the first finish before dispatching again.
 `hack/ci-concurrency_test.sh` checks the group expression for each kind of
 run, not repeats of one.
 
+**No cache on the release path.** Any job can write the GitHub Actions
+cache with the runner's own token, whatever its `permissions:` block, and a
+run on a tag restores what runs on `main` saved, including kb-refresh's
+job that builds freshly bumped, unreviewed modules. So no job that builds,
+signs or publishes a release, and no `ci.yml` job when `release.yml` calls
+it to gate one, restores a cache: in `release.yml`, `actions/setup-go` sets
+`cache: false`, `actions/setup-node` has no `cache:` and sets
+`package-manager-cache: false`, `docker/setup-buildx-action` sets
+`cache-binary: false`, and there is no `actions/cache` or `type=gha`
+BuildKit cache. In `ci.yml` each of those is keyed on the workflow's
+`RESTORE_CACHES`, false for a `release.yml` call and on any tag ref
+(`cache: ${{ env.RESTORE_CACHES == 'true' }}`, `if: env.RESTORE_CACHES ==
+'true'` on an `actions/cache` step). A new action on either workflow must
+be checked for a cache of its own and added to the list in
+`hack/release-caches_test.sh` (`make hack-test`), which fails on any of
+these (IR-22).
+
+**Docker Hub pulls go through a mirror.** Docker Hub rate-limits anonymous
+pulls per source IP (`429 toomanyrequests`), and a hosted runner shares its IP
+with many others, so a job that pulled from Docker Hub failed now and then with
+no commit to blame. CI pulls through Google's public pull-through cache,
+`mirror.gcr.io`: the same digests, no credentials, and the daemon falls back to
+`docker.io` for an image the mirror lacks. A job that builds an image, creates a
+kind cluster or otherwise pulls a container image (`images`, `release-check`,
+`kube`, and `release.yml`'s `goreleaser` and `verify`) runs
+`./.github/actions/dockerhub-mirror` right after checkout, which adds the
+mirror to `/etc/docker/daemon.json` and restarts Docker. Two cases that action
+cannot cover are handled by hand: a `docker/setup-buildx-action` builder runs
+its own BuildKit, so it sets `buildkitd-config-inline` with
+`[registry."docker.io"] mirrors = ["mirror.gcr.io"]` and pulls the BuildKit
+image itself by digest (`driver-opts: image=moby/buildkit:buildx-stable-1@sha256:...`,
+the same in all three buildx steps; the mirror serves a digest from its cache,
+while the first pull of the moving tag in a job went to Docker Hub and timed
+out; bump it by hand with the index digest `docker buildx imagetools inspect
+moby/buildkit:buildx-stable-1` prints), and the `pg-conformance`
+service container starts before any step (a Docker restart would kill it), so
+its image is named `mirror.gcr.io/library/postgres:<major>@sha256:...`, the
+digest from `hack/pg-images.txt`. `hack/dockerhub-mirror_test.sh` (`make
+hack-test`) fails a job that runs `docker build`, `kind create cluster`, `make
+e2e` and the like without the step, a buildx step without the BuildKit config,
+and a Docker Hub image in `services:` or `container:`. A new such job needs the
+step; nothing changes when you run these targets on your machine.
+
 The `kube` job (`hack/e2e.sh`) runs per Kubernetes minor from
 `hack/kind-node-images.txt`, each pinned to a kind node image digest. It
 creates a kind cluster, scans the vanilla cluster at its next minor and
@@ -249,7 +292,8 @@ no kubeconfig and touches no cluster you have a context for (the test pins
 ignored, and it refuses a non-loopback apiserver). The tool and
 the bundle index are pinned in `hack/envtest.sh`, each minor's bundle to an
 exact patch release in `hack/envtest-versions.txt`, and downloads are
-sha512-verified; the first run needs network, and CI caches `bin/envtest`.
+sha512-verified; the first run needs network, and CI caches `bin/envtest`
+(except when `release.yml` calls it: no cache on the release path).
 There are no nodes, pods or controllers, so only what the apiserver alone
 serves is tested. To add a minor, add its row to `hack/envtest-versions.txt`
 (an exact release `setup-envtest list` shows), its deprecated beta API to

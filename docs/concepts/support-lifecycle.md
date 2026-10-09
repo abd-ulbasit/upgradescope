@@ -37,7 +37,7 @@ terminal and is wrapped here):
     2026-10-03, not your bill). Extended support is on by default and billed per
     cluster-hour; a cluster whose upgrade policy is STANDARD is upgraded
     automatically at the end of standard support instead.
-    fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.35; the newest known is 1.36.
+    fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.35; the newest known is 1.37.
 ```
 
 On GKE and AKS the same finding is worded conditionally, because the

@@ -201,11 +201,15 @@ dockers_v2:
     dockerfile: Dockerfile.release
     # {{ .Tag }} (vX.Y.Z) is what the Helm chart's default image tag
     # (appVersion) resolves to; {{ .Version }} (X.Y.Z) is the conventional
-    # image tag. Pre-releases never move :latest (empty tags are skipped).
+    # image tag. :latest moves only for the highest stable release
+    # (UPGRADESCOPE_NEWEST, which release.yml sets from
+    # hack/release-newest.sh; unset, as in a snapshot, it is false), never
+    # for a pre-release or a re-run of an older release (#244). Empty tags
+    # are skipped.
     tags:
       - '{{ .Version }}'
       - '{{ .Tag }}'
-      - '{{ if not .Prerelease }}latest{{ end }}'
+      - '{{ if and (not .Prerelease) (eq (envOrDefault "UPGRADESCOPE_NEWEST" "false") "true") }}latest{{ end }}'
     platforms:
       - linux/amd64
       - linux/arm64
@@ -301,6 +305,12 @@ release:
   # verifies the published image and chart afterwards.
   draft: false
   prerelease: auto
+  # GitHub's Latest is what releases/latest, and so the Action's
+  # `version: latest` and @v0, install. Always an explicit "true" or
+  # "false": left unset, GitHub marks every newly published release Latest,
+  # so the slower of two racing releases, whichever tag it is, would take
+  # it (#244). true only for the highest stable release (release.yml).
+  make_latest: '{{ if eq (envOrDefault "UPGRADESCOPE_NEWEST" "false") "true" }}true{{ else }}false{{ end }}'
   # Re-running a release that failed half-way (same tag, same commit)
   # overwrites the assets it already uploaded instead of failing on them.
   # checksums.txt and its signature are replaced in the same run, so they

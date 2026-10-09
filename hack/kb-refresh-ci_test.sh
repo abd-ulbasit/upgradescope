@@ -6,6 +6,12 @@
 # and the required ci-ok never reported. A dispatched ci.yml run (#151) is no
 # substitute: its checks land on the commit, but the PR's check rollup
 # ignores them. So each PR-opening job approves its PR's held runs. This pins:
+#  - kb-refresh.yml (#244): the jobs that run code (go get of the newest
+#    k8s.io modules, make gen-kb, go test, make eol-sync) hold contents: read
+#    only, keep no token in their checkout and save no Go cache; the *-pr
+#    jobs that hold the writes run no repository or dependency code, and
+#    apply only a patch of their PR's paths (refusing anything else,
+#    renames, copies and symlinks, against crafted patches);
 #  - kb-refresh.yml: each PR-opening job runs 'Approve the PR's CI runs'
 #    exactly when the PR was created or updated, with actions: write on that
 #    job only; against a stub gh it polls the head commit's pull_request
@@ -267,8 +273,108 @@ check_approve() {
     fi
   fi
 }
-check_approve api-lifecycle bot/kb-refresh-api
-check_approve registry bot/kb-refresh-registry
+check_approve api-lifecycle-pr bot/kb-refresh-api
+check_approve registry-pr bot/kb-refresh-registry
+
+# --- kb-refresh.yml: the code runs read-only, the writes run no code (#244) --
+
+# The jobs that run repository or dependency code (go, make, setup-go) hold
+# contents: read and nothing else; the PR jobs, which hold the writes, run
+# none, and take only a patch of their PR's paths from the first job.
+jobs=$(awk '/^jobs:/{j=1;next} j&&/^[^ #]/{j=0} j&&/^  [a-z0-9_-]+:[ ]*$/{sub(/^  /,"");sub(/:.*/,"");print}' "$kb")
+runs_code() { grep -qE '^ +(run: .*\b(go|make) |uses: actions/setup-go@)|^ +(go|make|cd [^ ]+ && go) ' <<<"$1"; }
+perms_of() { awk '/^    permissions:/{p=1;next} p&&/^    [^ ]/{exit} p' <<<"$1" | sed 's/ *#.*//; s/^ *//' | grep -v '^$' | tr '\n' ' ' | sed 's/ $//'; }
+for j in $jobs; do
+  body=$(job "$kb" "$j")
+  if runs_code "$body"; then
+    if [ "$(perms_of "$body")" = "contents: read" ]; then
+      ok "$j runs repository or dependency code with contents: read only"
+    else
+      fail "$j runs repository or dependency code (go, make, setup-go) with permissions: $(perms_of "$body")"
+    fi
+    if grep -qE '^          cache: false( |$)' <<<"$body"; then ok "$j saves no Go cache a later job could restore"; else
+      fail "$j runs unreviewed code with a Go cache (set setup-go's cache: false)"; fi
+  elif grep -qE '^      [a-z-]+: write' <<<"$body" && [ "$j" != report-failure ]; then
+    ok "$j holds write permissions and runs no repository or dependency code"
+  fi
+done
+# Every checkout keeps no token (zizmor: artipacked).
+n=$(grep -c 'uses: actions/checkout@' "$kb")
+m=$(grep -A2 'uses: actions/checkout@' "$kb" | grep -cE '^ +persist-credentials: false( |$)')
+[ "$n" -gt 0 ] && [ "$n" = "$m" ] && ok "all $n checkouts in $kb set persist-credentials: false" ||
+  fail "$((n - m)) of $n checkouts in $kb keep their token (persist-credentials)"
+
+for p in api-lifecycle:gen-kb registry:eol-sync; do
+  j=${p%%:*} target=${p#*:}
+  body=$(job "$kb" "$j")
+  grep -qE "^        run: make $target$" <<<"$body" && ok "$j runs make $target" || fail "$j does not run make $target"
+  grep -qE "^          name: kb-refresh-$j$" <<<"$body" && grep -q 'uses: actions/upload-artifact@' <<<"$body" &&
+    ok "$j hands its patch over as the kb-refresh-$j artifact" || fail "$j does not upload a kb-refresh-$j artifact"
+  pr=$(job "$kb" "$j-pr")
+  grep -qE "^    needs: $j$" <<<"$pr" && ok "$j-pr needs $j" || fail "$j-pr does not need $j"
+  uses=$(grep -oE 'uses: [a-z0-9_.-]+/[a-z0-9_.-]+@' <<<"$pr" | sort -u | tr '\n' ' ')
+  [ "$uses" = "uses: actions/checkout@ uses: actions/download-artifact@ uses: peter-evans/create-pull-request@ " ] &&
+    ok "$j-pr uses only checkout, download-artifact and create-pull-request" ||
+    fail "$j-pr uses more than checkout, download-artifact and create-pull-request: $uses"
+  # Every command its steps run (run: lines and run: | blocks), comments out.
+  cmds=$(awk '
+    /^        run: \|$/ { r = 1; next }
+    /^        run: / { sub(/^        run: /, ""); print; next }
+    r { if ($0 !~ /^ *$/ && $0 !~ /^          /) { r = 0; next } print }
+  ' <<<"$pr" | sed 's/^ *//' | grep -v '^#' || true)
+  [ -n "$cmds" ] || fail "$j-pr: no run commands found to check"
+  if grep -E '(^|[^a-z_])(make|go|npm|node|python3?|bash|sh)( |$)|hack/|\./' <<<"$cmds" >"$work/pr-code"; then
+    fail "$j-pr runs repository or dependency code: $(head -3 "$work/pr-code")"
+  else
+    ok "$j-pr runs no make, go, hack/ or ./ command"
+  fi
+done
+
+# The apply step, against crafted patches in a scratch repository: only the
+# PR's paths, no renames or copies, no symlinks; an empty patch is a no-op.
+step 'Apply the regenerated files' < <(job "$kb" api-lifecycle-pr) | run_block >"$work/apply.sh"
+[ -s "$work/apply.sh" ] || fail "api-lifecycle-pr has no 'Apply the regenerated files' run block"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid \
+  GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
+a=$work/apply-repo
+git init -q -b main "$a"
+mkdir -p "$a/tools/gen-kb" "$a/internal/kb/data" "$a/.github/workflows"
+echo v1 >"$a/tools/gen-kb/go.mod" && echo '{}' >"$a/internal/kb/data/apilifecycle.json" && echo wf >"$a/.github/workflows/ci.yml"
+git -C "$a" add -A && git -C "$a" commit -qm base
+# mkpatch <name> <commands run in a copy>: the patch of what they change.
+mkpatch() {
+  rm -rf "$work/pp" && cp -R "$a" "$work/pp"
+  (cd "$work/pp" && eval "$2" && git add -A && git diff --cached --binary) >"$work/$1.patch"
+}
+mkpatch good 'echo v2 >tools/gen-kb/go.mod; echo "{\"a\":1}" >internal/kb/data/apilifecycle.json; printf "\x00\x01" >internal/kb/data/new.bin'
+mkpatch outside 'echo v2 >tools/gen-kb/go.mod; echo evil >.github/workflows/ci.yml'
+mkpatch rename 'git mv -k .github/workflows/ci.yml tools/gen-kb/ci.yml'
+mkpatch link 'ln -s ../../.git/config tools/gen-kb/cfg'
+mkpatch quoted 'echo x >"tools/gen-kb/a\"b"'
+: >"$work/empty.patch"
+# apply_case <label> <patch|missing> <want: applied|refused|noop> [changed-file]
+apply_case() {
+  local label=$1 patch=$2 want=$3 file=${4:-} rc=0
+  git -C "$a" reset -q --hard && git -C "$a" clean -qfd
+  local path="$work/$patch.patch"
+  [ "$patch" != missing ] || path=$work/no-such.patch
+  (cd "$a" && PATCH=$path RUNNER_TEMP=$work bash --noprofile --norc -e "$work/apply.sh") >"$work/apply.out" 2>&1 || rc=$?
+  local changed
+  changed=$(git -C "$a" status --porcelain | sort | tr '\n' ' ')
+  case $want in
+    applied) [ "$rc" = 0 ] && grep -q "$file" <<<"$changed" && ! grep -q '.github' <<<"$changed" ;;
+    refused) [ "$rc" != 0 ] && [ -z "$changed" ] && grep -q '::error::' "$work/apply.out" ;;
+    noop) [ "$rc" = 0 ] && [ -z "$changed" ] ;;
+  esac && ok "apply: $label" || fail "apply: $label: exit $rc, changed '$changed': $(cat "$work/apply.out")"
+}
+apply_case "a patch of the PR's paths (binary included) is applied" good applied internal/kb/data/new.bin
+apply_case "a patch that also changes .github/workflows is refused, nothing applied" outside refused
+apply_case "a rename is refused" rename refused
+apply_case "a symlink is refused" link refused
+apply_case "a path git has to quote is refused" quoted refused
+apply_case "an empty patch (nothing regenerated) changes nothing" empty noop
+apply_case "a missing patch fails" missing refused
 
 # --- ci.yml: a dispatched run is the whole PR suite --------------------------
 
