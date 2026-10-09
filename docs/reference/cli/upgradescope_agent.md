@@ -42,6 +42,7 @@ upgradescope agent [flags]
       --log-format string           log format: text (logfmt) or json (default "text")
       --log-level string            log level: debug, info, warn or error (default "info")
       --manage-crd                  keep the ClusterReadiness CRD schema in step with this binary at startup, a failed check retried every tick until it succeeds (needs get/patch on that CRD); false = never touch the CRD (default true)
+      --pprof-addr string           serve the Go profiler (/debug/pprof/) on this loopback host:port, e.g. 127.0.0.1:6060, reached in a pod with kubectl port-forward (empty = off)
       --registry-dir string         extra add-on registry entries: one <id>.yaml file or a directory of them, in the schema of registry/CONTRIBUTING.md and validated like the embedded entries; an entry with an embedded id replaces it
       --request-timeout duration    give up on a single API request after this long (0 = no per-request limit) (default 30s)
       --server-ca-file string       PEM bundle of CA certificates trusted for an https --server-url, on top of the system roots (a server behind a private CA); read at startup
