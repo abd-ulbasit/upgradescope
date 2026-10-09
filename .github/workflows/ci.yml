@@ -408,19 +408,46 @@ jobs:
         if: steps.changed.outputs.registry == 'true'
         run: make eol-check
 
+  # The Postgres majors pg-conformance runs on, from hack/pg-images.txt, each
+  # pinned by digest (#244: postgres:<major> was pulled by its moving tag,
+  # in the release-gating run too): 17 on PRs, pushes and releases, 14-18
+  # on the schedule and on demand (workflow_dispatch, unless
+  # full-matrix=false), by the same rule as the kube job's minors.
+  # hack/pg-images_test.sh covers the table and this wiring.
+  pg-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      images: ${{ steps.matrix.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE: ${{ inputs.release == true }}
+          FULL_MATRIX: ${{ inputs.full-matrix }}
+        run: |
+          set="$(hack/kind-images.sh set "$EVENT" "$RELEASE" "$FULL_MATRIX")"
+          images="$(hack/pg-images.sh matrix "$set")"
+          echo "Postgres images ($set): $images"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+
   # Store conformance against a real Postgres: 17 on every PR and push, the
   # supported range 14-18 on the schedule (and on demand).
   pg-conformance:
     name: postgres store conformance (postgres:${{ matrix.pg }})
+    needs: pg-matrix
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        pg: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release && inputs.full-matrix != false)) && '["14","15","16","17","18"]' || '["17"]') }}
+        include: ${{ fromJSON(needs.pg-matrix.outputs.images) }}
     services:
       postgres:
-        image: postgres:${{ matrix.pg }}
+        image: ${{ matrix.image }} # postgres:<major>@sha256:..., from hack/pg-images.txt
         env:
           POSTGRES_PASSWORD: ci-test
           POSTGRES_DB: upgradescope
@@ -828,7 +855,7 @@ jobs:
   # hack-test) fails if a job is missing from needs.
   ci-ok:
     if: always()
-    needs: [changes, lint, test, test-heap, build, notices, vuln, web, helm, examples, images, registry, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
+    needs: [changes, lint, test, test-heap, build, notices, vuln, web, helm, examples, images, registry, pg-matrix, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

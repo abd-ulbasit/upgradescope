@@ -1,0 +1,27 @@
+# Postgres majors the pg-conformance CI job runs the store conformance
+# suite against, one image each, pinned by the digest of its multi-arch
+# index. Read by hack/pg-images.sh (the job's matrix and its service image).
+#
+#   <major> <postgres image, pinned by digest> <pr|weekly>
+#
+# pr      every pull request, push to main and release run (plus weekly)
+# weekly  the scheduled run and workflow_dispatch only
+#
+# The tag a digest came from is the image name before the @ (postgres:17).
+# A tag moves with every patch release, so CI, and the release-gating run
+# release.yml calls, pull exactly these bytes until someone bumps them (#244).
+# Dependabot does not see workflow service images: bump by hand, every
+# major in one commit, with the index digest Docker Hub serves for the tag:
+#
+#   tok=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/postgres:pull" | jq -r .token)
+#   curl -sI -H "Authorization: Bearer $tok" \
+#     -H 'Accept: application/vnd.oci.image.index.v1+json' \
+#     -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+#     https://registry-1.docker.io/v2/library/postgres/manifests/17 | grep -i docker-content-digest
+#
+# Digests below: read that way on 2026-10-09.
+14 postgres:14@sha256:14bfab572eec6abf65892e1db7c3ba8d41b2a2855c1b143664907d6e146eb6e1 weekly
+15 postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c weekly
+16 postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d weekly
+17 postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3 pr
+18 postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336 weekly

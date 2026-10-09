@@ -334,6 +334,7 @@ hack-test:
 	./hack/install-tool_test.sh
 	./hack/examples-test_test.sh
 	./hack/kind-images_test.sh
+	./hack/pg-images_test.sh
 	./hack/envtest_test.sh
 	./hack/e2e_test.sh
 	./hack/ci-concurrency_test.sh
