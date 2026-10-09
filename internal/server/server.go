@@ -252,15 +252,18 @@ type Server struct {
 	observeGateBound func(bound int64) // test hook: each /gate answer's gateAnswerBound
 	maxGateAnswer    int64             // test override of gateAnswerLimit; 0 = --max-gate-bytes
 
-	teamMapHash        string        // fingerprint of cfg.TeamMap stored with evaluations
-	sinks              []sink        // cfg.Notifier flattened; outbox messages are per sink
-	outboxKick         chan struct{} // wakes the delivery worker after a commit
-	holds              sinkHolds     // sinks that asked to be left alone (Retry-After), in memory
-	notifyTimeout      time.Duration // bounds one delivery attempt
-	outboxLease        time.Duration // how long a claimed message is this server's to deliver
-	reevaluateInterval time.Duration // background re-evaluation period
-	reevaluateKick     chan struct{} // starts the next re-evaluation pass early
-	retentionInterval  time.Duration // pruning period after the startup pass
+	teamMapHash        string         // fingerprint of cfg.TeamMap stored with evaluations
+	sinks              []sink         // cfg.Notifier flattened; outbox messages are per sink
+	outboxKick         chan struct{}  // wakes the delivery worker after a commit
+	holds              sinkHolds      // sinks that asked to be left alone (Retry-After), in memory
+	notifyTimeout      time.Duration  // bounds one delivery attempt
+	outboxLease        time.Duration  // how long a claimed message is this server's to deliver
+	reevaluateInterval time.Duration  // background re-evaluation period
+	reevaluateKick     chan struct{}  // starts the next re-evaluation pass early
+	reevaluateCooldown time.Duration  // least time from a pass's start to a kicked one
+	unrefreshable      unrefreshable  // clusters the last pass could not bring up to date
+	legacyVersions     legacyVersions // judged versions of snapshots stored without one
+	retentionInterval  time.Duration  // pruning period after the startup pass
 	stopBackground     context.CancelFunc
 	backgroundDone     sync.WaitGroup
 	shutDown           bool // set by Shutdown, under mu: a later Start serves nothing
@@ -326,6 +329,7 @@ func New(cfg Config) (*Server, error) {
 	s.notifyTimeout = notifyTimeout
 	s.outboxLease = outboxLease
 	s.reevaluateInterval = reevaluateInterval
+	s.reevaluateCooldown = reevaluateCooldown
 	s.retentionInterval = retentionInterval
 	for _, t := range cfg.ExtraTargets {
 		v, err := inventory.ParseTarget(t)

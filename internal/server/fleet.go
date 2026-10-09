@@ -65,9 +65,10 @@ type clusterState struct {
 
 // clusterStates loads the latest snapshot head of every cluster sc reads
 // in one store call (and one more for a team scope's clusters). Fleet
-// views never decode inventories up front: at 500 clusters that held
-// hundreds of MiB per request (#125 SV-14); only a row stored before
-// snapshots.server_version is read whole, for its version.
+// views never decode inventories: at 500 clusters that held hundreds of
+// MiB per request (#125 SV-14). A row stored without a server version
+// (one migration 0009 could not backfill) is read whole once for it,
+// not on every request (versionOf).
 func (s *Server) clusterStates(ctx context.Context, sc readScope) ([]clusterState, error) {
 	clusters, err := s.cfg.Store.ListClusters(ctx)
 	if err != nil {
@@ -88,13 +89,9 @@ func (s *Server) clusterStates(ctx context.Context, sc readScope) ([]clusterStat
 		}
 		cs := clusterState{Cluster: c}
 		if head, ok := heads[c.ID]; ok {
-			cs.snap, cs.version, cs.hasSnapshot = head, head.ServerVersion, true
-			if cs.version == "" {
-				full, err := s.cfg.Store.LatestSnapshot(ctx, c.ID)
-				if err != nil && !errors.Is(err, store.ErrNotFound) {
-					return nil, err
-				}
-				cs.version = judgedVersion(full)
+			cs.snap, cs.hasSnapshot = head, true
+			if cs.version, err = s.versionOf(ctx, head); err != nil {
+				return nil, err
 			}
 		}
 		out = append(out, cs)

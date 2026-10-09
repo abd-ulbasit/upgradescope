@@ -1,0 +1,207 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+)
+
+// countingStore counts the calls that load a whole inventory
+// (LatestSnapshot) and the passes (ListClusters, once per pass).
+type countingStore struct {
+	*fakeStore
+	inventories, lists atomic.Int64
+}
+
+func (c *countingStore) LatestSnapshot(ctx context.Context, id int64) (store.Snapshot, error) {
+	c.inventories.Add(1)
+	return c.fakeStore.LatestSnapshot(ctx, id)
+}
+
+func (c *countingStore) ListClusters(ctx context.Context) ([]store.Cluster, error) {
+	c.lists.Add(1)
+	return c.fakeStore.ListClusters(ctx)
+}
+
+// pushNamedBody is the push of inv for the cluster called name.
+func pushNamedBody(t *testing.T, name string, inv any) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"schemaVersion": 1, "clusterName": name, "agentVersion": "test", "kbVersion": "test-kb", "inventory": inv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func countedServer(t *testing.T) (*Server, *countingStore, *httptest.Server) {
+	t.Helper()
+	cs := &countingStore{fakeStore: newFakeStore()}
+	s, err := New(Config{Store: cs, KB: testKB(), IngestToken: "ingest-tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) }
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return s, cs, ts
+}
+
+// TestReevaluationPassLoadsNoInventoryWhenNothingIsStale (#241): every
+// pass decoded every cluster's whole inventory before it looked at
+// whether anything was stale (23 of 24 hourly passes find nothing). It
+// now reads the snapshot heads and the evaluation summaries first.
+func TestReevaluationPassLoadsNoInventoryWhenNothingIsStale(t *testing.T) {
+	s, cs, ts := countedServer(t)
+	for i := range 3 {
+		pushCluster(t, ts, fmt.Sprintf("c%d", i), testInventoryWithPSP())
+	}
+	cs.inventories.Store(0)
+	s.reevaluateAll(context.Background())
+	if n := cs.inventories.Load(); n != 0 {
+		t.Errorf("a pass with nothing stale loaded %d inventories, want 0", n)
+	}
+	// A stale one is still re-evaluated, loading its inventory alone.
+	s.cfg.KB.Version += "-new"
+	s.reevaluateAll(context.Background())
+	if n := cs.inventories.Load(); n != 3 {
+		t.Errorf("a pass after a KB change loaded %d inventories, want 3 (each stale cluster once)", n)
+	}
+	for i := range 3 {
+		c, err := cs.ClusterByName(context.Background(), fmt.Sprintf("c%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e, err := cs.CurrentEvaluationSummary(context.Background(), c.ID, "1.35"); err != nil || e.KBVersion != s.cfg.KB.Version {
+			t.Errorf("c%d after the pass: KB %q (%v), want %q", i, e.KBVersion, err, s.cfg.KB.Version)
+		}
+	}
+}
+
+// TestUnrefreshableRowDoesNotDrivePasses (#241): a row no pass can bring
+// up to date (here its report would now be over --max-snapshot-bytes)
+// stays outdated, and every read that served it started another pass,
+// which loaded and evaluated the inventory again. The pass that fails
+// marks it for its snapshot and the UTC day: reads still say outdated but
+// start nothing, and later passes skip it until the snapshot or the day
+// changes.
+func TestUnrefreshableRowDoesNotDrivePasses(t *testing.T) {
+	s, cs, ts := countedServer(t)
+	pushCluster(t, ts, "prod", testInventoryWithPSP())
+	s.cfg.MaxSnapshotBytes = 200
+	s.cfg.KB.Version += "-new"
+	cs.inventories.Store(0)
+	s.reevaluateAll(context.Background())
+	if n := cs.inventories.Load(); n != 1 {
+		t.Fatalf("the first pass loaded %d inventories, want 1", n)
+	}
+	for range 100 {
+		var f fleetView
+		if resp := getJSON(t, ts, "/api/v1/fleet", "", &f); resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /fleet = %d", resp.StatusCode)
+		}
+		if len(s.reevaluateKick) != 0 {
+			t.Fatal("a read of the unrefreshable row started a pass")
+		}
+	}
+	s.reevaluateAll(context.Background())
+	if n := cs.inventories.Load(); n != 1 {
+		t.Errorf("after the next pass: %d inventories loaded, want still 1", n)
+	}
+	// The next UTC day tries again, once.
+	s.now = func() time.Time { return time.Date(2026, 6, 11, 0, 1, 0, 0, time.UTC) }
+	s.reevaluateAll(context.Background())
+	s.reevaluateAll(context.Background())
+	if n := cs.inventories.Load(); n != 2 {
+		t.Errorf("after two passes the next day: %d inventories loaded, want 2", n)
+	}
+}
+
+// TestKickedPassesAreRateLimited: reads that serve an outdated row start
+// the next pass early, but at most one per reevaluateCooldown after the
+// last pass started, however many reads come in between.
+func TestKickedPassesAreRateLimited(t *testing.T) {
+	s, cs, ts := countedServer(t)
+	pushCluster(t, ts, "prod", testInventoryWithPSP())
+	s.reevaluateCooldown = 600 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.runReevaluation(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	deadline := time.Now().Add(5 * time.Second)
+	for cs.lists.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	start := time.Now()
+	for time.Since(start) < 300*time.Millisecond {
+		s.kickReevaluation()
+		time.Sleep(3 * time.Millisecond)
+	}
+	if n := cs.lists.Load(); n != 1 {
+		t.Errorf("passes within the cooldown = %d, want 1 (the startup pass)", n)
+	}
+	time.Sleep(800 * time.Millisecond)
+	if n := cs.lists.Load(); n != 2 {
+		t.Errorf("passes after the cooldown = %d, want 2: one kicked pass for all the kicks in the window", n)
+	}
+}
+
+// TestReadsLoadNoInventoryForTheServerVersion (#241): /history, a stored
+// /report and the CSV export learned the default target by loading and
+// scanning the whole inventory; the head's server version is enough.
+func TestReadsLoadNoInventoryForTheServerVersion(t *testing.T) {
+	_, cs, ts := countedServer(t)
+	pushCluster(t, ts, "prod", testInventoryWithPSP())
+	cs.inventories.Store(0)
+	for _, path := range []string{
+		"/api/v1/clusters/1/history",
+		"/api/v1/clusters/1/report",
+		"/api/v1/clusters/1/findings",
+		"/api/v1/clusters/1/teams",
+		"/api/v1/clusters/1/export?format=csv",
+		"/api/v1/fleet",
+		"/api/v1/clusters",
+		"/metrics",
+	} {
+		if resp := getJSON(t, ts, path, "", nil); resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d", path, resp.StatusCode)
+		}
+		if n := cs.inventories.Swap(0); n != 0 {
+			t.Errorf("GET %s loaded %d inventories, want 0", path, n)
+		}
+	}
+}
+
+// TestLegacyRowWithoutVersionIsReadOnce: a latest snapshot stored without
+// a server version (before migration 0006, or never reported) is read
+// whole once for it, not by every fleet read, and a duplicate push records
+// the version on it.
+func TestLegacyRowWithoutVersionIsReadOnce(t *testing.T) {
+	_, cs, ts := countedServer(t)
+	pushCluster(t, ts, "prod", testInventoryWithPSP())
+	cs.mu.Lock()
+	cs.snapshots[0].ServerVersion = "" // as stored before 0006
+	cs.mu.Unlock()
+	cs.inventories.Store(0)
+	for range 5 {
+		var f fleetView
+		if resp := getJSON(t, ts, "/api/v1/fleet", "", &f); resp.StatusCode != http.StatusOK || len(f.Clusters) != 1 || f.Clusters[0].ServerVersion != "v1.34.2" {
+			t.Fatalf("GET /fleet = %d %+v, want the inventory's version", resp.StatusCode, f)
+		}
+	}
+	if n := cs.inventories.Load(); n != 1 {
+		t.Errorf("5 fleet reads of a legacy row loaded %d inventories, want 1", n)
+	}
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushNamedBody(t, "prod", testInventoryWithPSP()), false); resp.StatusCode != http.StatusOK {
+		t.Fatalf("duplicate push = %d %v, want 200", resp.StatusCode, out)
+	}
+	if head, err := cs.LatestSnapshotHead(context.Background(), 1); err != nil || head.ServerVersion != "v1.34.2" {
+		t.Errorf("after a duplicate push: ServerVersion = (%q, %v), want v1.34.2 recorded", head.ServerVersion, err)
+	}
+}

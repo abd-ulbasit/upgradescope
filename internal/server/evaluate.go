@@ -593,7 +593,8 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 			// Not a duplicate after all (another push moved the cluster on
 			// meanwhile): the snapshot is stored without evaluations, and
 			// reevaluate fills in every target.
-			return snapID, dup, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+			_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+			return snapID, dup, err
 		}
 	}
 
@@ -633,7 +634,8 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 			}
 			cluster.ID = c.ID
 		}
-		return snapID, true, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+		_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+		return snapID, true, err
 	}
 	if len(batch.Outbox) > 0 {
 		s.kickOutbox()
@@ -648,8 +650,9 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 // inv is the snapshot's inventory: on a duplicate push (pushed) the pushed
 // one, whose collectedAt is the new scrape's. A concurrent writer that got
 // there first (store.ErrConflict) has done the same work, so the pass is
-// dropped.
-func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory, pushed bool) error {
+// dropped. left is true when a target's report would be over the limit,
+// so what is stored stays, outdated (unrefreshable).
+func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory, pushed bool) (left bool, err error) {
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
@@ -660,12 +663,12 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		cur, err := s.cfg.Store.CurrentEvaluation(ctx, cluster.ID, target.String())
 		found := err == nil
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("loading current evaluation (cluster %d, target %s): %w", cluster.ID, target, err)
+			return false, fmt.Errorf("loading current evaluation (cluster %d, target %s): %w", cluster.ID, target, err)
 		}
 		if found && cur.SnapshotID != snapID {
 			// A newer snapshot arrived meanwhile; its own ingest evaluated it.
 			log.Printf("server: re-evaluation of cluster %d skipped: snapshot %d is no longer the latest", cluster.ID, snapID)
-			return nil
+			return false, nil
 		}
 		if found && !s.stale(cur, now) && !holdChanged(cur.Report, hold) {
 			continue
@@ -685,12 +688,13 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		if errors.As(err, &tooLarge) {
 			// A snapshot stored before the limit, or a newer knowledge base
 			// that flags more of it: what is stored stays, and the next
-			// pass tries again.
+			// push, or the first pass of the next UTC day, tries again.
 			log.Printf("server: re-evaluation of cluster %d skipped for target %s: %v", cluster.ID, target, err)
+			left = true
 			continue
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 		// A decided current evaluation is the target's latest decided
 		// one, the baseline deltaFor would load again: evaluations are
@@ -719,21 +723,21 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		deltas.add(d)
 	}
 	if len(batch.Current) == 0 {
-		return nil
+		return left, nil
 	}
 	batch.Outbox = s.outboxFor(cluster, &deltas, now)
-	_, _, err := s.cfg.Store.CommitEvaluations(ctx, batch)
+	_, _, err = s.cfg.Store.CommitEvaluations(ctx, batch)
 	if errors.Is(err, store.ErrConflict) {
 		log.Printf("server: re-evaluation of cluster %d skipped: %v", cluster.ID, err)
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(batch.Outbox) > 0 {
 		s.kickOutbox()
 	}
-	return nil
+	return left, nil
 }
 
 // expectBaselines adds the baselines d's delta was computed from to the
@@ -747,17 +751,46 @@ func expectBaselines(x *store.Expectation, d targetDelta) {
 	}
 }
 
-// reevaluateAll runs reevaluate over every cluster's latest snapshot. One
-// cluster's failure is logged and never stops the others.
+// reevaluateAll runs reevaluate over every cluster's latest snapshot. It
+// reads the snapshot heads in one query and each target's evaluation
+// summary first (needsPass), and loads a cluster's inventory only when
+// something is stale, missing or held: most passes find nothing, and an
+// inventory is up to --max-snapshot-bytes to load and decode. A cluster
+// the pass cannot bring up to date is marked (unrefreshable) and skipped
+// until its snapshot or the UTC day changes. One cluster's failure is
+// logged and never stops the others.
 func (s *Server) reevaluateAll(ctx context.Context) {
 	clusters, err := s.cfg.Store.ListClusters(ctx)
 	if err != nil {
 		log.Printf("server: re-evaluation: listing clusters: %v", err)
 		return
 	}
+	heads, err := s.cfg.Store.LatestSnapshotHeads(ctx)
+	if err != nil {
+		log.Printf("server: re-evaluation: latest snapshots: %v", err)
+		return
+	}
+	now := s.now()
+	listed := make(map[int64]bool, len(clusters))
+	for _, c := range clusters {
+		listed[c.ID] = true
+	}
+	s.unrefreshable.keepOnly(listed)
 	for _, c := range clusters {
 		if ctx.Err() != nil {
 			return
+		}
+		head, ok := heads[c.ID]
+		if !ok || s.unrefreshable.has(c.ID, head.ID, now) {
+			continue
+		}
+		version, err := s.versionOf(ctx, head)
+		if err != nil {
+			log.Printf("server: re-evaluation: latest snapshot of cluster %d: %v", c.ID, err)
+			continue
+		}
+		if !s.needsPass(ctx, head, version, now) {
+			continue
 		}
 		snap, inv, err := s.latestInventory(ctx, c.ID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -765,10 +798,17 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 		}
 		if err != nil {
 			log.Printf("server: re-evaluation: latest snapshot of cluster %d: %v", c.ID, err)
+			if errors.Is(err, errCorruptInventory) {
+				s.unrefreshable.mark(c.ID, head.ID, now)
+			}
 			continue
 		}
-		if err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv, false); err != nil {
+		left, err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv, false)
+		if err != nil {
 			log.Printf("server: re-evaluation of cluster %d: %v", c.ID, err)
+		}
+		if err != nil || left {
+			s.unrefreshable.mark(c.ID, snap.ID, now)
 		}
 	}
 }
@@ -777,10 +817,22 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 // config takes effect without waiting for pushes), then every
 // reevaluateInterval and at each UTC midnight (nextPassIn), until ctx
 // ends. A read that served an outdated verdict (kickReevaluation) starts
-// the next pass early.
+// the next pass early, but no sooner than reevaluateCooldown after the
+// last one started. A kick made before or during a pass is that pass's:
+// it brings the row the read served up to date, or marks it
+// unrefreshable, so it starts no second one.
 func (s *Server) runReevaluation(ctx context.Context) {
+	drainKick := func() {
+		select {
+		case <-s.reevaluateKick:
+		default:
+		}
+	}
 	for {
+		started := time.Now()
+		drainKick()
 		s.reevaluateAll(ctx)
+		drainKick()
 		timer := time.NewTimer(nextPassIn(s.now(), s.reevaluateInterval))
 		select {
 		case <-ctx.Done():
@@ -788,6 +840,18 @@ func (s *Server) runReevaluation(ctx context.Context) {
 			return
 		case <-timer.C:
 		case <-s.reevaluateKick:
+			if early := s.reevaluateCooldown - time.Since(started); early > 0 {
+				cooldown := time.NewTimer(early)
+				select {
+				case <-ctx.Done():
+					cooldown.Stop()
+					timer.Stop()
+					return
+				case <-timer.C: // the scheduled pass came first
+				case <-cooldown.C:
+				}
+				cooldown.Stop()
+			}
 			timer.Stop()
 		}
 	}
@@ -813,14 +877,17 @@ func (s *Server) kickReevaluation() {
 
 // outdated reports whether a stored evaluation served by a read is out of
 // date (stale: evaluated before today UTC, in the future, or under another
-// KB or team map), and if so starts the next pass early. The read still
-// serves it — recomputing on a GET would let read traffic drive writes and
-// notifications — but says so.
+// KB or team map), and if so starts the next pass early, unless a pass
+// today could not refresh its cluster's snapshot (unrefreshable). The read
+// still serves it — recomputing on a GET would let read traffic drive
+// writes and notifications — but says so.
 func (s *Server) outdated(e store.Evaluation, now time.Time) bool {
 	if !s.stale(e, now) {
 		return false
 	}
-	s.kickReevaluation()
+	if !s.unrefreshable.has(e.ClusterID, e.SnapshotID, now) {
+		s.kickReevaluation()
+	}
 	return true
 }
 
