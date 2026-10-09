@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -47,7 +48,18 @@ func TestGateClusterManifestAddOn(t *testing.T) {
 	}
 	ts := httptest.NewServer(newTestServer(t, newFakeStore(), func(c *Config) { c.KB = k }).Handler())
 	defer ts.Close()
-	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, testInventory()), false); resp.StatusCode != http.StatusAccepted {
+	// An agent that collected with this server's knowledge base (the gate
+	// judges a cluster collected with another as unknown: #268).
+	seed := map[string]any{}
+	if err := json.Unmarshal(pushReqBody(t, testInventory()), &seed); err != nil {
+		t.Fatal(err)
+	}
+	seed["kbVersion"] = k.Version
+	body, err := json.Marshal(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := postSnapshot(t, ts, "ingest-tok", body, false); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("seed push = %d %v", resp.StatusCode, out)
 	}
 	resp, raw := postGate(t, ts, "?target=1.35&cluster=prod-eu-1", "", deploymentManifest, "application/x-yaml")
