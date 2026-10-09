@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -145,6 +146,43 @@ func TestFoldKeepsCallersAsData(t *testing.T) {
 		if got := c.Finding(); !reflect.DeepEqual(got, standaloneByKey(standalone, c.Key)) {
 			t.Errorf("caller %d Finding() = %+v\nwant %+v", i, got, standaloneByKey(standalone, c.Key))
 		}
+	}
+}
+
+// A folded caller row is charged at least what it takes on the finding:
+// its Caller repeats the requested group, version, resource and
+// subresource, which its standalone finding's charge did not count. With
+// a 16 KiB subresource (the ingest limit), the report used to be charged
+// about three quarters of what findingSize says it takes, so
+// EvaluateWithin let it run that far over its limit.
+func TestEvaluateWithinChargesFoldedCallers(t *testing.T) {
+	long := strings.Repeat("s", 16<<10)
+	inv := inventory.Inventory{
+		APIUsage: []inventory.APIUsage{{Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 1, Namespaces: map[string]int{"default": 1},
+			Objects: []inventory.ObjectRef{{Namespace: "default", Name: "nightly"}}}},
+		DeprecatedCalls: []inventory.DeprecatedCall{
+			{Group: "batch", Version: "v1beta1", Resource: "cronjobs", Subresource: long, RemovedRelease: "1.25"},
+			{Group: "batch", Version: "v1beta1", Resource: "cronjobs", Subresource: long + "2", RemovedRelease: "1.25"},
+		},
+	}
+	k := testKB()
+	target := inventory.Version{Major: 1, Minor: 25}
+	want := Evaluate(inv, k, target, testNow)
+	if len(want.Findings) != 1 || len(want.Findings[0].Callers) != 2 {
+		t.Fatalf("precondition: findings = %d, want one with two callers", len(want.Findings))
+	}
+	charged := reportBaseSize(inv, k)
+	for i := range want.Findings {
+		charged += findingSize(&want.Findings[i])
+	}
+	for i := range want.NotAssessed {
+		charged += gapSize(&want.NotAssessed[i])
+	}
+	if _, err := EvaluateWithin(inv, k, target, testNow, charged-1); !errors.Is(err, ErrReportTooLarge) {
+		t.Errorf("EvaluateWithin(%d bytes, one under what the report's findings take) = %v, want ErrReportTooLarge", charged-1, err)
+	}
+	if got, err := EvaluateWithin(inv, k, target, testNow, 2*charged); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("EvaluateWithin(2 × %d bytes) = %v, want Evaluate's report", charged, err)
 	}
 }
 
@@ -318,5 +356,54 @@ func TestRemediationNamesOnlyServedReplacement(t *testing.T) {
 		if len(fs) != 1 || fs[0].Remediation != tc.want {
 			t.Errorf("%s/%s %s @%s: findings %+v, want remediation %q", tc.group, tc.version, tc.kind, target, fs, tc.want)
 		}
+	}
+}
+
+// A Helm manifest's remediation names only replacements the target
+// serves, as an API usage finding's does (ResolveReplacement), and says
+// when none is known: with the release that serves the chain's next
+// version when the KB knows it, as evalAPIUsage words it.
+func TestHelmManifestRemediationNamesOnlyServedReplacement(t *testing.T) {
+	v := func(m int) *inventory.Version { return &inventory.Version{Major: 1, Minor: m} }
+	k := kb.KB{
+		Version: "test-kb-1",
+		APILifecycle: []kb.APILifecycleEntry{
+			// Widget: v1alpha1 is gone at 1.30 and v1 is served from 1.31.
+			{Group: "example.io", Version: "v1alpha1", Kind: "Widget", Introduced: *v(20), Deprecated: v(25), Removed: v(30),
+				Replacement: &kb.GVK{Group: "example.io", Version: "v1", Kind: "Widget"}},
+			{Group: "example.io", Version: "v1", Kind: "Widget", Introduced: *v(31)},
+			// Gadget: v1alpha1's replacement v1beta1 is gone by 1.30 too,
+			// and nothing replaces it.
+			{Group: "example.io", Version: "v1alpha1", Kind: "Gadget", Introduced: *v(20), Deprecated: v(25), Removed: v(30),
+				Replacement: &kb.GVK{Group: "example.io", Version: "v1beta1", Kind: "Gadget"}},
+			{Group: "example.io", Version: "v1beta1", Kind: "Gadget", Introduced: *v(22), Deprecated: v(26), Removed: v(29)},
+			// Gizmo: v1beta1 is replaced by v1, served at 1.30.
+			{Group: "example.io", Version: "v1beta1", Kind: "Gizmo", Introduced: *v(20), Deprecated: v(25), Removed: v(30),
+				Replacement: &kb.GVK{Group: "example.io", Version: "v1", Kind: "Gizmo"}},
+			{Group: "example.io", Version: "v1", Kind: "Gizmo", Introduced: *v(25)},
+		},
+		Skew: kb.DefaultSkewPolicy(),
+	}
+	row := func(version, kind string) inventory.APIUsage {
+		return inventory.APIUsage{Group: "example.io", Version: version, Kind: kind, Count: 1, Namespaces: map[string]int{"": 1},
+			Objects: []inventory.ObjectRef{{Name: strings.ToLower(kind)}}}
+	}
+	rel := inventory.HelmRelease{Name: "r", Namespace: "ns", ChartName: "c", ChartVersion: "1.0.0", Status: "deployed", Revision: 1,
+		ManifestAPIs: []inventory.APIUsage{row("v1alpha1", "Widget"), row("v1alpha1", "Gadget"), row("v1beta1", "Gizmo")}}
+	fs := evalHelmReleases(inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}, k, inventory.Version{Major: 1, Minor: 30}, nil)
+	const want = "upgrade the release to a chart version that renders supported APIs (example.io/v1 Gizmo) before upgrading the cluster; " +
+		"if the cluster already stopped serving them, rewrite the stored manifest with the helm-mapkubeapis plugin first; " +
+		"no replacement Kubernetes 1.30 serves is known for example.io/v1alpha1 Gadget, " +
+		"example.io/v1alpha1 Widget (example.io/v1 Widget is served from 1.31)"
+	if len(fs) != 1 || fs[0].Remediation != want {
+		t.Errorf("findings = %+v\nwant one with remediation %q", fs, want)
+	}
+	// The warning a release deprecated at the target gets says so too.
+	fs = evalHelmReleases(inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}, k, inventory.Version{Major: 1, Minor: 29}, nil)
+	const warn = "upgrade the release to a chart version that renders supported APIs (example.io/v1 Gizmo); " +
+		"no replacement Kubernetes 1.29 serves is known for example.io/v1alpha1 Gadget, " +
+		"example.io/v1alpha1 Widget (example.io/v1 Widget is served from 1.31)"
+	if len(fs) != 1 || fs[0].Severity != SevWarning || fs[0].Remediation != warn {
+		t.Errorf("findings at 1.29 = %+v\nwant one warning with remediation %q", fs, warn)
 	}
 }

@@ -545,12 +545,17 @@ func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding, b *bud
 			Group: c.Group, Version: c.Version, Resource: c.Resource, Subresource: c.Subresource,
 			Key: calls[i].Key, Severity: calls[i].Severity, Title: calls[i].Title, Detail: calls[i].Detail,
 		})
+		// The row was charged as a finding of its own, whose key, title
+		// and detail its Caller repeats; the Caller also repeats the
+		// requested API, which that charge did not count.
+		if !b.charge(len(c.Group) + len(c.Version) + len(c.Resource) + len(c.Subresource)) {
+			return nil
+		}
 	}
 	for _, j := range order {
 		more := fmt.Sprintf(" apiserver_requested_deprecated_apis also records requests to %s since the last apiserver restart; the metric does not identify the client.", strings.Join(evidence[j], ", "))
 		usage[j].Detail += more
-		// The rows were charged as findings of their own, which their
-		// Callers repeat; the sentence is charged as what it adds.
+		// The sentence is charged as what it adds.
 		if !b.charge(len(more)) {
 			return nil
 		}
@@ -1870,6 +1875,7 @@ func evalChartKubeVersion(rel inventory.HelmRelease, target inventory.Version) (
 func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][]inventory.ObjectRef, target inventory.Version) []Finding {
 	type bucket struct {
 		apis, entries, replacements []string
+		unserved                    []string // APIs no served replacement is known for
 		objects                     []inventory.ObjectRef
 		count, omitted              int
 	}
@@ -1913,8 +1919,14 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 		api := gvString(u.Group, u.Version) + " " + u.Kind
 		b.apis = append(b.apis, api)
 		b.entries = append(b.entries, fmt.Sprintf("%s (%s; %s)", api, strings.Join(when, ", "), pluralObjects(count)))
+		// As evalAPIUsage words it: only a replacement target serves is
+		// recommended, else the one a later release serves is named.
 		if r, ok := idx.ResolveReplacement(e, target); ok {
 			b.replacements = append(b.replacements, gvString(r.Group, r.Version)+" "+r.Kind)
+		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
+			b.unserved = append(b.unserved, fmt.Sprintf("%s (%s %s is served from %s)", api, gvString(later.Group, later.Version), later.Kind, from))
+		} else if e.Replacement != nil {
+			b.unserved = append(b.unserved, api)
 		}
 		b.objects = append(b.objects, objs...)
 		b.count += count
@@ -1952,6 +1964,9 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 		} else {
 			f.Title = fmt.Sprintf("Helm release %s/%s manifest uses deprecated %s", rel.Namespace, rel.Name, apis)
 			f.Detail = fmt.Sprintf("%s %s at deprecated APIs: %s.", stores, pluralObjects(b.count), entries)
+		}
+		if len(b.unserved) > 0 {
+			f.Remediation += fmt.Sprintf("; no replacement Kubernetes %s serves is known for %s", target, strings.Join(b.unserved, ", "))
 		}
 		out = append(out, f)
 	}
