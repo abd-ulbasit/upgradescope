@@ -146,6 +146,28 @@ func validAgentNames(opts agentOptions) error {
 	return nil
 }
 
+// validPushSettings refuses, before any cluster access, push settings that
+// could never work (#238): a --server-url that is not an http or https
+// URL with a host, a token with whitespace inside it (surrounding
+// whitespace, such as the trailing newline of a Secret made from a file,
+// is trimmed from every source first), and a --cluster-name set to "".
+func validPushSettings(cmd *cobra.Command, opts *agentOptions) error {
+	if cmd.Flags().Changed("cluster-name") && opts.clusterName == "" {
+		return fmt.Errorf("invalid --cluster-name: empty; leave the flag out to name the cluster by its UID")
+	}
+	opts.serverToken = strings.TrimSpace(opts.serverToken)
+	if opts.serverURL == "" {
+		return nil
+	}
+	if err := agent.ValidateServerURL(opts.serverURL); err != nil {
+		return fmt.Errorf("invalid --server-url: %w", err)
+	}
+	if err := agent.ValidateServerToken(opts.serverToken); err != nil {
+		return fmt.Errorf("invalid --server-token ($UPGRADESCOPE_SERVER_TOKEN, --server-token-file or the flag): %w", err)
+	}
+	return nil
+}
+
 // buildAgentRESTConfig prefers in-cluster config (the agent's normal home)
 // and falls back to kubeconfig loading rules — the same rules as scan. An
 // explicit --kubeconfig or --context skips the in-cluster attempt entirely.
@@ -205,6 +227,12 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if err := agent.ValidateInterval(opts.interval); err != nil {
 				return err // 0 is below the minimum too, not "the default"
 			}
+			if err := agent.ValidateForceSyncEvery(opts.forceSyncEvery); err != nil {
+				return fmt.Errorf("invalid --force-sync-every: %w", err) // 0 is refused too, not "the default"
+			}
+			if err := validPushSettings(cmd, &opts); err != nil {
+				return err
+			}
 			if _, err := newAgentLogger(io.Discard, opts.logFormat, opts.logLevel); err != nil {
 				return err // a typo fails before any cluster access
 			}
@@ -231,11 +259,12 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().StringVar(&opts.clusterName, "cluster-name", "", "cluster label sent to the server, an RFC 1123 subdomain of at most 253 bytes (default: cluster UID)")
 	cmd.Flags().StringVar(&opts.crName, "cr-name", "cluster", "ClusterReadiness object name, an RFC 1123 subdomain of at most 253 bytes (changing it leaves the old object behind: kubectl delete ucr <old-name>)")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
-	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour, "push a snapshot even if unchanged after this long")
+	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour,
+		"push a snapshot even if unchanged after this long; must be positive, and a value at or below --interval means every tick")
 	cmd.Flags().StringSliceVar(&opts.targets, "targets", nil,
 		"target minors, CSV, e.g. 1.37,1.38, at most 8 distinct minors (the ClusterReadiness spec.targets cap; more is refused at start); when set, the ClusterReadiness spec.targets is reconciled to them every tick (overriding kubectl edits)")
 	cmd.Flags().BoolVar(&opts.manageCRD, "manage-crd", true,
-		"keep the ClusterReadiness CRD schema in step with this binary at startup (needs get/patch on that CRD); false = never touch the CRD")
+		"keep the ClusterReadiness CRD schema in step with this binary at startup, a failed check retried every tick until it succeeds (needs get/patch on that CRD); false = never touch the CRD")
 	cmd.Flags().StringVar(&opts.healthAddr, "health-addr", ":8081",
 		"listen address for /healthz, /readyz and /metrics (empty = disabled)")
 	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "log format: text (logfmt) or json")

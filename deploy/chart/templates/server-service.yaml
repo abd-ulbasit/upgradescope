@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "upgradescope.serverFullname" . }}
+  name: {{ include "upgradescope.serverService" . }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: server

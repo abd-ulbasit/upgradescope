@@ -356,16 +356,17 @@ func TestScoreHistoryOrderingAndLimit(t *testing.T) {
 	sid := mustSnapshot(t, s, cid, "aaa", tBase)
 
 	scores := []struct {
-		score int
-		ready bool
-		at    time.Time
+		score    int
+		ready    bool
+		blockers int
+		at       time.Time
 	}{
-		{70, false, tBase}, {75, false, tPlus(1)}, {80, false, tPlus(2)}, {92, true, tPlus(3)},
+		{70, false, 2, tBase}, {75, false, 1, tPlus(1)}, {80, false, 0, tPlus(2)}, {92, true, 0, tPlus(3)},
 	}
 	for _, e := range scores {
 		if _, err := s.InsertEvaluation(ctx, Evaluation{
 			ClusterID: cid, SnapshotID: sid, Target: "1.36",
-			Score: e.score, Ready: e.ready, CreatedAt: e.at,
+			Score: e.score, Ready: e.ready, Blockers: e.blockers, CreatedAt: e.at,
 		}); err != nil {
 			t.Fatalf("InsertEvaluation: %v", err)
 		}
@@ -407,6 +408,14 @@ func TestScoreHistoryOrderingAndLimit(t *testing.T) {
 			}
 			if last := got[len(got)-1]; last.Score == 92 && !last.Ready {
 				t.Error("ready flag lost on final point")
+			}
+			// Every point carries its verdict: a score of 80 with no
+			// blocker that is not ready is unknown, not "a bit low" (#243).
+			wantVerdict := map[int]string{70: "blocked", 75: "blocked", 80: "unknown", 92: "ready"}
+			for _, p := range got {
+				if p.Verdict != wantVerdict[p.Score] {
+					t.Errorf("score %d verdict = %q, want %q", p.Score, p.Verdict, wantVerdict[p.Score])
+				}
 			}
 		})
 	}

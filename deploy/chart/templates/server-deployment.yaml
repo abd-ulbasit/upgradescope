@@ -5,6 +5,27 @@
 {{- if and (gt (int .Values.server.replicas) 1) (not $postgres) }}
 {{- fail "server.replicas > 1 needs server.database.existingSecret (Postgres): SQLite on a ReadWriteOnce volume has a single writer" }}
 {{- end }}
+{{- /*
+SQLite's temp directory (SQLITE_TMPDIR=/tmp) is the chart's sqlite-tmp
+emptyDir, unless server.extraVolumeMounts already mounts a volume of the
+user's at /tmp: then that one is the temp directory and the chart adds none,
+since two mounts at one path make the Deployment invalid.
+*/}}
+{{- $ownTmp := not $postgres }}
+{{- if $ownTmp }}
+{{- range .Values.server.extraVolumeMounts }}
+{{- if eq (trimSuffix "/" (toString .mountPath)) "/tmp" }}
+{{- $ownTmp = false }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $ownTmp }}
+{{- range .Values.server.extraVolumes }}
+{{- if eq (toString .name) "sqlite-tmp" }}
+{{- fail "server.extraVolumes names a volume sqlite-tmp, the name of the chart's SQLite temp volume (server.tmp). Rename yours, or mount it at /tmp (server.extraVolumeMounts) to use it as the temp directory instead" }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -55,13 +76,33 @@ spec:
       # serve never calls the Kubernetes API.
       automountServiceAccountToken: false
       {{- include "upgradescope.podOptions" (dict "root" . "c" .Values.server) | trim | nindent 6 }}
+      {{- with .Values.server.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
+      {{- else }}
+      {{- if and .Values.server.defaultTopologySpread (gt (int .Values.server.replicas) 1) }}
+      # Replicas on different nodes, as far as the cluster allows: soft, so a
+      # small cluster still schedules them all.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: server
+      {{- end }}
+      {{- end }}
       containers:
         - name: server
           image: {{ include "upgradescope.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - serve
-            - {{ printf "--listen=:%d" (int .Values.server.service.port) | quote }}
+            # The listen port is not the Service port: the pod runs as a
+            # non-root user with no capabilities, which cannot bind below 1024
+            # on runtimes that do not lower net.ipv4.ip_unprivileged_port_start.
+            - {{ printf "--listen=:%d" (int .Values.server.containerPort) | quote }}
             {{- if not $postgres }}
             - --db=/data/upgradescope.sqlite
             {{- end }}
@@ -74,7 +115,7 @@ spec:
             - {{ printf "--targets=%s" (join "," .) | quote }}
             {{- end }}
             - {{ printf "--retention=%v" .Values.server.retention | quote }}
-            - {{ printf "--stale-after=%s" .Values.server.staleAfter | quote }}
+            - {{ printf "--stale-after=%s" (include "upgradescope.staleAfter" .) | quote }}
             {{- if .Values.server.teamMap }}
             - "--team-map=/etc/upgradescope/team-map/team-map.yaml"
             {{- end }}
@@ -85,6 +126,20 @@ spec:
             - --tls-cert-file=/etc/upgradescope/tls/tls.crt
             - --tls-key-file=/etc/upgradescope/tls/tls.key
             {{- end }}
+            # The names serve answers for when it checks the Host (a trusted
+            # team header, or a loopback --listen): the Service's, which the
+            # in-chart agent pushes to, the Ingress host and
+            # server.allowedHosts. Probes and scrapes of the pod's IP need
+            # none: the guard answers for the address a request arrives on.
+            # The Service names are the cut ones (upgradescope.serverService),
+            # the names the Service actually has.
+            {{- $svc := include "upgradescope.serverService" . }}
+            {{- $hosts := list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace) (include "upgradescope.serverFQDN" .) }}
+            {{- if and .Values.server.ingress.enabled .Values.server.ingress.host }}
+            {{- $hosts = append $hosts (lower .Values.server.ingress.host) }}
+            {{- end }}
+            {{- $hosts = concat $hosts .Values.server.allowedHosts | uniq }}
+            - {{ printf "--allowed-host=%s" (join "," $hosts) | quote }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}
@@ -97,6 +152,15 @@ spec:
             # 90% of the memory limit: the Go runtime does not read it.
             - name: GOMEMLIMIT
               value: {{ . | quote }}
+            {{- end }}
+            {{- if not $postgres }}
+            # SQLite spills a large delete (the retention prune, deleting a
+            # cluster) into a temp file, and the root filesystem is read-only:
+            # without a writable temp directory the delete fails with
+            # "disk I/O error (6410)" and history grows without bound. /tmp
+            # is the chart's sqlite-tmp volume, or the user's own at /tmp.
+            - name: SQLITE_TMPDIR
+              value: /tmp
             {{- end }}
             {{- if .Values.server.sharedIngestToken }}
             - name: UPGRADESCOPE_INGEST_TOKEN
@@ -165,7 +229,7 @@ spec:
             {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.server.service.port }}
+              containerPort: {{ int .Values.server.containerPort }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -196,6 +260,10 @@ spec:
             - name: data
               mountPath: /data
             {{- end }}
+            {{- if $ownTmp }}
+            - name: sqlite-tmp
+              mountPath: /tmp
+            {{- end }}
             {{- if .Values.server.teamMap }}
             - name: team-map
               mountPath: /etc/upgradescope/team-map
@@ -224,15 +292,22 @@ spec:
         - name: data
           {{- if .Values.server.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "upgradescope.serverFullname" . }}-data
+            claimName: {{ include "upgradescope.derived" (dict "root" . "suffix" "-server-data") }}
           {{- else }}
           emptyDir: {}
           {{- end }}
         {{- end }}
+        {{- if $ownTmp }}
+        # SQLITE_TMPDIR: scratch space for a large delete (see server.tmp in
+        # values.yaml). Node ephemeral storage, gone with the pod.
+        - name: sqlite-tmp
+          emptyDir:
+            sizeLimit: {{ .Values.server.tmp.sizeLimit | quote }}
+        {{- end }}
         {{- if .Values.server.teamMap }}
         - name: team-map
           configMap:
-            name: {{ include "upgradescope.serverFullname" . }}-team-map
+            name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-server-team-map") }}
         {{- end }}
         {{- with .Values.server.extraVolumes }}
         {{- toYaml . | nindent 8 }}

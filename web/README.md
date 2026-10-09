@@ -36,3 +36,14 @@ prefix, for example `https://ops.example.com/upgradescope/`, behind a
 reverse proxy that strips the prefix before forwarding to `serve`. Open it
 with the trailing slash: without it the browser resolves the relative
 asset URLs against the parent path and they fail to load.
+
+Because the URLs are relative, the server serves the page itself only where
+they resolve: at `/`, `/index.html` and one extensionless segment such as
+`/teams`. The dashboard routes by URL hash (`#/cluster/3`), so it has no
+other path of its own; at a nested path such as `/cluster/3`, `/cluster/3/`
+or `/foo/` (a link someone typed or pasted) the server answers `302` with a
+relative `Location` (`../#/cluster/3`), which the browser resolves against
+the URL it asked for, so the dashboard opens at the root, on that route,
+under the prefix too. It is written by hand and relative on purpose: an
+absolute redirect would drop the proxy's prefix. A path with a file
+extension that is not a file, and anything under `/assets/`, is a JSON 404.

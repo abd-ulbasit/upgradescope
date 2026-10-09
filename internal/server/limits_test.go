@@ -834,7 +834,7 @@ func TestGateBodyBudgetFullSendsNo100Continue(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: gate\r\nContent-Type: application/x-yaml\r\n"+
+	fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-yaml\r\n"+
 		"Expect: 100-continue\r\nContent-Length: 4096\r\n\r\n")
 	if code, body := readStatus(t, conn, 5*time.Second); code != http.StatusServiceUnavailable {
 		t.Fatalf("first response = %d (%s), want 503", code, body)
@@ -939,7 +939,7 @@ func stallUpload(t *testing.T, ts *httptest.Server, declared int64, sent int) ne
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	if _, err := fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: gate\r\n"+
+	if _, err := fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: localhost\r\n"+
 		"Content-Type: application/x-yaml\r\nContent-Length: %d\r\n\r\n%s",
 		declared, strings.Repeat("#", sent)); err != nil {
 		t.Fatal(err)

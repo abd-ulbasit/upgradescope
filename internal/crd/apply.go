@@ -54,8 +54,11 @@ func isEstablished(c *apiextensionsv1.CustomResourceDefinition) bool {
 
 // waitEstablished polls until the named CRD reports Established=True. Without
 // this, a freshly created CRD's CR endpoint 404s the first tick and the next
-// attempt is a full interval away.
+// attempt is a full interval away. The wait ends at establishTimeout, or
+// earlier at ctx's deadline (an agent tick can give its CRD check less),
+// so the error says how long it waited.
 func waitEstablished(ctx context.Context, crds apiextensionsv1typed.CustomResourceDefinitionInterface, name string) error {
+	start := time.Now()
 	err := wait.PollUntilContextTimeout(ctx, establishPollInterval, establishTimeout, true,
 		func(ctx context.Context) (bool, error) {
 			got, gerr := crds.Get(ctx, name, metav1.GetOptions{})
@@ -65,7 +68,8 @@ func waitEstablished(ctx context.Context, crds apiextensionsv1typed.CustomResour
 			return isEstablished(got), nil
 		})
 	if err != nil {
-		return fmt.Errorf("ClusterReadiness CRD created but not Established within %s: %w", establishTimeout, err)
+		return fmt.Errorf("ClusterReadiness CRD created but not Established after %s: %w",
+			time.Since(start).Round(10*time.Millisecond), err)
 	}
 	return nil
 }

@@ -83,13 +83,24 @@ const VERDICT_MARK: Record<Verdict, string> = {
   unknown: "?",
 };
 
-// ScoreBadge: the score, coloured by bucket, plus the verdict as a mark
-// and as text for screen readers — never colour alone. Without a verdict
-// (team rollups) it shows the score only.
+// badgeClass buckets the score for colour, but never lets a verdict that is
+// not ready read green: a team that owns one warning scores 98, and when a
+// blocker no team owns makes it blocked, or a check that did not run makes
+// it unknown, 98 in green would say the opposite of the verdict. Blocked is
+// red; unknown is at best amber (and drawn dashed, see .verdict-unknown).
+function badgeClass(score: number, verdict?: Verdict): string {
+  if (verdict === "blocked") return "score-bad";
+  const bucket = scoreClass(score);
+  return verdict === "unknown" && bucket === "score-good" ? "score-warn" : bucket;
+}
+
+// ScoreBadge: the score, coloured by bucket (see badgeClass), plus the
+// verdict as a mark and as text for screen readers — never colour alone.
+// Without a verdict it shows the score only.
 export function ScoreBadge({ score, verdict }: { score: number; verdict?: Verdict }) {
   return (
     <span
-      className={`score-badge ${scoreClass(score)}${verdict === "unknown" ? " verdict-unknown" : ""}`}
+      className={`score-badge ${badgeClass(score, verdict)}${verdict === "unknown" ? " verdict-unknown" : ""}`}
       title={verdict}
     >
       {score}

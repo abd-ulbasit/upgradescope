@@ -116,10 +116,19 @@ sha256(canonical inventory) changed, or --force-sync-every elapsed?
 ```
 
 The CRD status is written on every tick, even when the server is
-unreachable. The agent's local value never depends on the server. Pushes
+unreachable; only a spec the tick could not read, or `spec.targets` it
+could not set to `--targets`, stops the write, and the object is then
+marked stale (`upgradescope.dev/status-error`) instead. Collection gets the
+tick deadline minus a reserve (30s, or half the deadline under a minute)
+that the status write, the stale marker and the push keep
+([observability](observability.md#agent-logs)). The agent's local value never depends on the server. Pushes
 buffer at most one payload (the latest replaces any pending one) and retry
-transient failures with exponential backoff (a `Retry-After` on a 429 or 503
-is honoured, up to one minute). Permanent 4xx responses drop the payload. A
+transient failures with exponential backoff, fully jittered: each wait is
+anywhere from 0 to the 1s, 2s, 4s step, so the first retry may come almost
+immediately after the failure, and agents started together, whose first
+pushes coincide, do not retry together. A `Retry-After` on a 429 or 503
+is honoured as the least wait (capped at one minute), plus up to a quarter
+of it more, for the same reason, so one retry waits at most 75 seconds. Permanent 4xx responses drop the payload. A
 redirect is never followed, since the push would turn into a body-less GET:
 it counts as a permanent failure, and the log names the status and `Location`;
 set `--server-url` to the final URL. The canonical hash zeroes `collectedAt`, so an unchanged cluster
@@ -419,8 +428,8 @@ always give the same bytes out.
 | `removed-api` | blocker | An object written through a group/version removed at or before the target (for a kind that goes away, any stored object). Matching `deprecated-calls` rows are folded in as evidence. |
 | `removed-api` | warning | Removed in the minor after the target. |
 | `deprecated-api` | info | Deprecated, with no removal within that window (a deprecation after the target is titled as one). |
-| `deprecated-api` | warning | A Helm release's stored manifest uses a deprecated API that the target still serves. |
-| `deprecated-api-in-use` | blocker / warning / info | Requests seen in the apiserver metric for an API with no `removed-api` or `deprecated-api` finding. Otherwise they are evidence on that finding, unless the row is more severe than it (the apiserver reports a removal release the knowledge base does not have); then the row stays a finding of its own. Same window as above. Info when the removal release is missing. |
+| `deprecated-api` | warning | A Helm release's stored manifest uses a deprecated API that the target still serves. An object the live scan also flags is left to the live finding only when that finding is at least as severe, so a live info does not lower it. |
+| `deprecated-api-in-use` | blocker / warning / info | Requests seen in the apiserver metric for an API with no `removed-api` or `deprecated-api` finding. Otherwise they are evidence on that finding, unless the row is more severe than it (the apiserver reports a removal release the knowledge base does not have); then the row stays a finding of its own. Same window as above, from the knowledge base's removal release when it has one for the group, version and resource (inferred removals included), else the metric's `removed_release` label. Info when neither gives a removal. A folded row is kept as structured data (`callers`); suppressing every object of its finding by annotation or object-scoped rule leaves it standing as a finding of its own. |
 | `eol-addon` | blocker | The product is retired (`support.status: eol`, or a past product EOL date), the installed version's release line has ended, or the version is older than the oldest tracked line and that line has ended (keyed `eol-addon/<id>/below-<line>`). A node container runtime's ended line is a warning. |
 | `eol-approaching` | warning | The EOL date falls within the next 90 days. |
 | `chart-incompat` | blocker | The installed release line's, or the first matching compat row's, Kubernetes range excludes the target; a Helm release's chart `kubeVersion` excludes the target (info when it does not parse). |

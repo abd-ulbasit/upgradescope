@@ -282,6 +282,11 @@ func TestSecretFlagPrecedence(t *testing.T) {
 	}{
 		{"nothing set", "", nil, "", ""},
 		{"env only", "from-env", nil, "from-env", ""},
+		// A Secret written with a trailing newline (kubectl create secret
+		// --from-file, Vault and ESO templates) reaches serve through the
+		// environment too: trimmed as the file is (#240).
+		{"env trimmed like a file", " from-env\n", nil, "from-env", ""},
+		{"whitespace-only env", " \n\t", nil, "", "UPGRADESCOPE_TEST_SECRET"},
 		{"file only, trailing newline trimmed", "", []string{"--secret-file", file}, "from-file", ""},
 		{"flag beats env", "from-env", []string{"--secret", "from-flag"}, "from-flag", ""},
 		{"explicit empty flag beats env", "from-env", []string{"--secret", ""}, "", ""},

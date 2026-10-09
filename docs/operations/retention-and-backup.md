@@ -43,6 +43,26 @@ SQLite reuses the pages pruning frees, but the file does not shrink; run
 space. A large or busy fleet belongs on Postgres (`--db-url`, chart value
 `server.database.existingSecret`), which also allows several replicas.
 
+**Scratch space on SQLite.** A large delete (the daily prune after a long
+gap, `clusters delete` of a big cluster) spills into a SQLite temp file, and the
+server's root filesystem is read-only.
+The chart mounts an emptyDir at `/tmp` (`server.tmp.sizeLimit`, 1Gi) and
+sets `SQLITE_TMPDIR=/tmp`. Measured in
+`internal/server/store/sqlite_tempdir_test.go` at commit `b6d1adee` on an
+arm64 Mac, 2026-10-09: with writes denied everywhere but the database
+directory (`sandbox-exec`) and no temp directory, pruning 150 snapshots of
+400 KB (60 MB) and deleting that cluster each failed with `disk I/O error
+(6410)`; with `SQLITE_TMPDIR` on a writable directory both succeeded. That
+emulation of a read-only root filesystem runs on macOS only, so on Linux
+only the success half of the test runs, and the failure was not reproduced
+there. Without the volume the prune fails with only a log line,
+and history grows until the volume is full. How much temp space a delete takes
+was not measured beyond the 60 MB case; it should not pass the size of the
+database (SQLite journals the pages a statement changes: reasoning, not a
+measurement), which is why `server.tmp.sizeLimit` defaults to the default
+PVC size. Raise it with a larger PVC: an emptyDir over its limit evicts the
+pod. Postgres servers need neither.
+
 Fleet reads stay small as the fleet grows: `/api/v1/fleet` and the cluster
 list read each cluster's latest snapshot id and server version, never its
 inventory. `make bench-server` seeds 500 clusters with ~35 KiB inventories

@@ -78,6 +78,13 @@ type Config struct {
 	TeamMap         TeamMap // optional namespace→team override, applied before every Evaluate
 	Version         string  // build version: SARIF tool metadata ("" = omitted there) and toolVersion in report responses ("" when unset)
 
+	// AllowedHosts are the names, besides loopback, localhost, the Listen
+	// host and the address a request arrived on, that a request's Host may
+	// name while the Host guard is on (a loopback listener, or
+	// TrustTeamHeader set): the Service, Ingress or proxy names the server
+	// is reached under. Any port matches. See hostcheck.go.
+	AllowedHosts []string
+
 	// StaleAfter marks a cluster stale when its agent has not pushed
 	// (duplicates included) for longer; 0 = DefaultStaleAfter.
 	StaleAfter time.Duration
@@ -261,6 +268,10 @@ type Server struct {
 
 	readTokensMinted atomic.Bool // a read token exists in the store: reads need a credential (readOpen)
 
+	hostGuard    atomic.Bool // requests must name a host this server answers for (hostcheck.go)
+	allowedHosts []string    // cfg.AllowedHosts and the Listen host, normalized
+	hostRefusals refusalLog  // rate-limits the log of the guard's 421s
+
 	ready chan struct{} // closed once the listener is bound
 	mu    sync.Mutex
 	addr  string
@@ -275,6 +286,14 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("server: Config.TrustTeamHeader and Config.TrustedProxies must be set together: " +
 			"a team header is trusted only from the proxies that set it")
 	}
+	if cfg.ReadToken != "" && cfg.ReadToken == cfg.IngestToken {
+		return nil, errors.New("server: Config.ReadToken must differ from Config.IngestToken: " +
+			"every agent's push token would read the whole fleet, and every reader could push as any cluster")
+	}
+	allowed, err := allowedHostsOf(cfg)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
 		cfg:              cfg,
 		now:              time.Now,
@@ -283,7 +302,11 @@ func New(cfg Config) (*Server, error) {
 		gateSlots:        make(chan struct{}, maxConcurrentGates),
 		gateQueueTimeout: gateQueueTimeout,
 		ready:            make(chan struct{}),
+		allowedHosts:     allowed,
 	}
+	// The trusted header is trusted from a proxy's address whatever the
+	// listener: kubectl port-forward and a rebinding page reach it too.
+	s.hostGuard.Store(cfg.TrustTeamHeader != "")
 	s.gateBuffered = newByteBudget(maxBufferedGateBodies * s.maxGateBytes())
 	s.ingestSlots = make(chan struct{}, maxConcurrentIngests)
 	s.ingestQueueTimeout = ingestQueueTimeout
@@ -386,7 +409,9 @@ func isServerPath(p string) bool {
 	return false
 }
 
-// handler is the served root: reserved paths and /api/* go to the mux,
+// handler is the served root: a request for a host the server does not
+// answer for gets 421 while the Host guard is on (checkHost), before any
+// route; then reserved paths and /api/* go to the mux,
 // everything else is the embedded dashboard. Routing by prefix — not a
 // "GET /" catch-all route — keeps the mux's wrong-method semantics intact:
 // a DELETE on a GET-only API path must stay 405 + Allow, and a catch-all
@@ -394,13 +419,13 @@ func isServerPath(p string) bool {
 // itself sends the read token with every API call.
 func (s *Server) handler() http.Handler {
 	spa := spaHandler(distFS())
-	return securityHeaders(s.metrics.instrument(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return securityHeaders(s.checkHost(s.metrics.instrument(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isServerPath(r.URL.Path) {
 			s.serveMux(w, r)
 			return
 		}
 		spa.ServeHTTP(w, r)
-	})))
+	}))))
 }
 
 // serveMux routes to the mux, answering an unregistered path with the
@@ -460,9 +485,10 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 // contentSecurityPolicy fits the built dashboard: one module script and one
 // stylesheet from /assets, fetch() to the same origin, a data: favicon. No
 // inline or eval'd script is allowed — the SPA keeps the read token in
-// localStorage, so script injection is what this guards. Styles allow
-// 'unsafe-inline' for index.html's pre-paint <style> block and the HTML
-// export's inline stylesheet; injected CSS cannot read localStorage.
+// Web Storage (sessionStorage, or localStorage when the user ticks
+// "Remember on this device"), so script injection is what this guards.
+// Styles allow 'unsafe-inline' for index.html's pre-paint <style> block and
+// the HTML export's inline stylesheet; injected CSS cannot read Web Storage.
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
 	"object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -624,10 +650,17 @@ func (h *heldResponse) reset() {
 // decides it: "localhost" mapped to a routable address in /etc/hosts, a
 // hostname, or ":8080" (every interface) is refused, and nothing is
 // served on it in between.
+//
+// On a loopback address, every request must name a host the server
+// answers for (hostcheck.go), whatever the credentials: a DNS-rebinding
+// page reaches a loopback socket naming its own host.
 func (s *Server) Start() error {
 	ln, err := s.listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.cfg.Listen, err)
+	}
+	if isLoopbackAddr(ln.Addr()) {
+		s.hostGuard.Store(true)
 	}
 	if !s.cfg.AllowAnonymousRead && !isLoopbackAddr(ln.Addr()) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -712,6 +745,10 @@ func (s *Server) logStartup() {
 	if s.cfg.TrustTeamHeader != "" {
 		log.Printf("WARN server: reads from %v carrying %s are scoped to the teams it lists: "+
 			"the proxy there must strip that header from what clients send", s.cfg.TrustedProxies, s.cfg.TrustTeamHeader)
+	}
+	if s.hostGuardActive() {
+		names := append([]string{"localhost", "loopback addresses", "the address a request arrives on"}, s.allowedHosts...)
+		log.Printf("server: answering only requests whose Host is one of: %s (any port; add names with --allowed-host)", strings.Join(names, ", "))
 	}
 	if s.cfg.AdminToken == "" {
 		log.Printf("server: no admin token: cluster delete and rename (DELETE/PATCH /api/v1/clusters/{id}) are refused")

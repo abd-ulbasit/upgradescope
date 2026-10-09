@@ -23,6 +23,14 @@ image:
 # e.g. [{name: regcred}].
 imagePullSecrets: []
 
+# -- The cluster's DNS domain (the kubelet's clusterDomain): the server
+# Service's fully qualified name, <fullname>-server.<namespace>.svc.<this>
+# (the Service name cut to 63 characters for a long release), is passed to
+# the server as an --allowed-host and named in the cert-manager
+# Certificate. Set it when your cluster does not use
+# cluster.local.
+clusterDomain: cluster.local
+
 serviceAccount:
   # -- Create the agent ServiceAccount. Set false to bring your own (set name).
   create: true
@@ -87,7 +95,8 @@ agent:
   # -- Human-readable cluster name sent to the server (default: cluster UID).
   clusterName: ""
   # -- Keep the ClusterReadiness CRD schema in step with the agent binary at
-  # startup (agent --manage-crd). Grants get/update/patch on that one CRD
+  # startup, a failed check retried every tick until it succeeds (agent
+  # --manage-crd). Grants get/update/patch on that one CRD
   # only. The CRD itself is installed by the chart's crds/ directory; set
   # false when the CRD is managed elsewhere (e.g. GitOps) to drop the CRD
   # write permissions (get/update/patch on clusterreadinesses.upgradescope.dev).
@@ -188,20 +197,22 @@ agent:
   # The CPU limit is a cgroup quota, and a tick is CPU-bound: the first tick
   # after a start reads every Helm release once (the whole first tick took
   # about 23 CPU-seconds at 1,000 releases) and must finish that step in
-  # about a minute (the GitOps reads, with rbac.gitops.* on, share that
-  # minute). Measured against 2,000 fake nodes and 1,001 releases (1,000 and
+  # its deadline, at most 54 s at the default interval (59 s before the tick
+  # reserve; the GitOps reads, with rbac.gitops.* on, share it). Measured,
+  # with the 59 s, against 2,000 fake nodes and 1,001 releases (1,000 and
   # the chart's own; docs/operations/scale.md): at 200m the first tick
   # stopped at that deadline with 132 releases unread and a steady tick took
-  # 21 s; at 500m the first tick took 48 s, its Helm step within the minute;
+  # 21 s; at 500m the first tick took 48 s, its Helm step within the 59 s;
   # at 1 CPU the tick took 35 s and a steady tick 7 s. So the limit is 1
   # CPU. For scheduling it costs nothing while the agent idles (the request
   # is what the scheduler reserves), but a ResourceQuota on limits.cpu still
   # counts the limit, and a LimitRange whose max CPU is below 1 rejects it:
   # in such a namespace set limits.cpu yourself (it was 200m through
   # v0.2.0-rc.2, so 800m more quota). The Helm step took about 28 s of those
-  # 35 s, so by that arithmetic (computed, not measured) 1 CPU holds to
-  # about 2,000 releases, fewer with rbac.gitops.* on; give a larger cluster
-  # more, or a longer agent.interval.
+  # 35 s and now has at most 54 s at the default interval (the tick
+  # reserve), so by that arithmetic (computed, not measured) 1 CPU holds to
+  # about 1,900 releases, about 1,600 with rbac.gitops.* on; give a larger
+  # cluster more, or a longer agent.interval.
   resources:
     requests:
       cpu: 50m
@@ -284,12 +295,42 @@ server:
   # Go duration (2160h); 0 keeps everything (as "0" or --set ...retention=0).
   retention: 90d
   # -- A cluster whose agent has not pushed for this long is marked stale in
-  # the API, the dashboard data and /metrics. Agents push at least about
-  # every 70m by default.
-  staleAfter: 2h
+  # the API, the dashboard data and /metrics. Empty = the larger of 2h and
+  # three times agent.interval (2h for any interval up to 40m): an unchanged
+  # cluster pushes at its next tick after the hourly force-sync, so the gap
+  # between pushes is about max(interval, 1h) plus a tick. A value you set
+  # must be above agent.interval or the render fails, and the install notes
+  # warn when it is below max(interval, 1h) plus a tick; it also covers
+  # clusters in other regions that push to this server, whose own intervals
+  # the chart cannot see, so keep it above the longest of them. The
+  # UpgradescopeClusterStale alert follows it (metrics.prometheusRule).
+  staleAfter: ""
   # -- Server Pods. More than one needs a shared database (database below):
-  # SQLite on a ReadWriteOnce volume has a single writer.
+  # SQLite on a ReadWriteOnce volume has a single writer. With more than one
+  # the chart also renders a PodDisruptionBudget (podDisruptionBudget) and
+  # spreads the pods across nodes (defaultTopologySpread).
   replicas: 1
+  podDisruptionBudget:
+    # -- Render a PodDisruptionBudget for the server when replicas is above
+    # 1 (with one replica minAvailable 1 would block every node drain).
+    enabled: true
+    # -- Pods that must stay up during a voluntary disruption (a node drain):
+    # a count or a percentage such as 50%.
+    minAvailable: 1
+    # -- Set instead of minAvailable (a count, 0 included, or a percentage
+    # such as 50%); when set, minAvailable is not rendered. With both empty
+    # the render fails.
+    maxUnavailable: ""
+  # -- Spread the server pods across nodes (soft: topologySpreadConstraints,
+  # kubernetes.io/hostname, ScheduleAnyway, so a one-node cluster still
+  # schedules them all) when replicas is above 1. Ignored when
+  # topologySpreadConstraints is set.
+  defaultTopologySpread: true
+  # -- Your own topologySpreadConstraints for the server pods, rendered as
+  # written (set labelSelector yourself; the pods carry
+  # app.kubernetes.io/name: upgradescope, app.kubernetes.io/instance: <release>
+  # and app.kubernetes.io/component: server). Replaces the default spread.
+  topologySpreadConstraints: []
   database:
     # -- Name of an existing Secret holding a Postgres URL
     # (postgres://user:pass@host:5432/db?sslmode=require). Set = Postgres:
@@ -327,7 +368,8 @@ server:
     # Secret (tls.crt, tls.key, optional CA). Without it the in-chart agent
     # pushes its bearer token over plain HTTP inside the cluster (the agent
     # logs a warning). The certificate must name the Service
-    # (<fullname>-server.<namespace>.svc); the in-chart agent then pushes to
+    # (<server Service name>.<namespace>.svc: <fullname>-server, or the
+    # shortened name when the release name is long); the in-chart agent then pushes to
     # https:// and trusts the Secret's caKey, when it has one, on top of its
     # image's roots. Probes and the ServiceMonitor switch to HTTPS. The
     # Service port gets appProtocol https, and server.ingress gets
@@ -355,15 +397,49 @@ server:
     # without a mounted token).
     create: true
     name: ""
+  # -- The port serve listens on in the pod, named "http". It is not the
+  # Service port: the pod runs as a non-root user with no capabilities, which
+  # cannot bind a port below 1024 on runtimes that keep
+  # net.ipv4.ip_unprivileged_port_start at 1024 (containerd 1.x, CRI-O), so
+  # this stays 1024 or above while service.port may be 80 or 443.
+  containerPort: 8080
   service:
     type: ClusterIP
+    # -- The Service's port (targetPort: the container's "http"), any value.
+    # Agents in this release push to it.
     port: 8080
+  tmp:
+    # -- SQLite only (unused with database.existingSecret). The root
+    # filesystem is read-only, and SQLite spills a large delete (the daily
+    # retention prune, `clusters delete`) into a temp file. The chart mounts
+    # an emptyDir at /tmp and sets SQLITE_TMPDIR to it. Measured on a 60 MB
+    # backlog, a delete worked with a temp directory and failed with "disk
+    # I/O error (6410)" without one (docs/operations/retention-and-backup.md);
+    # it should need no more than the database's size (reasoning, not
+    # measured), so the default matches the default persistence.size: raise
+    # it with that. An emptyDir that outgrows its limit evicts the pod. It
+    # is node ephemeral storage, gone with the pod. The volume is named
+    # sqlite-tmp. A volume of your own mounted at /tmp (extraVolumeMounts)
+    # replaces it: the chart then adds no temp volume, ignores this limit
+    # and keeps SQLITE_TMPDIR=/tmp, so yours must be writable and as large.
+    # Without one, an extraVolumes entry named sqlite-tmp fails the render
+    # (two volumes of one name).
+    sizeLimit: 1Gi
   persistence:
     # -- PVC for the SQLite database (unused with database.existingSecret).
     # false = emptyDir (history lost on pod restart — demo only).
     enabled: true
     size: 1Gi
     storageClass: ""
+  # -- Extra host names (or IPs) requests may name in their Host header,
+  # passed as --allowed-host with the Service's DNS names and
+  # server.ingress.host, which the chart always passes. serve checks the
+  # Host when it trusts a proxy's team header (--trust-team-header in
+  # extraArgs) or listens on loopback, and answers any other name 421 (DNS
+  # rebinding); list here any other name clients use, such as a Gateway's
+  # host. Names only, any port matches; probes and scrapes of the pod's IP
+  # need nothing.
+  allowedHosts: []
   # -- Extra `upgradescope serve` flags, e.g. ["--max-snapshot-bytes=41943040"].
   extraArgs: []
   extraEnv: []
@@ -417,7 +493,10 @@ server:
 networkPolicy:
   # -- Render a NetworkPolicy that admits traffic to the server only from this
   # release's agent pods and the peers below (no effect without
-  # server.enabled, or on a CNI that does not enforce NetworkPolicy).
+  # server.enabled, or on a CNI that does not enforce NetworkPolicy). With
+  # server.ingress.enabled or metrics.serviceMonitor.enabled the render
+  # fails unless serverIngressFrom lists the ingress controller or
+  # Prometheus: the policy would otherwise cut them off.
   enabled: false
   # -- Extra NetworkPolicyPeer entries allowed to reach the server, e.g. the
   # ingress controller or the CI runners that call /api/v1/gate. The
@@ -447,14 +526,20 @@ metrics:
     # server.enabled) a cluster that stopped pushing. Scrape the metrics
     # with serviceMonitor or your own config: the rules select the jobs
     # serviceMonitor produces, <fullname>-agent-metrics and
-    # <fullname>-server (upgradescope-agent-metrics and upgradescope-server
-    # for a release named upgradescope).
+    # <fullname>-server (shortened to fit 63 characters for long release
+    # names; upgradescope-agent-metrics and upgradescope-server for a
+    # release named upgradescope).
     enabled: false
     labels: {}
-    # -- A cluster whose agent has not pushed for this long is stale. Agents
-    # push on every change and at least hourly (--force-sync-every), so
-    # keep it above that.
-    clusterStaleAfterSeconds: 7200
+    # -- A cluster whose agent has not pushed for this long is stale. 0 = the
+    # server's own threshold (server.staleAfter, by default the larger of
+    # 2h and three agent intervals), so the alert and the stale flag agree.
+    # Set it only for a different alert threshold: agents push on every
+    # change and at least hourly (--force-sync-every) and at most once per
+    # interval, so keep it above max(agent.interval, 1h) plus one interval
+    # (4200 at the default 10m; the install notes warn below that). The
+    # render fails when it is not above agent.interval.
+    clusterStaleAfterSeconds: 0
   grafanaDashboard:
     # -- Ship deploy/grafana/upgradescope-dashboard.json as a ConfigMap for
     # the Grafana sidecar, which loads ConfigMaps labeled

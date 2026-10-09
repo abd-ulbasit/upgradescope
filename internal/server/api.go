@@ -616,6 +616,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A per-cluster token is checked again in the commit's transaction: the
+	// push can take seconds to read, queue and evaluate, and a revoke in
+	// between must stop it.
+	var pushToken string
+	if boundCluster != "" {
+		pushToken = bearerToken(r)
+	}
 	body, release, ok := s.readSnapshotBody(w, r)
 	if !ok {
 		return
@@ -724,7 +731,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		ReceivedAt:    now,
 		ServerVersion: inv.ServerVersion, // "" (degraded): ingestSnapshot inherits the last one
 		Inventory:     req.Inventory,
-	}, legacyView(inv, req.AgentVersion))
+	}, legacyView(inv, req.AgentVersion), pushToken)
+	if errors.Is(err, store.ErrTokenRevoked) {
+		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token: it was revoked while this push was processed, and nothing was stored")
+		return
+	}
+	if errors.Is(err, store.ErrClusterChanged) {
+		errJSON(w, http.StatusConflict, fmt.Sprintf(
+			"cluster %q was renamed or deleted while this push was processed, and nothing was stored: push again", req.ClusterName))
+		return
+	}
 	var conflict *store.ClusterUIDConflictError
 	if errors.As(err, &conflict) { // another push bound the name meanwhile
 		writeUIDConflict(w, conflict)

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // database/sql driver, registered as "sqlite"
+
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
 //go:embed migrations/*.sql
@@ -552,6 +554,11 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 		if b.ClusterID, err = upsertClusterSQLite(ctx, tx, *b.Cluster); err != nil {
 			return 0, false, fmt.Errorf("commit evaluations: %w", err)
 		}
+		// The upsert holds SQLite's one write lock, so no revoke, rename or
+		// delete commits between these checks and this commit.
+		if err := recheckPush(ctx, tx, b, `SELECT 1 FROM tokens WHERE token_hash = ? AND cluster_name = ? AND revoked_at IS NULL`); err != nil {
+			return 0, false, fmt.Errorf("commit evaluations: %w", err)
+		}
 	}
 
 	var latestID int64
@@ -973,8 +980,8 @@ func (s *SQLite) ScoreHistory(ctx context.Context, clusterID int64, target strin
 		lim = -1 // SQLite: LIMIT -1 == no limit
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT created_at, score, ready FROM (
-			SELECT id, created_at, score, ready FROM evaluations
+		SELECT created_at, score, ready, blockers FROM (
+			SELECT id, created_at, score, ready, blockers FROM evaluations
 			WHERE cluster_id = ? AND target = ?
 			ORDER BY id DESC LIMIT ?
 		) ORDER BY id ASC`, clusterID, target, lim)
@@ -986,9 +993,11 @@ func (s *SQLite) ScoreHistory(ctx context.Context, clusterID int64, target strin
 	for rows.Next() {
 		var p ScorePoint
 		var created string
-		if err := rows.Scan(&created, &p.Score, &p.Ready); err != nil {
+		var blockers int
+		if err := rows.Scan(&created, &p.Score, &p.Ready, &blockers); err != nil {
 			return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 		}
+		p.Verdict = string(engine.StoredVerdict(p.Ready, blockers))
 		if p.At, err = parseStoredTime(created); err != nil {
 			return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 		}

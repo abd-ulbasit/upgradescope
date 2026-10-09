@@ -23,7 +23,7 @@ stops the agent at startup with `health listener: address already in use`).
 ## Agent logs
 
 The agent writes a startup line (version, KB version and horizon, interval,
-tick deadline, server URL or CRD-only, health address) and exactly one line
+tick deadline and tick reserve, server URL or CRD-only, health address) and exactly one line
 per tick. `--log-format=json` makes every line a JSON object;
 `--log-level` is `debug`, `info`, `warn` or `error`. Chart values:
 `agent.logFormat`, `agent.logLevel`.
@@ -44,6 +44,7 @@ level=INFO msg="tick complete" duration=2.41s push=ok consecutiveFailures=0 capa
 | `consecutiveFailures` | failed ticks in a row; 0 after a success |
 | `capabilities.<name>` | whether that collector could read what it needs; `status.notAssessed` on the CR says why not |
 | `targets.<minor>.verdict/score/blockers` | the evaluation per target |
+| `crdError` | the ClusterReadiness CRD could not be brought up to date (WARN); retried every tick until it succeeds, see below |
 
 A tick **fails** when the agent could not evaluate and write the
 `ClusterReadiness` status, including when it has no target to evaluate (no
@@ -52,12 +53,33 @@ shows `Ready=Unknown` with the reason in `status.notAssessed`). A failed push do
 status was written, and the agent's local result never depends on the
 server. Push failures are logged at WARN and counted separately.
 
+A tick also fails, and writes no status, when the agent could not read
+the `ClusterReadiness` spec (or decode it), or could not set
+`spec.targets` to `--targets`: a status for targets it did not read would
+carry the current `observedGeneration` and pass for current. The object
+keeps its last status, marked with the `upgradescope.dev/status-error`
+annotation, and the next tick reads the spec again.
+
 Each tick runs under a deadline of half the interval, at most 5 minutes, so a
-wedged API call cannot stop the loop. Within a tick, each API request is
+wedged API call cannot stop the loop. Collection gets that deadline minus
+a **reserve** of 30 seconds, or half the deadline when that is under a
+minute (an `--interval` under 2m: at the 1m minimum the deadline is 30s,
+so collection gets 15s). The reserve is the time of the work after
+collection, each part on its own slice, so a collection that runs out its
+time still leaves the status written, or the object marked as stale: the
+`ClusterReadiness` calls (the CRD check, the spec read, the status write)
+must end by half the reserve before the deadline, and a CRD check the
+tick retries (the one at startup having failed) by three quarters of it,
+so that a hung check, or the wait for a deleted CRD it creates again to be
+Established, leaves the spec read and the status write at least a
+quarter; the
+`upgradescope.dev/status-error` marker then gets a quarter of the reserve
+of its own; the push runs until the deadline, so it has at least a quarter
+of the reserve. Within a tick, each API request is
 given up after `--request-timeout` (default 30s; in the chart, set it
 through `agent.extraArgs`), and each collector step gets its own share of
-the tick deadline, so a stalled step leaves only its capability not
-assessed. A stop (SIGTERM) that lands mid-tick
+the collection's time, so a stalled step leaves only its capability not
+assessed, its reason naming the step deadline. A stop (SIGTERM) that lands mid-tick
 cancels the tick's calls; that tick is not counted or logged as failed, and
 the agent logs `agent stopping` with `interruptedTick=true`.
 
@@ -125,7 +147,7 @@ Go runtime and process metrics (`go_*`, `process_*`) are included.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `upgradescope_http_requests_total` | counter | `route`, `code` | requests by ServeMux pattern (`GET /api/v1/clusters/{id}`), `dashboard` for the SPA, `unmatched` for an unknown API or reserved path |
+| `upgradescope_http_requests_total` | counter | `route`, `code` | requests by ServeMux pattern (`GET /api/v1/clusters/{id}`), `dashboard` for the SPA, `unmatched` for an unknown API or reserved path, `host-refused` (code `421`) for one the [Host check](operations/auth.md#the-host-check-dns-rebinding) refused before any route |
 | `upgradescope_http_request_duration_seconds` | histogram | `route` | latency |
 | `upgradescope_ingest_total` | counter | `result` | snapshot pushes: `accepted`, `duplicate`, `unauthorized`, `forbidden`, `conflict`, `invalid`, `too_large`, `error` |
 | `upgradescope_cluster_score` | gauge | `cluster`, `target` | score of the cluster's current evaluation |
@@ -153,6 +175,14 @@ With a read token (`--read-token`, chart `server.readToken` or
 read API. The chart's ServiceMonitor sends it from the server's Secret.
 Its series name every cluster, so a team-scoped read token gets `403`
 there: scrape with `--read-token` or a read token minted for `*`.
+
+A request the Host check refuses is counted as `route="host-refused"`,
+`code="421"` (never by its Host or path, so the labels stay a fixed set)
+and logged at most once a minute: the line names the Host, quoted and
+escaped to ASCII, the client's address, and how many refusals since the
+previous line went unlogged. A rising count is a DNS-rebinding page or,
+more often, a client reaching the server under a name it was not given
+with `--allowed-host`.
 
 `/healthz`, `/readyz`, `/livez`, `/metrics`, any path below them, and
 everything under `/api/` never fall through to the dashboard: an

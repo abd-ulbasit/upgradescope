@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "upgradescope.serverFullname" . }}-data
+  name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-server-data") }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
 spec:

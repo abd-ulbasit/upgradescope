@@ -9,9 +9,9 @@ import (
 )
 
 // assertSecurityHeaders checks the defense-in-depth headers every response
-// the handler writes must carry (the SPA keeps the read token in
-// localStorage, so an XSS or a framing page must find as little room as
-// possible).
+// the handler writes must carry (the SPA keeps the read token in Web
+// Storage, sessionStorage by default, so an XSS or a framing page must
+// find as little room as possible).
 func assertSecurityHeaders(t *testing.T, what string, h http.Header) {
 	t.Helper()
 	if got := h.Get("X-Content-Type-Options"); got != "nosniff" {
@@ -101,7 +101,7 @@ func TestSecurityHeadersOnDashboard(t *testing.T) {
 		"assets/index-abc.css": {Data: []byte("body{}")},
 	}
 	h := securityHeaders(spaHandler(dist))
-	for _, path := range []string{"/", "/cluster/3", "/assets/index-abc.js", "/assets/index-abc.css"} {
+	for _, path := range []string{"/", "/teams", "/assets/index-abc.js", "/assets/index-abc.css"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusOK {

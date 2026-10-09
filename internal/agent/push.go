@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,11 +32,15 @@ type pushPayload struct {
 }
 
 const (
-	pushRetries    = 3 // retries after the initial attempt
+	pushRetries = 3 // retries after the initial attempt
+	// maxPushBackoff caps the backoff step and a server's Retry-After
+	// before retryDelay jitters them: a Retry-After at the cap is waited
+	// for up to a quarter longer, so one retry wait is at most 75s.
 	maxPushBackoff = time.Minute
 )
 
-// backoff is the delay before retry n (0-based): 1s, 2s, 4s, ... capped at 1m.
+// backoff is the delay before retry n (0-based): 1s, 2s, 4s, ... capped at
+// 1m, before retryDelay's jitter.
 func backoff(attempt int) time.Duration {
 	d := time.Second << uint(min(attempt, 20))
 	if d > maxPushBackoff {
@@ -54,6 +59,9 @@ type pusher struct {
 	log   *slog.Logger                                     // nil = slog.Default()
 	wait  func(ctx context.Context, d time.Duration) error // injectable for deterministic tests
 	now   func() time.Time                                 // nil = time.Now; injectable for deterministic tests
+	// jitter draws the retry jitter, uniform in [0, 1); nil = math/rand/v2's
+	// global source, seeded per process. Injectable for tests.
+	jitter func() float64
 
 	mu      sync.Mutex
 	pending *pushPayload
@@ -167,7 +175,8 @@ func (p *pusher) offer(pl pushPayload) {
 }
 
 // flush sends the pending snapshot, if any. Transient failures (network,
-// 5xx, 408, 429) retry up to pushRetries times with exponential backoff; the
+// 5xx, 408, 429) retry up to pushRetries times with jittered exponential
+// backoff (retryDelay); the
 // payload stays buffered on exhaustion so a later flush can retry it (in
 // practice the runner re-offers a fresh payload on the next push-worthy
 // tick). Permanent failures (any other 4xx: bad token, invalid body, ...)
@@ -196,7 +205,7 @@ func (p *pusher) flush(ctx context.Context) error {
 		if attempt == pushRetries {
 			break
 		}
-		if werr := p.wait(ctx, retryDelay(attempt, retryAfter)); werr != nil {
+		if werr := p.wait(ctx, retryDelay(attempt, retryAfter, p.draw())); werr != nil {
 			// A Retry-After can outlast the tick deadline; keep the server's
 			// status so the log says why the push was failing, not just that
 			// the tick ran out of time.
@@ -206,10 +215,30 @@ func (p *pusher) flush(ctx context.Context) error {
 	return fmt.Errorf("push snapshot after %d attempts (kept buffered): %w", pushRetries+1, lastErr)
 }
 
-// retryDelay is the wait before retry n: the backoff step, or the server's
-// Retry-After when that asks for longer, never beyond maxPushBackoff.
-func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
-	return min(max(backoff(attempt), retryAfter), maxPushBackoff)
+// retryDelay is the wait before retry n, for a jitter draw u in [0, 1):
+// the backoff step with full jitter (u × the step, so anywhere from 0 to
+// the step), or, when the server sent a Retry-After, that ask (capped at
+// maxPushBackoff) plus up to a quarter of it more (× (1 + u/4)): never
+// earlier than the server asked, whichever is longer, and at most 75s (a
+// capped ask, jittered; capping after the jitter would put every agent
+// asked for a minute or more back in lockstep at the cap). Agents started
+// together, which the server answers with the same 503 and Retry-After,
+// then retry spread over the band instead of in lockstep (#238).
+func retryDelay(attempt int, retryAfter time.Duration, u float64) time.Duration {
+	step := time.Duration(u * float64(backoff(attempt)))
+	ask := min(retryAfter, maxPushBackoff)
+	if ask > 0 {
+		ask += time.Duration(u * float64(ask) / 4)
+	}
+	return max(step, ask)
+}
+
+// draw is one jitter draw in [0, 1).
+func (p *pusher) draw() float64 {
+	if p.jitter != nil {
+		return p.jitter()
+	}
+	return rand.Float64()
 }
 
 // clock is the pusher's notion of now, for an HTTP-date Retry-After.
@@ -249,6 +278,14 @@ func (p *pusher) clear(pl *pushPayload) {
 // send makes one attempt. retryAfter is the server's Retry-After on a
 // transient failure (0 = none).
 func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, retryAfter time.Duration, err error) {
+	// Config refuses both at startup; a pusher built around it still never
+	// retries a request that could not be sent.
+	if err := ValidateServerURL(p.url); err != nil {
+		return true, 0, fmt.Errorf("push snapshot: %w", err)
+	}
+	if err := ValidateServerToken(p.token); err != nil {
+		return true, 0, fmt.Errorf("push snapshot: %w", err)
+	}
 	body, err := json.Marshal(pl)
 	if err != nil {
 		return true, 0, fmt.Errorf("marshal snapshot: %w", err)

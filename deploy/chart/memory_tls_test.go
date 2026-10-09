@@ -33,6 +33,10 @@ func renderErr(t *testing.T, sets ...string) string {
 	t.Helper()
 	args := []string{"template", "upgradescope", ".", "--namespace", "upgradescope"}
 	for _, s := range sets {
+		if f, ok := strings.CutPrefix(s, "-f="); ok {
+			args = append(args, "-f", f)
+			continue
+		}
 		args = append(args, "--set", s)
 	}
 	cmd := exec.Command(helmBin(t), args...)

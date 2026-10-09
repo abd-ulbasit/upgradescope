@@ -21,7 +21,13 @@ import (
 // a "-f=<path>" entry passes a values file instead.
 func render(t *testing.T, sets ...string) []unstructured.Unstructured {
 	t.Helper()
-	args := []string{"template", "upgradescope", ".", "--namespace", "upgradescope"}
+	return renderRelease(t, "upgradescope", sets...)
+}
+
+// renderRelease is render under another release name.
+func renderRelease(t *testing.T, release string, sets ...string) []unstructured.Unstructured {
+	t.Helper()
+	args := []string{"template", release, ".", "--namespace", "upgradescope"}
 	for _, s := range sets {
 		if f, ok := strings.CutPrefix(s, "-f="); ok {
 			args = append(args, "-f", f)
@@ -194,7 +200,12 @@ func TestServiceMonitors(t *testing.T) {
 // alerts returns alert name -> rule from the rendered PrometheusRule.
 func alerts(t *testing.T, objs []unstructured.Unstructured) map[string]map[string]any {
 	t.Helper()
-	pr := find(objs, "PrometheusRule", "upgradescope")
+	var pr *unstructured.Unstructured
+	for i := range objs {
+		if objs[i].GetKind() == "PrometheusRule" {
+			pr = &objs[i]
+		}
+	}
 	if pr == nil {
 		t.Fatalf("PrometheusRule not rendered (have %v)", kinds(objs))
 	}

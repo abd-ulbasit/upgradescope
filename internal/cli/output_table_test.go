@@ -62,8 +62,8 @@ INFO (1)
   [deprecated-api] batch/v1beta1 CronJob is deprecated
 
 TEAMS
-  platform       75/100  blocked  blockers 1  warnings 0
-  unattributed   95/100  ready    blockers 0  warnings 1
+  platform         75/100  blocked  blockers 1  warnings 0
+  (unattributed)   95/100  ready    blockers 0  warnings 1
 
 NOT ASSESSED
   deprecated-calls: GET /metrics forbidden

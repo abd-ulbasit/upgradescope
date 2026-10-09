@@ -177,7 +177,8 @@ func (sc readScope) clusterKeep(ns map[string]string) keep {
 // namespace was cut. A cut finding's title no longer counts the objects
 // the scope does not see (it counts the scope's when every object was
 // listed), and its detail, which names and counts everything the finding
-// covers, is replaced by one that names only what is kept. Lists the
+// covers, is replaced by one that names only what is kept; its folded
+// apiserver caller rows (Callers) are dropped with it. Lists the
 // engine capped (NamespacesOmitted, ObjectsOmitted) cannot be divided by
 // team, so a cut finding counts none omitted and its detail says more of
 // the scope's may be affected. A finding whose namespace list was capped
@@ -201,6 +202,10 @@ func (k keep) cut(f engine.Finding) (engine.Finding, bool) {
 	f.Teams, f.Namespaces, f.Objects = nilIfEmpty(teams), nilIfEmpty(namespaces), nilIfEmpty(objects)
 	f.NamespacesOmitted, f.ObjectsOmitted = 0, 0
 	f.Detail = cutDetail(namespaces, len(objects), capped)
+	// Folded apiserver caller rows are cluster-wide evidence about clients
+	// the metric attributes to no namespace or team, and the replaced
+	// detail drops their sentence: a cut finding carries none of them.
+	f.Callers = nil
 	return f, true
 }
 
@@ -499,9 +504,11 @@ func encodeTeams(teams []string) string {
 	return strings.Join(enc, ",")
 }
 
-// decodeTeams is the teams v lists in the team list encoding. Whitespace
-// around an entry is a list's optional whitespace and is trimmed (a name
-// that starts or ends with a space spells it %20); an empty entry names
+// decodeTeams is the teams v lists in the team list encoding. Space and
+// tab around an entry are a list's optional whitespace (RFC 9110 OWS) and
+// are trimmed (a name that starts or ends with a space spells it %20);
+// nothing else is: trimming Unicode spaces made a group named "payments"
+// and a no-break space read as payments (#250). An empty entry names
 // no team. An entry that is not valid percent-encoding ("50%off") names
 // no team the server could know, so it is dropped: read as written, it
 // could be a team whose encoded name it is not. A name sent unencoded
@@ -510,7 +517,7 @@ func encodeTeams(teams []string) string {
 func decodeTeams(v string) []string {
 	var teams []string
 	for _, e := range strings.Split(v, ",") {
-		if e = strings.TrimSpace(e); e == "" {
+		if e = strings.Trim(e, " \t"); e == "" {
 			continue
 		}
 		if t, err := url.PathUnescape(e); err == nil && t != "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,89 @@ func TestServeRefusesSharedAdminToken(t *testing.T) {
 		err := execServe(t, args, serveOK())
 		if err == nil || !strings.Contains(err.Error(), "--admin-token") {
 			t.Errorf("serve %v: err = %v, want a refusal naming --admin-token", args, err)
+		}
+	}
+}
+
+// One bearer that both pushes and reads would let every agent's shared
+// push token read the whole fleet, and every reader push as any cluster
+// (#250).
+func TestServeRefusesReadTokenEqualToIngestToken(t *testing.T) {
+	err := execServe(t, []string{"--read-token", "same", "--ingest-token", "same"}, serveOK())
+	if err == nil || !strings.Contains(err.Error(), "--read-token") || !strings.Contains(err.Error(), "--ingest-token") {
+		t.Errorf("serve with equal read and ingest tokens: err = %v, want a refusal naming both", err)
+	}
+	if err := execServe(t, []string{"--read-token", "r", "--ingest-token", "i"}, serveOK()); err != nil {
+		t.Errorf("distinct tokens: %v", err)
+	}
+}
+
+// A notification URL that cannot be delivered to is a startup error, not
+// eight silent retries per message (#240), and the error names the flag,
+// never the URL, whose path is the Slack credential.
+func TestServeValidatesNotificationURLs(t *testing.T) {
+	for _, flag := range []string{"slack-webhook", "webhook"} {
+		for _, bad := range []string{
+			"hooks.slack.com/services/T0/B0/SECRETSECRET",
+			"ftp://hooks.slack.com/services/T0/B0/SECRETSECRET",
+			"https:///services/T0/B0/SECRETSECRET",
+			"https://hooks.slack.com/services/T0/B0/SECRETSECRET\n",
+			"/services/T0/B0/SECRETSECRET",
+		} {
+			err := execServe(t, []string{"--" + flag, bad}, serveOK())
+			if err == nil || !strings.Contains(err.Error(), "invalid --"+flag+": want an absolute http(s) URL") {
+				t.Errorf("--%s %q: err = %v, want the invalid-URL refusal", flag, bad, err)
+				continue
+			}
+			if strings.Contains(err.Error(), "SECRET") {
+				t.Errorf("--%s %q: the refusal echoes the URL: %v", flag, bad, err)
+			}
+		}
+	}
+	// From the environment, surrounding whitespace is trimmed first, as
+	// from a file.
+	t.Setenv("UPGRADESCOPE_SLACK_WEBHOOK", "https://hooks.slack.com/services/T0/B0/X\n")
+	t.Setenv("UPGRADESCOPE_WEBHOOK_URL", "  http://hook.internal:8080/upgradescope?token=q\n")
+	t.Setenv("UPGRADESCOPE_READ_TOKEN", "read-tok\n")
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error { got = opts; return nil }
+	if err := execServe(t, nil, capture); err != nil {
+		t.Fatal(err)
+	}
+	if got.slackWebhook != "https://hooks.slack.com/services/T0/B0/X" || got.webhook != "http://hook.internal:8080/upgradescope?token=q" || got.readToken != "read-tok" {
+		t.Errorf("env values not trimmed: slack %q webhook %q read token %q", got.slackWebhook, got.webhook, got.readToken)
+	}
+}
+
+// --allowed-host (repeatable or comma separated, or
+// $UPGRADESCOPE_ALLOWED_HOSTS when the flag is not given) names the hosts
+// the Host guard answers for besides loopback; a bad entry fails the start.
+func TestServeAllowedHosts(t *testing.T) {
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error { got = opts; return nil }
+	if err := execServe(t, []string{"--allowed-host", "Upgradescope.example.com", "--allowed-host", "upgradescope-server.upgradescope.svc,10.96.0.10"}, capture); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"upgradescope.example.com", "upgradescope-server.upgradescope.svc", "10.96.0.10"}
+	if !slices.Equal(got.allowedHosts, want) {
+		t.Errorf("allowed hosts = %v, want %v", got.allowedHosts, want)
+	}
+	t.Setenv("UPGRADESCOPE_ALLOWED_HOSTS", "a.example, b.example\n")
+	if err := execServe(t, nil, capture); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.allowedHosts, []string{"a.example", "b.example"}) {
+		t.Errorf("allowed hosts from the environment = %v, want [a.example b.example]", got.allowedHosts)
+	}
+	if err := execServe(t, []string{"--allowed-host", "c.example"}, capture); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.allowedHosts, []string{"c.example"}) {
+		t.Errorf("--allowed-host with the env var set = %v, want the flag's [c.example]", got.allowedHosts)
+	}
+	for _, bad := range []string{"https://a.example", "a.example:443", "a/b", "*.example.com"} {
+		if err := execServe(t, []string{"--allowed-host", bad}, serveOK()); err == nil || !strings.Contains(err.Error(), "--allowed-host") {
+			t.Errorf("--allowed-host %q: err = %v, want a refusal naming the flag", bad, err)
 		}
 	}
 }

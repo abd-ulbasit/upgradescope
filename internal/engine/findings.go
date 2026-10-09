@@ -84,6 +84,36 @@ type Finding struct {
 	// already had this Key and every object listed here, else BaselineNew.
 	// The CLI gate fails only on new findings; score and verdict count both.
 	BaselineState BaselineState `json:"baselineState,omitempty"`
+	// Callers are the apiserver_requested_deprecated_apis rows folded into
+	// this API usage finding (foldDeprecatedCalls), in row order: each is
+	// what its deprecated-api-in-use finding would have been on its own.
+	// They are evidence about clients, not about the listed objects, so
+	// suppressing every object of the finding does not suppress them
+	// (suppress.Apply re-emits them as findings of their own).
+	Callers []Caller `json:"callers,omitempty"`
+}
+
+// Caller is one apiserver_requested_deprecated_apis row folded into an API
+// usage finding: the API it requested and the deprecated-api-in-use
+// finding it is on its own (Finding).
+type Caller struct {
+	Group       string   `json:"group,omitempty"` // "" for core
+	Version     string   `json:"version"`
+	Resource    string   `json:"resource"`
+	Subresource string   `json:"subresource,omitempty"`
+	Key         string   `json:"key"`
+	Severity    Severity `json:"severity"`
+	Title       string   `json:"title"`
+	Detail      string   `json:"detail"`
+}
+
+// Finding is c as the standalone deprecated-api-in-use finding
+// evalDeprecatedCalls built for its row.
+func (c Caller) Finding() Finding {
+	return Finding{
+		Category: CatDeprecatedAPIInUse, Severity: c.Severity, Key: c.Key, Title: c.Title, Detail: c.Detail,
+		Citations: []string{deprecationGuideURL},
+	}
 }
 
 // BaselineState mirrors SARIF's result.baselineState values.
@@ -354,6 +384,23 @@ const (
 	VerdictUnknown Verdict = "unknown"
 )
 
+// StoredVerdict reads a report's verdict back from the two facts a stored
+// evaluation keeps beside the report: its ready flag (Verdict == VerdictReady)
+// and its blocker count. Ready is ready; otherwise any blocker is blocked;
+// otherwise a required gap hid the answer, so unknown. It is the one place
+// that derives a verdict from a row, shared by the server and both stores, so
+// the verdict a list, a history point and a summary show cannot drift apart.
+func StoredVerdict(ready bool, blockers int) Verdict {
+	switch {
+	case ready:
+		return VerdictReady
+	case blockers > 0:
+		return VerdictBlocked
+	default:
+		return VerdictUnknown
+	}
+}
+
 type Report struct {
 	ClusterID string            `json:"clusterId"`
 	Target    inventory.Version `json:"target"`
@@ -404,6 +451,9 @@ func (r *Report) Rescore() {
 }
 
 var severityRank = map[Severity]int{SevBlocker: 0, SevWarning: 1, SevInfo: 2}
+
+// SortFindings orders findings as a report holds them (sortFindings).
+func SortFindings(fs []Finding) { sortFindings(fs) }
 
 // sortFindings orders findings deterministically: severity (blocker > warning
 // > info), then category, title and key (lexical), so two findings with one

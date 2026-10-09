@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -175,19 +176,34 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
+	// What is logged and stored never carries the sink's URL: a Slack
+	// webhook's path is its credential. The notifiers redact it already;
+	// this holds for any error a sink that names its URL returns
+	// (TestOutboxScrubsTheSinkURLFromAnyError).
+	errText := scrubSink(err, target)
 	if hold := retryAfterHold(err); hold > 0 {
 		s.holds.hold(m.Sink, s.now().Add(hold))
 	}
 	if m.Attempts >= outboxMaxAttempts {
-		log.Printf("server: giving up on notification %s (cluster %s, sink %s) after %d attempts: %v",
-			n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, err)
+		log.Printf("server: giving up on notification %s (cluster %s, sink %s) after %d attempts: %s",
+			n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, errText)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return
 	}
 	next := expiryCap(m, s.now().Add(retryDelay(m.Attempts, err)))
-	log.Printf("server: notification %s failed (cluster %s, sink %s, attempt %d), retrying at %s: %v",
-		n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), err)
-	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, outboxError(err)))
+	log.Printf("server: notification %s failed (cluster %s, sink %s, attempt %d), retrying at %s: %s",
+		n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), errText)
+	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, outboxError(errors.New(errText))))
+}
+
+// scrubSink is err's text with the URL of the sink that returned it
+// redacted (notify.Scrub): any sink that names its URL (notify.URLSink),
+// whether or not its own errors are redacted already.
+func scrubSink(err error, n notify.Notifier) string {
+	if u, ok := n.(notify.URLSink); ok {
+		return notify.Scrub(err.Error(), u.SinkURL())
+	}
+	return err.Error()
 }
 
 // expiryCap is t, or the moment m outlives outboxMaxAge if that comes
