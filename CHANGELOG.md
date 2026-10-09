@@ -54,10 +54,10 @@ a CI gate.
   `clusterDomain` (default `cluster.local`; a DNS name, a trailing dot is
   dropped) is the domain of the server Service's fully qualified name, which
   the chart passes to `--allowed-host` and names in the cert-manager
-  Certificate; both were always `.svc.cluster.local`, so set it when your
-  cluster uses another domain, or a client using the full name gets `421`
-  and a certificate without that name. What the option is for is under
-  **Changed** (#240).
+  Certificate; the Certificate always named `.svc.cluster.local`, so set it
+  when your cluster uses another domain, or a client using the full name
+  gets `421` and a certificate without that name. What the option is for is
+  under **Changed** (#240).
 - Team-scoped read tokens: `upgradescope tokens create --read --teams
   <team>` (repeatable, a team name taken as written; `--teams '*'` for the
   whole fleet), `tokens list --read` and `tokens revoke --read --id <n>`. A
@@ -464,6 +464,16 @@ a CI gate.
   chart. Refusals are counted in
   `upgradescope_http_requests_total{route="host-refused",code="421"}` and
   logged at most once a minute (#240).
+- `serve` refuses to start unless `--slack-webhook` and `--webhook` are
+  absolute `http(s)` URLs with a host, naming the flag and never the value;
+  before, a bad URL started and then dropped every notification. `clusters list`, `clusters delete` and
+  `clusters rename` with `--server` no longer follow a redirect: any 3xx is
+  an error naming its status and `Location`, so an http to https `301` or
+  `302` cannot turn a delete or rename into a GET reported as done, and
+  `clusters list` behind such a redirect, which used to work, now fails.
+  Before you upgrade, fix or remove a webhook URL that is not an absolute
+  `http(s)` URL with a host, and pass the URL the redirect names (for
+  example `https://`) as `--server` (#240).
 - `serve` refuses to start when `--read-token` equals `--ingest-token`
   (every agent's push token would read the whole fleet). Every command's
   secret read from its `$UPGRADESCOPE_*` variable (`serve`'s tokens and
@@ -480,13 +490,14 @@ a CI gate.
   team called `unattributed` shared its row. That team is now its own row,
   and `serve --team-map` refuses a team named `(unattributed)`. Update
   anything that reads the old key (#243).
-- The dashboard's nested paths (`/cluster/3`, `/teams/`, any extensionless
-  path below the root) answer `302` to the root with the route in the hash,
-  as a relative `Location` that keeps a proxy's path prefix, where they used
-  to serve a page whose assets did not load. A path with a file extension
-  that is not a file stays a JSON `404`; `/assets/` (which listed the asset
-  files) and any other path under it that is not a file are now a JSON `404`
-  too (#243).
+- The dashboard's extensionless paths of more than one segment, or ending in
+  `/` (`/cluster/3`, `/teams/`, `/index.html/`), answer `302` to the root
+  with the route in the hash, as a relative `Location` that keeps a proxy's
+  path prefix, where they used to serve a page whose assets did not load; a
+  single segment such as `/teams` still serves the dashboard, as before. A
+  path with a file extension that is not a file stays a JSON `404`;
+  `/assets/` (which listed the asset files) and any other path under it that
+  is not a file are now a JSON `404` too (#243).
 - Chart: the agent's CPU limit is now `1` CPU
   (`agent.resources.limits.cpu`), not `200m`; the request stays `50m`, so
   scheduling is unchanged. A ResourceQuota on `limits.cpu` without room for
@@ -499,7 +510,7 @@ a CI gate.
   of its periods; at 500m the first tick took 47.9 s and at 1 CPU 35.2 s,
   both complete, and a steady tick 6.9 s at 1 CPU. Peak RSS was 66 to 71 MiB
   at every limit. The new *Sizing the agent* section of the install guide
-  has the rest (#233, #229).
+  has the rest (#229).
 - The agent keeps a reserve of each tick for what follows collection: the
   ClusterReadiness status write, the `upgradescope.dev/status-error` marker
   and the push, each on its own slice of it, so a slow collector step no
@@ -515,14 +526,14 @@ a CI gate.
   of failing every tick: `--cluster-name ""` given explicitly (leave the
   flag out to name the cluster by its UID); `--force-sync-every` of 0 or
   below; a `--server-url` that is not an `http` or `https` URL with a host;
-  and, with `--server-url`, a push token with whitespace inside it
-  (surrounding whitespace is trimmed). `--force-sync-every` at or below
-  `--interval` force-syncs every tick. An agent given one of these
-  crash-loops with `invalid --<flag>` in its log: check `agent.extraArgs`
-  and the token Secret before you upgrade. The chart schema now rejects an
-  `agent.serverUrl` without a host, and is stricter than the agent about
-  non-ASCII host names and whitespace in the path, so a `helm upgrade` with
-  an unusual value can fail the schema (#238).
+  and, with `--server-url`, a push token with whitespace or a control
+  character inside it (surrounding whitespace is trimmed).
+  `--force-sync-every` at or below `--interval` force-syncs every tick. An
+  agent given one of these crash-loops with `invalid --<flag>` in its log:
+  check `agent.extraArgs` and the token Secret before you upgrade. The chart
+  schema now rejects an `agent.serverUrl` without a host, and is stricter
+  than the agent about non-ASCII host names and whitespace in the path, so a
+  `helm upgrade` with an unusual value can fail the schema (#238).
 - A deprecated-API caller is graded by the knowledge base's removal release
   when the knowledge base has one for that group, version and resource, else
   by the metric's `removed_release` label. A caller the label alone would
@@ -543,11 +554,15 @@ a CI gate.
   now also keeps each cluster's newest decided evaluation for every target
   the server evaluates for it (and the three minors below its default
   target), and its snapshot, however old, so a cluster can keep one older
-  snapshot and evaluation per target in use. A push that loses the
-  notification-baseline race three times answers `503` with `Retry-After:
-  10` and stores nothing: the agent retries. A `GET
-  /api/v1/fleet/teams?target=` rollup still computing after 20 s answers
-  `503` with `Retry-After`, keeping what it computed for the retry (#241).
+  snapshot and evaluation per target in use. With a notification sink
+  configured, a push whose notification baseline another writer replaced on
+  each of its three attempts answers `503` with `Retry-After: 10` and stores
+  nothing; the agent retries. A `GET /api/v1/fleet/teams?target=` rollup
+  still computing after 20 s answers `503` with `Retry-After`, keeping what
+  it computed for the retry. A what-if is kept per cluster snapshot
+  (or stored evaluation), target, knowledge base, team map and UTC day, so a
+  later request computes only what changed and a what-if's `evaluatedAt` is
+  when it was computed, not the request time (#241).
 - Chart: upgrade with `helm upgrade --reset-then-reuse-values` (Helm 3.14 or
   later), as the docs now say everywhere, not `--reuse-values`, which pins
   the new chart to the old release's image digest and fails when the chart
@@ -563,11 +578,12 @@ a CI gate.
   (`docs/operations/upgrade.md` has the one-time `kubectl patch`) (#242).
 - Chart: `server.staleAfter` defaults to empty, which follows
   `agent.interval`: the larger of 2h and three intervals (2h for any
-  interval up to 40m). A value you set at or below `agent.interval` fails
-  the render, and the install notes warn when one would flap.
+  interval up to 40m); the release candidates defaulted to `2h`. A value you
+  set at or below `agent.interval` fails the render, and the install notes
+  warn when one would flap.
   `metrics.prometheusRule.clusterStaleAfterSeconds` defaults to `0` (follow
-  the server's threshold, not `7200`); one at or below the interval fails
-  the render (#242).
+  the server's threshold; the release candidates defaulted to `7200`); one
+  at or below the interval fails the render (#242).
 - Chart: the server's container port is its own value,
   `server.containerPort` (default `8080`), so `server.service.port` may be
   `80` or `443`. Before, the pod listened on `server.service.port`: if you
@@ -1054,15 +1070,15 @@ a CI gate.
   `1Gi`) and sets `SQLITE_TMPDIR`; measured on a 60 MB backlog, a delete
   failed without it and worked with it. The volume is node ephemeral
   storage, and one that outgrows its limit evicts the pod. A volume of your
-  own mounted at `/tmp` (`server.extraVolumeMounts`) is used instead, and a
-  `server.extraVolumes` entry named `sqlite-tmp` fails the render. If prunes
-  had been failing, the first one after the upgrade deletes the whole
-  backlog at once: raise `server.tmp.sizeLimit` to the size of the database
-  before you upgrade (#242).
+  own mounted at `/tmp` (`server.extraVolumeMounts`) is used instead;
+  without one, a `server.extraVolumes` entry named `sqlite-tmp` fails the
+  render. If prunes had been failing, the first one after the upgrade
+  deletes the whole backlog at once: raise `server.tmp.sizeLimit` to the
+  size of the database before you upgrade (#242).
 - A push's notifications are diffed against the baseline the push committed
   against, so a push racing another replica's push or the background pass no
   longer loses or repeats a `became-ready` or `new-blocker` notification
-  (the push is evaluated again, up to three times: see **Changed**). Each
+  (the push is evaluated up to three times in all: see **Changed**). Each
   notification sink is delivered in queue order with its own timeout, up to
   four sinks at once, so one hung sink no longer delays the others. The
   background pass and the reads that need a snapshot's server version,
@@ -1070,7 +1086,7 @@ a CI gate.
   SQLite, behind 4,000 history rows with 30 KB reports, the notification
   baseline is read in under 2 ms and 100 points of history in under 5 ms;
   the notification delta of 20,000 new callers against 20,000 carried
-  findings takes 38 to 54 ms, where it took 46 s to 1 min 32 s (#241).
+  findings takes 38 to 54 ms, where it took 46 s to about 1 min 32 s (#241).
 - The agent's tick no longer leaves the ClusterReadiness stale and unmarked
   after a slow collector step (see **Changed**). A failed spec read, or a
   failed `spec.targets` patch, writes no status for targets it guessed and
@@ -1218,19 +1234,14 @@ a CI gate.
 ### Security
 
 - Built with Go 1.26.9 and `golang.org/x/net` v0.60.0 (`go.mod` requires Go
-  1.26.9, and the Dockerfile pins the `golang:1.26.9` image by digest).
-  `govulncheck` reported 12 standard-library advisories against Go 1.26.8
-  and 4 against `golang.org/x/net` v0.59.0; it reports no reachable one now
-  (#259).
+  1.26.9, and the Dockerfile pins the `golang:1.26.9` image by digest). This
+  fixes the `net/http` and HTTP/2, `crypto/tls`, `html/template`,
+  `net/textproto` and `mime/multipart` advisories `govulncheck` reported
+  against Go 1.26.8 and `golang.org/x/net` v0.59.0; `make vuln` passes with
+  an empty allowlist (#259).
 - Slack and generic webhook URLs, which are secrets, never reach the
   server's log or the outbox's `last_error` past `scheme://host/…`, and
-  the host is withheld too when the URL holds an `@`. `serve` refuses to
-  start unless `--slack-webhook` and `--webhook` are absolute `http(s)` URLs
-  with a host, naming the flag and never the value (#240).
-- `clusters list`, `clusters delete` and `clusters rename` with `--server`
-  never follow a redirect: any 3xx is an error naming its status and
-  `Location`, so an http to https `301` or `302` cannot turn a delete or
-  rename into a GET reported as done (#240).
+  the host is withheld too when the URL holds an `@` (#240).
 - A snapshot push authenticated before its token was revoked, or before its
   cluster was deleted or renamed, no longer commits: both stores re-check
   the token and the cluster inside the commit transaction. A revoked token
