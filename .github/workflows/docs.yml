@@ -11,9 +11,25 @@ name: docs
 #   deploy      publishes the build to GitHub Pages, on pushes to main and on
 #               a manual run against main (the first publish after Pages is
 #               enabled needs no docs-touching push).
+#   smoke       after a deploy: the site root and every link to the site in
+#               the README answer 200 at the URL the deploy reported
+#               (hack/docs-live-check.sh). A deploy that "succeeds" into a
+#               site that answers 404 fails here.
+#   smoke-published
+#               the same check, weekly, against the published site
+#               (mkdocs.yml's site_url), so a site that breaks later, or a
+#               README link whose page is gone, is noticed within a week. A
+#               failed scheduled run is the notice: GitHub emails whoever last
+#               edited the schedule, and the run is red in the Actions tab.
+#
+# Pages was never switched on and nothing noticed (#284): the deploy failed on
+# every push to main, the site answered 404 everywhere, and the workflow is
+# not part of ci-ok. Hence the two smoke jobs.
 #
 # One-time repository setting: Settings -> Pages -> Build and deployment ->
-# Source: "GitHub Actions" (the API's build_type=workflow).
+# Source: "GitHub Actions" (the API's build_type=workflow). It is part of the
+# repository's required configuration (CONTRIBUTING.md); without it deploy
+# fails with "Ensure GitHub Pages has been enabled".
 on:
   push:
     branches: [main]
@@ -23,9 +39,13 @@ on:
       - "hack/docs/**"
       - "CHANGELOG.md" # included by docs/changelog.md
       - "ci/**" # templates included by docs/guides/other-ci.md
+      - "README.md" # the smoke job requests every docs link it holds
+      - "hack/docs-live-check.sh" # ... and a change to the check runs it for real
       - ".github/workflows/docs.yml"
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '33 7 * * 1' # Mondays 07:33 UTC: the smoke-published job only
 
 # Least privilege: only the deploy job gets pages and id-token.
 permissions:
@@ -39,6 +59,7 @@ concurrency:
 
 jobs:
   references:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +73,7 @@ jobs:
       - run: make docs-check
 
   build:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,9 +100,44 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }} # for the smoke job
     concurrency:
       group: pages
       cancel-in-progress: false
     steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  smoke:
+    # No `if:`: a job runs only when everything it needs succeeded, so this
+    # runs after a deploy that succeeded and is skipped on pull requests, on
+    # other branches, on the schedule, and when references, build or deploy
+    # failed (hack/docs-live-workflow_test.sh).
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Retries with doubling waits for a deployment still propagating, and
+      # lists every URL that never answered 200.
+      - run: ./hack/docs-live-check.sh "$PAGE_URL"
+
+  smoke-published:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No argument: the site_url in mkdocs.yml, the site the README links to.
+      - run: ./hack/docs-live-check.sh
