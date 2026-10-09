@@ -108,10 +108,28 @@ func TestDocsMCPPageSaysWhatTheClusterChooses(t *testing.T) {
 		"**" + mcp.ClusterTextMarker + "**",
 		"`" + mcp.MetaClusterText + "`",
 		fmt.Sprintf("longer than %d KiB is cut, ending in `%s`", mcp.MaxClusterTextBytes>>10, strings.TrimSpace(mcp.ClusterTextCutMark)),
+		// The rule is inverted: not a list of fields that hold such text,
+		// but every string, but for the few the tool writes itself.
+		"not a list of fields that hold such text",
+		"every string in every tool's result, values and object keys alike",
+		"except numbers, booleans, the report's own field names, and the values of the few keys upgradescope writes itself",
+		"A field added to the report later is outside text until it is listed there",
+		"Every result of every tool (`scan`, `get_report`, `list_findings`, `registry_lookup` and `fleet_summary`)",
+		"never through a team's name or another key the document chose",
+		"A tool error is outside text whole",
+		"does not fall back to the pod's service account",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("%s does not say %q", mcpPage, want)
 		}
+	}
+	// The keys it lists as the tool's own are the ones the server treats so.
+	var listed []string
+	for _, k := range mcp.ToolWords() {
+		listed = append(listed, "`"+k+"`")
+	}
+	if want := strings.Join(listed, ", "); !strings.Contains(page, want) {
+		t.Errorf("%s does not list the keys the tool writes itself, %s", mcpPage, want)
 	}
 }
 
