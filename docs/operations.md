@@ -89,18 +89,29 @@ it (up to ~7 MB) take at most ~33 MiB of heap to build
 (`TestGateAnswerHeapIsBounded`).
 
 Reads cost what was stored, so they are bounded too. A read of one
-cluster (its detail, report, findings, teams, history or export) and the
-fleet teams rollup load the cluster's latest snapshot, up to
-`--max-snapshot-bytes` as pushed, which the SQLite driver holds twice;
-a report for a target with no stored evaluation (a what-if) also decodes
-and evaluates the whole inventory, at a cost per node like ingest's. One
+cluster (its detail, report, findings, teams, history or export) and
+each cluster's part of the fleet teams rollup load what they serve: a
+stored report, or the cluster's latest snapshot, up to
+`--max-snapshot-bytes` as pushed, which the SQLite driver holds twice.
+The snapshot is loaded only by the cluster detail (for its capabilities),
+a read scoped to teams (for its namespaces) and a report for a target
+with no stored evaluation (a what-if), which also decodes and evaluates
+the whole inventory, at a cost per node like ingest's; the others read
+the version the snapshot is judged at from its head. One
 370 KB push of `{}` object refs, accepted from any ingest token, took
 ~45 MB of heap for each such read, and 10 concurrent reads of it grew
 the heap ~400 MiB. These reads run one at a time in a read slot of their
 own, so they never wait on pushes or `/gate`; others wait up to 30s, then
 get `503` with `Retry-After`. Only a what-if decodes the whole inventory;
-the other reads decode its server version and capabilities and skip the
-rest. One read costs what it loads: on SQLite, whose driver holds a copy
+the cluster detail decodes its capabilities and skips the rest. The fleet
+teams rollup runs one at a time in a slot of its own and takes the read
+slot for one cluster at a time, so a per-cluster read waits for one
+cluster's part of it, not the whole, and fleet reads never wait for it; each cluster's part is kept (by its stored evaluation, or for
+a what-if by its snapshot, the target, the knowledge base, the team map
+and the UTC day, at most 4096 of them and 65,536 team scores in all), so
+the next rollup at that target computes only what changed, and a rollup
+still computing after 20s answers `503` with `Retry-After`, keeping what
+it computed for the retry. One read costs what it loads: on SQLite, whose driver holds a copy
 of every snapshot and report it reads beside the one it returns, a
 report from a stored evaluation about the report limit (below) grew the
 heap up to ~109 MiB, a what-if of one ~95 MiB, and the HTML export of
@@ -362,9 +373,12 @@ What is outside these bounds, and what it costs:
   read reads it (a report, its findings or teams for a target with no
   stored evaluation, or the fleet teams rollup), until that cluster's
   agent pushes again. Those decodes take their slots, but one 20 MiB
-  snapshot of `{}` object refs decodes to ~2.6 GB. Such a row also has
-  no stored server version, so `/clusters`, `/fleet` and `/metrics` load
-  it, up to 20 MiB, in their fleet slots, to read its version.
+  snapshot of `{}` object refs decodes to ~2.6 GB. Such a row was also
+  stored without its server version: migration 0009 copies it from the
+  stored inventory, and the next duplicate push records it; a row whose
+  inventory does not parse is loaded, up to 20 MiB, once per server start
+  by the first read that needs its version (the server remembers up to
+  4,096 such versions).
   (Evaluations stored before the `not_assessed` column are backfilled
   from their reports when the database is migrated, so no report is
   read for them.)
@@ -411,7 +425,9 @@ cap and then stalls makes other `/gate` requests `503` until the read
 timeout cuts it off (about 0.5 MiB/s of its bandwidth for 60s), and with
 an open read API that needs no credentials. Likewise, a client that keeps
 asking for what-if reports of a cluster at its node budget keeps other
-per-cluster reads waiting, and some of them get `503`. A read token
+per-cluster reads waiting, and some of them get `503`; a fleet teams
+rollup at a new target makes each per-cluster read wait for at most one
+cluster's what-if, and once computed, the rollup is kept. A read token
 limits both to token holders; the same holds for pushes and the ingest
 tokens.
 
@@ -479,7 +495,18 @@ least one core.
   the KB and the team map. The background pass re-evaluates hourly and just
   after each UTC midnight; until it has, every read of a stored verdict
   (fleet cells, cluster summaries, the report) carries `"outdated": true`
-  and starts the next pass early. Reads never recompute.
+  and starts the next pass early, at most one pass every 5 minutes. Reads
+  never recompute. A pass reads each cluster's snapshot head and its
+  evaluations' summary columns first, and loads and decodes an inventory
+  only for a cluster with a stale or missing target, or one that holds a
+  deprecated caller after an apiserver restart. A cluster the pass cannot
+  bring up to date (its report would now be over `--max-snapshot-bytes`,
+  its stored inventory does not decode, its evaluation fails) keeps what
+  is stored, marked outdated, and is tried again on its next push, on the
+  first pass of the next UTC day, or after a restart; until then passes
+  skip it and its reads start none. A store error in a pass (a busy
+  database, a lost connection) is not one of these: it marks nothing, and
+  the next pass tries the cluster again.
 
 ## Cluster lifecycle
 
@@ -757,9 +784,8 @@ evaluation in the same pass. Each one that has a stored decided
 evaluation of a lower target (within three minors below) is compared with
 it and notified once of the blockers that are new to it (at most one
 notification per cluster, its changes capped as usual). A cluster without
-one, because it was first seen on the newest minor or because its
-lower-target evaluations were pruned, has nothing to compare with, and
-its first decided evaluation is a silent baseline.
+one, because it was first seen on the newest minor, has nothing to
+compare with, and its first decided evaluation is a silent baseline.
 
 This differs from a target added to `--targets`, which stays silent: adding
 a target asks a new question about a cluster that has not changed, and
@@ -768,12 +794,24 @@ unknown until a knowledge-base update is the cluster's real next upgrade,
 and the update is the first time anyone could say what blocks it, so those
 blockers are genuinely new to each cluster and are announced, once.
 
-Retention edge: the old target's evaluation is the baseline only while it
-is stored. If a new default target stays `unknown` for longer than
-`--retention` after the upgrade (no knowledge base for it that long), the
-old target's evaluations are pruned (see [Retention and
-backup](operations/retention-and-backup.md)), and the first decided
-evaluation of the new target is then a silent baseline.
+Retention keeps the baselines in use: the last decided evaluation of
+each target the server evaluates for the cluster, and of the three minors
+below its default target, stays however old (see [Retention and
+backup](operations/retention-and-backup.md)), so a target that stays
+`unknown` for longer than `--retention` (a collector failing that long,
+or a new default target with no knowledge base for it) is still compared
+with it when it is next decided. The baseline of a target the server no
+longer evaluates for the cluster ages out with the rest.
+
+**Concurrent writers.** Several replicas (Postgres), or one replica's
+push and its background pass, can evaluate one cluster at the same
+time. Each pass's commit checks, in its transaction, that the cluster's
+latest snapshot and every baseline its changes were computed from are
+still the newest; if another writer replaced one in between, nothing is
+written and the push is evaluated again against what is there now, up
+to three times (a push that still meets a replaced baseline gets `503`
+with `Retry-After`, and the agent pushes again). So no `became-ready` or
+`new-blocker` is lost or sent twice because two writers raced.
 
 Delivery: notifications are committed to an outbox with the evaluations
 that produced them and delivered by a background worker, so a push never
@@ -781,7 +819,13 @@ waits on a receiver and a restart does not lose queued messages (unless the
 server was down so long that they have passed the 8 hour limit below, when
 they are dropped unsent). A failed delivery (an error, a timeout of 2s, any
 non-2xx status, **including redirects**, which are not followed) is retried with exponential backoff from 30s, up to 8
-attempts (about an hour), separately per sink. A receiver that answers
+attempts (about an hour), separately per sink. Each sink's messages are
+delivered in the order they were queued, one at a time, and up to four
+sinks at once, so a receiver that hangs delays only its own messages. A
+delivery starts only when its timeout ends within the message's
+2-minute claim, so no other replica can claim a message while it is
+being delivered; the rest are put back, unattempted, for the next
+claim. A receiver that answers
 `429` or `503` with a `Retry-After` header (seconds or an HTTP date) is
 left alone for that delay, capped at an hour: the sink is not called for
 that message or for any other message queued for it (which are put back

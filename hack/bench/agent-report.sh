@@ -81,13 +81,13 @@ jq -rs "$defs"'
   "| \(.fill) | \(.nodes) | \(.helmReleases) | \(.requests) | \(.listPods) | \(.getSecrets) | \(.bodyMiB) | \(.wireMiB) | \(.wallS) | \(.cpuS) | \(.peakHeapMiB) | \(.maxRssMiB) | \(.firstTick.requests), \(.firstTick.bodyMiB), \(.firstTick.wallS), \(.firstTick.cpuS) |"' "$1"
 
 # The GitOps fill (BENCH_GITOPS=1): what the lists of Argo CD Applications
-# and Flux HelmReleases, and the GETs of the OCIRepositories their chartRefs
-# name, cost a steady tick. Printed only when the run had GitOps charts.
+# and Flux HelmReleases, and the reads of the OCIRepositories their chartRefs
+# name (a list since #248, GETs where a list is refused), cost a steady tick. Printed only when the run had GitOps charts.
 if jq -es '[.[] | select((.gitopsCharts // 0) > 0)] | length > 0' "$1" >/dev/null; then
   echo
   echo "GitOps reads per tick, by fill level (medians over the ticks after the first; response MiB are bodies as client-go read them, decompressed; the tick's own requests are in the table above):"
   echo
-  echo "| Fill | GitOps charts read | LIST Applications: requests, MiB | LIST HelmReleases: requests, MiB | GET OCIRepositories: requests, MiB | GitOps total: requests, MiB | First tick: GitOps requests |"
+  echo "| Fill | GitOps charts read | LIST Applications: requests, MiB | LIST HelmReleases: requests, MiB | OCIRepositories (LIST or GET): requests, MiB | GitOps total: requests, MiB | First tick: GitOps requests |"
   echo "|---|---|---|---|---|---|---|"
   jq -rs "$defs"'
     levels | map(summary) | withGitops | .[] |

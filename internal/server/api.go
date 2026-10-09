@@ -746,6 +746,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		writeUIDConflict(w, conflict)
 		return
 	}
+	if errors.Is(err, store.ErrConflict) {
+		// Other writers replaced the notification baseline maxIngestAttempts
+		// times while this push was evaluated: nothing was stored.
+		w.Header().Set("Retry-After", "10")
+		errJSON(w, http.StatusServiceUnavailable, "the cluster changed while this push was evaluated, and nothing was stored; retry shortly")
+		return
+	}
 	var tooLarge *reportTooLargeError
 	if errors.As(err, &tooLarge) {
 		// Nothing was stored: every target is evaluated before the commit.
@@ -879,15 +886,19 @@ func (s *Server) requireCluster(w http.ResponseWriter, r *http.Request) (store.C
 }
 
 // defaultTarget computes a cluster's default evaluation target: the next
-// minor above the version its latest snapshot is judged at (judgedAt).
-// Only the snapshot's head is decoded. Errors: store.ErrNotFound (no
-// snapshots) or a corrupt/unparseable-version error.
+// minor above the version its latest snapshot is judged at (versionOf).
+// No inventory is loaded for a snapshot that stores its version.
+// Errors: store.ErrNotFound (no snapshots) or an unparseable version.
 func (s *Server) defaultTarget(ctx context.Context, clusterID int64) (inventory.Version, error) {
-	snap, head, err := s.latestHead(ctx, clusterID)
+	head, err := s.cfg.Store.LatestSnapshotHead(ctx, clusterID)
 	if err != nil {
 		return inventory.Version{}, err
 	}
-	server, err := inventory.ParseVersion(judgedAt(snap, head))
+	version, err := s.versionOf(ctx, head)
+	if err != nil {
+		return inventory.Version{}, err
+	}
+	server, err := inventory.ParseVersion(version)
 	if err != nil {
 		return inventory.Version{}, fmt.Errorf("latest snapshot has no parseable server version: %w", err)
 	}
@@ -1190,16 +1201,32 @@ type reportMeta struct {
 // through to the what-if path — any other store failure is returned, never
 // masked by a recompute that would hide a broken store behind a 200.
 // A store.ErrNotFound result means the cluster has no snapshots at all.
-// Only a what-if decodes the whole inventory; a read scoped to teams
-// decodes its namespaces too (reportMeta.nsTeams).
+// A stored report of a fleet-wide read loads no inventory (the version
+// is the snapshot head's, versionOf); a what-if decodes the whole
+// inventory, and a read scoped to teams its namespaces
+// (reportMeta.nsTeams).
 func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, target inventory.Version, sc readScope) (engine.Report, reportMeta, error) {
-	snap, head, err := s.latestHead(ctx, clusterID)
+	head, err := s.cfg.Store.LatestSnapshotHead(ctx, clusterID)
 	if err != nil {
 		return engine.Report{}, reportMeta{}, err
 	}
-	version := judgedAt(snap, head)
+	version, err := s.versionOf(ctx, head)
+	if err != nil {
+		return engine.Report{}, reportMeta{}, err
+	}
 	meta := reportMeta{ServerVersion: version, NotApplicable: notApplicable(version, target)}
+	var snap store.Snapshot // the inventory, loaded only when needed
+	loadSnapshot := func() error {
+		if snap.Inventory != nil {
+			return nil
+		}
+		snap, err = s.cfg.Store.LatestSnapshot(ctx, clusterID)
+		return err
+	}
 	if !sc.fleet() {
+		if err := loadSnapshot(); err != nil {
+			return engine.Report{}, reportMeta{}, err
+		}
 		if meta.nsTeams, err = s.namespaceTeams(snap); err != nil {
 			return engine.Report{}, reportMeta{}, err
 		}
@@ -1215,6 +1242,9 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 		meta.Outdated = s.outdated(e, s.now())
 		return rep, meta, nil
 	case errors.Is(err, store.ErrNotFound):
+		if err := loadSnapshot(); err != nil {
+			return engine.Report{}, reportMeta{}, err
+		}
 		inv, err := decodeInventory(snap)
 		if err != nil {
 			return engine.Report{}, reportMeta{}, err

@@ -63,20 +63,27 @@ quote them.
   cost that, because the agent fetched every release again each time: it was
   the one cost that grew with releases rather than with pages (1,000 GETs of
   1,061 requests).
-- **Argo CD and Flux add a request per fifty objects and one per
-  OCIRepository**: with 1,000 Applications and 1,000 HelmReleases (half of
-  them with a `chartRef` to an OCIRepository of their own) a steady tick
-  on main `735751d` made 596 requests, 543 more, and read 63 MiB, 12.8 s
-  and 6.2 CPU-seconds. See [the table](#re-measured-on-main-with-and-without-argo-cd-and-flux).
-  #228 does not change the GitOps lists or GETs, and its code was not run
-  with them.
+- **Argo CD and Flux add a request per fifty objects**: with 1,000
+  Applications and 1,000 HelmReleases (half of them with a `chartRef` to an
+  OCIRepository of their own) a steady tick on main `735751d` made 596
+  requests, 543 more, 500 of them one GET per OCIRepository, and read
+  63 MiB, 12.8 s and 6.2 CPU-seconds. Since
+  [#248](https://github.com/abd-ulbasit/upgradescope/issues/248) the
+  OCIRepositories are listed, paged at 50 like the other lists: at `da90a86e`
+  (with #228) the same fill's steady tick made 81 requests, 50 of them
+  GitOps (540 before), read 59.8 MiB, and took 7.5 s and 5.3 CPU-seconds on a
+  host at a load average of 20 to 28. See
+  [the tables](#re-measured-on-main-with-and-without-argo-cd-and-flux) and
+  [after #248](#the-ocirepositories-listed-248).
 - **Memory fits the chart's defaults** (64Mi request, 256Mi limit) with room
   at this fill: on main `735751d` the peak RSS of the benchmark never passed
   61 MiB, and the agent as a pod reached 71 MiB (`VmHWM`), the first tick
   included. At #228's code the benchmark's peak RSS was 65.0 MiB and its
   peak heap 39.2 MiB (57.1 and 29.3 MiB in the #226/#228 runs of `735751d`
   (with the recorder, `70d16ab`)): the larger pod pages that cut the
-  requests cost that; no pod was run at that code. That is above the 64Mi
+  requests cost that. As a pod at that code (`da90a86e`, at 200m, 9
+  October 2026) the agent's peak RSS was 81 MiB and the cgroup's peak
+  memory 107 MiB ([#247's run](#the-tick-after-a-partial-helm-step-247)). That is above the 64Mi
   request, which only informs scheduling. A pod page is bounded by its count
   only, at most 1,000 pods, so its worst case is 1,000 times the largest
   pod, whatever its size, reached when small pods are followed by large
@@ -114,6 +121,10 @@ quote them.
 | Also running | two other idle kind clusters on the same ThinkPad, and for the agent runs the lab's own KWOK controller keeping 2,000 nodes alive |
 | Also running, later runs | the lab's KWOK controller, and a second lab that another session used on the same ThinkPad. Its control-plane container used 11 to 19% of one core and 565 to 945 MiB whenever it was sampled (`docker stats`, at each fill level and at the start and end of the pod runs): the idle figure of a kind control plane, not a 2,000-node fill, which takes 2.4 to 3.6 cores. The ThinkPad's load average was 2.4 at the start of the GitOps run, and 9 to 25 during its fills and the pod runs (4 threads), so the wall times of the later runs are noisier than the counts and CPU-seconds, and are given as ranges |
 | Also running, #226 and #228 | the same two clusters (`bookstore`, and the other session's lab `us-lab-137b`, which held no fill then: 11 to 22% of a core and 530 to 840 MiB, `docker stats` before and after every run; 13 to 15% and 681 to 704 MiB around the `9810fb6` run), at a host load average of 7 to 12 (4 threads; 1.9 when the `9810fb6` run started and 15.4 when it ended), most of it lab A's KWOK controller (110 to 335% of a core at full size) |
+| upgradescope, #248 | `da90a86e` (branch `fix/collect-helm-gitops` on main `345a879`, with #226 and #228): `BENCH_GITOPS=1 BENCH_STEPS=1`, the ticks run on the ThinkPad (`BENCH_RUN_ON`), 9 October 2026, 15:28 to 15:35 UTC, on lab `us-lab-137b` ([the run](#the-ocirepositories-listed-248)) |
+| Also running, #248 | `bookstore` (12 to 22% of a core) and lab `us-lab-137`, another session's, up and not idle: 10 to 90% of a core and 654 MiB, so holding no full fill; host load average 12 to 28 (4 threads) |
+| upgradescope, #247 | `da90a86e` as a pod at 200m (the image packed as above, version `collect-da90a86e`), 9 October 2026, 17:46 to 18:12 UTC, on lab `us-lab-137b` reset and filled by `BENCH_STEPS=1 BENCH_TICKS=2` at `86500c36` (docs only after `da90a86e`) just before; the ThinkPad's kernel was 7.0.0-38 then ([the run](#the-tick-after-a-partial-helm-step-247)) |
+| Also running, #247 | `bookstore` and lab `us-lab-137`, both idle (11.7 to 24.3% of a core each; `us-lab-137` at 581 to 664 MiB, no fill); host load average 4.8 to 9.5 |
 
 ### What is simulated
 
@@ -441,8 +452,56 @@ first; the first tick makes the same GitOps requests, they have no cache):
   versions of the three groups are served, once each. Since #228 a steady
   tick asks none of the 7 (above; from the code and its test, not measured
   with the fill). #228 changes none of the 540 GitOps requests: their lists
-  are paged at 50, and the OCIRepository GETs are
-  [#248](https://github.com/abd-ulbasit/upgradescope/issues/248).
+  are paged at 50; the OCIRepository GETs were
+  [#248](https://github.com/abd-ulbasit/upgradescope/issues/248), below.
+
+### The OCIRepositories listed (#248)
+
+Since #248 a HelmRelease's `chartRef` is resolved from a list of the
+OCIRepositories, not a GET each: one list of the namespace the chartRefs
+point into when they all point into one, else one cluster-wide list, both
+paged at 50; per namespace when the cluster-wide list is forbidden; and a
+GET by name only in a namespace whose list is forbidden too. An
+OCIRepository that cannot be read is still an unresolved chartRef, a named
+partial gap, as before. The chart's `rbac.gitops.flux` grants `list` on
+OCIRepositories beside `get`.
+
+One run of `BENCH_GITOPS=1 BENCH_STEPS=1` (the full fill only, 5 ticks) at
+`da90a86e` (this branch, on main `345a879`, so with #226 and #228), 9
+October 2026, 15:28 to 15:35 UTC, on lab `us-lab-137b`, which held no fill
+before the run (its control plane at 39% of a core a minute before; a full
+fill keeps it at 1 to 3 cores) and was filled by it: 2,001 nodes, 1,000 Helm releases, 1,000 Applications and
+1,000 HelmReleases (500 chartRefs, each to an OCIRepository of its own in
+the HelmRelease's namespace, the HelmReleases spread over the fill's 100
+namespaces, so the collector made one cluster-wide list). The other lab, `us-lab-137`, was up and
+not idle: its control plane used 10 to 90% of a core during the run (17
+and 13% at the two samples around the measured ticks) and 654 MiB of
+memory, against 3.3 GiB for this lab's full fill. The ThinkPad's load
+average was 12 to 28 over the run and 20 to 28 around the measured ticks,
+on 4 threads, so the wall times are a loaded host's. The benchmark read
+back every seeded chart (2,000).
+
+| Fill | Requests | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB | First tick: requests, response MiB, wall s, CPU s |
+|---|---|---|---|---|---|---|---|---|
+| full, GitOps (`da90a86e`) | 81 | 59.8 | 5.5 | 7.5 | 5.3 | 41.6 | 66 | 1,090, 82.1, 30.3, 25.2 |
+| full, GitOps (`735751d`, above) | 596 | 63.2 | 5.4 | 12.8 | 6.2 | 31.6 | 60.8 | 1,596, 85.5, 44.4, 26.2 |
+
+| Fill | Charts read | LIST Applications: requests, MiB | LIST HelmReleases: requests, MiB | OCIRepositories: requests, MiB | GitOps total: requests, MiB |
+|---|---|---|---|---|---|
+| full (`da90a86e`) | 2,000 | 20, 7.46 | 20, 1.18 | 10 LISTs, 0.39 | 50, 9.04 |
+| full (`735751d`, above) | 2,000 | 20, 7.46 | 20, 3.65 | 500 GETs, 0.94 | 540, 12.05 |
+
+- **50 GitOps requests a steady tick, against 540**, with every chart still
+  resolved: 20 + 20 + 10 pages of 50. The first tick made the same 50. The
+  500 OCIRepositories took 10 list requests (0.34 s summed) where the 500
+  GETs were sequential. The tick's other 31 requests are #228's (above).
+- The four steady ticks took 7.2 to 7.8 s and 5.2 to 5.4 CPU-seconds,
+  against 12.8 s and 6.2 at `735751d`; the two runs had different code
+  besides #248 (#226 and #228) and different host load, so the difference
+  is not #248's alone.
+- The HelmRelease lists read 1.18 MiB here and 3.65 MiB in the earlier run
+  for the same 1,000 seeded HelmReleases; why was not investigated (the
+  request counts do not depend on it).
 
 ### The older tables (#71)
 
@@ -507,8 +566,11 @@ status UPDATE of the agent's `ClusterReadiness`): 31 in all (`59d8561`,
 with pages of up to 2,000: 10 + 2 + 3 + 9 = 24). A tick that asks API
 discovery again (the first, and the staleness rules above) adds 4 (7 with
 the Argo CD and Flux CRDs installed), and a first tick one GET per Helm
-release. With Argo CD and Flux objects every tick also lists them at 50 a
-page and GETs each distinct OCIRepository ([measured on
+release. With Argo CD and Flux objects every tick also lists them, and
+the OCIRepositories their chartRefs name, at 50 a page (50 requests at
+1,000 Applications and 1,000 HelmReleases, [measured at
+`da90a86e`](#the-ocirepositories-listed-248); before #248 one GET per
+OCIRepository instead, [measured on
 `735751d`](#re-measured-on-main-with-and-without-argo-cd-and-flux)). A
 cluster with no Helm release (the empty rows: 22 requests before #228)
 also lists Deployments, StatefulSets and DaemonSets, metadata only, to look
@@ -576,9 +638,10 @@ against 59 s.
   (partial)`, the first release not read, "step deadline: gave up after
   59s"). The following tick completed the step, in 105 s, using 13.0
   CPU-seconds, more than 132 releases explain (about 3 for them, 3 for the
-  rest): the tick after a partial one seems to decode again some of what the
-  partial one had decoded. That is not investigated here
-  ([#247](https://github.com/abd-ulbasit/upgradescope/issues/247)). A steady tick took
+  rest). It was not a decode again of what the partial tick had read:
+  [below](#the-tick-after-a-partial-helm-step-247), re-measured, the tick
+  after a partial one fetched exactly the releases left unread, and still
+  used more CPU than they explain. A steady tick took
   21 s against the 4 s it takes without a quota, throttled in 58 to 80% of
   the CFS periods it ran in.
 - **At 500m the first tick finished, in 48 s, and so did its Helm step,
@@ -604,6 +667,53 @@ against 59 s.
   the one after (27 s, 16.6 CPU-seconds) are the lab failing, not the
   quota, and are left out of the table; the first tick at 1 CPU is from
   before it, and the steady one from after.
+
+#### The tick after a partial Helm step (#247)
+
+[#247](https://github.com/abd-ulbasit/upgradescope/issues/247) asked whether
+the releases a partial Helm step decoded are cache hits on the next tick.
+They are: `TestHelmCacheKeepsWhatAPartialStepDecoded` stops a step at its
+deadline part way through 40 releases against a fake API, and the next tick
+fetches exactly the ones left unread. Re-measured as a pod at 200m, with
+the procedure above and `hack/bench/pod-sample.sh`, on 9 October 2026,
+17:46 to 18:12 UTC: the agent at `da90a86e` (this branch, on main
+`345a879`, so with #226's 8 concurrent GETs and #228), on lab
+`us-lab-137b` reset and filled with `BENCH_STEPS=1` (2,001 nodes, 1,000
+Helm releases, no Argo CD or Flux) just before, the chart installed with
+`agent.resources.limits.cpu=200m` and the default interval of 10 minutes.
+The other lab, `us-lab-137`, was up and idle (11.7 to 20.4% of a core, 581 to
+664 MiB); the ThinkPad's load average was 4.8 to 9.5 (4 threads), most of
+it this lab's KWOK heartbeats (1 to 3 cores). The requests per tick are
+from the lab's apiserver audit log, filtered to the agent's service
+account.
+
+| Tick | Wall s | CPU s | Helm step | Release GETs | Throttled periods | Throttled s |
+|---|---|---|---|---|---|---|
+| first | 75.5 | 15.0 | **gave up at its deadline**: 958 of 1,001 read, 43 not (and the Argo CD and Flux discovery after it gave up too) | 965 | 734 of 767 (96%) | 63.1 |
+| second | 51.9 | 9.0 | complete | 43 | 413 of 494 (84%) | 27.8 |
+| steady | 29.2 | 2.9 | complete | 0 | 120 of 174 (69%) | 8.5 |
+
+The peak RSS of the agent was 81 MiB and the cgroup's peak memory 107 MiB.
+The CPU of a tick is the counter's change between the samples around it
+(every 5 s, at most 11 s outside the tick, while the agent idles).
+
+- **The second tick fetched the 43 releases the first left unread, and no
+  other**: its 74 requests were a steady tick's 31 and the 43 GETs. So the
+  958 decoded before the deadline were cache hits, and #247's hypothesis,
+  a decode again of what the partial step read, is ruled out.
+- **Its CPU is still not explained by them.** It used 9.0 CPU-seconds, 6.1
+  more than the steady tick's 2.9, where 43 releases take about 0.8 (19.6
+  ms a release: the first tick of the fill's own benchmark run, outside a
+  quota, at `86500c36`, which differs from `da90a86e` only in docs, 22.6
+  CPU-seconds, less a steady tick's 3.0, over 1,000 releases;
+  computed, not measured in the pod). What the other 5 or so CPU-seconds are
+  was not found: they come with no extra request. At `735751d` the same
+  tick used 13.0 for 132 releases, about 7.6 more than they and a steady
+  tick (2.8 there) explain by the same arithmetic. #247 stays open for that.
+- At 200m the first tick still does not finish its Helm step, but it leaves
+  43 releases unread where `735751d` left 132: the first tick used 15.0
+  CPU-seconds, throttled in 96% of its periods. The chart's default is 1
+  CPU (below).
 
 **The chart's default is now 1 CPU** (`agent.resources.limits.cpu`),
 requests unchanged at 50m. The old default could not read 1,000 Helm
@@ -662,9 +772,9 @@ at all:
 | What | Found | Status |
 |---|---|---|
 | One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 33 s and 23.5 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests then, 53 on `735751d` and 31 after #228). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
-| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 to 36.7 s and 23.1 to 23.5 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread; as a pod at the old 200m default it reached it with 132 unread (measured, [above](#cpu-and-the-chart-limit)) | **Fixed** for the round trip ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 42.4 s here at `9810fb6`, on a host whose load rose to 15 (27.1 s at the draft `59d8561`, at a load of 7 to 12), and at 60 ms 30.4 s at `06cdf7a` and 29.6 s at `5da764e`, with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now, so under a CPU quota #226 does not help at 200m and saves at most the 13.4 s the GETs waited at 1 CPU (computed, [above](#cpu-and-the-chart-limit)); the chart's default limit is now 1 CPU, at which main's first tick read all 1,000. `TestCollectHelmConcurrentMatchesSequential` |
+| The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 to 36.7 s and 23.1 to 23.5 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread; as a pod at the old 200m default it reached it with 132 unread (measured, [above](#cpu-and-the-chart-limit)) | **Fixed** for the round trip ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 42.4 s here at `9810fb6`, on a host whose load rose to 15 (27.1 s at the draft `59d8561`, at a load of 7 to 12), and at 60 ms 30.4 s at `06cdf7a` and 29.6 s at `5da764e`, with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now, so under a CPU quota #226 was not expected to help at 200m and saves at most the 13.4 s the GETs waited at 1 CPU (computed, [above](#cpu-and-the-chart-limit)); measured at 200m at `da90a86e` (with #226 and #228, 9 October 2026), the first tick still gave up at the Helm step's deadline, with 43 of 1,001 unread where `735751d` left 132 ([above](#the-tick-after-a-partial-helm-step-247)); the runs differ in more than #226 and in host load, so the share that is #226's is not known; the chart's default limit is now 1 CPU, at which main's first tick read all 1,000. `TestCollectHelmConcurrentMatchesSequential` |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | **Fixed** ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227), #232): the add-ons take them from the version check's list; 30 pod list requests a tick instead of 38 in the runs on `735751d` |
-| Argo CD Applications and Flux HelmReleases are listed whole (page size 50) every tick, plus a GET per distinct OCIRepository (#218) | **Measured** (`BENCH_GITOPS=1`, main `735751d`): 540 of the 596 requests of a steady tick at 1,000 Applications and 1,000 HelmReleases, 500 of them sequential OCIRepository GETs; 12 MiB of 63; 8.7 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Open: the OCIRepository GETs could be a list per namespace ([#248](https://github.com/abd-ulbasit/upgradescope/issues/248)); #228 does not change them |
+| Argo CD Applications, Flux HelmReleases and the OCIRepositories their chartRefs name are listed whole (page size 50) every tick (#218; the OCIRepositories since #248, a GET each before) | **Measured** (`BENCH_GITOPS=1`, at 1,000 Applications and 1,000 HelmReleases with 500 chartRefs): at `da90a86e` 50 of the 81 requests of a steady tick (20 + 20 + 10 lists), 9.0 MiB of 59.8, every chart resolved ([above](#the-ocirepositories-listed-248)); on main `735751d`, before #248, 540 of 596, 500 of them sequential OCIRepository GETs, 12 MiB of 63, 8.7 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Fixed by [#248](https://github.com/abd-ulbasit/upgradescope/issues/248): a list instead of a GET per OCIRepository, a GET by name only where the list is forbidden; the rest grows by one request per 50 objects |
 | The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by their largest object (at most 1,000), discovery kept between ticks, the agent's object read once: 53 to 31 requests, short of the target of under 25. The bytes (50 MiB) and CPU (3 s) are unchanged, since every pod is still decoded every tick; reading pods less often (#228's option b) would cut those and the pod requests, and is not done |
 
 ## The server
