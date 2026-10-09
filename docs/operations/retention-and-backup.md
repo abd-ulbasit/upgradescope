@@ -94,9 +94,18 @@ directory: at commit `b6d1adee` (2026-10-09), pruning 150 snapshots of
 (6410)`, and with `SQLITE_TMPDIR` on a writable directory both succeeded.
 At commit `069e4a84` (2026-10-10), with the prune batched, the same prune
 succeeded with no temp directory; the cluster delete, unchanged, still fails
-without one. Why the prune no longer needs it was not isolated: the delete
-statement's plan differs, and the run stays far below one batch of 5,000
-rows, so this does not show what a full batch needs. That emulation of a
+without one. The difference is the transaction, not the statement
+(`TestTempSpaceIsNeededInsideATransactionNotByTheStatement`, same
+emulation): the same 60 MB delete, in the pre-batching form and in the
+batched form, fails with `disk I/O error (6410)` inside an explicit
+transaction and succeeds on its own, with no temp directory, and succeeds
+inside a transaction when `SQLITE_TMPDIR` is writable. The pre-batching
+prune ran in one transaction, as the cluster delete still does; each batch
+is now a statement of its own. SQLite journals each statement of a
+transaction and moves that journal to a temp file once it outgrows memory,
+which fits all four results but was not observed directly. The run stays
+far below one batch of 5,000 rows, so this does not show what a full
+batch needs. That emulation of a
 read-only root filesystem runs on macOS only, so on Linux only the success
 half of the tests run, and the failure was not reproduced there. Keep the
 volume: it is what the cluster delete needs, and a prune that does spill

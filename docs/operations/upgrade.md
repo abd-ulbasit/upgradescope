@@ -89,9 +89,13 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   had no such directory, and a prune of
   more than a few tens of MB failed with `disk I/O error (6410)`: if
   you ran one, the first prune after the upgrade deletes the backlog in
-  batches of at most 5,000 rows a transaction, so it no longer needs temp
-  space for the whole backlog at once; the temp space one batch needs was
-  not measured, so if it still fails, `upgradescope_retention_prune_failures_total`
+  batches of at most 5,000 rows, each a statement of its own and not part of
+  one long transaction. Measured on a 60 MB backlog, that form needed no
+  temp directory where the same delete inside a transaction failed (SQLite
+  journals the statements of a transaction in a temp file; the delete of a
+  whole cluster, which is one transaction, still needs the directory). The
+  temp space one full batch needs was not measured, so if it still fails,
+  `upgradescope_retention_prune_failures_total`
   counts it and `server.tmp.sizeLimit` is the knob
   ([Retention and backup](retention-and-backup.md#when-the-prune-fails)).
 - **The stale threshold follows `agent.interval`.** With `server.staleAfter`
