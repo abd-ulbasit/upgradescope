@@ -248,3 +248,26 @@ func TestFoldIndexMatchesKindMatchesResource(t *testing.T) {
 		}
 	}
 }
+
+// #237: a remediation names only an API the target serves; otherwise it
+// says none is known, and when the next one is served from.
+func TestRemediationNamesOnlyServedReplacement(t *testing.T) {
+	k := shippedKB(t)
+	cases := []struct {
+		group, version, kind string
+		target               int
+		want                 string
+	}{
+		{"storage.k8s.io", "v1alpha1", "VolumeAttributesClass", 33, "migrate to storage.k8s.io/v1beta1 VolumeAttributesClass"},
+		{"storage.k8s.io", "v1alpha1", "VolumeAttributesClass", 34, "migrate to storage.k8s.io/v1 VolumeAttributesClass"},
+		{"certificates.k8s.io", "v1beta1", "ClusterTrustBundle", 36, "no replacement Kubernetes 1.36 serves is known; certificates.k8s.io/v1 ClusterTrustBundle is served from 1.37"},
+	}
+	for _, tc := range cases {
+		inv := inventory.Inventory{APIUsage: []inventory.APIUsage{{Group: tc.group, Version: tc.version, Kind: tc.kind, Count: 1, Namespaces: map[string]int{"": 1}}}}
+		target := inventory.Version{Major: 1, Minor: tc.target}
+		fs := evalAPIUsage(inv, k, target, nil)
+		if len(fs) != 1 || fs[0].Remediation != tc.want {
+			t.Errorf("%s/%s %s @%s: findings %+v, want remediation %q", tc.group, tc.version, tc.kind, target, fs, tc.want)
+		}
+	}
+}

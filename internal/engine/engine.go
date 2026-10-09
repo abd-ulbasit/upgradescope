@@ -158,6 +158,10 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		}
 		if r, ok := idx.ResolveReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("migrate to %s %s", gvString(r.Group, r.Version), r.Kind)
+		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
+			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known; %s %s is served from %s", target, gvString(later.Group, later.Version), later.Kind, from)
+		} else if e.Replacement != nil {
+			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known", target)
 		}
 		gv := gvString(u.Group, u.Version)
 		switch {
