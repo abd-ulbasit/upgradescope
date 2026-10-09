@@ -262,15 +262,17 @@ does not restart them for you: after you change a token, a webhook value
 you named (`server.existingSecret`, `agent.existingSecret`), run
 
 ```sh
-kubectl -n <ns> rollout restart deploy/<release>-server deploy/<release>-agent
+kubectl -n <ns> rollout restart deploy/<fullname>-server deploy/<fullname>-agent
 ```
 
-(the install NOTES print it with your names). Until then the pods keep the
-old value, and the old token keeps working. No pod annotation carries a
-checksum of a secret, because anyone who can get pods or Deployments could
-read it, and test a short token against it offline. Every key is written
-under the chart-managed Secret's `data`, so from this chart version on,
-removing a value removes its key. The upgrade to this version is the one
+(`<fullname>` is the release name plus `-upgradescope`, cut to 63
+characters, or the release name alone when it contains `upgradescope`;
+the install NOTES print the command with your names).
+Until then the pods keep the old value, and the old token keeps working.
+No pod annotation carries a checksum of a secret, because anyone who can
+get pods or Deployments could read it, and test a short token against it
+offline. Every key is written under the chart-managed Secret's `data`, so
+from this chart version on, removing a value removes its key. The upgrade to this version is the one
 exception: a Secret written by an earlier chart wrote `readToken`,
 `adminToken`, `slackWebhook`, `webhook`, `webhookSecret` and the agent's
 `serverToken` as `stringData`, which the API server turned into `data`, and
@@ -357,7 +359,9 @@ settings, so the read token still protects all data.
   delete (the daily retention prune, `clusters delete`) spills into a temp
   file. The chart mounts an emptyDir at `/tmp` (`server.tmp.sizeLimit`,
   1Gi, the default PVC size; raise it with the PVC) and sets
-  `SQLITE_TMPDIR=/tmp`. Postgres servers get neither.
+  `SQLITE_TMPDIR=/tmp`. A volume of your own mounted at `/tmp`
+  (`server.extraVolumeMounts`) takes its place: the chart then adds none,
+  and yours must be writable and as large. Postgres servers get neither.
 - High availability: with `server.replicas` above 1 (Postgres only) the chart
   renders a PodDisruptionBudget (`server.podDisruptionBudget`, `minAvailable: 1`)
   and a soft topology spread over nodes (`server.defaultTopologySpread`, or

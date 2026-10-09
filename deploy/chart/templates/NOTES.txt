@@ -62,6 +62,27 @@ objects (RBAC cannot scope create by name), and updates only
 ClusterReadiness/{{ .Values.agent.crName }}{{ if .Values.agent.manageCRD }} and the clusterreadinesses.upgradescope.dev CRD{{ end }}.
 The full rule list and its reasons are in the chart README.
 {{- end }}
+{{- if and .Values.server.enabled .Values.agent.enabled }}
+{{- $gap := float64 (include "upgradescope.pushGapSeconds" .) }}
+{{- if and .Values.server.staleAfter (lt (float64 (include "upgradescope.durationSeconds" .Values.server.staleAfter)) $gap) }}
+
+WARNING: server.staleAfter ({{ .Values.server.staleAfter }}) is below {{ printf "%.0f" $gap }}s, the larger of
+agent.interval ({{ .Values.agent.interval }}) and 1h, plus one interval. An unchanged cluster pushes
+at its next tick after the hourly force-sync, so up to that long apart, and
+healthy clusters will read stale between pushes. Raise it, or leave it
+empty to follow the interval.
+{{- end }}
+{{- $alert := .Values.metrics.prometheusRule.clusterStaleAfterSeconds | default 0 }}
+{{- if and .Values.metrics.prometheusRule.enabled $alert (lt (float64 $alert) $gap) }}
+
+WARNING: metrics.prometheusRule.clusterStaleAfterSeconds ({{ int64 $alert }}) is below
+{{ printf "%.0f" $gap }}, the larger of agent.interval ({{ .Values.agent.interval }}) and 1h, plus one interval.
+An unchanged cluster pushes at its next tick after the hourly force-sync,
+so up to that long apart, and the UpgradescopeClusterStale alert's
+condition will hold between the pushes of healthy clusters. Raise it, or
+set it to 0 to follow the server's threshold.
+{{- end }}
+{{- end }}
 {{- if or .Values.server.enabled .Values.agent.enabled }}
 
 After you change a token or a webhook URL (server.ingestToken, readToken,

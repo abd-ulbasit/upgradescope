@@ -17,6 +17,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"sigs.k8s.io/yaml"
 )
 
 // Tests for the chart hardening of #242: the SQLite temp volume, token
@@ -108,32 +109,80 @@ func TestServerSQLiteHasAWritableTempDir(t *testing.T) {
 	}
 }
 
-// A user's own volume at /tmp, or named like the chart's, would make the
-// Deployment invalid (duplicate mountPath) or silently replace the SQLite
-// temp volume. The render fails and names the clash instead; the chart's
-// volume is named sqlite-tmp so an ordinary "tmp" volume does not collide.
+// A user's own volume at /tmp would be a second mount at one path, which
+// makes the Deployment invalid: it becomes SQLite's temp directory instead,
+// and the chart adds none. A user volume named like the chart's, sqlite-tmp,
+// would silently replace it, so that fails the render while the chart's is
+// there; the chart's volume is named sqlite-tmp so an ordinary "tmp" volume
+// does not collide.
 func TestExtraVolumesDoNotClashWithTheSQLiteTempVolume(t *testing.T) {
 	// A user volume called "tmp" mounted elsewhere is fine.
 	ok := writeValues(t, "server:\n  extraVolumes:\n    - {name: tmp, emptyDir: {}}\n  extraVolumeMounts:\n    - {name: tmp, mountPath: /scratch}\n")
 	if msg := renderErr(t, "server.enabled=true", ok); msg != "" {
 		t.Errorf("a volume named tmp mounted at /scratch fails the render: %s", msg)
 	}
-	mount := writeValues(t, "server:\n  extraVolumes:\n    - {name: mine, emptyDir: {}}\n  extraVolumeMounts:\n    - {name: mine, mountPath: /tmp}\n")
-	msg := renderErr(t, "server.enabled=true", mount)
-	if !strings.Contains(msg, "/tmp") || !strings.Contains(msg, "sqlite-tmp") || !strings.Contains(msg, `"mine"`) {
-		t.Errorf("a mount at /tmp renders without naming the clash: %q", msg)
+	if vol := volumeNamed(t, render(t, "server.enabled=true", ok), "upgradescope-server", "sqlite-tmp"); vol == nil {
+		t.Error("a user volume mounted elsewhere drops the chart's sqlite-tmp volume")
 	}
-	slash := writeValues(t, "server:\n  extraVolumeMounts:\n    - {name: mine, mountPath: /tmp/}\n")
-	if msg := renderErr(t, "server.enabled=true", slash); !strings.Contains(msg, "sqlite-tmp") {
-		t.Errorf("a mount at /tmp/ renders: %q", msg)
+
+	// The user's own /tmp is the temp directory: one mount there, theirs,
+	// no chart volume, and SQLITE_TMPDIR still /tmp.
+	for _, tc := range []struct{ name, values string }{
+		{"mine at /tmp", "server:\n  extraVolumes:\n    - {name: mine, emptyDir: {sizeLimit: 8Gi}}\n  extraVolumeMounts:\n    - {name: mine, mountPath: /tmp}\n"},
+		{"mine at /tmp/", "server:\n  extraVolumes:\n    - {name: mine, emptyDir: {sizeLimit: 8Gi}}\n  extraVolumeMounts:\n    - {name: mine, mountPath: /tmp/}\n"},
+		// Named like the chart's, but it replaces it rather than clashing.
+		{"sqlite-tmp at /tmp", "server:\n  extraVolumes:\n    - {name: sqlite-tmp, emptyDir: {sizeLimit: 8Gi}}\n  extraVolumeMounts:\n    - {name: sqlite-tmp, mountPath: /tmp}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := writeValues(t, tc.values)
+			if msg := renderErr(t, "server.enabled=true", f); msg != "" {
+				t.Fatalf("render failed: %s", msg)
+			}
+			objs := render(t, "server.enabled=true", f)
+			c := container(t, objs, "upgradescope-server")
+			if v, ok := envVar(c, "SQLITE_TMPDIR"); !ok || v != "/tmp" {
+				t.Errorf("SQLITE_TMPDIR = %q (set %v), want /tmp", v, ok)
+			}
+			ms, _, _ := unstructured.NestedSlice(c, "volumeMounts")
+			var atTmp []string
+			for _, m := range ms {
+				mm := m.(map[string]any)
+				if p, _ := mm["mountPath"].(string); strings.TrimSuffix(p, "/") == "/tmp" {
+					atTmp = append(atTmp, fmt.Sprint(mm["name"]))
+				}
+			}
+			if len(atTmp) != 1 {
+				t.Errorf("mounts at /tmp = %v, want only the user's", atTmp)
+			}
+			vols, _, _ := unstructured.NestedSlice(podTemplate(t, objs, "upgradescope-server"), "spec", "volumes")
+			var sizes []string
+			for _, v := range vols {
+				if size, ok, _ := unstructured.NestedString(v.(map[string]any), "emptyDir", "sizeLimit"); ok {
+					sizes = append(sizes, size)
+				}
+			}
+			if !slices.Equal(sizes, []string{"8Gi"}) {
+				t.Errorf("emptyDir size limits = %v, want only the user's 8Gi (the chart's 1Gi volume skipped)", sizes)
+			}
+		})
 	}
+
+	// A volume named sqlite-tmp next to the chart's is a real clash.
 	name := writeValues(t, "server:\n  extraVolumes:\n    - {name: sqlite-tmp, emptyDir: {}}\n")
 	if msg := renderErr(t, "server.enabled=true", name); !strings.Contains(msg, "sqlite-tmp") {
 		t.Errorf("a volume named sqlite-tmp renders: %q", msg)
 	}
-	// Postgres has no such volume, so /tmp is the user's to mount.
+	elsewhere := writeValues(t, "server:\n  extraVolumes:\n    - {name: sqlite-tmp, emptyDir: {}}\n  extraVolumeMounts:\n    - {name: sqlite-tmp, mountPath: /scratch}\n")
+	if msg := renderErr(t, "server.enabled=true", elsewhere); !strings.Contains(msg, "sqlite-tmp") {
+		t.Errorf("a volume named sqlite-tmp mounted at /scratch renders: %q", msg)
+	}
+	// Postgres has no such volume, so /tmp and the name are the user's.
+	mount := writeValues(t, "server:\n  extraVolumes:\n    - {name: sqlite-tmp, emptyDir: {}}\n  extraVolumeMounts:\n    - {name: sqlite-tmp, mountPath: /tmp}\n")
 	if msg := renderErr(t, "server.enabled=true", "server.database.existingSecret=pg", mount); msg != "" {
 		t.Errorf("a Postgres server refuses a /tmp mount: %s", msg)
+	}
+	if msg := renderErr(t, "server.enabled=true", "server.database.existingSecret=pg", name); msg != "" {
+		t.Errorf("a Postgres server refuses a volume named sqlite-tmp: %s", msg)
 	}
 }
 
@@ -307,6 +356,61 @@ func TestNotesSayToRestartAfterRotatingASecret(t *testing.T) {
 	}
 }
 
+// A stale threshold above agent.interval renders, but one below the longest
+// gap between an unchanged cluster's pushes (its next tick after the hourly
+// force-sync: max(interval, 1h) plus one interval) flags healthy clusters
+// stale between pushes, or holds the alert's condition there. The NOTES say
+// so; the defaults, and values at or above the gap, are not warned about.
+func TestNotesWarnOfAFlappingStaleThreshold(t *testing.T) {
+	const staleWarn, alertWarn = "WARNING: server.staleAfter", "WARNING: metrics.prometheusRule.clusterStaleAfterSeconds"
+	rule := []string{"server.enabled=true", "metrics.prometheusRule.enabled=true"}
+	for _, tc := range []struct {
+		name  string
+		sets  []string
+		stale string // the warning's text after staleWarn, "" for none
+		alert string // the warning's text after alertWarn, "" for none
+	}{
+		{name: "defaults", sets: rule},
+		{name: "default at 1h", sets: append(slices.Clone(rule), "agent.interval=1h")},
+		{name: "staleAfter 1h at 10m", sets: append(slices.Clone(rule), "server.staleAfter=1h"),
+			stale: "(1h) is below 4200s, the larger of agent.interval (10m) and 1h, plus one interval."},
+		{name: "staleAfter 69m at 10m", sets: append(slices.Clone(rule), "server.staleAfter=69m"), stale: "(69m) is below 4200s"},
+		{name: "staleAfter 70m at 10m", sets: append(slices.Clone(rule), "server.staleAfter=70m")},
+		{name: "staleAfter 2h at 10m", sets: append(slices.Clone(rule), "server.staleAfter=2h")},
+		{name: "staleAfter 90m at 1h", sets: append(slices.Clone(rule), "agent.interval=1h", "server.staleAfter=90m"),
+			stale: "(90m) is below 7200s, the larger of agent.interval (1h) and 1h"},
+		{name: "staleAfter 5h at 3h", sets: append(slices.Clone(rule), "agent.interval=3h", "server.staleAfter=5h"), stale: "(5h) is below 21600s"},
+		{name: "alert 3601 at 10m", sets: append(slices.Clone(rule), "metrics.prometheusRule.clusterStaleAfterSeconds=3601"),
+			alert: "(3601) is below 4200, the larger of agent.interval (10m) and 1h, plus one interval."},
+		{name: "alert 4200 at 10m", sets: append(slices.Clone(rule), "metrics.prometheusRule.clusterStaleAfterSeconds=4200")},
+		{name: "both", sets: append(slices.Clone(rule), "server.staleAfter=1h", "metrics.prometheusRule.clusterStaleAfterSeconds=3700"),
+			stale: "(1h) is below 4200s", alert: "(3700) is below 4200"},
+		// The alert threshold is unused without the rule.
+		{name: "alert without the rule", sets: []string{"server.enabled=true", "metrics.prometheusRule.clusterStaleAfterSeconds=3601"}},
+		// A hub with no in-chart agent does not know its agents' intervals.
+		{name: "hub", sets: []string{"server.enabled=true", "agent.enabled=false", "server.staleAfter=30m", "metrics.prometheusRule.enabled=true",
+			"metrics.prometheusRule.clusterStaleAfterSeconds=1800"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			notes := strings.Join(strings.Fields(renderNotes(t, "upgradescope", tc.sets...)), " ")
+			for _, w := range []struct{ prefix, want string }{{staleWarn, tc.stale}, {alertWarn, tc.alert}} {
+				switch has := strings.Contains(notes, w.prefix); {
+				case w.want == "" && has:
+					t.Errorf("NOTES warn %q:\n%s", w.prefix, notes)
+				case w.want != "" && !strings.Contains(notes, w.prefix+" "+w.want):
+					t.Errorf("NOTES lack %q:\n%s", w.prefix+" "+w.want, notes)
+				}
+			}
+			if tc.stale != "" && !strings.Contains(notes, "healthy clusters will read stale between pushes") {
+				t.Errorf("the staleAfter warning does not say what happens:\n%s", notes)
+			}
+			if tc.alert != "" && !strings.Contains(notes, "UpgradescopeClusterStale alert's condition will hold between the pushes of healthy clusters") {
+				t.Errorf("the alert warning does not say what happens:\n%s", notes)
+			}
+		})
+	}
+}
+
 // A value dropped on upgrade must leave the live Secret: stringData is
 // merged into data and never removed, so every key is written under data.
 func TestSecretKeysAreRemovedWithTheirValues(t *testing.T) {
@@ -412,6 +516,31 @@ func TestStaleThresholdFollowsTheAgentInterval(t *testing.T) {
 	// A hub with no in-chart agent does not know its agents' intervals.
 	if msg := renderErr(t, "server.enabled=true", "agent.enabled=false", "server.staleAfter=30m", "agent.interval=1h"); msg != "" {
 		t.Errorf("server-only render failed: %s", msg)
+	}
+}
+
+// The Prometheus guide gives the stale alert's threshold as the chart
+// renders it: 0 by default, following the server's, not a fixed 7200.
+func TestDocsGiveTheStaleAlertThreshold(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/guides/prometheus-grafana.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(raw)), " ")
+	for _, bad := range []string{"(default 7200)", "upgradescope_cluster_last_push_age_seconds > 7200`", "above an hour"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("the Prometheus guide still says %q", bad)
+		}
+	}
+	for _, want := range []string{
+		"upgradescope_cluster_last_push_age_seconds > <threshold>`",
+		"`metrics.prometheusRule.clusterStaleAfterSeconds`, which defaults to 0",
+		"at or below `agent.interval` fails the render",
+		"(../operations.md#stale-clusters)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the Prometheus guide lacks %q", want)
+		}
 	}
 }
 
@@ -915,10 +1044,35 @@ func TestDocsDoNotRecommendReuseValues(t *testing.T) {
 	}
 }
 
+// unknownKeys lists, as dotted paths, the keys of user values that a chart's
+// values.yaml (defaults) does not have. Below a key whose default is a map
+// with keys, the user's keys must be among them; below an empty map (free
+// form, such as podAnnotations), a list or a scalar, any value goes.
+func unknownKeys(user, defaults map[string]any, path string) []string {
+	var out []string
+	for k, v := range user {
+		d, ok := defaults[k]
+		if !ok {
+			out = append(out, path+k)
+			continue
+		}
+		um, uok := v.(map[string]any)
+		dm, dok := d.(map[string]any)
+		if uok && dok && len(dm) > 0 {
+			out = append(out, unknownKeys(um, dm, path+k+".")...)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // The files in testdata/upgrade claim to be what `helm get values` printed
-// for a release of an older chart. Render each against that chart, taken from
-// its tag (skipped where the tag is not in the clone): the old chart's schema
-// refuses a key it did not have, so a file that models no real release fails.
+// for a release of an older chart. Each is checked against that chart, taken
+// from its tag (skipped where the tag is not in the clone), in two ways: it
+// must render on it, which from v0.2.0-rc.1 on means passing its schema,
+// which refuses a key it did not have; and every key must be one its
+// values.yaml has, which is the only guard for v0.1.1, whose chart has no
+// values.schema.json and renders whatever keys it is given.
 func TestUpgradeValuesFilesAreRealUserValues(t *testing.T) {
 	for file, tag := range map[string]string{
 		"user-values-v0.1.x.yaml":      "v0.1.1",
@@ -938,8 +1092,31 @@ func TestUpgradeValuesFilesAreRealUserValues(t *testing.T) {
 			if out, err := untar.CombinedOutput(); err != nil {
 				t.Fatalf("tar: %v\n%s", err, out)
 			}
-			if _, err := renderChartDir(t, filepath.Join(dir, "deploy", "chart"), filepath.Join("testdata", "upgrade", file)); err != nil {
+			chart := filepath.Join(dir, "deploy", "chart")
+			userFile := filepath.Join("testdata", "upgrade", file)
+			if _, err := renderChartDir(t, chart, userFile); err != nil {
 				t.Errorf("the %s chart refuses %s, so it is not what a %s release's user values were: %v", tag, file, tag, err)
+			}
+
+			var user, defaults map[string]any
+			for f, into := range map[string]*map[string]any{userFile: &user, filepath.Join(chart, "values.yaml"): &defaults} {
+				raw, err := os.ReadFile(f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := yaml.Unmarshal(raw, into); err != nil {
+					t.Fatalf("%s: %v", f, err)
+				}
+			}
+			if bad := unknownKeys(user, defaults, ""); len(bad) > 0 {
+				t.Errorf("%s sets %v, which the %s chart's values.yaml does not have: no %s release's user values held them", file, bad, tag, tag)
+			}
+			if _, err := os.Stat(filepath.Join(chart, "values.schema.json")); errors.Is(err, os.ErrNotExist) {
+				// No schema: the key check is the guard, so it must catch a
+				// key the chart lacked (server.retention came with v0.2.0).
+				if bad := unknownKeys(map[string]any{"server": map[string]any{"retention": "30d", "enabled": true}}, defaults, ""); !slices.Equal(bad, []string{"server.retention"}) {
+					t.Errorf("the key check against %s's values.yaml finds %v in {server: {retention, enabled}}, want [server.retention]", tag, bad)
+				}
 			}
 		})
 	}
@@ -1016,6 +1193,25 @@ func TestDocsSayToRestartAfterRotatingASecret(t *testing.T) {
 			if strings.Contains(text, bad) {
 				t.Errorf("%s still describes a secret-derived checksum (%q)", f, bad)
 			}
+		}
+	}
+	// The Deployments are <fullname>-server and <fullname>-agent: a release
+	// named foo has foo-upgradescope-server, so deploy/<release>-server names
+	// nothing.
+	for _, f := range []string{
+		"../../docs/operations/upgrade.md",
+		"../../docs/operations/security-model-and-rbac.md",
+		"../../docs/operations/tenancy.md",
+		"../../docs/operations/auth.md",
+		"../../hack/docs/chart-README.md.gotmpl",
+		"README.md",
+	} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "deploy/<release>-") {
+			t.Errorf("%s names a Deployment deploy/<release>-...; the chart's are deploy/<fullname>-server and -agent", f)
 		}
 	}
 	// The security page and the upgrade page both mention the follow-up and

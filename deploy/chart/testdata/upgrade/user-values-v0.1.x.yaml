@@ -1,12 +1,15 @@
 # What `helm get values` printed for a v0.1.x install that set a few
 # values (the chart then defaulted image.tag to "dev" in values.yaml; only
-# what the user set is in a release's user values).
+# what the user set is in a release's user values). Every key is one the
+# v0.1.1 chart's values.yaml has: that chart has no schema to refuse any
+# other, so TestUpgradeValuesFilesAreRealUserValues checks the keys
+# against its values.yaml.
 agent:
   interval: 5m
   clusterName: prod-eu
 server:
   enabled: true
   ingestToken: v01-ingest-token
-  retention: 30d
+  readToken: v01-read-token
   persistence:
     size: 5Gi

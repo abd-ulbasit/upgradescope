@@ -313,6 +313,19 @@ to 40m.
 {{- end -}}
 {{- end -}}
 
+{{/*
+The longest gap between two pushes of an unchanged cluster whose agent runs
+at agent.interval, in whole seconds: it pushes at its next tick after the
+hourly force-sync, so up to max(interval, 1h) plus one interval (70m at the
+default 10m). A stale threshold the render accepts (above the interval) but
+below this flags healthy clusters stale between their pushes: the NOTES
+warn about it.
+*/}}
+{{- define "upgradescope.pushGapSeconds" -}}
+{{- $interval := float64 (include "upgradescope.durationSeconds" .Values.agent.interval) -}}
+{{- printf "%d" (int64 (ceil (addf (maxf $interval 3600.0) $interval))) -}}
+{{- end -}}
+
 {{/* serve --stale-after: server.staleAfter as written, else "2h" when that is
 the default threshold, else the default in seconds ("10800s"). */}}
 {{- define "upgradescope.staleAfter" -}}

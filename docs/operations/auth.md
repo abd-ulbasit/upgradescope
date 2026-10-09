@@ -362,8 +362,10 @@ The chart has no values for the trusted header yet: add
 `--trust-team-header` and `--trusted-proxy-cidr` with your own manifest
 (the [example](#example-oauth2-proxy-as-a-sidecar)) or a post-renderer.
 Read tokens minted with `tokens create --read` work with the chart as it
-is (`kubectl exec deploy/<release>-server -- /upgradescope tokens create
---read --teams payments --db /data/upgradescope.sqlite`). Its Ingress
+is (`kubectl exec deploy/<fullname>-server -- /upgradescope tokens create
+--read --teams payments --db /data/upgradescope.sqlite`, where `<fullname>`
+is the release name plus `-upgradescope`, cut to 63 characters, or the
+release name alone when it contains `upgradescope`). Its Ingress
 guard knows only `server.readToken` and `server.ingress.allowAnonymousRead`:
 a deployment that relies on minted tokens alone sets
 `server.ingress.allowAnonymousRead=true`, which passes

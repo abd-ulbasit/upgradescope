@@ -196,7 +196,10 @@ cannot read is reported as not assessed.
   `server.ingestToken`, `readToken`, `adminToken`, a webhook value,
   `agent.serverToken` or the contents of a `server.existingSecret` or
   `agent.existingSecret`, run `kubectl -n <ns> rollout restart
-  deploy/<release>-server deploy/<release>-agent`: until then the pods keep
+  deploy/<fullname>-server deploy/<fullname>-agent` (`<fullname>` is the
+  release name plus `-upgradescope`, cut to 63 characters, or the release
+  name alone when it contains `upgradescope`; the install NOTES print the
+  command with your names): until then the pods keep
   the old value and the old token still works, which matters when you are
   rotating because a token leaked. The chart puts no hash of a secret in
   pod or Deployment metadata to trigger the restart, since everyone who can

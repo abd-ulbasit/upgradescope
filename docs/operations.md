@@ -553,7 +553,8 @@ the data of those cycles.
 A cluster is **stale** when its agent has not pushed, duplicates included,
 within `serve --stale-after` (default `2h`; chart `server.staleAfter`, which
 when unset is the larger of 2h and three times `agent.interval`, and which
-the chart refuses at or below that interval). An
+the chart refuses at or below that interval and warns about below the
+larger of the interval and 1h, plus one interval). An
 unchanged cluster pushes on its agent's next tick after the hourly
 force-sync, about every 70 minutes with the defaults, so a window under
 about 80 minutes would flag healthy clusters. An agent's interval of an

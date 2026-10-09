@@ -50,10 +50,12 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   they restart:
 
   ```sh
-  kubectl -n <ns> rollout restart deploy/<release>-server deploy/<release>-agent
+  kubectl -n <ns> rollout restart deploy/<fullname>-server deploy/<fullname>-agent
   ```
 
-  (the chart NOTES print the command with your Deployments' names). The
+  (`<fullname>` is the release name plus `-upgradescope`, cut to 63
+  characters, or the release name alone when it contains `upgradescope`;
+  the chart NOTES print the command with your Deployments' names). The
   same goes for the contents of a Secret you name (`server.existingSecret`,
   `agent.existingSecret`), and for a rotation you make with `kubectl`
   rather than Helm. The chart does not restart the pods for you because it
@@ -74,15 +76,17 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   you can clear it once with `kubectl -n <ns> patch secret
   <fullname>-server-tokens --type=json -p
   '[{"op":"remove","path":"/data/<key>"}]'` (the agent's Secret is
-  `<fullname>-agent-token`; `<fullname>` is the release name plus
-  `-upgradescope`, unless the release name already contains it), checking
+  `<fullname>-agent-token`), checking
   with `kubectl get secret ... -o jsonpath='{.data}'`. Or remove the value in
   a later upgrade.
 - **SQLite needs a writable `/tmp`.** The server's root filesystem is
   read-only, and SQLite spills a large delete (the daily retention prune,
   `clusters delete`) into a temp file. The chart mounts an emptyDir at
   `/tmp` (`server.tmp.sizeLimit`, 1Gi) and sets `SQLITE_TMPDIR` to it.
-  Chart versions before this one had no such directory, and a prune of
+  If you already mount a volume of your own at `/tmp`
+  (`server.extraVolumeMounts`), the chart adds none and SQLite uses yours,
+  which must be writable and large enough. Chart versions before this one
+  had no such directory, and a prune of
   more than a few tens of MB failed with `disk I/O error (6410)`: if
   you ran one, the first prune after the upgrade deletes the whole backlog
   at once, which can take a lot of temp space, so raise `server.tmp.sizeLimit`
@@ -94,7 +98,9 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   `UpgradescopeClusterStale` alert follows it
   (`metrics.prometheusRule.clusterStaleAfterSeconds` is 0, meaning the
   same threshold). A `server.staleAfter` or `clusterStaleAfterSeconds`
-  that is not above `agent.interval` now fails the render. With the
+  that is not above `agent.interval` now fails the render, and the install
+  notes warn about one below the larger of `agent.interval` and 1h, plus
+  one interval, which healthy clusters exceed between pushes. With the
   default 10m interval nothing changes. Clusters in other regions that
   push to this server have intervals the chart cannot see: keep the
   threshold above the longest of them.

@@ -299,7 +299,8 @@ server:
   # three times agent.interval (2h for any interval up to 40m): an unchanged
   # cluster pushes at its next tick after the hourly force-sync, so the gap
   # between pushes is about max(interval, 1h) plus a tick. A value you set
-  # must be above agent.interval or the render fails; it also covers
+  # must be above agent.interval or the render fails, and the install notes
+  # warn when it is below max(interval, 1h) plus a tick; it also covers
   # clusters in other regions that push to this server, whose own intervals
   # the chart cannot see, so keep it above the longest of them. The
   # UpgradescopeClusterStale alert follows it (metrics.prometheusRule).
@@ -418,8 +419,11 @@ server:
     # measured), so the default matches the default persistence.size: raise
     # it with that. An emptyDir that outgrows its limit evicts the pod. It
     # is node ephemeral storage, gone with the pod. The volume is named
-    # sqlite-tmp. Do not mount your own volume at /tmp (extraVolumeMounts) or
-    # name one sqlite-tmp (extraVolumes): the render fails and says so.
+    # sqlite-tmp. A volume of your own mounted at /tmp (extraVolumeMounts)
+    # replaces it: the chart then adds no temp volume, ignores this limit
+    # and keeps SQLITE_TMPDIR=/tmp, so yours must be writable and as large.
+    # Without one, an extraVolumes entry named sqlite-tmp fails the render
+    # (two volumes of one name).
     sizeLimit: 1Gi
   persistence:
     # -- PVC for the SQLite database (unused with database.existingSecret).
@@ -522,8 +526,9 @@ metrics:
     # server.enabled) a cluster that stopped pushing. Scrape the metrics
     # with serviceMonitor or your own config: the rules select the jobs
     # serviceMonitor produces, <fullname>-agent-metrics and
-    # <fullname>-server (upgradescope-agent-metrics and upgradescope-server
-    # for a release named upgradescope).
+    # <fullname>-server (shortened to fit 63 characters for long release
+    # names; upgradescope-agent-metrics and upgradescope-server for a
+    # release named upgradescope).
     enabled: false
     labels: {}
     # -- A cluster whose agent has not pushed for this long is stale. 0 = the
@@ -531,8 +536,9 @@ metrics:
     # 2h and three agent intervals), so the alert and the stale flag agree.
     # Set it only for a different alert threshold: agents push on every
     # change and at least hourly (--force-sync-every) and at most once per
-    # interval, so keep it above both; the render fails when it is not above
-    # agent.interval.
+    # interval, so keep it above max(agent.interval, 1h) plus one interval
+    # (4200 at the default 10m; the install notes warn below that). The
+    # render fails when it is not above agent.interval.
     clusterStaleAfterSeconds: 0
   grafanaDashboard:
     # -- Ship deploy/grafana/upgradescope-dashboard.json as a ConfigMap for
