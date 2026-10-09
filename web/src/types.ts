@@ -189,8 +189,21 @@ export interface AddOn {
   schema_version: number;
   id: string;
   display_name: string;
-  matchers: { images?: string[]; charts?: string[] };
-  support: { status: string; eol_date?: string; citations: string[] };
+  matchers: {
+    images?: string[];
+    charts?: string[];
+    // Images of a product's parts versioned on their own (Flux's controllers).
+    components?: { image: string }[];
+  };
+  support: {
+    status: string;
+    eol_date?: string;
+    // Split support: past eol_date, support continues until
+    // extended_eol_date only if extended_support_condition holds.
+    extended_eol_date?: string;
+    extended_support_condition?: string;
+    citations: string[];
+  };
   compat?: AddOnCompat[];
   recommendation?: string;
 }
