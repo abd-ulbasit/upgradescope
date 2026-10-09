@@ -305,9 +305,12 @@ func TestHelmCacheKeepsADriversEntriesWhenItsListFails(t *testing.T) {
 // #247: when the Helm step stops at its deadline with releases unread, what
 // it decoded before the deadline is in the cache, so the next tick fetches
 // and decodes only the releases the first left unread. The fake API answers
-// the first ten GETs at once and holds every later one past the step's
-// deadline, so the first tick decodes a prefix of the releases (in key
-// order: decoding is) and leaves the rest unread.
+// the first ten GETs at once and holds every later one until the step's
+// context is done, so the first tick decodes a prefix of the releases (in
+// key order: decoding is), at most ten, and leaves the rest unread. The
+// hold waits on the step's deadline itself, not on a clock of its own, so
+// however slow the machine no GET past the tenth is answered in time; all
+// the step's share must hold is the first release's GET and decode.
 func TestHelmCacheKeepsWhatAPartialStepDecoded(t *testing.T) {
 	const n = 40
 	var objs []runtime.Object
@@ -315,29 +318,39 @@ func TestHelmCacheKeepsWhatAPartialStepDecoded(t *testing.T) {
 		objs = append(objs, helmSecret(t, helmRev{ns: "apps", release: fmt.Sprintf("rel-%02d", i), rev: 1, status: "deployed",
 			chart: "app", chartVersion: "1.0.0", uid: fmt.Sprintf("uid-%d", i), rv: fmt.Sprint(100 + i)}))
 	}
-	const deadline = 500 * time.Millisecond // the Helm step's share: the first of two steps in twice that
+	// The Helm step's share: the first of ten steps in ten times that. The
+	// nine after it do nothing; they leave the scan most of its time when
+	// the step gives up, so the deadline that stops it is its own, however
+	// long its last fetches take to come back, and the reason says so.
+	const share, nSteps = 500 * time.Millisecond, 10
 	tick := func(cache *HelmCache, hold bool) (inventory.Inventory, []string) {
 		t.Helper()
 		kube, meta := helmClients(t, objs...)
+		// The Helm step's context's Done, set before the step fetches
+		// anything (its fetches run on goroutines it starts after).
+		var stepDone <-chan struct{}
+		ctx := context.Background()
 		if hold {
-			release := time.Now().Add(deadline * 3 / 2)
 			var gets atomic.Int32
 			kube.PrependReactor("get", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
 				if gets.Add(1) > 10 {
-					time.Sleep(time.Until(release)) // past the step's deadline
+					<-stepDone // until the step's deadline has passed
 				}
 				return false, nil, nil
 			})
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, nSteps*share)
+			defer cancel()
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*deadline)
-		defer cancel()
-		if !hold {
-			ctx = context.Background()
+		ss := []step{{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
+			stepDone = ctx.Done()
+			return collectHelmStep(ctx, Clients{Kube: kube, Metadata: meta}, nil, cache, inv)
+		}}}
+		for range nSteps - 1 {
+			ss = append(ss, step{cap: inventory.CapCRDs, run: func(context.Context, *inventory.Inventory) error { return nil }})
 		}
 		inv := inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
-		runSteps(ctx, &inv, []step{{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
-			return collectHelmStep(ctx, Clients{Kube: kube, Metadata: meta}, nil, cache, inv)
-		}}, {cap: inventory.CapCRDs, run: func(context.Context, *inventory.Inventory) error { return nil }}})
+		runSteps(ctx, &inv, ss)
 		return inv, helmGets(kube)
 	}
 
