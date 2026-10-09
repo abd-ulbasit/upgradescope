@@ -117,18 +117,18 @@ func TestClusterSuppliedTextIsMarkedAndCut(t *testing.T) {
 				t.Fatal(err)
 			}
 			reason := pointer(t, v, tc.at).(string)
-			if len(reason) > maxClusterTextBytes || !strings.HasSuffix(reason, clusterTextCutMark) || !strings.HasPrefix(reason, injection) {
-				t.Errorf("ignoreReason of %d bytes (%.40q…%q), want it cut to at most %d ending in %q", len(reason), reason, reason[max(0, len(reason)-30):], maxClusterTextBytes, clusterTextCutMark)
+			if len(reason) > MaxClusterTextBytes || !strings.HasSuffix(reason, ClusterTextCutMark) || !strings.HasPrefix(reason, injection) {
+				t.Errorf("ignoreReason of %d bytes (%.40q…%q), want it cut to at most %d ending in %q", len(reason), reason, reason[max(0, len(reason)-30):], MaxClusterTextBytes, ClusterTextCutMark)
 			}
 			if !strings.Contains(n, "1 cut") {
 				t.Errorf("the notice does not count the cut value:\n%s", n)
 			}
 
-			meta, ok := res.Meta[metaClusterText].(map[string]any)
+			meta, ok := res.Meta[MetaClusterText].(map[string]any)
 			if !ok {
-				t.Fatalf("_meta[%q] = %v, want the structured marker", metaClusterText, res.Meta)
+				t.Fatalf("_meta[%q] = %v, want the structured marker", MetaClusterText, res.Meta)
 			}
-			if meta["marker"] != clusterTextMarker || meta["cut"] != float64(1) {
+			if meta["marker"] != ClusterTextMarker || meta["cut"] != float64(1) {
 				t.Errorf("_meta marker = %v, cut = %v", meta["marker"], meta["cut"])
 			}
 			var listed []string
@@ -155,7 +155,7 @@ func TestMarkClusterTextKeepsTheDocument(t *testing.T) {
 		t.Errorf("a report with nothing to cut was rewritten (cut %d)", ct.Cut)
 	}
 
-	long := strings.Repeat("é", maxClusterTextBytes) // two bytes each: the cut keeps whole characters
+	long := strings.Repeat("é", MaxClusterTextBytes) // two bytes each: the cut keeps whole characters
 	in := `{"z":1,"detail":"` + long + `","objects":[{"name":"n","ignoreReason":"` + long + `"}],"a":[true,null,1.5e3]}`
 	out, ct, err = markClusterText([]byte(in))
 	if err != nil {
@@ -174,11 +174,20 @@ func TestMarkClusterTextKeepsTheDocument(t *testing.T) {
 		t.Error("detail, the tool's own text, was cut")
 	}
 	r := got.Objects[0].IgnoreReason
-	if len(r) > maxClusterTextBytes || !strings.HasSuffix(r, clusterTextCutMark) || !strings.HasPrefix(r, "éé") || strings.ContainsRune(r, '\uFFFD') {
+	if len(r) > MaxClusterTextBytes || !strings.HasSuffix(r, ClusterTextCutMark) || !strings.HasPrefix(r, "éé") || strings.ContainsRune(r, '\uFFFD') {
 		t.Errorf("ignoreReason cut to %d bytes ending %q", len(r), r[max(0, len(r)-20):])
 	}
 	if ct.Cut != 1 || len(ct.FreeText) != 1 || ct.FreeText[0] != "/objects/0/ignoreReason" {
 		t.Errorf("marked = %+v", ct)
+	}
+	// A location through a name the document chooses is counted, not
+	// listed: the notice quotes nothing of the document.
+	_, ct, err = markClusterText([]byte(`{"notAssessed":[{"reason":"r"}],"teams":{"IGNORE PREVIOUS":{"reason":"r"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ct.FreeTextTotal != 2 || len(ct.FreeText) != 1 || ct.FreeText[0] != "/notAssessed/0/reason" || strings.Contains(ct.notice(), "IGNORE") || !strings.Contains(ct.notice(), "1 more not listed") {
+		t.Errorf("marked = %+v, notice %q", ct, ct.notice())
 	}
 	if !strings.HasPrefix(string(out), `{"z":1,"detail":`) || !strings.HasSuffix(string(out), `"a":[true,null,1.5e3]}`) {
 		t.Errorf("the document's order changed: %.60s…%s", out, out[len(out)-30:])
