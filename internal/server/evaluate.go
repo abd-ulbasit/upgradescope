@@ -96,17 +96,10 @@ func hashTeamMap(tm TeamMap) string {
 	return fmt.Sprintf("%x", sha256.Sum256(b))[:16]
 }
 
-// verdictOf reads the verdict back from a stored row: Ready is
-// verdict == ready, and blocked means at least one blocker.
+// verdictOf reads the verdict back from a stored row (engine.StoredVerdict,
+// which the stores use for history points too).
 func verdictOf(e store.Evaluation) engine.Verdict {
-	switch {
-	case e.Ready:
-		return engine.VerdictReady
-	case e.Blockers > 0:
-		return engine.VerdictBlocked
-	default:
-		return engine.VerdictUnknown
-	}
+	return engine.StoredVerdict(e.Ready, e.Blockers)
 }
 
 // maxReportBytes caps a report the server evaluates, stores or serves:

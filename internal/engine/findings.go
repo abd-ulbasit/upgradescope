@@ -354,6 +354,23 @@ const (
 	VerdictUnknown Verdict = "unknown"
 )
 
+// StoredVerdict reads a report's verdict back from the two facts a stored
+// evaluation keeps beside the report: its ready flag (Verdict == VerdictReady)
+// and its blocker count. Ready is ready; otherwise any blocker is blocked;
+// otherwise a required gap hid the answer, so unknown. It is the one place
+// that derives a verdict from a row, shared by the server and both stores, so
+// the verdict a list, a history point and a summary show cannot drift apart.
+func StoredVerdict(ready bool, blockers int) Verdict {
+	switch {
+	case ready:
+		return VerdictReady
+	case blockers > 0:
+		return VerdictBlocked
+	default:
+		return VerdictUnknown
+	}
+}
+
 type Report struct {
 	ClusterID string            `json:"clusterId"`
 	Target    inventory.Version `json:"target"`

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // database/sql driver, registered as "sqlite"
+
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
 //go:embed migrations/*.sql
@@ -990,7 +992,7 @@ func (s *SQLite) ScoreHistory(ctx context.Context, clusterID int64, target strin
 		if err := rows.Scan(&created, &p.Score, &p.Ready, &blockers); err != nil {
 			return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 		}
-		p.Verdict = verdictOfRow(p.Ready, blockers)
+		p.Verdict = string(engine.StoredVerdict(p.Ready, blockers))
 		if p.At, err = parseStoredTime(created); err != nil {
 			return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 		}

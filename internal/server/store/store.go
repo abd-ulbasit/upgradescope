@@ -511,23 +511,9 @@ type ScorePoint struct {
 	// Verdict is the evaluation's verdict: ready, blocked (at least one
 	// blocker) or unknown (no blocker, but not ready). A score alone cannot
 	// tell unknown from ready: an evaluation whose required check did not
-	// run can score 100. Derived from the row (see verdictOfRow), so every
+	// run can score 100. Derived from the row (engine.StoredVerdict), so every
 	// stored evaluation has one; a client of an older server gets none.
 	Verdict string `json:"verdict,omitempty"`
-}
-
-// verdictOfRow reads the verdict back from a stored evaluation's ready flag
-// and blocker count, as the server's verdictOf does: ready is verdict ==
-// ready, and blocked means at least one blocker.
-func verdictOfRow(ready bool, blockers int) string {
-	switch {
-	case ready:
-		return "ready"
-	case blockers > 0:
-		return "blocked"
-	default:
-		return "unknown"
-	}
 }
 
 // timeFormat is RFC 3339 with a fixed nine-digit fractional second so that

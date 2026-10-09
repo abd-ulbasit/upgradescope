@@ -13,6 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver, registered as "pgx"
+
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
 //go:embed pgmigrations/*.sql
@@ -848,7 +850,7 @@ func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target str
 		if err := rows.Scan(&pt.At, &pt.Score, &pt.Ready, &blockers); err != nil {
 			return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 		}
-		pt.Verdict = verdictOfRow(pt.Ready, blockers)
+		pt.Verdict = string(engine.StoredVerdict(pt.Ready, blockers))
 		pt.At = pt.At.UTC()
 		out = append(out, pt)
 	}
