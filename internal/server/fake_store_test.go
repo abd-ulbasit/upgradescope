@@ -554,7 +554,7 @@ func (f *fakeStore) ScoreHistory(_ context.Context, clusterID int64, target stri
 	var all []store.ScorePoint
 	for _, e := range f.evals {
 		if e.ClusterID == clusterID && e.Target == target {
-			all = append(all, store.ScorePoint{At: e.CreatedAt, Score: e.Score, Ready: e.Ready})
+			all = append(all, store.ScorePoint{At: e.CreatedAt, Score: e.Score, Ready: e.Ready, Verdict: string(verdictOf(e))})
 		}
 	}
 	if limit > 0 && len(all) > limit {

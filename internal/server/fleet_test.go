@@ -1,16 +1,19 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -470,5 +473,136 @@ func TestFleetDefaultColumnsAreCapped(t *testing.T) {
 	resp, body := getRaw(t, ts2, "/api/v1/fleet", "")
 	if resp.StatusCode != http.StatusOK || strings.Contains(body, "targetsOmitted") {
 		t.Errorf("a two-cluster fleet: status %d, body %s; want 200 without targetsOmitted", resp.StatusCode, body)
+	}
+}
+
+// fleetVerdictFixture pushes the named clusters of four on v1.34 whose
+// "payments" team owns one warning-level finding (a deprecated HPA) and
+// nothing else of its own:
+//
+//	calm      the warning only                                  payments: ready
+//	orphaned  + a PSP blocker in a namespace no team owns       payments: blocked
+//	partial   + a required check that did not run               payments: unknown
+//	noisy     + both                                            payments: blocked
+func fleetVerdictFixture(t *testing.T, names ...string) *httptest.Server {
+	t.Helper()
+	deprecated, removed := inventory.Version{Major: 1, Minor: 30}, inventory.Version{Major: 1, Minor: 40}
+	s := newTestServer(t, newFakeStore(), func(c *Config) {
+		c.KB.APILifecycle = append(c.KB.APILifecycle, kb.APILifecycleEntry{
+			Group: "autoscaling", Version: "v2beta1", Kind: "HorizontalPodAutoscaler",
+			Introduced: inventory.Version{Major: 1, Minor: 8}, Deprecated: &deprecated, Removed: &removed,
+		})
+	})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	hpa := inventory.APIUsage{Group: "autoscaling", Version: "v2beta1", Kind: "HorizontalPodAutoscaler",
+		Count: 1, Namespaces: map[string]int{"pay": 1}}
+	psp := inventory.APIUsage{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy",
+		Count: 1, Namespaces: map[string]int{"": 1}}
+	shapes := map[string]struct {
+		usage []inventory.APIUsage
+		gap   bool
+	}{
+		"calm":     {[]inventory.APIUsage{hpa}, false},
+		"orphaned": {[]inventory.APIUsage{hpa, psp}, false},
+		"partial":  {[]inventory.APIUsage{hpa}, true},
+		"noisy":    {[]inventory.APIUsage{hpa, psp}, true},
+	}
+	for _, name := range names {
+		shape := shapes[name]
+		inv := testInventory()
+		inv.ClusterID = "uid-" + name
+		inv.Namespaces = []inventory.NamespaceInfo{{Name: "pay", Team: "payments"}}
+		inv.APIUsage = shape.usage
+		if shape.gap {
+			inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Available: true, Partial: true,
+				Reason: "list policy/v1beta1 podsecuritypolicies: forbidden", Skipped: []string{"policy/v1beta1 PodSecurityPolicy"}}
+		}
+		pushCluster(t, ts, name, inv)
+	}
+	return ts
+}
+
+// #243, VS-14: a team's score says nothing about a blocker no team owns or
+// a check that did not run, so the rollup carries the team's verdict, the
+// worst across clusters (blocked over unknown over ready).
+func TestFleetTeamsCarryTheTeamVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		clusters []string
+		want     engine.Verdict
+	}{
+		{"ready", []string{"calm"}, engine.VerdictReady},
+		{"an unattributed blocker blocks a team with only a warning", []string{"orphaned"}, engine.VerdictBlocked},
+		{"a required gap makes the team unknown", []string{"partial"}, engine.VerdictUnknown},
+		{"blocked beats unknown beats ready", []string{"calm", "partial", "orphaned"}, engine.VerdictBlocked},
+		{"unknown beats ready", []string{"calm", "partial"}, engine.VerdictUnknown},
+		{"blocked and unknown in one cluster", []string{"noisy"}, engine.VerdictBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := fleetVerdictFixture(t, tc.clusters...)
+			var got struct {
+				Teams map[string]struct {
+					WorstScore int            `json:"worstScore"`
+					Blockers   int            `json:"blockers"`
+					Verdict    engine.Verdict `json:"verdict"`
+				} `json:"teams"`
+			}
+			if resp := getJSON(t, ts, "/api/v1/fleet/teams?target=1.35", "", &got); resp.StatusCode != 200 {
+				t.Fatalf("status = %d", resp.StatusCode)
+			}
+			pay := got.Teams["payments"]
+			// The team's own findings are one warning everywhere: no
+			// blockers and a high score. Only the verdict knows better.
+			if pay.Blockers != 0 || pay.WorstScore < 90 {
+				t.Fatalf("payments = %+v, want a warning-only score of 90 or more and no blockers", pay)
+			}
+			if pay.Verdict != tc.want {
+				t.Errorf("payments verdict = %q, want %q", pay.Verdict, tc.want)
+			}
+		})
+	}
+}
+
+// #243: a cluster left out of the rollup says why (`excluded`), and
+// `missing` keeps listing every one of them for older readers.
+func TestFleetTeamsSaysWhyAClusterWasLeftOut(t *testing.T) {
+	st := newFakeStore()
+	s := newTestServer(t, st)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	pushCluster(t, ts, "fine", testInventory())
+	ctx := context.Background()
+	empty, err := st.UpsertCluster(ctx, store.Cluster{Name: "empty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken, err := st.UpsertCluster(ctx, store.Cluster{Name: "broken"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.InsertSnapshot(ctx, store.Snapshot{ClusterID: broken, Hash: "x", Inventory: []byte(`{`)}); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Missing  []string        `json:"missing"`
+		Excluded []fleetExcluded `json:"excluded"`
+	}
+	if resp := getJSON(t, ts, "/api/v1/fleet/teams?target=1.35", "", &got); resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	want := []fleetExcluded{
+		{Name: "empty", ClusterID: empty, Reason: "no-snapshot"},
+		{Name: "broken", ClusterID: broken, Reason: "unreadable"},
+	}
+	slices.SortFunc(got.Excluded, func(a, b fleetExcluded) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(want, func(a, b fleetExcluded) int { return strings.Compare(a.Name, b.Name) })
+	if !reflect.DeepEqual(got.Excluded, want) {
+		t.Errorf("excluded = %+v, want %+v", got.Excluded, want)
+	}
+	slices.Sort(got.Missing)
+	if !reflect.DeepEqual(got.Missing, []string{"broken", "empty"}) {
+		t.Errorf("missing = %v, want both names", got.Missing)
 	}
 }

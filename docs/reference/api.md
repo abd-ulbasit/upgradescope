@@ -296,7 +296,7 @@ Auth: `readToken` (bearer).
 
 **Per-team scores.** The score formula applied to each team's findings, from the same
 report the report endpoint serves. Findings with no team are under
-`unattributed`.
+`(unattributed)`, a name no label value can take and `--team-map` refuses, so a real team called `unattributed` is a separate row.
 
 Auth: `readToken` (bearer).
 
@@ -345,9 +345,18 @@ Auth: `readToken` (bearer).
 **Per-team rollup across the fleet.** For one target, each team's worst score, total blockers and the
 clusters it has findings in. Each cluster contributes its stored
 evaluation, else a what-if from its latest snapshot (`evaluated`
-says which); clusters without a snapshot, or whose what-if report
-would be over `--max-snapshot-bytes`, are `missing`, and clusters
-that already run the target are `notApplicable`.
+says which). Clusters left out are named in `missing` and, with the
+reason, in `excluded`: `no-snapshot` (the agent has not pushed
+one), `too-large` (the what-if report would be over
+`--max-snapshot-bytes`) or `unreadable` (the stored inventory does
+not decode). Clusters that already run the target are
+`notApplicable`.
+
+A team's `verdict` is the worst of its verdicts in the clusters
+evaluated: `blocked` over `unknown` over `ready`. Its score and
+blockers count only its own findings, so a team with a clean score
+can still be blocked by a blocker no team owns, or unknown because
+a required check did not run.
 
 Auth: `readToken` (bearer).
 
@@ -810,7 +819,7 @@ whole.
 
 ### TeamScores
 
-Team name to score; findings with no team are under `unattributed`.
+Team name to score; findings with no team are under `(unattributed)`, a name no label value can take and `--team-map` refuses, so a real team called `unattributed` is a separate row.
 
 Type: map of [TeamScore](#teamscore).
 
@@ -961,6 +970,7 @@ are not known. The same for every target.
 | `at` | string (date-time) | yes | — |
 | `score` | integer | yes | — |
 | `ready` | boolean | yes | — |
+| `verdict` | [Verdict](#verdict) | no | The evaluation's verdict. A score can't tell `unknown` from `ready` (an evaluation whose required check did not run can score 100), so draw the trend by this. Absent from servers that predate it. |
 
 ### FleetCell
 
@@ -1003,7 +1013,16 @@ are not known. The same for every target.
 |---|---|---|---|
 | `worstScore` | integer | yes | — |
 | `blockers` | integer | yes | — |
+| `verdict` | [Verdict](#verdict) | yes | The worst of the team's verdicts across the clusters, `blocked` over `unknown` over `ready`. Never read the score without it. |
 | `clusters` | array of string | yes | — |
+
+### FleetExcluded
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | — |
+| `clusterId` | integer (int64) | yes | — |
+| `reason` | `no-snapshot` \| `too-large` \| `unreadable` | yes | `no-snapshot`: the agent has not pushed one. `too-large`: the cluster has snapshots, but its report for the target would be over `--max-snapshot-bytes`. `unreadable`: its stored inventory does not decode (or the cluster went away mid-request). |
 
 ### FleetTeamsSource
 
@@ -1022,7 +1041,8 @@ are not known. The same for every target.
 | `target` | [Target](#target) | yes | — |
 | `teams` | map of [FleetTeam](#fleetteam) | yes | — |
 | `evaluated` | array of [FleetTeamsSource](#fleetteamssource) | yes | — |
-| `missing` | array of string | yes | — |
+| `missing` | array of string | yes | The names of every cluster left out of the rollup, whatever the reason; `excluded` says why. |
+| `excluded` | array of [FleetExcluded](#fleetexcluded) | yes | — |
 | `notApplicable` | array of string | yes | — |
 
 ### GateFinding

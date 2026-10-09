@@ -205,7 +205,7 @@ func writeSuppressed(w io.Writer, r engine.Report) {
 
 // writeTeamsSection renders per-team scores, only when at least one finding
 // is attributed to a named team. Teams sort alphabetically; the teamless
-// bucket renders as "unattributed", last.
+// bucket renders as "(unattributed)", last.
 func writeTeamsSection(w io.Writer, r engine.Report) {
 	scores := engine.TeamScores(r)
 	names := make([]string, 0, len(scores))
@@ -228,7 +228,7 @@ func writeTeamsSection(w io.Writer, r engine.Report) {
 	width := 0
 	for _, name := range names {
 		if name == "" {
-			name = "unattributed"
+			name = engine.UnattributedTeam
 		}
 		if len(name) > width {
 			width = len(name)
@@ -239,7 +239,7 @@ func writeTeamsSection(w io.Writer, r engine.Report) {
 		ts := scores[name]
 		label := name
 		if label == "" {
-			label = "unattributed"
+			label = engine.UnattributedTeam
 		}
 		fmt.Fprintf(w, "  %-*s  %3d/100  %-7s  blockers %d  warnings %d\n",
 			width, label, ts.Score, ts.Verdict, ts.Blockers, ts.Warnings)

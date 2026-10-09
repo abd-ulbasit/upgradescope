@@ -523,10 +523,17 @@ func decodeTeams(raw string) ([]string, error) {
 	return teams, nil
 }
 
+// ScorePoint is one evaluation in a cluster's score history.
 type ScorePoint struct {
 	At    time.Time `json:"at"`
 	Score int       `json:"score"`
 	Ready bool      `json:"ready"`
+	// Verdict is the evaluation's verdict: ready, blocked (at least one
+	// blocker) or unknown (no blocker, but not ready). A score alone cannot
+	// tell unknown from ready: an evaluation whose required check did not
+	// run can score 100. Derived from the row (engine.StoredVerdict), so every
+	// stored evaluation has one; a client of an older server gets none.
+	Verdict string `json:"verdict,omitempty"`
 }
 
 // timeFormat is RFC 3339 with a fixed nine-digit fractional second so that

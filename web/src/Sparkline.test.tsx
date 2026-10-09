@@ -46,4 +46,37 @@ describe("Sparkline", () => {
     // runs on to the right edge.
     expect((b - a) / (end - a)).toBeCloseTo(0.25, 3);
   });
+
+  // #243: an evaluation whose required check did not run can score 100. The
+  // trend draws verdicts, not scores: unknown is not the colour of ready.
+  it("colours each dot by its verdict, not its score", () => {
+    const at = (i: number) => new Date(t0 + i * day).toISOString();
+    const { container } = render(
+      <Sparkline
+        points={[
+          { at: at(0), score: 100, ready: true, verdict: "ready" },
+          { at: at(1), score: 100, ready: false, verdict: "unknown" },
+          { at: at(2), score: 75, ready: false, verdict: "blocked" },
+          { at: at(3), score: 82, ready: false }, // an older server: no verdict
+        ]}
+        now={t0 + 3 * day}
+      />,
+    );
+    const dots = [...container.querySelectorAll("circle")];
+    expect(dots[0]!.getAttribute("class")).toMatch(/spark-ready/);
+    expect(dots[1]!.getAttribute("class")).toMatch(/spark-unknown/);
+    expect(dots[1]!.getAttribute("class")).not.toMatch(/spark-ready|score-good/);
+    expect(dots[2]!.getAttribute("class")).toMatch(/spark-blocked/);
+    // Without a verdict a dot is neutral: no guess from the score.
+    expect(dots[3]!.getAttribute("class")).not.toMatch(/spark-(ready|unknown|blocked)|score-/);
+    expect(dots[1]!.querySelector("title")!.textContent).toMatch(/score 100, unknown/);
+    expect(dots[3]!.querySelector("title")!.textContent).not.toMatch(/ready|unknown|blocked/);
+  });
+
+  it("treats ready=true as ready even without a verdict", () => {
+    const { container } = render(
+      <Sparkline points={[{ at: new Date(t0).toISOString(), score: 100, ready: true }]} now={t0} />,
+    );
+    expect(container.querySelector("circle")!.getAttribute("class")).toMatch(/spark-ready/);
+  });
 });

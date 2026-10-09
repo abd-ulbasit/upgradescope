@@ -314,8 +314,8 @@ func TestHistory(t *testing.T) {
 			t.Fatalf("status %d points %d, want 200 with 3", resp.StatusCode, len(pts))
 		}
 		for _, p := range pts {
-			if p.Score != 75 || p.Ready {
-				t.Fatalf("point = %+v, want score 75 ready false", p)
+			if p.Score != 75 || p.Ready || p.Verdict != "blocked" {
+				t.Fatalf("point = %+v, want score 75 ready false verdict blocked", p)
 			}
 		}
 	})

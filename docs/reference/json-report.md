@@ -71,7 +71,7 @@ edit to its dataset):
     {"capability": "helm", "reason": "files mode"},
     {"capability": "versions", "reason": "files mode"}
   ],
-  "teams": {"unattributed": {"score": 75, "ready": false, "verdict": "blocked", "blockers": 1, "warnings": 0}}
+  "teams": {"(unattributed)": {"score": 75, "ready": false, "verdict": "blocked", "blockers": 1, "warnings": 0}}
 }
 ```
 
@@ -98,7 +98,7 @@ edit to its dataset):
 | `unrecognizedImagesOmitted` | How many more unrecognized repositories there were beyond the 200 listed. |
 | `support` | A cluster on EKS, GKE or AKS whose Kubernetes minor the knowledge base dates: `provider`, `minor`, `phase` (`standard`, `ending`, `extended`, `ended`), `extendedSupportFrom` (the day extended support begins) and `extendedSupportEnds`, and, only where the provider's price is cited, `annualCostDelta` (what extended support adds per cluster per year, a decimal string), `currency` and `priceAsOf`: a list price as of that day, not a bill, with `annualCostNote` when the provider charges it only to some clusters. Where the provider's extended support is opt-in (GKE, AKS) `extendedSupportCondition` names the configuration it applies under, and phases `ending` and `extended` then describe the provider's window, not a confirmed enrolment. Present whether or not it is a finding; absent for other clusters and manifests. The same for every target. See [managed-provider support](../concepts/support-lifecycle.md). |
 | `hops[]` | `scan --plan` only: the [upgrade plan](../guides/upgrade-plan.md), one entry per control-plane upgrade from the cluster's minor (or `--from`) to `target`, in order. Each has `from`, `to`, the `score` and `verdict` at `to`, `findings` (the ones first seen at this upgrade, in full), `changed` and `carried` (findings listed at an earlier upgrade, by `key`, with their `severity` and `title` here, `since`, the upgrade that lists them, and in `changed`, `was`, the earlier severity) and `notAssessed`. Every other field is the report at `target`, the verdict included. |
-| `teams` | Per-team scores; findings without a team are under `unattributed`. A team's `verdict` is `blocked` by a blocker of its own or by an unattributed one (it cannot be ruled out as the team's), otherwise `unknown` when the report has a required not-assessed gap, otherwise `ready`; another team's blockers do not lower it, and `ready` is `verdict == "ready"`. `score`, `blockers` and `warnings` count only the team's own findings. |
+| `teams` | Per-team scores; findings without a team are under `(unattributed)`. A team's `verdict` is `blocked` by a blocker of its own or by an unattributed one (it cannot be ruled out as the team's), otherwise `unknown` when the report has a required not-assessed gap, otherwise `ready`; another team's blockers do not lower it, and `ready` is `verdict == "ready"`. `score`, `blockers` and `warnings` count only the team's own findings. |
 
 The server's report endpoint serves the same report fields (except
 `kubeContext`, `apiServer` and `hops`, which only `scan` sets), plus where the

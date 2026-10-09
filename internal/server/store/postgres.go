@@ -13,6 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver, registered as "pgx"
+
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
 //go:embed pgmigrations/*.sql
@@ -839,8 +841,8 @@ func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target str
 		lim = limit
 	}
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT created_at, score, ready FROM (
-			SELECT id, created_at, score, ready FROM evaluations
+		SELECT created_at, score, ready, blockers FROM (
+			SELECT id, created_at, score, ready, blockers FROM evaluations
 			WHERE cluster_id = $1 AND target = $2
 			ORDER BY id DESC LIMIT $3
 		) recent ORDER BY id ASC`, clusterID, target, lim)
@@ -851,9 +853,11 @@ func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target str
 	var out []ScorePoint
 	for rows.Next() {
 		var pt ScorePoint
-		if err := rows.Scan(&pt.At, &pt.Score, &pt.Ready); err != nil {
+		var blockers int
+		if err := rows.Scan(&pt.At, &pt.Score, &pt.Ready, &blockers); err != nil {
 			return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 		}
+		pt.Verdict = string(engine.StoredVerdict(pt.Ready, blockers))
 		pt.At = pt.At.UTC()
 		out = append(out, pt)
 	}

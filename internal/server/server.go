@@ -485,9 +485,10 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 // contentSecurityPolicy fits the built dashboard: one module script and one
 // stylesheet from /assets, fetch() to the same origin, a data: favicon. No
 // inline or eval'd script is allowed — the SPA keeps the read token in
-// localStorage, so script injection is what this guards. Styles allow
-// 'unsafe-inline' for index.html's pre-paint <style> block and the HTML
-// export's inline stylesheet; injected CSS cannot read localStorage.
+// Web Storage (sessionStorage, or localStorage when the user ticks
+// "Remember on this device"), so script injection is what this guards.
+// Styles allow 'unsafe-inline' for index.html's pre-paint <style> block and
+// the HTML export's inline stylesheet; injected CSS cannot read Web Storage.
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
 	"object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"

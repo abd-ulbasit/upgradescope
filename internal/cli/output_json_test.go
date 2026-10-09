@@ -46,15 +46,15 @@ func TestWriteJSON(t *testing.T) {
 	}
 
 	// Presentation-time teams field: the blocker has no team → bucket
-	// "unattributed".
+	// "(unattributed)".
 	var withTeams struct {
 		Teams map[string]engine.TeamScore `json:"teams"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &withTeams); err != nil {
 		t.Fatalf("unmarshal teams: %v", err)
 	}
-	want := map[string]engine.TeamScore{"unattributed": {Score: 75, Ready: false, Verdict: engine.VerdictBlocked, Blockers: 1}}
-	if len(withTeams.Teams) != 1 || withTeams.Teams["unattributed"] != want["unattributed"] {
+	want := map[string]engine.TeamScore{engine.UnattributedTeam: {Score: 75, Ready: false, Verdict: engine.VerdictBlocked, Blockers: 1}}
+	if len(withTeams.Teams) != 1 || withTeams.Teams[engine.UnattributedTeam] != want[engine.UnattributedTeam] {
 		t.Errorf("teams = %+v, want %+v", withTeams.Teams, want)
 	}
 }
@@ -106,5 +106,27 @@ func TestWriteJSONNoFindingsOmitsTeams(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "\"teams\"") {
 		t.Errorf("teams key present for empty report:\n%s", buf.String())
+	}
+}
+
+// A team a namespace label calls "unattributed" and the findings no team
+// owns are two rows, never one merged or a blank-named one (#243).
+func TestTeamScoresForOutputRealTeamNamedUnattributed(t *testing.T) {
+	r := engine.Report{Findings: []engine.Finding{
+		{Category: engine.CatEOLAddon, Severity: engine.SevWarning, Key: "a", Teams: []string{"unattributed"}},
+		{Category: engine.CatEOLAddon, Severity: engine.SevBlocker, Key: "b"},
+	}}
+	got := teamScoresForOutput(r)
+	if len(got) != 2 {
+		t.Fatalf("teams = %+v, want 2 rows", got)
+	}
+	if got["unattributed"].Blockers != 0 || got["unattributed"].Warnings != 1 {
+		t.Errorf("the real team = %+v, want 0 blockers 1 warning", got["unattributed"])
+	}
+	if got[engine.UnattributedTeam].Blockers != 1 {
+		t.Errorf("the unowned bucket = %+v, want 1 blocker", got[engine.UnattributedTeam])
+	}
+	if _, blank := got[""]; blank {
+		t.Errorf("blank key leaked: %+v", got)
 	}
 }

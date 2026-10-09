@@ -465,3 +465,50 @@ func TestEvaluateUnreportedRequiredCapabilities(t *testing.T) {
 		})
 	}
 }
+
+// StoredVerdict is how the server and both stores read a verdict back from a
+// row (ready flag + blocker count). It must name the verdict Evaluate
+// produced, for each of the three, and answer every combination a row can
+// hold (the ready flag decides first, then any blocker).
+func TestStoredVerdict(t *testing.T) {
+	now := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	target := inventory.Version{Major: 1, Minor: 35}
+
+	blocked := clusterInv()
+	blocked.APIUsage = []inventory.APIUsage{{Group: "extensions", Version: "v1beta1", Kind: "Ingress", Count: 1}}
+	for want, inv := range map[Verdict]inventory.Inventory{
+		VerdictReady:   clusterInv(),
+		VerdictBlocked: blocked,
+		VerdictUnknown: degrade(clusterInv(), inventory.CapAPIUsage, "discovery: forbidden"),
+	} {
+		r := Evaluate(inv, testKB(), target, now)
+		if r.Verdict != want {
+			t.Fatalf("fixture for %q evaluated to %q", want, r.Verdict)
+		}
+		blockers := 0
+		for _, f := range r.Findings {
+			if f.Severity == SevBlocker {
+				blockers++
+			}
+		}
+		if got := StoredVerdict(r.Ready, blockers); got != want {
+			t.Errorf("StoredVerdict(ready=%v, blockers=%d) = %q, want the evaluated %q", r.Ready, blockers, got, want)
+		}
+	}
+
+	for _, tc := range []struct {
+		ready    bool
+		blockers int
+		want     Verdict
+	}{
+		{true, 0, VerdictReady},
+		{true, 1, VerdictReady},
+		{false, 0, VerdictUnknown},
+		{false, 1, VerdictBlocked},
+		{false, 7, VerdictBlocked},
+	} {
+		if got := StoredVerdict(tc.ready, tc.blockers); got != tc.want {
+			t.Errorf("StoredVerdict(%v, %d) = %q, want %q", tc.ready, tc.blockers, got, tc.want)
+		}
+	}
+}

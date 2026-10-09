@@ -265,9 +265,48 @@ func isNextMinor(version string, v inventory.Version) bool {
 
 // fleetTeam aggregates one team across the fleet for a single target.
 type fleetTeam struct {
-	WorstScore int      `json:"worstScore"` // min team score across clusters
-	Blockers   int      `json:"blockers"`   // summed across clusters
-	Clusters   []string `json:"clusters"`   // sorted cluster names with findings for this team
+	WorstScore int `json:"worstScore"` // min team score across clusters
+	Blockers   int `json:"blockers"`   // summed across clusters
+	// Verdict is the worst of the team's verdict in each cluster, with the
+	// precedence of the verdicts themselves: blocked over unknown over
+	// ready. A team's score alone says nothing about a blocker no team owns
+	// or a check that did not run; the verdict does (#243, VS-14).
+	Verdict  engine.Verdict `json:"verdict"`
+	Clusters []string       `json:"clusters"` // sorted cluster names with findings for this team
+}
+
+// worseVerdict is the worse of two verdicts: blocked over unknown over
+// ready. The zero value is worse than nothing, so it never wins.
+func worseVerdict(a, b engine.Verdict) engine.Verdict {
+	rank := func(v engine.Verdict) int {
+		switch v {
+		case engine.VerdictBlocked:
+			return 3
+		case engine.VerdictUnknown:
+			return 2
+		case engine.VerdictReady:
+			return 1
+		}
+		return 0
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
+// The reasons a cluster is left out of the teams rollup.
+const (
+	excludedNoSnapshot = "no-snapshot" // the agent has not pushed one
+	excludedTooLarge   = "too-large"   // its report would exceed --max-snapshot-bytes
+	excludedUnreadable = "unreadable"  // its stored inventory does not decode, or it vanished mid-request
+)
+
+// fleetExcluded is a cluster the teams rollup could not include and why.
+type fleetExcluded struct {
+	Name      string `json:"name"`
+	ClusterID int64  `json:"clusterId"`
+	Reason    string `json:"reason"` // no-snapshot | too-large | unreadable
 }
 
 // fleetTeamsSource records where one cluster's contribution came from.
@@ -284,9 +323,10 @@ type fleetTeamsSource struct {
 // /clusters/{id}/teams serves: its current stored evaluation, else a
 // what-if computed from its latest snapshot — so a target outside
 // --targets is a real answer, not an empty one. The response says which
-// clusters were evaluated and how (`evaluated`), which have no snapshot
-// (`missing`), and which already run the target (`notApplicable`, left out
-// of the rollup). target is required: team scores are only comparable at
+// clusters were evaluated and how (`evaluated`), which were left out
+// (`missing`, and `excluded` saying why: no snapshot, a report over the
+// size cap, an unreadable inventory), and which already run the target
+// (`notApplicable`, left out of the rollup). target is required: team scores are only comparable at
 // the same target.
 func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("target")
@@ -310,9 +350,14 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 	teams := map[string]*fleetTeam{}
 	evaluated := []fleetTeamsSource{}
 	missing, notApp := []string{}, []string{}
+	excluded := []fleetExcluded{}
+	exclude := func(c clusterState, reason string) {
+		missing = append(missing, c.Name)
+		excluded = append(excluded, fleetExcluded{Name: c.Name, ClusterID: c.ID, Reason: reason})
+	}
 	for _, c := range states {
 		if !c.hasSnapshot {
-			missing = append(missing, c.Name)
+			exclude(c, excludedNoSnapshot)
 			continue
 		}
 		if notApplicable(c.version, target) {
@@ -321,11 +366,16 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 		}
 		rep, src, err := s.fleetTeamsReport(ctx, c, target)
 		var tooLarge *reportTooLargeError
-		if errors.Is(err, errCorruptInventory) || errors.Is(err, store.ErrNotFound) || errors.As(err, &tooLarge) {
+		if errors.As(err, &tooLarge) {
+			log.Printf("server: fleet teams: %v", err)
+			exclude(c, excludedTooLarge)
+			continue
+		}
+		if errors.Is(err, errCorruptInventory) || errors.Is(err, store.ErrNotFound) {
 			// One bad row (or a cluster deleted meanwhile) must not take
 			// the rollup down: it has nothing to contribute.
 			log.Printf("server: fleet teams: %v", err)
-			missing = append(missing, c.Name)
+			exclude(c, excludedUnreadable)
 			continue
 		}
 		if err != nil {
@@ -336,10 +386,11 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 		for team, ts := range scopeOf(r).renderedTeams(rep) {
 			agg := teams[team]
 			if agg == nil {
-				agg = &fleetTeam{WorstScore: ts.Score}
+				agg = &fleetTeam{WorstScore: ts.Score, Verdict: ts.Verdict}
 				teams[team] = agg
-			} else if ts.Score < agg.WorstScore {
-				agg.WorstScore = ts.Score
+			} else {
+				agg.WorstScore = min(agg.WorstScore, ts.Score)
+				agg.Verdict = worseVerdict(agg.Verdict, ts.Verdict)
 			}
 			agg.Blockers += ts.Blockers
 			agg.Clusters = append(agg.Clusters, c.Name)
@@ -353,6 +404,7 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 		"teams":         teams,
 		"evaluated":     evaluated,
 		"missing":       missing,
+		"excluded":      excluded,
 		"notApplicable": notApp,
 	})
 }
