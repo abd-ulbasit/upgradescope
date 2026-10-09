@@ -2,6 +2,10 @@
 {{- $memLimit := include "upgradescope.goMemLimit" (dict "resources" .Values.agent.resources "extraEnv" .Values.agent.extraEnv) }}
 {{- $serverCA := include "upgradescope.agentTrustsServerCA" . }}
 {{- $caFile := include "upgradescope.agentServerCA" . }}
+{{- $tokenSource := dict }}
+{{- if include "upgradescope.pushEnabled" . }}
+{{- $tokenSource = include "upgradescope.agentTokenSource" . | fromJson }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -68,10 +72,16 @@ spec:
             {{- if .Values.agent.extraRegistry }}
             - "--registry-dir=/etc/upgradescope/registry"
             {{- end }}
+            {{- if $tokenSource }}
+            # The push token is a file mounted from its Secret (no subPath, so
+            # the kubelet updates it), never argv: the agent re-reads it when
+            # it changes, so a rotated token needs no restart.
+            - "--server-token-file=/etc/upgradescope/push-token/token"
+            {{- end }}
             {{- range .Values.agent.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- if or (include "upgradescope.pushEnabled" .) .Values.agent.extraEnv $memLimit }}
+          {{- if or .Values.agent.extraEnv $memLimit $serverCA }}
           env:
             {{- with $memLimit }}
             # 90% of the memory limit: the Go runtime does not read it.
@@ -83,13 +93,6 @@ spec:
             # has one) on top of the image's roots.
             - name: SSL_CERT_DIR
               value: /etc/upgradescope/server-ca
-            {{- end }}
-            {{- if include "upgradescope.pushEnabled" . }}
-            # The push token reaches the agent only through the environment,
-            # never argv (argv is readable via /proc/<pid>/cmdline).
-            - name: UPGRADESCOPE_SERVER_TOKEN
-              valueFrom:
-                secretKeyRef: {{- include "upgradescope.agentTokenRef" . | nindent 18 }}
             {{- end }}
             {{- with .Values.agent.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -119,11 +122,16 @@ spec:
           securityContext: {{- toYaml . | nindent 12 }}
           {{- end }}
           resources: {{- toYaml .Values.agent.resources | nindent 12 }}
-          {{- if or $serverCA $caFile .Values.agent.extraRegistry .Values.agent.extraVolumeMounts }}
+          {{- if or $serverCA $caFile $tokenSource .Values.agent.extraRegistry .Values.agent.extraVolumeMounts }}
           volumeMounts:
             {{- if or $serverCA $caFile }}
             - name: server-ca
               mountPath: /etc/upgradescope/server-ca
+              readOnly: true
+            {{- end }}
+            {{- if $tokenSource }}
+            - name: push-token
+              mountPath: /etc/upgradescope/push-token
               readOnly: true
             {{- end }}
             {{- if .Values.agent.extraRegistry }}
@@ -135,7 +143,7 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or $serverCA $caFile .Values.agent.extraRegistry .Values.agent.extraVolumes }}
+      {{- if or $serverCA $caFile $tokenSource .Values.agent.extraRegistry .Values.agent.extraVolumes }}
       volumes:
         {{- with .Values.agent.serverCA }}
         {{- if .configMap }}
@@ -160,6 +168,14 @@ spec:
             optional: true
             items:
               - {key: {{ .Values.server.tls.caKey | quote }}, path: ca.crt}
+        {{- end }}
+        {{- if $tokenSource }}
+        # Only the push token's key.
+        - name: push-token
+          secret:
+            secretName: {{ $tokenSource.name }}
+            items:
+              - {key: {{ $tokenSource.key }}, path: token}
         {{- end }}
         {{- if .Values.agent.extraRegistry }}
         - name: extra-registry

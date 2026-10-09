@@ -29,6 +29,36 @@ assert_env_secret() {
   fi
 }
 
+# assert_file_secret FILE FLAG PATH SECRET KEY VOLUME DESC: the container is
+# passed --FLAG-file=PATH, and the pod volume VOLUME is the Secret SECRET with
+# KEY as the file PATH ends in (optional: VOLUME is marked so when the
+# description says "optional").
+assert_file_secret() {
+  local file=$1 flag=$2 path=$3 secret=$4 key=$5 vol=$6 desc=$7 block
+  block="$(awk -v v="        - name: $vol" '
+    $0 == v { on = 1; print; next }
+    on && (/^        - name:/ || /^ {0,7}[^ ]/) { exit }
+    on { print }' "$file")"
+  if grep -qxF -- "            - \"--$flag-file=$path\"" "$file" &&
+     grep -qxE "[[:space:]]*secretName: $secret" <<<"$block" &&
+     grep -qF -- "{key: $key, path: ${path##*/}}" <<<"$block"; then
+    if [[ "$desc" == *optional* ]]; then
+      grep -qxE '[[:space:]]*optional: true' <<<"$block" && pass "$desc" || fail "$desc (volume $vol is not optional: true)"
+    else
+      grep -qE 'optional: true' <<<"$block" && fail "$desc (volume $vol is optional)" || pass "$desc"
+    fi
+  else
+    fail "$desc (--$flag-file=$path is not key $key of Secret $secret in volume $vol)"
+  fi
+}
+# assert_no_env_secret FILE: no container reads a secret from the environment
+# but the database URL (tokens, webhook URLs and keys are mounted files).
+assert_no_env_secret() {
+  local n
+  n="$(grep -cE 'secretKeyRef' "$1" || true)"
+  if [ "$n" = "${2:-0}" ]; then pass "$3"; else fail "$3 ($n secretKeyRef, want ${2:-0})"; fi
+}
+
 echo "== helm lint"
 helm lint --strict "$CHART"
 
@@ -169,13 +199,14 @@ done
 
 echo "== agent assertions: external-server render"
 assert_contains "$TMP/external.yaml" '--server-url=https://uscope.example.com' "explicit serverUrl wins"
-assert_env_secret "$TMP/external.yaml" UPGRADESCOPE_SERVER_TOKEN my-secret serverToken "agent token from agent.existingSecret"
+assert_file_secret "$TMP/external.yaml" server-token /etc/upgradescope/push-token/token my-secret serverToken push-token "agent token from agent.existingSecret, a mounted file"
+assert_no_env_secret "$TMP/external.yaml" 0 "the agent token is not an environment variable"
 assert_no_line "$TMP/external.yaml" 'kind: Secret' "no generated Secret when existingSecret set"
 
 echo "== agent assertions: inline agent.serverToken goes into a chart Secret"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set agent.serverUrl=https://uscope.example.com --set agent.serverToken=s3cret > "$TMP/inline-agent.yaml"
-assert_env_secret "$TMP/inline-agent.yaml" UPGRADESCOPE_SERVER_TOKEN upgradescope-agent-token serverToken "agent token from the chart's agent Secret"
+assert_file_secret "$TMP/inline-agent.yaml" server-token /etc/upgradescope/push-token/token upgradescope-agent-token serverToken push-token "agent token from the chart's agent Secret, a mounted file"
 assert_contains "$TMP/inline-agent.yaml" "serverToken: \"$(printf s3cret | base64)\"" "inline token stored in the Secret (data, base64: a removed one leaves no key)"
 
 echo "== agent assertions: targets render"
@@ -213,13 +244,13 @@ assert_line "$TMP/server.yaml" 'kind: Secret'                "Secrets rendered"
 assert_contains "$TMP/server.yaml" 'name: upgradescope-server' "server resources named *-server"
 assert_contains "$TMP/server.yaml" 'type: Recreate' "Recreate strategy (single SQLite writer)"
 assert_contains "$TMP/server.yaml" '--db=/data/upgradescope.sqlite' "db on the data volume"
-assert_env_secret "$TMP/server.yaml" UPGRADESCOPE_INGEST_TOKEN upgradescope-server-tokens ingestToken "ingest token from the Secret via env"
+assert_file_secret "$TMP/server.yaml" ingest-token /etc/upgradescope/secret-files/ingestToken upgradescope-server-tokens ingestToken secret-files "ingest token from the Secret, a mounted file"
 assert_contains "$TMP/server.yaml" 'ingestToken: "dGVzdC10b2tlbg=="' "ingest token in Secret data (base64), so switching it off removes it"
-assert_env_secret "$TMP/server.yaml" UPGRADESCOPE_SERVER_TOKEN upgradescope-server-tokens ingestToken "agent pushes with the server's ingest token"
+assert_file_secret "$TMP/server.yaml" server-token /etc/upgradescope/push-token/token upgradescope-server-tokens ingestToken push-token "agent pushes with the server's ingest token"
 assert_no_line "$TMP/server.yaml" '  serverToken: "test-token"' "no copy of the ingest token in a second Secret"
 assert_contains "$TMP/server.yaml" '--server-url=http://upgradescope-server.upgradescope.svc:8080' "agent points at in-chart server"
 assert_contains "$TMP/server.yaml" 'path: /healthz' "healthz probes"
-assert_not_contains "$TMP/server.yaml" 'UPGRADESCOPE_READ_TOKEN' "no read token unless set"
+assert_not_contains "$TMP/server.yaml" '--read-token-file' "no read token unless set"
 # serve refuses an open read API on a non-loopback --listen; the chart's
 # empty readToken default opts in explicitly (NOTES.txt warns about it).
 assert_contains "$TMP/server.yaml" '--allow-anonymous-read' "empty readToken opts in to anonymous reads"
@@ -227,16 +258,16 @@ assert_contains "$TMP/server.yaml" '--allow-anonymous-read' "empty readToken opt
 echo "== secrets never reach argv (no \$(VAR) expansion into args)"
 for f in "$TMP"/*.yaml; do
   assert_not_contains "$f" '$(UPGRADESCOPE_' "$(basename "$f"): no \$(UPGRADESCOPE_*) in args"
-  assert_not_contains "$f" '--ingest-token' "$(basename "$f"): no --ingest-token arg"
-  assert_not_contains "$f" '--server-token' "$(basename "$f"): no --server-token arg"
+  assert_not_contains "$f" '--ingest-token=' "$(basename "$f"): no --ingest-token= arg (the value is a mounted file)"
+  assert_not_contains "$f" '--server-token=' "$(basename "$f"): no --server-token= arg (the value is a mounted file)"
 done
 
 echo "== server assertions: read token set"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.enabled=true --set server.ingestToken=t \
   --set server.readToken=r > "$TMP/readtoken.yaml"
-assert_env_secret "$TMP/readtoken.yaml" UPGRADESCOPE_READ_TOKEN upgradescope-server-tokens readToken "read token from the Secret via env"
-assert_not_contains "$TMP/readtoken.yaml" '--read-token' "no read token in args"
+assert_file_secret "$TMP/readtoken.yaml" read-token /etc/upgradescope/secret-files/readToken upgradescope-server-tokens readToken secret-files "read token from the Secret, a mounted file"
+assert_not_contains "$TMP/readtoken.yaml" '--read-token=' "no read token value in args"
 assert_not_contains "$TMP/readtoken.yaml" '--allow-anonymous-read' "no anonymous reads with a read token"
 
 echo "== server assertions: no ingest token supplied -> chart generates one (one-command install)"
@@ -247,7 +278,7 @@ if grep -qE '^  ingestToken: "[A-Za-z0-9+/]{54}=="$' "$TMP/gentoken.yaml"; then 
 else
   fail "no generated ingestToken in the server Secret"
 fi
-assert_env_secret "$TMP/gentoken.yaml" UPGRADESCOPE_SERVER_TOKEN upgradescope-server-tokens ingestToken "agent uses the generated token"
+assert_file_secret "$TMP/gentoken.yaml" server-token /etc/upgradescope/push-token/token upgradescope-server-tokens ingestToken push-token "agent uses the generated token"
 
 echo "== server assertions: webhook URLs live only in the Secret"
 SLACK='https://hooks.slack.com/services/T000/B000/XXXX'
@@ -259,24 +290,25 @@ perl -0777 -ne 'print grep { !/^kind: Secret$/m } split /^---$/m' "$TMP/webhooks
 assert_contains "$TMP/webhooks.yaml" "slackWebhook: \"$(printf %s "$SLACK" | base64)\"" "Slack URL in the Secret (data, base64)"
 assert_not_contains "$TMP/webhooks-nosecret.txt" "$SLACK" "Slack URL nowhere outside the Secret"
 assert_not_contains "$TMP/webhooks-nosecret.txt" "$HOOK" "webhook URL nowhere outside the Secret"
-assert_env_secret "$TMP/webhooks.yaml" UPGRADESCOPE_SLACK_WEBHOOK upgradescope-server-tokens slackWebhook "Slack URL via env"
-assert_env_secret "$TMP/webhooks.yaml" UPGRADESCOPE_WEBHOOK_URL upgradescope-server-tokens webhook "webhook URL via env"
+assert_file_secret "$TMP/webhooks.yaml" slack-webhook /etc/upgradescope/secret-files/slackWebhook upgradescope-server-tokens slackWebhook secret-files "Slack URL, a mounted file"
+assert_file_secret "$TMP/webhooks.yaml" webhook /etc/upgradescope/secret-files/webhook upgradescope-server-tokens webhook secret-files "webhook URL, a mounted file"
 
 echo "== server assertions: server.existingSecret alone wires every key"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.enabled=true --set server.existingSecret=mysec > "$TMP/existing.yaml"
 assert_no_line "$TMP/existing.yaml" 'kind: Secret' "no chart Secret with server.existingSecret"
-assert_env_secret "$TMP/existing.yaml" UPGRADESCOPE_INGEST_TOKEN mysec ingestToken "server ingest token from existingSecret"
-assert_env_secret "$TMP/existing.yaml" UPGRADESCOPE_SERVER_TOKEN mysec ingestToken "agent token from the same existingSecret"
-assert_env_secret "$TMP/existing.yaml" UPGRADESCOPE_SLACK_WEBHOOK mysec slackWebhook "optional slackWebhook key"
-assert_env_secret "$TMP/existing.yaml" UPGRADESCOPE_WEBHOOK_URL mysec webhook "optional webhook key"
+assert_file_secret "$TMP/existing.yaml" ingest-token /etc/upgradescope/secret-files/ingestToken mysec ingestToken secret-files "server ingest token from existingSecret (required with the in-chart agent)"
+assert_file_secret "$TMP/existing.yaml" server-token /etc/upgradescope/push-token/token mysec ingestToken push-token "agent token from the same existingSecret"
+assert_file_secret "$TMP/existing.yaml" slack-webhook /etc/upgradescope/secret-files-optional/slackWebhook mysec slackWebhook secret-files-optional "optional slackWebhook key"
+assert_file_secret "$TMP/existing.yaml" webhook /etc/upgradescope/secret-files-optional/webhook mysec webhook secret-files-optional "optional webhook key"
+assert_contains "$TMP/existing.yaml" '--optional-secret-file=slack-webhook,webhook,webhook-secret' "serve is told which files may be absent"
 assert_contains "$TMP/existing.yaml" '--allow-anonymous-read' "no read token unless asked for"
 
 echo "== server assertions: read token from existingSecret, no inline value"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.enabled=true --set server.existingSecret=mysec \
   --set server.readTokenFromSecret=true > "$TMP/existing-read.yaml"
-assert_env_secret "$TMP/existing-read.yaml" UPGRADESCOPE_READ_TOKEN mysec readToken "read token from existingSecret"
+assert_file_secret "$TMP/existing-read.yaml" read-token /etc/upgradescope/secret-files/readToken mysec readToken secret-files "read token from existingSecret"
 assert_not_contains "$TMP/existing-read.yaml" '--allow-anonymous-read' "no anonymous reads"
 if helm template upgradescope "$CHART" --set server.enabled=true --set server.readTokenFromSecret=true >/dev/null 2>&1; then
   fail "readTokenFromSecret without existingSecret should fail"
@@ -308,7 +340,7 @@ assert_no_line "$TMP/hub.yaml" '  name: upgradescope-agent'  "no agent Deploymen
 assert_no_line "$TMP/hub.yaml" '  name: upgradescope'        "no agent ServiceAccount"
 assert_no_line "$TMP/hub.yaml" 'kind: ClusterRole'           "no ClusterRole"
 assert_no_line "$TMP/hub.yaml" 'kind: ClusterRoleBinding'    "no ClusterRoleBinding"
-assert_not_contains "$TMP/hub.yaml" 'UPGRADESCOPE_SERVER_TOKEN' "no agent push token"
+assert_not_contains "$TMP/hub.yaml" '--server-token-file' "no agent push token"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set agent.enabled=false --set server.enabled=true --set server.ingestToken=t \
   --set agent.serverToken=x --set agent.serverUrl=https://x.example \
@@ -387,22 +419,17 @@ echo "== hub: admin token and webhook secret, inline or from server.existingSecr
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.enabled=true --set server.ingestToken=t \
   --set server.adminToken=adm --set server.webhookSecret=whk > "$TMP/hub-admin.yaml"
-assert_env_secret "$TMP/hub-admin.yaml" UPGRADESCOPE_ADMIN_TOKEN upgradescope-server-tokens adminToken "admin token from the chart Secret"
-assert_env_secret "$TMP/hub-admin.yaml" UPGRADESCOPE_WEBHOOK_SECRET upgradescope-server-tokens webhookSecret "webhook secret from the chart Secret"
+assert_file_secret "$TMP/hub-admin.yaml" admin-token /etc/upgradescope/secret-files/adminToken upgradescope-server-tokens adminToken secret-files "admin token from the chart Secret"
+assert_file_secret "$TMP/hub-admin.yaml" webhook-secret /etc/upgradescope/secret-files/webhookSecret upgradescope-server-tokens webhookSecret secret-files "webhook secret from the chart Secret"
 assert_contains "$TMP/hub-admin.yaml" "adminToken: \"$(printf adm | base64)\"" "admin token stored in the Secret (data, base64)"
-assert_not_contains "$TMP/server.yaml" 'UPGRADESCOPE_ADMIN_TOKEN' "no admin token unless set"
+assert_not_contains "$TMP/server.yaml" '--admin-token-file' "no admin token unless set"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set agent.enabled=false --set server.enabled=true --set server.existingSecret=hub \
   --set server.readTokenFromSecret=true --set server.adminTokenFromSecret=true > "$TMP/hub-existing.yaml"
-assert_env_secret "$TMP/hub-existing.yaml" UPGRADESCOPE_ADMIN_TOKEN hub adminToken "admin token from existingSecret"
-assert_env_secret "$TMP/hub-existing.yaml" UPGRADESCOPE_READ_TOKEN hub readToken "read token from existingSecret"
-assert_env_secret "$TMP/hub-existing.yaml" UPGRADESCOPE_INGEST_TOKEN hub ingestToken "ingest token from existingSecret"
-assert_env_secret "$TMP/hub-existing.yaml" UPGRADESCOPE_WEBHOOK_SECRET hub webhookSecret "optional webhookSecret key"
-if grep -A6 -xE '[[:space:]]*- name: UPGRADESCOPE_INGEST_TOKEN' "$TMP/hub-existing.yaml" | grep -qxE '[[:space:]]*optional: true'; then
-  pass "a hub's shared ingest token is optional (per-cluster tokens suffice)"
-else
-  fail "the hub's ingestToken key should be optional without an in-chart agent"
-fi
+assert_file_secret "$TMP/hub-existing.yaml" admin-token /etc/upgradescope/secret-files/adminToken hub adminToken secret-files "admin token from existingSecret"
+assert_file_secret "$TMP/hub-existing.yaml" read-token /etc/upgradescope/secret-files/readToken hub readToken secret-files "read token from existingSecret"
+assert_file_secret "$TMP/hub-existing.yaml" ingest-token /etc/upgradescope/secret-files-optional/ingestToken hub ingestToken secret-files-optional "a hub's shared ingest token is optional (per-cluster tokens suffice)"
+assert_file_secret "$TMP/hub-existing.yaml" webhook-secret /etc/upgradescope/secret-files-optional/webhookSecret hub webhookSecret secret-files-optional "optional webhookSecret key"
 if helm template upgradescope "$CHART" --set server.enabled=true --set server.adminTokenFromSecret=true >/dev/null 2>&1; then
   fail "adminTokenFromSecret without existingSecret should fail"
 else

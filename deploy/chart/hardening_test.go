@@ -3,7 +3,6 @@ package chart
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -317,19 +316,30 @@ func renderNotes(t *testing.T, release string, sets ...string) string {
 	return s
 }
 
-// The NOTES tell the operator what the chart cannot do for them: restart the
-// pods after a token, webhook or existingSecret change, by the Deployments'
-// real names, and why.
-func TestNotesSayToRestartAfterRotatingASecret(t *testing.T) {
+// The NOTES say that a rotation needs no restart and how long it takes, and
+// still print the restart for what cannot rotate, by the Deployments' real
+// names.
+func TestNotesDescribeRotationWithoutARestart(t *testing.T) {
 	both := strings.Join(strings.Fields(renderNotes(t, "upgradescope", "server.enabled=true")), " ")
 	for _, want := range []string{
-		"kubectl -n upgradescope rollout restart deploy/upgradescope-server deploy/upgradescope-agent",
-		"environment variables",
-		"read once at start",
+		"Rotating a token or a webhook URL needs no restart",
+		"re-read a file when it changes",
+		"at most every 5s",
+		"up to about 60 to 90s",
 		"existingSecret",
+		"keeps the old value",
+		"naming the file",
+		"the database URL",
+		"server.extraEnv",
+		"kubectl -n upgradescope rollout restart deploy/upgradescope-server deploy/upgradescope-agent",
 	} {
 		if !strings.Contains(both, want) {
 			t.Errorf("NOTES lack %q:\n%s", want, both)
+		}
+	}
+	for _, bad := range []string{"environment variables, which", "restart the pods that read it"} {
+		if strings.Contains(both, bad) {
+			t.Errorf("NOTES still say %q", bad)
 		}
 	}
 	// A long release: the command names the Deployments that are rendered.
@@ -351,7 +361,7 @@ func TestNotesSayToRestartAfterRotatingASecret(t *testing.T) {
 	}
 	// Only what is installed.
 	agentOnly := renderNotes(t, "upgradescope", "agent.serverUrl=https://hub.example.com", "agent.serverToken=t")
-	if !strings.Contains(agentOnly, "rollout restart deploy/upgradescope-agent\n") || strings.Contains(agentOnly, "deploy/upgradescope-server") {
+	if !strings.Contains(agentOnly, "rollout restart deploy/upgradescope-agent\n") || strings.Contains(agentOnly, "rollout restart deploy/upgradescope-server") {
 		t.Errorf("agent-only NOTES:\n%s", agentOnly)
 	}
 }
@@ -381,10 +391,21 @@ func TestNotesWarnOfAFlappingStaleThreshold(t *testing.T) {
 			stale: "(90m) is below 7200s, the larger of agent.interval (1h) and 1h"},
 		{name: "staleAfter 5h at 3h", sets: append(slices.Clone(rule), "agent.interval=3h", "server.staleAfter=5h"), stale: "(5h) is below 21600s"},
 		{name: "alert 3601 at 10m", sets: append(slices.Clone(rule), "metrics.prometheusRule.clusterStaleAfterSeconds=3601"),
-			alert: "(3601) is below 4200, the larger of agent.interval (10m) and 1h, plus one interval."},
+			alert: "(3601) is below 4200s, the larger of agent.interval (10m) and 1h, plus one interval."},
 		{name: "alert 4200 at 10m", sets: append(slices.Clone(rule), "metrics.prometheusRule.clusterStaleAfterSeconds=4200")},
 		{name: "both", sets: append(slices.Clone(rule), "server.staleAfter=1h", "metrics.prometheusRule.clusterStaleAfterSeconds=3700"),
-			stale: "(1h) is below 4200s", alert: "(3700) is below 4200"},
+			stale: "(1h) is below 4200s", alert: "(3700) is below 4200s"},
+		// The force-sync period the agent really runs: --force-sync-every in
+		// agent.extraArgs, in either spelling, the last one winning.
+		{name: "force-sync 2h, staleAfter 2h", sets: append(slices.Clone(rule), "server.staleAfter=2h", "agent.extraArgs={--force-sync-every=2h}"),
+			stale: "(2h) is below 7800s, the larger of agent.interval (10m) and the force-sync period (7200s, agent.extraArgs --force-sync-every), plus one interval."},
+		{name: "force-sync 2h, staleAfter 3h", sets: append(slices.Clone(rule), "server.staleAfter=3h", "agent.extraArgs={--force-sync-every=2h}")},
+		{name: "force-sync 2h as two arguments", sets: append(slices.Clone(rule), "server.staleAfter=2h", "agent.extraArgs={--force-sync-every,2h}"),
+			stale: "(2h) is below 7800s"},
+		{name: "force-sync 30m is below the interval's hour", sets: append(slices.Clone(rule), "server.staleAfter=70m", "agent.extraArgs={--force-sync-every=30m}")},
+		{name: "last force-sync wins", sets: append(slices.Clone(rule), "server.staleAfter=2h", "agent.extraArgs={--force-sync-every=4h,--force-sync-every=1h}")},
+		{name: "force-sync 2h, alert 4200", sets: append(slices.Clone(rule), "agent.extraArgs={--force-sync-every=2h}", "metrics.prometheusRule.clusterStaleAfterSeconds=4200"),
+			alert: "(4200) is below 7800s, the larger of agent.interval (10m) and the force-sync period (7200s, agent.extraArgs --force-sync-every), plus one interval."},
 		// The alert threshold is unused without the rule.
 		{name: "alert without the rule", sets: []string{"server.enabled=true", "metrics.prometheusRule.clusterStaleAfterSeconds=3601"}},
 		// A hub with no in-chart agent does not know its agents' intervals.
@@ -762,9 +783,10 @@ func TestLongReleaseKeepsTheNamesOfResourcesThatExist(t *testing.T) {
 		t.Errorf("claimName = %q, want %q", claim, full+"-server-data")
 	}
 	_ = srv
-	env, _, _ := unstructured.NestedSlice(container(t, objs, full+"-server"), "env")
-	if raw, _ := json.Marshal(env); !strings.Contains(string(raw), `"name":"`+full+`-server-tokens"`) {
-		t.Errorf("the server reads its tokens from a Secret other than %s-server-tokens: %s", full, raw)
+	if v := volumeNamed(t, objs, full+"-server", "secret-files"); v == nil {
+		t.Error("no secret-files volume")
+	} else if name, _, _ := unstructured.NestedString(v, "secret", "secretName"); name != full+"-server-tokens" {
+		t.Errorf("the server reads its tokens from the Secret %q, want %s-server-tokens", name, full)
 	}
 }
 
@@ -1168,9 +1190,9 @@ func TestPodDisruptionBudgetBounds(t *testing.T) {
 }
 
 // The upgrade and security pages (and the chart README, generated from its
-// template) tell the operator to restart the pods after rotating a secret,
-// and none describes a pod-template checksum of one.
-func TestDocsSayToRestartAfterRotatingASecret(t *testing.T) {
+// template) say that a rotation needs no restart, how long it takes and what
+// still needs one, and none describes a pod-template checksum of a secret.
+func TestDocsDescribeRotationWithoutARestart(t *testing.T) {
 	for _, f := range []string{
 		"../../docs/operations/upgrade.md",
 		"../../docs/operations/security-model-and-rbac.md",
@@ -1183,15 +1205,20 @@ func TestDocsSayToRestartAfterRotatingASecret(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := strings.Join(strings.Fields(string(raw)), " ")
+		// What still needs a restart keeps its command.
 		if !strings.Contains(text, "rollout restart") {
-			t.Errorf("%s does not say to run kubectl rollout restart after rotating a secret", f)
+			t.Errorf("%s does not say what still needs kubectl rollout restart", f)
 		}
-		if f != "../../docs/operations/tenancy.md" && !(strings.Contains(text, "environment variables") && strings.Contains(text, "once")) {
-			t.Errorf("%s does not say why: the values are environment variables read once at start", f)
+		if !strings.Contains(text, "no restart") && !strings.Contains(text, "without a restart") {
+			t.Errorf("%s does not say a rotation needs no restart", f)
 		}
-		for _, bad := range []string{"salted", "carry a checksum of the values", "carries a checksum of the chart-managed", "restarts the server, since the pod template"} {
+		if !strings.Contains(text, "60 to 90 s") {
+			t.Errorf("%s does not give the rotation latency (60 to 90 seconds)", f)
+		}
+		for _, bad := range []string{"salted", "carry a checksum of the values", "carries a checksum of the chart-managed", "restarts the server, since the pod template",
+			"A follow-up will make", "re-read mounted token files, so that no restart", "read once, when they start, and the chart does not restart"} {
 			if strings.Contains(text, bad) {
-				t.Errorf("%s still describes a secret-derived checksum (%q)", f, bad)
+				t.Errorf("%s still says %q", f, bad)
 			}
 		}
 	}
@@ -1214,13 +1241,13 @@ func TestDocsSayToRestartAfterRotatingASecret(t *testing.T) {
 			t.Errorf("%s names a Deployment deploy/<release>-...; the chart's are deploy/<fullname>-server and -agent", f)
 		}
 	}
-	// The security page and the upgrade page both mention the follow-up and
-	// the reason the chart does not hash tokens.
+	// The security page and the upgrade page both give the reason the chart
+	// does not hash tokens.
 	for _, f := range []string{"../../docs/operations/upgrade.md", "../../docs/operations/security-model-and-rbac.md"} {
 		raw, _ := os.ReadFile(f)
 		text := strings.Join(strings.Fields(string(raw)), " ")
-		if !strings.Contains(text, "re-read mounted token files") || !strings.Contains(text, "tested against it offline") {
-			t.Errorf("%s lacks the reason or the follow-up", f)
+		if !strings.Contains(text, "tested against it offline") {
+			t.Errorf("%s lacks the reason the chart does not hash tokens", f)
 		}
 	}
 }
