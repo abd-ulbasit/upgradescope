@@ -219,8 +219,11 @@ cluster. The requests of one tick are:
   version. A CRD with a deprecated or unserved version adds a list of its
   custom resources. Where the Argo CD or Flux CRDs are served, the lists
   of Applications and HelmReleases add ceil(N / 50) requests each (whole
-  objects, so smaller pages), plus a GET per distinct OCIRepository a
-  HelmRelease references; a cluster with no Helm release also lists
+  objects, so smaller pages), plus a list of the OCIRepositories that
+  HelmRelease `chartRef`s point at (ceil(N / 50) requests, of their one
+  namespace or cluster-wide; per namespace when the cluster-wide list is
+  forbidden, and a GET for each only in a namespace whose list is forbidden
+  too, #248); a cluster with no Helm release also lists
   Deployments, StatefulSets and DaemonSets metadata-only, until it finds
   a tracking label or annotation of either tool, if the role lets it.
 - **Each pod is listed once.** The `kube-system` pods are read for the

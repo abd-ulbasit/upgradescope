@@ -1,9 +1,11 @@
 package collect
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path"
 	"regexp"
@@ -380,9 +382,15 @@ func markWorkloads(ctx context.Context, meta metadata.Interface, states []gitops
 // listCustomResources lists one custom resource cluster-wide, paged,
 // calling fn for every item.
 func listCustomResources(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, fn func(*unstructured.Unstructured)) error {
+	return listCustomResourcesIn(ctx, dyn, gvr, metav1.NamespaceAll, fn)
+}
+
+// listCustomResourcesIn lists one custom resource in namespace (all of
+// them when it is metav1.NamespaceAll), paged, calling fn for every item.
+func listCustomResourcesIn(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, namespace string, fn func(*unstructured.Unstructured)) error {
 	opts := metav1.ListOptions{Limit: gitopsPageSize}
 	for {
-		l, err := dyn.Resource(gvr).Namespace(metav1.NamespaceAll).List(ctx, opts)
+		l, err := dyn.Resource(gvr).Namespace(namespace).List(ctx, opts)
 		if err != nil {
 			return fmt.Errorf("list %s: %w", gvr.Resource, err)
 		}
@@ -466,14 +474,13 @@ func plausibleTarget(ns string) bool { return ns == "" || len(content.IsDNS1123L
 
 // readFluxHelmReleases reads the chart of every HelmRelease that deploys
 // to the scanned cluster: spec.chart.spec (a HelmRepository, GitRepository
-// or Bucket chart), or a chartRef to an OCIRepository, which it resolves.
-// A chartRef of another kind, or an OCIRepository that cannot be read, is
-// counted in s.unresolved.
+// or Bucket chart), or a chartRef to an OCIRepository, which it resolves
+// (readOCIRepositories). A chartRef of another kind, or an OCIRepository
+// that cannot be read, is counted in s.unresolved.
 func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc discovery.DiscoveryInterfaceWithContext, served map[string][]string, s *gitopsToolState) ([]inventory.GitOpsChart, error) {
-	type ref struct{ namespace, name string }
 	var out []inventory.GitOpsChart
-	var pending []int     // indexes into out of charts awaiting an OCIRepository
-	refs := map[int]ref{} // …and the OCIRepository each awaits
+	var pending []int        // indexes into out of charts awaiting an OCIRepository
+	refs := map[int]ociRef{} // …and the OCIRepository each awaits
 	err := listCustomResources(ctx, dyn, s.gvr, func(hr *unstructured.Unstructured) {
 		s.seen++
 		spec := mapAt(hr.Object, "spec")
@@ -522,7 +529,7 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 			ns = hr.GetNamespace()
 		}
 		pending = append(pending, len(out))
-		refs[len(out)] = ref{ns, stringAt(cr, "name")}
+		refs[len(out)] = ociRef{ns, stringAt(cr, "name")}
 		out = append(out, c)
 	})
 	if err != nil {
@@ -532,43 +539,135 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 		return out, nil
 	}
 	gvr, _ := servedResource(ctx, disc, served[fluxSource], fluxSource, fluxSourceVersion, "ocirepositories")
+	wanted := map[ociRef]bool{}
+	for _, r := range refs {
+		wanted[r] = true
+	}
+	repos := readOCIRepositories(ctx, dyn, gvr, wanted, s)
 	var resolved []inventory.GitOpsChart
-	cache := map[ref]*unstructured.Unstructured{}
 	for i, c := range out {
 		r, awaiting := refs[i]
 		if !awaiting {
 			resolved = append(resolved, c)
 			continue
 		}
-		repo, seen := cache[r]
-		if !seen && gvr != (schema.GroupVersionResource{}) {
-			var err error
-			repo, err = dyn.Resource(gvr).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
-			if err != nil && s.unresolvedWhy == "" {
-				s.unresolvedWhy = fmt.Sprintf("get ocirepository %s/%s: %v", r.namespace, r.name, err)
-			}
-			cache[r] = repo
-		}
-		// The URL is redacted first: the chart name is its last element,
-		// which a query string would otherwise be part of.
-		repoURL := ""
-		if repo != nil {
-			repoURL = redactRepoURL(stringAt(mapAt(repo.Object, "spec"), "url"))
-		}
-		chart := path.Base(strings.TrimRight(strings.TrimPrefix(repoURL, "oci://"), "/"))
-		if repoURL == "" || !plausibleChartName(chart) {
+		repo, ok := repos[r]
+		if !ok {
 			s.unresolved++
 			continue
 		}
-		ociRef := mapAt(mapAt(repo.Object, "spec"), "ref")
-		c.Chart, c.Repo = chart, repoURL
-		c.Version = stringAt(ociRef, "tag")
-		if c.Version == "" {
-			c.Version = stringAt(ociRef, "semver")
-		}
+		c.Chart, c.Repo, c.Version = repo.chart, repo.url, repo.version
 		resolved = append(resolved, c)
 	}
 	return resolved, nil
+}
+
+// ociRef names an OCIRepository a HelmRelease's chartRef points at.
+type ociRef struct{ namespace, name string }
+
+// ociChart is what a chart is read from an OCIRepository: only these
+// fields are kept of a listed one.
+type ociChart struct{ chart, url, version string }
+
+// ociChartOf reads the chart an OCIRepository names: the last element of
+// its URL, and its tag or semver range; false when it names none. The URL
+// is redacted first: the chart name is its last element, which a query
+// string would otherwise be part of.
+func ociChartOf(repo *unstructured.Unstructured) (ociChart, bool) {
+	spec := mapAt(repo.Object, "spec")
+	repoURL := redactRepoURL(stringAt(spec, "url"))
+	chart := path.Base(strings.TrimRight(strings.TrimPrefix(repoURL, "oci://"), "/"))
+	if repoURL == "" || !plausibleChartName(chart) {
+		return ociChart{}, false
+	}
+	ref := mapAt(spec, "ref")
+	version := stringAt(ref, "tag")
+	if version == "" {
+		version = stringAt(ref, "semver")
+	}
+	return ociChart{chart: chart, url: repoURL, version: version}, true
+}
+
+// readOCIRepositories resolves the OCIRepositories in wanted to the charts
+// they name, listing them rather than fetching each (#248: one GET per
+// chartRef was 500 of a steady tick's 596 requests at 1,000 HelmReleases):
+// one list, paged like the other custom resources, of the one namespace
+// they are all in, or cluster-wide when they are in several. When that
+// cluster-wide list is forbidden (a role granted per namespace), each
+// namespace that holds one is listed instead, and when a namespace's list
+// is forbidden too, its OCIRepositories are fetched by name, one GET each,
+// as before #248. An OCIRepository that cannot be read, is not there, or
+// names no chart is missing from the result (the caller counts each
+// chartRef to it as unresolved), and s.unresolvedWhy keeps the first
+// reason. Only the wanted OCIRepositories are kept of what a list returns.
+// Nothing is read when the resource is not served (gvr is zero).
+func readOCIRepositories(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, wanted map[ociRef]bool, s *gitopsToolState) map[ociRef]ociChart {
+	out := map[ociRef]ociChart{}
+	if gvr == (schema.GroupVersionResource{}) || len(wanted) == 0 {
+		return out
+	}
+	why := func(format string, args ...any) {
+		if s.unresolvedWhy == "" {
+			s.unresolvedWhy = fmt.Sprintf(format, args...)
+		}
+	}
+	keep := func(repo *unstructured.Unstructured) {
+		if r := (ociRef{repo.GetNamespace(), repo.GetName()}); wanted[r] {
+			if c, ok := ociChartOf(repo); ok {
+				out[r] = c
+			}
+		}
+	}
+	// list lists namespace (all of them for metav1.NamespaceAll); false
+	// when the list is forbidden. Another error leaves what it would have
+	// read unresolved, and is the reason.
+	list := func(namespace string) bool {
+		err := listCustomResourcesIn(ctx, dyn, gvr, namespace, keep)
+		switch {
+		case apierrors.IsForbidden(err):
+			return false
+		case err != nil && namespace == metav1.NamespaceAll:
+			why("%v (cluster-wide)", err)
+		case err != nil:
+			why("%v (in namespace %s)", err, namespace)
+		}
+		return true
+	}
+	byName := func(a, b ociRef) int {
+		return cmp.Or(strings.Compare(a.namespace, b.namespace), strings.Compare(a.name, b.name))
+	}
+	refs := slices.SortedFunc(maps.Keys(wanted), byName)
+	var namespaces []string // of refs, sorted
+	for _, r := range refs {
+		if len(namespaces) == 0 || namespaces[len(namespaces)-1] != r.namespace {
+			namespaces = append(namespaces, r.namespace)
+		}
+	}
+	if len(namespaces) == 1 || !list(metav1.NamespaceAll) {
+		for _, ns := range namespaces {
+			if list(ns) {
+				continue
+			}
+			for _, r := range refs { // the list is forbidden here: a GET by name each
+				if r.namespace != ns {
+					continue
+				}
+				repo, err := dyn.Resource(gvr).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
+				if err != nil {
+					why("get ocirepository %s/%s: %v", r.namespace, r.name, err)
+					continue
+				}
+				keep(repo)
+			}
+		}
+	}
+	for _, r := range refs {
+		if _, ok := out[r]; !ok {
+			why("ocirepository %s/%s not found, or names no chart", r.namespace, r.name)
+			break
+		}
+	}
+	return out
 }
 
 // redactRepoURL returns a chart repository URL read from a custom resource
