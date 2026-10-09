@@ -127,7 +127,7 @@ transient failures with exponential backoff, fully jittered (each wait is
 anywhere from 0 to the 1s, 2s, 4s step), so agents started together, whose
 first pushes coincide, do not retry together. A `Retry-After` on a 429 or 503
 is honoured as the least wait (capped at one minute), plus up to a quarter
-of it more, for the same reason. Permanent 4xx responses drop the payload. A
+of it more, for the same reason, so one retry waits at most 75 seconds. Permanent 4xx responses drop the payload. A
 redirect is never followed, since the push would turn into a body-less GET:
 it counts as a permanent failure, and the log names the status and `Location`;
 set `--server-url` to the final URL. The canonical hash zeroes `collectedAt`, so an unchanged cluster

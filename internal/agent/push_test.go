@@ -674,7 +674,8 @@ func TestLoadServerCAsRejectsUnusableFiles(t *testing.T) {
 
 // Every retry delay is in its jitter band: the backoff step fully
 // jittered, from 0 to the step, and a Retry-After never shortened, at
-// most a quarter longer. Draws from a seeded source cover the band.
+// most a quarter longer, so never over 75s. Draws from a seeded source
+// cover the band.
 func TestRetryDelayJitterBand(t *testing.T) {
 	rng := rand.New(rand.NewPCG(238, 1))
 	for _, ask := range []time.Duration{0, 10 * time.Second, time.Hour} {
@@ -686,6 +687,9 @@ func TestRetryDelayJitterBand(t *testing.T) {
 				d := retryDelay(attempt, ask, rng.Float64())
 				if d < lo || d > hi {
 					t.Fatalf("retryDelay(%d, %v) = %v, outside [%v, %v]", attempt, ask, d, lo, hi)
+				}
+				if d > 75*time.Second { // the ceiling maxPushBackoff's comment and AG-05 state
+					t.Fatalf("retryDelay(%d, %v) = %v, over 75s", attempt, ask, d)
 				}
 				seen[d] = true
 			}

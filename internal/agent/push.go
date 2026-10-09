@@ -32,11 +32,15 @@ type pushPayload struct {
 }
 
 const (
-	pushRetries    = 3 // retries after the initial attempt
+	pushRetries = 3 // retries after the initial attempt
+	// maxPushBackoff caps the backoff step and a server's Retry-After
+	// before retryDelay jitters them: a Retry-After at the cap is waited
+	// for up to a quarter longer, so one retry wait is at most 75s.
 	maxPushBackoff = time.Minute
 )
 
-// backoff is the delay before retry n (0-based): 1s, 2s, 4s, ... capped at 1m.
+// backoff is the delay before retry n (0-based): 1s, 2s, 4s, ... capped at
+// 1m, before retryDelay's jitter.
 func backoff(attempt int) time.Duration {
 	d := time.Second << uint(min(attempt, 20))
 	if d > maxPushBackoff {
@@ -215,7 +219,9 @@ func (p *pusher) flush(ctx context.Context) error {
 // the backoff step with full jitter (u × the step, so anywhere from 0 to
 // the step), or, when the server sent a Retry-After, that ask (capped at
 // maxPushBackoff) plus up to a quarter of it more (× (1 + u/4)): never
-// earlier than the server asked, whichever is longer. Agents started
+// earlier than the server asked, whichever is longer, and at most 75s (a
+// capped ask, jittered; capping after the jitter would put every agent
+// asked for a minute or more back in lockstep at the cap). Agents started
 // together, which the server answers with the same 503 and Retry-After,
 // then retry spread over the band instead of in lockstep (#238).
 func retryDelay(attempt int, retryAfter time.Duration, u float64) time.Duration {
