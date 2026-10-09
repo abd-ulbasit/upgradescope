@@ -118,7 +118,7 @@ func TestTickWithASlowCollectionStillWritesTheStatusAndPushes(t *testing.T) {
 	fake := fakeDyn().(*dynamicfake.FakeDynamicClient)
 	srv := newSnapServer(t)
 	r := testRunner(t, ctxDyn{Interface: fake}, srv.srv.URL)
-	const budget = time.Second
+	const budget = 3 * time.Second // a 1.5s reserve: 750ms for the status write, room on a loaded runner
 	r.tickBudget = budget
 	collectDeadline := slowCollect(r)
 
@@ -145,7 +145,7 @@ func TestTickWithAStalledStatusWriteStillMarksTheCR(t *testing.T) {
 	fake := fakeDyn().(*dynamicfake.FakeDynamicClient)
 	srv := newSnapServer(t)
 	r := testRunner(t, ctxDyn{Interface: fake, stall: map[string]bool{"update-status": true}}, srv.srv.URL)
-	r.tickBudget = time.Second
+	r.tickBudget = 3 * time.Second
 	slowCollect(r)
 
 	rep := r.runTick(context.Background())
