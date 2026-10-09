@@ -74,8 +74,9 @@ func WithCheckInterval(d time.Duration) Option { return func(f *File) { f.interv
 func WithClock(now func() time.Time) Option { return func(f *File) { f.now = now } }
 
 // WithLogf sends the reload log lines to logf instead of the standard logger.
-// isError is true for a value that could not be taken or was removed, false
-// for a reload that worked. A line names the file and never a value.
+// isError is true for a value that could not be taken, false for a reload
+// that worked or a removal that revoked a value on purpose (RemovalClears).
+// A line names the file and never a value.
 func WithLogf(logf func(isError bool, format string, args ...any)) Option {
 	return func(f *File) { f.logf = logf }
 }
@@ -169,13 +170,22 @@ func (f *File) Value() string {
 func (f *File) reloadIfChanged() {
 	st, err := os.Stat(f.path) // follows symlinks: a Secret volume's files are links through ..data
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && f.removalClears && f.stamp != nil {
-			f.stamp = nil
-			empty := ""
-			f.value.Store(&empty)
-			f.failure = ""
-			f.logf(true, "secretfile: %s was removed: its value is no longer in service", f.path)
-			return
+		if errors.Is(err, fs.ErrNotExist) {
+			if f.optional && f.stamp == nil {
+				// Absent on purpose (a Secret without the key) or already
+				// removed and logged: nothing was ever loaded, nothing to
+				// keep, nothing to report.
+				return
+			}
+			if f.removalClears && f.stamp != nil {
+				f.stamp = nil
+				empty := ""
+				f.value.Store(&empty)
+				f.failure = ""
+				// A revocation the operator asked for, not a fault.
+				f.logf(false, "secretfile: %s was removed: its value is no longer in service", f.path)
+				return
+			}
 		}
 		f.fail(err)
 		return

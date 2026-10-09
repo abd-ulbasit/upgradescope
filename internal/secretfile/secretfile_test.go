@@ -395,3 +395,117 @@ func TestReloadGroupSerializesReloadsWithoutBlocking(t *testing.T) {
 		t.Fatalf("the skipped check was lost: Value = %q, want other-2", v)
 	}
 }
+
+// levels records each log line with its severity.
+type levels struct {
+	mu   sync.Mutex
+	errs []string
+	info []string
+}
+
+func (l *levels) logf(isError bool, format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if isError {
+		l.errs = append(l.errs, fmt.Sprintf(format, args...))
+	} else {
+		l.info = append(l.info, fmt.Sprintf(format, args...))
+	}
+}
+
+// A key absent on purpose (existingSecret without ingestToken) is not a
+// fault: no ERROR on any check, however many.
+func TestOptionalFileMissingOnPurposeLogsNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ingest")
+	clk := &clock{t: time.Unix(1_700_000_000, 0)}
+	lv := &levels{}
+	f, err := Open(path, Optional(), RemovalClears(), WithClock(clk.now), WithLogf(lv.logf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		clk.advance(DefaultCheckInterval)
+		if got := f.Value(); got != "" {
+			t.Fatalf("Value = %q, want empty", got)
+		}
+	}
+	if len(lv.errs) != 0 || len(lv.info) != 0 {
+		t.Fatalf("an optional file that was never there logs nothing, got errors %q info %q", lv.errs, lv.info)
+	}
+}
+
+// Revoking by deleting the key is logged once, at INFO, and the checks after
+// it stay quiet.
+func TestOptionalRemovalIsLoggedOnceAtInfo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ingest")
+	write(t, path, "tok")
+	clk := &clock{t: time.Unix(1_700_000_000, 0)}
+	lv := &levels{}
+	f, err := Open(path, Optional(), RemovalClears(), WithClock(clk.now), WithLogf(lv.logf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		clk.advance(DefaultCheckInterval)
+		if got := f.Value(); got != "" {
+			t.Fatalf("Value = %q, want revoked", got)
+		}
+	}
+	if len(lv.errs) != 0 {
+		t.Fatalf("a removal on purpose is not an ERROR: %q", lv.errs)
+	}
+	if len(lv.info) != 1 || !strings.Contains(lv.info[0], "was removed") {
+		t.Fatalf("want exactly one INFO line about the removal, got %q", lv.info)
+	}
+}
+
+// A required file that goes missing is still an ERROR and keeps the value.
+func TestRequiredFileMissingStillErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ingest")
+	write(t, path, "tok")
+	clk := &clock{t: time.Unix(1_700_000_000, 0)}
+	lv := &levels{}
+	f, err := Open(path, WithClock(clk.now), WithLogf(lv.logf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(path)
+	clk.advance(DefaultCheckInterval)
+	if got := f.Value(); got != "tok" {
+		t.Fatalf("Value = %q, want the old value", got)
+	}
+	if len(lv.errs) != 1 {
+		t.Fatalf("want one ERROR, got %q", lv.errs)
+	}
+}
+
+// A swap to another file with the same size and a modification time set back
+// to the old one is still a change: only the file's identity differs.
+func TestSwapToAnotherInodeWithSameSizeAndMtimeIsPickedUp(t *testing.T) {
+	f, path, clk, _ := setup(t, "aaaa")
+	old, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, "bbbb") // new inode, same size
+	if err := os.Chtimes(path, time.Time{}, old.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	now, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(old, now) {
+		t.Fatal("setup: the swapped file has the old inode (the old file was still there when the new one was written)")
+	}
+	if !now.ModTime().Equal(old.ModTime()) || now.Size() != old.Size() {
+		t.Fatalf("setup: want equal size and mtime, got %v/%d and %v/%d", now.ModTime(), now.Size(), old.ModTime(), old.Size())
+	}
+	clk.advance(DefaultCheckInterval)
+	if got := f.Value(); got != "bbbb" {
+		t.Fatalf("Value = %q, want bbbb: a replaced file with the same size and mtime must be reloaded", got)
+	}
+}
