@@ -99,6 +99,26 @@ To accept a finding for now, with a reason and an expiry, use an
   `--skip-crds`, or the CRD was deleted. Apply `deploy/chart/crds/`.
   With `agent.manageCRD=true` the agent stops at startup with this error;
   with `false`, every tick fails with it.
+- **`could not bring the ClusterReadiness CRD up to date`** (startup, WARN)
+  **and `crdError` on tick lines.** The CRD exists but the agent could not
+  check or upgrade its schema: a transient apiserver fault, or a role
+  without `patch` on the CRD. Every tick tries again until it succeeds;
+  meanwhile `status.notAssessed` leads with a note, because an older schema
+  makes the apiserver drop the status fields it lacks (conditions, for
+  Argo CD and `kubectl wait`). A role that may not patch the CRD should run
+  with `agent.manageCRD=false` and the CRD applied by hand.
+- **The agent exits at once with `invalid --server-url`, `invalid
+  --server-token`, `invalid --cluster-name` or `invalid
+  --force-sync-every`.** These settings could never work, so they are
+  refused before the agent touches the cluster: the server URL must be an
+  `http://` or `https://` URL with a host (`fleet.example.com` alone is
+  not); the token must have no whitespace or control character inside it
+  (surrounding whitespace, such as the newline of a Secret made with
+  `--from-file`, is trimmed from every source); `--cluster-name` may not
+  be set to `""` (leave it out to use the cluster UID); and
+  `--force-sync-every` must be positive. A `--force-sync-every` below
+  `--interval` is raised to the interval, with a warning, since the agent
+  pushes at most once per tick.
 - **The pod never becomes Ready.** Readiness waits for a successful tick.
   `kubectl logs` shows one line per tick, with `tick failed` and the error.
   A tick fails when no target can be evaluated (no `spec.targets` and an
@@ -113,8 +133,10 @@ To accept a finding for now, with a reason and an expiry, use an
   annotation.** The agent could not write the status, at the time and for the
   reason the annotation gives, so the verdict shown is the last one it could
   write: stale. The usual cause is a role without `update` on
-  `clusterreadinesses/status` (a hand-written role, `rbac.create=false`); the
-  next successful write removes the annotation. If the role also lacks
+  `clusterreadinesses/status` (a hand-written role, `rbac.create=false`);
+  it is also set when the agent could not read the object's spec or set
+  its `spec.targets`, since a status for targets it did not read is not
+  written. The next successful write removes the annotation. If the role also lacks
   `patch` on the object itself, there is no annotation, and the signals are
   `/readyz`, the agent's logs (`tick failed`) and the alert above.
 
