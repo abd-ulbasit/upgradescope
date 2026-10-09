@@ -24,7 +24,15 @@
 # rke2-images-all lists of each release). RKE1 published its own build on
 # the same repository with "-rancherN" tags (nginx-1.12.1-rancher4,
 # 0.21.0-rancher1: rancher/kontainer-driver-metadata), so this entry claims
-# the hardened tags only, and ingress-nginx.yaml the rest.
+# the hardened tags only, and ingress-nginx.yaml the rest. RKE2's first
+# releases shipped a "-rancherN" build too (nginx-0.30.0-rancher1 in
+# v1.18.10+rke2r1 through v1.20.11, nginx-0.46.0-rancher1 in v1.21.2+rke2r1;
+# hardened from v1.20.12 and v1.21.3, per each release's
+# rke2-images.linux-amd64.txt, read 2026-10-09): those releases and that
+# build are long out of support, so ingress-nginx's verdict holds for them.
+# An image pinned by digest alone has no tag; the collector gives it to
+# this entry when its pod's labels or a Helm release in its namespace name
+# rke2-ingress-nginx.
 schema_version: 2
 id: rke2-ingress-nginx
 display_name: RKE2 Ingress NGINX

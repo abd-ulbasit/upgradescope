@@ -17,13 +17,19 @@ the dashboard.
   one repository publishes two vendors' builds that only the tag tells
   apart, an entry claims its tags with a tag pattern:
   `rancher/nginx-ingress-controller` is RKE2's build with a `-hardenedN`
-  tag and RKE1's (Ingress NGINX) with any other.
+  tag and Ingress NGINX with any other: RKE1's `-rancherN` builds, which
+  RKE2's first releases also shipped (`nginx-0.30.0-rancher1` up to
+  v1.20.11, `nginx-0.46.0-rancher1` in v1.21.2, both long out of support).
+  An image pinned by digest alone has no tag to tell them apart: it is RKE2's
+  build when its pod's labels or a Helm release in its namespace name
+  `rke2-ingress-nginx`, and Ingress NGINX otherwise.
 - **Component images.** A product whose parts carry their own versions is
   matched by those images too, each part's release line mapped to the
   product line that ships it: Flux's `source-controller` v1.5 and
   `helm-controller` v1.2 are Flux 2.5. A part's line the entry does not map
   yet (a Flux release newer than the registry) reads as Flux with no
-  version, an `addon-no-data` info.
+  version, an `addon-no-data` info, and so do Flux v2's pre-GA 0.x
+  releases, deliberately: endoflife.date lists no line for them.
 - **Helm releases.** A release whose chart name is in an entry's matchers is
   that add-on, at the release's `appVersion` (never the chart version).
   In the release's namespace, the `appVersion` wins over image tags and
@@ -194,7 +200,8 @@ vendor builds of Ingress NGINX have their own
 entries (`rke2-ingress-nginx`, `aks-app-routing-nginx`) and the Bitnami
 rebuild is in `ingress-nginx`, as is RKE1's build (`-rancherN` tags of
 `rancher/nginx-ingress-controller`; RKE1 itself has been end of life since
-2025-07-31). No image is claimed by two entries: a tag-qualified matcher
+2025-07-31), which RKE2's releases of 2020-2021 up to v1.20.11 and v1.21.2
+shipped too. No image is claimed by two entries: a tag-qualified matcher
 takes its tags ahead of another entry's path-only matcher of that
 repository, and two tag-qualified matchers on one repository are refused.
 Flux is found by its v2 controllers (`fluxcd/source-controller`,
@@ -204,7 +211,11 @@ Flux is found by its v2 controllers (`fluxcd/source-controller`,
 as Flux v1 by `fluxcd/flux` and `weaveworks/flux`. Kubernetes Dashboard is
 found by its v1.x images too (`kubernetes-dashboard-amd64` and the `-arm`,
 `-arm64`, `-ppc64le` and `-s390x` variants, under `k8s.gcr.io` or
-`gcr.io/google_containers`).
+`gcr.io/google_containers`). Those v1 names are one path segment, matched
+exactly: a mirror that adds a prefix
+(`myregistry.corp/k8s/kubernetes-dashboard-amd64`) is not recognized, and
+the image is listed as unrecognized; add the mirror's path to a
+`--registry-dir` copy of the entry.
 Add-ons that endoflife.date does not track and that no entry covers yet
 (cluster-autoscaler, the AWS Load Balancer Controller and the other EKS
 add-ons) are not judged; the report lists their images as unrecognized.
