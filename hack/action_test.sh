@@ -141,7 +141,8 @@ case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; *) arch=arm64 ;; esac
 asset="upgradescope_${os}_${arch}.tar.gz"
 
 # curl: serves $releases/download/<tag>/<file> from $work/rel/<tag>/<file>
-# and redirects $releases/latest to $STUB_LATEST; logs every URL.
+# and redirects $releases/latest to $STUB_LATEST; logs every URL. With
+# STUB_CURL_RETRIES=1 every download fails as a retried transient error.
 mkdir -p "$work/stub-curl"
 cat >"$work/stub-curl/curl" <<EOF
 #!/usr/bin/env bash
@@ -157,6 +158,14 @@ case \$url in
     [ "\$fmt" != '%{url_effective}' ] || printf '%s' "$releases/tag/\$STUB_LATEST" ;;
   "$releases/download/"*)
     f="$work/rel/\${url#"$releases/download/"}"
+    if [ -n "\${STUB_CURL_RETRIES:-}" ]; then
+      # A transient failure under --retry: a line per retry, then the
+      # attempts' errors, the last one being curl's final error.
+      for i in 1 2 3 4 5 6; do echo "Warning: Problem : HTTP error. Will retry in 1 seconds. \$i retries left." >&2; done
+      echo "curl: (22) The requested URL returned error: 503" >&2
+      echo "curl: (22) The requested URL returned error: 503" >&2
+      exit 22
+    fi
     [ -f "\$f" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     cp "\$f" "\$out" ;;
   *) exit 6 ;;
@@ -187,7 +196,9 @@ fi
 cat "$work/ls-remote"
 EOF
 chmod +x "$work/stub-curl/curl" "$work/stub-go/go" "$work/stub-git/git"
-# gh: answers only `gh attestation verify <file> --repo <this repository>
+# gh: with STUB_GH_OLD=1, a gh from before `gh attestation` (2.49), as on
+# some self-hosted runners: every such call fails as an unknown command.
+# Otherwise it answers only `gh attestation verify <file> --repo <this repository>
 # --signer-workflow <its release.yml> --source-ref refs/tags/<tag>
 # --deny-self-hosted-runners`: verified when the file's sha256 is in
 # $work/attest/<tag> (what release.yml's attestation covers for that tag),
@@ -197,6 +208,11 @@ mkdir -p "$work/stub-gh" "$work/attest"
 cat >"$work/stub-gh/gh" <<EOF
 #!/usr/bin/env bash
 echo "gh \$*" >>"$work/calls"
+if [ -n "\${STUB_GH_OLD:-}" ]; then
+  echo "unknown command \"\$1\" for \"gh\""
+  echo "::warning title=FORGED::from an old gh"
+  exit 1
+fi
 [ "\$1 \$2" = "attestation verify" ] || exit 2
 file=\$3
 [ "\$4 \$5 \$6 \$7" = "--repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml" ] &&
@@ -568,6 +584,15 @@ expect "an unresolvable latest with verify-provenance true fails, naming the err
 hasnt "an unresolvable latest with verify-provenance true never runs go" "$work/calls" "go "
 installed_nothing && ok "an unresolvable latest with verify-provenance true installs nothing" ||
   fail "an unresolvable latest with verify-provenance true installs nothing" "$work/out"
+# Under --retry, curl's retry warnings come first and its final error last:
+# the failure names the final error, once, without the warnings.
+run install "$work/stub-curl:$work/stub-go:" STUB_CURL_RETRIES=1
+expect "a retried download names curl's final error, after its retry warnings" 1 \
+  "cannot download the release archive $releases/download/v9.9.9/$asset (curl: (22) The requested URL returned error: 503); nothing was installed"
+hasnt "a retried download's failure leaves out the retry warnings" "$work/out" "Will retry"
+[ "$(grep -o 'returned error: 503' "$work/out" | wc -l | tr -d ' ')" = 1 ] &&
+  ok "a final error repeated by the retries is named once" || fail "a final error repeated by the retries is named once" "$work/out"
+installed_nothing && ok "a retried download that fails installs nothing" || fail "a retried download that fails installs nothing" "$work/out"
 if compgen -G "$tmp/upgradescope-*.err" >/dev/null || compgen -G "$tmp/upgradescope-dl.*" >/dev/null; then
   fail "a failed download leaves no scratch files in RUNNER_TEMP" "$work/out"
 else ok "a failed download leaves no scratch files in RUNNER_TEMP"; fi
@@ -642,6 +667,22 @@ expect "a release without its bundle fails provenance (cosign)" 1 "cannot downlo
 installed_nothing && ok "no bundle: nothing installed" || fail "no bundle: nothing installed" "$work/out"
 verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.9.1
 expect "cosign: a release verifies at its own tag" 0 "provenance OK: checksums.txt (v9.9.1)"
+
+# A gh too old to have `gh attestation` (self-hosted runners) is not a
+# verifier: cosign verifies when it is on PATH, else the step fails and
+# says what to install. Nothing from the old gh is relayed unprefixed.
+verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" STUB_GH_OLD=1
+expect "a gh without attestation falls back to cosign" 0 "provenance OK: checksums.txt (v9.9.9) is signed by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (cosign verify-blob)"
+has "an old gh's missing attestation command is named" "$work/out" "gh on PATH has no attestation command (gh 2.49 or later has it): verifying with cosign instead"
+has "an old gh's output is prefixed" "$work/out" "| ::warning title=FORGED::from an old gh"
+verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" STUB_GH_OLD=1 INPUT_VERSION=v9.9.3
+expect "a gh without attestation still fails a substituted release through cosign" 1 "provenance check failed: checksums.txt for v9.9.3 is not signed by"
+installed_nothing && ok "old gh, cosign: a substituted archive is not installed" || fail "old gh, cosign: a substituted archive is not installed" "$work/out"
+verifier="$work/stub-gh:" run install "$work/stub-curl:" STUB_GH_OLD=1
+expect "a gh without attestation and no cosign fails, saying what to install" 1 \
+  "gh on PATH has no attestation command (gh 2.49 or later has it) and cosign is not on PATH to verify $asset (v9.9.9); nothing was installed"
+has "old gh, no cosign: the failure says how to opt out" "$work/out" "or set verify-provenance: false to install on the checksum alone"
+installed_nothing && ok "old gh, no cosign: nothing installed" || fail "old gh, no cosign: nothing installed" "$work/out"
 
 # No verifier: fail, and say how to opt out.
 verifier= run install "$work/stub-curl:"

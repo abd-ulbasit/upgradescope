@@ -193,7 +193,15 @@ provenance() {
       return
     fi
     logged "$dl/verify.log"
-    die "provenance check failed: gh attestation verify found no attestation that $workflow built $asset at refs/tags/$tag (its output is above); nothing was installed. A replaced release asset fails here; if gh itself cannot reach the attestations API on this runner, verify-provenance: false installs on the checksum alone"
+    # A gh from before `gh attestation` (2.49; some self-hosted runners) is
+    # no verifier: cosign is tried next, and without cosign the step fails.
+    # Any other gh failure fails the step: cosign is never a second chance
+    # for an archive gh rejected.
+    grep -q '^unknown command "attestation" for "gh"' "$dl/verify.log" ||
+      die "provenance check failed: gh attestation verify found no attestation that $workflow built $asset at refs/tags/$tag (its output is above); nothing was installed. A replaced release asset fails here; if gh itself cannot reach the attestations API on this runner, verify-provenance: false installs on the checksum alone"
+    command -v cosign >/dev/null ||
+      die "gh on PATH has no attestation command (gh 2.49 or later has it) and cosign is not on PATH to verify $asset ($tag); nothing was installed. Install gh 2.49+ or cosign (sigstore/cosign-installer) before this step, or set verify-provenance: false to install on the checksum alone"
+    echo "gh on PATH has no attestation command (gh 2.49 or later has it): verifying with cosign instead"
   fi
   if command -v cosign >/dev/null; then
     curl -fsSL --retry 3 -o "$dl/checksums.txt.sigstore.json" "$releases/download/$tag/checksums.txt.sigstore.json" ||
@@ -220,7 +228,11 @@ provenance() {
 # ::warning.
 no_archive() {
   local what=$1 err
-  err=$(sed -n '1,5p' "$2" 2>/dev/null | tr '\n' ' ')
+  # curl's final error: under --retry its stderr can start with retry
+  # warnings, and each failed attempt repeats its error line, so the last
+  # "curl: (N)" line, or, with none, the last 3 lines.
+  err=$(awk '/^curl: \(/ { e = $0 } { l[NR] = $0 }
+    END { if (e != "") print e; else for (i = (NR > 3 ? NR - 2 : 1); i <= NR; i++) print l[i] }' "$2" 2>/dev/null | tr '\n' ' ')
   err=${err% }
   rm -f "$2"
   if [ "${INPUT_VERIFY_PROVENANCE:-true}" != false ]; then
