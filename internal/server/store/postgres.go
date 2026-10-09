@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -26,7 +25,8 @@ var pgMigrationsFS embed.FS
 // database/sql. Times are TIMESTAMPTZ columns; every time.Time returned is
 // normalized to UTC.
 type Postgres struct {
-	db *sql.DB
+	db     *sql.DB
+	tuning pruneTuning // retention batch size and test hook
 }
 
 var _ Store = (*Postgres)(nil)
@@ -203,88 +203,22 @@ func (p *Postgres) RenameCluster(ctx context.Context, name, newName string) erro
 // received before it that no evaluation refers to any more, sparing each
 // cluster's latest snapshot and its evaluations and each (cluster,
 // target)'s newest decided evaluation (the notification baseline), then
-// those baselines baselines does not spare, in one transaction. A snapshot
-// that becomes non-latest between the statements keeps its evaluations, so
-// it stays until the next run.
+// those baselines baselines does not spare, in bounded batches of one
+// transaction each (prune.go). A snapshot that becomes non-latest between
+// the statements keeps its evaluations, so it stays until the next run.
 func (p *Postgres) Prune(ctx context.Context, cutoff time.Time, baselines PruneBaselines) (PruneResult, error) {
-	tx, err := p.db.BeginTx(ctx, nil)
-	if err != nil {
-		return PruneResult{}, fmt.Errorf("prune: begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	at := cutoff.UTC()
-	var res PruneResult
-	evals, err := tx.ExecContext(ctx, `
-		DELETE FROM evaluations WHERE created_at < $1
-		AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
-		AND id NOT IN (SELECT MAX(id) FROM evaluations WHERE ready OR blockers > 0 GROUP BY cluster_id, target)`, at)
-	if err != nil {
-		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
-	}
-	if res.Evaluations, err = evals.RowsAffected(); err != nil {
-		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
-	}
-	if len(baselines) > 0 {
-		// The baselines of targets no longer in use, which the delete above
-		// spared: found by pair, deleted by id under the same conditions.
-		rows, err := tx.QueryContext(ctx, `
-			SELECT cluster_id, target, MAX(id) FROM evaluations WHERE ready OR blockers > 0 GROUP BY cluster_id, target`)
-		if err != nil {
-			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-		}
-		var pairs []baselinePair
-		for rows.Next() {
-			var bp baselinePair
-			if err := rows.Scan(&bp.clusterID, &bp.target, &bp.id); err != nil {
-				_ = rows.Close()
-				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-			}
-			pairs = append(pairs, bp)
-		}
-		if err := rows.Close(); err != nil {
-			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-		}
-		if err := rows.Err(); err != nil {
-			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-		}
-		for ids := baselines.unspared(pairs); len(ids) > 0; {
-			n := min(len(ids), pruneChunk)
-			args := []any{at}
-			holders := make([]string, 0, n)
-			for i, id := range ids[:n] {
-				args = append(args, id)
-				holders = append(holders, fmt.Sprintf("$%d", i+2))
-			}
-			ids = ids[n:]
-			gone, err := tx.ExecContext(ctx, `
-				DELETE FROM evaluations WHERE created_at < $1
-				AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
-				AND id IN (`+strings.Join(holders, ",")+`)`, args...)
-			if err != nil {
-				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-			}
-			k, err := gone.RowsAffected()
-			if err != nil {
-				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-			}
-			res.Evaluations += k
-		}
-	}
-	snaps, err := tx.ExecContext(ctx, `
-		DELETE FROM snapshots WHERE received_at < $1
-		AND id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
-		AND NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.snapshot_id = snapshots.id)`, at)
-	if err != nil {
-		return PruneResult{}, fmt.Errorf("prune snapshots: %w", err)
-	}
-	if res.Snapshots, err = snaps.RowsAffected(); err != nil {
-		return PruneResult{}, fmt.Errorf("prune snapshots: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return PruneResult{}, fmt.Errorf("prune: commit: %w", err)
-	}
-	return res, nil
+	d := pgDialect
+	d.db = p.db
+	return prune(ctx, d, p.tuning, cutoff.UTC(), baselines)
 }
+
+// TunePrune implements PruneTuner.
+func (p *Postgres) TunePrune(batchRows int, onBatch func(PruneBatch)) {
+	p.tuning.tune(batchRows, onBatch)
+}
+
+// Kind names the store in metrics: "postgres".
+func (p *Postgres) Kind() string { return "postgres" }
 
 // scanClusterPg mirrors scanCluster for TIMESTAMPTZ columns: the driver
 // hands back time.Time directly; normalize to UTC.

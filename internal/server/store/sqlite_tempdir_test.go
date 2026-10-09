@@ -203,6 +203,17 @@ func TestLargeDeleteOnReadOnlyRootFilesystem(t *testing.T) {
 				t.Fatal(err)
 			}
 			out, err := runChild(t, op, db, nil, []string{dir})
+			if op == "prune" {
+				// The batched prune (prune.go) deletes snapshots with
+				// DELETE ... WHERE id IN (SELECT ... LIMIT n); the single
+				// statement it replaced failed here with 6410 on the same
+				// 60 MB. Measured, not explained: the plan differs, and
+				// cluster delete below, unchanged, still fails.
+				if err != nil || !strings.HasPrefix(out, "ok") {
+					t.Fatalf("batched prune with no writable temp directory: %v\n%s", err, out)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(out, "6410") {
 				t.Fatalf("%s with no writable temp directory: want error 6410 (the bug), got err=%v\n%s", op, err, out)
 			}
