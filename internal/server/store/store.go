@@ -396,6 +396,18 @@ func notAssessedBytes(v sql.NullString) []byte {
 // caller may drop the pass (the other writer covered it) or recompute.
 var ErrConflict = errors.New("store: evaluation state changed concurrently")
 
+// ErrTokenRevoked is returned by CommitEvaluations when the batch's
+// IngestToken is no longer an active token of its cluster: revoked, or
+// moved or deleted with the cluster, while the push was processed.
+// Nothing was written.
+var ErrTokenRevoked = errors.New("store: the ingest token is no longer valid for this cluster")
+
+// ErrClusterChanged is returned by CommitEvaluations when the batch's
+// Cluster.ID is set and the cluster registered under its name is no longer
+// that cluster: it was renamed or deleted after the push looked it up.
+// Nothing was written.
+var ErrClusterChanged = errors.New("store: the cluster was renamed or deleted while the push was processed")
+
 // ErrClusterNameTaken is returned by RenameCluster when the new name is
 // registered to another cluster. Test with errors.Is.
 var ErrClusterNameTaken = errors.New("store: cluster name is taken")
@@ -411,8 +423,16 @@ type EvaluationBatch struct {
 	// Cluster, when non-nil, is upserted first in the commit's transaction
 	// (UpsertCluster rules) and its id replaces ClusterID: ingest registers
 	// a new cluster only together with its first snapshot.
+	// When Cluster.ID is set (the cluster the push looked up), the commit
+	// fails with ErrClusterChanged unless the name is still that cluster.
 	Cluster   *Cluster
 	ClusterID int64
+	// IngestToken, with Cluster, is the per-cluster ingest token the push
+	// was authenticated with ("" for the shared token, which the store does
+	// not know). The commit fails with ErrTokenRevoked unless it is still
+	// an active token of Cluster.Name, checked in the commit's transaction
+	// so a push authenticated before a revoke cannot land after it.
+	IngestToken string
 	// Snapshot, when non-nil, is a newly pushed snapshot stored first
 	// (InsertSnapshot dedup rules); every Insert gets its id.
 	Snapshot *Snapshot
@@ -526,4 +546,28 @@ func parseStoredTime(s string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parse stored time %q: %w", s, err)
 	}
 	return t.UTC(), nil
+}
+
+// recheckPush is CommitEvaluations' check, after b.Cluster's upsert gave
+// b.ClusterID and in the same transaction, that the push may still commit:
+// the cluster it looked up is still the one under its name
+// (ErrClusterChanged), and its per-cluster token is still active for it
+// (ErrTokenRevoked). tokenQuery selects a row for (token_hash,
+// cluster_name) of an active token.
+func recheckPush(ctx context.Context, tx *sql.Tx, b EvaluationBatch, tokenQuery string) error {
+	if b.Cluster.ID != 0 && b.Cluster.ID != b.ClusterID {
+		return fmt.Errorf("cluster %q (id %d, now %d): %w", b.Cluster.Name, b.Cluster.ID, b.ClusterID, ErrClusterChanged)
+	}
+	if b.IngestToken == "" {
+		return nil
+	}
+	var one int
+	err := tx.QueryRowContext(ctx, tokenQuery, HashToken(b.IngestToken), b.Cluster.Name).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("cluster %q: %w", b.Cluster.Name, ErrTokenRevoked)
+	}
+	if err != nil {
+		return fmt.Errorf("check ingest token: %w", err)
+	}
+	return nil
 }

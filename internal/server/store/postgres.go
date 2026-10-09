@@ -464,6 +464,13 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 		if b.ClusterID, err = upsertClusterPg(ctx, tx, *b.Cluster); err != nil {
 			return 0, false, fmt.Errorf("commit evaluations: %w", err)
 		}
+		// The upsert locks the cluster's row, so a rename or delete waits
+		// for this commit; FOR SHARE locks the token's, so a revoke does
+		// (one that committed first is seen: each statement reads what is
+		// committed when it starts).
+		if err := recheckPush(ctx, tx, b, `SELECT 1 FROM tokens WHERE token_hash = $1 AND cluster_name = $2 AND revoked_at IS NULL FOR SHARE`); err != nil {
+			return 0, false, fmt.Errorf("commit evaluations: %w", err)
+		}
 	} else {
 		var lockID int64
 		err = tx.QueryRowContext(ctx,
