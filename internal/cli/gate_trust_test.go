@@ -125,6 +125,18 @@ func TestDocsSayWhoCanTurnTheGateOff(t *testing.T) {
 			!strings.Contains(squash(src), "a pull request can suppress its own findings") {
 			t.Errorf("%s does not say that a pull request can suppress its own findings", file)
 		}
+		// A paragraph pasted twice reads as one long line and passes the
+		// workflow comparison below, so no sentence of one may repeat.
+		seen := map[string]bool{}
+		for _, sentence := range strings.SplitAfter(squash(src), ". ") {
+			if len(sentence) < 60 {
+				continue
+			}
+			if seen[sentence] {
+				t.Errorf("%s: this sentence appears twice: %.80q", file, sentence)
+			}
+			seen[sentence] = true
+		}
 		block := yamlAfterHeading(t, file)
 		if first == "" {
 			first = block

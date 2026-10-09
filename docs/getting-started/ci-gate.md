@@ -146,6 +146,12 @@ To hold the gate against a pull request's author:
    `trusted/.upgradescope.yaml`, because the config's file globs resolve
    relative to the config's directory.
 
+   The snippet also assumes that no step the pull request controls can write
+   into `trusted/`. The one that runs the pull request's code, `helm
+   template`, writes only below its `--output-dir` (`rendered/<chart>/...`);
+   if you add a step that runs a script or a build from the pull request,
+   have it write elsewhere and keep it before the copy.
+
 ```yaml
 on: pull_request
 jobs:

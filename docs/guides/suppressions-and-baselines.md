@@ -286,7 +286,13 @@ out into another directory, copy the two files over the pull request's, and
 name them in the Action. The files must exist at the base (`ignore: []` is a
 valid empty config), and a pull request that changes them is judged by the
 old rules, so accepting a finding takes a pull request of its own that
-changes only those files. The copy comes last, right before the gate, and removes the destination first (`rm -f --`): a pull request can commit `.upgradescope.yaml` as a symlink to a file an earlier step writes, a plain `cp` would write through it, and that step would then overwrite the trusted content. `config` names the copy, not `trusted/...`, because the config's file globs resolve relative to the config's directory. `CODEOWNERS` with required code-owner review on the
+changes only those files. The copy comes last, right before the gate, and
+removes the destination first (`rm -f --`): a pull request can commit
+`.upgradescope.yaml` as a symlink to a file an earlier step writes, a plain
+`cp` would write through it, and that step would then overwrite the trusted
+content. `config` names the copy, not `trusted/...`, because the config's
+file globs resolve relative to the config's directory. `CODEOWNERS` with
+required code-owner review on the
 two files and on `.github/workflows/` covers what a checkout cannot, and
 the workflow can be edited by a pull request too:
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/mcp"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 	"github.com/abd-ulbasit/upgradescope/internal/textsafe"
 )
@@ -185,7 +186,15 @@ metadata:
   annotations:
     upgradescope.dev/ignore: removed-api
     upgradescope.dev/ignore-reason: %q
-`, name, ns, "why\x1b[2J\r\u202e")
+---
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: %q
+  namespace: %q
+  annotations:
+    upgradescope.dev/ignore: removed-api
+`, name, ns, "why\x1b[2J\r\u202e", name, ns)
 	cfg := fmt.Sprintf("ignore:\n  - category: eol-addon\n    reason: %q\n    expires: 2000-01-01\n", "cfg\x1b[2J\u202e")
 	dir := writeFiles(t, map[string]string{
 		"a.yaml": manifest, "bad\x1b[2J\u202e.yaml": "kind: [unterminated\n", ".upgradescope.yaml": cfg,
@@ -205,6 +214,20 @@ metadata:
 			}
 			if !strings.Contains(errOut, `\x1b[2J`) {
 				t.Errorf("the warning does not show the escape:\n%s", errOut)
+			}
+			// The suppress path names the object of an annotation without a
+			// reason; that warning is built from the manifest's own name.
+			found := false
+			for _, line := range strings.Split(errOut, "\n") {
+				if strings.Contains(line, "ignore-reason") {
+					found = true
+					if !strings.Contains(line, `evil\x1b[2J`) || !strings.Contains(line, `ns\u202eabc`) {
+						t.Errorf("the suppress warning does not show the object escaped: %q", line)
+					}
+				}
+			}
+			if !found {
+				t.Errorf("no suppress warning (annotation without a reason) on stderr:\n%s", errOut)
 			}
 		})
 	}
@@ -372,4 +395,41 @@ func TestMarkdownShowsWhitespaceControlsAsEscapes(t *testing.T) {
 		}
 	}
 	assertTerminalSafe(t, "markdown", md.String())
+}
+
+// The scan tool applies the in-cluster annotations and warns, on the
+// server's stderr, about one without a reason. The warning names the
+// object, which the cluster's author chose, so it is escaped like the CLI's.
+func TestMCPScanSuppressWarningEscapesObjectNames(t *testing.T) {
+	orig := runMCPScan
+	runMCPScan = func(_ context.Context, opts []scanOptions) ([]engine.Report, error) {
+		f := engine.Finding{
+			Category: engine.CatRemovedAPI, Severity: engine.SevBlocker,
+			Objects: []inventory.ObjectRef{{
+				Name: "evil\x1b[2J\r::error::pwned", Namespace: "ns\u202eabc", File: "f\x1b]0;t\a.yaml", Line: 2,
+				Ignore: string(engine.CatRemovedAPI),
+			}},
+		}
+		reports := make([]engine.Report, len(opts))
+		for i := range reports {
+			reports[i] = engine.Report{Findings: []engine.Finding{f}}
+		}
+		return reports, nil
+	}
+	t.Cleanup(func() { runMCPScan = orig })
+
+	var stderr bytes.Buffer
+	if _, err := mcpScanner(mcpOptions{}, &stderr)(context.Background(), mcp.ScanRequest{Targets: []string{"1.38"}}); err != nil {
+		t.Fatal(err)
+	}
+	out := stderr.String()
+	assertTerminalSafe(t, "mcp stderr", out)
+	if !strings.Contains(out, "warning: ") || !strings.Contains(out, "ignore-reason") {
+		t.Fatalf("no suppress warning on stderr:\n%s", out)
+	}
+	for _, want := range []string{`evil\x1b[2J`, `ns\u202eabc`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the warning does not show %s:\n%s", want, out)
+		}
+	}
 }
