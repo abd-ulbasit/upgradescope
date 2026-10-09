@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"strings"
@@ -65,6 +66,54 @@ func TestOutboxNeverLogsOrStoresSinkURLs(t *testing.T) {
 			t.Errorf("%s carries a sink's secret:\n%s", what, text)
 		}
 		if !strings.Contains(text, "http://"+refused+"/…") {
+			t.Errorf("%s does not name the sink's scheme and host:\n%s", what, text)
+		}
+	}
+	if !strings.Contains(logged.String(), "giving up") {
+		t.Errorf("the log has no give-up line:\n%s", logged)
+	}
+}
+
+// rawURLNotifier is a sink whose errors repeat its URL as written and as
+// Go quotes it, as a notifier that does not redact its own errors would.
+type rawURLNotifier struct{ url string }
+
+func (r *rawURLNotifier) SinkURL() string { return r.url }
+
+func (r *rawURLNotifier) Notify(context.Context, notify.Notification) error {
+	return fmt.Errorf("post %s: refused (Post %q)", r.url, r.url)
+}
+
+// The outbox scrubs a sink's URL from every error it logs or stores, not
+// only from the ones the Slack and webhook notifiers already redact: a
+// sink whose error carries its URL raw leaves neither its path nor its
+// query in the log or in last_error.
+func TestOutboxScrubsTheSinkURLFromAnyError(t *testing.T) {
+	raw := &rawURLNotifier{url: "https://hooks.example.com/services/T000/B000/SECRETSECRET?token=SECRETQ"}
+	logged := captureLog(t)
+	st := &lastErrorStore{Store: openSQLite(t)}
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s := newTestServer(t, nil, func(c *Config) { c.Store = st; c.Notifier = raw })
+	s.now = clock.now
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	blockedThenClean(t, ts)
+
+	for range outboxMaxAttempts + 1 { // every retry, then the give-up
+		s.deliverOutbox(context.Background())
+		clock.set(clock.now().Add(outboxMaxBackoff + time.Minute))
+	}
+	st.mu.Lock()
+	stored := strings.Join(st.errs, "\n")
+	st.mu.Unlock()
+	if len(st.errs) < 2 {
+		t.Fatalf("only %d failed deliveries were stored", len(st.errs))
+	}
+	for what, text := range map[string]string{"the log": logged.String(), "last_error": stored} {
+		if strings.Contains(text, "SECRET") {
+			t.Errorf("%s carries the sink's secret:\n%s", what, text)
+		}
+		if !strings.Contains(text, "https://hooks.example.com/…") {
 			t.Errorf("%s does not name the sink's scheme and host:\n%s", what, text)
 		}
 	}

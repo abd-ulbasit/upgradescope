@@ -66,6 +66,23 @@ type SlackNotifier struct {
 	Client *http.Client // exported so tests shorten the timeout; never nil from NewSlack
 }
 
+// URLSink is a notifier that delivers to one URL, which may carry its
+// credential (a Slack webhook's path, a webhook's ?token=): the server
+// scrubs it (Scrub) from every error the notifier returns before logging
+// or storing one.
+type URLSink interface {
+	Notifier
+	SinkURL() string
+}
+
+var (
+	_ URLSink = (*SlackNotifier)(nil)
+	_ URLSink = (*GenericWebhook)(nil)
+)
+
+// SinkURL is the webhook URL s posts to (URLSink).
+func (s *SlackNotifier) SinkURL() string { return s.URL }
+
 // NewSlack returns a SlackNotifier with the 2s delivery timeout.
 func NewSlack(url string) *SlackNotifier {
 	return &SlackNotifier{URL: url, Client: &http.Client{Timeout: webhookTimeout}}
@@ -92,6 +109,9 @@ type GenericWebhook struct {
 	Secret string // HMAC-SHA256 key for SignatureHeader; "" = unsigned
 	Client *http.Client
 }
+
+// SinkURL is the URL g posts to (URLSink).
+func (g *GenericWebhook) SinkURL() string { return g.URL }
 
 // NewGenericWebhook returns an unsigned GenericWebhook with the 2s
 // delivery timeout; set Secret to sign.

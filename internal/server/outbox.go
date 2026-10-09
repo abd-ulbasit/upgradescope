@@ -177,8 +177,9 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 		return
 	}
 	// What is logged and stored never carries the sink's URL: a Slack
-	// webhook's path is its credential (the notifiers redact it already;
-	// this holds for any error a sink returns).
+	// webhook's path is its credential. The notifiers redact it already;
+	// this holds for any error a sink that names its URL returns
+	// (TestOutboxScrubsTheSinkURLFromAnyError).
 	errText := scrubSink(err, target)
 	if hold := retryAfterHold(err); hold > 0 {
 		s.holds.hold(m.Sink, s.now().Add(hold))
@@ -196,13 +197,11 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) {
 }
 
 // scrubSink is err's text with the URL of the sink that returned it
-// redacted (notify.Scrub).
+// redacted (notify.Scrub): any sink that names its URL (notify.URLSink),
+// whether or not its own errors are redacted already.
 func scrubSink(err error, n notify.Notifier) string {
-	switch t := n.(type) {
-	case *notify.SlackNotifier:
-		return notify.Scrub(err.Error(), t.URL)
-	case *notify.GenericWebhook:
-		return notify.Scrub(err.Error(), t.URL)
+	if u, ok := n.(notify.URLSink); ok {
+		return notify.Scrub(err.Error(), u.SinkURL())
 	}
 	return err.Error()
 }
