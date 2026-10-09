@@ -39,8 +39,8 @@ what is supported:
 | | Read | Not read |
 |---|---|---|
 | **Helm** | releases in the `secrets` and `configmaps` storage drivers (`HELM_DRIVER=secret`, the default, and `configmap`): chart, versions, `kubeVersion`, stored manifest | the `sql` driver: its releases live in an external database the cluster does not show. Not supported |
-| **Argo CD** | `applications.argoproj.io/v1alpha1`: the `chart`, `repoURL` and `targetRevision` of each `spec.sources[]` entry (or of `spec.source`, when `spec.sources` is empty, as Argo CD does) that sets `chart`, for Applications (including those an ApplicationSet generates) whose destination is this cluster (`https://kubernetes.default.svc` or `https://kubernetes.default.svc.cluster.local`, with or without `:443`, or the name `in-cluster`) | sources that render a path in Git (a Helm chart in a repository, Kustomize with `helmCharts`) name no chart. Applications for other clusters, which are counted in the reason |
-| **Flux** | `helmreleases.helm.toolkit.fluxcd.io`: `spec.chart.spec` (`chart`, `version`, `sourceRef`; from a `GitRepository` or `Bucket` the chart is a path, and the last element of it is taken as the chart's name) and a `spec.chartRef` to an `OCIRepository` (`source.toolkit.fluxcd.io`, its `spec.url` and `spec.ref.tag` or `semver`; the OCIRepositories are listed, one list of the namespace the chartRefs point into or one cluster-wide, paged at 50, and with a role that may list only some namespaces, per namespace, fetched by name where even that is refused; the agent remembers a refused list across ticks and asks for it again only once an hour, so a role with `get` alone costs those refused lists once an hour, not on every tick, and a list granted later is used within the hour, while `scan` asks once per run). The newest of `v2`, `v2beta2` and `v2beta1` the cluster serves | a `chartRef` to a `HelmChart`, or an `OCIRepository` that cannot be read (both are counted in the reason, with the first read error, and the capability is partial). HelmReleases with a `spec.kubeConfig`, which deploy to other clusters |
+| **Argo CD** | `applications.argoproj.io/v1alpha1`: the `chart`, `repoURL` and `targetRevision` of each `spec.sources[]` entry (or of `spec.source`, when `spec.sources` is empty, as Argo CD does) that sets `chart`, and each such entry whose `repoURL` is `oci://...` with no `chart`, which is how Argo CD reads a Helm chart from an OCI registry (`path: .`): the chart is the last element of the repository path (`oci://ghcr.io/acme/charts/ingress-nginx` is `ingress-nginx`, with the userinfo, query and fragment cut first) and its version the `targetRevision`, for Applications (including those an ApplicationSet generates) whose destination is this cluster (`https://kubernetes.default.svc` or `https://kubernetes.default.svc.cluster.local`, with or without `:443`, or the name `in-cluster`) | sources that render a path in Git (a Helm chart in a repository, Kustomize with `helmCharts`) name no chart, and an `oci://` source with no repository path below the registry host names none either. An `oci://` source that holds plain manifests (a `path` other than `.`) is read as a chart too, since it cannot be told from one here: that over-reports the gap below, the safe direction. Applications for other clusters, which are counted in the reason |
+| **Flux** | `helmreleases.helm.toolkit.fluxcd.io`: `spec.chart.spec` (`chart`, `version`, `sourceRef`; from a `GitRepository` or `Bucket` the chart is a path, and the last element of it is taken as the chart's name) and a `spec.chartRef` to an `OCIRepository` (`source.toolkit.fluxcd.io`, its `spec.url` and `spec.ref`: the digest, else the semver range, else the tag, the order Flux itself applies; the OCIRepositories are listed, one list of the namespace the chartRefs point into or one cluster-wide, paged at 50, and with a role that may list only some namespaces, per namespace, fetched by name where even that is refused; the agent remembers a refused list across ticks and asks for it again only once an hour, so a role with `get` alone costs those refused lists once an hour, not on every tick, and a list granted later is used within the hour, while `scan` asks once per run). The newest of `v2`, `v2beta2` and `v2beta1` the cluster serves | a `chartRef` to a `HelmChart`, or an `OCIRepository` that cannot be read (both are counted in the reason, with the first read error, and the capability is partial). HelmReleases with a `spec.kubeConfig`, which deploy to other clusters |
 
 What the charts feed is **add-on detection**: a chart the registry knows (for
 example `ingress-nginx`) is an install in the namespace the chart deploys
@@ -53,7 +53,13 @@ and the add-on's `source` is `gitops` when nothing stronger found it.
 A chart version in these resources is what the author asked for, often a
 constraint (`4.*`, `>=4.0.0 <5.0.0`), not what is installed. It is shown as the
 add-on's chart version only when it is a single version and no Helm release
-records the real one. A Flux cluster, where helm-controller leaves a release
+records the real one. For a Flux OCIRepository the version follows Flux's own
+precedence, **digest over semver over tag**: a `ref.digest` is recorded as the
+digest (`sha256:...`), which is no chart version, so a tag beside it is not
+reported as one; a `ref.semver` is recorded as the range it is (a range is no
+exact version; a semver of one version is), whatever the tag says; a `ref.tag`
+alone is the version; no `ref` at all (Flux then follows `latest`) records
+none. A Flux cluster, where helm-controller leaves a release
 Secret, reports that release's chart version when the release and the chart
 source are in the same namespace: the HelmRelease's `targetNamespace` is unset
 or its own namespace (the agent matches by namespace and does not read
@@ -105,8 +111,8 @@ cluster leaves no marker here until `application.resourceTrackingMethod` is
 `annotation` (or `annotation+label`). The CRD check needs no permission. Helm is
 an optional capability, so this never turns a verdict to `unknown` by itself.
 
-Every chart read from an Argo CD Application is that gap too, **whether or not
-the cluster has other Helm releases**: `helm template` leaves the chart no
+Every chart read from an Argo CD Application, a native OCI source included, is
+that gap too, **whether or not the cluster has other Helm releases**: `helm template` leaves the chart no
 release, so its `kubeVersion` and stored-manifest checks cannot have run. This
 is the common case, since Argo CD is usually installed with its own Helm chart.
 Applications that name no chart (a path in Git) add no gap while releases

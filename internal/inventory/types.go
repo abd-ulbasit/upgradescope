@@ -51,8 +51,10 @@ type CapabilityStatus struct {
 	//     deprecated version, "group/version resource", whose metric rows
 	//     cannot be told apart from its own requests;
 	//   - helm: storage drivers not read ("configmaps") and releases not
-	//     read, not decodable or whose manifest was not fully parsed
-	//     ("namespace/name"); GitOps tools that deploy charts without
+	//     read, not decodable, left out for a name or chart metadata the
+	//     server would refuse, or whose manifest was not fully parsed
+	//     ("namespace/name", an invalid name quoted and cut: see
+	//     Inventory.Conform); GitOps tools that deploy charts without
 	//     leaving a Helm release the scan can read, or whose custom
 	//     resources it could not read (GitOpsArgoCD, GitOpsFlux);
 	//   - versions: the control-plane components with a kube-system pod
@@ -67,6 +69,9 @@ type CapabilityStatus struct {
 	//   - addons: resources not read for add-on evidence,
 	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses",
 	//     "v1 pods", SkippedPods);
+	//   - api-usage, helm and addons, as the server adds them to a snapshot
+	//     collected with another knowledge base than its own:
+	//     SkippedNewerKB;
 	//   - crds: the custom resources not checked for use of a deprecated
 	//     or unserved CRD version, "group/version Kind"
 	//     ("cert-manager.io/v1alpha2 Certificate").

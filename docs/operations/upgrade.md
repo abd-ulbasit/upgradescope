@@ -269,7 +269,15 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   protocol is versioned (`schemaVersion` 1), a newer server stores fields
   an older agent does not send and keeps fields a newer agent sends that it
   does not know, and a server re-judges every stored snapshot with its own
-  knowledge base. Snapshots from v0.1.x agents are judged with their
+  knowledge base. A re-judgement cannot cover evidence the agent's knowledge
+  base never collected, though: an agent lists API usage and matches
+  add-ons by its own data, so the server compares the knowledge base
+  digests in the push with its own and, where they differ, marks
+  `api-usage` and `addons` partial and required, and the cluster reads
+  `unknown` rather than `ready` until the agent runs the server's data.
+  Upgrade the agents with the server, or expect `unknown` in between
+  ([what a push is judged as](../operations.md#what-a-push-is-judged-as)).
+  Snapshots from v0.1.x agents are judged with their
   differences named: their API-usage signal meant something else, so those
   clusters read `unknown` until their agents are upgraded
   ([Running the server](../operations.md#what-a-push-is-judged-as)).
