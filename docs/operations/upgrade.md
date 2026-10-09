@@ -62,9 +62,22 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   those who can read Secrets, and a short token can be tested against it
   offline. A follow-up will make `serve` and the agent re-read mounted
   token files when they change, so that no restart is needed. Every key of
-  the chart's Secrets is written under `data`, so a value you remove on
-  upgrade is removed from the Secret too (after the restart, the pods run
-  without it).
+  the chart's Secrets is written under `data`, so from this chart version
+  on, a value you remove on upgrade is removed from the Secret too (after
+  the restart, the pods run without it). The upgrade to this version is the
+  exception. Earlier charts wrote `readToken`, `adminToken`, `slackWebhook`,
+  `webhook`, `webhookSecret` and the agent's `serverToken` as `stringData`,
+  which the API server turned into `data`; Helm works out deletions from the
+  previous manifest, which listed `stringData.<key>` and never `data.<key>`,
+  so a value you remove in that same upgrade keeps its key in the Secret.
+  The key is inert (the pods read a key only when its value is set), and
+  you can clear it once with `kubectl -n <ns> patch secret
+  <fullname>-server-tokens --type=json -p
+  '[{"op":"remove","path":"/data/<key>"}]'` (the agent's Secret is
+  `<fullname>-agent-token`; `<fullname>` is the release name plus
+  `-upgradescope`, unless the release name already contains it), checking
+  with `kubectl get secret ... -o jsonpath='{.data}'`. Or remove the value in
+  a later upgrade.
 - **SQLite needs a writable `/tmp`.** The server's root filesystem is
   read-only, and SQLite spills a large delete (the daily retention prune,
   `clusters delete`) into a temp file. The chart mounts an emptyDir at
@@ -85,9 +98,6 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   default 10m interval nothing changes. Clusters in other regions that
   push to this server have intervals the chart cannot see: keep the
   threshold above the longest of them.
-- **The listen port is its own value.** `server.containerPort` (8080) is
-  what serve binds; `server.service.port` is only the Service's, so it can
-  be 80 or 443.
 - **Only Service names are cut to fit 63 characters.** A Service name is a
   DNS-1035 label, which the API server refuses past 63 characters, so the
   server Service and the agent metrics Service shorten the release's
@@ -98,13 +108,14 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   (the data PVC, the token Secret, the ConfigMaps, the Deployments,
   whatever their length), so a long release name loses neither its SQLite
   history nor its generated ingest token on upgrade.
-- **The pod's listen port is `server.containerPort` (8080), whatever
-  `server.service.port` is.** Before, the pod listened on
-  `server.service.port`. If you had set it to something other than 8080,
-  the pod now listens on 8080 and the Service still answers on your port,
-  but a NetworkPolicy, sidecar or `kubectl port-forward pod/...` of your own
-  that names the pod's old port must follow it (set `server.containerPort`
-  to the old value to keep it, if it is 1024 or above).
+- **The listen port is its own value.** `server.containerPort` (8080) is
+  what serve binds; `server.service.port` is only the Service's, so it can
+  be 80 or 443. Before, the pod listened on `server.service.port`. If you
+  had set that to something other than 8080, the pod now listens on 8080
+  and the Service still answers on your port, but a NetworkPolicy, sidecar
+  or `kubectl port-forward pod/...` of your own that names the pod's old
+  port must follow it (set `server.containerPort` to the old value to keep
+  it, if it is 1024 or above).
 - **`networkPolicy.enabled` with an Ingress or a ServiceMonitor** needs
   `networkPolicy.serverIngressFrom` now: the policy admits only the
   in-chart agent, and the render fails rather than cut off the Ingress

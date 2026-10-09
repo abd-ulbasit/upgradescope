@@ -5,6 +5,19 @@
 {{- if and (gt (int .Values.server.replicas) 1) (not $postgres) }}
 {{- fail "server.replicas > 1 needs server.database.existingSecret (Postgres): SQLite on a ReadWriteOnce volume has a single writer" }}
 {{- end }}
+{{- if not $postgres }}
+{{- /* the chart's own /tmp volume (SQLITE_TMPDIR) would clash with these */}}
+{{- range .Values.server.extraVolumeMounts }}
+{{- if eq (trimSuffix "/" (toString .mountPath)) "/tmp" }}
+{{- fail (printf "server.extraVolumeMounts mounts %q at /tmp, where the chart mounts the SQLite temp volume (server.tmp, sqlite-tmp). Mount yours elsewhere, or use server.database.existingSecret (Postgres), which has no such volume" (toString .name)) }}
+{{- end }}
+{{- end }}
+{{- range .Values.server.extraVolumes }}
+{{- if eq (toString .name) "sqlite-tmp" }}
+{{- fail "server.extraVolumes names a volume sqlite-tmp, the name of the chart's SQLite temp volume (server.tmp). Rename yours" }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -237,7 +250,7 @@ spec:
             {{- if not $postgres }}
             - name: data
               mountPath: /data
-            - name: tmp
+            - name: sqlite-tmp
               mountPath: /tmp
             {{- end }}
             {{- if .Values.server.teamMap }}
@@ -274,7 +287,7 @@ spec:
           {{- end }}
         # SQLITE_TMPDIR: scratch space for a large delete (see server.tmp in
         # values.yaml). Node ephemeral storage, gone with the pod.
-        - name: tmp
+        - name: sqlite-tmp
           emptyDir:
             sizeLimit: {{ .Values.server.tmp.sizeLimit | quote }}
         {{- end }}

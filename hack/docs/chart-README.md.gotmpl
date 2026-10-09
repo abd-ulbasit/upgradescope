@@ -269,7 +269,18 @@ kubectl -n <ns> rollout restart deploy/<release>-server deploy/<release>-agent
 old value, and the old token keeps working. No pod annotation carries a
 checksum of a secret, because anyone who can get pods or Deployments could
 read it, and test a short token against it offline. Every key is written
-under the chart-managed Secret's `data`, so removing a value removes its key.
+under the chart-managed Secret's `data`, so from this chart version on,
+removing a value removes its key. The upgrade to this version is the one
+exception: a Secret written by an earlier chart wrote `readToken`,
+`adminToken`, `slackWebhook`, `webhook`, `webhookSecret` and the agent's
+`serverToken` as `stringData`, which the API server turned into `data`, and
+Helm cannot remove a `data` key that its previous manifest never listed. So a
+value you remove in the same upgrade keeps its key in the Secret. The key is
+inert (the pods read it only when the value is set), but to clear it run
+`kubectl -n <ns> patch secret <fullname>-server-tokens --type=json -p
+'[{"op":"remove","path":"/data/<key>"}]'` (the agent's is
+`<fullname>-agent-token`) and check with `kubectl get secret ... -o
+jsonpath='{.data}'`; or remove the value in a later upgrade.
 
 ## Read API exposure
 

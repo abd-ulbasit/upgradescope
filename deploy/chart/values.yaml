@@ -367,7 +367,8 @@ server:
     # Secret (tls.crt, tls.key, optional CA). Without it the in-chart agent
     # pushes its bearer token over plain HTTP inside the cluster (the agent
     # logs a warning). The certificate must name the Service
-    # (<fullname>-server.<namespace>.svc); the in-chart agent then pushes to
+    # (<server Service name>.<namespace>.svc: <fullname>-server, or the
+    # shortened name when the release name is long); the in-chart agent then pushes to
     # https:// and trusts the Secret's caKey, when it has one, on top of its
     # image's roots. Probes and the ServiceMonitor switch to HTTPS. The
     # Service port gets appProtocol https, and server.ingress gets
@@ -416,8 +417,9 @@ server:
     # it should need no more than the database's size (reasoning, not
     # measured), so the default matches the default persistence.size: raise
     # it with that. An emptyDir that outgrows its limit evicts the pod. It
-    # is node ephemeral storage, gone with the pod. Do not mount your own
-    # volume at /tmp (extraVolumeMounts).
+    # is node ephemeral storage, gone with the pod. The volume is named
+    # sqlite-tmp. Do not mount your own volume at /tmp (extraVolumeMounts) or
+    # name one sqlite-tmp (extraVolumes): the render fails and says so.
     sizeLimit: 1Gi
   persistence:
     # -- PVC for the SQLite database (unused with database.existingSecret).

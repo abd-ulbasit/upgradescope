@@ -81,12 +81,12 @@ func TestServerSQLiteHasAWritableTempDir(t *testing.T) {
 	if v, ok := envVar(c, "SQLITE_TMPDIR"); !ok || v != "/tmp" {
 		t.Errorf("SQLITE_TMPDIR = %q (set %v), want /tmp", v, ok)
 	}
-	if got := mountPath(c, "tmp"); got != "/tmp" {
+	if got := mountPath(c, "sqlite-tmp"); got != "/tmp" {
 		t.Errorf("tmp volume mounted at %q, want /tmp", got)
 	}
-	vol := volumeNamed(t, objs, "upgradescope-server", "tmp")
+	vol := volumeNamed(t, objs, "upgradescope-server", "sqlite-tmp")
 	if vol == nil {
-		t.Fatal("no tmp volume")
+		t.Fatal("no sqlite-tmp volume")
 	}
 	if size, _, _ := unstructured.NestedString(vol, "emptyDir", "sizeLimit"); size != "1Gi" {
 		t.Errorf("tmp emptyDir sizeLimit = %q, want 1Gi", size)
@@ -96,15 +96,44 @@ func TestServerSQLiteHasAWritableTempDir(t *testing.T) {
 	}
 
 	objs = render(t, "server.enabled=true", "server.tmp.sizeLimit=4Gi")
-	if size, _, _ := unstructured.NestedString(volumeNamed(t, objs, "upgradescope-server", "tmp"), "emptyDir", "sizeLimit"); size != "4Gi" {
+	if size, _, _ := unstructured.NestedString(volumeNamed(t, objs, "upgradescope-server", "sqlite-tmp"), "emptyDir", "sizeLimit"); size != "4Gi" {
 		t.Errorf("server.tmp.sizeLimit=4Gi renders sizeLimit %q", size)
 	}
 
 	// Postgres does no SQLite work: no temp volume, no variable.
 	objs = render(t, "server.enabled=true", "server.database.existingSecret=pg")
 	c = container(t, objs, "upgradescope-server")
-	if _, ok := envVar(c, "SQLITE_TMPDIR"); ok || mountPath(c, "tmp") != "" || volumeNamed(t, objs, "upgradescope-server", "tmp") != nil {
+	if _, ok := envVar(c, "SQLITE_TMPDIR"); ok || mountPath(c, "sqlite-tmp") != "" || volumeNamed(t, objs, "upgradescope-server", "sqlite-tmp") != nil {
 		t.Error("a Postgres server gets the SQLite temp directory")
+	}
+}
+
+// A user's own volume at /tmp, or named like the chart's, would make the
+// Deployment invalid (duplicate mountPath) or silently replace the SQLite
+// temp volume. The render fails and names the clash instead; the chart's
+// volume is named sqlite-tmp so an ordinary "tmp" volume does not collide.
+func TestExtraVolumesDoNotClashWithTheSQLiteTempVolume(t *testing.T) {
+	// A user volume called "tmp" mounted elsewhere is fine.
+	ok := writeValues(t, "server:\n  extraVolumes:\n    - {name: tmp, emptyDir: {}}\n  extraVolumeMounts:\n    - {name: tmp, mountPath: /scratch}\n")
+	if msg := renderErr(t, "server.enabled=true", ok); msg != "" {
+		t.Errorf("a volume named tmp mounted at /scratch fails the render: %s", msg)
+	}
+	mount := writeValues(t, "server:\n  extraVolumes:\n    - {name: mine, emptyDir: {}}\n  extraVolumeMounts:\n    - {name: mine, mountPath: /tmp}\n")
+	msg := renderErr(t, "server.enabled=true", mount)
+	if !strings.Contains(msg, "/tmp") || !strings.Contains(msg, "sqlite-tmp") || !strings.Contains(msg, `"mine"`) {
+		t.Errorf("a mount at /tmp renders without naming the clash: %q", msg)
+	}
+	slash := writeValues(t, "server:\n  extraVolumeMounts:\n    - {name: mine, mountPath: /tmp/}\n")
+	if msg := renderErr(t, "server.enabled=true", slash); !strings.Contains(msg, "sqlite-tmp") {
+		t.Errorf("a mount at /tmp/ renders: %q", msg)
+	}
+	name := writeValues(t, "server:\n  extraVolumes:\n    - {name: sqlite-tmp, emptyDir: {}}\n")
+	if msg := renderErr(t, "server.enabled=true", name); !strings.Contains(msg, "sqlite-tmp") {
+		t.Errorf("a volume named sqlite-tmp renders: %q", msg)
+	}
+	// Postgres has no such volume, so /tmp is the user's to mount.
+	if msg := renderErr(t, "server.enabled=true", "server.database.existingSecret=pg", mount); msg != "" {
+		t.Errorf("a Postgres server refuses a /tmp mount: %s", msg)
 	}
 }
 
@@ -829,6 +858,8 @@ var fence = regexp.MustCompile("^\\s*(```|~~~)")
 // carries the old chart's defaults (its image digest, resource limits,
 // security contexts) onto the new chart and fails to render when the new
 // chart adds a value. A page may warn against it in prose.
+var inlineCode = regexp.MustCompile("`[^`]+`")
+
 func TestDocsDoNotRecommendReuseValues(t *testing.T) {
 	roots := []string{"../../README.md", "README.md", "../../docs"}
 	var files []string
@@ -865,8 +896,16 @@ func TestDocsDoNotRecommendReuseValues(t *testing.T) {
 			if strings.Contains(line, "--reset-then-reuse-values") {
 				withReset++
 			}
-			if bare.MatchString(strings.ReplaceAll(line, "--reset-then-reuse-values", "")) && inFence {
+			clean := strings.ReplaceAll(line, "--reset-then-reuse-values", "")
+			if bare.MatchString(clean) && inFence {
 				t.Errorf("%s:%d recommends --reuse-values in a command: %s", f, n, strings.TrimSpace(line))
+			}
+			if !inFence {
+				for _, span := range inlineCode.FindAllString(clean, -1) {
+					if strings.Contains(span, "helm upgrade") && bare.MatchString(span) {
+						t.Errorf("%s:%d recommends --reuse-values in an inline command: %s", f, n, span)
+					}
+				}
 			}
 		}
 		_ = fh.Close()
@@ -986,6 +1025,38 @@ func TestDocsSayToRestartAfterRotatingASecret(t *testing.T) {
 		text := strings.Join(strings.Fields(string(raw)), " ")
 		if !strings.Contains(text, "re-read mounted token files") || !strings.Contains(text, "tested against it offline") {
 			t.Errorf("%s lacks the reason or the follow-up", f)
+		}
+	}
+}
+
+// The first upgrade to this chart is the exception to "removing a value
+// removes its key": an earlier chart wrote the keys as stringData, which Helm
+// cannot remove once the API server has turned them into data. The ledger,
+// the upgrade page and the chart README must say so and give the cleanup.
+func TestDocsQualifyKeyRemovalOnTheFirstUpgrade(t *testing.T) {
+	for _, f := range []string{
+		"../../docs/claims.md",
+		"../../docs/operations/upgrade.md",
+		"../../hack/docs/chart-README.md.gotmpl",
+		"README.md",
+	} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.Join(strings.Fields(string(raw)), " ")
+		if f == "../../docs/claims.md" {
+			i := strings.Index(text, "| RB-19 |")
+			j := strings.Index(text[i:], "| RB-20 |")
+			if i < 0 || j < 0 {
+				t.Fatal("RB-19 or RB-20 not found in the claims ledger")
+			}
+			text = text[i : i+j]
+		}
+		for _, want := range []string{"from this chart version on", "stringData", `"op":"remove"`, "/data/<key>"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not carry the qualification on key removal (missing %q)", f, want)
+			}
 		}
 	}
 }
