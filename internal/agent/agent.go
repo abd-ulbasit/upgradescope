@@ -97,7 +97,7 @@ func ValidateServerURL(raw string) error {
 	if s := strings.ToLower(u.Scheme); s != "http" && s != "https" {
 		return fmt.Errorf("server URL %q: want an http:// or https:// URL, e.g. https://upgradescope.example.com", raw)
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" { // "https://:8080" has a Host (":8080") but no host: Go would dial localhost
 		return fmt.Errorf("server URL %q: no host", raw)
 	}
 	return nil
@@ -120,8 +120,8 @@ func ValidateServerToken(tok string) error {
 // Config treats a zero ForceSyncEvery as unset (1h), but a caller that was
 // given one explicitly (--force-sync-every) must not have 0 silently mean
 // the default, nor a negative period mean every tick (#238). A period
-// below the interval is not refused: Run raises it to the interval
-// (forceSyncFloor).
+// below the interval is not refused: it means every tick
+// (forceSyncInEffect), and Run says so.
 func ValidateForceSyncEvery(d time.Duration) error {
 	if d <= 0 {
 		return fmt.Errorf("force-sync-every %s: must be positive (how long an unchanged inventory waits before it is pushed again)", d)
@@ -129,10 +129,24 @@ func ValidateForceSyncEvery(d time.Duration) error {
 	return nil
 }
 
-// forceSyncFloor is the force-sync period in effect: the agent pushes at
-// most once per tick, so a period below the interval is raised to it.
-func forceSyncFloor(forceSync, interval time.Duration) time.Duration {
-	return max(forceSync, interval)
+// minTickSpacing is the shortest time between two ticks' pushes: Run
+// sleeps jitter(interval), at least this long, after a tick ends (its push
+// done) and before the next begins.
+func minTickSpacing(interval time.Duration) time.Duration {
+	return interval - interval/10
+}
+
+// forceSyncInEffect is the force-sync period the agent applies. One below
+// the interval asks for more than one push a tick, so it means every tick,
+// as it did before #238: it is lowered to minTickSpacing, which no tick
+// spacing can undercut. Raising it to the interval instead would skip the
+// force-sync on every tick the jitter brings early, about half of them,
+// since maybePush compares it to the time since the last push.
+func forceSyncInEffect(forceSync, interval time.Duration) time.Duration {
+	if forceSync < interval {
+		return minTickSpacing(interval)
+	}
+	return forceSync
 }
 
 // applyDefaults fills zero values and rejects invalid combinations.
@@ -625,9 +639,10 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 		log = slog.Default()
 	}
 	if cfg.ServerURL != "" && cfg.ForceSyncEvery < cfg.Interval {
-		cfg.ForceSyncEvery = forceSyncFloor(cfg.ForceSyncEvery, cfg.Interval)
-		log.Warn("force-sync-every is below the interval: raised to the interval, as the agent pushes at most once per tick",
-			"forceSyncEvery", cfg.ForceSyncEvery.String(), "interval", cfg.Interval.String())
+		asked := cfg.ForceSyncEvery
+		cfg.ForceSyncEvery = forceSyncInEffect(asked, cfg.Interval)
+		log.Warn("force-sync-every is below the interval: an unchanged inventory is pushed every tick, as the agent pushes at most once a tick",
+			"forceSyncEvery", asked.String(), "interval", cfg.Interval.String(), "inEffect", cfg.ForceSyncEvery.String())
 	}
 	obs := newObserver(log, k, cfg.Interval)
 	healthAddr := ""
@@ -693,12 +708,18 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	}
 }
 
-// jitter returns d ±10%, so the second and later ticks of agents started at
+// jitter returns d ±10% (from minTickSpacing(d) to 11/10 of d), so the second and later ticks of agents started at
 // the same moment drift apart instead of reaching the upgradescope server
 // together. The first tick is not jittered: it runs at once so the pod is
 // Ready, and `helm install --wait` gets an answer, as soon as possible.
 // Agents started together therefore push together; their push retries are
 // jittered (retryDelay), so a busy server's 503s do not keep them aligned.
 func jitter(d time.Duration) time.Duration {
-	return time.Duration(float64(d) * (0.9 + 0.2*rand.Float64()))
+	return jitterBy(d, rand.Int64N(int64(d/5)+1))
+}
+
+// jitterBy is jitter for a draw n in [0, d/5]. Integer arithmetic keeps
+// the floor exact: float64(d)*0.9 can land a nanosecond under it.
+func jitterBy(d time.Duration, n int64) time.Duration {
+	return minTickSpacing(d) + time.Duration(n)
 }

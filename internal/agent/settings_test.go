@@ -20,6 +20,7 @@ func TestValidateServerURL(t *testing.T) {
 		"http://",
 		"https:///api",
 		"://x",
+		"https://:8080", // a port, no host: Go would dial localhost
 	} {
 		if err := ValidateServerURL(bad); err == nil {
 			t.Errorf("ValidateServerURL(%q) = nil, want an error", bad)
@@ -68,9 +69,11 @@ func TestValidateForceSyncEvery(t *testing.T) {
 	}
 }
 
-// A period below the interval cannot be honoured (the agent pushes at most
-// once per tick): Run raises it to the interval and says so.
-func TestRunRaisesForceSyncBelowTheInterval(t *testing.T) {
+// A period below the interval means "every tick", as it did before #238:
+// Run lowers it to the shortest spacing two ticks can have (the jitter
+// floor, 9/10 of the interval) and says so. Raising it to the interval
+// instead skipped the force-sync on every tick the jitter brought early.
+func TestRunForceSyncBelowTheIntervalMeansEveryTick(t *testing.T) {
 	logs := &syncBuffer{}
 	srv := newSnapServer(t)
 	cfg := Config{ServerURL: srv.srv.URL, ServerToken: "t", ForceSyncEvery: 30 * time.Second, Interval: 5 * time.Minute,
@@ -78,15 +81,63 @@ func TestRunRaisesForceSyncBelowTheInterval(t *testing.T) {
 	runOneTick(t, fakeAPIExt(), cfg)
 	var warned bool
 	for _, l := range logs.lines(t) {
-		if l["level"] == "WARN" && strings.Contains(l["msg"].(string), "force-sync-every") && l["forceSyncEvery"] == "5m0s" {
+		if l["level"] == "WARN" && strings.Contains(l["msg"].(string), "every tick") &&
+			l["forceSyncEvery"] == "30s" && l["interval"] == "5m0s" && l["inEffect"] == "4m30s" {
 			warned = true
 		}
 	}
 	if !warned {
-		t.Errorf("no WARN line raising force-sync-every to the 5m interval: %v", logs.lines(t))
+		t.Errorf("no WARN line saying a 30s force-sync-every means every 5m tick (4m30s in effect): %v", logs.lines(t))
 	}
-	if got := forceSyncFloor(30*time.Second, 5*time.Minute); got != 5*time.Minute {
-		t.Errorf("forceSyncFloor = %v, want the interval", got)
+	for _, tc := range []struct{ forceSync, interval, want time.Duration }{
+		{30 * time.Second, 5 * time.Minute, 4*time.Minute + 30*time.Second},
+		{time.Minute, 10 * time.Minute, 9 * time.Minute},
+		{9*time.Minute + 59*time.Second, 10 * time.Minute, 9 * time.Minute}, // below the interval: every tick, even above the floor
+		{10 * time.Minute, 10 * time.Minute, 10 * time.Minute},              // not below: kept
+		{time.Hour, 10 * time.Minute, time.Hour},
+	} {
+		if got := forceSyncInEffect(tc.forceSync, tc.interval); got != tc.want {
+			t.Errorf("forceSyncInEffect(%v, %v) = %v, want %v", tc.forceSync, tc.interval, got, tc.want)
+		}
+	}
+}
+
+// The reviewer's case: --force-sync-every 1m with --interval 10m pushed an
+// unchanged inventory on every tick before #238, and must still when the
+// jitter brings a tick early (0.95 × the interval, and the floor itself).
+func TestForceSyncBelowTheIntervalPushesEveryEarlyTick(t *testing.T) {
+	srv := newSnapServer(t)
+	r := testRunner(t, fakeDyn(), srv.srv.URL)
+	r.cfg.Interval = 10 * time.Minute
+	r.cfg.ForceSyncEvery = forceSyncInEffect(time.Minute, r.cfg.Interval)
+	cur := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return cur }
+	for i, gap := range []time.Duration{0, r.cfg.Interval * 95 / 100, minTickSpacing(r.cfg.Interval), r.cfg.Interval * 11 / 10} {
+		cur = cur.Add(gap)
+		if err := r.tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if srv.count() != i+1 {
+			t.Fatalf("after a tick %v after the last: %d pushes, want %d (an unchanged inventory pushed every tick)", gap, srv.count(), i+1)
+		}
+	}
+}
+
+// The jitter never brings a tick closer than minTickSpacing, the floor
+// forceSyncInEffect relies on, nor further than 11/10 of the interval.
+func TestJitterFloorIsMinTickSpacing(t *testing.T) {
+	for _, d := range []time.Duration{time.Minute, 10 * time.Minute, 7*time.Minute + 3*time.Nanosecond} {
+		if got := jitterBy(d, 0); got != minTickSpacing(d) {
+			t.Errorf("jitterBy(%v, 0) = %v, want the floor %v", d, got, minTickSpacing(d))
+		}
+		if got, hi := jitterBy(d, int64(d/5)), d+d/10; got > hi {
+			t.Errorf("jitterBy(%v, max) = %v, above %v", d, got, hi)
+		}
+		for range 200 {
+			if got := jitter(d); got < minTickSpacing(d) || got > d+d/10 {
+				t.Fatalf("jitter(%v) = %v, outside [%v, %v]", d, got, minTickSpacing(d), d+d/10)
+			}
+		}
 	}
 }
 

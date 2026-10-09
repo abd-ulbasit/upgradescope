@@ -116,9 +116,11 @@ To accept a finding for now, with a reason and an expiry, use an
   (surrounding whitespace, such as the newline of a Secret made with
   `--from-file`, is trimmed from every source); `--cluster-name` may not
   be set to `""` (leave it out to use the cluster UID); and
-  `--force-sync-every` must be positive. A `--force-sync-every` below
-  `--interval` is raised to the interval, with a warning, since the agent
-  pushes at most once per tick.
+  `--force-sync-every` must be positive (0 no longer means the 1h
+  default). A `--force-sync-every` below `--interval` is not refused: it
+  means an unchanged inventory is pushed on every tick, as before, and the
+  agent logs a warning with the period in effect, nine tenths of the
+  interval, the shortest gap the tick jitter leaves between two ticks.
 - **The pod never becomes Ready.** Readiness waits for a successful tick.
   `kubectl logs` shows one line per tick, with `tick failed` and the error.
   A tick fails when no target can be evaluated (no `spec.targets` and an
