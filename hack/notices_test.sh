@@ -72,10 +72,15 @@ case_dir() { local d="$work/$1"; fixture "$d"; echo "$d"; }
 d=$(case_dir pass)
 expect "allowed licenses generate the file" 0 "notices: wrote THIRD_PARTY_NOTICES" "$d"
 n="$d/THIRD_PARTY_NOTICES"
-has "Go module listed with its license" "$n" "  example.com/a v1.0.0 (MIT)"
-has "Go standard library listed at go.mod's version" "$n" "  Go standard library go1.26.8 (BSD-3-Clause)"
-has "production npm package listed" "$n" "  left-pad 1.3.0 (MIT)"
-has "bundled dev package (vite) listed" "$n" "  vite 6.0.0 (MIT)"
+has "Go module listed with its license" "$n" "  example.com/a (MIT)"
+has "Go standard library listed" "$n" "  Go standard library (BSD-3-Clause)"
+has "production npm package listed" "$n" "  left-pad (MIT)"
+has "bundled dev package (vite) listed" "$n" "  vite (MIT)"
+if grep -qE 'v1\.0\.0|1\.3\.0|6\.0\.0|go1\.26' "$n"; then
+  echo "FAIL no version in the file" >&2; echo "FAIL no version in the file" >>"$work/results"
+else
+  echo "ok   no version in the file" | tee -a "$work/results"
+fi
 has "license text reproduced" "$n" "MIT License"
 if grep -q "$(printf '\r')" "$n" || grep -q 'Copyright a ' "$n"; then
   echo "FAIL CRLF and trailing blanks normalized" >&2; echo "FAIL CRLF and trailing blanks normalized" >>"$work/results"
@@ -98,6 +103,33 @@ d=$(case_dir stale)
 expect "generate" 0 "wrote" "$d"
 printf 'example.com/new\tv0.1.0\tMIT\t%s\n' "$d/licenses/a" >>"$d/go-rows"
 expect "a new dependency makes --check fail" 1 "THIRD_PARTY_NOTICES is stale" "$d" --check
+expect "the stale message names the Dependabot PR commands" 1 "gh pr checkout <number> && make notices" "$d" --check
+
+# A bump that keeps every license and its text (#253 was vite 8.3.1 to
+# 8.3.2) needs no regeneration: Go, npm, bundled dev and the toolchain.
+d=$(case_dir bump)
+expect "generate before the bumps" 0 "wrote" "$d"
+sed -i.bak 's/v1.0.0/v1.0.1/; s/v2.0.0/v2.1.0/' "$d/go-rows" && rm -f "$d/go-rows.bak"
+sed -i.bak 's/"1.3.0"/"1.3.1"/; s/"6.0.0"/"6.0.1"/' "$d/web/package-lock.json" && rm -f "$d/web/package-lock.json.bak"
+printf 'module example.com/x\n\ngo 1.26.9\n' >"$d/go.mod"
+expect "version bumps with the same licenses pass --check" 0 "THIRD_PARTY_NOTICES is up to date" "$d" --check
+printf 'vite license\nand the licenses of what it bundles\n' >"$d/web/node_modules/vite/LICENSE.md"
+expect "a changed license text makes --check fail" 1 "THIRD_PARTY_NOTICES is stale" "$d" --check
+d=$(case_dir relicensed)
+expect "generate before the relicense" 0 "wrote" "$d"
+sed -i.bak 's/^example.com\/c\tv3.0.0\tApache-2.0\t.*/example.com\/c\tv3.1.0\tMIT\t'"$(printf '%s' "$d/licenses/a" | sed 's/[\/&]/\\&/g')"'/' "$d/go-rows" && rm -f "$d/go-rows.bak"
+expect "a changed license makes --check fail" 1 "THIRD_PARTY_NOTICES is stale" "$d" --check
+
+# Two versions of one npm package: one line, and both texts when they differ.
+d=$(case_dir nested)
+mkdir -p "$d/web/node_modules/a/node_modules/left-pad"
+printf 'left-pad 1.0 license\n' >"$d/web/node_modules/a/node_modules/left-pad/LICENSE"
+sed -i.bak 's|"node_modules/left-pad": {"version": "1.3.0", "license": "MIT"},|&\n    "node_modules/a/node_modules/left-pad": {"version": "1.0.0", "license": "MIT"},|' "$d/web/package-lock.json" && rm -f "$d/web/package-lock.json.bak"
+expect "generate with a nested duplicate" 0 "wrote" "$d"
+[ "$(grep -c '^  left-pad (MIT)$' "$d/THIRD_PARTY_NOTICES")" = 1 ] && echo "ok   a package at two versions is listed once" | tee -a "$work/results" ||
+  { echo "FAIL a package at two versions is listed once" >&2; echo "FAIL a package at two versions is listed once" >>"$work/results"; }
+has "the first version's text" "$d/THIRD_PARTY_NOTICES" "left-pad license"
+has "the second version's text" "$d/THIRD_PARTY_NOTICES" "left-pad 1.0 license"
 
 d=$(case_dir gpl)
 printf 'example.com/gpl\tv1.0.0\tGPL-3.0\t%s\n' "$d/licenses/a" >>"$d/go-rows"

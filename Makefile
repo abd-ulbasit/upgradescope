@@ -135,8 +135,11 @@ renovate-audit:
 
 # THIRD_PARTY_NOTICES: the license text of every Go module the binary links
 # (go-licenses, pinned in the script) and every npm package in the dashboard
-# bundle. `make notices` rewrites it (commit the result after a dependency
-# change); `make notices-check` (CI's notices job) runs the script's offline
+# bundle, named without versions, so a bump that keeps every license and its
+# text needs no regeneration. `make notices` rewrites it (commit the result
+# when a dependency is added or dropped, or a license or its text changes:
+# the check's failure prints the commands for a Dependabot PR's branch);
+# `make notices-check` (CI's notices job) runs the script's offline
 # tests, then fails on a stale file or on a dependency whose license is
 # missing or not on the allowlist (GPL, AGPL, SSPL and unknown never are).
 # Needs Go, jq, network, and Node when web/node_modules is incomplete.
