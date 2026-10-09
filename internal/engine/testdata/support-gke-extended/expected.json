@@ -8,7 +8,7 @@
         "https://cloud.google.com/kubernetes-engine/pricing"
       ],
       "detail": "Google Kubernetes Engine ended standard support for Kubernetes 1.34 on 2027-01-25; extended support, which applies only if the cluster is on the Extended release channel, runs until 2027-11-25; upgradescope cannot see whether this cluster is enrolled. Extended support costs $4,380 more per cluster per year at list price ($0.60 against $0.10 per cluster-hour, over 8,760 hours; list price as of 2026-10-03, not your bill). It is charged only for clusters on the Extended release channel. Extended support applies only to clusters on the Extended release channel; clusters on other channels are upgraded automatically at the end of standard support.",
-      "key": "support-lifecycle/gke/1.34",
+      "key": "support-lifecycle/gke/1.34/extended",
       "remediation": "Upgrade the control plane to a Kubernetes minor that is still in standard support.",
       "severity": "blocker",
       "title": "Kubernetes 1.34 is past Google Kubernetes Engine standard support (ended 2027-01-25)"

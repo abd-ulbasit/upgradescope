@@ -126,6 +126,13 @@ func (s SupportStatus) Summary() string {
 	return fmt.Sprintf("%sstandard support ends %s, extended support until %s%s%s", head, s.ExtendedSupportFrom, s.ExtendedSupportEnds, only, cost)
 }
 
+// SupportKey is the Finding.Key of a support-lifecycle finding:
+// support-lifecycle/<provider>/<minor>/<phase>, the phase being ending,
+// extended or ended (SupportPhase; no finding is made in phase standard).
+func SupportKey(provider, minor string, phase SupportPhase) string {
+	return string(CatSupportLifecycle) + "/" + provider + "/" + minor + "/" + string(phase)
+}
+
 // evalSupport places the cluster's control-plane minor in its provider's
 // support calendar and, once standard support is ending or over, reports
 // it: a warning from supportWarnDays before the day extended support
@@ -187,9 +194,13 @@ func evalSupport(inv inventory.Inventory, k kb.KB, now time.Time) (*SupportStatu
 		return st, nil
 	}
 
+	// The phase is part of the key, as an add-on's key moves from
+	// eol-approaching to eol-addon at its boundary: a rule or baseline that
+	// accepts the ending warning, or the extended-support blocker, must not
+	// also hide the cluster falling out of support entirely (#266).
 	f := Finding{
 		Category:  CatSupportLifecycle,
-		Key:       string(CatSupportLifecycle) + "/" + p.ID + "/" + minor,
+		Key:       SupportKey(p.ID, minor, st.Phase),
 		Citations: slices.Clone(p.Citations),
 	}
 	if st.AnnualCostDelta != "" {
