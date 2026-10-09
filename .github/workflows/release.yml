@@ -144,7 +144,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read # ci.yml's changes job declares it (skipped on tags)
-      attestations: read # ci.yml's action job declares it (the Action's provenance check)
       security-events: write # ci.yml's action job declares it; it uploads SARIF only on a dispatched fixture run, never on a tag
 
   # GoReleaser publishes the archives and the image together: the image
@@ -190,12 +189,19 @@ jobs:
       # Re-checked here, not taken from preflight: a newer release may have
       # published while ci ran. .goreleaser.yml reads it for make_latest and
       # the :latest image tag.
+      # The release list goes to a file first, never through a pipe: a run:
+      # step without shell: runs under `bash -e`, with no pipefail, so a
+      # failed `gh release list` piped into is-newest would read as an empty
+      # list and print true (#244). Every step that calls release-newest.sh
+      # does the same; hack/release-newest_test.sh runs them under `bash -e`
+      # with a failing gh.
       - name: is this still the highest stable release?
         id: newest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          newest=$(hack/release-newest.sh published | hack/release-newest.sh is-newest "$GITHUB_REF_NAME")
+          hack/release-newest.sh published >"$RUNNER_TEMP/releases"
+          newest=$(hack/release-newest.sh is-newest "$GITHUB_REF_NAME" <"$RUNNER_TEMP/releases")
           echo "newest=$newest" >>"$GITHUB_OUTPUT"
           echo "GitHub Latest and :latest move to $GITHUB_REF_NAME: $newest" >>"$GITHUB_STEP_SUMMARY"
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
@@ -216,21 +222,36 @@ jobs:
       # other published, so the one that published last took Latest and
       # :latest, whichever tag it was. Every stable run ends by pointing
       # both at the highest published stable release; the last run to get
-      # here sees both releases. A no-op when they already name it.
+      # here sees both releases. A no-op when they already name it. When
+      # the highest release is another run's, still publishing (its release
+      # is out but its image is not yet pushed), :latest is left to that
+      # run, which ends with this same step.
       - name: GitHub's Latest and the image's :latest name the highest stable release
         if: ${{ !contains(github.ref_name, '-') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          highest=$(hack/release-newest.sh published | hack/release-newest.sh highest)
+          hack/release-newest.sh published >"$RUNNER_TEMP/releases"
+          highest=$(hack/release-newest.sh highest <"$RUNNER_TEMP/releases")
           latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name) || latest=
           if [ "$latest" != "$highest" ]; then
             id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$highest" --jq .id)
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -f make_latest=true >/dev/null
             echo "GitHub Latest: ${latest:-none} -> $highest" >>"$GITHUB_STEP_SUMMARY"
           fi
-          want=$(docker buildx imagetools inspect "$IMAGE:$highest" --format '{{json .Manifest}}' | jq -r .digest)
-          case "$want" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$highest"; exit 1 ;; esac
+          want=$(docker buildx imagetools inspect "$IMAGE:$highest" --format '{{json .Manifest}}' | jq -r .digest) || want=
+          case "$want" in
+            sha256:*) ;;
+            *)
+              if [ "$highest" = "$GITHUB_REF_NAME" ]; then
+                echo "::error::no digest for $IMAGE:$highest"
+                exit 1
+              fi
+              echo "::notice::$IMAGE:$highest is not pushed yet: its release run is still publishing, and points :latest at it when it ends"
+              echo "$IMAGE:latest left to $highest's release run (its image is not pushed yet)" >>"$GITHUB_STEP_SUMMARY"
+              exit 0
+              ;;
+          esac
           got=$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Manifest}}' | jq -r .digest) || got=
           if [ "$got" != "$want" ]; then
             oras="$(hack/install-tool.sh oras)" # pinned, sha256-verified; logged in through docker's config
@@ -415,7 +436,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           major="${GITHUB_REF_NAME%%.*}"
-          newest=$(hack/release-newest.sh published | hack/release-newest.sh is-newest --major "$GITHUB_REF_NAME")
+          # To a file first, as in the goreleaser job: no pipefail here.
+          hack/release-newest.sh published >"$RUNNER_TEMP/releases"
+          newest=$(hack/release-newest.sh is-newest --major "$GITHUB_REF_NAME" <"$RUNNER_TEMP/releases")
           if [ "$newest" != true ]; then
             echo "::notice::$major stays: a higher $major release than $GITHUB_REF_NAME is published"
             echo "$major stays: a higher $major release than $GITHUB_REF_NAME is published" >> "$GITHUB_STEP_SUMMARY"

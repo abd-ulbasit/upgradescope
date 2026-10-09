@@ -4,10 +4,13 @@
 # re-run of an older release, or the slower of two racing ones, used to move
 # v0 (and, on a re-dispatch, :latest) back to an older engine.
 #   - hack/release-newest.sh's decisions, on fixture tag lists;
-#   - release.yml's steps that call it, run the way Actions runs them
-#     (bash -eo pipefail) against a stub gh, docker and oras: preflight's
-#     newest outputs, the goreleaser job's re-check and its closing step
-#     that points Latest and :latest at the highest release, and major-tag;
+#   - release.yml's steps that call it, run the way Actions runs a run:
+#     step without shell: (`bash -e {0}`: errexit, no pipefail) against a
+#     stub gh, docker and oras: preflight's newest outputs, the goreleaser
+#     job's re-check and its closing step that points Latest and :latest at
+#     the highest release, and major-tag; each with a failing gh too, which
+#     must fail the step and decide nothing (a piped `gh release list`
+#     failing under bash -e read as an empty list: newest=true);
 #   - the wiring: major-tag runs only on preflight's major-newest, under one
 #     repository-wide concurrency group; GoReleaser gets the re-check as
 #     UPGRADESCOPE_NEWEST;
@@ -89,6 +92,26 @@ step() {
   '
 }
 
+# Every step that calls release-newest.sh runs under Actions' default shell,
+# as run_block runs it: a shell: there would make this test's runs differ
+# from the workflow's. None pipes `release-newest.sh published` into
+# anything: without pipefail, a failed gh would go unnoticed.
+calls_newest=$(awk '/^      - name: / { name = $0; sub(/^      - name: /, "", name) } !/^ *#/ && /hack\/release-newest\.sh/ && name != "" { print name }' "$wf" | sort -u)
+[ "$(wc -l <<<"$calls_newest")" -ge 4 ] && ok "release.yml's steps that call release-newest.sh are found ($(wc -l <<<"$calls_newest" | tr -d ' '))" ||
+  fail "fewer than 4 release.yml steps call hack/release-newest.sh: $calls_newest"
+while IFS= read -r name; do
+  if awk -v want="      - name: $name" '$0 == want { on = 1; next } on && /^      - / { on = 0 } on && /^  [a-z]/ { on = 0 } on && /^        shell:/ { f = 1 } END { exit f }' "$wf"; then
+    ok "'$name' runs under Actions' default shell (bash -e), as this test runs it"
+  else
+    fail "'$name' sets shell:; run_block runs it under bash -e, so update the test with it"
+  fi
+done <<<"$calls_newest"
+if grep -nE 'release-newest\.sh[^|#]*published[^|#]*\|' "$wf" >"$work/piped"; then
+  fail "release.yml pipes release-newest.sh published into a command (no pipefail: a failed gh reads as no releases)" "$work/piped"
+else
+  ok "release.yml never pipes release-newest.sh published (it writes the list to a file first)"
+fi
+
 # A scratch checkout: the real hack/release-newest.sh, a stub install-tool.sh.
 mkdir -p "$work/repo/hack" "$work/bin"
 cp "$newest" "$work/repo/hack/release-newest.sh"
@@ -153,7 +176,9 @@ releases() {
     jq -nc --arg t "${t%%:*}" --argjson p "$pre" --argjson d "$draft" '{tagName: $t, isPrerelease: $p, isDraft: $d}'
   done | jq -cs . >"$work/releases.json"
 }
-# run_block <script> <tag> [env...]: the block as a step of a run on <tag>.
+# run_block <script> <tag> [env...]: the block as a step of a run on <tag>,
+# under `bash -e` as Actions runs a run: step that sets no shell: errexit
+# but no pipefail, so a failure inside a pipe is not the step's failure.
 run_block() {
   local script=$1 tag=$2
   shift 2
@@ -162,7 +187,7 @@ run_block() {
   (cd "$work/repo" && env PATH="$work/bin:$PATH" CALLS="$work/calls" STUB_RELEASES="$work/releases.json" \
     STUB_DIGESTS="$work/digests" GITHUB_REPOSITORY=o/r GITHUB_REF_NAME="$tag" GITHUB_SHA=c0ffee \
     GITHUB_OUTPUT="$work/output" GITHUB_STEP_SUMMARY="$work/summary" RUNNER_TEMP="$work" GH_TOKEN=stub \
-    IMAGE=ghcr.io/o/r "$@" bash -eo pipefail "$script") >"$work/out" 2>&1 || code=$?
+    IMAGE=ghcr.io/o/r "$@" bash -e "$script") >"$work/out" 2>&1 || code=$?
 }
 outputs() { tr '\n' ' ' <"$work/output" | sed 's/ $//'; }
 writes() { grep -E '^(gh api -X|oras )' "$work/calls" | sed 's/ (token:set)$//' || true; }
@@ -216,6 +241,12 @@ run_block "$work/recheck.sh" v0.2.0
 run_block "$work/recheck.sh" v0.2.1
 [ "$code" = 0 ] && [ "$(outputs)" = newest=true ] && ok "goreleaser: the highest release: UPGRADESCOPE_NEWEST=true" ||
   fail "goreleaser: v0.2.1's re-check is not newest=true" "$work/out"
+# The #244 false-green on a transient API error: a re-run of v0.2.0 with
+# v0.2.1 published, and gh release list failing (HTTP 502, rate limit).
+run_block "$work/recheck.sh" v0.2.0 STUB_GH_FAIL=1
+[ "$code" != 0 ] && [ ! -s "$work/output" ] &&
+  ok "goreleaser: a failed release listing fails the re-check, with no newest output (under bash -e)" ||
+  fail "goreleaser: a failed release listing did not fail the re-check (exit $code, outputs '$(outputs)')" "$work/out"
 step goreleaser 'is this still the highest stable release?' | grep -qxF '        id: newest' &&
   job goreleaser | grep -qxF '          UPGRADESCOPE_NEWEST: ${{ steps.newest.outputs.newest }}' &&
   [ "$(job goreleaser | grep -n 'id: newest' | cut -d: -f1)" -lt "$(job goreleaser | grep -n 'uses: goreleaser/goreleaser-action@' | cut -d: -f1)" ] &&
@@ -255,11 +286,25 @@ want_rec "the first release with no :latest yet: :latest is created" v0.2.0 v0.2
   "oras tag ghcr.io/o/r@sha256:aaa latest;" v0.2.0
 want_rec "no Latest release yet: v0.2.0 is made Latest" v0.2.0 "" sha256:aaa \
   "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.2.0 v0.2.0-rc.2:pre
+# A higher release racing this one: published, its image not pushed yet.
+# Its own run points :latest at it when it ends; this one leaves :latest.
 releases v0.2.0 v0.3.0
 run_block "$work/reconcile.sh" v0.2.0 STUB_LATEST=v0.2.0
-[ "$code" != 0 ] && [ -z "$(writes | grep oras || true)" ] &&
-  ok "reconcile: the highest release's image not found fails the job, moving no :latest" ||
-  fail "reconcile: a missing image for the highest release did not fail the step" "$work/out"
+[ "$code" = 0 ] && [ "$(writes | tr '\n' ';')" = "gh api -X PATCH repos/o/r/releases/id-v0.3.0 -f make_latest=true;" ] &&
+  grep -q '^::notice::ghcr.io/o/r:v0.3.0 is not pushed yet' "$work/out" &&
+  ok "reconcile: a higher release still publishing its image: Latest moves to it, :latest is left to its run" ||
+  fail "reconcile: a higher release without its image yet did not leave :latest to its run" "$work/out"
+# This run's own image missing: a broken publish, not a race.
+releases v0.2.0 v0.3.0
+run_block "$work/reconcile.sh" v0.3.0 STUB_LATEST=v0.3.0
+[ "$code" != 0 ] && [ -z "$(writes | grep oras || true)" ] && grep -q '^::error::no digest for ghcr.io/o/r:v0.3.0' "$work/out" &&
+  ok "reconcile: this release's own image not found fails the job, moving no :latest" ||
+  fail "reconcile: a missing image for this run's own release did not fail the step" "$work/out"
+releases v0.2.0 v0.2.1
+run_block "$work/reconcile.sh" v0.2.0 STUB_LATEST=v0.2.0 STUB_GH_FAIL=1
+[ "$code" != 0 ] && [ -z "$(writes)" ] &&
+  ok "reconcile: a failed release listing fails the step and moves nothing (under bash -e)" ||
+  fail "reconcile: a failed release listing did not fail the step, or moved something" "$work/out"
 
 # --- major-tag ---------------------------------------------------------------
 
@@ -314,6 +359,13 @@ releases v1.0.0
 run_block "$work/major.sh" v1.0.0
 [ "$code" = 0 ] && [ "$(writes)" = "gh api -X POST repos/o/r/git/refs -f ref=refs/tags/v1 -f sha=c0ffee" ] &&
   ok "major-tag: the first v1 release creates v1" || fail "major-tag: v1.0.0 does not create v1" "$work/out"
+# A re-run of v0.2.0 with v0.2.1 published and gh release list failing must
+# not move v0 back (the #244 false-green on a transient API error).
+releases v0.2.0 v0.2.1
+run_block "$work/major.sh" v0.2.0 STUB_MAJOR_EXISTS=1 STUB_GH_FAIL=1
+[ "$code" != 0 ] && [ -z "$(writes)" ] && ! grep -q 'PATCH' "$work/calls" &&
+  ok "major-tag: a failed release listing fails the job and moves no tag (under bash -e)" ||
+  fail "major-tag: a failed release listing did not fail the job, or moved the tag" "$work/out"
 
 # --- .goreleaser.yml templates -------------------------------------------------
 
