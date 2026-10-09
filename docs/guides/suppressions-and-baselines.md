@@ -18,6 +18,7 @@ Contents:
 5. [The server gate](#the-server-gate)
 6. [The agent: `spec.ignore`](#the-agent-specignore)
 7. [Finding keys](#finding-keys)
+8. [Who can turn the gate off](#who-can-turn-the-gate-off)
 
 ## Ignore rules (`.upgradescope.yaml`)
 
@@ -255,3 +256,72 @@ becomes "2 objects"). Examples:
 
 `--output json` shows the key of every finding, and the SARIF output uses
 it as the rule id.
+
+## Who can turn the gate off
+
+Everything on this page that makes a finding stop counting is a file in the
+repository being judged: the ignore rules, the annotations in the manifests
+and the baseline. In CI on a `pull_request` those files come from the pull
+request's own tree, so **a pull request can suppress its own findings and
+the gate then passes.** Nothing is hidden (the suppressed findings, their
+reasons and the rule's file are in the table, the step summary, the JSON and
+the SARIF, and the change is in the diff), but the gate does not stop an
+author who wants past it unless you pin its inputs:
+
+- **Ignore rules.** `.upgradescope.yaml` is found in the scan root, then at
+  the repository root, so a pull request that adds one next to a manifest
+  with a removed API turns exit 2 into exit 0. `--config <path>` (the
+  Action's `config`) names the one file to read and stops that search.
+- **Annotations.** `upgradescope.dev/ignore` with `ignore-reason` on an
+  object always applies; no flag turns it off. Review the suppressed table,
+  or fail the job when a suppression came from an annotation
+  (`jq -e '[.suppressed[]? | select(.source == "annotation")] | length == 0'`
+  on the JSON report).
+- **The baseline.** `--baseline <path>` (the Action's `baseline`) reads
+  whatever file it is given, so a pull request can commit a baseline that
+  holds its own findings.
+
+To pin the config and the baseline, take both from the base commit: check it
+out into another directory, copy the two files over the pull request's, and
+name them in the Action. The files must exist at the base (`ignore: []` is a
+valid empty config), and a pull request that changes them is judged by the
+old rules, so accepting a finding takes a pull request of its own that
+changes only those files. `CODEOWNERS` with required code-owner review on the
+two files and on `.github/workflows/` covers what a checkout cannot, and
+the workflow can be edited by a pull request too:
+
+```yaml
+on: pull_request
+jobs:
+  upgrade-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7            # the pull request (its merge commit)
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7            # the base commit, only the two files
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          sparse-checkout: |
+            /.upgradescope.yaml
+            /upgradescope-baseline.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Take the config and baseline from the base commit
+        run: cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
+      - run: helm template my-release ./chart --output-dir rendered
+      - uses: abd-ulbasit/upgradescope@v0.2.0
+        id: gate
+        with:
+          path: rendered
+          target: "1.37"
+          version: v0.2.0
+          config: .upgradescope.yaml           # named, so no other config is looked for
+          baseline: upgradescope-baseline.json
+```
+
+The [CI gate page](../getting-started/ci-gate.md#who-can-turn-the-gate-off)
+has the full trust table and the annotation guard.
