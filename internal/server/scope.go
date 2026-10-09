@@ -499,9 +499,11 @@ func encodeTeams(teams []string) string {
 	return strings.Join(enc, ",")
 }
 
-// decodeTeams is the teams v lists in the team list encoding. Whitespace
-// around an entry is a list's optional whitespace and is trimmed (a name
-// that starts or ends with a space spells it %20); an empty entry names
+// decodeTeams is the teams v lists in the team list encoding. Space and
+// tab around an entry are a list's optional whitespace (RFC 9110 OWS) and
+// are trimmed (a name that starts or ends with a space spells it %20);
+// nothing else is: trimming Unicode spaces made a group named "payments"
+// and a no-break space read as payments (#250). An empty entry names
 // no team. An entry that is not valid percent-encoding ("50%off") names
 // no team the server could know, so it is dropped: read as written, it
 // could be a team whose encoded name it is not. A name sent unencoded
@@ -510,7 +512,7 @@ func encodeTeams(teams []string) string {
 func decodeTeams(v string) []string {
 	var teams []string
 	for _, e := range strings.Split(v, ",") {
-		if e = strings.TrimSpace(e); e == "" {
+		if e = strings.Trim(e, " \t"); e == "" {
 			continue
 		}
 		if t, err := url.PathUnescape(e); err == nil && t != "" {

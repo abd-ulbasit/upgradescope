@@ -113,3 +113,25 @@ func clusterID(t *testing.T, ts *httptest.Server, name string) string {
 	t.Fatalf("no cluster %s in %s", name, raw)
 	return ""
 }
+
+// Only a list's optional whitespace, space and tab, is trimmed around an
+// entry. strings.TrimSpace also removed Unicode spaces, so a group named
+// "payments" followed by a no-break space read as the team payments
+// (#250). The comma and percent aliasing is oauth2-proxy's format, which
+// the docs make a condition of the mode; this closes the one the server
+// added.
+func TestDecodeTeamsTrimsOnlySpaceAndTab(t *testing.T) {
+	for v, want := range map[string][]string{
+		" payments\t, web ": {"payments", "web"},
+		"payments ":         {"payments "},
+		" payments":         {" payments"},
+		"payments　,web":     {"payments　", "web"},
+		"payments\u0085":    {"payments\u0085"},
+		"payments%C2%A0":    {"payments "},
+		"\t":                nil,
+	} {
+		if got := decodeTeams(v); !slices.Equal(got, want) {
+			t.Errorf("decodeTeams(%q) = %q, want %q", v, got, want)
+		}
+	}
+}
