@@ -233,7 +233,7 @@ func resolveTargets(spec crd.Spec, inv inventory.Inventory) (targets []inventory
 	for _, raw := range spec.Targets {
 		v, perr := inventory.ParseTarget(raw)
 		if perr != nil {
-			skip(fmt.Sprintf("targets: skipped invalid spec target %q", raw))
+			skip(fmt.Sprintf("targets: skipped invalid spec target %q: %v", raw, perr))
 			continue
 		}
 		// The CRD schema allows repeats; a second evaluation of the same

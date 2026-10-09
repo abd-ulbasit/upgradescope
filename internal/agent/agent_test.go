@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -138,8 +139,13 @@ func TestResolveTargetsSkipsInvalidWithNote(t *testing.T) {
 	if len(targets) != 1 || targets[0] != (inventory.Version{Major: 1, Minor: 37}) {
 		t.Errorf("targets = %v, want [1.37]", targets)
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "latest") {
-		t.Errorf("notes = %v, want one mentioning %q", notes, "latest")
+	// The note says why, in ParseTarget's own words.
+	_, perr := inventory.ParseTarget("latest")
+	if perr == nil {
+		t.Fatal(`ParseTarget accepted "latest"`)
+	}
+	if want := fmt.Sprintf("targets: skipped invalid spec target %q: %v", "latest", perr); len(notes) != 1 || notes[0] != want {
+		t.Errorf("notes = %q, want [%q]", notes, want)
 	}
 }
 
@@ -159,6 +165,14 @@ func TestResolveTargetsSkipsTargetsBelowTheKnowledgeBase(t *testing.T) {
 	}
 	if len(notes) != 1 || !strings.Contains(notes[0], `"1.3"`) {
 		t.Errorf("notes = %v, want one naming %q", notes, "1.3")
+	}
+	// The note carries ParseTarget's error, so the YAML-number hint (1.3 is
+	// what YAML makes of 1.30) and the knowledge base's floor reach the
+	// operator in status.notAssessed.
+	_, perr := inventory.ParseTarget("1.3")
+	if perr == nil || len(notes) != 1 || !strings.HasSuffix(notes[0], ": "+perr.Error()) ||
+		!strings.Contains(notes[0], `quote it ("1.30")`) || !strings.Contains(notes[0], inventory.OldestCovered().String()) {
+		t.Errorf("notes = %q, want the note to end with ParseTarget's error %v (the YAML hint and the floor)", notes, perr)
 	}
 }
 
