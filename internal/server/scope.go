@@ -177,7 +177,8 @@ func (sc readScope) clusterKeep(ns map[string]string) keep {
 // namespace was cut. A cut finding's title no longer counts the objects
 // the scope does not see (it counts the scope's when every object was
 // listed), and its detail, which names and counts everything the finding
-// covers, is replaced by one that names only what is kept. Lists the
+// covers, is replaced by one that names only what is kept; its folded
+// apiserver caller rows (Callers) are dropped with it. Lists the
 // engine capped (NamespacesOmitted, ObjectsOmitted) cannot be divided by
 // team, so a cut finding counts none omitted and its detail says more of
 // the scope's may be affected. A finding whose namespace list was capped
@@ -201,6 +202,10 @@ func (k keep) cut(f engine.Finding) (engine.Finding, bool) {
 	f.Teams, f.Namespaces, f.Objects = nilIfEmpty(teams), nilIfEmpty(namespaces), nilIfEmpty(objects)
 	f.NamespacesOmitted, f.ObjectsOmitted = 0, 0
 	f.Detail = cutDetail(namespaces, len(objects), capped)
+	// Folded apiserver caller rows are cluster-wide evidence about clients
+	// the metric attributes to no namespace or team, and the replaced
+	// detail drops their sentence: a cut finding carries none of them.
+	f.Callers = nil
 	return f, true
 }
 

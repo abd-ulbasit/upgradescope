@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/codequality/codequalitytest"
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/junit/junittest"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 )
@@ -262,6 +263,43 @@ func TestGateClusterSuppression(t *testing.T) {
 	_, raw = postGate(t, ts, q+"&format=sarif&path=deploy/rendered.yaml", "", pspManifest, "application/x-yaml")
 	if !strings.Contains(string(raw), "PSPs are removed before the upgrade") {
 		t.Errorf("SARIF lacks the manifest PSP's suppression:\n%s", raw)
+	}
+}
+
+// #236: with ?cluster=, a rule that takes every object of the cluster's
+// PSP finding by name leaves the apiserver caller folded into it standing
+// as its own deprecated-api-in-use blocker. Caller rows are the cluster's
+// (gateResult), so the caller keeps clusterVerdict blocked while the
+// gate's own verdict, ready and status, which judge only what the
+// manifests introduce, pass.
+func TestGateClusterReemittedCallerBlocksClusterVerdictOnly(t *testing.T) {
+	st := newFakeStore()
+	ts := httptest.NewServer(newTestServer(t, st).Handler())
+	defer ts.Close()
+	inv := testInventoryWithPSP()
+	inv.APIUsage[0].Count, inv.APIUsage[0].Namespaces = 1, map[string]int{"": 1}
+	inv.APIUsage[0].Objects = []inventory.ObjectRef{{Name: "restricted"}}
+	inv.DeprecatedCalls = []inventory.DeprecatedCall{{Group: "policy", Version: "v1beta1", Resource: "podsecuritypolicies", RemovedRelease: "1.35"}}
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, inv), false); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("seed push = %d %v", resp.StatusCode, out)
+	}
+
+	const (
+		pspKey    = "removed-api/policy/v1beta1/PodSecurityPolicy"
+		callerKey = "deprecated-api-in-use/policy/v1beta1/podsecuritypolicies"
+	)
+	byName := "ignore:\n  - key: " + pspKey + "\n    name: restricted\n    reason: deleted with the 1.35 upgrade\n"
+	resp, raw := postGate(t, ts, "?target=1.35&fail-on=blocker&cluster=prod-eu-1"+withConfig(byName), "", deploymentManifest, "application/x-yaml")
+	b := decodeSuppressed(t, raw)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Upgradescope-Verdict") != "ready" || b.Verdict != "ready" || b.ClusterVerdict != "blocked" {
+		t.Errorf("status %d, verdict %q / %q, clusterVerdict %q; want 200, ready / ready, blocked\n%s",
+			resp.StatusCode, resp.Header.Get("X-Upgradescope-Verdict"), b.Verdict, b.ClusterVerdict, raw)
+	}
+	if len(b.Findings) != 1 || b.Findings[0].Key != callerKey || b.Findings[0].Source != "cluster" {
+		t.Errorf("findings = %+v, want the caller alone, the cluster's", b.Findings)
+	}
+	if len(b.Suppressed) != 1 || b.Suppressed[0].Key != pspKey {
+		t.Errorf("suppressed = %+v, want the PSP finding", b.Suppressed)
 	}
 }
 
