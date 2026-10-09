@@ -316,9 +316,10 @@ them without a watch (AG-01) and without reading pods less often:
   1,000 times the largest object, reached when small objects are followed by
   large ones (pods are listed by namespace). `TestPodPagePeakHeapIsBounded`
   measures it on GitHub's ubuntu-latest runner (linux/amd64), where users'
-  agents run (four CI runs at `23f8739` and `04c39fa`, 9 October 2026): 500
-  pods of 137 bytes, then 1,000 of up to 41,685 bytes (39.4 MiB encoded),
-  held between 122.3 and 125.3 MiB of live heap (its lower bounds 122.3 to
+  agents run (four CI runs at `23f8739` and `04c39fa`, runs 37950213827
+  and 37964795504, this change before its rebase onto `377fd77`; 9 October
+  2026): 500 pods of 137 bytes, then 1,000 of up to 41,685 bytes (39.4
+  MiB encoded), held between 122.3 and 125.3 MiB of live heap (its lower bounds 122.3 to
   123.4, its upper bounds 125.0 to 125.3), under half the chart's 256Mi; a
   run of those pods, which stays at 500 a page as before, 61.7 to 68.0 MiB;
   production-sized pods (about 8 KiB in protobuf, managedFields included;

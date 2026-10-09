@@ -292,9 +292,10 @@ func liveHeapBracket(f func()) (low, high uint64) {
 // on 9 October 2026: liveHeapBracket put it between 123.0 and 125.2 MiB in
 // three runs on an Intel Core i3-7100U (linux/amd64), between 124.0 and
 // 125.8 MiB on a loaded Apple M1 Pro, and between 122.3 and 125.3 MiB in
-// four runs on GitHub's ubuntu-latest runner (at 23f8739 and 04c39fa, five
-// attempts each). Single readings on the runner are higher and spread out:
-// 125.4 to 129.0 MiB on the first attempt of six runs of the earlier test
+// four runs on GitHub's ubuntu-latest runner (at 23f8739 and 04c39fa, CI
+// runs 37950213827 and 37964795504, five attempts each). Single readings
+// on the runner are higher and spread out: 125.4 to 129.0 MiB on the
+// first attempt of six runs of the earlier test
 // (4 to 9 October), 153.0 MiB on a second and a third, and up to 153.8 MiB
 // in the four runs, the garbage liveHeapBracket describes and not a larger
 // live heap. The 128 MiB this test enforced until then was 2.5 to 3.5 MiB
