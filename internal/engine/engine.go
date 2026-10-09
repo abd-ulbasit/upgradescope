@@ -733,7 +733,9 @@ type addOnSubject struct {
 //   - product level (support), for whole-product retirements such as
 //     ingress-nginx: status "eol" or eol_date ≤ now → blocker, eol-addon;
 //     eol_date in (now, now+90d] → warning, eol-approaching. One finding
-//     naming every install.
+//     naming every install. With split support (extended_eol_date, see
+//     splitSupportFinding) the blocker waits for the extended date, and
+//     the time between the dates is a warning stating its condition.
 //   - release line (cycles), unless the product carries a date or EOL
 //     status: the group's cycle has ended → blocker, eol-addon (warning
 //     for a node runtime); it ends in (now, now+90d] → warning,
@@ -771,7 +773,17 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 			eolDate, hasDate = d, true
 		}
 	}
+	extDate, hasExt := time.Time{}, false
+	if a.Support.ExtendedEOLDate != "" && a.Support.Status != "eol" {
+		if d, err := time.Parse("2006-01-02", a.Support.ExtendedEOLDate); err == nil && hasDate {
+			extDate, hasExt = d, true
+		}
+	}
 	switch {
+	case hasExt:
+		if f, ok := splitSupportFinding(a, all, eolDate, extDate, now, window); ok {
+			out = append(out, finding(all, f.Category, f.Severity, string(f.Category)+"/"+a.ID, f.Title, f.Detail, a.Support.Citations))
+		}
 	case a.Support.Status == "eol" || (hasDate && !eolDate.After(now)):
 		// Tense follows the date: status "eol" can carry a future
 		// effective date (upstream already declared EOL).
@@ -840,6 +852,36 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 		}
 	}
 	return out
+}
+
+// splitSupportFinding judges a product with split support (#265): support
+// ends for everyone on eol_date (end) and lasts until extended_eol_date
+// (ext) only if support.extended_support_condition holds, which the
+// collector cannot see. end within 90 days, or the window between the two
+// dates → warning, eol-approaching, stating the condition; ext passed →
+// blocker, eol-addon; ok is false before end's 90-day window opens. Only
+// Category, Severity, Title and Detail are set.
+func splitSupportFinding(a registry.AddOn, all addOnSubject, end, ext, now, window time.Time) (Finding, bool) {
+	s, cond := a.Support, a.Support.ExtendedSupportCondition
+	switch {
+	case !ext.After(now):
+		return Finding{Category: CatEOLAddon, Severity: SevBlocker,
+			Title:  fmt.Sprintf("%s is end-of-life since %s", a.DisplayName, s.ExtendedEOLDate),
+			Detail: all.located + fmt.Sprintf(" Support ended on %s, and support that applied only if %s ended on %s.", s.EOLDate, cond, s.ExtendedEOLDate)}, true
+	case !ext.After(window):
+		return Finding{Category: CatEOLApproaching, Severity: SevWarning,
+			Title:  fmt.Sprintf("%s reaches end-of-life on %s", a.DisplayName, s.ExtendedEOLDate),
+			Detail: all.located + fmt.Sprintf(" Support until then applies only if %s; without it, support ended on %s.", cond, s.EOLDate)}, true
+	case !end.After(now):
+		return Finding{Category: CatEOLApproaching, Severity: SevWarning,
+			Title:  fmt.Sprintf("%s is supported until %s only if %s", a.DisplayName, s.ExtendedEOLDate, cond),
+			Detail: all.located + fmt.Sprintf(" Support without that condition ended on %s; upgradescope cannot see whether this cluster meets it.", s.EOLDate)}, true
+	case !end.After(window):
+		return Finding{Category: CatEOLApproaching, Severity: SevWarning,
+			Title:  fmt.Sprintf("%s reaches end-of-life on %s", a.DisplayName, s.EOLDate),
+			Detail: all.located + fmt.Sprintf(" Support ends on %s; after that it continues until %s only if %s, which upgradescope cannot see.", s.EOLDate, s.ExtendedEOLDate, cond)}, true
+	}
+	return Finding{}, false
 }
 
 // evalAddOnCompat judges each install of a group against target (see
