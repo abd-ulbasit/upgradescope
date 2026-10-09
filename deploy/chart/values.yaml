@@ -291,9 +291,15 @@ server:
   # Each key is mounted as a file (without subPath) and re-read when the
   # Secret changes, so editing it rotates the value without a restart (see
   # ingestToken for the latency). A key that may be absent and is added later
-  # is picked up for the ingest token and the webhook key; deleting the
-  # ingestToken key stops that token working, while emptying it, or any
-  # other key, keeps the old value.
+  # is picked up for the ingest token and the webhook key. Deleting a key is
+  # not how you revoke a token: only the ingestToken key of a hub with no
+  # in-chart agent (agent.enabled=false) is optional, and deleting it stops
+  # that token working. With the in-chart agent the key is required, and
+  # deleting it does NOT revoke the token: the kubelet leaves a volume whose
+  # required item is missing as it was, so the old token stays in service and
+  # the other rotations in that Secret stop arriving until the key is back.
+  # Rotate the value instead. Emptying a key, or deleting another optional
+  # one, keeps the old value.
   existingSecret: ""
   # -- With existingSecret: protect the read API with its readToken key.
   readTokenFromSecret: false

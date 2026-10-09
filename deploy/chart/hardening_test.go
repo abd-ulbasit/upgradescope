@@ -1283,3 +1283,45 @@ func TestDocsQualifyKeyRemovalOnTheFirstUpgrade(t *testing.T) {
 		}
 	}
 }
+
+// Deleting the ingestToken key of an existingSecret revokes the token only
+// where the chart mounts it as optional (a hub with no in-chart agent). With
+// the in-chart agent both the server's volume and the agent's push-token
+// volume list it as required, so the kubelet leaves the volume as it was and
+// the old token stays in service. The upgrade page, the security page and
+// the values comment (so the chart README and helm-values.md) say which.
+func TestIngestKeyDeletionIsDocumentedAsRevokingOnlyWhereItIsOptional(t *testing.T) {
+	// What the docs rely on: optional on the hub, required with the agent.
+	hub := render(t, "server.enabled=true", "agent.enabled=false", "server.existingSecret=ex")
+	file := fileFlags(containerArgs(t, hub, "upgradescope-server"))["ingest-token"]
+	if _, _, optional := resolveFile(t, hub, "upgradescope-server", file); !optional {
+		t.Error("the hub's ingestToken key is required: deleting it would not revoke the token the way the docs say")
+	}
+	with := render(t, "server.enabled=true", "server.existingSecret=ex")
+	file = fileFlags(containerArgs(t, with, "upgradescope-server"))["ingest-token"]
+	if _, _, optional := resolveFile(t, with, "upgradescope-server", file); optional {
+		t.Error("the ingestToken key is optional with the in-chart agent: the docs say it is required")
+	}
+	agentFile := fileFlags(containerArgs(t, with, "upgradescope-agent"))["server-token"]
+	if secret, key, optional := resolveFile(t, with, "upgradescope-agent", agentFile); secret != "ex" || key != "ingestToken" || optional {
+		t.Errorf("the in-chart agent's push token is key %q of %q (optional %v), want a required ingestToken of ex", key, secret, optional)
+	}
+
+	for _, f := range []string{
+		"../../docs/operations/upgrade.md",
+		"../../docs/operations/security-model-and-rbac.md",
+		"values.yaml",
+	} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.ToLower(strings.NewReplacer("**", "", "#", "").Replace(string(raw)))
+		text = strings.Join(strings.Fields(text), " ")
+		for _, want := range []string{"agent.enabled=false", "does not revoke", "required"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not carry the qualification on deleting the ingestToken key (missing %q)", f, want)
+			}
+		}
+	}
+}

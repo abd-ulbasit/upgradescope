@@ -88,8 +88,22 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   tick. A new file that is empty or unreadable, or a read, admin or ingest
   token that would equal one of the others, is not taken: the old value
   stays in service and the pod logs an error naming the file (never its
-  contents). Deleting the `ingestToken` key from an `existingSecret` stops
-  the shared ingest token working; emptying it keeps the old one.
+  contents). Deleting a key revokes a token in one case only: the
+  `ingestToken` key of a `server.existingSecret` on a hub with no in-chart
+  agent (`agent.enabled=false`), where the chart mounts that key as
+  optional, so once the kubelet has synced the Secret the shared ingest
+  token stops working. Emptying the key keeps the old token. With
+  `agent.enabled=true` the key is required (the in-chart agent pushes with
+  it; the server's `secret-files` volume and the agent's push-token volume
+  both list it), and **deleting it does not revoke the token**: the kubelet
+  does not update a volume whose required item is missing, so it leaves the
+  old files in place, the old ingest token stays in service, and the
+  other rotations in that volume (`readToken`, for example) stop arriving
+  until the key is back; a pod that starts while it is missing does not
+  start at all. (That is how the kubelet treats a required Secret key,
+  reasoned from its behaviour and not reproduced on a cluster here.) To revoke a shared ingest token in that
+  setup, change its value instead (the rotation above), and restart the
+  pods if the old one must stop working before the kubelet has synced.
 
   Three things still need a restart, because they do not come from the
   mounted files: the Postgres URL (`server.database.existingSecret`, a
@@ -127,6 +141,18 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   `<fullname>-agent-token`), checking
   with `kubectl get secret ... -o jsonpath='{.data}'`. Or remove the value in
   a later upgrade.
+- **A secret in `extraArgs` beside the chart's file flag no longer
+  renders.** The chart now passes `--read-token-file`, `--admin-token-file`,
+  `--ingest-token-file`, `--slack-webhook-file`, `--webhook-file` and
+  `--webhook-secret-file` to `serve`, and `--server-token-file` to the
+  agent, for every secret it supplies, and each flag excludes its
+  value-carrying twin (`--read-token`, and so on). A chart that passed the
+  secret in an environment variable let a flag in `server.extraArgs` or
+  `agent.extraArgs` win; this one stops the render with a message naming the
+  flag, instead of a pod that exits at start. Remove the argument and set the
+  value the chart way (`server.readToken` and its siblings, `agent.serverToken`,
+  or the key of an `existingSecret`). A flag for a secret the chart does not
+  supply (no `server.readToken`, say) stays yours.
 - **SQLite needs a writable `/tmp`.** The server's root filesystem is
   read-only, and SQLite spills a large delete (the daily retention prune,
   `clusters delete`) into a temp file. The chart mounts an emptyDir at

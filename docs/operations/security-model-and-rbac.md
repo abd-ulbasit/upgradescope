@@ -209,9 +209,16 @@ cannot read is reported as not assessed.
   credential at its source too (`tokens revoke` for stored tokens) if the
   window matters. A new file that is empty or unreadable, or that would make
   two of the read, admin and ingest tokens equal, keeps the old value in
-  service and logs an error naming the file and never its contents; the one
-  exception is the shared ingest token of an `existingSecret`, which stops
-  working when its key is deleted. A value from a flag or an environment
+  service and logs an error naming the file and never its contents. Deleting
+  a key is not a revocation, with one exception: the shared ingest token of a
+  `server.existingSecret` on a hub with no in-chart agent (`agent.enabled=false`),
+  whose key the chart mounts as optional, stops working once the kubelet has
+  synced the deletion. With the in-chart agent that key is required, and
+  **deleting it does not revoke the token**: the kubelet does not update a
+  volume whose required item is missing, so the old token stays in service and
+  the other rotations in that volume stop arriving until the key is restored
+  (reasoned from the kubelet's behaviour, not reproduced on a cluster). To
+  revoke, change the value ([Upgrade](upgrade.md#the-chart)). A value from a flag or an environment
   variable (`server.extraEnv`, `server.extraArgs`, the database URL) is
   read once at start and still needs `kubectl -n <ns> rollout restart
   deploy/<fullname>-server deploy/<fullname>-agent` (`<fullname>` is the
