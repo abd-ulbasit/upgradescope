@@ -88,7 +88,7 @@ helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
   as a Secret's trailing newline, is trimmed from the flag, the environment
   and the file alike), or `--cluster-name ""`. The chart renders none of
   these from its own values (it omits an empty `agent.clusterName`, and its
-  schema requires an http(s) `agent.serverUrl`), so check
+  schema requires an http(s) `agent.serverUrl` with a host), so check
   `agent.extraArgs` and the token Secret before you upgrade: an agent
   given one of them crash-loops with `invalid --<flag>` in its log. A
   `--force-sync-every` below `--interval` is still accepted and still
