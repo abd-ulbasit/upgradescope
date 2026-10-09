@@ -18,7 +18,10 @@ import (
 // 7958e18, main before #72, written there by TestDumpFleetGolden (with the
 // fixture and this file's dump half copied in). A fleet-wide read must
 // still answer them byte for byte. Regenerate them only on a commit
-// without read scopes, or the test proves nothing.
+// without read scopes, or the test proves nothing. Fields added since
+// (fleet-teams.json's `verdict` and `excluded`, shared-history.json's `verdict`, #243) are written in by
+// hand, and the unowned team bucket's key was renamed "(unattributed)"
+// the same way: nothing else in them changed.
 const fleetGoldenDir = "testdata/fleet-wide"
 
 // fleetGoldenReads are the reads the golden files hold, by file name:

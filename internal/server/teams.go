@@ -6,13 +6,10 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
-// unattributedTeam is the rendered key for findings carrying no team.
-const unattributedTeam = "unattributed"
-
 // renderTeamScores maps engine.TeamScores output for the wire: the
-// empty-string team renders as "unattributed". If a real team is literally
-// named "unattributed" (pathological), the "" entry keeps its empty key
-// rather than silently merging two different scores under one name.
+// empty-string team (findings no team owns) renders as
+// engine.UnattributedTeam, a name no label value can take, so a real team
+// called "unattributed" stays its own row.
 func renderTeamScores(m map[string]engine.TeamScore) map[string]engine.TeamScore {
 	ts, ok := m[""]
 	if !ok {
@@ -22,10 +19,8 @@ func renderTeamScores(m map[string]engine.TeamScore) map[string]engine.TeamScore
 	for k, v := range m {
 		out[k] = v
 	}
-	if _, taken := out[unattributedTeam]; !taken {
-		delete(out, "")
-		out[unattributedTeam] = ts
-	}
+	delete(out, "")
+	out[engine.UnattributedTeam] = ts
 	return out
 }
 

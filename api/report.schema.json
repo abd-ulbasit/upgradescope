@@ -26,7 +26,7 @@
     "support": {"$ref": "#/$defs/support"},
     "hops": {"description": "scan --plan only: the upgrade plan, one entry per control-plane upgrade from the cluster's minor (a live scan's oldest kube-apiserver, or --from) to target, in order. Each finding is listed in full at the first hop that has it and referenced by key at later ones. The rest of the report, the verdict included, is the final target's.", "type": "array", "items": {"$ref": "#/$defs/hop"}},
     "teams": {
-      "description": "Per-team scores; findings with no team are under \"unattributed\". Present when there are findings.",
+      "description": "Per-team scores; findings with no team are under \"(unattributed)\". Present when there are findings.",
       "type": "object",
       "additionalProperties": {"$ref": "#/$defs/teamScore"}
     }

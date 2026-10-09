@@ -1,5 +1,12 @@
 package engine
 
+// UnattributedTeam is the name the presentation layers (CLI table and JSON,
+// server API, dashboard) give the bucket of findings no team owns, which
+// TeamScores keys by "". It carries parentheses, which a Kubernetes label
+// value cannot, so no real team can be named it: a team called
+// "unattributed" is a different row (#243).
+const UnattributedTeam = "(unattributed)"
+
 // TeamScore is one team's slice of a report, scored with the same spec §6
 // formula as the cluster score, over only that team's findings.
 type TeamScore struct {
@@ -17,7 +24,7 @@ type TeamScore struct {
 // TeamScores groups a report's findings by team and scores each subset with
 // Score. A finding attributed to N teams counts for each of them; a finding
 // with no teams is attributed to the empty-string team "" (callers render it
-// as "unattributed"). Pure: no I/O, no clock — same contract as Evaluate.
+// as UnattributedTeam). Pure: no I/O, no clock — same contract as Evaluate.
 // The result is deliberately NOT part of engine.Report; servers and CLIs
 // compute it at presentation time.
 //

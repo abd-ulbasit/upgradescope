@@ -16,21 +16,25 @@ func TestRenderTeamScores(t *testing.T) {
 	}
 	got := renderTeamScores(in)
 	want := map[string]engine.TeamScore{
-		"unattributed": {Score: 95, Ready: true, Warnings: 1},
-		"payments":     {Score: 75, Blockers: 1},
+		engine.UnattributedTeam: {Score: 95, Ready: true, Warnings: 1},
+		"payments":              {Score: 75, Blockers: 1},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("renderTeamScores = %+v, want %+v", got, want)
 	}
-	// Pathological collision: a real team named "unattributed" must not be
-	// overwritten by the "" bucket.
+	// A real team named "unattributed" is its own row: the bucket of
+	// findings no team owns carries a name no label value can take (#243).
 	collide := map[string]engine.TeamScore{
 		"":             {Score: 95},
 		"unattributed": {Score: 50, Blockers: 2},
 	}
 	got = renderTeamScores(collide)
-	if got["unattributed"] != (engine.TeamScore{Score: 50, Blockers: 2}) || got[""] != (engine.TeamScore{Score: 95}) {
+	if len(got) != 2 || got["unattributed"] != (engine.TeamScore{Score: 50, Blockers: 2}) ||
+		got[engine.UnattributedTeam] != (engine.TeamScore{Score: 95}) {
 		t.Fatalf("collision handling wrong: %+v", got)
+	}
+	if _, kept := got[""]; kept {
+		t.Fatalf("the empty key must not reach the wire: %+v", got)
 	}
 }
 

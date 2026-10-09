@@ -458,7 +458,7 @@ paths:
       description: |
         The score formula applied to each team's findings, from the same
         report the report endpoint serves. Findings with no team are under
-        `unattributed`.
+        `(unattributed)`, a name no label value can take, so a real team called `unattributed` is a separate row.
       responses:
         "200":
           description: Team scores.
@@ -548,9 +548,18 @@ paths:
         For one target, each team's worst score, total blockers and the
         clusters it has findings in. Each cluster contributes its stored
         evaluation, else a what-if from its latest snapshot (`evaluated`
-        says which); clusters without a snapshot, or whose what-if report
-        would be over `--max-snapshot-bytes`, are `missing`, and clusters
-        that already run the target are `notApplicable`.
+        says which). Clusters left out are named in `missing` and, with the
+        reason, in `excluded`: `no-snapshot` (the agent has not pushed
+        one), `too-large` (the what-if report would be over
+        `--max-snapshot-bytes`) or `unreadable` (the stored inventory does
+        not decode). Clusters that already run the target are
+        `notApplicable`.
+
+        A team's `verdict` is the worst of its verdicts in the clusters
+        evaluated: `blocked` over `unknown` over `ready`. Its score and
+        blockers count only its own findings, so a team with a clean score
+        can still be blocked by a blocker no team owns, or unknown because
+        a required check did not run.
       parameters:
         - name: target
           in: query
@@ -1046,7 +1055,7 @@ components:
         warnings: {type: integer}
     TeamScores:
       type: object
-      description: Team name to score; findings with no team are under `unattributed`.
+      description: Team name to score; findings with no team are under `(unattributed)`, a name no label value can take, so a real team called `unattributed` is a separate row.
       additionalProperties: {$ref: "#/components/schemas/TeamScore"}
     ReportEnvelope:
       type: object
@@ -1171,6 +1180,9 @@ components:
         at: {type: string, format: date-time}
         score: {type: integer}
         ready: {type: boolean}
+        verdict:
+          $ref: "#/components/schemas/Verdict"
+          description: The evaluation's verdict. A score can't tell `unknown` from `ready` (an evaluation whose required check did not run can score 100), so draw the trend by this. Absent from servers that predate it.
 
     FleetCell:
       type: object
@@ -1220,11 +1232,24 @@ components:
         clusters: {type: array, items: {$ref: "#/components/schemas/FleetRow"}}
     FleetTeam:
       type: object
-      required: [worstScore, blockers, clusters]
+      required: [worstScore, blockers, verdict, clusters]
       properties:
         worstScore: {type: integer}
         blockers: {type: integer}
+        verdict:
+          $ref: "#/components/schemas/Verdict"
+          description: The worst of the team's verdicts across the clusters, `blocked` over `unknown` over `ready`. Never read the score without it.
         clusters: {type: array, items: {type: string}}
+    FleetExcluded:
+      type: object
+      required: [name, clusterId, reason]
+      properties:
+        name: {type: string}
+        clusterId: {type: integer, format: int64}
+        reason:
+          type: string
+          enum: [no-snapshot, too-large, unreadable]
+          description: "`no-snapshot`: the agent has not pushed one. `too-large`: the cluster has snapshots, but its report for the target would be over `--max-snapshot-bytes`. `unreadable`: its stored inventory does not decode (or the cluster went away mid-request)."
     FleetTeamsSource:
       type: object
       required: [name, clusterId, source, evaluatedAt, snapshotId]
@@ -1236,14 +1261,20 @@ components:
         snapshotId: {type: integer, format: int64}
     FleetTeamsResponse:
       type: object
-      required: [target, teams, evaluated, missing, notApplicable]
+      required: [target, teams, evaluated, missing, excluded, notApplicable]
       properties:
         target: {$ref: "#/components/schemas/Target"}
         teams:
           type: object
           additionalProperties: {$ref: "#/components/schemas/FleetTeam"}
         evaluated: {type: array, items: {$ref: "#/components/schemas/FleetTeamsSource"}}
-        missing: {type: array, items: {type: string}}
+        missing:
+          type: array
+          items: {type: string}
+          description: The names of every cluster left out of the rollup, whatever the reason; `excluded` says why.
+        excluded:
+          type: array
+          items: {$ref: "#/components/schemas/FleetExcluded"}
         notApplicable: {type: array, items: {type: string}}
 
     GateFinding:
