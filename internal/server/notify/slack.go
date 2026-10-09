@@ -73,9 +73,15 @@ type SlackNotifier struct {
 // credential (a Slack webhook's path, a webhook's ?token=): the server
 // scrubs it (Scrub) from every error the notifier returns before logging
 // or storing one.
+//
+// A URL that follows a rotating file can change between the post and the
+// scrub, which would scrub an error with a URL other than the one it names.
+// Pin reads it once: the notifier to call for one delivery, which posts to
+// the URL returned, and that URL, to scrub with.
 type URLSink interface {
 	Notifier
 	SinkURL() string
+	Pin() (Notifier, string)
 }
 
 var (
@@ -89,6 +95,14 @@ func (s *SlackNotifier) SinkURL() string {
 		return s.URLFunc()
 	}
 	return s.URL
+}
+
+// Pin is a notifier that posts to the URL s has now, and that URL (URLSink).
+func (s *SlackNotifier) Pin() (Notifier, string) {
+	u := s.SinkURL()
+	pinned := *s
+	pinned.URL, pinned.URLFunc = u, nil
+	return &pinned, u
 }
 
 // NewSlack returns a SlackNotifier with the 2s delivery timeout.
@@ -129,6 +143,18 @@ func (g *GenericWebhook) SinkURL() string {
 		return g.URLFunc()
 	}
 	return g.URL
+}
+
+// Pin is a notifier that posts to the URL g has now, signed with the key it
+// has now, and that URL (URLSink).
+func (g *GenericWebhook) Pin() (Notifier, string) {
+	u := g.SinkURL()
+	pinned := *g
+	pinned.URL, pinned.URLFunc = u, nil
+	if g.SecretFunc != nil {
+		pinned.Secret, pinned.SecretFunc = g.SecretFunc(), nil
+	}
+	return &pinned, u
 }
 
 // NewGenericWebhook returns an unsigned GenericWebhook with the 2s
