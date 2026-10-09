@@ -38,6 +38,7 @@ upgradescope serve [flags]
       --admin-token string           bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server'; it also reads (empty = administration refused) (visible in process listings: prefer $UPGRADESCOPE_ADMIN_TOKEN or --admin-token-file)
       --admin-token-file string      read --admin-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
       --allow-anonymous-read         serve the read API and /api/v1/gate without a read token on a non-loopback --listen address
+      --allowed-host strings         a host name (or IP) requests may name in their Host header, any port, repeatable or comma separated (default $UPGRADESCOPE_ALLOWED_HOSTS): on a loopback --listen, or with --trust-team-header, any other Host than localhost, a loopback address, the --listen host or the address the request arrived on gets 421, which stops DNS-rebinding pages; name the Service, Ingress or proxy host the server is reached under
       --db string                    path to the SQLite database (parent directory is created) (default "upgradescope.db")
       --db-url string                Postgres URL (postgres://user:pass@host:5432/db); mutually exclusive with --db (visible in process listings: prefer $UPGRADESCOPE_DB_URL or --db-url-file)
       --db-url-file string           read --db-url from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)

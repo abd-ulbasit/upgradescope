@@ -1,8 +1,9 @@
 # upgradescope serve behind oauth2-proxy, with team-scoped reads from the
 # proxy's group header (docs/operations/auth.md).
 #
-# The header mode is safe only when both hold, and this example holds
-# both (deploy/examples/examples_test.go checks them):
+# The header mode is safe only when the three conditions in the docs
+# hold. This example holds the first two (deploy/examples/examples_test.go
+# checks them); the third is yours to hold:
 #   1. serve is reachable only through the proxy: it listens on
 #      127.0.0.1:8080 inside the pod, and the one Service exposes the
 #      proxy's port, never serve's;
@@ -12,7 +13,13 @@
 #      the client's request first when --skip-auth-strip-headers is true,
 #      on authenticated and skip-auth routes alike, then sets
 #      X-Forwarded-Groups from the session only: one header, the
-#      session's groups joined by commas.
+#      session's groups joined by commas;
+#   3. nobody who may not read a team can name a group that reads as it.
+#      The groups are joined with commas unencoded, so a group named
+#      "interns,payments" reads as payments too, and "pay%6Dents" as
+#      payments: filter the groups claim at your identity provider or
+#      connector to groups operators control (--allowed-group only
+#      decides who may sign in; it does not filter the claim).
 #
 # Machines go through the proxy too, on routes it does not authenticate
 # (with the header stripped, so they read as the token they present):
