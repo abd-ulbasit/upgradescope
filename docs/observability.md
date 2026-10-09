@@ -155,6 +155,25 @@ Go runtime and process metrics (`go_*`, `process_*`) are included.
 | `upgradescope_cluster_blockers` | gauge | `cluster`, `target` | blocker findings |
 | `upgradescope_cluster_last_push_age_seconds` | gauge | `cluster` | seconds since the cluster's agent last pushed (duplicates count) |
 | `upgradescope_cluster_stale` | gauge | `cluster` | 1 when the agent has not pushed within `serve --stale-after` (default 2h), else 0 |
+| `upgradescope_retention_prune_failures_total` | counter | `store` | retention prunes that failed, by `sqlite` or `postgres`; at 0 from startup |
+| `upgradescope_retention_last_success_timestamp_seconds` | gauge | | Unix time of the last prune that completed; absent until the first one does |
+| `upgradescope_retention_rows_deleted_total` | counter | `table` | rows retention deleted, `snapshots` or `evaluations`, including those a failed prune had already committed; at 0 from startup |
+
+The three `upgradescope_retention_*` series exist only with a
+`--retention` window (the default is 90d; with `--retention=0` there is no
+prune and none of them is exported). The server prunes at startup and then
+daily, in batches of at most 5,000 rows a transaction. A prune counts as
+successful only when it ran to the end: the gauge is set then and only
+then, so a prune that fails partway adds one to the failure counter, leaves
+the gauge at the last complete prune and keeps the rows its committed
+batches deleted (`upgradescope_retention_rows_deleted_total` counts them);
+the next run resumes there. A prune cut short by the server stopping is
+neither. The chart's `UpgradescopeRetentionStale` alert fires when the
+gauge is more than 2 days old, or absent for more than 2 days after the
+server started. Retention failing never fails `/readyz`: a server that
+cannot prune still ingests and serves, and restarting it would not help,
+so the metric and the log line (`server: retention: ... failed`) are the
+signals ([Retention and backup](operations/retention-and-backup.md#when-the-prune-fails)).
 
 Per-cluster gauges are read from the database at scrape time, for each
 cluster's default target and every applicable `--targets` minor: the same

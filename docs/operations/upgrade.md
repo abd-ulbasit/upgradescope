@@ -88,10 +88,12 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   which must be writable and large enough. Chart versions before this one
   had no such directory, and a prune of
   more than a few tens of MB failed with `disk I/O error (6410)`: if
-  you ran one, the first prune after the upgrade deletes the whole backlog
-  at once, which can take a lot of temp space, so raise `server.tmp.sizeLimit`
-  to the size of the database first
-  ([Retention and backup](retention-and-backup.md)).
+  you ran one, the first prune after the upgrade deletes the backlog in
+  batches of at most 5,000 rows a transaction, so it no longer needs temp
+  space for the whole backlog at once; the temp space one batch needs was
+  not measured, so if it still fails, `upgradescope_retention_prune_failures_total`
+  counts it and `server.tmp.sizeLimit` is the knob
+  ([Retention and backup](retention-and-backup.md#when-the-prune-fails)).
 - **The stale threshold follows `agent.interval`.** With `server.staleAfter`
   unset, the server marks a cluster stale after the larger of 2h and three
   agent intervals, where the chart used to fix 2h; the

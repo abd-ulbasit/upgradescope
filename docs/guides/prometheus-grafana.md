@@ -45,6 +45,7 @@ the jobs the chart's ServiceMonitors produce: `<fullname>-agent-metrics` and
 | `UpgradescopeVerdictUnknown` | `upgradescope_readiness_verdict{verdict="unknown"} == 1` | 1h | info |
 | `UpgradescopeAgentNotTicking` | `time() - upgradescope_agent_last_success_timestamp_seconds > 2 * upgradescope_agent_interval_seconds + 300 or absent(up{job="…-agent-metrics"} == 1)` | 5m | warning |
 | `UpgradescopeClusterStale` (server only) | `upgradescope_cluster_last_push_age_seconds > <threshold>` (7200 at the default 10m interval) | 10m | warning |
+| `UpgradescopeRetentionStale` (server only, not with `server.retention=0`) | `time() - upgradescope_retention_last_success_timestamp_seconds > 172800`, or that gauge absent while the server started more than 2 days ago | 15m | warning |
 
 While an agent keeps failing its ticks, the verdict gauges behind the first
 two alerts are withdrawn, so those alerts resolve; `UpgradescopeAgentNotTicking`
