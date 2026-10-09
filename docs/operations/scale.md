@@ -561,6 +561,15 @@ The peak RSS of the agent process was 66 to 71 MiB in every pod, and the
 cgroup's peak memory (page cache included) 98 MiB at most, against the
 256Mi limit.
 
+These runs predate the tick reserve
+([#238](https://github.com/abd-ulbasit/upgradescope/issues/238)):
+collection now gets the tick deadline minus 30 seconds, 4m30s of the
+5 minutes at the default interval, and each step's share shrinks with it.
+The Helm step, given 59 s in these runs, would now get the 270 s left less
+the first step's time, over the five steps left: at most 54 s (computed,
+not measured). Compare a new run's step-deadline reasons against that, not
+against 59 s.
+
 - **At 200m the first tick did not finish its Helm step.** The tick used
   12.0 CPU-seconds in its 73 s, against the 14.7 that 0.2 CPU allows over
   that time, and left 132 releases unread; the status said so (`helm
