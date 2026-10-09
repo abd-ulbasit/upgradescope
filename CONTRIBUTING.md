@@ -239,6 +239,27 @@ be checked for a cache of its own and added to the list in
 `hack/release-caches_test.sh` (`make hack-test`), which fails on any of
 these (IR-22).
 
+**Docker Hub pulls go through a mirror.** Docker Hub rate-limits anonymous
+pulls per source IP (`429 toomanyrequests`), and a hosted runner shares its IP
+with many others, so a job that pulled from Docker Hub failed now and then with
+no commit to blame. CI pulls through Google's public pull-through cache,
+`mirror.gcr.io`: the same digests, no credentials, and the daemon falls back to
+`docker.io` for an image the mirror lacks. A job that builds an image, creates a
+kind cluster or otherwise pulls a container image (`images`, `release-check`,
+`kube`, and `release.yml`'s `goreleaser` and `verify`) runs
+`./.github/actions/dockerhub-mirror` right after checkout, which adds the
+mirror to `/etc/docker/daemon.json` and restarts Docker. Two cases that action
+cannot cover are handled by hand: a `docker/setup-buildx-action` builder runs
+its own BuildKit, so it sets `buildkitd-config-inline` with
+`[registry."docker.io"] mirrors = ["mirror.gcr.io"]`, and the `pg-conformance`
+service container starts before any step (a Docker restart would kill it), so
+its image is named `mirror.gcr.io/library/postgres:<major>@sha256:...`, the
+digest from `hack/pg-images.txt`. `hack/dockerhub-mirror_test.sh` (`make
+hack-test`) fails a job that runs `docker build`, `kind create cluster`, `make
+e2e` and the like without the step, a buildx step without the BuildKit config,
+and a Docker Hub image in `services:` or `container:`. A new such job needs the
+step; nothing changes when you run these targets on your machine.
+
 The `kube` job (`hack/e2e.sh`) runs per Kubernetes minor from
 `hack/kind-node-images.txt`, each pinned to a kind node image digest. It
 creates a kind cluster, scans the vanilla cluster at its next minor and

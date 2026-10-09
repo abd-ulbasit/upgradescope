@@ -9,8 +9,11 @@
 #     17 on PRs, pushes and releases, every major on the schedule and on
 #     demand;
 #   - every services: or container: image in .github/workflows is pinned by
-#     @sha256:, or is ${{ matrix.image }} of a matrix pg-matrix builds from
-#     the table, whose line is the only zizmor ignore in the workflows.
+#     @sha256:, or is mirror.gcr.io/library/${{ matrix.image }} of a matrix
+#     pg-matrix builds from the table (a service starts before any step, so
+#     it is pulled from the mirror by name; hack/dockerhub-mirror_test.sh
+#     covers the mirror itself), whose line is the only zizmor ignore in
+#     the workflows.
 # Offline; needs jq.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -107,16 +110,16 @@ want_majors "workflow_dispatch with full-matrix=false runs 17" workflow_dispatch
 grep -qxF '      images: ${{ steps.matrix.outputs.images }}' "$work/pg-matrix.job" &&
   grep -qxF '    needs: pg-matrix' "$work/pg-conformance.job" &&
   grep -qxF '        include: ${{ fromJSON(needs.pg-matrix.outputs.images) }}' "$work/pg-conformance.job" &&
-  grep -qE '^        image: \$\{\{ matrix\.image \}\}( |$)' "$work/pg-conformance.job" &&
-  ok "pg-conformance's service image is matrix.image, from pg-matrix's output" ||
-  fail "pg-conformance does not take its service image from pg-matrix (needs, matrix include, image: \${{ matrix.image }})"
+  grep -qE '^        image: mirror\.gcr\.io/library/\$\{\{ matrix\.image \}\}( |$)' "$work/pg-conformance.job" &&
+  ok "pg-conformance's service image is matrix.image (through mirror.gcr.io), from pg-matrix's output" ||
+  fail "pg-conformance does not take its service image from pg-matrix (needs, matrix include, image: mirror.gcr.io/library/\${{ matrix.image }})"
 
 # --- every service and container image in .github/workflows ------------------
 
 # zizmor cannot see through a matrix built from a job output, so the
 # pg-conformance service image carries the one zizmor ignore in the repo,
 # with its reason; any other ignore would hide a finding nobody reviewed.
-pg_image_line='        image: ${{ matrix.image }} # zizmor: ignore[unpinned-images] pinned by digest in hack/pg-images.txt'
+pg_image_line='        image: mirror.gcr.io/library/${{ matrix.image }} # zizmor: ignore[unpinned-images] pinned by digest in hack/pg-images.txt'
 grep -n 'zizmor: *ignore' .github/workflows/*.yml >"$work/ignores" || true
 if [ "$(wc -l <"$work/ignores" | tr -d ' ')" = 1 ] && grep -qF "${pg_image_line#        }" "$work/ignores"; then
   ok "the only zizmor ignore in .github/workflows is pg-conformance's unpinned-images, with its reason"
@@ -139,9 +142,9 @@ while IFS= read -r line; do
   case $v in
     *@sha256:*)
       [[ $v =~ @sha256:[0-9a-f]{64}$ ]] && ok "$where: $v is pinned by digest" || fail "$where: '$v' has a malformed digest" ;;
-    '${{ matrix.image }}')
+    'mirror.gcr.io/library/${{ matrix.image }}')
       [ "${where%%:*}" = "$ci" ] && grep -qxF "$pg_image_line" "$work/pg-conformance.job" &&
-        ok "$where: matrix.image comes from hack/pg-images.txt, all pinned" ||
+        ok "$where: matrix.image comes from hack/pg-images.txt, all pinned, pulled through mirror.gcr.io" ||
         fail "$where: \${{ matrix.image }} outside pg-conformance, whose matrix is not known to be pinned" ;;
     *) fail "$where: service or container image '$v' is not pinned by @sha256: (zizmor: unpinned-images)" ;;
   esac

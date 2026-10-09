@@ -390,6 +390,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/dockerhub-mirror # Docker Hub's anonymous pull limit (429): pull through mirror.gcr.io
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod # Dockerfile.release's binaries are built on the runner
@@ -397,6 +398,13 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           cache-binary: false # it installs no buildx (no version: input); never from the Actions cache
+          # The docker-container builder runs its own BuildKit, which does not
+          # read the daemon's registry-mirrors: give it the mirror too (the
+          # dockerhub-mirror step above covers the daemon, which pulls the
+          # builder image itself).
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: build ${{ matrix.dockerfile }} (linux/amd64, linux/arm64)
         env:
           IMAGES_DOCKERFILES: ${{ matrix.dockerfile }}
@@ -490,7 +498,11 @@ jobs:
         # from hack/pg-images.txt, which hack/pg-images.sh rejects unless
         # pinned (hack/pg-images_test.sh checks this line and that no other
         # workflow line ignores a zizmor audit).
-        image: ${{ matrix.image }} # zizmor: ignore[unpinned-images] pinned by digest in hack/pg-images.txt
+        # Services start before the first step, so the daemon mirror
+        # (.github/actions/dockerhub-mirror, whose restart would kill them)
+        # cannot apply: the image is pulled by name from mirror.gcr.io, the
+        # same digest Docker Hub serves (hack/dockerhub-mirror_test.sh).
+        image: mirror.gcr.io/library/${{ matrix.image }} # zizmor: ignore[unpinned-images] pinned by digest in hack/pg-images.txt
         env:
           POSTGRES_PASSWORD: ci-test
           POSTGRES_DB: upgradescope
@@ -543,6 +555,7 @@ jobs:
         with:
           fetch-depth: 0 # goreleaser derives the snapshot version from tags
           persist-credentials: false
+      - uses: ./.github/actions/dockerhub-mirror # Docker Hub's anonymous pull limit (429): pull through mirror.gcr.io
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -552,6 +565,13 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           cache-binary: false # it installs no buildx (no version: input); never from the Actions cache
+          # The docker-container builder runs its own BuildKit, which does not
+          # read the daemon's registry-mirrors: give it the mirror too (the
+          # dockerhub-mirror step above covers the daemon, which pulls the
+          # builder image itself).
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - run: make release-check
       # The CLI as the last release shipped it against this tree, through
       # `--help`: a removed flag, a changed default or usage line must be
@@ -868,6 +888,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/dockerhub-mirror # Docker Hub's anonymous pull limit (429): pull through mirror.gcr.io
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

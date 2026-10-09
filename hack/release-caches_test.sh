@@ -42,7 +42,7 @@ known='actions/checkout actions/upload-artifact actions/download-artifact
 actions/attest-build-provenance dorny/paths-filter azure/setup-helm
 docker/login-action sigstore/cosign-installer anchore/sbom-action/download-syft
 goreleaser/goreleaser-action github/codeql-action/upload-sarif
-rajatjindal/krew-release-bot ./action ./'
+rajatjindal/krew-release-bot ./action ./ ./.github/actions/dockerhub-mirror'
 
 # steps <workflow>: one tab-separated line per step: line, uses, with.cache,
 # with.package-manager-cache, with.cache-binary, if (values without their
