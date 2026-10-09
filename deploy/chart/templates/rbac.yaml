@@ -49,13 +49,14 @@ rules:
   {{- if .Values.rbac.gitops.flux }}
   # rbac.gitops.flux: the charts Flux deploys, read from HelmRelease
   # spec.chart and spec.chartRef, and a chartRef to an OCIRepository (URL and
-  # tag), fetched by name.
+  # tag), listed (one list, not a GET per chartRef, #248; get is the
+  # fallback where only that is granted).
   - apiGroups: ["helm.toolkit.fluxcd.io"]
     resources: ["helmreleases"]
     verbs: ["get", "list"]
   - apiGroups: ["source.toolkit.fluxcd.io"]
     resources: ["ocirepositories"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   {{- end }}
   # --- files/kb-rbac-rules.yaml ---
   {{- .Files.Get "files/kb-rbac-rules.yaml" | nindent 2 }}

@@ -40,7 +40,7 @@ what is supported:
 |---|---|---|
 | **Helm** | releases in the `secrets` and `configmaps` storage drivers (`HELM_DRIVER=secret`, the default, and `configmap`): chart, versions, `kubeVersion`, stored manifest | the `sql` driver: its releases live in an external database the cluster does not show. Not supported |
 | **Argo CD** | `applications.argoproj.io/v1alpha1`: the `chart`, `repoURL` and `targetRevision` of each `spec.sources[]` entry (or of `spec.source`, when `spec.sources` is empty, as Argo CD does) that sets `chart`, for Applications (including those an ApplicationSet generates) whose destination is this cluster (`https://kubernetes.default.svc` or `https://kubernetes.default.svc.cluster.local`, with or without `:443`, or the name `in-cluster`) | sources that render a path in Git (a Helm chart in a repository, Kustomize with `helmCharts`) name no chart. Applications for other clusters, which are counted in the reason |
-| **Flux** | `helmreleases.helm.toolkit.fluxcd.io`: `spec.chart.spec` (`chart`, `version`, `sourceRef`; from a `GitRepository` or `Bucket` the chart is a path, and the last element of it is taken as the chart's name) and a `spec.chartRef` to an `OCIRepository` (`source.toolkit.fluxcd.io`, its `spec.url` and `spec.ref.tag` or `semver`). The newest of `v2`, `v2beta2` and `v2beta1` the cluster serves | a `chartRef` to a `HelmChart`, or an `OCIRepository` that cannot be read (both are counted in the reason, with the first read error, and the capability is partial). HelmReleases with a `spec.kubeConfig`, which deploy to other clusters |
+| **Flux** | `helmreleases.helm.toolkit.fluxcd.io`: `spec.chart.spec` (`chart`, `version`, `sourceRef`; from a `GitRepository` or `Bucket` the chart is a path, and the last element of it is taken as the chart's name) and a `spec.chartRef` to an `OCIRepository` (`source.toolkit.fluxcd.io`, its `spec.url` and `spec.ref.tag` or `semver`; the OCIRepositories are listed, one list of the namespace the chartRefs point into or one cluster-wide, paged at 50, and with a role that may list only some namespaces, per namespace, fetched by name where even that is refused; the agent remembers a refused list across ticks and asks for it again only once an hour, so a role with `get` alone costs those refused lists once an hour, not on every tick, and a list granted later is used within the hour, while `scan` asks once per run). The newest of `v2`, `v2beta2` and `v2beta1` the cluster serves | a `chartRef` to a `HelmChart`, or an `OCIRepository` that cannot be read (both are counted in the reason, with the first read error, and the capability is partial). HelmReleases with a `spec.kubeConfig`, which deploy to other clusters |
 
 What the charts feed is **add-on detection**: a chart the registry knows (for
 example `ingress-nginx`) is an install in the namespace the chart deploys
@@ -138,7 +138,7 @@ default. Enable what you run:
 rbac:
   gitops:
     argocd: true   # get, list on applications.argoproj.io
-    flux: true     # get, list on helmreleases.helm.toolkit.fluxcd.io, get on ocirepositories.source.toolkit.fluxcd.io
+    flux: true     # get, list on helmreleases.helm.toolkit.fluxcd.io and ocirepositories.source.toolkit.fluxcd.io
 ```
 
 Without them, with the tool installed, the agent reports `helm` as partial,
