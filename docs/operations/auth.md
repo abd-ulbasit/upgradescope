@@ -85,7 +85,8 @@ does not have.
 The chart passes `--allowed-host` with the server Service's DNS names
 (`<release>-server`, `.<namespace>`, `.<namespace>.svc` and
 `.<namespace>.svc.<clusterDomain>`, `cluster.local` unless you set the
-`clusterDomain` value), `server.ingress.host` and
+`clusterDomain` value; for a long release, the Service name as cut to 63
+characters, the name the Service has), `server.ingress.host` and
 `server.allowedHosts`, so turning the check on (`--trust-team-header` in
 `server.extraArgs`) breaks no push, Ingress or Service client. A proxy in
 front sends either its upstream's Host (oauth2-proxy

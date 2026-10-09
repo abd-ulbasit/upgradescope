@@ -1,5 +1,5 @@
 {{- if and .Values.server.enabled .Values.server.tls.certManager.issuerRef.name (not .Values.server.tls.secretName) }}
-{{- $svc := include "upgradescope.serverFullname" . }}
+{{- $svc := include "upgradescope.serverService" . }}
 # The server's HTTPS certificate, issued by cert-manager into the Secret
 # the server serves (server.tls). With a CA or self-signed issuer, the
 # Secret's ca.crt is what the in-chart agent trusts. It names the Service
@@ -7,7 +7,7 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ $svc }}
+  name: {{ include "upgradescope.serverFullname" . }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: server

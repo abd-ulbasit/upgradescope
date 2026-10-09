@@ -9,10 +9,18 @@ metadata:
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: server
 spec:
-  {{- if .Values.server.podDisruptionBudget.maxUnavailable }}
-  maxUnavailable: {{ .Values.server.podDisruptionBudget.maxUnavailable }}
+  {{- /* 0 is a value (a number is falsy in a template), "" and null are not. */}}
+  {{- $pdb := .Values.server.podDisruptionBudget }}
+  {{- $max := "" }}
+  {{- if not (kindIs "invalid" $pdb.maxUnavailable) }}{{ $max = toString $pdb.maxUnavailable }}{{ end }}
+  {{- $min := "" }}
+  {{- if not (kindIs "invalid" $pdb.minAvailable) }}{{ $min = toString $pdb.minAvailable }}{{ end }}
+  {{- if ne $max "" }}
+  maxUnavailable: {{ $pdb.maxUnavailable }}
+  {{- else if ne $min "" }}
+  minAvailable: {{ $pdb.minAvailable }}
   {{- else }}
-  minAvailable: {{ .Values.server.podDisruptionBudget.minAvailable }}
+  {{- fail "server.podDisruptionBudget needs minAvailable or maxUnavailable: both are empty, which is not a budget. Set one, or server.podDisruptionBudget.enabled=false" }}
   {{- end }}
   selector:
     matchLabels:

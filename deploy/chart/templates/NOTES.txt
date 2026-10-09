@@ -17,7 +17,7 @@ Pin target versions without Helm:
 {{- if .Values.server.enabled }}
 
 Server API (port-forward):
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "upgradescope.serverFullname" . }} 8080:{{ .Values.server.service.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "upgradescope.serverService" . }} 8080:{{ .Values.server.service.port }}
 {{- if include "upgradescope.serverTLSSecret" . }}
   SERVER=https://127.0.0.1:8080   # serves the server.tls certificate: pass curl its CA (--cacert)
 {{- else }}
@@ -61,6 +61,19 @@ rbac.helmSecrets=false turns that off){{ end }}{{ if .Values.rbac.gitops.argocd 
 objects (RBAC cannot scope create by name), and updates only
 ClusterReadiness/{{ .Values.agent.crName }}{{ if .Values.agent.manageCRD }} and the clusterreadinesses.upgradescope.dev CRD{{ end }}.
 The full rule list and its reasons are in the chart README.
+{{- end }}
+{{- if or .Values.server.enabled .Values.agent.enabled }}
+
+After you change a token or a webhook URL (server.ingestToken, readToken,
+adminToken, slackWebhook, webhook, webhookSecret, agent.serverToken), or the
+contents of a Secret you named (server.existingSecret, agent.existingSecret),
+restart the pods that read it:
+  kubectl -n {{ .Release.Namespace }} rollout restart{{ if .Values.server.enabled }} deploy/{{ include "upgradescope.serverFullname" . }}{{ end }}{{ if .Values.agent.enabled }} deploy/{{ include "upgradescope.derived" (dict "root" . "suffix" "-agent") }}{{ end }}
+The values reach the containers as environment variables, which are read
+once at start: helm upgrade changes the Secret, and the running pods keep
+the old token (it still works) until they restart. No pod annotation
+carries a function of a secret value, so the chart cannot restart them for
+you.
 {{- end }}
 
 Uninstall: helm uninstall keeps the CRD (Helm crds/ semantics). Full removal:

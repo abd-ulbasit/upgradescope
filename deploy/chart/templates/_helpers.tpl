@@ -13,17 +13,26 @@
 {{- end -}}
 
 {{/*
-A resource name made of the fullname plus a suffix, e.g. "-server" or
-"-agent-metrics" (call with (dict "root" $ "suffix" "-server")). The
-fullname gives way to the suffix, so the whole name is at most 63
-characters: a Service name is a DNS-1035 label, which the API server
-refuses past 63, though helm template and lint do not. A name that already
-fits (every one of a default release name) is unchanged. A fullname cut
-short may leave two releases' names equal: Helm releases are at most 53
-characters and are unique per namespace, so only a release name sharing its
-first characters with another in the namespace is affected.
+A resource name made of the fullname plus a suffix, e.g. "-server-data"
+(call with (dict "root" $ "suffix" "-server-data")). Never cut: a release
+upgraded from an earlier chart keeps the PVC, Secrets and ConfigMaps it
+has, whose names the API server accepts up to 253 characters. Only a
+Service name is a DNS-1035 label, which the API server refuses past 63
+characters, though helm template and lint do not: see upgradescope.service.
 */}}
 {{- define "upgradescope.derived" -}}
+{{- printf "%s%s" (include "upgradescope.fullname" .root) .suffix -}}
+{{- end -}}
+
+{{/*
+A Service name: the fullname plus a suffix, at most 63 characters. The
+fullname gives way to the suffix. A name that already fits is the one
+upgradescope.derived gives; a longer one never installed (the API server
+refused the Service), so cutting it renames nothing that exists. Two
+releases whose fullnames share all but their tail may collide: Helm release
+names are at most 53 characters and unique per namespace.
+*/}}
+{{- define "upgradescope.service" -}}
 {{- printf "%s%s" (include "upgradescope.fullname" .root | trunc (int (sub 63 (len .suffix))) | trimSuffix "-") .suffix -}}
 {{- end -}}
 
@@ -101,11 +110,17 @@ affinity: {{- toYaml . | nindent 2 }}
 {{- include "upgradescope.derived" (dict "root" . "suffix" "-server") -}}
 {{- end -}}
 
+{{/* The server's Service name: at most 63 characters. */}}
+{{- define "upgradescope.serverService" -}}
+{{- include "upgradescope.service" (dict "root" . "suffix" "-server") -}}
+{{- end -}}
+
 {{/* The server Service's fully qualified DNS name:
-<fullname>-server.<namespace>.svc.<clusterDomain>, the domain lowercased
-and without a trailing dot. */}}
+<service>.<namespace>.svc.<clusterDomain>, where <service> is the cut
+Service name (upgradescope.serverService), the domain lowercased and
+without a trailing dot. */}}
 {{- define "upgradescope.serverFQDN" -}}
-{{- printf "%s.%s.svc.%s" (include "upgradescope.serverFullname" .) .Release.Namespace (.Values.clusterDomain | lower | trimSuffix ".") -}}
+{{- printf "%s.%s.svc.%s" (include "upgradescope.serverService" .) .Release.Namespace (.Values.clusterDomain | lower | trimSuffix ".") -}}
 {{- end -}}
 
 {{/* Is the agent pushing to a server at all? Non-empty string = yes. */}}
@@ -119,7 +134,7 @@ over HTTPS when it serves TLS. */}}
 {{- if .Values.agent.serverUrl -}}
 {{- .Values.agent.serverUrl -}}
 {{- else -}}
-{{- printf "%s://%s.%s.svc:%d" (ternary "https" "http" (ne (include "upgradescope.serverTLSSecret" .) "")) (include "upgradescope.serverFullname" .) .Release.Namespace (int .Values.server.service.port) -}}
+{{- printf "%s://%s.%s.svc:%d" (ternary "https" "http" (ne (include "upgradescope.serverTLSSecret" .) "")) (include "upgradescope.serverService" .) .Release.Namespace (int .Values.server.service.port) -}}
 {{- end -}}
 {{- end -}}
 
@@ -324,37 +339,5 @@ own threshold, so the alert and the stale flag agree. */}}
 {{- $set -}}
 {{- else -}}
 {{- include "upgradescope.staleAfterSeconds" . -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-A checksum for the pod template of a Deployment whose environment holds
-tokens read from a chart-managed Secret. The Secrets are read at container
-start, so without it `helm upgrade --set server.readToken=<new>` changes the
-Secret and leaves the old token working in the running pod. Only the
-values the user supplied are hashed (not a generated ingest token, which
-helm template and GitOps renderers would regenerate on every render and so
-roll the pods every sync), salted with the release and namespace so the
-hash is not a rainbow-table lookup; a short or guessable token can still
-be tested against it by anyone who can read the Deployment, so use long
-random ones. A Secret named by an existingSecret cannot be hashed: its
-contents are not in the chart.
-*/}}
-{{- define "upgradescope.serverSecretChecksum" -}}
-{{- if not .Values.server.existingSecret -}}
-{{- $v := pick .Values.server "ingestToken" "readToken" "adminToken" "slackWebhook" "webhook" "webhookSecret" "sharedIngestToken" -}}
-{{- printf "%s/%s/%s" .Release.Namespace .Release.Name (toJson $v) | sha256sum -}}
-{{- end -}}
-{{- end -}}
-
-{{/* As serverSecretChecksum, for the agent's push token: its own inline
-agent.serverToken, or the in-chart server's ingest token it falls back to.
-Empty with agent.existingSecret, or with a generated server token. */}}
-{{- define "upgradescope.agentSecretChecksum" -}}
-{{- if .Values.agent.existingSecret -}}
-{{- else if .Values.agent.serverToken -}}
-{{- printf "%s/%s/%s" .Release.Namespace .Release.Name .Values.agent.serverToken | sha256sum -}}
-{{- else if and .Values.server.enabled .Values.server.sharedIngestToken (not .Values.server.existingSecret) .Values.server.ingestToken -}}
-{{- printf "%s/%s/%s" .Release.Namespace .Release.Name .Values.server.ingestToken | sha256sum -}}
 {{- end -}}
 {{- end -}}

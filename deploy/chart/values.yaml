@@ -24,9 +24,10 @@ image:
 imagePullSecrets: []
 
 # -- The cluster's DNS domain (the kubelet's clusterDomain): the server
-# Service's fully qualified name, <fullname>-server.<namespace>.svc.<this>,
-# is passed to the server as an --allowed-host and named in the
-# cert-manager Certificate. Set it when your cluster does not use
+# Service's fully qualified name, <fullname>-server.<namespace>.svc.<this>
+# (the Service name cut to 63 characters for a long release), is passed to
+# the server as an --allowed-host and named in the cert-manager
+# Certificate. Set it when your cluster does not use
 # cluster.local.
 clusterDomain: cluster.local
 
@@ -312,10 +313,12 @@ server:
     # -- Render a PodDisruptionBudget for the server when replicas is above
     # 1 (with one replica minAvailable 1 would block every node drain).
     enabled: true
-    # -- Pods that must stay up during a voluntary disruption (a node drain).
+    # -- Pods that must stay up during a voluntary disruption (a node drain):
+    # a count or a percentage such as 50%.
     minAvailable: 1
-    # -- Set instead of minAvailable (a number or a percentage such as 50%);
-    # when set, minAvailable is not rendered.
+    # -- Set instead of minAvailable (a count, 0 included, or a percentage
+    # such as 50%); when set, minAvailable is not rendered. With both empty
+    # the render fails.
     maxUnavailable: ""
   # -- Spread the server pods across nodes (soft: topologySpreadConstraints,
   # kubernetes.io/hostname, ScheduleAnyway, so a one-node cluster still
@@ -412,8 +415,9 @@ server:
     # I/O error (6410)" without one (docs/operations/retention-and-backup.md);
     # it should need no more than the database's size (reasoning, not
     # measured), so the default matches the default persistence.size: raise
-    # it with that. An emptyDir that outgrows its limit evicts the pod. Node ephemeral storage, gone with the pod. Do not mount
-    # your own volume at /tmp (extraVolumeMounts).
+    # it with that. An emptyDir that outgrows its limit evicts the pod. It
+    # is node ephemeral storage, gone with the pod. Do not mount your own
+    # volume at /tmp (extraVolumeMounts).
     sizeLimit: 1Gi
   persistence:
     # -- PVC for the SQLite database (unused with database.existingSecret).

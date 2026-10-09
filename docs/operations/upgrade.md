@@ -42,16 +42,29 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   forgets your settings, so pass `-f values.yaml` with them instead if you
   keep a values file. The two `helm get values` calls show that only your
   own settings carried over.
-- **Pods roll when a chart-managed token changes.** The pod templates carry
-  a checksum of the values you set in the chart's own Secrets (the read,
-  ingest and admin tokens, the webhook URLs, `agent.serverToken`), so
-  `helm upgrade --set server.readToken=<new>` restarts the server and the old
-  token stops working. A Secret you name (`server.existingSecret`,
-  `agent.existingSecret`) cannot be hashed: restart the pods yourself after
-  changing it (`kubectl rollout restart deploy/<release>-server` and
-  `-agent`), or the running pods keep the old values. The checksum is a
-  salted SHA-256 of the token, visible to whoever can read the Deployment:
-  use long random tokens.
+- **After changing a token, a webhook value or an `existingSecret`,
+  restart the pods yourself.** The tokens and webhook URLs reach the
+  containers as environment variables, which are read once at start.
+  `helm upgrade --set server.readToken=<new>` changes the Secret and leaves
+  the running pods on the old value, and the old token keeps working until
+  they restart:
+
+  ```sh
+  kubectl -n <ns> rollout restart deploy/<release>-server deploy/<release>-agent
+  ```
+
+  (the chart NOTES print the command with your Deployments' names). The
+  same goes for the contents of a Secret you name (`server.existingSecret`,
+  `agent.existingSecret`), and for a rotation you make with `kubectl`
+  rather than Helm. The chart does not restart the pods for you because it
+  cannot do so safely: a checksum of a token in a pod annotation would be
+  readable by everyone who can get pods or Deployments, a wider set than
+  those who can read Secrets, and a short token can be tested against it
+  offline. A follow-up will make `serve` and the agent re-read mounted
+  token files when they change, so that no restart is needed. Every key of
+  the chart's Secrets is written under `data`, so a value you remove on
+  upgrade is removed from the Secret too (after the restart, the pods run
+  without it).
 - **SQLite needs a writable `/tmp`.** The server's root filesystem is
   read-only, and SQLite spills a large delete (the daily retention prune,
   `clusters delete`) into a temp file. The chart mounts an emptyDir at
@@ -75,15 +88,23 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
 - **The listen port is its own value.** `server.containerPort` (8080) is
   what serve binds; `server.service.port` is only the Service's, so it can
   be 80 or 443.
-- **Resource names are cut to fit 63 characters.** A Service name is a
-  DNS-1035 label. When a release's fullname plus a suffix (`-server`,
-  `-agent-metrics`, `-server-tokens`) would pass 63 characters, the
-  fullname is shortened for that name, so a name that already fits does not
-  change. A fullname (the release name plus `-upgradescope`, unless the
-  release name already contains it) of 45 characters or fewer never reaches
-  it. A longer one renames some resources on upgrade, the server's data PVC
-  and token Secret among them: compare `helm template` with
-  `kubectl get pvc,secret` first.
+- **Only Service names are cut to fit 63 characters.** A Service name is a
+  DNS-1035 label, which the API server refuses past 63 characters, so the
+  server Service and the agent metrics Service shorten the release's
+  fullname (the release name plus `-upgradescope`, unless the release name
+  already contains it) when it would pass 63 with `-server` or
+  `-agent-metrics`. A Service name that fits is unchanged, and one that did
+  not fit never installed. Every other resource keeps the name it had
+  (the data PVC, the token Secret, the ConfigMaps, the Deployments,
+  whatever their length), so a long release name loses neither its SQLite
+  history nor its generated ingest token on upgrade.
+- **The pod's listen port is `server.containerPort` (8080), whatever
+  `server.service.port` is.** Before, the pod listened on
+  `server.service.port`. If you had set it to something other than 8080,
+  the pod now listens on 8080 and the Service still answers on your port,
+  but a NetworkPolicy, sidecar or `kubectl port-forward pod/...` of your own
+  that names the pod's old port must follow it (set `server.containerPort`
+  to the old value to keep it, if it is 1024 or above).
 - **`networkPolicy.enabled` with an Ingress or a ServiceMonitor** needs
   `networkPolicy.serverIngressFrom` now: the policy admits only the
   in-chart agent, and the render fails rather than cut off the Ingress

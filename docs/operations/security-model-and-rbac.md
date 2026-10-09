@@ -191,6 +191,19 @@ cannot read is reported as not assessed.
   --server` treat any 3xx as an error naming its status and Location:
   Go would follow a 301 or 302 with a GET, which the admin token reads,
   and report a delete that never happened.
+- **Rotating a secret needs a restart.** The chart passes tokens and
+  webhook URLs as environment variables read once at start. After you change
+  `server.ingestToken`, `readToken`, `adminToken`, a webhook value,
+  `agent.serverToken` or the contents of a `server.existingSecret` or
+  `agent.existingSecret`, run `kubectl -n <ns> rollout restart
+  deploy/<release>-server deploy/<release>-agent`: until then the pods keep
+  the old value and the old token still works, which matters when you are
+  rotating because a token leaked. The chart puts no hash of a secret in
+  pod or Deployment metadata to trigger the restart, since everyone who can
+  get pods or Deployments could read it, and a short token could be tested
+  against it offline ([Upgrade](upgrade.md#the-chart)). A follow-up will make
+  `serve` and the agent re-read mounted token files, so that no restart is
+  needed.
 - **Bounded input.** Snapshot and gate bodies are capped
   (`--max-snapshot-bytes`, `--max-gate-bytes`), gzip included, and their
   memory is bounded by structure, not only bytes: JSON values and YAML

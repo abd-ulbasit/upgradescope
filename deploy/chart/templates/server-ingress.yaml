@@ -37,7 +37,7 @@ spec:
             pathType: {{ $ing.pathType }}
             backend:
               service:
-                name: {{ include "upgradescope.serverFullname" . }}
+                name: {{ include "upgradescope.serverService" . }}
                 port:
                   name: http
 {{- end }}

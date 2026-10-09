@@ -26,8 +26,7 @@ spec:
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: agent
-      {{- $tokenSum := include "upgradescope.agentSecretChecksum" . }}
-      {{- if or .Values.agent.podAnnotations .Values.agent.extraRegistry $tokenSum }}
+      {{- if or .Values.agent.podAnnotations .Values.agent.extraRegistry }}
       annotations:
         {{- with .Values.agent.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -35,11 +34,6 @@ spec:
         {{- with .Values.agent.extraRegistry }}
         # agent reads --registry-dir at startup: roll the pod when it changes.
         checksum/registry: {{ toYaml . | sha256sum }}
-        {{- end }}
-        {{- with $tokenSum }}
-        # The push token reaches the agent as an environment variable read at
-        # start: roll the pod when the chart-managed token changes.
-        checksum/token: {{ . }}
         {{- end }}
       {{- end }}
     spec:

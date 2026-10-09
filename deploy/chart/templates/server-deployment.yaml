@@ -38,8 +38,7 @@ spec:
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: server
-      {{- $secretSum := include "upgradescope.serverSecretChecksum" . }}
-      {{- if or .Values.server.podAnnotations .Values.server.teamMap $secretSum }}
+      {{- if or .Values.server.podAnnotations .Values.server.teamMap }}
       annotations:
         {{- with .Values.server.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -47,12 +46,6 @@ spec:
         {{- with .Values.server.teamMap }}
         # serve reads --team-map at startup: roll the pods when it changes.
         checksum/team-map: {{ toYaml . | sha256sum }}
-        {{- end }}
-        {{- with $secretSum }}
-        # The tokens and webhook URLs reach serve as environment variables
-        # read at start: roll the pods when the chart-managed Secret changes.
-        # An existingSecret cannot be hashed; restart the pods after rotating it.
-        checksum/secret: {{ . }}
         {{- end }}
       {{- end }}
     spec:
@@ -117,7 +110,9 @@ spec:
             # in-chart agent pushes to, the Ingress host and
             # server.allowedHosts. Probes and scrapes of the pod's IP need
             # none: the guard answers for the address a request arrives on.
-            {{- $svc := include "upgradescope.serverFullname" . }}
+            # The Service names are the cut ones (upgradescope.serverService),
+            # the names the Service actually has.
+            {{- $svc := include "upgradescope.serverService" . }}
             {{- $hosts := list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace) (include "upgradescope.serverFQDN" .) }}
             {{- if and .Values.server.ingress.enabled .Values.server.ingress.host }}
             {{- $hosts = append $hosts (lower .Values.server.ingress.host) }}

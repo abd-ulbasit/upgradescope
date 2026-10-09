@@ -150,7 +150,11 @@ func countSnapshots(t *testing.T, path string) int {
 }
 
 // With SQLITE_TMPDIR on a writable directory (what the chart sets), a 60 MB
-// prune and a 60 MB cluster delete succeed.
+// prune and a 60 MB cluster delete succeed. This does not fail without the
+// fix wherever SQLite finds another writable directory (/var/tmp, /usr/tmp
+// or /tmp, which a Linux CI runner has), so it guards the success half only:
+// the failure is reproduced by TestLargeDeleteOnReadOnlyRootFilesystem, on
+// macOS.
 func TestLargeDeleteWithSQLiteTmpDir(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds 60 MB")

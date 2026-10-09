@@ -256,16 +256,20 @@ from `secretKeyRef`, never as arguments, and never appear in a Deployment.
 `server.existingSecret` alone is enough for a combined install: the server
 and the in-chart agent both use its `ingestToken` key.
 
-The containers read these variables when they start. For the chart's own
-Secrets the pod templates carry a checksum of the values you set (the read,
-ingest and admin tokens, the webhook URLs, `agent.serverToken`; a generated
-ingest token is not hashed), so `helm upgrade --set server.readToken=<new>`
-restarts the pods and the old token stops working. The checksum is a salted
-SHA-256 of the token that anyone who can read the Deployment sees: use long
-random tokens. A Secret you name (`server.existingSecret`,
-`agent.existingSecret`) cannot be hashed: restart the pods after you change
-it. Every key is written under the Secret's `data`, so removing a value
-removes its key.
+The containers read these variables once, when they start, and the chart
+does not restart them for you: after you change a token, a webhook value
+(`helm upgrade --set server.readToken=<new>`) or the contents of a Secret
+you named (`server.existingSecret`, `agent.existingSecret`), run
+
+```sh
+kubectl -n <ns> rollout restart deploy/<release>-server deploy/<release>-agent
+```
+
+(the install NOTES print it with your names). Until then the pods keep the
+old value, and the old token keeps working. No pod annotation carries a
+checksum of a secret, because anyone who can get pods or Deployments could
+read it, and test a short token against it offline. Every key is written
+under the chart-managed Secret's `data`, so removing a value removes its key.
 
 ## Read API exposure
 
@@ -347,9 +351,10 @@ settings, so the read token still protects all data.
   renders a PodDisruptionBudget (`server.podDisruptionBudget`, `minAvailable: 1`)
   and a soft topology spread over nodes (`server.defaultTopologySpread`, or
   your own `server.topologySpreadConstraints`, rendered as written).
-- Names: a name made of the release's fullname and a suffix is cut to 63
-  characters (a Service name is a DNS-1035 label), by shortening the
-  fullname for that name; names that fit are unchanged.
+- Names: only a Service name is cut to 63 characters (a Service name is a
+  DNS-1035 label), by shortening the fullname for that name. Every other
+  resource keeps `<fullname><suffix>` however long it is, so upgrading a
+  release with a long name keeps its PVC and token Secret.
 - Upgrading: use `helm upgrade --reset-then-reuse-values` (Helm 3.14+), not
   `--reuse-values`, which keeps the old chart's defaults, the image digest
   among them

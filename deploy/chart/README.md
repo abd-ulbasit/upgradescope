@@ -251,16 +251,20 @@ from `secretKeyRef`, never as arguments, and never appear in a Deployment.
 `server.existingSecret` alone is enough for a combined install: the server
 and the in-chart agent both use its `ingestToken` key.
 
-The containers read these variables when they start. For the chart's own
-Secrets the pod templates carry a checksum of the values you set (the read,
-ingest and admin tokens, the webhook URLs, `agent.serverToken`; a generated
-ingest token is not hashed), so `helm upgrade --set server.readToken=<new>`
-restarts the pods and the old token stops working. The checksum is a salted
-SHA-256 of the token that anyone who can read the Deployment sees: use long
-random tokens. A Secret you name (`server.existingSecret`,
-`agent.existingSecret`) cannot be hashed: restart the pods after you change
-it. Every key is written under the Secret's `data`, so removing a value
-removes its key.
+The containers read these variables once, when they start, and the chart
+does not restart them for you: after you change a token, a webhook value
+(`helm upgrade --set server.readToken=<new>`) or the contents of a Secret
+you named (`server.existingSecret`, `agent.existingSecret`), run
+
+```sh
+kubectl -n <ns> rollout restart deploy/<release>-server deploy/<release>-agent
+```
+
+(the install NOTES print it with your names). Until then the pods keep the
+old value, and the old token keeps working. No pod annotation carries a
+checksum of a secret, because anyone who can get pods or Deployments could
+read it, and test a short token against it offline. Every key is written
+under the chart-managed Secret's `data`, so removing a value removes its key.
 
 ## Read API exposure
 
@@ -342,9 +346,10 @@ settings, so the read token still protects all data.
   renders a PodDisruptionBudget (`server.podDisruptionBudget`, `minAvailable: 1`)
   and a soft topology spread over nodes (`server.defaultTopologySpread`, or
   your own `server.topologySpreadConstraints`, rendered as written).
-- Names: a name made of the release's fullname and a suffix is cut to 63
-  characters (a Service name is a DNS-1035 label), by shortening the
-  fullname for that name; names that fit are unchanged.
+- Names: only a Service name is cut to 63 characters (a Service name is a
+  DNS-1035 label), by shortening the fullname for that name. Every other
+  resource keeps `<fullname><suffix>` however long it is, so upgrading a
+  release with a long name keeps its PVC and token Secret.
 - Upgrading: use `helm upgrade --reset-then-reuse-values` (Helm 3.14+), not
   `--reuse-values`, which keeps the old chart's defaults, the image digest
   among them
@@ -406,7 +411,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `agent.targets` | list | `[]` | Target Kubernetes minors to evaluate, MAJOR.MINOR only (the CRD's format), e.g. ["1.37", "1.38"], at most 8 entries (the CRD's spec.targets cap, which the agent also enforces on distinct minors; the chart counts entries, so list each minor once), passed to the agent as --targets. The chart never renders the ClusterReadiness object: the agent creates it and, when targets is non-empty, resets spec.targets to this list on every tick, so this value wins over `kubectl edit`. Empty = the agent leaves spec.targets alone; set them with `kubectl patch ucr cluster --type merge -p '{"spec":{"targets":["1.37"]}}'` or let it default to the next minor above the server version. Emptying this after it was set does NOT clear spec.targets (the CR keeps the last list); to go back to the default next minor, run `kubectl patch ucr cluster --type merge -p '{"spec":{"targets":[]}}'`. |
 | `agent.teamLabel` | string | `"team"` | Namespace label used for team attribution. |
 | `agent.tolerations` | list | `[]` | — |
-| `clusterDomain` | string | `"cluster.local"` | The cluster's DNS domain (the kubelet's clusterDomain): the server Service's fully qualified name, &lt;fullname&gt;-server.&lt;namespace&gt;.svc.&lt;this&gt;, is passed to the server as an --allowed-host and named in the cert-manager Certificate. Set it when your cluster does not use cluster.local. |
+| `clusterDomain` | string | `"cluster.local"` | The cluster's DNS domain (the kubelet's clusterDomain): the server Service's fully qualified name, &lt;fullname&gt;-server.&lt;namespace&gt;.svc.&lt;this&gt; (the Service name cut to 63 characters for a long release), is passed to the server as an --allowed-host and named in the cert-manager Certificate. Set it when your cluster does not use cluster.local. |
 | `image.digest` | string | `""` | sha256:&lt;64 hex&gt;. When set and tag is empty, the pods pull repository:&lt;appVersion&gt;@digest, so the image cannot change under the tag. The published chart sets it to the digest of the image released with it. It is not applied when you set tag (it is the appVersion image's digest); to pin another tag, write tag: vX.Y.Z@sha256:&lt;64 hex&gt;. With another repository and an empty tag it still applies: set it to "" unless that repository mirrors the same image. |
 | `image.pullPolicy` | string | `"IfNotPresent"` | The default image is pinned by digest in the published chart, so IfNotPresent always runs the released bytes. |
 | `image.repository` | string | `"ghcr.io/abd-ulbasit/upgradescope"` | — |
@@ -455,8 +460,8 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.persistence.storageClass` | string | `""` | — |
 | `server.podAnnotations` | object | `{}` | — |
 | `server.podDisruptionBudget.enabled` | bool | `true` | Render a PodDisruptionBudget for the server when replicas is above 1 (with one replica minAvailable 1 would block every node drain). |
-| `server.podDisruptionBudget.maxUnavailable` | string | `""` | Set instead of minAvailable (a number or a percentage such as 50%); when set, minAvailable is not rendered. |
-| `server.podDisruptionBudget.minAvailable` | int | `1` | Pods that must stay up during a voluntary disruption (a node drain). |
+| `server.podDisruptionBudget.maxUnavailable` | string | `""` | Set instead of minAvailable (a count, 0 included, or a percentage such as 50%); when set, minAvailable is not rendered. With both empty the render fails. |
+| `server.podDisruptionBudget.minAvailable` | int | `1` | Pods that must stay up during a voluntary disruption (a node drain): a count or a percentage such as 50%. |
 | `server.podLabels` | object | `{}` | app.kubernetes.io/name, instance and component are reserved for the selector and ignored here. |
 | `server.podSecurityContext` | object | `{"fsGroup":65532,"runAsGroup":65532,"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}}` | As agent.podSecurityContext; fsGroup makes the data volume writable. OpenShift restricted-v2: {runAsUser: null, runAsGroup: null, fsGroup: null}. |
 | `server.priorityClassName` | string | `""` | — |
@@ -480,7 +485,7 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.tls.caKey` | string | `"ca.crt"` | The key of the CA certificate in that Secret, which the ServiceMonitor and the in-chart agent trust (cert-manager CA and self-signed issuers write ca.crt). Empty for a publicly trusted certificate whose Secret has no CA: they then use their system roots. |
 | `server.tls.certManager.issuerRef` | object | `{}` | Or have cert-manager issue one for the Service names into &lt;fullname&gt;-server-https (not the Ingress's &lt;fullname&gt;-server-tls), e.g. {name: cluster-ca, kind: ClusterIssuer}. Needs the cert-manager CRDs. |
 | `server.tls.secretName` | string | `""` | HTTPS on the server's own port, from an existing kubernetes.io/tls Secret (tls.crt, tls.key, optional CA). Without it the in-chart agent pushes its bearer token over plain HTTP inside the cluster (the agent logs a warning). The certificate must name the Service (&lt;fullname&gt;-server.&lt;namespace&gt;.svc); the in-chart agent then pushes to https:// and trusts the Secret's caKey, when it has one, on top of its image's roots. Probes and the ServiceMonitor switch to HTTPS. The Service port gets appProtocol https, and server.ingress gets nginx.ingress.kubernetes.io/backend-protocol: HTTPS unless its annotations set it; another controller may need its own annotation. serve re-reads the pair when the kubelet updates the mounted Secret (usually within a minute or two of a renewal), so a renewal needs no restart. |
-| `server.tmp.sizeLimit` | string | `"1Gi"` | SQLite only (unused with database.existingSecret). The root filesystem is read-only, and SQLite spills a large delete (the daily retention prune, `clusters delete`) into a temp file. The chart mounts an emptyDir at /tmp and sets SQLITE_TMPDIR to it. Measured on a 60 MB backlog, a delete worked with a temp directory and failed with "disk I/O error (6410)" without one (docs/operations/retention-and-backup.md); it should need no more than the database's size (reasoning, not measured), so the default matches the default persistence.size: raise it with that. An emptyDir that outgrows its limit evicts the pod. Node ephemeral storage, gone with the pod. Do not mount your own volume at /tmp (extraVolumeMounts). |
+| `server.tmp.sizeLimit` | string | `"1Gi"` | SQLite only (unused with database.existingSecret). The root filesystem is read-only, and SQLite spills a large delete (the daily retention prune, `clusters delete`) into a temp file. The chart mounts an emptyDir at /tmp and sets SQLITE_TMPDIR to it. Measured on a 60 MB backlog, a delete worked with a temp directory and failed with "disk I/O error (6410)" without one (docs/operations/retention-and-backup.md); it should need no more than the database's size (reasoning, not measured), so the default matches the default persistence.size: raise it with that. An emptyDir that outgrows its limit evicts the pod. It is node ephemeral storage, gone with the pod. Do not mount your own volume at /tmp (extraVolumeMounts). |
 | `server.tolerations` | list | `[]` | — |
 | `server.topologySpreadConstraints` | list | `[]` | Your own topologySpreadConstraints for the server pods, rendered as written (set labelSelector yourself; the pods carry app.kubernetes.io/name: upgradescope, app.kubernetes.io/instance: &lt;release&gt; and app.kubernetes.io/component: server). Replaces the default spread. |
 | `server.webhook` | string | `""` | Optional generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in docs/reference/webhook.md). Stored like slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL. |

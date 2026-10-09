@@ -1,6 +1,6 @@
 {{- if and .Values.metrics.prometheusRule.enabled (or .Values.agent.enabled .Values.server.enabled) }}
-{{- $agentJob := include "upgradescope.derived" (dict "root" . "suffix" "-agent-metrics") }}
-{{- $serverJob := include "upgradescope.serverFullname" . }}
+{{- $agentJob := include "upgradescope.service" (dict "root" . "suffix" "-agent-metrics") }}
+{{- $serverJob := include "upgradescope.serverService" . }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:

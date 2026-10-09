@@ -3,6 +3,7 @@ package chart
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -120,82 +121,160 @@ func secretData(t *testing.T, objs []unstructured.Unstructured, name string) map
 	return d
 }
 
-// The Deployments read their tokens from Secrets at container start, so
-// rotating a chart-managed token has to change a pod template or the old
-// token keeps working until some other event restarts the pod.
-func TestTokenRotationRollsThePods(t *testing.T) {
-	base := []string{"server.enabled=true", "server.ingestToken=ingest-1", "server.readToken=read-1", "server.adminToken=admin-1",
-		"server.slackWebhook=https://hooks.example.com/1", "server.webhook=https://hooks.example.com/2", "server.webhookSecret=sign-1"}
-	checksum := func(objs []unstructured.Unstructured, dep, key string) string {
-		t.Helper()
-		v, ok := podAnnotation(t, objs, dep, key)
-		if !ok || v == "" {
-			t.Fatalf("%s has no %s annotation", dep, key)
-		}
-		return v
+// The containers read their tokens and webhook URLs from environment
+// variables at start, so rotating one needs a restart. The chart must not
+// try to do that through the pod template: any function of a secret value in
+// pod or Deployment metadata, salted or not, is readable by everyone who can
+// get pods or Deployments (a wider set than Secret readers), and a short
+// operator-chosen token can be tested against it offline.
+//
+// The test renders every secret twice with different values and requires the
+// two renders to differ in the Secrets alone: no other object, annotation
+// or label carries anything derived from a secret.
+func TestNoObjectCarriesAFunctionOfASecret(t *testing.T) {
+	cases := map[string]func(v string) []string{
+		"in-chart server": func(v string) []string {
+			return []string{"server.enabled=true", "server.ingestToken=ingest-" + v, "server.readToken=read-" + v, "server.adminToken=admin-" + v,
+				"server.slackWebhook=https://hooks.example.com/slack-" + v, "server.webhook=https://hooks.example.com/hook-" + v, "server.webhookSecret=sign-" + v,
+				"server.teamMap[0].pattern=a-*", "server.teamMap[0].team=a"}
+		},
+		"remote agent": func(v string) []string {
+			return []string{"agent.serverUrl=https://hub.example.com", "agent.serverToken=push-" + v}
+		},
+		"server, agent token of its own": func(v string) []string {
+			return []string{"server.enabled=true", "server.sharedIngestToken=false", "agent.serverToken=push-" + v, "server.readToken=read-" + v}
+		},
 	}
-	before := render(t, base...)
-	serverSum := checksum(before, "upgradescope-server", "checksum/secret")
-	agentSum := checksum(before, "upgradescope-agent", "checksum/token")
+	for name, sets := range cases {
+		t.Run(name, func(t *testing.T) {
+			a, b := render(t, sets("one")...), render(t, sets("two")...)
+			if len(a) != len(b) {
+				t.Fatalf("the renders hold %d and %d objects", len(a), len(b))
+			}
+			secrets := 0
+			for i := range a {
+				if a[i].GetKind() == "Secret" {
+					secrets++
+					continue
+				}
+				ja, _ := a[i].MarshalJSON()
+				jb, _ := b[i].MarshalJSON()
+				if !bytes.Equal(ja, jb) {
+					t.Errorf("%s changes when only a secret value does:\n%s\n%s", a[i].GetKind()+"/"+a[i].GetName(), ja, jb)
+				}
+			}
+			if secrets == 0 {
+				t.Fatal("no Secret rendered: the test compares nothing")
+			}
+			// What the pod templates and Deployments do carry is the two
+			// checksums of non-secret config, and nothing that looks like
+			// a digest besides them.
+			digest := regexp.MustCompile(`^[0-9a-f]{64}$`)
+			for _, o := range a {
+				if o.GetKind() != "Deployment" {
+					continue
+				}
+				tpl, _, _ := unstructured.NestedStringMap(o.Object, "spec", "template", "metadata", "annotations")
+				for k, v := range tpl {
+					if digest.MatchString(v) && k != "checksum/team-map" && k != "checksum/registry" {
+						t.Errorf("%s pod annotation %s = %s looks like a digest of something other than the team map or the registry", o.GetName(), k, v)
+					}
+					if strings.HasPrefix(k, "checksum/") && k != "checksum/team-map" && k != "checksum/registry" {
+						t.Errorf("%s has the pod annotation %s: only checksum/team-map and checksum/registry are allowed", o.GetName(), k)
+					}
+				}
+				if own := o.GetAnnotations(); len(own) != 0 {
+					t.Errorf("Deployment %s has annotations %v", o.GetName(), own)
+				}
+			}
+		})
+	}
+	// The team map is not a secret: its checksum is how the pods roll.
+	if _, ok := podAnnotation(t, render(t, "server.enabled=true", "server.teamMap[0].pattern=a-*", "server.teamMap[0].team=a"), "upgradescope-server", "checksum/team-map"); !ok {
+		t.Error("the server pod lost checksum/team-map")
+	}
+}
 
-	rotate := func(key, val string) []string {
-		out := slices.Clone(base)
-		i := slices.IndexFunc(out, func(s string) bool { return strings.HasPrefix(s, key+"=") })
-		out[i] = key + "=" + val
-		return out
+// renderNotes renders the chart's NOTES.txt for the given values (helm
+// template does not print it, and helm install would need a cluster): the
+// chart is copied with NOTES.txt wrapped in a define and a ConfigMap that
+// prints it.
+func renderNotes(t *testing.T, release string, sets ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS(".")); err != nil {
+		t.Fatal(err)
 	}
-	rotated := func(key string) string {
-		if key == "server.slackWebhook" || key == "server.webhook" {
-			return "https://hooks.example.com/rotated"
-		}
-		return "rotated"
+	notes, err := os.ReadFile(filepath.Join(dir, "templates", "NOTES.txt"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, key := range []string{"server.readToken", "server.adminToken", "server.ingestToken", "server.slackWebhook", "server.webhook", "server.webhookSecret"} {
-		after := render(t, rotate(key, rotated(key))...)
-		if got := checksum(after, "upgradescope-server", "checksum/secret"); got == serverSum {
-			t.Errorf("rotating %s leaves the server pod template as it was", key)
-		}
-		agentChanged := checksum(after, "upgradescope-agent", "checksum/token") != agentSum
-		// The in-chart agent pushes with the shared ingest token, so only
-		// that one rolls it.
-		if want := key == "server.ingestToken"; agentChanged != want {
-			t.Errorf("rotating %s: agent pod template changed = %v, want %v", key, agentChanged, want)
-		}
+	if err := os.Remove(filepath.Join(dir, "templates", "NOTES.txt")); err != nil {
+		t.Fatal(err)
 	}
-	// The same values render the same checksums (no per-render noise).
-	again := render(t, base...)
-	if checksum(again, "upgradescope-server", "checksum/secret") != serverSum || checksum(again, "upgradescope-agent", "checksum/token") != agentSum {
-		t.Error("a second render of the same values changes a checksum")
+	wrapped := "{{- define \"test.notes\" -}}\n" + string(notes) + "\n{{- end -}}\n"
+	if err := os.WriteFile(filepath.Join(dir, "templates", "_notes.tpl"), []byte(wrapped), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if serverSum == agentSum {
-		t.Error("server and agent checksums are equal")
+	cm := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notes\ndata:\n  notes: |\n{{ include \"test.notes\" . | indent 4 }}\n"
+	if err := os.WriteFile(filepath.Join(dir, "templates", "notes-test.yaml"), []byte(cm), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	args := []string{"template", release, dir, "--namespace", "upgradescope", "--show-only", "templates/notes-test.yaml"}
+	for _, s := range sets {
+		args = append(args, "--set", s)
+	}
+	cmd := exec.Command(helmBin(t), args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("helm %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
+	}
+	var o unstructured.Unstructured
+	if err := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(out), 4096).Decode(&o.Object); err != nil {
+		t.Fatal(err)
+	}
+	s, _, _ := unstructured.NestedString(o.Object, "data", "notes")
+	return s
+}
 
-	// An inline agent token has its own checksum.
-	a1 := render(t, "agent.serverUrl=https://hub.example.com", "agent.serverToken=t1")
-	a2 := render(t, "agent.serverUrl=https://hub.example.com", "agent.serverToken=t2")
-	if checksum(a1, "upgradescope-agent", "checksum/token") == checksum(a2, "upgradescope-agent", "checksum/token") {
-		t.Error("rotating agent.serverToken leaves the agent pod template as it was")
+// The NOTES tell the operator what the chart cannot do for them: restart the
+// pods after a token, webhook or existingSecret change, by the Deployments'
+// real names, and why.
+func TestNotesSayToRestartAfterRotatingASecret(t *testing.T) {
+	both := strings.Join(strings.Fields(renderNotes(t, "upgradescope", "server.enabled=true")), " ")
+	for _, want := range []string{
+		"kubectl -n upgradescope rollout restart deploy/upgradescope-server deploy/upgradescope-agent",
+		"environment variables",
+		"read once at start",
+		"existingSecret",
+	} {
+		if !strings.Contains(both, want) {
+			t.Errorf("NOTES lack %q:\n%s", want, both)
+		}
 	}
-
-	// A generated ingest token (none set) is not hashed: helm template and
-	// GitOps renderers generate a new one every render and would roll the
-	// pods on every sync.
-	g := render(t, "server.enabled=true")
-	if _, ok := podAnnotation(t, g, "upgradescope-agent", "checksum/token"); ok {
-		t.Error("the agent hashes a generated ingest token")
+	// A long release: the command names the Deployments that are rendered.
+	long := strings.Repeat("r", 50)
+	notes := renderNotes(t, long, "server.enabled=true")
+	lobjs := renderRelease(t, long, "server.enabled=true")
+	var deps []string
+	for _, o := range lobjs {
+		if o.GetKind() == "Deployment" {
+			deps = append(deps, "deploy/"+o.GetName())
+		}
 	}
-	if a, _ := podAnnotation(t, g, "upgradescope-server", "checksum/secret"); a == "" {
-		t.Error("the server has no checksum/secret with generated tokens")
+	slices.Sort(deps)
+	if len(deps) != 2 {
+		t.Fatalf("deployments = %v", deps)
 	}
-
-	// An existingSecret's contents are not in the chart: nothing to hash.
-	e := render(t, "server.enabled=true", "server.existingSecret=mine", "agent.existingSecret=mine-agent")
-	if _, ok := podAnnotation(t, e, "upgradescope-server", "checksum/secret"); ok {
-		t.Error("the server hashes values that an existingSecret ignores")
+	if !strings.Contains(notes, "rollout restart "+strings.Join([]string{deps[1], deps[0]}, " ")) { // server, then agent
+		t.Errorf("NOTES name no restart of %v:\n%s", deps, notes)
 	}
-	if _, ok := podAnnotation(t, e, "upgradescope-agent", "checksum/token"); ok {
-		t.Error("the agent hashes values that agent.existingSecret ignores")
+	// Only what is installed.
+	agentOnly := renderNotes(t, "upgradescope", "agent.serverUrl=https://hub.example.com", "agent.serverToken=t")
+	if !strings.Contains(agentOnly, "rollout restart deploy/upgradescope-agent\n") || strings.Contains(agentOnly, "deploy/upgradescope-server") {
+		t.Errorf("agent-only NOTES:\n%s", agentOnly)
 	}
 }
 
@@ -347,8 +426,10 @@ func TestServicePortIsNotTheListenPort(t *testing.T) {
 }
 
 // A Service name is a DNS-1035 label: at most 63 characters, which the API
-// server enforces and helm template does not.
-func TestNamesFitSixtyThreeCharacters(t *testing.T) {
+// server enforces and helm template does not. Everything that names a
+// Service follows its cut name; no other resource is renamed (see
+// TestLongReleaseKeepsTheNamesOfResourcesThatExist).
+func TestServiceNamesFitSixtyThreeCharacters(t *testing.T) {
 	values := writeValues(t, `
 server:
   enabled: true
@@ -378,7 +459,7 @@ metrics:
 		}
 		objs := renderRelease(t, release, values)
 		for _, o := range objs {
-			if n := o.GetName(); len(n) > 63 {
+			if n := o.GetName(); o.GetKind() == "Service" && len(n) > 63 {
 				t.Errorf("%s: %s %q is %d characters", release, o.GetKind(), n, len(n))
 			}
 		}
@@ -414,9 +495,28 @@ metrics:
 				svc = o.GetName()
 			}
 		}
-		ing := find(objs, "Ingress", svc)
+		// The certificate names the Service it is for.
+		for _, o := range objs {
+			if o.GetKind() != "Certificate" {
+				continue
+			}
+			dns, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "dnsNames")
+			if !slices.Contains(dns, svc+".upgradescope.svc") {
+				t.Errorf("%s: Certificate dnsNames %v lack the Service %q", release, dns, svc)
+			}
+		}
+		var ing *unstructured.Unstructured
+		for i := range objs {
+			if objs[i].GetKind() == "Ingress" {
+				ing = &objs[i]
+			}
+		}
 		if ing == nil {
-			t.Fatalf("%s: no Ingress named after Service %q", release, svc)
+			t.Fatalf("%s: no Ingress", release)
+		}
+		// The in-chart agent pushes to the Service.
+		if a := strings.Join(args(container(t, objs, find2(objs, "Deployment", "-agent"))), " "); !strings.Contains(a, "://"+svc+".upgradescope.svc:") {
+			t.Errorf("%s: agent args %q do not push to the Service %q", release, a, svc)
 		}
 		rules, _, _ := unstructured.NestedSlice(ing.Object, "spec", "rules")
 		paths, _, _ := unstructured.NestedSlice(rules[0].(map[string]any), "http", "paths")
@@ -444,6 +544,69 @@ metrics:
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("default names = %v, want %v", got, want)
+	}
+}
+
+// An earlier chart named every resource fullname + suffix, uncut, and the
+// API server accepts a PVC, Secret or ConfigMap name of up to 253
+// characters. A release whose fullname is 52 to 56 characters has such
+// names beyond 63. Renaming the PVC on `helm upgrade` makes Helm delete the
+// old one (the SQLite history with it), and a renamed token Secret defeats
+// the lookup that keeps the generated ingest token, so every remote agent
+// gets a 401. Only a Service name is cut: the Services of such a release
+// never installed, so there is nothing to keep.
+func TestLongReleaseKeepsTheNamesOfResourcesThatExist(t *testing.T) {
+	const release = "platform-observability-readiness-scan-eu" // 40 characters
+	if len(release) != 40 {
+		t.Fatalf("release is %d characters", len(release))
+	}
+	full := release + "-upgradescope"
+	objs := renderRelease(t, release, "server.enabled=true", "metrics.serviceMonitor.enabled=true", "metrics.prometheusRule.enabled=true",
+		"server.teamMap[0].pattern=a-*", "server.teamMap[0].team=a", "server.ingress.enabled=true", "server.ingress.host=u.example.com", "server.readToken=x",
+		"server.tls.certManager.issuerRef.name=ca", "agent.extraRegistry.thing\\.yaml=id: thing")
+	// What origin/main rendered for these values (fullname + suffix).
+	for kind, names := range map[string][]string{
+		"PersistentVolumeClaim": {full + "-server-data"},
+		"Secret":                {full + "-server-tokens"},
+		"ConfigMap":             {full + "-server-team-map", full + "-agent-registry"},
+		"Deployment":            {full + "-server", full + "-agent"},
+		"ServiceAccount":        {full, full + "-server"},
+		"ClusterRole":           {full + "-agent"},
+		"ClusterRoleBinding":    {full + "-agent"},
+		"Ingress":               {full + "-server"},
+		"Certificate":           {full + "-server"},
+		"ServiceMonitor":        {full + "-agent", full + "-server"},
+		"PrometheusRule":        {full},
+	} {
+		var have []string
+		for _, o := range objs {
+			if o.GetKind() == kind {
+				have = append(have, o.GetName())
+			}
+		}
+		slices.Sort(have)
+		slices.Sort(names)
+		if !slices.Equal(have, names) {
+			t.Errorf("%s names = %v, want the uncut %v", kind, have, names)
+		}
+	}
+	// The Services are the cut ones, and what points at them follows.
+	for _, o := range objs {
+		if o.GetKind() == "Service" && len(o.GetName()) > 63 {
+			t.Errorf("Service %q is %d characters", o.GetName(), len(o.GetName()))
+		}
+	}
+	// A pod names the PVC and the Secret under the names that exist.
+	srv := podTemplate(t, objs, full+"-server")
+	if v := volumeNamed(t, objs, full+"-server", "data"); v == nil {
+		t.Error("no data volume")
+	} else if claim, _, _ := unstructured.NestedString(v, "persistentVolumeClaim", "claimName"); claim != full+"-server-data" {
+		t.Errorf("claimName = %q, want %q", claim, full+"-server-data")
+	}
+	_ = srv
+	env, _, _ := unstructured.NestedSlice(container(t, objs, full+"-server"), "env")
+	if raw, _ := json.Marshal(env); !strings.Contains(string(raw), `"name":"`+full+`-server-tokens"`) {
+		t.Errorf("the server reads its tokens from a Secret other than %s-server-tokens: %s", full, raw)
 	}
 }
 
@@ -548,6 +711,16 @@ func TestServerHighAvailability(t *testing.T) {
 	if msg := renderErr(t, "server.enabled=true", "server.replicas=2"); !strings.Contains(msg, "Postgres") {
 		t.Errorf("SQLite with 2 replicas: %q", msg)
 	}
+}
+
+// find2 returns the name of the one object of kind whose name ends in suffix.
+func find2(objs []unstructured.Unstructured, kind, suffix string) string {
+	for _, o := range objs {
+		if o.GetKind() == kind && strings.HasSuffix(o.GetName(), suffix) {
+			return o.GetName()
+		}
+	}
+	return ""
 }
 
 func mapsEqual(a, b map[string]string) bool {
@@ -700,5 +873,119 @@ func TestDocsDoNotRecommendReuseValues(t *testing.T) {
 	}
 	if withReset == 0 {
 		t.Error("no doc gives the --reset-then-reuse-values command")
+	}
+}
+
+// The files in testdata/upgrade claim to be what `helm get values` printed
+// for a release of an older chart. Render each against that chart, taken from
+// its tag (skipped where the tag is not in the clone): the old chart's schema
+// refuses a key it did not have, so a file that models no real release fails.
+func TestUpgradeValuesFilesAreRealUserValues(t *testing.T) {
+	for file, tag := range map[string]string{
+		"user-values-v0.1.x.yaml":      "v0.1.1",
+		"user-values-v0.2.0-rc.2.yaml": "v0.2.0-rc.2",
+	} {
+		t.Run(tag, func(t *testing.T) {
+			if err := exec.Command("git", "rev-parse", "--verify", "--quiet", "refs/tags/"+tag).Run(); err != nil {
+				t.Skipf("tag %s is not in this clone", tag)
+			}
+			dir := t.TempDir()
+			tarball, err := exec.Command("git", "-C", "../..", "archive", tag, "--", "deploy/chart").Output()
+			if err != nil {
+				t.Fatalf("git archive %s: %v", tag, err)
+			}
+			untar := exec.Command("tar", "-x", "-C", dir)
+			untar.Stdin = bytes.NewReader(tarball)
+			if out, err := untar.CombinedOutput(); err != nil {
+				t.Fatalf("tar: %v\n%s", err, out)
+			}
+			if _, err := renderChartDir(t, filepath.Join(dir, "deploy", "chart"), filepath.Join("testdata", "upgrade", file)); err != nil {
+				t.Errorf("the %s chart refuses %s, so it is not what a %s release's user values were: %v", tag, file, tag, err)
+			}
+		})
+	}
+}
+
+// A budget of 0 is a value, not "unset" (a number 0 is falsy in a template),
+// and a budget with neither bound is not a budget.
+func TestPodDisruptionBudgetBounds(t *testing.T) {
+	ha := []string{"server.enabled=true", "server.replicas=2", "server.database.existingSecret=pg"}
+	spec := func(extra ...string) map[string]any {
+		t.Helper()
+		pdb := find(render(t, append(slices.Clone(ha), extra...)...), "PodDisruptionBudget", "upgradescope-server")
+		if pdb == nil {
+			t.Fatal("no PodDisruptionBudget")
+		}
+		s, _, _ := unstructured.NestedMap(pdb.Object, "spec")
+		return s
+	}
+	if s := spec("server.podDisruptionBudget.maxUnavailable=0"); fmt.Sprint(s["maxUnavailable"]) != "0" || s["minAvailable"] != nil {
+		t.Errorf("maxUnavailable=0 renders %v, want maxUnavailable: 0 alone", s)
+	}
+	if s := spec("server.podDisruptionBudget.minAvailable=0"); fmt.Sprint(s["minAvailable"]) != "0" || s["maxUnavailable"] != nil {
+		t.Errorf("minAvailable=0 renders %v, want minAvailable: 0 alone", s)
+	}
+	if s := spec("server.podDisruptionBudget.minAvailable=50%"); s["minAvailable"] != "50%" {
+		t.Errorf("minAvailable=50%% renders %v", s)
+	}
+	if s := spec("server.podDisruptionBudget.maxUnavailable=1", "server.podDisruptionBudget.minAvailable=2"); s["minAvailable"] != nil || fmt.Sprint(s["maxUnavailable"]) != "1" {
+		t.Errorf("both set renders %v, want maxUnavailable alone", s)
+	}
+	for _, bad := range [][]string{
+		{"server.podDisruptionBudget.minAvailable=", "server.podDisruptionBudget.maxUnavailable="},
+		{"server.podDisruptionBudget.minAvailable=null"},
+	} {
+		if msg := renderErr(t, append(slices.Clone(ha), bad...)...); !strings.Contains(msg, "minAvailable or maxUnavailable") {
+			t.Errorf("%v: render error = %q, want one naming both bounds", bad, msg)
+		}
+	}
+	for _, bad := range []string{"-1", "abc", "5%%%"} {
+		if msg := renderErr(t, append(slices.Clone(ha), "server.podDisruptionBudget.maxUnavailable="+bad)...); msg == "" {
+			t.Errorf("maxUnavailable=%s renders", bad)
+		}
+	}
+	// The budget is only rendered for replicas above one, so an empty one
+	// with a single replica is not an error.
+	if msg := renderErr(t, "server.enabled=true", "server.podDisruptionBudget.minAvailable="); msg != "" {
+		t.Errorf("an empty budget with one replica: %s", msg)
+	}
+}
+
+// The upgrade and security pages (and the chart README, generated from its
+// template) tell the operator to restart the pods after rotating a secret,
+// and none describes a pod-template checksum of one.
+func TestDocsSayToRestartAfterRotatingASecret(t *testing.T) {
+	for _, f := range []string{
+		"../../docs/operations/upgrade.md",
+		"../../docs/operations/security-model-and-rbac.md",
+		"../../docs/operations/tenancy.md",
+		"../../hack/docs/chart-README.md.gotmpl",
+		"README.md",
+	} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.Join(strings.Fields(string(raw)), " ")
+		if !strings.Contains(text, "rollout restart") {
+			t.Errorf("%s does not say to run kubectl rollout restart after rotating a secret", f)
+		}
+		if f != "../../docs/operations/tenancy.md" && !(strings.Contains(text, "environment variables") && strings.Contains(text, "once")) {
+			t.Errorf("%s does not say why: the values are environment variables read once at start", f)
+		}
+		for _, bad := range []string{"salted", "carry a checksum of the values", "carries a checksum of the chart-managed", "restarts the server, since the pod template"} {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s still describes a secret-derived checksum (%q)", f, bad)
+			}
+		}
+	}
+	// The security page and the upgrade page both mention the follow-up and
+	// the reason the chart does not hash tokens.
+	for _, f := range []string{"../../docs/operations/upgrade.md", "../../docs/operations/security-model-and-rbac.md"} {
+		raw, _ := os.ReadFile(f)
+		text := strings.Join(strings.Fields(string(raw)), " ")
+		if !strings.Contains(text, "re-read mounted token files") || !strings.Contains(text, "tested against it offline") {
+			t.Errorf("%s lacks the reason or the follow-up", f)
+		}
 	}
 }

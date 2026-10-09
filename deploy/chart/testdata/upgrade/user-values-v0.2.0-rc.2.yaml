@@ -1,14 +1,15 @@
 # User values of a v0.2.0-rc.2 install that used most of the chart: they
 # must still pass the current schema and render, because
 # `helm upgrade --reset-then-reuse-values` carries them onto the new chart.
+# Every key is one the rc.2 chart has: TestUpgradeValuesFilesAreRealUserValues
+# renders this file on the chart at the v0.2.0-rc.2 tag, whose schema refuses
+# any other.
 image:
   pullPolicy: Always
 imagePullSecrets:
   - name: regcred
 rbac:
   helmSecrets: false
-  gitops:
-    argocd: true
 agent:
   interval: 15m
   crName: prod
