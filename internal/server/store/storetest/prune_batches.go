@@ -12,22 +12,23 @@ import (
 // batch drains over several transactions, each of at most the batch size,
 // and a run cut short leaves what it committed deleted and the next run
 // finishes. The stores take the batch size and a per-transaction hook
-// through store.PruneTuner so the tests need not seed thousands of rows.
+// through store.PruneTestHookSetter so the tests need not seed thousands
+// of rows.
 
 const (
 	batchTestRows    = 5  // rows one retention transaction may delete in these tests
 	batchTestBacklog = 23 // old snapshots, each with one undecided evaluation
 )
 
-// tuned returns s as a PruneTuner with the test batch size, recording the
-// size of every transaction that deleted rows.
+// tuned sets the test batch size on s (a store.PruneTestHookSetter) and
+// records the size of every transaction that deleted rows.
 func tuned(t *testing.T, s store.Store, onBatch func(store.PruneBatch)) {
 	t.Helper()
-	pt, ok := s.(store.PruneTuner)
+	pt, ok := s.(store.PruneTestHookSetter)
 	if !ok {
-		t.Fatalf("%T does not implement store.PruneTuner: the batch size cannot be set", s)
+		t.Fatalf("%T does not implement store.PruneTestHookSetter: the batch size cannot be set", s)
 	}
-	pt.TunePrune(batchTestRows, onBatch)
+	pt.SetPruneTestHook(batchTestRows, onBatch)
 }
 
 // seedBacklog stores a cluster with batchTestBacklog old snapshots, each

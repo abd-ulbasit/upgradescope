@@ -50,7 +50,7 @@ func TestPruneBacklogTiming(t *testing.T) {
 		t.Fatal(err)
 	}
 	txs := 0
-	s.TunePrune(0, func(PruneBatch) { txs++ })
+	s.SetPruneTestHook(0, func(PruneBatch) { txs++ })
 	start := time.Now()
 	res, err := s.Prune(ctx, tBase.Add(-90*24*time.Hour), nil)
 	if err != nil {

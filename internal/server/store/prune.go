@@ -16,18 +16,20 @@ import (
 const pruneBatchRows = 5000
 
 // PruneBatch is one committed retention transaction: the table it deleted
-// from ("evaluations" or "snapshots") and how many rows. See PruneTuner.
+// from ("evaluations" or "snapshots") and how many rows. See
+// PruneTestHookSetter.
 type PruneBatch struct {
 	Table string
 	Rows  int64
 }
 
-// PruneTuner is implemented by SQLite and Postgres for tests: TunePrune
-// sets how many rows one retention transaction deletes (0 restores the
-// default) and a hook called after each transaction that deleted rows has
-// committed. Call it before Prune, not concurrently with it.
-type PruneTuner interface {
-	TunePrune(batchRows int, onBatch func(PruneBatch))
+// PruneTestHookSetter is implemented by SQLite and Postgres for tests only,
+// and nothing outside a test should call it: SetPruneTestHook sets how many
+// rows one retention transaction deletes (0 restores the default) and a
+// hook called after each transaction that deleted rows has committed. Call
+// it before Prune, not concurrently with it.
+type PruneTestHookSetter interface {
+	SetPruneTestHook(batchRows int, onBatch func(PruneBatch))
 }
 
 // pruneTuning is the batch size and test hook a store carries.
@@ -75,7 +77,14 @@ func prune(ctx context.Context, d pruneDialect, t pruneTuning, at any, baselines
 	var res PruneResult
 	batch := t.rows()
 	// drain runs one batched DELETE until a transaction deletes less than
-	// a full batch.
+	// a full batch. A short batch is taken to mean nothing is left, so rows
+	// removed meanwhile by a concurrent DeleteCluster, or by a second
+	// replica pruning, can make one come up short and end the run early:
+	// what remains waits for the next daily run, which resumes. Nothing
+	// serialises two replicas pruning (Postgres only; SQLite has one
+	// process), and their overlapping batches can deadlock, in which case
+	// Postgres aborts one: that run is counted as a failure and resumes the
+	// same way.
 	drain := func(table, stmt string) (int64, error) {
 		var total int64
 		for {

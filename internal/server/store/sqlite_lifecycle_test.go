@@ -109,7 +109,7 @@ func TestPruneDefaultBatchBoundsEveryTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := map[string][]int64{}
-	s.TunePrune(0, func(b PruneBatch) { rows[b.Table] = append(rows[b.Table], b.Rows) })
+	s.SetPruneTestHook(0, func(b PruneBatch) { rows[b.Table] = append(rows[b.Table], b.Rows) })
 	res, err := s.Prune(ctx, tBase.Add(-90*24*time.Hour), nil)
 	if err != nil {
 		t.Fatal(err)

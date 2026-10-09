@@ -263,8 +263,8 @@ func (s *SQLite) Prune(ctx context.Context, cutoff time.Time, baselines PruneBas
 	return prune(ctx, d, s.tuning, formatTime(cutoff), baselines)
 }
 
-// TunePrune implements PruneTuner.
-func (s *SQLite) TunePrune(batchRows int, onBatch func(PruneBatch)) {
+// SetPruneTestHook implements PruneTestHookSetter. Tests only.
+func (s *SQLite) SetPruneTestHook(batchRows int, onBatch func(PruneBatch)) {
 	s.tuning.tune(batchRows, onBatch)
 }
 

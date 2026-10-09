@@ -212,8 +212,8 @@ func (p *Postgres) Prune(ctx context.Context, cutoff time.Time, baselines PruneB
 	return prune(ctx, d, p.tuning, cutoff.UTC(), baselines)
 }
 
-// TunePrune implements PruneTuner.
-func (p *Postgres) TunePrune(batchRows int, onBatch func(PruneBatch)) {
+// SetPruneTestHook implements PruneTestHookSetter. Tests only.
+func (p *Postgres) SetPruneTestHook(batchRows int, onBatch func(PruneBatch)) {
 	p.tuning.tune(batchRows, onBatch)
 }
 
