@@ -9,6 +9,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
 
+	"github.com/abd-ulbasit/upgradescope/internal/agent"
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
 )
 
@@ -136,5 +137,73 @@ func TestSchemaAgentTargetsAtMostEight(t *testing.T) {
 	nine := "agent.targets={1.30,1.31,1.32,1.33,1.34,1.35,1.36,1.37,1.38}"
 	if renderErr(t, nine) == "" {
 		t.Error("9 agent.targets rendered, want a schema error")
+	}
+}
+
+// agent.serverUrl is passed as --server-url, which the agent refuses at
+// start unless it is an http:// or https:// URL with a host
+// (agent.ValidateServerURL): a pod given one crash-loops. Every non-empty
+// URL the schema accepts must pass the agent's check ("" means no push).
+// The schema may be stricter (a host of letters, digits, dots, dashes,
+// underscores and tildes, or a bracketed IPv6 address); it must still take
+// the ordinary forms.
+func TestSchemaServerURLAgreesWithTheAgent(t *testing.T) {
+	pattern, _ := agentSchemaProp(t, "serverUrl")["pattern"].(string)
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("agent.serverUrl pattern %q: %v", pattern, err)
+	}
+	if !re.MatchString("") {
+		t.Error(`agent.serverUrl="" refused by the schema; it means no push`)
+	}
+	for _, good := range []string{
+		"https://uscope.example.com", "http://upgradescope-server.upgradescope.svc:8080",
+		"https://10.0.0.1:443/", "https://[::1]:8443", "https://[2001:db8::1]/", "https://[fe80:0:0:0:0:0:0:1]", "https://user@host.example/base?x=1#f",
+		"https://x.example:",
+	} {
+		if !re.MatchString(good) {
+			t.Errorf("agent.serverUrl=%q refused by the schema", good)
+		}
+		if err := agent.ValidateServerURL(good); err != nil {
+			t.Errorf("test setup: the agent refuses %q: %v", good, err)
+		}
+	}
+	for _, bad := range []string{"https://:8080", "https:///path", "https://?x", "https://#f", "https://@", "https://u@:1", "https://[]", "https://[1]", "https://[1:2:3]", "https://[::ffff:1.2.3.4]", "uscope.example.com", "ftp://x"} {
+		if re.MatchString(bad) {
+			t.Errorf("agent.serverUrl=%q accepted by the schema; the agent refuses it", bad)
+		}
+	}
+	// Every string of up to five characters after each scheme, over an
+	// alphabet of the characters a host, port, userinfo or path turns on.
+	alphabet := []string{"a", "1", ":", "/", "@", "[", "]", "?", "#", "%", " ", ".", "-", "_", "~", "\x7f"}
+	var gen func(s string, depth int)
+	gen = func(s string, depth int) {
+		if re.MatchString(s) {
+			if err := agent.ValidateServerURL(s); err != nil {
+				t.Errorf("agent.serverUrl=%q accepted by the schema; the agent refuses it: %v", s, err)
+			}
+		}
+		if depth == 0 {
+			return
+		}
+		for _, c := range alphabet {
+			gen(s+c, depth-1)
+		}
+	}
+	gen("http://", 5)
+	gen("https://", 5)
+}
+
+// The same rule, end to end: what helm template accepts and refuses.
+func TestSchemaServerURL(t *testing.T) {
+	for _, good := range []string{"https://uscope.example.com", "https://[::1]:8443/base"} {
+		if out := renderErr(t, "agent.serverUrl="+good, "agent.serverToken=t"); out != "" {
+			t.Errorf("agent.serverUrl=%q rejected: %s", good, out)
+		}
+	}
+	for _, bad := range []string{"https://:8080", "https:///path", "https://[1:2:3]", "uscope.example.com"} {
+		if renderErr(t, "agent.serverUrl="+bad, "agent.serverToken=t") == "" {
+			t.Errorf("agent.serverUrl=%q rendered, want a schema error", bad)
+		}
 	}
 }

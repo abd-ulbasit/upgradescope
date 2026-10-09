@@ -116,10 +116,19 @@ sha256(canonical inventory) changed, or --force-sync-every elapsed?
 ```
 
 The CRD status is written on every tick, even when the server is
-unreachable. The agent's local value never depends on the server. Pushes
+unreachable; only a spec the tick could not read, or `spec.targets` it
+could not set to `--targets`, stops the write, and the object is then
+marked stale (`upgradescope.dev/status-error`) instead. Collection gets the
+tick deadline minus a reserve (30s, or half the deadline under a minute)
+that the status write, the stale marker and the push keep
+([observability](observability.md#agent-logs)). The agent's local value never depends on the server. Pushes
 buffer at most one payload (the latest replaces any pending one) and retry
-transient failures with exponential backoff (a `Retry-After` on a 429 or 503
-is honoured, up to one minute). Permanent 4xx responses drop the payload. A
+transient failures with exponential backoff, fully jittered: each wait is
+anywhere from 0 to the 1s, 2s, 4s step, so the first retry may come almost
+immediately after the failure, and agents started together, whose first
+pushes coincide, do not retry together. A `Retry-After` on a 429 or 503
+is honoured as the least wait (capped at one minute), plus up to a quarter
+of it more, for the same reason, so one retry waits at most 75 seconds. Permanent 4xx responses drop the payload. A
 redirect is never followed, since the push would turn into a body-less GET:
 it counts as a permanent failure, and the log names the status and `Location`;
 set `--server-url` to the final URL. The canonical hash zeroes `collectedAt`, so an unchanged cluster

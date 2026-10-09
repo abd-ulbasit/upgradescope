@@ -351,10 +351,14 @@ func TestObserverTickLogLevels(t *testing.T) {
 	o.record(tickReport{push: pushFailed, pushErr: errors.New("server returned 503")})
 	o.record(tickReport{err: errors.New("boom"), push: pushOff})
 	o.record(tickReport{err: errors.New("boom again"), push: pushOff})
+	o.record(tickReport{crdErr: errors.New("apply ClusterReadiness CRD: forbidden"), push: pushOff})
 
 	lines := logs.lines(t)
-	if len(lines) != 3 {
-		t.Fatalf("log lines = %d, want 3", len(lines))
+	if len(lines) != 4 {
+		t.Fatalf("log lines = %d, want 4", len(lines))
+	}
+	if lines[3]["level"] != "WARN" || lines[3]["msg"] != msgTickComplete || lines[3]["crdError"] != "apply ClusterReadiness CRD: forbidden" {
+		t.Errorf("CRD-check line = %v, want WARN tick complete with crdError", lines[3])
 	}
 	if lines[0]["level"] != "WARN" || lines[0]["msg"] != msgTickComplete || lines[0]["pushError"] != "server returned 503" {
 		t.Errorf("push-failure line = %v, want WARN tick complete with pushError", lines[0])
