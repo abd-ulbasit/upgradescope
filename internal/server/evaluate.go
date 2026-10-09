@@ -590,9 +590,6 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 			if err != nil {
 				return 0, false, err
 			}
-			// Not a duplicate after all (another push moved the cluster on
-			// meanwhile): the snapshot is stored without evaluations, and
-			// reevaluate fills in every target.
 			_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
 			return snapID, dup, err
 		}
