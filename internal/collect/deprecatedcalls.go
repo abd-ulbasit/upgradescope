@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -31,16 +33,21 @@ const (
 // so the server can tell a caller missing because the gauge reset from
 // one that is gone (evaluate.go, deprecatedCallsHold).
 //
-// The scanner feeds this metric itself only through selfListed: the
+// The scanner feeds this metric itself only through self.listed: the
 // resources api-usage listed at a deprecated version, because nothing
 // else serves a kind that is being removed ("group/version resource",
 // e.g. "policy/v1beta1 podsecuritypolicies" on 1.24). It runs after
 // api-usage, so on every scan, the first after an apiserver restart
 // included, the rows are there. Their rows are kept, and the capability
-// comes back partial with selfListed as Skipped: for those resources the
+// comes back partial with self.listed as Skipped: for those resources the
 // metric cannot tell other clients from the scanner, and the engine does
-// not report them as callers.
-func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, selfListed []string, inv *inventory.Inventory) error {
+// not report them as callers. When api-usage's discovery did not get
+// through (self.undiscovered), it cannot say what the scanner lists, and a
+// row an earlier scan's LIST left in the gauge would be reported as
+// another client's: every row (not of a subresource, which the scanner
+// never requests) at one of those group/versions is named in Skipped too,
+// for this scan (#239).
+func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, self selfCalls, inv *inventory.Inventory) error {
 	raw, err := rc.Get().AbsPath("/metrics").DoRaw(ctx)
 	if err != nil {
 		// 401/403 is the expected state on managed control planes
@@ -77,7 +84,7 @@ func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, selfListed [
 	}
 	fam, ok := families[deprecatedAPIsMetric]
 	if !ok {
-		return selfRequests(selfListed) // no deprecated API requested since apiserver start
+		return selfRequests(self, nil) // no deprecated API requested since apiserver start
 	}
 	var calls []inventory.DeprecatedCall
 	for _, m := range fam.GetMetric() {
@@ -112,19 +119,42 @@ func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, selfListed [
 		return a.Subresource < b.Subresource
 	})
 	inv.DeprecatedCalls = calls
-	return selfRequests(selfListed)
+	var unattributed []string // rows that may be an earlier scan's own LISTs
+	for _, c := range calls {
+		gv := schema.GroupVersion{Group: c.Group, Version: c.Version}.String()
+		if row := gv + " " + c.Resource; c.Subresource == "" && slices.Contains(self.undiscovered, gv) &&
+			!slices.Contains(self.listed, row) && !slices.Contains(unattributed, row) {
+			unattributed = append(unattributed, row)
+		}
+	}
+	return selfRequests(self, unattributed)
 }
 
 // selfRequests is the outcome of a successful scrape: nil, or, when the
-// scanner listed deprecated endpoints itself, a partialError naming them.
-func selfRequests(selfListed []string) error {
-	if len(selfListed) == 0 {
+// scanner listed deprecated endpoints itself or rows may be its own, a
+// partialError naming them.
+func selfRequests(self selfCalls, unattributed []string) error {
+	if len(self.listed) == 0 && len(unattributed) == 0 {
 		return nil
 	}
+	var msgs []string
+	if len(self.listed) > 0 {
+		msgs = append(msgs, fmt.Sprintf("upgradescope lists %s itself (nothing else serves a kind being removed), so the metric cannot show whether other clients request it; apiserver audit logs (annotation k8s.io/deprecated) can",
+			strings.Join(self.listed, ", ")))
+	}
+	if len(unattributed) > 0 {
+		var gvs []string
+		for _, row := range unattributed {
+			if gv, _, _ := strings.Cut(row, " "); !slices.Contains(gvs, gv) {
+				gvs = append(gvs, gv)
+			}
+		}
+		msgs = append(msgs, fmt.Sprintf("API discovery did not show what upgradescope lists at %s on this scan, and the metric keeps an earlier scan's own LISTs until the apiserver restarts, so %s may be upgradescope's and are not attributed to other clients; apiserver audit logs (annotation k8s.io/deprecated) can tell",
+			strings.Join(gvs, ", "), strings.Join(unattributed, ", ")))
+	}
 	return partialError{
-		msg: fmt.Sprintf("upgradescope lists %s itself (nothing else serves a kind being removed), so the metric cannot show whether other clients request it; apiserver audit logs (annotation k8s.io/deprecated) can",
-			strings.Join(selfListed, ", ")),
+		msg:        strings.Join(msgs, "; "),
 		incomplete: true,
-		skipped:    selfListed,
+		skipped:    slices.Sorted(slices.Values(append(slices.Clone(self.listed), unattributed...))),
 	}
 }

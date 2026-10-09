@@ -92,7 +92,12 @@ func controlPlaneOwned(m *metav1.PartialObjectMetadata) bool {
 // "group/version resource", sorted: the scanner's own entries in
 // apiserver_requested_deprecated_apis, which the deprecated-calls step
 // marks so the engine does not report the scanner as a caller. Discovery
-// and the KB alone decide them, so they are the same on every scan.
+// and the KB alone decide them, so they are the same on every scan that
+// gets through discovery. One that does not (discovery failed, or skipped a
+// group) cannot say what the scanner lists there, while the metric still
+// holds the rows of an earlier scan's LISTs until the apiserver restarts:
+// selfCalls.undiscovered names the group/versions of those it could have
+// been, for deprecated-calls to withhold rather than attribute (#239).
 //
 // Each object is attributed per flagged entry:
 //
@@ -129,7 +134,7 @@ func controlPlaneOwned(m *metav1.PartialObjectMetadata) bool {
 // a failed group discovery left unchecked (the engine decides from them
 // whether the gap can hide a blocker); if every flagged resource failed,
 // the capability degrades fully.
-func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) (selfListed []string, err error) {
+func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) (self selfCalls, err error) {
 	flagged := map[kb.GVK]kb.APILifecycleEntry{}
 	// continues holds the kinds the KB records a version of that is neither
 	// deprecated nor removed. They outlive their flagged versions even when
@@ -155,8 +160,9 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 		// any flagged API the KB records at one went unchecked.
 		var gde *discovery.ErrGroupDiscoveryFailed
 		if !errors.As(err, &gde) || lists == nil {
-			return nil, fmt.Errorf("discovery: %w", err)
+			return unknownSelfCalls(lifecycle, nil), fmt.Errorf("discovery: %w", err)
 		}
+		self = unknownSelfCalls(lifecycle, func(gv schema.GroupVersion) bool { _, failed := gde.Groups[gv]; return failed })
 		skipped := make([]string, 0, len(gde.Groups))
 		for gv := range gde.Groups {
 			skipped = append(skipped, gv.String())
@@ -235,7 +241,7 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 		if _, seen := targetsOf[gvr]; !seen {
 			toList = append(toList, gvr)
 			if deprecatedList {
-				selfListed = append(selfListed, gvr.GroupVersion().String()+" "+gvr.Resource)
+				self.listed = append(self.listed, gvr.GroupVersion().String()+" "+gvr.Resource)
 			}
 		}
 		for _, s := range served {
@@ -257,7 +263,7 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 		}
 	}
 
-	slices.Sort(selfListed)
+	slices.Sort(self.listed)
 
 	attempted, succeeded := 0, 0
 	var usages, unknowns []inventory.APIUsage
@@ -290,13 +296,43 @@ func collectAPIUsage(ctx context.Context, disc discovery.DiscoveryInterface, met
 	inv.APIUsage, inv.APIAuthorshipUnknown = usages, unknowns
 
 	if len(failures) == 0 {
-		return selfListed, nil
+		return self, nil
 	}
 	msg := strings.Join(failures, "; ")
 	if attempted > 0 && succeeded == 0 {
-		return selfListed, errors.New(msg) // nothing usable — degrade the capability
+		return self, errors.New(msg) // nothing usable — degrade the capability
 	}
-	return selfListed, partialError{msg: msg, incomplete: true, skipped: slices.Sorted(maps.Keys(unchecked))}
+	return self, partialError{msg: msg, incomplete: true, skipped: slices.Sorted(maps.Keys(unchecked))}
+}
+
+// selfCalls is what api-usage tells deprecated-calls about the scanner's
+// own requests in apiserver_requested_deprecated_apis.
+type selfCalls struct {
+	// listed holds the resources this scan listed at a deprecated version,
+	// "group/version resource", sorted.
+	listed []string
+	// undiscovered holds the group/versions ("policy/v1beta1"), sorted, at
+	// which an earlier scan may have listed a resource while this scan's
+	// discovery did not show what it lists there: every group/version at
+	// which the KB schedules a kind's removal, the only ones the scanner
+	// ever lists at a deprecated version, when discovery failed, and those
+	// of a group discovery skipped. A metric row at one of them may be the
+	// scanner's own.
+	undiscovered []string
+}
+
+// unknownSelfCalls is what is known before discovery has answered: the
+// scanner may have listed a resource at any group/version where the KB
+// schedules a removal (in skipped, when skipped is not nil).
+func unknownSelfCalls(lifecycle []kb.APILifecycleEntry, skipped func(schema.GroupVersion) bool) selfCalls {
+	gvs := map[string]bool{}
+	for _, e := range lifecycle {
+		gv := schema.GroupVersion{Group: e.Group, Version: e.Version}
+		if e.Removed != nil && (skipped == nil || skipped(gv)) {
+			gvs[gv.String()] = true
+		}
+	}
+	return selfCalls{undiscovered: slices.Sorted(maps.Keys(gvs))}
 }
 
 // apiName renders a flagged API as CapabilityStatus.Skipped names it:

@@ -216,7 +216,9 @@ func roundShare(d time.Duration) time.Duration {
 // custom resources only at versions that are not deprecated, so it adds
 // no metric rows; the /metrics scrape stays last.
 func steps(c Clients, k kb.KB, opts Options) []step {
-	var selfListed []string // api-usage's own deprecated LISTs
+	// api-usage's own deprecated LISTs; until it has run, unknown wherever
+	// the scanner could list one (#239).
+	self := unknownSelfCalls(k.APILifecycle, nil)
 	// versions' kube-system pods, which addons does not list again (#227).
 	// Not one shared all-namespaces list: versions would then fail with it
 	// under the narrow kube-system-only role (#122) or when a cluster-wide
@@ -248,7 +250,7 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 				return errors.New("discovery/metadata client not configured")
 			}
 			var err error
-			selfListed, err = collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
+			self, err = collectAPIUsage(ctx, c.Discovery, c.Metadata, k.APILifecycle, inv)
 			return err
 		}},
 		{cap: inventory.CapCRDs, run: func(ctx context.Context, inv *inventory.Inventory) error {
@@ -257,11 +259,11 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			}
 			return collectCRDs(ctx, c.APIExtensions, c.Metadata, inv)
 		}},
-		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error { // after api-usage: consumes selfListed
+		{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error { // after api-usage: consumes self
 			if c.RESTClient == nil {
 				return errors.New("rest client not configured")
 			}
-			return collectDeprecatedCalls(ctx, c.RESTClient, selfListed, inv)
+			return collectDeprecatedCalls(ctx, c.RESTClient, self, inv)
 		}},
 	}
 }
