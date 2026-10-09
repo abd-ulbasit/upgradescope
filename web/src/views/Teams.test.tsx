@@ -149,9 +149,29 @@ describe("Teams view", () => {
     const notes = [...document.querySelectorAll(".rollup-notes li")].map((li) => li.textContent);
     expect(notes).toContain("No snapshot yet: fresh.");
     expect(notes.find((n) => n?.includes("huge"))).toMatch(/report for → 1.35 would be over --max-snapshot-bytes/);
-    expect(notes.find((n) => n?.includes("broken"))).toMatch(/unreadable/);
+    expect(notes.find((n) => n?.includes("broken"))).toMatch(/could not be read/);
     // The cluster that has snapshots is never "no snapshot yet".
     expect(notes.find((n) => n?.startsWith("No snapshot yet"))).not.toMatch(/huge|broken/);
+  });
+
+  it("still names a cluster whose reason it does not know, or that only `missing` lists", async () => {
+    mockApi({
+      "api/v1/fleet": fleet,
+      "api/v1/fleet/teams?target=1.35": {
+        ...teams,
+        missing: ["fresh", "future", "bare"],
+        excluded: [
+          { name: "fresh", clusterId: 5, reason: "no-snapshot" },
+          // a reason a newer server may add
+          { name: "future", clusterId: 8, reason: "quarantined" as never },
+        ],
+      } satisfies FleetTeamsResponse,
+    });
+    render(<Teams />);
+    await screen.findByRole("row", { name: /payments/ });
+    const notes = [...document.querySelectorAll(".rollup-notes li")].map((li) => li.textContent);
+    expect(notes).toContain("No snapshot yet: fresh.");
+    expect(notes).toContain("Not included: future, bare.");
   });
 
   it("describes missing clusters neutrally when the server sends no reasons", async () => {

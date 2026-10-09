@@ -196,13 +196,19 @@ function excludedNotes(
   const labels: Record<ExcludedReason, string> = {
     "no-snapshot": "No snapshot yet",
     "too-large": "Not included, its report for → TARGET would be over --max-snapshot-bytes",
-    unreadable: "Not included, its stored inventory is unreadable (see the server log)",
+    unreadable: "Not included, its stored inventory could not be read (see the server log)",
   };
   const order: ExcludedReason[] = ["no-snapshot", "too-large", "unreadable"];
-  return order.flatMap((reason) => {
+  const notes = order.flatMap((reason) => {
     const names = data.excluded!.filter((e) => e.reason === reason).map((e) => e.name);
     return names.length > 0
       ? [{ key: reason, label: labels[reason].replace("TARGET", data.target), names }]
       : [];
   });
+  // A cluster whose reason this dashboard does not know (a newer server), or
+  // one `missing` names that `excluded` does not, is still said to be left
+  // out: never dropped from the page.
+  const said = new Set(notes.flatMap((n) => n.names));
+  const rest = [...new Set([...data.excluded.map((e) => e.name), ...data.missing])].filter((n) => !said.has(n));
+  return rest.length > 0 ? [...notes, { key: "other", label: "Not included", names: rest }] : notes;
 }

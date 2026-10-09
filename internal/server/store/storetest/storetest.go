@@ -729,16 +729,17 @@ func testScoreHistory(t *testing.T, s store.Store) {
 	sid := mustSnapshot(t, s, cid, "aaa", base)
 
 	points := []struct {
-		score int
-		ready bool
-		when  time.Time
+		score    int
+		ready    bool
+		blockers int
+		when     time.Time
 	}{
-		{70, false, base}, {75, false, at(1)}, {80, false, at(2)}, {92, true, at(3)},
+		{70, false, 2, base}, {75, false, 1, at(1)}, {80, false, 0, at(2)}, {92, true, 0, at(3)},
 	}
 	for _, p := range points {
 		if _, err := s.InsertEvaluation(ctx, store.Evaluation{
 			ClusterID: cid, SnapshotID: sid, Target: "1.36",
-			Score: p.score, Ready: p.ready, CreatedAt: p.when,
+			Score: p.score, Ready: p.ready, Blockers: p.blockers, CreatedAt: p.when,
 		}); err != nil {
 			t.Fatalf("InsertEvaluation: %v", err)
 		}
@@ -775,6 +776,13 @@ func testScoreHistory(t *testing.T, s store.Store) {
 				}
 				if i > 0 && !got[i-1].At.Before(p.At) {
 					t.Errorf("points not ascending by At: %v then %v", got[i-1].At, p.At)
+				}
+				// Every point carries its verdict, derived from ready and
+				// blockers: a score of 80 with no blocker that is not ready
+				// is unknown, not "a bit low" (#243, DB-11).
+				wantVerdict := map[int]string{70: "blocked", 75: "blocked", 80: "unknown", 92: "ready"}[p.Score]
+				if p.Verdict != wantVerdict {
+					t.Errorf("score %d verdict = %q, want %q", p.Score, p.Verdict, wantVerdict)
 				}
 			}
 		})
