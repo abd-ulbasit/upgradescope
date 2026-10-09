@@ -134,3 +134,23 @@ func TestApplyPartialObjectSuppressionKeepsCallersOnFinding(t *testing.T) {
 		t.Errorf("suppressed = %+v, want one entry without callers", got.Suppressed)
 	}
 }
+
+// A re-emitted caller lists no objects or namespaces, so a rule for its
+// key or category that also has object selectors matches nothing: the
+// caller still counts.
+func TestApplyCallerRuleWithSelectorsTakesNothing(t *testing.T) {
+	annotated := inventory.ObjectRef{Name: "legacy-fs", Manager: "helm", Ignore: "removed-api", IgnoreReason: "deleting next sprint"}
+	for _, rule := range []Rule{
+		{Key: callerKey, Namespace: "*", Reason: "the caller is helm"},
+		{Key: callerKey, Name: "legacy-fs", Reason: "the caller is helm"},
+		{Category: "deprecated-api-in-use", File: "*", Reason: "the caller is helm"},
+	} {
+		got, _ := Apply(callerReport(t, annotated), []Rule{rule}, Options{Now: now})
+		if got.Verdict != engine.VerdictBlocked || len(got.Findings) != 1 || got.Findings[0].Key != callerKey {
+			t.Errorf("rule %+v: verdict %s, findings %+v; want blocked by the caller", rule, got.Verdict, got.Findings)
+		}
+		if len(got.Suppressed) != 1 || got.Suppressed[0].Key != flowSchemaKey {
+			t.Errorf("rule %+v: suppressed = %+v, want only the annotated object finding", rule, got.Suppressed)
+		}
+	}
+}
