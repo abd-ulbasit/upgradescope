@@ -33,9 +33,11 @@ Required checks:
   not know what that release removes.
 - **`target`**, for live clusters: the target must be an upgrade. A
   target at or below the minor the oldest kube-apiserver already runs (a
-  downgrade, the same minor, or a typo such as `1.4`) is reported as a
-  required `target` gap, so the verdict is `unknown`, never `ready`: every
-  check judges a newer minor.
+  downgrade or the same minor) is reported as a required `target` gap, so
+  the verdict is `unknown`, never `ready`: every check judges a newer minor.
+  A target below 1.16, the oldest minor the knowledge base covers (a typo
+  such as `1.4` for `1.40`, which is what YAML makes of an unquoted number),
+  is not a verdict: it is refused as an input.
 - **`versions`**, for live clusters: the server version (skew needs it).
   A *partial* `versions` is required too when it names a component whose
   version upstream would have told and was not read (a component image
@@ -144,6 +146,7 @@ Consequences:
 finding at or above the threshold remains after suppression and is not
 `unchanged` against a `--baseline`, **or** when the verdict is `unknown`,
 unless `--allow-incomplete`. A target that is not an upgrade of the cluster
-exits 2 even with `--allow-incomplete`. `never` always exits 0. Operational errors
-exit 1. The server's gate endpoint and the GitHub Action use the same rule.
+exits 2 even with `--allow-incomplete`; only `--fail-on never` always exits 0,
+that case included. Operational errors, and a `--target` below the knowledge
+base, exit 1. The server's gate endpoint and the GitHub Action use the same rule.
 Details: [Suppressions and baselines](../guides/suppressions-and-baselines.md#how-the-gate-decides).
