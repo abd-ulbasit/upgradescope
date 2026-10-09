@@ -427,17 +427,25 @@ func TestMCPScanWithoutAContextAtStartIsRefused(t *testing.T) {
 	useRealCurrentKubeContext(t)
 	noCurrent := strings.Replace(testKubeconfig, "current-context: test", `current-context: ""`, 1)
 	for _, tc := range []struct {
-		name    string
-		initial *string // the kubeconfig at start; nil: none
-		flag    bool    // named by --kubeconfig rather than $KUBECONFIG
+		name      string
+		initial   *string // the kubeconfig at start; nil: none
+		flag      bool    // named by --kubeconfig rather than $KUBECONFIG
+		inCluster bool    // in a pod: the service account's environment is set
 	}{
-		{"no kubeconfig at all", nil, false},
-		{"no current context", &noCurrent, false},
-		{"no current context in --kubeconfig", &noCurrent, true},
-		{"an unreadable kubeconfig", ptr("{{ not a kubeconfig"), false},
+		{"no kubeconfig at all", nil, false, false},
+		// clientcmd would fall back to the pod's service account, a
+		// config no context names: there is nothing to pin.
+		{"in a pod with no kubeconfig", nil, false, true},
+		{"no current context", &noCurrent, false, false},
+		{"no current context in --kubeconfig", &noCurrent, true, false},
+		{"an unreadable kubeconfig", ptr("{{ not a kubeconfig"), false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			*scans = nil
+			if tc.inCluster {
+				t.Setenv("KUBERNETES_SERVICE_HOST", "127.0.0.1")
+				t.Setenv("KUBERNETES_SERVICE_PORT", "1")
+			}
 			kc := filepath.Join(t.TempDir(), "kc")
 			if tc.initial != nil {
 				if err := os.WriteFile(kc, []byte(*tc.initial), 0o600); err != nil {

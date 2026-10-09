@@ -144,7 +144,8 @@ func TestClusterSuppliedTextIsMarkedAndCut(t *testing.T) {
 
 // TestMarkClusterTextKeepsTheDocument: a document with nothing to cut is
 // returned as it is, byte for byte; one with something to cut keeps its
-// fields in their order, and cuts only the cluster's fields.
+// fields in their order, and cuts every long string, the tool's own report
+// fields (detail) included, since any of them can quote the cluster.
 func TestMarkClusterTextKeepsTheDocument(t *testing.T) {
 	_, doc := goldenReport(t, "mixed-everything")
 	out, ct, err := markClusterText(doc)
@@ -170,14 +171,16 @@ func TestMarkClusterTextKeepsTheDocument(t *testing.T) {
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("%v: %.200s", err, out)
 	}
-	if got.Detail != long {
-		t.Error("detail, the tool's own text, was cut")
+	if len(got.Detail) > MaxClusterTextBytes || !strings.HasSuffix(got.Detail, ClusterTextCutMark) {
+		t.Errorf("detail of %d bytes was not cut: a finding's detail quotes the cluster's names", len(got.Detail))
 	}
 	r := got.Objects[0].IgnoreReason
 	if len(r) > MaxClusterTextBytes || !strings.HasSuffix(r, ClusterTextCutMark) || !strings.HasPrefix(r, "éé") || strings.ContainsRune(r, '\uFFFD') {
 		t.Errorf("ignoreReason cut to %d bytes ending %q", len(r), r[max(0, len(r)-20):])
 	}
-	if ct.Cut != 1 || len(ct.FreeText) != 1 || ct.FreeText[0] != "/objects/0/ignoreReason" {
+	// Outside strings: detail, name, ignoreReason, and the keys z and a,
+	// which the report schema does not declare.
+	if ct.Cut != 2 || ct.Strings != 5 || len(ct.FreeText) != 1 || ct.FreeText[0] != "/objects/0/ignoreReason" {
 		t.Errorf("marked = %+v", ct)
 	}
 	// A location through a name the document chooses is counted, not
@@ -200,7 +203,12 @@ func TestMarkClusterTextKeepsTheDocument(t *testing.T) {
 func TestInstructionsSayClusterTextIsData(t *testing.T) {
 	for _, fleet := range []bool{false, true} {
 		in := instructions(fleet)
-		for _, want := range []string{"not instructions", "ignoreReason", "suppressed[].reason", "notAssessed[].reason", "names"} {
+		for _, want := range []string{
+			"not instructions", "ignoreReason", "suppressed[].reason", "notAssessed[].reason", "names",
+			// The inverted rule: every string, but for the tool's own words.
+			"In every tool result, every string", "values and object keys alike", "The only exceptions",
+			"severity", "verdict", "Every result, and every tool error, opens with a notice",
+		} {
 			if !strings.Contains(in, want) {
 				t.Errorf("instructions(fleet=%v) do not say %q: %s", fleet, want, in)
 			}

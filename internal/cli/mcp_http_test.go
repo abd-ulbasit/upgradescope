@@ -168,17 +168,20 @@ func TestMCPHTTPRefusalClosesTheConnection(t *testing.T) {
 		} else {
 			rawPOST(t, c, addr, 1000, "ab") // stalls in its body
 		}
+		// A deadline of its own, so a server that drains the stalled body
+		// before it answers, or keeps the connection, fails in seconds
+		// rather than at the go test timeout.
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 		br := bufio.NewReader(c)
 		resp, err := http.ReadResponse(br, nil)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("no answer to an unauthenticated request within 5s: %v", err)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized || !resp.Close {
 			t.Errorf("an unauthenticated request = %s (close %v), want 401 closing the connection", resp.Status, resp.Close)
 		}
-		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 		if _, err := io.Copy(io.Discard, br); err != nil {
 			t.Errorf("after a 401 the connection stayed open: %v", err)
 		}
@@ -270,7 +273,7 @@ func initializeSession(t *testing.T, client *http.Client, addr string) string {
 // timeout, so what they hold is given back.
 func TestMCPHTTPIdleSessionsExpire(t *testing.T) {
 	setMCPHTTPLimits(t, func(c *mcpHTTPConfig) {
-		c.sessions.SessionTimeout = time.Second
+		c.sessions.SessionTimeout = 2 * time.Second
 		c.sessions.MaxSessions = 5000
 	})
 	addr, _ := startMCPHTTP(t)
@@ -286,8 +289,12 @@ func TestMCPHTTPIdleSessionsExpire(t *testing.T) {
 	base := runtime.NumGoroutine()
 
 	const n = 2000
+	// The first few hundred sessions open well within the timeout, so they
+	// are all open when the goroutines are counted: an open session holds
+	// one, which proves the count falling back below is the expiry.
+	const early = 200
 	ids := map[string]bool{}
-	for range n {
+	for i := range n {
 		resp, body, err := mcpPOST(context.Background(), client, addr, "", initializeBody)
 		if err != nil {
 			t.Fatal(err)
@@ -296,14 +303,16 @@ func TestMCPHTTPIdleSessionsExpire(t *testing.T) {
 			t.Fatalf("initialize = %s %q", resp.Status, body)
 		}
 		ids[resp.Header.Get("Mcp-Session-Id")] = true
+		if i == early-1 {
+			if g := runtime.NumGoroutine(); g < base+early/2 {
+				t.Fatalf("%d goroutines with %d sessions open, %d before: sessions hold none, so their expiry proves nothing", g, early, base)
+			}
+		}
 	}
 	if len(ids) != n {
 		t.Fatalf("%d sessions for %d initializes", len(ids), n)
 	}
 	client.CloseIdleConnections()
-	if g := runtime.NumGoroutine(); g < base+n/2 {
-		t.Logf("%d goroutines with %d sessions open, %d before", g, n, base)
-	}
 	goroutinesBackTo(t, base, 15*time.Second)
 
 	// An expired session is gone: the client is told to start a new one.

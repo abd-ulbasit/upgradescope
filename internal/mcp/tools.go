@@ -160,7 +160,7 @@ func (s *server) scan(ctx context.Context, _ *mcpsdk.CallToolRequest, in scanInp
 	defer func() { <-s.scanSlot }()
 	reports, err := s.cfg.Scan(ctx, ScanRequest{Targets: slices.Clone(in.Targets)})
 	if err != nil {
-		return nil, nil, fmt.Errorf("scan: %w", err)
+		return nil, nil, &outsideError{"scan: ", err}
 	}
 	if len(reports) != len(in.Targets) {
 		return nil, nil, fmt.Errorf("scan: %d reports for %d targets", len(reports), len(in.Targets))
@@ -180,7 +180,7 @@ func (s *server) scan(ctx context.Context, _ *mcpsdk.CallToolRequest, in scanInp
 	}
 	// The reports are kept whatever their size, so a scan too large to
 	// send whole can still be read through list_findings.
-	return reportResult(out, "the reports are kept: read them with list_findings and a severity, a category or a limit, with target to pick one")
+	return markedResult(out, "the reports are kept: read them with list_findings and a severity, a category or a limit, with target to pick one")
 }
 
 func (s *server) getReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in sourceInput) (*mcpsdk.CallToolResult, json.RawMessage, error) {
@@ -188,7 +188,7 @@ func (s *server) getReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in so
 	if err != nil {
 		return nil, nil, err
 	}
-	return reportResult(doc, "ask list_findings for the findings instead, filtered by severity or category, or with a limit")
+	return markedResult(doc, "ask list_findings for the findings instead, filtered by severity or category, or with a limit")
 }
 
 // fits refuses a result too large for a client to receive in one message,
@@ -284,7 +284,7 @@ func (s *server) listFindings(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return nil, nil, err
 	}
-	return reportResult(out, "narrow it with severity or category, or a smaller limit")
+	return markedResult(out, "narrow it with severity or category, or a smaller limit")
 }
 
 // report resolves which report a tool reads and returns it with the
@@ -337,7 +337,7 @@ func (s *server) report(ctx context.Context, in sourceInput) (json.RawMessage, s
 			return nil, "", err
 		}
 		if err := checkReport(doc); err != nil {
-			return nil, "", fmt.Errorf("upgradescope server: the report of cluster %q is not an upgradescope report of schemaVersion 1: %w", name, err)
+			return nil, "", fmt.Errorf("upgradescope server: the report of cluster %q is not an upgradescope report of schemaVersion 1: %w", quoteOutside(name), err)
 		}
 		return doc, name, nil
 	}
@@ -416,7 +416,7 @@ func (s *server) registryLookup(_ context.Context, _ *mcpsdk.CallToolRequest, in
 	}
 	addons, err := s.cfg.Registry()
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading the embedded registry: %w", err)
+		return nil, nil, &outsideError{"loading the embedded registry: ", err}
 	}
 	matched := []registry.AddOn{}
 	for _, a := range addons {
@@ -433,7 +433,12 @@ func (s *server) registryLookup(_ context.Context, _ *mcpsdk.CallToolRequest, in
 		Total     int              `json:"total"`
 		Truncated bool             `json:"truncated"`
 	}{matched, total, total > limit})
-	return nil, out, err
+	if err != nil {
+		return nil, nil, err
+	}
+	// The registry is compiled in, but its text is the upstream projects'
+	// and endoflife.date's, so it is marked as every result is.
+	return markedResult(out, "pass a narrower query or a smaller limit")
 }
 
 // addOnMatches reports whether the lower-case query q is part of the add-on's
@@ -460,5 +465,5 @@ func (s *server) fleetSummary(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if d := bytes.TrimSpace(doc); len(d) == 0 || d[0] != '{' || !json.Valid(d) {
 		return nil, nil, errors.New("upgradescope server: the fleet response is not a JSON object (is --server-url an upgradescope server?)")
 	}
-	return nil, doc, fits(doc, "", "pass fewer targets")
+	return markedResult(doc, "pass fewer targets")
 }

@@ -128,7 +128,12 @@ func (c *httpCalls) cancelWithRequest(next mcpsdk.MethodHandler) mcpsdk.MethodHa
 }
 
 // sessionCap refuses a request that would open a session past
-// opts.MaxSessions.
+// opts.MaxSessions. A POST that opens one is counted in opening until it
+// returns, and its session is in srv.Sessions() from the moment the SDK
+// makes it, so while it is in flight it is counted twice: a burst of
+// concurrent initializes can be refused with somewhat fewer than
+// MaxSessions open. That errs on the side of the cap, and the client is
+// told to retry.
 type sessionCap struct {
 	srv  *mcpsdk.Server
 	opts HTTPOptions
