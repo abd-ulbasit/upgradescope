@@ -10,6 +10,11 @@ name: scorecard
 # workflow it can trust: one job, no top-level env or defaults, no run:
 # steps, and only checkout, upload-artifact, codeql upload-sarif and
 # scorecard-action itself. Keep it that way.
+#
+# It needs the repository public: while it was private, the scheduled run
+# of 2026-10-06 (37455968547) failed in Scorecard's GraphQL commit listing
+# ("Resource not accessible by integration"), which this job's token cannot
+# read on a private repository; the runs before and after, public, passed.
 on:
   push:
     branches: [main]
