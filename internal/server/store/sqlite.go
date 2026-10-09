@@ -249,9 +249,10 @@ func (s *SQLite) RenameCluster(ctx context.Context, name, newName string) error 
 
 // Prune deletes evaluations created before cutoff, then the snapshots
 // received before it that no evaluation refers to any more, sparing each
-// cluster's latest snapshot and its evaluations, in one transaction.
-// Stored times are fixed-width UTC strings, so string order is instant
-// order.
+// cluster's latest snapshot and its evaluations and each (cluster,
+// target)'s newest decided evaluation (pruneKeepsBaselines), in one
+// transaction. Stored times are fixed-width UTC strings, so string order
+// is instant order.
 func (s *SQLite) Prune(ctx context.Context, cutoff time.Time) (PruneResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -262,7 +263,8 @@ func (s *SQLite) Prune(ctx context.Context, cutoff time.Time) (PruneResult, erro
 	var res PruneResult
 	evals, err := tx.ExecContext(ctx, `
 		DELETE FROM evaluations WHERE created_at < ?
-		AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)`, at)
+		AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+		AND id NOT IN (SELECT MAX(id) FROM evaluations WHERE ready = 1 OR blockers > 0 GROUP BY cluster_id, target)`, at)
 	if err != nil {
 		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
 	}
@@ -394,12 +396,14 @@ func (s *SQLite) LatestSnapshotHead(ctx context.Context, clusterID int64) (Snaps
 }
 
 // LatestSnapshotHeads returns every cluster's latest snapshot without its
-// inventory, in one query over idx_snapshots_cluster_id.
+// inventory, in one query: per cluster, one step down
+// idx_snapshots_cluster_id from its end, so the cost follows the clusters,
+// not every snapshot kept.
 func (s *SQLite) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.id, s.cluster_id, s.hash, s.kb_version, s.agent_version, s.received_at, s.server_version
-		FROM snapshots s
-		JOIN (SELECT MAX(id) AS id FROM snapshots GROUP BY cluster_id) latest ON s.id = latest.id`)
+		FROM clusters c
+		JOIN snapshots s ON s.id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = c.id)`)
 	if err != nil {
 		return nil, fmt.Errorf("latest snapshot heads: %w", err)
 	}
@@ -429,22 +433,55 @@ type sqlExecer interface {
 }
 
 // evaluationColumns is the SELECT list scanEvaluation reads.
-const evaluationColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL`
+const evaluationColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL, carries_hold`
 
 // summaryColumns is evaluationColumns without the report: NULL scans to a
 // nil Report, and the other columns are all a summary needs. Both drivers
 // use it.
-const summaryColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, NULL, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL`
+const summaryColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, NULL, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL, carries_hold`
+
+// The SQLite read queries whose plans TestEvaluationReadsUseIndexes pins:
+// each walks an index backwards by id and stops at the first row it keeps,
+// so its cost does not grow with a pair's history, and no report is
+// carried through a sort.
+const (
+	sqliteLatestEvaluationQuery = `SELECT ` + evaluationColumns + ` FROM evaluations WHERE cluster_id = ? AND target = ?
+		ORDER BY id DESC LIMIT 1`
+	sqliteCurrentEvaluationQuery = `SELECT ` + evaluationColumns + ` FROM evaluations
+		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = ?) AND target = ?
+		ORDER BY id DESC LIMIT 1`
+	sqliteCurrentSummaryQuery = `SELECT ` + summaryColumns + ` FROM evaluations
+		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = ?) AND target = ?
+		ORDER BY id DESC LIMIT 1`
+	sqliteLatestKnownQuery = `SELECT ` + evaluationColumns + ` FROM evaluations
+		WHERE cluster_id = ? AND target = ? AND (ready = 1 OR blockers > 0)
+		ORDER BY id DESC LIMIT 1`
+	// sqliteScoreHistoryQuery is newest first; ScoreHistory reverses it.
+	sqliteScoreHistoryQuery = `SELECT created_at, score, ready, blockers FROM evaluations
+		WHERE cluster_id = ? AND target = ?
+		ORDER BY id DESC LIMIT ?`
+	// sqliteLatestKnownIDQuery is the commit's baseline check
+	// (Expectation.Baselines): the id LatestKnownEvaluation returns.
+	sqliteLatestKnownIDQuery = `SELECT id FROM evaluations
+		WHERE cluster_id = ? AND target = ? AND (ready = 1 OR blockers > 0)
+		ORDER BY id DESC LIMIT 1`
+	// sqliteSnapshotEvaluationIDQuery is the commit's Current check: the
+	// id of a snapshot's newest evaluation of a target.
+	sqliteSnapshotEvaluationIDQuery = `SELECT id FROM evaluations WHERE snapshot_id = ? AND target = ?
+		ORDER BY id DESC LIMIT 1`
+)
 
 func scanEvaluation(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
 	var created, evaluated string
 	var gaps sql.NullString
+	var hold sql.NullBool
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &created, &evaluated, &e.TeamMapHash, &gaps, &e.TeamsUnknown); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &created, &evaluated, &e.TeamMapHash, &gaps, &e.TeamsUnknown, &hold); err != nil {
 		return Evaluation{}, err
 	}
 	e.NotAssessed = notAssessedBytes(gaps)
+	e.CarriesHold = carriesHoldColumn(hold)
 	var err error
 	if e.CreatedAt, err = parseStoredTime(created); err != nil {
 		return Evaluation{}, err
@@ -477,10 +514,10 @@ func insertEvaluationSQLite(ctx context.Context, x sqlExecer, e Evaluation) (int
 		evaluated = created
 	}
 	res, err := x.ExecContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams))
+		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), carriesHold(e.Report))
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -508,41 +545,34 @@ func (s *SQLite) queryEvaluation(ctx context.Context, what, query string, args .
 // insertion order (highest id; never created_at, which a clock step can
 // reorder), or ErrNotFound.
 func (s *SQLite) LatestEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
-	return s.queryEvaluation(ctx, fmt.Sprintf("latest evaluation for cluster %d target %s", clusterID, target), `
-		SELECT `+evaluationColumns+` FROM evaluations WHERE cluster_id = ? AND target = ?
-		ORDER BY id DESC LIMIT 1`, clusterID, target)
+	return s.queryEvaluation(ctx, fmt.Sprintf("latest evaluation for cluster %d target %s", clusterID, target),
+		sqliteLatestEvaluationQuery, clusterID, target)
 }
 
 // CurrentEvaluation returns the newest evaluation for target of the
 // cluster's latest snapshot (highest id), or ErrNotFound.
 func (s *SQLite) CurrentEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
-	return s.queryEvaluation(ctx, fmt.Sprintf("current evaluation for cluster %d target %s", clusterID, target), `
-		SELECT `+evaluationColumns+` FROM evaluations
-		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = ?) AND target = ?
-		ORDER BY id DESC LIMIT 1`, clusterID, target)
+	return s.queryEvaluation(ctx, fmt.Sprintf("current evaluation for cluster %d target %s", clusterID, target),
+		sqliteCurrentEvaluationQuery, clusterID, target)
 }
 
 // CurrentEvaluationSummary is CurrentEvaluation without the report.
 func (s *SQLite) CurrentEvaluationSummary(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
-	return s.queryEvaluation(ctx, fmt.Sprintf("current evaluation summary for cluster %d target %s", clusterID, target), `
-		SELECT `+summaryColumns+` FROM evaluations
-		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = ?) AND target = ?
-		ORDER BY id DESC LIMIT 1`, clusterID, target)
+	return s.queryEvaluation(ctx, fmt.Sprintf("current evaluation summary for cluster %d target %s", clusterID, target),
+		sqliteCurrentSummaryQuery, clusterID, target)
 }
 
 // LatestKnownEvaluation returns the newest evaluation for (cluster, target)
 // that is ready or has a blocker, or ErrNotFound.
 func (s *SQLite) LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
-	return s.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target), `
-		SELECT `+evaluationColumns+` FROM evaluations
-		WHERE cluster_id = ? AND target = ? AND (ready = 1 OR blockers > 0)
-		ORDER BY id DESC LIMIT 1`, clusterID, target)
+	return s.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target),
+		sqliteLatestKnownQuery, clusterID, target)
 }
 
 // CommitEvaluations writes b in one BEGIN IMMEDIATE transaction (the DSN's
 // _txlock), which also serializes it against every other writer: the
-// duplicate check and the Current/SnapshotID checks read state no one can
-// change before the commit.
+// duplicate check and the Current/SnapshotID/Expect checks read state no
+// one can change before the commit.
 func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int64, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -575,18 +605,23 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 	if b.Snapshot != nil {
 		if !noSnapshot && latestHash == b.Snapshot.Hash {
 			// Same inventory: keep the envelope current (an upgraded agent
-			// or KB is news even when the cluster is not) and commit the
-			// cluster's last-seen bump.
+			// or KB is news even when the cluster is not), record the
+			// version it is judged at on a row stored without one (before
+			// migration 0006), and commit the cluster's last-seen bump.
 			if _, err := tx.ExecContext(ctx, `
-				UPDATE snapshots SET kb_version = ?, agent_version = ?
-				WHERE id = ? AND (kb_version <> ? OR agent_version <> ?)`,
-				b.Snapshot.KBVersion, b.Snapshot.AgentVersion, latestID, b.Snapshot.KBVersion, b.Snapshot.AgentVersion); err != nil {
+				UPDATE snapshots SET kb_version = ?1, agent_version = ?2,
+					server_version = CASE WHEN server_version = '' THEN ?3 ELSE server_version END
+				WHERE id = ?4 AND (kb_version <> ?1 OR agent_version <> ?2 OR (server_version = '' AND ?3 <> ''))`,
+				b.Snapshot.KBVersion, b.Snapshot.AgentVersion, b.Snapshot.ServerVersion, latestID); err != nil {
 				return 0, false, fmt.Errorf("commit evaluations: record envelope: %w", err)
 			}
 			if err := tx.Commit(); err != nil {
 				return 0, false, fmt.Errorf("commit evaluations: commit: %w", err)
 			}
 			return latestID, true, nil
+		}
+		if err := checkExpectation(ctx, tx, b, latestID, sqliteLatestKnownIDQuery); err != nil {
+			return 0, false, fmt.Errorf("commit evaluations: %w", err)
 		}
 		received := b.Snapshot.ReceivedAt
 		if received.IsZero() {
@@ -612,15 +647,16 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 		}
 		for target, want := range b.Current {
 			var got int64
-			err := tx.QueryRowContext(ctx, `
-				SELECT id FROM evaluations WHERE snapshot_id = ? AND target = ?
-				ORDER BY id DESC LIMIT 1`, snapID, target).Scan(&got)
+			err := tx.QueryRowContext(ctx, sqliteSnapshotEvaluationIDQuery, snapID, target).Scan(&got)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return 0, false, fmt.Errorf("commit evaluations: current %s: %w", target, err)
 			}
 			if got != want {
 				return 0, false, fmt.Errorf("commit evaluations: target %s changed (evaluation %d, expected %d): %w", target, got, want, ErrConflict)
 			}
+		}
+		if err := checkExpectation(ctx, tx, b, latestID, sqliteLatestKnownIDQuery); err != nil {
+			return 0, false, fmt.Errorf("commit evaluations: %w", err)
 		}
 	}
 
@@ -636,9 +672,9 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = ?, not_assessed = ?, kb_version = ?, team_map_hash = ?, teams = ?, blockers = ?, warnings = ?, evaluated_at = ?
+			UPDATE evaluations SET report = ?, not_assessed = ?, kb_version = ?, team_map_hash = ?, teams = ?, blockers = ?, warnings = ?, evaluated_at = ?, carries_hold = ?
 			WHERE id = ? AND cluster_id = ?`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, formatTime(evaluated), e.ID, b.ClusterID); err != nil {
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, formatTime(evaluated), carriesHold(e.Report), e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}
@@ -979,12 +1015,7 @@ func (s *SQLite) ScoreHistory(ctx context.Context, clusterID int64, target strin
 	if limit <= 0 {
 		lim = -1 // SQLite: LIMIT -1 == no limit
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT created_at, score, ready, blockers FROM (
-			SELECT id, created_at, score, ready, blockers FROM evaluations
-			WHERE cluster_id = ? AND target = ?
-			ORDER BY id DESC LIMIT ?
-		) ORDER BY id ASC`, clusterID, target, lim)
+	rows, err := s.db.QueryContext(ctx, sqliteScoreHistoryQuery, clusterID, target, lim)
 	if err != nil {
 		return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 	}
@@ -1006,5 +1037,6 @@ func (s *SQLite) ScoreHistory(ctx context.Context, clusterID int64, target strin
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 	}
+	slices.Reverse(out) // oldest first
 	return out, nil
 }
