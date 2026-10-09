@@ -3,7 +3,9 @@ package collect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -111,7 +113,7 @@ func (f gitopsFixture) clients() Clients {
 
 func (f gitopsFixture) helmStep() (inventory.Inventory, error) {
 	var inv inventory.Inventory
-	err := collectHelmStep(context.Background(), f.clients(), nil, nil, &inv)
+	err := collectHelmStep(context.Background(), f.clients(), nil, nil, nil, &inv)
 	return inv, err
 }
 
@@ -579,7 +581,7 @@ func TestGitOpsWithoutDynamicClientStillReportsTheGap(t *testing.T) {
 	c := f.clients()
 	c.Dynamic = nil
 	var inv inventory.Inventory
-	err := collectHelmStep(context.Background(), c, nil, nil, &inv)
+	err := collectHelmStep(context.Background(), c, nil, nil, nil, &inv)
 	pe := partial(t, err)
 	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"argocd"}) || inv.GitOpsCharts != nil {
 		t.Errorf("partial = %+v, charts %v; want the gap and no charts", pe, inv.GitOpsCharts)
@@ -797,6 +799,7 @@ func TestGitOpsFluxOCIRepositoryErrorIsInTheReason(t *testing.T) {
 		resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases),
 		resources("source.toolkit.fluxcd.io/v1", fluxOCIRepos),
 	}, []runtime.Object{hr}, helmSecret(t, helmRev{ns: "a", release: "r", rev: 1, status: "deployed", chart: "x", chartVersion: "1.0.0"}))
+	forbidList(f.dyn, "ocirepositories") // so the GET by name is the fallback (#248)
 	f.dyn.PrependReactor("get", "ocirepositories", func(clienttesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "ocirepositories"}, "ingress-nginx-chart", errors.New("RBAC"))
 	})
@@ -823,5 +826,184 @@ func TestGitOpsDiscoveryFailureIsWorded(t *testing.T) {
 	}
 	if strings.Contains(pe.Error(), "chart sources not read") {
 		t.Errorf("reason %q claims chart sources were unread though neither tool is known to exist", pe.Error())
+	}
+}
+
+// ociFleet is n HelmReleases whose chartRefs point at an OCIRepository of
+// their own, spread over the namespaces given, beside OCIRepositories no
+// HelmRelease uses; served at the stable APIs.
+func ociFleet(t *testing.T, n int, namespaces ...string) gitopsFixture {
+	t.Helper()
+	var crs []runtime.Object
+	for i := range n {
+		ns := namespaces[i%len(namespaces)]
+		crs = append(crs,
+			fluxRelease("v2", ns, fmt.Sprintf("app-%02d", i), map[string]any{
+				"chartRef": map[string]any{"kind": "OCIRepository", "name": fmt.Sprintf("chart-%02d", i)},
+			}),
+			cr("source.toolkit.fluxcd.io/v1", "OCIRepository", ns, fmt.Sprintf("chart-%02d", i), map[string]any{
+				"url": fmt.Sprintf("oci://ghcr.io/acme/charts/chart-%02d", i), "ref": map[string]any{"tag": fmt.Sprintf("1.%d.0", i)},
+			}),
+			cr("source.toolkit.fluxcd.io/v1", "OCIRepository", ns, fmt.Sprintf("manifests-%02d", i), map[string]any{
+				"url": "oci://ghcr.io/acme/manifests", "ref": map[string]any{"tag": "latest"},
+			}))
+	}
+	return newGitOpsFixture(t, []*metav1.APIResourceList{
+		resources("helm.toolkit.fluxcd.io/v2", fluxHelmReleases),
+		resources("source.toolkit.fluxcd.io/v1", fluxOCIRepos),
+	}, crs, helmSecret(t, helmRev{ns: "a", release: "r", rev: 1, status: "deployed", chart: "x", chartVersion: "1.0.0"}))
+}
+
+// ociReads returns the reads of OCIRepositories so far: each list by its
+// namespace ("" cluster-wide) and each GET by namespace/name.
+func ociReads(f gitopsFixture) (lists, gets []string) {
+	for _, a := range f.dyn.Actions() {
+		if a.GetResource().Resource != "ocirepositories" {
+			continue
+		}
+		switch a := a.(type) {
+		case clienttesting.ListAction:
+			lists = append(lists, a.GetNamespace())
+		case clienttesting.GetAction:
+			gets = append(gets, a.GetNamespace()+"/"+a.GetName())
+		}
+	}
+	return lists, gets
+}
+
+// #248: the OCIRepositories chartRefs point at are listed, not fetched one
+// GET each: one list, of their namespace when they share one, else
+// cluster-wide; a forbidden cluster-wide list falls back to one list per
+// namespace that holds one, and a namespace whose list is forbidden too to
+// a GET by name for each of its OCIRepositories, as before. Every chart
+// resolves whichever way it was read, and the unrelated OCIRepositories
+// add nothing.
+func TestGitOpsFluxOCIRepositoriesAreListed(t *testing.T) {
+	forbid := func(f gitopsFixture, namespaces ...string) {
+		f.dyn.PrependReactor("list", "ocirepositories", func(a clienttesting.Action) (bool, runtime.Object, error) {
+			if slices.Contains(namespaces, a.GetNamespace()) {
+				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "ocirepositories"}, "", errors.New("RBAC"))
+			}
+			return false, nil, nil
+		})
+	}
+	cases := []struct {
+		name       string
+		namespaces []string
+		forbid     []string // list namespaces refused ("" cluster-wide)
+		lists      []string
+		gets       int
+	}{
+		{"one namespace: listed there", []string{"apps"}, nil, []string{"apps"}, 0},
+		{"several namespaces: listed cluster-wide", []string{"team-a", "team-b", "team-c"}, nil, []string{""}, 0},
+		{"cluster-wide forbidden: listed per namespace", []string{"team-a", "team-b", "team-c"}, []string{""}, []string{"", "team-a", "team-b", "team-c"}, 0},
+		{"a namespace's list forbidden too: fetched there", []string{"team-a", "team-b", "team-c"}, []string{"", "team-b"}, []string{"", "team-a", "team-b", "team-c"}, 10},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := ociFleet(t, 30, tc.namespaces...)
+			if tc.forbid != nil {
+				forbid(f, tc.forbid...)
+			}
+			inv, err := f.helmStep()
+			pe := partial(t, err)
+			if pe.incomplete {
+				t.Errorf("partial %+v: every chartRef resolves", pe)
+			}
+			if len(inv.GitOpsCharts) != 30 {
+				t.Fatalf("%d charts, want 30", len(inv.GitOpsCharts))
+			}
+			for _, c := range inv.GitOpsCharts {
+				if want := "chart-" + strings.TrimPrefix(c.Name, "app-"); c.Chart != want || c.Version == "" || !strings.HasSuffix(c.Repo, want) {
+					t.Errorf("chart %+v, want %s from its own OCIRepository", c, want)
+				}
+			}
+			lists, gets := ociReads(f)
+			if !slices.Equal(lists, tc.lists) || len(gets) != tc.gets {
+				t.Errorf("lists %q and %d GETs %q; want lists %q and %d GETs", lists, len(gets), gets, tc.lists, tc.gets)
+			}
+			for _, g := range gets {
+				if !strings.HasPrefix(g, "team-b/chart-") {
+					t.Errorf("GET %s: only the namespace whose list is refused is fetched by name", g)
+				}
+			}
+		})
+	}
+}
+
+// #248: a role granted get but not list on OCIRepositories (a namespaced
+// Role, or one written for the agent before #248) refuses the cluster-wide
+// list and each namespace's before the GETs by name: one refused request
+// per namespace plus one, each in the audit log. A GitOpsCache, which the
+// agent keeps across ticks, remembers each refusal, so the ticks after go
+// straight to what worked, and asks again once ForbiddenListRecheck has
+// passed, so a list granted later is used within the hour.
+func TestGitOpsRefusedOCIRepositoryListsAreRememberedAcrossTicks(t *testing.T) {
+	f := ociFleet(t, 30, "team-a", "team-b", "team-c")
+	refused := map[string]bool{"": true, "team-a": true, "team-b": true, "team-c": true} // by namespace, "" cluster-wide
+	f.dyn.PrependReactor("list", "ocirepositories", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if refused[a.GetNamespace()] {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "ocirepositories"}, "", errors.New("RBAC"))
+		}
+		return false, nil, nil
+	})
+	start := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	now := start
+	cache := NewGitOpsCache()
+	cache.now = func() time.Time { return now }
+	all := []string{"", "team-a", "team-b", "team-c"}
+	ticks := []struct {
+		name  string
+		at    time.Duration // since the first tick
+		grant []string      // lists no longer refused from this tick on
+		lists []string      // OCIRepository lists asked for, by namespace
+		gets  int
+	}{
+		{"first tick: every list refused, a GET each", 0, nil, all, 30},
+		{"next tick: no refused list asked again", time.Minute, nil, nil, 30},
+		{"just under the hour: none yet", ForbiddenListRecheck - time.Second, nil, nil, 30},
+		{"an hour on: asked again, refused again", ForbiddenListRecheck, nil, all, 30},
+		{"namespace lists granted: used at the next recheck", 2 * ForbiddenListRecheck, []string{"team-a", "team-b", "team-c"}, all, 0},
+		{"then only the cluster-wide refusal is remembered", 2*ForbiddenListRecheck + time.Minute, nil, []string{"team-a", "team-b", "team-c"}, 0},
+		{"cluster-wide list granted: used at the next recheck", 3 * ForbiddenListRecheck, []string{""}, []string{""}, 0},
+		{"and kept", 3*ForbiddenListRecheck + time.Minute, nil, []string{""}, 0},
+	}
+	for _, tc := range ticks {
+		now = start.Add(tc.at)
+		for _, ns := range tc.grant {
+			delete(refused, ns)
+		}
+		f.dyn.ClearActions()
+		var inv inventory.Inventory
+		pe := partial(t, collectHelmStep(context.Background(), f.clients(), nil, nil, cache, &inv))
+		if pe.incomplete || len(inv.GitOpsCharts) != 30 {
+			t.Fatalf("%s: partial %+v with %d charts, want all 30 resolved", tc.name, pe, len(inv.GitOpsCharts))
+		}
+		if lists, gets := ociReads(f); !slices.Equal(lists, tc.lists) || len(gets) != tc.gets {
+			t.Errorf("%s: lists %q and %d GETs; want lists %q and %d GETs", tc.name, lists, len(gets), tc.lists, tc.gets)
+		}
+	}
+	if len(cache.refused) != 0 {
+		t.Errorf("cache holds refusals %v, want none: every list succeeded since", cache.refused)
+	}
+}
+
+// An OCIRepository a chartRef names that the list does not hold (deleted,
+// or never created) leaves the chartRef unresolved, a gap that says which.
+func TestGitOpsFluxMissingOCIRepositoryIsUnresolved(t *testing.T) {
+	f := ociFleet(t, 3, "team-a", "team-b")
+	if err := f.dyn.Tracker().Delete(schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}, "team-b", "chart-01"); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := f.helmStep()
+	pe := partial(t, err)
+	if len(inv.GitOpsCharts) != 2 || !pe.incomplete || !slices.Equal(pe.skipped, []string{"flux"}) {
+		t.Fatalf("charts %+v, partial %+v: want two charts and flux skipped", inv.GitOpsCharts, pe)
+	}
+	if !strings.Contains(pe.Error(), "1 HelmRelease chartRef(s) not resolved to a chart (ocirepository team-b/chart-01 not found, or names no chart)") {
+		t.Errorf("reason %q: must name the missing OCIRepository", pe.Error())
+	}
+	if _, gets := ociReads(f); len(gets) != 0 {
+		t.Errorf("GETs %q: the list said it is not there", gets)
 	}
 }

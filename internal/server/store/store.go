@@ -73,9 +73,13 @@ type Store interface {
 	// Prune is retention: it deletes evaluations created before cutoff and
 	// then snapshots received before it that no evaluation refers to any
 	// more, except each cluster's latest snapshot and its evaluations (the
-	// cluster's current state, however old). Tokens, clusters and the
+	// cluster's current state, however old) and each (cluster, target)'s
+	// newest decided evaluation (LatestKnownEvaluation: the notification
+	// baseline, of the target itself or of an upgrade), with its snapshot.
+	// baselines limits that last exception to the targets still in use
+	// (PruneBaselines); nil spares every baseline. Tokens, clusters and the
 	// outbox are not touched.
-	Prune(ctx context.Context, cutoff time.Time) (PruneResult, error)
+	Prune(ctx context.Context, cutoff time.Time, baselines PruneBaselines) (PruneResult, error)
 
 	InsertSnapshot(ctx context.Context, s Snapshot) (int64, bool, error) // (id, duplicate, err) — duplicate iff same cluster+hash as latest
 	LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error)
@@ -119,8 +123,9 @@ type Store interface {
 	// b.Cluster set, the cluster is registered or touched in the same
 	// transaction, so a failed commit leaves no cluster row and no
 	// last-seen bump behind. ErrConflict means another writer moved the
-	// cluster on (b.SnapshotID is no longer latest, or b.Current no longer
-	// matches); *ClusterUIDConflictError that b.Cluster's UID is refused.
+	// cluster on (b.SnapshotID is no longer latest, b.Current no longer
+	// matches, or b.Expect no longer holds); *ClusterUIDConflictError that
+	// b.Cluster's UID is refused.
 	CommitEvaluations(ctx context.Context, b EvaluationBatch) (snapshotID int64, duplicate bool, err error)
 
 	// Notification outbox: messages committed with their evaluations,
@@ -233,7 +238,29 @@ type Evaluation struct {
 	// predates the teams column (NULL): no scoped token reads its cluster
 	// until the next pass rewrites it, so the server treats it as stale.
 	TeamsUnknown bool `json:"-"`
+	// CarriesHold is set on read when the report carries a deprecated
+	// caller held after an apiserver restart (CarriesHold), summaries
+	// included, so the background pass knows which evaluations need their
+	// snapshot's inventory without loading a report. Written by the store
+	// from the report, never by the caller; true for a row written by a
+	// binary that predates the column (NULL), which may carry one.
+	CarriesHold bool `json:"-"`
 }
+
+// holdMarker is in every stored report that carries a held deprecated
+// caller: the carried head's field name (the server's findingHead
+// HoldUntil), which a JSON string in the report cannot contain unescaped.
+// Unexported, so no importer can change it; CarriesHold is the question.
+var holdMarker = []byte(`"holdUntil":`)
+
+// CarriesHold reports whether a stored report carries a held deprecated
+// caller (holdMarker): the carries_hold column of report, and the cheap
+// test before a report is decoded for a hold.
+func CarriesHold(report []byte) bool { return bytes.Contains(report, holdMarker) }
+
+// carriesHoldColumn reads the carries_hold column back: NULL, a row
+// written before migration 0009, may carry one.
+func carriesHoldColumn(v sql.NullBool) bool { return !v.Valid || v.Bool }
 
 // teamsColumn is Teams as the teams column stores it: a JSON array of
 // strings, "[]" for none.
@@ -412,6 +439,38 @@ var ErrClusterChanged = errors.New("store: the cluster was renamed or deleted wh
 // registered to another cluster. Test with errors.Is.
 var ErrClusterNameTaken = errors.New("store: cluster name is taken")
 
+// PruneBaselines says, per cluster id, which targets' notification
+// baselines (the newest decided evaluation of a cluster and target) a
+// Prune spares however old they are: a cluster's entry lists the targets
+// its server still evaluates or may look back to for an upgrade; the
+// baselines of its other targets age out like any evaluation. A cluster
+// without an entry keeps every target's, as does a nil PruneBaselines.
+type PruneBaselines map[int64][]string
+
+// baselinePair is a (cluster, target) pair and its newest decided
+// evaluation, as Prune finds them.
+type baselinePair struct {
+	clusterID int64
+	target    string
+	id        int64
+}
+
+// unspared returns the ids of the baselines in pairs that b does not
+// spare.
+func (b PruneBaselines) unspared(pairs []baselinePair) []int64 {
+	var ids []int64
+	for _, p := range pairs {
+		if targets, limited := b[p.clusterID]; limited && !slices.Contains(targets, p.target) {
+			ids = append(ids, p.id)
+		}
+	}
+	return ids
+}
+
+// pruneChunk is how many evaluation ids one DELETE of unspared baselines
+// names.
+const pruneChunk = 500
+
 // PruneResult counts the rows one Prune deleted.
 type PruneResult struct {
 	Snapshots   int64
@@ -451,6 +510,26 @@ type EvaluationBatch struct {
 	// Score, Ready and CreatedAt (the history point) stay.
 	Refresh []Evaluation
 	Outbox  []OutboxMessage
+	// Expect, when set, is what the pass computed its notification deltas
+	// from. The commit checks it in its transaction (compare-and-swap) and
+	// fails with ErrConflict, writing nothing, when another writer has
+	// changed it since, so a delta is never committed against a baseline
+	// that is no longer the newest. A duplicate writes no evaluation and is
+	// not checked.
+	Expect *Expectation
+}
+
+// Expectation is the state one pass read before computing its
+// notification deltas (EvaluationBatch.Expect).
+type Expectation struct {
+	// LatestSnapshotID is the cluster's latest snapshot when the pass
+	// began, 0 for none. Checked only with Snapshot set (a push): the
+	// stored snapshot a re-evaluation judges is SnapshotID.
+	LatestSnapshotID int64
+	// Baselines maps every target whose baseline the pass read to the id
+	// of that target's newest decided evaluation
+	// (LatestKnownEvaluation), 0 for none.
+	Baselines map[string]int64
 }
 
 // OutboxMessage is one notification awaiting delivery to one sink.
@@ -575,6 +654,32 @@ func recheckPush(ctx context.Context, tx *sql.Tx, b EvaluationBatch, tokenQuery 
 	}
 	if err != nil {
 		return fmt.Errorf("check ingest token: %w", err)
+	}
+	return nil
+}
+
+// checkExpectation is CommitEvaluations' compare-and-swap of b.Expect, in
+// the commit's transaction after the writer's lock (SQLite's one write
+// lock, Postgres' cluster row): latestID is the cluster's latest snapshot
+// (0 for none), and knownIDQuery selects the id of a (cluster_id, target)'s
+// newest decided evaluation. Nothing is checked without b.Expect.
+func checkExpectation(ctx context.Context, tx *sql.Tx, b EvaluationBatch, latestID int64, knownIDQuery string) error {
+	if b.Expect == nil {
+		return nil
+	}
+	if b.Snapshot != nil && latestID != b.Expect.LatestSnapshotID {
+		return fmt.Errorf("cluster %d's latest snapshot is %d, not %d: %w", b.ClusterID, latestID, b.Expect.LatestSnapshotID, ErrConflict)
+	}
+	for _, target := range slices.Sorted(maps.Keys(b.Expect.Baselines)) {
+		want := b.Expect.Baselines[target]
+		var got int64
+		err := tx.QueryRowContext(ctx, knownIDQuery, b.ClusterID, target).Scan(&got)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("baseline %s: %w", target, err)
+		}
+		if got != want {
+			return fmt.Errorf("target %s's notification baseline changed (evaluation %d, expected %d): %w", target, got, want, ErrConflict)
+		}
 	}
 	return nil
 }

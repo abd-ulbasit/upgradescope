@@ -293,8 +293,8 @@ func TestCollectAPIUsageMakesNoDeprecatedRequestOn137(t *testing.T) {
 			t.Errorf("listed %v: a deprecated version", gvr)
 		}
 	}
-	if len(self) != 0 {
-		t.Errorf("self-listed = %q, want none", self)
+	if len(self.listed) != 0 || len(self.undiscovered) != 0 {
+		t.Errorf("self-listed = %q, undiscovered %q, want none", self.listed, self.undiscovered)
 	}
 }
 
@@ -323,8 +323,8 @@ func TestCollectAPIUsageReportsItsOwnDeprecatedLists(t *testing.T) {
 	if got := listedGVRs(meta); !reflect.DeepEqual(got, wantLists) {
 		t.Errorf("listed %v, want exactly %v", got, wantLists)
 	}
-	if want := []string{"policy/v1beta1 podsecuritypolicies"}; !reflect.DeepEqual(self, want) {
-		t.Errorf("self-listed = %q, want %q", self, want)
+	if want := []string{"policy/v1beta1 podsecuritypolicies"}; !reflect.DeepEqual(self.listed, want) || len(self.undiscovered) != 0 {
+		t.Errorf("self-listed = %q, undiscovered %q; want %q, none", self.listed, self.undiscovered, want)
 	}
 }
 
@@ -546,6 +546,11 @@ func TestAuthoringManagerIgnoresInternalManagersAndStatusEntries(t *testing.T) {
 		{"kube-apiserver", []metav1.ManagedFieldsEntry{wrote("kube-apiserver", gv)}, nil, ""},
 		{"kube-controller-manager", []metav1.ManagedFieldsEntry{wrote("kube-controller-manager", gv)}, nil, ""},
 		{"apf config producer", []metav1.ManagedFieldsEntry{wrote("api-priority-and-fairness-config-producer-v1", gv)}, nil, ""},
+		// The fourth trusted manager (#239's doc drift): a scheduler built on
+		// the kube-scheduler framework reporting that name is trusted too,
+		// while one with a name of its own is not.
+		{"kube-scheduler", []metav1.ManagedFieldsEntry{wrote("kube-scheduler", gv)}, nil, ""},
+		{"a custom scheduler's own name", []metav1.ManagedFieldsEntry{wrote("my-scheduler", gv)}, nil, "my-scheduler"},
 		{"status subresource", []metav1.ManagedFieldsEntry{{Manager: "operator", APIVersion: gv, Subresource: "status"}}, nil, ""},
 		{"other version", []metav1.ManagedFieldsEntry{wrote("terraform", "flowcontrol.apiserver.k8s.io/v1")}, nil, ""},
 		{"last-applied", nil, lastApplied(gv, "FlowSchema"), "kubectl last-applied"},

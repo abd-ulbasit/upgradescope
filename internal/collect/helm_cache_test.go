@@ -7,7 +7,9 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clienttesting "k8s.io/client-go/testing"
@@ -297,5 +299,92 @@ func TestHelmCacheKeepsADriversEntriesWhenItsListFails(t *testing.T) {
 	}
 	if len(inv.HelmReleases) != 2 {
 		t.Errorf("%d releases, want both", len(inv.HelmReleases))
+	}
+}
+
+// #247: when the Helm step stops at its deadline with releases unread, what
+// it decoded before the deadline is in the cache, so the next tick fetches
+// and decodes only the releases the first left unread. The fake API answers
+// the first ten GETs at once and holds every later one until the step's
+// context is done, so the first tick decodes a prefix of the releases (in
+// key order: decoding is), at most ten, and leaves the rest unread. The
+// hold waits on the step's deadline itself, not on a clock of its own, so
+// however slow the machine no GET past the tenth is answered in time; all
+// the step's share must hold is the first release's GET and decode.
+func TestHelmCacheKeepsWhatAPartialStepDecoded(t *testing.T) {
+	const n = 40
+	var objs []runtime.Object
+	for i := range n {
+		objs = append(objs, helmSecret(t, helmRev{ns: "apps", release: fmt.Sprintf("rel-%02d", i), rev: 1, status: "deployed",
+			chart: "app", chartVersion: "1.0.0", uid: fmt.Sprintf("uid-%d", i), rv: fmt.Sprint(100 + i)}))
+	}
+	// The Helm step's share: the first of ten steps in ten times that. The
+	// nine after it do nothing; they leave the scan most of its time when
+	// the step gives up, so the deadline that stops it is its own, however
+	// long its last fetches take to come back, and the reason says so.
+	const share, nSteps = 500 * time.Millisecond, 10
+	tick := func(cache *HelmCache, hold bool) (inventory.Inventory, []string) {
+		t.Helper()
+		kube, meta := helmClients(t, objs...)
+		// The Helm step's context's Done, set before the step fetches
+		// anything (its fetches run on goroutines it starts after).
+		var stepDone <-chan struct{}
+		ctx := context.Background()
+		if hold {
+			var gets atomic.Int32
+			kube.PrependReactor("get", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
+				if gets.Add(1) > 10 {
+					<-stepDone // until the step's deadline has passed
+				}
+				return false, nil, nil
+			})
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, nSteps*share)
+			defer cancel()
+		}
+		ss := []step{{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
+			stepDone = ctx.Done()
+			return collectHelmStep(ctx, Clients{Kube: kube, Metadata: meta}, nil, cache, nil, inv)
+		}}}
+		for range nSteps - 1 {
+			ss = append(ss, step{cap: inventory.CapCRDs, run: func(context.Context, *inventory.Inventory) error { return nil }})
+		}
+		inv := inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+		runSteps(ctx, &inv, ss)
+		return inv, helmGets(kube)
+	}
+
+	cache := NewHelmCache()
+	first, _ := tick(cache, true)
+	st := first.Capabilities[inventory.CapHelm]
+	if !st.Available || !st.Partial || !strings.Contains(st.Reason, "not read") || !strings.Contains(st.Reason, "step deadline") {
+		t.Fatalf("first tick helm %+v: want partial at the step deadline", st)
+	}
+	decoded := map[string]bool{}
+	for _, r := range first.HelmReleases {
+		decoded["secrets/sh.helm.release.v1."+r.Name+".v1"] = true
+	}
+	if len(decoded) == 0 || len(decoded) == n {
+		t.Fatalf("first tick decoded %d of %d: the fake must stop the step part way", len(decoded), n)
+	}
+	if cache.Len() != len(decoded) {
+		t.Errorf("cache holds %d, want the %d releases the partial step decoded", cache.Len(), len(decoded))
+	}
+
+	second, gets := tick(cache, false)
+	if st := second.Capabilities[inventory.CapHelm]; st.Partial || len(second.HelmReleases) != n {
+		t.Fatalf("second tick helm %+v with %d releases, want all %d", st, len(second.HelmReleases), n)
+	}
+	var want []string
+	for i := range n {
+		if g := fmt.Sprintf("secrets/sh.helm.release.v1.rel-%02d.v1", i); !decoded[g] {
+			want = append(want, g)
+		}
+	}
+	if got := slices.Sorted(slices.Values(gets)); !slices.Equal(got, want) {
+		t.Errorf("second tick fetched %d releases %v\nwant only the %d the first left unread %v", len(got), got, len(want), want)
+	}
+	if cache.Len() != n {
+		t.Errorf("cache holds %d after the second tick, want %d", cache.Len(), n)
 	}
 }

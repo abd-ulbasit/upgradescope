@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,8 +13,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/version"
+	"k8s.io/client-go/discovery"
 	discoveryfake "k8s.io/client-go/discovery/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
@@ -134,6 +137,103 @@ func TestCollect_SelfFeedingDeprecatedCalls(t *testing.T) {
 				if gvr.Resource == "componentstatuses" || gvr.Resource == "endpoints" {
 					t.Errorf("listed %v: deprecated, never removed", gvr)
 				}
+			}
+		})
+	}
+}
+
+// failingDiscovery is discovery that does not get through this scan: with
+// fail nil it fails outright (a stall past the api-usage step's deadline),
+// otherwise it leaves out the group/versions in fail, as a broken
+// aggregated API or a group that timed out does (ErrGroupDiscoveryFailed).
+type failingDiscovery struct {
+	*discoveryfake.FakeDiscovery
+	fail map[schema.GroupVersion]bool
+}
+
+func (d failingDiscovery) ServerGroupsAndResourcesWithContext(ctx context.Context) ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	if d.fail == nil {
+		return nil, nil, context.DeadlineExceeded
+	}
+	groups, lists, err := d.FakeDiscovery.ServerGroupsAndResourcesWithContext(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	gde := &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{}}
+	lists = slices.DeleteFunc(lists, func(l *metav1.APIResourceList) bool {
+		gv, _ := schema.ParseGroupVersion(l.GroupVersion)
+		if d.fail[gv] {
+			gde.Groups[gv] = errors.New("the server is currently unable to handle the request")
+		}
+		return d.fail[gv]
+	})
+	return groups, lists, gde
+}
+
+// #239: the scanner's own deprecated LIST of an earlier scan stays in
+// apiserver_requested_deprecated_apis until the apiserver restarts. When a
+// later scan's discovery does not get through (it stalls, or leaves out the
+// group), api-usage cannot say what the scanner lists there, and that row
+// used to be scored as another client's: a deprecated-api-in-use blocker
+// for the scanner's own traffic. It is withheld instead, and named.
+func TestSelfListedRowsAreNotAttributedWhenDiscoveryFails(t *testing.T) {
+	list := metav1.Verbs{"get", "list"}
+	r := func(name, kind string) metav1.APIResource {
+		return metav1.APIResource{Name: name, Kind: kind, Verbs: list}
+	}
+	deprecated := map[string]string{"policy/v1beta1 podsecuritypolicies": "1.25"}
+	lists := []*metav1.APIResourceList{
+		resources("v1", r("pods", "Pod")),
+		resources("policy/v1", r("poddisruptionbudgets", "PodDisruptionBudget")),
+		resources("policy/v1beta1", r("poddisruptionbudgets", "PodDisruptionBudget"), r("podsecuritypolicies", "PodSecurityPolicy")),
+	}
+	cases := []struct {
+		name string
+		fail map[schema.GroupVersion]bool
+		// the api-usage capability: unavailable, or partial naming PSP
+		apiUsageAvailable bool
+	}{
+		{"discovery fails outright", nil, false},
+		{"discovery leaves out policy/v1beta1", map[schema.GroupVersion]bool{{Group: "policy", Version: "v1beta1"}: true}, true},
+	}
+	k := loadKB(t)
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	target := inventory.Version{Major: 1, Minor: 25}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := selfFeedingClients(t, "v1.24.17", deprecated, lists...)
+			Collect(context.Background(), c, k, Options{}) // lists PSPs at policy/v1beta1, which the metric now shows
+
+			c.Discovery = failingDiscovery{c.Discovery.(*discoveryfake.FakeDiscovery), tc.fail}
+			inv := Collect(context.Background(), c, k, Options{})
+			if !slices.ContainsFunc(inv.DeprecatedCalls, func(d inventory.DeprecatedCall) bool { return d.Resource == "podsecuritypolicies" }) {
+				t.Fatalf("deprecated calls %+v: the fake must serve the earlier scan's PSP row", inv.DeprecatedCalls)
+			}
+			au := inv.Capabilities[inventory.CapAPIUsage]
+			if au.Available != tc.apiUsageAvailable || (au.Available && !slices.Contains(au.Skipped, "policy/v1beta1 PodSecurityPolicy")) {
+				t.Errorf("api-usage %+v: want available %v, and PSP unchecked when available", au, tc.apiUsageAvailable)
+			}
+			dc := inv.Capabilities[inventory.CapDeprecatedCalls]
+			if !dc.Available || !dc.Partial || !slices.Contains(dc.Skipped, "policy/v1beta1 podsecuritypolicies") {
+				t.Errorf("deprecated-calls %+v: want partial, skipping the row it cannot attribute", dc)
+			}
+			if !strings.Contains(dc.Reason, "policy/v1beta1") {
+				t.Errorf("deprecated-calls reason %q: must say which group/version it could not attribute", dc.Reason)
+			}
+			if broad := strings.Contains(dc.Reason, "every row at a group/version where the knowledge base schedules a removal is withheld"); broad != (tc.fail == nil) {
+				t.Errorf("deprecated-calls reason %q: says every removal group/version is withheld: %v, want %v (discovery failed outright)", dc.Reason, broad, tc.fail == nil)
+			}
+			rep := engine.Evaluate(inv, k, target, now)
+			for _, f := range rep.Findings {
+				if f.Category == engine.CatDeprecatedAPIInUse {
+					t.Errorf("finding %s: %s; the row may be the scanner's own", f.Key, f.Detail)
+				}
+			}
+			if rep.Verdict == engine.VerdictBlocked {
+				t.Errorf("verdict blocked (gaps %+v)", rep.NotAssessed)
+			}
+			if !slices.ContainsFunc(rep.NotAssessed, func(g engine.CapabilityGap) bool { return g.Capability == inventory.CapAPIUsage }) {
+				t.Errorf("not assessed %+v: api-usage must stay a gap", rep.NotAssessed)
 			}
 		})
 	}

@@ -377,12 +377,13 @@ func TestRenderedRBACHelmSecretsOff(t *testing.T) {
 
 // #70: the GitOps chart sources are read only when asked for, and only the
 // resources that name a chart: Argo CD Applications, Flux HelmReleases and
-// the OCIRepositories their chartRefs point at (a get by name).
+// the OCIRepositories their chartRefs point at (listed since #248, a get by
+// name where only that is granted).
 func TestRenderedRBACGitOpsOptIn(t *testing.T) {
 	argo := res("argoproj.io", "applications", "get", "list")
 	flux := []rbacv1.PolicyRule{
 		res("helm.toolkit.fluxcd.io", "helmreleases", "get", "list"),
-		res("source.toolkit.fluxcd.io", "ocirepositories", "get"),
+		res("source.toolkit.fluxcd.io", "ocirepositories", "get", "list"),
 	}
 	for _, tc := range []struct {
 		name       string
@@ -407,7 +408,7 @@ func TestRenderedRBACGitOpsOptIn(t *testing.T) {
 				res("argoproj.io", "applicationsets", "get", "list"),
 				res("helm.toolkit.fluxcd.io", "helmreleases", "watch", "create", "update", "patch", "delete"),
 				res("source.toolkit.fluxcd.io", "helmrepositories", "get", "list"),
-				res("source.toolkit.fluxcd.io", "ocirepositories", "list", "watch", "update"),
+				res("source.toolkit.fluxcd.io", "ocirepositories", "watch", "create", "update", "patch", "delete"),
 			)
 			check := assertDenied
 			if tc.argo {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestCollectDeprecatedCalls(t *testing.T) {
 	rc := metricsRESTClient(t, metricsBody)
 
 	var inv inventory.Inventory
-	if err := collectDeprecatedCalls(context.Background(), rc, nil, &inv); err != nil {
+	if err := collectDeprecatedCalls(context.Background(), rc, selfCalls{}, &inv); err != nil {
 		t.Fatal(err)
 	}
 	want := []inventory.DeprecatedCall{
@@ -88,7 +89,7 @@ process_start_time_seconds 1.78592040037e+09
 	want := time.Unix(1785920400, 0).UTC()
 	for name, body := range map[string]string{"with calls": metricsBody + started, "without calls": started} {
 		var inv inventory.Inventory
-		if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), nil, &inv); err != nil {
+		if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), selfCalls{}, &inv); err != nil {
 			t.Fatal(err)
 		}
 		if !inv.APIServerStartTime.Equal(want) || inv.APIServerStartTime.Location() != time.UTC {
@@ -107,7 +108,7 @@ process_start_time_seconds 1.78592040037e+09
 		"two":      gauge + "process_start_time_seconds{a=\"1\"} 1.7e+09\nprocess_start_time_seconds{a=\"2\"} 1.7e+09\n",
 	} {
 		var inv inventory.Inventory
-		if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), nil, &inv); err != nil {
+		if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), selfCalls{}, &inv); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if !inv.APIServerStartTime.IsZero() {
@@ -125,7 +126,7 @@ func TestCollectDeprecatedCallsMarksSelfListedResources(t *testing.T) {
 	self := []string{"v1 componentstatuses"}
 
 	var inv inventory.Inventory
-	err := collectDeprecatedCalls(context.Background(), rc, self, &inv)
+	err := collectDeprecatedCalls(context.Background(), rc, selfCalls{listed: self}, &inv)
 	var pe partialError
 	if !errors.As(err, &pe) || !pe.incomplete || !reflect.DeepEqual(pe.skipped, self) {
 		t.Fatalf("err = %#v, want an incomplete partialError skipping %q", err, self)
@@ -171,7 +172,7 @@ func TestCollectDeprecatedCallsForbidden(t *testing.T) {
 			rc := metricsDenyRESTClient(t, status)
 
 			var inv inventory.Inventory
-			err := collectDeprecatedCalls(context.Background(), rc, nil, &inv)
+			err := collectDeprecatedCalls(context.Background(), rc, selfCalls{}, &inv)
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
@@ -192,7 +193,7 @@ func TestCollectDeprecatedCallsOtherErrorNotRewritten(t *testing.T) {
 	rc := metricsDenyRESTClient(t, http.StatusInternalServerError)
 
 	var inv inventory.Inventory
-	err := collectDeprecatedCalls(context.Background(), rc, nil, &inv)
+	err := collectDeprecatedCalls(context.Background(), rc, selfCalls{}, &inv)
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
@@ -205,10 +206,103 @@ func TestCollectDeprecatedCallsFamilyAbsent(t *testing.T) {
 	rc := metricsRESTClient(t, "# TYPE apiserver_request_total counter\napiserver_request_total{code=\"200\"} 7\n")
 
 	var inv inventory.Inventory
-	if err := collectDeprecatedCalls(context.Background(), rc, nil, &inv); err != nil {
+	if err := collectDeprecatedCalls(context.Background(), rc, selfCalls{}, &inv); err != nil {
 		t.Fatal(err)
 	}
 	if inv.DeprecatedCalls != nil {
 		t.Errorf("calls = %#v, want none when family is absent", inv.DeprecatedCalls)
+	}
+}
+
+// #239: rows at a group/version api-usage's discovery did not show (it
+// failed, or skipped the group) may be an earlier scan's own LISTs: they
+// are withheld and named, the scanner's listed ones kept as they were. A
+// subresource row is someone else's, and a row at another group/version
+// is attributed as always.
+func TestCollectDeprecatedCallsWithholdsRowsDiscoveryCouldNotAttribute(t *testing.T) {
+	body := `# TYPE apiserver_requested_deprecated_apis gauge
+apiserver_requested_deprecated_apis{group="policy",removed_release="1.25",resource="podsecuritypolicies",subresource="",version="v1beta1"} 1
+apiserver_requested_deprecated_apis{group="policy",removed_release="1.25",resource="poddisruptionbudgets",subresource="status",version="v1beta1"} 1
+apiserver_requested_deprecated_apis{group="flowcontrol.apiserver.k8s.io",removed_release="1.32",resource="flowschemas",subresource="",version="v1beta3"} 1
+`
+	self := selfCalls{listed: []string{"coordination.k8s.io/v1beta1 leasecandidates"}, undiscovered: []string{"policy/v1beta1"}}
+	var inv inventory.Inventory
+	err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), self, &inv)
+	var pe partialError
+	if !errors.As(err, &pe) || !pe.incomplete {
+		t.Fatalf("err = %#v, want an incomplete partialError", err)
+	}
+	if want := []string{"coordination.k8s.io/v1beta1 leasecandidates", "policy/v1beta1 podsecuritypolicies"}; !reflect.DeepEqual(pe.skipped, want) {
+		t.Errorf("skipped %q, want %q", pe.skipped, want)
+	}
+	for _, want := range []string{"upgradescope lists coordination.k8s.io/v1beta1 leasecandidates itself", "did not show what upgradescope lists at policy/v1beta1", "policy/v1beta1 podsecuritypolicies may be upgradescope's"} {
+		if !strings.Contains(pe.msg, want) {
+			t.Errorf("reason %q\nmissing %q", pe.msg, want)
+		}
+	}
+	if len(inv.DeprecatedCalls) != 3 {
+		t.Errorf("calls %+v: every row is kept for the engine", inv.DeprecatedCalls)
+	}
+
+	// Discovery got through and the scanner listed nothing deprecated: no gap.
+	if err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), selfCalls{}, &inventory.Inventory{}); err != nil {
+		t.Errorf("err = %v, want nil", err)
+	}
+}
+
+// When api-usage's discovery did not answer at all, every group/version at
+// which the knowledge base schedules a removal is withheld, also one the
+// scanner would never list at (flowcontrol v1beta3 while v1 is served:
+// the scanner lists v1), so another client's real call there is not
+// reported for that scan. The reason must say the withholding is that
+// broad, not only that the rows may be the scanner's.
+func TestDiscoveryFailureWithholdingIsWordedAsBroadAsItIs(t *testing.T) {
+	body := `# TYPE apiserver_requested_deprecated_apis gauge
+apiserver_requested_deprecated_apis{group="flowcontrol.apiserver.k8s.io",removed_release="1.32",resource="flowschemas",subresource="",version="v1beta3"} 1
+apiserver_requested_deprecated_apis{group="policy",removed_release="1.25",resource="podsecuritypolicies",subresource="",version="v1beta1"} 1
+`
+	err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), unknownSelfCalls(loadKB(t).APILifecycle, nil), &inventory.Inventory{})
+	pe := partial(t, err)
+	if want := []string{"flowcontrol.apiserver.k8s.io/v1beta3 flowschemas", "policy/v1beta1 podsecuritypolicies"}; !pe.incomplete || !reflect.DeepEqual(pe.skipped, want) {
+		t.Fatalf("partial %v, skipped %q; want %q withheld", pe.incomplete, pe.skipped, want)
+	}
+	for _, want := range []string{
+		"API discovery did not answer on this scan",
+		"every row at a group/version where the knowledge base schedules a removal is withheld for this scan",
+		"whether or not upgradescope would list there",
+		"whichever client sent it",
+		"flowcontrol.apiserver.k8s.io/v1beta3 flowschemas, policy/v1beta1 podsecuritypolicies are not attributed to any client",
+	} {
+		if !strings.Contains(pe.msg, want) {
+			t.Errorf("reason %q\nmissing %q", pe.msg, want)
+		}
+	}
+
+	// A group discovery skipped withholds that group's rows only, worded as before.
+	self := unknownSelfCalls(loadKB(t).APILifecycle, func(gv schema.GroupVersion) bool { return gv.Group == "policy" })
+	pe = partial(t, collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), self, &inventory.Inventory{}))
+	if !reflect.DeepEqual(pe.skipped, []string{"policy/v1beta1 podsecuritypolicies"}) || strings.Contains(pe.msg, "did not answer") || !strings.Contains(pe.msg, "did not show what upgradescope lists at policy/v1beta1") {
+		t.Errorf("skipped %q, reason %q: want only the skipped group's row, worded as a group discovery skipped", pe.skipped, pe.msg)
+	}
+}
+
+// What api-usage can say before discovery answers: every group/version at
+// which the knowledge base schedules a removal, the only ones the scanner
+// lists at a deprecated version.
+func TestUnknownSelfCallsAreTheRemovalGroupVersions(t *testing.T) {
+	self := unknownSelfCalls(loadKB(t).APILifecycle, nil)
+	for _, want := range []string{"policy/v1beta1", "coordination.k8s.io/v1beta1", "flowcontrol.apiserver.k8s.io/v1beta3"} {
+		if !slices.Contains(self.undiscovered, want) {
+			t.Errorf("undiscovered %q: missing %s", self.undiscovered, want)
+		}
+	}
+	if slices.Contains(self.undiscovered, "v1") || len(self.listed) != 0 {
+		t.Errorf("undiscovered %q, listed %q: core v1 (Endpoints, ComponentStatus) is never removed", self.undiscovered, self.listed)
+	}
+	if got := unknownSelfCalls(loadKB(t).APILifecycle, func(gv schema.GroupVersion) bool { return gv.Group == "policy" }); !reflect.DeepEqual(got.undiscovered, []string{"policy/v1beta1"}) || got.blind {
+		t.Errorf("only policy skipped: undiscovered %q, blind %v; want [policy/v1beta1], not blind", got.undiscovered, got.blind)
+	}
+	if !self.blind {
+		t.Error("no discovery at all: want blind, every removal group/version withheld")
 	}
 }

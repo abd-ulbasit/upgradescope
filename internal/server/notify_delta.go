@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -93,6 +94,7 @@ func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findin
 		}
 	}
 
+	folds := newCarriedFolds(carried)
 	currBlockerCount := 0
 	seenBlockers := map[string]bool{}
 	for _, f := range curr.Findings {
@@ -108,7 +110,7 @@ func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findin
 		// A caller folded into a usage finding of prev splits out of it
 		// when api-usage did not see that API: the carried finding,
 		// seen through the /metrics scrape.
-		if !prevBlockers[k] && !slices.ContainsFunc(carried, func(h findingHead) bool { return engine.FoldsInto(k, h.key()) }) {
+		if !prevBlockers[k] && !folds.folds(k) {
 			changes = append(changes, change(notify.KindNewBlocker, f, target))
 		}
 	}
@@ -135,11 +137,94 @@ func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findin
 	return changes, carried
 }
 
+// carriedFolds indexes the carried API usage findings (removed-api,
+// deprecated-api, unknown-api) by the "group/version/resource" a
+// deprecated caller of their API names, so whether a caller folds into
+// one (engine.FoldsInto) is a lookup, not a comparison with every carried
+// finding: 20,000 new callers against 20,000 carried findings took over
+// a minute inside the ingest slot (#241). Each entry is keyed by every
+// resource name the engine may derive from the finding's kind (the kind
+// itself and its plurals, a superset of what kindMatchesResource
+// accepts), and FoldsInto confirms the match, so the answer is FoldsInto's
+// exactly. One entry per (group, version, lower-cased kind) is kept: the
+// match ignores the kind's case, so at most a handful of kinds share a
+// resource name.
+type carriedFolds map[string][]string
+
+func newCarriedFolds(carried []findingHead) carriedFolds {
+	var idx carriedFolds
+	seen := map[string]bool{}
+	for _, h := range carried {
+		usage := h.key()
+		cat, tail, _ := strings.Cut(usage, "/")
+		switch engine.Category(cat) {
+		case engine.CatRemovedAPI, engine.CatDeprecatedAPI, engine.CatUnknownAPI:
+		default:
+			continue
+		}
+		u := strings.Split(tail, "/") // group/version/Kind
+		if len(u) != 3 || u[0] == "helm-release" || u[2] == "" {
+			continue
+		}
+		kind := strings.ToLower(u[2])
+		if id := u[0] + "/" + u[1] + "/" + kind; seen[id] {
+			continue
+		} else {
+			seen[id] = true
+		}
+		if idx == nil {
+			idx = carriedFolds{}
+		}
+		for _, r := range resourceNames(kind) {
+			key := u[0] + "/" + u[1] + "/" + r
+			idx[key] = append(idx[key], usage)
+		}
+	}
+	return idx
+}
+
+// resourceNames are the resource names a lower-cased kind may go by.
+func resourceNames(kind string) []string {
+	names := []string{kind, kind + "s", kind + "es"}
+	if strings.HasSuffix(kind, "y") {
+		names = append(names, kind[:len(kind)-1]+"ies")
+	}
+	return names
+}
+
+// folds reports whether call, a deprecated caller's key, folds into a
+// carried API usage finding.
+func (idx carriedFolds) folds(call string) bool {
+	if len(idx) == 0 {
+		return false
+	}
+	cat, tail, _ := strings.Cut(call, "/")
+	if engine.Category(cat) != engine.CatDeprecatedAPIInUse {
+		return false
+	}
+	c := strings.SplitN(tail, "/", 4) // group/version/resource[/subresource]
+	if len(c) < 3 {
+		return false
+	}
+	return slices.ContainsFunc(idx[c[0]+"/"+c[1]+"/"+c[2]], func(usage string) bool { return engine.FoldsInto(call, usage) })
+}
+
 // upgradeLookback is how many minors below a new default target
 // upgradeBaseline looks for the cluster's previous one: one for an
 // upgrade the agent pushed on both sides of, more when it missed a push
 // across several upgrades.
 const upgradeLookback = 3
+
+// lookbackTargets are the targets upgradeBaseline looks at for a new
+// default target, nearest first, and the ones retention keeps baselines
+// of besides the targets a server evaluates (retainedBaselines).
+func lookbackTargets(def inventory.Version) []inventory.Version {
+	var out []inventory.Version
+	for minor := def.Minor - 1; minor >= max(def.Minor-upgradeLookback, 0); minor-- {
+		out = append(out, inventory.Version{Major: def.Major, Minor: minor})
+	}
+	return out
+}
 
 // upgradeBaseline is the notification baseline of a default target with
 // no decided evaluation yet, because the cluster upgraded (1.35 → 1.36
@@ -157,17 +242,24 @@ const upgradeLookback = 3
 // one. An extra target's first evaluation stays the silent baseline: a
 // target added to --targets is a new question, and announcing it would
 // page every cluster in the fleet on the restart. ErrNotFound when there
-// is no baseline.
-func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engine.Report) (store.Evaluation, error) {
+// is no baseline. Each lower target it looks up is recorded in read, with
+// the id of its newest decided evaluation (0 for none).
+func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engine.Report, read map[string]int64) (store.Evaluation, error) {
 	server, err := inventory.ParseVersion(cur.ServerVersion)
 	if err != nil || server.Next() != cur.Target {
 		return store.Evaluation{}, store.ErrNotFound
 	}
-	for minor := cur.Target.Minor - 1; minor >= max(cur.Target.Minor-upgradeLookback, 0); minor-- {
-		prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, clusterID, inventory.Version{Major: cur.Target.Major, Minor: minor}.String())
-		if !errors.Is(err, store.ErrNotFound) {
-			return prev, err
+	for _, v := range lookbackTargets(cur.Target) {
+		lower := v.String()
+		prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, clusterID, lower)
+		if errors.Is(err, store.ErrNotFound) {
+			read[lower] = 0
+			continue
 		}
+		if err == nil {
+			read[lower] = prev.ID
+		}
+		return prev, err
 	}
 	return store.Evaluation{}, store.ErrNotFound
 }
@@ -182,6 +274,12 @@ type targetDelta struct {
 	target  notify.Target
 	changes []notify.Change
 	carried []findingHead
+	// baselines are the baselines deltaFor read from the store: each
+	// target it looked up, the upgrade baseline's lower ones included, to
+	// the id of its newest decided evaluation (0 for none). The commit
+	// checks them (store.Expectation), so the delta is never committed
+	// against a baseline another writer replaced meanwhile.
+	baselines map[string]int64
 }
 
 // kindRank orders a notification's changes: blockers first.
