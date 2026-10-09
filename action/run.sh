@@ -244,17 +244,6 @@ go_install() {
 }
 
 install() {
-  command -v go >/dev/null ||
-    die "no release archive for $os/$arch at $1 and no Go toolchain to build it from source; use a published release (https://github.com/abd-ulbasit/upgradescope/releases) or add actions/setup-go before this action"
-  echo "falling back to go install $module@$1"
-  go install "$module@$1"
-  local gobin
-  gobin=$(go env GOBIN)
-  [ -n "$gobin" ] || gobin="$(go env GOPATH)/bin"
-  echo "$gobin" >>"$GITHUB_PATH"
-}
-
-install() {
   if [ "$INPUT_VERSION" = preinstalled ]; then
     command -v upgradescope >/dev/null || die "version is preinstalled, but there is no upgradescope on PATH"
     echo "using $(command -v upgradescope): $(upgradescope --version | sed -n 1p)"
