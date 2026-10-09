@@ -180,7 +180,7 @@ func (s *server) scan(ctx context.Context, _ *mcpsdk.CallToolRequest, in scanInp
 	}
 	// The reports are kept whatever their size, so a scan too large to
 	// send whole can still be read through list_findings.
-	return nil, out, fits(out, "the reports are kept: read them with list_findings and a severity, a category or a limit, with target to pick one")
+	return reportResult(out, "the reports are kept: read them with list_findings and a severity, a category or a limit, with target to pick one")
 }
 
 func (s *server) getReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in sourceInput) (*mcpsdk.CallToolResult, json.RawMessage, error) {
@@ -188,15 +188,23 @@ func (s *server) getReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in so
 	if err != nil {
 		return nil, nil, err
 	}
-	return nil, doc, fits(doc, "ask list_findings for the findings instead, filtered by severity or category, or with a limit")
+	return reportResult(doc, "ask list_findings for the findings instead, filtered by severity or category, or with a limit")
 }
 
 // fits refuses a result too large for a client to receive in one message,
-// saying what to ask for instead.
-func fits(out json.RawMessage, instead string) error {
+// saying what to ask for instead. note is the text block, if any, that the
+// result carries besides the document.
+func fits(out json.RawMessage, note, instead string) error {
 	n, err := wireSize(out)
 	if err != nil {
 		return err
+	}
+	if note != "" {
+		enc, err := json.Marshal(note)
+		if err != nil {
+			return err
+		}
+		n += len(enc)
 	}
 	if n > maxResultBytes {
 		return fmt.Errorf("the result would take %s on the wire, more than an MCP client takes in one message (%s; the result carries its document twice, as structured content and as text): %s",
@@ -276,7 +284,7 @@ func (s *server) listFindings(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return nil, nil, err
 	}
-	return nil, out, fits(out, "narrow it with severity or category, or a smaller limit")
+	return reportResult(out, "narrow it with severity or category, or a smaller limit")
 }
 
 // report resolves which report a tool reads and returns it with the
@@ -452,5 +460,5 @@ func (s *server) fleetSummary(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if d := bytes.TrimSpace(doc); len(d) == 0 || d[0] != '{' || !json.Valid(d) {
 		return nil, nil, errors.New("upgradescope server: the fleet response is not a JSON object (is --server-url an upgradescope server?)")
 	}
-	return nil, doc, fits(doc, "pass fewer targets")
+	return nil, doc, fits(doc, "", "pass fewer targets")
 }

@@ -115,8 +115,10 @@ func TestMCPInventoryFileIsJudgedAsIngestJudgesIt(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("a 70 KiB reason was refused: %.300q", mcpText(res))
 		}
+		// Cut at ingest's limit, then to what a result carries of the
+		// cluster's free text.
 		raw, _ := json.Marshal(res.StructuredContent)
-		if !strings.Contains(string(raw), "…(cut)") {
+		if !strings.Contains(string(raw), "…(cut by upgradescope mcp)") || strings.Contains(string(raw), strings.Repeat("secrets is forbidden; ", 2<<10/22+1)) {
 			t.Errorf("the report does not carry the reason cut")
 		}
 	})
