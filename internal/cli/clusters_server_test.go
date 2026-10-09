@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -133,5 +135,49 @@ func TestClustersAgainstDatabase(t *testing.T) {
 	}
 	if _, err := execClusters(t, "rename", "nope", "x", "--db", db); err == nil || err.Error() != `no cluster "nope"` {
 		t.Errorf("rename unknown: err = %v", err)
+	}
+}
+
+// A load balancer's http→https 301 or 302 turned clusters delete's DELETE
+// (and rename's PATCH) into a GET, which the admin token reads, and the CLI
+// said it had deleted the cluster (#240). The admin client never follows a
+// redirect: every command fails naming the status and Location, and the
+// redirect target is never asked anything.
+func TestClustersRefuseRedirects(t *testing.T) {
+	ts, st := clustersServer(t)
+	var reached []string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = append(reached, r.Method+" "+r.URL.Path)
+		ts.Config.Handler.ServeHTTP(w, r)
+	}))
+	defer target.Close()
+	for _, code := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL+r.URL.Path, code)
+		}))
+		for _, args := range [][]string{
+			{"list", "--read-token", "read-tok"},
+			{"delete", "prod", "--admin-token", "admin-tok"},
+			{"rename", "prod", "prod-eu", "--admin-token", "admin-tok"},
+		} {
+			_, err := execClusters(t, append(args, "--server", redirect.URL)...)
+			if err == nil || !strings.Contains(err.Error(), strconv.Itoa(code)) || !strings.Contains(err.Error(), target.URL) {
+				t.Errorf("%d: clusters %v: err = %v, want a refusal naming the status and the Location", code, args, err)
+			}
+		}
+		redirect.Close()
+	}
+	if len(reached) != 0 {
+		t.Errorf("the redirect target was asked %v, want nothing", reached)
+	}
+	if _, err := st.ClusterByName(context.Background(), "prod"); err != nil {
+		t.Errorf("prod after the refused commands: %v", err)
+	}
+	// Direct, they still work.
+	if _, err := execClusters(t, "rename", "prod", "prod-eu", "--server", ts.URL, "--admin-token", "admin-tok"); err != nil {
+		t.Errorf("direct rename: %v", err)
+	}
+	if _, err := execClusters(t, "delete", "prod-eu", "--server", ts.URL, "--admin-token", "admin-tok"); err != nil {
+		t.Errorf("direct delete: %v", err)
 	}
 }

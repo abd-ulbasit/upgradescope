@@ -44,14 +44,19 @@ type tickReport struct {
 	// markerErr is a status-error marker that could not be cleared after a
 	// status write that succeeded: reported, but not a failed tick.
 	markerErr error
-	duration  time.Duration
-	caps      map[inventory.Capability]inventory.CapabilityStatus
-	reports   []engine.Report // one per evaluated target, in target order
+	// crdErr is a CRD schema check that failed (retried every tick until
+	// it succeeds): reported, but not a failed tick.
+	crdErr   error
+	duration time.Duration
+	caps     map[inventory.Capability]inventory.CapabilityStatus
+	reports  []engine.Report // one per evaluated target, in target order
 }
 
 // tickTimeout bounds one tick: half the interval, at most 5m. client-go's
 // HTTP/2 health checks and the apiserver's request timeout already bound
 // most calls; this is the backstop that keeps the loop moving regardless.
+// Collection gets this minus the tick reserve (tickReserve), which the
+// status write, its marker and the push keep.
 func tickTimeout(interval time.Duration) time.Duration {
 	return min(interval/2, 5*time.Minute)
 }
@@ -155,12 +160,15 @@ func (o *observer) record(rep tickReport) {
 	if rep.markerErr != nil {
 		attrs = append(attrs, "statusErrorMarker", rep.markerErr.Error())
 	}
+	if rep.crdErr != nil {
+		attrs = append(attrs, "crdError", rep.crdErr.Error())
+	}
 	switch {
 	case rep.err != nil:
 		o.log.Error(msgTickFailed, append([]any{"err", rep.err}, attrs...)...)
 	case rep.pushErr != nil:
 		o.log.Warn(msgTickComplete, append(attrs, "pushError", rep.pushErr.Error())...)
-	case rep.markerErr != nil:
+	case rep.markerErr != nil, rep.crdErr != nil:
 		o.log.Warn(msgTickComplete, attrs...)
 	default:
 		o.log.Info(msgTickComplete, attrs...)

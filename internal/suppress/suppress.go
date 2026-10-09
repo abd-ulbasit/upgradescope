@@ -196,6 +196,16 @@ type Options struct {
 // matches. A finding all of whose objects are taken, none omitted, leaves
 // Findings; otherwise it stays, with the remaining objects and a note.
 //
+// The deprecated-API callers folded into an API usage finding
+// (Finding.Callers) are evidence about clients, not about its objects:
+// only a rule without object selectors that takes the finding takes them
+// too. When object selectors or annotations take every object, each
+// caller stands as the deprecated-api-in-use finding it is on its own
+// (engine.Caller.Finding), at its own severity, and is matched against the
+// rules like any finding, so a rule for its key or category, without
+// selectors, still suppresses it. Fail closed: the client calling the
+// removed API may not be the one that wrote the suppressed objects.
+//
 // The returned warnings name expired rules (which do not apply), invalid
 // rules (skipped), and annotations without a reason (not applied).
 func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string) {
@@ -216,8 +226,12 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 	findings := make([]engine.Finding, 0, len(r.Findings))
 	var suppressed []engine.SuppressedFinding
 	warned := map[string]bool{}
-	for _, f := range r.Findings {
-		kept, taken, warns := applyFinding(f, active, opts)
+	reemitted := false
+	queue := slices.Clone(r.Findings)
+	for len(queue) > 0 {
+		f := queue[0]
+		queue = queue[1:]
+		kept, taken, callers, warns := applyFinding(f, active, opts)
 		for _, w := range warns {
 			if !warned[w] {
 				warned[w] = true
@@ -228,9 +242,16 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 			findings = append(findings, *kept)
 		}
 		suppressed = append(suppressed, taken...)
+		for _, c := range callers {
+			reemitted = true
+			queue = append(queue, c.Finding()) // judged by the rules in turn
+		}
 	}
 	if len(suppressed) == 0 {
 		return r, warnings
+	}
+	if reemitted {
+		engine.SortFindings(findings)
 	}
 	r.Findings = findings
 	r.Suppressed = append(slices.Clone(r.Suppressed), suppressed...)
@@ -243,11 +264,13 @@ type group struct {
 	reason, source, expires string
 	objects                 []inventory.ObjectRef
 	whole                   bool // also took unlisted objects (or an objectless finding)
+	all                     bool // a rule without object selectors: it takes the callers too
 }
 
-// applyFinding splits f into what stays (nil when nothing does) and what
-// is suppressed.
-func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding, []engine.SuppressedFinding, []string) {
+// applyFinding splits f into what stays (nil when nothing does), what is
+// suppressed, and the callers folded into f that stand on their own
+// because object selectors or annotations took all of f (see Apply).
+func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding, []engine.SuppressedFinding, []engine.Caller, []string) {
 	var groups []*group
 	var warnings []string
 	remaining := f.Objects
@@ -262,7 +285,7 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 		g := &group{reason: rule.Reason, source: opts.Source, expires: rule.Expires}
 		switch {
 		case rule.Namespace == "" && rule.Name == "" && rule.File == "":
-			g.objects, remaining, g.whole = remaining, nil, true
+			g.objects, remaining, g.whole, g.all = remaining, nil, true, true
 		case len(f.Objects) == 0:
 			// Namespaces the finding does not list (NamespacesOmitted)
 			// cannot be shown to match, so a namespace rule takes it
@@ -300,10 +323,11 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 	}
 
 	if len(groups) == 0 {
-		return &f, nil, warnings
+		return &f, nil, nil, warnings
 	}
 	out := make([]engine.SuppressedFinding, 0, len(groups))
 	listed := 0
+	callersTaken := false
 	for _, g := range groups {
 		sf := engine.SuppressedFinding{Finding: f, Reason: g.reason, Source: g.source, Expires: g.expires}
 		sf.Objects = g.objects
@@ -311,11 +335,20 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 		if g.whole {
 			sf.ObjectsOmitted = f.ObjectsOmitted
 		}
+		// The callers go with the rule without selectors that took them,
+		// and stay with f (or on their own) otherwise.
+		sf.Callers = nil
+		if g.all {
+			sf.Callers, callersTaken = f.Callers, true
+		}
 		listed += len(g.objects)
 		out = append(out, sf)
 	}
 	if whole || len(remaining) == 0 && f.ObjectsOmitted == 0 {
-		return nil, out, warnings
+		if callersTaken {
+			return nil, out, nil, warnings
+		}
+		return nil, out, f.Callers, warnings
 	}
 	f.Objects = remaining
 	// listed counts what the rules and annotations took from the refs f
@@ -323,7 +356,7 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 	// afterwards: the sentence says how many objects were suppressed, not
 	// how many of them the answer lists.
 	f.Detail = strings.TrimSpace(fmt.Sprintf("%s %d object(s) suppressed (see suppressed).", f.Detail, listed))
-	return &f, out, warnings
+	return &f, out, nil, warnings
 }
 
 // matches reports whether object o satisfies every selector of r.

@@ -69,7 +69,7 @@
             "name": "gpu.example.com"
           }
         ],
-        "remediation": "migrate to resource.k8s.io/v1 DeviceClass",
+        "remediation": "no replacement Kubernetes 1.32 serves is known; resource.k8s.io/v1 DeviceClass is served from 1.34",
         "severity": "info",
         "title": "resource.k8s.io/v1alpha3 DeviceClass deprecated in 1.34, after target 1.32 (1 object)"
       },
@@ -145,7 +145,7 @@
             "name": "gpu.example.com"
           }
         ],
-        "remediation": "migrate to resource.k8s.io/v1 DeviceClass",
+        "remediation": "no replacement Kubernetes 1.33 serves is known; resource.k8s.io/v1 DeviceClass is served from 1.34",
         "severity": "warning",
         "title": "resource.k8s.io/v1alpha3 DeviceClass removed in 1.34 (1 object)"
       }

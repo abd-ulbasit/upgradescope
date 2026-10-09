@@ -23,7 +23,8 @@ them owns a namespace in (by the namespace attribution findings carry,
 after `--team-map`), and of those only their findings, suppressed
 findings and team scores. A finding that spans teams is cut to theirs:
 only their teams, namespaces and objects, its title counting only
-theirs and its detail replaced by one that names only what is kept.
+theirs and its detail replaced by one that names only what is kept,
+without the folded apiserver caller rows (`callers`).
 A scoped report has no `unrecognizedImages`, and the helm
 capability's reason and skipped list (which name releases as
 namespace/name) are withheld. Any other cluster answers the same 404 as an
@@ -296,7 +297,7 @@ Auth: `readToken` (bearer).
 
 **Per-team scores.** The score formula applied to each team's findings, from the same
 report the report endpoint serves. Findings with no team are under
-`unattributed`.
+`(unattributed)`, a name no label value can take and `--team-map` refuses, so a real team called `unattributed` is a separate row.
 
 Auth: `readToken` (bearer).
 
@@ -345,9 +346,18 @@ Auth: `readToken` (bearer).
 **Per-team rollup across the fleet.** For one target, each team's worst score, total blockers and the
 clusters it has findings in. Each cluster contributes its stored
 evaluation, else a what-if from its latest snapshot (`evaluated`
-says which); clusters without a snapshot, or whose what-if report
-would be over `--max-snapshot-bytes`, are `missing`, and clusters
-that already run the target are `notApplicable`.
+says which). Clusters left out are named in `missing` and, with the
+reason, in `excluded`: `no-snapshot` (the agent has not pushed
+one), `too-large` (the what-if report would be over
+`--max-snapshot-bytes`) or `unreadable` (the stored inventory does
+not decode). Clusters that already run the target are
+`notApplicable`.
+
+A team's `verdict` is the worst of its verdicts in the clusters
+evaluated: `blocked` over `unknown` over `ready`. Its score and
+blockers count only its own findings, so a team with a clean score
+can still be blocked by a blocker no team owns, or unknown because
+a required check did not run.
 
 Auth: `readToken` (bearer).
 
@@ -758,6 +768,7 @@ whole.
 | `objects` | array of [ObjectRef](#objectref) | no | — |
 | `objectsOmitted` | integer | no | Affected objects not listed. |
 | `baselineState` | `new` \| `unchanged` | no | — |
+| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. A team-scoped read omits them from a finding it cuts to its teams. |
 
 ### FindingFields
 
@@ -776,6 +787,20 @@ whole.
 | `objects` | array of [ObjectRef](#objectref) | no | — |
 | `objectsOmitted` | integer | no | Affected objects not listed. |
 | `baselineState` | `new` \| `unchanged` | no | — |
+| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. A team-scoped read omits them from a finding it cuts to its teams. |
+
+### Caller
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `group` | string | no | Absent for the core group. |
+| `version` | string | yes | — |
+| `resource` | string | yes | — |
+| `subresource` | string | no | — |
+| `key` | string | yes | The key of the caller's own deprecated-api-in-use finding. |
+| `severity` | [Severity](#severity) | yes | — |
+| `title` | string | yes | — |
+| `detail` | string | yes | — |
 
 ### SuppressedFinding
 
@@ -794,6 +819,7 @@ whole.
 | `objects` | array of [ObjectRef](#objectref) | no | — |
 | `objectsOmitted` | integer | no | Affected objects not listed. |
 | `baselineState` | `new` \| `unchanged` | no | — |
+| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. A team-scoped read omits them from a finding it cuts to its teams. |
 | `reason` | string | yes | Why the finding is accepted. |
 | `source` | string | yes | What suppressed it: the config file, annotation, or spec.ignore. |
 | `expires` | string | no | YYYY-MM-DD, as the rule gave it. |
@@ -810,7 +836,7 @@ whole.
 
 ### TeamScores
 
-Team name to score; findings with no team are under `unattributed`.
+Team name to score; findings with no team are under `(unattributed)`, a name no label value can take and `--team-map` refuses, so a real team called `unattributed` is a separate row.
 
 Type: map of [TeamScore](#teamscore).
 
@@ -961,6 +987,7 @@ are not known. The same for every target.
 | `at` | string (date-time) | yes | — |
 | `score` | integer | yes | — |
 | `ready` | boolean | yes | — |
+| `verdict` | [Verdict](#verdict) | no | The evaluation's verdict. A score can't tell `unknown` from `ready` (an evaluation whose required check did not run can score 100), so draw the trend by this. Absent from servers that predate it. |
 
 ### FleetCell
 
@@ -1003,7 +1030,16 @@ are not known. The same for every target.
 |---|---|---|---|
 | `worstScore` | integer | yes | — |
 | `blockers` | integer | yes | — |
+| `verdict` | [Verdict](#verdict) | yes | The worst of the team's verdicts across the clusters, `blocked` over `unknown` over `ready`. Never read the score without it. |
 | `clusters` | array of string | yes | — |
+
+### FleetExcluded
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | — |
+| `clusterId` | integer (int64) | yes | — |
+| `reason` | `no-snapshot` \| `too-large` \| `unreadable` | yes | `no-snapshot`: the agent has not pushed one. `too-large`: the cluster has snapshots, but its report for the target would be over `--max-snapshot-bytes`. `unreadable`: its stored inventory does not decode (or the cluster went away mid-request). |
 
 ### FleetTeamsSource
 
@@ -1022,7 +1058,8 @@ are not known. The same for every target.
 | `target` | [Target](#target) | yes | — |
 | `teams` | map of [FleetTeam](#fleetteam) | yes | — |
 | `evaluated` | array of [FleetTeamsSource](#fleetteamssource) | yes | — |
-| `missing` | array of string | yes | — |
+| `missing` | array of string | yes | The names of every cluster left out of the rollup, whatever the reason; `excluded` says why. |
+| `excluded` | array of [FleetExcluded](#fleetexcluded) | yes | — |
 | `notApplicable` | array of string | yes | — |
 
 ### GateFinding
@@ -1042,6 +1079,7 @@ are not known. The same for every target.
 | `objects` | array of [ObjectRef](#objectref) | no | — |
 | `objectsOmitted` | integer | no | Affected objects not listed. |
 | `baselineState` | `new` \| `unchanged` | no | — |
+| `callers` | array of [Caller](#caller) | no | API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own. A team-scoped read omits them from a finding it cuts to its teams. |
 | `source` | `manifest` \| `cluster` | yes | manifest: introduced by the posted manifests; cluster: the cluster already has it. |
 
 ### GateResponse

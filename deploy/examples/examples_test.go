@@ -233,3 +233,25 @@ func skipsAuth(t *testing.T, routes []string, method, uri string) bool {
 	}
 	return false
 }
+
+// serve checks the Host of every request in trusted-header mode (#240).
+// oauth2-proxy v7.15.5 forwards the client's Host unless
+// --pass-host-header=false, which makes it send the upstream's,
+// 127.0.0.1:<port>, a loopback address serve always answers for: the
+// browser's Ingress host, the Service name agents use and the pod IP the
+// kubelet probes all reach serve as that, and no --allowed-host is needed.
+func TestOAuth2ProxyExampleSendsTheUpstreamHost(t *testing.T) {
+	deploys, _ := decodeAll(t, "oauth2-proxy/upgradescope-oauth2-proxy.yaml")
+	proxy := container(t, deploys[0], "oauth2-proxy")
+	if !slices.Contains(proxy.Args, "--pass-host-header=false") {
+		t.Errorf("oauth2-proxy args lack --pass-host-header=false: serve would get the client's Host and answer it 421")
+	}
+	for _, a := range proxy.Args {
+		if v, ok := strings.CutPrefix(a, "--upstream="); ok {
+			u, err := url.Parse(v)
+			if err != nil || u.Hostname() != "127.0.0.1" {
+				t.Errorf("--upstream %q: want http://127.0.0.1:<port>/, a Host serve answers for", v)
+			}
+		}
+	}
+}

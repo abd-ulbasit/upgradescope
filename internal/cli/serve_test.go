@@ -255,7 +255,11 @@ func TestServeSecretsFromEnvAndFiles(t *testing.T) {
 	files := map[string]string{}
 	for _, name := range []string{"ingest-token", "read-token", "slack-webhook", "webhook", "db-url"} {
 		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, []byte("file-"+name+"\n"), 0o600); err != nil {
+		v := "file-" + name
+		if name == "slack-webhook" || name == "webhook" {
+			v = "https://" + name + ".test/file" // a URL: serve checks it
+		}
+		if err := os.WriteFile(p, []byte(v+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		files[name] = p
@@ -268,7 +272,7 @@ func TestServeSecretsFromEnvAndFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.ingestToken != "flag-ingest" || got.readToken != "file-read-token" ||
-		got.slackWebhook != "file-slack-webhook" || got.webhook != "file-webhook" ||
+		got.slackWebhook != "https://slack-webhook.test/file" || got.webhook != "https://webhook.test/file" ||
 		got.dbURL != "file-db-url" {
 		t.Fatalf("file/flag precedence wrong: %+v", got)
 	}

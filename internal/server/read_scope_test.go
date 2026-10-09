@@ -627,6 +627,58 @@ func TestScopeCutsSuppressedFindings(t *testing.T) {
 	}
 }
 
+// A cut finding, open or suppressed, carries none of its folded apiserver
+// caller rows: they are cluster-wide evidence about clients the metric
+// attributes to no namespace or team, a scoped read is shown no
+// standalone caller row, and the cut detail drops their sentence. A
+// finding of the scope's teams only is not cut and keeps its callers, as
+// its detail keeps their sentence; the fleet-wide read keeps them all.
+func TestScopeCutDropsFoldedCallers(t *testing.T) {
+	ns := map[string]string{"pay-prod": "payments", "web-prod": "web"}
+	callers := []engine.Caller{{
+		Group: "extensions", Version: "v1beta1", Resource: "ingresses", Key: "deprecated-api-in-use/extensions/v1beta1/ingresses",
+		Severity: engine.SevBlocker, Title: "extensions/v1beta1 ingresses requested", Detail: "web-client-secret requests",
+	}}
+	payObj := inventory.ObjectRef{Namespace: "pay-prod", Name: "pay-obj"}
+	webObj := inventory.ObjectRef{Namespace: "web-prod", Name: "web-obj"}
+	finding := func(key string, teams, namespaces []string, objects ...inventory.ObjectRef) engine.Finding {
+		return engine.Finding{
+			Category: engine.CatRemovedAPI, Severity: engine.SevBlocker, Key: key, Title: "x removed (2 objects)",
+			Detail: "2 object(s) still stored/served at this version. apiserver_requested_deprecated_apis also records requests to extensions/v1beta1 ingresses.",
+			Teams:  teams, Namespaces: namespaces, Objects: objects, Callers: callers,
+		}
+	}
+	spans := finding("removed-api/spans", []string{"payments", "web"}, []string{"pay-prod", "web-prod"}, payObj, webObj)
+	own := finding("removed-api/own", []string{"payments"}, []string{"pay-prod"}, payObj)
+	rep := engine.Report{
+		Findings:   []engine.Finding{spans, own},
+		Suppressed: []engine.SuppressedFinding{{Finding: spans, Reason: "accepted", Source: "annotation"}},
+	}
+
+	full := fleetScope.report(rep, ns)
+	if len(full.Findings) != 2 || len(full.Findings[0].Callers) != 1 || len(full.Suppressed) != 1 || len(full.Suppressed[0].Callers) != 1 {
+		t.Fatalf("fleet-wide read lost callers: %+v", full)
+	}
+	got := scopeOfTeams([]string{"payments"}).report(rep, ns)
+	if len(got.Findings) != 2 || len(got.Suppressed) != 1 {
+		t.Fatalf("payments: %d findings, %d suppressed, want 2 and 1: %+v", len(got.Findings), len(got.Suppressed), got)
+	}
+	for _, f := range []engine.Finding{got.Findings[0], got.Suppressed[0].Finding} {
+		if f.Key != "removed-api/spans" {
+			t.Fatalf("unexpected order: %+v", got)
+		}
+		if f.Callers != nil {
+			t.Errorf("a cut finding carries %d caller row(s): %+v", len(f.Callers), f.Callers)
+		}
+		if raw, _ := json.Marshal(f); bytes.Contains(raw, []byte("callers")) || bytes.Contains(raw, []byte("web-client-secret")) {
+			t.Errorf("a cut finding's JSON has caller evidence: %s", raw)
+		}
+	}
+	if f := got.Findings[1]; f.Key != "removed-api/own" || len(f.Callers) != 1 || f.Detail != own.Detail {
+		t.Errorf("payments' own finding = %+v, want it uncut with its caller", f)
+	}
+}
+
 // A finding whose namespace list the engine capped is cut for a scoped
 // read even when every namespace and object it lists is the scope's: the
 // namespaces it does not list may be no team's or another's, so its
@@ -847,6 +899,7 @@ func TestTrustedTeamHeader(t *testing.T) {
 		// The same request from inside the range is trusted.
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/clusters", nil)
 		req.RemoteAddr = "10.1.2.3:41000"
+		req.Host = "localhost" // a name the Host guard answers for (httptest's default is example.com)
 		req.Header.Set(header, "web")
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)

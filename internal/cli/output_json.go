@@ -17,7 +17,7 @@ const reportSchemaVersion = engine.ReportSchemaVersion
 // trailing newline. This is the machine-readable contract; field names come
 // from the engine.Report struct tags and must stay stable (see
 // reportSchemaVersion). schemaVersion and toolVersion lead the object. A
-// `teams` field (per-team scores, teamless bucket keyed "unattributed") is
+// `teams` field (per-team scores, teamless bucket keyed "(unattributed)") is
 // added at presentation time when any finding exists — it is computed here,
 // never stored in the engine report.
 func WriteJSON(w io.Writer, r engine.Report) error {
@@ -41,17 +41,15 @@ func writeJSON(w io.Writer, r engine.Report, filesBase *string) error {
 }
 
 // teamScoresForOutput computes presentation-time team scores, renaming the
-// engine's teamless "" bucket to "unattributed" (unless a real team already
-// claims that name — then the "" key is kept rather than merging scores).
+// engine's teamless "" bucket to engine.UnattributedTeam, a name no label
+// value can take, so a real team called "unattributed" is a separate row.
 func teamScoresForOutput(r engine.Report) map[string]engine.TeamScore {
 	scores := engine.TeamScores(r)
 	ts, ok := scores[""]
 	if !ok {
 		return scores
 	}
-	if _, taken := scores["unattributed"]; !taken {
-		delete(scores, "")
-		scores["unattributed"] = ts
-	}
+	delete(scores, "")
+	scores[engine.UnattributedTeam] = ts
 	return scores
 }

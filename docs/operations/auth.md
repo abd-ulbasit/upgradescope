@@ -19,7 +19,9 @@ team called `*` is read as the team `(*)` (serve logs a warning at
 startup and keeps serving), so mint its token with `--teams '(*)'`. A
 map that also names a team `(*)` makes the two one team, and the
 warning says so: rename one to keep them apart. A namespace label value
-cannot be `*`.
+cannot be `*`. A `--team-map` team cannot be `(unattributed)` either: that
+is the name of the findings no team owns, and serve refuses a map that uses
+it.
 
 ## Read credentials
 
@@ -37,6 +39,61 @@ All tokens are sent as `Authorization: Bearer <token>`. Once
 `--read-token` is set, a read token has been minted or the trusted header
 is configured, a request that presents no valid credential gets `401`. `serve` refuses an open read API on an address that is not
 loopback unless `--allow-anonymous-read` is set.
+
+`--read-token` must differ from `--ingest-token` (and both from
+`--admin-token`): `serve` refuses to start otherwise, since one bearer
+would let every agent read the whole fleet and every reader push as any
+cluster.
+
+## The Host check (DNS rebinding)
+
+A web page can point its own name at your loopback address: a page on
+`attacker.example` makes `attacker.example` resolve to `127.0.0.1`
+(DNS rebinding), and its requests then reach a server on the browser's
+machine as same-origin requests that carry `Host: attacker.example`.
+Two kinds of request need no credential to read: an open read API, which
+`serve` allows only on loopback, and the trusted team header, which is
+trusted from every connection out of a `--trusted-proxy-cidr` address,
+`kubectl port-forward`'s included (it delivers the browser's
+connections to the pod from `127.0.0.1`, Host unchanged). So when
+`serve` **listens on loopback, or `--trust-team-header` is set**, it
+answers a request only when its Host names one of:
+
+- `localhost`, or a loopback address (`127.0.0.0/8`, `::1`);
+- the address the request arrived on, as an IP literal: the kubelet's
+  probes and Prometheus' scrapes name the pod's IP, so no endpoint needs
+  an exemption;
+- the `--listen` host, unless it is `0.0.0.0` or `::` (an address to
+  bind, not one clients reach);
+- a name given with `--allowed-host` (repeatable or comma separated, or
+  `$UPGRADESCOPE_ALLOWED_HOSTS` when the flag is not given): the
+  Service, Ingress or proxy name clients use.
+
+Any port matches: a rebinding page needs a name its owner controls, and
+the port differs from the listen port wherever a tunnel or a Service
+maps it (`kubectl port-forward 9000:8080` sends `Host: localhost:9000`).
+Every other request gets `421 Misdirected Request` before any route,
+token, team header or scope is looked at, `/healthz`, ingest and the
+dashboard included. Each refusal is counted in `/metrics`
+(`upgradescope_http_requests_total{route="host-refused",code="421"}`)
+and logged at most once a minute, with the Host quoted and escaped, so
+a name clients use but serve was not given shows up in the log. On a
+routable address with a read credential and no trusted header nothing
+changes: any Host is answered, since every read needs a token a page
+does not have.
+
+The chart passes `--allowed-host` with the server Service's DNS names
+(`<release>-server`, `.<namespace>`, `.<namespace>.svc` and
+`.<namespace>.svc.<clusterDomain>`, `cluster.local` unless you set the
+`clusterDomain` value; for a long release, the Service name as cut to 63
+characters, the name the Service has), `server.ingress.host` and
+`server.allowedHosts`, so turning the check on (`--trust-team-header` in
+`server.extraArgs`) breaks no push, Ingress or Service client. A proxy in
+front sends either its upstream's Host (oauth2-proxy
+`--pass-host-header=false`, as the [example](#example-oauth2-proxy-as-a-sidecar)
+does) or the client's, which must then be an `--allowed-host`.
+Cross-origin protection (`http.NewCrossOriginProtection`) is no defence
+here: a rebound request is same-origin, and it exempts `GET`.
 
 ## Team-scoped read tokens
 
@@ -106,7 +163,9 @@ counts payments' objects ("(1 object in scope)") when the finding listed
 every object, and otherwise drops the count. Its detail, which the engine
 writes about everything the finding covers (each namespace's count, the
 managers writing the objects, the add-on installs), is replaced by a
-sentence that names the namespaces kept and says the rest is not shown.
+sentence that names the namespaces kept and says the rest is not shown,
+and its `callers` (the apiserver caller rows folded into it, which the
+metric attributes to no namespace or team) are dropped with that detail.
 The engine caps a finding's lists (100 namespaces, 100 objects) before
 anyone reads it, and what the cap dropped cannot be divided by team, so
 a cut finding counts none omitted and says more of the scope's may be
@@ -305,8 +364,10 @@ The chart has no values for the trusted header yet: add
 `--trust-team-header` and `--trusted-proxy-cidr` with your own manifest
 (the [example](#example-oauth2-proxy-as-a-sidecar)) or a post-renderer.
 Read tokens minted with `tokens create --read` work with the chart as it
-is (`kubectl exec deploy/<release>-server -- /upgradescope tokens create
---read --teams payments --db /data/upgradescope.sqlite`). Its Ingress
+is (`kubectl exec deploy/<fullname>-server -- /upgradescope tokens create
+--read --teams payments --db /data/upgradescope.sqlite`, where `<fullname>`
+is the release name plus `-upgradescope`, cut to 63 characters, or the
+release name alone when it contains `upgradescope`). Its Ingress
 guard knows only `server.readToken` and `server.ingress.allowAnonymousRead`:
 a deployment that relies on minted tokens alone sets
 `server.ingress.allowAnonymousRead=true`, which passes
@@ -382,7 +443,7 @@ The two flags go together, and the mode is off by default.
 
 !!! danger "When header mode is safe"
     The server trusts whatever arrives from a trusted address. Header
-    mode is safe only when **both** hold:
+    mode is safe only when **all three** hold:
 
     1. **The server is reachable only through the proxy.** Listen on
        loopback (`--listen 127.0.0.1:8080`) with the proxy in the same
@@ -397,6 +458,28 @@ The two flags go together, and the mode is off by default.
        authenticated or not, and then sets it from the signed-in session
        only. A proxy that passes a client's `X-Forwarded-Groups` on (or
        appends to it) lets that client read any team it names.
+    3. **Nobody who may not read a team can name a group that reads as
+       it.** The header is a comma-separated list, and oauth2-proxy
+       v7.15.5 joins a session's groups with commas without encoding them
+       (`flattenHeaders` in
+       [`pkg/middleware/headers.go`](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.15.5/pkg/middleware/headers.go)
+       joins the values it injects). So a single group named
+       `interns,payments` sends exactly what membership of `interns` and
+       `payments` sends, and the server cannot tell them apart; a group
+       named `pay%6Dents` decodes to `payments`. Only a space or tab
+       around an entry is trimmed, so `payments` followed by a no-break
+       space stays another team. Group naming in the identity provider is
+       therefore part of the trust boundary: where users can create or
+       rename groups (Keycloak groups, GitHub teams through Dex, Okta
+       self-service groups), anyone who can name a group can read any team
+       whose name they know (never the whole fleet: `*` is a team). Filter
+       the claim so that only groups operators control reach the header:
+       at the identity provider (a mapper or client scope that emits the
+       chosen groups only) or at the connector (Dex's GitHub connector
+       lists the teams it passes in `orgs[].teams`). oauth2-proxy's
+       `--allowed-group` does not filter the claim: it only decides who may
+       sign in (`Authorize` in its `providers/provider_default.go`), and
+       the header still carries every group of the session.
 
     oauth2-proxy v7.15.5, which the example pins, does both halves of
     (2) with `--pass-user-headers=true --skip-auth-strip-headers=true`:
@@ -440,6 +523,10 @@ The two flags go together, and the mode is off by default.
       team they can name (never the whole fleet: `*` is a team). Treat
       that permission as read access to every team, or keep it to the
       people who already have it.
+    - A web page cannot ride that port-forward: the
+      [Host check](#the-host-check-dns-rebinding) answers a request
+      whose Host is not `localhost`, a loopback or the pod's own address
+      (or an `--allowed-host`) `421`, before the header is read.
     - A service-mesh sidecar (Istio, Linkerd and others) that delivers
       inbound traffic to the application over localhost makes every
       client, inside or outside the cluster, `127.0.0.1`: the header
@@ -450,7 +537,8 @@ The two flags go together, and the mode is off by default.
 Map identity-provider groups to team names: the header's values are
 compared with the teams namespaces are attributed to, exactly, after
 decoding. With oauth2-proxy, `--oidc-groups-claim` picks the claim and
-`--allowed-group` limits who may sign in at all.
+`--allowed-group` limits who may sign in at all; it does not filter the
+groups the header carries (condition 3 above).
 
 #### The team list encoding
 
@@ -462,11 +550,15 @@ it): a comma is `%2C`, a percent sign `%25`, a space `%20`, and a
 non-ASCII character its UTF-8 bytes (`é` is `%C3%A9`). The server trims
 the whitespace around each entry, decodes it, and drops an entry that is
 not valid percent-encoding (`50%off`): it cannot know which team that
-is. A name sent as is reads as itself when it holds no comma and no
-percent sign: `Platform Team`, or raw UTF-8 `équipe`, both work, which is
-what oauth2-proxy sends for such groups. A group whose name holds a comma
-or a percent sign must be sent encoded, or renamed: oauth2-proxy sends
-it as is, and `a,b` would read as the teams `a` and `b`.
+is. Only space and tab count as the whitespace around an entry; any other
+character, a no-break space included, is part of the name. A name sent as
+is reads as itself when it holds no comma and no percent sign:
+`Platform Team`, or raw UTF-8 `équipe`, both work, which is what
+oauth2-proxy sends for such groups. A group whose name holds a comma or a
+percent sign is read as other teams: oauth2-proxy sends it as is, so `a,b`
+reads as the teams `a` and `b`, and `pay%6Dents` as `payments`. That is a
+security condition of header mode, not a naming rule (condition 3 of
+[When header mode is safe](#trusted-team-header-trust-team-header)).
 
 | Team | In the header |
 |---|---|
@@ -481,7 +573,7 @@ it as is, and `a,b` would read as the teams `a` and `b`.
 ### Example: oauth2-proxy as a sidecar
 
 [`deploy/examples/oauth2-proxy/upgradescope-oauth2-proxy.yaml`](https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/examples/oauth2-proxy/upgradescope-oauth2-proxy.yaml)
-runs oauth2-proxy v7.15.5 in the server's pod and holds both conditions
+runs oauth2-proxy v7.15.5 in the server's pod and holds the first two conditions
 above (its test, `deploy/examples/examples_test.go`, fails if one goes):
 
 - `serve` listens on `127.0.0.1:8080`, so it is reachable only from
@@ -492,6 +584,12 @@ above (its test, `deploy/examples/examples_test.go`, fails if one goes):
 - The proxy pins `--pass-user-headers=true` and
   `--skip-auth-strip-headers=true`, and leaves `Authorization` alone
   (`--pass-basic-auth=false`).
+- The proxy sends `serve` its upstream's Host, `127.0.0.1:8080`
+  (`--pass-host-header=false`; v7.15.5's default, `true`, forwards the
+  client's, `setProxyUpstreamHostHeader` in its `pkg/upstream/http.go`),
+  so every client reaches `serve` as loopback, which the
+  [Host check](#the-host-check-dns-rebinding) answers, and no
+  `--allowed-host` is needed.
 
 Machines use the same Service, on the routes the proxy does not
 authenticate: agents push to `POST /api/v1/snapshots` with their ingest

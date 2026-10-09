@@ -561,6 +561,15 @@ The peak RSS of the agent process was 66 to 71 MiB in every pod, and the
 cgroup's peak memory (page cache included) 98 MiB at most, against the
 256Mi limit.
 
+These runs predate the tick reserve
+([#238](https://github.com/abd-ulbasit/upgradescope/issues/238)):
+collection now gets the tick deadline minus 30 seconds, 4m30s of the
+5 minutes at the default interval, and each step's share shrinks with it.
+The Helm step, given 59 s in these runs, would now get the 270 s left less
+the first step's time, over the five steps left: at most 54 s (computed,
+not measured). Compare a new run's step-deadline reasons against that, not
+against 59 s.
+
 - **At 200m the first tick did not finish its Helm step.** The tick used
   12.0 CPU-seconds in its 73 s, against the 14.7 that 0.2 CPU allows over
   that time, and left 132 releases unread; the status said so (`helm
@@ -610,20 +619,23 @@ yourself in such a namespace (see [Upgrade](upgrade.md)).
 How far 1 CPU goes is **computed from these runs, not measured**. The
 Helm step is the wall time of the first tick less the steady tick that
 follows (35.2 s less 6.9 s, about 28 s for 1,001 releases, one sequential
-GET each), and it must finish within its 59 s: 59 / 28.3 x 1,001 is about
-2,100, so "about 2,000 releases". It is not the 23.5 CPU-seconds per 1,000
+GET each), and it must finish within its deadline. That was 59 s in these
+runs; since the tick reserve it is at most 54 s ([above](#cpu-and-the-chart-limit)):
+54 / 28.3 x 1,001 is about 1,910, so "about 1,900 releases" (about 2,000
+with the 59 s before the reserve). It is not the 23.5 CPU-seconds per 1,000
 releases of the first tick as a whole (that is CPU, not the step's wall
 time, and the whole tick took 35 s). The Argo CD and Flux reads run inside
-the same step and so share its 59 s: they added 8.7 s to a steady tick with
+the same step and so share its 54 s: they added 8.7 s to a steady tick with
 no quota (12.8 s against 4.1 s, [above](#re-measured-on-main-with-and-without-argo-cd-and-flux))
 and 3.2 CPU-seconds, so with them the same arithmetic gives
-(59 - 8.7) / 28.3 x 1,001, about 1,750 releases at 1,000 Applications and
-1,000 HelmReleases. Both assume the step scales with the number of releases
-and that a slower apiserver does not stretch it, and neither was run. Beyond
-that, give the agent more CPU or a longer interval (`agent.interval`, whose
-half is the tick timeout; the Helm step gets a fifth of what is left of it
-after the first step, `runSteps`, so a longer interval also lengthens the
-step's deadline).
+(54 - 8.7) / 28.3 x 1,001, about 1,600 releases at 1,000 Applications and
+1,000 HelmReleases (about 1,750 before the reserve). Both assume the step
+scales with the number of releases and that a slower apiserver does not
+stretch it, and neither was run, nor was any run made with the reserve.
+Beyond that, give the agent more CPU or a longer interval (`agent.interval`,
+whose half is the tick timeout; collection gets that less the reserve, and
+the Helm step a fifth of what is left of it after the first step,
+`runSteps`, so a longer interval also lengthens the step's deadline).
 
 **#226 under a quota** (computed from the runs above, not measured: no pod
 ran #226's code). #226 overlaps the GETs' waiting with the decoding, which
@@ -642,7 +654,7 @@ at all:
   periods, so the core was mostly free while the GETs waited: #226 can save
   at most that waiting, 13.4 s in all for 1,000 GETs beside the apiserver
   (the recorder's figure for `735751d`, above), and less once the decoding
-  has the core to itself. The step's ceiling of about 2,000 releases above
+  has the core to itself. The step's ceiling of about 1,900 releases above
   is computed for the sequential fetch, so it is a lower estimate for #226's.
 
 ### Hotspots

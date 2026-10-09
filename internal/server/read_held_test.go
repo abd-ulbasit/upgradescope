@@ -73,7 +73,7 @@ func TestUnreadResponsesAreBounded(t *testing.T) {
 	s := pushedLargestReport(t)
 	s.readQueueTimeout = 5 * time.Minute // every request is served, none is turned away
 	for _, n := range []int{8, 20} {
-		checkUnreadBounded(t, s, s.readSlots, "GET /api/v1/clusters/1/report HTTP/1.1\r\nHost: upgradescope\r\n\r\n", n, maxReadHeap)
+		checkUnreadBounded(t, s, s.readSlots, "GET /api/v1/clusters/1/report HTTP/1.1\r\nHost: localhost\r\n\r\n", n, maxReadHeap)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestUnreadGateResponsesAreBounded(t *testing.T) {
 		t.Fatalf("one gate: status %d, %d bytes (%.300s); want 200 with an answer of at least 4 MiB", rec.Code, rec.Body.Len(), rec.Body)
 	}
 	t.Logf("each answer is %d bytes", rec.Body.Len())
-	raw := fmt.Sprintf("POST %s HTTP/1.1\r\nHost: upgradescope\r\nContent-Type: application/x-yaml\r\nContent-Length: %d\r\n\r\n%s",
+	raw := fmt.Sprintf("POST %s HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-yaml\r\nContent-Length: %d\r\n\r\n%s",
 		query, len(deploymentManifest), deploymentManifest)
 	checkUnreadBounded(t, s, s.gateSlots, raw, 10, maxGateDecodeHeap)
 }

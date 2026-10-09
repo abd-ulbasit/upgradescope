@@ -29,7 +29,10 @@ import {
 } from "../ui";
 
 const SEVERITIES: Severity[] = ["blocker", "warning", "info"];
-const UNATTRIBUTED = "unattributed";
+// The server's name for the bucket of findings no team owns. It carries
+// parentheses, which a label value cannot, so a team a namespace label calls
+// "unattributed" stays a separate row and a separate filter choice (#243).
+const UNATTRIBUTED = "(unattributed)";
 
 // Cluster drill-down: verdict + score + trend + findings (category/team
 // filters) + per-team table for one (cluster, target). target === undefined

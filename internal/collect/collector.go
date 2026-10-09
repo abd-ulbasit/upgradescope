@@ -158,12 +158,15 @@ func (e partialError) Error() string { return e.msg }
 // last step getting all that remains. A stalled step then leaves every
 // later step at least the scan budget divided by the number of steps, and
 // degrades only its own capability, its reason naming the step deadline.
+// The last step's deadline is ctx's own, so ctx has expired with it: the
+// note is left out only when ctx was cancelled (a stop), not when its
+// deadline passed (#238).
 func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
 	for i, s := range ss {
 		sctx, cancel, share := stepContext(ctx, len(ss)-i)
 		err := s.run(sctx, inv)
 		var note string
-		if ctx.Err() == nil && errors.Is(sctx.Err(), context.DeadlineExceeded) {
+		if !errors.Is(ctx.Err(), context.Canceled) && errors.Is(sctx.Err(), context.DeadlineExceeded) {
 			note = fmt.Sprintf(" (step deadline: gave up after %s, this step's share of the scan's time)", roundShare(share))
 		}
 		cancel()

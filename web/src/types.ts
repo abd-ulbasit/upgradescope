@@ -108,6 +108,10 @@ export interface ScorePoint {
   at: string;
   score: number;
   ready: boolean;
+  // The evaluation's verdict. A score can't tell unknown from ready, so the
+  // trend is drawn by this. Absent from servers that predate it: such a
+  // point renders neutral rather than guessing.
+  verdict?: Verdict;
 }
 
 export interface FleetCell {
@@ -138,7 +142,21 @@ export interface FleetResponse {
 export interface FleetTeam {
   worstScore: number;
   blockers: number;
+  // The worst of the team's verdicts across clusters (blocked over unknown
+  // over ready). A clean score does not make a team ready: a blocker no
+  // team owns, or a check that did not run, shows only here. Absent from
+  // servers that predate it.
+  verdict?: Verdict;
   clusters: string[]; // cluster names
+}
+
+// Why a cluster is left out of a team rollup.
+export type ExcludedReason = "no-snapshot" | "too-large" | "unreadable";
+
+export interface FleetExcluded {
+  name: string;
+  clusterId: number;
+  reason: ExcludedReason;
 }
 
 export interface FleetTeamsSource {
@@ -155,7 +173,8 @@ export interface FleetTeamsResponse {
   target: string;
   teams: Record<string, FleetTeam>;
   evaluated: FleetTeamsSource[];
-  missing: string[];
+  missing: string[]; // every cluster left out, whatever the reason
+  excluded?: FleetExcluded[]; // the same clusters with the reason; absent from older servers
   notApplicable: string[];
 }
 

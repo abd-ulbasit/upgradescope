@@ -336,3 +336,32 @@ func TestCollectStalledMetricsVerdictCanBeReady(t *testing.T) {
 		t.Errorf("notAssessed = %+v, want the deprecated-calls gap reported", rep.NotAssessed)
 	}
 }
+
+// The last step's deadline is the scan's own, so when it runs out the
+// parent context has expired too. Its reason still names the step
+// deadline (#238): only a cancelled scan (a stop) leaves the note out,
+// since nothing then ran out of time.
+func TestRunStepsLastStepNamesTheStepDeadline(t *testing.T) {
+	stall := func(ctx context.Context, _ *inventory.Inventory) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	inv := inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	runSteps(ctx, &inv, []step{{cap: inventory.CapDeprecatedCalls, run: stall}})
+	if st := inv.Capabilities[inventory.CapDeprecatedCalls]; st.Available || !strings.Contains(st.Reason, "step deadline") {
+		t.Errorf("deprecated-calls = %+v, want not available, naming the step deadline", st)
+	}
+
+	inv = inventory.Inventory{Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+	stopped, stop := context.WithTimeout(context.Background(), time.Minute)
+	defer stop()
+	runSteps(stopped, &inv, []step{{cap: inventory.CapDeprecatedCalls, run: func(ctx context.Context, inv *inventory.Inventory) error {
+		stop() // a stop arrives mid-step
+		return stall(ctx, inv)
+	}}})
+	if st := inv.Capabilities[inventory.CapDeprecatedCalls]; strings.Contains(st.Reason, "step deadline") {
+		t.Errorf("deprecated-calls = %+v after a stop, want no step-deadline note", st)
+	}
+}

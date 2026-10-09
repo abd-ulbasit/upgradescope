@@ -71,7 +71,12 @@ The status is only as fresh as the agent's last successful write. An agent
 that can no longer write it (its role narrowed, for example) leaves the
 last verdict and `Ready` condition in place, but marks the object: the
 annotation `upgradescope.dev/status-error` holds the time of the failed
-write and its reason, and the next successful write removes it.
+write and its reason, and the next successful write removes it. A tick
+that could not read the object's spec, or set its `spec.targets`, writes
+no status and marks the object the same way: it does not know which
+targets the spec asks for. Collection never takes the whole tick: part of
+the tick deadline is kept for the status write and this marker
+([observability](../observability.md#agent-logs)).
 
 ```sh
 kubectl get clusterreadiness cluster -o jsonpath='{.metadata.annotations.upgradescope\.dev/status-error}'
@@ -92,7 +97,7 @@ version. To evaluate others, set them in the chart (the agent then resets
 `spec.targets` to this list on every tick):
 
 ```sh
-helm upgrade upgradescope deploy/chart -n upgradescope --reuse-values \
+helm upgrade upgradescope deploy/chart -n upgradescope --reset-then-reuse-values \
   --set-json 'agent.targets=["1.37","1.38"]'
 ```
 

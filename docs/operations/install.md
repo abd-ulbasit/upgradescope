@@ -121,6 +121,10 @@ the repository: `helm install upgradescope deploy/chart ...`, with
 (`make docker-build`) when you run unreleased changes: a clone's chart
 defaults to the image of the release it was cut for.
 
+Upgrade it with `helm upgrade --reset-then-reuse-values` (Helm 3.14 or
+later), never `--reuse-values`, which keeps the old chart's defaults, the
+pinned image digest among them: [Upgrade](upgrade.md#the-chart).
+
 What the chart installs, and the agent-only, combined and fleet-hub setups:
 [In-cluster agent](../getting-started/in-cluster.md), the
 [chart README](https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/chart/README.md)
@@ -134,17 +138,18 @@ The agent's defaults are 50m CPU and 64Mi requested, with limits of 1 CPU and
 the first tick after every start reads each Helm release once: measured
 against 2,000 fake nodes and 1,000 releases (1,001 with the chart's own),
 the whole first tick took about 23 CPU-seconds, 35 s at 1
-CPU and 48 s at 500m, both finishing the Helm step (which has about a
-minute), and did not finish its Helm step at 200m, the chart's default
+CPU and 48 s at 500m, both finishing the Helm step (which had 59 s in those
+runs), and did not finish its Helm step at 200m, the chart's default
 through v0.2.0-rc.2 (it left 132 releases unread, and the report's
 `notAssessed` said so). If you set a lower limit on a cluster with many
 releases, expect the first ticks to report `helm (partial)` until the cache
-fills. At 1 CPU the Helm step took about 28 s of the 35, so above about
-2,000 releases (arithmetic, not measured) give the agent more than 1 CPU or
-a longer `agent.interval`. With `rbac.gitops.*` on, each tick also lists Argo
+fills. At 1 CPU the Helm step took about 28 s of the 35, and since the tick
+reserve (#238) the step has at most 54 s at the default interval, so above
+about 1,900 releases (arithmetic, not measured) give the agent more than
+1 CPU or a longer `agent.interval`. With `rbac.gitops.*` on, each tick also lists Argo
 CD Applications and Flux HelmReleases and reads their OCIRepositories: 540
 requests and 3 more CPU-seconds for 1,000 of each. These reads share the
-Helm step's minute, so the ceiling is lower (about 1,750 releases by the
+Helm step's 54 s, so the ceiling is lower (about 1,600 releases by the
 same arithmetic, taking the 8.7 s the GitOps reads added to a tick with no
 quota).
 

@@ -176,7 +176,7 @@ echo "== agent assertions: inline agent.serverToken goes into a chart Secret"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set agent.serverUrl=https://uscope.example.com --set agent.serverToken=s3cret > "$TMP/inline-agent.yaml"
 assert_env_secret "$TMP/inline-agent.yaml" UPGRADESCOPE_SERVER_TOKEN upgradescope-agent-token serverToken "agent token from the chart's agent Secret"
-assert_contains "$TMP/inline-agent.yaml" 'serverToken: "s3cret"' "inline token stored in the Secret"
+assert_contains "$TMP/inline-agent.yaml" "serverToken: \"$(printf s3cret | base64)\"" "inline token stored in the Secret (data, base64: a removed one leaves no key)"
 
 echo "== agent assertions: targets render"
 # The agent creates ClusterReadiness/<crName> on its first tick. Were the
@@ -256,7 +256,7 @@ helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.enabled=true --set server.ingestToken=t \
   --set server.slackWebhook="$SLACK" --set server.webhook="$HOOK" > "$TMP/webhooks.yaml"
 perl -0777 -ne 'print grep { !/^kind: Secret$/m } split /^---$/m' "$TMP/webhooks.yaml" > "$TMP/webhooks-nosecret.txt"
-assert_contains "$TMP/webhooks.yaml" "slackWebhook: \"$SLACK\"" "Slack URL in the Secret"
+assert_contains "$TMP/webhooks.yaml" "slackWebhook: \"$(printf %s "$SLACK" | base64)\"" "Slack URL in the Secret (data, base64)"
 assert_not_contains "$TMP/webhooks-nosecret.txt" "$SLACK" "Slack URL nowhere outside the Secret"
 assert_not_contains "$TMP/webhooks-nosecret.txt" "$HOOK" "webhook URL nowhere outside the Secret"
 assert_env_secret "$TMP/webhooks.yaml" UPGRADESCOPE_SLACK_WEBHOOK upgradescope-server-tokens slackWebhook "Slack URL via env"
@@ -389,7 +389,7 @@ helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.adminToken=adm --set server.webhookSecret=whk > "$TMP/hub-admin.yaml"
 assert_env_secret "$TMP/hub-admin.yaml" UPGRADESCOPE_ADMIN_TOKEN upgradescope-server-tokens adminToken "admin token from the chart Secret"
 assert_env_secret "$TMP/hub-admin.yaml" UPGRADESCOPE_WEBHOOK_SECRET upgradescope-server-tokens webhookSecret "webhook secret from the chart Secret"
-assert_contains "$TMP/hub-admin.yaml" 'adminToken: "adm"' "admin token stored in the Secret"
+assert_contains "$TMP/hub-admin.yaml" "adminToken: \"$(printf adm | base64)\"" "admin token stored in the Secret (data, base64)"
 assert_not_contains "$TMP/server.yaml" 'UPGRADESCOPE_ADMIN_TOKEN' "no admin token unless set"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set agent.enabled=false --set server.enabled=true --set server.existingSecret=hub \

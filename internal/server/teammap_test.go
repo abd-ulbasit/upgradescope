@@ -32,6 +32,9 @@ func TestParseTeamMapRejectsBadInput(t *testing.T) {
 		"empty pattern": "- pattern: \"\"\n  team: x\n",
 		"empty team":    "- pattern: \"a-*\"\n  team: \"\"\n",
 		"bad glob":      "- pattern: \"[\"\n  team: x\n",
+		// The name of the findings no team owns: a team of that name would
+		// be merged into the bucket on every surface.
+		"reserved team": "- pattern: \"a-*\"\n  team: \"(unattributed)\"\n",
 	}
 	for name, in := range cases {
 		if _, err := ParseTeamMap([]byte(in)); err == nil {

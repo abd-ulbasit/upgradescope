@@ -323,4 +323,50 @@ describe("Cluster view", () => {
     expect(screen.getByText("ingress-nginx is EOL")).toBeTruthy();
     expect(screen.queryByText("flowcontrol v1beta3 in use")).toBeNull();
   });
+
+  // #243: a team a namespace label calls "unattributed" and the findings no
+  // team owns are two rows and two filter choices.
+  it("keeps a team named unattributed apart from the findings no team owns", async () => {
+    const findings = [
+      finding({ key: "a", severity: "warning", title: "owned by the real team", teams: ["unattributed"] }),
+      finding({ key: "b", severity: "blocker", title: "owned by nobody" }),
+    ];
+    await openCluster("#/cluster/1?target=1.35", {
+      "api/v1/clusters/1/report?target=1.35": report("1.35", {
+        findings,
+        teams: {
+          unattributed: { score: 95, ready: false, verdict: "blocked", blockers: 0, warnings: 1 },
+          "(unattributed)": { score: 75, ready: false, verdict: "blocked", blockers: 1, warnings: 0 },
+        },
+      }),
+    });
+    const teams = screen.getByRole("heading", { name: "Teams" }).closest(".card") as HTMLElement;
+    const links = within(teams).getAllByRole("link").map((a) => [a.textContent, a.getAttribute("href")]);
+    expect(links).toEqual([
+      ["(unattributed)", "#/cluster/1?target=1.35&team=(unattributed)"],
+      ["unattributed", "#/cluster/1?target=1.35&team=unattributed"],
+    ]);
+
+    const select = screen.getByLabelText("Team") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "unattributed" } });
+    expect(screen.getByText("owned by the real team")).toBeTruthy();
+    expect(screen.queryByText("owned by nobody")).toBeNull();
+    fireEvent.change(select, { target: { value: "(unattributed)" } });
+    expect(screen.getByText("owned by nobody")).toBeTruthy();
+    expect(screen.queryByText("owned by the real team")).toBeNull();
+  });
+
+  it("opens the unowned findings from the route", async () => {
+    await openCluster("#/cluster/1?target=1.35&team=%28unattributed%29", {
+      "api/v1/clusters/1/report?target=1.35": report("1.35", {
+        findings: [
+          finding({ key: "a", title: "owned by the real team", teams: ["unattributed"] }),
+          finding({ key: "b", title: "owned by nobody" }),
+        ],
+      }),
+    });
+    expect((screen.getByLabelText("Team") as HTMLSelectElement).value).toBe("(unattributed)");
+    expect(screen.getByText("owned by nobody")).toBeTruthy();
+    expect(screen.queryByText("owned by the real team")).toBeNull();
+  });
 });

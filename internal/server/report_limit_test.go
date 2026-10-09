@@ -88,10 +88,15 @@ func TestEvaluatingReadsRefuseAReportOverTheLimit(t *testing.T) {
 	}
 	rec = get("/api/v1/fleet/teams?target=1.40")
 	var teams struct {
-		Missing []string `json:"missing"`
+		Missing  []string        `json:"missing"`
+		Excluded []fleetExcluded `json:"excluded"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &teams); rec.Code != http.StatusOK || err != nil || len(teams.Missing) != 1 {
 		t.Errorf("fleet teams: status %d (%.300s), want 200 with the cluster missing", rec.Code, rec.Body)
+	}
+	// It has snapshots: it is left out for its size, not for want of one (#243).
+	if len(teams.Excluded) != 1 || teams.Excluded[0].Reason != excludedTooLarge {
+		t.Errorf("fleet teams excluded = %+v, want the cluster with reason %q", teams.Excluded, excludedTooLarge)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate?target=1.35&cluster=prod-eu-1",
 		strings.NewReader("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"))

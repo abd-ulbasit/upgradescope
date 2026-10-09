@@ -32,7 +32,12 @@ server: refusing to serve the read API and /api/v1/gate without a read token on 
 
 Without a read credential, the read API, the dashboard's data and
 `/api/v1/gate` answer anyone who can reach the address. On loopback that is
-every user and process on the machine; the first command above is meant
+every user and process on the machine, though not a web page: on loopback
+`serve` answers only requests whose Host is `localhost` or a loopback
+address (or an `--allowed-host`), and any other `421`, so a page that
+rebinds its own name to `127.0.0.1` reads nothing
+([The Host check](../operations/auth.md#the-host-check-dns-rebinding)).
+The first command above is meant
 for a single-user workstation. Add `--read-token` (and send it as
 `Authorization: Bearer <token>`) wherever that is not acceptable.
 
@@ -154,12 +159,17 @@ labels with a glob map, first match wins:
 ```
 
 Team scores apply the score formula to each team's findings. Findings with
-no team are grouped as `unattributed`. A team's verdict is `blocked` by a
-blocker of its own or an unattributed one (kubelet skew, an object in an
+no team are grouped as `(unattributed)` (a name no label value can take, and
+`--team-map` refuses it as a team name, so it never merges with a team called
+`unattributed`). A team's verdict is
+`blocked` by a blocker of its own or an unattributed one (kubelet skew, an object in an
 unlabelled namespace), which cannot be ruled out as the team's; otherwise
 it is `unknown` when the cluster's report has a required not-assessed gap,
 which may hide any team's blocker; otherwise `ready`. Another team's
-blocker does not lower it. A read token minted for a team
+blocker does not lower it. The fleet-wide team rollup (`GET /api/v1/fleet/teams`
+and the dashboard's Teams page) carries each team's worst verdict across the
+clusters, `blocked` over `unknown` over `ready`, because a team's score alone
+cannot say whether it is blocked by a blocker no team owns. A read token minted for a team
 (`upgradescope tokens create --read --teams payments`) reads only that
 team's clusters, findings and scores ([Read access](../operations/auth.md)).
 

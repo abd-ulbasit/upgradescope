@@ -5,7 +5,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "upgradescope.fullname" . }}-agent
+  name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-agent") }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent
@@ -164,7 +164,7 @@ spec:
         {{- if .Values.agent.extraRegistry }}
         - name: extra-registry
           configMap:
-            name: {{ include "upgradescope.fullname" . }}-agent-registry
+            name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-agent-registry") }}
         {{- end }}
         {{- with .Values.agent.extraVolumes }}
         {{- toYaml . | nindent 8 }}
