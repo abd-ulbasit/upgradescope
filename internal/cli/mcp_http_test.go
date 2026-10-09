@@ -138,6 +138,20 @@ func TestMCPHTTPClosesIdleAndStalledConnections(t *testing.T) {
 	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
 		t.Errorf("a request with 100 KiB of headers = %s, want 431", resp.Status)
 	}
+
+	big := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"` + strings.Repeat("x", mcpsdk.DefaultMaxRequestBodyBytes) + `"}}`
+	req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/mcp", strings.NewReader(big))
+	req.Header.Set("Authorization", "Bearer s3cret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if resp, err := http.DefaultClient.Do(req); err != nil {
+		t.Errorf("a body over %d bytes: %v", mcpsdk.DefaultMaxRequestBodyBytes, err)
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Errorf("a body over %d bytes = %s, want 413", mcpsdk.DefaultMaxRequestBodyBytes, resp.Status)
+		}
+	}
 }
 
 // TestMCPHTTPRefusalClosesTheConnection: a request without the token is

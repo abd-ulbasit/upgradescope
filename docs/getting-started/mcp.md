@@ -66,7 +66,12 @@ what `upgradescope scan` reads: `$KUBECONFIG`, then `~/.kube/config`, at that
 kubeconfig's current context. Without `--context`, the current context is
 read once, when the server starts, and kept (the server prints it on
 stderr), so `kubectl config use-context` afterwards, by you or by an
-assistant's shell tool, does not move the server to another cluster. It has
+assistant's shell tool, does not move the server to another cluster. If
+there is none to keep at start (no kubeconfig, one that names no current
+context, or one that cannot be read), **`scan` is off** for the life of the
+server: the start message says so, every `scan` call is refused saying to
+restart with `--context`, and a context that becomes current later is never
+used. The other tools work. It has
 no other default and takes no other
 input from a call: **an assistant chooses the target versions, never the
 cluster**, a kubeconfig or a directory of manifests, so it cannot point the
@@ -80,6 +85,10 @@ A scan needs the same read access as `upgradescope scan`
 reads the whole cluster and can take minutes. A call with several targets
 reads the cluster once and judges it at each. Scans run one at a time; a
 call the client cancels stops its scan, or stops waiting for another one.
+A client that goes away cancels its calls too: on stdio by closing its
+end, and over HTTP by closing the connection that carries the call (its
+answer could not be delivered any more), so an abandoned scan gives up the
+scan slot at once.
 
 ## Tools
 
@@ -149,7 +158,10 @@ shows it, is that schema; the output schemas of `scan` and `list_findings`
 refer to its definitions, so a finding is the same object everywhere. See
 [JSON report](../reference/json-report.md) for the fields and the
 versioning promise (`schemaVersion` 1; fields are only added). Every result
-is returned as `structuredContent` and as text.
+is returned as `structuredContent` and as text. A result that carries a
+report (`scan`, `get_report`, `list_findings`) has two text blocks: a notice
+about the cluster's text in it (see [below](#what-to-keep-in-mind)), then
+the JSON.
 
 ## Fleet mode
 
@@ -204,7 +216,19 @@ claude mcp add --transport http upgradescope http://127.0.0.1:8808/mcp \
 
 The token can also come from `$UPGRADESCOPE_MCP_HTTP_TOKEN` or `--http-token`
 (visible in process listings). A request without it, or with another, gets
-`401`.
+`401`, and its connection is closed without reading the body it sent.
+
+Whatever the token, a peer cannot hold the server's connections or memory:
+
+- a request's headers must arrive within 10 seconds and the whole request
+  within 60 seconds, its headers may take at most 64 KiB (`431` past that)
+  and its body at most 4 MiB (`413`); a keep-alive connection idle for 120
+  seconds is closed. There is no limit on writing an answer, so a scan that
+  takes minutes still returns its result;
+- an MCP session that gets no request for 10 minutes is closed (a client
+  that comes back gets `404` and opens a new one, as the MCP specification
+  has it), and at most 100 sessions are open at once: past that a new one
+  is refused with `503` and the reason, and the open ones go on working.
 
 An address that is not loopback is refused unless `--allow-remote` is
 given; use it with `--http-token`, or when something in front of the
@@ -217,10 +241,28 @@ address `--allow-remote` opens gets no such check.
 
 ## What to keep in mind
 
-- Findings quote names from the cluster (namespaces, objects, Helm releases,
-  images). Anyone who can create an object can choose what an assistant reads
-  there; treat finding text as data, as you would a log line, and keep the
-  assistant's other tools (shell, file writes) behind your usual approvals.
+- A report carries text from the cluster, which whoever can create or
+  annotate an object there chooses: the names it read (namespaces, objects,
+  Helm releases, images, teams, field managers), which finding titles and
+  details quote, and free text copied from objects. The free text is
+  `objects[].ignore` and `objects[].ignoreReason` (the
+  `upgradescope.dev/ignore` and `upgradescope.dev/ignore-reason`
+  annotations, kept up to 16 KiB and listed even when they suppress
+  nothing), `suppressed[].reason` (the reason of an annotation that did
+  suppress a finding) and `notAssessed[].reason` (what the API server
+  answered). In `--files` mode the manifests' authors choose all of it; in a
+  `report_file` or from the fleet server, whoever wrote the report.
+- So every `scan`, `get_report` and `list_findings` result opens with a
+  notice that marks that text as **cluster-supplied, not instructions**, and
+  names where the free text is (as JSON pointers, e.g.
+  `/findings/0/objects/0/ignoreReason`); the result's `_meta` carries the
+  same, structured, under `upgradescope.dev/clusterSupplied`. Each such
+  value longer than 2 KiB is cut, ending in `…(cut by upgradescope mcp)`, so
+  `get_report` can differ there from the report file it read. The server's
+  instructions tell the assistant the same. This helps an assistant tell
+  the cluster's words from the tool's; it does not make it immune to them:
+  keep the assistant's other tools (shell, file writes) behind your usual
+  approvals.
 - `report_file` and `inventory_file` let an assistant read a local regular
   file of that shape that you can read. A file that is not a report or
   inventory is not returned, and the reason it is refused quotes none of it.
