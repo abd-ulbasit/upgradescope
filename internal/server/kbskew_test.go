@@ -238,7 +238,7 @@ func TestKBSkewNeverEchoesTheAgentsLabels(t *testing.T) {
 		{"agentVersion with a tab", "0.2\t0", k.Version},
 		{"kbVersion over the bound", "0.2.0", strings.Repeat("a", 1<<10)},
 		{"agentVersion over the bound", strings.Repeat("1", 257), k.Version},
-		{"kbVersion not ASCII", "0.2.0", "k8s.io/api v0.36.1 ‮; lifecycle 00000000; registry 00000000"},
+		{"kbVersion not ASCII", "0.2.0", "k8s.io/api v0.36.1 \u202e; lifecycle 00000000; registry 00000000"},
 	} {
 		code, out := h.pushKBStatus("hostile-"+strings.ReplaceAll(strings.Fields(tc.name)[0], "V", "v"), tc.agent, tc.kb, testInventory())
 		if code != http.StatusUnprocessableEntity {
