@@ -220,6 +220,9 @@ func TestSelfListedRowsAreNotAttributedWhenDiscoveryFails(t *testing.T) {
 			if !strings.Contains(dc.Reason, "policy/v1beta1") {
 				t.Errorf("deprecated-calls reason %q: must say which group/version it could not attribute", dc.Reason)
 			}
+			if broad := strings.Contains(dc.Reason, "every row at a group/version where the knowledge base schedules a removal is withheld"); broad != (tc.fail == nil) {
+				t.Errorf("deprecated-calls reason %q: says every removal group/version is withheld: %v, want %v (discovery failed outright)", dc.Reason, broad, tc.fail == nil)
+			}
 			rep := engine.Evaluate(inv, k, target, now)
 			for _, f := range rep.Findings {
 				if f.Category == engine.CatDeprecatedAPIInUse {

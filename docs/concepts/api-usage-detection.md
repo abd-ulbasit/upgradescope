@@ -211,7 +211,11 @@ lists `crds` as not assessed.
   an earlier scan's rows until the apiserver restarts: the rows at the
   group/versions where the knowledge base schedules a removal (those it
   could have listed) are then named as skipped for that scan as well, and
-  `api-usage` is a gap (#239).
+  `api-usage` is a gap (#239). When discovery fails outright, that is every
+  such group/version, also one the scanner would not list at on that
+  cluster (`flowcontrol.apiserver.k8s.io/v1beta3` where `v1` is served), so
+  other clients' real calls there go unreported for that scan; the reason
+  says the withholding is that broad.
 - **Object references are capped** at 100 per API; the finding says how
   many more there are, and the managers it names come from the listed ones.
 - **The agent cannot read custom resources.** The chart grants reading

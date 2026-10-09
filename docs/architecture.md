@@ -322,7 +322,11 @@ fails, or skips a group), the step cannot say what it lists there, while
 the metric keeps an earlier scan's rows until the apiserver restarts; the
 rows at the group/versions it could have listed (those where the knowledge
 base schedules a removal) are then named as skipped for that scan too, not
-attributed to other clients (#239).
+attributed to other clients (#239). When discovery fails outright, that is
+every such group/version, also one the scanner would not list at on that
+cluster (`flowcontrol.apiserver.k8s.io/v1beta3` where `v1` is served), so
+other clients' real calls there are withheld for that scan as well; the
+reason says so.
 Then, per flagged group/version:
 
 - **The kind goes away** (the knowledge base entry has no replacement, the

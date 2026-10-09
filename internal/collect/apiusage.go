@@ -319,11 +319,18 @@ type selfCalls struct {
 	// of a group discovery skipped. A metric row at one of them may be the
 	// scanner's own.
 	undiscovered []string
+	// blind is set when discovery did not answer at all: undiscovered is
+	// then every group/version at which the KB schedules a removal, also
+	// those the scanner would not list at on this cluster (flowcontrol
+	// v1beta3 where v1 is served), so other clients' real calls there are
+	// withheld for the scan too, and the reason says so.
+	blind bool
 }
 
 // unknownSelfCalls is what is known before discovery has answered: the
 // scanner may have listed a resource at any group/version where the KB
-// schedules a removal (in skipped, when skipped is not nil).
+// schedules a removal (in skipped, when skipped is not nil; when it is
+// nil, the result is blind).
 func unknownSelfCalls(lifecycle []kb.APILifecycleEntry, skipped func(schema.GroupVersion) bool) selfCalls {
 	gvs := map[string]bool{}
 	for _, e := range lifecycle {
@@ -332,7 +339,7 @@ func unknownSelfCalls(lifecycle []kb.APILifecycleEntry, skipped func(schema.Grou
 			gvs[gv.String()] = true
 		}
 	}
-	return selfCalls{undiscovered: slices.Sorted(maps.Keys(gvs))}
+	return selfCalls{undiscovered: slices.Sorted(maps.Keys(gvs)), blind: skipped == nil}
 }
 
 // apiName renders a flagged API as CapabilityStatus.Skipped names it:

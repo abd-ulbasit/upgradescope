@@ -250,6 +250,42 @@ apiserver_requested_deprecated_apis{group="flowcontrol.apiserver.k8s.io",removed
 	}
 }
 
+// When api-usage's discovery did not answer at all, every group/version at
+// which the knowledge base schedules a removal is withheld, also one the
+// scanner would never list at (flowcontrol v1beta3 while v1 is served:
+// the scanner lists v1), so another client's real call there is not
+// reported for that scan. The reason must say the withholding is that
+// broad, not only that the rows may be the scanner's.
+func TestDiscoveryFailureWithholdingIsWordedAsBroadAsItIs(t *testing.T) {
+	body := `# TYPE apiserver_requested_deprecated_apis gauge
+apiserver_requested_deprecated_apis{group="flowcontrol.apiserver.k8s.io",removed_release="1.32",resource="flowschemas",subresource="",version="v1beta3"} 1
+apiserver_requested_deprecated_apis{group="policy",removed_release="1.25",resource="podsecuritypolicies",subresource="",version="v1beta1"} 1
+`
+	err := collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), unknownSelfCalls(loadKB(t).APILifecycle, nil), &inventory.Inventory{})
+	pe := partial(t, err)
+	if want := []string{"flowcontrol.apiserver.k8s.io/v1beta3 flowschemas", "policy/v1beta1 podsecuritypolicies"}; !pe.incomplete || !reflect.DeepEqual(pe.skipped, want) {
+		t.Fatalf("partial %v, skipped %q; want %q withheld", pe.incomplete, pe.skipped, want)
+	}
+	for _, want := range []string{
+		"API discovery did not answer on this scan",
+		"every row at a group/version where the knowledge base schedules a removal is withheld for this scan",
+		"whether or not upgradescope would list there",
+		"whichever client sent it",
+		"flowcontrol.apiserver.k8s.io/v1beta3 flowschemas, policy/v1beta1 podsecuritypolicies are not attributed to any client",
+	} {
+		if !strings.Contains(pe.msg, want) {
+			t.Errorf("reason %q\nmissing %q", pe.msg, want)
+		}
+	}
+
+	// A group discovery skipped withholds that group's rows only, worded as before.
+	self := unknownSelfCalls(loadKB(t).APILifecycle, func(gv schema.GroupVersion) bool { return gv.Group == "policy" })
+	pe = partial(t, collectDeprecatedCalls(context.Background(), metricsRESTClient(t, body), self, &inventory.Inventory{}))
+	if !reflect.DeepEqual(pe.skipped, []string{"policy/v1beta1 podsecuritypolicies"}) || strings.Contains(pe.msg, "did not answer") || !strings.Contains(pe.msg, "did not show what upgradescope lists at policy/v1beta1") {
+		t.Errorf("skipped %q, reason %q: want only the skipped group's row, worded as a group discovery skipped", pe.skipped, pe.msg)
+	}
+}
+
 // What api-usage can say before discovery answers: every group/version at
 // which the knowledge base schedules a removal, the only ones the scanner
 // lists at a deprecated version.
@@ -263,7 +299,10 @@ func TestUnknownSelfCallsAreTheRemovalGroupVersions(t *testing.T) {
 	if slices.Contains(self.undiscovered, "v1") || len(self.listed) != 0 {
 		t.Errorf("undiscovered %q, listed %q: core v1 (Endpoints, ComponentStatus) is never removed", self.undiscovered, self.listed)
 	}
-	if got := unknownSelfCalls(loadKB(t).APILifecycle, func(gv schema.GroupVersion) bool { return gv.Group == "policy" }); !reflect.DeepEqual(got.undiscovered, []string{"policy/v1beta1"}) {
-		t.Errorf("only policy skipped: undiscovered %q, want [policy/v1beta1]", got.undiscovered)
+	if got := unknownSelfCalls(loadKB(t).APILifecycle, func(gv schema.GroupVersion) bool { return gv.Group == "policy" }); !reflect.DeepEqual(got.undiscovered, []string{"policy/v1beta1"}) || got.blind {
+		t.Errorf("only policy skipped: undiscovered %q, blind %v; want [policy/v1beta1], not blind", got.undiscovered, got.blind)
+	}
+	if !self.blind {
+		t.Error("no discovery at all: want blind, every removal group/version withheld")
 	}
 }

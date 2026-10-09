@@ -46,7 +46,11 @@ const (
 // row an earlier scan's LIST left in the gauge would be reported as
 // another client's: every row (not of a subresource, which the scanner
 // never requests) at one of those group/versions is named in Skipped too,
-// for this scan (#239).
+// for this scan (#239). When discovery did not answer at all (self.blind),
+// those are every group/version at which the KB schedules a removal, also
+// ones the scanner would not list at on this cluster, so other clients'
+// real calls there are withheld for the scan too; the reason says it is
+// that broad.
 func collectDeprecatedCalls(ctx context.Context, rc rest.Interface, self selfCalls, inv *inventory.Inventory) error {
 	raw, err := rc.Get().AbsPath("/metrics").DoRaw(ctx)
 	if err != nil {
@@ -142,7 +146,11 @@ func selfRequests(self selfCalls, unattributed []string) error {
 		msgs = append(msgs, fmt.Sprintf("upgradescope lists %s itself (nothing else serves a kind being removed), so the metric cannot show whether other clients request it; apiserver audit logs (annotation k8s.io/deprecated) can",
 			strings.Join(self.listed, ", ")))
 	}
-	if len(unattributed) > 0 {
+	switch {
+	case len(unattributed) > 0 && self.blind:
+		msgs = append(msgs, fmt.Sprintf("API discovery did not answer on this scan, so it is not known what upgradescope lists, and the metric keeps an earlier scan's own LISTs until the apiserver restarts: every row at a group/version where the knowledge base schedules a removal is withheld for this scan, whether or not upgradescope would list there (it lists a deprecated version only where nothing else serves the kind) and whichever client sent it, so %s are not attributed to any client; apiserver audit logs (annotation k8s.io/deprecated) can tell",
+			strings.Join(unattributed, ", ")))
+	case len(unattributed) > 0:
 		var gvs []string
 		for _, row := range unattributed {
 			if gv, _, _ := strings.Cut(row, " "); !slices.Contains(gvs, gv) {
