@@ -215,6 +215,17 @@ func (idx carriedFolds) folds(call string) bool {
 // across several upgrades.
 const upgradeLookback = 3
 
+// lookbackTargets are the targets upgradeBaseline looks at for a new
+// default target, nearest first, and the ones retention keeps baselines
+// of besides the targets a server evaluates (retainedBaselines).
+func lookbackTargets(def inventory.Version) []inventory.Version {
+	var out []inventory.Version
+	for minor := def.Minor - 1; minor >= max(def.Minor-upgradeLookback, 0); minor-- {
+		out = append(out, inventory.Version{Major: def.Major, Minor: minor})
+	}
+	return out
+}
+
 // upgradeBaseline is the notification baseline of a default target with
 // no decided evaluation yet, because the cluster upgraded (1.35 → 1.36
 // makes the default target 1.37): the latest decided evaluation of the
@@ -238,8 +249,8 @@ func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engin
 	if err != nil || server.Next() != cur.Target {
 		return store.Evaluation{}, store.ErrNotFound
 	}
-	for minor := cur.Target.Minor - 1; minor >= max(cur.Target.Minor-upgradeLookback, 0); minor-- {
-		lower := inventory.Version{Major: cur.Target.Major, Minor: minor}.String()
+	for _, v := range lookbackTargets(cur.Target) {
+		lower := v.String()
 		prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, clusterID, lower)
 		if errors.Is(err, store.ErrNotFound) {
 			read[lower] = 0

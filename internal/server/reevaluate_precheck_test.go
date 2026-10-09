@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -203,5 +206,126 @@ func TestLegacyRowWithoutVersionIsReadOnce(t *testing.T) {
 	}
 	if head, err := cs.LatestSnapshotHead(context.Background(), 1); err != nil || head.ServerVersion != "v1.34.2" {
 		t.Errorf("after a duplicate push: ServerVersion = (%q, %v), want v1.34.2 recorded", head.ServerVersion, err)
+	}
+}
+
+// TestPassLoadsTheInventoryOfAHeldTarget (SV-17): a target whose current
+// evaluation carries a held deprecated caller (after an apiserver restart,
+// #204) is not skipped by the pass although nothing is stale: only the
+// inventory says whether the scrape it judges ends or moves the hold
+// (holdChanged), and the summary alone cannot. A target without a held
+// caller, in the same state, loads nothing.
+func TestPassLoadsTheInventoryOfAHeldTarget(t *testing.T) {
+	cs := &countingStore{fakeStore: newFakeStore()}
+	s, err := New(Config{Store: cs, KB: testKB(), IngestToken: "ingest-tok", Notifier: &recordingNotifier{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := &fakeClock{t: aug1}
+	s.now = clock.now
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	push := func(name string, at time.Time, inv inventory.Inventory) {
+		t.Helper()
+		clock.set(at)
+		if resp, out := postSnapshot(t, ts, "ingest-tok", pushNamedBody(t, name, inv), false); resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+			t.Fatalf("push %s at %v: %d %v", name, at, resp.StatusCode, out)
+		}
+	}
+	// "held": its caller was seen, then the apiserver restarted and the
+	// next scrape has none, so the caller is held for the window.
+	push("held", aug1, scrapedAt(withServiceCIDRCaller(testInventory()), aug1, oldStart))
+	restart := aug1.Add(time.Hour)
+	at := restart.Add(5 * time.Minute)
+	push("held", at, scrapedAt(callsScraped(testInventory()), at, restart))
+	// "plain": the same state without any caller.
+	push("plain", at, scrapedAt(callsScraped(testInventory()), at, oldStart))
+
+	ctx := context.Background()
+	for name, want := range map[string]bool{"held": true, "plain": false} {
+		c, err := cs.ClusterByName(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := cs.CurrentEvaluationSummary(ctx, c.ID, "1.35")
+		if err != nil || e.CarriesHold != want || s.stale(e, clock.now()) {
+			t.Fatalf("%s: summary CarriesHold=%v stale=%v (%v), want CarriesHold=%v on a fresh row", name, e.CarriesHold, s.stale(e, clock.now()), err, want)
+		}
+	}
+
+	cs.inventories.Store(0)
+	s.reevaluateAll(ctx)
+	if n := cs.inventories.Load(); n != 1 {
+		t.Errorf("a pass over one held and one plain cluster loaded %d inventories, want 1 (the held one)", n)
+	}
+}
+
+// busyCommitStore fails CommitEvaluations with a transient error while
+// busy is set (SQLITE_BUSY, a dropped Postgres connection).
+type busyCommitStore struct {
+	*countingStore
+	busy atomic.Bool
+}
+
+func (b *busyCommitStore) CommitEvaluations(ctx context.Context, batch store.EvaluationBatch) (int64, bool, error) {
+	if b.busy.Load() {
+		return 0, false, errors.New("database is locked")
+	}
+	return b.countingStore.CommitEvaluations(ctx, batch)
+}
+
+// TestTransientStoreErrorDoesNotMarkTheClusterUnrefreshable: only what
+// repeats for the same snapshot (a report over the limit, a corrupt
+// inventory, a failed evaluation) marks a cluster; one store error in a
+// pass must not leave the cluster skipped by passes, and its reads
+// without a pass of their own, until the next UTC day.
+func TestTransientStoreErrorDoesNotMarkTheClusterUnrefreshable(t *testing.T) {
+	cs := &busyCommitStore{countingStore: &countingStore{fakeStore: newFakeStore()}}
+	s, err := New(Config{Store: cs, KB: testKB(), IngestToken: "ingest-tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) }
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	pushCluster(t, ts, "prod", testInventoryWithPSP())
+	head, err := cs.LatestSnapshotHead(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.cfg.KB.Version += "-new"
+	cs.busy.Store(true)
+	s.reevaluateAll(context.Background())
+	if s.unrefreshable.has(1, head.ID, s.now()) {
+		t.Fatal("a store error in the pass marked the cluster unrefreshable")
+	}
+	e, err := cs.CurrentEvaluationSummary(context.Background(), 1, "1.35")
+	if err != nil || !s.outdated(e, s.now()) || len(s.reevaluateKick) != 1 {
+		t.Fatalf("read of the outdated row after the blip: outdated and kicking a pass expected, kicks = %d (%v)", len(s.reevaluateKick), err)
+	}
+
+	// The next pass, with the store back, brings it up to date.
+	cs.busy.Store(false)
+	s.reevaluateAll(context.Background())
+	if e, err := cs.CurrentEvaluationSummary(context.Background(), 1, "1.35"); err != nil || e.KBVersion != s.cfg.KB.Version {
+		t.Errorf("after the store came back: KB %q (%v), want %q", e.KBVersion, err, s.cfg.KB.Version)
+	}
+}
+
+// TestHoldMarkerIsTheCarriedFieldName: the carries_hold column and
+// holdChanged both look for store.HoldMarker in a stored report, so it
+// must be what a carried head with a hold encodes as.
+func TestHoldMarkerIsTheCarriedFieldName(t *testing.T) {
+	b, err := json.Marshal(findingHead{Key: "k", HoldUntil: time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, store.HoldMarker) {
+		t.Errorf("a head with a hold encodes as %s, without store.HoldMarker %s", b, store.HoldMarker)
+	}
+	if b, _ := json.Marshal(findingHead{Key: "k"}); bytes.Contains(b, store.HoldMarker) {
+		t.Errorf("a head without a hold encodes as %s, with the marker", b)
 	}
 }

@@ -48,6 +48,7 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("PruneKeepsNotificationBaseline", func(t *testing.T) { testPruneKeepsNotificationBaseline(t, newStore(t)) })
 	t.Run("CommitRefusesStaleBaseline", func(t *testing.T) { testCommitRefusesStaleBaseline(t, newStore(t)) })
 	t.Run("ReevaluateRefusesStaleBaseline", func(t *testing.T) { testReevaluateRefusesStaleBaseline(t, newStore(t)) })
+	t.Run("PruneLimitsBaselinesToTargetsInUse", func(t *testing.T) { testPruneLimitsBaselinesToTargetsInUse(t, newStore(t)) })
 	t.Run("CarriesHold", func(t *testing.T) { testCarriesHold(t, newStore(t)) })
 	t.Run("DuplicateFillsServerVersion", func(t *testing.T) { testDuplicateFillsServerVersion(t, newStore(t)) })
 	t.Run("SnapshotDedup", func(t *testing.T) { testSnapshotDedup(t, newStore(t)) })

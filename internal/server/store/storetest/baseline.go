@@ -144,7 +144,7 @@ func testPruneKeepsNotificationBaseline(t *testing.T, s store.Store) {
 	s2 := mustSnapshot(t, s, a, "a2", day(-150))
 	ev(a, s2, "1.36", 0, -150) // the cluster's current state, unknown for 150 days
 
-	res, err := s.Prune(ctx, day(-90))
+	res, err := s.Prune(ctx, day(-90), nil)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
@@ -164,7 +164,7 @@ func testPruneKeepsNotificationBaseline(t *testing.T, s store.Store) {
 	// A decided pass on a new snapshot moves the baseline: the old one goes.
 	s3 := mustSnapshot(t, s, a, "a3", day(-1))
 	ev(a, s3, "1.36", 2, -1)
-	res, err = s.Prune(ctx, day(-90))
+	res, err = s.Prune(ctx, day(-90), nil)
 	if err != nil {
 		t.Fatalf("second Prune: %v", err)
 	}
@@ -174,6 +174,77 @@ func testPruneKeepsNotificationBaseline(t *testing.T, s store.Store) {
 	}
 	if e, err := s.LatestKnownEvaluation(ctx, a, "1.35"); err != nil || e.ID != old35 {
 		t.Errorf("1.35 baseline after the second Prune = (%+v, %v), want %d kept", e, err, old35)
+	}
+}
+
+// testPruneLimitsBaselinesToTargetsInUse: with PruneBaselines naming a
+// cluster's targets in use, the baselines of its other targets age out
+// like any evaluation, a snapshot only they kept with them; the targets
+// named, a cluster not named, and the cluster's current state stay.
+func testPruneLimitsBaselinesToTargetsInUse(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	ev := func(cid, sid int64, target string, blockers int, created int) int64 {
+		t.Helper()
+		return mustEval(t, s, store.Evaluation{ClusterID: cid, SnapshotID: sid, Target: target, Score: 80, Blockers: blockers, CreatedAt: day(created)})
+	}
+	// a: three old default targets, each last decided in s0, and 1.36 in use.
+	a := mustCluster(t, s, "a")
+	a0 := mustSnapshot(t, s, a, "a0", day(-300))
+	ev(a, a0, "1.34", 1, -300)
+	ev(a, a0, "1.35", 1, -300)
+	base36 := ev(a, a0, "1.36", 1, -300)
+	a1 := mustSnapshot(t, s, a, "a1", day(-200))
+	cur36 := ev(a, a1, "1.36", 0, -200) // unknown: the current state
+	// b: the same history, not named: every baseline stays.
+	b := mustCluster(t, s, "b")
+	b0 := mustSnapshot(t, s, b, "b0", day(-300))
+	ev(b, b0, "1.34", 1, -300)
+	ev(b, b0, "1.35", 1, -300)
+	b1 := mustSnapshot(t, s, b, "b1", day(-200))
+	ev(b, b1, "1.35", 0, -200)
+	// c: a snapshot kept only by a baseline of a target not in use.
+	c := mustCluster(t, s, "c")
+	c0 := mustSnapshot(t, s, c, "c0", day(-300))
+	ev(c, c0, "1.35", 1, -300)
+	c1 := mustSnapshot(t, s, c, "c1", day(-200))
+	ev(c, c1, "1.36", 1, -200)
+
+	limit := store.PruneBaselines{a: {"1.36"}, c: {"1.36"}}
+	res, err := s.Prune(ctx, day(-90), limit)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	// a's 1.34 and 1.35 baselines and c's 1.35, then snapshot c0.
+	if res != (store.PruneResult{Snapshots: 1, Evaluations: 3}) {
+		t.Errorf("Prune = %+v, want {1 3}: a's 1.34 and 1.35, c's 1.35, and c's snapshot they alone kept", res)
+	}
+	for _, tc := range []struct {
+		cluster int64
+		target  string
+		want    int64 // the baseline's evaluation id; 0: none
+	}{{a, "1.34", 0}, {a, "1.35", 0}, {a, "1.36", base36}, {c, "1.35", 0}} {
+		e, err := s.LatestKnownEvaluation(ctx, tc.cluster, tc.target)
+		switch {
+		case tc.want == 0 && !errors.Is(err, store.ErrNotFound):
+			t.Errorf("baseline of cluster %d target %s = (%+v, %v), want ErrNotFound: not in use", tc.cluster, tc.target, e, err)
+		case tc.want != 0 && (err != nil || e.ID != tc.want):
+			t.Errorf("baseline of cluster %d target %s = (%+v, %v), want evaluation %d", tc.cluster, tc.target, e, err, tc.want)
+		}
+	}
+	for _, target := range []string{"1.34", "1.35"} {
+		if _, err := s.LatestKnownEvaluation(ctx, b, target); err != nil {
+			t.Errorf("baseline of cluster b (not named) target %s: %v, want kept", target, err)
+		}
+	}
+	if e, err := s.CurrentEvaluation(ctx, a, "1.36"); err != nil || e.ID != cur36 {
+		t.Errorf("a's current 1.36 = (%+v, %v), want evaluation %d", e, err, cur36)
+	}
+	if _, err := s.LatestSnapshot(ctx, c); err != nil {
+		t.Errorf("c's latest snapshot: %v", err)
+	}
+	// Idempotent.
+	if again, err := s.Prune(ctx, day(-90), limit); err != nil || again != (store.PruneResult{}) {
+		t.Errorf("second Prune = (%+v, %v), want nothing", again, err)
 	}
 }
 

@@ -19,7 +19,9 @@ const reevaluateCooldown = 5 * time.Minute
 // unrefreshable remembers the clusters a background pass could not bring
 // up to date, by the snapshot it judged and the UTC day: a report that
 // would now be over --max-snapshot-bytes, a stored inventory that does not
-// decode, an evaluation that failed. Until the snapshot or the day changes
+// decode, an evaluation that failed. A store error does not mark: it is a
+// blip, not something the same snapshot would meet again. Until the
+// snapshot or the day changes
 // (the KB and the team map are this process's), a pass would fail the
 // same way, so passes skip the cluster without loading its inventory, and
 // a read that serves its outdated rows says so without starting one. It
@@ -123,6 +125,13 @@ func (s *Server) versionOf(ctx context.Context, head store.Snapshot) (string, er
 // that carries a held deprecated caller whose hold the inventory may end
 // (holdChanged reads both). It reads only evaluation summaries: no report,
 // no inventory.
+//
+// The held case is a column (CarriesHold), not a decode of each report:
+// whether the scrape the pass judges ends or moves a recorded hold is a
+// question for the inventory (its collectedAt and apiserver start), so a
+// held target has the pass load its cluster's inventory until the hold
+// ends, and every other cluster loads and decodes nothing
+// (TestPassLoadsTheInventoryOfAHeldTarget).
 func (s *Server) needsPass(ctx context.Context, head store.Snapshot, version string, now time.Time) bool {
 	for _, target := range s.evalTargets(version) {
 		e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, head.ClusterID, target.String())

@@ -504,7 +504,9 @@ least one core.
   its stored inventory does not decode, its evaluation fails) keeps what
   is stored, marked outdated, and is tried again on its next push, on the
   first pass of the next UTC day, or after a restart; until then passes
-  skip it and its reads start none.
+  skip it and its reads start none. A store error in a pass (a busy
+  database, a lost connection) is not one of these: it marks nothing, and
+  the next pass tries the cluster again.
 
 ## Cluster lifecycle
 
@@ -792,12 +794,14 @@ unknown until a knowledge-base update is the cluster's real next upgrade,
 and the update is the first time anyone could say what blocks it, so those
 blockers are genuinely new to each cluster and are announced, once.
 
-Retention keeps every baseline: each target's last decided evaluation
-stays, however old (see [Retention and
+Retention keeps the baselines in use: the last decided evaluation of
+each target the server evaluates for the cluster, and of the three minors
+below its default target, stays however old (see [Retention and
 backup](operations/retention-and-backup.md)), so a target that stays
 `unknown` for longer than `--retention` (a collector failing that long,
 or a new default target with no knowledge base for it) is still compared
-with it when it is next decided.
+with it when it is next decided. The baseline of a target the server no
+longer evaluates for the cluster ages out with the rest.
 
 **Concurrent writers.** Several replicas (Postgres), or one replica's
 push and its background pass, can evaluate one cluster at the same

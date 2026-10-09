@@ -22,12 +22,21 @@ a day; `0` keeps everything) prunes once at startup and then daily:
   a cluster that has been silent longer than the window keeps its current
   state (and shows as stale);
 - and except each cluster's last decided (ready or blocked) evaluation of
-  each target, with its snapshot, however old: the baseline notifications
-  are compared with ([Notifications](../operations.md#notifications)). A
-  target that stays `unknown` for longer than the window, or the
-  previous default target after an upgrade, still has one when it is
-  next decided. Usually it is of the latest snapshot anyway; otherwise
-  it keeps one older snapshot and evaluation per target, at most.
+  each target the server still compares it with, with its snapshot, however
+  old: the baseline notifications are compared with
+  ([Notifications](../operations.md#notifications)). Those targets are
+  the ones it evaluates for the cluster (the default target and the
+  `--targets` above the cluster's version) and the three minors below the
+  default target, which an upgrade looks back to for the previous
+  default's baseline. A target that stays `unknown` for longer than the
+  window, or the previous default target after an upgrade, still has one
+  when it is next decided. The baseline of any other target (dropped from
+  `--targets`, or three minors or more below a cluster's default after it
+  upgraded) ages out like any evaluation, so these do not pile up. Usually
+  the baseline is of the latest snapshot anyway; otherwise a cluster keeps
+  one older snapshot and evaluation for each target in that set, at most,
+  and each snapshot of up to `--max-snapshot-bytes`. A cluster whose
+  server version is not known keeps every target's.
 
 An older snapshot stays while any of its evaluations is inside the window.
 Score history, the dashboard sparkline and exports reach back the window
@@ -79,7 +88,7 @@ each push reads) and `/history` are read through indexes by evaluation id
 `TestEvaluationReadsDoNotGrowWithHistory` (SQLite, 4,000 history rows of
 one pair with 30 KB reports, the baseline the oldest of them) fails above
 2 ms for the baseline and 5 ms for 100 points of `/history`; on an arm64
-Mac (10 October 2026, at f2dceae5, best of five) they took 0.04 ms and
+Mac (10 October 2026, best of five, PR #276) they took 0.04 ms and
 0.75 ms. `make bench-server` seeds 500 clusters with ~35 KiB inventories
 on SQLite and runs 10 concurrent `/fleet` readers; it fails above a 1s p95
 or a 512 MiB heap peak. On an arm64 Mac (October 2026): p95 about 0.5s,

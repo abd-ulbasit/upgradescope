@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -201,10 +202,11 @@ func (p *Postgres) RenameCluster(ctx context.Context, name, newName string) erro
 // Prune deletes evaluations created before cutoff, then the snapshots
 // received before it that no evaluation refers to any more, sparing each
 // cluster's latest snapshot and its evaluations and each (cluster,
-// target)'s newest decided evaluation (the notification baseline), in one
-// transaction. A snapshot that becomes non-latest between the two
-// statements keeps its evaluations, so it stays until the next run.
-func (p *Postgres) Prune(ctx context.Context, cutoff time.Time) (PruneResult, error) {
+// target)'s newest decided evaluation (the notification baseline), then
+// those baselines baselines does not spare, in one transaction. A snapshot
+// that becomes non-latest between the statements keeps its evaluations, so
+// it stays until the next run.
+func (p *Postgres) Prune(ctx context.Context, cutoff time.Time, baselines PruneBaselines) (PruneResult, error) {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return PruneResult{}, fmt.Errorf("prune: begin: %w", err)
@@ -221,6 +223,52 @@ func (p *Postgres) Prune(ctx context.Context, cutoff time.Time) (PruneResult, er
 	}
 	if res.Evaluations, err = evals.RowsAffected(); err != nil {
 		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
+	}
+	if len(baselines) > 0 {
+		// The baselines of targets no longer in use, which the delete above
+		// spared: found by pair, deleted by id under the same conditions.
+		rows, err := tx.QueryContext(ctx, `
+			SELECT cluster_id, target, MAX(id) FROM evaluations WHERE ready OR blockers > 0 GROUP BY cluster_id, target`)
+		if err != nil {
+			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+		}
+		var pairs []baselinePair
+		for rows.Next() {
+			var bp baselinePair
+			if err := rows.Scan(&bp.clusterID, &bp.target, &bp.id); err != nil {
+				_ = rows.Close()
+				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+			}
+			pairs = append(pairs, bp)
+		}
+		if err := rows.Close(); err != nil {
+			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+		}
+		for ids := baselines.unspared(pairs); len(ids) > 0; {
+			n := min(len(ids), pruneChunk)
+			args := []any{at}
+			holders := make([]string, 0, n)
+			for i, id := range ids[:n] {
+				args = append(args, id)
+				holders = append(holders, fmt.Sprintf("$%d", i+2))
+			}
+			ids = ids[n:]
+			gone, err := tx.ExecContext(ctx, `
+				DELETE FROM evaluations WHERE created_at < $1
+				AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+				AND id IN (`+strings.Join(holders, ",")+`)`, args...)
+			if err != nil {
+				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+			}
+			k, err := gone.RowsAffected()
+			if err != nil {
+				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+			}
+			res.Evaluations += k
+		}
 	}
 	snaps, err := tx.ExecContext(ctx, `
 		DELETE FROM snapshots WHERE received_at < $1

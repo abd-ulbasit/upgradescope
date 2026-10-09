@@ -76,8 +76,10 @@ type Store interface {
 	// cluster's current state, however old) and each (cluster, target)'s
 	// newest decided evaluation (LatestKnownEvaluation: the notification
 	// baseline, of the target itself or of an upgrade), with its snapshot.
-	// Tokens, clusters and the outbox are not touched.
-	Prune(ctx context.Context, cutoff time.Time) (PruneResult, error)
+	// baselines limits that last exception to the targets still in use
+	// (PruneBaselines); nil spares every baseline. Tokens, clusters and the
+	// outbox are not touched.
+	Prune(ctx context.Context, cutoff time.Time, baselines PruneBaselines) (PruneResult, error)
 
 	InsertSnapshot(ctx context.Context, s Snapshot) (int64, bool, error) // (id, duplicate, err) — duplicate iff same cluster+hash as latest
 	LatestSnapshot(ctx context.Context, clusterID int64) (Snapshot, error)
@@ -433,6 +435,38 @@ var ErrClusterChanged = errors.New("store: the cluster was renamed or deleted wh
 // ErrClusterNameTaken is returned by RenameCluster when the new name is
 // registered to another cluster. Test with errors.Is.
 var ErrClusterNameTaken = errors.New("store: cluster name is taken")
+
+// PruneBaselines says, per cluster id, which targets' notification
+// baselines (the newest decided evaluation of a cluster and target) a
+// Prune spares however old they are: a cluster's entry lists the targets
+// its server still evaluates or may look back to for an upgrade; the
+// baselines of its other targets age out like any evaluation. A cluster
+// without an entry keeps every target's, as does a nil PruneBaselines.
+type PruneBaselines map[int64][]string
+
+// baselinePair is a (cluster, target) pair and its newest decided
+// evaluation, as Prune finds them.
+type baselinePair struct {
+	clusterID int64
+	target    string
+	id        int64
+}
+
+// unspared returns the ids of the baselines in pairs that b does not
+// spare.
+func (b PruneBaselines) unspared(pairs []baselinePair) []int64 {
+	var ids []int64
+	for _, p := range pairs {
+		if targets, limited := b[p.clusterID]; limited && !slices.Contains(targets, p.target) {
+			ids = append(ids, p.id)
+		}
+	}
+	return ids
+}
+
+// pruneChunk is how many evaluation ids one DELETE of unspared baselines
+// names.
+const pruneChunk = 500
 
 // PruneResult counts the rows one Prune deleted.
 type PruneResult struct {

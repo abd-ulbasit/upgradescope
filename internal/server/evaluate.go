@@ -443,17 +443,12 @@ func (c callsHold) stamp(carried []findingHead) []findingHead {
 	return carried
 }
 
-// holdMarker is in every stored report that carries a held caller: the
-// carried head's field name, which a JSON string in the report cannot
-// contain unescaped.
-var holdMarker = []byte(`"holdUntil":`)
-
 // holdChanged reports whether report, a stored evaluation's, carries a
 // held caller whose hold this scrape ends or moves (callsHold.until), so
 // the evaluation is re-evaluated though it is not stale. A report without
 // the marker is not decoded.
 func holdChanged(report []byte, hold callsHold) bool {
-	if !bytes.Contains(report, holdMarker) {
+	if !bytes.Contains(report, store.HoldMarker) {
 		return false
 	}
 	heads, err := storedFindingHeads(report)
@@ -640,6 +635,14 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 	return snapID, false, nil
 }
 
+// evaluationError is a failure of the evaluation of a snapshot, as
+// opposed to the store's: it repeats for the same snapshot, so the pass
+// marks the cluster (unrefreshable). A store error does not.
+type evaluationError struct{ err error }
+
+func (e *evaluationError) Error() string { return e.err.Error() }
+func (e *evaluationError) Unwrap() error { return e.err }
+
 // reevaluate brings a stored snapshot's evaluations up to date: targets
 // with no evaluation, or a stale one, or one whose restart hold inv's
 // scrape ends or moves (holdChanged), are recomputed; unchanged results
@@ -691,7 +694,7 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			continue
 		}
 		if err != nil {
-			return false, err
+			return false, &evaluationError{err}
 		}
 		// A decided current evaluation is the target's latest decided
 		// one, the baseline deltaFor would load again: evaluations are
@@ -804,7 +807,13 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 		if err != nil {
 			log.Printf("server: re-evaluation of cluster %d: %v", c.ID, err)
 		}
-		if err != nil || left {
+		// Only a failure of the evaluation itself repeats until the
+		// snapshot or the day changes. A store error (a busy SQLite, a
+		// dropped Postgres connection) is a blip: marking it would skip
+		// the cluster, and keep its reads from starting a pass, for the
+		// rest of the UTC day.
+		var evalErr *evaluationError
+		if left || errors.As(err, &evalErr) {
 			s.unrefreshable.mark(c.ID, snap.ID, now)
 		}
 	}

@@ -33,8 +33,9 @@ func largeDelta(t testing.TB, n int) ([]findingHead, engine.Report, func(finding
 }
 
 // TestComputeDeltaIsLinearInCarriedFindings (#241): every new blocker was
-// compared with every carried finding (engine.FoldsInto), 3.3 s at
-// 20,000 x 20,000 inside the ingest slot. Indexed by the API a caller
+// compared with every carried finding (engine.FoldsInto), about 46 s at
+// 20,000 x 20,000 of this fixture on an arm64 Mac (docs/claims.md NT-07),
+// inside the ingest slot. Indexed by the API a caller
 // folds by, it is one lookup per blocker.
 func TestComputeDeltaIsLinearInCarriedFindings(t *testing.T) {
 	prev, curr, unassessed := largeDelta(t, 20000)

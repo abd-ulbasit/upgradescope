@@ -161,7 +161,7 @@ func (f *fakeStore) RenameCluster(_ context.Context, name, newName string) error
 // Prune mirrors the real stores: evaluations before cutoff, then
 // unreferenced snapshots before it, sparing each cluster's latest and each
 // (cluster, target)'s newest decided evaluation.
-func (f *fakeStore) Prune(_ context.Context, cutoff time.Time) (store.PruneResult, error) {
+func (f *fakeStore) Prune(_ context.Context, cutoff time.Time, baselines store.PruneBaselines) (store.PruneResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pruneCalls = append(f.pruneCalls, cutoff)
@@ -176,6 +176,9 @@ func (f *fakeStore) Prune(_ context.Context, cutoff time.Time) (store.PruneResul
 	}
 	baseline := map[int64]bool{}
 	for _, e := range f.evals {
+		if targets, limited := baselines[e.ClusterID]; limited && !slices.Contains(targets, e.Target) {
+			continue
+		}
 		if k, ok := f.latestKnownLocked(e.ClusterID, e.Target); ok {
 			baseline[k.ID] = true
 		}

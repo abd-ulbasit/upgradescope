@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
@@ -144,6 +146,80 @@ func TestPushRacingTheBackgroundPassSendsOnce(t *testing.T) {
 
 			if got := kinds(rec); len(got) != 1 || got[0] != notify.KindBecameReady {
 				t.Errorf("delivered %v, want one became-ready (the background pass's)", got)
+			}
+		})
+	}
+}
+
+// rivalStore runs rival ahead of every commit of a pushed snapshot: a
+// writer that lands between the push's baseline reads and its commit,
+// every time.
+type rivalStore struct {
+	store.Store
+	rival func()
+}
+
+func (r *rivalStore) CommitEvaluations(ctx context.Context, b store.EvaluationBatch) (int64, bool, error) {
+	if b.Snapshot != nil && r.rival != nil {
+		r.rival()
+	}
+	return r.Store.CommitEvaluations(ctx, b)
+}
+
+// TestPushLosingTheRaceEveryTimeAnswers503AndStoresNothing (NT-05): when
+// another writer replaces the baseline before every one of the
+// maxIngestAttempts commits, the push is not stored and answers 503 with
+// Retry-After for the agent's retry, after evaluating it three times, as
+// documented. The latest snapshot is the rivals', so the
+// notifications they sent were not duplicated or undone by the loser.
+func TestPushLosingTheRaceEveryTimeAnswers503AndStoresNothing(t *testing.T) {
+	for name, open := range raceStores(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := open(t)
+			rec := &recordingNotifier{}
+			rivalSrv, err := New(Config{Store: st, KB: testKB(), Notifier: rec, IngestToken: "tok"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rivalTS := httptest.NewServer(rivalSrv.Handler())
+			defer rivalTS.Close()
+			races := 0
+			loser, err := New(Config{Store: &rivalStore{Store: st, rival: func() {
+				races++
+				inv := testInventoryWithPSP()
+				inv.ServerVersion = fmt.Sprintf("v1.34.%d", 10+races) // another snapshot each time
+				pushInventory(t, rivalTS.URL, "tok", inv)
+			}}, KB: testKB(), Notifier: rec, IngestToken: "tok"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			loserTS := httptest.NewServer(loser.Handler())
+			defer loserTS.Close()
+
+			pushInventory(t, rivalTS.URL, "tok", testInventory()) // the first evaluation: silent
+			races = 0
+			lost := testInventory()
+			lost.ServerVersion = "v1.34.99"
+			resp, out := postSnapshot(t, loserTS, "tok", pushNamedBody(t, "prod-test", lost), false)
+			if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != "10" {
+				t.Fatalf("push that lost every race = %d (Retry-After %q) %v, want 503 with Retry-After 10", resp.StatusCode, resp.Header.Get("Retry-After"), out)
+			}
+			const documented = 3 // docs/claims.md NT-05, docs/operations.md: up to three times
+			if races != documented {
+				t.Errorf("the push was evaluated against %d racing writers, want the documented %d", races, documented)
+			}
+			c, err := st.ClusterByName(ctx, "prod-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			snap, err := st.LatestSnapshotHead(ctx, c.ID)
+			if err != nil || snap.ServerVersion != fmt.Sprintf("v1.34.%d", 10+documented) {
+				t.Errorf("latest snapshot = (%q, %v), want the last rival's, v1.34.%d: the push stored nothing", snap.ServerVersion, err, 10+documented)
+			}
+			rivalSrv.deliverOutbox(ctx)
+			if got := kinds(rec); len(got) != 1 || got[0] != notify.KindNewBlocker {
+				t.Errorf("delivered %v, want the rivals' one new-blocker and nothing from the loser", got)
 			}
 		})
 	}
