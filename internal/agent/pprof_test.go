@@ -45,8 +45,16 @@ func TestRunServesPprofOnlyOnItsOwnLoopbackListener(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Errorf("GET /debug/pprof/cmdline = %d %.80q, want 200", resp.StatusCode, body)
 	}
-	if resp, _ = get(t, health+"/debug/pprof/"); resp.StatusCode != 404 {
-		t.Errorf("health listener GET /debug/pprof/ = %d, want 404: the profiler is not on it", resp.StatusCode)
+	// The CPU profile is the endpoint the docs tell an operator to fetch:
+	// a one-second profile must be served, so deleting its route fails here.
+	resp, body = get(t, "http://"+addr+"/debug/pprof/profile?seconds=1")
+	if resp.StatusCode != 200 || len(body) == 0 {
+		t.Errorf("GET /debug/pprof/profile?seconds=1 = %d with %d bytes, want 200 and a profile", resp.StatusCode, len(body))
+	}
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/profile?seconds=1"} {
+		if resp, _ = get(t, health+path); resp.StatusCode != 404 {
+			t.Errorf("health listener GET %s = %d, want 404: the profiler is not on it", path, resp.StatusCode)
+		}
 	}
 }
 

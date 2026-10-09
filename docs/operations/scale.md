@@ -153,11 +153,13 @@ quote them.
   5% large releases, 22.8 MB stored and 106.9 MB decompressed in all
   (compare the real charts measured in `internal/collect/helm.go`). The
   class follows the release's number (`rel-NNNN`: the large ones are those
-  whose number ends in 95 to 99) and so does its namespace (`bench-ns-NN`,
-  one per last two digits), so **the large releases are exactly the last
-  five namespaces, the last 50 releases in the order the Helm step visits
-  them** (namespace, then name): the ones a first tick that gives up leaves
-  unread, and the costliest to decode (about 8 times a mean release,
+  whose number ends in 95 to 99) and so does its namespace (`bench-ns-NNN`,
+  one per last two digits of the number, so `bench-ns-000` to `bench-ns-099`
+  with the seeder's default 100 namespaces), so **at the default 100
+  namespaces and 1,000 releases the large releases are exactly the last five
+  namespaces (`bench-ns-095` to `bench-ns-099`), the last 50 releases in the
+  order the Helm step visits them** (namespace, then name): the ones a first
+  tick that gives up leaves unread, and the costliest to decode (about 8 times a mean release,
   [measured below](#the-tick-after-a-partial-helm-step-247)). Every
   node also carries two DaemonSet pods (`kube-proxy` and `kindnet`, created
   by the cluster's own DaemonSets), so the cluster holds about 4,000 pods
