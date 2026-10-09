@@ -489,3 +489,31 @@ func TestServedAlternativePrefersStabilityAtTheSameRelease(t *testing.T) {
 		}
 	}
 }
+
+// "Other than e's own": when e itself is served at the target (the caller
+// asked about an API that is already available), it is never its own
+// alternative, even when it is the newest served version of its kind, and
+// a kind with no other served version has none.
+func TestServedAlternativeIsNeverTheEntryItself(t *testing.T) {
+	v := func(m int) inventory.Version { return inventory.Version{Major: 1, Minor: m} }
+	entry := func(version string, intro int) APILifecycleEntry {
+		return APILifecycleEntry{Group: "example.k8s.io", Version: version, Kind: "Thing", Introduced: v(intro)}
+	}
+	beta, ga := entry("v1beta1", 30), entry("v1", 34)
+	idx := NewIndex([]APILifecycleEntry{beta, ga})
+	// ga is served at 1.36 and is the newest: the alternative is the older beta.
+	if g, ok := idx.ServedAlternative(ga, v(36)); !ok || g.Version != "v1beta1" {
+		t.Errorf("ServedAlternative(v1 served at 1.36) = %v, %v; want example.k8s.io v1beta1", g, ok)
+	}
+	// And the other way round: beta is served too, and the newer v1 is the alternative.
+	if g, ok := idx.ServedAlternative(beta, v(36)); !ok || g.Version != "v1" {
+		t.Errorf("ServedAlternative(v1beta1 served at 1.36) = %v, %v; want example.k8s.io v1", g, ok)
+	}
+	// A kind with only the entry itself has no alternative, served or not.
+	only := NewIndex([]APILifecycleEntry{ga})
+	for _, target := range []int{33, 36} {
+		if g, ok := only.ServedAlternative(ga, v(target)); ok {
+			t.Errorf("ServedAlternative with no other version at 1.%d = %v, want none", target, g)
+		}
+	}
+}

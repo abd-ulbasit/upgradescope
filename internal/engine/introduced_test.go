@@ -171,6 +171,41 @@ func TestRemovalPastHorizonIsProjected(t *testing.T) {
 	}
 }
 
+// The horizon is the newest release the dataset covers, so a removal AT the
+// horizon is a shipped release, not a projection: only a removal strictly
+// after it is "(projected)". networking.k8s.io/v1beta1 ServiceCIDR is
+// removed in 1.37, the shipped dataset's horizon (the blocker at target
+// 1.37, the warning at 1.36, and the blocker again one release past the
+// horizon, where the removal is still a fact).
+func TestRemovalAtHorizonIsNotProjected(t *testing.T) {
+	k := realKB(t)
+	if k.MaxKnownK8s != (inventory.Version{Major: 1, Minor: 37}) {
+		t.Fatalf("the shipped dataset's horizon is %s: pick a KB entry removed at the new horizon", k.MaxKnownK8s)
+	}
+	if e, ok := kb.NewIndex(k.APILifecycle).Lookup("networking.k8s.io", "v1beta1", "ServiceCIDR"); !ok || e.Removed == nil || *e.Removed != k.MaxKnownK8s {
+		t.Fatalf("ServiceCIDR v1beta1 = %+v, want removed exactly at the horizon %s", e, k.MaxKnownK8s)
+	}
+	u := manifestUsage("networking.k8s.io", "v1beta1", "ServiceCIDR")
+	for _, c := range []struct {
+		target int
+		sev    Severity
+	}{{36, SevWarning}, {37, SevBlocker}, {38, SevBlocker}} {
+		r := Evaluate(manifestsInv(u), k, inventory.Version{Major: 1, Minor: c.target}, testNow)
+		var f *Finding
+		for i := range r.Findings {
+			if r.Findings[i].Key == "removed-api/networking.k8s.io/v1beta1/ServiceCIDR" {
+				f = &r.Findings[i]
+			}
+		}
+		if f == nil || f.Severity != c.sev {
+			t.Fatalf("target 1.%d: finding %+v, want a %s removed-api finding", c.target, f, c.sev)
+		}
+		if !strings.Contains(f.Title, "removed in 1.37 (1 object)") || strings.Contains(f.Title, "projected") || strings.Contains(f.Detail, "projected") {
+			t.Errorf("target 1.%d: title %q detail %q, want a removal at the horizon stated as a fact", c.target, f.Title, f.Detail)
+		}
+	}
+}
+
 // A replacement upstream tags nowhere is gen-kb's default (the kind's GA
 // version): the finding that advises it also cites the successor's
 // changelog, since the migration guide ends at v1.32 (#266).

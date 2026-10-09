@@ -275,3 +275,42 @@ func TestEvalHelmManifestRemovalPastHorizonIsProjected(t *testing.T) {
 		t.Errorf("a removal inside the horizon: findings = %+v, want no projected marker", fs)
 	}
 }
+
+// The horizon is the newest release the dataset covers: a stored manifest's
+// removal AT it is a shipped release and stated as a fact, as evalAPIUsage
+// does; only a removal strictly after it is "(projected)".
+func TestEvalHelmManifestRemovalAtHorizonIsNotProjected(t *testing.T) {
+	k := helmTestKB() // horizon 1.36
+	k.APILifecycle = append(k.APILifecycle, kb.APILifecycleEntry{
+		Group: "example.k8s.io", Version: "v1beta1", Kind: "Widget", Introduced: inventory.Version{Major: 1, Minor: 34},
+		Deprecated: &inventory.Version{Major: 1, Minor: 35}, Removed: &k.MaxKnownK8s,
+		Replacement: &kb.GVK{Group: "example.k8s.io", Version: "v1", Kind: "Widget"},
+	}, kb.APILifecycleEntry{Group: "example.k8s.io", Version: "v1", Kind: "Widget", Introduced: inventory.Version{Major: 1, Minor: 34}})
+	rel := inventory.HelmRelease{
+		Name: "w", Namespace: "apps", ChartName: "w", ChartVersion: "1.0.0", Status: "deployed", Revision: 1,
+		ManifestAPIs: []inventory.APIUsage{{Group: "example.k8s.io", Version: "v1beta1", Kind: "Widget", Count: 1,
+			Namespaces: map[string]int{"apps": 1}, Objects: []inventory.ObjectRef{{Name: "x", Namespace: "apps", Line: 3}}}},
+	}
+	inv := inventory.Inventory{HelmReleases: []inventory.HelmRelease{rel}}
+	for _, c := range []struct {
+		target int
+		sev    Severity
+		key    string
+	}{
+		{35, SevWarning, "deprecated-api/helm-release/apps/w"}, // the removal is in the next minor
+		{36, SevBlocker, "removed-api/helm-release/apps/w"},    // at the target, and the horizon
+		{37, SevBlocker, "removed-api/helm-release/apps/w"},    // one release past the horizon, the removal is still a fact
+	} {
+		fs := evalHelmReleases(inv, k, inventory.Version{Major: 1, Minor: c.target}, nil)
+		if len(fs) != 1 || fs[0].Severity != c.sev || fs[0].Key != c.key {
+			t.Fatalf("target 1.%d: findings = %+v, want one %s %s", c.target, fs, c.sev, c.key)
+		}
+		f := fs[0]
+		if !strings.Contains(f.Detail, "removed in 1.36") || strings.Contains(f.Detail, "projected") || strings.Contains(f.Title, "projected") {
+			t.Errorf("target 1.%d: title %q detail %q, want the removal at the horizon stated as a fact", c.target, f.Title, f.Detail)
+		}
+		if c.sev == SevBlocker && !strings.Contains(f.Detail, "does not serve") {
+			t.Errorf("target 1.%d: detail = %q, want 'does not serve'", c.target, f.Detail)
+		}
+	}
+}
