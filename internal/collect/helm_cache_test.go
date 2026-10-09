@@ -344,7 +344,7 @@ func TestHelmCacheKeepsWhatAPartialStepDecoded(t *testing.T) {
 		}
 		ss := []step{{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			stepDone = ctx.Done()
-			return collectHelmStep(ctx, Clients{Kube: kube, Metadata: meta}, nil, cache, inv)
+			return collectHelmStep(ctx, Clients{Kube: kube, Metadata: meta}, nil, cache, nil, inv)
 		}}}
 		for range nSteps - 1 {
 			ss = append(ss, step{cap: inventory.CapCRDs, run: func(context.Context, *inventory.Inventory) error { return nil }})

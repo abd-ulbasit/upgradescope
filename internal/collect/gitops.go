@@ -151,15 +151,17 @@ func (s gitopsToolState) present() (evidence string, ok bool) {
 }
 
 // collectHelmStep is the helm step: the Helm release storage drivers
-// (collectHelmWith, which reuses cache when it is not nil), then the charts GitOps tools deploy (collectGitOps). The
+// (collectHelmWith, which reuses helm when it is not nil), then the charts
+// GitOps tools deploy (collectGitOps, which remembers refused lists in
+// gitops when it is not nil). The
 // release storage decides the capability's availability, as before; what
 // the tools add (their charts, and notes on what is not assessed) only
 // ever makes an available capability partial, never unavailable.
-func collectHelmStep(ctx context.Context, c Clients, lifecycle []kb.APILifecycleEntry, cache *HelmCache, inv *inventory.Inventory) error {
-	err := collectHelmWith(ctx, c.Kube, c.Metadata, lifecycle, cache, inv)
+func collectHelmStep(ctx context.Context, c Clients, lifecycle []kb.APILifecycleEntry, helm *HelmCache, gitops *GitOpsCache, inv *inventory.Inventory) error {
+	err := collectHelmWith(ctx, c.Kube, c.Metadata, lifecycle, helm, inv)
 	var pe partialError
 	available := errors.As(err, &pe)
-	states := collectGitOps(ctx, c, available && len(inv.HelmReleases) == 0, inv)
+	states := collectGitOps(ctx, c, available && len(inv.HelmReleases) == 0, gitops, inv)
 	if !available {
 		// The release storage could not be read at all, so the capability
 		// is unavailable; say that the charts GitOps tools declare were
@@ -256,8 +258,9 @@ func (pe partialError) withGitOps(states []gitopsToolState, noReleases bool) err
 // best-effort: a workload list that fails shows nothing, and is no gap
 // (a role that cannot list workloads). Resources not served are not
 // an error. Nothing is read without a discovery client; without a dynamic
-// client the tools are only looked for.
-func collectGitOps(ctx context.Context, c Clients, noReleases bool, inv *inventory.Inventory) []gitopsToolState {
+// client the tools are only looked for. cache, when not nil, remembers the
+// OCIRepository lists refused (readOCIRepositories).
+func collectGitOps(ctx context.Context, c Clients, noReleases bool, cache *GitOpsCache, inv *inventory.Inventory) []gitopsToolState {
 	if c.Discovery == nil {
 		return nil
 	}
@@ -305,7 +308,7 @@ func collectGitOps(ctx context.Context, c Clients, noReleases bool, inv *invento
 		case inventory.GitOpsArgoCD:
 			charts, err = readArgoApplications(ctx, c.Dynamic, s)
 		case inventory.GitOpsFlux:
-			charts, err = readFluxHelmReleases(ctx, c.Dynamic, disc, served, s)
+			charts, err = readFluxHelmReleases(ctx, c.Dynamic, disc, served, cache, s)
 		}
 		if err != nil {
 			s.failure = fmt.Sprintf("%s chart sources not read: %v", s.label, err)
@@ -475,9 +478,9 @@ func plausibleTarget(ns string) bool { return ns == "" || len(content.IsDNS1123L
 // readFluxHelmReleases reads the chart of every HelmRelease that deploys
 // to the scanned cluster: spec.chart.spec (a HelmRepository, GitRepository
 // or Bucket chart), or a chartRef to an OCIRepository, which it resolves
-// (readOCIRepositories). A chartRef of another kind, or an OCIRepository
-// that cannot be read, is counted in s.unresolved.
-func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc discovery.DiscoveryInterfaceWithContext, served map[string][]string, s *gitopsToolState) ([]inventory.GitOpsChart, error) {
+// (readOCIRepositories, with cache). A chartRef of another kind, or an
+// OCIRepository that cannot be read, is counted in s.unresolved.
+func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc discovery.DiscoveryInterfaceWithContext, served map[string][]string, cache *GitOpsCache, s *gitopsToolState) ([]inventory.GitOpsChart, error) {
 	var out []inventory.GitOpsChart
 	var pending []int        // indexes into out of charts awaiting an OCIRepository
 	refs := map[int]ociRef{} // …and the OCIRepository each awaits
@@ -543,7 +546,7 @@ func readFluxHelmReleases(ctx context.Context, dyn dynamic.Interface, disc disco
 	for _, r := range refs {
 		wanted[r] = true
 	}
-	repos := readOCIRepositories(ctx, dyn, gvr, wanted, s)
+	repos := readOCIRepositories(ctx, dyn, gvr, wanted, cache, s)
 	var resolved []inventory.GitOpsChart
 	for i, c := range out {
 		r, awaiting := refs[i]
@@ -596,16 +599,20 @@ func ociChartOf(repo *unstructured.Unstructured) (ociChart, bool) {
 // cluster-wide list is forbidden (a role granted per namespace), each
 // namespace that holds one is listed instead, and when a namespace's list
 // is forbidden too, its OCIRepositories are fetched by name, one GET each,
-// as before #248. An OCIRepository that cannot be read, is not there, or
-// names no chart is missing from the result (the caller counts each
-// chartRef to it as unresolved), and s.unresolvedWhy keeps the first
-// reason. Only the wanted OCIRepositories are kept of what a list returns.
-// Nothing is read when the resource is not served (gvr is zero).
-func readOCIRepositories(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, wanted map[ociRef]bool, s *gitopsToolState) map[ociRef]ociChart {
+// as before #248. A list refused is remembered in cache, when it is not
+// nil, and not asked for again until ForbiddenListRecheck has passed: the
+// agent's next ticks go straight to what worked (see GitOpsCache). An
+// OCIRepository that cannot be read, is not there, or names no chart is
+// missing from the result (the caller counts each chartRef to it as
+// unresolved), and s.unresolvedWhy keeps the first reason. Only the wanted
+// OCIRepositories are kept of what a list returns. Nothing is read when
+// the resource is not served (gvr is zero).
+func readOCIRepositories(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, wanted map[ociRef]bool, cache *GitOpsCache, s *gitopsToolState) map[ociRef]ociChart {
 	out := map[ociRef]ociChart{}
 	if gvr == (schema.GroupVersionResource{}) || len(wanted) == 0 {
 		return out
 	}
+	cache.expire()
 	why := func(format string, args ...any) {
 		if s.unresolvedWhy == "" {
 			s.unresolvedWhy = fmt.Sprintf(format, args...)
@@ -619,10 +626,16 @@ func readOCIRepositories(ctx context.Context, dyn dynamic.Interface, gvr schema.
 		}
 	}
 	// list lists namespace (all of them for metav1.NamespaceAll); false
-	// when the list is forbidden. Another error leaves what it would have
-	// read unresolved, and is the reason.
+	// when the list is forbidden, now or when cache remembers it was.
+	// Another error leaves what it would have read unresolved, and is the
+	// reason.
 	list := func(namespace string) bool {
+		l := gitopsList{gvr: gvr, namespace: namespace}
+		if cache.wasRefused(l) {
+			return false
+		}
 		err := listCustomResourcesIn(ctx, dyn, gvr, namespace, keep)
+		cache.record(l, err)
 		switch {
 		case apierrors.IsForbidden(err):
 			return false

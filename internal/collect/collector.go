@@ -47,6 +47,11 @@ type Options struct {
 	// staleness rules DiscoveryCache states, so a steady tick does not ask
 	// for it again. The agent keeps one; a one-shot scan leaves it nil.
 	DiscoveryCache *DiscoveryCache
+	// GitOpsCache, when set, remembers the OCIRepository lists the
+	// apiserver refused, so a role without list on them is not asked again
+	// on every call, only once ForbiddenListRecheck has passed. The agent
+	// keeps one; a one-shot scan leaves it nil.
+	GitOpsCache *GitOpsCache
 }
 
 // listPageSize bounds every cluster-wide list call: large clusters must
@@ -237,7 +242,7 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Kube == nil || c.Metadata == nil {
 				return errors.New("kubernetes/metadata client not configured")
 			}
-			return collectHelmStep(ctx, c, k.APILifecycle, opts.HelmCache, inv)
+			return collectHelmStep(ctx, c, k.APILifecycle, opts.HelmCache, opts.GitOpsCache, inv)
 		}},
 		{cap: inventory.CapAddOns, run: func(ctx context.Context, inv *inventory.Inventory) error { // after helm: consumes inv.HelmReleases
 			if c.Kube == nil {

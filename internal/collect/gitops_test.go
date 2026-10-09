@@ -113,7 +113,7 @@ func (f gitopsFixture) clients() Clients {
 
 func (f gitopsFixture) helmStep() (inventory.Inventory, error) {
 	var inv inventory.Inventory
-	err := collectHelmStep(context.Background(), f.clients(), nil, nil, &inv)
+	err := collectHelmStep(context.Background(), f.clients(), nil, nil, nil, &inv)
 	return inv, err
 }
 
@@ -581,7 +581,7 @@ func TestGitOpsWithoutDynamicClientStillReportsTheGap(t *testing.T) {
 	c := f.clients()
 	c.Dynamic = nil
 	var inv inventory.Inventory
-	err := collectHelmStep(context.Background(), c, nil, nil, &inv)
+	err := collectHelmStep(context.Background(), c, nil, nil, nil, &inv)
 	pe := partial(t, err)
 	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"argocd"}) || inv.GitOpsCharts != nil {
 		t.Errorf("partial = %+v, charts %v; want the gap and no charts", pe, inv.GitOpsCharts)
@@ -928,6 +928,63 @@ func TestGitOpsFluxOCIRepositoriesAreListed(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// #248: a role granted get but not list on OCIRepositories (a namespaced
+// Role, or one written for the agent before #248) refuses the cluster-wide
+// list and each namespace's before the GETs by name: one refused request
+// per namespace plus one, each in the audit log. A GitOpsCache, which the
+// agent keeps across ticks, remembers each refusal, so the ticks after go
+// straight to what worked, and asks again once ForbiddenListRecheck has
+// passed, so a list granted later is used within the hour.
+func TestGitOpsRefusedOCIRepositoryListsAreRememberedAcrossTicks(t *testing.T) {
+	f := ociFleet(t, 30, "team-a", "team-b", "team-c")
+	refused := map[string]bool{"": true, "team-a": true, "team-b": true, "team-c": true} // by namespace, "" cluster-wide
+	f.dyn.PrependReactor("list", "ocirepositories", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if refused[a.GetNamespace()] {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "ocirepositories"}, "", errors.New("RBAC"))
+		}
+		return false, nil, nil
+	})
+	start := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	now := start
+	cache := NewGitOpsCache()
+	cache.now = func() time.Time { return now }
+	all := []string{"", "team-a", "team-b", "team-c"}
+	ticks := []struct {
+		name  string
+		at    time.Duration // since the first tick
+		grant []string      // lists no longer refused from this tick on
+		lists []string      // OCIRepository lists asked for, by namespace
+		gets  int
+	}{
+		{"first tick: every list refused, a GET each", 0, nil, all, 30},
+		{"next tick: no refused list asked again", time.Minute, nil, nil, 30},
+		{"just under the hour: none yet", ForbiddenListRecheck - time.Second, nil, nil, 30},
+		{"an hour on: asked again, refused again", ForbiddenListRecheck, nil, all, 30},
+		{"namespace lists granted: used at the next recheck", 2 * ForbiddenListRecheck, []string{"team-a", "team-b", "team-c"}, all, 0},
+		{"then only the cluster-wide refusal is remembered", 2*ForbiddenListRecheck + time.Minute, nil, []string{"team-a", "team-b", "team-c"}, 0},
+		{"cluster-wide list granted: used at the next recheck", 3 * ForbiddenListRecheck, []string{""}, []string{""}, 0},
+		{"and kept", 3*ForbiddenListRecheck + time.Minute, nil, []string{""}, 0},
+	}
+	for _, tc := range ticks {
+		now = start.Add(tc.at)
+		for _, ns := range tc.grant {
+			delete(refused, ns)
+		}
+		f.dyn.ClearActions()
+		var inv inventory.Inventory
+		pe := partial(t, collectHelmStep(context.Background(), f.clients(), nil, nil, cache, &inv))
+		if pe.incomplete || len(inv.GitOpsCharts) != 30 {
+			t.Fatalf("%s: partial %+v with %d charts, want all 30 resolved", tc.name, pe, len(inv.GitOpsCharts))
+		}
+		if lists, gets := ociReads(f); !slices.Equal(lists, tc.lists) || len(gets) != tc.gets {
+			t.Errorf("%s: lists %q and %d GETs; want lists %q and %d GETs", tc.name, lists, len(gets), tc.lists, tc.gets)
+		}
+	}
+	if len(cache.refused) != 0 {
+		t.Errorf("cache holds refusals %v, want none: every list succeeded since", cache.refused)
 	}
 }
 
