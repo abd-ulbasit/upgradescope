@@ -250,7 +250,11 @@ func TestCollectHelmFollowsListPagination(t *testing.T) {
 
 // #25: which revision, if any, is installed. helm uninstall --keep-history
 // marks the newest revision uninstalled and keeps the Secrets; a failed
-// upgrade leaves the previous successful revision's resources running.
+// upgrade leaves the previous successful revision's resources running. #239:
+// after a failed revision the newest deployed one is judged (Helm's
+// Releases.Deployed), else the newest superseded one; a history of failed
+// revisions only (a failed install) has none to judge, and is a gap that
+// names the release rather than a release silently dropped.
 func TestCollectHelmInstalledRevision(t *testing.T) {
 	rev := func(n int, status, chartVersion string) helmRev {
 		return helmRev{ns: "ingress-nginx", release: "ingress-nginx", rev: n, status: status, chart: "ingress-nginx", chartVersion: chartVersion, appVersion: chartVersion}
@@ -259,16 +263,19 @@ func TestCollectHelmInstalledRevision(t *testing.T) {
 		name string
 		revs []helmRev
 		want string // chart version of the release reported; "" = not installed
+		gap  bool   // no revision to judge: a partial capability naming the release
 	}{
-		{"newest uninstalled (--keep-history)", []helmRev{rev(3, "superseded", "4.7.0"), rev(4, "uninstalled", "4.8.0")}, ""},
-		{"newest uninstalling", []helmRev{rev(3, "superseded", "4.7.0"), rev(4, "uninstalling", "4.8.0")}, ""},
-		{"newest failed, earlier deployed", []helmRev{rev(1, "superseded", "4.6.0"), rev(2, "deployed", "4.7.0"), rev(3, "failed", "4.8.0")}, "4.7.0"},
-		{"newest failed, earlier superseded", []helmRev{rev(1, "superseded", "4.6.0"), rev(2, "failed", "4.7.0"), rev(3, "failed", "4.8.0")}, "4.6.0"},
-		{"failed install, nothing earlier", []helmRev{rev(1, "failed", "4.8.0")}, ""},
-		{"newest pending-upgrade is present", []helmRev{rev(1, "deployed", "4.7.0"), rev(2, "pending-upgrade", "4.8.0")}, "4.8.0"},
-		{"newest pending-install is present", []helmRev{rev(1, "pending-install", "4.8.0")}, "4.8.0"},
-		{"newest pending-rollback is present", []helmRev{rev(1, "superseded", "4.7.0"), rev(2, "superseded", "4.8.0"), rev(3, "pending-rollback", "4.7.0")}, "4.7.0"},
-		{"revision 10 is newer than revision 9", []helmRev{rev(9, "superseded", "4.7.0"), rev(10, "deployed", "4.8.0")}, "4.8.0"},
+		{"newest uninstalled (--keep-history)", []helmRev{rev(3, "superseded", "4.7.0"), rev(4, "uninstalled", "4.8.0")}, "", false},
+		{"newest uninstalling", []helmRev{rev(3, "superseded", "4.7.0"), rev(4, "uninstalling", "4.8.0")}, "", false},
+		{"newest failed, earlier deployed", []helmRev{rev(1, "superseded", "4.6.0"), rev(2, "deployed", "4.7.0"), rev(3, "failed", "4.8.0")}, "4.7.0", false},
+		{"newest failed, earlier superseded", []helmRev{rev(1, "superseded", "4.6.0"), rev(2, "failed", "4.7.0"), rev(3, "failed", "4.8.0")}, "4.6.0", false},
+		{"newest failed, a deployed revision before a superseded one", []helmRev{rev(1, "deployed", "4.6.0"), rev(2, "superseded", "4.7.0"), rev(3, "failed", "4.8.0")}, "4.6.0", false},
+		{"failed install, nothing earlier", []helmRev{rev(1, "failed", "4.8.0")}, "", true},
+		{"only failed revisions", []helmRev{rev(1, "failed", "4.7.0"), rev(2, "failed", "4.8.0")}, "", true},
+		{"newest pending-upgrade is present", []helmRev{rev(1, "deployed", "4.7.0"), rev(2, "pending-upgrade", "4.8.0")}, "4.8.0", false},
+		{"newest pending-install is present", []helmRev{rev(1, "pending-install", "4.8.0")}, "4.8.0", false},
+		{"newest pending-rollback is present", []helmRev{rev(1, "superseded", "4.7.0"), rev(2, "superseded", "4.8.0"), rev(3, "pending-rollback", "4.7.0")}, "4.7.0", false},
+		{"revision 10 is newer than revision 9", []helmRev{rev(9, "superseded", "4.7.0"), rev(10, "deployed", "4.8.0")}, "4.8.0", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -277,8 +284,9 @@ func TestCollectHelmInstalledRevision(t *testing.T) {
 				objs = append(objs, helmSecret(t, r))
 			}
 			inv, err := collectHelmFrom(t, objs...)
-			if err != nil && !errors.As(err, new(partialError)) {
-				t.Fatal(err)
+			var pe partialError
+			if err != nil && !errors.As(err, &pe) {
+				t.Fatalf("%v: the release storage was read, so the capability stays available", err)
 			}
 			switch {
 			case tc.want == "" && len(inv.HelmReleases) != 0:
@@ -286,7 +294,59 @@ func TestCollectHelmInstalledRevision(t *testing.T) {
 			case tc.want != "" && (len(inv.HelmReleases) != 1 || inv.HelmReleases[0].ChartVersion != tc.want):
 				t.Errorf("releases = %+v, want one at chart %s", inv.HelmReleases, tc.want)
 			}
+			named := pe.incomplete && slices.Contains(pe.skipped, "ingress-nginx/ingress-nginx")
+			if named != tc.gap {
+				t.Errorf("partial %v, skipped %q (%q); want the release named as a gap: %v", pe.incomplete, pe.skipped, pe.msg, tc.gap)
+			}
+			if tc.gap && !strings.Contains(pe.msg, "1 release(s) with only failed revisions not assessed") {
+				t.Errorf("reason %q: it must say why the release was not assessed", pe.msg)
+			}
 		})
+	}
+}
+
+// #239 end to end: a failed install (helm install --wait timing out leaves
+// the resources running and the release failed) has no deployed or
+// superseded revision to judge its stored manifest by, so the removed-API
+// check is not assessed for it, and the report says so instead of reading
+// as clean: the helm capability is partial and names the release, beside a
+// release that was judged.
+func TestHelmFailedOnlyReleaseIsANamedGapEndToEnd(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := "apiVersion: flowcontrol.apiserver.k8s.io/v1beta3\nkind: FlowSchema\nmetadata:\n  name: batch-jobs\n"
+	kube, meta := helmClients(t,
+		helmSecret(t, helmRev{ns: "platform", release: "apf", rev: 1, status: "failed", chart: "apf", chartVersion: "0.3.0", manifest: fs}),
+		helmSecret(t, helmRev{ns: "platform", release: "apf", rev: 2, status: "failed", chart: "apf", chartVersion: "0.3.0", manifest: fs}),
+		helmSecret(t, helmRev{ns: "platform", release: "web", rev: 1, status: "deployed", chart: "web", chartVersion: "1.0.0"}),
+	)
+	inv := inventory.Inventory{ServerVersion: "v1.32.4", Capabilities: map[inventory.Capability]inventory.CapabilityStatus{
+		inventory.CapVersions: {Available: true}, inventory.CapAPIUsage: {Available: true},
+	}}
+	runSteps(context.Background(), &inv, []step{{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
+		return collectHelm(ctx, kube, meta, k.APILifecycle, inv)
+	}}})
+	st := inv.Capabilities[inventory.CapHelm]
+	if !st.Available || !st.Partial || !slices.Equal(st.Skipped, []string{"platform/apf"}) {
+		t.Fatalf("helm capability %+v: want available, partial, skipping platform/apf", st)
+	}
+	if len(inv.HelmReleases) != 1 || inv.HelmReleases[0].Name != "web" {
+		t.Errorf("releases %+v: want web alone; apf has no revision to judge", inv.HelmReleases)
+	}
+	rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 33}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	if rep.Ready {
+		t.Errorf("ready with a release whose stored manifest was not assessed; gaps %+v", rep.NotAssessed)
+	}
+	gap := false
+	for _, g := range rep.NotAssessed {
+		if out, _ := json.Marshal(g); strings.Contains(string(out), "platform/apf") {
+			gap = true
+		}
+	}
+	if !gap {
+		t.Errorf("not assessed %+v: want a gap naming platform/apf", rep.NotAssessed)
 	}
 }
 
