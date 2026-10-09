@@ -325,3 +325,46 @@ func TestGitOpsListFailingOtherwiseIsAskedForEveryCall(t *testing.T) {
 }
 
 var _ = metav1.NamespaceAll
+
+// A multi-source Application's `ref` source supplies values files to a
+// chart of another source and is no chart itself: an oci:// one (values
+// kept in an OCI artifact) is not read as a chart named after the
+// repository's last path element. A source that sets both ref and chart
+// is a chart.
+func TestGitOpsArgoRefSourceIsNotAChart(t *testing.T) {
+	app := argoApp("platform", map[string]any{
+		"destination": inCluster("platform"),
+		"sources": []any{
+			map[string]any{"repoURL": "oci://ghcr.io/acme/config/platform-values", "targetRevision": "1.0.0", "ref": "values"},
+			map[string]any{"repoURL": ociIngressNginx, "path": ".", "targetRevision": "4.11.3"},
+			map[string]any{"repoURL": "registry-1.docker.io/bitnamicharts", "chart": "redis", "targetRevision": "20.1.0", "ref": "both"},
+		},
+	})
+	f := newGitOpsFixture(t, []*metav1.APIResourceList{argoServed()}, []runtime.Object{app}, helmRelease(t))
+	inv, _ := f.helmStep()
+	var names []string
+	for _, c := range inv.GitOpsCharts {
+		names = append(names, c.Chart)
+	}
+	if want := []string{"ingress-nginx", "redis"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("charts read = %v, want %v (the ref source supplies values, not a chart)", names, want)
+	}
+}
+
+// An OCI source whose path is not "." is read as the chart named by the
+// repository's last element: Argo CD would read the chart from that path
+// inside the artifact, so this can name a chart that is not deployed. That
+// is over-reporting (an add-on that is not there, which the user can
+// ignore), documented in the GitOps guide; the test pins it so a change is
+// deliberate.
+func TestGitOpsArgoOCISourceWithAPathIsStillReadAsTheRepositoryChart(t *testing.T) {
+	app := argoApp("ingress-nginx", map[string]any{
+		"destination": inCluster("ingress-nginx"),
+		"source":      map[string]any{"repoURL": ociIngressNginx, "path": "charts/sub", "targetRevision": "4.11.3"},
+	})
+	f := newGitOpsFixture(t, []*metav1.APIResourceList{argoServed()}, []runtime.Object{app}, helmRelease(t))
+	inv, _ := f.helmStep()
+	if len(inv.GitOpsCharts) != 1 || inv.GitOpsCharts[0].Chart != "ingress-nginx" {
+		t.Errorf("gitops charts = %#v, want the repository's chart", inv.GitOpsCharts)
+	}
+}

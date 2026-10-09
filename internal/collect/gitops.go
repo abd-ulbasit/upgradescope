@@ -431,6 +431,12 @@ func readArgoApplications(ctx context.Context, dyn dynamic.Interface, s *gitopsT
 			repo := redactRepoURL(stringAt(src, "repoURL"))
 			chart := stringAt(src, "chart")
 			if chart == "" {
+				// A source that only sets ref supplies values files to the chart
+				// of another source (multi-source): it is no chart, even when its
+				// repoURL is an oci:// artifact.
+				if stringAt(src, "ref") != "" {
+					continue
+				}
 				// A native OCI source (repoURL oci://..., path ".") names no
 				// chart: the chart is the repository's last path element.
 				chart, _ = ociChartName(repo)

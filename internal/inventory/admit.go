@@ -66,10 +66,13 @@ func (inv *Inventory) Admit() error {
 			return &ServerVersionError{Err: err}
 		}
 	}
-	// Collectors read identifiers from objects the apiserver validated, so
-	// one that is not a valid Kubernetes identifier is not from a genuine
-	// inventory; reports repeat them, so they are refused before anything
-	// is stored or evaluated.
+	// Most identifiers are read from objects the apiserver validated, but
+	// not all (a Helm release's name is a label value, and the objects of
+	// its stored manifest are text in a Secret anyone can create), so a
+	// genuine collector conforms its inventory first (Conform) and one
+	// that is not valid even then is not from a genuine inventory. Reports
+	// repeat identifiers, so they are refused before anything is stored or
+	// evaluated.
 	if err := inv.ValidateIdentifiers(); err != nil {
 		return err
 	}

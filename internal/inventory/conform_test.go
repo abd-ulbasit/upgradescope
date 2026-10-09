@@ -210,15 +210,47 @@ func TestConformKeepsAnUnavailableCapability(t *testing.T) {
 	}
 }
 
-// A capability the inventory does not report is created partial and
-// available, so what was dropped is not silent.
-func TestConformReportsTheCapabilityItRepaired(t *testing.T) {
+// A capability the inventory does not report is left absent, not made
+// available and partial: that would claim a read the collector never made,
+// where an absent capability is a gap of its own. What was dropped is still
+// returned for the log.
+func TestConformLeavesAnUnreportedCapabilityAbsent(t *testing.T) {
 	inv := Inventory{SchemaVersion: 1, HelmReleases: []HelmRelease{{Name: "Bad_Name", Namespace: "apps"}}}
-	if _, err := inv.Conform(); err != nil {
+	notes, err := inv.Conform()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if st := inv.Capabilities[CapHelm]; !st.Available || !st.Partial {
-		t.Errorf("helm = %+v, want available and partial", st)
+	if st, ok := inv.Capabilities[CapHelm]; ok {
+		t.Errorf("helm = %+v, want it left absent", st)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "Helm release(s) dropped") {
+		t.Errorf("notes = %q, want the drop named", notes)
+	}
+}
+
+// The one-at-a-time fallback is bounded: each drop validates the whole
+// inventory again. An inventory with more to drop than the cap is returned
+// with Admit's error, which the agent logs and does not push.
+func TestConformFallbackIsBounded(t *testing.T) {
+	build := func(n int) Inventory {
+		inv := conformable()
+		for i := range n {
+			inv.GitOpsCharts = append(inv.GitOpsCharts, GitOpsChart{Tool: GitOpsArgoCD, Name: fmt.Sprintf("Bad_%04d", i), Chart: "c"})
+		}
+		return inv
+	}
+	inv := build(maxFallbackDrops)
+	if _, err := inv.Conform(); err != nil || inv.Admit() != nil || len(inv.GitOpsCharts) != 0 {
+		t.Errorf("at the cap: Conform = %v, charts left %d, want all dropped", err, len(inv.GitOpsCharts))
+	}
+	inv = build(maxFallbackDrops + 50)
+	_, err := inv.Conform()
+	var ie *IdentifierError
+	if !errors.As(err, &ie) {
+		t.Fatalf("over the cap: Conform = %v, want Admit's identifier error", err)
+	}
+	if len(inv.GitOpsCharts) != 50 {
+		t.Errorf("over the cap: %d charts left, want 50 (the cap's worth dropped)", len(inv.GitOpsCharts))
 	}
 }
 

@@ -11,7 +11,9 @@ import (
 // Conform repairs an inventory a collector built so that Admit does not
 // refuse it, and records every repair in the status of the capability it
 // cost data: the capability is marked Partial, Skipped names what was not
-// recorded, and Reason says how much and why. A collector reads identifiers
+// recorded, and Reason says how much and why. A capability the
+// collector never reported stays absent (the server reads that as a gap of
+// its own); the repair is in the notes only. A collector reads identifiers
 // and strings from objects the apiserver validated, and so Admit holds the
 // server to them; but a Helm release's name is a label value, the objects
 // in its stored manifest are text inside a payload anyone who can create a
@@ -55,10 +57,14 @@ func (inv *Inventory) Conform() (notes []string, err error) {
 	}
 	inv.conformImages(r)
 	// What is left is not a shape a collector is known to produce: drop the
-	// element Admit names, until nothing is, or one cannot be dropped.
-	for {
+	// element Admit names, until nothing is, or one cannot be dropped. Each
+	// drop validates the whole inventory again, so the cost is the number
+	// of drops times its size: at most maxFallbackDrops, and an inventory
+	// that still has more to drop is returned with Admit's error, as one
+	// this repair does not know how to make admissible.
+	for drops := 0; ; drops++ {
 		err = inv.checkAdmissible()
-		if err == nil || !inv.dropElement(err, r) {
+		if err == nil || drops == maxFallbackDrops || !inv.dropElement(err, r) {
 			break
 		}
 	}
@@ -78,6 +84,12 @@ func (inv Inventory) checkAdmissible() error {
 	}
 	return inv.ValidateLimits()
 }
+
+// maxFallbackDrops is the most elements Conform drops one at a time (see
+// dropElement), each after validating the whole inventory again. The
+// targeted repairs handle every shape a collector is known to produce in
+// bulk; this is the net under them.
+const maxFallbackDrops = 256
 
 // maxNamedSkips is the most Skipped entries Conform adds to one capability:
 // a cluster full of invalid releases must not grow its reports without
@@ -151,11 +163,12 @@ func (r *repairs) apply(inv *Inventory) (lines []string) {
 			inv.Capabilities = map[Capability]CapabilityStatus{}
 		}
 		st, ok := inv.Capabilities[c]
-		switch {
-		case ok && !st.Available:
-			continue // already not assessed at all
-		case !ok:
-			st = CapabilityStatus{Available: true}
+		if !ok || !st.Available {
+			// Not reported, or already not assessed at all: a capability
+			// the collector never set is not made available here, which
+			// would claim a read it did not make. The server treats an
+			// absent one as a required gap of its own.
+			continue
 		}
 		st.Partial = true
 		if st.Reason != "" {
