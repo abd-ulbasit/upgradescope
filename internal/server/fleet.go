@@ -324,7 +324,9 @@ type fleetTeamsSource struct {
 // (`missing`, and `excluded` saying why: no snapshot, a report over the
 // size cap, an unreadable inventory), and which already run the target
 // (`notApplicable`, left out of the rollup). target is required: team scores are only comparable at
-// the same target.
+// the same target. Each cluster's contribution is computed in the read
+// slot and cached, and a rollup past fleetTeamsBudget is 503 with
+// Retry-After (fleet_teams_cache.go).
 func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("target")
 	if q == "" {
@@ -338,6 +340,7 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	deadline := time.Now().Add(s.fleetTeamsBudget)
 	states, err := s.clusterStates(ctx, scopeOf(r))
 	if err != nil {
 		internalErr(w, "listing clusters", err)
@@ -361,26 +364,34 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 			notApp = append(notApp, c.Name)
 			continue
 		}
-		rep, src, err := s.fleetTeamsReport(ctx, c, target)
-		var tooLarge *reportTooLargeError
-		if errors.As(err, &tooLarge) {
-			log.Printf("server: fleet teams: %v", err)
-			exclude(c, excludedTooLarge)
-			continue
+		entry, err := fleetTeamsEntry{}, errFleetTeamsBudget
+		if time.Now().Before(deadline) {
+			entry, err = s.fleetTeamsContribution(ctx, c, target, deadline)
 		}
-		if errors.Is(err, errCorruptInventory) || errors.Is(err, store.ErrNotFound) {
-			// One bad row (or a cluster deleted meanwhile) must not take
-			// the rollup down: it has nothing to contribute.
-			log.Printf("server: fleet teams: %v", err)
-			exclude(c, excludedUnreadable)
-			continue
-		}
-		if err != nil {
-			internalErr(w, "loading evaluation", err)
+		if errors.Is(err, errFleetTeamsBudget) {
+			w.Header().Set("Retry-After", "10")
+			errJSON(w, http.StatusServiceUnavailable, fmt.Sprintf(
+				"%v (%s) before every cluster was evaluated at %s; what was computed is kept, so a retry goes on from there", err, s.fleetTeamsBudget, target))
 			return
 		}
+		if errors.Is(err, store.ErrNotFound) {
+			// A cluster deleted meanwhile has nothing to contribute.
+			log.Printf("server: fleet teams: %v", err)
+			entry.excluded = excludedUnreadable
+		} else if err != nil {
+			if ctx.Err() == nil {
+				internalErr(w, "loading evaluation", err)
+			}
+			return
+		}
+		if entry.excluded != "" {
+			exclude(c, entry.excluded)
+			continue
+		}
+		src := entry.src
+		src.Name, src.ClusterID = c.Name, c.ID
 		evaluated = append(evaluated, src)
-		for team, ts := range scopeOf(r).renderedTeams(rep) {
+		for team, ts := range renderTeamScores(scopeOf(r).teamScores(entry.scores)) {
 			agg := teams[team]
 			if agg == nil {
 				agg = &fleetTeam{WorstScore: ts.Score, Verdict: ts.Verdict}
@@ -406,31 +417,74 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// fleetTeamsReport is one cluster's report for the teams rollup: the
-// current stored evaluation, else a what-if from the latest snapshot. A
-// corrupt stored report is logged and recomputed rather than failing the
-// whole rollup.
-func (s *Server) fleetTeamsReport(ctx context.Context, c clusterState, target inventory.Version) (engine.Report, fleetTeamsSource, error) {
-	src := fleetTeamsSource{Name: c.Name, ClusterID: c.ID}
-	e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String())
-	switch {
-	case err == nil:
-		var rep engine.Report
-		jerr := json.Unmarshal(e.Report, &rep)
-		if jerr == nil {
-			src.Source, src.EvaluatedAt, src.SnapshotID = sourceStored, e.EvaluatedAt, e.SnapshotID
-			return rep, src, nil
-		}
-		log.Printf("server: fleet teams: corrupt report (cluster %d, evaluation %d), using a what-if: %v", c.ID, e.ID, jerr)
-	case !errors.Is(err, store.ErrNotFound):
-		return engine.Report{}, src, err
+// fleetTeamsContribution is one cluster's contribution to the teams
+// rollup: the team scores of its current stored evaluation, else of a
+// what-if from its latest snapshot, or why it is left out (a report over
+// the size cap, an inventory that does not decode). It is cached
+// (fleetTeamsKey), and what is not cached is computed in the read slot.
+// A corrupt stored report is logged and recomputed rather than failing
+// the whole rollup.
+func (s *Server) fleetTeamsContribution(ctx context.Context, c clusterState, target inventory.Version, deadline time.Time) (fleetTeamsEntry, error) {
+	sum, err := s.cfg.Store.CurrentEvaluationSummary(ctx, c.ID, target.String())
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fleetTeamsEntry{}, err
 	}
-	snap, inv, err := s.latestInventory(ctx, c.ID)
-	if err != nil {
-		return engine.Report{}, src, err
-	}
+	stored := err == nil
 	now := s.now().UTC() // as stored evaluations read back
-	src.Source, src.EvaluatedAt, src.SnapshotID = sourceWhatIf, now, snap.ID
-	rep, err := s.evaluateWhatIf(inv, target, now)
-	return rep, src, err
+	key := fleetTeamsKey{snapshotID: c.snap.ID, target: target, day: utcDay(now), kbVersion: s.cfg.KB.Version, teamMapHash: s.teamMapHash}
+	if stored {
+		key = fleetTeamsKey{evaluationID: sum.ID, evaluatedAt: sum.EvaluatedAt}
+	}
+	if e, ok := s.fleetTeams.get(key); ok {
+		return e, nil
+	}
+	var entry fleetTeamsEntry
+	err = s.withReadSlot(ctx, deadline, func() error {
+		if stored {
+			e, err := s.cfg.Store.CurrentEvaluation(ctx, c.ID, target.String())
+			if err == nil && e.ID == sum.ID {
+				var rep engine.Report
+				jerr := json.Unmarshal(e.Report, &rep)
+				if jerr == nil {
+					entry.scores = engine.TeamScores(rep)
+					entry.src = fleetTeamsSource{Source: sourceStored, EvaluatedAt: e.EvaluatedAt, SnapshotID: e.SnapshotID}
+					return nil
+				}
+				log.Printf("server: fleet teams: corrupt report (cluster %d, evaluation %d), using a what-if: %v", c.ID, e.ID, jerr)
+			} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+			// Replaced or gone meanwhile, or corrupt: a what-if, not cached
+			// under the stored key.
+			key = fleetTeamsKey{snapshotID: c.snap.ID, target: target, day: utcDay(now), kbVersion: s.cfg.KB.Version, teamMapHash: s.teamMapHash}
+		}
+		snap, inv, err := s.latestInventory(ctx, c.ID)
+		if errors.Is(err, errCorruptInventory) {
+			log.Printf("server: fleet teams: %v", err)
+			entry.excluded = excludedUnreadable
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		key.snapshotID = snap.ID
+		rep, err := s.evaluateWhatIf(inv, target, now)
+		var tooLarge *reportTooLargeError
+		if errors.As(err, &tooLarge) {
+			log.Printf("server: fleet teams: %v", err)
+			entry.excluded = excludedTooLarge
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		entry.scores = engine.TeamScores(rep)
+		entry.src = fleetTeamsSource{Source: sourceWhatIf, EvaluatedAt: now, SnapshotID: snap.ID}
+		return nil
+	})
+	if err != nil {
+		return fleetTeamsEntry{}, err
+	}
+	s.fleetTeams.put(key, entry)
+	return entry, nil
 }
