@@ -313,7 +313,10 @@ type GitOpsChart struct {
 	Target string `json:"target,omitempty"`
 	Chart  string `json:"chart"`
 	// Version is the chart version as the resource spells it, which may be
-	// a constraint ("4.*", ">=4.0.0") or a tag; "" when it names none.
+	// a constraint ("4.*", ">=4.0.0"), a tag, or the digest an Flux
+	// OCIRepository pins ("sha256:..."; Flux applies a digest over a semver
+	// range over a tag, and so is it recorded); "" when it names none. An
+	// Argo CD source's is its targetRevision.
 	Version string `json:"version,omitempty"`
 	// Repo is an Application's repoURL, a HelmRelease's chart source
 	// ("HelmRepository/flux-system/ingress-nginx") or the URL of the

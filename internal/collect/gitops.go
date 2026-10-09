@@ -428,7 +428,13 @@ func readArgoApplications(ctx context.Context, dyn dynamic.Interface, s *gitopsT
 		}
 		dest := mapAt(spec, "destination")
 		for _, src := range sources {
+			repo := redactRepoURL(stringAt(src, "repoURL"))
 			chart := stringAt(src, "chart")
+			if chart == "" {
+				// A native OCI source (repoURL oci://..., path ".") names no
+				// chart: the chart is the repository's last path element.
+				chart, _ = ociChartName(repo)
+			}
 			if chart == "" || !plausibleChartName(chart) {
 				continue
 			}
@@ -443,7 +449,7 @@ func readArgoApplications(ctx context.Context, dyn dynamic.Interface, s *gitopsT
 			}
 			out = append(out, inventory.GitOpsChart{
 				Tool: s.id, Name: app.GetName(), Namespace: app.GetNamespace(), Target: target,
-				Chart: chart, Version: stringAt(src, "targetRevision"), Repo: redactRepoURL(stringAt(src, "repoURL")),
+				Chart: chart, Version: stringAt(src, "targetRevision"), Repo: repo,
 			})
 		}
 	})
@@ -572,23 +578,45 @@ type ociRef struct{ namespace, name string }
 // fields are kept of a listed one.
 type ociChart struct{ chart, url, version string }
 
+// ociChartName returns the chart an OCI repository URL names, already
+// redacted (redactRepoURL: the last element of a query string would
+// otherwise be the name): the last element of its path, without any digest
+// the reference is pinned by. ok is false for a URL that is not oci:// or
+// has no path below its registry host.
+func ociChartName(repoURL string) (string, bool) {
+	rest, ok := strings.CutPrefix(repoURL, "oci://")
+	if !ok {
+		return "", false
+	}
+	rest, _, _ = strings.Cut(rest, "@") // a digest-pinned reference
+	rest = strings.TrimRight(rest, "/")
+	if _, p, hasPath := strings.Cut(rest, "/"); !hasPath || p == "" {
+		return "", false
+	}
+	return path.Base(rest), true
+}
+
+// ociVersion is the version an OCIRepository's spec.ref selects, by Flux's
+// own precedence (fluxcd.io/flux/components/source/ocirepositories): the
+// digest over the semver range over the tag. A digest is recorded as the
+// digest, which is no chart version (exactChartVersion refuses it); a
+// semver is recorded as the range it is, not as an exact version; a tag is
+// the version. None of them set (Flux then follows the "latest" tag) is "".
+func ociVersion(ref map[string]any) string {
+	return cmp.Or(stringAt(ref, "digest"), stringAt(ref, "semver"), stringAt(ref, "tag"))
+}
+
 // ociChartOf reads the chart an OCIRepository names: the last element of
-// its URL, and its tag or semver range; false when it names none. The URL
-// is redacted first: the chart name is its last element, which a query
-// string would otherwise be part of.
+// its URL (ociChartName), and the version its ref selects (ociVersion);
+// false when it names no chart.
 func ociChartOf(repo *unstructured.Unstructured) (ociChart, bool) {
 	spec := mapAt(repo.Object, "spec")
 	repoURL := redactRepoURL(stringAt(spec, "url"))
-	chart := path.Base(strings.TrimRight(strings.TrimPrefix(repoURL, "oci://"), "/"))
-	if repoURL == "" || !plausibleChartName(chart) {
+	chart, ok := ociChartName(repoURL)
+	if !ok || !plausibleChartName(chart) {
 		return ociChart{}, false
 	}
-	ref := mapAt(spec, "ref")
-	version := stringAt(ref, "tag")
-	if version == "" {
-		version = stringAt(ref, "semver")
-	}
-	return ociChart{chart: chart, url: repoURL, version: version}, true
+	return ociChart{chart: chart, url: repoURL, version: ociVersion(mapAt(spec, "ref"))}, true
 }
 
 // readOCIRepositories resolves the OCIRepositories in wanted to the charts
