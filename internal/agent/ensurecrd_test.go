@@ -3,12 +3,21 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
@@ -73,5 +82,63 @@ func TestRunRetriesEnsureCRDOnTheFirstTick(t *testing.T) {
 	if _, err := apiext.ApiextensionsV1().CustomResourceDefinitions().Get(
 		context.Background(), "clusterreadinesses.upgradescope.dev", metav1.GetOptions{}); err != nil {
 		t.Errorf("the CRD was not installed by the tick after a failed startup check: %v", err)
+	}
+}
+
+// An apiserver that hangs on the startup CRD check does not hold the
+// first tick back: the check gets startupCRDTimeout, then falls back to
+// the per-tick retry, and the tick writes the status meanwhile. A fake
+// clientset ignores contexts, so the hang is a real HTTP server's.
+func TestRunStartupCRDCheckIsBounded(t *testing.T) {
+	old := startupCRDTimeout
+	startupCRDTimeout = 100 * time.Millisecond
+	defer func() { startupCRDTimeout = old }()
+	var first atomic.Bool
+	hung := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if first.CompareAndSwap(false, true) {
+			<-r.Context().Done() // the startup GET: hang until the client gives up
+			return
+		}
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer hung.Close()
+	apiext, err := apiextensionsclient.NewForConfig(&rest.Config{Host: hung.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &syncBuffer{}
+	dyn := fakeDyn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, fakeClients(t, "v1.35.2"), dyn, apiext, mustKB(t),
+			Config{Logger: slog.New(slog.NewJSONHandler(logs, nil))})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if obj, err := dyn.Resource(crd.GVR()).Get(context.Background(), crd.DefaultName, metav1.GetOptions{}); err == nil {
+			if _, found, _ := unstructured.NestedMap(obj.Object, "status"); found {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first tick never wrote the status behind a hung startup CRD check")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var warned bool
+	for _, l := range logs.lines(t) {
+		if l["level"] == "WARN" && strings.Contains(l["msg"].(string), "retried every tick") &&
+			strings.Contains(fmt.Sprint(l["err"]), "deadline") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("no startup WARN naming the deadline: %v", logs.lines(t))
 	}
 }

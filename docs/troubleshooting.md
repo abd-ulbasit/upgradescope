@@ -101,7 +101,8 @@ To accept a finding for now, with a reason and an expiry, use an
   with `false`, every tick fails with it.
 - **`could not bring the ClusterReadiness CRD up to date`** (startup, WARN)
   **and `crdError` on tick lines.** The CRD exists but the agent could not
-  check or upgrade its schema: a transient apiserver fault, or a role
+  check or upgrade its schema: a transient apiserver fault, an apiserver
+  that did not answer within the startup check's 30 seconds, or a role
   without `patch` on the CRD. Every tick tries again until it succeeds;
   meanwhile `status.notAssessed` leads with a note, because an older schema
   makes the apiserver drop the status fields it lacks (conditions, for

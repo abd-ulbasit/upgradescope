@@ -129,6 +129,11 @@ func ValidateForceSyncEvery(d time.Duration) error {
 	return nil
 }
 
+// startupCRDTimeout bounds the CRD check at startup: a get, a patch or a
+// create and its wait for Established (crd.establishTimeout, 10s). One
+// that runs out is retried on every tick (runner.ensureCRD).
+var startupCRDTimeout = 30 * time.Second
+
 // minTickSpacing is the shortest time between two ticks' pushes: Run
 // sleeps jitter(interval), at least this long, after a tick ends (its push
 // done) and before the next begins.
@@ -678,7 +683,12 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	r := newRunner(clients, dyn, k, cfg)
 	if !cfg.SkipCRDManagement {
 		ensure := func(ctx context.Context) error { return crd.EnsureCRD(ctx, apiext) }
-		if err := ensure(ctx); err != nil {
+		// Bounded: an apiserver that hangs at pod start must not hold the
+		// first tick back. A check that times out is retried every tick.
+		sctx, scancel := context.WithTimeout(ctx, startupCRDTimeout)
+		err := ensure(sctx)
+		scancel()
+		if err != nil {
 			if errors.Is(err, crd.ErrCRDNotInstalled) {
 				return err // every tick would 404; say why once, clearly
 			}
