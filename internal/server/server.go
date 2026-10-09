@@ -242,6 +242,7 @@ type Server struct {
 	readSlots        chan struct{} // semaphore: one token per read that loads a snapshot
 	readQueueTimeout time.Duration // how long such a read waits for a slot
 	fleetTeamsBudget time.Duration // how long one fleet teams rollup may run
+	teamsSlots       chan struct{} // semaphore: one token per fleet teams rollup
 	fleetTeams       fleetTeamsCache
 
 	fleetSlots          chan struct{} // semaphore: one token per read of the whole fleet being built
@@ -320,6 +321,7 @@ func New(cfg Config) (*Server, error) {
 	s.readSlots = make(chan struct{}, maxConcurrentReads)
 	s.readQueueTimeout = readQueueTimeout
 	s.fleetTeamsBudget = fleetTeamsBudget
+	s.teamsSlots = make(chan struct{}, maxConcurrentTeamsRollups)
 	s.fleetSlots = make(chan struct{}, maxConcurrentFleetReads)
 	s.fleetQueueTimeout = readQueueTimeout
 	s.metricsQueueTimeout = metricsQueueTimeout
@@ -394,7 +396,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/teams", s.readAuth(s.inReadSlot(s.handleTeams)))
 	s.mux.HandleFunc("GET /api/v1/fleet", s.readAuth(s.inFleetSlot(s.handleFleet)))
 	// The teams rollup takes the read slot per cluster (fleet_teams_cache.go).
-	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.inFleetSlot(s.handleFleetTeams)))
+	s.mux.HandleFunc("GET /api/v1/fleet/teams", s.readAuth(s.inTeamsSlot(s.handleFleetTeams)))
 	s.mux.HandleFunc("POST /api/v1/gate", s.readAuth(s.handleGate))
 	s.mux.HandleFunc("GET /api/v1/clusters/{id}/export", s.readAuth(s.inReadSlot(s.handleExport)))
 	s.mux.HandleFunc("GET /api/v1/registry", s.readAuth(s.handleRegistry))
@@ -559,6 +561,17 @@ func (s *Server) inReadSlot(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) inFleetSlot(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.heldIn(w, r, h, s.fleetSlots, s.fleetQueueTimeout, "too many concurrent fleet reads; retry shortly")
+	}
+}
+
+// inTeamsSlot runs h, a fleet teams rollup, in the slot of its own
+// (maxConcurrentTeamsRollups) with its response written to memory, and
+// sends it as send does. The rollup takes the read slot for each
+// cluster's part (fleet_teams_cache.go), so it never holds the fleet
+// reads' slots, nor the read slot for longer than one cluster.
+func (s *Server) inTeamsSlot(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.heldIn(w, r, h, s.teamsSlots, s.readQueueTimeout, "a fleet teams rollup is already running; retry shortly")
 	}
 }
 

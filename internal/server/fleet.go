@@ -368,10 +368,10 @@ func (s *Server) handleFleetTeams(w http.ResponseWriter, r *http.Request) {
 		if time.Now().Before(deadline) {
 			entry, err = s.fleetTeamsContribution(ctx, c, target, deadline)
 		}
-		if errors.Is(err, errFleetTeamsBudget) {
+		if errors.Is(err, errFleetTeamsBudget) || errors.Is(err, errReadSlotBusy) {
 			w.Header().Set("Retry-After", "10")
 			errJSON(w, http.StatusServiceUnavailable, fmt.Sprintf(
-				"%v (%s) before every cluster was evaluated at %s; what was computed is kept, so a retry goes on from there", err, s.fleetTeamsBudget, target))
+				"%v before every cluster was evaluated at %s; what was computed is kept, so a retry goes on from there", err, target))
 			return
 		}
 		if errors.Is(err, store.ErrNotFound) {
@@ -457,6 +457,10 @@ func (s *Server) fleetTeamsContribution(ctx context.Context, c clusterState, tar
 			// Replaced or gone meanwhile, or corrupt: a what-if, not cached
 			// under the stored key.
 			key = fleetTeamsKey{snapshotID: c.snap.ID, target: target, day: utcDay(now), kbVersion: s.cfg.KB.Version, teamMapHash: s.teamMapHash}
+			if e, ok := s.fleetTeams.get(key); ok {
+				entry = e
+				return nil
+			}
 		}
 		snap, inv, err := s.latestInventory(ctx, c.ID)
 		if errors.Is(err, errCorruptInventory) {

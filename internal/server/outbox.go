@@ -217,10 +217,11 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) bool {
 		settle(s.cfg.Store.DeferOutbox(ctx, m.ID, expiryCap(m, until)))
 		return true
 	}
-	// Its lease ends before this attempt could: another claimer may take
-	// it then, so it is put back for the next claim, unattempted. (A
-	// lease no longer than the timeout would never start one.)
-	if now := s.now(); s.outboxLease > s.notifyTimeout && now.Add(s.notifyTimeout).After(m.NextAttemptAt) {
+	// Its lease ends before this attempt could (with a fifth of the
+	// timeout to spare for settling it): another claimer may take it then,
+	// so it is put back for the next claim, unattempted. (A lease no longer
+	// than that would never start one.)
+	if now, need := s.now(), s.notifyTimeout+s.notifyTimeout/5; s.outboxLease > need && now.Add(need).After(m.NextAttemptAt) {
 		settle(s.cfg.Store.DeferOutbox(ctx, m.ID, now))
 		return false
 	}

@@ -16,15 +16,16 @@ import (
 //
 //   - each cluster's contribution is computed in the read slot, which it
 //     takes and gives back per cluster, so a per-cluster read waits at
-//     most one cluster's compute; the request as a whole holds a fleet
-//     slot;
+//     most one cluster's compute; the request as a whole holds a slot of
+//     its own (maxConcurrentTeamsRollups), not the fleet reads';
 //   - each contribution is cached (fleetTeamsCache), so the next request
 //     for that target redoes only what changed;
 //   - a request that has run fleetTeamsBudget gets 503 with Retry-After
 //     instead of holding on; what it computed stays cached, so the retry
 //     goes on from there.
 const (
-	fleetTeamsBudget = 20 * time.Second
+	fleetTeamsBudget          = 20 * time.Second
+	maxConcurrentTeamsRollups = 1
 	// maxFleetTeamsEntries and maxFleetTeamsTeams bound the cache: entries,
 	// and team scores across them (one is about 100 bytes), oldest first
 	// out.
@@ -32,9 +33,12 @@ const (
 	maxFleetTeamsTeams   = 1 << 16
 )
 
-// errFleetTeamsBudget is a rollup past fleetTeamsBudget, or one that could
-// not get the read slot within it.
+// errFleetTeamsBudget is a rollup past fleetTeamsBudget.
 var errFleetTeamsBudget = errors.New("the fleet teams rollup ran past its time bound")
+
+// errReadSlotBusy is a rollup that waited readQueueTimeout for the read
+// slot, as a per-cluster read gives up.
+var errReadSlotBusy = errors.New("too many concurrent reads")
 
 // fleetTeamsKey identifies one cluster's contribution. A stored one is its
 // evaluation as last written (a refresh moves evaluatedAt). A what-if is
@@ -98,17 +102,22 @@ func (c *fleetTeamsCache) put(k fleetTeamsKey, e fleetTeamsEntry) {
 	}
 }
 
-// withReadSlot runs f in the read slot, waiting for it until deadline
-// (errFleetTeamsBudget) or ctx ends.
+// withReadSlot runs f in the read slot, waiting for it as long as a
+// per-cluster read does (errReadSlotBusy), but not past deadline
+// (errFleetTeamsBudget), or until ctx ends.
 func (s *Server) withReadSlot(ctx context.Context, deadline time.Time, f func() error) error {
-	timer := time.NewTimer(time.Until(deadline))
+	wait, late := s.readQueueTimeout, errReadSlotBusy
+	if left := time.Until(deadline); left < wait {
+		wait, late = left, errFleetTeamsBudget
+	}
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case s.readSlots <- struct{}{}:
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
-		return errFleetTeamsBudget
+		return late
 	}
 	defer func() { <-s.readSlots }()
 	return f()

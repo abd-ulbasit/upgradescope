@@ -104,9 +104,9 @@ the heap ~400 MiB. These reads run one at a time in a read slot of their
 own, so they never wait on pushes or `/gate`; others wait up to 30s, then
 get `503` with `Retry-After`. Only a what-if decodes the whole inventory;
 the cluster detail decodes its capabilities and skips the rest. The fleet
-teams rollup holds a fleet slot and takes the read slot for one cluster
-at a time, so a per-cluster read waits for one cluster's part of it, not
-the whole; each cluster's part is kept (by its stored evaluation, or for
+teams rollup runs one at a time in a slot of its own and takes the read
+slot for one cluster at a time, so a per-cluster read waits for one
+cluster's part of it, not the whole, and fleet reads never wait for it; each cluster's part is kept (by its stored evaluation, or for
 a what-if by its snapshot, the target, the knowledge base, the team map
 and the UTC day, at most 4096 of them and 65,536 team scores in all), so
 the next rollup at that target computes only what changed, and a rollup

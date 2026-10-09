@@ -182,7 +182,7 @@ func TestOutboxLeaseCoversABatch(t *testing.T) {
 	if outboxBatch*shippedAttempt >= outboxLease {
 		t.Errorf("outboxBatch x %v = %v, want under outboxLease %v", shippedAttempt, outboxBatch*shippedAttempt, outboxLease)
 	}
-	if notifyTimeout >= outboxLease {
-		t.Errorf("notifyTimeout %v must be under outboxLease %v, or no delivery could start", notifyTimeout, outboxLease)
+	if need := notifyTimeout + notifyTimeout/5; need >= outboxLease {
+		t.Errorf("notifyTimeout and its margin (%v) must be under outboxLease %v, or no delivery could start", need, outboxLease)
 	}
 }

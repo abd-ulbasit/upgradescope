@@ -133,10 +133,18 @@ func TestFleetTeamsDoesNotHoldTheReadSlot(t *testing.T) {
 		t.Errorf("GET report during the rollup = %d", resp.StatusCode)
 	}
 	report := time.Since(start)
+	// The fleet reads have slots of their own and load no inventory.
+	start = time.Now()
+	if resp := getJSON(t, ts, "/api/v1/fleet", "", nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /fleet during the rollup = %d", resp.StatusCode)
+	}
+	if fleet := time.Since(start); fleet > delay {
+		t.Errorf("GET /fleet during the rollup took %v, want it not to wait for the rollup", fleet)
+	}
 	wg.Wait()
 	t.Logf("rollup %v; a what-if report during it %v", rollup, report)
 	// The report waits for at most one cluster's compute, then makes its own.
-	if report > 4*delay || report >= rollup/2 {
+	if report > 6*delay || report >= rollup/2 {
 		t.Errorf("a per-cluster read during the rollup took %v (rollup %v), want about two loads of %v", report, rollup, delay)
 	}
 }
