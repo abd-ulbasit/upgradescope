@@ -73,7 +73,7 @@ target.
 
 | Category | Blocker | Warning | Info |
 |---|---|---|---|
-| `removed-api` | An object (or a Helm release's stored manifest) uses an API removed at or before the target. | The API is removed in the minor after the target. | — |
+| `removed-api` | An object (or a Helm release's stored manifest) uses an API removed at or before the target; or, in `--files` mode and the gate (the manifests are proposed state), a manifest uses an API version the target does not serve yet, titled "not served until X" (applying it fails the same way). | The API is removed in the minor after the target. A removal after the knowledge base's horizon is titled "(projected)" in either severity. | — |
 | `deprecated-api` | — | A Helm release's stored manifest uses a deprecated API that is not removed by the target, even when the live scan also flags the object (as info). | An object uses an API that is deprecated (or will be, after the target) and not removed by the minor after the target. |
 | `deprecated-api-in-use` | The apiserver saw requests to an API removed at or before the target, and no object finding covers it (or every object of the one that did was suppressed by annotation or an object-scoped rule). The removal release is the knowledge base's when it knows the API, else the metric's `removed_release` label. | Removed in the minor after the target. | No removal release known to the knowledge base or reported. |
 | `eol-addon` | The add-on, or its installed release line, is past end of life. **Whatever the target.** | A node container runtime past end of life (it ships with the node image, not with Kubernetes). | — |

@@ -282,3 +282,80 @@ func gvString(g GVK) string {
 	}
 	return g.Group + "/" + g.Version
 }
+
+// ServedAlternative: for an API the target does not serve yet, the newest
+// version of its group and kind that the target does serve.
+func TestServedAlternative(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	cases := []struct {
+		group, version, kind string
+		target               int
+		want                 string // group/version, "" = none
+	}{
+		// resource.k8s.io v1 is served from 1.34; v1beta2 (1.33) is the newest before it.
+		{"resource.k8s.io", "v1", "DeviceClass", 33, "resource.k8s.io/v1beta2"},
+		{"resource.k8s.io", "v1", "DeviceClass", 32, "resource.k8s.io/v1beta1"},
+		// Workload v1beta1 is served from 1.37; at 1.36 only v1alpha2 is.
+		{"scheduling.k8s.io", "v1beta1", "Workload", 36, "scheduling.k8s.io/v1alpha2"},
+		{"scheduling.k8s.io", "v1beta1", "Workload", 35, "scheduling.k8s.io/v1alpha1"},
+		// Nothing of the kind is served before 1.35.
+		{"scheduling.k8s.io", "v1beta1", "Workload", 34, ""},
+		// v1 VolumeAttributesClass is served from 1.34, v1beta1 from 1.31.
+		{"storage.k8s.io", "v1", "VolumeAttributesClass", 33, "storage.k8s.io/v1beta1"},
+	}
+	for _, c := range cases {
+		e, ok := idx.Lookup(c.group, c.version, c.kind)
+		if !ok {
+			t.Errorf("KB lacks %s/%s %s", c.group, c.version, c.kind)
+			continue
+		}
+		got := ""
+		if g, ok := idx.ServedAlternative(e, *ver(c.target)); ok {
+			got = gvString(g)
+		}
+		if got != c.want {
+			t.Errorf("ServedAlternative(%s/%s %s, 1.%d) = %q, want %q", c.group, c.version, c.kind, c.target, got, c.want)
+		}
+	}
+}
+
+// For every entry and every target that does not serve it yet, the
+// alternative is a version of the same kind the KB knows the target
+// serves, never the entry itself.
+func TestServedAlternativeIsServed(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	unserved := 0
+	for _, e := range k.APILifecycle {
+		for minor := 9; minor <= k.MaxKnownK8s.Minor+3; minor++ {
+			target := *ver(minor)
+			if e.Introduced.Compare(target) <= 0 {
+				continue
+			}
+			unserved++
+			g, ok := idx.ServedAlternative(e, target)
+			if !ok {
+				continue
+			}
+			re, known := idx.Lookup(g.Group, g.Version, g.Kind)
+			switch {
+			case !known:
+				t.Errorf("%s/%s %s @%s: alternative %s %s is not in the KB", e.Group, e.Version, e.Kind, target, gvString(g), g.Kind)
+			case !servedAt(re, target):
+				t.Errorf("%s/%s %s @%s: alternative %s %s is not served (introduced %s, removed %v)", e.Group, e.Version, e.Kind, target, gvString(g), g.Kind, re.Introduced, re.Removed)
+			case g.Group != e.Group || g.Kind != e.Kind || g.Version == e.Version:
+				t.Errorf("%s/%s %s @%s: alternative %s %s is not another version of the same kind", e.Group, e.Version, e.Kind, target, gvString(g), g.Kind)
+			}
+		}
+	}
+	if unserved == 0 {
+		t.Fatal("no entry is introduced after a checked target: the test checked nothing")
+	}
+}

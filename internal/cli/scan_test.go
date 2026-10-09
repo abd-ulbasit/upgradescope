@@ -377,3 +377,30 @@ func TestWriteReportPropagatesWriteErrors(t *testing.T) {
 		}
 	}
 }
+
+// #266: scan --files reports a manifest at an API version the target does
+// not serve yet as a blocker naming the release that serves it (the apply
+// would fail with "no matches for kind"), and the same manifest at a
+// target that serves it is clean.
+func TestScanFilesAPINotServedYetIsABlocker(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	manifest := "apiVersion: resource.k8s.io/v1\nkind: DeviceClass\nmetadata: {name: gpu}\nspec: {}\n---\n" +
+		"apiVersion: admissionregistration.k8s.io/v1\nkind: MutatingAdmissionPolicy\nmetadata: {name: p}\nspec: {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.33", "--fail-on", "warning"}, real)
+	if !errors.Is(err, ErrGateFailed) || ExitCode(err) != 2 {
+		t.Fatalf("err = %v, want ErrGateFailed (exit 2)\n%s", err, out)
+	}
+	for _, want := range []string{"resource.k8s.io/v1 DeviceClass is not served until 1.34", "admissionregistration.k8s.io/v1 MutatingAdmissionPolicy is not served until 1.36"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("table lacks %q:\n%s", want, out)
+		}
+	}
+	out, _, err = execScanStderr(t, []string{"--files", dir, "--target", "1.36", "--fail-on", "warning"}, real)
+	if err != nil || strings.Contains(out, "not served until") {
+		t.Errorf("at 1.36, which serves both: err = %v\n%s", err, out)
+	}
+}

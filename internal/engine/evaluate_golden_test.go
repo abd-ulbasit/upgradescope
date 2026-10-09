@@ -38,6 +38,20 @@ var goldenParams = map[string]struct{ target, now string }{
 	// 1.33) but not after the control plane reaches 1.34 → blocker.
 	"gke-vendor-versions": {"1.34", "2026-06-10T00:00:00Z"},
 	"files-mode":          {"1.36", "2026-06-10T00:00:00Z"},
+	// #266: a manifest at an API version the target does not serve yet
+	// (introduced after it) is a blocker like a removed one: DeviceClass v1
+	// is served from 1.34 (v1alpha3 is what 1.33 serves), Workload v1beta1
+	// from 1.36 (no version before it), and the Deprecated branch must not
+	// answer for it first. The same stored objects in a live cluster are
+	// silent: the cluster serves what it stores.
+	"files-unserved-api":     {"1.33", "2026-06-10T00:00:00Z"},
+	"live-introduced-silent": {"1.33", "2026-06-10T00:00:00Z"},
+	// #266: a removal past the KB horizon (testdata/kb.json: 1.36) is a
+	// k8s.io/api lifecycle default, projected, in the title and detail; at
+	// the horizon (removal at target+1) it is a warning, past it a blocker
+	// and the kb-coverage note says so.
+	"files-removal-projected-warning": {"1.36", "2026-06-10T00:00:00Z"},
+	"files-removal-projected-blocker": {"1.38", "2026-06-10T00:00:00Z"},
 	// #124: a resource.k8s.io/v1alpha3 DeviceClass, deleted upstream in
 	// 1.34 (a KB tombstone), at target 1.34 — the removal release — blocks.
 	"removed-alpha-tombstone": {"1.34", "2026-06-10T00:00:00Z"},

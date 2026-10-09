@@ -169,6 +169,33 @@ func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version)
 	return GVK{Group: best.Group, Version: best.Version, Kind: best.Kind}, true
 }
 
+// ServedAlternative returns the newest version of e's group and kind that
+// target serves (introduced at or before it, not removed by it), other
+// than e's own: the API to write a manifest in when e itself is not served
+// yet (resource.k8s.io/v1 DeviceClass at 1.33 is v1beta2, v1 is served from
+// 1.34). Newest is the latest Introduced; the same release is broken by
+// the version name, so the answer does not depend on entry order. It
+// reports false when the KB knows no such version.
+func (i Index) ServedAlternative(e APILifecycleEntry, target inventory.Version) (GVK, bool) {
+	var best *APILifecycleEntry
+	for _, c := range i.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
+		if c.Version == e.Version || !servedAt(c, target) {
+			continue
+		}
+		if best == nil {
+			best = &c
+			continue
+		}
+		if cmpIntro := c.Introduced.Compare(best.Introduced); cmpIntro > 0 || cmpIntro == 0 && c.Version > best.Version {
+			best = &c
+		}
+	}
+	if best == nil {
+		return GVK{}, false
+	}
+	return GVK{Group: best.Group, Version: best.Version, Kind: best.Kind}, true
+}
+
 // LaterReplacement returns, when ResolveReplacement knows no replacement
 // target serves, the replacement e's chain reaches that a later release
 // serves, and the release that introduces it: certificates.k8s.io/v1

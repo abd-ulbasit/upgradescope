@@ -25,6 +25,9 @@ const (
 	// helmKubernetesAPIsURL documents why helm upgrade fails on a stored
 	// manifest with removed APIs, and the mapkubeapis fix.
 	helmKubernetesAPIsURL = "https://helm.sh/docs/topics/kubernetes_apis/"
+	// apiVersioningURL documents the alpha, beta and stable API levels and
+	// which a cluster serves.
+	apiVersioningURL = "https://kubernetes.io/docs/reference/using-api/#api-versioning"
 )
 
 // pluralObjects renders an object count with grammatical number:
@@ -123,6 +126,13 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 // manifest objects in files mode),
 //   - removed at ≤ target          → blocker, removed-api
 //   - removed exactly at target+1  → warning, removed-api
+//     (a removal past the KB horizon is titled "(projected)": it is a
+//     k8s.io/api lifecycle default, not a shipped release)
+//   - proposed state (manifests: files mode, the gate) at an API version
+//     the target does not serve yet (introduced after it) → blocker,
+//     removed-api, "not served until X": applying it fails like a removed
+//     API. Live stored objects are never judged so (the cluster serves
+//     what it stores).
 //   - deprecated, removal beyond the window or unset → info, deprecated-api;
 //     a deprecation after the target is titled as such, and "projected"
 //     past the KB horizon
@@ -156,7 +166,18 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 			Objects:        sortedObjects(u.Objects),
 			ObjectsOmitted: u.ObjectsOmitted,
 		}
-		if r, ok := idx.ResolveReplacement(e, target); ok {
+		// Proposed state: a manifest is applied to the cluster at the target.
+		// Live objects are stored where they are served, so only manifests
+		// can name an API the target does not serve yet.
+		unserved := known && e.Introduced.Compare(target) > 0 && (inv.Source == inventory.SourceFiles || listed != storedObjects)
+		if unserved {
+			if alt, ok := idx.ServedAlternative(e, target); ok {
+				f.Remediation = fmt.Sprintf("write it as %s %s, the newest version Kubernetes %s serves, or upgrade the cluster to Kubernetes %s before applying it", gvString(alt.Group, alt.Version), alt.Kind, target, e.Introduced)
+			} else {
+				f.Remediation = fmt.Sprintf("Kubernetes %s serves no version of %s the knowledge base knows: upgrade the cluster to Kubernetes %s before applying it", target, u.Kind, e.Introduced)
+			}
+			f.Citations = append(f.Citations, apiVersioningURL)
+		} else if r, ok := idx.ResolveReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("migrate to %s %s", gvString(r.Group, r.Version), r.Kind)
 		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known; %s %s is served from %s", target, gvString(later.Group, later.Version), later.Kind, from)
@@ -164,19 +185,27 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known", target)
 		}
 		gv := gvString(u.Group, u.Version)
+		projectedRemoval := ""
+		if e.Removed != nil && e.Removed.Compare(k.MaxKnownK8s) > 0 {
+			projectedRemoval = " (projected)" // k8s.io/api's lifecycle markers, not a release
+		}
 		switch {
 		case !known:
 			f.Category = CatUnknownAPI
 			f.Severity = SevInfo
 			f.Title = fmt.Sprintf("%s %s is not in the knowledge base (%s)", gv, u.Kind, pluralObjects(u.Count))
+		case unserved:
+			f.Category = CatRemovedAPI
+			f.Severity = SevBlocker
+			f.Title = fmt.Sprintf("%s %s is not served until %s, after target %s (%s)", gv, u.Kind, e.Introduced, target, pluralObjects(u.Count))
 		case e.Removed != nil && e.Removed.Compare(target) <= 0:
 			f.Category = CatRemovedAPI
 			f.Severity = SevBlocker
-			f.Title = fmt.Sprintf("%s %s removed in %s (%s)", gv, u.Kind, e.Removed, pluralObjects(u.Count))
+			f.Title = fmt.Sprintf("%s %s removed in %s%s (%s)", gv, u.Kind, e.Removed, projectedRemoval, pluralObjects(u.Count))
 		case e.Removed != nil && e.Removed.Compare(target.Next()) == 0:
 			f.Category = CatRemovedAPI
 			f.Severity = SevWarning
-			f.Title = fmt.Sprintf("%s %s removed in %s (%s)", gv, u.Kind, e.Removed, pluralObjects(u.Count))
+			f.Title = fmt.Sprintf("%s %s removed in %s%s (%s)", gv, u.Kind, e.Removed, projectedRemoval, pluralObjects(u.Count))
 		case e.Deprecated != nil:
 			f.Category = CatDeprecatedAPI
 			f.Severity = SevInfo
@@ -213,6 +242,12 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		f.Detail += writtenBy(u)
 		if !known {
 			f.Detail += fmt.Sprintf(" The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes %s serves it.", target)
+		}
+		if unserved {
+			f.Detail += fmt.Sprintf(" Kubernetes %s does not serve it yet (introduced in %s), so applying these objects to it fails with \"no matches for kind\".", target, e.Introduced)
+		}
+		if f.Category == CatRemovedAPI && projectedRemoval != "" && !unserved {
+			f.Detail += fmt.Sprintf(" The removal in %s is projected: it is a default of k8s.io/api's lifecycle markers, not a shipped release (the newest the knowledge base covers is %s), and may change before it ships.", e.Removed, k.MaxKnownK8s)
 		}
 		if !b.add(&out, f) {
 			return out
@@ -1782,7 +1817,8 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 	}
 	if target.Compare(k.MaxKnownK8s) > 0 {
 		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage, Required: true,
-			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed", k.MaxKnownK8s, target)})
+			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed (API removals after %s are projected from k8s.io/api lifecycle markers, not shipped releases)",
+				k.MaxKnownK8s, target, k.MaxKnownK8s)})
 	}
 	if from, ok := upgradeFrom(inv); ok && target.Compare(from) <= 0 {
 		gaps = append(gaps, CapabilityGap{Capability: GapTarget, Required: true,

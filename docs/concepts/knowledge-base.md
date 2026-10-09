@@ -39,7 +39,10 @@ each registered type for its generated `APILifecycleIntroduced`,
 built from, never a hand-copied table. That also covers removals scheduled
 further ahead than the human-written
 [deprecation guide](https://kubernetes.io/docs/reference/using-api/deprecation-guide/).
-CI regenerates the file on every change and fails when the committed copy
+Those removals are `k8s.io/api` lifecycle defaults, not shipped releases, and
+can change before the release ships: a removal after the horizon
+(`maxKnownK8s`) is titled "(projected)" in the report, as a deprecation after
+it is. CI regenerates the file on every change and fails when the committed copy
 differs, and checks that the generator imports every `k8s.io/api`
 group/version package.
 
@@ -81,7 +84,9 @@ has released, `maxKnownK8s` in the dataset, shown as `kb horizon` by
 `upgradescope version`. A target above it is allowed, but nothing can say
 what that release removes, so the report gets a `kb-stale` warning and a
 required `kb-coverage` gap, and the verdict is `unknown`
-([Verdict and score](verdict-and-score.md)). This is also what happens to
+([Verdict and score](verdict-and-score.md)). The gap says that API removals
+after the horizon are projected from `k8s.io/api`'s lifecycle markers, not
+from shipped releases. This is also what happens to
 the in-cluster agent's default target (the next minor) once a cluster runs
 the horizon minor, until you upgrade to a release with a newer KB.
 

@@ -190,7 +190,7 @@
   "notAssessed": [
     {
       "capability": "kb-coverage",
-      "reason": "knowledge base covers Kubernetes up to 1.36; target 1.38 cannot be assessed",
+      "reason": "knowledge base covers Kubernetes up to 1.36; target 1.38 cannot be assessed (API removals after 1.36 are projected from k8s.io/api lifecycle markers, not shipped releases)",
       "required": true
     }
   ],
