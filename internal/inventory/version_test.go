@@ -279,9 +279,28 @@ func TestParseTarget(t *testing.T) {
 // TestParseTargetFloorHintOnlyForTruncatedMinors: the YAML hint is for
 // minors that lose a trailing zero (one digit), not for 1.15.
 func TestParseTargetFloorHintOnlyForTruncatedMinors(t *testing.T) {
-	_, err := ParseTarget("1.15")
-	if err == nil || strings.Contains(err.Error(), "YAML") {
-		t.Fatalf("ParseTarget(1.15) = %v, want a floor error without the YAML hint", err)
+	for _, in := range []string{"1.15", "1.10", "1.0"} { // 1.0 is no YAML number's truncation
+		_, err := ParseTarget(in)
+		if err == nil || strings.Contains(err.Error(), "YAML") {
+			t.Fatalf("ParseTarget(%s) = %v, want a floor error without the YAML hint", in, err)
+		}
+	}
+	for _, in := range []string{"1.1", "1.9"} {
+		_, err := ParseTarget(in)
+		if err == nil || !strings.Contains(err.Error(), "YAML") {
+			t.Fatalf("ParseTarget(%s) = %v, want a floor error with the YAML hint", in, err)
+		}
+	}
+}
+
+// TestParseClusterVersionHasNoFloor: a cluster's own version (--from) is
+// judged however old it is, but is still a 1.x version.
+func TestParseClusterVersionHasNoFloor(t *testing.T) {
+	if v, err := ParseClusterVersion("1.15"); err != nil || v != (Version{Major: 1, Minor: 15}) {
+		t.Fatalf("ParseClusterVersion(1.15) = %v, %v; want 1.15", v, err)
+	}
+	if _, err := ParseClusterVersion("2.0"); err == nil {
+		t.Fatal("ParseClusterVersion(2.0) = nil error, want major 1 required")
 	}
 }
 

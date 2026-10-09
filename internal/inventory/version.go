@@ -81,13 +81,19 @@ func ParseTarget(s string) (Version, error) {
 	}
 	if floor := OldestCovered(); v.Compare(floor) < 0 {
 		hint := ""
-		if v.Minor < 10 { // 1.30 is read as 1.3: the minor loses its trailing zero
+		if v.Minor >= 1 && v.Minor < 10 { // 1.30 is read as 1.3: the minor loses its trailing zero (1.0 has no such number)
 			hint = fmt.Sprintf("is this %d.%d0 written as a YAML number? quote it (\"%d.%d0\"); ", v.Major, v.Minor, v.Major, v.Minor)
 		}
 		return Version{}, fmt.Errorf("invalid kubernetes version %q: %sthe oldest minor the knowledge base covers is %s, and a target below it would judge nothing", s, hint, floor)
 	}
 	return v, nil
 }
+
+// ParseClusterVersion parses the version a cluster runs (a --from flag):
+// ParseVersion plus major == 1, with no floor, because a cluster's own
+// version is judged, not refused, however old it is (Admit does the same
+// for an inventory's serverVersion).
+func ParseClusterVersion(s string) (Version, error) { return parseMajorOne(s) }
 
 // parseMajorOne is ParseVersion plus major == 1: a Kubernetes 1.x version,
 // of any minor (a cluster's own version, as opposed to a target, has no

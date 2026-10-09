@@ -20,7 +20,8 @@ upgradescope scan --target 1.36 --plan
 ```
 
 Rendered manifests carry no cluster version, so `--files` needs `--from`,
-the minor the cluster runs now:
+the minor the cluster runs now (any 1.x: a cluster's own version has no
+floor, unlike `--target`):
 
 ```sh
 upgradescope scan --files rendered/ --from 1.31 --target 1.36 --plan

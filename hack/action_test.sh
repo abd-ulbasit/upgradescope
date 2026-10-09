@@ -431,8 +431,12 @@ for t in 1.3 1.4 1.5 1.1 1.0 1.15 2.30 0.20; do
 done
 run install "$work/stub-curl:" INPUT_TARGET=1.3
 expect "target 1.3 says to quote it" 1 'Is this 1.30 written as a YAML number? quote it (target: "1.30")'
-run install "$work/stub-curl:" INPUT_TARGET=1.15
-hasnt "target 1.15 gets no YAML hint" "$work/out" "YAML number"
+for t in 1.15 1.10 1.0 2.3; do
+  run install "$work/stub-curl:" INPUT_TARGET="$t"
+  hasnt "target $t gets no YAML hint" "$work/out" "YAML number"
+done
+run install "$work/stub-curl:" INPUT_TARGET=1.9
+expect "target 1.9 says to quote it" 1 'Is this 1.90 written as a YAML number? quote it (target: "1.90")'
 # Only MAJOR.MINOR: the scan parses a longer or v-prefixed version, the
 # Action does not take one.
 for t in v1.36 1.36.2 1.x 1.; do

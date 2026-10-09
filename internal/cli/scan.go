@@ -731,7 +731,9 @@ func validatePlanOptions(opts *scanOptions) error {
 	case opts.from == "":
 		return errors.New("--plan with --files needs --from, the minor the cluster runs now")
 	}
-	from, err := inventory.ParseTarget(opts.from)
+	// A cluster's own version has no floor (unlike a target): a 1.15
+	// cluster plans here as it does live.
+	from, err := inventory.ParseClusterVersion(opts.from)
 	if err != nil {
 		return fmt.Errorf("invalid --from %q: %w", opts.from, err)
 	}
