@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,29 +21,92 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/mcp"
 )
 
+// serial fails a test that has been, or is later made, parallel: the checks
+// below count goroutines and mcpHTTPLimits is one for the whole process, so
+// a test that runs beside another cannot tell its servers from the other's.
+// (t.Setenv panics in a parallel test, and t.Parallel panics after it.)
+func serial(t *testing.T) {
+	t.Helper()
+	t.Setenv("UPGRADESCOPE_TEST_SERIAL", "1")
+}
+
 // setMCPHTTPLimits changes the HTTP transport's limits for one test, so it
 // need not wait out the real ones.
 func setMCPHTTPLimits(t *testing.T, edit func(*mcpHTTPConfig)) {
 	t.Helper()
+	serial(t)
 	orig := mcpHTTPLimits
 	edit(&mcpHTTPLimits)
 	t.Cleanup(func() { mcpHTTPLimits = orig })
 }
 
-// goroutinesBackTo waits until the process runs at most base goroutines
-// (and a little slack for the runtime's own), failing with how many are
-// left.
+// serverStacks are the stacks of the goroutines of this process that serve
+// an HTTP connection or hold an MCP session, which is what a peer of the
+// server holds and what the tests below show the server giving back. They
+// are read from the goroutines' stacks, not counted with
+// runtime.NumGoroutine: the count of the whole process also moves with the
+// runtime's own goroutines, the test binary's, and whatever another test
+// started or left behind, which the checks must not mistake for the
+// server's.
+func serverStacks() []string {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	var held []string
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		// "(*conn).serve(" is the frame of a connection's goroutine (not
+		// "created by ... (*conn).serve in", which its helpers carry); the
+		// SDK's frames are those of a session's.
+		if strings.Contains(g, "net/http.(*conn).serve(") || strings.Contains(g, "modelcontextprotocol/go-sdk/") {
+			held = append(held, g)
+		}
+	}
+	return held
+}
+
+// serverGoroutines is how many goroutines serverStacks finds.
+func serverGoroutines() int { return len(serverStacks()) }
+
+// waitServerGoroutines waits until the server holds at least n goroutines,
+// failing if it does not within the time given: the connections and
+// sessions a test opened are served by goroutines that start a moment
+// after the peer is done, so a count taken at once can miss them.
+func waitServerGoroutines(t *testing.T, n int, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		got := serverGoroutines()
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the server holds %d goroutines after %s, want at least %d: its connections and sessions are not being served", got, within, n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// goroutinesBackTo waits until the server holds at most base goroutines,
+// failing, with the stacks of those it still holds, if it does not within
+// the time given.
 func goroutinesBackTo(t *testing.T, base int, within time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for {
-		n := runtime.NumGoroutine()
-		if n <= base+3 {
+		held := serverStacks()
+		if len(held) <= base {
 			return
 		}
 		if time.Now().After(deadline) {
-			buf := make([]byte, 1<<20)
-			t.Fatalf("%d goroutines after %s, want about %d as before:\n%s", n, within, base, buf[:runtime.Stack(buf, true)])
+			n := len(held)
+			held = held[:min(n, 10)]
+			t.Fatalf("the server holds %d goroutines %s after the peers are gone, want %d as before; the first %d:\n%s", n, within, base, len(held), strings.Join(held, "\n\n"))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -90,10 +154,10 @@ func rawPOST(t *testing.T, conn net.Conn, addr string, length int, body string, 
 // token or not; and a request whose headers are over the limit is refused.
 func TestMCPHTTPClosesIdleAndStalledConnections(t *testing.T) {
 	setMCPHTTPLimits(t, func(c *mcpHTTPConfig) {
-		c.readHeaderTimeout, c.readTimeout, c.idleTimeout = 300*time.Millisecond, 300*time.Millisecond, 300*time.Millisecond
+		c.readHeaderTimeout, c.readTimeout, c.idleTimeout = time.Second, time.Second, time.Second
 	})
 	addr, _ := startMCPHTTP(t, "--http-token", "s3cret")
-	base := runtime.NumGoroutine()
+	base := serverGoroutines()
 
 	const each = 10
 	var idle, stalled, silent []net.Conn
@@ -117,10 +181,10 @@ func TestMCPHTTPClosesIdleAndStalledConnections(t *testing.T) {
 
 		silent = append(silent, dial(t, addr))
 	}
-	time.Sleep(50 * time.Millisecond)
-	if n := runtime.NumGoroutine(); n < base+2*each {
-		t.Fatalf("%d goroutines with %d connections open, %d before: the connections are not being served", n, 3*each, base)
-	}
+	// Each open connection is served by a goroutine of its own; they start
+	// a moment after the dial, and the timeouts (a second) are far longer
+	// than the loop above, so all of them are there to be counted.
+	waitServerGoroutines(t, base+2*each, 5*time.Second)
 	for i := range each {
 		closedWithin(t, "an idle keep-alive connection", idle[i], 5*time.Second)
 		closedWithin(t, "a stalled body", stalled[i], 5*time.Second)
@@ -159,8 +223,9 @@ func TestMCPHTTPClosesIdleAndStalledConnections(t *testing.T) {
 // reading) a body it declared and did not send, and without keeping the
 // connection alive for another try; nothing is left running.
 func TestMCPHTTPRefusalClosesTheConnection(t *testing.T) {
+	serial(t)
 	addr, _ := startMCPHTTP(t, "--http-token", "s3cret") // the real limits: a minute to read a request
-	base := runtime.NumGoroutine()
+	base := serverGoroutines()
 	for i := range 20 {
 		c := dial(t, addr)
 		if i%2 == 0 {
@@ -286,7 +351,7 @@ func TestMCPHTTPIdleSessionsExpire(t *testing.T) {
 	}
 	client.CloseIdleConnections()
 	time.Sleep(100 * time.Millisecond)
-	base := runtime.NumGoroutine()
+	base := serverGoroutines()
 
 	const n = 2000
 	// The first few hundred sessions open well within the timeout, so they
@@ -304,9 +369,9 @@ func TestMCPHTTPIdleSessionsExpire(t *testing.T) {
 		}
 		ids[resp.Header.Get("Mcp-Session-Id")] = true
 		if i == early-1 {
-			if g := runtime.NumGoroutine(); g < base+early/2 {
-				t.Fatalf("%d goroutines with %d sessions open, %d before: sessions hold none, so their expiry proves nothing", g, early, base)
-			}
+			// An open session holds a goroutine; at least half of these
+			// are still open (the timeout is seconds, the loop is not).
+			waitServerGoroutines(t, base+early/2, 5*time.Second)
 		}
 	}
 	if len(ids) != n {
@@ -414,5 +479,41 @@ func TestMCPHTTPDisconnectCancelsTheCall(t *testing.T) {
 	res := callMCPWithin(t, other, 5*time.Second, mcp.ToolScan, map[string]any{"targets": []any{"1.38"}})
 	if res.IsError {
 		t.Errorf("the next scan: %s", mcpText(res))
+	}
+}
+
+// TestServerGoroutinesCountsOnlyTheServers: the count the goroutine checks
+// above rely on moves with the connections the server holds and the MCP
+// sessions it keeps, and with nothing else a process runs: goroutines that
+// another test started or left (which a count of the whole process cannot
+// tell from the server's) change neither the count nor the wait for it to
+// fall.
+func TestServerGoroutinesCountsOnlyTheServers(t *testing.T) {
+	base := serverGoroutines()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() { defer wg.Done(); <-stop }()
+	}
+	if got := serverGoroutines(); got != base {
+		t.Errorf("50 goroutines of no server changed the count from %d to %d", base, got)
+	}
+	// Waiting for the count to fall back is not held up by them either.
+	goroutinesBackTo(t, base, time.Second)
+	close(stop)
+	wg.Wait()
+
+	addr, _ := startMCPHTTP(t)
+	if got := serverGoroutines(); got != base {
+		t.Errorf("a server with no connection holds %d goroutines, want %d", got, base)
+	}
+	for want := 1; want <= 3; want++ {
+		dial(t, addr)
+		waitServerGoroutines(t, base+want, 5*time.Second)
+		if got := serverGoroutines(); got != base+want {
+			t.Errorf("%d open connections: the count is %d, want %d", want, got, base+want)
+		}
 	}
 }
