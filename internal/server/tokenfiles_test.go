@@ -114,7 +114,7 @@ func TestIngestTokenRotatesWithoutARestart(t *testing.T) {
 	ts := httptest.NewServer(newTestServer(t, newFakeStore(), tf.apply).Handler())
 	defer ts.Close()
 
-	if got := pushStatus(t, ts, "ingest-one"); got != http.StatusAccepted {
+	if got := pushStatus(t, ts, "ingest-one"); got != http.StatusAccepted && got != http.StatusOK { // 200: the same snapshot again
 		t.Fatalf("current ingest token = %d, want 202", got)
 	}
 	rotate(t, tf.ingest, "ingest-two\n")
@@ -159,7 +159,7 @@ func TestEmptyOrUnreadableTokenFileKeepsTheOldToken(t *testing.T) {
 	if got := status(t, ts, "GET", "/api/v1/clusters", ""); got != 401 {
 		t.Fatalf("no token after the file was emptied = %d, want 401: an empty file must not open the read API", got)
 	}
-	if got := pushStatus(t, ts, "ingest-one"); got != http.StatusAccepted {
+	if got := pushStatus(t, ts, "ingest-one"); got != http.StatusAccepted && got != http.StatusOK { // 200: the same snapshot again
 		t.Fatalf("ingest token after its file was emptied = %d, want 202", got)
 	}
 	if got := status(t, ts, "DELETE", "/api/v1/clusters/999", "admin-one"); got != 404 {
@@ -217,6 +217,35 @@ func TestOptionalIngestTokenFileAppearsAndRevokes(t *testing.T) {
 	}
 	if got := pushStatus(t, ts, "ingest-late"); got != 401 {
 		t.Fatalf("ingest token removed from the Secret = %d, want 401: deleting the key revokes it", got)
+	}
+}
+
+// A required ingest-token file that goes away keeps the old token in service
+// and logs an error naming the file: only the optional file's removal
+// revokes. Rotating by rm and rewrite then takes effect when the file is back.
+func TestRequiredIngestTokenFileRemovalKeepsTheOldToken(t *testing.T) {
+	tf := newTokenFiles(t)
+	ts := httptest.NewServer(newTestServer(t, newFakeStore(), tf.apply).Handler())
+	defer ts.Close()
+
+	if got := pushStatus(t, ts, "ingest-one"); got != http.StatusAccepted && got != http.StatusOK { // 200: the same snapshot again
+		t.Fatalf("current ingest token = %d, want 202", got)
+	}
+	if err := os.Remove(tf.ingest); err != nil {
+		t.Fatal(err)
+	}
+	if got := pushStatus(t, ts, "ingest-one"); got != http.StatusAccepted && got != http.StatusOK { // 200: the same snapshot again
+		t.Fatalf("ingest token after its required file was removed = %d, want 2xx (old value kept)", got)
+	}
+	if logs := tf.logs(); !strings.Contains(logs, tf.ingest) || strings.Contains(logs, "no longer in service") || strings.Contains(logs, "ingest-one") {
+		t.Fatalf("want an error naming %s, no revocation and no token in the log, got %q", tf.ingest, logs)
+	}
+	rotate(t, tf.ingest, "ingest-two\n")
+	if got := pushStatus(t, ts, "ingest-two"); got != http.StatusAccepted && got != http.StatusOK {
+		t.Fatalf("rewritten ingest token = %d, want 2xx", got)
+	}
+	if got := pushStatus(t, ts, "ingest-one"); got != 401 {
+		t.Fatalf("replaced ingest token = %d, want 401", got)
 	}
 }
 

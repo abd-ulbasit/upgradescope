@@ -70,9 +70,13 @@ func newTokenSources(cfg *Config) (tokenSources, error) {
 	}
 	var err error
 	if cfg.IngestTokenFile != "" {
-		extra := []secretfile.Option{secretfile.RemovalClears()}
+		// Only an optional file's removal revokes the token (the operator
+		// said the key may be absent). A required file that goes away keeps
+		// the old value, so rotating by rm and rewrite, or losing the file
+		// by accident, does not answer every agent with 401.
+		var extra []secretfile.Option
 		if cfg.IngestTokenFileOptional {
-			extra = append(extra, secretfile.Optional())
+			extra = append(extra, secretfile.Optional(), secretfile.RemovalClears())
 		}
 		ts.in.file, err = open(cfg.IngestTokenFile, func(v string) error {
 			if v == ts.rd.current() {

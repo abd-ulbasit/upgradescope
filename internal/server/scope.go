@@ -406,7 +406,8 @@ func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 //     whatever bearer was sent, as before read tokens existed; else 401.
 func (s *Server) readScope(w http.ResponseWriter, r *http.Request) (readScope, bool) {
 	if token := bearerToken(r); token != "" {
-		if equalToken(token, s.tokens.read()) || equalToken(token, s.tokens.admin()) {
+		read, admin := s.tokens.read(), s.tokens.admin() // once each: one request, one value
+		if equalToken(token, read) || equalToken(token, admin) {
 			return fleetScope, true
 		}
 		teams, valid, err := s.cfg.Store.ValidReadToken(r.Context(), token)

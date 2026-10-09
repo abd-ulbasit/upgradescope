@@ -34,12 +34,13 @@ active one of a cluster. To rotate without a gap: `tokens create`, put
 the new token in the agent's Secret (the chart mounts it as a file the
 agent re-reads, so no restart: the agent's next push after the kubelet has
 synced the Secret, up to about 60 to 90 seconds at its default settings
-plus a 5-second check, uses it; a token the agent got from `--server-token`
-or `$UPGRADESCOPE_SERVER_TOKEN` is read once at start and needs
+plus a 5-second check, uses it, so wait for one successful push with the
+new token before you revoke the old id: revoking sooner answers the agent's
+pushes with 401 until the kubelet has synced; a token the agent got from
+`--server-token` or `$UPGRADESCOPE_SERVER_TOKEN` is read once at start and needs
 `kubectl rollout restart deploy/<fullname>-agent`, where `<fullname>` is the
 release name plus `-upgradescope`, cut to 63 characters, or the release name
-alone when it contains `upgradescope`), then
-revoke the old id.
+alone when it contains `upgradescope`), and then revoke the old id.
 
 Tokens are bearer secrets: anyone who sees one in transit can replay it.
 Serve HTTPS (`--tls-cert-file`, the chart's `server.tls`, or an Ingress
