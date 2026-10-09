@@ -154,3 +154,31 @@ func TestApplyCallerRuleWithSelectorsTakesNothing(t *testing.T) {
 		}
 	}
 }
+
+// A re-emitted caller is judged after every finding of the report, so
+// Apply re-sorts: findings[] keeps the report's order (severity first,
+// engine.SortFindings), and the blocker caller leads the report's warning
+// and info.
+func TestApplyReemittedCallerKeepsSeverityOrder(t *testing.T) {
+	annotated := inventory.ObjectRef{Name: "legacy-fs", Manager: "helm", Ignore: "removed-api", IgnoreReason: "deleting next sprint"}
+	r := callerReport(t, annotated)
+	caller := r.Findings[0].Callers[0].Finding()
+	if caller.Severity != engine.SevBlocker {
+		t.Fatalf("precondition: caller severity %s, want blocker", caller.Severity)
+	}
+	warning := engine.Finding{Category: engine.CatDeprecatedAPI, Severity: engine.SevWarning, Key: "deprecated-api/example.com/v1beta1/Widget", Title: "example.com/v1beta1 Widget is deprecated"}
+	info := engine.Finding{Category: engine.CatEOLApproaching, Severity: engine.SevInfo, Key: "eol-approaching/example", Title: "example approaches end of life"}
+	r.Findings = append(r.Findings, warning, info)
+
+	got, _ := Apply(r, nil, Options{Now: now})
+	if want := []engine.Finding{caller, warning, info}; !reflect.DeepEqual(got.Findings, want) {
+		var keys []string
+		for _, f := range got.Findings {
+			keys = append(keys, f.Key)
+		}
+		t.Errorf("findings %q, want %q, %q, %q (blocker first)", keys, caller.Key, warning.Key, info.Key)
+	}
+	if got.Verdict != engine.VerdictBlocked {
+		t.Errorf("verdict = %s, want blocked by the caller", got.Verdict)
+	}
+}
