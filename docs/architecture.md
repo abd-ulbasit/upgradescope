@@ -305,10 +305,21 @@ newest. When every version the resource's own group serves is flagged, it
 lists the same objects in the replacement's group instead, if that group
 serves the resource at an unflagged version (`extensions/v1beta1`
 ingresses are `networking.k8s.io/v1` ingresses on 1.19 to 1.21). Only when
-neither exists does it list a deprecated endpoint. That is unavoidable,
-and the scanner then appears in `apiserver_requested_deprecated_apis` for
-that resource. On 1.33 and later this happens on every cluster for core
-`v1` Endpoints and ComponentStatus, which only the deprecated `v1` serves.
+neither exists does it list a deprecated endpoint, and only for a kind
+whose removal the knowledge base schedules, since its objects can block an
+upgrade: the scanner then appears in `apiserver_requested_deprecated_apis`
+for that resource (`policy/v1beta1` PodSecurityPolicy on 1.24,
+`coordination.k8s.io/v1beta1` LeaseCandidate where only that version
+serves it), and the `deprecated-calls` step names it as skipped so the
+engine does not report the scanner as a caller. A kind that only deprecated
+versions serve but that is never removed is not listed at all: core `v1`
+Endpoints and ComponentStatus on 1.33 and later could only ever give info
+findings (#123). When API discovery does not get through on a scan (it
+fails, or skips a group), the step cannot say what it lists there, while
+the metric keeps an earlier scan's rows until the apiserver restarts; the
+rows at the group/versions it could have listed (those where the knowledge
+base schedules a removal) are then named as skipped for that scan too, not
+attributed to other clients (#239).
 Then, per flagged group/version:
 
 - **The kind goes away** (the knowledge base entry has no replacement, the
@@ -333,17 +344,29 @@ Then, per flagged group/version:
   Only kubectl client-side apply rewrites that annotation, so it may be
   stale under any other writer. The finding names the field manager, or
   `kubectl last-applied`.
-  Entries for the `status` subresource are ignored, and so are three
+  Entries for the `status` subresource are ignored, and so are four
   control-plane managers whose entries only record what was current when
   that release wrote the object: `kube-apiserver`,
-  `kube-controller-manager` and `api-priority-and-fairness-config-producer-v1`.
+  `kube-controller-manager`, `kube-scheduler` and
+  `api-priority-and-fairness-config-producer-v1`. A custom scheduler built
+  on the kube-scheduler framework may report the field manager
+  `kube-scheduler` too, so its writes through a deprecated version are not
+  counted either; schedulers mostly write bindings, Events and Leases
+  through GA versions, so the gap is narrow.
   APF objects with `apf.kubernetes.io/autoupdate-spec: "true"` are skipped,
   because the apiserver maintains them.
 
-The trade-off: an object with no managedFields entry for that version (for
-example, created before field tracking existed, or with its managedFields
-cleared by a raw client) and no last-applied annotation goes undetected, and
-so do writes by the excluded control-plane managers. Each manager is judged
+The trade-off: an object whose managedFields and last-applied annotation
+name another version is not counted, which is right when it is written
+through that version. An object with no entry left to judge by (none outside
+the `status` subresource and the trusted managers: created with no fields,
+created before field tracking existed, or with its managedFields cleared by
+a raw client) and no apiVersion in a last-applied annotation cannot be
+attributed: it is not counted as use either, and is reported once per kind
+as an info finding, "authorship unknown" (`inv.APIAuthorshipUnknown`, #199),
+which changes neither the verdict nor the score. An object only the trusted
+managers wrote is the control plane's, and neither. Writes by the trusted
+managers are not seen. Each manager is judged
 on its own, so when an object moves from one tool to another (from
 `kubectl apply` to Helm, say), the old tool's entry keeps the finding open
 until that entry is gone, for example once the new tool owns those fields.
