@@ -95,7 +95,12 @@ func TestEvalDeprecatedCallsRemovalSource(t *testing.T) {
 			"clients still requesting policy/v1beta1 podsecuritypolicies (removed in 1.25)", "it is removed in 1.25."},
 		{"KB without a removal", inventory.DeprecatedCall{Version: "v1", Resource: "componentstatuses", RemovedRelease: "1.30"}, 34, SevBlocker,
 			"clients still requesting v1 componentstatuses (removed in 1.30)", "it is removed in 1.30."},
+		// The KB wins when it is later too: the label alone would block.
+		{"KB later than label", inventory.DeprecatedCall{Group: "example.com", Version: "v1beta1", Resource: "widgets", RemovedRelease: "1.25"}, 26, SevWarning,
+			"clients still requesting example.com/v1beta1 widgets (removed in 1.27)", "it is removed in 1.27 per the knowledge base; the apiserver reports 1.25."},
 	}
+	k.APILifecycle = append(k.APILifecycle, kb.APILifecycleEntry{Group: "example.com", Version: "v1beta1", Kind: "Widget",
+		Introduced: inventory.Version{Major: 1, Minor: 20}, Deprecated: vp(1, 24), Removed: vp(1, 27)})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := evalDeprecatedCalls(callsInv(tc.row), k, inventory.Version{Major: 1, Minor: tc.target}, nil)
@@ -245,6 +250,50 @@ func TestFoldIndexMatchesKindMatchesResource(t *testing.T) {
 			if got != want {
 				t.Errorf("%s/%s: index %v, kindMatchesResource %v", kind, res, got, want)
 			}
+		}
+	}
+}
+
+// Two usage entries whose kinds share a REST resource name (Status and
+// Statuse both pluralize to statuses): the row folds into the first
+// entry's finding, whichever order they come in.
+func TestFoldIndexFirstUsageEntryWins(t *testing.T) {
+	k := testKB()
+	for _, kind := range []string{"Status", "Statuse"} {
+		k.APILifecycle = append(k.APILifecycle, kb.APILifecycleEntry{Group: "example.com", Version: "v1beta1", Kind: kind,
+			Introduced: inventory.Version{Major: 1, Minor: 20}, Deprecated: vp(1, 24)})
+	}
+	for _, kinds := range [][2]string{{"Status", "Statuse"}, {"Statuse", "Status"}} {
+		inv := inventory.Inventory{
+			APIUsage: []inventory.APIUsage{
+				{Group: "example.com", Version: "v1beta1", Kind: kinds[0], Count: 1, Namespaces: map[string]int{"a": 1}},
+				{Group: "example.com", Version: "v1beta1", Kind: kinds[1], Count: 1, Namespaces: map[string]int{"b": 1}},
+			},
+			DeprecatedCalls: []inventory.DeprecatedCall{{Group: "example.com", Version: "v1beta1", Resource: "statuses"}},
+		}
+		rep := Evaluate(inv, k, inventory.Version{Major: 1, Minor: 30}, testNow)
+		callers := map[string]int{}
+		for _, f := range rep.Findings {
+			callers[f.Key] = len(f.Callers)
+		}
+		first, second := "deprecated-api/example.com/v1beta1/"+kinds[0], "deprecated-api/example.com/v1beta1/"+kinds[1]
+		if len(rep.Findings) != 2 || callers[first] != 1 || callers[second] != 0 {
+			t.Errorf("usage order %v: callers per finding %v, want the row on %s only", kinds, callers, first)
+		}
+	}
+}
+
+// kbRemovals keeps RemovalOfCall's first-entry-wins rule when two KB
+// kinds share a REST resource name.
+func TestKBRemovalsFirstEntryWins(t *testing.T) {
+	for _, order := range [][2]string{{"Status", "Statuse"}, {"Statuse", "Status"}} {
+		k := kb.KB{APILifecycle: []kb.APILifecycleEntry{
+			{Group: "example.com", Version: "v1beta1", Kind: order[0], Removed: vp(1, 26)},
+			{Group: "example.com", Version: "v1beta1", Kind: order[1], Removed: vp(1, 29)},
+		}}
+		got, ok := kbRemovals(k)[resourceKey("example.com", "v1beta1", "statuses")]
+		if !ok || got != *vp(1, 26) {
+			t.Errorf("entries %v: removal %v (%v), want the first entry's 1.26", order, got, ok)
 		}
 	}
 }
