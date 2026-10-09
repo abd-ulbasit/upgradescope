@@ -103,14 +103,19 @@ func checkLifecycleFloors(f lifecycleFile) error {
 // Index is an O(1) lookup over lifecycle entries by group/version/kind.
 type Index struct {
 	byGVK map[GVK]APILifecycleEntry
+	// byKind lists the entries of each group and kind, in entry order.
+	byKind map[GVK][]APILifecycleEntry // Version unset
 }
 
 func NewIndex(entries []APILifecycleEntry) Index {
 	m := make(map[GVK]APILifecycleEntry, len(entries))
+	byKind := make(map[GVK][]APILifecycleEntry)
 	for _, e := range entries {
 		m[GVK{Group: e.Group, Version: e.Version, Kind: e.Kind}] = e
+		gk := GVK{Group: e.Group, Kind: e.Kind}
+		byKind[gk] = append(byKind[gk], e)
 	}
-	return Index{byGVK: m}
+	return Index{byGVK: m, byKind: byKind}
 }
 
 // Lookup returns the entry for group/version/kind. Group is "" for core.
@@ -119,27 +124,83 @@ func (i Index) Lookup(group, version, kind string) (APILifecycleEntry, bool) {
 	return e, ok
 }
 
+// servedAt reports whether target serves e: introduced at or before it,
+// and not removed by it.
+func servedAt(e APILifecycleEntry, target inventory.Version) bool {
+	return e.Introduced.Compare(target) <= 0 && (e.Removed == nil || e.Removed.Compare(target) > 0)
+}
+
 // ResolveReplacement returns the API to migrate e to for an upgrade to
-// target: it follows the replacement chain (flowcontrol v1beta1 → v1beta3 →
-// v1) past every hop that is itself removed at or before target, so advice
-// never points at an API the KB knows the target no longer serves. A hop
-// the KB has no entry for carries no removal evidence and is returned as
-// is (the dataset tests require every shipped replacement to be a known
-// GVK). It reports false when e has no replacement, or the chain dead-ends
-// at a removed API with no further replacement, or loops.
+// target, only ever one the KB knows target serves: introduced at or
+// before it, and not removed by it. It follows the replacement chain
+// (flowcontrol v1beta1 → v1beta3 → v1) past every hop removed at or
+// before target. A hop introduced after target is not served yet: the
+// newest version of the hop's group and kind that target serves and that
+// was introduced after e is recommended instead (storage.k8s.io/v1alpha1
+// VolumeAttributesClass names v1, served from 1.34; at 1.33 that is
+// v1beta1), and none when there is no such version. A hop the KB has no
+// entry for carries no lifecycle evidence and is returned as is (the
+// dataset tests require every shipped replacement to be a known GVK). It
+// reports false when no served replacement is known: e has no
+// replacement, the chain dead-ends at a removed API, loops, or reaches a
+// hop not served yet with no served alternative (LaterReplacement then
+// names it).
 func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version) (GVK, bool) {
+	g, r, known, ok := i.chain(e, target)
+	switch {
+	case !ok:
+		return GVK{}, false
+	case !known || servedAt(r, target):
+		return g, true
+	}
+	// r is not introduced yet at target.
+	var best *APILifecycleEntry
+	for _, c := range i.byKind[GVK{Group: g.Group, Kind: g.Kind}] {
+		if c.Version == e.Version && c.Group == e.Group || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 {
+			continue
+		}
+		if best == nil || c.Introduced.Compare(best.Introduced) > 0 {
+			best = &c
+		}
+	}
+	if best == nil {
+		return GVK{}, false
+	}
+	return GVK{Group: best.Group, Version: best.Version, Kind: best.Kind}, true
+}
+
+// LaterReplacement returns, when ResolveReplacement knows no replacement
+// target serves, the replacement e's chain reaches that a later release
+// serves, and the release that introduces it: certificates.k8s.io/v1
+// ClusterTrustBundle from 1.37 for v1beta1 at 1.36. It reports false
+// otherwise.
+func (i Index) LaterReplacement(e APILifecycleEntry, target inventory.Version) (GVK, inventory.Version, bool) {
+	if _, ok := i.ResolveReplacement(e, target); ok {
+		return GVK{}, inventory.Version{}, false
+	}
+	g, r, known, ok := i.chain(e, target)
+	if !ok || !known || r.Introduced.Compare(target) <= 0 {
+		return GVK{}, inventory.Version{}, false
+	}
+	return g, r.Introduced, true
+}
+
+// chain follows e's replacements past every hop removed at or before
+// target and returns the first that is not, with its entry when the KB
+// has one (known); ok is false when the chain ends or loops first.
+func (i Index) chain(e APILifecycleEntry, target inventory.Version) (g GVK, r APILifecycleEntry, known, ok bool) {
 	seen := map[GVK]bool{{Group: e.Group, Version: e.Version, Kind: e.Kind}: true}
 	for next := e.Replacement; next != nil; {
-		g := *next
+		g = *next
 		if seen[g] {
-			return GVK{}, false
+			return GVK{}, APILifecycleEntry{}, false, false
 		}
 		seen[g] = true
-		r, ok := i.byGVK[g]
-		if !ok || r.Removed == nil || r.Removed.Compare(target) > 0 {
-			return g, true
+		r, known = i.byGVK[g]
+		if !known || r.Removed == nil || r.Removed.Compare(target) > 0 {
+			return g, r, known, true
 		}
 		next = r.Replacement
 	}
-	return GVK{}, false
+	return GVK{}, APILifecycleEntry{}, false, false
 }

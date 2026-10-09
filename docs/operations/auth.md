@@ -163,7 +163,9 @@ counts payments' objects ("(1 object in scope)") when the finding listed
 every object, and otherwise drops the count. Its detail, which the engine
 writes about everything the finding covers (each namespace's count, the
 managers writing the objects, the add-on installs), is replaced by a
-sentence that names the namespaces kept and says the rest is not shown.
+sentence that names the namespaces kept and says the rest is not shown,
+and its `callers` (the apiserver caller rows folded into it, which the
+metric attributes to no namespace or team) are dropped with that detail.
 The engine caps a finding's lists (100 namespaces, 100 objects) before
 anyone reads it, and what the cap dropped cannot be divided by team, so
 a cut finding counts none omitted and says more of the scope's may be

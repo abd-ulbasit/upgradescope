@@ -12,6 +12,27 @@
       "title": "clients still requesting policy/v1beta1 poddisruptionbudgets (removed in 1.25)"
     },
     {
+      "callers": [
+        {
+          "detail": "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.",
+          "group": "batch",
+          "key": "deprecated-api-in-use/batch/v1beta1/cronjobs",
+          "resource": "cronjobs",
+          "severity": "blocker",
+          "title": "clients still requesting batch/v1beta1 cronjobs (removed in 1.25)",
+          "version": "v1beta1"
+        },
+        {
+          "detail": "apiserver_requested_deprecated_apis records requests to this API since the last apiserver restart; it is removed in 1.25. The metric does not identify the client; apiserver audit logs do.",
+          "group": "batch",
+          "key": "deprecated-api-in-use/batch/v1beta1/cronjobs/status",
+          "resource": "cronjobs",
+          "severity": "blocker",
+          "subresource": "status",
+          "title": "clients still requesting batch/v1beta1 cronjobs/status (removed in 1.25)",
+          "version": "v1beta1"
+        }
+      ],
       "category": "removed-api",
       "citations": [
         "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"

@@ -66,7 +66,22 @@
         "citations": {"type": "array", "items": {"type": "string"}},
         "objects": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/objectRef"}},
         "objectsOmitted": {"description": "Affected objects not listed.", "type": "integer", "minimum": 1},
-        "baselineState": {"description": "With --baseline: unchanged (the baseline had it) or new.", "enum": ["new", "unchanged"]}
+        "baselineState": {"description": "With --baseline: unchanged (the baseline had it) or new.", "enum": ["new", "unchanged"]},
+        "callers": {"description": "API usage findings: the apiserver_requested_deprecated_apis rows folded into this finding, in row order, each the deprecated-api-in-use finding it is on its own. Suppressing every object of the finding by annotation or an object-scoped rule does not suppress them: they then stand as findings of their own.", "type": "array", "items": {"$ref": "#/$defs/caller"}}
+      }
+    },
+    "caller": {
+      "type": "object",
+      "required": ["version", "resource", "key", "severity", "title", "detail"],
+      "properties": {
+        "group": {"description": "Absent for the core group.", "type": "string"},
+        "version": {"type": "string"},
+        "resource": {"type": "string"},
+        "subresource": {"type": "string"},
+        "key": {"description": "The key of the caller's own deprecated-api-in-use finding.", "type": "string"},
+        "severity": {"enum": ["blocker", "warning", "info"]},
+        "title": {"type": "string"},
+        "detail": {"type": "string"}
       }
     },
     "finding": {"$ref": "#/$defs/findingFields"},

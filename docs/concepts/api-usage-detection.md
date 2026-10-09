@@ -70,7 +70,19 @@ The second signal is the apiserver metric `apiserver_requested_deprecated_apis`,
 read from `/metrics`. It covers **callers that store nothing**: a CronJob
 that lists `batch/v1beta1` jobs, a dashboard that polls a beta API. A
 requested API with no object finding becomes a `deprecated-api-in-use`
-finding; one that matches an object finding is added to it as evidence.
+finding; one that matches an object finding is added to it as evidence
+(in JSON, the finding's `callers`). Suppressing every object of that
+finding does not suppress the caller, which then stands on its own
+([suppressions](../guides/suppressions-and-baselines.md#ignore-rules-upgradescopeyaml)).
+
+A requested API is judged by the knowledge base's removal release when the
+knowledge base has one for its group, version and resource, and by the
+metric's `removed_release` label otherwise. The two can differ: the label
+is the upstream lifecycle tag, while the knowledge base records the release
+kube-apiserver actually stopped serving a type in. `networking.k8s.io/v1alpha1`
+IPAddress is labelled removed in 1.33 but is gone from 1.31, so a client
+still calling it blocks an upgrade to 1.31. The finding says which source
+it used when they differ.
 
 What this metric is, and is not:
 
