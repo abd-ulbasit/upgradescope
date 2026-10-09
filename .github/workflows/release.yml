@@ -145,7 +145,7 @@ jobs:
       contents: read
       pull-requests: read # ci.yml's changes job declares it (skipped on tags)
       attestations: read # ci.yml's action job declares it (the Action's provenance check)
-      security-events: write # ci.yml's action job declares it; it uploads SARIF only on pushes to main
+      security-events: write # ci.yml's action job declares it; it uploads SARIF only on a dispatched fixture run, never on a tag
 
   # GoReleaser publishes the archives and the image together: the image
   # packages the exact linux binaries in the archives (Dockerfile.release).

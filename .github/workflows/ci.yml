@@ -27,6 +27,10 @@ on:
         description: 'Every Kubernetes minor in hack/kind-node-images.txt (1.29-1.37) and Postgres 14-18; false runs the PR sets'
         type: boolean
         default: true
+      upload-fixture-sarif:
+        description: "Upload the action job's fixture SARIF to code scanning, to check GitHub still accepts it (refused on the default branch, where its two blockers would be open alerts)"
+        type: boolean
+        default: false
   # release.yml calls this workflow for every v* tag, so a release is gated on
   # the whole suite, vuln gate and kind e2e included, at the tagged commit.
   workflow_call:
@@ -552,7 +556,7 @@ jobs:
     permissions:
       contents: read
       attestations: read # the Action's provenance check (gh attestation verify) on its version: latest install
-      security-events: write # upload-sarif below, on pushes to main only
+      security-events: write # upload-sarif below, on a dispatched fixture run only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -700,16 +704,24 @@ jobs:
           grep -qF '**Baseline:** 0 new, 2 unchanged.' "$(summary "$REBASELINED_OUTPUTS")" \
             || fail "rebaselined summary does not say nothing is new"
 
-      # This leaves the fixture's two blockers as open alerts on
-      # action/testdata/removed/all.yaml in the Security tab: dismiss them
-      # once as "used in tests"; later uploads of the same results match
-      # the dismissed alerts.
+      # The fixture's SARIF holds two blockers on purpose. Uploaded from main
+      # (as every push did until #244), they became open error alerts in the
+      # public Security tab, which read as the project failing its own gate.
+      # The SARIF the binary writes is checked against what code scanning
+      # requires by TestWriteGitHubAcceptable, and its locations above. To
+      # see GitHub itself accept it, dispatch this workflow on a branch other
+      # than the default with upload-fixture-sarif: the alerts are then
+      # filed under that branch, in a category of their own, and never on
+      # main. hack/ci-sarif_test.sh pins this condition.
       - name: GitHub code scanning accepts the SARIF
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest'
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.upload-fixture-sarif == true &&
+          github.ref != format('refs/heads/{0}', github.event.repository.default_branch) &&
+          matrix.os == 'ubuntu-latest'
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: ${{ steps.removed.outputs.sarif-file }}
-          category: upgradescope-action-ci
+          category: upgradescope-action-fixture
 
   # The Kubernetes minors the kube job runs on, from
   # hack/kind-node-images.txt: the `pr` rows (1.31, the oldest with the
