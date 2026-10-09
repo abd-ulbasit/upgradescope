@@ -220,19 +220,22 @@ func testPrune(t *testing.T, s store.Store) {
 	b1 := mustSnapshot(t, s, b, "b1", day(-365))
 	ev(b, b1, "1.36", day(-365))
 
-	res, err := s.Prune(ctx, day(-90))
+	res, err := s.Prune(ctx, day(-90), nil)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
-	if res.Snapshots != 1 || res.Evaluations != 3 {
-		t.Errorf("Prune = %+v, want 1 snapshot (a1) and 3 evaluations (a1's two, a2's day -150)", res)
+	// a1's 1.37 evaluation is that target's newest decided one, a
+	// notification baseline (testPruneKeepsNotificationBaseline): it stays,
+	// and a1 with it.
+	if res.Snapshots != 0 || res.Evaluations != 2 {
+		t.Errorf("Prune = %+v, want no snapshot and 2 evaluations (a1's 1.36, a2's day -150)", res)
 	}
 	hist, _ := s.ScoreHistory(ctx, a, "1.36", 0)
 	if len(hist) != 2 || !hist[0].At.Equal(day(-10)) || !hist[1].At.Equal(day(-5)) {
 		t.Errorf("a 1.36 history = %+v, want days -10 and -5", hist)
 	}
-	if h37, _ := s.ScoreHistory(ctx, a, "1.37", 0); len(h37) != 0 {
-		t.Errorf("a 1.37 history = %+v, want pruned", h37)
+	if h37, _ := s.ScoreHistory(ctx, a, "1.37", 0); len(h37) != 1 || !h37[0].At.Equal(day(-200)) {
+		t.Errorf("a 1.37 history = %+v, want its last decided evaluation (day -200) kept", h37)
 	}
 	if latest, err := s.LatestSnapshot(ctx, a); err != nil || latest.ID != s3 {
 		t.Errorf("a latest = (%+v, %v), want %d", latest, err, s3)
@@ -240,7 +243,7 @@ func testPrune(t *testing.T, s store.Store) {
 	if e, err := s.CurrentEvaluation(ctx, b, "1.36"); err != nil || e.SnapshotID != b1 {
 		t.Errorf("b current = (%+v, %v), want its year-old evaluation kept", e, err)
 	}
-	again, err := s.Prune(ctx, day(-90))
+	again, err := s.Prune(ctx, day(-90), nil)
 	if err != nil || again.Snapshots != 0 || again.Evaluations != 0 {
 		t.Errorf("second Prune = (%+v, %v), want nothing left to prune", again, err)
 	}

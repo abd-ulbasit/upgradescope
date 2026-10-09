@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -124,7 +123,11 @@ func (e *reportTooLargeError) Error() string {
 // returns a *reportTooLargeError.
 func (s *Server) evaluateWithin(inv inventory.Inventory, target inventory.Version, now time.Time) (engine.Report, error) {
 	limit := s.maxReportBytes()
-	rep, err := engine.EvaluateWithin(inv, s.cfg.KB, target, now, int(limit))
+	run := engine.EvaluateWithin
+	if s.runEngine != nil {
+		run = s.runEngine
+	}
+	rep, err := run(inv, s.cfg.KB, target, now, int(limit))
 	if errors.Is(err, engine.ErrReportTooLarge) {
 		return engine.Report{}, &reportTooLargeError{target: target, limit: limit}
 	}
@@ -226,7 +229,8 @@ type baseline struct {
 // baseline's findings from it forward, when the baseline saw them with it
 // (computeDelta, unassessed). known is that baseline when the caller
 // holds it; otherwise deltaFor loads it, and decodes only its findings'
-// heads and its gaps. Failures are logged and never fail the pass.
+// heads and its gaps, recording what it read (targetDelta.baselines) for
+// the commit to check. Failures are logged and never fail the pass.
 func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline, unassessed func(findingHead) bool) targetDelta {
 	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
 	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
@@ -237,11 +241,16 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 		return d
 	}
 	target := cur.Target.String()
+	d.baselines = map[string]int64{}
 	prev, err := s.cfg.Store.LatestKnownEvaluation(ctx, cluster.ID, target)
+	if err == nil {
+		d.baselines[target] = prev.ID
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		// First decided evaluation of this target: after an upgrade, the
 		// previous default target's is the baseline (upgradeBaseline).
-		prev, err = s.upgradeBaseline(ctx, cluster.ID, cur)
+		d.baselines[target] = 0
+		prev, err = s.upgradeBaseline(ctx, cluster.ID, cur, d.baselines)
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		return d // first decided evaluation of this target: no delta
@@ -437,17 +446,12 @@ func (c callsHold) stamp(carried []findingHead) []findingHead {
 	return carried
 }
 
-// holdMarker is in every stored report that carries a held caller: the
-// carried head's field name, which a JSON string in the report cannot
-// contain unescaped.
-var holdMarker = []byte(`"holdUntil":`)
-
 // holdChanged reports whether report, a stored evaluation's, carries a
 // held caller whose hold this scrape ends or moves (callsHold.until), so
 // the evaluation is re-evaluated though it is not stale. A report without
 // the marker is not decoded.
 func holdChanged(report []byte, hold callsHold) bool {
-	if !bytes.Contains(report, holdMarker) {
+	if !store.CarriesHold(report) {
 		return false
 	}
 	heads, err := storedFindingHeads(report)
@@ -518,7 +522,41 @@ func (s *Server) outboxFor(cluster store.Cluster, deltas *changeMerger, now time
 // still the cluster under its name, in its transaction
 // (store.ErrTokenRevoked, store.ErrClusterChanged), so a revoke, rename or
 // delete that lands while the push is processed is never undone by it.
+//
+// With notification sinks, the commit also checks that the cluster's
+// latest snapshot and every notification baseline the deltas were
+// computed from are still what the pass read (store.Expectation): another
+// replica's push, or this server's background pass, may land in between.
+// Then nothing is written (store.ErrConflict) and the push is ingested
+// again against what is there now, up to maxIngestAttempts times, so no
+// became-ready or new-blocker is lost or sent twice. The last conflict is
+// returned, and the agent retries the push.
 func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
+	for attempt := 1; ; attempt++ {
+		id, dup, err := s.ingestOnce(ctx, cluster, snap, inv, token)
+		if !errors.Is(err, store.ErrConflict) || attempt == maxIngestAttempts {
+			return id, dup, err
+		}
+		log.Printf("server: push of cluster %q raced another writer (attempt %d), evaluating it again: %v", cluster.Name, attempt, err)
+		if cluster.ID == 0 { // registered by the push that raced this one
+			c, err := s.cfg.Store.ClusterByName(ctx, cluster.Name)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return 0, false, fmt.Errorf("loading cluster %q: %w", cluster.Name, err)
+			}
+			cluster.ID = c.ID
+		}
+	}
+}
+
+// maxIngestAttempts bounds how often one push is evaluated again after
+// its commit met a replaced baseline (ingestSnapshot). Each attempt
+// re-reads what the last one met, so a second conflict needs a third
+// writer inside the same window.
+const maxIngestAttempts = 3
+
+// ingestOnce is one attempt of ingestSnapshot.
+func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
+	var latestID int64 // the latest snapshot this attempt read; 0 for none
 	// A duplicate (the agent's hourly force-sync) is the common push: go
 	// straight to re-evaluating what is stale, instead of evaluating every
 	// target for the commit to discard. The commit still checks the hash,
@@ -530,6 +568,9 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return 0, false, fmt.Errorf("loading latest snapshot (cluster %d): %w", cluster.ID, err)
 		}
+		if err == nil {
+			latestID = latest.ID
+		}
 		if err == nil && snap.ServerVersion == "" {
 			if latest.ServerVersion == "" {
 				if latest, err = s.cfg.Store.LatestSnapshot(ctx, cluster.ID); err != nil {
@@ -539,14 +580,16 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			snap.ServerVersion = judgedVersion(latest)
 		}
 		if err == nil && latest.Hash == snap.Hash {
-			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token})
+			// Not a duplicate after all when another push moved the
+			// cluster on meanwhile: then nothing is written, and the push
+			// is evaluated in full (ingestSnapshot).
+			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token,
+				Expect: &store.Expectation{LatestSnapshotID: latestID}})
 			if err != nil {
 				return 0, false, err
 			}
-			// Not a duplicate after all (another push moved the cluster on
-			// meanwhile): the snapshot is stored without evaluations, and
-			// reevaluate fills in every target.
-			return snapID, dup, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+			_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+			return snapID, dup, err
 		}
 	}
 
@@ -558,6 +601,9 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	now := s.now()
 	hold := s.callsHoldOf(inv, snap.ServerVersion, true)
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token}
+	if len(s.sinks) > 0 {
+		batch.Expect = &store.Expectation{LatestSnapshotID: latestID, Baselines: map[string]int64{}}
+	}
 	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(snap.ServerVersion) {
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
@@ -567,6 +613,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep, hold))
 		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Insert = append(batch.Insert, e)
+		expectBaselines(batch.Expect, d)
 		deltas.add(d)
 	}
 	batch.Outbox = s.outboxFor(cluster, &deltas, now)
@@ -582,13 +629,22 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			}
 			cluster.ID = c.ID
 		}
-		return snapID, true, s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+		_, err = s.reevaluate(ctx, cluster, snapID, snap.ServerVersion, inv, true)
+		return snapID, true, err
 	}
 	if len(batch.Outbox) > 0 {
 		s.kickOutbox()
 	}
 	return snapID, false, nil
 }
+
+// evaluationError is a failure of the evaluation of a snapshot, as
+// opposed to the store's: it repeats for the same snapshot, so the pass
+// marks the cluster (unrefreshable). A store error does not.
+type evaluationError struct{ err error }
+
+func (e *evaluationError) Error() string { return e.err.Error() }
+func (e *evaluationError) Unwrap() error { return e.err }
 
 // reevaluate brings a stored snapshot's evaluations up to date: targets
 // with no evaluation, or a stale one, or one whose restart hold inv's
@@ -597,8 +653,9 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 // inv is the snapshot's inventory: on a duplicate push (pushed) the pushed
 // one, whose collectedAt is the new scrape's. A concurrent writer that got
 // there first (store.ErrConflict) has done the same work, so the pass is
-// dropped.
-func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory, pushed bool) error {
+// dropped. left is true when a target's report would be over the limit,
+// so what is stored stays, outdated (unrefreshable).
+func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID int64, serverVersion string, inv inventory.Inventory, pushed bool) (left bool, err error) {
 	evalInv := inv
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
@@ -609,12 +666,12 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		cur, err := s.cfg.Store.CurrentEvaluation(ctx, cluster.ID, target.String())
 		found := err == nil
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("loading current evaluation (cluster %d, target %s): %w", cluster.ID, target, err)
+			return false, fmt.Errorf("loading current evaluation (cluster %d, target %s): %w", cluster.ID, target, err)
 		}
 		if found && cur.SnapshotID != snapID {
 			// A newer snapshot arrived meanwhile; its own ingest evaluated it.
 			log.Printf("server: re-evaluation of cluster %d skipped: snapshot %d is no longer the latest", cluster.ID, snapID)
-			return nil
+			return false, nil
 		}
 		if found && !s.stale(cur, now) && !holdChanged(cur.Report, hold) {
 			continue
@@ -634,12 +691,13 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		if errors.As(err, &tooLarge) {
 			// A snapshot stored before the limit, or a newer knowledge base
 			// that flags more of it: what is stored stays, and the next
-			// pass tries again.
+			// push, or the first pass of the next UTC day, tries again.
 			log.Printf("server: re-evaluation of cluster %d skipped for target %s: %v", cluster.ID, target, err)
+			left = true
 			continue
 		}
 		if err != nil {
-			return err
+			return false, &evaluationError{err}
 		}
 		// A decided current evaluation is the target's latest decided
 		// one, the baseline deltaFor would load again: evaluations are
@@ -651,6 +709,14 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, hold))
 		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Current[target.String()] = cur.ID // 0 when not found
+		if len(d.baselines) > 0 {
+			// An upgrade baseline is another target's, which Current does
+			// not cover.
+			if batch.Expect == nil {
+				batch.Expect = &store.Expectation{Baselines: map[string]int64{}}
+			}
+			expectBaselines(batch.Expect, d)
+		}
 		if decoded && sameResult(cur, stored.Findings, rep) && (len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)
@@ -660,34 +726,74 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		deltas.add(d)
 	}
 	if len(batch.Current) == 0 {
-		return nil
+		return left, nil
 	}
 	batch.Outbox = s.outboxFor(cluster, &deltas, now)
-	_, _, err := s.cfg.Store.CommitEvaluations(ctx, batch)
+	_, _, err = s.cfg.Store.CommitEvaluations(ctx, batch)
 	if errors.Is(err, store.ErrConflict) {
 		log.Printf("server: re-evaluation of cluster %d skipped: %v", cluster.ID, err)
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(batch.Outbox) > 0 {
 		s.kickOutbox()
 	}
-	return nil
+	return left, nil
 }
 
-// reevaluateAll runs reevaluate over every cluster's latest snapshot. One
-// cluster's failure is logged and never stops the others.
+// expectBaselines adds the baselines d's delta was computed from to the
+// commit's expectation (nil: none is checked).
+func expectBaselines(x *store.Expectation, d targetDelta) {
+	if x == nil {
+		return
+	}
+	for target, id := range d.baselines {
+		x.Baselines[target] = id
+	}
+}
+
+// reevaluateAll runs reevaluate over every cluster's latest snapshot. It
+// reads the snapshot heads in one query and each target's evaluation
+// summary first (needsPass), and loads a cluster's inventory only when
+// something is stale, missing or held: most passes find nothing, and an
+// inventory is up to --max-snapshot-bytes to load and decode. A cluster
+// the pass cannot bring up to date is marked (unrefreshable) and skipped
+// until its snapshot or the UTC day changes. One cluster's failure is
+// logged and never stops the others.
 func (s *Server) reevaluateAll(ctx context.Context) {
 	clusters, err := s.cfg.Store.ListClusters(ctx)
 	if err != nil {
 		log.Printf("server: re-evaluation: listing clusters: %v", err)
 		return
 	}
+	heads, err := s.cfg.Store.LatestSnapshotHeads(ctx)
+	if err != nil {
+		log.Printf("server: re-evaluation: latest snapshots: %v", err)
+		return
+	}
+	now := s.now()
+	listed := make(map[int64]bool, len(clusters))
+	for _, c := range clusters {
+		listed[c.ID] = true
+	}
+	s.unrefreshable.keepOnly(listed)
 	for _, c := range clusters {
 		if ctx.Err() != nil {
 			return
+		}
+		head, ok := heads[c.ID]
+		if !ok || s.unrefreshable.has(c.ID, head.ID, now) {
+			continue
+		}
+		version, err := s.versionOf(ctx, head)
+		if err != nil {
+			log.Printf("server: re-evaluation: latest snapshot of cluster %d: %v", c.ID, err)
+			continue
+		}
+		if !s.needsPass(ctx, head, version, now) {
+			continue
 		}
 		snap, inv, err := s.latestInventory(ctx, c.ID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -695,10 +801,23 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 		}
 		if err != nil {
 			log.Printf("server: re-evaluation: latest snapshot of cluster %d: %v", c.ID, err)
+			if errors.Is(err, errCorruptInventory) {
+				s.unrefreshable.mark(c.ID, head.ID, now)
+			}
 			continue
 		}
-		if err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv, false); err != nil {
+		left, err := s.reevaluate(ctx, c, snap.ID, judgedAt(snap, inv), inv, false)
+		if err != nil {
 			log.Printf("server: re-evaluation of cluster %d: %v", c.ID, err)
+		}
+		// Only a failure of the evaluation itself repeats until the
+		// snapshot or the day changes. A store error (a busy SQLite, a
+		// dropped Postgres connection) is a blip: marking it would skip
+		// the cluster, and keep its reads from starting a pass, for the
+		// rest of the UTC day.
+		var evalErr *evaluationError
+		if left || errors.As(err, &evalErr) {
+			s.unrefreshable.mark(c.ID, snap.ID, now)
 		}
 	}
 }
@@ -707,10 +826,22 @@ func (s *Server) reevaluateAll(ctx context.Context) {
 // config takes effect without waiting for pushes), then every
 // reevaluateInterval and at each UTC midnight (nextPassIn), until ctx
 // ends. A read that served an outdated verdict (kickReevaluation) starts
-// the next pass early.
+// the next pass early, but no sooner than reevaluateCooldown after the
+// last one started. A kick made before or during a pass is that pass's:
+// it brings the row the read served up to date, or marks it
+// unrefreshable, so it starts no second one.
 func (s *Server) runReevaluation(ctx context.Context) {
+	drainKick := func() {
+		select {
+		case <-s.reevaluateKick:
+		default:
+		}
+	}
 	for {
+		started := time.Now()
+		drainKick()
 		s.reevaluateAll(ctx)
+		drainKick()
 		timer := time.NewTimer(nextPassIn(s.now(), s.reevaluateInterval))
 		select {
 		case <-ctx.Done():
@@ -718,6 +849,18 @@ func (s *Server) runReevaluation(ctx context.Context) {
 			return
 		case <-timer.C:
 		case <-s.reevaluateKick:
+			if early := s.reevaluateCooldown - time.Since(started); early > 0 {
+				cooldown := time.NewTimer(early)
+				select {
+				case <-ctx.Done():
+					cooldown.Stop()
+					timer.Stop()
+					return
+				case <-timer.C: // the scheduled pass came first
+				case <-cooldown.C:
+				}
+				cooldown.Stop()
+			}
 			timer.Stop()
 		}
 	}
@@ -743,14 +886,17 @@ func (s *Server) kickReevaluation() {
 
 // outdated reports whether a stored evaluation served by a read is out of
 // date (stale: evaluated before today UTC, in the future, or under another
-// KB or team map), and if so starts the next pass early. The read still
-// serves it — recomputing on a GET would let read traffic drive writes and
-// notifications — but says so.
+// KB or team map), and if so starts the next pass early, unless a pass
+// today could not refresh its cluster's snapshot (unrefreshable). The read
+// still serves it — recomputing on a GET would let read traffic drive
+// writes and notifications — but says so.
 func (s *Server) outdated(e store.Evaluation, now time.Time) bool {
 	if !s.stale(e, now) {
 		return false
 	}
-	s.kickReevaluation()
+	if !s.unrefreshable.has(e.ClusterID, e.SnapshotID, now) {
+		s.kickReevaluation()
+	}
 	return true
 }
 

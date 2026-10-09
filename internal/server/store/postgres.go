@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -200,10 +201,12 @@ func (p *Postgres) RenameCluster(ctx context.Context, name, newName string) erro
 
 // Prune deletes evaluations created before cutoff, then the snapshots
 // received before it that no evaluation refers to any more, sparing each
-// cluster's latest snapshot and its evaluations, in one transaction. A
-// snapshot that becomes non-latest between the two statements keeps its
-// evaluations, so it stays until the next run.
-func (p *Postgres) Prune(ctx context.Context, cutoff time.Time) (PruneResult, error) {
+// cluster's latest snapshot and its evaluations and each (cluster,
+// target)'s newest decided evaluation (the notification baseline), then
+// those baselines baselines does not spare, in one transaction. A snapshot
+// that becomes non-latest between the statements keeps its evaluations, so
+// it stays until the next run.
+func (p *Postgres) Prune(ctx context.Context, cutoff time.Time, baselines PruneBaselines) (PruneResult, error) {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return PruneResult{}, fmt.Errorf("prune: begin: %w", err)
@@ -213,12 +216,59 @@ func (p *Postgres) Prune(ctx context.Context, cutoff time.Time) (PruneResult, er
 	var res PruneResult
 	evals, err := tx.ExecContext(ctx, `
 		DELETE FROM evaluations WHERE created_at < $1
-		AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)`, at)
+		AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+		AND id NOT IN (SELECT MAX(id) FROM evaluations WHERE ready OR blockers > 0 GROUP BY cluster_id, target)`, at)
 	if err != nil {
 		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
 	}
 	if res.Evaluations, err = evals.RowsAffected(); err != nil {
 		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
+	}
+	if len(baselines) > 0 {
+		// The baselines of targets no longer in use, which the delete above
+		// spared: found by pair, deleted by id under the same conditions.
+		rows, err := tx.QueryContext(ctx, `
+			SELECT cluster_id, target, MAX(id) FROM evaluations WHERE ready OR blockers > 0 GROUP BY cluster_id, target`)
+		if err != nil {
+			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+		}
+		var pairs []baselinePair
+		for rows.Next() {
+			var bp baselinePair
+			if err := rows.Scan(&bp.clusterID, &bp.target, &bp.id); err != nil {
+				_ = rows.Close()
+				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+			}
+			pairs = append(pairs, bp)
+		}
+		if err := rows.Close(); err != nil {
+			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+		}
+		for ids := baselines.unspared(pairs); len(ids) > 0; {
+			n := min(len(ids), pruneChunk)
+			args := []any{at}
+			holders := make([]string, 0, n)
+			for i, id := range ids[:n] {
+				args = append(args, id)
+				holders = append(holders, fmt.Sprintf("$%d", i+2))
+			}
+			ids = ids[n:]
+			gone, err := tx.ExecContext(ctx, `
+				DELETE FROM evaluations WHERE created_at < $1
+				AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+				AND id IN (`+strings.Join(holders, ",")+`)`, args...)
+			if err != nil {
+				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+			}
+			k, err := gone.RowsAffected()
+			if err != nil {
+				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
+			}
+			res.Evaluations += k
+		}
 	}
 	snaps, err := tx.ExecContext(ctx, `
 		DELETE FROM snapshots WHERE received_at < $1
@@ -332,11 +382,18 @@ func (p *Postgres) LatestSnapshotHead(ctx context.Context, clusterID int64) (Sna
 }
 
 // LatestSnapshotHeads returns every cluster's latest snapshot without its
-// inventory, in one query over idx_snapshots_cluster_id.
+// inventory, in one query: per cluster, one step down
+// idx_snapshots_cluster_id from its end (a LATERAL lookup), so the cost
+// follows the clusters, not every snapshot kept. DISTINCT ON (cluster_id)
+// ... ORDER BY cluster_id, id DESC sorted every snapshot row instead: the
+// (cluster_id, id) index gives neither direction of that order.
 func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot, error) {
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT DISTINCT ON (cluster_id) id, cluster_id, hash, kb_version, agent_version, received_at, server_version
-		FROM snapshots ORDER BY cluster_id, id DESC`)
+		SELECT s.id, s.cluster_id, s.hash, s.kb_version, s.agent_version, s.received_at, s.server_version
+		FROM clusters c CROSS JOIN LATERAL (
+			SELECT id, cluster_id, hash, kb_version, agent_version, received_at, server_version
+			FROM snapshots WHERE cluster_id = c.id ORDER BY id DESC LIMIT 1
+		) s`)
 	if err != nil {
 		return nil, fmt.Errorf("latest snapshot heads: %w", err)
 	}
@@ -360,11 +417,13 @@ func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot,
 func scanEvaluationPg(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
 	var gaps sql.NullString
+	var hold sql.NullBool
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps, &e.TeamsUnknown); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps, &e.TeamsUnknown, &hold); err != nil {
 		return Evaluation{}, err
 	}
 	e.NotAssessed = notAssessedBytes(gaps)
+	e.CarriesHold = carriesHoldColumn(hold)
 	e.CreatedAt = e.CreatedAt.UTC()
 	e.EvaluatedAt = e.EvaluatedAt.UTC()
 	return e, nil
@@ -387,10 +446,10 @@ func insertEvaluationPg(ctx context.Context, x sqlExecer, e Evaluation) (int64, 
 	}
 	var id int64
 	err := x.QueryRowContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams)).Scan(&id)
+		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report)).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -439,15 +498,30 @@ func (p *Postgres) CurrentEvaluationSummary(ctx context.Context, clusterID int64
 // LatestKnownEvaluation returns the newest evaluation for (cluster, target)
 // that is ready or has a blocker, or ErrNotFound.
 func (p *Postgres) LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
-	return p.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target), `
-		SELECT `+evaluationColumns+` FROM evaluations
-		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
-		ORDER BY id DESC LIMIT 1`, clusterID, target)
+	return p.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target),
+		pgLatestKnownQuery, clusterID, target)
 }
+
+// The Postgres queries whose plans TestPostgresEvaluationReadsUseIndexes
+// pins: each walks an index of migration 0009 backwards.
+const (
+	pgLatestKnownQuery = `SELECT ` + evaluationColumns + ` FROM evaluations
+		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
+		ORDER BY id DESC LIMIT 1`
+	// pgLatestKnownIDQuery is the commit's baseline check
+	// (Expectation.Baselines): the id LatestKnownEvaluation returns.
+	pgLatestKnownIDQuery = `SELECT id FROM evaluations
+		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
+		ORDER BY id DESC LIMIT 1`
+	// pgScoreHistoryQuery is newest first; ScoreHistory reverses it.
+	pgScoreHistoryQuery = `SELECT created_at, score, ready, blockers FROM evaluations
+		WHERE cluster_id = $1 AND target = $2
+		ORDER BY id DESC LIMIT $3`
+)
 
 // CommitEvaluations writes b in one transaction.
 //
-// Concurrency: the duplicate check and the Current/SnapshotID checks read
+// Concurrency: the duplicate check and the Current/SnapshotID/Expect checks read
 // state that must not change before the commit, and READ COMMITTED gives
 // no such protection — two racing pushes of one hash would both miss the
 // duplicate, two racing passes would both insert. Locking the parent
@@ -497,18 +571,23 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 	if b.Snapshot != nil {
 		if !noSnapshot && latestHash == b.Snapshot.Hash {
 			// Same inventory: keep the envelope current (an upgraded agent
-			// or KB is news even when the cluster is not) and commit the
-			// cluster's last-seen bump.
+			// or KB is news even when the cluster is not), record the
+			// version it is judged at on a row stored without one (before
+			// migration 0006), and commit the cluster's last-seen bump.
 			if _, err := tx.ExecContext(ctx, `
-				UPDATE snapshots SET kb_version = $1, agent_version = $2
-				WHERE id = $3 AND (kb_version <> $1 OR agent_version <> $2)`,
-				b.Snapshot.KBVersion, b.Snapshot.AgentVersion, latestID); err != nil {
+				UPDATE snapshots SET kb_version = $1, agent_version = $2,
+					server_version = CASE WHEN server_version = '' THEN $3 ELSE server_version END
+				WHERE id = $4 AND (kb_version <> $1 OR agent_version <> $2 OR (server_version = '' AND $3 <> ''))`,
+				b.Snapshot.KBVersion, b.Snapshot.AgentVersion, b.Snapshot.ServerVersion, latestID); err != nil {
 				return 0, false, fmt.Errorf("commit evaluations: record envelope: %w", err)
 			}
 			if err := tx.Commit(); err != nil {
 				return 0, false, fmt.Errorf("commit evaluations: commit: %w", err)
 			}
 			return latestID, true, nil
+		}
+		if err := checkExpectation(ctx, tx, b, latestID, pgLatestKnownIDQuery); err != nil {
+			return 0, false, fmt.Errorf("commit evaluations: %w", err)
 		}
 		received := b.Snapshot.ReceivedAt
 		if received.IsZero() {
@@ -540,6 +619,9 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 				return 0, false, fmt.Errorf("commit evaluations: target %s changed (evaluation %d, expected %d): %w", target, got, want, ErrConflict)
 			}
 		}
+		if err := checkExpectation(ctx, tx, b, latestID, pgLatestKnownIDQuery); err != nil {
+			return 0, false, fmt.Errorf("commit evaluations: %w", err)
+		}
 	}
 
 	for _, e := range b.Insert {
@@ -554,9 +636,9 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, teams = $5, blockers = $6, warnings = $7, evaluated_at = $8
-			WHERE id = $9 AND cluster_id = $10`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, e.ID, b.ClusterID); err != nil {
+			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, teams = $5, blockers = $6, warnings = $7, evaluated_at = $8, carries_hold = $9
+			WHERE id = $10 AND cluster_id = $11`,
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, CarriesHold(e.Report), e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}
@@ -840,12 +922,7 @@ func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target str
 	if limit > 0 {
 		lim = limit
 	}
-	rows, err := p.db.QueryContext(ctx, `
-		SELECT created_at, score, ready, blockers FROM (
-			SELECT id, created_at, score, ready, blockers FROM evaluations
-			WHERE cluster_id = $1 AND target = $2
-			ORDER BY id DESC LIMIT $3
-		) recent ORDER BY id ASC`, clusterID, target, lim)
+	rows, err := p.db.QueryContext(ctx, pgScoreHistoryQuery, clusterID, target, lim)
 	if err != nil {
 		return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 	}
@@ -864,5 +941,6 @@ func (p *Postgres) ScoreHistory(ctx context.Context, clusterID int64, target str
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("score history cluster %d target %s: %w", clusterID, target, err)
 	}
+	slices.Reverse(out) // oldest first
 	return out, nil
 }

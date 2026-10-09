@@ -77,7 +77,7 @@ func TestTempDirChild(t *testing.T) {
 	defer s.Close()
 	switch op {
 	case "prune":
-		res, err := s.Prune(context.Background(), time.Now().UTC().Add(-90*24*time.Hour))
+		res, err := s.Prune(context.Background(), time.Now().UTC().Add(-90*24*time.Hour), nil)
 		if err != nil {
 			fmt.Printf("error %v\n", err)
 			os.Exit(1)
