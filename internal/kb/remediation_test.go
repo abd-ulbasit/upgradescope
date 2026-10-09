@@ -468,3 +468,24 @@ func TestVolumeAttachmentV1alpha1RemovedInTheReleaseItStoppedBeingServed(t *test
 		t.Fatalf("storage.k8s.io/v1alpha1 VolumeAttachment = %+v, want removed 1.23, inferred", e)
 	}
 }
+
+// Two versions introduced in the same release: the more stable one is the
+// alternative (v1 over v1beta1 over v1alpha1), whatever the entry order.
+func TestServedAlternativePrefersStabilityAtTheSameRelease(t *testing.T) {
+	v := func(m int) inventory.Version { return inventory.Version{Major: 1, Minor: m} }
+	entry := func(version string, intro int) APILifecycleEntry {
+		return APILifecycleEntry{Group: "example.k8s.io", Version: version, Kind: "Thing", Introduced: v(intro)}
+	}
+	own := entry("v2", 40) // not served at 1.36
+	for _, order := range [][]string{{"v1beta1", "v1", "v1alpha1"}, {"v1alpha1", "v1beta1", "v1"}, {"v1", "v1alpha1", "v1beta1"}} {
+		var es []APILifecycleEntry
+		for _, ver := range order {
+			es = append(es, entry(ver, 30))
+		}
+		es = append(es, own)
+		g, ok := NewIndex(es).ServedAlternative(own, v(36))
+		if !ok || g.Version != "v1" {
+			t.Errorf("order %v: ServedAlternative = %v, %v; want v1", order, g, ok)
+		}
+	}
+}

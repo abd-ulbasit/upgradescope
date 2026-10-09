@@ -1,6 +1,6 @@
 [
   {
-    "description": "resource.k8s.io/v1 DeviceClass is not served until 1.34, after target 1.33 (1 object): gpu. Fix: write it as resource.k8s.io/v1alpha3 DeviceClass, the newest version Kubernetes 1.33 serves, or upgrade the cluster to Kubernetes 1.34 before applying it.",
+    "description": "resource.k8s.io/v1 DeviceClass is not served until 1.34, after target 1.33 (1 object): gpu. Fix: write it as resource.k8s.io/v1alpha3 DeviceClass, the newest version Kubernetes 1.33 can serve (alpha and beta APIs may need enabling), or upgrade the cluster to Kubernetes 1.34 before applying it.",
     "check_name": "removed-api/resource.k8s.io/v1/DeviceClass",
     "fingerprint": "1c8d74d4ccf93ea4e75cb3a7c47c7157d2891fc496c849adb4a3b2b27ca6ca60",
     "severity": "critical",

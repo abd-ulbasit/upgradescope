@@ -264,6 +264,7 @@ func defaultGAReplacements(entries []entry) []entry {
 			continue
 		}
 		entries[i].Replacement = &gvkOut{Group: succ.Group, Version: succ.Version, Kind: succ.Kind}
+		entries[i].ReplacementDefaulted = true
 		changed = append(changed, entries[i])
 	}
 	return changed
@@ -275,7 +276,7 @@ func defaultGAReplacements(entries []entry) []entry {
 func replacementCitations(succ entry) []string {
 	return []string{
 		deprecationGuideURL,
-		fmt.Sprintf("https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-%d.%d.md", succ.Introduced.Major, succ.Introduced.Minor),
+		fmt.Sprintf("https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-%d.%d.md", succ.Introduced.Major, succ.Introduced.Minor), // kb.ChangelogURL
 	}
 }
 

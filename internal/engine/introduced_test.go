@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,4 +169,31 @@ func TestRemovalPastHorizonIsProjected(t *testing.T) {
 			t.Errorf("target at the horizon has a kb-coverage gap: %+v", g)
 		}
 	}
+}
+
+// A replacement upstream tags nowhere is gen-kb's default (the kind's GA
+// version): the finding that advises it also cites the successor's
+// changelog, since the migration guide ends at v1.32 (#266).
+func TestDefaultedReplacementCitesTheSuccessorsChangelog(t *testing.T) {
+	k := realKB(t)
+	idx := kb.NewIndex(k.APILifecycle)
+	old, ok := idx.Lookup("admissionregistration.k8s.io", "v1beta1", "ValidatingAdmissionPolicy")
+	if !ok || !old.ReplacementDefaulted || old.Replacement == nil {
+		t.Fatalf("ValidatingAdmissionPolicy v1beta1 = %+v, want a defaulted replacement", old)
+	}
+	succ, _ := idx.Lookup(old.Replacement.Group, old.Replacement.Version, old.Replacement.Kind)
+	r := Evaluate(manifestsInv(manifestUsage("admissionregistration.k8s.io", "v1beta1", "ValidatingAdmissionPolicy")), k, inventory.Version{Major: 1, Minor: 36}, testNow)
+	for _, f := range r.Findings {
+		if f.Key != "removed-api/admissionregistration.k8s.io/v1beta1/ValidatingAdmissionPolicy" {
+			continue
+		}
+		if !strings.HasPrefix(f.Remediation, "migrate to admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy") {
+			t.Errorf("remediation = %q", f.Remediation)
+		}
+		if !slices.Contains(f.Citations, kb.ChangelogURL(succ.Introduced)) || !slices.Contains(f.Citations, deprecationGuideURL) {
+			t.Errorf("citations = %v, want the migration guide and %s", f.Citations, kb.ChangelogURL(succ.Introduced))
+		}
+		return
+	}
+	t.Fatalf("no removed-api finding in %+v", r.Findings)
 }

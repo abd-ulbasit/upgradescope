@@ -1,6 +1,9 @@
 package kb
 
 import (
+	"fmt"
+	"os"
+	"regexp"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -72,6 +75,23 @@ func TestDatasetSanity(t *testing.T) {
 		if e.Removed == nil || *e.Removed != c.removed {
 			t.Errorf("%s/%s %s: Removed = %v, want %v", c.group, c.version, c.kind, e.Removed, c.removed)
 		}
+	}
+}
+
+// TestActionFloorIsTheKnowledgeBaseFloor pins the floor action/run.sh
+// refuses a target below ("local oldest=N") to inventory.OldestCovered, so
+// the two cannot drift.
+func TestActionFloorIsTheKnowledgeBaseFloor(t *testing.T) {
+	b, err := os.ReadFile("../../action/run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^\s*local oldest=(\d+)$`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal(`action/run.sh has no "local oldest=N" line`)
+	}
+	if want := fmt.Sprint(inventory.OldestCovered().Minor); string(m[1]) != want {
+		t.Errorf("action/run.sh refuses targets below 1.%s, but inventory.OldestCovered() is %s", m[1], inventory.OldestCovered())
 	}
 }
 

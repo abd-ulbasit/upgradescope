@@ -104,6 +104,11 @@ type entry struct {
 	// package without ever tagging a removal, so Removed is the k8s.io/api
 	// minor in which it disappeared (see carryForward).
 	RemovedInferred bool `json:"removedInferred,omitempty"`
+	// ReplacementDefaulted marks a Replacement upstream tags nowhere:
+	// gen-kb set it to the kind's GA version (defaultGAReplacements), so a
+	// finding that advises it cites the successor's changelog as well as
+	// the migration guide, which stops at v1.32.
+	ReplacementDefaulted bool `json:"replacementDefaulted,omitempty"`
 }
 
 func (e entry) gvk() gvkOut { return gvkOut{Group: e.Group, Version: e.Version, Kind: e.Kind} }

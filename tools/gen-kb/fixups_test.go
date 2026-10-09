@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -385,6 +386,12 @@ func TestDefaultGAReplacements(t *testing.T) {
 	want := []string{"g.k8s.io/v1beta1 Thing -> v1", "g.k8s.io/v1alpha1 Multi -> v2", "g.k8s.io/v1beta2 Tagged -> v1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("defaulted %q, want %q", got, want)
+	}
+	for i, e := range entries {
+		wantFlag := slices.ContainsFunc(changed, func(c entry) bool { return c.gvk() == e.gvk() })
+		if e.ReplacementDefaulted != wantFlag {
+			t.Errorf("entries[%d] %s: ReplacementDefaulted = %v, want %v (only a defaulted replacement is flagged)", i, e.gvk(), e.ReplacementDefaulted, wantFlag)
+		}
 	}
 	if r := entries[7].Replacement; r == nil || r.Version != "v1beta2" {
 		t.Errorf("a tagged replacement was overwritten: %+v", r)
