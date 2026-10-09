@@ -317,7 +317,7 @@ v0.2.0-rc.2's linux/amd64 archive with its attestation).
 | Input | Required | Default | |
 |---|---|---|---|
 | `path` | yes | | File or directory of rendered manifests (`*.yaml`, `*.yml`, `*.json`). It must exist. |
-| `target` | yes | | Target Kubernetes minor version, such as `1.36`. |
+| `target` | yes | | Target Kubernetes minor version, `MAJOR.MINOR` such as `1.36`, **quoted** (`target: "1.30"`): YAML reads an unquoted `1.30` as the number 1.3, which would judge nothing and read ready, so the action refuses any target below 1.16, the oldest minor the knowledge base covers, and says to quote it. |
 | `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
 | `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
 | `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag; at a full commit SHA it runs the release tag that points at that commit, or `latest` with a `::warning` when none does or the lookup fails; at any other ref, or inside another action, it runs `latest`. See [Usage](#usage). |
@@ -327,7 +327,7 @@ v0.2.0-rc.2's linux/amd64 archive with its attestation).
 | `write-baseline` | no | | Also write this scan's JSON report, after suppression, to this path, for a later `baseline` (`scan --write-baseline`). |
 
 Relative paths resolve from the workspace. The action checks every input
-before it downloads anything. A bad `version`, `target`, `fail-on`,
+before it downloads anything. A bad `version`, `target` (not `MAJOR.MINOR`, or below 1.16), `fail-on`,
 `allow-incomplete` or `verify-provenance` value, a `path` that does not exist, a `config` or `baseline` that is not
 a file, or a `write-baseline` whose directory does not exist fails the
 step with an error that names the input. The error shows the value with

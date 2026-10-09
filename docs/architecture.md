@@ -535,7 +535,10 @@ verdict (and `--fail-on`); the score is for trends and comparison.
 
 Per-team scores (`engine.TeamScores`) apply the same formula to each team's
 subset of findings. Teams come from a namespace label (`--team-label`,
-default `team`), optionally overridden by the server's `--team-map`. A
+default `team`), optionally overridden by the server's `--team-map`. Only a
+live cluster (a scan, the agent, or the server's stored snapshot) has the
+labels: `scan --files` reads no Namespace objects, so all its findings are
+unattributed and `--team-label` is refused with `--files`. A
 finding that spans N teams counts for each of them, and an unattributed
 finding is grouped under `""`. Each team also has a `verdict`: `blocked`
 by a blocker of its own or an unattributed one (which cannot be ruled out
