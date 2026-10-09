@@ -87,7 +87,8 @@ agent:
   # -- Human-readable cluster name sent to the server (default: cluster UID).
   clusterName: ""
   # -- Keep the ClusterReadiness CRD schema in step with the agent binary at
-  # startup (agent --manage-crd). Grants get/update/patch on that one CRD
+  # startup, a failed check retried every tick until it succeeds (agent
+  # --manage-crd). Grants get/update/patch on that one CRD
   # only. The CRD itself is installed by the chart's crds/ directory; set
   # false when the CRD is managed elsewhere (e.g. GitOps) to drop the CRD
   # write permissions (get/update/patch on clusterreadinesses.upgradescope.dev).

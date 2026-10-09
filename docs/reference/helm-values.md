@@ -26,7 +26,7 @@ instead of being ignored. Installing and configuring the chart:
 | `agent.interval` | string | `"10m"` | Evaluation interval: a Go duration of at least 1m, e.g. 10m, 1h, 1m30s, 300s or 1.5h. |
 | `agent.logFormat` | string | `"text"` | Log format, text (logfmt) or json, and level: debug, info, warn, error. The agent logs one line at startup and one per tick. |
 | `agent.logLevel` | string | `"info"` | — |
-| `agent.manageCRD` | bool | `true` | Keep the ClusterReadiness CRD schema in step with the agent binary at startup (agent --manage-crd). Grants get/update/patch on that one CRD only. The CRD itself is installed by the chart's crds/ directory; set false when the CRD is managed elsewhere (e.g. GitOps) to drop the CRD write permissions (get/update/patch on clusterreadinesses.upgradescope.dev). The KB-derived read rule still allows get/list on all CRDs (the KB flags apiextensions.k8s.io/v1beta1), whatever this is set to. |
+| `agent.manageCRD` | bool | `true` | manage-crd). Grants get/update/patch on that one CRD only. The CRD itself is installed by the chart's crds/ directory; set false when the CRD is managed elsewhere (e.g. GitOps) to drop the CRD write permissions (get/update/patch on clusterreadinesses.upgradescope.dev). The KB-derived read rule still allows get/list on all CRDs (the KB flags apiextensions.k8s.io/v1beta1), whatever this is set to. |
 | `agent.nodeSelector` | object | `{}` | — |
 | `agent.podAnnotations` | object | `{}` | — |
 | `agent.podLabels` | object | `{}` | app.kubernetes.io/name, instance and component are reserved for the selector and ignored here. |
