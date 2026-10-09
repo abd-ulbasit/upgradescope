@@ -22,6 +22,10 @@ const scrapeTimeout = 10 * time.Second
 const (
 	routeDashboard = "dashboard" // the embedded SPA and its assets
 	routeUnmatched = "unmatched" // a reserved or /api/ path with no route (JSON 404)
+	// routeHostRefused is a request the Host check refused (421) before
+	// any route: a DNS-rebinding page, or a client using a name serve was
+	// not told it answers for (hostcheck.go).
+	routeHostRefused = "host-refused"
 )
 
 // serverMetrics is the server's Prometheus registry: HTTP traffic by route
@@ -104,12 +108,18 @@ func (m *serverMetrics) instrument(next http.Handler) http.Handler {
 		default:
 			route = routeDashboard
 		}
-		m.requests.WithLabelValues(route, strconv.Itoa(code)).Inc()
-		m.duration.WithLabelValues(route).Observe(time.Since(start).Seconds())
+		m.observe(route, code, start)
 		if route == "POST /api/v1/snapshots" {
 			m.ingest.WithLabelValues(ingestResult(code)).Inc()
 		}
 	})
+}
+
+// observe counts one request answered with code under route and times it
+// from start.
+func (m *serverMetrics) observe(route string, code int, start time.Time) {
+	m.requests.WithLabelValues(route, strconv.Itoa(code)).Inc()
+	m.duration.WithLabelValues(route).Observe(time.Since(start).Seconds())
 }
 
 // ingestResult names a snapshot push outcome from handleIngest's status.

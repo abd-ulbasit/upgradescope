@@ -32,7 +32,12 @@ server: refusing to serve the read API and /api/v1/gate without a read token on 
 
 Without a read credential, the read API, the dashboard's data and
 `/api/v1/gate` answer anyone who can reach the address. On loopback that is
-every user and process on the machine; the first command above is meant
+every user and process on the machine, though not a web page: on loopback
+`serve` answers only requests whose Host is `localhost` or a loopback
+address (or an `--allowed-host`), and any other `421`, so a page that
+rebinds its own name to `127.0.0.1` reads nothing
+([The Host check](../operations/auth.md#the-host-check-dns-rebinding)).
+The first command above is meant
 for a single-user workstation. Add `--read-token` (and send it as
 `Authorization: Bearer <token>`) wherever that is not acceptable.
 

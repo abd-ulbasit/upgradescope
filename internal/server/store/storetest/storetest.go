@@ -41,6 +41,8 @@ func RunStoreConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("RenameCluster", func(t *testing.T) { testRenameCluster(t, newStore(t)) })
 	t.Run("CommitEvaluationsRegistersCluster", func(t *testing.T) { testCommitRegistersCluster(t, newStore(t)) })
 	t.Run("CommitFailureLeavesNoCluster", func(t *testing.T) { testCommitFailureLeavesNoCluster(t, newStore(t)) })
+	t.Run("CommitRechecksIngestToken", func(t *testing.T) { testCommitRechecksIngestToken(t, newStore(t)) })
+	t.Run("CommitRefusesChangedCluster", func(t *testing.T) { testCommitRefusesChangedCluster(t, newStore(t)) })
 	t.Run("DuplicateRecordsEnvelope", func(t *testing.T) { testDuplicateRecordsEnvelope(t, newStore(t)) })
 	t.Run("PruneKeepsLatestSnapshot", func(t *testing.T) { testPrune(t, newStore(t)) })
 	t.Run("SnapshotDedup", func(t *testing.T) { testSnapshotDedup(t, newStore(t)) })

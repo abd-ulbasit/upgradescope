@@ -519,6 +519,10 @@ is stopped.
   (chart `agent.clusterName`): until then its pushes are refused when it
   uses a per-cluster token, or register the old name again when it uses
   the shared ingest token.
+- A push already in flight when a delete, rename or token revoke lands
+  (it was authenticated before it) stores nothing: the commit checks the
+  token and the cluster again in its transaction, and answers `401` for a
+  revoked token and `409` for a cluster renamed or deleted meanwhile.
 
 Every delete and rename is logged by the server.
 
@@ -561,7 +565,13 @@ describe it as it was at `lastSeen`.
 With `--slack-webhook` or `--webhook`, the server sends a notification when
 an evaluation pass changes a cluster's readiness: a new blocker, all
 blockers resolved (became ready), or an add-on entering its end-of-life
-window. Each pass is compared with the target's last evaluation that had
+window. Each URL must be an absolute `http` or `https` URL with a host, or
+`serve` refuses to start, naming the flag but not the URL; whitespace
+around one read from the environment or a file (a Secret's trailing
+newline) is trimmed first. A webhook URL is a secret (a Slack webhook's
+path is its credential), so a failed delivery is logged, and stored in
+the outbox's `last_error`, with the URL's scheme and host only:
+`https://hooks.slack.com/…`. Each pass is compared with the target's last evaluation that had
 a decided verdict (ready or blocked). A pass whose verdict is unknown sends
 nothing and is not a baseline either: what it could not see is not news.
 

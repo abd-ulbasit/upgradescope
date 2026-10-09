@@ -152,7 +152,17 @@ cannot read is reported as not assessed.
   ([Read access](auth.md)). The server refuses an open read API unless the
   address it actually bound is loopback, or it is told otherwise
   (`--allow-anonymous-read`). The `Bearer` scheme is matched
-  case-insensitively.
+  case-insensitively. The read, ingest and admin tokens must all differ.
+  A per-cluster token is checked again when its push commits, with the
+  cluster the push looked up: a push in flight when its token is revoked,
+  or its cluster deleted or renamed, stores nothing (`401`, `409`).
+- **Host check (DNS rebinding).** On a loopback listener, or with a
+  trusted team header, a request whose Host is not `localhost`, a
+  loopback address, the address it arrived on, the `--listen` host (not
+  `0.0.0.0` or `::`) or an `--allowed-host` name gets `421` before any route or credential is
+  looked at: a web page that rebinds its own name to `127.0.0.1` cannot
+  read an open loopback read API, or ride a `kubectl port-forward` into
+  header mode ([The Host check](auth.md#the-host-check-dns-rebinding)).
 - **Trusted team header, off by default.** With `--trust-team-header` and
   `--trusted-proxy-cidr`, a read whose TCP peer is in those ranges takes its
   team scope from that header; from anywhere else the header is ignored. It
@@ -162,9 +172,25 @@ cannot read is reported as not assessed.
   `kubectl port-forward` and a mesh sidecar that delivers traffic over
   localhost included
   ([Trusted team header](auth.md#trusted-team-header-trust-team-header)).
+  Group names are part of that boundary: the header is a comma-separated
+  list oauth2-proxy does not encode, so whoever can name an identity
+  provider group `interns,payments` reads payments; filter the groups
+  claim at the identity provider or connector.
 - **Secrets never in argv.** Every token and the database URL can come from
   an environment variable or a file (`--read-token-file`, ...); the chart
   passes them as environment variables from Secrets, never as arguments.
+  Either source is trimmed of surrounding whitespace (a Secret's trailing
+  newline), and a value of whitespace only is refused.
+- **Webhook URLs are secrets too.** A Slack webhook's path is its
+  credential. `serve` refuses to start unless `--slack-webhook` and
+  `--webhook` are absolute http(s) URLs, naming the flag and never the
+  value, and a failed delivery is logged, and stored in the outbox's
+  `last_error`, with the URL's scheme and host only
+  (`https://hooks.slack.com/…`).
+- **Admin commands never follow redirects.** `clusters delete|rename
+  --server` treat any 3xx as an error naming its status and Location:
+  Go would follow a 301 or 302 with a GET, which the admin token reads,
+  and report a delete that never happened.
 - **Bounded input.** Snapshot and gate bodies are capped
   (`--max-snapshot-bytes`, `--max-gate-bytes`), gzip included, and their
   memory is bounded by structure, not only bytes: JSON values and YAML

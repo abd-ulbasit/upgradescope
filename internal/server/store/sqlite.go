@@ -552,6 +552,11 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 		if b.ClusterID, err = upsertClusterSQLite(ctx, tx, *b.Cluster); err != nil {
 			return 0, false, fmt.Errorf("commit evaluations: %w", err)
 		}
+		// The upsert holds SQLite's one write lock, so no revoke, rename or
+		// delete commits between these checks and this commit.
+		if err := recheckPush(ctx, tx, b, `SELECT 1 FROM tokens WHERE token_hash = ? AND cluster_name = ? AND revoked_at IS NULL`); err != nil {
+			return 0, false, fmt.Errorf("commit evaluations: %w", err)
+		}
 	}
 
 	var latestID int64

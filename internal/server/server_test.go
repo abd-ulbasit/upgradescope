@@ -153,7 +153,7 @@ func stallGate(t *testing.T, addr string) net.Conn {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: x\r\n"+
+	fmt.Fprintf(conn, "POST /api/v1/gate?target=1.35 HTTP/1.1\r\nHost: localhost\r\n"+
 		"Content-Type: application/x-yaml\r\nContent-Length: 100000\r\n\r\nabc")
 	return conn
 }
@@ -197,7 +197,7 @@ func TestIdleKeepAliveClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+	fmt.Fprintf(conn, "GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		t.Fatalf("reading /healthz response: %v", err)

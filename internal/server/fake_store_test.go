@@ -398,6 +398,15 @@ func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBat
 			}
 			b.ClusterID = id
 		}
+		// As the real stores recheck the push in their transaction.
+		if b.Cluster.ID != 0 && b.Cluster.ID != b.ClusterID {
+			return 0, false, store.ErrClusterChanged
+		}
+		if b.IngestToken != "" {
+			if tk, ok := f.tokens[b.IngestToken]; !ok || tk.cluster != b.Cluster.Name || tk.revoked {
+				return 0, false, store.ErrTokenRevoked
+			}
+		}
 	}
 	upsert := func() {
 		if b.Cluster != nil {

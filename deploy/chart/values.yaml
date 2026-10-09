@@ -23,6 +23,13 @@ image:
 # e.g. [{name: regcred}].
 imagePullSecrets: []
 
+# -- The cluster's DNS domain (the kubelet's clusterDomain): the server
+# Service's fully qualified name, <fullname>-server.<namespace>.svc.<this>,
+# is passed to the server as an --allowed-host and named in the
+# cert-manager Certificate. Set it when your cluster does not use
+# cluster.local.
+clusterDomain: cluster.local
+
 serviceAccount:
   # -- Create the agent ServiceAccount. Set false to bring your own (set name).
   create: true
@@ -364,6 +371,15 @@ server:
     enabled: true
     size: 1Gi
     storageClass: ""
+  # -- Extra host names (or IPs) requests may name in their Host header,
+  # passed as --allowed-host with the Service's DNS names and
+  # server.ingress.host, which the chart always passes. serve checks the
+  # Host when it trusts a proxy's team header (--trust-team-header in
+  # extraArgs) or listens on loopback, and answers any other name 421 (DNS
+  # rebinding); list here any other name clients use, such as a Gateway's
+  # host. Names only, any port matches; probes and scrapes of the pod's IP
+  # need nothing.
+  allowedHosts: []
   # -- Extra `upgradescope serve` flags, e.g. ["--max-snapshot-bytes=41943040"].
   extraArgs: []
   extraEnv: []

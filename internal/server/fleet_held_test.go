@@ -110,7 +110,7 @@ func TestUnreadFleetResponsesAreBounded(t *testing.T) {
 			}
 			t.Logf("GET %s: %d bytes", path, rec.Body.Len())
 			rec = nil
-			req := "GET " + path + " HTTP/1.1\r\nHost: upgradescope\r\n\r\n"
+			req := "GET " + path + " HTTP/1.1\r\nHost: localhost\r\n\r\n"
 			checkUnreadBounded(t, s, s.fleetSlots, req, unreadFleetClients, maxFleetSlotHeap)
 		})
 	}

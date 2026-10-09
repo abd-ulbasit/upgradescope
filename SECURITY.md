@@ -178,7 +178,11 @@ Out of scope:
   missing token is a configuration choice, not a vulnerability. So is a
   `--trust-team-header` proxy that passes client-supplied copies of the
   header on, or a `--trusted-proxy-cidr` wider than the proxy: the docs
-  say both make the header spoofable.
+  say both make the header spoofable, and an identity provider that lets
+  users name groups (a group `interns,payments` reads as payments): the
+  docs make filtering the groups claim a condition of the mode. A web
+  page that reaches an open loopback server or header mode by DNS
+  rebinding is in scope: the Host check is meant to stop it.
 - Findings that are wrong (false positives or false negatives) but have no
   security impact. Open a regular bug report for those.
 - Vulnerabilities in dependencies that upgradescope does not reach. Do report

@@ -427,7 +427,7 @@ func stallPush(t *testing.T, addr string, declared int, sent string, gzipped boo
 	if gzipped {
 		enc = "Content-Encoding: gzip\r\n"
 	}
-	fmt.Fprintf(conn, "POST /api/v1/snapshots HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ingest-tok\r\n%s"+
+	fmt.Fprintf(conn, "POST /api/v1/snapshots HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer ingest-tok\r\n%s"+
 		"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", enc, declared, sent)
 	return conn
 }

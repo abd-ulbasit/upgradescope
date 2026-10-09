@@ -17,6 +17,6 @@ spec:
     - {{ $svc }}
     - {{ printf "%s.%s" $svc .Release.Namespace }}
     - {{ printf "%s.%s.svc" $svc .Release.Namespace }}
-    - {{ printf "%s.%s.svc.cluster.local" $svc .Release.Namespace }}
+    - {{ include "upgradescope.serverFQDN" . }}
   issuerRef: {{- toYaml .Values.server.tls.certManager.issuerRef | nindent 4 }}
 {{- end }}

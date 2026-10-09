@@ -519,7 +519,13 @@ func (s *Server) outboxFor(cluster store.Cluster, deltas *changeMerger, now time
 // the previous snapshot's instead, so the cluster keeps its default
 // target and its cells: they carry the engine's verdict on what the push
 // did report — unknown at best, since versions is a required capability.
-func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory) (int64, bool, error) {
+//
+// token is the per-cluster ingest token the push was authenticated with
+// ("" for the shared one): the commit re-checks it, and that cluster.ID is
+// still the cluster under its name, in its transaction
+// (store.ErrTokenRevoked, store.ErrClusterChanged), so a revoke, rename or
+// delete that lands while the push is processed is never undone by it.
+func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
 	// A duplicate (the agent's hourly force-sync) is the common push: go
 	// straight to re-evaluating what is stale, instead of evaluating every
 	// target for the commit to discard. The commit still checks the hash,
@@ -540,7 +546,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 			snap.ServerVersion = judgedVersion(latest)
 		}
 		if err == nil && latest.Hash == snap.Hash {
-			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap})
+			snapID, dup, err := s.cfg.Store.CommitEvaluations(ctx, store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token})
 			if err != nil {
 				return 0, false, err
 			}
@@ -558,7 +564,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 	evalInv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
 	now := s.now()
 	hold := s.callsHoldOf(inv, snap.ServerVersion, true)
-	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap}
+	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token}
 	var deltas changeMerger // each target's changes, merged as they come
 	for _, target := range s.evalTargets(snap.ServerVersion) {
 		e, rep, err := s.evaluation(cluster, evalInv, target, now)
