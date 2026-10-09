@@ -85,6 +85,18 @@ spec:
             - --tls-cert-file=/etc/upgradescope/tls/tls.crt
             - --tls-key-file=/etc/upgradescope/tls/tls.key
             {{- end }}
+            # The names serve answers for when it checks the Host (a trusted
+            # team header, or a loopback --listen): the Service's, which the
+            # in-chart agent pushes to, the Ingress host and
+            # server.allowedHosts. Probes and scrapes of the pod's IP need
+            # none: the guard answers for the address a request arrives on.
+            {{- $svc := include "upgradescope.serverFullname" . }}
+            {{- $hosts := list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace) (printf "%s.%s.svc.cluster.local" $svc .Release.Namespace) }}
+            {{- if and .Values.server.ingress.enabled .Values.server.ingress.host }}
+            {{- $hosts = append $hosts (lower .Values.server.ingress.host) }}
+            {{- end }}
+            {{- $hosts = concat $hosts .Values.server.allowedHosts | uniq }}
+            - {{ printf "--allowed-host=%s" (join "," $hosts) | quote }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}

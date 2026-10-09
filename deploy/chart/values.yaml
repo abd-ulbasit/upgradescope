@@ -364,6 +364,15 @@ server:
     enabled: true
     size: 1Gi
     storageClass: ""
+  # -- Extra host names (or IPs) requests may name in their Host header,
+  # passed as --allowed-host with the Service's DNS names and
+  # server.ingress.host, which the chart always passes. serve checks the
+  # Host when it trusts a proxy's team header (--trust-team-header in
+  # extraArgs) or listens on loopback, and answers any other name 421 (DNS
+  # rebinding); list here any other name clients use, such as a Gateway's
+  # host. Names only, any port matches; probes and scrapes of the pod's IP
+  # need nothing.
+  allowedHosts: []
   # -- Extra `upgradescope serve` flags, e.g. ["--max-snapshot-bytes=41943040"].
   extraArgs: []
   extraEnv: []
