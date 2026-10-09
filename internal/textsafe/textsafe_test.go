@@ -53,12 +53,6 @@ func TestEscapeLeavesNothingUnsafe(t *testing.T) {
 	}
 }
 
-func TestLinesKeepsNewlines(t *testing.T) {
-	if got, want := Lines("a\nb\x1b\r\nc"), "a\nb\\x1b\\r\nc"; got != want {
-		t.Errorf("Lines = %q, want %q", got, want)
-	}
-}
-
 func TestEscapeNoAllocWhenSafe(t *testing.T) {
 	s := "ingress-nginx"
 	if n := testing.AllocsPerRun(100, func() { _ = Escape(s) }); n != 0 {

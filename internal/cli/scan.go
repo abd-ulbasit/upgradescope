@@ -57,9 +57,49 @@ func ExitCode(err error) int {
 }
 
 // ErrorText is err as the process prints it on stderr. An error can quote
-// a file name or a value from the manifests being scanned, so its control
-// characters are shown as escapes (a multi-line error keeps its line breaks).
-func ErrorText(err error) string { return textsafe.Lines(err.Error()) }
+// a file name or a value from the manifests being scanned, so every control
+// character in it is shown as an escape, a newline too: a name holding a
+// newline must not start a second, forged line. The one newline kept is the
+// separator errors.Join writes between the errors it joins, found by walking
+// the error tree rather than by looking at the text.
+func ErrorText(err error) string {
+	var b strings.Builder
+	writeError(&b, err)
+	return b.String()
+}
+
+func writeError(b *strings.Builder, err error) {
+	msg := err.Error()
+	switch u := err.(type) {
+	case interface{ Unwrap() []error }:
+		kids := u.Unwrap()
+		texts := make([]string, len(kids))
+		for i, k := range kids {
+			texts[i] = k.Error()
+		}
+		// Only a pure join (errors.Join) has a message that is its children's,
+		// separated by newlines; fmt.Errorf with several %w does not.
+		if len(kids) > 0 && msg == strings.Join(texts, "\n") {
+			for i, k := range kids {
+				if i > 0 {
+					b.WriteByte('\n')
+				}
+				writeError(b, k)
+			}
+			return
+		}
+	case interface{ Unwrap() error }:
+		// "context: %w" puts the wrapped error's text last; keep a join in it.
+		if k := u.Unwrap(); k != nil {
+			if kmsg := k.Error(); strings.HasSuffix(msg, kmsg) {
+				b.WriteString(textsafe.Escape(msg[:len(msg)-len(kmsg)]))
+				writeError(b, k)
+				return
+			}
+		}
+	}
+	b.WriteString(textsafe.Escape(msg))
+}
 
 type scanOptions struct {
 	target      string

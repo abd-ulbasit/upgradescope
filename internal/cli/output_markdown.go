@@ -188,7 +188,7 @@ var mdEscaper = strings.NewReplacer(
 // control characters are escaped before the markup is, so the backslash of
 // an escape is escaped too and the cell shows \x1b, not the character.
 func mdText(s string) string {
-	return mdEscaper.Replace(textsafe.Escape(oneLine(s)))
+	return mdEscaper.Replace(oneLine(textsafe.Escape(s)))
 }
 
 // mdCode renders s as a code span in a table cell: the fence is one
@@ -199,7 +199,7 @@ func mdText(s string) string {
 // shows as a\|b (checked against GitHub's /markdown API). Escaping it as
 // mdText does would show the extra backslash.
 func mdCode(s string) string {
-	s = strings.ReplaceAll(textsafe.Escape(oneLine(s)), "|", `\|`)
+	s = strings.ReplaceAll(oneLine(textsafe.Escape(s)), "|", `\|`)
 	longest, run := 0, 0
 	for _, c := range s {
 		if c == '`' {
@@ -216,7 +216,9 @@ func mdCode(s string) string {
 	return fence + s + fence
 }
 
-// oneLine joins s's lines with spaces: a newline would end the table row.
+// oneLine collapses the runs of spaces that remain once the controls are
+// escaped (the escape of a newline is two printable characters, so no line
+// break is left that could end the table row).
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

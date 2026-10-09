@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -297,16 +299,77 @@ func TestAdminListsEscapeNames(t *testing.T) {
 	assertTerminalSafe(t, "tokens revoke", msg)
 }
 
-// A scan error that quotes a manifest's file name is printed escaped.
-func TestErrorTextEscapesButKeepsLines(t *testing.T) {
-	dir := writeFiles(t, map[string]string{"bad\x1b[2J\u202e.yaml": "kind: [unterminated\n"})
+// A scan error that quotes a name a pull request chose is one line on
+// stderr, however the name was spelled: a newline in a file name must not
+// start a line of its own that looks like a warning.
+func TestErrorTextEscapesNewlinesInQuotedNames(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"app.yaml": removedAPIs})
+	// A dangling symlink: the walk fails to open it, and the error quotes its path.
+	name := "x\nwarning: FAKE\x1b[2J\r\u202e.yaml"
+	if err := os.Symlink(filepath.Join(dir, "missing-target"), filepath.Join(dir, name)); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
 	_, _, err := execScanFiles(t, "--files", dir)
 	if err == nil {
-		t.Fatal("want an error: no manifests")
+		t.Fatal("want an error from the dangling symlink")
 	}
-	got := ErrorText(fmt.Errorf("first\x1b[2J: %w\nsecond\r", err))
+	got := ErrorText(err)
 	assertTerminalSafe(t, "error", got)
-	if !strings.Contains(got, "\nsecond\\r") || !strings.Contains(got, `first\x1b[2J`) {
-		t.Errorf("ErrorText = %q", got)
+	if strings.Contains(got, "\n") {
+		t.Errorf("one failing file is one line, got %q", got)
 	}
+	if !strings.Contains(got, `x\nwarning: FAKE\x1b[2J\r\u202e.yaml`) {
+		t.Errorf("the name is not shown as escapes: %q", got)
+	}
+	if strings.Contains(err.Error(), "\n") == false {
+		t.Fatal("the test no longer reproduces: the raw error has no newline")
+	}
+}
+
+// ErrorText keeps exactly the newlines errors.Join writes between errors
+// (also under a "context: %w" prefix) and escapes every other one.
+func TestErrorTextKeepsOnlyTheJoinSeparators(t *testing.T) {
+	a := errors.New("first\nforged\x1b[2J")
+	b := fmt.Errorf("second %q\nforged: %w", "x", errors.New("inner\rpart"))
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"plain", a, `first\nforged\x1b[2J`},
+		{"join", errors.Join(a, b), "first\\nforged\\x1b[2J\nsecond \"x\"\\nforged: inner\\rpart"},
+		{"wrapped join", fmt.Errorf("ctx\n%s: %w", "p", errors.Join(a, errors.New("two"))), "ctx\\np: first\\nforged\\x1b[2J\ntwo"},
+		{"several %w, newline-separated, read as a join", fmt.Errorf("%w\n%w", a, errors.New("two")), "first\\nforged\\x1b[2J\ntwo"},
+		{"several %w with a prefix are escaped whole", fmt.Errorf("p\n%w %w", a, errors.New("two")), `p\nfirst\nforged\x1b[2J two`},
+		{"wrapped", fmt.Errorf("ctx\nfake: %w", errors.New("in\x00ner")), `ctx\nfake: in\x00ner`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ErrorText(tc.err)
+			if got != tc.want {
+				t.Errorf("ErrorText = %q, want %q", got, tc.want)
+			}
+			assertTerminalSafe(t, tc.name, got)
+		})
+	}
+}
+
+// The whitespace controls are shown as escapes in Markdown too, never
+// folded into a space: a reviewer sees that the name held a CR or a tab.
+func TestMarkdownShowsWhitespaceControlsAsEscapes(t *testing.T) {
+	name := "RED\a\r::error::pwned\u0085x\tT\vU\fV\nW\u2028X\u2029Y"
+	r := engine.Report{Verdict: engine.VerdictBlocked, Findings: []engine.Finding{{
+		Category: engine.CatRemovedAPI, Severity: engine.SevBlocker, Title: name,
+		Objects: []inventory.ObjectRef{{Name: name, File: name + ".yaml", Line: 1}},
+	}}}
+	var md bytes.Buffer
+	WriteMarkdown(&md, r)
+	// In text the backslash of the escape is itself escaped; in a code span it is not.
+	text := `RED\\x07\\r::error::pwned\\u0085x\\tT\\x0bU\\x0cV\\nW\\u2028X\\u2029Y`
+	code := "`" + `RED\x07\r::error::pwned\u0085x\tT\x0bU\x0cV\nW\u2028X\u2029Y.yaml:1` + "`"
+	for _, want := range []string{text, code} {
+		if strings.Count(md.String(), want) < 1 {
+			t.Errorf("markdown lacks %q:\n%s", want, md.String())
+		}
+	}
+	assertTerminalSafe(t, "markdown", md.String())
 }

@@ -40,17 +40,11 @@ func Unsafe(r rune) bool {
 // backslash is left as it is, so a Windows path stays readable; the escapes
 // are for a person reading, not for parsing back. A string with nothing to
 // escape is returned as it is, without allocating.
-func Escape(s string) string { return escape(s, true) }
-
-// Lines is Escape for text that is already several lines, such as an error
-// from errors.Join: a newline is kept as the line break it is.
-func Lines(s string) string { return escape(s, false) }
-
-func escape(s string, newlines bool) string {
+func Escape(s string) string {
 	clean := true
 	for i := 0; i < len(s); {
 		r, n := utf8.DecodeRuneInString(s[i:])
-		if (r == utf8.RuneError && n == 1) || (Unsafe(r) && (newlines || r != '\n')) {
+		if (r == utf8.RuneError && n == 1) || Unsafe(r) {
 			clean = false
 			break
 		}
@@ -66,8 +60,6 @@ func escape(s string, newlines bool) string {
 		switch {
 		case r == utf8.RuneError && n == 1:
 			fmt.Fprintf(&b, `\x%02x`, s[i])
-		case r == '\n' && !newlines:
-			b.WriteByte('\n')
 		case r == '\n':
 			b.WriteString(`\n`)
 		case r == '\r':
