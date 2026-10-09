@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -111,7 +112,15 @@ func TestHelmDecodeCostByRelease(t *testing.T) {
 		line = append(line, fmt.Sprintf("%.0f%%", 100*float64(c)/float64(total)))
 	}
 	t.Logf("share of the CPU by twentieth of the order the step visits them in: %s", strings.Join(line, " "))
-	for _, n := range []int{len(rels) / 100 * 4, len(rels) / 20} {
+	// The tails a partial step leaves unread: 5% of the releases, and the
+	// counts in UPGRADESCOPE_HELM_TAIL (comma separated, e.g. "43,51").
+	tails := []int{len(rels) / 20}
+	for _, f := range strings.Split(os.Getenv("UPGRADESCOPE_HELM_TAIL"), ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(f)); err == nil && n > 0 && n <= len(rels) {
+			tails = append(tails, n)
+		}
+	}
+	for _, n := range tails {
 		var c time.Duration
 		for _, d := range cost[len(cost)-n:] {
 			c += d
