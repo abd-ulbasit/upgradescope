@@ -350,6 +350,7 @@ hack-test:
 	./hack/ci-ok_test.sh
 	./hack/ci-sarif_test.sh
 	./hack/release-ci-permissions_test.sh
+	./hack/release-caches_test.sh
 	./hack/kb-refresh-ci_test.sh
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh

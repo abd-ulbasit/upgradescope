@@ -48,6 +48,18 @@ on:
 permissions:
   contents: read
 
+# No cache on the release path (IR-22, #244). Any job can write the
+# Actions cache with the runner's own token, whatever its permissions:
+# block, and a run on a tag restores entries written on main, kb-refresh's
+# job that builds freshly bumped, unreviewed modules included. So when
+# release.yml calls this workflow (inputs.release, on a tag ref), every
+# job restores nothing: setup-go cache false, no setup-node cache, the
+# actions/cache step skipped. PRs, main and the schedule keep their
+# caches. hack/release-caches_test.sh evaluates this and checks every
+# step that could restore a cache.
+env:
+  RESTORE_CACHES: ${{ !inputs.release && github.ref_type != 'tag' }}
+
 # A new push to a PR cancels that PR's superseded run (one group per PR).
 # Everything else gets a group of its own: groups are repository-wide, and a
 # PENDING run is cancelled whenever another run joins its group, even with
@@ -168,6 +180,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       # go vet + staticcheck, pinned in the Makefile: golangci-lint-action
       # lags Go releases, and an unpinned linter turns an upstream release
       # into a red build on an unrelated PR.
@@ -184,6 +197,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
           cache-dependency-path: |
             go.sum
             tools/*/go.sum
@@ -220,6 +234,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - run: make test-heap
 
   # The binary and the dashboard it embeds, then every package (tests
@@ -237,6 +252,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - run: make build
       # The real go:embed bundle through Server's routing: GET / and every
       # asset index.html references, each 200 with its content type. A 200
@@ -263,10 +279,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24' # the Dockerfile's
-          cache: npm
+          package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
+          cache: ${{ env.RESTORE_CACHES == 'true' && 'npm' || '' }}
           cache-dependency-path: web/package-lock.json
       - run: make notices-check
 
@@ -282,6 +300,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       # The gate lives in hack/vulncheck.sh so `make vuln` reproduces it byte
       # for byte on a laptop. It pins govulncheck, scans the linux/amd64
       # binary, and fails closed; accepted advisories are in
@@ -296,6 +315,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24' # Renovate's engines
+          package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
       - name: npm audit of hack/renovate (per-advisory ignore list)
         run: make renovate-audit
 
@@ -317,7 +337,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
+          package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
+          cache: ${{ env.RESTORE_CACHES == 'true' && 'npm' || '' }}
           cache-dependency-path: web/package-lock.json
       - run: make web-test
 
@@ -351,6 +372,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24' # Renovate's engines
+          package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
       - run: make examples-test
 
   # Every Dockerfile for both architectures the release publishes, pushing
@@ -371,7 +393,10 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod # Dockerfile.release's binaries are built on the runner
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false # it installs no buildx (no version: input); never from the Actions cache
       - name: build ${{ matrix.dockerfile }} (linux/amd64, linux/arm64)
         env:
           IMAGES_DOCKERFILES: ${{ matrix.dockerfile }}
@@ -399,6 +424,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - name: Did this branch touch registry/?
         id: changed
         env:
@@ -477,6 +503,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - name: wait for postgres (entrypoint restarts once after initdb)
         run: |
           for _ in $(seq 1 60); do
@@ -514,9 +541,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       # In snapshot mode dockers_v2 still builds (and --loads, never pushes)
       # the linux/amd64 and linux/arm64 images from Dockerfile.release.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false # it installs no buildx (no version: input); never from the Actions cache
       - run: make release-check
       # The CLI as the last release shipped it against this tree, through
       # `--help`: a removed flag, a changed default or usage line must be
@@ -563,6 +593,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - run: make action-test
 
       - id: release
@@ -780,6 +811,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0 # keep in step with the helm job and release.yml HELM_VERSION
@@ -818,9 +850,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       # setup-envtest and this minor's kube-apiserver and etcd bundle. The
       # key changes with the pins, so a bump downloads afresh.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: env.RESTORE_CACHES == 'true' # no cache on the release path (IR-22)
         with:
           path: bin/envtest
           key: envtest-${{ runner.os }}-${{ matrix.minor }}-${{ hashFiles('hack/envtest.sh', 'hack/envtest-versions.txt') }}
@@ -840,6 +874,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
           cache-dependency-path: |
             go.sum
             tools/gen-kb/go.sum

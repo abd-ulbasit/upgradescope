@@ -222,6 +222,23 @@ dispatches are fine), so let the first finish before dispatching again.
 `hack/ci-concurrency_test.sh` checks the group expression for each kind of
 run, not repeats of one.
 
+**No cache on the release path.** Any job can write the GitHub Actions
+cache with the runner's own token, whatever its `permissions:` block, and a
+run on a tag restores what runs on `main` saved, including kb-refresh's
+job that builds freshly bumped, unreviewed modules. So no job that builds,
+signs or publishes a release, and no `ci.yml` job when `release.yml` calls
+it to gate one, restores a cache: in `release.yml`, `actions/setup-go` sets
+`cache: false`, `actions/setup-node` has no `cache:` and sets
+`package-manager-cache: false`, `docker/setup-buildx-action` sets
+`cache-binary: false`, and there is no `actions/cache` or `type=gha`
+BuildKit cache. In `ci.yml` each of those is keyed on the workflow's
+`RESTORE_CACHES`, false for a `release.yml` call and on any tag ref
+(`cache: ${{ env.RESTORE_CACHES == 'true' }}`, `if: env.RESTORE_CACHES ==
+'true'` on an `actions/cache` step). A new action on either workflow must
+be checked for a cache of its own and added to the list in
+`hack/release-caches_test.sh` (`make hack-test`), which fails on any of
+these (IR-22).
+
 The `kube` job (`hack/e2e.sh`) runs per Kubernetes minor from
 `hack/kind-node-images.txt`, each pinned to a kind node image digest. It
 creates a kind cluster, scans the vanilla cluster at its next minor and
@@ -249,7 +266,8 @@ no kubeconfig and touches no cluster you have a context for (the test pins
 ignored, and it refuses a non-loopback apiserver). The tool and
 the bundle index are pinned in `hack/envtest.sh`, each minor's bundle to an
 exact patch release in `hack/envtest-versions.txt`, and downloads are
-sha512-verified; the first run needs network, and CI caches `bin/envtest`.
+sha512-verified; the first run needs network, and CI caches `bin/envtest`
+(except when `release.yml` calls it: no cache on the release path).
 There are no nodes, pods or controllers, so only what the apiserver alone
 serves is tested. To add a minor, add its row to `hack/envtest-versions.txt`
 (an exact release `setup-envtest list` shows), its deprecated beta API to
