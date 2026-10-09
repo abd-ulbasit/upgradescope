@@ -272,6 +272,14 @@ func (p *pusher) clear(pl *pushPayload) {
 // send makes one attempt. retryAfter is the server's Retry-After on a
 // transient failure (0 = none).
 func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, retryAfter time.Duration, err error) {
+	// Config refuses both at startup; a pusher built around it still never
+	// retries a request that could not be sent.
+	if err := ValidateServerURL(p.url); err != nil {
+		return true, 0, fmt.Errorf("push snapshot: %w", err)
+	}
+	if err := ValidateServerToken(p.token); err != nil {
+		return true, 0, fmt.Errorf("push snapshot: %w", err)
+	}
 	body, err := json.Marshal(pl)
 	if err != nil {
 		return true, 0, fmt.Errorf("marshal snapshot: %w", err)

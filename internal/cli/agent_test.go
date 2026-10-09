@@ -338,3 +338,56 @@ func TestRunAgentRejectsUnusableServerCAFile(t *testing.T) {
 		t.Errorf("runAgent with a missing CA file: err = %v, want one naming --server-ca-file and the file", err)
 	}
 }
+
+// #238: push settings that can never work stop the agent before it
+// touches the cluster, with a message naming the flag.
+func TestAgentRefusesUnusablePushSettings(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		env  string
+		want string
+	}{
+		{[]string{"--server-url", "upgradescope.example.com", "--server-token", "t"}, "", "--server-url"},
+		{[]string{"--server-url", "localhost:8080", "--server-token", "t"}, "", "--server-url"},
+		{[]string{"--server-url", "ftp://upgradescope.example.com", "--server-token", "t"}, "", "--server-url"},
+		{[]string{"--server-url", "https://upgradescope.example.com"}, "ab cd", "--server-token"},
+		{[]string{"--server-url", "https://upgradescope.example.com", "--server-token", "a\tb"}, "", "--server-token"},
+		{[]string{"--cluster-name", ""}, "", "--cluster-name"},
+		{[]string{"--force-sync-every", "0"}, "", "--force-sync-every"},
+		{[]string{"--force-sync-every", "-1s"}, "", "--force-sync-every"},
+	} {
+		t.Setenv("UPGRADESCOPE_SERVER_TOKEN", tc.env)
+		ran := false
+		orig := runAgent
+		runAgent = func(context.Context, agentOptions) error { ran = true; return nil }
+		root := Root()
+		root.SetArgs(append([]string{"agent"}, tc.args...))
+		err := root.Execute()
+		runAgent = orig
+		if err == nil || !strings.Contains(err.Error(), tc.want) || ran {
+			t.Errorf("agent %q (env token %q): err = %v, ran = %v; want a refusal naming %s before the agent runs", tc.args, tc.env, err, ran, tc.want)
+		}
+	}
+}
+
+// The trailing newline of a token Secret made from a file (kubectl create
+// secret --from-file, echo without -n) is trimmed from the environment as
+// it is from --server-token-file.
+func TestAgentTrimsTheEnvironmentToken(t *testing.T) {
+	t.Setenv("UPGRADESCOPE_SERVER_TOKEN", "env-tok\n")
+	got, err := execAgent(t, "--server-url", "https://upgradescope.example.com")
+	if err != nil || got.serverToken != "env-tok" {
+		t.Fatalf("serverToken = %q, err %v; want env-tok", got.serverToken, err)
+	}
+}
+
+func TestAgentForceSyncEveryFlag(t *testing.T) {
+	got, err := execAgent(t, "--force-sync-every", "2h")
+	if err != nil || got.forceSyncEvery != 2*time.Hour {
+		t.Fatalf("forceSyncEvery = %v, err %v; want 2h", got.forceSyncEvery, err)
+	}
+	// Below the interval is accepted here; the agent raises it at start.
+	if _, err := execAgent(t, "--force-sync-every", "1m"); err != nil {
+		t.Errorf("--force-sync-every 1m: %v, want accepted", err)
+	}
+}

@@ -16,9 +16,11 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,6 +85,56 @@ func ValidateInterval(d time.Duration) error {
 	return nil
 }
 
+// ValidateServerURL rejects a --server-url no push could reach: anything
+// but an http or https URL with a host. Without a scheme ("fleet.example.com")
+// or with another one, every push would fail with "unsupported protocol
+// scheme", retried as if the server were down (#238).
+func ValidateServerURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("server URL %q: %w", raw, err)
+	}
+	if s := strings.ToLower(u.Scheme); s != "http" && s != "https" {
+		return fmt.Errorf("server URL %q: want an http:// or https:// URL, e.g. https://upgradescope.example.com", raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("server URL %q: no host", raw)
+	}
+	return nil
+}
+
+// ValidateServerToken rejects a push token no request could carry: one
+// with whitespace or control characters in it. A trailing newline (a
+// Secret made from a file with one) made every push fail with an invalid
+// Authorization header, retried as if the server were down (#238).
+// Callers reading a token from a file or the environment trim its
+// surrounding whitespace first; what is left must have none.
+func ValidateServerToken(tok string) error {
+	if i := strings.IndexFunc(tok, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }); i >= 0 {
+		return fmt.Errorf("server token has whitespace or a control character at byte %d: a bearer token has none", i)
+	}
+	return nil
+}
+
+// ValidateForceSyncEvery rejects a force-sync period that is not positive.
+// Config treats a zero ForceSyncEvery as unset (1h), but a caller that was
+// given one explicitly (--force-sync-every) must not have 0 silently mean
+// the default, nor a negative period mean every tick (#238). A period
+// below the interval is not refused: Run raises it to the interval
+// (forceSyncFloor).
+func ValidateForceSyncEvery(d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("force-sync-every %s: must be positive (how long an unchanged inventory waits before it is pushed again)", d)
+	}
+	return nil
+}
+
+// forceSyncFloor is the force-sync period in effect: the agent pushes at
+// most once per tick, so a period below the interval is raised to it.
+func forceSyncFloor(forceSync, interval time.Duration) time.Duration {
+	return max(forceSync, interval)
+}
+
 // applyDefaults fills zero values and rejects invalid combinations.
 func (c *Config) applyDefaults() error {
 	if c.Interval == 0 {
@@ -100,8 +152,19 @@ func (c *Config) applyDefaults() error {
 	if c.ForceSyncEvery == 0 {
 		c.ForceSyncEvery = time.Hour
 	}
-	if c.ServerURL != "" && c.ServerToken == "" {
-		return fmt.Errorf("server-url set but server-token empty (the ingest endpoint requires a bearer token)")
+	if err := ValidateForceSyncEvery(c.ForceSyncEvery); err != nil {
+		return err
+	}
+	if c.ServerURL != "" {
+		if c.ServerToken == "" {
+			return fmt.Errorf("server-url set but server-token empty (the ingest endpoint requires a bearer token)")
+		}
+		if err := ValidateServerURL(c.ServerURL); err != nil {
+			return err
+		}
+		if err := ValidateServerToken(c.ServerToken); err != nil {
+			return err
+		}
 	}
 	// Normalize to MAJOR.MINOR: the CRD pins spec.targets items to that
 	// form, so writing "v1.38" or "1.37.2" verbatim would be rejected with
@@ -505,6 +568,12 @@ func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) (pushed
 	if name == "" {
 		name = inv.ClusterID
 	}
+	if name == "" {
+		// The server refuses a snapshot without a name; offered again next
+		// tick, as the hash gate has not moved.
+		return false, errors.New("push skipped: no cluster name: --cluster-name is unset and the cluster UID " +
+			"(the kube-system namespace's) could not be read (see status.notAssessed); set --cluster-name")
+	}
 	r.pusher.offer(pushPayload{
 		SchemaVersion: 1,
 		ClusterName:   name,
@@ -554,6 +623,11 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
+	}
+	if cfg.ServerURL != "" && cfg.ForceSyncEvery < cfg.Interval {
+		cfg.ForceSyncEvery = forceSyncFloor(cfg.ForceSyncEvery, cfg.Interval)
+		log.Warn("force-sync-every is below the interval: raised to the interval, as the agent pushes at most once per tick",
+			"forceSyncEvery", cfg.ForceSyncEvery.String(), "interval", cfg.Interval.String())
 	}
 	obs := newObserver(log, k, cfg.Interval)
 	healthAddr := ""
