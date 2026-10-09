@@ -49,7 +49,8 @@ updates:
   # kyverno and gator, and their sha256s; the kind node images; the
   # Postgres service images in hack/pg-images.txt; the Renovate validator in
   # hack/renovate/package.json and its lockfile, whose advisories
-  # make renovate-audit gates) are not visible to it and are bumped by hand. A GoReleaser bump goes in the Makefile and release.yml together,
+  # make renovate-audit gates) are not visible to it and are bumped by
+  # hand. A GoReleaser bump goes in the Makefile and release.yml together,
   # and only to a version whose go.mod needs no newer Go than ours
   # (make check-toolchain).
   - package-ecosystem: github-actions
