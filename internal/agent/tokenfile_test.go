@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/secretfile"
 )
@@ -163,5 +166,66 @@ func TestPushTokenRotationIsRaceFree(t *testing.T) {
 	wg.Wait()
 	if got := p.tokenFn(); got != "tok-40" {
 		t.Fatalf("final token %q", got)
+	}
+}
+
+// The agent that ships: a runner built the way Run builds it (applyDefaults,
+// then newRunner) pushes with the token file's current content, so a rotated
+// Secret takes effect at the next push with no restart. The tests above build
+// the pusher by hand; this one covers the wiring in newRunner that connects
+// Config to it (#255).
+func TestRunnerPushesWithTheRotatedTokenFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	rotateFile(t, path, "tok-one\n")
+
+	var mu sync.Mutex
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+		io.WriteString(w, `{"snapshotId": 1}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := Config{
+		ServerURL: srv.URL, ServerTokenFile: path,
+		secretOpts: []secretfile.Option{secretfile.WithCheckInterval(0)},
+	}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Fatalf("applyDefaults: %v", err)
+	}
+	r := newRunner(fakeClients(t, "v1.35.2"), fakeDyn(), mustKB(t), cfg)
+	r.pusher.wait = func(context.Context, time.Duration) error { return nil }
+
+	tickPush := func() string {
+		t.Helper()
+		mu.Lock()
+		n := len(auth)
+		mu.Unlock()
+		r.lastHash = "" // an unchanged inventory would not be pushed again
+		if err := r.tick(context.Background()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(auth) != n+1 {
+			t.Fatalf("pushes = %d, want %d", len(auth), n+1)
+		}
+		return auth[len(auth)-1]
+	}
+
+	if got := tickPush(); got != "Bearer tok-one" {
+		t.Fatalf("first push Authorization = %q", got)
+	}
+	rotateFile(t, path, "tok-two\n")
+	if got := tickPush(); got != "Bearer tok-two" {
+		t.Fatalf("push after rotation Authorization = %q, want the rotated token", got)
+	}
+	// A bad new file keeps the token in service.
+	rotateFile(t, path, "\n")
+	if got := tickPush(); got != "Bearer tok-two" {
+		t.Fatalf("push after the file was emptied Authorization = %q, want the old token", got)
 	}
 }
