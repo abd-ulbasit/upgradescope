@@ -516,6 +516,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      attestations: read # the Action's provenance check (gh attestation verify) on its version: latest install
       security-events: write # upload-sarif below, on pushes to main only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

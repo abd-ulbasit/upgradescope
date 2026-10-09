@@ -44,10 +44,25 @@ inputs:
       branch, @v0), or used from another action, latest.
       For a reproducible gate, pin the action ref (@vX.Y.Z or a commit SHA)
       and a tag here: @v0 and "latest" move with each release.
-      The archive is verified against the release's checksums.txt; without
-      one for this runner, it is built with `go install` when Go is set up.
+      The archive is verified against the release's checksums.txt and, with
+      verify-provenance, its build provenance; without one for this runner,
+      it is built with `go install` when Go is set up.
     required: false
     default: ""
+  verify-provenance:
+    description: >-
+      "true" (the default) also verifies that the downloaded archive was
+      built by this repository's release workflow at the release's tag:
+      `gh attestation verify` of the archive's build-provenance attestation
+      (gh is preinstalled on GitHub-hosted runners), or, without gh,
+      `cosign verify-blob` of checksums.txt's signature. A failed check, or
+      no gh or cosign to run it, fails the step before anything is
+      installed. Releases before v0.2.0 publish no provenance and are
+      checked against checksums.txt only, with a warning. "false" checks
+      the archive against checksums.txt only, with a warning. Not used for
+      version: preinstalled or a `go install` build.
+    required: false
+    default: "true"
   config:
     description: >-
       Path to an .upgradescope.yaml with ignore rules (scan --config).
@@ -119,8 +134,11 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_WRITE_BASELINE: ${{ inputs.write-baseline }}
+        INPUT_VERIFY_PROVENANCE: ${{ inputs.verify-provenance }}
         ACTION_REF: ${{ github.action_ref }}
         ACTION_REPOSITORY: ${{ github.action_repository }}
+        # gh attestation verify reads the attestations API with it.
+        GH_TOKEN: ${{ github.token }}
       run: bash "$GITHUB_ACTION_PATH/action/run.sh" install
 
     - name: Scan manifests
@@ -135,6 +153,7 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_WRITE_BASELINE: ${{ inputs.write-baseline }}
+        INPUT_VERIFY_PROVENANCE: ${{ inputs.verify-provenance }}
       run: bash "$GITHUB_ACTION_PATH/action/run.sh" scan
 
 branding:

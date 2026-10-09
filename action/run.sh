@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # The upgradescope GitHub Action's logic. action.yml (repository root) and
 # action/action.yml are thin wrappers that run it twice:
-#   run.sh install   validate the inputs, put a checksum-verified
-#                    upgradescope on PATH (via GITHUB_PATH)
+#   run.sh install   validate the inputs, put a checksum- and provenance-
+#                    verified upgradescope on PATH (via GITHUB_PATH)
 #   run.sh scan      run the gate, set the outputs, annotate, and write the
 #                    step summary
 #
 # Inputs arrive as environment variables (INPUT_PATH, INPUT_TARGET,
 # INPUT_FAIL_ON, INPUT_ALLOW_INCOMPLETE, INPUT_VERSION, INPUT_CONFIG,
-# INPUT_BASELINE, INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
+# INPUT_BASELINE, INPUT_WRITE_BASELINE, INPUT_VERIFY_PROVENANCE), never as
+# ${{ }} expressions in a script:
 # the runner pastes an expression's value into the script text, so a value
 # holding `"; cmd` would run cmd (GitHub's script-injection guidance).
 # ACTION_REF is the ref the action was used at (github.action_ref), and
@@ -71,6 +72,11 @@ release_older() {
   ((10#$ap < 10#$bp))
 }
 
+# The first release whose provenance the install verifies: from v0.2.0 on,
+# every release publishes a build-provenance attestation for each archive
+# and a cosign bundle for checksums.txt (release.yml, .goreleaser.yml).
+provenance_since=v0.2.0
+
 # A full commit SHA, what pinning the action by commit gives github.action_ref.
 commit_sha='^[0-9a-fA-F]{40}$'
 
@@ -128,6 +134,11 @@ validate() {
     true | false) ;;
     *) die "invalid allow-incomplete '$INPUT_ALLOW_INCOMPLETE' (want true or false)" ;;
   esac
+  # Unset is true: a direct run verifies too.
+  case ${INPUT_VERIFY_PROVENANCE:-true} in
+    true | false) ;;
+    *) die "invalid verify-provenance '$INPUT_VERIFY_PROVENANCE' (want true or false)" ;;
+  esac
   [ -n "$p" ] || die "path is required"
   [ -e "$p" ] || die "path '$p' does not exist (render the manifests before this step)"
   local c=${INPUT_CONFIG-} b=${INPUT_BASELINE-} w=${INPUT_WRITE_BASELINE-}
@@ -144,6 +155,53 @@ validate() {
 
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'
+}
+
+# provenance <tag> <dir>: that the archive in dir (its sha256 already
+# matched the same release's checksums.txt) was built by this repository's
+# release workflow at refs/tags/<tag>, which checksums.txt alone cannot
+# show: anything that can replace a release's assets can replace both
+# (#244). With gh (preinstalled on GitHub-hosted runners), the archive's
+# build-provenance attestation must be signed by release.yml for
+# refs/tags/<tag> on a GitHub-hosted runner; without gh but with cosign,
+# checksums.txt's cosign bundle must be signed by that same workflow
+# identity, and the archive is pinned to checksums.txt by its sha256.
+# Releases before $provenance_since (v0.1.x publish neither) and
+# verify-provenance: false skip the check, with a ::warning. Any other
+# failure, a missing verifier included, fails the step before anything is
+# put on PATH. The verifier's output reaches the log through logged.
+provenance() {
+  local tag=$1 dl=$2 workflow="$repo/.github/workflows/release.yml"
+  if [ "${INPUT_VERIFY_PROVENANCE:-true}" = false ]; then
+    echo "::warning::verify-provenance is false: $asset ($tag) is checked only against checksums.txt from the same release, which does not show it was built by $repo's release workflow"
+    return
+  fi
+  if release_older "$tag" "$provenance_since"; then
+    echo "::warning::provenance is verified for releases from $provenance_since on: $asset ($tag) is checked only against checksums.txt from the same release"
+    return
+  fi
+  if command -v gh >/dev/null; then
+    if gh attestation verify "$dl/$asset" --repo "$repo" --signer-workflow "$workflow" \
+      --source-ref "refs/tags/$tag" --deny-self-hosted-runners >"$dl/verify.log" 2>&1; then
+      echo "provenance OK: $asset ($tag) was built by $workflow at refs/tags/$tag (gh attestation verify)"
+      return
+    fi
+    logged "$dl/verify.log"
+    die "provenance check failed: gh attestation verify found no attestation that $workflow built $asset at refs/tags/$tag (its output is above); nothing was installed. A replaced release asset fails here; if gh itself cannot reach the attestations API on this runner, verify-provenance: false installs on the checksum alone"
+  fi
+  if command -v cosign >/dev/null; then
+    curl -fsSL --retry 3 -o "$dl/checksums.txt.sigstore.json" "$releases/download/$tag/checksums.txt.sigstore.json" ||
+      die "cannot download checksums.txt.sigstore.json for $tag, so the provenance of $asset cannot be verified; nothing was installed"
+    if cosign verify-blob "$dl/checksums.txt" --bundle "$dl/checksums.txt.sigstore.json" \
+      --certificate-identity "https://github.com/$workflow@refs/tags/$tag" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com >"$dl/verify.log" 2>&1; then
+      echo "provenance OK: checksums.txt ($tag) is signed by $workflow at refs/tags/$tag (cosign verify-blob), and $asset matches it"
+      return
+    fi
+    logged "$dl/verify.log"
+    die "provenance check failed: checksums.txt for $tag is not signed by $workflow at refs/tags/$tag (cosign verify-blob); nothing was installed"
+  fi
+  die "verify-provenance is true, but neither gh nor cosign is on PATH to verify $asset ($tag); nothing was installed. GitHub-hosted runners have gh; elsewhere install gh or cosign (sigstore/cosign-installer) before this step, or set verify-provenance: false to install on the checksum alone"
 }
 
 # go_install <version>: the fallback when no release archive downloads.
@@ -260,6 +318,7 @@ install() {
   got=$(sha256 "$dl/$asset")
   [ "$got" = "$want" ] || die "sha256 mismatch for $asset ($tag): got $got, checksums.txt says $want"
   echo "sha256 OK: $asset ($tag)"
+  provenance "$tag" "$dl"
 
   local bin_dir="$RUNNER_TEMP/upgradescope-bin"
   mkdir -p "$bin_dir"

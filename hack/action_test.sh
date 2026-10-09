@@ -6,8 +6,10 @@
 #     the same action apart from where run.sh lives;
 #   - ci.yml: a change to any file the action job tests triggers that job;
 #   - action/run.sh install: input validation, sha256 verification against
-#     the release's checksums.txt (fail closed), the go install fallback
-#     only with a Go toolchain, and version: preinstalled;
+#     the release's checksums.txt and the provenance check (gh attestation
+#     verify, or cosign verify-blob; both fail closed, including on a
+#     substituted archive whose checksums.txt matches), the go install
+#     fallback only with a Go toolchain, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
 #     summary on action/testdata, the allow-incomplete, config, baseline
 #     and write-baseline inputs, and an injection payload as data;
@@ -182,6 +184,48 @@ fi
 cat "$work/ls-remote"
 EOF
 chmod +x "$work/stub-curl/curl" "$work/stub-go/go" "$work/stub-git/git"
+# gh: answers only `gh attestation verify <file> --repo <this repository>
+# --signer-workflow <its release.yml> --source-ref refs/tags/<tag>
+# --deny-self-hosted-runners`: verified when the file's sha256 is in
+# $work/attest/<tag> (what release.yml's attestation covers for that tag),
+# else it fails as gh does, with a line that would forge an annotation if
+# run.sh relayed it unprefixed.
+mkdir -p "$work/stub-gh" "$work/attest"
+cat >"$work/stub-gh/gh" <<EOF
+#!/usr/bin/env bash
+echo "gh \$*" >>"$work/calls"
+[ "\$1 \$2" = "attestation verify" ] || exit 2
+file=\$3
+[ "\$4 \$5 \$6 \$7" = "--repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml" ] &&
+  [ "\$8" = --source-ref ] && [ "\${10}" = --deny-self-hosted-runners ] && [ \$# = 10 ] || { echo "stub gh: unexpected flags: \$*" >&2; exit 2; }
+tag=\${9#refs/tags/}
+sum=\$(sha256sum "\$file" 2>/dev/null || shasum -a 256 "\$file")
+if grep -qx "\${sum%% *}" "$work/attest/\$tag" 2>/dev/null; then
+  echo "Loaded 1 attestation from GitHub API"
+  echo "Verification succeeded!"
+  exit 0
+fi
+echo "Loaded 0 attestations from GitHub API"
+echo "::warning title=FORGED::from gh"
+echo "Verification failed: no matching attestations found"
+exit 1
+EOF
+# cosign: answers only `cosign verify-blob <checksums.txt> --bundle <b>
+# --certificate-identity <id> --certificate-oidc-issuer <GitHub's>`: the
+# bundle holds the identity and the sha256 of the checksums.txt it signed.
+mkdir -p "$work/stub-cosign"
+cat >"$work/stub-cosign/cosign" <<EOF
+#!/usr/bin/env bash
+echo "cosign \$*" >>"$work/calls"
+[ "\$1 \$3 \$5 \$7" = "verify-blob --bundle --certificate-identity --certificate-oidc-issuer" ] &&
+  [ "\$8" = https://token.actions.githubusercontent.com ] && [ \$# = 8 ] || { echo "stub cosign: unexpected: \$*" >&2; exit 2; }
+sum=\$(sha256sum "\$2" 2>/dev/null || shasum -a 256 "\$2")
+if [ "\$(cat "\$4")" = "identity=\$6 sha=\${sum%% *}" ]; then echo "Verified OK"; exit 0; fi
+echo "Error: none of the expected identities matched what was in the certificate"
+echo "::error title=FORGED::from cosign"
+exit 1
+EOF
+chmod +x "$work/stub-gh/gh" "$work/stub-cosign/cosign"
 # The tags at each commit, as git ls-remote --tags lists them: an annotated
 # tag's own object on refs/tags/<tag>, the commit it points at on
 # refs/tags/<tag>^{}; a lightweight tag only the commit.
@@ -205,7 +249,10 @@ $sha_two${tab}refs/tags/v9.9.9^{}
 $sha_two${tab}refs/tags/v9.9.9-rc.1^{}
 EOF
 
-# release <tag> <checksums-mode: ok|bad|missing|none> [no-archive]
+# release <tag> <checksums-mode: ok|bad|missing|none> [no-archive]: a
+# release as release.yml publishes it: the archive, checksums.txt, the
+# archive's attestation (in $work/attest/<tag>) and checksums.txt's cosign
+# bundle.
 release() {
   local d="$work/rel/$1"
   mkdir -p "$d" "$work/pkg"
@@ -219,6 +266,20 @@ release() {
     missing) echo "0000000000000000000000000000000000000000000000000000000000000000  upgradescope_plan9_amd64.tar.gz" >"$d/checksums.txt" ;;
     none) ;;
   esac
+  [ ! -f "$d/$asset" ] || sum "$d/$asset" >>"$work/attest/$1"
+  [ ! -f "$d/checksums.txt" ] ||
+    echo "identity=https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/$1 sha=$(sum "$d/checksums.txt")" \
+      >"$d/checksums.txt.sigstore.json"
+}
+sum() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | awk '{ print $1 }'; }
+# tamper <tag>: what anything that can replace a release's assets can do: a
+# different binary, and a checksums.txt that matches it. The attestation
+# and the cosign bundle stay the original's.
+tamper() {
+  local d="$work/rel/$1"
+  printf '#!/bin/sh\necho "upgradescope %s (substituted)"\n' "$1" >"$work/pkg/upgradescope"
+  tar -czf "$d/$asset" -C "$work/pkg" upgradescope
+  (cd "$d" && { sha256sum "$asset" 2>/dev/null || shasum -a 256 "$asset"; }) >"$d/checksums.txt"
 }
 release v9.9.9 ok
 release v9.9.8 bad
@@ -228,6 +289,11 @@ release v9.9.5 none
 release v9.9.4 ok
 release v9.9.9-rc.1 ok
 release v0.2.0-rc.2 ok
+release v0.1.1 ok
+release v9.9.3 ok && tamper v9.9.3
+release v9.9.1 ok
+mv "$work/attest/v9.9.1" "$work/attest/v9.9.0" # v9.9.1's archive, attested for another tag
+release v9.8.0 ok && rm "$work/rel/v9.8.0/checksums.txt.sigstore.json"
 
 # The real binary, for the scan cases.
 mkdir -p "$work/real"
@@ -245,7 +311,9 @@ run() {
   mkdir -p "$rt" "$tmp"
   : >"$rt/output" && : >"$rt/path" && : >"$rt/summary" && : >"$work/calls"
   code=0
-  env -i HOME="$HOME" PATH="$prefix$work/sys" RUNNER_TEMP="$tmp" \
+  # gh, to verify attestations, is on PATH as on GitHub-hosted runners,
+  # unless the case sets verifier (the stub dirs to use instead, or none).
+  env -i HOME="$HOME" PATH="$prefix${verifier-$work/stub-gh:}$work/sys" RUNNER_TEMP="$tmp" \
     GITHUB_OUTPUT="$rt/output" GITHUB_PATH="$rt/path" GITHUB_STEP_SUMMARY="$rt/summary" \
     INPUT_PATH=action/testdata/removed INPUT_TARGET=1.36 INPUT_FAIL_ON=blocker INPUT_VERSION=v9.9.9 \
     "$@" bash action/run.sh "$cmd" >"$work/out" 2>&1 || code=$?
@@ -480,6 +548,107 @@ hasnt "preinstalled logs only the first --version line" "$work/out" "registry da
 hasnt "preinstalled downloads nothing" "$work/calls" curl
 run install "$work/stub-curl:" INPUT_VERSION=preinstalled
 expect "preinstalled without a binary fails" 1 "no upgradescope on PATH"
+
+# --- provenance -------------------------------------------------------------
+
+# checksums.txt comes from the same release as the archive, so it shows the
+# archive is intact, not that the release workflow built it: anything that
+# can replace the release's assets can replace both. From v0.2.0 on, the
+# archive's build-provenance attestation (gh) or checksums.txt's cosign
+# bundle (cosign) must be the release workflow's at that tag (#244).
+# installed_nothing: the last run put no binary on PATH.
+installed_nothing() { [ ! -e "$tmp/upgradescope-bin/upgradescope" ] && [ ! -s "$rt/path" ]; }
+run install "$work/stub-curl:"
+expect "a release's attestation is verified with gh" 0 "provenance OK: $asset (v9.9.9) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (gh attestation verify)"
+has "gh verifies the archive, pinned to the release workflow and the tag, on a GitHub-hosted runner" "$work/calls" \
+  "gh attestation verify $tmp/upgradescope-dl."
+has "gh pins the signer workflow and the source ref" "$work/calls" \
+  "--repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml --source-ref refs/tags/v9.9.9 --deny-self-hosted-runners"
+if grep -q '^::warning' "$work/out"; then fail "a verified install does not warn" "$work/out"; else ok "a verified install does not warn"; fi
+[ "$(grep -n 'sha256 OK' "$work/out" | cut -d: -f1)" -lt "$(grep -n 'provenance OK' "$work/out" | cut -d: -f1)" ] &&
+  [ "$(grep -n 'provenance OK' "$work/out" | cut -d: -f1)" -lt "$(grep -n '^installed ' "$work/out" | cut -d: -f1)" ] &&
+  ok "provenance is checked after the checksum and before the install" || fail "provenance is checked after the checksum and before the install" "$work/out"
+
+# The #244 repro: an archive and a checksums.txt both replaced. The checksum
+# matches; the attestation does not.
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.3
+expect "a substituted archive with a matching checksums.txt fails provenance (gh)" 1 \
+  "provenance check failed: gh attestation verify found no attestation that abd-ulbasit/upgradescope/.github/workflows/release.yml built $asset at refs/tags/v9.9.3"
+has "the substituted archive's checksum still matched" "$work/out" "sha256 OK: $asset (v9.9.3)"
+installed_nothing && ok "a substituted archive is not installed (no binary, no GITHUB_PATH)" || fail "a substituted archive is not installed" "$work/out"
+has "gh's output reaches the log" "$work/out" "| Verification failed: no matching attestations found"
+has "gh's output is prefixed, so it cannot start a workflow command" "$work/out" "| ::warning title=FORGED::from gh"
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.1
+expect "an attestation for another tag does not verify (the source ref is the tag)" 1 "provenance check failed"
+installed_nothing && ok "an archive attested for another tag is not installed" || fail "an archive attested for another tag is not installed" "$work/out"
+
+# Without gh, cosign verifies checksums.txt's bundle; the archive is pinned
+# to checksums.txt by its sha256.
+verifier="$work/stub-cosign:" run install "$work/stub-curl:"
+expect "without gh, cosign verifies checksums.txt's signature" 0 "provenance OK: checksums.txt (v9.9.9) is signed by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (cosign verify-blob), and $asset matches it"
+has "cosign checks the release workflow's identity at the tag" "$work/calls" \
+  "--certificate-identity https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/v9.9.9 --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+has "the bundle comes from the same release" "$work/calls" "curl $releases/download/v9.9.9/checksums.txt.sigstore.json"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.9.3
+expect "a substituted archive with a matching checksums.txt fails provenance (cosign)" 1 \
+  "provenance check failed: checksums.txt for v9.9.3 is not signed by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.3"
+installed_nothing && ok "cosign: a substituted archive is not installed" || fail "cosign: a substituted archive is not installed" "$work/out"
+has "cosign's output is prefixed, so it cannot start a workflow command" "$work/out" "| ::error title=FORGED::from cosign"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.8.0
+expect "a release without its bundle fails provenance (cosign)" 1 "cannot download checksums.txt.sigstore.json for v9.8.0"
+installed_nothing && ok "no bundle: nothing installed" || fail "no bundle: nothing installed" "$work/out"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.9.1
+expect "cosign: a release verifies at its own tag" 0 "provenance OK: checksums.txt (v9.9.1)"
+
+# No verifier: fail, and say how to opt out.
+verifier= run install "$work/stub-curl:"
+expect "no gh and no cosign fails the step" 1 "verify-provenance is true, but neither gh nor cosign is on PATH to verify $asset (v9.9.9)"
+has "the failure says how to opt out" "$work/out" "or set verify-provenance: false to install on the checksum alone"
+installed_nothing && ok "no verifier: nothing installed" || fail "no verifier: nothing installed" "$work/out"
+
+# verify-provenance: false: the checksum alone, with a warning, even for a
+# substituted release (what false means).
+verifier= run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=false
+expect "verify-provenance: false installs on the checksum, with a warning" 0 \
+  "::warning::verify-provenance is false: $asset (v9.9.9) is checked only against checksums.txt from the same release"
+has "verify-provenance: false still installs" "$rt/path" "$tmp/upgradescope-bin"
+hasnt "verify-provenance: false runs no verifier" "$work/calls" "attestation"
+run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=false INPUT_VERSION=v9.9.3
+expect "verify-provenance: false does not catch a substituted release" 0 "installed upgradescope v9.9.3 (substituted)"
+run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=true
+expect "verify-provenance: true verifies" 0 "provenance OK: $asset (v9.9.9)"
+run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=yes
+expect "verify-provenance takes only true or false" 1 "invalid verify-provenance 'yes' (want true or false)"
+hasnt "an invalid verify-provenance downloads nothing" "$work/calls" curl
+run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=$'true\n::warning title=FORGED::x'
+if [ "$code" = 1 ] && [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -qF '%0A::warning' "$work/out"; then
+  ok "a line break in verify-provenance cannot start a workflow command"
+else fail "a line break in verify-provenance cannot start a workflow command" "$work/out"; fi
+
+# Releases before v0.2.0 publish no provenance: the checksum, a warning,
+# and no verifier run (a pre-release of v0.2.0 is before it).
+verifier= run install "$work/stub-curl:" INPUT_VERSION=v0.1.1
+expect "a release before v0.2.0 installs on the checksum" 0 "installed upgradescope v0.1.1 from"
+has "a release before v0.2.0 warns that only the checksum is checked" "$work/out" \
+  "::warning::provenance is verified for releases from v0.2.0 on: $asset (v0.1.1) is checked only against checksums.txt from the same release"
+[ "$(grep -c '^::warning' "$work/out")" = 1 ] && ok "a release before v0.2.0 warns once" || fail "a release before v0.2.0 warns once" "$work/out"
+run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST=v0.1.1
+expect "latest at v0.1.1 (GitHub's latest today) installs with a warning" 0 "::warning::provenance is verified for releases from v0.2.0 on: $asset (v0.1.1)"
+hasnt "a release before v0.2.0 runs no verifier" "$work/calls" "attestation"
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+expect "a v0.2.0 release candidate is before v0.2.0" 0 "::warning::provenance is verified for releases from v0.2.0 on: $asset (v0.2.0-rc.2)"
+
+# The install step passes github.token for gh; the scan step needs none.
+for yml in action.yml action/action.yml; do
+  if [ "$(grep -cxF '        GH_TOKEN: ${{ github.token }}' "$yml")" = 1 ] &&
+    awk '/- name: Install upgradescope/ { i = 1 } /- name: Scan manifests/ { i = 0 } i && /GH_TOKEN: \$\{\{ github.token \}\}/ { f = 1 } END { exit !f }' "$yml" &&
+    awk '/^  verify-provenance:$/ { on = 1; next } on && /^  [a-z-]+:$/ { on = 0 } on && /^    default: "true"$/ { f = 1 } END { exit !f }' "$yml"; then
+    ok "$yml: verify-provenance defaults to true and the install step passes github.token as GH_TOKEN"
+  else
+    grep -n 'GH_TOKEN\|verify-provenance' "$yml" >"$work/out" || true
+    fail "$yml: verify-provenance defaults to true and the install step passes github.token as GH_TOKEN" "$work/out"
+  fi
+done
 
 # --- scan -------------------------------------------------------------------
 
