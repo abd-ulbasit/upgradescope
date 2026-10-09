@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
@@ -255,18 +256,19 @@ type Server struct {
 	observeGateBound func(bound int64) // test hook: each /gate answer's gateAnswerBound
 	maxGateAnswer    int64             // test override of gateAnswerLimit; 0 = --max-gate-bytes
 
-	teamMapHash        string         // fingerprint of cfg.TeamMap stored with evaluations
-	sinks              []sink         // cfg.Notifier flattened; outbox messages are per sink
-	outboxKick         chan struct{}  // wakes the delivery worker after a commit
-	holds              sinkHolds      // sinks that asked to be left alone (Retry-After), in memory
-	notifyTimeout      time.Duration  // bounds one delivery attempt
-	outboxLease        time.Duration  // how long a claimed message is this server's to deliver
-	reevaluateInterval time.Duration  // background re-evaluation period
-	reevaluateKick     chan struct{}  // starts the next re-evaluation pass early
-	reevaluateCooldown time.Duration  // least time from a pass's start to a kicked one
-	unrefreshable      unrefreshable  // clusters the last pass could not bring up to date
-	legacyVersions     legacyVersions // judged versions of snapshots stored without one
-	retentionInterval  time.Duration  // pruning period after the startup pass
+	teamMapHash        string                                                                                     // fingerprint of cfg.TeamMap stored with evaluations
+	sinks              []sink                                                                                     // cfg.Notifier flattened; outbox messages are per sink
+	outboxKick         chan struct{}                                                                              // wakes the delivery worker after a commit
+	holds              sinkHolds                                                                                  // sinks that asked to be left alone (Retry-After), in memory
+	notifyTimeout      time.Duration                                                                              // bounds one delivery attempt
+	outboxLease        time.Duration                                                                              // how long a claimed message is this server's to deliver
+	reevaluateInterval time.Duration                                                                              // background re-evaluation period
+	reevaluateKick     chan struct{}                                                                              // starts the next re-evaluation pass early
+	reevaluateCooldown time.Duration                                                                              // least time from a pass's start to a kicked one
+	unrefreshable      unrefreshable                                                                              // clusters the last pass could not bring up to date
+	runEngine          func(inventory.Inventory, kb.KB, inventory.Version, time.Time, int) (engine.Report, error) // test seam; nil: engine.EvaluateWithin
+	legacyVersions     legacyVersions                                                                             // judged versions of snapshots stored without one
+	retentionInterval  time.Duration                                                                              // pruning period after the startup pass
 	stopBackground     context.CancelFunc
 	backgroundDone     sync.WaitGroup
 	shutDown           bool // set by Shutdown, under mu: a later Start serves nothing

@@ -132,6 +132,15 @@ func (s *Server) versionOf(ctx context.Context, head store.Snapshot) (string, er
 // held target has the pass load its cluster's inventory until the hold
 // ends, and every other cluster loads and decodes nothing
 // (TestPassLoadsTheInventoryOfAHeldTarget).
+//
+// That load is a conservative cost, not a measured need: a background
+// pass judges the stored snapshot, whose collectedAt and apiserver start
+// do not move, and a KB or team-map change already makes the row stale,
+// so in practice holdChanged rarely flips there (the push of a duplicate
+// is what ends a hold, and it has its inventory in hand). It is paid on
+// each pass for as long as a hold lasts, at most deprecatedCallsHold
+// after the last apiserver start the agent scraped, and only by clusters
+// that carry one.
 func (s *Server) needsPass(ctx context.Context, head store.Snapshot, version string, now time.Time) bool {
 	for _, target := range s.evalTargets(version) {
 		e, err := s.cfg.Store.CurrentEvaluationSummary(ctx, head.ClusterID, target.String())

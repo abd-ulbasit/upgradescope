@@ -449,7 +449,7 @@ func insertEvaluationPg(ctx context.Context, x sqlExecer, e Evaluation) (int64, 
 		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), carriesHold(e.Report)).Scan(&id)
+		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report)).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -638,7 +638,7 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
 			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, teams = $5, blockers = $6, warnings = $7, evaluated_at = $8, carries_hold = $9
 			WHERE id = $10 AND cluster_id = $11`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, carriesHold(e.Report), e.ID, b.ClusterID); err != nil {
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, CarriesHold(e.Report), e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}

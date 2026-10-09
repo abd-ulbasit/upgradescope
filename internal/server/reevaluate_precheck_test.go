@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -315,17 +316,115 @@ func TestTransientStoreErrorDoesNotMarkTheClusterUnrefreshable(t *testing.T) {
 }
 
 // TestHoldMarkerIsTheCarriedFieldName: the carries_hold column and
-// holdChanged both look for store.HoldMarker in a stored report, so it
+// holdChanged both ask store.CarriesHold of a stored report, so its marker
 // must be what a carried head with a hold encodes as.
 func TestHoldMarkerIsTheCarriedFieldName(t *testing.T) {
 	b, err := json.Marshal(findingHead{Key: "k", HoldUntil: time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(b, store.HoldMarker) {
-		t.Errorf("a head with a hold encodes as %s, without store.HoldMarker %s", b, store.HoldMarker)
+	if !store.CarriesHold(b) {
+		t.Errorf("a head with a hold encodes as %s, without the hold marker", b)
 	}
-	if b, _ := json.Marshal(findingHead{Key: "k"}); bytes.Contains(b, store.HoldMarker) {
+	if b, _ := json.Marshal(findingHead{Key: "k"}); store.CarriesHold(b) {
 		t.Errorf("a head without a hold encodes as %s, with the marker", b)
 	}
+}
+
+// corruptingStore serves a stored inventory that does not decode while
+// corrupt is set.
+type corruptingStore struct {
+	*countingStore
+	corrupt atomic.Bool
+}
+
+func (c *corruptingStore) LatestSnapshot(ctx context.Context, id int64) (store.Snapshot, error) {
+	snap, err := c.countingStore.LatestSnapshot(ctx, id)
+	if err == nil && c.corrupt.Load() {
+		snap.Inventory = []byte(`{"serverVersion": "v1.34.0", "namespaces": [`)
+	}
+	return snap, err
+}
+
+// outdatedClusterIsMarked asserts what a failed pass leaves for the
+// cluster's "1.35" row: still outdated, marked, not loaded again by later
+// passes of the day, and without a pass started by its reads. Passes try
+// again the next UTC day.
+func outdatedClusterIsMarked(t *testing.T, s *Server, store store.Store, loads *atomic.Int64) {
+	t.Helper()
+	head, err := store.LatestSnapshotHead(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.unrefreshable.has(1, head.ID, s.now()) {
+		t.Fatal("the failed pass did not mark the cluster unrefreshable")
+	}
+	e, err := store.CurrentEvaluationSummary(context.Background(), 1, "1.35")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 50 {
+		if !s.outdated(e, s.now()) {
+			t.Fatal("the row the pass could not bring up to date is not served as outdated")
+		}
+	}
+	if n := len(s.reevaluateKick); n != 0 {
+		t.Errorf("reads of the marked row started %d passes, want none", n)
+	}
+	before := loads.Load()
+	s.reevaluateAll(context.Background())
+	if n := loads.Load(); n != before {
+		t.Errorf("a later pass of the same day loaded %d more inventories, want 0 (the cluster is skipped)", n-before)
+	}
+	s.now = func() time.Time { return time.Date(2026, 6, 11, 0, 1, 0, 0, time.UTC) }
+	s.reevaluateAll(context.Background())
+	if n := loads.Load(); n != before+1 {
+		t.Errorf("the next UTC day's pass loaded %d inventories, want 1 (it tries again)", n-before)
+	}
+}
+
+// TestCorruptInventoryMarksTheClusterUnrefreshable (#241, SV-03b): a
+// stored inventory that does not decode repeats for the same snapshot, so
+// the pass marks the cluster: later passes skip it, and its reads kick
+// nothing, until the snapshot or the UTC day changes.
+func TestCorruptInventoryMarksTheClusterUnrefreshable(t *testing.T) {
+	cs := &corruptingStore{countingStore: &countingStore{fakeStore: newFakeStore()}}
+	s, err := New(Config{Store: cs, KB: testKB(), IngestToken: "ingest-tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) }
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	pushCluster(t, ts, "prod", testInventoryWithPSP())
+
+	s.cfg.KB.Version += "-new"
+	cs.corrupt.Store(true)
+	cs.inventories.Store(0)
+	s.reevaluateAll(context.Background())
+	if n := cs.inventories.Load(); n != 1 {
+		t.Fatalf("the first pass loaded %d inventories, want 1", n)
+	}
+	outdatedClusterIsMarked(t, s, cs, &cs.inventories)
+}
+
+// TestFailedEvaluationMarksTheClusterUnrefreshable (#241, SV-03b): an
+// evaluation that fails for a reason other than the store's (nothing but
+// a too-large report fails the real engine, which is handled apart, so
+// the engine is replaced) repeats for the same snapshot: the pass marks
+// the cluster, as it does a corrupt inventory.
+func TestFailedEvaluationMarksTheClusterUnrefreshable(t *testing.T) {
+	s, cs, ts := countedServer(t)
+	pushCluster(t, ts, "prod", testInventoryWithPSP())
+
+	s.cfg.KB.Version += "-new"
+	s.runEngine = func(inventory.Inventory, kb.KB, inventory.Version, time.Time, int) (engine.Report, error) {
+		return engine.Report{}, errors.New("engine failed")
+	}
+	cs.inventories.Store(0)
+	s.reevaluateAll(context.Background())
+	if n := cs.inventories.Load(); n != 1 {
+		t.Fatalf("the first pass loaded %d inventories, want 1", n)
+	}
+	outdatedClusterIsMarked(t, s, cs, &cs.inventories)
 }

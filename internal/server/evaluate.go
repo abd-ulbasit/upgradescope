@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -124,7 +123,11 @@ func (e *reportTooLargeError) Error() string {
 // returns a *reportTooLargeError.
 func (s *Server) evaluateWithin(inv inventory.Inventory, target inventory.Version, now time.Time) (engine.Report, error) {
 	limit := s.maxReportBytes()
-	rep, err := engine.EvaluateWithin(inv, s.cfg.KB, target, now, int(limit))
+	run := engine.EvaluateWithin
+	if s.runEngine != nil {
+		run = s.runEngine
+	}
+	rep, err := run(inv, s.cfg.KB, target, now, int(limit))
 	if errors.Is(err, engine.ErrReportTooLarge) {
 		return engine.Report{}, &reportTooLargeError{target: target, limit: limit}
 	}
@@ -448,7 +451,7 @@ func (c callsHold) stamp(carried []findingHead) []findingHead {
 // the evaluation is re-evaluated though it is not stale. A report without
 // the marker is not decoded.
 func holdChanged(report []byte, hold callsHold) bool {
-	if !bytes.Contains(report, store.HoldMarker) {
+	if !store.CarriesHold(report) {
 		return false
 	}
 	heads, err := storedFindingHeads(report)

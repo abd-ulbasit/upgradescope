@@ -113,9 +113,15 @@ func TestRetentionKeepsBaselinesOfTargetsInUseOnly(t *testing.T) {
 	if _, err := h.st.LatestKnownEvaluation(ctx, id, "1.35"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("baseline at 1.35 after pruning: %v, want ErrNotFound: not in use at v1.39", err)
 	}
-	for _, target := range []string{"1.45"} {
+	for target, why := range map[string]string{
+		"1.45": "an extra target above the version",
+		// 1.37 was last evaluated on the first push's snapshot, long past
+		// the window, so only the lookback keeps it: the previous default
+		// an upgrade compares against.
+		"1.37": "within the lookback below the default, on a snapshot past the window",
+	} {
 		if _, err := h.st.LatestKnownEvaluation(ctx, id, target); err != nil {
-			t.Errorf("baseline at %s after pruning: %v, want kept: an extra target above the version", target, err)
+			t.Errorf("baseline at %s after pruning: %v, want kept: %s", target, err, why)
 		}
 	}
 }

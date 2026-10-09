@@ -49,6 +49,16 @@ func (s *Server) pruneOnce(ctx context.Context) {
 // default target. A cluster whose version is not known is left out, and
 // keeps every target's baseline; so is every cluster when the heads
 // cannot be read.
+//
+// Prune applies this set in its own transaction, after it was computed:
+// a version change landing between the two can leave out a baseline only
+// the new version needs. That is harmless for an ordinary upgrade, since
+// consecutive lookback sets overlap (a one-minor upgrade keeps all but the
+// oldest of the previous set, and the baseline the new default compares
+// with is the previous default's, in both sets). A jump of several minors
+// in that window can lose a baseline; the cost is that the first push
+// after it has none and notifies nothing for that target, as for a first
+// evaluation.
 func (s *Server) retainedBaselines(ctx context.Context) store.PruneBaselines {
 	heads, err := s.cfg.Store.LatestSnapshotHeads(ctx)
 	if err != nil {

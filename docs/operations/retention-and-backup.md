@@ -31,7 +31,7 @@ a day; `0` keeps everything) prunes once at startup and then daily:
   default's baseline. A target that stays `unknown` for longer than the
   window, or the previous default target after an upgrade, still has one
   when it is next decided. The baseline of any other target (dropped from
-  `--targets`, or three minors or more below a cluster's default after it
+  `--targets`, or more than three minors below a cluster's default after it
   upgraded) ages out like any evaluation, so these do not pile up. Usually
   the baseline is of the latest snapshot anyway; otherwise a cluster keeps
   one older snapshot and evaluation for each target in that set, at most,

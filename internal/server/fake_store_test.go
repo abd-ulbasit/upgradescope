@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"slices"
@@ -352,7 +351,7 @@ func (f *fakeStore) current(ctx context.Context, method string, clusterID int64,
 	}
 	if e, ok := f.currentEvalLocked(snap.ID, target); ok {
 		e.NotAssessed = fakeNotAssessed(e.Report)
-		e.CarriesHold = bytes.Contains(e.Report, store.HoldMarker)
+		e.CarriesHold = store.CarriesHold(e.Report)
 		return e, nil
 	}
 	return store.Evaluation{}, store.ErrNotFound

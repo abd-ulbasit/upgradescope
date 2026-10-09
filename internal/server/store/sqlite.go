@@ -561,7 +561,7 @@ func insertEvaluationSQLite(ctx context.Context, x sqlExecer, e Evaluation) (int
 		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), carriesHold(e.Report))
+		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report))
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -718,7 +718,7 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
 			UPDATE evaluations SET report = ?, not_assessed = ?, kb_version = ?, team_map_hash = ?, teams = ?, blockers = ?, warnings = ?, evaluated_at = ?, carries_hold = ?
 			WHERE id = ? AND cluster_id = ?`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, formatTime(evaluated), carriesHold(e.Report), e.ID, b.ClusterID); err != nil {
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, formatTime(evaluated), CarriesHold(e.Report), e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}

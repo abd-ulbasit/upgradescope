@@ -239,7 +239,7 @@ type Evaluation struct {
 	// until the next pass rewrites it, so the server treats it as stale.
 	TeamsUnknown bool `json:"-"`
 	// CarriesHold is set on read when the report carries a deprecated
-	// caller held after an apiserver restart (HoldMarker), summaries
+	// caller held after an apiserver restart (CarriesHold), summaries
 	// included, so the background pass knows which evaluations need their
 	// snapshot's inventory without loading a report. Written by the store
 	// from the report, never by the caller; true for a row written by a
@@ -247,13 +247,16 @@ type Evaluation struct {
 	CarriesHold bool `json:"-"`
 }
 
-// HoldMarker is in every stored report that carries a held deprecated
+// holdMarker is in every stored report that carries a held deprecated
 // caller: the carried head's field name (the server's findingHead
 // HoldUntil), which a JSON string in the report cannot contain unescaped.
-var HoldMarker = []byte(`"holdUntil":`)
+// Unexported, so no importer can change it; CarriesHold is the question.
+var holdMarker = []byte(`"holdUntil":`)
 
-// carriesHold is the carries_hold column of report.
-func carriesHold(report []byte) bool { return bytes.Contains(report, HoldMarker) }
+// CarriesHold reports whether a stored report carries a held deprecated
+// caller (holdMarker): the carries_hold column of report, and the cheap
+// test before a report is decoded for a hold.
+func CarriesHold(report []byte) bool { return bytes.Contains(report, holdMarker) }
 
 // carriesHoldColumn reads the carries_hold column back: NULL, a row
 // written before migration 0009, may carry one.
