@@ -253,3 +253,203 @@ func pointer(t *testing.T, v any, p string) any {
 	}
 	return v
 }
+
+// member is one member of a JSON object, in the document's order.
+type member struct {
+	key   string
+	value json.RawMessage
+}
+
+// membersOf is the members of the JSON object doc, in order, duplicate
+// names included (unmarshalling into a map would hide them).
+func membersOf(t *testing.T, doc []byte) []member {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(doc))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		t.Fatalf("not an object (%v, %v): %.80s", tok, err, doc)
+	}
+	var ms []member
+	for dec.More() {
+		k, err := dec.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			t.Fatal(err)
+		}
+		ms = append(ms, member{k.(string), v})
+	}
+	return ms
+}
+
+// objectOf writes an object whose members are the pairs of kv, in that
+// order, with the names written as given (a map would sort them and drop
+// a repeated name).
+func objectOf(kv ...string) []byte {
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for i := 0; i < len(kv); i += 2 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		writeJSONString(&b, kv[i])
+		b.WriteByte(':')
+		b.WriteString(kv[i+1])
+	}
+	b.WriteByte('}')
+	return b.Bytes()
+}
+
+// TestCutKeysStayDistinct: cutting a long member name must not make it
+// equal to another member name of the same object, whichever comes first:
+// a name that is already the cut form of a long one (a hand-written
+// report_file, a fleet server) and long names that share their first
+// 2 KiB each keep their own member, with a distinct name that still fits
+// MaxClusterTextBytes and ends in the cut mark. The names that were not
+// cut are the document's own, and a name the document repeats is its
+// repetition, not the cut's.
+func TestCutKeysStayDistinct(t *testing.T) {
+	long1 := strings.Repeat("k", 3*MaxClusterTextBytes)
+	long2 := long1 + "-tail"
+	form := cutClusterText(long1)
+	if cutClusterText(long2) != form {
+		t.Fatal("the two long names do not cut to the same form")
+	}
+
+	check := func(t *testing.T, in []byte) []member {
+		t.Helper()
+		out, ct, err := markClusterText(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, _, _ := markClusterText(in)
+		if !bytes.Equal(out, again) {
+			t.Error("marking the same document twice gave different documents")
+		}
+		ms := membersOf(t, out)
+		in2 := membersOf(t, in)
+		if len(ms) != len(in2) {
+			t.Fatalf("%d members in, %d out", len(in2), len(ms))
+		}
+		seen := map[string]bool{}
+		for i, m := range ms {
+			if len(m.key) > MaxClusterTextBytes {
+				t.Errorf("member %d: a name of %d bytes, over %d", i, len(m.key), MaxClusterTextBytes)
+			}
+			if seen[m.key] {
+				t.Errorf("member %d: the name %.40q… is used twice: %.120s", i, m.key, out)
+			}
+			seen[m.key] = true
+			if string(m.value) != string(in2[i].value) {
+				t.Errorf("member %d: value %s became %s", i, in2[i].value, m.value)
+			}
+			if len(in2[i].key) > MaxClusterTextBytes && !strings.HasSuffix(m.key, ClusterTextCutMark) {
+				t.Errorf("member %d: a long name is now %.40q…", i, m.key)
+			}
+		}
+		if ct.Cut == 0 {
+			t.Error("nothing counted as cut")
+		}
+		return ms
+	}
+
+	t.Run("an uncut name equal to the form a later long name cuts to", func(t *testing.T) {
+		ms := check(t, objectOf(form, "1", long1, "2"))
+		if ms[0].key != form {
+			t.Errorf("the name the document wrote was changed to %.40q…", ms[0].key)
+		}
+	})
+	t.Run("the same, after other names, and with two long names", func(t *testing.T) {
+		ms := check(t, objectOf("a", "0", form, "1", long1, "2", long2, "3"))
+		if ms[0].key != "a" || ms[1].key != form {
+			t.Errorf("names the document wrote were changed: %.20q, %.40q…", ms[0].key, ms[1].key)
+		}
+	})
+	t.Run("an uncut name equal to the form, after the long name", func(t *testing.T) {
+		check(t, objectOf(long1, "1", form, "2"))
+	})
+	t.Run("a name that looks like a number the walker would add", func(t *testing.T) {
+		ms := check(t, objectOf(long1, "1", long2, "2"))
+		// The second name the walker made is taken by the document's own.
+		check(t, objectOf(long1, "1", long2, "2", ms[1].key, "3"))
+		check(t, objectOf(ms[1].key, "3", long1, "1", long2, "2"))
+	})
+	t.Run("two long names with the same form", func(t *testing.T) {
+		check(t, objectOf(long1, "1", long2, "2", long1+"x", "3", long1+"y", "4"))
+	})
+	t.Run("objects have their own names", func(t *testing.T) {
+		out, _, err := markClusterText(objectOf("one", string(objectOf(form, "1", long1, "2")), "two", string(objectOf(long1, "3")), "three", string(objectOf(form, "4"))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		top := membersOf(t, out)
+		one, two, three := membersOf(t, top[0].value), membersOf(t, top[1].value), membersOf(t, top[2].value)
+		if one[0].key == one[1].key {
+			t.Error("the names of one object are equal")
+		}
+		if two[0].key != form || three[0].key != form {
+			t.Errorf("a name was changed in an object it does not collide in: %.40q…, %.40q…", two[0].key, three[0].key)
+		}
+	})
+	t.Run("a repeated name stays as the document wrote it", func(t *testing.T) {
+		out, _, err := markClusterText(objectOf("a", "1", "a", "2", long1, "3"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ms := membersOf(t, out)
+		if len(ms) != 3 || ms[0].key != "a" || ms[1].key != "a" {
+			t.Errorf("a name the document repeats was renamed: %.120s", out)
+		}
+		if ms[2].key != form {
+			t.Errorf("a name that collides with nothing was renamed")
+		}
+	})
+}
+
+// TestAReportFileWhoseNamesCutToOneFormKeepsDistinctNames: through the
+// tool, a report_file with an object holding a name that equals the cut
+// form of another, longer name returns an object with two members, not a
+// JSON object with a duplicate name that a client would collapse to one.
+func TestAReportFileWhoseNamesCutToOneFormKeepsDistinctNames(t *testing.T) {
+	long := strings.Repeat("k", 3*MaxClusterTextBytes)
+	form := cutClusterText(long)
+	var m map[string]any
+	if err := json.Unmarshal(reportWithClusterText(t), &m); err != nil {
+		t.Fatal(err)
+	}
+	// Marshalling sorts the names: the form (its first space is under "k")
+	// comes before the long name it is the cut of.
+	m["x-extra"] = map[string]any{form: "the name the file wrote", long: "the long name"}
+	doc, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkReport(doc); err != nil {
+		t.Fatalf("the report does not follow the schema: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "report.json")
+	if err := os.WriteFile(path, doc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, connect(t, localConfig()), ToolGetReport, map[string]any{"report_file": path})
+	if res.IsError {
+		t.Fatal(text(res))
+	}
+	body := res.Content[1].(*mcpsdk.TextContent).Text
+	var extra []member
+	for _, top := range membersOf(t, []byte(body)) {
+		if top.key == "x-extra" {
+			extra = membersOf(t, top.value)
+		}
+	}
+	if len(extra) != 2 || extra[0].key == extra[1].key {
+		t.Fatalf("x-extra has %d member(s) with names equal or lost: %.200s", len(extra), body)
+	}
+	if extra[0].key != form || string(extra[0].value) != `"the name the file wrote"` || string(extra[1].value) != `"the long name"` {
+		t.Errorf("the members were changed: %.40q… = %s, %.40q… = %s", extra[0].key, extra[0].value, extra[1].key, extra[1].value)
+	}
+	if !strings.HasSuffix(extra[1].key, ClusterTextCutMark) || len(extra[1].key) > MaxClusterTextBytes {
+		t.Errorf("the long name is now %d bytes ending %q", len(extra[1].key), extra[1].key[len(extra[1].key)-30:])
+	}
+}

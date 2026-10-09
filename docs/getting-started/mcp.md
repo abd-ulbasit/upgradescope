@@ -280,7 +280,9 @@ address `--allow-remote` opens gets no such check.
   structured, under `upgradescope.dev/clusterSupplied`. Each outside string,
   and each object key, longer than 2 KiB is cut, ending in `…(cut by
   upgradescope mcp)`, so `get_report` can differ there from the report file
-  it read.
+  it read. A cut key that would equal another key of its object is numbered
+  before the cut mark (`#2 …(cut by upgradescope mcp)`), so an object never
+  comes out with a key twice.
 - A tool error is outside text whole, since it may quote the API server, a
   file, the fleet server or the call's own arguments: it opens with a notice
   saying so, carries the marker in `_meta`, and is cut to 2 KiB, after the

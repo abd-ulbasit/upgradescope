@@ -168,6 +168,11 @@ type clusterTextWalker struct {
 	dec   *json.Decoder
 	out   bytes.Buffer
 	found clusterText
+	// plain are the names, written as they were, of the objects being
+	// copied, the innermost object's last: an object's start at its
+	// objectNames.base. They are kept for the one use of seeing, when a name
+	// of the object is first cut, which names it already has.
+	plain []string
 }
 
 // value copies one JSON value at path; field is the member name that holds
@@ -183,7 +188,7 @@ func (w *clusterTextWalker) value(path, field string, listable bool) error {
 		switch t {
 		case '{':
 			w.out.WriteByte('{')
-			var written map[string]bool // keys written, once one is cut
+			names := objectNames{base: len(w.plain)}
 			for i := 0; w.dec.More(); i++ {
 				k, err := w.dec.Token()
 				if err != nil {
@@ -196,14 +201,14 @@ func (w *clusterTextWalker) value(path, field string, listable bool) error {
 				if i > 0 {
 					w.out.WriteByte(',')
 				}
-				out := w.key(key, &written)
-				writeJSONString(&w.out, out)
+				writeJSONString(&w.out, w.key(&names, key))
 				w.out.WriteByte(':')
 				if err := w.value(path+"/"+escapePointer(key), key, listable && pathKeys[key]); err != nil {
 					return err
 				}
 			}
 			w.out.WriteByte('}')
+			w.plain = w.plain[:names.base]
 		case '[':
 			w.out.WriteByte('[')
 			for i := 0; w.dec.More(); i++ {
@@ -245,29 +250,60 @@ func (w *clusterTextWalker) value(path, field string, listable bool) error {
 	return nil
 }
 
+// objectNames is what key knows of the names of the object being copied.
+type objectNames struct {
+	base int // where the object's names start in the walker's plain
+	// written holds every name the object has had written, once one of them
+	// is cut: true for those the walker made (a cut name, or a name it
+	// numbered), false for those it wrote as they were. It is nil until then.
+	written map[string]bool
+}
+
 // key is an object's member name as the result carries it: outside text
-// unless it is one of the report's own names, cut when too long, and made
-// distinct from the object's other keys when cutting would merge two.
-// written records the object's keys from the first cut on.
-func (w *clusterTextWalker) key(key string, written *map[string]bool) string {
+// unless it is one of the report's own names, cut when too long, and, so
+// that cutting never merges two members, distinct from the object's other
+// names. A cut name that equals a name already written (the document's own,
+// or the cut form of another long name) is numbered, " #2", " #3", before
+// its cut mark; so is a name the document wrote that equals a cut name
+// already written. A name that equals only another name the document wrote
+// is left alone: that repetition is the document's, not the cut's. Every
+// name is at most MaxClusterTextBytes.
+func (w *clusterTextWalker) key(o *objectNames, key string) string {
 	if !pathKeys[key] && !reportKeys[key] {
 		w.found.Strings++
 	}
 	if len(key) <= MaxClusterTextBytes {
-		if *written != nil {
-			(*written)[key] = true
+		if o.written == nil { // no name of this object has been cut yet
+			w.plain = append(w.plain, key)
+			return key
 		}
+		if made, taken := o.written[key]; taken && made {
+			return o.distinct(key)
+		}
+		o.written[key] = false
 		return key
 	}
 	w.found.Cut++
-	if *written == nil {
-		*written = map[string]bool{}
+	if o.written == nil {
+		o.written = make(map[string]bool, len(w.plain)-o.base+1)
+		for _, k := range w.plain[o.base:] {
+			o.written[k] = false
+		}
 	}
-	out := cutClusterText(key)
-	for n := 2; (*written)[out]; n++ {
-		out = cutClusterText(key) + " #" + strconv.Itoa(n)
+	return o.distinct(cutClusterText(key))
+}
+
+// distinct is form, a name the walker made or has to change, numbered if
+// the object has the name already, recorded as written.
+func (o *objectNames) distinct(form string) string {
+	out := form
+	for n := 2; ; n++ {
+		if _, taken := o.written[out]; !taken {
+			break
+		}
+		out = numbered(form, n)
 	}
-	(*written)[out] = true
+	o.written[out] = true
 	return out
 }
 
@@ -312,11 +348,31 @@ func writeJSONString(b *bytes.Buffer, s string) {
 // cutClusterText cuts s to MaxClusterTextBytes, whole characters only,
 // ending in ClusterTextCutMark.
 func cutClusterText(s string) string {
-	n := MaxClusterTextBytes - len(ClusterTextCutMark)
+	return s[:runeStart(s, MaxClusterTextBytes-len(ClusterTextCutMark))] + ClusterTextCutMark
+}
+
+// runeStart is the largest n' <= n at which a character of s starts, so
+// that s[:n'] holds whole characters. n is less than len(s).
+func runeStart(s string, n int) int {
 	for n > 0 && !utf8.RuneStart(s[n]) {
 		n--
 	}
-	return s[:n] + ClusterTextCutMark
+	return n
+}
+
+// numbered is form, a name the walker made, with " #n" before the cut mark
+// it ends in, so that it is still a cut name and still fits
+// MaxClusterTextBytes.
+func numbered(form string, n int) string {
+	suffix := " #" + strconv.Itoa(n)
+	head, mark := form, ""
+	if strings.HasSuffix(form, ClusterTextCutMark) {
+		head, mark = strings.TrimSuffix(form, ClusterTextCutMark), ClusterTextCutMark
+	}
+	if limit := MaxClusterTextBytes - len(mark) - len(suffix); len(head) > limit {
+		head = head[:runeStart(head, limit)]
+	}
+	return head + suffix + mark
 }
 
 // quoteOutside is s, outside text a message quotes, cut to
