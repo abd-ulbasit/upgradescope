@@ -261,8 +261,14 @@ func parseImage(image string) imageRef {
 // (registry.ProviderBuildPrefixes: GKE's and AKS's own builds of Calico,
 // Cilium, Istio, …) follows the provider's support policy, so host-less
 // upstream matchers never claim it; only a matcher naming the provider
-// location does, on the full reference or a mirror path ending with it.
+// location does, on the full reference or a mirror path ending with it. A
+// matcher with a tag pattern (registry.SplitTagPattern) matches only the
+// tags it names.
 func imageMatches(ref imageRef, matcher string) bool {
+	matcher, pattern := registry.SplitTagPattern(matcher)
+	if pattern != "" && !registry.TagMatches(ref.tag, pattern) {
+		return false
+	}
 	full := ref.host + "/" + ref.path
 	if registry.IsProviderBuild(matcher) {
 		return registry.PathMatches(full, matcher)
@@ -325,14 +331,78 @@ func olderVersion(cur, v string) string {
 	return cur
 }
 
+// imageClaim is an add-on an image belongs to, and the add-on's version
+// the image gives.
+type imageClaim struct {
+	id, version string
+}
+
+// imageClaims returns the add-ons whose image matchers claim ref, in
+// registry order, each with the version ref gives it: the tag's, or, for a
+// component image (registry.ComponentImage), the product line that ships
+// the tag's line ("" when the entry does not map it). A matcher with a
+// tag pattern claims ref ahead of path-only matchers: when one matches,
+// only the entries matching that way claim it, so RKE2's "-hardenedN"
+// build is not also upstream ingress-nginx's (#265).
+func imageClaims(ref imageRef, addons []registry.AddOn) []imageClaim {
+	var tagged, plain []imageClaim
+	tagVersion := versionFromTag(ref.tag)
+	for _, a := range addons {
+		byTag, byPath := false, false
+		for _, m := range a.Matchers.Images {
+			if imageMatches(ref, m) {
+				_, pattern := registry.SplitTagPattern(m)
+				byTag, byPath = byTag || pattern != "", byPath || pattern == ""
+			}
+		}
+		switch {
+		case byTag:
+			tagged = append(tagged, imageClaim{a.ID, tagVersion})
+		case byPath:
+			plain = append(plain, imageClaim{a.ID, tagVersion})
+		default:
+			if i := slices.IndexFunc(a.Matchers.Components, func(c registry.ComponentImage) bool { return imageMatches(ref, c.Image) }); i >= 0 {
+				plain = append(plain, imageClaim{a.ID, a.Matchers.Components[i].ProductLine(tagVersion)})
+			}
+		}
+	}
+	if len(tagged) > 0 {
+		return tagged
+	}
+	return plain
+}
+
+// untaggedClaim settles an image without a tag (a digest-only reference),
+// which no tag pattern can match, so that a repository two products share
+// (RKE2's "-hardenedN" and RKE1's "-rancherN" builds of
+// rancher/nginx-ingress-controller, #265) is not given to the path-only
+// entry by default when the evidence says otherwise: the first of named
+// (the entries the pod's own labels name, then those a Helm release in its
+// namespace names) with a tag-qualified matcher of ref's repository claims
+// it, at that entry's version in named. ok is false when none does, and
+// the image keeps its imageClaims.
+func untaggedClaim(ref imageRef, named []imageClaim, addons []registry.AddOn) (claim imageClaim, ok bool) {
+	if ref.tag != "" {
+		return imageClaim{}, false
+	}
+	for _, n := range named {
+		i := slices.IndexFunc(addons, func(a registry.AddOn) bool { return a.ID == n.id })
+		if i >= 0 && slices.ContainsFunc(addons[i].Matchers.Images, func(m string) bool {
+			path, pattern := registry.SplitTagPattern(m)
+			return pattern != "" && imageMatches(ref, path)
+		}) {
+			return n, true
+		}
+	}
+	return imageClaim{}, false
+}
+
 // imageAddOns returns the IDs of the add-ons whose image matchers claim
-// ref, in registry order.
+// ref (imageClaims), in registry order.
 func imageAddOns(ref imageRef, addons []registry.AddOn) []string {
 	var ids []string
-	for _, a := range addons {
-		if slices.ContainsFunc(a.Matchers.Images, func(m string) bool { return imageMatches(ref, m) }) {
-			ids = append(ids, a.ID)
-		}
+	for _, c := range imageClaims(ref, addons) {
+		ids = append(ids, c.id)
 	}
 	return ids
 }
@@ -411,7 +481,11 @@ var ingressClassAddOns = map[string][]string{
 // Evidence, strongest first, each a Source:
 //   - "chart": a Helm release of a chart matcher; its appVersion is the
 //     install's version.
-//   - "image": an image matcher; the version is the tag's.
+//   - "image": an image matcher; the version is the tag's, or for a
+//     component image the product line its tag's line ships in. An image
+//     without a tag goes to the entry its pod's labels, or a Helm release
+//     in its namespace, name when that entry has a tag-qualified matcher
+//     of its repository (untaggedClaim).
 //   - "labels": the pod's labels name the add-on (see labelAddOn), for a
 //     pod none of whose images that add-on's matchers claim but one of
 //     which no matcher claims at all: the container the labels are about
@@ -458,14 +532,37 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 	byInstall := map[install][]evidence{}
 	unmatched := map[string]bool{}
 
+	// What names the add-on of an image without a tag (untaggedClaim): its
+	// pod's labels, then the Helm releases of its namespace.
+	labelNamed := map[nsImage][]imageClaim{}
+	for _, p := range ev.labelled {
+		if id, version := labelAddOn(p.Labels, addons); id != "" {
+			for _, img := range p.Images {
+				k := nsImage{p.Namespace, img}
+				labelNamed[k] = append(labelNamed[k], imageClaim{id, version})
+			}
+		}
+	}
+	releaseNamed := map[string][]imageClaim{}
+	for _, rel := range ev.releases {
+		for _, a := range addons {
+			if slices.Contains(a.Matchers.Charts, rel.ChartName) {
+				releaseNamed[rel.Namespace] = append(releaseNamed[rel.Namespace], imageClaim{a.ID, ""})
+			}
+		}
+	}
+
 	for _, img := range ev.images {
 		ref := parseImage(img.Image)
-		ids := imageAddOns(ref, addons)
-		for _, id := range ids {
-			in := install{id, img.Namespace}
-			byInstall[in] = append(byInstall[in], evidence{source: "image", version: versionFromTag(ref.tag)})
+		claims := imageClaims(ref, addons)
+		if c, ok := untaggedClaim(ref, append(slices.Clone(labelNamed[img]), releaseNamed[img.Namespace]...), addons); ok {
+			claims = []imageClaim{c}
 		}
-		if len(ids) == 0 {
+		for _, c := range claims {
+			in := install{c.id, img.Namespace}
+			byInstall[in] = append(byInstall[in], evidence{source: "image", version: c.version})
+		}
+		if len(claims) == 0 {
 			unmatched[ref.host+"/"+ref.path] = true
 		}
 	}

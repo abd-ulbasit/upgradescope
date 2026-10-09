@@ -450,6 +450,11 @@ func TestRegistryLookup(t *testing.T) {
 	if !strings.Contains(string(out), `"id":"containerd"`) && !strings.Contains(string(out), `"truncated":true`) {
 		t.Errorf("lookup containerd = %.200s", out)
 	}
+	// So does a component image (#265): Flux's controllers.
+	out = structured(t, call(t, cs, ToolRegistryLookup, map[string]any{"query": "fluxcd/source-controller"}))
+	if !strings.Contains(string(out), `"id":"flux"`) {
+		t.Errorf("lookup fluxcd/source-controller = %.200s", out)
+	}
 	if r := call(t, cs, ToolRegistryLookup, map[string]any{"query": " "}); !r.IsError {
 		t.Error("an empty query was accepted")
 	}
