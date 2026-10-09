@@ -304,9 +304,9 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 // that could not be read or reconciled stops it, the CR then marked as not
 // current) → push on hash change or force interval, each phase on its own
 // part of the tick deadline (maxTickReserve). Partial failures are joined
-// and returned; the
-// caller never stops the loop on a tick error. The outcome, with the push
-// result kept apart from the tick's own errors, is left in r.last.
+// and returned; the caller never stops the loop on a tick error. The
+// outcome, with the push result kept apart from the tick's own errors, is
+// left in r.last.
 func (r *runner) tick(ctx context.Context) error {
 	var errs []error
 	r.last = tickReport{push: pushOff}
