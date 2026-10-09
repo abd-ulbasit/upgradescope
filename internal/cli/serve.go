@@ -21,6 +21,7 @@ import (
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/internal/secretfile"
 	"github.com/abd-ulbasit/upgradescope/internal/server"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
 )
@@ -41,6 +42,19 @@ type serveOptions struct {
 	targets      string
 	teamMap      string
 	registryDir  string // --registry-dir: extra add-on registry entries
+
+	// The -file variants of the secrets that follow their file: the paths
+	// runServe hands to the server (tokens) and re-reads (notification URLs
+	// and the webhook key), "" = the value came from the flag or the
+	// environment, which cannot rotate. optionalSecretFiles are the secrets
+	// whose file may be missing at start (--optional-secret-file).
+	ingestTokenFile    string
+	readTokenFile      string
+	adminTokenFile     string
+	slackWebhookFile   string
+	webhookFile        string
+	webhookKeyFile     string
+	optionalSecretFile []string
 
 	// trustTeamHeader and trustedProxies are the trusted-proxy mode
 	// (server.Config.TrustTeamHeader); parsedProxies is trustedProxies
@@ -92,11 +106,35 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 
 	var notifiers []notify.Notifier
 	if opts.slackWebhook != "" {
-		notifiers = append(notifiers, notify.NewSlack(opts.slackWebhook))
+		slack := notify.NewSlack(opts.slackWebhook)
+		if opts.slackWebhookFile != "" {
+			f, err := secretfile.Open(opts.slackWebhookFile, secretfile.WithValidate(notifyURLCheck))
+			if err != nil {
+				return fmt.Errorf("--slack-webhook-file: %w", err)
+			}
+			slack.URLFunc = f.Value
+		}
+		notifiers = append(notifiers, slack)
 	}
 	if opts.webhook != "" {
 		hook := notify.NewGenericWebhook(opts.webhook)
 		hook.Secret = opts.webhookKey
+		if opts.webhookFile != "" {
+			f, err := secretfile.Open(opts.webhookFile, secretfile.WithValidate(notifyURLCheck))
+			if err != nil {
+				return fmt.Errorf("--webhook-file: %w", err)
+			}
+			hook.URLFunc = f.Value
+		}
+		if opts.webhookKeyFile != "" {
+			// The key may be added to the Secret after the start; until then
+			// requests are unsigned.
+			f, err := secretfile.Open(opts.webhookKeyFile, secretfile.Optional())
+			if err != nil {
+				return fmt.Errorf("--webhook-secret-file: %w", err)
+			}
+			hook.SecretFunc = f.Value
+		}
 		notifiers = append(notifiers, hook)
 	}
 
@@ -106,20 +144,25 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 	}
 
 	srv, err := server.New(server.Config{
-		Listen:             opts.listen,
-		Store:              st,
-		KB:                 kbData,
-		Notifier:           notify.Multi(notifiers...), // zero notifiers → harmless no-op
-		IngestToken:        opts.ingestToken,
-		ReadToken:          opts.readToken,
-		AdminToken:         opts.adminToken,
-		ExtraTargets:       extraTargets,
-		TeamMap:            opts.parsedTeamMap,
-		AllowAnonymousRead: opts.allowAnonymousRead,
-		TrustTeamHeader:    opts.trustTeamHeader,
-		TrustedProxies:     opts.parsedProxies,
-		AllowedHosts:       opts.allowedHosts,
-		Version:            version,
+		Listen:          opts.listen,
+		Store:           st,
+		KB:              kbData,
+		Notifier:        notify.Multi(notifiers...), // zero notifiers → harmless no-op
+		IngestToken:     opts.ingestToken,
+		ReadToken:       opts.readToken,
+		AdminToken:      opts.adminToken,
+		IngestTokenFile: opts.ingestTokenFile,
+		ReadTokenFile:   opts.readTokenFile,
+		AdminTokenFile:  opts.adminTokenFile,
+
+		IngestTokenFileOptional: slices.Contains(opts.optionalSecretFile, "ingest-token"),
+		ExtraTargets:            extraTargets,
+		TeamMap:                 opts.parsedTeamMap,
+		AllowAnonymousRead:      opts.allowAnonymousRead,
+		TrustTeamHeader:         opts.trustTeamHeader,
+		TrustedProxies:          opts.parsedProxies,
+		AllowedHosts:            opts.allowedHosts,
+		Version:                 version,
 
 		MaxSnapshotBytes: opts.maxSnapshotBytes,
 		MaxGateBytes:     opts.maxGateBytes,
@@ -186,11 +229,21 @@ a credential: --read-token (fleet-wide), read tokens minted with
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := validOptionalSecretFiles(cmd, opts.optionalSecretFile); err != nil {
+				return err
+			}
 			for _, s := range secrets {
+				s.optional = slices.Contains(opts.optionalSecretFile, s.name)
 				if err := s.resolve(cmd); err != nil {
 					return err
 				}
 			}
+			opts.ingestTokenFile = secrets[0].fromFile(cmd)
+			opts.readTokenFile = secrets[1].fromFile(cmd)
+			opts.adminTokenFile = secrets[2].fromFile(cmd)
+			opts.slackWebhookFile = secrets[3].fromFile(cmd)
+			opts.webhookFile = secrets[4].fromFile(cmd)
+			opts.webhookKeyFile = secrets[5].fromFile(cmd)
 			if err := db.resolve(cmd); err != nil {
 				return err
 			}
@@ -229,6 +282,12 @@ a credential: --read-token (fleet-wide), read tokens minted with
 		addSecretFlag(cmd, &opts.webhookKey, "webhook-secret", "UPGRADESCOPE_WEBHOOK_SECRET",
 			"sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key>"),
 	}
+	cmd.Flags().StringSliceVar(&opts.optionalSecretFile, "optional-secret-file", nil,
+		"names of --*-file flags (ingest-token, slack-webhook, webhook, webhook-secret) whose file may be missing at start, as a key absent from a Secret you manage is: "+
+			"the secret is then unset; a token file that appears later is picked up, and one removed later stops that token working. A file that exists is read as usual")
+	for _, s := range secrets {
+		s.follow(cmd)
+	}
 	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
 	cmd.Flags().StringVar(&opts.trustTeamHeader, "trust-team-header", "",
@@ -255,6 +314,34 @@ a credential: --read-token (fleet-wide), read tokens minted with
 	cmd.Flags().StringVar(&opts.retention, "retention", "90d", "prune snapshots and evaluations older than this, in days (90d) or a Go duration (2160h), at startup and daily; each cluster's latest snapshot and its evaluations are always kept; 0 keeps everything")
 	cmd.MarkFlagsRequiredTogether("tls-cert-file", "tls-key-file")
 	return cmd
+}
+
+// secretFileNames are the secrets --optional-secret-file may name: the ones
+// a Secret you manage may not have a key for.
+var secretFileNames = []string{"ingest-token", "slack-webhook", "webhook", "webhook-secret"}
+
+// validOptionalSecretFiles refuses an --optional-secret-file entry that is
+// not one of secretFileNames, or whose --<name>-file is not given (a typo
+// would otherwise leave a secret unset without a word).
+func validOptionalSecretFiles(cmd *cobra.Command, names []string) error {
+	for _, n := range names {
+		if !slices.Contains(secretFileNames, n) {
+			return fmt.Errorf("invalid --optional-secret-file %q: want one of %s", n, strings.Join(secretFileNames, ", "))
+		}
+		if !cmd.Flags().Changed(n + "-file") {
+			return fmt.Errorf("--optional-secret-file %s needs --%s-file", n, n)
+		}
+	}
+	return nil
+}
+
+// notifyURLCheck refuses a notification URL read from a file that could not
+// be delivered to; its error never repeats the URL.
+func notifyURLCheck(v string) error {
+	if err := notify.CheckURL(v); err != nil {
+		return fmt.Errorf("want an absolute http(s) URL (%v)", err)
+	}
+	return nil
 }
 
 // cgroupRoot is where the container's own cgroup is mounted.

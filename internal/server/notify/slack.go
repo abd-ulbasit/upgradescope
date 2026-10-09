@@ -62,8 +62,11 @@ func FormatText(n Notification) string {
 
 // SlackNotifier posts notifications to a Slack incoming webhook as text.
 type SlackNotifier struct {
-	URL    string
-	Client *http.Client // exported so tests shorten the timeout; never nil from NewSlack
+	URL string
+	// URLFunc, when set, gives the URL at each delivery in place of URL: a
+	// webhook URL read from a mounted Secret, which follows a rotation.
+	URLFunc func() string
+	Client  *http.Client // exported so tests shorten the timeout; never nil from NewSlack
 }
 
 // URLSink is a notifier that delivers to one URL, which may carry its
@@ -81,7 +84,12 @@ var (
 )
 
 // SinkURL is the webhook URL s posts to (URLSink).
-func (s *SlackNotifier) SinkURL() string { return s.URL }
+func (s *SlackNotifier) SinkURL() string {
+	if s.URLFunc != nil {
+		return s.URLFunc()
+	}
+	return s.URL
+}
 
 // NewSlack returns a SlackNotifier with the 2s delivery timeout.
 func NewSlack(url string) *SlackNotifier {
@@ -99,7 +107,7 @@ func (s *SlackNotifier) Notify(ctx context.Context, n Notification) error {
 	if err != nil {
 		return fmt.Errorf("slack: encode payload: %w", err)
 	}
-	return postJSON(ctx, s.Client, "slack webhook", s.URL, payload, nil)
+	return postJSON(ctx, s.Client, "slack webhook", s.SinkURL(), payload, nil)
 }
 
 // GenericWebhook POSTs the Notification as JSON to any HTTP endpoint,
@@ -107,11 +115,21 @@ func (s *SlackNotifier) Notify(ctx context.Context, n Notification) error {
 type GenericWebhook struct {
 	URL    string
 	Secret string // HMAC-SHA256 key for SignatureHeader; "" = unsigned
-	Client *http.Client
+	// URLFunc and SecretFunc, when set, give the URL and the signing key at
+	// each delivery in place of URL and Secret: values read from a mounted
+	// Secret, which follow a rotation.
+	URLFunc    func() string
+	SecretFunc func() string
+	Client     *http.Client
 }
 
 // SinkURL is the URL g posts to (URLSink).
-func (g *GenericWebhook) SinkURL() string { return g.URL }
+func (g *GenericWebhook) SinkURL() string {
+	if g.URLFunc != nil {
+		return g.URLFunc()
+	}
+	return g.URL
+}
 
 // NewGenericWebhook returns an unsigned GenericWebhook with the 2s
 // delivery timeout; set Secret to sign.
@@ -127,10 +145,14 @@ func (g *GenericWebhook) Notify(ctx context.Context, n Notification) error {
 	h := http.Header{}
 	h.Set("X-Upgradescope-Delivery", n.DeliveryID)
 	h.Set("X-Upgradescope-Event", n.Type)
-	if g.Secret != "" {
-		h.Set(SignatureHeader, Sign(g.Secret, payload))
+	secret := g.Secret
+	if g.SecretFunc != nil {
+		secret = g.SecretFunc()
 	}
-	return postJSON(ctx, g.Client, "webhook", g.URL, payload, h)
+	if secret != "" {
+		h.Set(SignatureHeader, Sign(secret, payload))
+	}
+	return postJSON(ctx, g.Client, "webhook", g.SinkURL(), payload, h)
 }
 
 // noRedirect makes a redirect the response: following one turns the POST

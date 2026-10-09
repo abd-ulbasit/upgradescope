@@ -406,7 +406,7 @@ func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 //     whatever bearer was sent, as before read tokens existed; else 401.
 func (s *Server) readScope(w http.ResponseWriter, r *http.Request) (readScope, bool) {
 	if token := bearerToken(r); token != "" {
-		if equalToken(token, s.cfg.ReadToken) || equalToken(token, s.cfg.AdminToken) {
+		if equalToken(token, s.tokens.read()) || equalToken(token, s.tokens.admin()) {
 			return fleetScope, true
 		}
 		teams, valid, err := s.cfg.Store.ValidReadToken(r.Context(), token)
@@ -445,7 +445,7 @@ func equalToken(presented, configured string) bool {
 // false (remembered, so it is asked until then only), and revoking the last
 // one does not open the read API again.
 func (s *Server) readOpen(ctx context.Context) (bool, error) {
-	if s.cfg.ReadToken != "" || s.cfg.TrustTeamHeader != "" || s.readTokensMinted.Load() {
+	if s.tokens.read() != "" || s.cfg.TrustTeamHeader != "" || s.readTokensMinted.Load() {
 		return false, nil
 	}
 	toks, err := s.cfg.Store.ListReadTokens(ctx)

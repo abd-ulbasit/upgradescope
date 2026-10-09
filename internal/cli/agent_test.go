@@ -414,3 +414,24 @@ func TestAgentForceSyncEveryFlag(t *testing.T) {
 		t.Errorf("--force-sync-every 1m: %v, want accepted", err)
 	}
 }
+
+// A push token from --server-token-file is handed to the agent as a path it
+// re-reads, so a rotated Secret needs no restart; one from the flag or the
+// environment is a fixed value.
+func TestAgentServerTokenFileFollowsRotation(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(file, []byte("file-tok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := execAgent(t, "--server-token-file", file)
+	if err != nil || got.serverTokenFile != file {
+		t.Fatalf("serverTokenFile = %q, err %v; want %q", got.serverTokenFile, err, file)
+	}
+	t.Setenv("UPGRADESCOPE_SERVER_TOKEN", "env-tok")
+	if got, err = execAgent(t); err != nil || got.serverTokenFile != "" {
+		t.Fatalf("env token: serverTokenFile = %q, err %v; want none", got.serverTokenFile, err)
+	}
+	if got, err = execAgent(t, "--server-token", "flag-tok"); err != nil || got.serverTokenFile != "" {
+		t.Fatalf("flag token: serverTokenFile = %q, err %v; want none", got.serverTokenFile, err)
+	}
+}

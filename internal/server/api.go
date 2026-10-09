@@ -481,8 +481,8 @@ func bearerToken(r *http.Request) string {
 // handleIngest once the body names its cluster (403 there).
 func (s *Server) authIngest(w http.ResponseWriter, r *http.Request) (boundCluster string, ok bool) {
 	token := bearerToken(r)
-	if token != "" && s.cfg.IngestToken != "" &&
-		subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.IngestToken)) == 1 {
+	if token != "" && s.tokens.ingest() != "" &&
+		subtle.ConstantTimeCompare([]byte(token), []byte(s.tokens.ingest())) == 1 {
 		return "", true
 	}
 	if token == "" {

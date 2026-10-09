@@ -28,7 +28,7 @@ const maxAdminBody = 4 << 10
 // token is configured or a different token is presented, 401 when none is.
 func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.AdminToken == "" {
+		if s.tokens.admin() == "" {
 			errJSON(w, http.StatusForbidden, "cluster administration is disabled: start the server with --admin-token")
 			return
 		}
@@ -37,7 +37,7 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 			errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(presented), []byte(s.cfg.AdminToken)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(presented), []byte(s.tokens.admin())) != 1 {
 			errJSON(w, http.StatusForbidden, "this endpoint needs the admin token")
 			return
 		}

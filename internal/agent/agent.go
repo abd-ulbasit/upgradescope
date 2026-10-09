@@ -33,6 +33,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/internal/secretfile"
 	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
@@ -48,13 +49,21 @@ const ignoreSource = "spec.ignore"
 const maxSkipNotes = 8
 
 type Config struct {
-	Interval       time.Duration // default 10m, min 1m
-	ServerURL      string        // optional; "" = CRD-only mode
-	ServerToken    string        // bearer for push
-	ClusterName    string        // human label sent to server; default = ClusterID
-	CRName         string        // default crd.DefaultName
-	TeamLabel      string        // default "team"
-	ForceSyncEvery time.Duration // default 1h: push even if hash unchanged
+	Interval    time.Duration // default 10m, min 1m
+	ServerURL   string        // optional; "" = CRD-only mode
+	ServerToken string        // bearer for push
+	// ServerTokenFile, when set, is the file the push token is read from,
+	// in place of ServerToken: a mounted Secret. It is read at start (a
+	// missing, empty or unacceptable file fails it) and re-read when it
+	// changes, checked at most every 5 seconds when a push is made, so a
+	// rotated token needs no restart. A new file that is empty or unreadable
+	// leaves the old token in use and is logged, naming the file and never
+	// the token.
+	ServerTokenFile string
+	ClusterName     string        // human label sent to server; default = ClusterID
+	CRName          string        // default crd.DefaultName
+	TeamLabel       string        // default "team"
+	ForceSyncEvery  time.Duration // default 1h: push even if hash unchanged
 	// ServerRootCAs verifies the server's certificate on pushes (from
 	// LoadServerCAs: the system roots plus a private CA); nil = the system
 	// roots.
@@ -80,6 +89,13 @@ type Config struct {
 	// Logger receives the startup line and one line per tick; nil uses
 	// slog.Default().
 	Logger *slog.Logger
+
+	// serverTokenFn gives the push token at each push: the file's current
+	// value (ServerTokenFile), set by applyDefaults; nil = ServerToken.
+	serverTokenFn func() string
+	// secretOpts configures the secretfile.File behind ServerTokenFile
+	// (tests: check interval, log).
+	secretOpts []secretfile.Option
 }
 
 // ValidateInterval rejects an evaluation interval below the 1m minimum.
@@ -217,6 +233,25 @@ func (c *Config) applyDefaults() error {
 	}
 	if err := ValidateForceSyncEvery(c.ForceSyncEvery); err != nil {
 		return err
+	}
+	if c.ServerURL != "" && c.ServerTokenFile != "" {
+		logger := c.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		f, err := secretfile.Open(c.ServerTokenFile, append([]secretfile.Option{
+			secretfile.WithValidate(ValidateServerToken),
+			secretfile.WithLogf(func(isError bool, format string, args ...any) {
+				if isError {
+					logger.Error(fmt.Sprintf(format, args...))
+				} else {
+					logger.Info(fmt.Sprintf(format, args...))
+				}
+			})}, c.secretOpts...)...)
+		if err != nil {
+			return fmt.Errorf("server token file: %w", err)
+		}
+		c.ServerToken, c.serverTokenFn = f.Value(), f.Value
 	}
 	if c.ServerURL != "" {
 		if c.ServerToken == "" {
@@ -359,6 +394,7 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 	}
 	if cfg.ServerURL != "" {
 		r.pusher = newPusher(cfg.ServerURL, cfg.ServerToken, cfg.ServerRootCAs)
+		r.pusher.tokenFn = cfg.serverTokenFn
 		r.pusher.log = cfg.Logger
 	}
 	return r

@@ -26,24 +26,28 @@ import (
 )
 
 type agentOptions struct {
-	interval       time.Duration
-	serverURL      string
-	serverToken    string
-	serverCAFile   string
-	clusterName    string
-	crName         string
-	teamLabel      string
-	forceSyncEvery time.Duration
-	kubeconfig     string
-	kubecontext    string
-	requestTimeout time.Duration
-	targets        []string
-	manageCRD      bool
-	healthAddr     string
-	pprofAddr      string
-	logFormat      string
-	logLevel       string
-	registryDir    string // --registry-dir: extra add-on registry entries
+	interval    time.Duration
+	serverURL   string
+	serverToken string
+	// serverTokenFile is --server-token-file when the token came from it:
+	// the path the agent re-reads, so a rotated token needs no restart ("" =
+	// the flag or the environment, which cannot rotate).
+	serverTokenFile string
+	serverCAFile    string
+	clusterName     string
+	crName          string
+	teamLabel       string
+	forceSyncEvery  time.Duration
+	kubeconfig      string
+	kubecontext     string
+	requestTimeout  time.Duration
+	targets         []string
+	manageCRD       bool
+	healthAddr      string
+	pprofAddr       string
+	logFormat       string
+	logLevel        string
+	registryDir     string // --registry-dir: extra add-on registry entries
 }
 
 // newAgentLogger builds the agent's slog logger: format text (logfmt) or
@@ -111,6 +115,7 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 		Interval:          opts.interval,
 		ServerURL:         opts.serverURL,
 		ServerToken:       opts.serverToken,
+		ServerTokenFile:   opts.serverTokenFile,
 		ServerRootCAs:     serverRoots,
 		ClusterName:       opts.clusterName,
 		CRName:            opts.crName,
@@ -223,6 +228,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if err := serverToken.resolve(cmd); err != nil {
 				return err
 			}
+			opts.serverTokenFile = serverToken.fromFile(cmd)
 			if err := validRequestTimeout(opts.requestTimeout); err != nil {
 				return err
 			}
@@ -259,6 +265,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().StringVar(&opts.serverURL, "server-url", "", "upgradescope server base URL (empty = CRD-only mode)")
 	serverToken = addSecretFlag(cmd, &opts.serverToken, "server-token", "UPGRADESCOPE_SERVER_TOKEN",
 		"bearer token for snapshot pushes (required with --server-url)")
+	serverToken.follow(cmd)
 	cmd.Flags().StringVar(&opts.serverCAFile, "server-ca-file", "",
 		"PEM bundle of CA certificates trusted for an https --server-url, on top of the system roots (a server behind a private CA); read at startup")
 	cmd.Flags().StringVar(&opts.clusterName, "cluster-name", "", "cluster label sent to the server, an RFC 1123 subdomain of at most 253 bytes (default: cluster UID)")
