@@ -287,10 +287,12 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 		case rule.Namespace == "" && rule.Name == "" && rule.File == "":
 			g.objects, remaining, g.whole, g.all = remaining, nil, true, true
 		case len(f.Objects) == 0:
-			// Namespaces the finding does not list (NamespacesOmitted)
-			// cannot be shown to match, so a namespace rule takes it
-			// whole only when it lists them all.
-			g.whole = rule.Name == "" && rule.File == "" && f.NamespacesOmitted == 0 && allMatch(rule.Namespace, f.Namespaces)
+			// Namespaces the finding does not list (NamespacesOmitted),
+			// and installs in no named namespace (Unnamespaced: a manifest
+			// without metadata.namespace, an IngressClass), cannot be
+			// shown to match, so a namespace rule takes it whole only
+			// when it lists them all and the finding has none.
+			g.whole = rule.Name == "" && rule.File == "" && f.NamespacesOmitted == 0 && !f.Unnamespaced && allMatch(rule.Namespace, f.Namespaces)
 		default:
 			g.objects, remaining = take(remaining, func(o inventory.ObjectRef) bool { return rule.matches(o, opts.FileBase) })
 		}

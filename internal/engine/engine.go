@@ -702,6 +702,9 @@ func groupInstalls(a registry.AddOn, ins []addOnInstall, node bool, now time.Tim
 // MaxFindingNamespaces (Evaluate caps it).
 func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addOnSubject {
 	s := addOnSubject{installs: ins, node: node}
+	if !node {
+		s.unnamespaced = slices.ContainsFunc(ins, unnamespaced)
+	}
 	for _, in := range ins {
 		if in.version != "" && (s.version == "" || versionBefore(in.version, s.version)) {
 			s.version = in.version
@@ -755,6 +758,14 @@ func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addO
 	return s
 }
 
+// unnamespaced reports whether an install is in no named namespace: an
+// IngressClass (cluster-scoped) or a manifest object without
+// metadata.namespace (shown as ""). A namespace-scoped ignore rule cannot be
+// shown to cover it (Finding.Unnamespaced).
+func unnamespaced(in addOnInstall) bool {
+	return len(in.where) == 0 || slices.Contains(in.where, "")
+}
+
 // nsLabel names a namespace in an evidence sentence; "" is a manifest
 // object's unset metadata.namespace (files mode).
 func nsLabel(ns string) string {
@@ -804,7 +815,9 @@ type addOnSubject struct {
 	located    string   // evidence sentence that opens every finding's detail
 	namespaces []string // sorted
 	teams      []string
-	installs   []addOnInstall
+	// unnamespaced: some install is in no named namespace (unnamespaced).
+	unnamespaced bool
+	installs     []addOnInstall
 	// node marks node container runtimes. They ship with the node image or
 	// OS, which a node upgrade or node-pool image bump replaces, so an
 	// ended release line is a warning; only a compat row (the kubelet
@@ -844,7 +857,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 	finding := func(s addOnSubject, cat Category, sev Severity, key, title, detail string, citations []string) Finding {
 		return Finding{
 			Category: cat, Severity: sev, Key: key, Title: title, Detail: detail,
-			Teams: s.teams, Namespaces: s.namespaces, Remediation: a.Recommendation,
+			Teams: s.teams, Namespaces: s.namespaces, Unnamespaced: s.unnamespaced, Remediation: a.Recommendation,
 			Citations: append([]string(nil), citations...),
 		}
 	}
@@ -911,7 +924,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 			}
 			if ok {
 				f.Key = key(f.Category)
-				f.Teams, f.Namespaces = s.teams, s.namespaces
+				f.Teams, f.Namespaces, f.Unnamespaced = s.teams, s.namespaces, s.unnamespaced
 				if s.node && f.Severity == SevBlocker {
 					f.Severity = SevWarning
 					f.Detail += " The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself."
@@ -996,6 +1009,7 @@ func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version)
 		if !s.node {
 			f.Namespaces = append(f.Namespaces, in.where...)
 			f.Teams = append(f.Teams, in.teams...)
+			f.Unnamespaced = f.Unnamespaced || unnamespaced(in)
 		}
 		if oldest == "" || versionBefore(in.version, oldest) {
 			oldest = in.version

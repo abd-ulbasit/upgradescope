@@ -1044,6 +1044,7 @@ components:
         teams: {type: array, items: {type: string}}
         namespaces: {type: array, items: {type: string}, maxItems: 100, description: "Affected namespaces, sorted, at most 100."}
         namespacesOmitted: {type: integer, description: Affected namespaces not listed.}
+        unnamespaced: {type: boolean, description: "An add-on finding that also covers an install in no named namespace: a manifest object without metadata.namespace, or a cluster-scoped IngressClass. A namespace-scoped ignore rule cannot be shown to match it, so it does not take the finding."}
         remediation: {type: string}
         citations: {type: array, items: {type: string, format: uri}}
         objects: {type: array, items: {$ref: "#/components/schemas/ObjectRef"}, maxItems: 100}

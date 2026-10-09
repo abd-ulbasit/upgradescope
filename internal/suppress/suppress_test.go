@@ -10,6 +10,7 @@ import (
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 var now = time.Date(2026, 10, 2, 15, 0, 0, 0, time.UTC)
@@ -384,5 +385,88 @@ func TestFindConfig(t *testing.T) {
 	writeFile(t, atRoot, "ignore: []\n")
 	if got, err := FindConfig(scanRoot); err != nil || got != atRoot {
 		t.Errorf("scan root config: %q, %v; want %s (nearest wins)", got, err, atRoot)
+	}
+}
+
+// A namespace-scoped rule takes an objectless finding only when every
+// install it covers is in a named namespace the rule matches (#237): an
+// install in no named namespace (a manifest without metadata.namespace, a
+// cluster-scoped IngressClass) can be deployed anywhere, prod included, so
+// a rule meant for "sandbox" must leave the finding.
+func TestApplyNamespaceSelectorLeavesFindingsCoveringUnnamespacedInstalls(t *testing.T) {
+	eol := eolNginx()
+	eol.Namespaces = []string{"sandbox"}
+	eol.Unnamespaced = true
+	incompat := engine.Finding{
+		Category: engine.CatChartIncompat, Severity: engine.SevBlocker, Key: "chart-incompat/ingress-nginx",
+		Title: "ingress-nginx 4.7.1 supports Kubernetes up to 1.33 (target 1.38)", Namespaces: []string{"sandbox"}, Unnamespaced: true,
+	}
+	for _, f := range []engine.Finding{eol, incompat} {
+		t.Run(string(f.Category), func(t *testing.T) {
+			r := report(f)
+			if r.Verdict != engine.VerdictBlocked {
+				t.Fatalf("verdict before = %s, want blocked", r.Verdict)
+			}
+			for _, rule := range []Rule{
+				{Category: string(f.Category), Namespace: "sandbox", Reason: "x"},
+				{Key: f.Key, Namespace: "*", Reason: "x"},
+			} {
+				got, _ := Apply(r, []Rule{rule}, Options{Now: now})
+				if len(got.Suppressed) != 0 || len(got.Findings) != 1 || got.Verdict != engine.VerdictBlocked {
+					t.Errorf("rule %+v: suppressed %d, kept %d, verdict %s; want the blocker kept", rule, len(got.Suppressed), len(got.Findings), got.Verdict)
+				}
+			}
+			// A rule without a namespace selector still takes it whole: it
+			// does not claim to know where the installs are.
+			got, _ := Apply(r, []Rule{{Category: string(f.Category), Reason: "x"}}, Options{Now: now})
+			if len(got.Suppressed) != 1 || len(got.Findings) != 0 {
+				t.Errorf("rule without a namespace: suppressed %d, kept %d; want it suppressed", len(got.Suppressed), len(got.Findings))
+			}
+			// The same finding with every install in a matching named
+			// namespace is still suppressed.
+			f.Unnamespaced = false
+			got, _ = Apply(report(f), []Rule{{Category: string(f.Category), Namespace: "sandbox", Reason: "x"}}, Options{Now: now})
+			if len(got.Suppressed) != 1 || len(got.Findings) != 0 || got.Verdict != engine.VerdictReady {
+				t.Errorf("all installs in sandbox: suppressed %d, kept %d, verdict %s; want it suppressed", len(got.Suppressed), len(got.Findings), got.Verdict)
+			}
+		})
+	}
+}
+
+// #237's repro, end to end on the embedded knowledge base: a files
+// inventory with ingress-nginx, retired as a whole, once in no namespace
+// (helm template output) and once in sandbox. The rule for sandbox leaves
+// the blocker, and the verdict stays blocked.
+func TestEndToEndNamespaceRuleDoesNotTakeAnInstallWithoutNamespace(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := inventory.Inventory{
+		SchemaVersion: 1, ClusterID: "files", Source: inventory.SourceFiles,
+		AddOns: []inventory.AddOnInstance{
+			{ID: "ingress-nginx", Version: "1.11.3", Namespaces: []string{""}, Source: "image"},
+			{ID: "ingress-nginx", Version: "1.11.3", Namespaces: []string{"sandbox"}, Source: "image"},
+		},
+	}
+	r := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 34}, now)
+	rule := Rule{Category: "eol-addon", Namespace: "sandbox", Reason: "x"}
+	got, _ := Apply(r, []Rule{rule}, Options{Now: now})
+	blockers := 0
+	for _, f := range got.Findings {
+		if f.Category == engine.CatEOLAddon && f.Severity == engine.SevBlocker {
+			blockers++
+		}
+	}
+	if blockers != 1 || got.Verdict != engine.VerdictBlocked || len(got.Suppressed) != 0 {
+		t.Fatalf("with the sandbox rule: %d eol-addon blockers, verdict %s, %d suppressed; want the blocker kept and the verdict blocked", blockers, got.Verdict, len(got.Suppressed))
+	}
+	// With the install in sandbox alone, the rule takes the finding.
+	inv.AddOns = inv.AddOns[1:]
+	got, _ = Apply(engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 34}, now), []Rule{rule}, Options{Now: now})
+	for _, f := range got.Findings {
+		if f.Category == engine.CatEOLAddon {
+			t.Fatalf("sandbox-only install: finding %s kept, want it suppressed", f.Key)
+		}
 	}
 }

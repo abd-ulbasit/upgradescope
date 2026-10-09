@@ -68,6 +68,15 @@ Such a finding names at most 100 namespaces and counts the rest, which
 cannot be shown to match, so past 100 a `namespace` rule no longer takes
 it, even with a glob such as `*` that would match them all; use a rule
 without selectors (by `key`) for it.
+An add-on install in no named namespace cannot be shown to match either: a
+manifest object without `metadata.namespace` (`helm template` output usually
+has none, and the install can land in any namespace, production included),
+or a cluster-scoped `IngressClass`. A finding that covers one is marked
+`unnamespaced` in the JSON report, and a `namespace` rule, a glob such as
+`*` included, never takes it: an `ingress-nginx` end-of-life blocker for an
+install in `sandbox` and another with no namespace stays a blocker under a
+rule for `sandbox`. A finding whose installs are all in named namespaces
+the rule matches is suppressed as before.
 Rules apply in order, and the first one that matches an object takes it.
 
 **Deprecated-API callers.** When the apiserver's

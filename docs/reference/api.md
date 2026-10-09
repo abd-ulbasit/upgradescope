@@ -495,10 +495,10 @@ Request body (`application/json`): string
 | 200 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) | The gate passed. |
 | 200 | `application/sarif+json` | [SARIF](#sarif) | The gate passed. |
 | 200 | `application/xml` | [JUnit](#junit) | The gate passed. |
-| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
-| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
-| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no or bad `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
-| 400 | `application/json` | [Error](#error) | The body ended early or could not be read. |
+| 422 | `application/json` | [GateResponse](#gateresponse) or [CodeQuality](#codequality) or [Error](#error) | The gate failed (same body as 200), or the request is invalid (no `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 422 | `application/sarif+json` | [SARIF](#sarif) | The gate failed (same body as 200), or the request is invalid (no `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 422 | `application/xml` | [JUnit](#junit) | The gate failed (same body as 200), or the request is invalid (no `target`, bad `format`, `fail-on`, `allow-incomplete`, `path` or `config`, an invalid document separator, a UTF-16 stream, or an undecodable manifest stream: an Error body). |
+| 400 | `application/json` | [Error](#error) | The `target` is not a Kubernetes 1.x minor at or above the oldest the knowledge base covers (1.16): `1.3`, which is what YAML makes of an unquoted `target: 1.30`, would judge nothing and read ready, so it is refused, saying to quote the version. Not a 422, which is the gate's own verdict. Also: the body ended early or could not be read. |
 | 401 | `application/json` | [Error](#error) | An error. |
 | 404 | `application/json` | [Error](#error) | An error. |
 | 408 | `application/json` | [Error](#error) | The body did not arrive within the server's read timeout (60s for `serve`). |
@@ -623,7 +623,10 @@ Every error a handler writes.
 
 ### Target
 
-A Kubernetes minor, `MAJOR.MINOR`.
+A Kubernetes minor, `MAJOR.MINOR`, from 1.16 (the oldest the
+knowledge base covers; an older one is refused, with the gate's
+400 and the other endpoints' 422). Quote it in YAML: an unquoted
+`1.30` is the number 1.3.
 
 Type: string, pattern `^[0-9]+\.[0-9]+$`.
 
@@ -776,6 +779,7 @@ whole.
 | `teams` | array of string | no | — |
 | `namespaces` | array of string | no | Affected namespaces, sorted, at most 100. |
 | `namespacesOmitted` | integer | no | Affected namespaces not listed. |
+| `unnamespaced` | boolean | no | An add-on finding that also covers an install in no named namespace: a manifest object without metadata.namespace, or a cluster-scoped IngressClass. A namespace-scoped ignore rule cannot be shown to match it, so it does not take the finding. |
 | `remediation` | string | no | — |
 | `citations` | array of string (uri) | no | — |
 | `objects` | array of [ObjectRef](#objectref) | no | — |
@@ -795,6 +799,7 @@ whole.
 | `teams` | array of string | no | — |
 | `namespaces` | array of string | no | Affected namespaces, sorted, at most 100. |
 | `namespacesOmitted` | integer | no | Affected namespaces not listed. |
+| `unnamespaced` | boolean | no | An add-on finding that also covers an install in no named namespace: a manifest object without metadata.namespace, or a cluster-scoped IngressClass. A namespace-scoped ignore rule cannot be shown to match it, so it does not take the finding. |
 | `remediation` | string | no | — |
 | `citations` | array of string (uri) | no | — |
 | `objects` | array of [ObjectRef](#objectref) | no | — |
@@ -827,6 +832,7 @@ whole.
 | `teams` | array of string | no | — |
 | `namespaces` | array of string | no | Affected namespaces, sorted, at most 100. |
 | `namespacesOmitted` | integer | no | Affected namespaces not listed. |
+| `unnamespaced` | boolean | no | An add-on finding that also covers an install in no named namespace: a manifest object without metadata.namespace, or a cluster-scoped IngressClass. A namespace-scoped ignore rule cannot be shown to match it, so it does not take the finding. |
 | `remediation` | string | no | — |
 | `citations` | array of string (uri) | no | — |
 | `objects` | array of [ObjectRef](#objectref) | no | — |
@@ -1087,6 +1093,7 @@ are not known. The same for every target.
 | `teams` | array of string | no | — |
 | `namespaces` | array of string | no | Affected namespaces, sorted, at most 100. |
 | `namespacesOmitted` | integer | no | Affected namespaces not listed. |
+| `unnamespaced` | boolean | no | An add-on finding that also covers an install in no named namespace: a manifest object without metadata.namespace, or a cluster-scoped IngressClass. A namespace-scoped ignore rule cannot be shown to match it, so it does not take the finding. |
 | `remediation` | string | no | — |
 | `citations` | array of string (uri) | no | — |
 | `objects` | array of [ObjectRef](#objectref) | no | — |
