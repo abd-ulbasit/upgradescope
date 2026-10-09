@@ -112,3 +112,28 @@ func TestTickFailedSpecTargetsPatchWritesNoStatus(t *testing.T) {
 	}
 	requireNoStatusWritten(t, dyn, "failed spec.targets patch")
 }
+
+// A create of a missing CR that fails while another writer creates it (the
+// re-read finds it) is not lost when the spec.targets patch then fails:
+// the tick reports both errors.
+func TestTickFailedSpecTargetsPatchKeepsTheCreateError(t *testing.T) {
+	dyn := fakeDyn().(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("create", crd.Plural, func(k8stesting.Action) (bool, runtime.Object, error) {
+		if err := dyn.Tracker().Create(crd.GVR(), specCR(map[string]interface{}{"targets": []interface{}{"1.35"}}), ""); err != nil {
+			t.Fatal(err)
+		}
+		return true, nil, apierrors.NewServerTimeout(schema.GroupResource{Group: crd.Group, Resource: crd.Plural}, "create", 1)
+	})
+	dyn.PrependReactor("patch", crd.Plural, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if strings.Contains(string(a.(k8stesting.PatchAction).GetPatch()), `"spec"`) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: crd.Group, Resource: crd.Plural}, crd.DefaultName, errors.New("RBAC: cannot patch"))
+		}
+		return false, nil, nil
+	})
+	r := targetsRunner(t, dyn, "1.37")
+	err := r.tick(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "spec.targets") || !strings.Contains(err.Error(), "create clusterreadiness") {
+		t.Fatalf("tick err = %v, want both the create error and the spec.targets patch error", err)
+	}
+	requireNoStatusWritten(t, dyn, "failed create, then failed spec.targets patch")
+}

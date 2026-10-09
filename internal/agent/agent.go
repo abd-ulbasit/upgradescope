@@ -401,7 +401,7 @@ func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.I
 			if serr != nil {
 				// The stored spec still lists other targets, at the
 				// generation the status would be stamped with.
-				return r.statusNotWritten(ph, fmt.Errorf("status not written: %w", serr))
+				return append(errs, r.statusNotWritten(ph, fmt.Errorf("status not written: %w", serr))...)
 			}
 			gen, obj = g, nil // patched: the status write reads it again
 		}
