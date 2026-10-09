@@ -41,6 +41,11 @@ type mcpOptions struct {
 	kubecontext    string
 	requestTimeout time.Duration
 
+	// noContext is why no context was pinned at start, when --context was
+	// not given and the kubeconfig named no current context then: scan is
+	// refused with it.
+	noContext error
+
 	httpAddr    string
 	allowRemote bool
 	httpToken   string
@@ -115,8 +120,15 @@ without it, and the tool shows that error.`,
 			stderr := cmd.ErrOrStderr()
 			if opts.kubecontext == "" {
 				// Pin the context: a scan reads the cluster the server
-				// started on, whatever the kubeconfig says later.
-				if opts.kubecontext = currentKubeContext(opts.kubeconfig); opts.kubecontext != "" {
+				// started on, whatever the kubeconfig says later. With none
+				// to pin, scan is off: a later current context is one the
+				// server did not start on.
+				kubecontext, err := currentKubeContext(opts.kubeconfig)
+				if err != nil {
+					opts.noContext = err
+					fmt.Fprintf(stderr, "upgradescope mcp: scan is off: %v, so there is no context to pin; restart with --context NAME to scan (the other tools work)\n", err)
+				} else {
+					opts.kubecontext = kubecontext
 					fmt.Fprintf(stderr, "upgradescope mcp: scans read kubeconfig context %q (its current context at start; --context names another)\n", opts.kubecontext)
 				}
 			}
@@ -210,19 +222,26 @@ func normalizeMCPAddr(s string) (addr string, remote bool, err error) {
 }
 
 // currentKubeContext is the kubeconfig's current context, by the loading
-// rules a scan uses ($KUBECONFIG, ~/.kube/config, or kubeconfig), or ""
-// when there is no kubeconfig to read; a scan then fails with the reason.
-// A package var so tests never read the user's kubeconfig.
-var currentKubeContext = func(kubeconfig string) string {
+// rules a scan uses ($KUBECONFIG, ~/.kube/config, or kubeconfig), or why
+// there is none: no kubeconfig, one that names no current context, or one
+// that cannot be read. A package var so tests never read the user's
+// kubeconfig.
+var currentKubeContext = func(kubeconfig string) (string, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
 		rules.ExplicitPath = kubeconfig
 	}
 	raw, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).RawConfig()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("the kubeconfig cannot be read (%w)", err)
 	}
-	return raw.CurrentContext
+	if raw.CurrentContext == "" {
+		if len(raw.Contexts) == 0 {
+			return "", errors.New("no kubeconfig with a context was found ($KUBECONFIG, ~/.kube/config or --kubeconfig)")
+		}
+		return "", errors.New("the kubeconfig names no current context")
+	}
+	return raw.CurrentContext, nil
 }
 
 type nopWriteCloser struct{ io.Writer }
@@ -303,7 +322,8 @@ func requireBearer(token string, next http.Handler) http.Handler {
 // assistant gets the report a person at the terminal gets. The cluster is
 // read once per call and judged at each target. The cluster read is what
 // base carries, --kubeconfig and --context (pinned at start when it was not
-// given), and what clientcmd takes from the environment; a call names
+// given; with no context to pin, every scan is refused), and what clientcmd
+// takes from the environment; a call names
 // targets and nothing else, and nothing is defaulted beyond that. In
 // particular no ignore file is discovered from the working directory,
 // which an MCP client chooses; the suppressions that live in the cluster
@@ -317,6 +337,9 @@ func mcpScanner(base mcpOptions, stderr io.Writer) func(context.Context, mcp.Sca
 		}
 		if len(req.Targets) == 0 {
 			return nil, errors.New("no targets")
+		}
+		if base.kubecontext == "" {
+			return nil, fmt.Errorf("scan is off: when the server started, %v, so it pinned no context, and it reads no context chosen later; restart it with --context NAME (or once the kubeconfig names a current context)", base.noContext)
 		}
 		all := make([]scanOptions, 0, len(req.Targets))
 		for _, t := range req.Targets {

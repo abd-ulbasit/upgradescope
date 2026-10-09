@@ -41,13 +41,19 @@ const mixedInventory = "../engine/testdata/mixed-everything/inventory.json"
 // it. Closing the client ends the command, which must then return nil.
 func startMCP(t *testing.T, args ...string) *mcpsdk.ClientSession {
 	t.Helper()
+	return startMCPStderr(t, io.Discard, args...)
+}
+
+// startMCPStderr is startMCP with the command's stderr written to stderr.
+func startMCPStderr(t *testing.T, stderr io.Writer, args ...string) *mcpsdk.ClientSession {
+	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	cmd := Root()
 	cmd.SetArgs(append([]string{"mcp"}, args...))
 	cmd.SetIn(inR)
 	cmd.SetOut(outW)
-	cmd.SetErr(io.Discard)
+	cmd.SetErr(stderr)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -255,8 +261,12 @@ func init() {
 	runMCPScan = func(context.Context, []scanOptions) ([]engine.Report, error) {
 		return nil, errors.New("test bug: runMCPScan is not stubbed (stubScan)")
 	}
-	currentKubeContext = func(string) string { return "" }
+	currentKubeContext = func(string) (string, error) { return stubContext, nil }
 }
+
+// stubContext is the context the stand-in for the kubeconfig lookup says
+// is current.
+const stubContext = "stub-current-context"
 
 // stubScan replaces the cluster read of `scan` with the fixture inventory,
 // recording the options each target of a scan was given.
@@ -330,8 +340,7 @@ func TestMCPScanFeedsTheOtherTools(t *testing.T) {
 // (no ignore file, no gate, no plan).
 func TestMCPScanHonoursOnlyKubeconfigContextAndTheEnvironment(t *testing.T) {
 	scans := stubScan(t)
-	currentKubeContext = realCurrentKubeContext
-	t.Cleanup(func() { currentKubeContext = func(string) string { return "" } })
+	useRealCurrentKubeContext(t)
 	envKubeconfig := writeKubeconfig(t) // current-context: test
 	flagKubeconfig := filepath.Join(t.TempDir(), "kc")
 	if err := os.WriteFile(flagKubeconfig, []byte(strings.Replace(testKubeconfig, "current-context: test", "current-context: from-file", 1)), 0o600); err != nil {
@@ -345,7 +354,7 @@ func TestMCPScanHonoursOnlyKubeconfigContextAndTheEnvironment(t *testing.T) {
 		wantContext    string
 	}{
 		{"nothing named: the current context, pinned", envKubeconfig, nil, "", "test"},
-		{"no kubeconfig at all", filepath.Join(t.TempDir(), "none"), nil, "", ""},
+		{"no kubeconfig, but a context named", filepath.Join(t.TempDir(), "none"), []string{"--context", "from-flag"}, "", "from-flag"},
 		{"kubeconfig flag: its current context", envKubeconfig, []string{"--kubeconfig", flagKubeconfig}, flagKubeconfig, "from-file"},
 		{"kubeconfig and context flags", envKubeconfig, []string{"--kubeconfig", "/flags/kc", "--context", "from-flag"}, "/flags/kc", "from-flag"},
 		{"context flag only", envKubeconfig, []string{"--context", "from-flag"}, "", "from-flag"},
@@ -399,6 +408,74 @@ func TestMCPScanHonoursOnlyKubeconfigContextAndTheEnvironment(t *testing.T) {
 		}
 	})
 }
+
+func useRealCurrentKubeContext(t *testing.T) {
+	t.Helper()
+	currentKubeContext = realCurrentKubeContext
+	t.Cleanup(func() { currentKubeContext = func(string) (string, error) { return stubContext, nil } })
+}
+
+// TestMCPScanWithoutAContextAtStartIsRefused: when no --context is given
+// and no current context can be read when the server starts (no
+// kubeconfig, one that names none, one that cannot be read), there is no
+// context to pin, so scan is refused, saying to pass --context, and stays
+// refused when a kubeconfig with a current context appears later or
+// switches: a scan never reads a context chosen after the start. The
+// start message says so, and the other tools work.
+func TestMCPScanWithoutAContextAtStartIsRefused(t *testing.T) {
+	scans := stubScan(t)
+	useRealCurrentKubeContext(t)
+	noCurrent := strings.Replace(testKubeconfig, "current-context: test", `current-context: ""`, 1)
+	for _, tc := range []struct {
+		name    string
+		initial *string // the kubeconfig at start; nil: none
+		flag    bool    // named by --kubeconfig rather than $KUBECONFIG
+	}{
+		{"no kubeconfig at all", nil, false},
+		{"no current context", &noCurrent, false},
+		{"no current context in --kubeconfig", &noCurrent, true},
+		{"an unreadable kubeconfig", ptr("{{ not a kubeconfig"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			*scans = nil
+			kc := filepath.Join(t.TempDir(), "kc")
+			if tc.initial != nil {
+				if err := os.WriteFile(kc, []byte(*tc.initial), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var args []string
+			if tc.flag {
+				args = []string{"--kubeconfig", kc}
+				t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "none"))
+			} else {
+				t.Setenv("KUBECONFIG", kc)
+			}
+			var stderr syncBuffer
+			cs := startMCPStderr(t, &stderr, args...)
+			if msg := stderr.String(); !strings.Contains(msg, "scan is off") || !strings.Contains(msg, "--context") {
+				t.Errorf("the start message does not say scan is off and how to turn it on: %q", msg)
+			}
+			for _, current := range []string{"test", "switched"} {
+				if err := os.WriteFile(kc, []byte(strings.Replace(testKubeconfig, "current-context: test", "current-context: "+current, 1)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				res := callMCP(t, cs, mcp.ToolScan, map[string]any{"targets": []any{"1.37"}})
+				if !res.IsError || !strings.Contains(mcpText(res), "--context") || !strings.Contains(mcpText(res), "when the server started") {
+					t.Errorf("scan with the kubeconfig now at %q: isError=%v %q, want it refused, naming --context", current, res.IsError, mcpText(res))
+				}
+			}
+			if len(*scans) != 0 {
+				t.Errorf("%d scans ran with no context pinned at start: %+v", len(*scans), *scans)
+			}
+			if res := callMCP(t, cs, mcp.ToolRegistryLookup, map[string]any{"query": "ingress-nginx"}); res.IsError {
+				t.Errorf("registry_lookup with scan off: %s", mcpText(res))
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // TestMCPScanLooksUpNoIgnoreFile: the working directory is the MCP client's
 // choice, so an .upgradescope.yaml found there does not hide findings from
