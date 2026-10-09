@@ -23,9 +23,75 @@ release stays usable: finding keys are stable across releases.
 ## The chart
 
 ```sh
+helm get values upgradescope -n upgradescope > values-before.yaml
 helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
-  --version <new> -n upgradescope --reuse-values
+  --version <new> -n upgradescope --reset-then-reuse-values
+helm get values upgradescope -n upgradescope | diff values-before.yaml -
 ```
+
+- **Use `--reset-then-reuse-values`, which needs Helm 3.14 or later; do
+  not use `--reuse-values`.** The new chart's `values.yaml` supplies the
+  defaults and your own settings (what `helm get values` prints) are
+  laid over them. `--reuse-values` does it the other way round: it makes
+  the old release's *defaults* the new chart's, so every default that
+  changed in between stays as it was. That includes the image digest the
+  published chart pins (the pods keep running the old image under the new
+  chart, and with it the old knowledge base), the server's memory limit
+  and the security contexts, and a value the new chart adds can make the
+  render fail with a nil-pointer error. Plain `helm upgrade` with no flag
+  forgets your settings, so pass `-f values.yaml` with them instead if you
+  keep a values file. The two `helm get values` calls show that only your
+  own settings carried over.
+- **Pods roll when a chart-managed token changes.** The pod templates carry
+  a checksum of the values you set in the chart's own Secrets (the read,
+  ingest and admin tokens, the webhook URLs, `agent.serverToken`), so
+  `helm upgrade --set server.readToken=<new>` restarts the server and the old
+  token stops working. A Secret you name (`server.existingSecret`,
+  `agent.existingSecret`) cannot be hashed: restart the pods yourself after
+  changing it (`kubectl rollout restart deploy/<release>-server` and
+  `-agent`), or the running pods keep the old values. The checksum is a
+  salted SHA-256 of the token, visible to whoever can read the Deployment:
+  use long random tokens.
+- **SQLite needs a writable `/tmp`.** The server's root filesystem is
+  read-only, and SQLite spills a large delete (the daily retention prune,
+  `clusters delete`) into a temp file. The chart mounts an emptyDir at
+  `/tmp` (`server.tmp.sizeLimit`, 1Gi) and sets `SQLITE_TMPDIR` to it.
+  Chart versions before this one had no such directory, and a prune of
+  more than a few tens of MB failed with `disk I/O error (6410)`: if
+  you ran one, the first prune after the upgrade deletes the whole backlog
+  at once, which can take a lot of temp space, so raise `server.tmp.sizeLimit`
+  to the size of the database first
+  ([Retention and backup](retention-and-backup.md)).
+- **The stale threshold follows `agent.interval`.** With `server.staleAfter`
+  unset, the server marks a cluster stale after the larger of 2h and three
+  agent intervals, where the chart used to fix 2h; the
+  `UpgradescopeClusterStale` alert follows it
+  (`metrics.prometheusRule.clusterStaleAfterSeconds` is 0, meaning the
+  same threshold). A `server.staleAfter` or `clusterStaleAfterSeconds`
+  that is not above `agent.interval` now fails the render. With the
+  default 10m interval nothing changes. Clusters in other regions that
+  push to this server have intervals the chart cannot see: keep the
+  threshold above the longest of them.
+- **The listen port is its own value.** `server.containerPort` (8080) is
+  what serve binds; `server.service.port` is only the Service's, so it can
+  be 80 or 443.
+- **Resource names are cut to fit 63 characters.** A Service name is a
+  DNS-1035 label. When a release's fullname plus a suffix (`-server`,
+  `-agent-metrics`, `-server-tokens`) would pass 63 characters, the
+  fullname is shortened for that name, so a name that already fits does not
+  change. A fullname (the release name plus `-upgradescope`, unless the
+  release name already contains it) of 45 characters or fewer never reaches
+  it. A longer one renames some resources on upgrade, the server's data PVC
+  and token Secret among them: compare `helm template` with
+  `kubectl get pvc,secret` first.
+- **`networkPolicy.enabled` with an Ingress or a ServiceMonitor** needs
+  `networkPolicy.serverIngressFrom` now: the policy admits only the
+  in-chart agent, and the render fails rather than cut off the Ingress
+  controller or Prometheus.
+- **More than one server replica** gets a PodDisruptionBudget
+  (`server.podDisruptionBudget`) and a soft spread across nodes
+  (`server.defaultTopologySpread`, or your own
+  `server.topologySpreadConstraints`).
 
 - **The CRD.** Helm installs `crds/` on first install only and never
   upgrades it. The agent brings the `ClusterReadiness` CRD up to its own
@@ -132,8 +198,14 @@ with it), then set the agent's name to match:
 ```sh
 upgradescope clusters rename Prod_EU prod-eu --server https://upgradescope.example.com
 helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope -n upgradescope \
-  --reuse-values --set agent.clusterName=prod-eu
+  --reset-then-reuse-values --set agent.clusterName=prod-eu
 ```
+
+`--reset-then-reuse-values` carries over only what you set and takes every
+other value from the new chart, which is what a jump from v0.1.x needs:
+the v0.1.x chart's own defaults (`image.tag: dev`, a 512Mi memory limit, no
+security contexts) are not carried forward, and `--reuse-values` would
+carry them ([The chart](#the-chart)).
 
 Until an agent's name is changed its pushes are refused; nothing stored
 is lost, only the cycles it could not push

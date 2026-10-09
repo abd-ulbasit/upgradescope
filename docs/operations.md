@@ -539,8 +539,11 @@ re-binds its per-cluster tokens to the new name, then set the agent's
 ```sh
 upgradescope clusters rename Prod_EU prod-eu --server https://upgradescope.example.com
 helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope -n upgradescope \
-  --reuse-values --set agent.clusterName=prod-eu
+  --reset-then-reuse-values --set agent.clusterName=prod-eu
 ```
+
+(`--reset-then-reuse-values` needs Helm 3.14; it keeps what you set and takes
+the rest from the new chart. See [Upgrade](operations/upgrade.md#the-chart).)
 
 Until the agent is changed its pushes are refused; nothing is lost but
 the data of those cycles.
@@ -548,10 +551,17 @@ the data of those cycles.
 ## Stale clusters
 
 A cluster is **stale** when its agent has not pushed, duplicates included,
-within `serve --stale-after` (default `2h`; chart `server.staleAfter`). An
+within `serve --stale-after` (default `2h`; chart `server.staleAfter`, which
+when unset is the larger of 2h and three times `agent.interval`, and which
+the chart refuses at or below that interval). An
 unchanged cluster pushes on its agent's next tick after the hourly
 force-sync, about every 70 minutes with the defaults, so a window under
-about 80 minutes would flag healthy clusters. A stale cluster's scores
+about 80 minutes would flag healthy clusters. An agent's interval of an
+hour or more raises that gap to about the interval plus a tick; the chart's
+`UpgradescopeClusterStale` alert uses the same threshold unless
+`metrics.prometheusRule.clusterStaleAfterSeconds` says otherwise. Agents in
+other clusters have intervals the chart cannot see: keep the threshold above
+the longest. A stale cluster's scores
 describe it as it was at `lastSeen`.
 
 - `GET /api/v1/clusters`, `GET /api/v1/clusters/{id}` and every row of

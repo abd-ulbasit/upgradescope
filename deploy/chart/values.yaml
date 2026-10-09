@@ -407,13 +407,12 @@ server:
     # -- SQLite only (unused with database.existingSecret). The root
     # filesystem is read-only, and SQLite spills a large delete (the daily
     # retention prune, `clusters delete`) into a temp file. The chart mounts
-    # an emptyDir at /tmp and sets SQLITE_TMPDIR to it. A delete needs about
-    # as much space as the data it removes: measured on a 60 MB backlog it
-    # worked with a temp directory and failed with "disk I/O error (6410)"
-    # without one (docs/operations/retention-and-backup.md). The default
-    # matches the default persistence.size; raise it with that. An emptyDir
-    # that outgrows its limit evicts the pod, so do not set it smaller than
-    # the database. Node ephemeral storage, gone with the pod. Do not mount
+    # an emptyDir at /tmp and sets SQLITE_TMPDIR to it. Measured on a 60 MB
+    # backlog, a delete worked with a temp directory and failed with "disk
+    # I/O error (6410)" without one (docs/operations/retention-and-backup.md);
+    # it should need no more than the database's size (reasoning, not
+    # measured), so the default matches the default persistence.size: raise
+    # it with that. An emptyDir that outgrows its limit evicts the pod. Node ephemeral storage, gone with the pod. Do not mount
     # your own volume at /tmp (extraVolumeMounts).
     sizeLimit: 1Gi
   persistence:

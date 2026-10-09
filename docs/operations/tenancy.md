@@ -61,7 +61,10 @@ What read tokens do **not** do:
   admin tokens.
 
 Rotating `--read-token` means restarting the server and handing the new
-value to every consumer at once; stored read tokens rotate one consumer at
+value to every consumer at once (with the chart, `helm upgrade --set
+server.readToken=<new>` restarts it, since the pod template carries a
+checksum of the chart-managed Secret; a token in a `server.existingSecret`
+needs a `kubectl rollout restart deploy/<release>-server`); stored read tokens rotate one consumer at
 a time (`tokens create --read`, hand it out, `tokens revoke --read --id <id>`).
 For people, put an authenticating proxy in front of the server, which can
 also set each person's team scope:

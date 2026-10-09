@@ -341,7 +341,7 @@ settings, so the read token still protects all data.
 - SQLite needs scratch space: the root filesystem is read-only, and a large
   delete (the daily retention prune, `clusters delete`) spills into a temp
   file. The chart mounts an emptyDir at `/tmp` (`server.tmp.sizeLimit`,
-  1Gi, about the size of the data a delete removes) and sets
+  1Gi, the default PVC size; raise it with the PVC) and sets
   `SQLITE_TMPDIR=/tmp`. Postgres servers get neither.
 - High availability: with `server.replicas` above 1 (Postgres only) the chart
   renders a PodDisruptionBudget (`server.podDisruptionBudget`, `minAvailable: 1`)

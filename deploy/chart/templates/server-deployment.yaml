@@ -277,8 +277,8 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
-        # SQLITE_TMPDIR: scratch space for a large delete, as big as the data
-        # the delete touches. Node ephemeral storage, gone with the pod.
+        # SQLITE_TMPDIR: scratch space for a large delete (see server.tmp in
+        # values.yaml). Node ephemeral storage, gone with the pod.
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.server.tmp.sizeLimit | quote }}
