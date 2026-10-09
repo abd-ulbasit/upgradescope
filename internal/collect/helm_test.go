@@ -851,3 +851,27 @@ func TestCollectHelmDegradesPerDriver(t *testing.T) {
 		t.Errorf("err = %v, want a full failure: no listed release could be read", err)
 	}
 }
+
+// When no listed release could be read (a role with list but not get), the
+// capability is unavailable, and its reason still names a release with
+// only failed revisions beside the unread ones: it was never fetched, so
+// it is a gap of its own, not one of the releases the get refused (#239).
+func TestHelmUnreadReasonNamesFailedOnlyReleases(t *testing.T) {
+	kube, meta := helmClients(t,
+		helmSecret(t, helmRev{ns: "a", release: "r", rev: 1, status: "deployed", chart: "x", chartVersion: "1.0.0"}),
+		helmSecret(t, helmRev{ns: "b", release: "f", rev: 1, status: "failed", chart: "y", chartVersion: "2.0.0"}))
+	kube.PrependReactor("get", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "sh.helm.release.v1.r.v1", errors.New("RBAC"))
+	})
+	var inv inventory.Inventory
+	err := collectHelm(context.Background(), kube, meta, nil, &inv)
+	var pe partialError
+	if err == nil || errors.As(err, &pe) {
+		t.Fatalf("err = %v, want a full failure: no listed release could be read", err)
+	}
+	for _, want := range []string{"1 release(s) not read, first a/r: ", "1 release(s) with only failed revisions not assessed", "first b/f"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("reason %q\nmissing %q", err, want)
+		}
+	}
+}

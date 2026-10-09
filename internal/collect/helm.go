@@ -359,9 +359,6 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 	cache.prune(seen, func(driver int) bool { return listErrs[driver] == nil })
 	if unread > 0 {
 		failed = append(failed, fmt.Sprintf("%d release(s) not read, first %s", unread, firstUnread))
-		if len(rels) == 0 { // listed but none readable (e.g. list without get)
-			return errors.New(strings.Join(failed, "; "))
-		}
 	}
 	if undecodable > 0 {
 		failed = append(failed, fmt.Sprintf("%d release(s) not decodable, first %s", undecodable, firstUndecodable))
@@ -369,8 +366,11 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 	if unparsed > 0 {
 		failed = append(failed, fmt.Sprintf("%d release manifest(s) not fully parsed, first %s", unparsed, firstUnparsed))
 	}
-	// Unavailable only for what was not read: a release with no revision to
-	// judge was read, and leaves the capability partial however many there are.
+	// Unavailable only for what was not read: the default driver, or every
+	// release when something failed (a driver, or each listed release's GET,
+	// as with list without get). A release with no revision to judge was
+	// read, and leaves the capability partial however many there are; its
+	// count is in the reason either way.
 	notAssessed := listErrs[0] != nil || (len(rels) == 0 && len(failed) > 0)
 	if unjudged > 0 {
 		failed = append(failed, fmt.Sprintf("%d release(s) with only failed revisions not assessed (no deployed or superseded revision to judge their chart and stored manifest by), first %s", unjudged, firstUnjudged))
@@ -388,7 +388,7 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 	}
 	msg := strings.Join(append([]string{"helm releases: " + strings.Join(counts, ", ")}, failed...), "; ")
 	if notAssessed {
-		return errors.New(msg) // secrets unread, or nothing read and a driver failed: not assessed
+		return errors.New(msg) // secrets unread, or nothing read and something failed: not assessed
 	}
 	return partialError{msg: msg, incomplete: len(failed) > 0, skipped: skipped}
 }
