@@ -232,8 +232,11 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 }
 
 // tick is one loop iteration: collect → resolve targets → evaluate each →
-// WriteStatus (always, even when the server is unreachable) → push on hash
-// change or force interval. Partial failures are joined and returned; the
+// WriteStatus (always, even when the server is unreachable; only a spec
+// that could not be read or reconciled stops it, the CR then marked as not
+// current) → push on hash change or force interval, each phase on its own
+// part of the tick deadline (maxTickReserve). Partial failures are joined
+// and returned; the
 // caller never stops the loop on a tick error. The outcome, with the push
 // result kept apart from the tick's own errors, is left in r.last.
 func (r *runner) tick(ctx context.Context) error {
@@ -244,12 +247,35 @@ func (r *runner) tick(ctx context.Context) error {
 	inv := r.collectFn(cctx)
 	cancel()
 	r.last.caps = inv.Capabilities
-	// The ClusterReadiness calls below share the status slice of the
-	// reserve; the push, last, keeps the tick's own context.
-	pushCtx := ctx
-	ctx, cancel = ph.status()
-	defer cancel()
 
+	// The ClusterReadiness calls share the status slice of the reserve;
+	// the push, last, keeps the tick's own context.
+	sctx, cancel := ph.status()
+	errs = append(errs, r.writeStatus(sctx, ph, inv)...)
+	cancel()
+	r.last.err = errors.Join(errs...)
+
+	if r.pusher != nil {
+		pushed, err := r.maybePush(ctx, inv)
+		switch {
+		case err != nil:
+			r.last.push, r.last.pushErr = pushFailed, err
+			errs = append(errs, err)
+		case pushed:
+			r.last.push = pushOK
+		default:
+			r.last.push = pushUnchanged
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// writeStatus reads the ClusterReadiness spec, evaluates inv for its
+// targets and writes the status, under ctx (the status slice of the tick
+// reserve). It returns the tick's errors; a status write that succeeded
+// but left an old marker in place is left in r.last.markerErr instead.
+func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.Inventory) []error {
+	var errs []error
 	// Read the spec, and the object the status is written over (one GET,
 	// #228). The CR may have been deleted between ticks: recreate it, then
 	// read it again. gen is the generation whose spec this tick evaluates; 0
@@ -262,17 +288,23 @@ func (r *runner) tick(ctx context.Context) error {
 		spec, gen, obj, err = crd.ReadSpecObject(ctx, r.dyn, r.cfg.CRName)
 	}
 	if err != nil {
-		errs = append(errs, err)
+		// No spec, no status: evaluating the default target instead, under
+		// a generation the tick never read, would claim a spec it did not
+		// evaluate (#238). The CR keeps its last status, marked as not
+		// current; the next tick reads the spec again.
+		return append(errs, r.statusNotWritten(ph, fmt.Errorf("status not written: %w", err))...)
 	}
 	if len(r.cfg.Targets) > 0 {
-		if err == nil && !slices.Equal(spec.Targets, r.cfg.Targets) {
+		if !slices.Equal(spec.Targets, r.cfg.Targets) {
 			g, serr := crd.SetTargets(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets)
 			if serr != nil {
-				errs = append(errs, serr)
+				// The stored spec still lists other targets, at the
+				// generation the status would be stamped with.
+				return r.statusNotWritten(ph, fmt.Errorf("status not written: %w", serr))
 			}
 			gen, obj = g, nil // patched: the status write reads it again
 		}
-		spec.Targets = r.cfg.Targets // evaluate what was configured either way
+		spec.Targets = r.cfg.Targets
 	}
 
 	targets, notes, terr := resolveTargets(spec, inv)
@@ -325,21 +357,17 @@ func (r *runner) tick(ctx context.Context) error {
 			errs = append(errs, merr)
 		}
 	}
-	r.last.err = errors.Join(errs...)
+	return errs
+}
 
-	if r.pusher != nil {
-		pushed, err := r.maybePush(pushCtx, inv)
-		switch {
-		case err != nil:
-			r.last.push, r.last.pushErr = pushFailed, err
-			errs = append(errs, err)
-		case pushed:
-			r.last.push = pushOK
-		default:
-			r.last.push = pushUnchanged
-		}
+// statusNotWritten marks the CR's status as not current, for a tick that
+// could not write it because of cause.
+func (r *runner) statusNotWritten(ph tickPhases, cause error) []error {
+	errs := []error{cause}
+	if merr := r.markStatusError(ph, cause); merr != nil {
+		errs = append(errs, merr)
 	}
-	return errors.Join(errs...)
+	return errs
 }
 
 // markStatusError marks the CR's status as not current (#199) under the
