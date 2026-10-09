@@ -161,10 +161,12 @@ shows it, is that schema; the output schemas of `scan` and `list_findings`
 refer to its definitions, so a finding is the same object everywhere. See
 [JSON report](../reference/json-report.md) for the fields and the
 versioning promise (`schemaVersion` 1; fields are only added). Every result
-is returned as `structuredContent` and as text. A result that carries a
-report (`scan`, `get_report`, `list_findings`) has two text blocks: a notice
-about the cluster's text in it (see [below](#what-to-keep-in-mind)), then
-the JSON.
+is returned as `structuredContent` and as text. Every result of every tool
+(`scan`, `get_report`, `list_findings`, `registry_lookup` and
+`fleet_summary`) has two text blocks: a notice about the cluster's text in
+it (see [below](#what-to-keep-in-mind)), then the JSON. A tool error has two
+as well, the notice and then the error. So read the JSON from
+`structuredContent`, or from the second text block, never the first.
 
 ## Fleet mode
 

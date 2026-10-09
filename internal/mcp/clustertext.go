@@ -56,10 +56,11 @@ const maxListedFreeText = 20
 var (
 	severityForm = enumForm("blocker", "warning", "info")
 	dateForm     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`).MatchString
-	// kbForm is kb.datasetVersion's "k8s.io/api v0.37.1; lifecycle
-	// 696a4b81; registry de96a5da": a module and its version, then
-	// labelled hex digests.
-	kbForm = regexp.MustCompile(`^[A-Za-z0-9./-]{1,64}( v[0-9][0-9A-Za-z.+-]{0,40})?(; [a-z]{1,16} [0-9a-f]{6,64}){0,4}$`).MatchString
+	// kbForm is the one shape kb.datasetVersion writes, "k8s.io/api
+	// v0.37.1; lifecycle 696a4b81; registry de96a5da": a lower-case module
+	// path, its version vX.Y.Z, then both labelled digests (8 hex digits),
+	// in that order. A value missing a part, or with a free tail, is not it.
+	kbForm = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,30}(/[a-z0-9._-]{1,30}){1,3} v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}; lifecycle [0-9a-f]{8}; registry [0-9a-f]{8}$`).MatchString
 )
 
 func enumForm(values ...string) func(string) bool {

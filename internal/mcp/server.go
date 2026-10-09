@@ -157,8 +157,11 @@ func New(cfg Config) *mcpsdk.Server {
 	}
 	// The slot is held around the whole call, the SDK's check and encoding
 	// of the result included, which is where most of a report's copies are.
-	// markErrors is outermost, so it marks every tool error, the SDK's
-	// own argument checks' included.
+	// markErrors is the outermost of New's middleware, so it marks every
+	// tool error, the SDK's own argument checks' included. (Over HTTP,
+	// NewHTTPHandler adds cancelWithRequest after, which wraps it; that
+	// one returns errCallerGone, a JSON-RPC error and not a tool result,
+	// so there is nothing for markErrors to mark.)
 	srv.AddReceivingMiddleware(markErrors, s.boundReads)
 	return srv
 }

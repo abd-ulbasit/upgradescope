@@ -117,6 +117,10 @@ func TestDocsMCPPageSaysWhatTheClusterChooses(t *testing.T) {
 		"Every result of every tool (`scan`, `get_report`, `list_findings`, `registry_lookup` and `fleet_summary`)",
 		"never through a team's name or another key the document chose",
 		"A tool error is outside text whole",
+		// The output contract: two text blocks, the notice first.
+		"has two text blocks: a notice about the cluster's text in it (see [below](#what-to-keep-in-mind)), then the JSON",
+		"A tool error has two as well, the notice and then the error",
+		"read the JSON from `structuredContent`, or from the second text block, never the first",
 		"does not fall back to the pod's service account",
 	} {
 		if !strings.Contains(page, want) {
