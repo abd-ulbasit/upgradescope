@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Regenerates the committed files derived from the embedded knowledge base
 # (make kb-derived), so a refresh of the data and what it feeds land in one
-# commit. kb-refresh.yml's registry job runs this after `make eol-sync` and
-# commits what it rewrote with the registry: a weekly sync used to open a
+# commit. kb-refresh.yml's registry job runs this after `make eol-sync`, and
+# its api-lifecycle job after `make gen-kb`, and each commits what it
+# rewrote with its data: a weekly sync used to open a
 # PR that failed its own CI on a doc example the new data had made stale
 # (#252: EKS 1.37's dates changed "the newest known is 1.36" in
 # docs/concepts/support-lifecycle.md).

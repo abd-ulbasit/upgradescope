@@ -266,8 +266,9 @@ gen-kb:
 
 # kb-derived rewrites the committed files the embedded KB feeds (the
 # support-lifecycle doc's scan examples, the chart's KB RBAC rules) through
-# the tests that pin them (hack/kb-derived.sh); kb-refresh.yml's registry
-# job runs it after eol-sync, so its PR carries both.
+# the tests that pin them (hack/kb-derived.sh); both kb-refresh.yml
+# jobs run it after changing the data (gen-kb, eol-sync), so each PR carries
+# the files its data feeds.
 .PHONY: kb-derived
 kb-derived:
 	./hack/kb-derived.sh

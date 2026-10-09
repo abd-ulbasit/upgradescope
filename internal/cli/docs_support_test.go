@@ -22,8 +22,8 @@ const supportLifecycleDoc = "../../docs/concepts/support-lifecycle.md"
 // is regenerated, instead of showing a reader output the tool no longer
 // prints. The page wraps the detail for width; whitespace is not compared.
 //
-// With -update (make kb-derived, which the weekly registry sync runs before
-// it commits) a stale example is rewritten from the scan, its detail
+// With -update (make kb-derived, which both weekly refresh jobs run before
+// they commit) a stale example is rewritten from the scan, its detail
 // wrapped at 80 columns; an example that matches is left as it is. The
 // support-lifecycle examples are matched to the cases below in order.
 func TestSupportLifecycleDocExamplesMatchScanOutput(t *testing.T) {

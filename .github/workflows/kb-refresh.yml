@@ -92,6 +92,10 @@ jobs:
       - name: Regenerate import list, go.mod and dataset
         run: make gen-kb
 
+      # The files the dataset feeds, in the same commit (hack/kb-derived.sh).
+      - name: Regenerate what the data feeds
+        run: make kb-derived
+
       - name: Validate the regenerated KB
         run: |
           go test ./internal/kb/ ./internal/engine/
@@ -159,6 +163,8 @@ jobs:
           add-paths: |
             tools/gen-kb
             internal/kb/data
+            deploy/chart/files/kb-rbac-rules.yaml
+            docs/concepts/support-lifecycle.md
           commit-message: |
             chore(kb): weekly API lifecycle refresh
 
