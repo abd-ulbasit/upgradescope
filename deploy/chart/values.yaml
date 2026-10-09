@@ -154,7 +154,9 @@ agent:
   # file. The ConfigMap is mounted as the volume `extra-registry`, a name
   # to avoid in extraVolumes. Only the agent uses it: a server that judges
   # what the agent pushes needs the same entries (server.extraArgs and
-  # server.extraVolumes).
+  # server.extraVolumes). The entries change the knowledge-base version, so
+  # a server without them reads every cluster of this agent as unknown (a
+  # registry mismatch the agent's upgrade does not clear).
   extraRegistry: {}
   # -- Extra `upgradescope agent` flags, e.g. ["--force-sync-every=2h"].
   extraArgs: []
