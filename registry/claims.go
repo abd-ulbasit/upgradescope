@@ -55,15 +55,26 @@ func TagMatches(tag, pattern string) bool {
 }
 
 // matchersOverlap reports whether some image is claimed by both image
-// matchers. Provider builds are claimed only by matchers naming the
-// provider location, so a provider matcher never overlaps a host-less one.
-// A tag-qualified matcher claims its tags ahead of a path-only matcher (see
-// SplitTagPattern), so the two never overlap; two tag-qualified matchers of
-// one repository are taken to overlap whatever their patterns.
+// matchers of embedded entries. Provider builds are claimed only by
+// matchers naming the provider location, so a provider matcher never
+// overlaps a host-less one. A tag-qualified matcher claims its tags ahead of
+// a path-only matcher (see SplitTagPattern), so the two never overlap; two
+// tag-qualified matchers of one repository are taken to overlap whatever
+// their patterns. That precedence is the registry's own design; an operator
+// entry never gets it unless it keeps an embedded entry's matcher as it is
+// (see claimsOverlap).
 func matchersOverlap(a, b string) bool {
+	return claimsOverlap(a, b, true)
+}
+
+// claimsOverlap is matchersOverlap, with tagsAhead choosing whether a
+// tag-qualified matcher and a path-only one of one repository are exempt
+// from overlapping. Without the exemption, a tag pattern changes nothing: the
+// two matchers overlap when their repositories do.
+func claimsOverlap(a, b string, tagsAhead bool) bool {
 	a, ta := SplitTagPattern(a)
 	b, tb := SplitTagPattern(b)
-	if IsProviderBuild(a) != IsProviderBuild(b) || (ta == "") != (tb == "") {
+	if IsProviderBuild(a) != IsProviderBuild(b) || (tagsAhead && (ta == "") != (tb == "")) {
 		return false
 	}
 	return PathMatches(a, b) || PathMatches(b, a)
@@ -88,7 +99,7 @@ func imageClaims(a AddOn) []string {
 // check for operator entries: the same errors, each with the fix that suits
 // it.
 func ClaimConflicts(addons []AddOn) []error {
-	return claimConflicts(addons, nil)
+	return claimConflicts(addons, nil, nil)
 }
 
 // MergeConflicts returns the claim conflicts of Merge(base, extra), each
@@ -110,7 +121,20 @@ func MergeConflicts(base, extra []AddOn) []error {
 	for _, e := range extra {
 		isExtra[e.ID] = true
 	}
-	return claimConflicts(Merge(base, extra), func(a, b AddOn, claim string) string {
+	// An operator's matcher keeps the tag-over-path precedence only as the
+	// embedded entry of its id has it: the identical matcher, which the
+	// registry's own tests have shown to claim only what the embedded
+	// registry means it to. A copy of rke2-ingress-nginx.yaml thus loads,
+	// and a new id, or an edit that adds or widens a pattern, cannot take
+	// another entry's tags with no error.
+	blessed := func(owner AddOn, matcher string) bool {
+		if !isExtra[owner.ID] {
+			return true
+		}
+		old, replaces := embedded[owner.ID]
+		return replaces && slices.Contains(imageClaims(old), matcher)
+	}
+	return claimConflicts(Merge(base, extra), blessed, func(a, b AddOn, claim string) string {
 		mine, other := a, b // mine: the operator's entry; other: an embedded one
 		if !isExtra[mine.ID] {
 			mine, other = b, a
@@ -157,10 +181,13 @@ func quoteAll(ss []string) string {
 	return strings.Join(q, ", ")
 }
 
-// claimConflicts is ClaimConflicts with hint, when non-nil, choosing the fix
-// an error suggests for a conflict between a and b over an "image" or a
-// "chart"; a hint of "" keeps the default fix.
-func claimConflicts(addons []AddOn, hint func(a, b AddOn, claim string) string) []error {
+// claimConflicts is ClaimConflicts with blessed, when non-nil, saying
+// whether an owner's matcher has the tag-over-path precedence (a pair of
+// matchers is exempt from overlapping only when both do, nil meaning all
+// do), and hint, when non-nil, choosing the fix an error suggests for a
+// conflict between a and b over an "image" or a "chart"; a hint of ""
+// keeps the default fix.
+func claimConflicts(addons []AddOn, blessed func(owner AddOn, matcher string) bool, hint func(a, b AddOn, claim string) string) []error {
 	fix := func(a, b AddOn, claim string) string {
 		if hint != nil {
 			if h := hint(a, b, claim); h != "" {
@@ -174,7 +201,7 @@ func claimConflicts(addons []AddOn, hint func(a, b AddOn, claim string) string) 
 		for _, b := range addons[i+1:] {
 			for _, ma := range imageClaims(a) {
 				for _, mb := range imageClaims(b) {
-					if matchersOverlap(ma, mb) {
+					if claimsOverlap(ma, mb, blessed == nil || (blessed(a, ma) && blessed(b, mb))) {
 						errs = append(errs, fmt.Errorf("registry: %s image matcher %q and %s image matcher %q claim the same image; an image may belong to one entry only (%s)", a.ID, ma, b.ID, mb, fix(a, b, "image")))
 					}
 				}

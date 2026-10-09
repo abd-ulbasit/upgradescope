@@ -213,10 +213,27 @@ func TestClaimConflicts(t *testing.T) {
 		{"a component image of another entry", entry("mine", []string{"fluxcd/source-controller"}, nil), `"fluxcd/source-controller"`},
 		{"a mirror path of a component image", entry("mine", []string{"corp/fluxcd/helm-controller"}, nil), `"fluxcd/helm-controller"`},
 		{"a component image claimed as a component again", AddOn{ID: "mine", Matchers: Matchers{Components: []ComponentImage{{Image: "fluxcd/kustomize-controller"}}}}, `"fluxcd/kustomize-controller"`},
-		// A tag-qualified matcher takes the tags it names from a path-only
-		// one; two tag-qualified matchers on one repository are refused.
-		{"a tag-qualified matcher on a repository claimed without one", entry("mine", []string{"ingress-nginx/controller:*-mine*"}, nil), ""},
+		// A tag pattern is no way around a claim: the embedded registry's
+		// own tag-over-path precedence is for its entries only, so an
+		// operator's matcher of a new id that names a claimed repository
+		// is refused whatever tag it adds (it turned ingress-nginx's
+		// blocked/75 into ready/100 before).
+		{"a tag-qualified matcher on a repository claimed without one", entry("mine", []string{"ingress-nginx/controller:v*"}, nil), `"ingress-nginx/controller"`},
+		{"a tag-qualified matcher on a mirror path of a claimed repository", entry("mine", []string{"corp/mirror/ingress-nginx/controller:v*"}, nil), "ingress-nginx"},
+		{"a tag-qualified matcher on a component image", entry("mine", []string{"fluxcd/source-controller:v2*"}, nil), `"fluxcd/source-controller"`},
+		{"a tag-qualified matcher on a repository nobody claims", entry("mine", []string{"acme/mesh:v*"}, nil), ""},
+		{"a tag-qualified matcher on a provider build nobody claims", entry("mine", []string{"mcr.microsoft.com/oss/calico/node:v*"}, nil), ""},
 		{"a second tag-qualified matcher on a repository", entry("mine", []string{"rancher/nginx-ingress-controller:*-mine*"}, nil), "rke2-ingress-nginx"},
+		// A path-only matcher over a repository an embedded entry claims
+		// with a tag pattern claims that entry's tags as well.
+		{"a path-only matcher of a new id over a tag-qualified claim", entry("mine", []string{"rancher/nginx-ingress-controller"}, nil), "rke2-ingress-nginx"},
+		// A replacement keeps the precedence its embedded entry has only
+		// with the matchers the embedded entry has: widening or moving the
+		// tag pattern, or adding another, takes tags that are another
+		// entry's.
+		{"a replacement that widens its tag pattern", entry("rke2-ingress-nginx", []string{"rancher/nginx-ingress-controller:*"}, []string{"rke2-ingress-nginx"}), "ingress-nginx"},
+		{"a replacement that moves its tag pattern", entry("rke2-ingress-nginx", []string{"rancher/nginx-ingress-controller:*-mine*"}, []string{"rke2-ingress-nginx"}), `"rancher/nginx-ingress-controller"`},
+		{"a replacement that adds a tag-qualified claim of another entry", entry("rke2-ingress-nginx", []string{"rancher/nginx-ingress-controller:*-hardened*", "ingress-nginx/controller:v*"}, []string{"rke2-ingress-nginx"}), `"ingress-nginx/controller"`},
 		// An entry of a new id is told to replace the embedded one instead.
 		{"a new id is told to replace the claiming entry", entry("mine", []string{"cilium/operator"}, nil), "replace the embedded entry by using its id"},
 		// A replacement copied from an earlier release, whose claim the
@@ -294,5 +311,24 @@ recommendation: Migrate to Traefik, the default RKE2 ingress controller from v1.
 	}
 	if strings.Contains(msg, "replace the embedded entry by using its id") {
 		t.Errorf("conflict %q tells an entry that already replaces its embedded one to replace by id", msg)
+	}
+}
+
+// A faithful copy of any embedded entry, or of all of them, is what
+// CONTRIBUTING tells an operator to start from: it must never conflict,
+// including the pairs whose tag pattern takes precedence over another
+// entry's path (rke2-ingress-nginx over ingress-nginx).
+func TestMergeConflictsFaithfulCopies(t *testing.T) {
+	base, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := MergeConflicts(base, base); len(errs) != 0 {
+		t.Errorf("a copy of the whole embedded registry conflicts: %v", errs)
+	}
+	for _, a := range base {
+		if errs := MergeConflicts(base, []AddOn{a}); len(errs) != 0 {
+			t.Errorf("a copy of %s conflicts: %v", a.ID, errs)
+		}
 	}
 }

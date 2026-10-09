@@ -286,7 +286,13 @@ single `<id>.yaml` file or a directory of them, in the schema above.
   matcher claims an image or chart that an embedded entry of another id
   already claims (the same repository, or a longer mirror path of it) stops
   the command at start, naming both entries: replace the embedded entry
-  instead, by using its id. A copy of an embedded file taken from an
+  instead, by using its id. A tag pattern does not get around this: the
+  precedence of a tag-qualified matcher over a path-only one is the
+  embedded registry's own, so an extra entry of a new id that adds a
+  pattern to a claimed repository (`ingress-nginx/controller:v*`) is
+  refused like the plain path, and so is a replacement that adds or widens
+  a pattern, since it would take another entry's tags. A copy of an
+  embedded file that keeps its matchers as they are loads. A copy of an embedded file taken from an
   earlier release can conflict the same way when a later release moves a
   claim to another entry (RKE1's `rancher/nginx-ingress-controller` builds
   moved from rke2-ingress-nginx to ingress-nginx, #265); the error then
