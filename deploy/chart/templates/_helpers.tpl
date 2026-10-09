@@ -12,6 +12,21 @@
 {{- end -}}
 {{- end -}}
 
+{{/*
+A resource name made of the fullname plus a suffix, e.g. "-server" or
+"-agent-metrics" (call with (dict "root" $ "suffix" "-server")). The
+fullname gives way to the suffix, so the whole name is at most 63
+characters: a Service name is a DNS-1035 label, which the API server
+refuses past 63, though helm template and lint do not. A name that already
+fits (every one of a default release name) is unchanged. A fullname cut
+short may leave two releases' names equal: Helm releases are at most 53
+characters and are unique per namespace, so only a release name sharing its
+first characters with another in the namespace is affected.
+*/}}
+{{- define "upgradescope.derived" -}}
+{{- printf "%s%s" (include "upgradescope.fullname" .root | trunc (int (sub 63 (len .suffix))) | trimSuffix "-") .suffix -}}
+{{- end -}}
+
 {{/* Common labels */}}
 {{- define "upgradescope.labels" -}}
 app.kubernetes.io/name: {{ include "upgradescope.name" . }}
@@ -83,7 +98,7 @@ affinity: {{- toYaml . | nindent 2 }}
 
 {{/* Server resource name */}}
 {{- define "upgradescope.serverFullname" -}}
-{{- printf "%s-server" (include "upgradescope.fullname" .) -}}
+{{- include "upgradescope.derived" (dict "root" . "suffix" "-server") -}}
 {{- end -}}
 
 {{/* The server Service's fully qualified DNS name:
@@ -116,7 +131,7 @@ Ingress's default, which holds the public host's certificate. */}}
 {{- if .Values.server.tls.secretName -}}
 {{- .Values.server.tls.secretName -}}
 {{- else if .Values.server.tls.certManager.issuerRef.name -}}
-{{- printf "%s-https" (include "upgradescope.serverFullname" .) -}}
+{{- include "upgradescope.derived" (dict "root" . "suffix" "-server-https") -}}
 {{- end -}}
 {{- end -}}
 
@@ -189,7 +204,7 @@ themselves. Call with (dict "resources" .resources "extraEnv" .extraEnv).
 
 {{/* Chart-managed Secret for an inline agent.serverToken */}}
 {{- define "upgradescope.agentTokenSecretName" -}}
-{{- printf "%s-agent-token" (include "upgradescope.fullname" .) -}}
+{{- include "upgradescope.derived" (dict "root" . "suffix" "-agent-token") -}}
 {{- end -}}
 
 {{/*
@@ -241,6 +256,105 @@ key: ingestToken
 {{- if .Values.server.existingSecret -}}
 {{- .Values.server.existingSecret -}}
 {{- else -}}
-{{- printf "%s-tokens" (include "upgradescope.serverFullname" .) -}}
+{{- include "upgradescope.derived" (dict "root" . "suffix" "-server-tokens") -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+A Go duration ("90s", "1.5h", "1h30m") as seconds, printed as a number.
+The schema only lets valid durations through, so a string with no parsable
+part reads as 0.
+*/}}
+{{- define "upgradescope.durationSeconds" -}}
+{{- $units := dict "ns" 0.000000001 "us" 0.000001 "µs" 0.000001 "μs" 0.000001 "ms" 0.001 "s" 1.0 "m" 60.0 "h" 3600.0 -}}
+{{- $total := 0.0 -}}
+{{- range $part := regexFindAll "(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:ns|us|µs|μs|ms|s|m|h)" (toString .) -1 -}}
+{{- $n := regexFind "^(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)" $part -}}
+{{- $total = addf $total (mulf (float64 $n) (float64 (get $units (trimPrefix $n $part)))) -}}
+{{- end -}}
+{{- printf "%f" $total -}}
+{{- end -}}
+
+{{/*
+How long the server waits for a cluster's push before it calls the cluster
+stale, in whole seconds. server.staleAfter when set (the render fails when
+it is not above agent.interval: every cluster would flap stale between its
+ticks), else the larger of 2h and three agent intervals. An unchanged
+cluster pushes at its next tick after the hourly force-sync, so the gap
+between pushes is about max(interval, 1h) plus a tick: three intervals
+leave two missed ticks of slack, and 2h is the default for any interval up
+to 40m.
+*/}}
+{{- define "upgradescope.staleAfterSeconds" -}}
+{{- $interval := float64 (include "upgradescope.durationSeconds" .Values.agent.interval) -}}
+{{- if .Values.server.staleAfter -}}
+{{- $stale := float64 (include "upgradescope.durationSeconds" .Values.server.staleAfter) -}}
+{{- if and .Values.agent.enabled (le $stale $interval) -}}
+{{- fail (printf "server.staleAfter (%s) must be above agent.interval (%s): the agent pushes at most once per interval, so every cluster would read stale between pushes. Leave server.staleAfter empty to follow the interval (the larger of 2h and 3 x interval)" .Values.server.staleAfter .Values.agent.interval) -}}
+{{- end -}}
+{{- printf "%d" (int64 (ceil $stale)) -}}
+{{- else -}}
+{{- printf "%d" (int64 (ceil (maxf 7200.0 (mulf 3.0 $interval)))) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* serve --stale-after: server.staleAfter as written, else "2h" when that is
+the default threshold, else the default in seconds ("10800s"). */}}
+{{- define "upgradescope.staleAfter" -}}
+{{- if .Values.server.staleAfter -}}
+{{- $_ := include "upgradescope.staleAfterSeconds" . -}}
+{{- .Values.server.staleAfter -}}
+{{- else if eq (include "upgradescope.staleAfterSeconds" .) "7200" -}}
+2h
+{{- else -}}
+{{- printf "%ss" (include "upgradescope.staleAfterSeconds" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The UpgradescopeClusterStale alert's threshold in seconds:
+metrics.prometheusRule.clusterStaleAfterSeconds when set, else the server's
+own threshold, so the alert and the stale flag agree. */}}
+{{- define "upgradescope.clusterStaleAfterSeconds" -}}
+{{- $set := int64 (.Values.metrics.prometheusRule.clusterStaleAfterSeconds | default 0) -}}
+{{- if $set -}}
+{{- $interval := float64 (include "upgradescope.durationSeconds" .Values.agent.interval) -}}
+{{- if and .Values.agent.enabled (le (float64 $set) $interval) -}}
+{{- fail (printf "metrics.prometheusRule.clusterStaleAfterSeconds (%d) must be above agent.interval (%s). Leave it 0 to follow server.staleAfter" $set .Values.agent.interval) -}}
+{{- end -}}
+{{- $set -}}
+{{- else -}}
+{{- include "upgradescope.staleAfterSeconds" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+A checksum for the pod template of a Deployment whose environment holds
+tokens read from a chart-managed Secret. The Secrets are read at container
+start, so without it `helm upgrade --set server.readToken=<new>` changes the
+Secret and leaves the old token working in the running pod. Only the
+values the user supplied are hashed (not a generated ingest token, which
+helm template and GitOps renderers would regenerate on every render and so
+roll the pods every sync), salted with the release and namespace so the
+hash is not a rainbow-table lookup; a short or guessable token can still
+be tested against it by anyone who can read the Deployment, so use long
+random ones. A Secret named by an existingSecret cannot be hashed: its
+contents are not in the chart.
+*/}}
+{{- define "upgradescope.serverSecretChecksum" -}}
+{{- if not .Values.server.existingSecret -}}
+{{- $v := pick .Values.server "ingestToken" "readToken" "adminToken" "slackWebhook" "webhook" "webhookSecret" "sharedIngestToken" -}}
+{{- printf "%s/%s/%s" .Release.Namespace .Release.Name (toJson $v) | sha256sum -}}
+{{- end -}}
+{{- end -}}
+
+{{/* As serverSecretChecksum, for the agent's push token: its own inline
+agent.serverToken, or the in-chart server's ingest token it falls back to.
+Empty with agent.existingSecret, or with a generated server token. */}}
+{{- define "upgradescope.agentSecretChecksum" -}}
+{{- if .Values.agent.existingSecret -}}
+{{- else if .Values.agent.serverToken -}}
+{{- printf "%s/%s/%s" .Release.Namespace .Release.Name .Values.agent.serverToken | sha256sum -}}
+{{- else if and .Values.server.enabled .Values.server.sharedIngestToken (not .Values.server.existingSecret) .Values.server.ingestToken -}}
+{{- printf "%s/%s/%s" .Release.Namespace .Release.Name .Values.server.ingestToken | sha256sum -}}
 {{- end -}}
 {{- end -}}

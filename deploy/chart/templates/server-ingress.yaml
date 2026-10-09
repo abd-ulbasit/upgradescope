@@ -27,7 +27,7 @@ spec:
   tls:
     - hosts:
         - {{ $host | quote }}
-      secretName: {{ $ing.tls.secretName | default (printf "%s-tls" (include "upgradescope.serverFullname" .)) }}
+      secretName: {{ $ing.tls.secretName | default (include "upgradescope.derived" (dict "root" . "suffix" "-server-tls")) }}
   {{- end }}
   rules:
     - host: {{ $host }}

@@ -38,7 +38,8 @@ spec:
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: server
-      {{- if or .Values.server.podAnnotations .Values.server.teamMap }}
+      {{- $secretSum := include "upgradescope.serverSecretChecksum" . }}
+      {{- if or .Values.server.podAnnotations .Values.server.teamMap $secretSum }}
       annotations:
         {{- with .Values.server.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -46,6 +47,12 @@ spec:
         {{- with .Values.server.teamMap }}
         # serve reads --team-map at startup: roll the pods when it changes.
         checksum/team-map: {{ toYaml . | sha256sum }}
+        {{- end }}
+        {{- with $secretSum }}
+        # The tokens and webhook URLs reach serve as environment variables
+        # read at start: roll the pods when the chart-managed Secret changes.
+        # An existingSecret cannot be hashed; restart the pods after rotating it.
+        checksum/secret: {{ . }}
         {{- end }}
       {{- end }}
     spec:
@@ -55,13 +62,33 @@ spec:
       # serve never calls the Kubernetes API.
       automountServiceAccountToken: false
       {{- include "upgradescope.podOptions" (dict "root" . "c" .Values.server) | trim | nindent 6 }}
+      {{- with .Values.server.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
+      {{- else }}
+      {{- if and .Values.server.defaultTopologySpread (gt (int .Values.server.replicas) 1) }}
+      # Replicas on different nodes, as far as the cluster allows: soft, so a
+      # small cluster still schedules them all.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: server
+      {{- end }}
+      {{- end }}
       containers:
         - name: server
           image: {{ include "upgradescope.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - serve
-            - {{ printf "--listen=:%d" (int .Values.server.service.port) | quote }}
+            # The listen port is not the Service port: the pod runs as a
+            # non-root user with no capabilities, which cannot bind below 1024
+            # on runtimes that do not lower net.ipv4.ip_unprivileged_port_start.
+            - {{ printf "--listen=:%d" (int .Values.server.containerPort) | quote }}
             {{- if not $postgres }}
             - --db=/data/upgradescope.sqlite
             {{- end }}
@@ -74,7 +101,7 @@ spec:
             - {{ printf "--targets=%s" (join "," .) | quote }}
             {{- end }}
             - {{ printf "--retention=%v" .Values.server.retention | quote }}
-            - {{ printf "--stale-after=%s" .Values.server.staleAfter | quote }}
+            - {{ printf "--stale-after=%s" (include "upgradescope.staleAfter" .) | quote }}
             {{- if .Values.server.teamMap }}
             - "--team-map=/etc/upgradescope/team-map/team-map.yaml"
             {{- end }}
@@ -109,6 +136,14 @@ spec:
             # 90% of the memory limit: the Go runtime does not read it.
             - name: GOMEMLIMIT
               value: {{ . | quote }}
+            {{- end }}
+            {{- if not $postgres }}
+            # SQLite spills a large delete (the retention prune, deleting a
+            # cluster) into a temp file, and the root filesystem is read-only:
+            # without a writable temp directory the delete fails with
+            # "disk I/O error (6410)" and history grows without bound.
+            - name: SQLITE_TMPDIR
+              value: /tmp
             {{- end }}
             {{- if .Values.server.sharedIngestToken }}
             - name: UPGRADESCOPE_INGEST_TOKEN
@@ -177,7 +212,7 @@ spec:
             {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.server.service.port }}
+              containerPort: {{ int .Values.server.containerPort }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -207,6 +242,8 @@ spec:
             {{- if not $postgres }}
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
             {{- end }}
             {{- if .Values.server.teamMap }}
             - name: team-map
@@ -236,15 +273,20 @@ spec:
         - name: data
           {{- if .Values.server.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "upgradescope.serverFullname" . }}-data
+            claimName: {{ include "upgradescope.derived" (dict "root" . "suffix" "-server-data") }}
           {{- else }}
           emptyDir: {}
           {{- end }}
+        # SQLITE_TMPDIR: scratch space for a large delete, as big as the data
+        # the delete touches. Node ephemeral storage, gone with the pod.
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.server.tmp.sizeLimit | quote }}
         {{- end }}
         {{- if .Values.server.teamMap }}
         - name: team-map
           configMap:
-            name: {{ include "upgradescope.serverFullname" . }}-team-map
+            name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-server-team-map") }}
         {{- end }}
         {{- with .Values.server.extraVolumes }}
         {{- toYaml . | nindent 8 }}

@@ -5,7 +5,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "upgradescope.fullname" . }}-agent-metrics
+  name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-agent-metrics") }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent
@@ -23,7 +23,7 @@ spec:
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ include "upgradescope.fullname" . }}-agent
+  name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-agent") }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent

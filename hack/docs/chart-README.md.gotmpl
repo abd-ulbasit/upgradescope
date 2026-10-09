@@ -124,7 +124,8 @@ cluster (its history and tokens go too) with the admin token:
       --server https://upgradescope.example.com
 
 The server prunes history older than `server.retention` (90 days) and
-marks clusters that stopped pushing stale after `server.staleAfter` (2h).
+marks clusters that stopped pushing stale after `server.staleAfter` (by
+default the larger of 2h and three `agent.interval`s, so 2h at the default 10m).
 The docs cover [retention, sizing and backups](https://abd-ulbasit.github.io/upgradescope/operations/retention-and-backup/),
 [webhooks](https://abd-ulbasit.github.io/upgradescope/reference/webhook/)
 and [team-scoped read tokens and putting the dashboard behind an SSO proxy](https://abd-ulbasit.github.io/upgradescope/operations/auth/).
@@ -255,6 +256,17 @@ from `secretKeyRef`, never as arguments, and never appear in a Deployment.
 `server.existingSecret` alone is enough for a combined install: the server
 and the in-chart agent both use its `ingestToken` key.
 
+The containers read these variables when they start. For the chart's own
+Secrets the pod templates carry a checksum of the values you set (the read,
+ingest and admin tokens, the webhook URLs, `agent.serverToken`; a generated
+ingest token is not hashed), so `helm upgrade --set server.readToken=<new>`
+restarts the pods and the old token stops working. The checksum is a salted
+SHA-256 of the token that anyone who can read the Deployment sees: use long
+random tokens. A Secret you name (`server.existingSecret`,
+`agent.existingSecret`) cannot be hashed: restart the pods after you change
+it. Every key is written under the Secret's `data`, so removing a value
+removes its key.
+
 ## Read API exposure
 
 With `server.enabled=true` and no read token, the read API is
@@ -264,7 +276,10 @@ With `server.enabled=true` and no read token, the read API is
 `server.ingress.allowAnonymousRead=true` says an authenticating layer
 (oauth2-proxy, an identity-aware proxy) fronts it.
 `networkPolicy.enabled=true` admits traffic to the server only from this
-release's agent and the peers in `networkPolicy.serverIngressFrom`.
+release's agent and the peers in `networkPolicy.serverIngressFrom`; with
+`server.ingress.enabled` or `metrics.serviceMonitor.enabled` the render
+fails unless that list names the Ingress controller or Prometheus, which
+the policy would otherwise cut off.
 
 The server also serves the web dashboard at `/` (images built from the
 repo Dockerfile embed it). Static assets are unauthenticated; every API
@@ -320,6 +335,25 @@ settings, so the read token still protects all data.
   and `server.podSecurityContext: {runAsUser: null, runAsGroup: null, fsGroup: null}`.
   `runAsNonRoot` and the `RuntimeDefault` seccomp profile stay.
 - The server runs under its own ServiceAccount and mounts no API token.
+- Ports: serve listens on `server.containerPort` (8080) in the pod, which
+  has no capability to bind a port below 1024. `server.service.port` is
+  the Service's own and may be 80 or 443 (`targetPort: http`).
+- SQLite needs scratch space: the root filesystem is read-only, and a large
+  delete (the daily retention prune, `clusters delete`) spills into a temp
+  file. The chart mounts an emptyDir at `/tmp` (`server.tmp.sizeLimit`,
+  1Gi, about the size of the data a delete removes) and sets
+  `SQLITE_TMPDIR=/tmp`. Postgres servers get neither.
+- High availability: with `server.replicas` above 1 (Postgres only) the chart
+  renders a PodDisruptionBudget (`server.podDisruptionBudget`, `minAvailable: 1`)
+  and a soft topology spread over nodes (`server.defaultTopologySpread`, or
+  your own `server.topologySpreadConstraints`, rendered as written).
+- Names: a name made of the release's fullname and a suffix is cut to 63
+  characters (a Service name is a DNS-1035 label), by shortening the
+  fullname for that name; names that fit are unchanged.
+- Upgrading: use `helm upgrade --reset-then-reuse-values` (Helm 3.14+), not
+  `--reuse-values`, which keeps the old chart's defaults, the image digest
+  among them
+  ([Upgrade](https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-chart)).
 - `values.schema.json` rejects unknown keys, intervals under one minute
   (`agent.interval` takes any Go duration of at least `1m`: `10m`, `90s`,
   `1.5h`), malformed targets (`agent.targets` must be `MAJOR.MINOR`) and

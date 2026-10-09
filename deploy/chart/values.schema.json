@@ -155,7 +155,10 @@
             { "type": "integer", "enum": [0] }
           ]
         },
-        "staleAfter": { "$ref": "#/definitions/duration" },
+        "staleAfter": {
+          "description": "Empty = the larger of 2h and three agent intervals.",
+          "anyOf": [{ "const": "" }, { "$ref": "#/definitions/duration" }]
+        },
         "replicas": { "type": "integer", "minimum": 1 },
         "database": {
           "type": "object",
@@ -229,6 +232,30 @@
             "name": { "type": "string" }
           }
         },
+        "containerPort": {
+          "description": "The port serve listens on in the pod. 1024 or above: the pod runs as a non-root user with no capabilities. server.service.port is the Service's own.",
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
+        },
+        "tmp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sizeLimit": { "type": "string", "minLength": 1 }
+          }
+        },
+        "podDisruptionBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minAvailable": { "type": ["integer", "string"] },
+            "maxUnavailable": { "type": ["integer", "string"] }
+          }
+        },
+        "defaultTopologySpread": { "type": "boolean" },
+        "topologySpreadConstraints": { "$ref": "#/definitions/list" },
         "service": {
           "type": "object",
           "additionalProperties": false,
@@ -288,7 +315,10 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "labels": { "$ref": "#/definitions/stringMap" },
-            "clusterStaleAfterSeconds": { "type": "integer", "minimum": 60 }
+            "clusterStaleAfterSeconds": {
+              "description": "0 = the server's own staleAfter threshold.",
+              "anyOf": [{ "const": 0 }, { "type": "integer", "minimum": 60 }]
+            }
           }
         },
         "grafanaDashboard": {

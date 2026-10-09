@@ -1,0 +1,22 @@
+{{- if and .Values.server.enabled .Values.server.podDisruptionBudget.enabled (gt (int .Values.server.replicas) 1) }}
+{{- /* Only with more than one replica: with one, minAvailable 1 would block
+       every node drain. */}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "upgradescope.serverFullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "upgradescope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  {{- if .Values.server.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.server.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.server.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "upgradescope.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: server
+{{- end }}

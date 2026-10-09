@@ -1,0 +1,12 @@
+# What `helm get values` printed for a v0.1.x install that set a few
+# values (the chart then defaulted image.tag to "dev" in values.yaml; only
+# what the user set is in a release's user values).
+agent:
+  interval: 5m
+  clusterName: prod-eu
+server:
+  enabled: true
+  ingestToken: v01-ingest-token
+  retention: 30d
+  persistence:
+    size: 5Gi

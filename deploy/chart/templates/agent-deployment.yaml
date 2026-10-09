@@ -5,7 +5,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "upgradescope.fullname" . }}-agent
+  name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-agent") }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent
@@ -26,7 +26,8 @@ spec:
         app.kubernetes.io/name: {{ include "upgradescope.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: agent
-      {{- if or .Values.agent.podAnnotations .Values.agent.extraRegistry }}
+      {{- $tokenSum := include "upgradescope.agentSecretChecksum" . }}
+      {{- if or .Values.agent.podAnnotations .Values.agent.extraRegistry $tokenSum }}
       annotations:
         {{- with .Values.agent.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -34,6 +35,11 @@ spec:
         {{- with .Values.agent.extraRegistry }}
         # agent reads --registry-dir at startup: roll the pod when it changes.
         checksum/registry: {{ toYaml . | sha256sum }}
+        {{- end }}
+        {{- with $tokenSum }}
+        # The push token reaches the agent as an environment variable read at
+        # start: roll the pod when the chart-managed token changes.
+        checksum/token: {{ . }}
         {{- end }}
       {{- end }}
     spec:
@@ -164,7 +170,7 @@ spec:
         {{- if .Values.agent.extraRegistry }}
         - name: extra-registry
           configMap:
-            name: {{ include "upgradescope.fullname" . }}-agent-registry
+            name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-agent-registry") }}
         {{- end }}
         {{- with .Values.agent.extraVolumes }}
         {{- toYaml . | nindent 8 }}
