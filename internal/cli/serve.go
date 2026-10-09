@@ -49,6 +49,10 @@ type serveOptions struct {
 	trustedProxies  []string
 	parsedProxies   []netip.Prefix
 
+	// allowedHosts is --allowed-host (or $UPGRADESCOPE_ALLOWED_HOSTS),
+	// normalized by validateServeOptions.
+	allowedHosts []string
+
 	maxSnapshotBytes   int64
 	maxGateBytes       int64
 	allowAnonymousRead bool
@@ -114,6 +118,7 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		AllowAnonymousRead: opts.allowAnonymousRead,
 		TrustTeamHeader:    opts.trustTeamHeader,
 		TrustedProxies:     opts.parsedProxies,
+		AllowedHosts:       opts.allowedHosts,
 		Version:            version,
 
 		MaxSnapshotBytes: opts.maxSnapshotBytes,
@@ -190,6 +195,9 @@ a credential: --read-token (fleet-wide), read tokens minted with
 				return err
 			}
 			opts.db, opts.dbURL = db.db, db.dbURL
+			if !cmd.Flags().Changed("allowed-host") {
+				opts.allowedHosts = splitList(os.Getenv(allowedHostsEnv))
+			}
 			if err := validateServeOptions(&opts); err != nil {
 				return err
 			}
@@ -229,6 +237,10 @@ a credential: --read-token (fleet-wide), read tokens minted with
 	cmd.Flags().StringSliceVar(&opts.trustedProxies, "trusted-proxy-cidr", nil,
 		"with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16")
 	cmd.MarkFlagsRequiredTogether("trust-team-header", "trusted-proxy-cidr")
+	cmd.Flags().StringSliceVar(&opts.allowedHosts, "allowed-host", nil,
+		"a host name (or IP) requests may name in their Host header, any port, repeatable or comma separated (default $"+allowedHostsEnv+"): "+
+			"on a loopback --listen, or with --trust-team-header, any other Host than localhost, a loopback address, the --listen host "+
+			"or the address the request arrived on gets 421, which stops DNS-rebinding pages; name the Service, Ingress or proxy host the server is reached under")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
 	cmd.Flags().Int64Var(&opts.maxSnapshotBytes, "max-snapshot-bytes", server.DefaultMaxSnapshotBytes, "largest accepted snapshot push body, in bytes (also applied after gzip decompression); "+
@@ -307,6 +319,19 @@ func validateServeOptions(opts *serveOptions) error {
 	if opts.webhookKey != "" && opts.webhook == "" {
 		return fmt.Errorf("--webhook-secret signs the generic webhook: set --webhook too")
 	}
+	if err := checkNotifyURL("slack-webhook", opts.slackWebhook); err != nil {
+		return err
+	}
+	if err := checkNotifyURL("webhook", opts.webhook); err != nil {
+		return err
+	}
+	if opts.readToken != "" && opts.readToken == opts.ingestToken {
+		return fmt.Errorf("--read-token must differ from --ingest-token: " +
+			"every agent's push token would read the whole fleet, and every reader could push as any cluster")
+	}
+	if err := parseAllowedHosts(opts); err != nil {
+		return err
+	}
 	if opts.adminToken != "" && (opts.adminToken == opts.readToken || opts.adminToken == opts.ingestToken) {
 		return fmt.Errorf("--admin-token must differ from --read-token and --ingest-token: " +
 			"whoever holds those must not be able to delete or rename clusters")
@@ -339,6 +364,51 @@ func validateServeOptions(opts *serveOptions) error {
 	if n := len(opts.parsedTargets); n > server.MaxExtraTargets {
 		return fmt.Errorf("--targets lists %d distinct minors, at most %d are allowed: %s",
 			n, server.MaxExtraTargets, server.ExtraTargetsCost)
+	}
+	return nil
+}
+
+// allowedHostsEnv is --allowed-host's environment variable, a comma
+// separated list, read when the flag is not given.
+const allowedHostsEnv = "UPGRADESCOPE_ALLOWED_HOSTS"
+
+// splitList splits a comma-separated list, trimming each entry and dropping
+// empty ones.
+func splitList(v string) []string {
+	var out []string
+	for _, e := range strings.Split(v, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// parseAllowedHosts normalizes --allowed-host (server.ParseAllowedHost).
+func parseAllowedHosts(opts *serveOptions) error {
+	var out []string
+	for _, raw := range opts.allowedHosts {
+		h, err := server.ParseAllowedHost(raw)
+		if err != nil {
+			return fmt.Errorf("invalid --allowed-host: %w", err)
+		}
+		if !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+	opts.allowedHosts = out
+	return nil
+}
+
+// checkNotifyURL refuses a notification URL that could never be delivered
+// to: anything but an absolute http(s) URL with a host. The error names
+// the flag, never the value: a Slack webhook's path is its credential.
+func checkNotifyURL(flag, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if err := notify.CheckURL(raw); err != nil {
+		return fmt.Errorf("invalid --%s: want an absolute http(s) URL (%v)", flag, err)
 	}
 	return nil
 }

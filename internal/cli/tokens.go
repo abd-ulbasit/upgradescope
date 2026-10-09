@@ -48,7 +48,8 @@ func addSecretFlag(cmd *cobra.Command, dst *string, name, env, usage string) *se
 }
 
 // resolve fills the value from --<name>-file or the environment unless the
-// flag itself was set (even to "").
+// flag itself was set (even to ""). Either source is trimmed of surrounding
+// whitespace, and one that holds nothing else is refused.
 func (s *secretFlag) resolve(cmd *cobra.Command) error {
 	if cmd.Flags().Changed(s.name) {
 		return nil
@@ -65,7 +66,16 @@ func (s *secretFlag) resolve(cmd *cobra.Command) error {
 		*s.dst = v
 		return nil
 	}
-	*s.dst = os.Getenv(s.env)
+	// Surrounding whitespace is trimmed as from a file: a Secret written
+	// with a trailing newline reaches the environment too, and a token
+	// "tok\n" no client can present.
+	if raw := os.Getenv(s.env); raw != "" {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			return fmt.Errorf("$%s holds only whitespace", s.env)
+		}
+		*s.dst = v
+	}
 	return nil
 }
 
