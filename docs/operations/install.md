@@ -155,9 +155,10 @@ quota).
 
 Memory: the agent's peak RSS was 66 to 71 MiB as a pod at that size (main
 `735751d`, before #228's larger pod pages, which raised the benchmark's peak
-RSS by about 8 MiB). A pod page holds up to 1,000 pods, so 1,000 pods of about 70 KiB each, after a
+RSS by about 8 MiB). A pod page holds up to 1,000 pods, so 1,000 pods of about 60 KiB each, after a
 page of small ones, would take the agent past its `GOMEMLIMIT` at the
-256Mi limit (computed, see
+256Mi limit (computed from the live heap such a page held on GitHub's
+linux/amd64 runner, see
 [the tick after #226 and #228](scale.md#the-tick-after-226-and-228)). Raise
 `agent.resources.limits.memory` on a cluster whose pods are that large, as
 Argo Workflows pods, which carry their template, can be. The measurements,
