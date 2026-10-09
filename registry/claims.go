@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 )
@@ -30,14 +31,52 @@ func PathMatches(path, matcher string) bool {
 	return path == matcher || strings.HasSuffix(path, "/"+matcher)
 }
 
-// matchersOverlap reports whether some repository path is claimed by both
-// image matchers. Provider builds are claimed only by matchers naming the
+// SplitTagPattern splits an image matcher into its repository path and
+// its tag pattern, "" when it has none: "rancher/nginx-ingress-controller:*-hardened*"
+// is the path rancher/nginx-ingress-controller and the pattern
+// "*-hardened*". A tag pattern tells apart builds of different products
+// that one repository publishes and only their tags name (RKE2's
+// "-hardenedN" and RKE1's "-rancherN" builds of ingress-nginx, #265).
+func SplitTagPattern(matcher string) (path, tagPattern string) {
+	path, tagPattern, _ = strings.Cut(matcher, ":")
+	return path, tagPattern
+}
+
+// TagMatches reports whether an image tag matches a tag pattern, in which
+// "*" stands for any run of characters: "*-hardened*" matches
+// "v1.12.6-hardened1" and "nginx-1.9.4-hardened1". An image without a tag
+// matches no pattern.
+func TagMatches(tag, pattern string) bool {
+	if tag == "" {
+		return false
+	}
+	ok, err := path.Match(pattern, tag) // tags hold no "/", so "*" spans the whole tag
+	return err == nil && ok
+}
+
+// matchersOverlap reports whether some image is claimed by both image
+// matchers. Provider builds are claimed only by matchers naming the
 // provider location, so a provider matcher never overlaps a host-less one.
+// A tag-qualified matcher claims its tags ahead of a path-only matcher (see
+// SplitTagPattern), so the two never overlap; two tag-qualified matchers of
+// one repository are taken to overlap whatever their patterns.
 func matchersOverlap(a, b string) bool {
-	if IsProviderBuild(a) != IsProviderBuild(b) {
+	a, ta := SplitTagPattern(a)
+	b, tb := SplitTagPattern(b)
+	if IsProviderBuild(a) != IsProviderBuild(b) || (ta == "") != (tb == "") {
 		return false
 	}
 	return PathMatches(a, b) || PathMatches(b, a)
+}
+
+// imageClaims are the image matchers of an entry: its images and its
+// component images.
+func imageClaims(a AddOn) []string {
+	claims := slices.Clone(a.Matchers.Images)
+	for _, c := range a.Matchers.Components {
+		claims = append(claims, c.Image)
+	}
+	return claims
 }
 
 // ClaimConflicts returns one error for each image repository or chart that
@@ -50,8 +89,8 @@ func ClaimConflicts(addons []AddOn) []error {
 	var errs []error
 	for i, a := range addons {
 		for _, b := range addons[i+1:] {
-			for _, ma := range a.Matchers.Images {
-				for _, mb := range b.Matchers.Images {
+			for _, ma := range imageClaims(a) {
+				for _, mb := range imageClaims(b) {
 					if matchersOverlap(ma, mb) {
 						errs = append(errs, fmt.Errorf("registry: %s image matcher %q and %s image matcher %q claim the same image; an image may belong to one entry only (replace the embedded entry by using its id)", a.ID, ma, b.ID, mb))
 					}
