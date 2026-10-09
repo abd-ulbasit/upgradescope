@@ -443,6 +443,12 @@ a CI gate.
 
 ### Changed
 
+- Chart: a release that already runs `server.replicas` above 1 (which needs
+  Postgres) gets the PodDisruptionBudget and the soft spread of the server
+  pods across nodes on `helm upgrade`, as both are on by default, so a node
+  drain no longer takes the last server pod. To keep the release as it was,
+  set `server.podDisruptionBudget.enabled=false` and
+  `server.defaultTopologySpread=false` (#242).
 - `serve` answers `421` to a request whose Host it does not answer for,
   before any route, credential, team header or scope is looked at, when it
   listens on a loopback address or `--trust-team-header` is set (a routable
@@ -476,12 +482,12 @@ a CI gate.
   redirect names (for example `https://`) as `--server` (#240).
 - `serve` refuses to start when `--read-token` equals `--ingest-token`
   (every agent's push token would read the whole fleet). Every command's
-  secret read from its `$UPGRADESCOPE_*` variable (`serve`'s tokens and
-  webhook URLs, the agent's server token, `clusters`, `mcp`, `tokens
-  --db-url`) is trimmed of surrounding whitespace, as one read from
-  `--<name>-file` already was, and a variable that holds only whitespace is
-  now an error. The trusted team header trims only space and tab from each
-  team name it lists, no other whitespace (#250).
+  secret read from its `$UPGRADESCOPE_*` variable (`serve`'s tokens, webhook
+  URLs, webhook secret and `--db-url`, the agent's server token, `clusters`,
+  `mcp`, `tokens --db-url`) is trimmed of surrounding whitespace, as one
+  read from `--<name>-file` already was, and a variable that holds only
+  whitespace is now an error. The trusted team header trims only space and
+  tab from each team name it lists, no other whitespace (#250).
 - `unattributed`, the key of the findings no team owns, is now
   `(unattributed)` in the `teams` of `scan -o json`, the report, `GET
   /api/v1/clusters/{id}/teams`, the gate response, `GET /api/v1/fleet/teams`
@@ -565,16 +571,16 @@ a CI gate.
   when it was computed, not the request time (#241).
 - Chart: upgrade with `helm upgrade --reset-then-reuse-values` (Helm 3.14 or
   later), as the docs now say everywhere, not `--reuse-values`, which pins
-  the new chart to the old release's image digest and fails when the chart
-  adds a value. The chart never restarted pods when a secret changed, and
-  still does not, because no pod annotation carries a function of a secret
-  value (readable by everyone who can get Deployments): after you change a
-  token, a webhook URL or the contents of a Secret you named, run `kubectl
-  rollout restart` on the server and agent Deployments (the install notes
-  now print the command). Every key of the chart's Secrets is now written
-  under `data`, so from this version on, removing a value removes its key;
-  the one exception is a value you remove in the same upgrade from an
-  earlier chart, which keeps an inert key in the Secret
+  the new chart to the old release's image digest and can fail the render
+  when the chart adds a value. The chart never restarted pods when a secret
+  changed, and still does not, because no pod annotation carries a function
+  of a secret value (readable by everyone who can get Deployments): after
+  you change a token, a webhook URL or the contents of a Secret you named,
+  run `kubectl rollout restart` on the server and agent Deployments (the
+  install notes now print the command). Every key of the chart's Secrets is
+  now written under `data`, so from this version on, removing a value
+  removes its key; the one exception is a value you remove in the same
+  upgrade from an earlier chart, which keeps an inert key in the Secret
   (`docs/operations/upgrade.md` has the one-time `kubectl patch`) (#242).
 - Chart: `server.staleAfter` defaults to empty, which follows
   `agent.interval`: the larger of 2h and three intervals (2h for any
@@ -1094,10 +1100,11 @@ a CI gate.
   `upgradescope.dev/status-error`, fails the tick, and the next tick reads
   the spec again; the patch path no longer drops earlier errors of the tick.
   A CRD check that failed or ran out its 30 s at start is retried on every
-  later tick until it succeeds. Push retries wait a random time from 0 to
-  the backoff step (a `Retry-After` is the least wait plus up to a quarter
-  more), so agents answered with the same `503` do not retry together
-  (#238).
+  later tick until it succeeds; meanwhile each tick line carries `crdError`
+  at WARN and `status.notAssessed` leads with a note, without failing the
+  tick. Push retries wait a random time from 0 to the backoff step (a
+  `Retry-After` is the least wait plus up to a quarter more), so agents
+  answered with the same `503` do not retry together (#238).
 - `POST /api/v1/gate` made room for the pull request's objects under the
   100-object listing cap before it evaluated, so a cluster object pushed out
   of the listing could not be accepted by its annotation or a `?config=`
@@ -1251,7 +1258,8 @@ a CI gate.
   sees the Host the server's new check accepts. The
   `docs/operations/auth.md` danger box now states that group naming in the
   identity provider is part of the trust boundary: a group name holding a
-  comma, a `%XX` escape or whitespace aliases other teams (#250).
+  comma or a `%XX` escape, or with a space or tab around it, reads as other
+  teams (#240, #250).
 - Argo CD `repoURL`s and Flux OCIRepository URLs are recorded in the
   inventory without userinfo, query string or fragment: everything between
   the scheme (or the start, where there is none) and the last `@` (before
