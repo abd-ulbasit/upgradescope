@@ -3,7 +3,10 @@ package server
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
@@ -28,15 +31,100 @@ import (
 // retentionInterval is how often the pruner runs after the startup pass.
 const retentionInterval = 24 * time.Hour
 
-// pruneOnce deletes what has aged out of the retention window. A failure
-// is logged; the next run retries.
-func (s *Server) pruneOnce(ctx context.Context) {
-	cutoff := s.now().Add(-s.cfg.Retention)
-	res, err := s.cfg.Store.Prune(ctx, cutoff, s.retainedBaselines(ctx))
-	if err != nil {
-		log.Printf("server: retention: pruning before %s: %v", cutoff.UTC().Format(time.RFC3339), err)
+// Retention is observable (#263): a prune that fails is counted
+// (upgradescope_retention_prune_failures_total), and the time of the last
+// complete one is exported (upgradescope_retention_last_success_timestamp_seconds),
+// which the chart's UpgradescopeRetentionStale alert watches. A failed
+// prune is not a readiness failure: /readyz pings the store and nothing
+// else, because a server that cannot prune still ingests and serves, and
+// restarting it would not help.
+//
+// The store deletes in bounded batches (store.Prune), so a failure partway
+// leaves the batches it committed deleted and the next run (the next day,
+// or the next start) resumes where it stopped.
+
+// retentionMetrics are the retention series of the server's registry.
+type retentionMetrics struct {
+	failures *prometheus.CounterVec // by store kind
+	deleted  *prometheus.CounterVec // by table
+
+	mu          sync.Mutex
+	lastSuccess time.Time // zero until the first complete prune
+}
+
+var descRetentionLastSuccess = prometheus.NewDesc("upgradescope_retention_last_success_timestamp_seconds",
+	"Unix time of the last retention prune that completed. Absent until the first one does; only set with --retention.", nil, nil)
+
+func newRetentionMetrics() *retentionMetrics {
+	return &retentionMetrics{
+		failures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "upgradescope_retention_prune_failures_total",
+			Help: "Retention prunes that failed, by store (sqlite or postgres). A failed prune deleted what its committed batches did and resumes on the next run.",
+		}, []string{"store"}),
+		deleted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "upgradescope_retention_rows_deleted_total",
+			Help: "Rows retention deleted, by table (snapshots or evaluations), failed prunes' committed batches included.",
+		}, []string{"table"}),
+	}
+}
+
+// start creates the series at 0, so that rate() and increase() have a
+// first sample to compare with. Called only when retention is on.
+func (m *retentionMetrics) start(kind string) {
+	m.failures.WithLabelValues(kind)
+	m.deleted.WithLabelValues("snapshots")
+	m.deleted.WithLabelValues("evaluations")
+}
+
+func (m *retentionMetrics) succeeded(at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastSuccess = at
+}
+
+func (m *retentionMetrics) Describe(ch chan<- *prometheus.Desc) { ch <- descRetentionLastSuccess }
+
+func (m *retentionMetrics) Collect(ch chan<- prometheus.Metric) {
+	m.mu.Lock()
+	at := m.lastSuccess
+	m.mu.Unlock()
+	if at.IsZero() {
 		return
 	}
+	ch <- prometheus.MustNewConstMetric(descRetentionLastSuccess, prometheus.GaugeValue, float64(at.UnixNano())/1e9)
+}
+
+// storeKind names s for metrics: "sqlite" or "postgres", or "unknown" for
+// a store that does not say.
+func storeKind(s store.Store) string {
+	if k, ok := s.(interface{ Kind() string }); ok {
+		return k.Kind()
+	}
+	return "unknown"
+}
+
+// pruneOnce deletes what has aged out of the retention window and records
+// the outcome. A failure is logged and counted; the next run retries and
+// resumes where this one stopped. A prune cut short by shutdown is neither
+// a failure nor a success.
+func (s *Server) pruneOnce(ctx context.Context) {
+	rm := s.metrics.retention
+	cutoff := s.now().Add(-s.cfg.Retention)
+	res, err := s.cfg.Store.Prune(ctx, cutoff, s.retainedBaselines(ctx))
+	rm.deleted.WithLabelValues("snapshots").Add(float64(res.Snapshots))
+	rm.deleted.WithLabelValues("evaluations").Add(float64(res.Evaluations))
+	if err != nil {
+		if ctx.Err() != nil {
+			log.Printf("server: retention: pruning before %s stopped by shutdown after %d snapshots and %d evaluations; the next run resumes: %v",
+				cutoff.UTC().Format(time.RFC3339), res.Snapshots, res.Evaluations, err)
+			return
+		}
+		rm.failures.WithLabelValues(storeKind(s.cfg.Store)).Inc()
+		log.Printf("server: retention: pruning before %s failed after %d snapshots and %d evaluations; the next run resumes: %v",
+			cutoff.UTC().Format(time.RFC3339), res.Snapshots, res.Evaluations, err)
+		return
+	}
+	rm.succeeded(s.now())
 	if res.Snapshots > 0 || res.Evaluations > 0 {
 		log.Printf("server: retention: pruned %d snapshots and %d evaluations older than %s",
 			res.Snapshots, res.Evaluations, cutoff.UTC().Format(time.RFC3339))
@@ -50,7 +138,7 @@ func (s *Server) pruneOnce(ctx context.Context) {
 // keeps every target's baseline; so is every cluster when the heads
 // cannot be read.
 //
-// Prune applies this set in its own transaction, after it was computed:
+// Prune applies this set in its own transactions, after it was computed:
 // a version change landing between the two can leave out a baseline only
 // the new version needs. That is harmless for an ordinary upgrade, since
 // consecutive lookback sets overlap (a one-minor upgrade keeps all but the

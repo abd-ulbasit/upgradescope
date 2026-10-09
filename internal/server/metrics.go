@@ -37,6 +37,8 @@ type serverMetrics struct {
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
 	ingest   *prometheus.CounterVec
+	// retention is the retention prune's series (retention.go).
+	retention *retentionMetrics
 }
 
 func newServerMetrics(s *Server) *serverMetrics {
@@ -56,7 +58,11 @@ func newServerMetrics(s *Server) *serverMetrics {
 			Help: "Snapshot pushes by result: accepted, duplicate, unauthorized, forbidden, conflict, invalid, too_large, error.",
 		}, []string{"result"}),
 	}
-	m.reg.MustRegister(m.requests, m.duration, m.ingest, clusterCollector{s},
+	m.retention = newRetentionMetrics()
+	if s.cfg.Retention > 0 {
+		m.retention.start(storeKind(s.cfg.Store))
+	}
+	m.reg.MustRegister(m.requests, m.duration, m.ingest, m.retention.failures, m.retention.deleted, m.retention, clusterCollector{s},
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
 }
