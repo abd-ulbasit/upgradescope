@@ -95,7 +95,11 @@ func (inv Inventory) checkAdmissible() error {
 // maxFallbackDrops is the most elements Conform drops one at a time (see
 // dropElement), each after validating the whole inventory again. The
 // targeted repairs handle every shape a collector is known to produce in
-// bulk; this is the net under them.
+// bulk; this is the net under them. It is not free: BenchmarkConformFallback
+// measures an inventory of 5000 nodes, 3000 releases and 20k named API
+// objects (a large cluster) at ~0.1 s for one validation and ~2.4 s for the
+// cap's worth of drops (Apple M1 Pro), paid once a tick and only for a shape
+// the targeted repairs above do not know.
 const maxFallbackDrops = 256
 
 // maxNamedSkips is the most Skipped entries Conform adds to one capability:

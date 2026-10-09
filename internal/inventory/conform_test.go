@@ -341,3 +341,54 @@ func TestConformDropsEveryAddOnWithAStringOverTheLimitInOnePass(t *testing.T) {
 		})
 	}
 }
+
+// bigConformable is an inventory of the size a large cluster's agent pushes:
+// thousands of nodes and releases, and API usage naming 20k objects.
+func bigConformable(badCharts int) Inventory {
+	inv := conformable()
+	for i := range 5000 {
+		inv.Nodes = append(inv.Nodes, NodeInfo{Name: fmt.Sprintf("node-%05d.example.com", i), KubeletVersion: "v1.35.2"})
+	}
+	for i := range 3000 {
+		rel := HelmRelease{Name: fmt.Sprintf("rel-%04d", i), Namespace: "apps", ChartName: "c", ChartVersion: "1.0.0", Status: "deployed"}
+		for j := range 5 {
+			rel.ManifestAPIs = append(rel.ManifestAPIs, APIUsage{Group: "batch", Version: "v1beta1", Kind: fmt.Sprintf("K%d", j), Count: 1,
+				Namespaces: map[string]int{"apps": 1}, Objects: []ObjectRef{{Namespace: "apps", Name: fmt.Sprintf("o-%d", j), Line: 1}}})
+		}
+		inv.HelmReleases = append(inv.HelmReleases, rel)
+	}
+	for i := range 200 {
+		u := APIUsage{Group: "policy", Version: "v1beta1", Kind: fmt.Sprintf("Kind%03d", i), Count: 100, Namespaces: map[string]int{"apps": 100}}
+		for j := range 100 {
+			u.Objects = append(u.Objects, ObjectRef{Namespace: "apps", Name: fmt.Sprintf("obj-%03d", j), Line: 1})
+		}
+		inv.APIUsage = append(inv.APIUsage, u)
+	}
+	for i := range badCharts {
+		inv.GitOpsCharts = append(inv.GitOpsCharts, GitOpsChart{Tool: GitOpsArgoCD, Name: fmt.Sprintf("Bad_%04d", i), Chart: "c"})
+	}
+	return inv
+}
+
+// BenchmarkConformFallback measures what the one-at-a-time fallback costs
+// at a large cluster's size, where it validates the whole inventory once
+// per drop: "none" is an inventory with nothing to repair (one validation),
+// "cap" one with maxFallbackDrops elements only the fallback knows.
+func BenchmarkConformFallback(b *testing.B) {
+	for _, bad := range []int{0, maxFallbackDrops} {
+		name := "none"
+		if bad > 0 {
+			name = "cap"
+		}
+		b.Run(name, func(b *testing.B) {
+			for b.Loop() {
+				b.StopTimer()
+				inv := bigConformable(bad)
+				b.StartTimer()
+				if _, err := inv.Conform(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
