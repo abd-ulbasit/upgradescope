@@ -3,7 +3,11 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,7 +16,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
-// SE-18: what the gate trusts. On a pull_request the config, the
+// SE-19: what the gate trusts. On a pull_request the config, the
 // annotations and the baseline all come from the pull request's tree, and
 // the docs say so (TestDocsSayWhoCanTurnTheGateOff).
 
@@ -148,17 +152,49 @@ func TestDocsSayWhoCanTurnTheGateOff(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(readDoc(t, "action.yml")), &action); err != nil {
 		t.Fatal(err)
 	}
+	steps := wf.Jobs["upgrade-gate"].Steps
 	var baseCheckout, gate bool
 	var cp string
-	for _, s := range wf.Jobs["upgrade-gate"].Steps {
+	cpAt, gateAt, baseAt, clearAt := -1, -1, -1, -1
+	for i, s := range steps {
 		switch {
 		case strings.HasPrefix(s.Uses, "actions/checkout@") && s.With["ref"] == "${{ github.event.pull_request.base.sha }}":
 			baseCheckout = s.With["path"] == "trusted"
-		case strings.HasPrefix(s.Run, "cp trusted/"):
-			cp = s.Run
+			baseAt = i
+		case strings.Contains(s.Run, "cp trusted/"):
+			cp, cpAt = s.Run, i
+		case strings.HasPrefix(s.Uses, "abd-ulbasit/upgradescope@"):
+			gateAt = i
+		case strings.HasPrefix(s.Run, "rm -rf -- trusted"):
+			clearAt = i
 		}
 	}
-	for _, s := range wf.Jobs["upgrade-gate"].Steps {
+	// A pull request can commit .upgradescope.yaml as a symlink to a file that
+	// a later step writes (helm template's output, say). The copy must be the
+	// step right before the gate, so nothing overwrites it, and must delete
+	// the destination first, so cp does not write through the symlink.
+	if cpAt < 0 || gateAt < 0 || cpAt != gateAt-1 {
+		t.Errorf("the copy (step %d) must be the step right before the gate (step %d)", cpAt, gateAt)
+	}
+	// A pull request can also commit a "trusted" directory or symlink where
+	// the base commit is checked out.
+	if baseAt < 0 || clearAt < 0 || clearAt > baseAt {
+		t.Errorf("the path the base commit goes to must be cleared (step %d) before it is checked out (step %d)", clearAt, baseAt)
+	}
+	var lines []string
+	for _, l := range strings.Split(cp, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 2 || lines[0] != "rm -f -- .upgradescope.yaml upgradescope-baseline.json" ||
+		lines[1] != "cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json ." {
+		t.Errorf("the copy step must remove the destinations, then copy: %q", lines)
+	}
+	if cp != "" {
+		runCopyAgainstSymlinks(t, cp)
+	}
+	for _, s := range steps {
 		if !strings.HasPrefix(s.Uses, "abd-ulbasit/upgradescope@") {
 			continue
 		}
@@ -186,6 +222,57 @@ func TestDocsAnnotationGuardMatchesTheReport(t *testing.T) {
 	for _, file := range []string{"docs/getting-started/ci-gate.md", "docs/guides/suppressions-and-baselines.md", "action/README.md"} {
 		if !strings.Contains(readDoc(t, file), `select(.source == "annotation")`) {
 			t.Errorf("%s: no annotation guard", file)
+		}
+	}
+}
+
+// Runs the documented copy step in a workspace where the pull request
+// committed both files as symlinks into a directory that a later step
+// writes. The trusted content must end up in a regular file, and a later
+// write to the symlink's old target must not reach it.
+func runCopyAgainstSymlinks(t *testing.T, script string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the step is a POSIX shell script")
+	}
+	ws := t.TempDir()
+	mk := func(name, content string) {
+		p := filepath.Join(ws, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("trusted/.upgradescope.yaml", "ignore: []\n")
+	mk("trusted/upgradescope-baseline.json", "{}\n")
+	mk("rendered/chart/cfg.yaml", "placeholder\n")
+	mk("rendered/chart/base.json", "placeholder\n")
+	for link, target := range map[string]string{
+		".upgradescope.yaml":         "rendered/chart/cfg.yaml",
+		"upgradescope-baseline.json": "rendered/chart/base.json",
+	} {
+		if err := os.Symlink(target, filepath.Join(ws, link)); err != nil {
+			t.Skipf("no symlinks here: %v", err)
+		}
+	}
+	cmd := exec.Command("sh", "-ec", script)
+	cmd.Dir = ws
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the copy step failed: %v\n%s", err, out)
+	}
+	// The step that ran before the gate in the attack: helm template rewrites
+	// the placeholders with the pull request's own rules.
+	mk("rendered/chart/cfg.yaml", "ignore: [{category: removed-api, reason: x}]\n")
+	mk("rendered/chart/base.json", "forged\n")
+	for name, want := range map[string]string{".upgradescope.yaml": "ignore: []\n", "upgradescope-baseline.json": "{}\n"} {
+		got, err := os.ReadFile(filepath.Join(ws, name))
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q (%v), want the base commit's %q", name, got, err, want)
+		}
+		if fi, err := os.Lstat(filepath.Join(ws, name)); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+			t.Errorf("%s is still a symlink after the copy", name)
 		}
 	}
 }

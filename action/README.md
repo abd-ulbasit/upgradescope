@@ -213,6 +213,8 @@ jobs:
       - uses: actions/checkout@v7            # the pull request (its merge commit)
         with:
           persist-credentials: false
+      - name: Clear the path the base commit goes to
+        run: rm -rf -- trusted               # a pull request may have committed one
       - uses: actions/checkout@v7            # the base commit, only the two files
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -222,9 +224,11 @@ jobs:
             /upgradescope-baseline.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - name: Take the config and baseline from the base commit
-        run: cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
       - run: helm template my-release ./chart --output-dir rendered
+      - name: Take the config and baseline from the base commit, last
+        run: |
+          rm -f -- .upgradescope.yaml upgradescope-baseline.json
+          cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
       - uses: abd-ulbasit/upgradescope@v0.2.0
         id: gate
         with:
@@ -238,7 +242,7 @@ jobs:
 The copy fails the step when the base commit has no such file (`ignore: []`
 is a valid empty config), and a pull request that changes either file is
 judged by the old rules, so accepting a finding takes a pull request of its
-own that changes only those files. Annotations stay honoured and have no input to turn them off: put
+own that changes only those files. The copy comes last, right before the gate, and removes the destination first (`rm -f --`): a pull request can commit `.upgradescope.yaml` as a symlink to a file an earlier step writes, a plain `cp` would write through it, and that step would then overwrite the trusted content. `config` names the copy, not `trusted/...`, because the config's file globs resolve relative to the config's directory. The copy comes last, right before the gate, and removes the destination first (`rm -f --`): a pull request can commit `.upgradescope.yaml` as a symlink to a file an earlier step writes, a plain `cp` would write through it, and that step would then overwrite the trusted content. `config` names the copy, not `trusted/...`, because the config's file globs resolve relative to the config's directory. Annotations stay honoured and have no input to turn them off: put
 `CODEOWNERS` with required review on the config, the baseline and
 `.github/workflows/`, and to fail the job when an annotation suppressed a
 finding, add after the gate step:

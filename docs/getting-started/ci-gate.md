@@ -135,6 +135,17 @@ To hold the gate against a pull request's author:
    its own that changes only the config or the baseline, reviewed by the
    people who own them; the new rules apply after it merges.
 
+   Two details of the snippet matter. The copy is the **last step before the
+   gate**, and it deletes the destination first (`rm -f --`): a pull request
+   can commit `.upgradescope.yaml` as a symlink to a file that an earlier
+   step writes (the output of `helm template`, say), and a plain `cp` writes
+   through the symlink, after which that step overwrites the trusted content
+   with the pull request's own. Removing the link and copying afterwards
+   leaves a regular file that nothing else touches. And the Action's
+   `config` points at the copy in the workspace, not at
+   `trusted/.upgradescope.yaml`, because the config's file globs resolve
+   relative to the config's directory.
+
 ```yaml
 on: pull_request
 jobs:
@@ -146,6 +157,8 @@ jobs:
       - uses: actions/checkout@v7            # the pull request (its merge commit)
         with:
           persist-credentials: false
+      - name: Clear the path the base commit goes to
+        run: rm -rf -- trusted               # a pull request may have committed one
       - uses: actions/checkout@v7            # the base commit, only the two files
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -155,9 +168,11 @@ jobs:
             /upgradescope-baseline.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - name: Take the config and baseline from the base commit
-        run: cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
       - run: helm template my-release ./chart --output-dir rendered
+      - name: Take the config and baseline from the base commit, last
+        run: |
+          rm -f -- .upgradescope.yaml upgradescope-baseline.json
+          cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
       - uses: abd-ulbasit/upgradescope@v0.2.0
         id: gate
         with:
