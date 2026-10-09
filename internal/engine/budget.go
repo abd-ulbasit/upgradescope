@@ -90,7 +90,16 @@ func findingSize(f *Finding) int {
 	for _, o := range f.Objects {
 		n += 8*fieldOverhead + len(o.Namespace) + len(o.Name) + len(o.File) + len(o.RenderedFrom) + len(o.Manager) + len(o.Ignore) + len(o.IgnoreReason)
 	}
+	for _, c := range f.Callers {
+		n += callerSize(&c)
+	}
 	return n
+}
+
+// callerSize is findingSize for a folded caller row.
+func callerSize(c *Caller) int {
+	return 8*fieldOverhead + len(c.Group) + len(c.Version) + len(c.Resource) + len(c.Subresource) +
+		len(c.Key) + len(c.Severity) + len(c.Title) + len(c.Detail)
 }
 
 // reportBaseSize is findingSize for what a report has besides its

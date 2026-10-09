@@ -1,0 +1,250 @@
+package engine
+
+import (
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
+)
+
+func shippedKB(t testing.TB) kb.KB {
+	t.Helper()
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatalf("kb.Load: %v", err)
+	}
+	return k
+}
+
+func callerFindings(fs []Finding) []Finding {
+	var out []Finding
+	for _, f := range fs {
+		if f.Category == CatDeprecatedAPIInUse {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// #236: the apiserver labels a row with the upstream lifecycle tag, but
+// the knowledge base records the earlier release kube-apiserver stopped
+// serving an inferred removal in. StorageVersionMigration v1alpha1 is
+// tagged removed in 1.36 and gone from 1.35.
+func TestEvalDeprecatedCallsJudgedByKBRemoval(t *testing.T) {
+	k := shippedKB(t)
+	e, ok := kb.NewIndex(k.APILifecycle).Lookup("storagemigration.k8s.io", "v1alpha1", "StorageVersionMigration")
+	if !ok || e.Removed == nil || *e.Removed != (inventory.Version{Major: 1, Minor: 35}) {
+		t.Fatalf("precondition: KB entry %+v, want removed 1.35", e)
+	}
+	inv := clusterInv()
+	inv.DeprecatedCalls = []inventory.DeprecatedCall{{Group: "storagemigration.k8s.io", Version: "v1alpha1", Resource: "storageversionmigrations", RemovedRelease: "1.36"}}
+	rep := Evaluate(inv, k, inventory.Version{Major: 1, Minor: 35}, testNow)
+	calls := callerFindings(rep.Findings)
+	if len(calls) != 1 || calls[0].Severity != SevBlocker {
+		t.Fatalf("callers = %+v, want one blocker", calls)
+	}
+	if rep.Verdict != VerdictBlocked {
+		t.Errorf("verdict = %s, want blocked", rep.Verdict)
+	}
+	f := calls[0]
+	if f.Title != "clients still requesting storagemigration.k8s.io/v1alpha1 storageversionmigrations (removed in 1.35)" {
+		t.Errorf("title = %q", f.Title)
+	}
+	if !strings.Contains(f.Detail, "it is removed in 1.35 per the knowledge base; the apiserver reports 1.36.") {
+		t.Errorf("detail = %q, want the KB named as the source", f.Detail)
+	}
+}
+
+// The issue's stronger example: IPAddress v1alpha1 is tagged removed in
+// 1.33 but deleted in 1.31, so a caller at target 1.31 blocks.
+func TestEvalDeprecatedCallsIPAddressKBRemoval(t *testing.T) {
+	k := shippedKB(t)
+	row := inventory.DeprecatedCall{Group: "networking.k8s.io", Version: "v1alpha1", Resource: "ipaddresses", RemovedRelease: "1.33"}
+	fs := evalDeprecatedCalls(callsInv(row), k, inventory.Version{Major: 1, Minor: 31}, nil)
+	if len(fs) != 1 || fs[0].Severity != SevBlocker {
+		t.Fatalf("got %+v, want one blocker", fs)
+	}
+}
+
+// A row whose label is later than the KB is judged by the KB; one the KB
+// does not know keeps the label; a KB removal with no label still counts;
+// a KB entry without a removal leaves the label in charge.
+func TestEvalDeprecatedCallsRemovalSource(t *testing.T) {
+	k := testKB()
+	cases := []struct {
+		name   string
+		row    inventory.DeprecatedCall
+		target int
+		sev    Severity
+		title  string
+		detail string
+	}{
+		{"label later than KB", inventory.DeprecatedCall{Group: "batch", Version: "v1beta1", Resource: "cronjobs", RemovedRelease: "1.27"}, 25, SevBlocker,
+			"clients still requesting batch/v1beta1 cronjobs (removed in 1.25)", "it is removed in 1.25 per the knowledge base; the apiserver reports 1.27."},
+		{"label agrees", inventory.DeprecatedCall{Group: "batch", Version: "v1beta1", Resource: "cronjobs", RemovedRelease: "1.25"}, 24, SevWarning,
+			"clients still requesting batch/v1beta1 cronjobs (removed in 1.25)", "it is removed in 1.25."},
+		{"no label", inventory.DeprecatedCall{Group: "batch", Version: "v1beta1", Resource: "cronjobs"}, 25, SevBlocker,
+			"clients still requesting batch/v1beta1 cronjobs (removed in 1.25)", "it is removed in 1.25 per the knowledge base; the apiserver records no removal release."},
+		{"unparseable label", inventory.DeprecatedCall{Group: "batch", Version: "v1beta1", Resource: "cronjobs", Subresource: "status", RemovedRelease: "soon"}, 25, SevBlocker,
+			"clients still requesting batch/v1beta1 cronjobs/status (removed in 1.25)", `it is removed in 1.25 per the knowledge base; the apiserver's removal release "soon" could not be parsed.`},
+		{"not in the KB", inventory.DeprecatedCall{Group: "policy", Version: "v1beta1", Resource: "podsecuritypolicies", RemovedRelease: "1.25"}, 24, SevWarning,
+			"clients still requesting policy/v1beta1 podsecuritypolicies (removed in 1.25)", "it is removed in 1.25."},
+		{"KB without a removal", inventory.DeprecatedCall{Version: "v1", Resource: "componentstatuses", RemovedRelease: "1.30"}, 34, SevBlocker,
+			"clients still requesting v1 componentstatuses (removed in 1.30)", "it is removed in 1.30."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := evalDeprecatedCalls(callsInv(tc.row), k, inventory.Version{Major: 1, Minor: tc.target}, nil)
+			if len(fs) != 1 {
+				t.Fatalf("got %+v", fs)
+			}
+			if fs[0].Severity != tc.sev || fs[0].Title != tc.title || !strings.Contains(fs[0].Detail, tc.detail) {
+				t.Errorf("got %s %q %q\nwant %s %q containing %q", fs[0].Severity, fs[0].Title, fs[0].Detail, tc.sev, tc.title, tc.detail)
+			}
+		})
+	}
+}
+
+// A folded caller row is kept on the finding as structured data: what
+// its standalone finding would have been.
+func TestFoldKeepsCallersAsData(t *testing.T) {
+	inv := inventory.Inventory{
+		APIUsage: []inventory.APIUsage{{Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 1, Namespaces: map[string]int{"default": 1},
+			Objects: []inventory.ObjectRef{{Namespace: "default", Name: "nightly", Manager: "helm"}}}},
+		DeprecatedCalls: []inventory.DeprecatedCall{
+			{Group: "batch", Version: "v1beta1", Resource: "cronjobs", Subresource: "status", RemovedRelease: "1.25"},
+			{Group: "batch", Version: "v1beta1", Resource: "cronjobs", RemovedRelease: "1.25"},
+		},
+	}
+	target := inventory.Version{Major: 1, Minor: 25}
+	rep := Evaluate(inv, testKB(), target, testNow)
+	if len(rep.Findings) != 1 {
+		t.Fatalf("findings = %+v", rep.Findings)
+	}
+	standalone := Evaluate(inventory.Inventory{DeprecatedCalls: inv.DeprecatedCalls}, testKB(), target, testNow).Findings
+	var want []Caller
+	for _, key := range []string{"deprecated-api-in-use/batch/v1beta1/cronjobs", "deprecated-api-in-use/batch/v1beta1/cronjobs/status"} { // row order
+		f := standaloneByKey(standalone, key)
+		want = append(want, Caller{Key: f.Key, Severity: f.Severity, Title: f.Title, Detail: f.Detail})
+	}
+	want[0].Group, want[0].Version, want[0].Resource = "batch", "v1beta1", "cronjobs"
+	want[1].Group, want[1].Version, want[1].Resource, want[1].Subresource = "batch", "v1beta1", "cronjobs", "status"
+	if got := rep.Findings[0].Callers; !reflect.DeepEqual(got, want) {
+		t.Errorf("callers = %+v\nwant %+v", got, want)
+	}
+	for i, c := range rep.Findings[0].Callers {
+		if got := c.Finding(); !reflect.DeepEqual(got, standaloneByKey(standalone, c.Key)) {
+			t.Errorf("caller %d Finding() = %+v\nwant %+v", i, got, standaloneByKey(standalone, c.Key))
+		}
+	}
+}
+
+func standaloneByKey(fs []Finding, key string) Finding {
+	for _, f := range fs {
+		if f.Key == key {
+			return f
+		}
+	}
+	return Finding{}
+}
+
+// #236: a Helm manifest's deprecated-API warning is not swallowed by the
+// live scan's info finding for the same object; more evidence never
+// lowers the severity.
+func TestHelmManifestWarningSurvivesLiveInfo(t *testing.T) {
+	inv := clusterInv()
+	inv.ServerVersion = "v1.29.3"
+	inv.Nodes = []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.29.3"}}
+	inv.HelmReleases = []inventory.HelmRelease{flowSchemaRelease()}
+	target := inventory.Version{Major: 1, Minor: 30}
+	without := Evaluate(inv, helmTestKB(), target, testNow)
+	inv.APIUsage = []inventory.APIUsage{{Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3", Kind: "FlowSchema", Count: 1,
+		Namespaces: map[string]int{"": 1}, Objects: []inventory.ObjectRef{{Name: "batch-jobs", Manager: "helm"}}}}
+	with := Evaluate(inv, helmTestKB(), target, testNow)
+	if without.Score != 95 {
+		t.Fatalf("precondition: score without the live object = %d, want 95", without.Score)
+	}
+	if with.Score != without.Score {
+		t.Errorf("score with the live object = %d, want %d: more evidence must not raise the score", with.Score, without.Score)
+	}
+	var keys []string
+	for _, f := range with.Findings {
+		keys = append(keys, string(f.Severity)+" "+f.Key)
+	}
+	want := []string{"warning deprecated-api/helm-release/platform/apf", "info deprecated-api/flowcontrol.apiserver.k8s.io/v1beta3/FlowSchema"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("findings = %q, want %q", keys, want)
+	}
+}
+
+// At target+1 removal the live finding is a removed-api warning, as
+// severe as the manifest's deprecated-api warning: the object is counted
+// once, by the live finding.
+func TestHelmManifestDedupesEquallySevereLive(t *testing.T) {
+	inv := inventory.Inventory{
+		HelmReleases: []inventory.HelmRelease{flowSchemaRelease()},
+		APIUsage: []inventory.APIUsage{{Group: "flowcontrol.apiserver.k8s.io", Version: "v1beta3", Kind: "FlowSchema", Count: 1,
+			Namespaces: map[string]int{"": 1}, Objects: []inventory.ObjectRef{{Name: "batch-jobs", Manager: "helm"}}}},
+	}
+	rep := Evaluate(inv, helmTestKB(), inventory.Version{Major: 1, Minor: 31}, testNow)
+	if keys := findingKeys(rep.Findings); !reflect.DeepEqual(keys, []string{"removed-api/flowcontrol.apiserver.k8s.io/v1beta3/FlowSchema"}) {
+		t.Errorf("findings = %q, want only the live removed-api warning", keys)
+	}
+}
+
+// foldInventory is n usage entries of group g/v kind K<i> and n caller
+// rows of resource r<i>: no row folds, the worst case for a scan of
+// every usage entry per row.
+func foldInventory(n int) inventory.Inventory {
+	inv := inventory.Inventory{SchemaVersion: 1, ServerVersion: "1.30"}
+	for i := range n {
+		inv.APIUsage = append(inv.APIUsage, inventory.APIUsage{Group: "g", Version: "v", Kind: fmt.Sprintf("K%d", i), Count: 1})
+		inv.DeprecatedCalls = append(inv.DeprecatedCalls, inventory.DeprecatedCall{Group: "g", Version: "v", Resource: fmt.Sprintf("r%d", i)})
+	}
+	return inv
+}
+
+// #236: folding was O(calls × usage), 13 to 53 s for 16,000 of each.
+// Indexed, it is linear: the bound here is generous for a loaded or
+// race-instrumented machine; the measured time is in the claims ledger
+// (DC-05).
+func TestFoldDeprecatedCallsIsLinear(t *testing.T) {
+	inv := foldInventory(16000)
+	k := kb.KB{Skew: kb.DefaultSkewPolicy()}
+	start := time.Now()
+	rep := Evaluate(inv, k, inventory.Version{Major: 1, Minor: 31}, testNow)
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Evaluate with 16,000 usage entries and caller rows took %s, want well under a second", d)
+	}
+	if n := len(callerFindings(rep.Findings)); n != 16000 {
+		t.Errorf("%d caller findings, want 16000", n)
+	}
+}
+
+func BenchmarkFoldDeprecatedCalls16k(b *testing.B) {
+	inv := foldInventory(16000)
+	k := kb.KB{Skew: kb.DefaultSkewPolicy()}
+	target := inventory.Version{Major: 1, Minor: 31}
+	b.ReportAllocs()
+	for b.Loop() {
+		Evaluate(inv, k, target, testNow)
+	}
+}
+
+// The index keeps the scan's first-match semantics and plural rules.
+func TestFoldIndexMatchesKindMatchesResource(t *testing.T) {
+	for _, kind := range []string{"Ingress", "Endpoints", "NetworkPolicy", "Gateway", "Status", "CronJob", "Y", "Ay"} {
+		lower, plural := resourceNames(kind)
+		for _, res := range []string{lower, plural, lower + "s", lower + "es", strings.TrimSuffix(lower, "y") + "ies", "x"} {
+			want := kindMatchesResource(kind, res)
+			got := res == lower || res == plural
+			if got != want {
+				t.Errorf("%s/%s: index %v, kindMatchesResource %v", kind, res, got, want)
+			}
+		}
+	}
+}
