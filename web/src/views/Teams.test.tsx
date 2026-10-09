@@ -97,4 +97,72 @@ describe("Teams view", () => {
     await screen.findByRole("row", { name: /payments/ });
     expect(fetchedUrls(fetchMock)).toContain("api/v1/fleet/teams?target=1.37");
   });
+
+  // #243, VS-14: a team's score counts only its own findings. One warning
+  // scores 98, but a blocker no team owns makes the team blocked, and a
+  // check that did not run makes it unknown; neither may read green.
+  it("shows each team's verdict and never colours a blocked or unknown team green", async () => {
+    mockApi({
+      "api/v1/fleet": fleet,
+      "api/v1/fleet/teams?target=1.35": {
+        ...teams,
+        teams: {
+          payments: { worstScore: 98, blockers: 0, verdict: "blocked", clusters: ["prod-eu"] },
+          platform: { worstScore: 98, blockers: 0, verdict: "unknown", clusters: ["prod-eu"] },
+          shop: { worstScore: 98, blockers: 0, verdict: "ready", clusters: ["prod-eu"] },
+        },
+      } satisfies FleetTeamsResponse,
+    });
+    render(<Teams />);
+    const row = async (name: string) => (await screen.findByRole("row", { name: new RegExp(name) })) as HTMLElement;
+
+    const payments = await row("payments");
+    expect(within(payments).getByText("Blocked")).toBeTruthy();
+    expect(within(payments).getByText("98").className).not.toMatch(/score-good/);
+    expect(within(payments).getByText("98").className).toMatch(/score-bad/);
+
+    const platform = await row("platform");
+    expect(within(platform).getByText("Unknown")).toBeTruthy();
+    expect(within(platform).getByText("98").className).not.toMatch(/score-good/);
+    expect(within(platform).getByText("98").className).toMatch(/verdict-unknown/);
+
+    const shop = await row("shop");
+    expect(within(shop).getByText("Ready")).toBeTruthy();
+    expect(within(shop).getByText("98").className).toMatch(/score-good/);
+  });
+
+  it("labels each excluded cluster by its reason, not all as no snapshot yet", async () => {
+    mockApi({
+      "api/v1/fleet": fleet,
+      "api/v1/fleet/teams?target=1.35": {
+        ...teams,
+        missing: ["fresh", "huge", "broken"],
+        excluded: [
+          { name: "fresh", clusterId: 5, reason: "no-snapshot" },
+          { name: "huge", clusterId: 6, reason: "too-large" },
+          { name: "broken", clusterId: 7, reason: "unreadable" },
+        ],
+      } satisfies FleetTeamsResponse,
+    });
+    render(<Teams />);
+    await screen.findByRole("row", { name: /payments/ });
+    const notes = [...document.querySelectorAll(".rollup-notes li")].map((li) => li.textContent);
+    expect(notes).toContain("No snapshot yet: fresh.");
+    expect(notes.find((n) => n?.includes("huge"))).toMatch(/report for → 1.35 would be over --max-snapshot-bytes/);
+    expect(notes.find((n) => n?.includes("broken"))).toMatch(/unreadable/);
+    // The cluster that has snapshots is never "no snapshot yet".
+    expect(notes.find((n) => n?.startsWith("No snapshot yet"))).not.toMatch(/huge|broken/);
+  });
+
+  it("describes missing clusters neutrally when the server sends no reasons", async () => {
+    mockApi({
+      "api/v1/fleet": fleet,
+      "api/v1/fleet/teams?target=1.35": teams, // an older server: `missing` only
+    });
+    render(<Teams />);
+    await screen.findByRole("row", { name: /payments/ });
+    const note = [...document.querySelectorAll(".rollup-notes li")].find((li) => li.textContent?.includes("staging"));
+    expect(note?.textContent).toMatch(/Not included/);
+    expect(note?.textContent).not.toMatch(/No snapshot yet/);
+  });
 });

@@ -1,11 +1,20 @@
 import type { ScorePoint } from "./types";
-import { formatTime, scoreClass } from "./ui";
+import { formatTime } from "./ui";
 
 // Sparkline: hand-rolled SVG score trend (0–100). x is time: evaluations
 // arrive irregularly (ingest skips unchanged inventories), so points are
 // placed by their timestamp between the first one and now. The line is a
 // step — a score holds until the next evaluation replaces it — and runs on
 // to now, so a cluster that stopped reporting shows a long flat tail.
+// Each dot is coloured by its evaluation's verdict, with the score as its
+// height: a score of 100 is not "ready" when a required check did not run.
+// dotClass: the verdict decides the colour. ready=true is a verdict even
+// from a server that sends none; anything else without one stays neutral.
+function dotClass(p: ScorePoint): string {
+  const v = p.verdict ?? (p.ready ? "ready" : undefined);
+  return v ? `spark-${v}` : "";
+}
+
 export function Sparkline({
   points,
   now = Date.now(),
@@ -63,9 +72,9 @@ export function Sparkline({
             cx={x(times[i]!)}
             cy={y(p.score)}
             r={i === points.length - 1 ? 4 : 2.5}
-            className={`spark-dot ${scoreClass(p.score)}`}
+            className={`spark-dot ${dotClass(p)}`}
           >
-            <title>{`${formatTime(p.at)} — score ${p.score}${p.ready ? ", ready" : ""}`}</title>
+            <title>{`${formatTime(p.at)} — score ${p.score}${p.verdict ? `, ${p.verdict}` : p.ready ? ", ready" : ""}`}</title>
           </circle>
         ))}
       </svg>

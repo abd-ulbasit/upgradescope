@@ -578,14 +578,19 @@ h1 .badge {
 .spark-dot {
   fill: var(--accent);
 }
-.spark-dot.score-good {
+/* A dot is coloured by the evaluation's verdict, not its score: an unknown
+   evaluation can score 100. A point with no verdict (an older server) keeps
+   the neutral accent. Unknown is hollow, so it differs by shape too. */
+.spark-dot.spark-ready {
   fill: var(--good);
 }
-.spark-dot.score-warn {
-  fill: var(--warn);
-}
-.spark-dot.score-bad {
+.spark-dot.spark-blocked {
   fill: var(--bad);
+}
+.spark-dot.spark-unknown {
+  fill: var(--bg, transparent);
+  stroke: var(--warn);
+  stroke-width: 1.5;
 }
 .sparkline figcaption {
   font-size: 12px;
