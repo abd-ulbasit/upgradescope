@@ -466,14 +466,14 @@ a CI gate.
   logged at most once a minute (#240).
 - `serve` refuses to start unless `--slack-webhook` and `--webhook` are
   absolute `http(s)` URLs with a host, naming the flag and never the value;
-  before, a bad URL started and then dropped every notification. `clusters list`, `clusters delete` and
-  `clusters rename` with `--server` no longer follow a redirect: any 3xx is
-  an error naming its status and `Location`, so an http to https `301` or
-  `302` cannot turn a delete or rename into a GET reported as done, and
-  `clusters list` behind such a redirect, which used to work, now fails.
-  Before you upgrade, fix or remove a webhook URL that is not an absolute
-  `http(s)` URL with a host, and pass the URL the redirect names (for
-  example `https://`) as `--server` (#240).
+  before, a bad URL started and then dropped every notification. `clusters
+  list`, `clusters delete` and `clusters rename` with `--server` no longer
+  follow a redirect: any 3xx is an error naming its status and `Location`,
+  so an http to https `301` or `302` cannot turn a delete or rename into a
+  GET reported as done, and `clusters list` behind such a redirect, which
+  used to work, now fails. Before you upgrade, fix or remove a webhook URL
+  that is not an absolute `http(s)` URL with a host, and pass the URL the
+  redirect names (for example `https://`) as `--server` (#240).
 - `serve` refuses to start when `--read-token` equals `--ingest-token`
   (every agent's push token would read the whole fleet). Every command's
   secret read from its `$UPGRADESCOPE_*` variable (`serve`'s tokens and
