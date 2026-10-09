@@ -485,7 +485,12 @@ jobs:
         include: ${{ fromJSON(needs.pg-matrix.outputs.images) }}
     services:
       postgres:
-        image: ${{ matrix.image }} # postgres:<major>@sha256:..., from hack/pg-images.txt
+        # zizmor cannot follow a matrix built from a job output, so it cannot
+        # see the digest: every row is postgres:<major>@sha256:<index digest>
+        # from hack/pg-images.txt, which hack/pg-images.sh rejects unless
+        # pinned (hack/pg-images_test.sh checks this line and that no other
+        # workflow line ignores a zizmor audit).
+        image: ${{ matrix.image }} # zizmor: ignore[unpinned-images] pinned by digest in hack/pg-images.txt
         env:
           POSTGRES_PASSWORD: ci-test
           POSTGRES_DB: upgradescope

@@ -10,7 +10,7 @@
 #     demand;
 #   - every services: or container: image in .github/workflows is pinned by
 #     @sha256:, or is ${{ matrix.image }} of a matrix pg-matrix builds from
-#     the table.
+#     the table, whose line is the only zizmor ignore in the workflows.
 # Offline; needs jq.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -113,6 +113,17 @@ grep -qxF '      images: ${{ steps.matrix.outputs.images }}' "$work/pg-matrix.jo
 
 # --- every service and container image in .github/workflows ------------------
 
+# zizmor cannot see through a matrix built from a job output, so the
+# pg-conformance service image carries the one zizmor ignore in the repo,
+# with its reason; any other ignore would hide a finding nobody reviewed.
+pg_image_line='        image: ${{ matrix.image }} # zizmor: ignore[unpinned-images] pinned by digest in hack/pg-images.txt'
+grep -n 'zizmor: *ignore' .github/workflows/*.yml >"$work/ignores" || true
+if [ "$(wc -l <"$work/ignores" | tr -d ' ')" = 1 ] && grep -qF "${pg_image_line#        }" "$work/ignores"; then
+  ok "the only zizmor ignore in .github/workflows is pg-conformance's unpinned-images, with its reason"
+else
+  fail "zizmor ignores in .github/workflows must be exactly pg-conformance's service image line" "$work/ignores"
+fi
+
 # One line per image: <file>:<line>: <value>, for each image: key under a
 # job's services: or container:.
 awk '
@@ -129,7 +140,7 @@ while IFS= read -r line; do
     *@sha256:*)
       [[ $v =~ @sha256:[0-9a-f]{64}$ ]] && ok "$where: $v is pinned by digest" || fail "$where: '$v' has a malformed digest" ;;
     '${{ matrix.image }}')
-      [ "${where%%:*}" = "$ci" ] && grep -qxF '        image: ${{ matrix.image }} # postgres:<major>@sha256:..., from hack/pg-images.txt' "$work/pg-conformance.job" &&
+      [ "${where%%:*}" = "$ci" ] && grep -qxF "$pg_image_line" "$work/pg-conformance.job" &&
         ok "$where: matrix.image comes from hack/pg-images.txt, all pinned" ||
         fail "$where: \${{ matrix.image }} outside pg-conformance, whose matrix is not known to be pinned" ;;
     *) fail "$where: service or container image '$v' is not pinned by @sha256: (zizmor: unpinned-images)" ;;
