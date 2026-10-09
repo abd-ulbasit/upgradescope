@@ -36,6 +36,32 @@ import (
 // the tools check (mcp.MaxReportBytes says why that matters).
 const maxInventoryFileBytes = server.DefaultMaxSnapshotBytes
 
+// mcpHTTPConfig are the limits of the streamable HTTP transport.
+type mcpHTTPConfig struct {
+	readHeaderTimeout time.Duration
+	readTimeout       time.Duration
+	idleTimeout       time.Duration
+	maxHeaderBytes    int
+	sessions          mcp.HTTPOptions
+}
+
+// mcpHTTPLimits bound what a peer of `mcp --http` can hold, token or not,
+// as `serve`'s limits do (internal/server): a request's headers must
+// arrive within 10s and the whole request (the SDK takes a body of at most
+// 4 MiB) within a minute, a keep-alive connection idle for two minutes is
+// closed, and headers are at most 64 KiB. There is no write timeout: a
+// scan's result is written on the response of its call, and a scan can
+// take minutes (the read timeout does not cut it short: net/http lifts the
+// read deadline once the request is read). A var so tests can shorten
+// them.
+var mcpHTTPLimits = mcpHTTPConfig{
+	readHeaderTimeout: 10 * time.Second,
+	readTimeout:       60 * time.Second,
+	idleTimeout:       120 * time.Second,
+	maxHeaderBytes:    64 << 10,
+	sessions:          mcp.HTTPOptions{SessionTimeout: mcp.DefaultSessionTimeout, MaxSessions: mcp.DefaultMaxSessions},
+}
+
 type mcpOptions struct {
 	kubeconfig     string
 	kubecontext    string
@@ -262,19 +288,20 @@ func serveMCPStdio(ctx context.Context, srv *mcpsdk.Server, in io.Reader, out io
 	return err
 }
 
-// serveMCPHTTP serves MCP over streamable HTTP at /mcp until ctx ends.
-// Cross-origin browser requests are refused here; the SDK refuses a
-// request whose Host header is not loopback when it arrives on a loopback
-// address (DNS rebinding), which covers the default binding but not an
-// --allow-remote one. With token, every request must carry it as a bearer
-// token.
+// serveMCPHTTP serves MCP over streamable HTTP at /mcp until ctx ends,
+// within mcpHTTPLimits. mcp.NewHTTPHandler refuses cross-origin browser
+// requests, bounds the sessions and cancels a call whose connection
+// closes; the SDK refuses a request whose Host header is not loopback when
+// it arrives on a loopback address (DNS rebinding), which covers the
+// default binding but not an --allow-remote one. With token, every request
+// must carry it as a bearer token.
 func serveMCPHTTP(ctx context.Context, srv *mcpsdk.Server, addr, token string, stderr io.Writer) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("mcp: listen: %w", err)
 	}
-	var h http.Handler = http.NewCrossOriginProtection().Handler(
-		mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return srv }, nil))
+	limits := mcpHTTPLimits
+	h := mcp.NewHTTPHandler(srv, limits.sessions)
 	auth := "no authentication: any local user or process that reaches it can run scans with your kubeconfig"
 	if token != "" {
 		h = requireBearer(token, h)
@@ -282,7 +309,13 @@ func serveMCPHTTP(ctx context.Context, srv *mcpsdk.Server, addr, token string, s
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", h)
-	hs := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	hs := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: limits.readHeaderTimeout,
+		ReadTimeout:       limits.readTimeout,
+		IdleTimeout:       limits.idleTimeout,
+		MaxHeaderBytes:    limits.maxHeaderBytes,
+	}
 	fmt.Fprintf(stderr, "upgradescope mcp: serving MCP on http://%s/mcp (%s)\n", ln.Addr(), auth)
 	errCh := make(chan error, 1)
 	go func() { errCh <- hs.Serve(ln) }()
@@ -303,13 +336,18 @@ func serveMCPHTTP(ctx context.Context, srv *mcpsdk.Server, addr, token string, s
 }
 
 // requireBearer passes on only requests that carry token as a bearer
-// token, compared in constant time.
+// token, compared in constant time. A refusal closes the connection and
+// reads nothing of the body: net/http would otherwise read up to 256 KiB
+// of it to keep the connection, waiting on a peer that stalls.
 func requireBearer(token string, next http.Handler) http.Handler {
 	want := []byte("Bearer " + token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="upgradescope mcp"`)
+			w.Header().Set("Connection", "close")
 			http.Error(w, "missing or invalid bearer token (start the client with the token of 'upgradescope mcp --http-token')", http.StatusUnauthorized)
+			// The body is not read: a read of it now fails at once.
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now())
 			return
 		}
 		next.ServeHTTP(w, r)

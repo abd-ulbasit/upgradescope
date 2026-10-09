@@ -59,8 +59,10 @@ type Config struct {
 	Version string
 	// Scan reads the cluster once and judges it at each target of req, as
 	// `upgradescope scan --output json` would: one report document per
-	// target, in req's order. It stops when ctx ends (the client cancelled
-	// the call or went away). Required.
+	// target, in req's order. It stops when ctx ends: the client cancelled
+	// the call (notifications/cancelled), or went away (on stdio, closed
+	// its end; over HTTP, closed the connection that carried the call,
+	// which NewHTTPHandler turns into a cancel). Required.
 	Scan func(ctx context.Context, req ScanRequest) ([]json.RawMessage, error)
 	// Inventory judges an inventory file (the JSON an agent pushes) at a
 	// target and returns the report document, giving up when ctx ends.
