@@ -125,7 +125,7 @@ Go runtime and process metrics (`go_*`, `process_*`) are included.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `upgradescope_http_requests_total` | counter | `route`, `code` | requests by ServeMux pattern (`GET /api/v1/clusters/{id}`), `dashboard` for the SPA, `unmatched` for an unknown API or reserved path |
+| `upgradescope_http_requests_total` | counter | `route`, `code` | requests by ServeMux pattern (`GET /api/v1/clusters/{id}`), `dashboard` for the SPA, `unmatched` for an unknown API or reserved path, `host-refused` (code `421`) for one the [Host check](operations/auth.md#the-host-check-dns-rebinding) refused before any route |
 | `upgradescope_http_request_duration_seconds` | histogram | `route` | latency |
 | `upgradescope_ingest_total` | counter | `result` | snapshot pushes: `accepted`, `duplicate`, `unauthorized`, `forbidden`, `conflict`, `invalid`, `too_large`, `error` |
 | `upgradescope_cluster_score` | gauge | `cluster`, `target` | score of the cluster's current evaluation |
@@ -153,6 +153,14 @@ With a read token (`--read-token`, chart `server.readToken` or
 read API. The chart's ServiceMonitor sends it from the server's Secret.
 Its series name every cluster, so a team-scoped read token gets `403`
 there: scrape with `--read-token` or a read token minted for `*`.
+
+A request the Host check refuses is counted as `route="host-refused"`,
+`code="421"` (never by its Host or path, so the labels stay a fixed set)
+and logged at most once a minute: the line names the Host, quoted and
+escaped to ASCII, the client's address, and how many refusals since the
+previous line went unlogged. A rising count is a DNS-rebinding page or,
+more often, a client reaching the server under a name it was not given
+with `--allowed-host`.
 
 `/healthz`, `/readyz`, `/livez`, `/metrics`, any path below them, and
 everything under `/api/` never fall through to the dashboard: an

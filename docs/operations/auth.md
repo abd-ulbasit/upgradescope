@@ -72,9 +72,13 @@ the port differs from the listen port wherever a tunnel or a Service
 maps it (`kubectl port-forward 9000:8080` sends `Host: localhost:9000`).
 Every other request gets `421 Misdirected Request` before any route,
 token, team header or scope is looked at, `/healthz`, ingest and the
-dashboard included. On a routable address with a read credential and no
-trusted header nothing changes: any Host is answered, since every read
-needs a token a page does not have.
+dashboard included. Each refusal is counted in `/metrics`
+(`upgradescope_http_requests_total{route="host-refused",code="421"}`)
+and logged at most once a minute, with the Host quoted and escaped, so
+a name clients use but serve was not given shows up in the log. On a
+routable address with a read credential and no trusted header nothing
+changes: any Host is answered, since every read needs a token a page
+does not have.
 
 The chart passes `--allowed-host` with the server Service's DNS names
 (`<release>-server`, `.<namespace>`, `.<namespace>.svc` and

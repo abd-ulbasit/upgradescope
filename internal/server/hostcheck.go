@@ -3,11 +3,15 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // The Host allow-list (DNS rebinding). A page on attacker.example can make
@@ -48,17 +52,67 @@ func (s *Server) hostGuardActive() bool {
 	return s.hostGuard.Load()
 }
 
-// checkHost wraps next with the Host allow-list while it is active.
+// checkHost wraps next with the Host allow-list while it is active. A
+// refusal comes before the metrics middleware, so it is counted here, under
+// routeHostRefused, and logged (refusalLog).
 func (s *Server) checkHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.hostGuardActive() && !s.hostAllowed(r) {
+			start := time.Now()
 			errJSON(w, http.StatusMisdirectedRequest, fmt.Sprintf(
 				"this server does not answer for Host %q (DNS rebinding guard): "+
 					"reach it as localhost or a loopback address, or add the name with serve --allowed-host", hostName(r.Host)))
+			s.metrics.observe(routeHostRefused, http.StatusMisdirectedRequest, start)
+			s.hostRefusals.note(s.now(), r)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// hostRefusalLogEvery is how often at most a Host refusal is logged: a
+// rebinding page or a misconfigured client repeats its request, so one
+// line a minute, with the count since the last, says as much as a line
+// each would, and a flood of them cannot fill the log.
+const hostRefusalLogEvery = time.Minute
+
+// maxLoggedHost bounds the Host a refusal line quotes (a DNS name is at
+// most 253 bytes).
+const maxLoggedHost = 256
+
+// refusalLog rate-limits the log of Host refusals to one line every
+// hostRefusalLogEvery. The zero value is ready.
+type refusalLog struct {
+	mu      sync.Mutex
+	last    time.Time // when the last line was written; zero = never
+	skipped int       // refusals since then not logged
+}
+
+// note logs r's refusal at now, unless a line was written less than
+// hostRefusalLogEvery before (a clock stepped back does not count), in
+// which case it is counted in the next line. The Host is quoted, escaped
+// to ASCII and bounded: it is what the client sent.
+func (l *refusalLog) note(now time.Time, r *http.Request) {
+	l.mu.Lock()
+	if d := now.Sub(l.last); !l.last.IsZero() && d >= 0 && d < hostRefusalLogEvery {
+		l.skipped++
+		l.mu.Unlock()
+		return
+	}
+	skipped := l.skipped
+	l.last, l.skipped = now, 0
+	l.mu.Unlock()
+	host, cut := r.Host, ""
+	if len(host) > maxLoggedHost {
+		host, cut = host[:maxLoggedHost], "…"
+	}
+	more := ""
+	if skipped > 0 {
+		more = fmt.Sprintf("; %d more refused since the last such line", skipped)
+	}
+	log.Printf("server: refused a request for Host %s%s from %s with 421: not a name this server answers for "+
+		"(DNS rebinding guard; add one clients use with --allowed-host)%s",
+		strconv.QuoteToASCII(host), cut, r.RemoteAddr, more)
 }
 
 // hostAllowed reports whether r's Host is one s answers for.

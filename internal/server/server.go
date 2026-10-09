@@ -270,6 +270,7 @@ type Server struct {
 
 	hostGuard    atomic.Bool // requests must name a host this server answers for (hostcheck.go)
 	allowedHosts []string    // cfg.AllowedHosts and the Listen host, normalized
+	hostRefusals refusalLog  // rate-limits the log of the guard's 421s
 
 	ready chan struct{} // closed once the listener is bound
 	mu    sync.Mutex

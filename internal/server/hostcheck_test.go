@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // hostRequest sends method path to addr (host:port) over a real TCP
@@ -73,6 +74,104 @@ func TestLoopbackServerRefusesForeignHosts(t *testing.T) {
 	} {
 		if code, body := hostRequest(t, addr, http.MethodGet, "/api/v1/clusters", host); code != http.StatusOK {
 			t.Errorf("GET /api/v1/clusters with Host %q = %d %s, want 200", host, code, body)
+		}
+	}
+}
+
+// refusalLines is the log's Host-refusal lines.
+func refusalLines(logged *bytes.Buffer) []string {
+	var out []string
+	for _, l := range strings.Split(logged.String(), "\n") {
+		if strings.Contains(l, "refused a request for Host") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// A 421 from the Host check came before the metrics middleware and wrote no
+// log, so neither /metrics nor the log showed a rebinding attempt or a
+// client sending a Host serve does not answer for (#240). Every refusal is
+// counted under route "host-refused", code 421, and logged at most once a
+// minute, the Host escaped and the refusals since the last line counted.
+func TestHostRefusalsAreCountedAndLogged(t *testing.T) {
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.Listen = "127.0.0.1:0" })
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s.now = clock.now
+	logged := captureLog(t)
+	startServer(t, s)
+	addr := s.Addr()
+	refuse := func(host string) {
+		t.Helper()
+		if code, body := hostRequest(t, addr, http.MethodGet, "/api/v1/clusters", host); code != http.StatusMisdirectedRequest {
+			t.Fatalf("Host %q = %d %s, want 421", host, code, body)
+		}
+	}
+	refuse("attacker.example:8080")
+	for range 4 {
+		refuse("other.example")
+	}
+	clock.set(clock.now().Add(hostRefusalLogEvery - time.Second))
+	refuse("other.example")
+	lines := refusalLines(logged)
+	if len(lines) != 1 || !strings.Contains(lines[0], `Host "attacker.example:8080"`) || !strings.Contains(lines[0], "127.0.0.1:") {
+		t.Fatalf("refusal lines within a minute:\n%s\nwant one, naming the first Host and the client's address", strings.Join(lines, "\n"))
+	}
+
+	// A minute on, the next refusal is logged with the count it stood for,
+	// its Host escaped to ASCII: no control character or look-alike letter
+	// reaches the log.
+	clock.set(clock.now().Add(time.Second))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "evil\n.ex\u0430mple\x1b[2J\u202e"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("Host with control characters = %d, want 421", rec.Code)
+	}
+	lines = refusalLines(logged)
+	if len(lines) != 2 {
+		t.Fatalf("refusal lines after a minute:\n%s\nwant two", strings.Join(lines, "\n"))
+	}
+	if want := `Host "evil\n.ex\u0430mple\x1b[2J\u202e"`; !strings.Contains(lines[1], want) || !strings.Contains(lines[1], "5 more") {
+		t.Errorf("second refusal line %q, want it to name %s and the 5 refusals not logged", lines[1], want)
+	}
+	if strings.ContainsAny(logged.String(), "\x1b\u202e\u0430") {
+		t.Errorf("the log carries a raw control or non-ASCII character:\n%q", logged)
+	}
+
+	// A clock stepped back does not silence the log for the step.
+	clock.set(clock.now().Add(-time.Hour))
+	refuse("stepped.example")
+	if lines = refusalLines(logged); len(lines) != 3 {
+		t.Errorf("refusal after the clock stepped back: %d lines, want 3", len(lines))
+	}
+
+	// A Host of any length is quoted cut to maxLoggedHost bytes.
+	clock.set(clock.now().Add(hostRefusalLogEvery))
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = strings.Repeat("a", 4096) + ".example"
+	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	lines = refusalLines(logged)
+	if last := lines[len(lines)-1]; len(lines) != 4 || !strings.Contains(last, `"`+strings.Repeat("a", maxLoggedHost)+`"…`) || len(last) > maxLoggedHost+300 {
+		t.Errorf("refusal of a 4 KiB Host: %d lines, the last %d bytes, want 4 and the Host cut to %d bytes", len(lines), len(last), maxLoggedHost)
+	}
+
+	code, body := hostRequest(t, addr, http.MethodGet, "/metrics", "localhost")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics = %d %s", code, body)
+	}
+	for _, want := range []string{
+		`upgradescope_http_requests_total{code="421",route="host-refused"} 9`,
+		`upgradescope_http_request_duration_seconds_count{route="host-refused"} 9`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics lacks %s", want)
+		}
+	}
+	for _, l := range strings.Split(body, "\n") {
+		if strings.Contains(l, "attacker.example") || strings.Contains(l, `code="421"`) && !strings.Contains(l, `route="host-refused"`) {
+			t.Errorf("/metrics labels a refusal by its Host or path: %s", l)
 		}
 	}
 }
