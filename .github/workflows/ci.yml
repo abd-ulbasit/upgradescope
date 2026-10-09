@@ -629,6 +629,61 @@ jobs:
           [ "$VERDICT" = blocked ] && [ "$BLOCKERS" -gt 0 ] \
             || { echo "::error::outputs verdict='$VERDICT' blockers='$BLOCKERS', want blocked and > 0"; exit 1; }
 
+      # The real provenance check: latest above is v0.1.x, which predates
+      # provenance, so the install takes the warning path. v0.2.0-rc.2 has
+      # attestations; the action must verify one with the runner's gh and
+      # this job's token, then install the archive. A later step cannot read
+      # an earlier one's log, so a gh ahead of the runner's on PATH records
+      # each call the action makes (arguments and exit status) for the check
+      # after it.
+      - name: record the gh calls of the next step
+        run: |
+          set -euo pipefail
+          real="$(command -v gh)"
+          mkdir -p "$RUNNER_TEMP/gh-spy"
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'rc=0'
+            printf '%q "$@" || rc=$?\n' "$real"
+            printf 'printf "rc=%%s gh %%s\\n" "$rc" "$*" >> %q\n' "$RUNNER_TEMP/gh-calls.log"
+            echo 'exit "$rc"'
+          } > "$RUNNER_TEMP/gh-spy/gh"
+          chmod +x "$RUNNER_TEMP/gh-spy/gh"
+          cat "$RUNNER_TEMP/gh-spy/gh"
+          echo "$RUNNER_TEMP/gh-spy" >> "$GITHUB_PATH"
+      - id: attested
+        uses: ./action
+        with:
+          path: action/testdata/clean
+          target: '1.36'
+          fail-on: never # this step tests the install; the gate is tested above and below
+          version: v0.2.0-rc.2
+      - name: v0.2.0-rc.2 verified with gh attestation verify, then installed from its archive
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          case "$(uname -s)/$(uname -m)" in
+            Linux/x86_64) asset=upgradescope_linux_amd64.tar.gz ;;
+            Linux/aarch64) asset=upgradescope_linux_arm64.tar.gz ;;
+            Darwin/x86_64) asset=upgradescope_darwin_amd64.tar.gz ;;
+            Darwin/arm64) asset=upgradescope_darwin_arm64.tar.gz ;;
+            *) fail "unexpected runner $(uname -s)/$(uname -m)" ;;
+          esac
+          cat "$RUNNER_TEMP/gh-calls.log" || fail "the action ran no gh"
+          [ "$(wc -l < "$RUNNER_TEMP/gh-calls.log")" -eq 1 ] || fail "the action ran gh more than once"
+          want="rc=0 gh attestation verify $RUNNER_TEMP/upgradescope-dl."
+          want2="/$asset --repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml --source-ref refs/tags/v0.2.0-rc.2 --deny-self-hosted-runners"
+          got="$(cat "$RUNNER_TEMP/gh-calls.log")"
+          case "$got" in
+            "$want"*"$want2") ;;
+            *) fail "want one passing '${want}XXXXXX$want2'" ;;
+          esac
+          got="$(command -v upgradescope)"
+          [ "$got" = "$RUNNER_TEMP/upgradescope-bin/upgradescope" ] \
+            || fail "upgradescope resolved to '$got', not the release archive"
+          version="$(upgradescope --version | sed -n 1p)"
+          [ "$version" = "upgradescope 0.2.0-rc.2" ] || fail "upgradescope --version says '$version', want 'upgradescope 0.2.0-rc.2'"
+
       # This tree's binary first on PATH, for version: preinstalled.
       - run: make build && echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
       - id: removed

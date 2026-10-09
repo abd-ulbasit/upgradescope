@@ -64,9 +64,12 @@ Pick how the gate moves:
   candidate. If you set `version: latest` at a release tag that is newer
   than the latest release (a release candidate, say), the step logs a
   `::warning` that the binary is older than the action, since an older
-  engine can pass what the newer one blocks. With `version: latest` the
-  action does not look up a commit SHA's release, so at a SHA or a branch
-  it gives no such warning.
+  engine can pass what the newer one blocks. If that latest is v0.1.0 or
+  v0.1.1, which predate provenance, and the action's release is v0.2.0-rc.2
+  or later, the step fails instead ([Latest moved
+  back](#install-and-integrity)). With `version: latest` the action does
+  not look up a commit SHA's release, so at a SHA or a branch it gives no
+  such warning and no such failure.
 
 The examples below pin v0.2.0, the first release that ships this action
 (root `action.yml`, outputs, step summary). Put the release you pin in its
@@ -246,7 +249,7 @@ v0.2.0-rc.2's linux/amd64 archive with its attestation).
 | `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
 | `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
 | `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag; at a full commit SHA it runs the release tag that points at that commit, or `latest` with a `::warning` when none does or the lookup fails; at any other ref, or inside another action, it runs `latest`. See [Usage](#usage). |
-| `verify-provenance` | no | `true` | `true` or `false`. `true` verifies, for a release from v0.2.0-rc.2 on, that this repository's release workflow built the archive at that release's tag, with `gh attestation verify` or, without gh 2.49+, `cosign verify-blob`, and fails the step before installing when it does not verify, neither tool is on `PATH`, or no archive downloads (there is no source-build fallback). `false` checks the archive against `checksums.txt` only and warns, and falls back to `go install` when no archive downloads. See [Install and integrity](#install-and-integrity). |
+| `verify-provenance` | no | `true` | `true` or `false`. `true` verifies, for every release but v0.1.0 and v0.1.1 (which predate provenance), that this repository's release workflow built the archive at that release's tag, with `gh attestation verify` or, without gh 2.49+, `cosign verify-blob`, and fails the step before installing when it does not verify, neither tool is on `PATH`, or no archive downloads (there is no source-build fallback). `false` checks the archive against `checksums.txt` only and warns, and falls back to `go install` when no archive downloads. See [Install and integrity](#install-and-integrity). |
 | `config` | no | | Path to an `.upgradescope.yaml` with ignore rules (`scan --config`). Unset, the scan looks for `.upgradescope.yaml` in `path`, then at the repository root. |
 | `baseline` | no | | Path to the JSON report of an earlier scan: the `report-json` output, or a `write-baseline` file (`scan --baseline`). The gate then fails only on findings that are new since. |
 | `write-baseline` | no | | Also write this scan's JSON report, after suppression, to this path, for a later `baseline` (`scan --write-baseline`). |
@@ -323,9 +326,10 @@ cannot write the step summary, so a warning replaces it.
   catches corruption and truncation but not a tampered release: anything
   that can replace a release's assets can replace the archive and
   `checksums.txt` together.
-- **Provenance** (`verify-provenance: true`, the default). For a release
-  from v0.2.0-rc.2 on, the action then checks that this repository's release
-  workflow built the archive, before it installs anything:
+- **Provenance** (`verify-provenance: true`, the default). For every release
+  but v0.1.0 and v0.1.1 (see below), the action then checks that this
+  repository's release workflow built the archive, before it installs
+  anything:
   - with `gh` on `PATH` (GitHub-hosted runners have it), it runs
     `gh attestation verify <archive> --repo abd-ulbasit/upgradescope
     --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml
@@ -357,16 +361,28 @@ cannot write the step summary, so a warning replaces it.
   The verifier's output is in the log, each line behind `| `. What is
   verified is the build: which workflow, tag and kind of runner produced
   the archive. Not that the release's code is free of bugs.
-- **Without provenance.** The threshold is a version number: v0.2.0-rc.2
-  is the lowest release that publishes attestations (`gh attestation
-  verify` of its linux/amd64 archive passes at `refs/tags/v0.2.0-rc.2` and
-  fails at `refs/tags/v0.2.0-rc.1`; rc.1 was never published as a
-  release), and every release candidate from it on is verified like a
-  release. Releases before it (v0.1.0 and v0.1.1, GitHub's latest until
-  v0.2.0 ships) are checked against `checksums.txt` only, with a
-  `::warning` that says so. `verify-provenance: false` does the same for
-  any release, also with a `::warning`. Neither detects a tampered
-  release.
+- **Without provenance.** Two releases predate provenance, v0.1.0 and v0.1.1
+  (GitHub's latest until v0.2.0 ships): `gh attestation verify` finds no
+  attestation for their archives. They are named, not found by a version
+  comparison, so every other tag is verified, a prerelease suffix such as
+  `-beta` included, and one without provenance fails the step. v0.2.0-rc.2
+  is the first release that publishes it (`gh attestation verify` of its
+  linux/amd64 archive passes at `refs/tags/v0.2.0-rc.2`; v0.2.0-rc.1 is a
+  tag that was never published as a release). v0.1.0 and v0.1.1 are
+  checked against `checksums.txt` only, with a `::warning` that says so.
+  `verify-provenance: false` does the same for any release, also with a
+  `::warning`. Neither detects a tampered release.
+- **Latest moved back.** With `version: latest` and the action at a
+  release tag from v0.2.0-rc.2 on (`@vX.Y.Z` or `@vX.Y.Z-rc.N`), a latest
+  that resolves to v0.1.0 or v0.1.1 fails the step before anything is
+  downloaded. Such a latest means someone moved GitHub's latest back to a
+  release nothing can verify (what anything that can edit the releases
+  would do to install a binary of its choosing), or that the action is at
+  a release candidate, which GitHub's latest skips, before a stable
+  release from v0.2.0 on is latest.
+  Set `version` to the action's release, or `verify-provenance: false` to
+  install it on the checksum alone. At a commit SHA, a branch or `@v0`,
+  `latest` is not compared with the action's release.
 - **No archive, no install.** When the archive cannot be downloaded (the
   release has none for the runner, the asset is gone, the download fails)
   or `latest` does not resolve to a tag, the step fails with curl's final

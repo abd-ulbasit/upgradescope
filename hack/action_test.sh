@@ -11,8 +11,10 @@
 #     substituted archive whose checksums.txt matches), no source build
 #     ever with verify-provenance true (a failed download installs
 #     nothing), the go install fallback only with verify-provenance false
-#     and a Go toolchain, the provenance threshold (v0.2.0-rc.2) and its
-#     version comparator, and version: preinstalled;
+#     and a Go toolchain, the pre-provenance releases (exactly v0.1.0 and
+#     v0.1.1, never by version), a latest moved back to one of them at an
+#     action ref that publishes provenance (fails), mutants of both checks,
+#     the version comparator, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
 #     summary on action/testdata, the allow-incomplete, config, baseline
 #     and write-baseline inputs, and an injection payload as data;
@@ -308,9 +310,16 @@ release v9.9.5 none
 release v9.9.4 ok
 release v9.9.9-rc.1 ok
 release v0.2.0-rc.2 ok
-release v0.2.0-rc.1 ok
 release v0.2.0-rc.10 ok
-release v0.1.1 ok
+release v0.2.0-beta ok
+release v0.2.0-rc.2a ok
+release v0.1.1-hotfix ok
+# Published without provenance: v0.1.0 and v0.1.1 as they are; v0.2.0-rc.1
+# (a tag that was never published as a release) and v0.1.2 (numerically
+# among v0.1.x) as a release not on the list would be.
+for t in v0.1.0 v0.1.1 v0.2.0-rc.1 v0.1.2; do
+  release "$t" ok && rm "$work/attest/$t" "$work/rel/$t/checksums.txt.sigstore.json"
+done
 release v9.9.3 ok && tamper v9.9.3
 release v9.9.1 ok
 mv "$work/attest/v9.9.1" "$work/attest/v9.9.0" # v9.9.1's archive, attested for another tag
@@ -323,7 +332,8 @@ go build -o "$work/real/upgradescope" ./cmd/upgradescope
 # run <cmd> <path-prefix> [env...]: action/run.sh <cmd> as a step of a fresh
 # job; output in $work/out, the step's runner files in $rt, RUNNER_TEMP in
 # $tmp. With same_job=1, a later step of the last run's job: its own runner
-# files, the same RUNNER_TEMP.
+# files, the same RUNNER_TEMP. With script=<file>, that file runs instead of
+# action/run.sh (the mutants).
 run() {
   local cmd=$1 prefix=$2
   shift 2
@@ -337,7 +347,7 @@ run() {
   env -i HOME="$HOME" PATH="$prefix${verifier-$work/stub-gh:}$work/sys" RUNNER_TEMP="$tmp" \
     GITHUB_OUTPUT="$rt/output" GITHUB_PATH="$rt/path" GITHUB_STEP_SUMMARY="$rt/summary" \
     INPUT_PATH=action/testdata/removed INPUT_TARGET=1.36 INPUT_FAIL_ON=blocker INPUT_VERSION=v9.9.9 \
-    "$@" bash action/run.sh "$cmd" >"$work/out" 2>&1 || code=$?
+    "$@" bash "${script:-action/run.sh}" "$cmd" >"$work/out" 2>&1 || code=$?
   forged "$work/out" | sed "s/^/run $n ($cmd): /" >>"$work/forged"
 }
 n=0
@@ -709,22 +719,27 @@ if [ "$code" = 1 ] && [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -qF '%0A::w
   ok "a line break in verify-provenance cannot start a workflow command"
 else fail "a line break in verify-provenance cannot start a workflow command" "$work/out"; fi
 
-# Releases before v0.2.0-rc.2, the lowest release with attestations (rc.1
-# was never published as a release), publish no provenance: the checksum, a
-# warning, and no verifier run. From rc.2 on, release candidates included,
-# the provenance is verified (#244, S2).
-verifier= run install "$work/stub-curl:" INPUT_VERSION=v0.1.1
-expect "a release before v0.2.0-rc.2 installs on the checksum" 0 "installed upgradescope v0.1.1 from"
-has "a release before v0.2.0-rc.2 warns that only the checksum is checked" "$work/out" \
-  "::warning::provenance is verified for releases from v0.2.0-rc.2 on: $asset (v0.1.1) is checked only against checksums.txt from the same release"
-[ "$(grep -c '^::warning' "$work/out")" = 1 ] && ok "a release before v0.2.0-rc.2 warns once" || fail "a release before v0.2.0-rc.2 warns once" "$work/out"
+# The releases from before provenance are v0.1.0 and v0.1.1, by name (their
+# archives have no attestation): the checksum, a warning, and no verifier
+# run. Every other tag is verified, whatever its version (#244, S2):
+# v0.2.0-rc.1 (a tag never published as a release) and v0.1.2 (numerically
+# among v0.1.x) without provenance fail closed.
+for t in v0.1.0 v0.1.1; do
+  verifier= run install "$work/stub-curl:" INPUT_VERSION=$t
+  expect "$t, from before provenance, installs on the checksum" 0 "installed upgradescope $t from"
+  has "$t warns that only the checksum is checked" "$work/out" \
+    "::warning::$t predates provenance (v0.1.0 and v0.1.1 publish none; every other release is verified): $asset ($t) is checked only against checksums.txt from the same release"
+  [ "$(grep -c '^::warning' "$work/out")" = 1 ] && ok "$t warns once" || fail "$t warns once" "$work/out"
+done
 run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST=v0.1.1
-expect "latest at v0.1.1 (GitHub's latest today) installs with a warning" 0 "::warning::provenance is verified for releases from v0.2.0-rc.2 on: $asset (v0.1.1)"
-hasnt "a release before v0.2.0-rc.2 runs no verifier" "$work/calls" "attestation"
-run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.1
-expect "v0.2.0-rc.1 is before the threshold: checksum only, with a warning" 0 \
-  "::warning::provenance is verified for releases from v0.2.0-rc.2 on: $asset (v0.2.0-rc.1)"
-hasnt "v0.2.0-rc.1 runs no verifier" "$work/calls" "attestation"
+expect "latest at v0.1.1 (GitHub's latest today) installs with a warning" 0 "::warning::v0.1.1 predates provenance"
+hasnt "a release from before provenance runs no verifier" "$work/calls" "attestation"
+for t in v0.2.0-rc.1 v0.1.2; do
+  run install "$work/stub-curl:" INPUT_VERSION=$t
+  expect "$t, not on the pre-provenance list, without provenance fails closed" 1 \
+    "provenance check failed: gh attestation verify found no attestation that abd-ulbasit/upgradescope/.github/workflows/release.yml built $asset at refs/tags/$t"
+  installed_nothing && ok "$t without provenance is not installed" || fail "$t without provenance is not installed" "$work/out"
+done
 run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
 expect "v0.2.0-rc.2, the first release with attestations, is verified" 0 \
   "provenance OK: $asset (v0.2.0-rc.2) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v0.2.0-rc.2"
@@ -745,9 +760,122 @@ verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v0.2.
 expect "a tampered v0.2.0-rc.2 fails closed (cosign)" 1 "provenance check failed: checksums.txt for v0.2.0-rc.2 is not signed by"
 installed_nothing && ok "cosign: a tampered v0.2.0-rc.2 is not installed" || fail "cosign: a tampered v0.2.0-rc.2 is not installed" "$work/out"
 
-# release_older, the comparator behind the threshold, on its own: semver
-# order, the core numerically, a candidate before its release, candidates
-# by number (rc.10 after rc.2).
+# A prerelease suffix that is not -rc.N, which a version comparator cannot
+# order (it read v0.2.0-beta as before v0.2.0-rc.2), and a v0.1.1 with a
+# suffix, are not the pre-provenance releases: verified, and a tampered one
+# fails closed, as version and as latest.
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-beta
+expect "v0.2.0-beta, a suffix that is not -rc.N, is verified" 0 \
+  "provenance OK: $asset (v0.2.0-beta) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v0.2.0-beta"
+for t in v0.2.0-beta v0.2.0-rc.2a v0.1.1-hotfix; do
+  tamper "$t"
+  run install "$work/stub-curl:" INPUT_VERSION=$t
+  expect "a tampered $t fails closed" 1 \
+    "provenance check failed: gh attestation verify found no attestation that abd-ulbasit/upgradescope/.github/workflows/release.yml built $asset at refs/tags/$t"
+  installed_nothing && ok "a tampered $t is not installed" || fail "a tampered $t is not installed" "$work/out"
+done
+run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST=v0.1.1-hotfix
+expect "latest at a tampered v0.1.1-hotfix fails closed" 1 "provenance check failed: gh attestation verify found no attestation"
+installed_nothing && ok "latest at a tampered v0.1.1-hotfix is not installed" || fail "latest at a tampered v0.1.1-hotfix is not installed" "$work/out"
+
+# pre_provenance, on its own: exactly v0.1.0 and v0.1.1, nothing that only
+# starts or ends like them, and no pattern.
+eval "$(sed -n '/^pre_provenance() {$/,/^}$/p' action/run.sh)"
+prepro() { # prepro <tag> <want: yes|no>
+  local got=no
+  if pre_provenance "$1"; then got=yes; fi
+  if [ "$got" = "$2" ]; then ok "pre_provenance $(printf %q "$1"): $2"; else fail "pre_provenance $(printf %q "$1"): got $got, want $2"; fi
+}
+prepro v0.1.0 yes
+prepro v0.1.1 yes
+for t in v0.1.2 v0.1.10 v0.0.9 v0.1 v0.1.1-rc.1 v0.1.1-hotfix v0.1.0-beta v0.2.0-rc.1 v0.2.0-rc.2 v0.2.0-beta v0.2.0-rc.2a \
+  v0.2.0 0.1.1 V0.1.1 xv0.1.1 'v0.1.1 ' ' v0.1.1' "v0.1.1$nl" 'v0.1.?' 'v0.1.*' '*' ''; do
+  prepro "$t" no
+done
+
+# Latest moved back: an action at a release tag from v0.2.0-rc.2 on, given
+# a latest that is v0.1.0 or v0.1.1 (moved back, or below the release
+# candidate the action is at), fails before it downloads anything.
+# verify-provenance: false installs it, with its warnings; an action at a
+# release before v0.2.0-rc.2, at a branch, or in another repository keeps
+# the warning.
+for ref in v0.2.0-rc.2 v0.2.0 v9.9.9; do
+  for latest in v0.1.0 v0.1.1; do
+    run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=$ref STUB_LATEST=$latest
+    expect "latest moved back to $latest fails at the action ref $ref" 1 \
+      "version latest is $latest, which predates provenance and cannot be verified, but this action is at $ref, and every release from v0.2.0-rc.2 on publishes provenance: GitHub's latest was moved back, or skips the release candidate this action is at; nothing was installed"
+    has "latest moved back to $latest at $ref says how to pin or opt out" "$work/out" \
+      "Set version: $ref, or verify-provenance: false to install $latest on the checksum alone"
+    hasnt "latest moved back to $latest at $ref downloads nothing" "$work/calls" "$releases/download/"
+    installed_nothing && ok "latest moved back to $latest at $ref installs nothing" ||
+      fail "latest moved back to $latest at $ref installs nothing" "$work/out"
+  done
+done
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1 INPUT_VERIFY_PROVENANCE=false
+expect "latest moved back installs with verify-provenance: false" 0 "installed upgradescope v0.1.1 from"
+has "latest moved back with verify-provenance: false warns that it is older" "$work/out" \
+  "::warning::version latest is v0.1.1, older than this action's own release v9.9.9"
+has "latest moved back with verify-provenance: false warns that it is unverified" "$work/out" "::warning::verify-provenance is false"
+for ref in v0.2.0-rc.1 v0.1.1 main; do
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=$ref STUB_LATEST=v0.1.1
+  expect "latest at v0.1.1 installs with a warning at the action ref $ref" 0 "::warning::v0.1.1 predates provenance"
+done
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1
+expect "latest at v0.1.1 installs with a warning at another repository's release ref" 0 "::warning::v0.1.1 predates provenance"
+
+# Mutants: each edit of action/run.sh below reopens a hole closed above, and
+# the case named with it must catch it. Each case first passes on
+# action/run.sh itself.
+tampered_beta_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-beta
+  [ "$code" = 1 ] && installed_nothing
+}
+tampered_hotfix_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=v0.1.1-hotfix
+  [ "$code" = 1 ] && installed_nothing
+}
+unattested_v012_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=v0.1.2
+  [ "$code" = 1 ] && installed_nothing
+}
+moved_back_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v0.2.0-rc.2 STUB_LATEST=v0.1.1
+  [ "$code" = 1 ] && installed_nothing
+}
+moved_back_opt_out_installs() {
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1 INPUT_VERIFY_PROVENANCE=false
+  [ "$code" = 0 ] && grep -qF "installed upgradescope v0.1.1 from" "$work/out"
+}
+pre_provenance_installs() {
+  verifier= run install "$work/stub-curl:" INPUT_VERSION=v0.1.1
+  [ "$code" = 0 ] && grep -qF "installed upgradescope v0.1.1 from" "$work/out"
+}
+# mutant <name> <case> <perl -pe script>
+mutant() {
+  if ! "$2"; then fail "mutant case $2 fails on action/run.sh itself" "$work/out"; return; fi
+  perl -pe "$3" action/run.sh >"$work/mutant.sh"
+  if cmp -s action/run.sh "$work/mutant.sh"; then fail "mutant '$1' changed nothing (its pattern no longer matches)"; return; fi
+  # A mutant that does not parse would be caught for the wrong reason.
+  if ! bash -n "$work/mutant.sh" 2>"$work/out"; then fail "mutant '$1' is not valid bash" "$work/out"; return; fi
+  if script="$work/mutant.sh" "$2"; then fail "not caught by $2: $1" "$work/out"; else ok "caught by $2: $1"; fi
+}
+by_version='s/^  if pre_provenance "\$tag"; then$/  if release_older "\$tag" "\$provenance_since"; then/'
+mutant "the pre-provenance check by version again (release_older against v0.2.0-rc.2)" tampered_beta_fails "$by_version"
+mutant "the pre-provenance check by version again (release_older against v0.2.0-rc.2)" unattested_v012_fails "$by_version"
+mutant "the pre-provenance check by version again (release_older against v0.2.0-rc.2)" tampered_hotfix_fails "$by_version"
+mutant "the list matches v0.1.* by prefix" unattested_v012_fails 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    v0.1.*) return 0 ;;/'
+mutant "the list matches v0.1.1 by prefix" tampered_hotfix_fails 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    v0.1.0* | v0.1.1*) return 0 ;;/'
+mutant "the list is empty" pre_provenance_installs 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    "") return 0 ;;/'
+mutant "no moved-back check" moved_back_fails 's/ && pre_provenance "\$tag" &&$/ \&\& false \&\&/'
+mutant "the moved-back check only above v0.2.0-rc.2, not at it" moved_back_fails \
+  's/! release_older "\$ref" "\$provenance_since"/release_older "\$provenance_since" "\$ref"/'
+mutant "the moved-back check ignores verify-provenance: false" moved_back_opt_out_installs \
+  's/^      \[ "\$\{INPUT_VERIFY_PROVENANCE:-true\}" != false \]; then$/      true; then/'
+
+# release_older, the comparator behind newest and the latest-versus-ref
+# checks (never the pre-provenance one), on its own: semver order, the core
+# numerically, a candidate before its release, candidates by number (rc.10
+# after rc.2).
 eval "$(sed -n '/^release_older() {$/,/^}$/p' action/run.sh)"
 older() { # older <a> <b> <want: yes|no>
   local got=no
@@ -766,8 +894,8 @@ older v0.2.1-rc.1 v0.2.0-rc.2 no
 older v0.10.0 v0.9.9 no
 older v0.9.9 v0.10.0 yes
 older v1.0.0-rc.1 v0.2.0-rc.2 no
-grep -qxF 'provenance_since=v0.2.0-rc.2' action/run.sh && ok "the provenance threshold is v0.2.0-rc.2" ||
-  fail "the provenance threshold is not v0.2.0-rc.2"
+grep -qxF 'provenance_since=v0.2.0-rc.2' action/run.sh && ok "the first release with provenance is v0.2.0-rc.2" ||
+  fail "the first release with provenance is not v0.2.0-rc.2"
 
 # The install step passes github.token for gh; the scan step needs none.
 for yml in action.yml action/action.yml; do

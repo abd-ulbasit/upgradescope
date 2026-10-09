@@ -73,14 +73,28 @@ release_older() {
   ((10#$ap < 10#$bp))
 }
 
-# The first release whose provenance the install verifies, by version
-# number: from v0.2.0-rc.2 on, every release publishes a build-provenance
-# attestation for each archive and a cosign bundle for checksums.txt
-# (release.yml, .goreleaser.yml). v0.2.0-rc.2 is the lowest release that
-# has them: `gh attestation verify` of its linux/amd64 archive passes at
-# refs/tags/v0.2.0-rc.2 and fails at refs/tags/v0.2.0-rc.1, and rc.1 was
-# never published as a release. Never decided by a missing asset: that is
-# what a tampered release would look like.
+# pre_provenance <tag>: whether tag is one of the releases published before
+# release.yml attested its archives, by exact name: v0.1.0 and v0.1.1 (gh
+# attestation verify of their archives finds no attestation; the
+# attestations API answers 404). Every other tag is provenance-checked,
+# whatever its version: a list, not a version comparison, so no tag a
+# comparator could misorder (v0.2.0-beta, any suffix that is not -rc.N) is
+# ever taken for one of them. Never decided by a missing asset either: that
+# is what a tampered release would look like.
+pre_provenance() {
+  case $1 in
+    v0.1.0 | v0.1.1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The first release that publishes provenance: from v0.2.0-rc.2 on, every
+# release has a build-provenance attestation for each archive and a cosign
+# bundle for checksums.txt (release.yml, .goreleaser.yml). `gh attestation
+# verify` of its linux/amd64 archive passes at refs/tags/v0.2.0-rc.2;
+# v0.2.0-rc.1 is a tag that was never published as a release. An action at
+# this release or later, pinned to a release tag, never installs a
+# pre_provenance release as latest (install).
 provenance_since=v0.2.0-rc.2
 
 # A full commit SHA, what pinning the action by commit gives github.action_ref.
@@ -172,7 +186,7 @@ sha256() {
 # refs/tags/<tag> on a GitHub-hosted runner; without gh but with cosign,
 # checksums.txt's cosign bundle must be signed by that same workflow
 # identity, and the archive is pinned to checksums.txt by its sha256.
-# Releases before $provenance_since (v0.1.x publish neither) and
+# The pre_provenance releases (v0.1.0 and v0.1.1 publish neither) and
 # verify-provenance: false skip the check, with a ::warning. Any other
 # failure, a missing verifier included, fails the step before anything is
 # put on PATH. The verifier's output reaches the log through logged.
@@ -182,8 +196,8 @@ provenance() {
     echo "::warning::verify-provenance is false: $asset ($tag) is checked only against checksums.txt from the same release, which does not show it was built by $repo's release workflow"
     return
   fi
-  if release_older "$tag" "$provenance_since"; then
-    echo "::warning::provenance is verified for releases from $provenance_since on: $asset ($tag) is checked only against checksums.txt from the same release"
+  if pre_provenance "$tag"; then
+    echo "::warning::$tag predates provenance (v0.1.0 and v0.1.1 publish none; every other release is verified): $asset ($tag) is checked only against checksums.txt from the same release"
     return
   fi
   if command -v gh >/dev/null; then
@@ -334,6 +348,16 @@ install() {
     fi
     rm -f "$RUNNER_TEMP/upgradescope-latest.err"
     echo "latest release is $tag"
+    # An action at a release that publishes provenance, given a latest that
+    # does not: GitHub's latest was moved back to a release whose archive
+    # cannot be verified (what anything that can edit the releases would do
+    # to install a binary of its choosing, #244), or it skips the release
+    # candidate the action is at. Either way that fails, and only
+    # verify-provenance: false installs it, on the checksum alone.
+    if [[ $ref =~ $release_tag ]] && ! release_older "$ref" "$provenance_since" && pre_provenance "$tag" &&
+      [ "${INPUT_VERIFY_PROVENANCE:-true}" != false ]; then
+      die "version latest is $tag, which predates provenance and cannot be verified, but this action is at $ref, and every release from $provenance_since on publishes provenance: GitHub's latest was moved back, or skips the release candidate this action is at; nothing was installed. Set version: $ref, or verify-provenance: false to install $tag on the checksum alone"
+    fi
     if [[ $ref =~ $release_tag ]] && release_older "$tag" "$ref"; then
       echo "::warning::version latest is $tag, older than this action's own release $ref: GitHub's latest skips prereleases, and an older engine can pass what $ref blocks. Set version: $ref"
     fi
