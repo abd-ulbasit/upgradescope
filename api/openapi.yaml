@@ -1025,6 +1025,28 @@ components:
         objects: {type: array, items: {$ref: "#/components/schemas/ObjectRef"}, maxItems: 100}
         objectsOmitted: {type: integer, description: Affected objects not listed.}
         baselineState: {type: string, enum: [new, unchanged]}
+        callers:
+          type: array
+          items: {$ref: "#/components/schemas/Caller"}
+          description: |
+            API usage findings: the apiserver_requested_deprecated_apis
+            rows folded into this finding, in row order, each the
+            deprecated-api-in-use finding it is on its own. Suppressing
+            every object of the finding by annotation or an object-scoped
+            rule does not suppress them: they then stand as findings of
+            their own.
+    Caller:
+      type: object
+      required: [version, resource, key, severity, title, detail]
+      properties:
+        group: {type: string, description: Absent for the core group.}
+        version: {type: string}
+        resource: {type: string}
+        subresource: {type: string}
+        key: {type: string, description: "The key of the caller's own deprecated-api-in-use finding."}
+        severity: {$ref: "#/components/schemas/Severity"}
+        title: {type: string}
+        detail: {type: string}
     SuppressedFinding:
       allOf:
         - {$ref: "#/components/schemas/FindingFields"}
