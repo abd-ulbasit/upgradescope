@@ -47,7 +47,7 @@
     }
   ],
   "teams": {
-    "unattributed": {
+    "(unattributed)": {
       "score": 75,
       "ready": false,
       "blockers": 1,
