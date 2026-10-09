@@ -217,9 +217,22 @@ func TestClaimConflicts(t *testing.T) {
 		// one; two tag-qualified matchers on one repository are refused.
 		{"a tag-qualified matcher on a repository claimed without one", entry("mine", []string{"ingress-nginx/controller:*-mine*"}, nil), ""},
 		{"a second tag-qualified matcher on a repository", entry("mine", []string{"rancher/nginx-ingress-controller:*-mine*"}, nil), "rke2-ingress-nginx"},
+		// An entry of a new id is told to replace the embedded one instead.
+		{"a new id is told to replace the claiming entry", entry("mine", []string{"cilium/operator"}, nil), "replace the embedded entry by using its id"},
+		// A replacement copied from an earlier release, whose claim the
+		// embedded registry has since given to another entry (#265): RKE2's
+		// entry before its matcher was tag-qualified claims RKE1's builds,
+		// which ingress-nginx claims now. The fix is a fresh copy, not a
+		// replacement of ingress-nginx as well.
+		{"a replacement still using an earlier release's matcher", entry("rke2-ingress-nginx", []string{"rancher/nginx-ingress-controller"}, []string{"rke2-ingress-nginx"}),
+			`your rke2-ingress-nginx replaces the embedded entry of that id, and the embedded registry now claims this image under ingress-nginx, and the embedded rke2-ingress-nginx claims "rancher/nginx-ingress-controller:*-hardened*" instead: if your file is a copy of registry/data/rke2-ingress-nginx.yaml from an earlier release, copy the current one again and re-apply your edits`},
+		{"a replacement claiming a repository its embedded entry never did", entry("coredns", []string{"cilium/operator"}, nil),
+			"the embedded registry now claims this image under cilium: if your file is a copy of registry/data/coredns.yaml"},
+		{"a replacement claiming another entry's chart", entry("coredns", []string{"acme/dns"}, []string{"cert-manager"}),
+			"the embedded registry now claims this chart under cert-manager"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := ClaimConflicts(Merge(base, []AddOn{tc.extra}))
+			errs := MergeConflicts(base, []AddOn{tc.extra})
 			if tc.want == "" {
 				if len(errs) != 0 {
 					t.Errorf("want no conflict, got %v", errs)
@@ -229,6 +242,57 @@ func TestClaimConflicts(t *testing.T) {
 			if len(errs) == 0 || !strings.Contains(errors.Join(errs...).Error(), tc.want) {
 				t.Errorf("want a conflict mentioning %s, got %v", tc.want, errs)
 			}
+			if tc.extra.ID != "mine" && strings.Contains(errors.Join(errs...).Error(), "replace the embedded entry by using its id") {
+				t.Errorf("a replacement must not be told to replace the embedded entry by its id, which it does: %v", errs)
+			}
 		})
+	}
+}
+
+// The reported upgrade failure, end to end: origin/main's (v0.2.0-rc.2)
+// rke2-ingress-nginx.yaml, copied into --registry-dir as CONTRIBUTING says,
+// loads and validates, and the conflict it raises says to copy the file
+// again rather than to replace ingress-nginx too.
+func TestMergeConflictsOutdatedCopy(t *testing.T) {
+	const v020 = `schema_version: 2
+id: rke2-ingress-nginx
+display_name: RKE2 Ingress NGINX
+matchers:
+  images:
+    - rancher/nginx-ingress-controller # tagged nginx-<version>-hardenedN
+  charts:
+    - rke2-ingress-nginx
+support:
+  status: supported
+  citations:
+    - https://www.suse.com/c/kubecon-eu-2026-rke2-nginx-traefik-support/
+    - https://docs.rke2.io/reference/ingress_migration
+compat:
+  - range: ">=0.0.0"
+    k8s_max: "1.36"
+    citations:
+      - https://www.suse.com/c/kubecon-eu-2026-rke2-nginx-traefik-support/
+recommendation: Migrate to Traefik, the default RKE2 ingress controller from v1.36 (see the RKE2 ingress migration guide).
+`
+	extra, err := LoadExtra(writeEntry(t, t.TempDir(), "rke2-ingress-nginx.yaml", v020))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := MergeConflicts(base, extra)
+	if len(errs) != 1 {
+		t.Fatalf("want one conflict, got %v", errs)
+	}
+	msg := errs[0].Error()
+	for _, want := range []string{`"rancher/nginx-ingress-controller:*-hardened*"`, "copy of registry/data/rke2-ingress-nginx.yaml", "under ingress-nginx"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("conflict %q does not say %s", msg, want)
+		}
+	}
+	if strings.Contains(msg, "replace the embedded entry by using its id") {
+		t.Errorf("conflict %q tells an entry that already replaces its embedded one to replace by id", msg)
 	}
 }

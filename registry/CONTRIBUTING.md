@@ -282,7 +282,13 @@ single `<id>.yaml` file or a directory of them, in the schema above.
   matcher claims an image or chart that an embedded entry of another id
   already claims (the same repository, or a longer mirror path of it) stops
   the command at start, naming both entries: replace the embedded entry
-  instead, by using its id. An `id` that is another entry's chart name (or
+  instead, by using its id. A copy of an embedded file taken from an
+  earlier release can conflict the same way when a later release moves a
+  claim to another entry (RKE1's `rancher/nginx-ingress-controller` builds
+  moved from rke2-ingress-nginx to ingress-nginx, #265); the error then
+  names the matcher the current embedded entry uses and says to copy the
+  current file again and re-apply your edits. Re-check your copies against
+  `registry/data/` when you upgrade. An `id` that is another entry's chart name (or
   a chart that is another entry's id) is refused the same way, because a
   pod's `app.kubernetes.io/name` label names an add-on by either.
 - The entries are part of the knowledge base version a report carries.
