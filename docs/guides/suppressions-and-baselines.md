@@ -292,9 +292,9 @@ removes the destination first (`rm -f --`): a pull request can commit
 `cp` would write through it, and that step would then overwrite the trusted
 content. `config` names the copy, not `trusted/...`, because the config's
 file globs resolve relative to the config's directory. `CODEOWNERS` with
-required code-owner review on the
-two files and on `.github/workflows/` covers what a checkout cannot, and
-the workflow can be edited by a pull request too:
+required code-owner review on the two files and on `.github/workflows/`
+covers what a checkout cannot, and the workflow can be edited by a pull
+request too:
 
 ```yaml
 on: pull_request

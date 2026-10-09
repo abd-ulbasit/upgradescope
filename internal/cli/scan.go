@@ -59,9 +59,10 @@ func ExitCode(err error) int {
 // ErrorText is err as the process prints it on stderr. An error can quote
 // a file name or a value from the manifests being scanned, so every control
 // character in it is shown as an escape, a newline too: a name holding a
-// newline must not start a second, forged line. The one newline kept is the
-// separator errors.Join writes between the errors it joins, found by walking
-// the error tree rather than by looking at the text.
+// newline must not start a second, forged line. The only newlines kept are
+// those between the errors of a newline-joined multi-error (errors.Join's,
+// or several %w joined by newlines alone), found by walking the error tree
+// rather than by looking at the text.
 func ErrorText(err error) string {
 	var b strings.Builder
 	writeError(&b, err)

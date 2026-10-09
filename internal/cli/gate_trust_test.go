@@ -16,7 +16,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
 
-// SE-19: what the gate trusts. On a pull_request the config, the
+// SE-22: what the gate trusts. On a pull_request the config, the
 // annotations and the baseline all come from the pull request's tree, and
 // the docs say so (TestDocsSayWhoCanTurnTheGateOff).
 

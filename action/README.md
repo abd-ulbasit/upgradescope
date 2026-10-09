@@ -248,10 +248,10 @@ commit `.upgradescope.yaml` as a symlink to a file an earlier step writes, a
 plain `cp` would write through it, and that step would then overwrite the
 trusted content. `config` names the copy, not `trusted/...`, because the
 config's file globs resolve relative to the config's directory. Annotations
-stay honoured and have no input to turn them off: put
-`CODEOWNERS` with required review on the config, the baseline and
-`.github/workflows/`, and to fail the job when an annotation suppressed a
-finding, add after the gate step:
+stay honoured and have no input to turn them off: put `CODEOWNERS` with
+required review on the config, the baseline and `.github/workflows/`, and to
+fail the job when an annotation suppressed a finding, add after the gate
+step:
 
 ```yaml
       - if: ${{ !cancelled() && steps.gate.outputs.report-json != '' }}
