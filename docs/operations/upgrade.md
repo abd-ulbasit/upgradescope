@@ -92,8 +92,9 @@ helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
   `agent.extraArgs` and the token Secret before you upgrade: an agent
   given one of them crash-loops with `invalid --<flag>` in its log. A
   `--force-sync-every` below `--interval` is still accepted and still
-  means a push on every tick; the agent logs a warning with the period in
-  effect ([Troubleshooting](../troubleshooting.md#the-agent)).
+  means a push on every tick, and so now does one equal to it (which used
+  to force-sync only on the ticks the jitter brought late, about half of
+  them); the agent logs a warning with the period in effect ([Troubleshooting](../troubleshooting.md#the-agent)).
 - **The agent's tick reserve.** Collection now ends 30 seconds before the
   tick deadline (half of it when the deadline is under a minute), keeping
   that reserve for the status write, its error marker and the push: at

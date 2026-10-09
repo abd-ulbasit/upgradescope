@@ -34,7 +34,7 @@ upgradescope agent [flags]
       --cluster-name string         cluster label sent to the server, an RFC 1123 subdomain of at most 253 bytes (default: cluster UID)
       --context string              kubeconfig context to use
       --cr-name string              ClusterReadiness object name, an RFC 1123 subdomain of at most 253 bytes (changing it leaves the old object behind: kubectl delete ucr <old-name>) (default "cluster")
-      --force-sync-every duration   push a snapshot even if unchanged after this long; must be positive, and a value below --interval means every tick (default 1h0m0s)
+      --force-sync-every duration   push a snapshot even if unchanged after this long; must be positive, and a value at or below --interval means every tick (default 1h0m0s)
       --health-addr string          listen address for /healthz, /readyz and /metrics (empty = disabled) (default ":8081")
   -h, --help                        help for agent
       --interval duration           evaluation interval (minimum 1m) (default 10m0s)

@@ -118,8 +118,8 @@ To accept a finding for now, with a reason and an expiry, use an
   `--from-file`, is trimmed from every source); `--cluster-name` may not
   be set to `""` (leave it out to use the cluster UID); and
   `--force-sync-every` must be positive (0 no longer means the 1h
-  default). A `--force-sync-every` below `--interval` is not refused: it
-  means an unchanged inventory is pushed on every tick, as before, and the
+  default). A `--force-sync-every` at or below `--interval` is not refused:
+  it means an unchanged inventory is pushed on every tick, and the
   agent logs a warning with the period in effect, nine tenths of the
   interval, the shortest gap the tick jitter leaves between two ticks.
 - **The pod never becomes Ready.** Readiness waits for a successful tick.

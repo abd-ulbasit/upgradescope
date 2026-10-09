@@ -69,31 +69,38 @@ func TestValidateForceSyncEvery(t *testing.T) {
 	}
 }
 
-// A period below the interval means "every tick", as it did before #238:
+// A period at or below the interval means "every tick", as it did before #238:
 // Run lowers it to the shortest spacing two ticks can have (the jitter
 // floor, 9/10 of the interval) and says so. Raising it to the interval
 // instead skipped the force-sync on every tick the jitter brought early.
 func TestRunForceSyncBelowTheIntervalMeansEveryTick(t *testing.T) {
-	logs := &syncBuffer{}
-	srv := newSnapServer(t)
-	cfg := Config{ServerURL: srv.srv.URL, ServerToken: "t", ForceSyncEvery: 30 * time.Second, Interval: 5 * time.Minute,
-		Logger: slog.New(slog.NewJSONHandler(logs, nil))}
-	runOneTick(t, fakeAPIExt(), cfg)
-	var warned bool
-	for _, l := range logs.lines(t) {
-		if l["level"] == "WARN" && strings.Contains(l["msg"].(string), "every tick") &&
-			l["forceSyncEvery"] == "30s" && l["interval"] == "5m0s" && l["inEffect"] == "4m30s" {
-			warned = true
+	for _, tc := range []struct{ forceSync, inEffect string }{{"30s", "4m30s"}, {"5m0s", "4m30s"}} {
+		logs := &syncBuffer{}
+		srv := newSnapServer(t)
+		fs, err := time.ParseDuration(tc.forceSync)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if !warned {
-		t.Errorf("no WARN line saying a 30s force-sync-every means every 5m tick (4m30s in effect): %v", logs.lines(t))
+		cfg := Config{ServerURL: srv.srv.URL, ServerToken: "t", ForceSyncEvery: fs, Interval: 5 * time.Minute,
+			Logger: slog.New(slog.NewJSONHandler(logs, nil))}
+		runOneTick(t, fakeAPIExt(), cfg)
+		var warned bool
+		for _, l := range logs.lines(t) {
+			if l["level"] == "WARN" && strings.Contains(l["msg"].(string), "every tick") &&
+				l["forceSyncEvery"] == tc.forceSync && l["interval"] == "5m0s" && l["inEffect"] == tc.inEffect {
+				warned = true
+			}
+		}
+		if !warned {
+			t.Errorf("no WARN line saying a %s force-sync-every means every 5m tick (%s in effect): %v", tc.forceSync, tc.inEffect, logs.lines(t))
+		}
 	}
 	for _, tc := range []struct{ forceSync, interval, want time.Duration }{
 		{30 * time.Second, 5 * time.Minute, 4*time.Minute + 30*time.Second},
 		{time.Minute, 10 * time.Minute, 9 * time.Minute},
-		{9*time.Minute + 59*time.Second, 10 * time.Minute, 9 * time.Minute}, // below the interval: every tick, even above the floor
-		{10 * time.Minute, 10 * time.Minute, 10 * time.Minute},              // not below: kept
+		{9*time.Minute + 59*time.Second, 10 * time.Minute, 9 * time.Minute},            // below the interval: every tick, even above the floor
+		{10 * time.Minute, 10 * time.Minute, 9 * time.Minute},                          // at the interval: every tick too
+		{10*time.Minute + time.Second, 10 * time.Minute, 10*time.Minute + time.Second}, // above: kept
 		{time.Hour, 10 * time.Minute, time.Hour},
 	} {
 		if got := forceSyncInEffect(tc.forceSync, tc.interval); got != tc.want {
@@ -105,21 +112,26 @@ func TestRunForceSyncBelowTheIntervalMeansEveryTick(t *testing.T) {
 // The reviewer's case: --force-sync-every 1m with --interval 10m pushed an
 // unchanged inventory on every tick before #238, and must still when the
 // jitter brings a tick early (0.95 × the interval, and the floor itself).
+// A period equal to the interval (10m/10m) means every tick as well.
 func TestForceSyncBelowTheIntervalPushesEveryEarlyTick(t *testing.T) {
-	srv := newSnapServer(t)
-	r := testRunner(t, fakeDyn(), srv.srv.URL)
-	r.cfg.Interval = 10 * time.Minute
-	r.cfg.ForceSyncEvery = forceSyncInEffect(time.Minute, r.cfg.Interval)
-	cur := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	r.now = func() time.Time { return cur }
-	for i, gap := range []time.Duration{0, r.cfg.Interval * 95 / 100, minTickSpacing(r.cfg.Interval), r.cfg.Interval * 11 / 10} {
-		cur = cur.Add(gap)
-		if err := r.tick(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if srv.count() != i+1 {
-			t.Fatalf("after a tick %v after the last: %d pushes, want %d (an unchanged inventory pushed every tick)", gap, srv.count(), i+1)
-		}
+	for _, asked := range []time.Duration{time.Minute, 10 * time.Minute} {
+		t.Run(asked.String(), func(t *testing.T) {
+			srv := newSnapServer(t)
+			r := testRunner(t, fakeDyn(), srv.srv.URL)
+			r.cfg.Interval = 10 * time.Minute
+			r.cfg.ForceSyncEvery = forceSyncInEffect(asked, r.cfg.Interval)
+			cur := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+			r.now = func() time.Time { return cur }
+			for i, gap := range []time.Duration{0, r.cfg.Interval * 95 / 100, minTickSpacing(r.cfg.Interval), r.cfg.Interval * 11 / 10} {
+				cur = cur.Add(gap)
+				if err := r.tick(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if srv.count() != i+1 {
+					t.Fatalf("after a tick %v after the last: %d pushes, want %d (an unchanged inventory pushed every tick)", gap, srv.count(), i+1)
+				}
+			}
+		})
 	}
 }
 

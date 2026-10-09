@@ -260,7 +260,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().StringVar(&opts.crName, "cr-name", "cluster", "ClusterReadiness object name, an RFC 1123 subdomain of at most 253 bytes (changing it leaves the old object behind: kubectl delete ucr <old-name>)")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour,
-		"push a snapshot even if unchanged after this long; must be positive, and a value below --interval means every tick")
+		"push a snapshot even if unchanged after this long; must be positive, and a value at or below --interval means every tick")
 	cmd.Flags().StringSliceVar(&opts.targets, "targets", nil,
 		"target minors, CSV, e.g. 1.37,1.38, at most 8 distinct minors (the ClusterReadiness spec.targets cap; more is refused at start); when set, the ClusterReadiness spec.targets is reconciled to them every tick (overriding kubectl edits)")
 	cmd.Flags().BoolVar(&opts.manageCRD, "manage-crd", true,

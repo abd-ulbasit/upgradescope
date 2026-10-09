@@ -119,8 +119,8 @@ func ValidateServerToken(tok string) error {
 // ValidateForceSyncEvery rejects a force-sync period that is not positive.
 // Config treats a zero ForceSyncEvery as unset (1h), but a caller that was
 // given one explicitly (--force-sync-every) must not have 0 silently mean
-// the default, nor a negative period mean every tick (#238). A period
-// below the interval is not refused: it means every tick
+// the default, nor a negative period mean every tick (#238). A period at
+// or below the interval is not refused: it means every tick
 // (forceSyncInEffect), and Run says so.
 func ValidateForceSyncEvery(d time.Duration) error {
 	if d <= 0 {
@@ -141,14 +141,15 @@ func minTickSpacing(interval time.Duration) time.Duration {
 	return interval - interval/10
 }
 
-// forceSyncInEffect is the force-sync period the agent applies. One below
-// the interval asks for more than one push a tick, so it means every tick,
-// as it did before #238: it is lowered to minTickSpacing, which no tick
-// spacing can undercut. Raising it to the interval instead would skip the
-// force-sync on every tick the jitter brings early, about half of them,
-// since maybePush compares it to the time since the last push.
+// forceSyncInEffect is the force-sync period the agent applies. One at or
+// below the interval asks for a push every tick (or more than one), so it
+// means every tick, as it did before #238: it is lowered to
+// minTickSpacing, which no tick spacing can undercut. Keeping it at the
+// interval instead would skip the force-sync on every tick the jitter
+// brings early, about half of them, since maybePush compares it to the
+// time since the last push.
 func forceSyncInEffect(forceSync, interval time.Duration) time.Duration {
-	if forceSync < interval {
+	if forceSync <= interval {
 		return minTickSpacing(interval)
 	}
 	return forceSync
@@ -643,10 +644,10 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	if log == nil {
 		log = slog.Default()
 	}
-	if cfg.ServerURL != "" && cfg.ForceSyncEvery < cfg.Interval {
+	if cfg.ServerURL != "" && cfg.ForceSyncEvery <= cfg.Interval {
 		asked := cfg.ForceSyncEvery
 		cfg.ForceSyncEvery = forceSyncInEffect(asked, cfg.Interval)
-		log.Warn("force-sync-every is below the interval: an unchanged inventory is pushed every tick, as the agent pushes at most once a tick",
+		log.Warn("force-sync-every is at or below the interval: an unchanged inventory is pushed every tick, as the agent pushes at most once a tick",
 			"forceSyncEvery", asked.String(), "interval", cfg.Interval.String(), "inEffect", cfg.ForceSyncEvery.String())
 	}
 	obs := newObserver(log, k, cfg.Interval)
