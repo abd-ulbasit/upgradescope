@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -154,6 +155,7 @@ func TestFlushLatestOnlyBuffer(t *testing.T) {
 func TestFlushRetriesTransientWithBackoff(t *testing.T) {
 	rec := &pushRecorder{}
 	p, slept := newTestPusher(t, rec, http.StatusInternalServerError, http.StatusBadGateway, http.StatusAccepted)
+	p.jitter = func() float64 { return 0.5 } // half of each step
 	p.offer(testPayload("c"))
 	if err := p.flush(context.Background()); err != nil {
 		t.Fatalf("flush should succeed on third attempt: %v", err)
@@ -161,7 +163,7 @@ func TestFlushRetriesTransientWithBackoff(t *testing.T) {
 	if rec.requests() != 3 {
 		t.Errorf("requests = %d, want 3", rec.requests())
 	}
-	if want := []time.Duration{time.Second, 2 * time.Second}; len(*slept) != 2 || (*slept)[0] != want[0] || (*slept)[1] != want[1] {
+	if want := []time.Duration{500 * time.Millisecond, time.Second}; len(*slept) != 2 || (*slept)[0] != want[0] || (*slept)[1] != want[1] {
 		t.Errorf("backoff sleeps = %v, want %v", *slept, want)
 	}
 }
@@ -330,13 +332,15 @@ func TestFlushHonoursRetryAfter(t *testing.T) {
 		header string
 		want   time.Duration
 	}{
+		// At the bottom of the jitter band (a draw of 0): exactly the
+		// server's ask, and for no ask the fully jittered step's 0.
 		{"429 seconds", http.StatusTooManyRequests, "20", 20 * time.Second},
 		{"503 seconds", http.StatusServiceUnavailable, "10", 10 * time.Second},
 		{"capped at the backoff maximum", http.StatusServiceUnavailable, "3600", maxPushBackoff},
-		{"shorter than the backoff step", http.StatusServiceUnavailable, "0", time.Second},
+		{"no ask", http.StatusServiceUnavailable, "0", 0},
 		{"http-date", http.StatusTooManyRequests, future, 30 * time.Second},
-		{"unparseable", http.StatusTooManyRequests, "soon", time.Second},
-		{"negative", http.StatusTooManyRequests, "-5", time.Second},
+		{"unparseable", http.StatusTooManyRequests, "soon", 0},
+		{"negative", http.StatusTooManyRequests, "-5", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls int
@@ -357,6 +361,7 @@ func TestFlushHonoursRetryAfter(t *testing.T) {
 				return nil
 			}
 			p.now = func() time.Time { return now }
+			p.jitter = func() float64 { return 0 }
 			p.offer(testPayload("c"))
 			if err := p.flush(context.Background()); err != nil {
 				t.Fatalf("flush: %v", err)
@@ -371,17 +376,19 @@ func TestFlushHonoursRetryAfter(t *testing.T) {
 	}
 }
 
-// Retry-After repeated on every retry: each wait is the larger of the backoff
-// step and the server's ask (3s, 3s, then the 4s step), and a huge ask is
-// capped at the backoff maximum on every attempt.
+// Retry-After repeated on every retry: each wait is the larger of the
+// jittered backoff step and the server's ask (at a draw of 0.95 the steps
+// are 0.95s, 1.9s and 3.8s, the 3s ask 3.7125s: the ask twice, then the
+// step), and a huge ask is capped at the backoff maximum, plus its
+// jitter, on every attempt.
 func TestFlushRetryAfterOnEveryAttempt(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		header string
 		want   []time.Duration
 	}{
-		{"mixed with the backoff steps", "3", []time.Duration{3 * time.Second, 3 * time.Second, 4 * time.Second}},
-		{"capped every time", "3600", []time.Duration{maxPushBackoff, maxPushBackoff, maxPushBackoff}},
+		{"mixed with the backoff steps", "3", []time.Duration{3712500 * time.Microsecond, 3712500 * time.Microsecond, 3800 * time.Millisecond}},
+		{"capped every time", "3600", []time.Duration{74250 * time.Millisecond, 74250 * time.Millisecond, 74250 * time.Millisecond}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls int
@@ -397,6 +404,7 @@ func TestFlushRetryAfterOnEveryAttempt(t *testing.T) {
 				slept = append(slept, d)
 				return nil
 			}
+			p.jitter = func() float64 { return 0.95 }
 			p.offer(testPayload("c"))
 			err := p.flush(context.Background())
 			if err == nil || !strings.Contains(err.Error(), "503") {
@@ -661,5 +669,70 @@ func TestLoadServerCAsRejectsUnusableFiles(t *testing.T) {
 		if _, err := LoadServerCAs(f); err == nil || !strings.Contains(err.Error(), f) {
 			t.Errorf("LoadServerCAs(%q) = %v, want an error naming the file", f, err)
 		}
+	}
+}
+
+// Every retry delay is in its jitter band: the backoff step fully
+// jittered, from 0 to the step, and a Retry-After never shortened, at
+// most a quarter longer. Draws from a seeded source cover the band.
+func TestRetryDelayJitterBand(t *testing.T) {
+	rng := rand.New(rand.NewPCG(238, 1))
+	for _, ask := range []time.Duration{0, 10 * time.Second, time.Hour} {
+		for attempt := range pushRetries {
+			lo := min(ask, maxPushBackoff)
+			hi := max(backoff(attempt), lo+lo/4)
+			seen := map[time.Duration]bool{}
+			for range 200 {
+				d := retryDelay(attempt, ask, rng.Float64())
+				if d < lo || d > hi {
+					t.Fatalf("retryDelay(%d, %v) = %v, outside [%v, %v]", attempt, ask, d, lo, hi)
+				}
+				seen[d] = true
+			}
+			if len(seen) < 150 {
+				t.Errorf("retryDelay(%d, %v): %d distinct delays in 200 draws, want them spread over the band", attempt, ask, len(seen))
+			}
+		}
+	}
+}
+
+// #238: agents started together push together (the first tick is not
+// jittered), so a server whose ingest budget is full answers them all with
+// the same 503 and Retry-After: 10. Their retries must not land together
+// again 10s later: each agent's own random source spreads them over 10s
+// to 12.5s.
+func TestFlushRetriesOfAgentsStartedTogetherSpreadOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "10")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	const agents = 50
+	var first []time.Duration
+	for i := range agents {
+		p := newPusher(srv.URL, "sekret", nil)
+		p.jitter = rand.New(rand.NewPCG(uint64(i), 238)).Float64
+		var waits []time.Duration
+		p.wait = func(_ context.Context, d time.Duration) error {
+			waits = append(waits, d)
+			return nil
+		}
+		p.offer(testPayload("c"))
+		_ = p.flush(context.Background())
+		if len(waits) != pushRetries {
+			t.Fatalf("agent %d waited %v, want %d retries", i, waits, pushRetries)
+		}
+		first = append(first, waits[0])
+	}
+	slices.Sort(first)
+	lo, hi := first[0], first[len(first)-1]
+	if lo < 10*time.Second || hi > 12500*time.Millisecond {
+		t.Errorf("first retries in [%v, %v], want within [10s, 12.5s]", lo, hi)
+	}
+	if spread := hi - lo; spread < 2*time.Second {
+		t.Errorf("first retries of %d agents spread over %v, want them over most of the 2.5s band", agents, spread)
+	}
+	if n := len(slices.Compact(first)); n < agents-2 {
+		t.Errorf("%d distinct first-retry times among %d agents, want them apart", n, agents)
 	}
 }
