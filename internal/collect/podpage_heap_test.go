@@ -197,6 +197,10 @@ const podPageHeapBound = 144 << 20
 // attempts in four runs, 3 of 5 in one of them. At that run's rate, 5
 // attempts fail a run about once in 13 (0.6^5), 10 about once in 165
 // (0.6^10); the four runs' rate (0.2^10) makes it about once in 10 million.
+// Five runs of this test (at 443a542, before this change's last rebase onto
+// main, 9 October 2026; docs/claims.md PF-02)
+// all passed: 8 of their 50 worst-case attempts read past the bound, and
+// none of the runs had fewer than 6 of 10 under it.
 const podPageAttempts = 10
 
 // liveHeapBracket runs f as peakLiveHeap does, a goroutine forcing full

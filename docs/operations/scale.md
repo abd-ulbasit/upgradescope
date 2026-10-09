@@ -328,8 +328,14 @@ them without a watch (AG-01) and without reading pods less often:
   153.8 MiB in those runs: #251's CI read 153.0 MiB and failed the 128 MiB
   the test enforced then, 2.5 to 3.5 MiB above an Apple M1 Pro's readings.
   So the test lists each case 10 times, passes on the lowest upper bound,
-  and enforces 144 MiB: 18.7 MiB (14.9%) above the highest upper bound
-  read, and 86.4 MiB under the agent's `GOMEMLIMIT` (90% of 256Mi, 230.4
+  and enforces 144 MiB. Five dispatched runs of the final test, at
+  `443a542` (this change before its last rebase onto main; runs 37987299524, 37987318295, 37990925915, 37994320874 and
+  37996739083, 9 October 2026), all passed it: the worst case between 123.0
+  and 125.1 MiB (lower bounds 119.4 to 123.8, per attempt), a run of large
+  pods 62.4 to 63.5, production-sized pods 33.0 to 33.4 (lower bounds); 8 of
+  the 50 worst-case attempts read past 144 MiB, up to 153.7 (garbage), and
+  every run had at least 6 of its 10 under it. 144 MiB is 18.7 MiB (14.9%)
+  above the highest upper bound read, and 86.4 MiB under the agent's `GOMEMLIMIT` (90% of 256Mi, 230.4
   MiB) for the rest of the agent and a collection's garbage. The 40 KiB
   pods are an example, not the bound: at the rate they measured, about 3.2
   bytes of live heap per encoded byte (125.3 MiB for 39.4 MiB), one page of
