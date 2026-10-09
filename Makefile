@@ -261,6 +261,14 @@ pg-test:
 gen-kb:
 	cd tools/gen-kb && go generate ./...
 
+# kb-derived rewrites the committed files the embedded KB feeds (the
+# support-lifecycle doc's scan examples, the chart's KB RBAC rules) through
+# the tests that pin them (hack/kb-derived.sh); kb-refresh.yml's registry
+# job runs it after eol-sync, so its PR carries both.
+.PHONY: kb-derived
+kb-derived:
+	./hack/kb-derived.sh
+
 .PHONY: eol-sync eol-check
 eol-sync:
 	cd tools/eol-sync && go run . -dir ../../registry/data
@@ -353,6 +361,7 @@ hack-test:
 	./hack/release-ci-permissions_test.sh
 	./hack/release-caches_test.sh
 	./hack/kb-refresh-ci_test.sh
+	./hack/kb-derived_test.sh
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh
 	./hack/check-asset-names_test.sh

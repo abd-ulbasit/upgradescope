@@ -305,12 +305,18 @@ jobs:
           git apply "$PATCH"
           git status --short
 
+      # The doc examples the registry feeds, in the same commit (hack/kb-derived.sh).
+      - name: Regenerate what the data feeds
+        run: make kb-derived
+
       - name: Open PR if anything changed
         id: pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: bot/kb-refresh-registry
-          add-paths: registry/data
+          add-paths: |
+            registry/data
+            docs/concepts/support-lifecycle.md
           commit-message: |
             chore(registry): weekly endoflife.date sync
 
