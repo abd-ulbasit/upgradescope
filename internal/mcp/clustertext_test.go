@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -377,6 +378,29 @@ func TestCutKeysStayDistinct(t *testing.T) {
 	})
 	t.Run("two long names with the same form", func(t *testing.T) {
 		check(t, objectOf(long1, "1", long2, "2", long1+"x", "3", long1+"y", "4"))
+	})
+	t.Run("in every order", func(t *testing.T) {
+		names := []string{"a", form, numbered(form, 2), long1, long2}
+		var permute func(rest, done []string)
+		var orders int
+		permute = func(rest, done []string) {
+			if len(rest) == 0 {
+				orders++
+				var kv []string
+				for i, n := range done {
+					kv = append(kv, n, strconv.Itoa(i))
+				}
+				check(t, objectOf(kv...))
+				return
+			}
+			for i := range rest {
+				permute(slices.Concat(rest[:i], rest[i+1:]), append(slices.Clone(done), rest[i]))
+			}
+		}
+		permute(names, nil)
+		if orders != 120 {
+			t.Errorf("%d orders", orders)
+		}
 	})
 	t.Run("objects have their own names", func(t *testing.T) {
 		out, _, err := markClusterText(objectOf("one", string(objectOf(form, "1", long1, "2")), "two", string(objectOf(long1, "3")), "three", string(objectOf(form, "4"))))
