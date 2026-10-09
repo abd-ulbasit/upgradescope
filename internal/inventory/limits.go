@@ -115,6 +115,8 @@ const cutMark = " …(cut)"
 //     and ignore-reason annotations (up to 256 KiB), to MaxStringBytes:
 //     Ignore to the comma-separated tokens that fit whole, IgnoreReason
 //     ending in cutMark;
+//   - an object's RenderedFrom, the text of a Helm manifest's "# Source:"
+//     comment, to MaxStringBytes, ending in cutMark;
 //   - a GitOps chart's Chart, Version and Repo, copied from a custom
 //     resource's spec, to MaxStringBytes, ending in cutMark.
 //
@@ -149,6 +151,9 @@ func (inv *Inventory) CutFreeText() bool {
 				}
 				if s, ok := cutText(o.IgnoreReason, MaxStringBytes); ok {
 					o.IgnoreReason, cut = s, true
+				}
+				if s, ok := cutText(o.RenderedFrom, MaxStringBytes); ok { // a "# Source:" comment's text
+					o.RenderedFrom, cut = s, true
 				}
 			}
 		}

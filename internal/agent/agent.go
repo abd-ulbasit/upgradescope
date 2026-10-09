@@ -415,6 +415,11 @@ func (r *runner) tick(ctx context.Context) error {
 	cctx, cancel := ph.collect()
 	inv := r.collectFn(cctx)
 	cancel()
+	// collect.Collect leaves nothing the server would refuse; this holds
+	// whatever the collector (collectFn is injectable), and makes the status
+	// written and the snapshot pushed one inventory (#268). It changes
+	// nothing in an inventory that is already conformed.
+	_, _ = inv.Conform()
 	r.last.caps = inv.Capabilities
 
 	// The ClusterReadiness calls share the status slice of the reserve;
@@ -679,6 +684,15 @@ func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) (pushed
 	}
 	if hash == r.lastHash && r.now().Sub(r.lastPush) < r.cfg.ForceSyncEvery {
 		return false, nil
+	}
+	// The server refuses (422) an inventory that is not admissible, for
+	// good: the same content is offered every tick, as lastHash moves only
+	// on success. Conform has left out what could be, so an inventory still
+	// refused here has a value no repair mends; say so rather than send it.
+	// (Admit works on a copy: it cuts free text in place, in maps shared with
+	// inv, which is already cut.)
+	if aerr := inv.Admit(); aerr != nil {
+		return false, fmt.Errorf("push skipped: the server would refuse this inventory (422), so it is not sent: %w", aerr)
 	}
 	name := r.cfg.ClusterName
 	if name == "" {

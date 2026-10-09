@@ -18,6 +18,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -421,7 +422,14 @@ func helmRevisionOf(m metav1.PartialObjectMetadata) (name string, rev int, ok bo
 	if !ok {
 		return "", 0, false
 	}
+	// The name label is a free label value, written by whoever can label
+	// the object; Helm's release names are RFC 1123 subdomains. One that is
+	// not is not the release's (the apiserver validated the object's name,
+	// which carries it too), so the name comes from there.
 	name = m.Labels["name"]
+	if name != "" && len(content.IsDNS1123Subdomain(name)) > 0 {
+		name = ""
+	}
 	if name == "" {
 		if i := strings.LastIndex(rest, ".v"); i > 0 {
 			name = rest[:i]

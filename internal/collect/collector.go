@@ -190,8 +190,14 @@ func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
 	}
 	// A reason joins one failure per resource a step could not read, and
 	// object refs carry their ignore annotations whole: cut both to the
-	// inventory limits, which the server refuses a push beyond.
-	inv.CutFreeText()
+	// inventory limits, which the server refuses a push beyond. What is
+	// beyond them and cannot be cut (a Helm release or a manifest object
+	// whose name is no identifier, an image repository of 17 KiB) is left
+	// out and named in its capability (#268): the server refuses a whole
+	// inventory for one such value, and the agent would offer the same one
+	// every tick. What no repair can mend is left, and the agent, which
+	// checks again before it pushes, does not send it.
+	_, _ = inv.Conform()
 }
 
 // stepContext derives a step's context from the scan's: an equal share of

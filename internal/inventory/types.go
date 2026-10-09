@@ -296,7 +296,7 @@ const (
 
 // GitOpsChart is a Helm chart a GitOps tool deploys into the cluster, read
 // from the tool's own custom resource: an Argo CD Application source with
-// chart set, or a Flux HelmRelease. Argo CD renders with helm template and
+// chart set (or a native OCI source: repoURL oci://..., no chart field), or a Flux HelmRelease. Argo CD renders with helm template and
 // leaves no release the Helm collector can read, so this is all that is
 // known of its chart: no appVersion, no stored manifest. (Flux's
 // helm-controller does leave a release Secret, which the Helm collector
@@ -313,7 +313,7 @@ type GitOpsChart struct {
 	Target string `json:"target,omitempty"`
 	Chart  string `json:"chart"`
 	// Version is the chart version as the resource spells it, which may be
-	// a constraint ("4.*", ">=4.0.0"), a tag, or the digest an Flux
+	// a constraint ("4.*", ">=4.0.0"), a tag, or the digest a Flux
 	// OCIRepository pins ("sha256:..."; Flux applies a digest over a semver
 	// range over a tag, and so is it recorded); "" when it names none. An
 	// Argo CD source's is its targetRevision.
