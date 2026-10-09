@@ -69,8 +69,9 @@ func CleartextWarning(serverURL, token string) string {
 }
 
 // get returns the 2xx JSON body of GET path. Any other status is an error
-// carrying the server's own message, so an assistant sees "401 Unauthorized:
-// ..." and can tell the user to supply the read token.
+// carrying the server's own message, cut to MaxClusterTextBytes, so an
+// assistant sees "401 Unauthorized ..." and can tell the user to supply the
+// read token.
 func (f *Fleet) get(ctx context.Context, path string, query url.Values) (json.RawMessage, error) {
 	u := f.BaseURL + path
 	if len(query) > 0 {
@@ -90,7 +91,7 @@ func (f *Fleet) get(ctx context.Context, path string, query url.Values) (json.Ra
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("upgradescope server: GET %s: %w", path, err)
+		return nil, &outsideError{fmt.Sprintf("upgradescope server: GET %s: ", path), err}
 	}
 	defer resp.Body.Close()
 	if resp.ContentLength > maxFleetResponseBytes {
@@ -98,21 +99,24 @@ func (f *Fleet) get(ctx context.Context, path string, query url.Values) (json.Ra
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxFleetResponseBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("upgradescope server: GET %s: reading the response: %w", path, err)
+		return nil, &outsideError{fmt.Sprintf("upgradescope server: GET %s: reading the response: ", path), err}
 	}
 	if len(raw) > maxFleetResponseBytes {
 		return nil, fmt.Errorf("upgradescope server: GET %s: response is larger than %s, the most a tool reads", path, mib(maxFleetResponseBytes))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// The status code and Go's text for it, not resp.Status, whose
+		// reason phrase is the server's to choose; and the tool's hint
+		// before the server's own message, which is cut.
+		msg := fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+		if resp.StatusCode == http.StatusUnauthorized && f.Token == "" {
+			msg += " (the server requires a read token: start 'upgradescope mcp' with --read-token, --read-token-file or $UPGRADESCOPE_READ_TOKEN)"
+		}
 		var e struct {
 			Error string `json:"error"`
 		}
-		msg := resp.Status
 		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
-			msg += ": " + e.Error
-		}
-		if resp.StatusCode == http.StatusUnauthorized && f.Token == "" {
-			msg += " (the server requires a read token: start 'upgradescope mcp' with --read-token, --read-token-file or $UPGRADESCOPE_READ_TOKEN)"
+			msg += ": the server says: " + quoteOutside(e.Error)
 		}
 		return nil, fmt.Errorf("upgradescope server: GET %s: %s", path, msg)
 	}
@@ -130,7 +134,7 @@ func (f *Fleet) clusterID(ctx context.Context, cluster string) (int64, string, e
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(raw, &rows); err != nil {
-		return 0, "", fmt.Errorf("upgradescope server: decoding the cluster list: %w", err)
+		return 0, "", &outsideError{"upgradescope server: decoding the cluster list: ", err}
 	}
 	for _, r := range rows {
 		if r.Name == cluster {
@@ -144,7 +148,7 @@ func (f *Fleet) clusterID(ctx context.Context, cluster string) (int64, string, e
 			}
 		}
 	}
-	return 0, "", fmt.Errorf("the server has no cluster %q (it knows %d; fleet_summary lists them)", cluster, len(rows))
+	return 0, "", fmt.Errorf("the server has no cluster %q (it knows %d; fleet_summary lists them)", quoteOutside(cluster), len(rows))
 }
 
 // Report is the server's report of a cluster at target ("" = the cluster's
