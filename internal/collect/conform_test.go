@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -174,5 +175,39 @@ func TestCollectAdversarialClusterIsAdmitted(t *testing.T) {
 	}
 	if s := skippedOf(inv, inventory.CapHelm); !slices.Equal(s, []string{"tenant/app", "tenant/lab"}) {
 		t.Errorf("helm skipped = %q, want both releases named", s)
+	}
+}
+
+// A pod's creator chooses its image tag, and an add-on's version is read
+// from it: pods that run an add-on's image with a 17 KiB "version" in each
+// of many namespaces (an install is per add-on and namespace) made more
+// installs than Conform's one-at-a-time net drops, and the agent skipped
+// its push on every tick for ever (#268). A tag with no version a release
+// could have reads as no version, and the inventory is admitted.
+func TestCollectAddOnsWithAHostileImageTagInManyNamespacesAreAdmitted(t *testing.T) {
+	hostile := "v1." + strings.Repeat("9", 17<<10)
+	images := []string{
+		"registry.k8s.io/ingress-nginx/controller:" + hostile,
+		"quay.io/jetstack/cert-manager-controller:" + hostile,
+	}
+	var pods []*corev1.Pod
+	for n := range 40 {
+		ns := "tenant-" + strconv.Itoa(n)
+		for i, img := range images {
+			pods = append(pods, &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "p" + strconv.Itoa(i), Namespace: ns},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: img}}},
+			})
+		}
+	}
+	inv := collectCluster(t, pods)
+	requireAdmissible(t, inv)
+	if len(inv.AddOns) == 0 {
+		t.Fatal("no add-on detected: the test must exercise add-on installs")
+	}
+	for _, a := range inv.AddOns {
+		if a.Version != "" {
+			t.Errorf("add-on %s version = %d bytes, want none: the tag names no release", a.ID, len(a.Version))
+		}
 	}
 }

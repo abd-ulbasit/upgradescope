@@ -36,6 +36,12 @@ import (
 //     an identifier, or whose strings are over the limit: the object is
 //     dropped and counted in objectsOmitted, and a namespace key that is not
 //     a namespace name is dropped from the entry's namespaces;
+//   - an add-on install any of whose strings (id, version, chartVersion,
+//     source) is over MaxStringBytes: dropped, in one pass, and addons names
+//     SkippedPods, as an install that is gone may be what blocks an upgrade.
+//     An image tag is a pod creator's, so a version can be 17 KiB of digits
+//     and pods in any number of namespaces make as many such installs; the
+//     one-at-a-time net below could not keep up;
 //   - unrecognizedImages over MaxStringBytes, or beyond MaxUnrecognizedImages:
 //     dropped and counted in unrecognizedImagesOmitted;
 //   - whatever else Admit's identifier and limit checks still refuse, one
@@ -55,6 +61,7 @@ func (inv *Inventory) Conform() (notes []string, err error) {
 	for i := range inv.CRDs {
 		conformUsages(inv.CRDs[i].Usage, CapCRDs, r)
 	}
+	inv.conformAddOns(r)
 	inv.conformImages(r)
 	// What is left is not a shape a collector is known to produce: drop the
 	// element Admit names, until nothing is, or one cannot be dropped. Each
@@ -303,6 +310,27 @@ func objectProblem(o ObjectRef) string {
 		}
 	}
 	return ""
+}
+
+// conformAddOns drops, in one pass, the add-on installs with a string over
+// the limit. An install that is gone may be what blocks an upgrade, so the
+// addons capability names SkippedPods (the engine then reads its gap as
+// required), as dropElement does for the one it drops.
+func (inv *Inventory) conformAddOns(r *repairs) {
+	kept := inv.AddOns[:0]
+	for _, a := range inv.AddOns {
+		if len(a.ID) > MaxStringBytes || len(a.Version) > MaxStringBytes ||
+			len(a.ChartVersion) > MaxStringBytes || len(a.Source) > MaxStringBytes {
+			r.add(CapAddOns, fmt.Sprintf("add-on install(s) dropped for a string over %d bytes", MaxStringBytes), SkippedPods)
+			continue
+		}
+		kept = append(kept, a)
+	}
+	clear(inv.AddOns[len(kept):])
+	inv.AddOns = kept
+	if len(inv.AddOns) == 0 {
+		inv.AddOns = nil
+	}
 }
 
 // conformImages drops the unrecognized image repositories that are over the

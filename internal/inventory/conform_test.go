@@ -301,3 +301,43 @@ func TestConformQuotesAndCutsWhatItNames(t *testing.T) {
 		t.Errorf("reason echoes the identifier: %q", inv.Capabilities[CapHelm].Reason)
 	}
 }
+
+// An add-on install's version is the match of a pattern on an image tag, a
+// pod creator's string, so it can be over the limit, and pods in each of
+// many namespaces make one install each: more than the one-at-a-time net
+// drops. They are dropped in one pass, whatever their number, and addons
+// names the pods it could not assess, so the gap stays required. (Before
+// this, pods in about a dozen namespaces left the inventory unpushable.)
+func TestConformDropsEveryAddOnWithAStringOverTheLimitInOnePass(t *testing.T) {
+	long := "v1." + strings.Repeat("9", MaxStringBytes+1)
+	for name, mutate := range map[string]func(*AddOnInstance){
+		"version":      func(a *AddOnInstance) { a.Version = long },
+		"chartVersion": func(a *AddOnInstance) { a.ChartVersion = long },
+		"id":           func(a *AddOnInstance) { a.ID = long },
+		"source":       func(a *AddOnInstance) { a.Source = long },
+	} {
+		t.Run(name, func(t *testing.T) {
+			inv := conformable()
+			inv.AddOns = []AddOnInstance{{ID: "cert-manager", Version: "1.14.0", Namespaces: []string{"cert-manager"}, Source: "image"}}
+			for i := range 3 * maxFallbackDrops {
+				a := AddOnInstance{ID: "ingress-nginx", Version: "1.8.0", Namespaces: []string{fmt.Sprintf("ns-%d", i)}, Source: "image"}
+				mutate(&a)
+				inv.AddOns = append(inv.AddOns, a)
+			}
+			notes, err := inv.Conform()
+			if err != nil || inv.Admit() != nil {
+				t.Fatalf("Conform = %v, Admit = %v, want an admissible inventory", err, inv.Admit())
+			}
+			if len(inv.AddOns) != 1 || inv.AddOns[0].ID != "cert-manager" {
+				t.Errorf("add-ons = %+v, want only the genuine install", inv.AddOns)
+			}
+			st := inv.Capabilities[CapAddOns]
+			if !st.Partial || !slices.Contains(st.Skipped, SkippedPods) || !strings.Contains(st.Reason, "add-on install(s) dropped for a string over") {
+				t.Errorf("addons = %+v, want partial, skipping %q, saying why", st, SkippedPods)
+			}
+			if len(notes) != 1 || !strings.Contains(notes[0], fmt.Sprintf("%d add-on install(s)", 3*maxFallbackDrops)) {
+				t.Errorf("notes = %q, want every drop counted", notes)
+			}
+		})
+	}
+}

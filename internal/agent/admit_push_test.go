@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -136,5 +137,25 @@ func TestTickDoesNotPushAnInventoryNoRepairMends(t *testing.T) {
 	}
 	if r.last.push != pushFailed {
 		t.Errorf("push outcome = %v, want failed", r.last.push)
+	}
+}
+
+// What the agent leaves out so that the server accepts the push is logged
+// every tick it happens, as counts and kinds with no identifier (an
+// operator can then see why a report is partial without reading it).
+func TestTickLogsWhatConformLeftOut(t *testing.T) {
+	var logs strings.Builder
+	r := testRunner(t, fakeDyn(), "")
+	r.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	r.collectFn = func(context.Context) inventory.Inventory { return hostileInventory() }
+	if err := r.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "inventory conformed") || !strings.Contains(out, "Helm release(s) dropped") {
+		t.Errorf("log = %q, want the tick to say what was left out", out)
+	}
+	if strings.Contains(out, "Bad_Name") {
+		t.Errorf("log = %q, want no hostile identifier", out)
 	}
 }

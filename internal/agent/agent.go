@@ -419,7 +419,16 @@ func (r *runner) tick(ctx context.Context) error {
 	// whatever the collector (collectFn is injectable), and makes the status
 	// written and the snapshot pushed one inventory (#268). It changes
 	// nothing in an inventory that is already conformed.
-	_, _ = inv.Conform()
+	// What it left out is said once per tick: the notes name no identifier
+	// (counts and kinds only), so they are safe to log, and the capability
+	// reasons carry the same for the report.
+	if notes, _ := inv.Conform(); len(notes) > 0 {
+		log := r.cfg.Logger
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Warn("inventory conformed: some data was left out so the server would accept the push", "notes", notes)
+	}
 	r.last.caps = inv.Capabilities
 
 	// The ClusterReadiness calls share the status slice of the reserve;
