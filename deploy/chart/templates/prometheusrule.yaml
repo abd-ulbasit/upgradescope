@@ -66,12 +66,18 @@ spec:
           # No retention prune has completed in over 2 days (it runs at
           # startup and daily), or none has since a server that started
           # more than 2 days ago: the gauge is absent until the first one
-          # does. Job label as for the other server alerts.
+          # does. The third arm is for a server that restarts more often
+          # than that, where the second never holds: a prune failed in the
+          # last 2 days and none has completed since the current process
+          # started. Job label as for the other server alerts.
           expr: |-
             time() - upgradescope_retention_last_success_timestamp_seconds{job="{{ $serverJob }}"} > 172800
             or
             (absent(upgradescope_retention_last_success_timestamp_seconds{job="{{ $serverJob }}"})
               and on() (time() - min(process_start_time_seconds{job="{{ $serverJob }}"}) > 172800))
+            or
+            (absent(upgradescope_retention_last_success_timestamp_seconds{job="{{ $serverJob }}"})
+              and on() increase(upgradescope_retention_prune_failures_total{job="{{ $serverJob }}"}[2d]) > 0)
           for: 15m
           labels:
             severity: warning

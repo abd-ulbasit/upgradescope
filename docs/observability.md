@@ -169,8 +169,10 @@ the gauge at the last complete prune and keeps the rows its committed
 batches deleted (`upgradescope_retention_rows_deleted_total` counts them);
 the next run resumes there. A prune cut short by the server stopping is
 neither. The chart's `UpgradescopeRetentionStale` alert fires when the
-gauge is more than 2 days old, or absent for more than 2 days after the
-server started. Retention failing never fails `/readyz`: a server that
+gauge is more than 2 days old, absent for more than 2 days after the
+server started, or absent after a prune failed in the last 2 days (a
+server that restarts more often than every 2 days, with a startup prune
+that keeps failing). Retention failing never fails `/readyz`: a server that
 cannot prune still ingests and serves, and restarting it would not help,
 so the metric and the log line (`server: retention: ... failed`) are the
 signals ([Retention and backup](operations/retention-and-backup.md#when-the-prune-fails)).

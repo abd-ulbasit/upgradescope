@@ -128,9 +128,12 @@ visible
 
 The chart's `UpgradescopeRetentionStale` alert (`metrics.prometheusRule`;
 not rendered with `server.retention=0`) fires when the gauge is more than
-2 days old, or is absent more than 2 days after the server started. The
-prune runs at startup and then daily, so that is two missed days in a row,
-and the alert waits a further 15 minutes (`for`) after its condition holds.
+2 days old, is absent more than 2 days after the server started, or is
+absent after a prune failed in the last 2 days (the third arm is for a
+server that restarts more often than every 2 days, whose failing startup
+prune would otherwise never let the second arm hold). The prune runs at
+startup and then daily, so the first two are two missed days in a row, and
+the alert waits a further 15 minutes (`for`) after its condition holds.
 Until a run completes the database keeps growing.
 
 `/readyz` does not change: it pings the database and nothing else. A server
