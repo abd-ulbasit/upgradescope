@@ -56,7 +56,7 @@ inputs:
       "true" (the default) also verifies that the downloaded archive was
       built by this repository's release workflow at the release's tag:
       `gh attestation verify` of the archive's build-provenance attestation
-      (gh is preinstalled on GitHub-hosted runners), or, without gh,
+      (gh is preinstalled on GitHub-hosted runners), or, without gh 2.49+,
       `cosign verify-blob` of checksums.txt's signature. A failed check, or
       no gh or cosign to run it, fails the step before anything is
       installed, and so does an archive that cannot be downloaded: there

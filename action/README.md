@@ -246,7 +246,7 @@ v0.2.0-rc.2's linux/amd64 archive with its attestation).
 | `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
 | `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
 | `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag; at a full commit SHA it runs the release tag that points at that commit, or `latest` with a `::warning` when none does or the lookup fails; at any other ref, or inside another action, it runs `latest`. See [Usage](#usage). |
-| `verify-provenance` | no | `true` | `true` or `false`. `true` verifies, for a release from v0.2.0-rc.2 on, that this repository's release workflow built the archive at that release's tag, with `gh attestation verify` or, without gh, `cosign verify-blob`, and fails the step before installing when it does not verify, neither tool is on `PATH`, or no archive downloads (there is no source-build fallback). `false` checks the archive against `checksums.txt` only and warns, and falls back to `go install` when no archive downloads. See [Install and integrity](#install-and-integrity). |
+| `verify-provenance` | no | `true` | `true` or `false`. `true` verifies, for a release from v0.2.0-rc.2 on, that this repository's release workflow built the archive at that release's tag, with `gh attestation verify` or, without gh 2.49+, `cosign verify-blob`, and fails the step before installing when it does not verify, neither tool is on `PATH`, or no archive downloads (there is no source-build fallback). `false` checks the archive against `checksums.txt` only and warns, and falls back to `go install` when no archive downloads. See [Install and integrity](#install-and-integrity). |
 | `config` | no | | Path to an `.upgradescope.yaml` with ignore rules (`scan --config`). Unset, the scan looks for `.upgradescope.yaml` in `path`, then at the repository root. |
 | `baseline` | no | | Path to the JSON report of an earlier scan: the `report-json` output, or a `write-baseline` file (`scan --baseline`). The gate then fails only on findings that are new since. |
 | `write-baseline` | no | | Also write this scan's JSON report, after suppression, to this path, for a later `baseline` (`scan --write-baseline`). |
@@ -333,7 +333,9 @@ cannot write the step summary, so a warning replaces it.
     build-provenance attestation must be signed by `release.yml`, run for
     that release's tag, on a GitHub-hosted runner. Any workflow of another
     tag or branch, or a self-hosted runner, does not count;
-  - without `gh`, with `cosign` on `PATH`, it downloads
+  - without `gh`, or with a `gh` older than 2.49 that has no `attestation`
+    command (some self-hosted runners; the log says so), with `cosign` on
+    `PATH`, it downloads
     `checksums.txt.sigstore.json` from the same release and runs
     `cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json
     --certificate-identity
@@ -341,9 +343,15 @@ cannot write the step summary, so a warning replaces it.
     --certificate-oidc-issuer https://token.actions.githubusercontent.com`:
     `checksums.txt` must be signed by that workflow at that tag, and the
     archive is held to it by its sha256;
-  - with neither, the step fails and says so: install `gh` or `cosign`
-    (`sigstore/cosign-installer`) before the action, or set
+  - with neither, the step fails and says so: install `gh` (2.49 or later)
+    or `cosign` (`sigstore/cosign-installer`) before the action, or set
     `verify-provenance: false`.
+
+  Any other `gh` failure fails the step; `cosign` is not tried after it.
+  On GitHub Enterprise Server or GHE.com runners, `github.token` belongs to
+  that host, not github.com, so `gh attestation verify` against this
+  repository fails: put `cosign` on `PATH` and no `gh`, or set
+  `verify-provenance: false`.
 
   A check that does not pass fails the step, and nothing is put on `PATH`.
   The verifier's output is in the log, each line behind `| `. What is
@@ -361,7 +369,7 @@ cannot write the step summary, so a warning replaces it.
   release.
 - **No archive, no install.** When the archive cannot be downloaded (the
   release has none for the runner, the asset is gone, the download fails)
-  or `latest` does not resolve to a tag, the step fails with the download
+  or `latest` does not resolve to a tag, the step fails with curl's final
   error and installs nothing. It never falls back to a source build while
   `verify-provenance` is `true`: a `go install` build cannot be checked
   against the release's provenance, so a fallback would let anything that
