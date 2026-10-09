@@ -121,6 +121,10 @@ the repository: `helm install upgradescope deploy/chart ...`, with
 (`make docker-build`) when you run unreleased changes: a clone's chart
 defaults to the image of the release it was cut for.
 
+Upgrade it with `helm upgrade --reset-then-reuse-values` (Helm 3.14 or
+later), never `--reuse-values`, which keeps the old chart's defaults, the
+pinned image digest among them: [Upgrade](upgrade.md#the-chart).
+
 What the chart installs, and the agent-only, combined and fleet-hub setups:
 [In-cluster agent](../getting-started/in-cluster.md), the
 [chart README](https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/chart/README.md)

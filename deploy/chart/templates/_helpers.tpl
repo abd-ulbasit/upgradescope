@@ -12,6 +12,30 @@
 {{- end -}}
 {{- end -}}
 
+{{/*
+A resource name made of the fullname plus a suffix, e.g. "-server-data"
+(call with (dict "root" $ "suffix" "-server-data")). Never cut: a release
+upgraded from an earlier chart keeps the PVC, Secrets and ConfigMaps it
+has, whose names the API server accepts up to 253 characters. Only a
+Service name is a DNS-1035 label, which the API server refuses past 63
+characters, though helm template and lint do not: see upgradescope.service.
+*/}}
+{{- define "upgradescope.derived" -}}
+{{- printf "%s%s" (include "upgradescope.fullname" .root) .suffix -}}
+{{- end -}}
+
+{{/*
+A Service name: the fullname plus a suffix, at most 63 characters. The
+fullname gives way to the suffix. A name that already fits is the one
+upgradescope.derived gives; a longer one never installed (the API server
+refused the Service), so cutting it renames nothing that exists. Two
+releases whose fullnames share all but their tail may collide: Helm release
+names are at most 53 characters and unique per namespace.
+*/}}
+{{- define "upgradescope.service" -}}
+{{- printf "%s%s" (include "upgradescope.fullname" .root | trunc (int (sub 63 (len .suffix))) | trimSuffix "-") .suffix -}}
+{{- end -}}
+
 {{/* Common labels */}}
 {{- define "upgradescope.labels" -}}
 app.kubernetes.io/name: {{ include "upgradescope.name" . }}
@@ -83,14 +107,20 @@ affinity: {{- toYaml . | nindent 2 }}
 
 {{/* Server resource name */}}
 {{- define "upgradescope.serverFullname" -}}
-{{- printf "%s-server" (include "upgradescope.fullname" .) -}}
+{{- include "upgradescope.derived" (dict "root" . "suffix" "-server") -}}
+{{- end -}}
+
+{{/* The server's Service name: at most 63 characters. */}}
+{{- define "upgradescope.serverService" -}}
+{{- include "upgradescope.service" (dict "root" . "suffix" "-server") -}}
 {{- end -}}
 
 {{/* The server Service's fully qualified DNS name:
-<fullname>-server.<namespace>.svc.<clusterDomain>, the domain lowercased
-and without a trailing dot. */}}
+<service>.<namespace>.svc.<clusterDomain>, where <service> is the cut
+Service name (upgradescope.serverService), the domain lowercased and
+without a trailing dot. */}}
 {{- define "upgradescope.serverFQDN" -}}
-{{- printf "%s.%s.svc.%s" (include "upgradescope.serverFullname" .) .Release.Namespace (.Values.clusterDomain | lower | trimSuffix ".") -}}
+{{- printf "%s.%s.svc.%s" (include "upgradescope.serverService" .) .Release.Namespace (.Values.clusterDomain | lower | trimSuffix ".") -}}
 {{- end -}}
 
 {{/* Is the agent pushing to a server at all? Non-empty string = yes. */}}
@@ -104,7 +134,7 @@ over HTTPS when it serves TLS. */}}
 {{- if .Values.agent.serverUrl -}}
 {{- .Values.agent.serverUrl -}}
 {{- else -}}
-{{- printf "%s://%s.%s.svc:%d" (ternary "https" "http" (ne (include "upgradescope.serverTLSSecret" .) "")) (include "upgradescope.serverFullname" .) .Release.Namespace (int .Values.server.service.port) -}}
+{{- printf "%s://%s.%s.svc:%d" (ternary "https" "http" (ne (include "upgradescope.serverTLSSecret" .) "")) (include "upgradescope.serverService" .) .Release.Namespace (int .Values.server.service.port) -}}
 {{- end -}}
 {{- end -}}
 
@@ -116,7 +146,7 @@ Ingress's default, which holds the public host's certificate. */}}
 {{- if .Values.server.tls.secretName -}}
 {{- .Values.server.tls.secretName -}}
 {{- else if .Values.server.tls.certManager.issuerRef.name -}}
-{{- printf "%s-https" (include "upgradescope.serverFullname" .) -}}
+{{- include "upgradescope.derived" (dict "root" . "suffix" "-server-https") -}}
 {{- end -}}
 {{- end -}}
 
@@ -189,7 +219,7 @@ themselves. Call with (dict "resources" .resources "extraEnv" .extraEnv).
 
 {{/* Chart-managed Secret for an inline agent.serverToken */}}
 {{- define "upgradescope.agentTokenSecretName" -}}
-{{- printf "%s-agent-token" (include "upgradescope.fullname" .) -}}
+{{- include "upgradescope.derived" (dict "root" . "suffix" "-agent-token") -}}
 {{- end -}}
 
 {{/*
@@ -241,6 +271,86 @@ key: ingestToken
 {{- if .Values.server.existingSecret -}}
 {{- .Values.server.existingSecret -}}
 {{- else -}}
-{{- printf "%s-tokens" (include "upgradescope.serverFullname" .) -}}
+{{- include "upgradescope.derived" (dict "root" . "suffix" "-server-tokens") -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+A Go duration ("90s", "1.5h", "1h30m") as seconds, printed as a number.
+The schema only lets valid durations through, so a string with no parsable
+part reads as 0.
+*/}}
+{{- define "upgradescope.durationSeconds" -}}
+{{- $units := dict "ns" 0.000000001 "us" 0.000001 "µs" 0.000001 "μs" 0.000001 "ms" 0.001 "s" 1.0 "m" 60.0 "h" 3600.0 -}}
+{{- $total := 0.0 -}}
+{{- range $part := regexFindAll "(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:ns|us|µs|μs|ms|s|m|h)" (toString .) -1 -}}
+{{- $n := regexFind "^(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)" $part -}}
+{{- $total = addf $total (mulf (float64 $n) (float64 (get $units (trimPrefix $n $part)))) -}}
+{{- end -}}
+{{- printf "%f" $total -}}
+{{- end -}}
+
+{{/*
+How long the server waits for a cluster's push before it calls the cluster
+stale, in whole seconds. server.staleAfter when set (the render fails when
+it is not above agent.interval: every cluster would flap stale between its
+ticks), else the larger of 2h and three agent intervals. An unchanged
+cluster pushes at its next tick after the hourly force-sync, so the gap
+between pushes is about max(interval, 1h) plus a tick: three intervals
+leave two missed ticks of slack, and 2h is the default for any interval up
+to 40m.
+*/}}
+{{- define "upgradescope.staleAfterSeconds" -}}
+{{- $interval := float64 (include "upgradescope.durationSeconds" .Values.agent.interval) -}}
+{{- if .Values.server.staleAfter -}}
+{{- $stale := float64 (include "upgradescope.durationSeconds" .Values.server.staleAfter) -}}
+{{- if and .Values.agent.enabled (le $stale $interval) -}}
+{{- fail (printf "server.staleAfter (%s) must be above agent.interval (%s): the agent pushes at most once per interval, so every cluster would read stale between pushes. Leave server.staleAfter empty to follow the interval (the larger of 2h and 3 x interval)" .Values.server.staleAfter .Values.agent.interval) -}}
+{{- end -}}
+{{- printf "%d" (int64 (ceil $stale)) -}}
+{{- else -}}
+{{- printf "%d" (int64 (ceil (maxf 7200.0 (mulf 3.0 $interval)))) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The longest gap between two pushes of an unchanged cluster whose agent runs
+at agent.interval, in whole seconds: it pushes at its next tick after the
+hourly force-sync, so up to max(interval, 1h) plus one interval (70m at the
+default 10m). A stale threshold the render accepts (above the interval) but
+below this flags healthy clusters stale between their pushes: the NOTES
+warn about it.
+*/}}
+{{- define "upgradescope.pushGapSeconds" -}}
+{{- $interval := float64 (include "upgradescope.durationSeconds" .Values.agent.interval) -}}
+{{- printf "%d" (int64 (ceil (addf (maxf $interval 3600.0) $interval))) -}}
+{{- end -}}
+
+{{/* serve --stale-after: server.staleAfter as written, else "2h" when that is
+the default threshold, else the default in seconds ("10800s"). */}}
+{{- define "upgradescope.staleAfter" -}}
+{{- if .Values.server.staleAfter -}}
+{{- $_ := include "upgradescope.staleAfterSeconds" . -}}
+{{- .Values.server.staleAfter -}}
+{{- else if eq (include "upgradescope.staleAfterSeconds" .) "7200" -}}
+2h
+{{- else -}}
+{{- printf "%ss" (include "upgradescope.staleAfterSeconds" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The UpgradescopeClusterStale alert's threshold in seconds:
+metrics.prometheusRule.clusterStaleAfterSeconds when set, else the server's
+own threshold, so the alert and the stale flag agree. */}}
+{{- define "upgradescope.clusterStaleAfterSeconds" -}}
+{{- $set := int64 (.Values.metrics.prometheusRule.clusterStaleAfterSeconds | default 0) -}}
+{{- if $set -}}
+{{- $interval := float64 (include "upgradescope.durationSeconds" .Values.agent.interval) -}}
+{{- if and .Values.agent.enabled (le (float64 $set) $interval) -}}
+{{- fail (printf "metrics.prometheusRule.clusterStaleAfterSeconds (%d) must be above agent.interval (%s). Leave it 0 to follow server.staleAfter" $set .Values.agent.interval) -}}
+{{- end -}}
+{{- $set -}}
+{{- else -}}
+{{- include "upgradescope.staleAfterSeconds" . -}}
 {{- end -}}
 {{- end -}}

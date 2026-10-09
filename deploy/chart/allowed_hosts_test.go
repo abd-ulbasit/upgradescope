@@ -145,3 +145,57 @@ func TestServerAllowedHostsClusterDomain(t *testing.T) {
 		}
 	}
 }
+
+// A release of 53 characters, Helm's longest, has a fullname of 63 and so a
+// server Service name cut to 63 (upgradescope.serverService). The
+// --allowed-host list and the Certificate's dnsNames name the Service
+// under the name it has, in every form, clusterDomain included, so the
+// in-chart agent's push to the cut name is answered and not refused 421.
+func TestServerAllowedHostsFollowTheCutServiceName(t *testing.T) {
+	release := strings.Repeat("a", 53)
+	for _, tc := range []struct{ set, domain string }{
+		{"", "cluster.local"},
+		{"clusterDomain=Corp.Internal.", "corp.internal"},
+	} {
+		sets := []string{"server.enabled=true", "server.ingestToken=t", "server.readToken=r", "server.tls.certManager.issuerRef.name=ca-issuer"}
+		if tc.set != "" {
+			sets = append(sets, tc.set)
+		}
+		objs := renderRelease(t, release, sets...)
+		svc := find2(objs, "Service", "-server")
+		if svc == "" || len(svc) > 63 {
+			t.Fatalf("%q: server Service %q, want one of at most 63 characters", tc.set, svc)
+		}
+		if uncut := strings.Repeat("a", 53) + "-upgradescope"; strings.HasPrefix(svc, uncut[:63]+"-") {
+			t.Fatalf("%q: Service %q is not cut", tc.set, svc)
+		}
+		want := []string{
+			svc,
+			svc + ".upgradescope",
+			svc + ".upgradescope.svc",
+			svc + ".upgradescope.svc." + tc.domain,
+		}
+		got := allowedHosts(t, container(t, objs, find2(objs, "Deployment", "-server")))
+		if !slices.Equal(got, want) {
+			t.Errorf("%q: --allowed-host = %v, want the cut Service names %v", tc.set, got, want)
+		}
+		cert := find(objs, "Certificate", find2(objs, "Certificate", "-server"))
+		if cert == nil {
+			t.Fatalf("%q: no Certificate rendered", tc.set)
+		}
+		dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+		if !slices.Equal(dnsNames, want) {
+			t.Errorf("%q: Certificate dnsNames = %v, want %v", tc.set, dnsNames, want)
+		}
+		// The in-chart agent pushes to one of them.
+		var serverURL string
+		for _, a := range args(container(t, objs, find2(objs, "Deployment", "-agent"))) {
+			if v, ok := strings.CutPrefix(a, "--server-url="); ok {
+				serverURL = v
+			}
+		}
+		if u, err := neturl.Parse(serverURL); err != nil || !slices.Contains(got, u.Hostname()) {
+			t.Errorf("%q: the agent pushes to %q, whose host is not in --allowed-host %v", tc.set, serverURL, got)
+		}
+	}
+}

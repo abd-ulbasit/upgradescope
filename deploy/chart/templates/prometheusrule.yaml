@@ -1,6 +1,6 @@
 {{- if and .Values.metrics.prometheusRule.enabled (or .Values.agent.enabled .Values.server.enabled) }}
-{{- $agentJob := printf "%s-agent-metrics" (include "upgradescope.fullname" .) }}
-{{- $serverJob := include "upgradescope.serverFullname" . }}
+{{- $agentJob := include "upgradescope.service" (dict "root" . "suffix" "-agent-metrics") }}
+{{- $serverJob := include "upgradescope.serverService" . }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -45,13 +45,13 @@ spec:
             severity: warning
           annotations:
             summary: The upgradescope agent has not completed a tick recently
-            description: {{ printf "The ClusterReadiness status is going stale. kubectl -n %s logs deploy/%s-agent shows each tick's error." .Release.Namespace (include "upgradescope.fullname" .) | quote }}
+            description: {{ printf "The ClusterReadiness status is going stale. kubectl -n %s logs deploy/%s shows each tick's error." .Release.Namespace (include "upgradescope.derived" (dict "root" . "suffix" "-agent")) | quote }}
     {{- end }}
     {{- if .Values.server.enabled }}
     - name: upgradescope-server
       rules:
         - alert: UpgradescopeClusterStale
-          expr: upgradescope_cluster_last_push_age_seconds{job="{{ $serverJob }}"} > {{ int .Values.metrics.prometheusRule.clusterStaleAfterSeconds }}
+          expr: upgradescope_cluster_last_push_age_seconds{job="{{ $serverJob }}"} > {{ include "upgradescope.clusterStaleAfterSeconds" . }}
           for: 10m
           labels:
             severity: warning

@@ -4,6 +4,14 @@
   "type": "object",
   "additionalProperties": false,
   "definitions": {
+    "pdbBudget": {
+      "description": "A PodDisruptionBudget bound: a count (0 or more), a percentage such as 50%, or empty for unset.",
+      "anyOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "string", "pattern": "^([0-9]+%?)?$" },
+        { "type": "null" }
+      ]
+    },
     "duration": {
       "description": "Go duration of at least one minute, e.g. 10m, 1h, 1m30s, 90s, 1.5h. One of its parts must be a minute or more on its own (1m, 60s, 0.017h and up), so a sum such as 30s30s is refused.",
       "type": "string",
@@ -155,7 +163,10 @@
             { "type": "integer", "enum": [0] }
           ]
         },
-        "staleAfter": { "$ref": "#/definitions/duration" },
+        "staleAfter": {
+          "description": "Empty = the larger of 2h and three agent intervals.",
+          "anyOf": [{ "const": "" }, { "$ref": "#/definitions/duration" }]
+        },
         "replicas": { "type": "integer", "minimum": 1 },
         "database": {
           "type": "object",
@@ -229,6 +240,30 @@
             "name": { "type": "string" }
           }
         },
+        "containerPort": {
+          "description": "The port serve listens on in the pod. 1024 or above: the pod runs as a non-root user with no capabilities. server.service.port is the Service's own.",
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
+        },
+        "tmp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sizeLimit": { "type": "string", "minLength": 1 }
+          }
+        },
+        "podDisruptionBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minAvailable": { "$ref": "#/definitions/pdbBudget" },
+            "maxUnavailable": { "$ref": "#/definitions/pdbBudget" }
+          }
+        },
+        "defaultTopologySpread": { "type": "boolean" },
+        "topologySpreadConstraints": { "$ref": "#/definitions/list" },
         "service": {
           "type": "object",
           "additionalProperties": false,
@@ -288,7 +323,10 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "labels": { "$ref": "#/definitions/stringMap" },
-            "clusterStaleAfterSeconds": { "type": "integer", "minimum": 60 }
+            "clusterStaleAfterSeconds": {
+              "description": "0 = the server's own staleAfter threshold.",
+              "anyOf": [{ "const": 0 }, { "type": "integer", "minimum": 60 }]
+            }
           }
         },
         "grafanaDashboard": {
