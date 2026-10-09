@@ -16,7 +16,7 @@ Go modules
 
 Component list (name, version, license):
 
-  Go standard library go1.26.8 (BSD-3-Clause)
+  Go standard library go1.26.9 (BSD-3-Clause)
   github.com/Masterminds/semver/v3 v3.5.0 (MIT)
   github.com/beorn7/perks/quantile v1.0.1 (MIT)
   github.com/cespare/xxhash/v2 v2.3.0 (MIT)
@@ -68,7 +68,7 @@ Component list (name, version, license):
   github.com/yosida95/uritemplate/v3 v3.0.2 (BSD-3-Clause)
   go.yaml.in/yaml/v2 v2.4.4 (Apache-2.0)
   go.yaml.in/yaml/v3 v3.0.5 (MIT)
-  golang.org/x/net v0.59.0 (BSD-3-Clause)
+  golang.org/x/net v0.60.0 (BSD-3-Clause)
   golang.org/x/oauth2 v0.37.0 (BSD-3-Clause)
   golang.org/x/sync v0.23.0 (BSD-3-Clause)
   golang.org/x/sys v0.48.0 (BSD-3-Clause)
@@ -99,8 +99,8 @@ Component list (name, version, license):
   sigs.k8s.io/yaml v1.6.0 (Apache-2.0 AND BSD-3-Clause AND MIT)
 
 --------------------------------------------------------------------------------
-Go standard library go1.26.8
-golang.org/x/net v0.59.0
+Go standard library go1.26.9
+golang.org/x/net v0.60.0
 golang.org/x/oauth2 v0.37.0
 golang.org/x/sync v0.23.0
 golang.org/x/sys v0.48.0
