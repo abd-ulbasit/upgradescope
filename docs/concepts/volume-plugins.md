@@ -107,6 +107,18 @@ capabilities it does not know, so it accepts the push and judges what it
 knows. No `collectorSchema` bump was needed, and agents and servers can
 be upgraded in either order.
 
+## Validation at ingest
+
+The server checks each `volumePlugins` entry as it checks an API usage
+entry. A plugin must be a field name (at most 64 ASCII letters and
+digits, starting with a letter), no count may be negative, namespace keys
+and object refs must be namespace and object names, and an entry lists at
+most 100 objects. A push that breaks one of these is refused (422), and
+the error names the field. The agent repairs its inventory before pushing:
+it drops an entry with a bad plugin or count, and the bad objects and
+namespace keys of the rest, and marks `volumes` partial with the reason.
+One hostile pod cannot make every push of the cluster fail.
+
 ## Not checked
 
 Field-level removals other than in-tree volume plugins are not checked.
