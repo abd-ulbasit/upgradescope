@@ -207,6 +207,11 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 			}
 		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known; %s %s is served from %s", target, gvString(later.Group, later.Version), later.Kind, from)
+			if e.Serves(target) {
+				// Nothing as mature as the version in use is served yet (#332):
+				// it is the right one for this target, not an older API.
+				f.Remediation += fmt.Sprintf("; %s is the right version for Kubernetes %s until then", gvString(u.Group, u.Version), target)
+			}
 		} else if succ, ok := idx.ServedSuccessor(e, target); ok {
 			f.Remediation = "migrate to " + successorRemedy(succ, k.MaxKnownK8s, false)
 		} else if e.Replacement != nil {

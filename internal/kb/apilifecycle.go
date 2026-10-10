@@ -136,6 +136,10 @@ func servedAt(e APILifecycleEntry, target inventory.Version) bool {
 	return e.Introduced.Compare(target) <= 0 && (e.Removed == nil || e.Removed.Compare(target) > 0)
 }
 
+// Serves reports whether target serves e: introduced at or before it, and
+// not removed by it.
+func (e APILifecycleEntry) Serves(target inventory.Version) bool { return servedAt(e, target) }
+
 // ResolveReplacement returns the API to migrate e to for an upgrade to
 // target, only ever one the KB knows target serves: introduced at or
 // before it, and not removed by it. It follows the replacement chain
@@ -147,6 +151,9 @@ func servedAt(e APILifecycleEntry, target inventory.Version) bool {
 // v1beta1), and none when there is no such version. A hop the KB has no
 // entry for carries no lifecycle evidence and is returned as is (the
 // dataset tests require every shipped replacement to be a known GVK). It
+// never names a version less mature than e's (alpha < beta < GA, from the
+// version name, #332): a source whose GA replacement is not served yet is
+// not sent back to an alpha or beta (LaterReplacement names the GA one). It
 // reports false when no served replacement is known: e has no
 // replacement, the chain dead-ends at a removed API, loops, or reaches a
 // hop not served yet with no served alternative (LaterReplacement then
@@ -157,12 +164,15 @@ func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version)
 	case !ok:
 		return GVK{}, false
 	case !known || servedAt(r, target):
+		if stability(g.Version) < stability(e.Version) {
+			return GVK{}, false // never back to a less mature API
+		}
 		return g, true
 	}
 	// r is not introduced yet at target.
 	var best *APILifecycleEntry
 	for _, c := range i.byKind[GVK{Group: g.Group, Kind: g.Kind}] {
-		if c.Version == e.Version && c.Group == e.Group || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 {
+		if c.Version == e.Version && c.Group == e.Group || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 || stability(c.Version) < stability(e.Version) {
 			continue
 		}
 		if best == nil || c.Introduced.Compare(best.Introduced) > 0 {
@@ -181,7 +191,11 @@ func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version)
 // yet (resource.k8s.io/v1 DeviceClass at 1.33 is v1beta2, v1 is served from
 // 1.34). Newest is the latest Introduced; the same release is broken by
 // stability (GA, then beta, then alpha) and then by the version name, so
-// the answer does not depend on entry order. It reports false when the KB
+// the answer does not depend on entry order. Unlike a replacement, this
+// may be less mature than e: e is not served at target at all, so the
+// manifest cannot be applied as written, and an older version is the only
+// one that can be (the remediation says so, and when it may need enabling).
+// It reports false when the KB
 // knows no such version.
 func (i Index) ServedAlternative(e APILifecycleEntry, target inventory.Version) (GVK, bool) {
 	var best *APILifecycleEntry
@@ -209,13 +223,13 @@ func (i Index) ServedAlternative(e APILifecycleEntry, target inventory.Version) 
 // target serves (scheduling.k8s.io/v1alpha2 Workload, removed in 1.37,
 // moves to v1beta1, served from 1.37; coordination.k8s.io/v1alpha1
 // LeaseCandidate, removed in 1.32, to v1alpha2, as v1beta1 is served only
-// from 1.33). The successor may be pre-GA (PreGA), and may itself be
+// from 1.33). It is never less mature than e (#332). The successor may be pre-GA (PreGA), and may itself be
 // removed later (its Removed says). Newest, and ties, as ServedAlternative.
 // It reports false when the KB knows no such version.
 func (i Index) ServedSuccessor(e APILifecycleEntry, target inventory.Version) (APILifecycleEntry, bool) {
 	var best *APILifecycleEntry
 	for _, c := range i.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
-		if c.Version == e.Version || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 {
+		if c.Version == e.Version || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 || stability(c.Version) < stability(e.Version) {
 			continue
 		}
 		if best == nil {
