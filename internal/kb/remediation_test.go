@@ -517,3 +517,135 @@ func TestServedAlternativeIsNeverTheEntryItself(t *testing.T) {
 		}
 	}
 }
+
+// #302: a removed alpha whose kind has no GA version (so no replacement
+// chain) still has a successor of its kind served at its removal release
+// when a later version exists: the engine names it (ServedSuccessor). The
+// seven entries the verifier counted, with what the dataset serves then:
+// not always the beta (LeaseCandidate v1alpha1 is removed in 1.32, before
+// v1beta1 is served in 1.33).
+func TestRemovedAlphasWithAPreGASuccessorHaveARemedy(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	want := []struct {
+		group, version, kind string
+		removed              int
+		successor            string // group/version served at the removal release
+	}{
+		{"scheduling.k8s.io", "v1alpha2", "Workload", 37, "scheduling.k8s.io/v1beta1"},
+		{"scheduling.k8s.io", "v1alpha2", "PodGroup", 37, "scheduling.k8s.io/v1beta1"},
+		{"scheduling.k8s.io", "v1alpha1", "Workload", 36, "scheduling.k8s.io/v1alpha2"},
+		{"coordination.k8s.io", "v1alpha2", "LeaseCandidate", 38, "coordination.k8s.io/v1beta1"},
+		{"coordination.k8s.io", "v1alpha1", "LeaseCandidate", 32, "coordination.k8s.io/v1alpha2"},
+		{"resource.k8s.io", "v1alpha1", "ResourceClass", 27, "resource.k8s.io/v1alpha2"},
+		{"resource.k8s.io", "v1alpha2", "PodSchedulingContext", 31, "resource.k8s.io/v1alpha3"},
+	}
+	listed := map[GVK]bool{}
+	for _, w := range want {
+		e, ok := idx.Lookup(w.group, w.version, w.kind)
+		if !ok {
+			t.Errorf("KB lacks %s/%s %s", w.group, w.version, w.kind)
+			continue
+		}
+		listed[GVK{Group: w.group, Version: w.version, Kind: w.kind}] = true
+		if e.Removed == nil || *e.Removed != *ver(w.removed) {
+			t.Errorf("%s/%s %s: removed %v, want 1.%d", w.group, w.version, w.kind, e.Removed, w.removed)
+			continue
+		}
+		if r, ok := idx.ResolveReplacement(e, *e.Removed); ok {
+			t.Errorf("%s/%s %s: has a replacement chain (%s) and is not a #302 case", w.group, w.version, w.kind, gvString(r))
+		}
+		got, ok := idx.ServedSuccessor(e, *e.Removed)
+		if !ok || got.Group+"/"+got.Version != w.successor {
+			t.Errorf("ServedSuccessor(%s/%s %s, %s) = %s/%s %v, want %s", w.group, w.version, w.kind, e.Removed, got.Group, got.Version, ok, w.successor)
+		}
+	}
+
+	// Derived: every removed entry with a same-kind version introduced
+	// after it and served at its removal release has a remedy there, by
+	// the replacement chain, a later release's replacement, or the served
+	// successor; and the entries that rely on the successor are exactly
+	// the seven above (a new one is a deliberate addition to this list).
+	reliant := map[GVK]bool{}
+	for _, e := range k.APILifecycle {
+		if e.Removed == nil {
+			continue
+		}
+		hasSuccessor := false
+		for _, c := range idx.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
+			if c.Version != e.Version && c.Introduced.Compare(e.Introduced) > 0 && servedAt(c, *e.Removed) {
+				hasSuccessor = true
+			}
+		}
+		if !hasSuccessor {
+			continue
+		}
+		name := e.Group + "/" + e.Version + " " + e.Kind
+		if _, ok := idx.ResolveReplacement(e, *e.Removed); ok {
+			continue
+		}
+		if _, _, ok := idx.LaterReplacement(e, *e.Removed); ok {
+			continue
+		}
+		s, ok := idx.ServedSuccessor(e, *e.Removed)
+		if !ok {
+			t.Errorf("%s (removed %s): a later version of its kind is served then, but ServedSuccessor names none", name, e.Removed)
+			continue
+		}
+		if s.Introduced.Compare(e.Introduced) <= 0 || !servedAt(s, *e.Removed) || s.Kind != e.Kind || s.Group != e.Group {
+			t.Errorf("%s (removed %s): successor %s is not a later version served then", name, e.Removed, s.Version)
+		}
+		reliant[GVK{Group: e.Group, Version: e.Version, Kind: e.Kind}] = true
+	}
+	for g := range reliant {
+		if !listed[g] {
+			t.Errorf("%s/%s %s relies on the served successor but is not in the list of seven", g.Group, g.Version, g.Kind)
+		}
+	}
+	for g := range listed {
+		if !reliant[g] {
+			t.Errorf("%s/%s %s is in the list of seven but does not rely on the served successor", g.Group, g.Version, g.Kind)
+		}
+	}
+}
+
+// ServedSuccessor never names the entry itself, a version introduced
+// before or with it, one the target does not serve yet or has removed, and
+// breaks a tie in introduction by stability.
+func TestServedSuccessor(t *testing.T) {
+	entry := func(version string, intro int, removed *inventory.Version) APILifecycleEntry {
+		return APILifecycleEntry{Group: "example.k8s.io", Version: version, Kind: "Thing", Introduced: *ver(intro), Removed: removed}
+	}
+	older, own := entry("v1alpha1", 30, ver(34)), entry("v1alpha2", 32, ver(36))
+	idx := NewIndex([]APILifecycleEntry{
+		older, own,
+		entry("v1beta1", 35, nil),
+		entry("v1alpha3", 35, nil), // same release as the beta: the beta wins
+		entry("v1beta2", 38, nil),
+		entry("v1", 40, nil),
+	})
+	for _, c := range []struct {
+		e      APILifecycleEntry
+		target int
+		want   string
+	}{
+		{own, 36, "v1beta1"},
+		{own, 34, ""}, // nothing introduced after it is served yet
+		{own, 38, "v1beta2"},
+		{own, 40, "v1"},
+		{older, 34, "v1alpha2"}, // newer than the entry, not the entry itself
+	} {
+		got, ok := idx.ServedSuccessor(c.e, *ver(c.target))
+		if g := got.Version; (g != c.want) || ok != (c.want != "") {
+			t.Errorf("ServedSuccessor(%s, 1.%d) = %q %v, want %q", c.e.Version, c.target, g, ok, c.want)
+		}
+	}
+	// Removed successors are not served.
+	idx = NewIndex([]APILifecycleEntry{entry("v1alpha1", 30, ver(34)), entry("v1alpha2", 32, ver(36))})
+	if got, ok := idx.ServedSuccessor(entry("v1alpha1", 30, ver(34)), *ver(36)); ok {
+		t.Errorf("a successor removed by the target was named: %s", got.Version)
+	}
+}
