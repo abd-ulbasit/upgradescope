@@ -7,7 +7,7 @@
   </testsuite>
   <testsuite name="not-assessed" tests="1" failures="0" errors="1" skipped="0" time="0">
     <testcase name="kb-coverage" classname="upgradescope.not-assessed" time="0">
-      <error message="not assessed: kb-coverage (required): knowledge base covers Kubernetes up to 1.36; target 1.37 cannot be assessed" type="not-assessed">The verdict is unknown: a required check did not run, so a blocker may have been missed.</error>
+      <error message="not assessed: kb-coverage (required): knowledge base covers Kubernetes up to 1.36; target 1.37 cannot be assessed (API removals after 1.36 are projected from k8s.io/api lifecycle markers, not shipped releases)" type="not-assessed">The verdict is unknown: a required check did not run, so a blocker may have been missed.</error>
     </testcase>
   </testsuite>
 </testsuites>

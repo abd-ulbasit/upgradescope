@@ -33,9 +33,11 @@ Required checks:
   not know what that release removes.
 - **`target`**, for live clusters: the target must be an upgrade. A
   target at or below the minor the oldest kube-apiserver already runs (a
-  downgrade, the same minor, or a typo such as `1.4`) is reported as a
-  required `target` gap, so the verdict is `unknown`, never `ready`: every
-  check judges a newer minor.
+  downgrade or the same minor) is reported as a required `target` gap, so
+  the verdict is `unknown`, never `ready`: every check judges a newer minor.
+  A target below 1.16, the oldest minor the knowledge base covers (a typo
+  such as `1.4` for `1.40`, which is what YAML makes of an unquoted number),
+  is not a verdict: it is refused as an input.
 - **`versions`**, for live clusters: the server version (skew needs it).
   A *partial* `versions` is required too when it names a component whose
   version upstream would have told and was not read (a component image
@@ -73,7 +75,7 @@ target.
 
 | Category | Blocker | Warning | Info |
 |---|---|---|---|
-| `removed-api` | An object (or a Helm release's stored manifest) uses an API removed at or before the target. | The API is removed in the minor after the target. | — |
+| `removed-api` | An object (or a Helm release's stored manifest) uses an API removed at or before the target; or, in `--files` mode and the gate (the manifests are proposed state), a manifest uses an API version the target does not serve yet, titled "not served until X" (applying it fails the same way). | The API is removed in the minor after the target. A removal after the knowledge base's horizon is titled "(projected)" in either severity. | — |
 | `deprecated-api` | — | A Helm release's stored manifest uses a deprecated API that is not removed by the target, even when the live scan also flags the object (as info). | An object uses an API that is deprecated (or will be, after the target) and not removed by the minor after the target. |
 | `deprecated-api-in-use` | The apiserver saw requests to an API removed at or before the target, and no object finding covers it (or every object of the one that did was suppressed by annotation or an object-scoped rule). The removal release is the knowledge base's when it knows the API, else the metric's `removed_release` label. | Removed in the minor after the target. | No removal release known to the knowledge base or reported. |
 | `eol-addon` | The add-on, or its installed release line, is past end of life. **Whatever the target.** | A node container runtime past end of life (it ships with the node image, not with Kubernetes). | — |
@@ -144,6 +146,7 @@ Consequences:
 finding at or above the threshold remains after suppression and is not
 `unchanged` against a `--baseline`, **or** when the verdict is `unknown`,
 unless `--allow-incomplete`. A target that is not an upgrade of the cluster
-exits 2 even with `--allow-incomplete`. `never` always exits 0. Operational errors
-exit 1. The server's gate endpoint and the GitHub Action use the same rule.
+exits 2 even with `--allow-incomplete`; only `--fail-on never` always exits 0,
+that case included. Operational errors, and a `--target` below the knowledge
+base, exit 1. The server's gate endpoint and the GitHub Action use the same rule.
 Details: [Suppressions and baselines](../guides/suppressions-and-baselines.md#how-the-gate-decides).

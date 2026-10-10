@@ -95,7 +95,7 @@ func TestEvaluateVerdict(t *testing.T) {
 		{"server version unparseable", badServer, t135, VerdictUnknown,
 			[]CapabilityGap{{Capability: inventory.CapVersions, Reason: `server version "garbage" could not be parsed; kubelet and control-plane skew were not evaluated`, Required: true}}},
 		{"target above kb horizon", clusterInv(), t137, VerdictUnknown,
-			[]CapabilityGap{{Capability: GapKBCoverage, Reason: "knowledge base covers Kubernetes up to 1.36; target 1.37 cannot be assessed", Required: true}}},
+			[]CapabilityGap{{Capability: GapKBCoverage, Reason: "knowledge base covers Kubernetes up to 1.36; target 1.37 cannot be assessed (API removals after 1.36 are projected from k8s.io/api lifecycle markers, not shipped releases)", Required: true}}},
 		{"files mode does not require versions", filesInv(), t135, VerdictReady,
 			[]CapabilityGap{
 				{Capability: inventory.CapAddOns, Reason: "files mode"},

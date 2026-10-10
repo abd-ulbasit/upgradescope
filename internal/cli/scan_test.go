@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -260,13 +261,15 @@ func TestBaselineSeverityIncreaseIsNew(t *testing.T) {
 	}
 }
 
-// --target is compared with the cluster: on a 1.37 cluster, 1.36 and the
-// typo 1.4 are not upgrades (unknown, exit 2, the gap named in the table)
-// and 1.40 is three upgrades (named in an info finding). The table header
-// shows the server version the target was judged against.
+// --target is compared with the cluster: on a 1.37 cluster, 1.36, 1.20 and
+// 1.37 are not upgrades (unknown, exit 2, the gap named in the table) and
+// 1.40 is three upgrades (named in an info finding). The table header shows
+// the server version the target was judged against. A typo below the
+// knowledge base (1.4 for 1.40) never gets that far: it is refused as an
+// input (TestScanRejectsTargetBelowTheKnowledgeBase).
 func TestScanTargetNotAnUpgrade(t *testing.T) {
 	inv := liveInventory("v1.37.0")
-	for _, target := range []string{"1.36", "1.4", "1.37"} {
+	for _, target := range []string{"1.36", "1.20", "1.37"} {
 		out, _, err := execScanStderr(t, []string{"--target", target}, evalStub(t, inv))
 		if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 {
 			t.Errorf("--target %s: err = %v, want ErrTargetNotUpgrade (exit 2)", target, err)
@@ -294,12 +297,68 @@ func TestScanTargetNotAnUpgrade(t *testing.T) {
 	}
 	// A target that is not an upgrade is a user error, not a coverage
 	// limit: --allow-incomplete does not let it pass; --fail-on never does.
-	_, _, err := execScanStderr(t, []string{"--target", "1.4", "--allow-incomplete"}, evalStub(t, inv))
-	if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 || !strings.Contains(err.Error(), "target 1.4 is not an upgrade") {
-		t.Errorf("--allow-incomplete --target 1.4: err = %v, want ErrTargetNotUpgrade naming the target (exit 2)", err)
+	_, _, err := execScanStderr(t, []string{"--target", "1.20", "--allow-incomplete"}, evalStub(t, inv))
+	if !errors.Is(err, ErrTargetNotUpgrade) || ExitCode(err) != 2 || !strings.Contains(err.Error(), "target 1.20 is not an upgrade") {
+		t.Errorf("--allow-incomplete --target 1.20: err = %v, want ErrTargetNotUpgrade naming the target (exit 2)", err)
 	}
-	if _, _, err := execScanStderr(t, []string{"--target", "1.4", "--fail-on", "never"}, evalStub(t, inv)); err != nil {
-		t.Errorf("--fail-on never --target 1.4: err = %v, want nil", err)
+	// --fail-on never always exits 0, the not-an-upgrade rule included
+	// (the --help text and the docs say so).
+	if _, _, err := execScanStderr(t, []string{"--target", "1.20", "--fail-on", "never"}, evalStub(t, inv)); err != nil {
+		t.Errorf("--fail-on never --target 1.20: err = %v, want nil", err)
+	}
+	flat := strings.Join(strings.Fields(newScanCmd().Long), " ")
+	if !strings.Contains(flat, "only --fail-on never, which always exits 0, passes it") {
+		t.Errorf("scan --help does not say that only --fail-on never passes a target that is not an upgrade:\n%s", flat)
+	}
+	if usage := newScanCmd().Flag("fail-on").Usage; !strings.Contains(usage, "never always exits 0") {
+		t.Errorf("--fail-on help does not say never always exits 0: %q", usage)
+	}
+}
+
+// A --target below the oldest minor the knowledge base covers is an input
+// error (exit 1), not a verdict, on a live cluster and with --files: it
+// judges nothing, so it would read ready (#237). It is what YAML makes of
+// an unquoted target: 1.30, and the error says to quote it.
+func TestScanRejectsTargetBelowTheKnowledgeBase(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ing.yaml"), []byte("apiVersion: networking.k8s.io/v1beta1\nkind: Ingress\nmetadata: {name: web, namespace: shop}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"--target", "1.3"}, {"--target", "1.4"}, {"--target", "1.0"}, {"--target", "1.15"},
+		{"--files", dir, "--target", "1.3"}, {"--files", dir, "--target", "1.4"},
+		{"--files", dir, "--target", "1.3", "--fail-on", "never"},
+	} {
+		called := false
+		_, _, err := execScanStderr(t, args, func(scanOptions) (engine.Report, error) { called = true; return engine.Report{}, nil })
+		if err == nil || ExitCode(err) != 1 || called {
+			t.Errorf("scan %v: err = %v, scanned = %v; want an input error (exit 1) before any scan", args, err, called)
+			continue
+		}
+		if !strings.Contains(err.Error(), "oldest minor the knowledge base covers is 1.16") {
+			t.Errorf("scan %v: err = %v, want the knowledge-base floor named", args, err)
+		}
+		if args[len(args)-1] == "1.3" && !strings.Contains(err.Error(), `is this 1.30 written as a YAML number? quote it ("1.30")`) {
+			t.Errorf("scan %v: err = %v, want the YAML pitfall named", args, err)
+		}
+	}
+	// 1.16 and above behave as before.
+	if _, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.16"}, real); err != nil {
+		t.Errorf("--target 1.16 with a v1beta1 Ingress: err = %v, want a passing gate (removed in 1.22)", err)
+	}
+	if _, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.30"}, real); !errors.Is(err, ErrGateFailed) {
+		t.Errorf("--target 1.30 with a v1beta1 Ingress: err = %v, want ErrGateFailed", err)
+	}
+}
+
+// scan --help names the knowledge base's floor from inventory.OldestCovered,
+// not a copy that a refresh of the dataset would leave behind (#237).
+func TestScanHelpNamesTheKnowledgeBaseFloor(t *testing.T) {
+	long := newScanCmd().Long
+	want := "(" + inventory.OldestCovered().String() + ") is an error (exit 1), not a verdict"
+	if !strings.Contains(strings.Join(strings.Fields(long), " "), want) {
+		t.Errorf("scan --help does not say %q:\n%s", want, long)
 	}
 }
 
@@ -327,5 +386,115 @@ func TestWriteReportPropagatesWriteErrors(t *testing.T) {
 				t.Errorf("--output %s, verdict %s: err = %v (exit %d), want the write error, exit 1", format, r.Verdict, err, got)
 			}
 		}
+	}
+}
+
+// #266: scan --files reports a manifest at an API version the target does
+// not serve yet as a blocker naming the release that serves it (the apply
+// would fail with "no matches for kind"), and the same manifest at a
+// target that serves it is clean.
+func TestScanFilesAPINotServedYetIsABlocker(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	manifest := "apiVersion: resource.k8s.io/v1\nkind: DeviceClass\nmetadata: {name: gpu}\nspec: {}\n---\n" +
+		"apiVersion: admissionregistration.k8s.io/v1\nkind: MutatingAdmissionPolicy\nmetadata: {name: p}\nspec: {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.33", "--fail-on", "warning"}, real)
+	if !errors.Is(err, ErrGateFailed) || ExitCode(err) != 2 {
+		t.Fatalf("err = %v, want ErrGateFailed (exit 2)\n%s", err, out)
+	}
+	for _, want := range []string{"resource.k8s.io/v1 DeviceClass is not served until 1.34", "admissionregistration.k8s.io/v1 MutatingAdmissionPolicy is not served until 1.36"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("table lacks %q:\n%s", want, out)
+		}
+	}
+	out, _, err = execScanStderr(t, []string{"--files", dir, "--target", "1.36", "--fail-on", "warning"}, real)
+	if err != nil || strings.Contains(out, "not served until") {
+		t.Errorf("at 1.36, which serves both: err = %v\n%s", err, out)
+	}
+}
+
+// #266: storage.k8s.io/v1alpha1 VolumeAttachment is gone from
+// kube-apiserver 1.23 (its storage was dropped with the beta APIs removed
+// in 1.22), a release before the upstream tag, so at --target 1.23 it is a
+// blocker, not a warning that reads ready; at 1.22 it is the warning.
+func TestScanFilesVolumeAttachmentV1alpha1(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	m := "apiVersion: storage.k8s.io/v1alpha1\nkind: VolumeAttachment\nmetadata: {name: va1}\nspec: {attacher: csi.example.com, nodeName: n1, source: {persistentVolumeName: pv1}}\n"
+	if err := os.WriteFile(filepath.Join(dir, "va.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.23"}, real)
+	if !errors.Is(err, ErrGateFailed) || ExitCode(err) != 2 || !strings.Contains(out, "storage.k8s.io/v1alpha1 VolumeAttachment removed in 1.23") {
+		t.Errorf("--target 1.23: err = %v, want exit 2 with a removed-in-1.23 blocker\n%s", err, out)
+	}
+	out, _, err = execScanStderr(t, []string{"--files", dir, "--target", "1.22"}, real)
+	if err != nil || !strings.Contains(out, "removed in 1.23") {
+		t.Errorf("--target 1.22: err = %v, want a passing gate with the warning\n%s", err, out)
+	}
+}
+
+// #266: the removed-api blockers of recent releases carry the migration:
+// v1beta1 ValidatingAdmissionPolicy at 1.34, v1beta1 ServiceCIDR at 1.37.
+func TestScanFilesRemovedBetaBlockersNameTheirReplacement(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	m := "apiVersion: admissionregistration.k8s.io/v1beta1\nkind: ValidatingAdmissionPolicy\nmetadata: {name: demo}\nspec: {}\n---\n" +
+		"apiVersion: networking.k8s.io/v1beta1\nkind: ServiceCIDR\nmetadata: {name: c}\nspec: {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ := execScanStderr(t, []string{"--files", dir, "--target", "1.37", "--output", "json"}, real)
+	for _, want := range []string{`"remediation": "migrate to admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy"`, `"remediation": "migrate to networking.k8s.io/v1 ServiceCIDR"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("JSON lacks %s:\n%s", want, out)
+		}
+	}
+}
+
+// #237: team attribution needs a cluster. --files mode reads no Namespace
+// objects, so a rendered Namespace labelled team: payments attributes
+// nothing and every finding is unattributed; --team-label is refused with
+// a message that says why, not cobra's generic one.
+func TestScanFilesAttributesNoTeamsAndRefusesTeamLabel(t *testing.T) {
+	real := runScan
+	dir := t.TempDir()
+	m := "apiVersion: v1\nkind: Namespace\nmetadata: {name: shop, labels: {team: payments, owner: payments}}\n---\n" +
+		"apiVersion: networking.k8s.io/v1beta1\nkind: Ingress\nmetadata: {name: web, namespace: shop}\n"
+	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.30", "--team-label", "owner"}, func(scanOptions) (engine.Report, error) { called = true; return engine.Report{}, nil })
+	if err == nil || called || ExitCode(err) != 1 || !strings.Contains(err.Error(), "--team-label needs a live cluster") || strings.Contains(err.Error(), "if any flags in the group") {
+		t.Errorf("--files with --team-label: err = %v, scanned = %v; want the specific refusal (exit 1) before any scan", err, called)
+	}
+	out, _, err := execScanStderr(t, []string{"--files", dir, "--target", "1.30", "--output", "json"}, real)
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("err = %v, want ErrGateFailed", err)
+	}
+	var rep struct {
+		Teams    map[string]json.RawMessage `json:"teams"`
+		Findings []struct {
+			Teams []string `json:"teams"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Teams) != 1 || rep.Teams["(unattributed)"] == nil {
+		t.Errorf("teams = %v, want only (unattributed): files mode reads no Namespace labels", rep.Teams)
+	}
+	for _, f := range rep.Findings {
+		if len(f.Teams) != 0 {
+			t.Errorf("finding teams = %v, want none", f.Teams)
+		}
+	}
+	// A live scan still takes --team-label.
+	if _, _, err := execScanStderr(t, []string{"--target", "1.37", "--team-label", "owner"}, evalStub(t, liveInventory("v1.36.4"))); err != nil {
+		t.Errorf("live scan with --team-label: %v", err)
 	}
 }

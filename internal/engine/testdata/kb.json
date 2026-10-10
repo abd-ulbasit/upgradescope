@@ -44,6 +44,22 @@
     {
       "group": "resource.k8s.io", "version": "v1", "kind": "DeviceClass",
       "introduced": "1.34"
+    },
+    {
+      "group": "scheduling.k8s.io", "version": "v1beta1", "kind": "Workload",
+      "introduced": "1.36",
+      "deprecated": "1.40"
+    },
+    {
+      "group": "admissionregistration.k8s.io", "version": "v1alpha1", "kind": "MutatingAdmissionPolicy",
+      "introduced": "1.32",
+      "deprecated": "1.35",
+      "removed": "1.37",
+      "replacement": {"group": "admissionregistration.k8s.io", "version": "v1", "kind": "MutatingAdmissionPolicy"}
+    },
+    {
+      "group": "admissionregistration.k8s.io", "version": "v1", "kind": "MutatingAdmissionPolicy",
+      "introduced": "1.36"
     }
   ],
   "Providers": [

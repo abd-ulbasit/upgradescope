@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="4" failures="0" errors="0" time="0">
+  <testsuite name="removed-api" tests="1" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="removed-api/admissionregistration.k8s.io/v1alpha1/MutatingAdmissionPolicy" classname="upgradescope.removed-api" time="0">
+      <system-out>warning: admissionregistration.k8s.io/v1alpha1 MutatingAdmissionPolicy removed in 1.37 (projected) (1 object).&#xA;1 manifest object(s) use this API: namespace unset (1). The removal in 1.37 is projected: it is a default of k8s.io/api&#39;s lifecycle markers, not a shipped release (the newest the knowledge base covers is 1.36), and may change before it ships.&#xA;Objects:&#xA;- p (rendered/all.yaml:5)&#xA;Fix: migrate to admissionregistration.k8s.io/v1 MutatingAdmissionPolicy.&#xA;References:&#xA;- https://kubernetes.io/docs/reference/using-api/deprecation-guide/</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="not-assessed" tests="3" failures="0" errors="0" skipped="3" time="0">
+    <testcase name="deprecated-calls" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: deprecated-calls: files mode"></skipped>
+    </testcase>
+    <testcase name="helm" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: helm: files mode"></skipped>
+    </testcase>
+    <testcase name="versions" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: versions: files mode"></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -1,0 +1,42 @@
+{
+  "clusterId": "files",
+  "findings": [
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: namespace unset (1). The removal in 1.37 is projected: it is a default of k8s.io/api's lifecycle markers, not a shipped release (the newest the knowledge base covers is 1.36), and may change before it ships.",
+      "key": "removed-api/admissionregistration.k8s.io/v1alpha1/MutatingAdmissionPolicy",
+      "objects": [
+        {
+          "file": "rendered/all.yaml",
+          "line": 5,
+          "name": "p"
+        }
+      ],
+      "remediation": "migrate to admissionregistration.k8s.io/v1 MutatingAdmissionPolicy",
+      "severity": "warning",
+      "title": "admissionregistration.k8s.io/v1alpha1 MutatingAdmissionPolicy removed in 1.37 (projected) (1 object)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "deprecated-calls",
+      "reason": "files mode"
+    },
+    {
+      "capability": "helm",
+      "reason": "files mode"
+    },
+    {
+      "capability": "versions",
+      "reason": "files mode"
+    }
+  ],
+  "ready": true,
+  "score": 95,
+  "target": "1.36",
+  "verdict": "ready"
+}

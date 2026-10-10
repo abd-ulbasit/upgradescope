@@ -54,7 +54,9 @@ func TestServeWithoutIngestToken(t *testing.T) {
 }
 
 func TestServeRejectsBadTargets(t *testing.T) {
-	for _, targets := range []string{"1.37,banana", "2.0"} {
+	// 1.3 and 1.4 are what YAML makes of 1.30 and 1.40; below the oldest
+	// minor the knowledge base covers they would read ready (#237).
+	for _, targets := range []string{"1.37,banana", "2.0", "1.37,1.3", "1.4", "1.15"} {
 		err := execServe(t, []string{"--ingest-token", "t", "--targets", targets}, serveOK())
 		if err == nil || !strings.Contains(err.Error(), "--targets") {
 			t.Fatalf("--targets %s: want invalid --targets error, got %v", targets, err)

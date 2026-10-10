@@ -420,6 +420,33 @@ run install "$work/stub-curl:" INPUT_FAIL_ON=error
 expect "invalid fail-on is rejected" 1 "invalid fail-on 'error' (want blocker, warning or never)"
 run install "$work/stub-curl:" INPUT_TARGET=latest
 expect "invalid target is rejected" 1 "invalid target 'latest'"
+# A target below the oldest minor the knowledge base covers (1.16) is what
+# YAML makes of an unquoted number: target: 1.30 reaches the step as 1.3,
+# which would read ready (#237). Refused before anything is downloaded, with
+# the pitfall named.
+for t in 1.3 1.4 1.5 1.1 1.0 1.15 2.30 0.20; do
+  run install "$work/stub-curl:" INPUT_TARGET="$t"
+  expect "target $t (below the knowledge base) is rejected" 1 "the oldest Kubernetes minor the knowledge base covers is 1.16"
+  hasnt "target $t downloads nothing" "$work/calls" curl
+done
+run install "$work/stub-curl:" INPUT_TARGET=1.3
+expect "target 1.3 says to quote it" 1 'Is this 1.30 written as a YAML number? quote it (target: "1.30")'
+for t in 1.15 1.10 1.0 2.3; do
+  run install "$work/stub-curl:" INPUT_TARGET="$t"
+  hasnt "target $t gets no YAML hint" "$work/out" "YAML number"
+done
+run install "$work/stub-curl:" INPUT_TARGET=1.9
+expect "target 1.9 says to quote it" 1 'Is this 1.90 written as a YAML number? quote it (target: "1.90")'
+# Only MAJOR.MINOR: the scan parses a longer or v-prefixed version, the
+# Action does not take one.
+for t in v1.36 1.36.2 1.x 1.; do
+  run install "$work/stub-curl:" INPUT_TARGET="$t"
+  expect "target $t is not MAJOR.MINOR" 1 "invalid target '$t' (want a Kubernetes minor version like 1.36, quoted in the workflow"
+done
+for t in 1.16 1.36 1.016; do
+  run install "$work/stub-curl:" INPUT_TARGET="$t"
+  expect "target $t is accepted" 0 "upgradescope v9.9.9"
+done
 run install "$work/stub-curl:" INPUT_ALLOW_INCOMPLETE='true; touch pwned'
 expect "invalid allow-incomplete is rejected" 1 "invalid allow-incomplete 'true; touch pwned' (want true or false)"
 hasnt "invalid allow-incomplete downloads nothing" "$work/calls" curl

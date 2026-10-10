@@ -25,6 +25,9 @@ const (
 	// helmKubernetesAPIsURL documents why helm upgrade fails on a stored
 	// manifest with removed APIs, and the mapkubeapis fix.
 	helmKubernetesAPIsURL = "https://helm.sh/docs/topics/kubernetes_apis/"
+	// apiVersioningURL documents the alpha, beta and stable API levels and
+	// which a cluster serves.
+	apiVersioningURL = "https://kubernetes.io/docs/reference/using-api/#api-versioning"
 )
 
 // pluralObjects renders an object count with grammatical number:
@@ -123,6 +126,13 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 // manifest objects in files mode),
 //   - removed at ≤ target          → blocker, removed-api
 //   - removed exactly at target+1  → warning, removed-api
+//     (a removal past the KB horizon is titled "(projected)": it is a
+//     k8s.io/api lifecycle default, not a shipped release)
+//   - proposed state (manifests: files mode, the gate) at an API version
+//     the target does not serve yet (introduced after it) → blocker,
+//     removed-api, "not served until X": applying it fails like a removed
+//     API. Live stored objects are never judged so (the cluster serves
+//     what it stores).
 //   - deprecated, removal beyond the window or unset → info, deprecated-api;
 //     a deprecation after the target is titled as such, and "projected"
 //     past the KB horizon
@@ -156,27 +166,56 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 			Objects:        sortedObjects(u.Objects),
 			ObjectsOmitted: u.ObjectsOmitted,
 		}
-		if r, ok := idx.ResolveReplacement(e, target); ok {
+		// Proposed state: a manifest is applied to the cluster at the target.
+		// Live objects are stored where they are served, so only manifests
+		// can name an API the target does not serve yet.
+		unserved := known && e.Introduced.Compare(target) > 0 && (inv.Source == inventory.SourceFiles || listed != storedObjects)
+		if unserved {
+			if alt, ok := idx.ServedAlternative(e, target); ok {
+				enable := ""
+				if kb.PreGA(alt.Version) {
+					enable = " (alpha and beta APIs may need enabling)" // off by default in kube-apiserver
+				}
+				f.Remediation = fmt.Sprintf("write it as %s %s, the newest version Kubernetes %s can serve%s, or upgrade the cluster to Kubernetes %s before applying it", gvString(alt.Group, alt.Version), alt.Kind, target, enable, e.Introduced)
+			} else {
+				f.Remediation = fmt.Sprintf("Kubernetes %s serves no version of %s the knowledge base knows: upgrade the cluster to Kubernetes %s before applying it", target, u.Kind, e.Introduced)
+			}
+			f.Citations = append(f.Citations, apiVersioningURL)
+		} else if r, ok := idx.ResolveReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("migrate to %s %s", gvString(r.Group, r.Version), r.Kind)
+			// A replacement upstream tags nowhere is gen-kb's default, which
+			// the migration guide (it ends at v1.32) cannot back: cite the
+			// successor's changelog.
+			if re, ok := idx.Lookup(r.Group, r.Version, r.Kind); ok && e.ReplacementDefaulted {
+				f.Citations = append(f.Citations, kb.ChangelogURL(re.Introduced))
+			}
 		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known; %s %s is served from %s", target, gvString(later.Group, later.Version), later.Kind, from)
 		} else if e.Replacement != nil {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known", target)
 		}
 		gv := gvString(u.Group, u.Version)
+		projectedRemoval := ""
+		if e.Removed != nil && e.Removed.Compare(k.MaxKnownK8s) > 0 {
+			projectedRemoval = " (projected)" // k8s.io/api's lifecycle markers, not a release
+		}
 		switch {
 		case !known:
 			f.Category = CatUnknownAPI
 			f.Severity = SevInfo
 			f.Title = fmt.Sprintf("%s %s is not in the knowledge base (%s)", gv, u.Kind, pluralObjects(u.Count))
+		case unserved:
+			f.Category = CatRemovedAPI
+			f.Severity = SevBlocker
+			f.Title = fmt.Sprintf("%s %s is not served until %s, after target %s (%s)", gv, u.Kind, e.Introduced, target, pluralObjects(u.Count))
 		case e.Removed != nil && e.Removed.Compare(target) <= 0:
 			f.Category = CatRemovedAPI
 			f.Severity = SevBlocker
-			f.Title = fmt.Sprintf("%s %s removed in %s (%s)", gv, u.Kind, e.Removed, pluralObjects(u.Count))
+			f.Title = fmt.Sprintf("%s %s removed in %s%s (%s)", gv, u.Kind, e.Removed, projectedRemoval, pluralObjects(u.Count))
 		case e.Removed != nil && e.Removed.Compare(target.Next()) == 0:
 			f.Category = CatRemovedAPI
 			f.Severity = SevWarning
-			f.Title = fmt.Sprintf("%s %s removed in %s (%s)", gv, u.Kind, e.Removed, pluralObjects(u.Count))
+			f.Title = fmt.Sprintf("%s %s removed in %s%s (%s)", gv, u.Kind, e.Removed, projectedRemoval, pluralObjects(u.Count))
 		case e.Deprecated != nil:
 			f.Category = CatDeprecatedAPI
 			f.Severity = SevInfo
@@ -213,6 +252,12 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		f.Detail += writtenBy(u)
 		if !known {
 			f.Detail += fmt.Sprintf(" The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes %s serves it.", target)
+		}
+		if unserved {
+			f.Detail += fmt.Sprintf(" Kubernetes %s does not serve it yet (introduced in %s), so applying these objects to it fails with \"no matches for kind\".", target, e.Introduced)
+		}
+		if f.Category == CatRemovedAPI && projectedRemoval != "" && !unserved {
+			f.Detail += fmt.Sprintf(" The removal in %s is projected: it is a default of k8s.io/api's lifecycle markers, not a shipped release (the newest the knowledge base covers is %s), and may change before it ships.", e.Removed, k.MaxKnownK8s)
 		}
 		if !b.add(&out, f) {
 			return out
@@ -702,6 +747,9 @@ func groupInstalls(a registry.AddOn, ins []addOnInstall, node bool, now time.Tim
 // MaxFindingNamespaces (Evaluate caps it).
 func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addOnSubject {
 	s := addOnSubject{installs: ins, node: node}
+	if !node {
+		s.unnamespaced = slices.ContainsFunc(ins, unnamespaced)
+	}
 	for _, in := range ins {
 		if in.version != "" && (s.version == "" || versionBefore(in.version, s.version)) {
 			s.version = in.version
@@ -755,6 +803,14 @@ func newAddOnSubject(name string, ins []addOnInstall, line bool, node bool) addO
 	return s
 }
 
+// unnamespaced reports whether an install is in no named namespace: an
+// IngressClass (cluster-scoped) or a manifest object without
+// metadata.namespace (shown as ""). A namespace-scoped ignore rule cannot be
+// shown to cover it (Finding.Unnamespaced).
+func unnamespaced(in addOnInstall) bool {
+	return len(in.where) == 0 || slices.Contains(in.where, "")
+}
+
 // nsLabel names a namespace in an evidence sentence; "" is a manifest
 // object's unset metadata.namespace (files mode).
 func nsLabel(ns string) string {
@@ -804,7 +860,9 @@ type addOnSubject struct {
 	located    string   // evidence sentence that opens every finding's detail
 	namespaces []string // sorted
 	teams      []string
-	installs   []addOnInstall
+	// unnamespaced: some install is in no named namespace (unnamespaced).
+	unnamespaced bool
+	installs     []addOnInstall
 	// node marks node container runtimes. They ship with the node image or
 	// OS, which a node upgrade or node-pool image bump replaces, so an
 	// ended release line is a warning; only a compat row (the kubelet
@@ -844,7 +902,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 	finding := func(s addOnSubject, cat Category, sev Severity, key, title, detail string, citations []string) Finding {
 		return Finding{
 			Category: cat, Severity: sev, Key: key, Title: title, Detail: detail,
-			Teams: s.teams, Namespaces: s.namespaces, Remediation: a.Recommendation,
+			Teams: s.teams, Namespaces: s.namespaces, Unnamespaced: s.unnamespaced, Remediation: a.Recommendation,
 			Citations: append([]string(nil), citations...),
 		}
 	}
@@ -911,7 +969,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 			}
 			if ok {
 				f.Key = key(f.Category)
-				f.Teams, f.Namespaces = s.teams, s.namespaces
+				f.Teams, f.Namespaces, f.Unnamespaced = s.teams, s.namespaces, s.unnamespaced
 				if s.node && f.Severity == SevBlocker {
 					f.Severity = SevWarning
 					f.Detail += " The runtime comes with the node image or OS, not with the Kubernetes version, so this does not block the upgrade by itself."
@@ -996,6 +1054,7 @@ func evalAddOnCompat(a registry.AddOn, s addOnSubject, target inventory.Version)
 		if !s.node {
 			f.Namespaces = append(f.Namespaces, in.where...)
 			f.Teams = append(f.Teams, in.teams...)
+			f.Unnamespaced = f.Unnamespaced || unnamespaced(in)
 		}
 		if oldest == "" || versionBefore(in.version, oldest) {
 			oldest = in.version
@@ -1768,7 +1827,8 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 	}
 	if target.Compare(k.MaxKnownK8s) > 0 {
 		gaps = append(gaps, CapabilityGap{Capability: GapKBCoverage, Required: true,
-			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed", k.MaxKnownK8s, target)})
+			Reason: fmt.Sprintf("knowledge base covers Kubernetes up to %s; target %s cannot be assessed (API removals after %s are projected from k8s.io/api lifecycle markers, not shipped releases)",
+				k.MaxKnownK8s, target, k.MaxKnownK8s)})
 	}
 	if from, ok := upgradeFrom(inv); ok && target.Compare(from) <= 0 {
 		gaps = append(gaps, CapabilityGap{Capability: GapTarget, Required: true,
@@ -1867,7 +1927,7 @@ func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version
 				return out
 			}
 		}
-		for _, f := range evalHelmManifest(rel, idx, live, target) {
+		for _, f := range evalHelmManifest(rel, idx, live, target, k.MaxKnownK8s) {
 			f.Namespaces, f.Teams = ns, teams
 			if !b.add(&out, f) {
 				return out
@@ -1914,10 +1974,11 @@ func evalChartKubeVersion(rel inventory.HelmRelease, target inventory.Version) (
 // evalHelmManifest judges a release's flagged manifest objects (see
 // evalHelmReleases): at most a removed-api blocker and a deprecated-api
 // warning, in that order.
-func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][]inventory.ObjectRef, target inventory.Version) []Finding {
+func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][]inventory.ObjectRef, target, maxKnown inventory.Version) []Finding {
 	type bucket struct {
 		apis, entries, replacements []string
 		unserved                    []string // APIs no served replacement is known for
+		projected                   []string // removals past the KB horizon (see evalAPIUsage)
 		objects                     []inventory.ObjectRef
 		count, omitted              int
 	}
@@ -1956,7 +2017,15 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 			continue
 		}
 		if e.Removed != nil {
-			when = append(when, "removed in "+e.Removed.String())
+			removedIn := "removed in " + e.Removed.String()
+			if e.Removed.Compare(maxKnown) > 0 {
+				// As evalAPIUsage: k8s.io/api's lifecycle markers, not a release.
+				removedIn += " (projected)"
+				if !slices.Contains(b.projected, e.Removed.String()) {
+					b.projected = append(b.projected, e.Removed.String())
+				}
+			}
+			when = append(when, removedIn)
 		}
 		api := gvString(u.Group, u.Version) + " " + u.Kind
 		b.apis = append(b.apis, api)
@@ -1995,17 +2064,26 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 			ObjectsOmitted: b.omitted,
 			Remediation:    fix,
 		}
+		projection := ""
+		if len(b.projected) > 0 {
+			slices.Sort(b.projected)
+			projection = fmt.Sprintf(" The removal in %s is projected: it is a default of k8s.io/api's lifecycle markers, not a shipped release (the newest the knowledge base covers is %s), and may change before it ships.", strings.Join(b.projected, ", "), maxKnown)
+		}
 		if len(b.replacements) > 0 {
 			f.Remediation += " (" + strings.Join(b.replacements, ", ") + ")"
 		}
 		apis, entries := strings.Join(b.apis, ", "), strings.Join(b.entries, ", ")
 		if b.sev == SevBlocker {
 			f.Title = fmt.Sprintf("helm upgrade of release %s/%s will fail: its manifest uses %s", rel.Namespace, rel.Name, apis)
-			f.Detail = fmt.Sprintf("%s %s at APIs Kubernetes %s does not serve: %s. Helm refuses to upgrade a release whose stored manifest uses APIs the cluster no longer serves.", stores, pluralObjects(b.count), target, entries)
+			serves := "does not serve"
+			if len(b.projected) > 0 {
+				serves = "is projected not to serve"
+			}
+			f.Detail = fmt.Sprintf("%s %s at APIs Kubernetes %s %s: %s. Helm refuses to upgrade a release whose stored manifest uses APIs the cluster no longer serves.%s", stores, pluralObjects(b.count), target, serves, entries, projection)
 			f.Remediation += " before upgrading the cluster; if the cluster already stopped serving them, rewrite the stored manifest with the helm-mapkubeapis plugin first"
 		} else {
 			f.Title = fmt.Sprintf("Helm release %s/%s manifest uses deprecated %s", rel.Namespace, rel.Name, apis)
-			f.Detail = fmt.Sprintf("%s %s at deprecated APIs: %s.", stores, pluralObjects(b.count), entries)
+			f.Detail = fmt.Sprintf("%s %s at deprecated APIs: %s.%s", stores, pluralObjects(b.count), entries, projection)
 		}
 		if len(b.unserved) > 0 {
 			f.Remediation += fmt.Sprintf("; no replacement Kubernetes %s serves is known for %s", target, strings.Join(b.unserved, ", "))

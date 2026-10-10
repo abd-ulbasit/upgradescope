@@ -1,11 +1,11 @@
 [
   {
     "description": "Kubernetes 1.34 leaves Azure Kubernetes Service standard support on 2026-11-30. Azure Kubernetes Service ends standard support for Kubernetes 1.34 on 2026-11-30; extended support, which applies only if Long Term Support is enabled, then runs until 2027-11-30. AKS has no automatic extended support. Without Long Term Support (which needs the Premium tier), a cluster past community support gets only platform support (Azure and AKS platform issues, no Kubernetes fixes) while its minor is N-3, one behind the oldest minor in community support. Older minors are out of support. Fix: Upgrade the control plane to a Kubernetes minor that is still in standard support.",
-    "check_name": "support-lifecycle/aks/1.34",
-    "fingerprint": "8afb53784abd015b9ed4d62475a331cda21a1f300adbb0da31d08265f8c5b680",
+    "check_name": "support-lifecycle/aks/1.34/ending",
+    "fingerprint": "5b86416d7df0147ebf958f1c2ba9d18a620a1e1d2b487cfce165b873abf66e06",
     "severity": "minor",
     "location": {
-      "path": "upgradescope/support-lifecycle/aks/1.34",
+      "path": "upgradescope/support-lifecycle/aks/1.34/ending",
       "lines": {
         "begin": 1
       }

@@ -6,6 +6,7 @@ package kb
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
@@ -27,6 +28,11 @@ type APILifecycleEntry struct {
 	// removalFixes), or to the release the Kubernetes changelog states for a
 	// type upstream still registers but never tagged (its untaggedLifecycles).
 	RemovedInferred bool `json:"removedInferred,omitempty"`
+	// ReplacementDefaulted marks a Replacement upstream tags nowhere:
+	// tools/gen-kb set it to the kind's GA version, citing the migration
+	// guide (which stops at v1.32) and the successor's changelog
+	// (ReplacementCitation).
+	ReplacementDefaulted bool `json:"replacementDefaulted,omitempty"`
 }
 
 // BuiltinGroup is a built-in API group (one gen-kb's scheme registers),
@@ -167,6 +173,67 @@ func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version)
 		return GVK{}, false
 	}
 	return GVK{Group: best.Group, Version: best.Version, Kind: best.Kind}, true
+}
+
+// ServedAlternative returns the newest version of e's group and kind that
+// target serves (introduced at or before it, not removed by it), other
+// than e's own: the API to write a manifest in when e itself is not served
+// yet (resource.k8s.io/v1 DeviceClass at 1.33 is v1beta2, v1 is served from
+// 1.34). Newest is the latest Introduced; the same release is broken by
+// stability (GA, then beta, then alpha) and then by the version name, so
+// the answer does not depend on entry order. It reports false when the KB
+// knows no such version.
+func (i Index) ServedAlternative(e APILifecycleEntry, target inventory.Version) (GVK, bool) {
+	var best *APILifecycleEntry
+	for _, c := range i.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
+		if c.Version == e.Version || !servedAt(c, target) {
+			continue
+		}
+		if best == nil {
+			best = &c
+			continue
+		}
+		if cmpIntro := c.Introduced.Compare(best.Introduced); cmpIntro > 0 || cmpIntro == 0 && preferVersion(c.Version, best.Version) {
+			best = &c
+		}
+	}
+	if best == nil {
+		return GVK{}, false
+	}
+	return GVK{Group: best.Group, Version: best.Version, Kind: best.Kind}, true
+}
+
+// stability ranks a Kubernetes API version name: 2 for GA (v1), 1 for beta
+// (v1beta1), 0 for alpha (v1alpha1).
+func stability(version string) int {
+	switch {
+	case strings.Contains(version, "alpha"):
+		return 0
+	case strings.Contains(version, "beta"):
+		return 1
+	}
+	return 2
+}
+
+// ChangelogURL is the Kubernetes changelog of the minor v, where a release
+// announces the APIs it introduces.
+func ChangelogURL(v inventory.Version) string {
+	return fmt.Sprintf("https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-%d.%d.md", v.Major, v.Minor)
+}
+
+// PreGA reports whether an API version name is alpha or beta: off by
+// default in kube-apiserver unless enabled with --runtime-config (and,
+// for alphas, a feature gate), so "served" for it means "can be served".
+func PreGA(version string) bool { return stability(version) < 2 }
+
+// preferVersion reports whether API version a is preferred to b when both
+// are introduced in the same release: the more stable one, else the
+// greater name (v1beta2 over v1beta1).
+func preferVersion(a, b string) bool {
+	if sa, sb := stability(a), stability(b); sa != sb {
+		return sa > sb
+	}
+	return a > b
 }
 
 // LaterReplacement returns, when ResolveReplacement knows no replacement

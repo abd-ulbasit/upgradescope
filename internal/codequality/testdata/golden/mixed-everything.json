@@ -192,7 +192,7 @@
     }
   },
   {
-    "description": "Not assessed: kb-coverage (required): knowledge base covers Kubernetes up to 1.36; target 1.38 cannot be assessed. The verdict is unknown: a blocker may have been missed.",
+    "description": "Not assessed: kb-coverage (required): knowledge base covers Kubernetes up to 1.36; target 1.38 cannot be assessed (API removals after 1.36 are projected from k8s.io/api lifecycle markers, not shipped releases). The verdict is unknown: a blocker may have been missed.",
     "check_name": "not-assessed/kb-coverage",
     "fingerprint": "21ff8b73ded6d4ac93b8e36cf784cb04806611d3e2b45fd5401bd6d9594d4a92",
     "severity": "critical",

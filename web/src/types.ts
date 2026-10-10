@@ -54,6 +54,8 @@ export interface Finding {
   namespaces?: string[];
   // Newer servers list at most 100 namespaces and count the rest here.
   namespacesOmitted?: number;
+  // An add-on finding that also covers an install in no named namespace.
+  unnamespaced?: boolean;
   remediation?: string;
   citations?: string[];
 }

@@ -220,6 +220,10 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 			warnings = append(warnings, fmt.Sprintf("%s: ignore[%d] (%s) expired on %s and no longer applies", opts.Source, i, rule, rule.Expires))
 			continue
 		}
+		if legacySupportKey(rule.Key) {
+			warnings = append(warnings, fmt.Sprintf("%s: ignore[%d] (%s) matches nothing: the key of a support-lifecycle finding names its phase now; write %s/ending, %s/extended or %s/ended for the phase you accept (see the support lifecycle page)",
+				opts.Source, i, rule, rule.Key, rule.Key, rule.Key))
+		}
 		active = append(active, rule)
 	}
 
@@ -259,6 +263,16 @@ func Apply(r engine.Report, rules []Rule, opts Options) (engine.Report, []string
 	return r, warnings
 }
 
+// legacySupportKey reports whether key is a support-lifecycle key without
+// the phase, support-lifecycle/<provider>/<minor>, which every phase used
+// before the phase was part of the key (engine.SupportKey). Such a rule
+// matches no finding now, which fails closed (the finding is no longer
+// accepted), so Apply says so instead of leaving it silent.
+func legacySupportKey(key string) bool {
+	rest, ok := strings.CutPrefix(key, string(engine.CatSupportLifecycle)+"/")
+	return ok && strings.Count(rest, "/") == 1 && !strings.HasPrefix(rest, "/") && !strings.HasSuffix(rest, "/")
+}
+
 // group collects what one rule (or one annotation reason) took.
 type group struct {
 	reason, source, expires string
@@ -287,10 +301,12 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 		case rule.Namespace == "" && rule.Name == "" && rule.File == "":
 			g.objects, remaining, g.whole, g.all = remaining, nil, true, true
 		case len(f.Objects) == 0:
-			// Namespaces the finding does not list (NamespacesOmitted)
-			// cannot be shown to match, so a namespace rule takes it
-			// whole only when it lists them all.
-			g.whole = rule.Name == "" && rule.File == "" && f.NamespacesOmitted == 0 && allMatch(rule.Namespace, f.Namespaces)
+			// Namespaces the finding does not list (NamespacesOmitted),
+			// and installs in no named namespace (Unnamespaced: a manifest
+			// without metadata.namespace, an IngressClass), cannot be
+			// shown to match, so a namespace rule takes it whole only
+			// when it lists them all and the finding has none.
+			g.whole = rule.Name == "" && rule.File == "" && f.NamespacesOmitted == 0 && !f.Unnamespaced && allMatch(rule.Namespace, f.Namespaces)
 		default:
 			g.objects, remaining = take(remaining, func(o inventory.ObjectRef) bool { return rule.matches(o, opts.FileBase) })
 		}

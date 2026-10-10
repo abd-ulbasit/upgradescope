@@ -39,7 +39,7 @@ ignore:
   # A whole finding, by key, until a date.
   - key: eol-addon/ingress-nginx
     reason: migrating to Gateway API, tracked in PLAT-123
-    expires: 2026-12-31
+    expires: 2099-12-31   # a date inside your migration window
 
   # Every removed-API finding, but only for objects under legacy/.
   - category: removed-api
@@ -68,6 +68,15 @@ Such a finding names at most 100 namespaces and counts the rest, which
 cannot be shown to match, so past 100 a `namespace` rule no longer takes
 it, even with a glob such as `*` that would match them all; use a rule
 without selectors (by `key`) for it.
+An add-on install in no named namespace cannot be shown to match either: a
+manifest object without `metadata.namespace` (`helm template` output usually
+has none, and the install can land in any namespace, production included),
+or a cluster-scoped `IngressClass`. A finding that covers one is marked
+`unnamespaced` in the JSON report, and a `namespace` rule, a glob such as
+`*` included, never takes it: an `ingress-nginx` end-of-life blocker for an
+install in `sandbox` and another with no namespace stays a blocker under a
+rule for `sandbox`. A finding whose installs are all in named namespaces
+the rule matches is suppressed as before.
 Rules apply in order, and the first one that matches an object takes it.
 
 **Deprecated-API callers.** When the apiserver's
@@ -234,7 +243,7 @@ spec:
   ignore:
     - key: eol-addon/ingress-nginx
       reason: migrating to Gateway API, tracked in PLAT-123
-      expires: "2026-12-31"
+      expires: "2099-12-31"   # a date inside your migration window
 ```
 
 Each `status.targets[]` entry counts suppressed findings in `suppressed`.
@@ -266,7 +275,7 @@ becomes "2 objects"). Examples:
 | Version skew | `version-skew/kubelet-post-upgrade`, `version-skew/<component>-newer` or `-behind`, `version-skew/upgrade-path` |
 | Unknown built-in API | `unknown-api/<group>/<version>/<kind>` |
 | CRD version | `crd-version/unserved/<group>/<version>/<kind>`, `crd-version/deprecated/…`, `crd-version/stored-unserved/…` |
-| Managed-provider support | `support-lifecycle/<provider>/<minor>`, e.g. `support-lifecycle/eks/1.34` |
+| Managed-provider support | `support-lifecycle/<provider>/<minor>/<phase>`, e.g. `support-lifecycle/eks/1.34/extended`; the phase is `ending`, `extended` or `ended`, so accepting one never accepts a later one (a key without the phase, as written before, matches nothing: see [Upgrade](../operations/upgrade.md#the-support-lifecycle-key-names-its-phase)) |
 | Knowledge base behind the target | `kb-stale` |
 
 `--output json` shows the key of every finding, and the SARIF output uses

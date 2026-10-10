@@ -169,7 +169,7 @@ spec:
   ignore:
     - key: eol-addon/ingress-nginx
       reason: migrating to Gateway API, tracked in PLAT-123
-      expires: "2026-12-31"
+      expires: "2099-12-31"   # a date inside your migration window
 ```
 
 If `agent.targets` is set as well, the agent resets `spec.targets` to it on

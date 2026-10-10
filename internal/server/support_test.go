@@ -94,7 +94,7 @@ func TestGateTagsSupportLifecycleAsCluster(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body %s)", resp.StatusCode, raw)
 	}
 	b := decodeGate(t, raw)
-	src, ok := gateSources(b)["support-lifecycle/eks/1.34"]
+	src, ok := gateSources(b)["support-lifecycle/eks/1.34/extended"]
 	if !ok {
 		t.Fatalf("findings %v: the cluster's support-lifecycle blocker is missing", gateSources(b))
 	}

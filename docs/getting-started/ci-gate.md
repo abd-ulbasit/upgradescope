@@ -250,6 +250,10 @@ versions its own CRDs deprecate or do not serve, so live custom resources
 at a version that a posted CRD newly deprecates or stops serving are not
 judged.
 
+A `target` below 1.16, the oldest minor the knowledge base covers, is a 400
+that says to quote the version, not a verdict: YAML makes an unquoted
+`target: 1.30` the number 1.3, which would read ready.
+
 A `target` newer than the server's knowledge base (a cluster already on its
 newest minor, upgrading to the next) makes the verdict `unknown`, and an
 `unknown` verdict fails the gate (422). Pass a `target` the release knows,
