@@ -167,7 +167,7 @@ ones after it. client-go's `rest.Config.Timeout` (`--request-timeout`, default
 | Capability | What it reads | Notes |
 |---|---|---|
 | `versions` | `/version`, nodes (kubelet versions), namespaces (team label), kube-system control-plane pods (image tags) | The cluster ID is the `kube-system` namespace UID. Managed control planes expose no control-plane pods, so that list is empty there. |
-| `helm` | Secrets of type `helm.sh/release.v1` | Decodes base64, gunzip and JSON into a minimal struct, keeping the latest revision per release. No Helm SDK. The releases not yet decoded are fetched 8 at a time and decoded one at a time, in order (see [API cost per tick](#api-cost-per-tick)). |
+| `helm` | Helm v3 release storage: Secrets of type `helm.sh/release.v1` (the `secrets` driver, Helm's default) and ConfigMaps labelled `owner=helm` (the `configmaps` driver), listed metadata-only; the sql driver is not read | Decodes base64, gunzip and JSON into a minimal struct, for the installed revision of each release only: the newest revision, except that after an uninstall (`--keep-history`) there is none, and after a failed revision it is the newest `deployed` revision, else the newest `superseded` one. A release whose history holds failed revisions only (a failed install) has no revision to judge and makes the capability partial, naming the release (#239). No Helm SDK. The releases not yet decoded are fetched 8 at a time and decoded one at a time, in order (see [API cost per tick](#api-cost-per-tick)). |
 | `deprecated-calls` | apiserver `/metrics`, `apiserver_requested_deprecated_apis` | The runtime-caller signal: which deprecated APIs some client requested since the apiserver started, which manifest scanners cannot see. It does not say which client (audit logs do). The gauge resets when the apiserver restarts, HA apiservers report independently, and managed planes often deny access. |
 | `addons` | pod container and init-container images and labels (the `kube-system` pods from the `versions` step's read, the other namespaces from its own list), `networking.k8s.io/v1` IngressClasses, plus the Helm releases from the `helm` step | Matches registry matchers. An image matcher of two or more segments is a repository-path suffix on whole segments of the normalised reference (a one-segment matcher is that repository exactly, unless an entry writes it `"*/name"` to match under any registry prefix, which only a distinctive name may), so mirrors and pull-through caches match; provider builds (GKE, AKS) match only entries written for them. A chart matcher names a Helm release's chart or a pod's `helm.sh/chart` label. A pod running an image no matcher claims, whose `app.kubernetes.io/name`, `helm.sh/chart` chart name or `app.kubernetes.io/part-of` names an add-on, is that add-on, at its `app.kubernetes.io/version` when the name label (or, without one, the chart label) named it. An IngressClass with controller `k8s.io/ingress-nginx` is ingress-nginx, without a version, unless ingress-nginx, a vendor build of it or Traefik (which can serve that class) was found otherwise. Each namespace is its own install: a Helm release's `appVersion` wins there over image tags and labels on its release line (major.minor), and otherwise the oldest version its image tags and labels give; image tags and labels on another line than every release in the namespace are a second install there, at their oldest version, so an older canary revision beside a newer release is judged (#165). Image repositories no image matcher claims go to `unrecognizedImages` and never become findings. In files mode the same matcher runs over manifest pod templates and IngressClasses. |
 | `api-usage` | discovery, then one **metadata-only, paged** list per resource that still serves a version the knowledge base flags, at a non-deprecated version | Detects *authorship*, not servability. See below. |
@@ -219,8 +219,11 @@ cluster. The requests of one tick are:
   version. A CRD with a deprecated or unserved version adds a list of its
   custom resources. Where the Argo CD or Flux CRDs are served, the lists
   of Applications and HelmReleases add ceil(N / 50) requests each (whole
-  objects, so smaller pages), plus a GET per distinct OCIRepository a
-  HelmRelease references; a cluster with no Helm release also lists
+  objects, so smaller pages), plus a list of the OCIRepositories that
+  HelmRelease `chartRef`s point at (ceil(N / 50) requests, of their one
+  namespace or cluster-wide; per namespace when the cluster-wide list is
+  forbidden, and a GET for each only in a namespace whose list is forbidden
+  too, #248); a cluster with no Helm release also lists
   Deployments, StatefulSets and DaemonSets metadata-only, until it finds
   a tracking label or annotation of either tool, if the role lets it.
 - **Each pod is listed once.** The `kube-system` pods are read for the
@@ -305,10 +308,25 @@ newest. When every version the resource's own group serves is flagged, it
 lists the same objects in the replacement's group instead, if that group
 serves the resource at an unflagged version (`extensions/v1beta1`
 ingresses are `networking.k8s.io/v1` ingresses on 1.19 to 1.21). Only when
-neither exists does it list a deprecated endpoint. That is unavoidable,
-and the scanner then appears in `apiserver_requested_deprecated_apis` for
-that resource. On 1.33 and later this happens on every cluster for core
-`v1` Endpoints and ComponentStatus, which only the deprecated `v1` serves.
+neither exists does it list a deprecated endpoint, and only for a kind
+whose removal the knowledge base schedules, since its objects can block an
+upgrade: the scanner then appears in `apiserver_requested_deprecated_apis`
+for that resource (`policy/v1beta1` PodSecurityPolicy on 1.24,
+`coordination.k8s.io/v1beta1` LeaseCandidate where only that version
+serves it), and the `deprecated-calls` step names it as skipped so the
+engine does not report the scanner as a caller. A kind that only deprecated
+versions serve but that is never removed is not listed at all: core `v1`
+Endpoints and ComponentStatus on 1.33 and later could only ever give info
+findings (#123). When API discovery does not get through on a scan (it
+fails, or skips a group), the step cannot say what it lists there, while
+the metric keeps an earlier scan's rows until the apiserver restarts; the
+rows at the group/versions it could have listed (those where the knowledge
+base schedules a removal) are then named as skipped for that scan too, not
+attributed to other clients (#239). When discovery fails outright, that is
+every such group/version, also one the scanner would not list at on that
+cluster (`flowcontrol.apiserver.k8s.io/v1beta3` where `v1` is served), so
+other clients' real calls there are withheld for that scan as well; the
+reason says so.
 Then, per flagged group/version:
 
 - **The kind goes away** (the knowledge base entry has no replacement, the
@@ -333,17 +351,29 @@ Then, per flagged group/version:
   Only kubectl client-side apply rewrites that annotation, so it may be
   stale under any other writer. The finding names the field manager, or
   `kubectl last-applied`.
-  Entries for the `status` subresource are ignored, and so are three
+  Entries for the `status` subresource are ignored, and so are four
   control-plane managers whose entries only record what was current when
   that release wrote the object: `kube-apiserver`,
-  `kube-controller-manager` and `api-priority-and-fairness-config-producer-v1`.
+  `kube-controller-manager`, `kube-scheduler` and
+  `api-priority-and-fairness-config-producer-v1`. A custom scheduler built
+  on the kube-scheduler framework may report the field manager
+  `kube-scheduler` too, so its writes through a deprecated version are not
+  counted either; schedulers mostly write bindings, Events and Leases
+  through GA versions, so the gap is narrow.
   APF objects with `apf.kubernetes.io/autoupdate-spec: "true"` are skipped,
   because the apiserver maintains them.
 
-The trade-off: an object with no managedFields entry for that version (for
-example, created before field tracking existed, or with its managedFields
-cleared by a raw client) and no last-applied annotation goes undetected, and
-so do writes by the excluded control-plane managers. Each manager is judged
+The trade-off: an object whose managedFields and last-applied annotation
+name another version is not counted, which is right when it is written
+through that version. An object with no entry left to judge by (none outside
+the `status` subresource and the trusted managers: created with no fields,
+created before field tracking existed, or with its managedFields cleared by
+a raw client) and no apiVersion in a last-applied annotation cannot be
+attributed: it is not counted as use either, and is reported once per kind
+as an info finding, "authorship unknown" (`inv.APIAuthorshipUnknown`, #199),
+which changes neither the verdict nor the score. An object only the trusted
+managers wrote is the control plane's, and neither. Writes by the trusted
+managers are not seen. Each manager is judged
 on its own, so when an object moves from one tool to another (from
 `kubectl apply` to Helm, say), the old tool's entry keeps the finding open
 until that entry is gone, for example once the new tool owns those fields.

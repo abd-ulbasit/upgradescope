@@ -86,4 +86,40 @@ func TestLoadWithRegistryRejectsDoubleClaims(t *testing.T) {
 	if err := load("operator"); err != nil {
 		t.Errorf("an exact one-segment matcher claims no mirror path and no other product: %v", err)
 	}
+
+	// A replacement copied from an earlier release, whose claim has since
+	// moved to another entry (#265), is told to copy the file again.
+	dir := t.TempDir()
+	old := "schema_version: 2\nid: rke2-ingress-nginx\ndisplay_name: RKE2 Ingress NGINX\nmatchers:\n  images:\n    - rancher/nginx-ingress-controller" +
+		"\nsupport:\n  status: supported\n  citations:\n    - https://docs.rke2.io/reference/ingress_migration\n"
+	if err := os.WriteFile(filepath.Join(dir, "rke2-ingress-nginx.yaml"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadWithRegistry(dir); err == nil || !strings.Contains(err.Error(), "copy of registry/data/rke2-ingress-nginx.yaml from an earlier release") {
+		t.Errorf("an outdated copy of an embedded entry: want the hint to copy it again, got %v", err)
+	}
+}
+
+// A tag pattern is no way to take an embedded entry's image over: an entry
+// of a new id whose matcher adds one to Ingress NGINX's repository is
+// refused at start like the same entry without it. Unchecked, it turned the
+// controller's blocked verdict into ready/100.
+func TestLoadWithRegistryRejectsTagQualifiedTakeover(t *testing.T) {
+	for _, matcher := range []string{
+		"ingress-nginx/controller:v*",
+		"ingress-nginx/controller",
+		`"corp/mirror/ingress-nginx/controller:v1.*"`,
+		`"rancher/nginx-ingress-controller:*-mine*"`,
+	} {
+		dir := t.TempDir()
+		entry := "schema_version: 2\nid: my-ingress\ndisplay_name: My Ingress\nmatchers:\n  images:\n    - " + matcher +
+			"\nsupport:\n  status: supported\n  citations:\n    - https://acme.dev/lifecycle\n"
+		if err := os.WriteFile(filepath.Join(dir, "my-ingress.yaml"), []byte(entry), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadWithRegistry(dir)
+		if err == nil || !strings.Contains(err.Error(), "my-ingress") || !strings.Contains(err.Error(), "replace the embedded entry by using its id") {
+			t.Errorf("%s: want a claim conflict telling to replace the embedded entry, got %v", matcher, err)
+		}
+	}
 }

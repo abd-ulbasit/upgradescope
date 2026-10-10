@@ -27,6 +27,10 @@ on:
         description: 'Every Kubernetes minor in hack/kind-node-images.txt (1.29-1.37) and Postgres 14-18; false runs the PR sets'
         type: boolean
         default: true
+      upload-fixture-sarif:
+        description: "Upload the action job's fixture SARIF to code scanning, to check GitHub still accepts it (refused on the default branch, where its two blockers would be open alerts)"
+        type: boolean
+        default: false
   # release.yml calls this workflow for every v* tag, so a release is gated on
   # the whole suite, vuln gate and kind e2e included, at the tagged commit.
   workflow_call:
@@ -43,6 +47,18 @@ on:
 # Least privilege: nothing here writes to the repository.
 permissions:
   contents: read
+
+# No cache on the release path (IR-22, #244). Any job can write the
+# Actions cache with the runner's own token, whatever its permissions:
+# block, and a run on a tag restores entries written on main, kb-refresh's
+# job that builds freshly bumped, unreviewed modules included. So when
+# release.yml calls this workflow (inputs.release, on a tag ref), every
+# job restores nothing: setup-go cache false, no setup-node cache, the
+# actions/cache step skipped. PRs, main and the schedule keep their
+# caches. hack/release-caches_test.sh evaluates this and checks every
+# step that could restore a cache.
+env:
+  RESTORE_CACHES: ${{ !inputs.release && github.ref_type != 'tag' }}
 
 # A new push to a PR cancels that PR's superseded run (one group per PR).
 # Everything else gets a group of its own: groups are repository-wide, and a
@@ -164,6 +180,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       # go vet + staticcheck, pinned in the Makefile: golangci-lint-action
       # lags Go releases, and an unpinned linter turns an upstream release
       # into a red build on an unrelated PR.
@@ -180,6 +197,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
           cache-dependency-path: |
             go.sum
             tools/*/go.sum
@@ -216,6 +234,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - run: make test-heap
 
   # The binary and the dashboard it embeds, then every package (tests
@@ -233,6 +252,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - run: make build
       # The real go:embed bundle through Server's routing: GET / and every
       # asset index.html references, each 200 with its content type. A 200
@@ -259,10 +279,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24' # the Dockerfile's
-          cache: npm
+          package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
+          cache: ${{ env.RESTORE_CACHES == 'true' && 'npm' || '' }}
           cache-dependency-path: web/package-lock.json
       - run: make notices-check
 
@@ -278,6 +300,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       # The gate lives in hack/vulncheck.sh so `make vuln` reproduces it byte
       # for byte on a laptop. It pins govulncheck, scans the linux/amd64
       # binary, and fails closed; accepted advisories are in
@@ -286,6 +309,15 @@ jobs:
         run: make vuln-test
       - name: govulncheck (binary mode, per-advisory allowlist)
         run: make vuln
+      # The CI-only Renovate validator's lockfile (hack/renovate), bumped by
+      # hand: an advisory not accepted in hack/renovate/osv-scanner.toml,
+      # with a reason and an expiry, fails here, weekly too (#244).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24' # Renovate's engines
+          package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
+      - name: npm audit of hack/renovate (per-advisory ignore list)
+        run: make renovate-audit
 
   # Dashboard: npm ci, vitest, typecheck + vite build, production advisories,
   # and the committed go:embed copy equals the fresh build.
@@ -305,7 +337,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
+          package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
+          cache: ${{ env.RESTORE_CACHES == 'true' && 'npm' || '' }}
           cache-dependency-path: web/package-lock.json
       - run: make web-test
 
@@ -339,6 +372,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24' # Renovate's engines
+          package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
       - run: make examples-test
 
   # Every Dockerfile for both architectures the release publishes, pushing
@@ -356,10 +390,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/dockerhub-mirror # Docker Hub's anonymous pull limit (429): pull through mirror.gcr.io
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod # Dockerfile.release's binaries are built on the runner
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false # it installs no buildx (no version: input); never from the Actions cache
+          # The docker-container builder runs its own BuildKit, which does not
+          # read the daemon's registry-mirrors: give it the mirror too (the
+          # dockerhub-mirror step above covers the daemon, which pulls the
+          # builder image itself). That image is pinned by digest, the one
+          # buildx-stable-1 names today: the mirror serves a digest from its
+          # cache, but the first pull of the moving tag in a job went to
+          # Docker Hub and timed out. Bump it by hand, in every workflow
+          # (hack/dockerhub-mirror_test.sh checks they agree).
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: build ${{ matrix.dockerfile }} (linux/amd64, linux/arm64)
         env:
           IMAGES_DOCKERFILES: ${{ matrix.dockerfile }}
@@ -387,6 +437,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - name: Did this branch touch registry/?
         id: changed
         env:
@@ -408,19 +459,55 @@ jobs:
         if: steps.changed.outputs.registry == 'true'
         run: make eol-check
 
+  # The Postgres majors pg-conformance runs on, from hack/pg-images.txt, each
+  # pinned by digest (#244: postgres:<major> was pulled by its moving tag,
+  # in the release-gating run too): 17 on PRs, pushes and releases, 14-18
+  # on the schedule and on demand (workflow_dispatch, unless
+  # full-matrix=false), by the same rule as the kube job's minors.
+  # hack/pg-images_test.sh covers the table and this wiring.
+  pg-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      images: ${{ steps.matrix.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE: ${{ inputs.release == true }}
+          FULL_MATRIX: ${{ inputs.full-matrix }}
+        run: |
+          set="$(hack/kind-images.sh set "$EVENT" "$RELEASE" "$FULL_MATRIX")"
+          images="$(hack/pg-images.sh matrix "$set")"
+          echo "Postgres images ($set): $images"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+
   # Store conformance against a real Postgres: 17 on every PR and push, the
   # supported range 14-18 on the schedule (and on demand).
   pg-conformance:
     name: postgres store conformance (postgres:${{ matrix.pg }})
+    needs: pg-matrix
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        pg: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release && inputs.full-matrix != false)) && '["14","15","16","17","18"]' || '["17"]') }}
+        include: ${{ fromJSON(needs.pg-matrix.outputs.images) }}
     services:
       postgres:
-        image: postgres:${{ matrix.pg }}
+        # zizmor cannot follow a matrix built from a job output, so it cannot
+        # see the digest: every row is postgres:<major>@sha256:<index digest>
+        # from hack/pg-images.txt, which hack/pg-images.sh rejects unless
+        # pinned (hack/pg-images_test.sh checks this line and that no other
+        # workflow line ignores a zizmor audit).
+        # Services start before the first step, so the daemon mirror
+        # (.github/actions/dockerhub-mirror, whose restart would kill them)
+        # cannot apply: the image is pulled by name from mirror.gcr.io, the
+        # same digest Docker Hub serves (hack/dockerhub-mirror_test.sh).
+        image: mirror.gcr.io/library/${{ matrix.image }} # zizmor: ignore[unpinned-images] pinned by digest in hack/pg-images.txt
         env:
           POSTGRES_PASSWORD: ci-test
           POSTGRES_DB: upgradescope
@@ -438,6 +525,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - name: wait for postgres (entrypoint restarts once after initdb)
         run: |
           for _ in $(seq 1 60); do
@@ -472,12 +560,28 @@ jobs:
         with:
           fetch-depth: 0 # goreleaser derives the snapshot version from tags
           persist-credentials: false
+      - uses: ./.github/actions/dockerhub-mirror # Docker Hub's anonymous pull limit (429): pull through mirror.gcr.io
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       # In snapshot mode dockers_v2 still builds (and --loads, never pushes)
       # the linux/amd64 and linux/arm64 images from Dockerfile.release.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false # it installs no buildx (no version: input); never from the Actions cache
+          # The docker-container builder runs its own BuildKit, which does not
+          # read the daemon's registry-mirrors: give it the mirror too (the
+          # dockerhub-mirror step above covers the daemon, which pulls the
+          # builder image itself). That image is pinned by digest, the one
+          # buildx-stable-1 names today: the mirror serves a digest from its
+          # cache, but the first pull of the moving tag in a job went to
+          # Docker Hub and timed out. Bump it by hand, in every workflow
+          # (hack/dockerhub-mirror_test.sh checks they agree).
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - run: make release-check
       # The CLI as the last release shipped it against this tree, through
       # `--help`: a removed flag, a changed default or usage line must be
@@ -516,7 +620,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      security-events: write # upload-sarif below, on pushes to main only
+      security-events: write # upload-sarif below, on a dispatched fixture run only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -524,6 +628,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - run: make action-test
 
       - id: release
@@ -553,6 +658,61 @@ jobs:
             || { echo "::error::SARIF at $SARIF has no error-level result"; exit 1; }
           [ "$VERDICT" = blocked ] && [ "$BLOCKERS" -gt 0 ] \
             || { echo "::error::outputs verdict='$VERDICT' blockers='$BLOCKERS', want blocked and > 0"; exit 1; }
+
+      # The real provenance check: latest above is v0.1.x, which predates
+      # provenance, so the install takes the warning path. v0.2.0-rc.2 has
+      # attestations; the action must verify one with the runner's gh and
+      # this job's token, then install the archive. A later step cannot read
+      # an earlier one's log, so a gh ahead of the runner's on PATH records
+      # each call the action makes (arguments and exit status) for the check
+      # after it.
+      - name: record the gh calls of the next step
+        run: |
+          set -euo pipefail
+          real="$(command -v gh)"
+          mkdir -p "$RUNNER_TEMP/gh-spy"
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'rc=0'
+            printf '%q "$@" || rc=$?\n' "$real"
+            printf 'printf "rc=%%s gh %%s\\n" "$rc" "$*" >> %q\n' "$RUNNER_TEMP/gh-calls.log"
+            echo 'exit "$rc"'
+          } > "$RUNNER_TEMP/gh-spy/gh"
+          chmod +x "$RUNNER_TEMP/gh-spy/gh"
+          cat "$RUNNER_TEMP/gh-spy/gh"
+          echo "$RUNNER_TEMP/gh-spy" >> "$GITHUB_PATH"
+      - id: attested
+        uses: ./action
+        with:
+          path: action/testdata/clean
+          target: '1.36'
+          fail-on: never # this step tests the install; the gate is tested above and below
+          version: v0.2.0-rc.2
+      - name: v0.2.0-rc.2 verified with gh attestation verify, then installed from its archive
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          case "$(uname -s)/$(uname -m)" in
+            Linux/x86_64) asset=upgradescope_linux_amd64.tar.gz ;;
+            Linux/aarch64) asset=upgradescope_linux_arm64.tar.gz ;;
+            Darwin/x86_64) asset=upgradescope_darwin_amd64.tar.gz ;;
+            Darwin/arm64) asset=upgradescope_darwin_arm64.tar.gz ;;
+            *) fail "unexpected runner $(uname -s)/$(uname -m)" ;;
+          esac
+          cat "$RUNNER_TEMP/gh-calls.log" || fail "the action ran no gh"
+          [ "$(wc -l < "$RUNNER_TEMP/gh-calls.log")" -eq 1 ] || fail "the action ran gh more than once"
+          want="rc=0 gh attestation verify $RUNNER_TEMP/upgradescope-dl."
+          want2="/$asset --repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml --source-ref refs/tags/v0.2.0-rc.2 --deny-self-hosted-runners"
+          got="$(cat "$RUNNER_TEMP/gh-calls.log")"
+          case "$got" in
+            "$want"*"$want2") ;;
+            *) fail "want one passing '${want}XXXXXX$want2'" ;;
+          esac
+          got="$(command -v upgradescope)"
+          [ "$got" = "$RUNNER_TEMP/upgradescope-bin/upgradescope" ] \
+            || fail "upgradescope resolved to '$got', not the release archive"
+          version="$(upgradescope --version | sed -n 1p)"
+          [ "$version" = "upgradescope 0.2.0-rc.2" ] || fail "upgradescope --version says '$version', want 'upgradescope 0.2.0-rc.2'"
 
       # This tree's binary first on PATH, for version: preinstalled.
       - run: make build && echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
@@ -664,16 +824,24 @@ jobs:
           grep -qF '**Baseline:** 0 new, 2 unchanged.' "$(summary "$REBASELINED_OUTPUTS")" \
             || fail "rebaselined summary does not say nothing is new"
 
-      # This leaves the fixture's two blockers as open alerts on
-      # action/testdata/removed/all.yaml in the Security tab: dismiss them
-      # once as "used in tests"; later uploads of the same results match
-      # the dismissed alerts.
+      # The fixture's SARIF holds two blockers on purpose. Uploaded from main
+      # (as every push did until #244), they became open error alerts in the
+      # public Security tab, which read as the project failing its own gate.
+      # The SARIF the binary writes is checked against what code scanning
+      # requires by TestWriteGitHubAcceptable, and its locations above. To
+      # see GitHub itself accept it, dispatch this workflow on a branch other
+      # than the default with upload-fixture-sarif: the alerts are then
+      # filed under that branch, in a category of their own, and never on
+      # main. hack/ci-sarif_test.sh pins this condition.
       - name: GitHub code scanning accepts the SARIF
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest'
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.upload-fixture-sarif == true &&
+          github.ref != format('refs/heads/{0}', github.event.repository.default_branch) &&
+          matrix.os == 'ubuntu-latest'
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: ${{ steps.removed.outputs.sarif-file }}
-          category: upgradescope-action-ci
+          category: upgradescope-action-fixture
 
   # The Kubernetes minors the kube job runs on, from
   # hack/kind-node-images.txt: the `pr` rows (1.31, the oldest with the
@@ -730,9 +898,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/dockerhub-mirror # Docker Hub's anonymous pull limit (429): pull through mirror.gcr.io
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0 # keep in step with the helm job and release.yml HELM_VERSION
@@ -771,9 +941,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
       # setup-envtest and this minor's kube-apiserver and etcd bundle. The
       # key changes with the pins, so a bump downloads afresh.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: env.RESTORE_CACHES == 'true' # no cache on the release path (IR-22)
         with:
           path: bin/envtest
           key: envtest-${{ runner.os }}-${{ matrix.minor }}-${{ hashFiles('hack/envtest.sh', 'hack/envtest-versions.txt') }}
@@ -793,6 +965,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
           cache-dependency-path: |
             go.sum
             tools/gen-kb/go.sum
@@ -827,7 +1000,7 @@ jobs:
   # hack-test) fails if a job is missing from needs.
   ci-ok:
     if: always()
-    needs: [changes, lint, test, test-heap, build, notices, vuln, web, helm, examples, images, registry, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
+    needs: [changes, lint, test, test-heap, build, notices, vuln, web, helm, examples, images, registry, pg-matrix, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

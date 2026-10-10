@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # The upgradescope GitHub Action's logic. action.yml (repository root) and
 # action/action.yml are thin wrappers that run it twice:
-#   run.sh install   validate the inputs, put a checksum-verified
-#                    upgradescope on PATH (via GITHUB_PATH)
+#   run.sh install   validate the inputs, put a checksum- and provenance-
+#                    verified upgradescope on PATH (via GITHUB_PATH); with
+#                    verify-provenance true, never anything unverified
 #   run.sh scan      run the gate, set the outputs, annotate, and write the
 #                    step summary
 #
 # Inputs arrive as environment variables (INPUT_PATH, INPUT_TARGET,
 # INPUT_FAIL_ON, INPUT_ALLOW_INCOMPLETE, INPUT_VERSION, INPUT_CONFIG,
-# INPUT_BASELINE, INPUT_WRITE_BASELINE), never as ${{ }} expressions in a script:
+# INPUT_BASELINE, INPUT_WRITE_BASELINE, INPUT_VERIFY_PROVENANCE), never as
+# ${{ }} expressions in a script:
 # the runner pastes an expression's value into the script text, so a value
 # holding `"; cmd` would run cmd (GitHub's script-injection guidance).
 # ACTION_REF is the ref the action was used at (github.action_ref), and
@@ -71,6 +73,30 @@ release_older() {
   ((10#$ap < 10#$bp))
 }
 
+# pre_provenance <tag>: whether tag is one of the releases published before
+# release.yml attested its archives, by exact name: v0.1.0 and v0.1.1 (gh
+# attestation verify of their archives finds no attestation; the
+# attestations API answers 404). Every other tag is provenance-checked,
+# whatever its version: a list, not a version comparison, so no tag a
+# comparator could misorder (v0.2.0-beta, any suffix that is not -rc.N) is
+# ever taken for one of them. Never decided by a missing asset either: that
+# is what a tampered release would look like.
+pre_provenance() {
+  case $1 in
+    v0.1.0 | v0.1.1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The first release that publishes provenance: from v0.2.0-rc.2 on, every
+# release has a build-provenance attestation for each archive and a cosign
+# bundle for checksums.txt (release.yml, .goreleaser.yml). `gh attestation
+# verify` of its linux/amd64 archive passes at refs/tags/v0.2.0-rc.2;
+# v0.2.0-rc.1 is a tag that was never published as a release. An action at
+# this release or later, pinned to a release tag, never installs a
+# pre_provenance release as latest (install).
+provenance_since=v0.2.0-rc.2
+
 # A full commit SHA, what pinning the action by commit gives github.action_ref.
 commit_sha='^[0-9a-fA-F]{40}$'
 
@@ -128,6 +154,11 @@ validate() {
     true | false) ;;
     *) die "invalid allow-incomplete '$INPUT_ALLOW_INCOMPLETE' (want true or false)" ;;
   esac
+  # Unset is true: a direct run verifies too.
+  case ${INPUT_VERIFY_PROVENANCE:-true} in
+    true | false) ;;
+    *) die "invalid verify-provenance '$INPUT_VERIFY_PROVENANCE' (want true or false)" ;;
+  esac
   [ -n "$p" ] || die "path is required"
   [ -e "$p" ] || die "path '$p' does not exist (render the manifests before this step)"
   local c=${INPUT_CONFIG-} b=${INPUT_BASELINE-} w=${INPUT_WRITE_BASELINE-}
@@ -146,8 +177,87 @@ sha256() {
   if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'
 }
 
-# go_install <version>: the fallback when no release archive downloads.
-# Builds from source, so only with a Go toolchain on the runner.
+# provenance <tag> <dir>: that the archive in dir (its sha256 already
+# matched the same release's checksums.txt) was built by this repository's
+# release workflow at refs/tags/<tag>, which checksums.txt alone cannot
+# show: anything that can replace a release's assets can replace both
+# (#244). With gh (preinstalled on GitHub-hosted runners), the archive's
+# build-provenance attestation must be signed by release.yml for
+# refs/tags/<tag> on a GitHub-hosted runner; without gh but with cosign,
+# checksums.txt's cosign bundle must be signed by that same workflow
+# identity, and the archive is pinned to checksums.txt by its sha256.
+# The pre_provenance releases (v0.1.0 and v0.1.1 publish neither) and
+# verify-provenance: false skip the check, with a ::warning. Any other
+# failure, a missing verifier included, fails the step before anything is
+# put on PATH. The verifier's output reaches the log through logged.
+provenance() {
+  local tag=$1 dl=$2 workflow="$repo/.github/workflows/release.yml"
+  if [ "${INPUT_VERIFY_PROVENANCE:-true}" = false ]; then
+    echo "::warning::verify-provenance is false: $asset ($tag) is checked only against checksums.txt from the same release, which does not show it was built by $repo's release workflow"
+    return
+  fi
+  if pre_provenance "$tag"; then
+    echo "::warning::$tag predates provenance (v0.1.0 and v0.1.1 publish none; every other release is verified): $asset ($tag) is checked only against checksums.txt from the same release"
+    return
+  fi
+  if command -v gh >/dev/null; then
+    if gh attestation verify "$dl/$asset" --repo "$repo" --signer-workflow "$workflow" \
+      --source-ref "refs/tags/$tag" --deny-self-hosted-runners >"$dl/verify.log" 2>&1; then
+      echo "provenance OK: $asset ($tag) was built by $workflow at refs/tags/$tag (gh attestation verify)"
+      return
+    fi
+    logged "$dl/verify.log"
+    # A gh from before `gh attestation` (2.49; some self-hosted runners) is
+    # no verifier: cosign is tried next, and without cosign the step fails.
+    # Any other gh failure fails the step: cosign is never a second chance
+    # for an archive gh rejected.
+    grep -q '^unknown command "attestation" for "gh"' "$dl/verify.log" ||
+      die "provenance check failed: gh attestation verify found no attestation that $workflow built $asset at refs/tags/$tag (its output is above); nothing was installed. A replaced release asset fails here; if gh itself cannot reach the attestations API on this runner, verify-provenance: false installs on the checksum alone"
+    command -v cosign >/dev/null ||
+      die "gh on PATH has no attestation command (gh 2.49 or later has it) and cosign is not on PATH to verify $asset ($tag); nothing was installed. Install gh 2.49+ or cosign (sigstore/cosign-installer) before this step, or set verify-provenance: false to install on the checksum alone"
+    echo "gh on PATH has no attestation command (gh 2.49 or later has it): verifying with cosign instead"
+  fi
+  if command -v cosign >/dev/null; then
+    curl -fsSL --retry 3 -o "$dl/checksums.txt.sigstore.json" "$releases/download/$tag/checksums.txt.sigstore.json" ||
+      die "cannot download checksums.txt.sigstore.json for $tag, so the provenance of $asset cannot be verified; nothing was installed"
+    if cosign verify-blob "$dl/checksums.txt" --bundle "$dl/checksums.txt.sigstore.json" \
+      --certificate-identity "https://github.com/$workflow@refs/tags/$tag" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com >"$dl/verify.log" 2>&1; then
+      echo "provenance OK: checksums.txt ($tag) is signed by $workflow at refs/tags/$tag (cosign verify-blob), and $asset matches it"
+      return
+    fi
+    logged "$dl/verify.log"
+    die "provenance check failed: checksums.txt for $tag is not signed by $workflow at refs/tags/$tag (cosign verify-blob); nothing was installed"
+  fi
+  die "verify-provenance is true, but neither gh nor cosign is on PATH to verify $asset ($tag); nothing was installed. GitHub-hosted runners have gh; elsewhere install gh or cosign (sigstore/cosign-installer) before this step, or set verify-provenance: false to install on the checksum alone"
+}
+
+# no_archive <what> <error file>: no release archive could be had (none for
+# this runner, a failed download, a latest that does not resolve). With
+# verify-provenance true (the default) that fails the step and installs
+# nothing: a source build cannot be provenance-checked, so falling back to
+# one would let anything that can make the download fail (a deleted or
+# replaced asset, network interference) install an unverified binary
+# (#244). Only verify-provenance: false falls back to go_install, with a
+# ::warning.
+no_archive() {
+  local what=$1 err
+  # curl's final error: under --retry its stderr can start with retry
+  # warnings, and each failed attempt repeats its error line, so the last
+  # "curl: (N)" line, or, with none, the last 3 lines.
+  err=$(awk '/^curl: \(/ { e = $0 } { l[NR] = $0 }
+    END { if (e != "") print e; else for (i = (NR > 3 ? NR - 2 : 1); i <= NR; i++) print l[i] }' "$2" 2>/dev/null | tr '\n' ' ')
+  err=${err% }
+  rm -f "$2"
+  if [ "${INPUT_VERIFY_PROVENANCE:-true}" != false ]; then
+    die "$what${err:+ ($err)}; nothing was installed. verify-provenance is true, and only a release archive can be verified, so there is no fallback to a source build. Use a published release (https://github.com/$repo/releases), or set verify-provenance: false to build it with go install, unverified"
+  fi
+  echo "::warning::$(esc "verify-provenance is false and $what${err:+ ($err)}: building from source with go install, which has no checksums.txt or provenance check (only Go's module checksum database)")"
+}
+
+# go_install <version>: with verify-provenance: false only (no_archive),
+# the fallback when no release archive downloads. Builds from source, so
+# only with a Go toolchain on the runner.
 go_install() {
   command -v go >/dev/null ||
     die "no release archive for $os/$arch at $1 and no Go toolchain to build it from source; use a published release (https://github.com/abd-ulbasit/upgradescope/releases) or add actions/setup-go before this action"
@@ -229,14 +339,25 @@ install() {
     # Pin "latest" to one tag first, so the archive and checksums.txt come
     # from the same release even if one is published in between.
     local url
-    url=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' "$releases/latest") || url=
+    url=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' "$releases/latest" 2>"$RUNNER_TEMP/upgradescope-latest.err") || url=
     tag=${url##*/}
     if [[ ! $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-      echo "cannot resolve the latest release (got '$(esc "$url")')"
+      no_archive "cannot resolve the latest release (got '$url')" "$RUNNER_TEMP/upgradescope-latest.err"
       go_install latest
       return
     fi
+    rm -f "$RUNNER_TEMP/upgradescope-latest.err"
     echo "latest release is $tag"
+    # An action at a release that publishes provenance, given a latest that
+    # does not: GitHub's latest was moved back to a release whose archive
+    # cannot be verified (what anything that can edit the releases would do
+    # to install a binary of its choosing, #244), or it skips the release
+    # candidate the action is at. Either way that fails, and only
+    # verify-provenance: false installs it, on the checksum alone.
+    if [[ $ref =~ $release_tag ]] && ! release_older "$ref" "$provenance_since" && pre_provenance "$tag" &&
+      [ "${INPUT_VERIFY_PROVENANCE:-true}" != false ]; then
+      die "version latest is $tag, which predates provenance and cannot be verified, but this action is at $ref, and every release from $provenance_since on publishes provenance: GitHub's latest was moved back, or skips the release candidate this action is at; nothing was installed. Set version: $ref, or verify-provenance: false to install $tag on the checksum alone"
+    fi
     if [[ $ref =~ $release_tag ]] && release_older "$tag" "$ref"; then
       echo "::warning::version latest is $tag, older than this action's own release $ref: GitHub's latest skips prereleases, and an older engine can pass what $ref blocks. Set version: $ref"
     fi
@@ -244,12 +365,13 @@ install() {
 
   local dl
   dl=$(mktemp -d "$RUNNER_TEMP/upgradescope-dl.XXXXXX")
-  if ! curl -fsSL --retry 3 -o "$dl/$asset" "$releases/download/$tag/$asset"; then
-    echo "no release archive at $releases/download/$tag/$asset"
+  if ! curl -fsSL --retry 3 -o "$dl/$asset" "$releases/download/$tag/$asset" 2>"$RUNNER_TEMP/upgradescope-download.err"; then
     rm -rf "$dl"
+    no_archive "cannot download the release archive $releases/download/$tag/$asset" "$RUNNER_TEMP/upgradescope-download.err"
     go_install "$tag"
     return
   fi
+  rm -f "$RUNNER_TEMP/upgradescope-download.err"
   # From here on, fail closed: an archive that cannot be verified is never
   # installed, and never swapped for a source build.
   curl -fsSL --retry 3 -o "$dl/checksums.txt" "$releases/download/$tag/checksums.txt" ||
@@ -260,6 +382,7 @@ install() {
   got=$(sha256 "$dl/$asset")
   [ "$got" = "$want" ] || die "sha256 mismatch for $asset ($tag): got $got, checksums.txt says $want"
   echo "sha256 OK: $asset ($tag)"
+  provenance "$tag" "$dl"
 
   local bin_dir="$RUNNER_TEMP/upgradescope-bin"
   mkdir -p "$bin_dir"

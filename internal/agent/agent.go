@@ -305,12 +305,14 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 		tickBudget: tickTimeout(cfg.Interval),
 	}
 	// The caches outlive the ticks: a release already decoded is not fetched
-	// again until its storage object changes (#71), and API discovery is
-	// asked again only under collect.DiscoveryCache's staleness rules (#228).
+	// again until its storage object changes (#71), API discovery is asked
+	// again only under collect.DiscoveryCache's staleness rules (#228), and a
+	// refused OCIRepository list only once an hour (#248).
 	helmCache := collect.NewHelmCache()
 	discoveryCache := collect.NewDiscoveryCache()
+	gitopsCache := collect.NewGitOpsCache()
 	r.collectFn = func(ctx context.Context) inventory.Inventory {
-		return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache})
+		return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache, GitOpsCache: gitopsCache})
 	}
 	if cfg.ServerURL != "" {
 		r.pusher = newPusher(cfg.ServerURL, cfg.ServerToken, cfg.ServerRootCAs)

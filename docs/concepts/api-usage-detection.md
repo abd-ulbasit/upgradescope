@@ -53,10 +53,10 @@ version:
    (LeaseCandidate), where "no surviving version" may just mean the
    knowledge base does not know the GA version yet.
 
-Entries for the `status` subresource are ignored, and so are three
+Entries for the `status` subresource are ignored, and so are four
 control-plane managers whose entries only record what was current when that
 release wrote the object (`kube-apiserver`, `kube-controller-manager`,
-`api-priority-and-fairness-config-producer-v1`). API Priority and Fairness
+`kube-scheduler`, `api-priority-and-fairness-config-producer-v1`). API Priority and Fairness
 objects the apiserver maintains (`apf.kubernetes.io/autoupdate-spec: "true"`)
 are skipped.
 
@@ -192,9 +192,13 @@ lists `crds` as not assessed.
   plane's own, which it replaces across an upgrade. It is neither counted
   as use nor reported as authorship unknown.
 - **The control plane's managers are trusted.** A write through a
-  deprecated version by `kube-apiserver`, `kube-controller-manager` or the
-  APF producer is not reported, and neither is an object of a kind that
-  goes away when only control-plane managers ever wrote it.
+  deprecated version by `kube-apiserver`, `kube-controller-manager`,
+  `kube-scheduler` or the APF producer is not reported, and neither is an
+  object of a kind that goes away when only control-plane managers ever
+  wrote it. A custom scheduler built on the kube-scheduler framework may
+  report the field manager `kube-scheduler` too, and its writes through a
+  deprecated version are not reported either; schedulers mostly write
+  bindings, Events and Leases through GA versions, so the gap is narrow.
 - **Old entries can keep a finding open.** When an object moves from one
   tool to another (`kubectl apply` to Helm), the old tool's entry keeps the
   finding until it is gone. A Helm upgrade that changes nothing but the
@@ -214,7 +218,16 @@ lists `crds` as not assessed.
   same way on every scan, so the scanner never reports itself as a caller.
   The cost: other clients of those resources are not seen through the
   metric. The apiserver audit log (annotation `k8s.io/deprecated`) shows
-  them.
+  them. On a scan whose API discovery does not get through (it fails, or
+  skips a group), step 1 cannot say what it lists, while the metric keeps
+  an earlier scan's rows until the apiserver restarts: the rows at the
+  group/versions where the knowledge base schedules a removal (those it
+  could have listed) are then named as skipped for that scan as well, and
+  `api-usage` is a gap (#239). When discovery fails outright, that is every
+  such group/version, also one the scanner would not list at on that
+  cluster (`flowcontrol.apiserver.k8s.io/v1beta3` where `v1` is served), so
+  other clients' real calls there go unreported for that scan; the reason
+  says the withholding is that broad.
 - **Object references are capped** at 100 per API; the finding says how
   many more there are, and the managers it names come from the listed ones.
 - **The agent cannot read custom resources.** The chart grants reading

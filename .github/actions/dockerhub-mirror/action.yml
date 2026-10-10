@@ -1,0 +1,44 @@
+name: Docker Hub mirror
+description: >-
+  Pull Docker Hub images through Google's public pull-through cache
+  (mirror.gcr.io) by adding it to the Docker daemon's registry-mirrors, then
+  restart the daemon. Docker Hub rate-limits anonymous pulls per source IP
+  (429 toomanyrequests), and a hosted runner shares its IP with many others.
+  The same digests come back, no credentials are involved, and the daemon
+  falls back to docker.io for an image the mirror lacks. Use it right after
+  checkout and before any step that pulls, builds or runs a container image
+  (hack/dockerhub-mirror_test.sh checks every workflow job does).
+  Not for a job with services: or container:, which start before the steps
+  and would die in the restart: name those images mirror.gcr.io/... instead.
+  Does nothing off Linux. A docker/setup-buildx-action builder runs its own
+  BuildKit, which ignores the daemon's mirrors: configure that one with
+  buildkitd-config-inline (see ci.yml's images job).
+
+runs:
+  using: composite
+  steps:
+    - name: pull Docker Hub images through mirror.gcr.io
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        mirror=https://mirror.gcr.io
+        cfg=${DOCKER_DAEMON_JSON:-/etc/docker/daemon.json} # the variable is for the self-test only
+        current='{}'
+        if [ -s "$cfg" ]; then current=$(sudo cat "$cfg"); fi
+        # Merge, never overwrite: the runner image's own settings stay, an
+        # existing registry-mirrors list keeps its entries after ours, and a
+        # second run adds nothing. Invalid JSON fails here, before any write.
+        updated=$(jq --arg m "$mirror" \
+          '.["registry-mirrors"] = ([$m] + ((.["registry-mirrors"] // []) | map(select(. != $m))))' <<<"$current")
+        sudo mkdir -p "$(dirname "$cfg")"
+        sudo tee "$cfg" <<<"$updated" >/dev/null
+        sudo systemctl restart docker
+        for _ in $(seq 1 30); do
+          if docker info >/dev/null 2>&1; then break; fi
+          sleep 1
+        done
+        mirrors=$(docker info --format '{{json .RegistryConfig.Mirrors}}')
+        echo "docker registry mirrors: $mirrors"
+        jq -e '(. // []) | map(select(startswith("https://mirror.gcr.io"))) | length > 0' <<<"$mirrors" >/dev/null \
+          || { echo "::error::docker is not using mirror.gcr.io after the restart"; exit 1; }

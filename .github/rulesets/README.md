@@ -16,8 +16,18 @@ gh api 'repos/abd-ulbasit/upgradescope/rulesets?targets=tag'
 
 ## `release-tags.json`: release tags are immutable
 
-`refs/tags/v*` except `v0` cannot be deleted, moved (`update`) or
-force-moved, by anyone. There are no bypass actors, admins included.
+Every release tag, `vX.Y.Z` or `vX.Y.Z-pre` (`refs/tags/v*.*.*`), cannot
+be deleted, moved (`update`) or force-moved, by anyone. There are no bypass
+actors, admins included.
+
+The include pattern needs two dots, so it never matches a floating major
+tag (`v0`, `v1`, ... `v12`): those have none, and the release workflow's
+`major-tag` job must be able to move them. `hack/ruleset-tags_test.sh`
+(`make hack-test`) checks that every tag `release.yml` releases is covered,
+and that the major tag `major-tag` derives from each (`${tag%%.*}`) is not.
+Before #244 the ruleset covered `refs/tags/v*` and excluded only `v0`, so
+the first v1.x release would have created `v1` and the next one could not
+move it.
 
 A release tag names the commit that the published archives, packages,
 image, chart, checksums, signatures and provenance were built from.
@@ -87,11 +97,6 @@ installed on the repository the bypass, and have the `major-tag` job push
 
 ## When v1 ships
 
-`v*` in `release-tags.json` also matches a future floating `v1`, which
-would then be locked like a release tag and the release workflow could not
-move it. Before the first v1 release:
-
-1. add `refs/tags/v1` to the `exclude` list of `release-tags.json` and
-   re-apply it;
-2. if `major-tag.json` is applied by then, add `refs/tags/v1` to its
-   `include` list and re-apply it too.
+`release-tags.json` needs no change: `refs/tags/v*.*.*` never matches `v1`.
+If `major-tag.json` is applied by then, add `refs/tags/v1` to its `include`
+list and re-apply it.

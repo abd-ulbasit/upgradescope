@@ -89,10 +89,10 @@ func loadWith(lifecycle []byte, extra string) (KB, error) {
 		if err != nil {
 			return KB{}, fmt.Errorf("kb: loading extra registry %s: %w", extra, err)
 		}
-		addons = registry.Merge(addons, more)
-		if errs := registry.ClaimConflicts(addons); len(errs) > 0 {
+		if errs := registry.MergeConflicts(addons, more); len(errs) > 0 {
 			return KB{}, fmt.Errorf("kb: extra registry %s: %w", extra, errors.Join(errs...))
 		}
+		addons = registry.Merge(addons, more)
 	}
 	providers, err := registry.LoadProviders()
 	if err != nil {

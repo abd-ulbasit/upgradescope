@@ -44,10 +44,33 @@ inputs:
       branch, @v0), or used from another action, latest.
       For a reproducible gate, pin the action ref (@vX.Y.Z or a commit SHA)
       and a tag here: @v0 and "latest" move with each release.
-      The archive is verified against the release's checksums.txt; without
-      one for this runner, it is built with `go install` when Go is set up.
+      The archive is verified against the release's checksums.txt and, with
+      verify-provenance, its build provenance. When no archive can be
+      downloaded, the step fails and installs nothing; only with
+      verify-provenance "false" is it built with `go install` instead (when
+      Go is set up), unverified and with a warning.
     required: false
     default: ""
+  verify-provenance:
+    description: >-
+      "true" (the default) also verifies that the downloaded archive was
+      built by this repository's release workflow at the release's tag:
+      `gh attestation verify` of the archive's build-provenance attestation
+      (gh is preinstalled on GitHub-hosted runners), or, without gh 2.49+,
+      `cosign verify-blob` of checksums.txt's signature. A failed check, or
+      no gh or cosign to run it, fails the step before anything is
+      installed, and so does an archive that cannot be downloaded: there
+      is no fallback to an unverified source build. v0.1.0 and v0.1.1, the
+      releases from before provenance (by name, not by version: every
+      other release is verified), are checked against checksums.txt only,
+      with a warning; a "latest" that is one of them fails the step when
+      the action is at a release tag from v0.2.0-rc.2 on (GitHub's latest
+      was moved back). "false" checks the archive against checksums.txt
+      only, with a warning, and when no archive downloads falls back to
+      `go install` (Go set up), also with a warning. Not used for
+      version: preinstalled.
+    required: false
+    default: "true"
   config:
     description: >-
       Path to an .upgradescope.yaml with ignore rules (scan --config).
@@ -119,8 +142,13 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_WRITE_BASELINE: ${{ inputs.write-baseline }}
+        INPUT_VERIFY_PROVENANCE: ${{ inputs.verify-provenance }}
         ACTION_REF: ${{ github.action_ref }}
         ACTION_REPOSITORY: ${{ github.action_repository }}
+        # gh attestation verify reads this repository's public
+        # attestations through the GitHub API with it; no permission
+        # beyond the default read of public data is needed.
+        GH_TOKEN: ${{ github.token }}
       run: bash "$GITHUB_ACTION_PATH/run.sh" install
 
     - name: Scan manifests
@@ -135,6 +163,7 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_WRITE_BASELINE: ${{ inputs.write-baseline }}
+        INPUT_VERIFY_PROVENANCE: ${{ inputs.verify-provenance }}
       run: bash "$GITHUB_ACTION_PATH/run.sh" scan
 
 branding:

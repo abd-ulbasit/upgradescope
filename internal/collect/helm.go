@@ -200,9 +200,11 @@ type helmRevision struct {
 // capability is unavailable; a release whose payload cannot be decoded is
 // skipped and counted too — one corrupt release must not fail the
 // capability — and a release whose manifest is not fully parsed is
-// recorded with what the rest holds, and counted. Any of these failures
-// leaves an available capability Partial, naming the drivers and releases
-// it skipped.
+// recorded with what the rest holds, and counted. A release whose history
+// holds failed revisions only has no revision to judge (installedRevision):
+// it is not fetched, and is counted and named too, whether or not anything
+// else was read (#239). Any of these failures leaves an available
+// capability Partial, naming the drivers and releases it skipped.
 func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
 	return collectHelmWith(ctx, kube, meta, lifecycle, nil, inv)
 }
@@ -260,6 +262,7 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 	unread, firstUnread := 0, ""
 	undecodable, firstUndecodable := 0, ""
 	unparsed, firstUnparsed := 0, ""
+	unjudged, firstUnjudged := 0, ""
 	var skippedReleases []string
 	// The installed revision of each release, in key order, and whether
 	// the cache holds it: the cache is read here, before any fetch, and
@@ -279,8 +282,15 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 		// driver holding the release — secrets, Helm's default — wins.
 		revs := revisions[k]
 		first := slices.MinFunc(revs, func(a, b helmRevision) int { return a.driver - b.driver }).driver
-		r, ok := installedRevision(slices.DeleteFunc(revs, func(r helmRevision) bool { return r.driver != first }))
-		if !ok {
+		r, pick := installedRevision(slices.DeleteFunc(revs, func(r helmRevision) bool { return r.driver != first }))
+		switch pick {
+		case revisionGone:
+			continue
+		case revisionUnjudged: // never fetched: no revision of it is judged
+			if unjudged++; unjudged == 1 {
+				firstUnjudged = k.namespace + "/" + k.name
+			}
+			skippedReleases = append(skippedReleases, k.namespace+"/"+k.name)
 			continue
 		}
 		ck := helmCacheKey{driver: r.driver, namespace: k.namespace, object: r.object, uid: r.uid, rv: r.rv}
@@ -349,15 +359,21 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 	cache.prune(seen, func(driver int) bool { return listErrs[driver] == nil })
 	if unread > 0 {
 		failed = append(failed, fmt.Sprintf("%d release(s) not read, first %s", unread, firstUnread))
-		if len(rels) == 0 { // listed but none readable (e.g. list without get)
-			return errors.New(strings.Join(failed, "; "))
-		}
 	}
 	if undecodable > 0 {
 		failed = append(failed, fmt.Sprintf("%d release(s) not decodable, first %s", undecodable, firstUndecodable))
 	}
 	if unparsed > 0 {
 		failed = append(failed, fmt.Sprintf("%d release manifest(s) not fully parsed, first %s", unparsed, firstUnparsed))
+	}
+	// Unavailable only for what was not read: the default driver, or every
+	// release when something failed (a driver, or each listed release's GET,
+	// as with list without get). A release with no revision to judge was
+	// read, and leaves the capability partial however many there are; its
+	// count is in the reason either way.
+	notAssessed := listErrs[0] != nil || (len(rels) == 0 && len(failed) > 0)
+	if unjudged > 0 {
+		failed = append(failed, fmt.Sprintf("%d release(s) with only failed revisions not assessed (no deployed or superseded revision to judge their chart and stored manifest by), first %s", unjudged, firstUnjudged))
 	}
 	skipped = append(skipped, skippedReleases...) // keys are sorted
 	if len(rels) > 0 {
@@ -371,8 +387,8 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 		}
 	}
 	msg := strings.Join(append([]string{"helm releases: " + strings.Join(counts, ", ")}, failed...), "; ")
-	if listErrs[0] != nil || (len(rels) == 0 && len(failed) > 0) {
-		return errors.New(msg) // secrets unread, or nothing read and a driver failed: not assessed
+	if notAssessed {
+		return errors.New(msg) // secrets unread, or nothing read and something failed: not assessed
 	}
 	return partialError{msg: msg, incomplete: len(failed) > 0, skipped: skipped}
 }
@@ -418,31 +434,45 @@ func helmRevisionOf(m metav1.PartialObjectMetadata) (name string, rev int, ok bo
 	return name, rev, name != ""
 }
 
+// revisionPick is what installedRevision found in a release's history.
+type revisionPick int
+
+const (
+	revisionInstalled revisionPick = iota // a revision to judge the release by
+	revisionGone                          // uninstalled: nothing runs, nothing to report
+	revisionUnjudged                      // failed revisions only: something may run, nothing to judge it by
+)
+
 // installedRevision picks the revision whose chart is what runs, by the
 // newest revision's status:
 //
 //   - uninstalled, uninstalling: nothing (helm uninstall --keep-history
-//     keeps the history but deletes the resources);
-//   - failed: the newest deployed or superseded revision before it, whose
-//     resources a failed upgrade leaves running; nothing when there is
-//     none (a failed install);
+//     keeps the history but deletes the resources), revisionGone;
+//   - failed: the newest deployed revision, as Helm's Releases.Deployed
+//     finds it, else the newest superseded one: what a failed upgrade
+//     leaves running, and the manifest a helm upgrade builds from when
+//     there is a deployed one (#239). With neither, the history is failed
+//     revisions only (a failed install, such as helm install --wait timing
+//     out with every resource running): revisionUnjudged, which the caller
+//     reports as a gap naming the release, since a failed revision's
+//     manifest says what Helm tried to apply, not what runs;
 //   - anything else (deployed, pending-install/upgrade/rollback, or a
 //     status this code does not know): the newest revision, which is being
 //     or has been applied.
-func installedRevision(revs []helmRevision) (helmRevision, bool) {
+func installedRevision(revs []helmRevision) (helmRevision, revisionPick) {
 	slices.SortFunc(revs, func(a, b helmRevision) int { return b.revision - a.revision })
 	switch revs[0].status {
 	case "uninstalled", "uninstalling":
-		return helmRevision{}, false
+		return helmRevision{}, revisionGone
 	case "failed":
-		for _, r := range revs[1:] {
-			if r.status == "deployed" || r.status == "superseded" {
-				return r, true
+		for _, status := range []string{"deployed", "superseded"} {
+			if i := slices.IndexFunc(revs[1:], func(r helmRevision) bool { return r.status == status }); i >= 0 {
+				return revs[1+i], revisionInstalled
 			}
 		}
-		return helmRevision{}, false
+		return helmRevision{}, revisionUnjudged
 	}
-	return revs[0], true
+	return revs[0], revisionInstalled
 }
 
 // manifestAPIs parses a release's stored manifest with the --files parser

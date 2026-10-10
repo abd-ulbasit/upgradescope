@@ -133,7 +133,7 @@ func TestFluxHelmReleasesUseChartSourcesAndChartRefs(t *testing.T) {
 				t.Errorf("hr %d: OCIRepository url %q tag %q, want an oci:// URL and a tag", i, url, tag)
 			}
 			if names[o.oci.GetNamespace()+"/"+o.oci.GetName()] {
-				t.Errorf("OCIRepository %s/%s is shared: each chartRef must have its own (one GET each per tick)", o.oci.GetNamespace(), o.oci.GetName())
+				t.Errorf("OCIRepository %s/%s is shared: each chartRef must have its own (as many to read as chartRefs)", o.oci.GetNamespace(), o.oci.GetName())
 			}
 			names[o.oci.GetNamespace()+"/"+o.oci.GetName()] = true
 		} else {

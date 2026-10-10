@@ -6,8 +6,15 @@
 #     the same action apart from where run.sh lives;
 #   - ci.yml: a change to any file the action job tests triggers that job;
 #   - action/run.sh install: input validation, sha256 verification against
-#     the release's checksums.txt (fail closed), the go install fallback
-#     only with a Go toolchain, and version: preinstalled;
+#     the release's checksums.txt and the provenance check (gh attestation
+#     verify, or cosign verify-blob; both fail closed, including on a
+#     substituted archive whose checksums.txt matches), no source build
+#     ever with verify-provenance true (a failed download installs
+#     nothing), the go install fallback only with verify-provenance false
+#     and a Go toolchain, the pre-provenance releases (exactly v0.1.0 and
+#     v0.1.1, never by version), a latest moved back to one of them at an
+#     action ref that publishes provenance (fails), mutants of both checks,
+#     the version comparator, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
 #     summary on action/testdata, the allow-incomplete, config, baseline
 #     and write-baseline inputs, and an injection payload as data;
@@ -136,7 +143,8 @@ case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; *) arch=arm64 ;; esac
 asset="upgradescope_${os}_${arch}.tar.gz"
 
 # curl: serves $releases/download/<tag>/<file> from $work/rel/<tag>/<file>
-# and redirects $releases/latest to $STUB_LATEST; logs every URL.
+# and redirects $releases/latest to $STUB_LATEST; logs every URL. With
+# STUB_CURL_RETRIES=1 every download fails as a retried transient error.
 mkdir -p "$work/stub-curl"
 cat >"$work/stub-curl/curl" <<EOF
 #!/usr/bin/env bash
@@ -148,11 +156,19 @@ done
 echo "curl \$url" >>"$work/calls"
 case \$url in
   "$releases/latest")
-    [ -n "\${STUB_LATEST:-}" ] || exit 22
+    [ -n "\${STUB_LATEST:-}" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     [ "\$fmt" != '%{url_effective}' ] || printf '%s' "$releases/tag/\$STUB_LATEST" ;;
   "$releases/download/"*)
     f="$work/rel/\${url#"$releases/download/"}"
-    [ -f "\$f" ] || exit 22
+    if [ -n "\${STUB_CURL_RETRIES:-}" ]; then
+      # A transient failure under --retry: a line per retry, then the
+      # attempts' errors, the last one being curl's final error.
+      for i in 1 2 3 4 5 6; do echo "Warning: Problem : HTTP error. Will retry in 1 seconds. \$i retries left." >&2; done
+      echo "curl: (22) The requested URL returned error: 503" >&2
+      echo "curl: (22) The requested URL returned error: 503" >&2
+      exit 22
+    fi
+    [ -f "\$f" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     cp "\$f" "\$out" ;;
   *) exit 6 ;;
 esac
@@ -182,6 +198,55 @@ fi
 cat "$work/ls-remote"
 EOF
 chmod +x "$work/stub-curl/curl" "$work/stub-go/go" "$work/stub-git/git"
+# gh: with STUB_GH_OLD=1, a gh from before `gh attestation` (2.49), as on
+# some self-hosted runners: every such call fails as an unknown command.
+# Otherwise it answers only `gh attestation verify <file> --repo <this repository>
+# --signer-workflow <its release.yml> --source-ref refs/tags/<tag>
+# --deny-self-hosted-runners`: verified when the file's sha256 is in
+# $work/attest/<tag> (what release.yml's attestation covers for that tag),
+# else it fails as gh does, with a line that would forge an annotation if
+# run.sh relayed it unprefixed.
+mkdir -p "$work/stub-gh" "$work/attest"
+cat >"$work/stub-gh/gh" <<EOF
+#!/usr/bin/env bash
+echo "gh \$*" >>"$work/calls"
+if [ -n "\${STUB_GH_OLD:-}" ]; then
+  echo "unknown command \"\$1\" for \"gh\""
+  echo "::warning title=FORGED::from an old gh"
+  exit 1
+fi
+[ "\$1 \$2" = "attestation verify" ] || exit 2
+file=\$3
+[ "\$4 \$5 \$6 \$7" = "--repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml" ] &&
+  [ "\$8" = --source-ref ] && [ "\${10}" = --deny-self-hosted-runners ] && [ \$# = 10 ] || { echo "stub gh: unexpected flags: \$*" >&2; exit 2; }
+tag=\${9#refs/tags/}
+sum=\$(sha256sum "\$file" 2>/dev/null || shasum -a 256 "\$file")
+if grep -qx "\${sum%% *}" "$work/attest/\$tag" 2>/dev/null; then
+  echo "Loaded 1 attestation from GitHub API"
+  echo "Verification succeeded!"
+  exit 0
+fi
+echo "Loaded 0 attestations from GitHub API"
+echo "::warning title=FORGED::from gh"
+echo "Verification failed: no matching attestations found"
+exit 1
+EOF
+# cosign: answers only `cosign verify-blob <checksums.txt> --bundle <b>
+# --certificate-identity <id> --certificate-oidc-issuer <GitHub's>`: the
+# bundle holds the identity and the sha256 of the checksums.txt it signed.
+mkdir -p "$work/stub-cosign"
+cat >"$work/stub-cosign/cosign" <<EOF
+#!/usr/bin/env bash
+echo "cosign \$*" >>"$work/calls"
+[ "\$1 \$3 \$5 \$7" = "verify-blob --bundle --certificate-identity --certificate-oidc-issuer" ] &&
+  [ "\$8" = https://token.actions.githubusercontent.com ] && [ \$# = 8 ] || { echo "stub cosign: unexpected: \$*" >&2; exit 2; }
+sum=\$(sha256sum "\$2" 2>/dev/null || shasum -a 256 "\$2")
+if [ "\$(cat "\$4")" = "identity=\$6 sha=\${sum%% *}" ]; then echo "Verified OK"; exit 0; fi
+echo "Error: none of the expected identities matched what was in the certificate"
+echo "::error title=FORGED::from cosign"
+exit 1
+EOF
+chmod +x "$work/stub-gh/gh" "$work/stub-cosign/cosign"
 # The tags at each commit, as git ls-remote --tags lists them: an annotated
 # tag's own object on refs/tags/<tag>, the commit it points at on
 # refs/tags/<tag>^{}; a lightweight tag only the commit.
@@ -205,7 +270,10 @@ $sha_two${tab}refs/tags/v9.9.9^{}
 $sha_two${tab}refs/tags/v9.9.9-rc.1^{}
 EOF
 
-# release <tag> <checksums-mode: ok|bad|missing|none> [no-archive]
+# release <tag> <checksums-mode: ok|bad|missing|none> [no-archive]: a
+# release as release.yml publishes it: the archive, checksums.txt, the
+# archive's attestation (in $work/attest/<tag>) and checksums.txt's cosign
+# bundle.
 release() {
   local d="$work/rel/$1"
   mkdir -p "$d" "$work/pkg"
@@ -219,6 +287,20 @@ release() {
     missing) echo "0000000000000000000000000000000000000000000000000000000000000000  upgradescope_plan9_amd64.tar.gz" >"$d/checksums.txt" ;;
     none) ;;
   esac
+  [ ! -f "$d/$asset" ] || sum "$d/$asset" >>"$work/attest/$1"
+  [ ! -f "$d/checksums.txt" ] ||
+    echo "identity=https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/$1 sha=$(sum "$d/checksums.txt")" \
+      >"$d/checksums.txt.sigstore.json"
+}
+sum() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | awk '{ print $1 }'; }
+# tamper <tag>: what anything that can replace a release's assets can do: a
+# different binary, and a checksums.txt that matches it. The attestation
+# and the cosign bundle stay the original's.
+tamper() {
+  local d="$work/rel/$1"
+  printf '#!/bin/sh\necho "upgradescope %s (substituted)"\n' "$1" >"$work/pkg/upgradescope"
+  tar -czf "$d/$asset" -C "$work/pkg" upgradescope
+  (cd "$d" && { sha256sum "$asset" 2>/dev/null || shasum -a 256 "$asset"; }) >"$d/checksums.txt"
 }
 release v9.9.9 ok
 release v9.9.8 bad
@@ -228,6 +310,20 @@ release v9.9.5 none
 release v9.9.4 ok
 release v9.9.9-rc.1 ok
 release v0.2.0-rc.2 ok
+release v0.2.0-rc.10 ok
+release v0.2.0-beta ok
+release v0.2.0-rc.2a ok
+release v0.1.1-hotfix ok
+# Published without provenance: v0.1.0 and v0.1.1 as they are; v0.2.0-rc.1
+# (a tag that was never published as a release) and v0.1.2 (numerically
+# among v0.1.x) as a release not on the list would be.
+for t in v0.1.0 v0.1.1 v0.2.0-rc.1 v0.1.2; do
+  release "$t" ok && rm "$work/attest/$t" "$work/rel/$t/checksums.txt.sigstore.json"
+done
+release v9.9.3 ok && tamper v9.9.3
+release v9.9.1 ok
+mv "$work/attest/v9.9.1" "$work/attest/v9.9.0" # v9.9.1's archive, attested for another tag
+release v9.8.0 ok && rm "$work/rel/v9.8.0/checksums.txt.sigstore.json"
 
 # The real binary, for the scan cases.
 mkdir -p "$work/real"
@@ -236,7 +332,8 @@ go build -o "$work/real/upgradescope" ./cmd/upgradescope
 # run <cmd> <path-prefix> [env...]: action/run.sh <cmd> as a step of a fresh
 # job; output in $work/out, the step's runner files in $rt, RUNNER_TEMP in
 # $tmp. With same_job=1, a later step of the last run's job: its own runner
-# files, the same RUNNER_TEMP.
+# files, the same RUNNER_TEMP. With script=<file>, that file runs instead of
+# action/run.sh (the mutants).
 run() {
   local cmd=$1 prefix=$2
   shift 2
@@ -245,10 +342,12 @@ run() {
   mkdir -p "$rt" "$tmp"
   : >"$rt/output" && : >"$rt/path" && : >"$rt/summary" && : >"$work/calls"
   code=0
-  env -i HOME="$HOME" PATH="$prefix$work/sys" RUNNER_TEMP="$tmp" \
+  # gh, to verify attestations, is on PATH as on GitHub-hosted runners,
+  # unless the case sets verifier (the stub dirs to use instead, or none).
+  env -i HOME="$HOME" PATH="$prefix${verifier-$work/stub-gh:}$work/sys" RUNNER_TEMP="$tmp" \
     GITHUB_OUTPUT="$rt/output" GITHUB_PATH="$rt/path" GITHUB_STEP_SUMMARY="$rt/summary" \
     INPUT_PATH=action/testdata/removed INPUT_TARGET=1.36 INPUT_FAIL_ON=blocker INPUT_VERSION=v9.9.9 \
-    "$@" bash action/run.sh "$cmd" >"$work/out" 2>&1 || code=$?
+    "$@" bash "${script:-action/run.sh}" "$cmd" >"$work/out" 2>&1 || code=$?
   forged "$work/out" | sed "s/^/run $n ($cmd): /" >>"$work/forged"
 }
 n=0
@@ -270,6 +369,28 @@ forged() {
       print "$_\n";
     }' "$1"
 }
+# inert <file>: the log holds nothing the runner would read as a workflow
+# command but run.sh's own: forged finds no line, and no line that is not a
+# :: command holds a ##[ (the runner reads that legacy form anywhere in
+# one). What forged finds is left in $work/forged.case. This is the security
+# property itself, so it holds whichever of the binary's escaping and
+# run.sh's "| " prefix keeps a hostile name from starting a line; it fails
+# only when neither does.
+inert() {
+  forged "$1" >"$work/forged.case"
+  [ ! -s "$work/forged.case" ] && ! awk '!/^::/ && index($0, "##[") { f = 1 } END { exit !f }' "$1"
+}
+# sameline <file> <needle>...: one line of the file holds every needle. A
+# hostile name that the binary escapes stays on one line, with \n in it.
+sameline() {
+  local f=$1 line n
+  shift
+  while IFS= read -r line; do
+    for n; do case $line in *"$n"*) ;; *) continue 2 ;; esac; done
+    return 0
+  done <"$f"
+  return 1
+}
 # expect <name> <want-exit> <want-substring>: checks the last run.
 expect() {
   if [ "$code" = "$2" ] && grep -qF -- "$3" "$work/out"; then ok "$1"; else
@@ -282,6 +403,13 @@ output() { sed -n "s/^$1=//p" "$rt/output" | tail -n 1; }
 # has <name> <file> <substring>
 has() { if grep -qF -- "$3" "$2"; then ok "$1"; else fail "$1" "$2"; fi; }
 hasnt() { if grep -qF -- "$3" "$2"; then fail "$1" "$2"; else ok "$1"; fi; }
+# installed_nothing: the last run put no binary on PATH.
+installed_nothing() { [ ! -e "$tmp/upgradescope-bin/upgradescope" ] && [ ! -s "$rt/path" ]; }
+
+# A function defined twice runs its last definition, and the first is dead
+# code a reader takes for the real one.
+dup=$(sed -n 's/^\([a-z_][a-z0-9_]*\)() {$/\1/p' action/run.sh | sort | uniq -d)
+[ -z "$dup" ] && ok "action/run.sh defines each function once" || fail "action/run.sh defines $dup more than once"
 
 # --- input validation -----------------------------------------------------
 
@@ -464,15 +592,57 @@ expect "an archive missing from checksums.txt fails" 1 "checksums.txt for v9.9.7
 run install "$work/stub-curl:" INPUT_VERSION=v9.9.5
 expect "a release without checksums.txt fails" 1 "cannot download checksums.txt for v9.9.5"
 
-run install "$work/stub-curl:" INPUT_VERSION=v9.9.6
-expect "no archive and no Go toolchain fails clearly" 1 "no Go toolchain to build it from source"
+# No archive. With verify-provenance true (the default) nothing is
+# installed, Go or not: a source build cannot be provenance-checked, so a
+# fallback to one would let anything that can make the download fail
+# install an unverified binary (#244, S1).
 run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=v9.9.6
-expect "no archive falls back to go install with Go present" 0 "falling back to go install"
+expect "no archive with verify-provenance true fails, naming the download error" 1 \
+  "cannot download the release archive $releases/download/v9.9.6/$asset (curl: (22) The requested URL returned error: 404); nothing was installed"
+has "no archive: the failure says there is no source-build fallback, and how to opt out" "$work/out" \
+  "there is no fallback to a source build. Use a published release (https://github.com/abd-ulbasit/upgradescope/releases), or set verify-provenance: false"
+hasnt "no archive with verify-provenance true never runs go" "$work/calls" "go "
+installed_nothing && ok "no archive with verify-provenance true installs nothing (no binary, no GITHUB_PATH)" ||
+  fail "no archive with verify-provenance true installs nothing" "$work/out"
+[ "$(grep -c '^::' "$work/out")" = 1 ] && ok "no archive: one error, nothing else" || fail "no archive: one error, nothing else" "$work/out"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=v9.9.6 INPUT_VERIFY_PROVENANCE=true
+expect "no archive with an explicit verify-provenance: true fails" 1 "nothing was installed. verify-provenance is true"
+hasnt "no archive with an explicit verify-provenance: true never runs go" "$work/calls" "go "
+installed_nothing && ok "no archive with an explicit verify-provenance: true installs nothing" ||
+  fail "no archive with an explicit verify-provenance: true installs nothing" "$work/out"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=latest
+expect "an unresolvable latest with verify-provenance true fails, naming the error" 1 \
+  "cannot resolve the latest release (got '') (curl: (22) The requested URL returned error: 404); nothing was installed"
+hasnt "an unresolvable latest with verify-provenance true never runs go" "$work/calls" "go "
+installed_nothing && ok "an unresolvable latest with verify-provenance true installs nothing" ||
+  fail "an unresolvable latest with verify-provenance true installs nothing" "$work/out"
+# Under --retry, curl's retry warnings come first and its final error last:
+# the failure names the final error, once, without the warnings.
+run install "$work/stub-curl:$work/stub-go:" STUB_CURL_RETRIES=1
+expect "a retried download names curl's final error, after its retry warnings" 1 \
+  "cannot download the release archive $releases/download/v9.9.9/$asset (curl: (22) The requested URL returned error: 503); nothing was installed"
+hasnt "a retried download's failure leaves out the retry warnings" "$work/out" "Will retry"
+[ "$(grep -o 'returned error: 503' "$work/out" | wc -l | tr -d ' ')" = 1 ] &&
+  ok "a final error repeated by the retries is named once" || fail "a final error repeated by the retries is named once" "$work/out"
+installed_nothing && ok "a retried download that fails installs nothing" || fail "a retried download that fails installs nothing" "$work/out"
+if compgen -G "$tmp/upgradescope-*.err" >/dev/null || compgen -G "$tmp/upgradescope-dl.*" >/dev/null; then
+  fail "a failed download leaves no scratch files in RUNNER_TEMP" "$work/out"
+else ok "a failed download leaves no scratch files in RUNNER_TEMP"; fi
+
+# verify-provenance: false keeps the source-build fallback, with a warning,
+# and only with a Go toolchain.
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.6 INPUT_VERIFY_PROVENANCE=false
+expect "no archive and no Go toolchain fails clearly (verify-provenance: false)" 1 "no Go toolchain to build it from source"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=v9.9.6 INPUT_VERIFY_PROVENANCE=false
+expect "no archive falls back to go install with Go present (verify-provenance: false)" 0 "falling back to go install"
+has "the fallback warns that the source build is unverified" "$work/out" \
+  "::warning::verify-provenance is false and cannot download the release archive $releases/download/v9.9.6/$asset (curl: (22) The requested URL returned error: 404): building from source with go install, which has no checksums.txt or provenance check"
 has "go install builds the requested version" "$work/calls" "go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@v9.9.6"
 has "go install puts GOBIN on GITHUB_PATH" "$rt/path" "$work/gobin"
-run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=latest
-expect "unresolvable latest falls back to go install" 0 "falling back to go install"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=latest INPUT_VERIFY_PROVENANCE=false
+expect "unresolvable latest falls back to go install (verify-provenance: false)" 0 "falling back to go install"
 has "go install builds @latest" "$work/calls" "cmd/upgradescope@latest"
+has "the @latest fallback warns too" "$work/out" "::warning::verify-provenance is false and cannot resolve the latest release"
 
 run install "$work/real:$work/stub-curl:" INPUT_VERSION=preinstalled
 expect "preinstalled uses the binary on PATH" 0 "using $work/real/upgradescope: upgradescope "
@@ -480,6 +650,286 @@ hasnt "preinstalled logs only the first --version line" "$work/out" "registry da
 hasnt "preinstalled downloads nothing" "$work/calls" curl
 run install "$work/stub-curl:" INPUT_VERSION=preinstalled
 expect "preinstalled without a binary fails" 1 "no upgradescope on PATH"
+
+# --- provenance -------------------------------------------------------------
+
+# checksums.txt comes from the same release as the archive, so it shows the
+# archive is intact, not that the release workflow built it: anything that
+# can replace the release's assets can replace both. From v0.2.0 on, the
+# archive's build-provenance attestation (gh) or checksums.txt's cosign
+# bundle (cosign) must be the release workflow's at that tag (#244).
+run install "$work/stub-curl:"
+expect "a release's attestation is verified with gh" 0 "provenance OK: $asset (v9.9.9) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (gh attestation verify)"
+has "gh verifies the archive, pinned to the release workflow and the tag, on a GitHub-hosted runner" "$work/calls" \
+  "gh attestation verify $tmp/upgradescope-dl."
+has "gh pins the signer workflow and the source ref" "$work/calls" \
+  "--repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml --source-ref refs/tags/v9.9.9 --deny-self-hosted-runners"
+if grep -q '^::warning' "$work/out"; then fail "a verified install does not warn" "$work/out"; else ok "a verified install does not warn"; fi
+[ "$(grep -n 'sha256 OK' "$work/out" | cut -d: -f1)" -lt "$(grep -n 'provenance OK' "$work/out" | cut -d: -f1)" ] &&
+  [ "$(grep -n 'provenance OK' "$work/out" | cut -d: -f1)" -lt "$(grep -n '^installed ' "$work/out" | cut -d: -f1)" ] &&
+  ok "provenance is checked after the checksum and before the install" || fail "provenance is checked after the checksum and before the install" "$work/out"
+
+# The #244 repro: an archive and a checksums.txt both replaced. The checksum
+# matches; the attestation does not.
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.3
+expect "a substituted archive with a matching checksums.txt fails provenance (gh)" 1 \
+  "provenance check failed: gh attestation verify found no attestation that abd-ulbasit/upgradescope/.github/workflows/release.yml built $asset at refs/tags/v9.9.3"
+has "the substituted archive's checksum still matched" "$work/out" "sha256 OK: $asset (v9.9.3)"
+installed_nothing && ok "a substituted archive is not installed (no binary, no GITHUB_PATH)" || fail "a substituted archive is not installed" "$work/out"
+has "gh's output reaches the log" "$work/out" "| Verification failed: no matching attestations found"
+has "gh's output is prefixed, so it cannot start a workflow command" "$work/out" "| ::warning title=FORGED::from gh"
+run install "$work/stub-curl:" INPUT_VERSION=v9.9.1
+expect "an attestation for another tag does not verify (the source ref is the tag)" 1 "provenance check failed"
+installed_nothing && ok "an archive attested for another tag is not installed" || fail "an archive attested for another tag is not installed" "$work/out"
+
+# Without gh, cosign verifies checksums.txt's bundle; the archive is pinned
+# to checksums.txt by its sha256.
+verifier="$work/stub-cosign:" run install "$work/stub-curl:"
+expect "without gh, cosign verifies checksums.txt's signature" 0 "provenance OK: checksums.txt (v9.9.9) is signed by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (cosign verify-blob), and $asset matches it"
+has "cosign checks the release workflow's identity at the tag" "$work/calls" \
+  "--certificate-identity https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/v9.9.9 --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+has "the bundle comes from the same release" "$work/calls" "curl $releases/download/v9.9.9/checksums.txt.sigstore.json"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.9.3
+expect "a substituted archive with a matching checksums.txt fails provenance (cosign)" 1 \
+  "provenance check failed: checksums.txt for v9.9.3 is not signed by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.3"
+installed_nothing && ok "cosign: a substituted archive is not installed" || fail "cosign: a substituted archive is not installed" "$work/out"
+has "cosign's output is prefixed, so it cannot start a workflow command" "$work/out" "| ::error title=FORGED::from cosign"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.8.0
+expect "a release without its bundle fails provenance (cosign)" 1 "cannot download checksums.txt.sigstore.json for v9.8.0"
+installed_nothing && ok "no bundle: nothing installed" || fail "no bundle: nothing installed" "$work/out"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.9.1
+expect "cosign: a release verifies at its own tag" 0 "provenance OK: checksums.txt (v9.9.1)"
+
+# A gh too old to have `gh attestation` (self-hosted runners) is not a
+# verifier: cosign verifies when it is on PATH, else the step fails and
+# says what to install. Nothing from the old gh is relayed unprefixed.
+verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" STUB_GH_OLD=1
+expect "a gh without attestation falls back to cosign" 0 "provenance OK: checksums.txt (v9.9.9) is signed by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (cosign verify-blob)"
+has "an old gh's missing attestation command is named" "$work/out" "gh on PATH has no attestation command (gh 2.49 or later has it): verifying with cosign instead"
+has "an old gh's output is prefixed" "$work/out" "| ::warning title=FORGED::from an old gh"
+verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" STUB_GH_OLD=1 INPUT_VERSION=v9.9.3
+expect "a gh without attestation still fails a substituted release through cosign" 1 "provenance check failed: checksums.txt for v9.9.3 is not signed by"
+installed_nothing && ok "old gh, cosign: a substituted archive is not installed" || fail "old gh, cosign: a substituted archive is not installed" "$work/out"
+verifier="$work/stub-gh:" run install "$work/stub-curl:" STUB_GH_OLD=1
+expect "a gh without attestation and no cosign fails, saying what to install" 1 \
+  "gh on PATH has no attestation command (gh 2.49 or later has it) and cosign is not on PATH to verify $asset (v9.9.9); nothing was installed"
+has "old gh, no cosign: the failure says how to opt out" "$work/out" "or set verify-provenance: false to install on the checksum alone"
+installed_nothing && ok "old gh, no cosign: nothing installed" || fail "old gh, no cosign: nothing installed" "$work/out"
+
+# No verifier: fail, and say how to opt out.
+verifier= run install "$work/stub-curl:"
+expect "no gh and no cosign fails the step" 1 "verify-provenance is true, but neither gh nor cosign is on PATH to verify $asset (v9.9.9)"
+has "the failure says how to opt out" "$work/out" "or set verify-provenance: false to install on the checksum alone"
+installed_nothing && ok "no verifier: nothing installed" || fail "no verifier: nothing installed" "$work/out"
+
+# verify-provenance: false: the checksum alone, with a warning, even for a
+# substituted release (what false means).
+verifier= run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=false
+expect "verify-provenance: false installs on the checksum, with a warning" 0 \
+  "::warning::verify-provenance is false: $asset (v9.9.9) is checked only against checksums.txt from the same release"
+has "verify-provenance: false still installs" "$rt/path" "$tmp/upgradescope-bin"
+hasnt "verify-provenance: false runs no verifier" "$work/calls" "attestation"
+run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=false INPUT_VERSION=v9.9.3
+expect "verify-provenance: false does not catch a substituted release" 0 "installed upgradescope v9.9.3 (substituted)"
+run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=true
+expect "verify-provenance: true verifies" 0 "provenance OK: $asset (v9.9.9)"
+run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=yes
+expect "verify-provenance takes only true or false" 1 "invalid verify-provenance 'yes' (want true or false)"
+hasnt "an invalid verify-provenance downloads nothing" "$work/calls" curl
+run install "$work/stub-curl:" INPUT_VERIFY_PROVENANCE=$'true\n::warning title=FORGED::x'
+if [ "$code" = 1 ] && [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -qF '%0A::warning' "$work/out"; then
+  ok "a line break in verify-provenance cannot start a workflow command"
+else fail "a line break in verify-provenance cannot start a workflow command" "$work/out"; fi
+
+# The releases from before provenance are v0.1.0 and v0.1.1, by name (their
+# archives have no attestation): the checksum, a warning, and no verifier
+# run. Every other tag is verified, whatever its version (#244, S2):
+# v0.2.0-rc.1 (a tag never published as a release) and v0.1.2 (numerically
+# among v0.1.x) without provenance fail closed.
+for t in v0.1.0 v0.1.1; do
+  verifier= run install "$work/stub-curl:" INPUT_VERSION=$t
+  expect "$t, from before provenance, installs on the checksum" 0 "installed upgradescope $t from"
+  has "$t warns that only the checksum is checked" "$work/out" \
+    "::warning::$t predates provenance (v0.1.0 and v0.1.1 publish none; every other release is verified): $asset ($t) is checked only against checksums.txt from the same release"
+  [ "$(grep -c '^::warning' "$work/out")" = 1 ] && ok "$t warns once" || fail "$t warns once" "$work/out"
+done
+run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST=v0.1.1
+expect "latest at v0.1.1 (GitHub's latest today) installs with a warning" 0 "::warning::v0.1.1 predates provenance"
+hasnt "a release from before provenance runs no verifier" "$work/calls" "attestation"
+for t in v0.2.0-rc.1 v0.1.2; do
+  run install "$work/stub-curl:" INPUT_VERSION=$t
+  expect "$t, not on the pre-provenance list, without provenance fails closed" 1 \
+    "provenance check failed: gh attestation verify found no attestation that abd-ulbasit/upgradescope/.github/workflows/release.yml built $asset at refs/tags/$t"
+  installed_nothing && ok "$t without provenance is not installed" || fail "$t without provenance is not installed" "$work/out"
+done
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+expect "v0.2.0-rc.2, the first release with attestations, is verified" 0 \
+  "provenance OK: $asset (v0.2.0-rc.2) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v0.2.0-rc.2"
+has "v0.2.0-rc.2 is verified at its own tag" "$work/calls" "--source-ref refs/tags/v0.2.0-rc.2 --deny-self-hosted-runners"
+hasnt "a verified v0.2.0-rc.2 does not warn" "$work/out" "::warning"
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.10
+expect "v0.2.0-rc.10 (numerically after rc.2) is verified" 0 "provenance OK: $asset (v0.2.0-rc.10)"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+expect "v0.2.0-rc.2 is verified with cosign without gh" 0 "provenance OK: checksums.txt (v0.2.0-rc.2) is signed by"
+# The SHA cases above install rc.2 as published; from here on it is tampered.
+tamper v0.2.0-rc.2
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+expect "a tampered v0.2.0-rc.2 fails closed (gh)" 1 \
+  "provenance check failed: gh attestation verify found no attestation that abd-ulbasit/upgradescope/.github/workflows/release.yml built $asset at refs/tags/v0.2.0-rc.2"
+has "the tampered rc.2's checksum still matched" "$work/out" "sha256 OK: $asset (v0.2.0-rc.2)"
+installed_nothing && ok "a tampered v0.2.0-rc.2 is not installed" || fail "a tampered v0.2.0-rc.2 is not installed" "$work/out"
+verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+expect "a tampered v0.2.0-rc.2 fails closed (cosign)" 1 "provenance check failed: checksums.txt for v0.2.0-rc.2 is not signed by"
+installed_nothing && ok "cosign: a tampered v0.2.0-rc.2 is not installed" || fail "cosign: a tampered v0.2.0-rc.2 is not installed" "$work/out"
+
+# A prerelease suffix that is not -rc.N, which a version comparator cannot
+# order (it read v0.2.0-beta as before v0.2.0-rc.2), and a v0.1.1 with a
+# suffix, are not the pre-provenance releases: verified, and a tampered one
+# fails closed, as version and as latest.
+run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-beta
+expect "v0.2.0-beta, a suffix that is not -rc.N, is verified" 0 \
+  "provenance OK: $asset (v0.2.0-beta) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v0.2.0-beta"
+for t in v0.2.0-beta v0.2.0-rc.2a v0.1.1-hotfix; do
+  tamper "$t"
+  run install "$work/stub-curl:" INPUT_VERSION=$t
+  expect "a tampered $t fails closed" 1 \
+    "provenance check failed: gh attestation verify found no attestation that abd-ulbasit/upgradescope/.github/workflows/release.yml built $asset at refs/tags/$t"
+  installed_nothing && ok "a tampered $t is not installed" || fail "a tampered $t is not installed" "$work/out"
+done
+run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST=v0.1.1-hotfix
+expect "latest at a tampered v0.1.1-hotfix fails closed" 1 "provenance check failed: gh attestation verify found no attestation"
+installed_nothing && ok "latest at a tampered v0.1.1-hotfix is not installed" || fail "latest at a tampered v0.1.1-hotfix is not installed" "$work/out"
+
+# pre_provenance, on its own: exactly v0.1.0 and v0.1.1, nothing that only
+# starts or ends like them, and no pattern.
+eval "$(sed -n '/^pre_provenance() {$/,/^}$/p' action/run.sh)"
+prepro() { # prepro <tag> <want: yes|no>
+  local got=no
+  if pre_provenance "$1"; then got=yes; fi
+  if [ "$got" = "$2" ]; then ok "pre_provenance $(printf %q "$1"): $2"; else fail "pre_provenance $(printf %q "$1"): got $got, want $2"; fi
+}
+prepro v0.1.0 yes
+prepro v0.1.1 yes
+for t in v0.1.2 v0.1.10 v0.0.9 v0.1 v0.1.1-rc.1 v0.1.1-hotfix v0.1.0-beta v0.2.0-rc.1 v0.2.0-rc.2 v0.2.0-beta v0.2.0-rc.2a \
+  v0.2.0 0.1.1 V0.1.1 xv0.1.1 'v0.1.1 ' ' v0.1.1' "v0.1.1$nl" 'v0.1.?' 'v0.1.*' '*' ''; do
+  prepro "$t" no
+done
+
+# Latest moved back: an action at a release tag from v0.2.0-rc.2 on, given
+# a latest that is v0.1.0 or v0.1.1 (moved back, or below the release
+# candidate the action is at), fails before it downloads anything.
+# verify-provenance: false installs it, with its warnings; an action at a
+# release before v0.2.0-rc.2, at a branch, or in another repository keeps
+# the warning.
+for ref in v0.2.0-rc.2 v0.2.0 v9.9.9; do
+  for latest in v0.1.0 v0.1.1; do
+    run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=$ref STUB_LATEST=$latest
+    expect "latest moved back to $latest fails at the action ref $ref" 1 \
+      "version latest is $latest, which predates provenance and cannot be verified, but this action is at $ref, and every release from v0.2.0-rc.2 on publishes provenance: GitHub's latest was moved back, or skips the release candidate this action is at; nothing was installed"
+    has "latest moved back to $latest at $ref says how to pin or opt out" "$work/out" \
+      "Set version: $ref, or verify-provenance: false to install $latest on the checksum alone"
+    hasnt "latest moved back to $latest at $ref downloads nothing" "$work/calls" "$releases/download/"
+    installed_nothing && ok "latest moved back to $latest at $ref installs nothing" ||
+      fail "latest moved back to $latest at $ref installs nothing" "$work/out"
+  done
+done
+run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1 INPUT_VERIFY_PROVENANCE=false
+expect "latest moved back installs with verify-provenance: false" 0 "installed upgradescope v0.1.1 from"
+has "latest moved back with verify-provenance: false warns that it is older" "$work/out" \
+  "::warning::version latest is v0.1.1, older than this action's own release v9.9.9"
+has "latest moved back with verify-provenance: false warns that it is unverified" "$work/out" "::warning::verify-provenance is false"
+for ref in v0.2.0-rc.1 v0.1.1 main; do
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=$ref STUB_LATEST=v0.1.1
+  expect "latest at v0.1.1 installs with a warning at the action ref $ref" 0 "::warning::v0.1.1 predates provenance"
+done
+run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1
+expect "latest at v0.1.1 installs with a warning at another repository's release ref" 0 "::warning::v0.1.1 predates provenance"
+
+# Mutants: each edit of action/run.sh below reopens a hole closed above, and
+# the case named with it must catch it. Each case first passes on
+# action/run.sh itself.
+tampered_beta_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-beta
+  [ "$code" = 1 ] && installed_nothing
+}
+tampered_hotfix_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=v0.1.1-hotfix
+  [ "$code" = 1 ] && installed_nothing
+}
+unattested_v012_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=v0.1.2
+  [ "$code" = 1 ] && installed_nothing
+}
+moved_back_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v0.2.0-rc.2 STUB_LATEST=v0.1.1
+  [ "$code" = 1 ] && installed_nothing
+}
+moved_back_opt_out_installs() {
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1 INPUT_VERIFY_PROVENANCE=false
+  [ "$code" = 0 ] && grep -qF "installed upgradescope v0.1.1 from" "$work/out"
+}
+pre_provenance_installs() {
+  verifier= run install "$work/stub-curl:" INPUT_VERSION=v0.1.1
+  [ "$code" = 0 ] && grep -qF "installed upgradescope v0.1.1 from" "$work/out"
+}
+# mutant <name> <case> <perl -pe script>
+mutant() {
+  if ! "$2"; then fail "mutant case $2 fails on action/run.sh itself" "$work/out"; return; fi
+  perl -pe "$3" action/run.sh >"$work/mutant.sh"
+  if cmp -s action/run.sh "$work/mutant.sh"; then fail "mutant '$1' changed nothing (its pattern no longer matches)"; return; fi
+  # A mutant that does not parse would be caught for the wrong reason.
+  if ! bash -n "$work/mutant.sh" 2>"$work/out"; then fail "mutant '$1' is not valid bash" "$work/out"; return; fi
+  if script="$work/mutant.sh" "$2"; then fail "not caught by $2: $1" "$work/out"; else ok "caught by $2: $1"; fi
+}
+by_version='s/^  if pre_provenance "\$tag"; then$/  if release_older "\$tag" "\$provenance_since"; then/'
+mutant "the pre-provenance check by version again (release_older against v0.2.0-rc.2)" tampered_beta_fails "$by_version"
+mutant "the pre-provenance check by version again (release_older against v0.2.0-rc.2)" unattested_v012_fails "$by_version"
+mutant "the pre-provenance check by version again (release_older against v0.2.0-rc.2)" tampered_hotfix_fails "$by_version"
+mutant "the list matches v0.1.* by prefix" unattested_v012_fails 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    v0.1.*) return 0 ;;/'
+mutant "the list matches v0.1.1 by prefix" tampered_hotfix_fails 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    v0.1.0* | v0.1.1*) return 0 ;;/'
+mutant "the list is empty" pre_provenance_installs 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    "") return 0 ;;/'
+mutant "no moved-back check" moved_back_fails 's/ && pre_provenance "\$tag" &&$/ \&\& false \&\&/'
+mutant "the moved-back check only above v0.2.0-rc.2, not at it" moved_back_fails \
+  's/! release_older "\$ref" "\$provenance_since"/release_older "\$provenance_since" "\$ref"/'
+mutant "the moved-back check ignores verify-provenance: false" moved_back_opt_out_installs \
+  's/^      \[ "\$\{INPUT_VERIFY_PROVENANCE:-true\}" != false \]; then$/      true; then/'
+
+# release_older, the comparator behind newest and the latest-versus-ref
+# checks (never the pre-provenance one), on its own: semver order, the core
+# numerically, a candidate before its release, candidates by number (rc.10
+# after rc.2).
+eval "$(sed -n '/^release_older() {$/,/^}$/p' action/run.sh)"
+older() { # older <a> <b> <want: yes|no>
+  local got=no
+  if release_older "$1" "$2"; then got=yes; fi
+  if [ "$got" = "$3" ]; then ok "release_older $1 $2: $3"; else fail "release_older $1 $2: got $got, want $3"; fi
+}
+older v0.2.0-rc.1 v0.2.0-rc.2 yes
+older v0.2.0-rc.2 v0.2.0-rc.2 no
+older v0.2.0-rc.10 v0.2.0-rc.2 no
+older v0.2.0-rc.2 v0.2.0-rc.10 yes
+older v0.2.0 v0.2.0-rc.2 no
+older v0.2.0-rc.2 v0.2.0 yes
+older v0.1.1 v0.2.0-rc.2 yes
+older v0.1.9 v0.2.0-rc.2 yes
+older v0.2.1-rc.1 v0.2.0-rc.2 no
+older v0.10.0 v0.9.9 no
+older v0.9.9 v0.10.0 yes
+older v1.0.0-rc.1 v0.2.0-rc.2 no
+grep -qxF 'provenance_since=v0.2.0-rc.2' action/run.sh && ok "the first release with provenance is v0.2.0-rc.2" ||
+  fail "the first release with provenance is not v0.2.0-rc.2"
+
+# The install step passes github.token for gh; the scan step needs none.
+for yml in action.yml action/action.yml; do
+  if [ "$(grep -cxF '        GH_TOKEN: ${{ github.token }}' "$yml")" = 1 ] &&
+    awk '/- name: Install upgradescope/ { i = 1 } /- name: Scan manifests/ { i = 0 } i && /GH_TOKEN: \$\{\{ github.token \}\}/ { f = 1 } END { exit !f }' "$yml" &&
+    awk '/^  verify-provenance:$/ { on = 1; next } on && /^  [a-z-]+:$/ { on = 0 } on && /^    default: "true"$/ { f = 1 } END { exit !f }' "$yml"; then
+    ok "$yml: verify-provenance defaults to true and the install step passes github.token as GH_TOKEN"
+  else
+    grep -n 'GH_TOKEN\|verify-provenance' "$yml" >"$work/out" || true
+    fail "$yml: verify-provenance defaults to true and the install step passes github.token as GH_TOKEN" "$work/out"
+  fi
+done
 
 # --- scan -------------------------------------------------------------------
 
@@ -695,14 +1145,26 @@ loud_ok "the gate's stderr cannot start a workflow command (gate failed, exit 2)
 run scan "$work/loud:" INPUT_PATH=action/testdata/clean
 loud_ok "the gate's stderr cannot start a workflow command (gate passed)"
 # A directory name with a line break, holding no manifests: the binary's
-# "No Kubernetes manifests found under <path>" repeats the name.
+# "No Kubernetes manifests found under <path>" repeats the name. Two layers
+# keep it from starting a command: the binary writes the line break as \n
+# (internal/textsafe), so the message is one line, and run.sh's "| " prefix
+# on every line of the binary's stderr would stop even a raw line break.
+# The first case is the property, which holds with either layer and fails
+# only without both; the second pins the binary's, so losing it is named
+# even while run.sh's prefix still covers it.
 evil="$work/evil${nl}::warning title=FORGED::y"
 mkdir -p "$evil" && echo readme >"$evil/README"
 run scan "$work/real:" INPUT_PATH="$evil"
-if [ "$code" = 1 ] && grep -qF '| ::warning title=FORGED::y' "$work/out" && grep -qF 'no Kubernetes manifests found' "$work/out" &&
+if inert "$work/out" && [ "$code" = 1 ] && grep -qF 'no Kubernetes manifests found' "$work/out" && grep -qF 'title=FORGED::y' "$work/out" &&
   [ "$(grep -c '^::' "$work/out")" = 1 ] && grep -q '^::error::upgradescope scan failed (exit 1)' "$work/out"; then
   ok "a path with a line break cannot start a command through the binary's error"
-else fail "a path with a line break cannot start a command through the binary's error" "$work/out"; fi
+else
+  cat "$work/forged.case" >>"$work/out"
+  fail "a path with a line break cannot start a command through the binary's error" "$work/out"
+fi
+if sameline "$work/out" 'no Kubernetes manifests found' 'evil\n::warning title=FORGED::y'; then
+  ok "the binary's error writes a line break in a path as \\n, on one line"
+else fail "the binary's error writes a line break in a path as \\n, on one line" "$work/out"; fi
 # A file name a fork PR controls, in a malformed manifest.
 badname="$work/bad"
 mkdir -p "$badname" && printf 'a: [\n' >"$badname/b${nl}::warning title=FORGEDBAD::q.yaml"
@@ -722,8 +1184,12 @@ else fail "a file name with a line break in a finding cannot start a command" "$
 # TrimStart strips all Unicode whitespace before it looks for ::, so a
 # pattern for "a line that would start a command" misses some of it, and
 # every line of the gate's stderr and of the Markdown report gets the
-# prefix instead (#197 AC-05b). Each in a skipped file's name, in a finding's
-# file name, and in the path input (the binary's error, and validate's).
+# prefix instead (#197 AC-05b). The binary also writes the line break as an
+# escape now, so these cases check the property (inert: no line the runner
+# reads as a command, which holds with either layer) and, for the binary's
+# warning, that the escape is there. Each in a skipped file's name, in a
+# finding's file name, and in the path input (the binary's error, and
+# validate's).
 i=0
 for label in FF VT NBSP U+3000 U+0085; do
   case $label in
@@ -738,13 +1204,18 @@ for label in FF VT NBSP U+3000 U+0085; do
   mkdir -p "$d" && printf 'a: [\n' >"$d/b${nl}${ws}::warning title=FORGED::q.yaml"
   cp action/testdata/removed/all.yaml "$d/m${nl}${ws}::warning title=FORGED::z.yaml"
   run scan "$work/real:" INPUT_PATH="$d"
-  forged "$work/out" >"$work/forged.case"
-  if [ "$code" = 2 ] && grep -qF "| ${ws}::warning title=FORGED::q.yaml" "$work/out" &&
-    grep -qF 'skipped' "$work/out" && [ ! -s "$work/forged.case" ]; then
+  if inert "$work/out" && [ "$code" = 2 ] && grep -qF 'skipped' "$work/out" && grep -qF 'title=FORGED::q.yaml' "$work/out"; then
     ok "a line break and $label in a file name cannot start a workflow command"
   else
     cat "$work/forged.case" >>"$work/out"
     fail "a line break and $label in a file name cannot start a workflow command" "$work/out"
+  fi
+  # The binary's own layer: the skipped file's name, line break and all, is
+  # one line of its warning.
+  if sameline "$work/out" 'skipped' 'b\n' 'title=FORGED::q.yaml'; then
+    ok "a line break and $label in a file name stay on one line of the binary's warning"
+  else
+    fail "a line break and $label in a file name stay on one line of the binary's warning" "$work/out"
   fi
   p="$work/wsp$i${nl}${ws}::warning title=FORGED::y"
   mkdir -p "$p" && echo readme >"$p/README"

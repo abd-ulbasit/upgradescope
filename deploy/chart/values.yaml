@@ -67,7 +67,7 @@ rbac:
     # unavailable for Argo CD either way (helm template leaves no release).
     argocd: false
     # -- Get/list on Flux HelmReleases
-    # (helm.toolkit.fluxcd.io/helmreleases) and get on OCIRepositories
+    # (helm.toolkit.fluxcd.io/helmreleases) and OCIRepositories
     # (source.toolkit.fluxcd.io/ocirepositories, for a HelmRelease chartRef),
     # to read the chart each HelmRelease deploys. Off, with Flux installed:
     # the Helm capability is reported partial, naming the forbidden list.

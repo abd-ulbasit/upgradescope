@@ -31,7 +31,7 @@ support:
     - https://endoflife.date/istio
     - https://istio.io/latest/docs/releases/supported-releases/
 cycles:
-  - {cycle: "1.31", eol: "2027-02-28", k8s_min: "1.32", k8s_max: "1.36", citations: ["https://endoflife.date/istio"]}
+  - {cycle: "1.31", eol: "2027-02-28", k8s_min: "1.32", k8s_max: "1.37", citations: ["https://endoflife.date/istio"]}
   - {cycle: "1.30", eol: "2026-12-31", k8s_min: "1.32", k8s_max: "1.36", citations: ["https://endoflife.date/istio"]}
   - {cycle: "1.29", eol: "2026-10-31", k8s_min: "1.31", k8s_max: "1.35", citations: ["https://endoflife.date/istio"]}
   - {cycle: "1.28", eol: "2026-07-01", k8s_min: "1.30", k8s_max: "1.34", citations: ["https://endoflife.date/istio"]}

@@ -177,8 +177,7 @@ func ValidateProvider(p ProviderSupport) []error {
 		errs = append(errs, fmt.Errorf("%s: endoflife_product %q must be a lowercase endoflife.date slug", p.ID, p.EndoflifeProduct))
 	}
 	if c := p.ExtendedSupportCondition; c != "" {
-		low := strings.ToLower(c)
-		if c != strings.TrimSpace(c) || strings.HasSuffix(c, ".") || strings.HasPrefix(low, "if ") || strings.HasPrefix(low, "only if ") {
+		if !bareClause(c) {
 			errs = append(errs, fmt.Errorf("%s: extended_support_condition %q must be a bare clause with no leading \"if\" and no trailing period (it completes \"only if ...\")", p.ID, c))
 		}
 	}

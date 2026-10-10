@@ -205,7 +205,7 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) bool {
 	// A message that has waited out its lifetime is stale: dropped unsent,
 	// so a sink that stays limited cannot keep a queue growing.
 	if age := s.now().Sub(m.CreatedAt); !m.CreatedAt.IsZero() && age >= outboxMaxAge {
-		log.Printf("server: giving up on notification %s (cluster %s, sink %s): queued %s ago, past the %s limit",
+		log.Printf("server: giving up on notification %s (cluster %q, sink %s): queued %s ago, past the %s limit",
 			n.DeliveryID, n.Cluster.Name, m.Sink, age.Round(time.Minute), outboxMaxAge)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return true
@@ -241,13 +241,13 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) bool {
 		s.holds.hold(m.Sink, s.now().Add(hold))
 	}
 	if m.Attempts >= outboxMaxAttempts {
-		log.Printf("server: giving up on notification %s (cluster %s, sink %s) after %d attempts: %s",
+		log.Printf("server: giving up on notification %s (cluster %q, sink %s) after %d attempts: %s",
 			n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, errText)
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
 		return true
 	}
 	next := expiryCap(m, s.now().Add(retryDelay(m.Attempts, err)))
-	log.Printf("server: notification %s failed (cluster %s, sink %s, attempt %d), retrying at %s: %s",
+	log.Printf("server: notification %s failed (cluster %q, sink %s, attempt %d), retrying at %s: %s",
 		n.DeliveryID, n.Cluster.Name, m.Sink, m.Attempts, next.UTC().Format(time.RFC3339), errText)
 	settle(s.cfg.Store.RescheduleOutbox(ctx, m.ID, next, outboxError(errors.New(errText))))
 	return true

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // AddOn is one entry in the add-on EOL/compatibility registry (schema_version 2).
@@ -38,19 +39,88 @@ type Matchers struct {
 	// registry.k8s.io/ingress-nginx/controller, k8s.gcr.io/ingress-nginx/controller
 	// and mirror/ingress-nginx/controller. The version is read from the tag.
 	// They never match a provider build (ProviderBuildPrefixes); an entry
-	// for one names it with its host instead.
+	// for one names it with its host instead. A matcher may end in a tag
+	// pattern ("rancher/nginx-ingress-controller:*-hardened*", see
+	// SplitTagPattern): it then claims only the tags the pattern matches,
+	// ahead of another entry's path-only matcher of that repository.
 	Images []string `json:"images,omitempty" yaml:"images,omitempty"`
 	Charts []string `json:"charts,omitempty" yaml:"charts,omitempty"` // exact chart name; version = the release's appVersion
 	// Runtimes are node container runtime names, the scheme of
 	// node.status.nodeInfo.containerRuntimeVersion ("containerd" in
 	// "containerd://1.7.27").
 	Runtimes []string `json:"runtimes,omitempty" yaml:"runtimes,omitempty"`
+	// Components are images of the product's parts that carry their own
+	// version, not the product's (Flux's controllers): each maps its
+	// release lines to the product release line that ships them.
+	Components []ComponentImage `json:"components,omitempty" yaml:"components,omitempty"`
 }
 
 type Support struct {
-	Status    string   `json:"status" yaml:"status"`                         // "supported" | "eol" | "unknown"
-	EOLDate   string   `json:"eol_date,omitempty" yaml:"eol_date,omitempty"` // RFC3339 date "2026-03-24"
-	Citations []string `json:"citations" yaml:"citations"`                   // ≥1 required when status != unknown
+	Status  string `json:"status" yaml:"status"`                         // "supported" | "eol" | "unknown"
+	EOLDate string `json:"eol_date,omitempty" yaml:"eol_date,omitempty"` // RFC3339 date "2026-03-24"
+	// ExtendedEOLDate and ExtendedSupportCondition describe split support:
+	// support ends for everyone on EOLDate and continues until
+	// ExtendedEOLDate only if ExtendedSupportCondition holds (a bare clause
+	// completing "only if ...", such as a vendor subscription), which the
+	// collector cannot see. Both or neither; they need EOLDate and status
+	// supported.
+	ExtendedEOLDate          string   `json:"extended_eol_date,omitempty" yaml:"extended_eol_date,omitempty"`
+	ExtendedSupportCondition string   `json:"extended_support_condition,omitempty" yaml:"extended_support_condition,omitempty"`
+	Citations                []string `json:"citations" yaml:"citations"` // ≥1 required when status != unknown
+}
+
+// ComponentImage is an image of one part of a product that is versioned
+// on its own: Flux's source-controller v1.5 ships in Flux 2.5, its
+// helm-controller v1.2 too. The image's release line (major.minor of the
+// tag) is mapped to the product's through Lines; a line Lines does not
+// list gives no version, never a guess.
+type ComponentImage struct {
+	Image     string          `json:"image" yaml:"image"` // a path-only image matcher
+	Lines     []ComponentLine `json:"lines" yaml:"lines"`
+	Citations []string        `json:"citations" yaml:"citations"` // where the mapping is published
+}
+
+// ComponentLine maps one release line of a component image to the product
+// release line that ships it.
+type ComponentLine struct {
+	Component string `json:"component" yaml:"component"` // MAJOR.MINOR of the image tag
+	Product   string `json:"product" yaml:"product"`     // the product's release line
+}
+
+// UnmarshalJSON decodes a line strictly, for the reason Cycle does: an
+// unquoted 1.10 would otherwise be read as "1.1", another release line.
+func (l *ComponentLine) UnmarshalJSON(b []byte) error {
+	type plain ComponentLine
+	var p plain
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Value == "number" {
+			return fmt.Errorf("component line field %q: quote versions (\"1.10\", not 1.10)", typeErr.Field)
+		}
+		return err
+	}
+	*l = ComponentLine(p)
+	return nil
+}
+
+// ProductLine returns the product release line that ships version, a
+// version read from the component image's tag ("1.2.0" → "2.5"), or ""
+// when Lines does not list its line.
+func (c ComponentImage) ProductLine(version string) string {
+	major, rest, ok := strings.Cut(version, ".")
+	if !ok || major == "" {
+		return ""
+	}
+	minor, _, _ := strings.Cut(rest, ".")
+	minor, _, _ = strings.Cut(minor, "-")
+	for _, l := range c.Lines {
+		if l.Component == major+"."+minor {
+			return l.Product
+		}
+	}
+	return ""
 }
 
 // Cycle is one release line of an add-on, e.g. Istio "1.31".
