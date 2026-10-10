@@ -89,6 +89,12 @@ func TestTempDirChild(t *testing.T) {
 			os.Exit(1)
 		}
 		fmt.Println("ok deleted")
+	case "old-auto", "old-tx", "new-auto", "new-tx":
+		if err := execChild(context.Background(), s, op); err != nil {
+			fmt.Printf("error %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("ok")
 	default:
 		fmt.Printf("error unknown op %q\n", op)
 		os.Exit(1)
@@ -203,12 +209,115 @@ func TestLargeDeleteOnReadOnlyRootFilesystem(t *testing.T) {
 				t.Fatal(err)
 			}
 			out, err := runChild(t, op, db, nil, []string{dir})
+			if op == "prune" {
+				// The batched prune (prune.go) deletes snapshots with
+				// DELETE ... WHERE id IN (SELECT ... LIMIT n); the single
+				// statement it replaced failed here with 6410 on the same
+				// 60 MB. The difference is the explicit transaction the
+				// old prune ran in, as the cluster delete below still
+				// does (TestTempSpaceIsNeededInsideATransactionNotByTheStatement).
+				if err != nil || !strings.HasPrefix(out, "ok") {
+					t.Fatalf("batched prune with no writable temp directory: %v\n%s", err, out)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(out, "6410") {
 				t.Fatalf("%s with no writable temp directory: want error 6410 (the bug), got err=%v\n%s", op, err, out)
 			}
 			out, err = runChild(t, op, db, []string{"SQLITE_TMPDIR=" + tmp}, []string{dir})
 			if err != nil || !strings.HasPrefix(out, "ok") {
 				t.Fatalf("%s with SQLITE_TMPDIR=%s: %v\n%s", op, tmp, err, out)
+			}
+		})
+	}
+}
+
+// The two snapshot deletes of the retention prune, as statements: the one
+// before batching (every old snapshot at once, with the evaluations clause
+// of the full prune dropped, since the seeded database has none) and the
+// batched one (prune.go) at its production batch size.
+const (
+	tempDirOldDelete = `DELETE FROM snapshots WHERE received_at < ?
+		AND id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+		AND NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.snapshot_id = snapshots.id)`
+	tempDirNewDelete = `DELETE FROM snapshots WHERE id IN (
+		SELECT id FROM snapshots WHERE received_at < ?
+		AND id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+		AND NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.snapshot_id = snapshots.id)
+		ORDER BY id LIMIT ?)`
+)
+
+// execChild is the "<statement>-<auto|tx>" operations of TestTempDirChild:
+// one of the two deletes, run on its own (autocommit) or inside an explicit
+// transaction.
+func execChild(ctx context.Context, s *SQLite, op string) error {
+	at := formatTime(time.Now().UTC().Add(-90 * 24 * time.Hour))
+	stmt, args := tempDirNewDelete, []any{at, pruneBatchRows}
+	if strings.HasPrefix(op, "old-") {
+		stmt, args = tempDirOldDelete, []any{at}
+	}
+	if strings.HasSuffix(op, "-auto") {
+		_, err := s.db.ExecContext(ctx, stmt, args...)
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Why the batched prune needs no temp directory in the emulation above
+// while the cluster delete does: not the statement, the transaction. The
+// same 60 MB delete, in either form (the pre-batching statement and the
+// batched one), fails with error 6410 inside an explicit transaction and
+// succeeds on its own, with no writable temp directory. SQLite journals
+// each statement of a transaction (a statement journal, which it moves to a
+// temp file once it outgrows memory) and a statement that is the whole
+// transaction needs none. The pre-batching prune ran in one BeginTx, as
+// DeleteCluster does. With a writable SQLITE_TMPDIR the transaction form
+// succeeds too, so it is the temp directory that is missing. That the
+// mechanism is a statement journal is SQLite's documented use of temp
+// files, consistent with this matrix and not observed directly.
+func TestTempSpaceIsNeededInsideATransactionNotByTheStatement(t *testing.T) {
+	if !sandboxExecAvailable() {
+		t.Skip("needs macOS sandbox-exec to emulate a read-only root filesystem")
+	}
+	if testing.Short() {
+		t.Skip("seeds 60 MB")
+	}
+	for _, c := range []struct {
+		op      string
+		wantErr bool
+	}{
+		{"old-auto", false}, {"old-tx", true}, {"new-auto", false}, {"new-tx", true},
+	} {
+		t.Run(c.op, func(t *testing.T) {
+			dir := t.TempDir()
+			db := filepath.Join(dir, "u.sqlite")
+			seedBacklog(t, db)
+			out, err := runChild(t, c.op, db, nil, []string{dir})
+			switch {
+			case c.wantErr && (err == nil || !strings.Contains(out, "6410")):
+				t.Fatalf("%s with no writable temp directory: want error 6410, got err=%v\n%s", c.op, err, out)
+			case !c.wantErr && (err != nil || !strings.HasPrefix(out, "ok")):
+				t.Fatalf("%s with no writable temp directory: want ok, got err=%v\n%s", c.op, err, out)
+			}
+			if !c.wantErr {
+				return
+			}
+			// Control: the failure is the missing temp directory.
+			tmp := filepath.Join(dir, "tmp")
+			if err := os.Mkdir(tmp, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out, err = runChild(t, c.op, db, []string{"SQLITE_TMPDIR=" + tmp}, []string{dir})
+			if err != nil || !strings.HasPrefix(out, "ok") {
+				t.Fatalf("%s with SQLITE_TMPDIR=%s: %v\n%s", c.op, tmp, err, out)
 			}
 		})
 	}

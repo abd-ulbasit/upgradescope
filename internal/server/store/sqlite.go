@@ -24,7 +24,8 @@ var migrationsFS embed.FS
 // SQLite is the Store implementation backed by a single SQLite database
 // file (modernc.org/sqlite — pure Go, CGO-free).
 type SQLite struct {
-	db *sql.DB
+	db     *sql.DB
+	tuning pruneTuning // retention batch size and test hook
 }
 
 var _ Store = (*SQLite)(nil)
@@ -250,86 +251,25 @@ func (s *SQLite) RenameCluster(ctx context.Context, name, newName string) error 
 // Prune deletes evaluations created before cutoff, then the snapshots
 // received before it that no evaluation refers to any more, sparing each
 // cluster's latest snapshot and its evaluations and each (cluster,
-// target)'s newest decided evaluation, in one transaction, then those
-// baselines baselines does not spare. Stored times are fixed-width UTC
-// strings, so string order is instant order.
+// target)'s newest decided evaluation, then those baselines baselines does
+// not spare, in bounded batches of one transaction each (prune.go). Stored
+// times are fixed-width UTC strings, so string order is instant order.
+//
+// It does not run PRAGMA incremental_vacuum or VACUUM: the file keeps its
+// size and SQLite reuses the freed pages (docs/operations/retention-and-backup.md).
 func (s *SQLite) Prune(ctx context.Context, cutoff time.Time, baselines PruneBaselines) (PruneResult, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return PruneResult{}, fmt.Errorf("prune: begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	at := formatTime(cutoff)
-	var res PruneResult
-	evals, err := tx.ExecContext(ctx, `
-		DELETE FROM evaluations WHERE created_at < ?
-		AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
-		AND id NOT IN (SELECT MAX(id) FROM evaluations WHERE ready = 1 OR blockers > 0 GROUP BY cluster_id, target)`, at)
-	if err != nil {
-		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
-	}
-	if res.Evaluations, err = evals.RowsAffected(); err != nil {
-		return PruneResult{}, fmt.Errorf("prune evaluations: %w", err)
-	}
-	if len(baselines) > 0 {
-		// The baselines of targets no longer in use, which the delete above
-		// spared: found by pair, deleted by id under the same conditions.
-		rows, err := tx.QueryContext(ctx, `
-			SELECT cluster_id, target, MAX(id) FROM evaluations WHERE ready = 1 OR blockers > 0 GROUP BY cluster_id, target`)
-		if err != nil {
-			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-		}
-		var pairs []baselinePair
-		for rows.Next() {
-			var p baselinePair
-			if err := rows.Scan(&p.clusterID, &p.target, &p.id); err != nil {
-				_ = rows.Close()
-				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-			}
-			pairs = append(pairs, p)
-		}
-		if err := rows.Close(); err != nil {
-			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-		}
-		if err := rows.Err(); err != nil {
-			return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-		}
-		for ids := baselines.unspared(pairs); len(ids) > 0; {
-			n := min(len(ids), pruneChunk)
-			args := []any{at}
-			for _, id := range ids[:n] {
-				args = append(args, id)
-			}
-			ids = ids[n:]
-			gone, err := tx.ExecContext(ctx, `
-				DELETE FROM evaluations WHERE created_at < ?
-				AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
-				AND id IN (?`+strings.Repeat(",?", n-1)+`)`, args...)
-			if err != nil {
-				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-			}
-			k, err := gone.RowsAffected()
-			if err != nil {
-				return PruneResult{}, fmt.Errorf("prune baselines: %w", err)
-			}
-			res.Evaluations += k
-		}
-	}
-	snaps, err := tx.ExecContext(ctx, `
-		DELETE FROM snapshots WHERE received_at < ?
-		AND id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
-		AND NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.snapshot_id = snapshots.id)`, at)
-	if err != nil {
-		return PruneResult{}, fmt.Errorf("prune snapshots: %w", err)
-	}
-	if res.Snapshots, err = snaps.RowsAffected(); err != nil {
-		return PruneResult{}, fmt.Errorf("prune snapshots: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return PruneResult{}, fmt.Errorf("prune: commit: %w", err)
-	}
-	return res, nil
+	d := sqliteDialect
+	d.db = s.db
+	return prune(ctx, d, s.tuning, formatTime(cutoff), baselines)
 }
+
+// SetPruneTestHook implements PruneTestHookSetter. Tests only.
+func (s *SQLite) SetPruneTestHook(batchRows int, onBatch func(PruneBatch)) {
+	s.tuning.tune(batchRows, onBatch)
+}
+
+// Kind names the store in metrics: "sqlite".
+func (s *SQLite) Kind() string { return "sqlite" }
 
 // rowScanner abstracts *sql.Row and *sql.Rows for shared scan helpers.
 type rowScanner interface{ Scan(dest ...any) error }

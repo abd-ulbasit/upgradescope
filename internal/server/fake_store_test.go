@@ -30,7 +30,8 @@ type fakeStore struct {
 	// errs injects failures by method name, e.g. errs["InsertSnapshot"].
 	errs map[string]error
 
-	pruneCalls []time.Time // cutoffs Prune was called with
+	pruneCalls []time.Time       // cutoffs Prune was called with
+	prunePart  store.PruneResult // what a failing Prune reports it had deleted
 }
 
 var _ store.Store = (*fakeStore)(nil)
@@ -165,7 +166,7 @@ func (f *fakeStore) Prune(_ context.Context, cutoff time.Time, baselines store.P
 	defer f.mu.Unlock()
 	f.pruneCalls = append(f.pruneCalls, cutoff)
 	if err := f.errs["Prune"]; err != nil {
-		return store.PruneResult{}, err
+		return f.prunePart, err
 	}
 	latest := map[int64]bool{}
 	for id := range f.clusters {
@@ -787,3 +788,7 @@ func (f *fakeStore) ClustersOfTeams(ctx context.Context, teams []string, teamMap
 	slices.Sort(out)
 	return out, nil
 }
+
+// Kind makes the fake say what the real stores do, for the retention
+// metrics' store label.
+func (f *fakeStore) Kind() string { return "sqlite" }
