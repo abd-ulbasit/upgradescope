@@ -68,8 +68,15 @@ type Finding struct {
 	// MaxFindingNamespaces; NamespacesOmitted counts the ones not listed.
 	Namespaces        []string `json:"namespaces,omitempty"`
 	NamespacesOmitted int      `json:"namespacesOmitted,omitempty"`
-	Remediation       string   `json:"remediation,omitempty"`
-	Citations         []string `json:"citations,omitempty"`
+	// Unnamespaced marks an add-on finding that also covers an install in
+	// no named namespace: a manifest object without metadata.namespace
+	// (helm template output usually has none, and the install can land in
+	// any namespace), or a cluster-scoped IngressClass. Namespaces does not
+	// list it, so a namespace-scoped ignore rule cannot be shown to match
+	// it and leaves the finding (suppress.Apply).
+	Unnamespaced bool     `json:"unnamespaced,omitempty"`
+	Remediation  string   `json:"remediation,omitempty"`
+	Citations    []string `json:"citations,omitempty"`
 	// Objects identifies the affected objects for API-usage findings
 	// (copied from inventory.APIUsage, so at most inventory.MaxObjectRefs;
 	// inside the server's /gate, where the PR's refs are added to the

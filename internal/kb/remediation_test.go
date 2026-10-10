@@ -282,3 +282,238 @@ func gvString(g GVK) string {
 	}
 	return g.Group + "/" + g.Version
 }
+
+// ServedAlternative: for an API the target does not serve yet, the newest
+// version of its group and kind that the target does serve.
+func TestServedAlternative(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	cases := []struct {
+		group, version, kind string
+		target               int
+		want                 string // group/version, "" = none
+	}{
+		// resource.k8s.io v1 is served from 1.34; v1beta2 (1.33) is the newest before it.
+		{"resource.k8s.io", "v1", "DeviceClass", 33, "resource.k8s.io/v1beta2"},
+		{"resource.k8s.io", "v1", "DeviceClass", 32, "resource.k8s.io/v1beta1"},
+		// Workload v1beta1 is served from 1.37; at 1.36 only v1alpha2 is.
+		{"scheduling.k8s.io", "v1beta1", "Workload", 36, "scheduling.k8s.io/v1alpha2"},
+		{"scheduling.k8s.io", "v1beta1", "Workload", 35, "scheduling.k8s.io/v1alpha1"},
+		// Nothing of the kind is served before 1.35.
+		{"scheduling.k8s.io", "v1beta1", "Workload", 34, ""},
+		// v1 VolumeAttributesClass is served from 1.34, v1beta1 from 1.31.
+		{"storage.k8s.io", "v1", "VolumeAttributesClass", 33, "storage.k8s.io/v1beta1"},
+	}
+	for _, c := range cases {
+		e, ok := idx.Lookup(c.group, c.version, c.kind)
+		if !ok {
+			t.Errorf("KB lacks %s/%s %s", c.group, c.version, c.kind)
+			continue
+		}
+		got := ""
+		if g, ok := idx.ServedAlternative(e, *ver(c.target)); ok {
+			got = gvString(g)
+		}
+		if got != c.want {
+			t.Errorf("ServedAlternative(%s/%s %s, 1.%d) = %q, want %q", c.group, c.version, c.kind, c.target, got, c.want)
+		}
+	}
+}
+
+// For every entry and every target that does not serve it yet, the
+// alternative is a version of the same kind the KB knows the target
+// serves, never the entry itself.
+func TestServedAlternativeIsServed(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	unserved := 0
+	for _, e := range k.APILifecycle {
+		for minor := 9; minor <= k.MaxKnownK8s.Minor+3; minor++ {
+			target := *ver(minor)
+			if e.Introduced.Compare(target) <= 0 {
+				continue
+			}
+			unserved++
+			g, ok := idx.ServedAlternative(e, target)
+			if !ok {
+				continue
+			}
+			re, known := idx.Lookup(g.Group, g.Version, g.Kind)
+			switch {
+			case !known:
+				t.Errorf("%s/%s %s @%s: alternative %s %s is not in the KB", e.Group, e.Version, e.Kind, target, gvString(g), g.Kind)
+			case !servedAt(re, target):
+				t.Errorf("%s/%s %s @%s: alternative %s %s is not served (introduced %s, removed %v)", e.Group, e.Version, e.Kind, target, gvString(g), g.Kind, re.Introduced, re.Removed)
+			case g.Group != e.Group || g.Kind != e.Kind || g.Version == e.Version:
+				t.Errorf("%s/%s %s @%s: alternative %s %s is not another version of the same kind", e.Group, e.Version, e.Kind, target, gvString(g), g.Kind)
+			}
+		}
+	}
+	if unserved == 0 {
+		t.Fatal("no entry is introduced after a checked target: the test checked nothing")
+	}
+}
+
+// #266: a removed entry whose kind has a GA version carries a remediation
+// at its removal release, so the blockers a user hits when upgrading past a
+// removal say what to migrate to. Where the GA version is introduced after
+// the removal (resource.k8s.io v1alpha1 ResourceClaim, removed 1.27, v1
+// from 1.34), the remediation names the newest version served at the
+// removal, or the release the GA version is served from.
+func TestEveryRemovedEntryWithAGASuccessorHasARemedy(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	checked := 0
+	for _, e := range k.APILifecycle {
+		if e.Removed == nil {
+			continue
+		}
+		var ga *APILifecycleEntry
+		for _, c := range idx.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
+			if c.Deprecated == nil && c.Removed == nil && (ga == nil || c.Introduced.Compare(ga.Introduced) > 0) {
+				ga = &c
+			}
+		}
+		if ga == nil {
+			continue
+		}
+		checked++
+		name := e.Group + "/" + e.Version + " " + e.Kind
+		if e.Replacement == nil {
+			t.Errorf("%s (removed %s) has no replacement, but %s/%s is GA (introduced %s)", name, e.Removed, ga.Group, ga.Version, ga.Introduced)
+			continue
+		}
+		if _, ok := idx.ResolveReplacement(e, *e.Removed); ok {
+			continue
+		}
+		if _, from, ok := idx.LaterReplacement(e, *e.Removed); !ok || from.Compare(*e.Removed) <= 0 {
+			t.Errorf("%s: no remediation at its removal in %s: nothing serves its kind then and no later release is named", name, e.Removed)
+		}
+	}
+	if checked < 30 {
+		t.Errorf("checked only %d removed entries with a GA successor, want at least the 33 #266 lists", checked)
+	}
+}
+
+// The examples of #266: the remediation of a removed beta blocker.
+func TestRemovedBetaBlockersCarryARemediation(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	idx := NewIndex(k.APILifecycle)
+	cases := []struct {
+		group, version, kind string
+		target               int
+		want                 string // group/version, or "" with a later release named
+		later                string
+	}{
+		{"admissionregistration.k8s.io", "v1beta1", "ValidatingAdmissionPolicy", 34, "admissionregistration.k8s.io/v1", ""},
+		{"admissionregistration.k8s.io", "v1beta1", "ValidatingAdmissionPolicyBinding", 34, "admissionregistration.k8s.io/v1", ""},
+		{"admissionregistration.k8s.io", "v1alpha1", "ValidatingAdmissionPolicy", 32, "admissionregistration.k8s.io/v1", ""},
+		{"networking.k8s.io", "v1beta1", "ServiceCIDR", 37, "networking.k8s.io/v1", ""},
+		{"networking.k8s.io", "v1beta1", "IPAddress", 37, "networking.k8s.io/v1", ""},
+		{"authentication.k8s.io", "v1beta1", "SelfSubjectReview", 33, "authentication.k8s.io/v1", ""},
+		{"resource.k8s.io", "v1beta1", "ResourceClaim", 38, "resource.k8s.io/v1", ""},
+		{"batch", "v2alpha1", "CronJob", 21, "batch/v1", ""},
+		// v1 does not exist yet when these were removed: the newest version
+		// served then.
+		{"networking.k8s.io", "v1alpha1", "ServiceCIDR", 31, "networking.k8s.io/v1beta1", ""},
+		{"resource.k8s.io", "v1alpha1", "ResourceClaim", 27, "resource.k8s.io/v1alpha2", ""},
+	}
+	for _, c := range cases {
+		e, ok := idx.Lookup(c.group, c.version, c.kind)
+		if !ok {
+			t.Errorf("KB lacks %s/%s %s", c.group, c.version, c.kind)
+			continue
+		}
+		if e.Removed == nil || *e.Removed != *ver(c.target) {
+			t.Errorf("%s/%s %s: removed %v, want 1.%d", c.group, c.version, c.kind, e.Removed, c.target)
+		}
+		r, ok := idx.ResolveReplacement(e, *ver(c.target))
+		got := ""
+		if ok {
+			got = gvString(r)
+		} else if g, from, ok := idx.LaterReplacement(e, *ver(c.target)); ok {
+			got = ""
+			if later := gvString(g) + " from " + from.String(); later != c.later {
+				t.Errorf("%s/%s %s @1.%d: later replacement %q, want %q", c.group, c.version, c.kind, c.target, later, c.later)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s/%s %s @1.%d: remediation %q, want %q", c.group, c.version, c.kind, c.target, got, c.want)
+		}
+	}
+}
+
+// #266: storage.k8s.io/v1alpha1 VolumeAttachment is dated by the release
+// kube-apiserver stopped serving it, not by the upstream tag (1.24).
+func TestVolumeAttachmentV1alpha1RemovedInTheReleaseItStoppedBeingServed(t *testing.T) {
+	k, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	e, ok := NewIndex(k.APILifecycle).Lookup("storage.k8s.io", "v1alpha1", "VolumeAttachment")
+	if !ok || e.Removed == nil || *e.Removed != *ver(23) || !e.RemovedInferred {
+		t.Fatalf("storage.k8s.io/v1alpha1 VolumeAttachment = %+v, want removed 1.23, inferred", e)
+	}
+}
+
+// Two versions introduced in the same release: the more stable one is the
+// alternative (v1 over v1beta1 over v1alpha1), whatever the entry order.
+func TestServedAlternativePrefersStabilityAtTheSameRelease(t *testing.T) {
+	v := func(m int) inventory.Version { return inventory.Version{Major: 1, Minor: m} }
+	entry := func(version string, intro int) APILifecycleEntry {
+		return APILifecycleEntry{Group: "example.k8s.io", Version: version, Kind: "Thing", Introduced: v(intro)}
+	}
+	own := entry("v2", 40) // not served at 1.36
+	for _, order := range [][]string{{"v1beta1", "v1", "v1alpha1"}, {"v1alpha1", "v1beta1", "v1"}, {"v1", "v1alpha1", "v1beta1"}} {
+		var es []APILifecycleEntry
+		for _, ver := range order {
+			es = append(es, entry(ver, 30))
+		}
+		es = append(es, own)
+		g, ok := NewIndex(es).ServedAlternative(own, v(36))
+		if !ok || g.Version != "v1" {
+			t.Errorf("order %v: ServedAlternative = %v, %v; want v1", order, g, ok)
+		}
+	}
+}
+
+// "Other than e's own": when e itself is served at the target (the caller
+// asked about an API that is already available), it is never its own
+// alternative, even when it is the newest served version of its kind, and
+// a kind with no other served version has none.
+func TestServedAlternativeIsNeverTheEntryItself(t *testing.T) {
+	v := func(m int) inventory.Version { return inventory.Version{Major: 1, Minor: m} }
+	entry := func(version string, intro int) APILifecycleEntry {
+		return APILifecycleEntry{Group: "example.k8s.io", Version: version, Kind: "Thing", Introduced: v(intro)}
+	}
+	beta, ga := entry("v1beta1", 30), entry("v1", 34)
+	idx := NewIndex([]APILifecycleEntry{beta, ga})
+	// ga is served at 1.36 and is the newest: the alternative is the older beta.
+	if g, ok := idx.ServedAlternative(ga, v(36)); !ok || g.Version != "v1beta1" {
+		t.Errorf("ServedAlternative(v1 served at 1.36) = %v, %v; want example.k8s.io v1beta1", g, ok)
+	}
+	// And the other way round: beta is served too, and the newer v1 is the alternative.
+	if g, ok := idx.ServedAlternative(beta, v(36)); !ok || g.Version != "v1" {
+		t.Errorf("ServedAlternative(v1beta1 served at 1.36) = %v, %v; want example.k8s.io v1", g, ok)
+	}
+	// A kind with only the entry itself has no alternative, served or not.
+	only := NewIndex([]APILifecycleEntry{ga})
+	for _, target := range []int{33, 36} {
+		if g, ok := only.ServedAlternative(ga, v(target)); ok {
+			t.Errorf("ServedAlternative with no other version at 1.%d = %v, want none", target, g)
+		}
+	}
+}

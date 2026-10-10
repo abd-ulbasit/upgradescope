@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -275,5 +276,188 @@ func TestNoLifecycleSetMatchesDocs(t *testing.T) {
 		if !strings.Contains(section, "`"+gv+"`") || !strings.Contains(section, kind) {
 			t.Errorf("%s is registered without lifecycle markers but \"What it does not cover\" does not name %s and %s", s, gv, kind)
 		}
+	}
+}
+
+// taggedRemovalFixes correct the removal tag of a type k8s.io/api still
+// registers, and only while the tag is later than the release that stopped
+// serving it: once upstream corrects the tag the override must go, or the
+// dataset would claim an inferred removal that is the tag.
+func TestTaggedRemovalFixesAreEarlierThanTheTag(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range addToSchemes {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, upstream, _ := extract(scheme)
+	if len(taggedRemovalFixes) == 0 {
+		t.Fatal("taggedRemovalFixes is empty")
+	}
+	for k, r := range taggedRemovalFixes {
+		name := k.Group + "/" + k.Version + " " + k.Kind
+		if !upstream[k] {
+			t.Errorf("%s: k8s.io/api no longer registers it; move the override to removalFixes", name)
+			continue
+		}
+		if _, deleted := removalFixes[k]; deleted {
+			t.Errorf("%s is in both removalFixes and taggedRemovalFixes", name)
+		}
+		typ, err := scheme.New(schema.GroupVersionKind{Group: k.Group, Version: k.Version, Kind: k.Kind})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		rm, ok := typ.(removedIface)
+		if !ok {
+			t.Errorf("%s: upstream tags no removal, so the override is not a correction; add it to untaggedLifecycles or delete it", name)
+			continue
+		}
+		maj, min := rm.APILifecycleRemoved()
+		if tag := (version{Major: maj, Minor: min}); !r.before(tag) {
+			t.Errorf("%s: upstream tags removal %s, not later than the override %s; delete the override", name, tag, r)
+		}
+	}
+}
+
+// #266: storage.k8s.io/v1alpha1 VolumeAttachment is dated by when
+// kube-apiserver stopped serving it (1.23), though k8s.io/api tags 1.24,
+// and the removal is marked inferred.
+func TestExtractDatesVolumeAttachmentByTheServedRelease(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range addToSchemes {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, _, _ := extract(scheme)
+	for _, e := range entries {
+		if e.gvk() == (gvkOut{Group: "storage.k8s.io", Version: "v1alpha1", Kind: "VolumeAttachment"}) {
+			if e.Removed == nil || *e.Removed != *v(1, 23) || !e.RemovedInferred {
+				t.Fatalf("VolumeAttachment v1alpha1 = removed %v (inferred %v), want 1.23 inferred", e.Removed, e.RemovedInferred)
+			}
+			return
+		}
+	}
+	t.Fatal("extract returned no storage.k8s.io/v1alpha1 VolumeAttachment")
+}
+
+func TestFixRemovalOfARegisteredTaggedType(t *testing.T) {
+	va := gvkOut{Group: "storage.k8s.io", Version: "v1alpha1", Kind: "VolumeAttachment"}
+	e := entry{Group: va.Group, Version: va.Version, Kind: va.Kind, Removed: v(1, 24)}
+	fixRemoval(&e)
+	if e.Removed == nil || *e.Removed != *v(1, 23) || !e.RemovedInferred {
+		t.Errorf("tag 1.24: removed %v inferred %v, want 1.23 inferred", e.Removed, e.RemovedInferred)
+	}
+	// An upstream tag already at or before the override stands.
+	e = entry{Group: va.Group, Version: va.Version, Kind: va.Kind, Removed: v(1, 23)}
+	fixRemoval(&e)
+	if e.RemovedInferred {
+		t.Error("tag 1.23: marked inferred, want upstream's tag kept")
+	}
+}
+
+func TestDefaultGAReplacements(t *testing.T) {
+	g := func(version, kind string) *gvkOut { return &gvkOut{Group: "g.k8s.io", Version: version, Kind: kind} }
+	entries := []entry{
+		// Removed beta, GA successor: defaulted.
+		{Group: "g.k8s.io", Version: "v1beta1", Kind: "Thing", Introduced: *v(1, 28), Deprecated: v(1, 31), Removed: v(1, 34)},
+		{Group: "g.k8s.io", Version: "v1", Kind: "Thing", Introduced: *v(1, 30)},
+		// The newest GA wins, not the first.
+		{Group: "g.k8s.io", Version: "v1alpha1", Kind: "Multi", Introduced: *v(1, 20), Removed: v(1, 22)},
+		{Group: "g.k8s.io", Version: "v1", Kind: "Multi", Introduced: *v(1, 22)},
+		{Group: "g.k8s.io", Version: "v2", Kind: "Multi", Introduced: *v(1, 30)},
+		// A deprecated or removed sibling is no successor.
+		{Group: "g.k8s.io", Version: "v1beta1", Kind: "NoGA", Introduced: *v(1, 20), Removed: v(1, 25)},
+		{Group: "g.k8s.io", Version: "v1beta2", Kind: "NoGA", Introduced: *v(1, 22), Deprecated: v(1, 26)},
+		// An upstream or fixed replacement stands.
+		{Group: "g.k8s.io", Version: "v1beta1", Kind: "Tagged", Introduced: *v(1, 20), Removed: v(1, 25), Replacement: g("v1beta2", "Tagged")},
+		{Group: "g.k8s.io", Version: "v1beta2", Kind: "Tagged", Introduced: *v(1, 22), Deprecated: v(1, 27), Removed: v(1, 30)},
+		{Group: "g.k8s.io", Version: "v1", Kind: "Tagged", Introduced: *v(1, 26)},
+		// Neither deprecated nor removed: nothing to migrate from.
+		{Group: "g.k8s.io", Version: "v1", Kind: "Alone", Introduced: *v(1, 1)},
+		// The group is part of the kind's identity.
+		{Group: "h.k8s.io", Version: "v1beta1", Kind: "Thing", Introduced: *v(1, 20), Removed: v(1, 25)},
+	}
+	changed := defaultGAReplacements(entries)
+	var got []string
+	for _, c := range changed {
+		got = append(got, c.Group+"/"+c.Version+" "+c.Kind+" -> "+c.Replacement.Version)
+	}
+	want := []string{"g.k8s.io/v1beta1 Thing -> v1", "g.k8s.io/v1alpha1 Multi -> v2", "g.k8s.io/v1beta2 Tagged -> v1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("defaulted %q, want %q", got, want)
+	}
+	for i, e := range entries {
+		wantFlag := slices.ContainsFunc(changed, func(c entry) bool { return c.gvk() == e.gvk() })
+		if e.ReplacementDefaulted != wantFlag {
+			t.Errorf("entries[%d] %s: ReplacementDefaulted = %v, want %v (only a defaulted replacement is flagged)", i, e.gvk(), e.ReplacementDefaulted, wantFlag)
+		}
+	}
+	if r := entries[7].Replacement; r == nil || r.Version != "v1beta2" {
+		t.Errorf("a tagged replacement was overwritten: %+v", r)
+	}
+	if r := entries[11].Replacement; r != nil {
+		t.Errorf("h.k8s.io Thing got %+v from another group", r)
+	}
+	// The citations are the migration guide and the successor's release notes.
+	cites := replacementCitations(entries[1])
+	if len(cites) != 2 || cites[0] != deprecationGuideURL || cites[1] != "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.30.md" {
+		t.Errorf("citations = %v", cites)
+	}
+}
+
+// Every entry whose replacement gen-kb defaults (#266) from the dataset as
+// committed: the 33 removed and deprecated alpha and beta types upstream
+// tags no replacement on, though their kind went GA. A new one is a refresh
+// that found another untagged type; it fails here until it is read, since
+// a wrong default is advice to migrate to an API that is not the successor.
+func TestDefaultedReplacementsAreListed(t *testing.T) {
+	committed, err := readDataset("../../internal/kb/data/apilifecycle.json")
+	if err != nil || len(committed) == 0 {
+		t.Fatalf("reading the committed dataset: %v (%d entries)", err, len(committed))
+	}
+	wantList := strings.Fields(`
+admissionregistration.k8s.io/v1alpha1/MutatingAdmissionPolicy admissionregistration.k8s.io/v1alpha1/MutatingAdmissionPolicyBinding
+admissionregistration.k8s.io/v1alpha1/ValidatingAdmissionPolicy admissionregistration.k8s.io/v1alpha1/ValidatingAdmissionPolicyBinding
+admissionregistration.k8s.io/v1beta1/ValidatingAdmissionPolicy admissionregistration.k8s.io/v1beta1/ValidatingAdmissionPolicyBinding
+authentication.k8s.io/v1alpha1/SelfSubjectReview authentication.k8s.io/v1beta1/SelfSubjectReview
+batch/v2alpha1/CronJob
+certificates.k8s.io/v1alpha1/ClusterTrustBundle certificates.k8s.io/v1alpha1/PodCertificateRequest
+discovery.k8s.io/v1alpha1/EndpointSlice
+networking.k8s.io/v1alpha1/IPAddress networking.k8s.io/v1alpha1/ServiceCIDR networking.k8s.io/v1beta1/IPAddress networking.k8s.io/v1beta1/ServiceCIDR
+resource.k8s.io/v1alpha1/ResourceClaim resource.k8s.io/v1alpha1/ResourceClaimTemplate
+resource.k8s.io/v1alpha2/ResourceClaim resource.k8s.io/v1alpha2/ResourceClaimTemplate resource.k8s.io/v1alpha2/ResourceSlice
+resource.k8s.io/v1alpha3/DeviceTaintRule
+resource.k8s.io/v1beta1/DeviceClass resource.k8s.io/v1beta1/ResourceClaim resource.k8s.io/v1beta1/ResourceClaimTemplate resource.k8s.io/v1beta1/ResourceSlice
+resource.k8s.io/v1beta2/DeviceClass resource.k8s.io/v1beta2/DeviceTaintRule resource.k8s.io/v1beta2/ResourceClaim resource.k8s.io/v1beta2/ResourceClaimTemplate resource.k8s.io/v1beta2/ResourceSlice
+scheduling.k8s.io/v1alpha1/PriorityClass
+storagemigration.k8s.io/v1alpha1/StorageVersionMigration`)
+	want := map[string]bool{}
+	for _, s := range wantList {
+		want[s] = true
+	}
+	// Strip the listed replacements; defaulting must restore exactly them.
+	stripped := make([]entry, len(committed))
+	for i, e := range committed {
+		stripped[i] = e
+		if want[e.Group+"/"+e.Version+"/"+e.Kind] {
+			stripped[i].Replacement = nil
+		}
+	}
+	var got []string
+	for _, c := range defaultGAReplacements(stripped) {
+		got = append(got, c.Group+"/"+c.Version+"/"+c.Kind)
+		orig := entryOf(committed, c.gvk())
+		if !reflect.DeepEqual(orig.Replacement, c.Replacement) {
+			t.Errorf("%s: committed replacement %+v, defaulting gives %+v", c.gvk(), orig.Replacement, c.Replacement)
+		}
+	}
+	sort.Strings(got)
+	sort.Strings(wantList)
+	if !reflect.DeepEqual(got, wantList) {
+		t.Errorf("defaulted entries =\n%q\nwant\n%q", got, wantList)
+	}
+	if len(wantList) != 33 {
+		t.Errorf("the list has %d entries, want 33", len(wantList))
 	}
 }

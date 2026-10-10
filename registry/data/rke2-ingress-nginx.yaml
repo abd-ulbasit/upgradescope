@@ -1,21 +1,52 @@
 # registry/data/rke2-ingress-nginx.yaml
-# Hand-curated: SUSE's build of ingress-nginx bundled with RKE2. Upstream
-# ingress-nginx retired in March 2026, but SUSE keeps backporting critical
-# and important CVE fixes for this build in every RKE2 release up to and
-# including v1.36, so it is a separate product from upstream ingress-nginx
-# (whose EOL verdict would be false here). RKE2 v1.37 offers only best-effort
-# support and later releases drop it; an RKE2 release is a Kubernetes minor,
-# so that bound is a k8s_max.
+# Hand-curated: SUSE's build of ingress-nginx bundled with RKE2, a separate
+# product from upstream ingress-nginx (retired in March 2026), whose
+# support SUSE splits by subscription:
+# - Community RKE2 users get no SUSE build after March 2026: "Ingress-nginx
+#   images provided by SUSE after March 2026 are only available for Prime
+#   and LTS customers. They will reside in the Prime Registry." (SUSE post).
+#   The source gives a month, not a day: eol_date is the last day of it.
+# - "SUSE Rancher Prime LTS customers will receive Ingress NGINX support
+#   through November 2027" (docs.rke2.io ingress migration guide): month
+#   only again, so extended_eol_date is 2027-11-30. The SUSE post's Prime
+#   table also lists v1.37 (best effort) and LTS Core terms of up to 60
+#   months; the dated statement is the migration guide's, so that is the
+#   date used.
+# The collector cannot see a subscription, so a finding states the
+# condition instead of assuming either side of it.
+# SUSE backports critical and important CVE fixes for Prime "across all
+# versions up to and including RKE2 v1.36"; v1.37 has ingress-nginx on best
+# effort for Prime and removed for community users. An RKE2 release is a
+# Kubernetes minor, so that bound is a k8s_max.
+#
+# RKE2 publishes this build as rancher/nginx-ingress-controller with a
+# "-hardenedN" tag (nginx-1.9.4-hardened1, v1.12.6-hardened1: the
+# rke2-images-all lists of each release). RKE1 published its own build on
+# the same repository with "-rancherN" tags (nginx-1.12.1-rancher4,
+# 0.21.0-rancher1: rancher/kontainer-driver-metadata), so this entry claims
+# the hardened tags only, and ingress-nginx.yaml the rest. RKE2's first
+# releases shipped a "-rancherN" build too (nginx-0.30.0-rancher1 in
+# v1.18.10+rke2r1 through v1.20.11, nginx-0.46.0-rancher1 in v1.21.2+rke2r1;
+# hardened from v1.20.12 and v1.21.3, per each release's
+# rke2-images.linux-amd64.txt, read 2026-10-09): those releases and that
+# build are long out of support, so ingress-nginx's verdict holds for them.
+# An image pinned by digest alone has no tag; the collector gives it to
+# this entry when its pod's labels or a Helm release in its namespace name
+# rke2-ingress-nginx.
 schema_version: 2
 id: rke2-ingress-nginx
 display_name: RKE2 Ingress NGINX
 matchers:
   images:
-    - rancher/nginx-ingress-controller # tagged nginx-<version>-hardenedN
+    # https://github.com/rancher/rke2/releases (rke2-images-all.linux-amd64.txt)
+    - "rancher/nginx-ingress-controller:*-hardened*"
   charts:
     - rke2-ingress-nginx
 support:
   status: supported
+  eol_date: "2026-03-31"
+  extended_eol_date: "2027-11-30"
+  extended_support_condition: the cluster has a SUSE Rancher Prime LTS subscription
   citations:
     - https://www.suse.com/c/kubecon-eu-2026-rke2-nginx-traefik-support/
     - https://docs.rke2.io/reference/ingress_migration

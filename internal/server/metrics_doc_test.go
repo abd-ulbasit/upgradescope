@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMetricsReferenceListsEveryServerMetric: docs/observability.md is the
@@ -17,7 +19,9 @@ func TestMetricsReferenceListsEveryServerMetric(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := newTestServer(t, newFakeStore())
+	// Retention on and one prune done, so the retention series exist.
+	s := newTestServer(t, newFakeStore(), func(c *Config) { c.Retention = 90 * 24 * time.Hour })
+	s.pruneOnce(context.Background())
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 	seedViaPush(t, ts)
@@ -39,7 +43,7 @@ func TestMetricsReferenceListsEveryServerMetric(t *testing.T) {
 			t.Errorf("docs/observability.md does not document the server metric %s", name)
 		}
 	}
-	if n < 8 {
+	if n < 11 {
 		t.Fatalf("gathered %d upgradescope metrics, want every one the server registers", n)
 	}
 }

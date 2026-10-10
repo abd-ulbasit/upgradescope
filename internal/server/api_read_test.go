@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,6 +231,13 @@ func TestReport(t *testing.T) {
 		resp := getJSON(t, ts, "/api/v1/clusters/1/report?target=bogus", "", &out)
 		if resp.StatusCode != http.StatusUnprocessableEntity || out["error"] == "" {
 			t.Fatalf("status %d body %v, want 422 with error", resp.StatusCode, out)
+		}
+	})
+	t.Run("target below the knowledge base is 422", func(t *testing.T) {
+		var out map[string]string
+		resp := getJSON(t, ts, "/api/v1/clusters/1/report?target=1.3", "", &out)
+		if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(out["error"], "oldest minor the knowledge base covers is 1.16") {
+			t.Fatalf("status %d body %v, want 422 naming the knowledge base floor", resp.StatusCode, out)
 		}
 	})
 	t.Run("unknown cluster is 404", func(t *testing.T) {

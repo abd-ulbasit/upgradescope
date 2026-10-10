@@ -149,7 +149,7 @@ func newClustersListCmd() *cobra.Command {
 				if r.Stale != nil {
 					stale = fmt.Sprint(*r.Stale)
 				}
-				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", r.ID, r.Name, uid, r.LastSeen.UTC().Format(time.RFC3339), stale)
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", r.ID, esc(r.Name), esc(uid), r.LastSeen.UTC().Format(time.RFC3339), stale)
 			}
 			return tw.Flush()
 		},

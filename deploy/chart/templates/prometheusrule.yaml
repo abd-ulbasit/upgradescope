@@ -1,6 +1,9 @@
 {{- if and .Values.metrics.prometheusRule.enabled (or .Values.agent.enabled .Values.server.enabled) }}
 {{- $agentJob := include "upgradescope.service" (dict "root" . "suffix" "-agent-metrics") }}
 {{- $serverJob := include "upgradescope.serverService" . }}
+{{- /* server.retention 0 (0, 0d, 0h...) keeps everything: no prune runs and
+the server exports no retention series, so there is nothing to alert on. */}}
+{{- $retentionOff := regexMatch "^(0+(\\.0*)?[dhms]?)+$" (toString .Values.server.retention) }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -58,5 +61,29 @@ spec:
           annotations:
             summary: {{ `Cluster {{ $labels.cluster }} stopped pushing snapshots` | quote }}
             description: {{ `The upgradescope server has had no snapshot from {{ $labels.cluster }} for {{ $value | humanizeDuration }}. Its agent is down, cannot reach the server, or its token was revoked; the fleet view shows its last known state.` | quote }}
+        {{- if not $retentionOff }}
+        - alert: UpgradescopeRetentionStale
+          # No retention prune has completed in over 2 days (it runs at
+          # startup and daily), or none has since a server that started
+          # more than 2 days ago: the gauge is absent until the first one
+          # does. The third arm is for a server that restarts more often
+          # than that, where the second never holds: a prune failed in the
+          # last 2 days and none has completed since the current process
+          # started. Job label as for the other server alerts.
+          expr: |-
+            time() - upgradescope_retention_last_success_timestamp_seconds{job="{{ $serverJob }}"} > 172800
+            or
+            (absent(upgradescope_retention_last_success_timestamp_seconds{job="{{ $serverJob }}"})
+              and on() (time() - min(process_start_time_seconds{job="{{ $serverJob }}"}) > 172800))
+            or
+            (absent(upgradescope_retention_last_success_timestamp_seconds{job="{{ $serverJob }}"})
+              and on() increase(upgradescope_retention_prune_failures_total{job="{{ $serverJob }}"}[2d]) > 0)
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: The upgradescope server has not pruned its history in over 2 days
+            description: {{ printf "Retention prunes fail or never finish, so the database keeps growing until the volume fills. kubectl -n %s logs deploy/%s shows the 'server: retention:' lines with the error; upgradescope_retention_prune_failures_total counts them. The server keeps serving: /readyz does not depend on it." .Release.Namespace (include "upgradescope.derived" (dict "root" . "suffix" "-server")) | quote }}
+        {{- end }}
     {{- end }}
 {{- end }}

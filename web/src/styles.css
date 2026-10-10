@@ -630,6 +630,10 @@ h1 .badge {
   color: var(--muted);
   background: var(--panel-2);
 }
+.support-split {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
 .compat td,
 .compat th {
   padding: 6px 10px;

@@ -103,9 +103,13 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, "target query parameter is required")
 		return
 	}
-	target, err := inventory.ParseVersion(targetQ)
+	// 400, not the 422 of a gate that failed: a target the knowledge base
+	// cannot judge (below its oldest minor, what YAML makes of
+	// "target: 1.30") is a mistake in the request, and a CI step that
+	// treats 422 as "not ready" must not read it as a verdict.
+	target, err := inventory.ParseTarget(targetQ)
 	if err != nil {
-		errJSON(w, http.StatusUnprocessableEntity, "invalid target: "+err.Error())
+		errJSON(w, http.StatusBadRequest, "invalid target: "+err.Error())
 		return
 	}
 	format := r.URL.Query().Get("format")

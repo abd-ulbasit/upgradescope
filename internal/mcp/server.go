@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -59,8 +61,10 @@ type Config struct {
 	Version string
 	// Scan reads the cluster once and judges it at each target of req, as
 	// `upgradescope scan --output json` would: one report document per
-	// target, in req's order. It stops when ctx ends (the client cancelled
-	// the call or went away). Required.
+	// target, in req's order. It stops when ctx ends: the client cancelled
+	// the call (notifications/cancelled), or went away (on stdio, closed
+	// its end; over HTTP, closed the connection that carried the call,
+	// which NewHTTPHandler turns into a cancel). Required.
 	Scan func(ctx context.Context, req ScanRequest) ([]json.RawMessage, error)
 	// Inventory judges an inventory file (the JSON an agent pushes) at a
 	// target and returns the report document, giving up when ctx ends.
@@ -153,7 +157,12 @@ func New(cfg Config) *mcpsdk.Server {
 	}
 	// The slot is held around the whole call, the SDK's check and encoding
 	// of the result included, which is where most of a report's copies are.
-	srv.AddReceivingMiddleware(s.boundReads)
+	// markErrors is the outermost of New's middleware, so it marks every
+	// tool error, the SDK's own argument checks' included. (Over HTTP,
+	// NewHTTPHandler adds cancelWithRequest after, which wraps it; that
+	// one returns errCallerGone, a JSON-RPC error and not a tool result,
+	// so there is nothing for markErrors to mark.)
+	srv.AddReceivingMiddleware(markErrors, s.boundReads)
 	return srv
 }
 
@@ -185,7 +194,9 @@ func instructions(fleet bool) string {
 	in := "upgradescope judges whether a Kubernetes cluster is ready to upgrade. All tools are read-only. " +
 		"Call scan first for a live cluster, then list_findings or get_report for detail; " +
 		"a verdict of unknown means a required check could not run, which is not a pass. " +
-		"registry_lookup answers add-on end-of-life and Kubernetes compatibility questions without a cluster."
+		"registry_lookup answers add-on end-of-life and Kubernetes compatibility questions without a cluster. " +
+		"In every tool result, " + strings.Replace(theRule(), "in this result, ", "", 1) +
+		"Every result, and every tool error, opens with a notice that says so, and each outside string over " + strconv.Itoa(MaxClusterTextBytes) + " bytes is cut."
 	if fleet {
 		in += " This server is connected to an upgradescope fleet server: pass cluster to get_report or list_findings, and use fleet_summary for the whole fleet."
 	}

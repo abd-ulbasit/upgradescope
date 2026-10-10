@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -97,7 +98,7 @@ func TestEvalSupportPhases(t *testing.T) {
 				t.Fatalf("findings = %+v, want one", fs)
 			}
 			f := fs[0]
-			if f.Category != CatSupportLifecycle || f.Severity != tt.wantSev || f.Key != "support-lifecycle/eks/1.34" || f.Title != tt.wantTitle {
+			if f.Category != CatSupportLifecycle || f.Severity != tt.wantSev || f.Key != "support-lifecycle/eks/1.34/"+string(tt.wantPhase) || f.Key != SupportKey("eks", "1.34", tt.wantPhase) || f.Title != tt.wantTitle {
 				t.Errorf("finding = %s %s %q %q", f.Category, f.Severity, f.Key, f.Title)
 			}
 		})
@@ -389,4 +390,48 @@ func TestEvalSupportOptInProvidersRealDataset(t *testing.T) {
 			t.Errorf("detail = %s", fs[0].Detail)
 		}
 	})
+}
+
+// The support-lifecycle key names the phase, so an accepted or baselined
+// finding of one phase never hides a worse later phase (#266): the ending
+// warning, the extended-support blocker and the out-of-support blocker are
+// three keys.
+func TestSupportKeyNamesThePhase(t *testing.T) {
+	inv := supportInv(inventory.ProviderEKS, "v1.34.2-eks-3abc123")
+	keys := map[SupportPhase]string{}
+	for _, c := range []struct {
+		now   time.Time
+		phase SupportPhase
+	}{
+		{day("2026-10-15"), SupportEnding},
+		{day("2026-12-15"), SupportExtended},
+		{day("2027-12-02"), SupportEnded},
+	} {
+		_, fs := evalSupport(inv, supportKB(), c.now)
+		if len(fs) != 1 {
+			t.Fatalf("%s: findings = %+v", c.phase, fs)
+		}
+		keys[c.phase] = fs[0].Key
+	}
+	want := map[SupportPhase]string{
+		SupportEnding:   "support-lifecycle/eks/1.34/ending",
+		SupportExtended: "support-lifecycle/eks/1.34/extended",
+		SupportEnded:    "support-lifecycle/eks/1.34/ended",
+	}
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys = %v, want %v", keys, want)
+	}
+	// Either side of each boundary: the key changes exactly there.
+	for _, c := range []struct {
+		before, at time.Time
+	}{
+		{day("2026-12-02").Add(-time.Second), day("2026-12-02")},
+		{day("2027-12-02").Add(-time.Second), day("2027-12-02")},
+	} {
+		_, a := evalSupport(inv, supportKB(), c.before)
+		_, b := evalSupport(inv, supportKB(), c.at)
+		if a[0].Key == b[0].Key {
+			t.Errorf("the key %q is the same either side of %s", a[0].Key, c.at)
+		}
+	}
 }

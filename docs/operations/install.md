@@ -155,9 +155,10 @@ quota).
 
 Memory: the agent's peak RSS was 66 to 71 MiB as a pod at that size (main
 `735751d`, before #228's larger pod pages, which raised the benchmark's peak
-RSS by about 8 MiB). A pod page holds up to 1,000 pods, so 1,000 pods of about 70 KiB each, after a
+RSS by about 8 MiB). A pod page holds up to 1,000 pods, so 1,000 pods of about 60 KiB each, after a
 page of small ones, would take the agent past its `GOMEMLIMIT` at the
-256Mi limit (computed, see
+256Mi limit (computed from the live heap such a page held on GitHub's
+linux/amd64 runner, see
 [the tick after #226 and #228](scale.md#the-tick-after-226-and-228)). Raise
 `agent.resources.limits.memory` on a cluster whose pods are that large, as
 Argo Workflows pods, which carry their template, can be. The measurements,
@@ -166,8 +167,9 @@ and their limits, are in [Scale and cost](scale.md#cpu-and-the-chart-limit).
 ## Sizes
 
 What a release ships, from a GoReleaser v2.17.1 snapshot (`make
-release-check`, the build the release workflow runs) of `b507114` (with
-the MCP server, #76), with Go 1.26.8, on 2026-10-03, on an Apple M1 Pro.
+release-check`, the build the release workflow runs) of main `f121698a`
+with #291, with Go 1.26.9, on 2026-10-10, in CI's release-check job on
+GitHub's linux/amd64 runner (run 38016964335).
 The binary is stripped
 (`CGO_ENABLED=0 -trimpath -ldflags "-s -w"`); the archive is the download,
 with the licenses, README, completions and man pages beside the binary.
@@ -176,12 +178,12 @@ change a size; the Go version and the commit do. 1 MiB is 1,048,576 bytes.
 
 | Platform | Binary | Archive |
 |---|---|---|
-| linux/amd64 | 59.9 MiB | 18.1 MiB |
-| linux/arm64 | 56.3 MiB | 16.3 MiB |
-| darwin/amd64 | 60.9 MiB | 18.4 MiB |
-| darwin/arm64 | 57.7 MiB | 17.0 MiB |
-| windows/amd64 | 61.0 MiB | 18.5 MiB |
-| windows/arm64 | 56.5 MiB | 16.3 MiB |
+| linux/amd64 | 61.0 MiB | 18.6 MiB |
+| linux/arm64 | 57.3 MiB | 16.7 MiB |
+| darwin/amd64 | 62.0 MiB | 18.8 MiB |
+| darwin/arm64 | 58.7 MiB | 17.4 MiB |
+| windows/amd64 | 62.1 MiB | 19.0 MiB |
+| windows/arm64 | 57.5 MiB | 16.7 MiB |
 
 Archives are `.tar.gz`, `.zip` on Windows. The release check
 (`hack/check-doc-sizes.sh`, after the snapshot) fails when a size here or

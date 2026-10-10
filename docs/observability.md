@@ -20,10 +20,32 @@ needs. Running `upgradescope agent` on a workstation, prefer
 stops the agent at startup with `health listener: address already in use`).
 `--health-addr ""` turns the listener off.
 
+## Profiling the agent
+
+`--pprof-addr 127.0.0.1:6060` serves Go's profiler (`/debug/pprof/`) on a
+listener of its own, off by default and **loopback only**: a profile shows
+the process's heap and goroutine stacks, so the agent refuses a port with no
+host, a wildcard (`:6060`, `0.0.0.0`) or a routable address at startup. In a
+pod, set it through the chart (`agent.extraArgs: ["--pprof-addr=127.0.0.1:6060"]`)
+and reach it with `kubectl port-forward`, which enters the pod's own network
+namespace:
+
+```sh
+kubectl -n upgradescope port-forward deploy/upgradescope-agent 6060:6060 &
+go tool pprof -top "http://127.0.0.1:6060/debug/pprof/profile?seconds=60"
+```
+
+The profile covers the seconds it is asked for, so start it just before a
+tick is due (the agent's log says when the last one ended; the next is due
+0.9 to 1.1 intervals after) and let it run past the tick's end. It samples
+the process's CPU time, so under a CPU quota it shows CPU-seconds, not the
+wall time a throttled tick spends waiting for its quota.
+`docs/operations/scale.md` ("The tick after a partial Helm step") reads one.
+
 ## Agent logs
 
 The agent writes a startup line (version, KB version and horizon, interval,
-tick deadline and tick reserve, server URL or CRD-only, health address) and exactly one line
+tick deadline and tick reserve, server URL or CRD-only, health address, profiler address) and exactly one line
 per tick. `--log-format=json` makes every line a JSON object;
 `--log-level` is `debug`, `info`, `warn` or `error`. Chart values:
 `agent.logFormat`, `agent.logLevel`.
@@ -155,6 +177,27 @@ Go runtime and process metrics (`go_*`, `process_*`) are included.
 | `upgradescope_cluster_blockers` | gauge | `cluster`, `target` | blocker findings |
 | `upgradescope_cluster_last_push_age_seconds` | gauge | `cluster` | seconds since the cluster's agent last pushed (duplicates count) |
 | `upgradescope_cluster_stale` | gauge | `cluster` | 1 when the agent has not pushed within `serve --stale-after` (default 2h), else 0 |
+| `upgradescope_retention_prune_failures_total` | counter | `store` | retention prunes that failed, by `sqlite` or `postgres`; at 0 from startup |
+| `upgradescope_retention_last_success_timestamp_seconds` | gauge | | Unix time of the last prune that completed; absent until the first one does |
+| `upgradescope_retention_rows_deleted_total` | counter | `table` | rows retention deleted, `snapshots` or `evaluations`, including those a failed prune had already committed; at 0 from startup |
+
+The three `upgradescope_retention_*` series exist only with a
+`--retention` window (the default is 90d; with `--retention=0` there is no
+prune and none of them is exported). The server prunes at startup and then
+daily, in batches of at most 5,000 rows a transaction. A prune counts as
+successful only when it ran to the end: the gauge is set then and only
+then, so a prune that fails partway adds one to the failure counter, leaves
+the gauge at the last complete prune and keeps the rows its committed
+batches deleted (`upgradescope_retention_rows_deleted_total` counts them);
+the next run resumes there. A prune cut short by the server stopping is
+neither. The chart's `UpgradescopeRetentionStale` alert fires when the
+gauge is more than 2 days old, absent for more than 2 days after the
+server started, or absent after a prune failed in the last 2 days (a
+server that restarts more often than every 2 days, with a startup prune
+that keeps failing). Retention failing never fails `/readyz`: a server that
+cannot prune still ingests and serves, and restarting it would not help,
+so the metric and the log line (`server: retention: ... failed`) are the
+signals ([Retention and backup](operations/retention-and-backup.md#when-the-prune-fails)).
 
 Per-cluster gauges are read from the database at scrape time, for each
 cluster's default target and every applicable `--targets` minor: the same

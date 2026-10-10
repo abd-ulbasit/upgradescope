@@ -16,7 +16,7 @@ accepts.
 ignore:
   - key: eol-addon/ingress-nginx
     reason: migrating to Gateway API, tracked in PLAT-123
-    expires: 2026-12-31
+    expires: 2099-12-31   # a date inside your migration window
   - category: removed-api
     file: legacy/**
     reason: legacy/ is kept for reference and never deployed
@@ -44,7 +44,7 @@ Any other key is an error.
 | `name` | no | Glob on the object's name. Never matches a finding without objects. |
 | `file` | no | Glob on the manifest path, relative to the directory that holds the config file; `**` spans directories. Never matches live objects. |
 | `reason` | **yes** | Why the finding is accepted. Shown wherever the finding is. |
-| `expires` | no | `YYYY-MM-DD`, the last day (UTC) the rule applies. From the next day the rule stops applying and the scan prints a warning naming it. |
+| `expires` | no | `YYYY-MM-DD`, the last day (UTC) the rule applies. From the next day the rule stops applying and the scan prints a warning naming it. The examples on these pages use `2099-12-31` so that they still work when copied; write a date inside your own migration window. |
 
 A rule without `namespace`, `name` or `file` takes the whole finding. With
 selectors it takes only the objects that match all of them.

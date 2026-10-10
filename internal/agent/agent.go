@@ -16,8 +16,10 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -69,6 +71,12 @@ type Config struct {
 	// HealthAddr is where /healthz, /readyz and /metrics listen, e.g.
 	// ":8081"; "" serves none of them.
 	HealthAddr string
+	// PprofAddr, when set, serves the Go profiler (/debug/pprof/) on its
+	// own listener, apart from the health one. Loopback only
+	// (ValidatePprofAddr): a profile exposes the process's memory and
+	// goroutines, and only a pod's own network namespace (kubectl
+	// port-forward) should reach it. "" serves none (#247).
+	PprofAddr string
 	// Logger receives the startup line and one line per tick; nil uses
 	// slog.Default().
 	Logger *slog.Logger
@@ -127,6 +135,41 @@ func ValidateForceSyncEvery(d time.Duration) error {
 		return fmt.Errorf("force-sync-every %s: must be positive (how long an unchanged inventory waits before it is pushed again)", d)
 	}
 	return nil
+}
+
+// ValidatePprofAddr rejects a --pprof-addr that is not a loopback host and
+// port ("127.0.0.1:6060", "localhost:6060", "[::1]:6060"; "" is off). A
+// profile lets whoever can fetch it read the process's heap and goroutine
+// stacks, so the profiler never listens on a port without a host, nor on a
+// wildcard or a routable address (#247).
+func ValidatePprofAddr(addr string) error {
+	if addr == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("pprof address %q: want host:port on loopback, e.g. 127.0.0.1:6060 (%v)", addr, err)
+	}
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return fmt.Errorf("pprof address %q: port %q is not a number from 0 to 65535", addr, port)
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("pprof address %q: the host must be loopback (127.0.0.1, [::1] or localhost): a profile exposes the process's memory and goroutines, so reach it with kubectl port-forward", addr)
+	}
+	return nil
+}
+
+// pprofHandler serves the profiler's endpoints on a mux of their own:
+// importing net/http/pprof also registers them on http.DefaultServeMux,
+// which nothing in this program serves.
+func pprofHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
 }
 
 // startupCRDTimeout bounds the CRD check at startup: a get, a patch or a
@@ -233,7 +276,7 @@ func resolveTargets(spec crd.Spec, inv inventory.Inventory) (targets []inventory
 	for _, raw := range spec.Targets {
 		v, perr := inventory.ParseTarget(raw)
 		if perr != nil {
-			skip(fmt.Sprintf("targets: skipped invalid spec target %q", raw))
+			skip(fmt.Sprintf("targets: skipped invalid spec target %q: %v", raw, perr))
 			continue
 		}
 		// The CRD schema allows repeats; a second evaluation of the same
@@ -689,6 +732,25 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 			_ = srv.Shutdown(sctx)
 		}()
 	}
+	pprofAddr := ""
+	if cfg.PprofAddr != "" {
+		if err := ValidatePprofAddr(cfg.PprofAddr); err != nil {
+			return err
+		}
+		ln, err := net.Listen("tcp", cfg.PprofAddr)
+		if err != nil {
+			return fmt.Errorf("pprof listener: %w", err)
+		}
+		pprofAddr = ln.Addr().String()
+		// No WriteTimeout: a CPU profile is written after its seconds.
+		srv := &http.Server{Handler: pprofHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+				log.Error("pprof listener stopped", "err", err)
+			}
+		}()
+		defer func() { _ = srv.Close() }()
+	}
 	server := cfg.ServerURL
 	if server == "" {
 		server = "off (CRD-only)"
@@ -696,7 +758,7 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	log.Info(msgStarting, "version", AgentVersion, "kbVersion", k.Version, "maxKnownK8s", k.MaxKnownK8s.String(),
 		"interval", cfg.Interval.String(), "tickTimeout", tickTimeout(cfg.Interval).String(),
 		"tickReserve", tickReserve(tickTimeout(cfg.Interval)).String(),
-		"crName", cfg.CRName, "server", server, "healthAddr", healthAddr)
+		"crName", cfg.CRName, "server", server, "healthAddr", healthAddr, "pprofAddr", pprofAddr)
 
 	r := newRunner(clients, dyn, k, cfg)
 	if !cfg.SkipCRDManagement {

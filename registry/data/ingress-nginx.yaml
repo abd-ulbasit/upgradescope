@@ -11,6 +11,17 @@ matchers:
     # https://github.com/bitnami/containers/issues/83267
     - bitnamilegacy/nginx-ingress-controller
     - kubernetes-ingress-controller/nginx-ingress-controller # pre-1.0 (quay.io, 0.x)
+    # RKE1's build ("-rancherN" tags such as nginx-1.12.1-rancher4 and
+    # 0.21.0-rancher1, listed in rancher/kontainer-driver-metadata
+    # pkg/rke/k8s_rke_system_images.go). RKE1 itself reached end of life on
+    # 31 July 2025 (https://www.suse.com/c/rke-end-of-life-by-july-2025-replatform-to-rke2-or-k3s/),
+    # so no vendor patches outlast upstream's for it. RKE2's releases up to
+    # v1.20.11 and v1.21.2 shipped a "-rancherN" build too
+    # (nginx-0.30.0-rancher1, nginx-0.46.0-rancher1), long out of support
+    # and claimed here alike. RKE2's "-hardenedN"
+    # build on this repository is rke2-ingress-nginx's tag-qualified
+    # matcher, which takes those tags first.
+    - rancher/nginx-ingress-controller
   charts:
     - ingress-nginx
 support:

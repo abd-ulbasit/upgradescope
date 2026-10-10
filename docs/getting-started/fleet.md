@@ -147,8 +147,13 @@ latest snapshot and not stored, and say which they served
 ## Teams
 
 Findings are attributed to teams through a namespace label (`team` by
-default; `--team-label` on the agent and `scan`). The server can override
-labels with a glob map, first match wins:
+default; `--team-label` on the agent and `scan`). Team attribution needs a
+cluster: `scan --files` (and a gate without `?cluster=`) reads manifests, not
+the cluster's Namespace objects, so every finding of a files scan is
+unattributed and `--team-label` is refused with `--files`. To attribute a PR's
+findings to teams, gate it against a stored cluster
+(`/api/v1/gate?cluster=`), which uses that cluster's namespace labels. The
+server can override labels with a glob map, first match wins:
 
 ```yaml
 # serve --team-map teams.yaml (chart: server.teamMap)

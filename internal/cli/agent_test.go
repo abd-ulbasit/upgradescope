@@ -238,6 +238,29 @@ func TestAgentObservabilityFlags(t *testing.T) {
 	}
 }
 
+// The profiler is off by default and loopback-only when on (#247).
+func TestAgentPprofAddrFlag(t *testing.T) {
+	got, err := execAgent(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.pprofAddr != "" {
+		t.Errorf("default pprofAddr = %q, want empty (off)", got.pprofAddr)
+	}
+	got, err = execAgent(t, "--pprof-addr=127.0.0.1:6060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.pprofAddr != "127.0.0.1:6060" {
+		t.Errorf("pprofAddr = %q, want 127.0.0.1:6060", got.pprofAddr)
+	}
+	for _, bad := range []string{":6060", "0.0.0.0:6060", "10.1.2.3:6060", "6060"} {
+		if _, err := execAgent(t, "--pprof-addr="+bad); err == nil || !strings.Contains(err.Error(), "--pprof-addr") {
+			t.Errorf("--pprof-addr=%s: error = %v, want a refusal naming the flag", bad, err)
+		}
+	}
+}
+
 func TestAgentRejectsBadLogFlags(t *testing.T) {
 	for _, args := range [][]string{{"--log-format=xml"}, {"--log-level=loud"}} {
 		if _, err := execAgent(t, args...); err == nil {

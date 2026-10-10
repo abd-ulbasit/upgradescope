@@ -209,9 +209,47 @@ func TestClaimConflicts(t *testing.T) {
 		{"same chart", entry("mine", []string{"acme/thing"}, []string{"cert-manager"}), `chart "cert-manager"`},
 		{"a provider build is not an upstream claim", entry("mine", []string{"mcr.microsoft.com/oss/calico/node"}, nil), ""},
 		{"a replacement of the claiming entry itself", entry("cilium", []string{"cilium/operator"}, nil), ""},
+		// Component images are claims too (#265).
+		{"a component image of another entry", entry("mine", []string{"fluxcd/source-controller"}, nil), `"fluxcd/source-controller"`},
+		{"a mirror path of a component image", entry("mine", []string{"corp/fluxcd/helm-controller"}, nil), `"fluxcd/helm-controller"`},
+		{"a component image claimed as a component again", AddOn{ID: "mine", Matchers: Matchers{Components: []ComponentImage{{Image: "fluxcd/kustomize-controller"}}}}, `"fluxcd/kustomize-controller"`},
+		// A tag pattern is no way around a claim: the embedded registry's
+		// own tag-over-path precedence is for its entries only, so an
+		// operator's matcher of a new id that names a claimed repository
+		// is refused whatever tag it adds (it turned ingress-nginx's
+		// blocked/75 into ready/100 before).
+		{"a tag-qualified matcher on a repository claimed without one", entry("mine", []string{"ingress-nginx/controller:v*"}, nil), `"ingress-nginx/controller"`},
+		{"a tag-qualified matcher on a mirror path of a claimed repository", entry("mine", []string{"corp/mirror/ingress-nginx/controller:v*"}, nil), "ingress-nginx"},
+		{"a tag-qualified matcher on a component image", entry("mine", []string{"fluxcd/source-controller:v2*"}, nil), `"fluxcd/source-controller"`},
+		{"a tag-qualified matcher on a repository nobody claims", entry("mine", []string{"acme/mesh:v*"}, nil), ""},
+		{"a tag-qualified matcher on a provider build nobody claims", entry("mine", []string{"mcr.microsoft.com/oss/calico/node:v*"}, nil), ""},
+		{"a second tag-qualified matcher on a repository", entry("mine", []string{"rancher/nginx-ingress-controller:*-mine*"}, nil), "rke2-ingress-nginx"},
+		// A path-only matcher over a repository an embedded entry claims
+		// with a tag pattern claims that entry's tags as well.
+		{"a path-only matcher of a new id over a tag-qualified claim", entry("mine", []string{"rancher/nginx-ingress-controller"}, nil), "rke2-ingress-nginx"},
+		// A replacement keeps the precedence its embedded entry has only
+		// with the matchers the embedded entry has: widening or moving the
+		// tag pattern, or adding another, takes tags that are another
+		// entry's.
+		{"a replacement that widens its tag pattern", entry("rke2-ingress-nginx", []string{"rancher/nginx-ingress-controller:*"}, []string{"rke2-ingress-nginx"}), "ingress-nginx"},
+		{"a replacement that moves its tag pattern", entry("rke2-ingress-nginx", []string{"rancher/nginx-ingress-controller:*-mine*"}, []string{"rke2-ingress-nginx"}), `"rancher/nginx-ingress-controller"`},
+		{"a replacement that adds a tag-qualified claim of another entry", entry("rke2-ingress-nginx", []string{"rancher/nginx-ingress-controller:*-hardened*", "ingress-nginx/controller:v*"}, []string{"rke2-ingress-nginx"}), `"ingress-nginx/controller"`},
+		// An entry of a new id is told to replace the embedded one instead.
+		{"a new id is told to replace the claiming entry", entry("mine", []string{"cilium/operator"}, nil), "replace the embedded entry by using its id"},
+		// A replacement copied from an earlier release, whose claim the
+		// embedded registry has since given to another entry (#265): RKE2's
+		// entry before its matcher was tag-qualified claims RKE1's builds,
+		// which ingress-nginx claims now. The fix is a fresh copy, not a
+		// replacement of ingress-nginx as well.
+		{"a replacement still using an earlier release's matcher", entry("rke2-ingress-nginx", []string{"rancher/nginx-ingress-controller"}, []string{"rke2-ingress-nginx"}),
+			`your rke2-ingress-nginx replaces the embedded entry of that id, and the embedded registry now claims this image under ingress-nginx, and the embedded rke2-ingress-nginx claims "rancher/nginx-ingress-controller:*-hardened*" instead: if your file is a copy of registry/data/rke2-ingress-nginx.yaml from an earlier release, copy the current one again and re-apply your edits`},
+		{"a replacement claiming a repository its embedded entry never did", entry("coredns", []string{"cilium/operator"}, nil),
+			"the embedded registry now claims this image under cilium: if your file is a copy of registry/data/coredns.yaml"},
+		{"a replacement claiming another entry's chart", entry("coredns", []string{"acme/dns"}, []string{"cert-manager"}),
+			"the embedded registry now claims this chart under cert-manager"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := ClaimConflicts(Merge(base, []AddOn{tc.extra}))
+			errs := MergeConflicts(base, []AddOn{tc.extra})
 			if tc.want == "" {
 				if len(errs) != 0 {
 					t.Errorf("want no conflict, got %v", errs)
@@ -221,6 +259,76 @@ func TestClaimConflicts(t *testing.T) {
 			if len(errs) == 0 || !strings.Contains(errors.Join(errs...).Error(), tc.want) {
 				t.Errorf("want a conflict mentioning %s, got %v", tc.want, errs)
 			}
+			if tc.extra.ID != "mine" && strings.Contains(errors.Join(errs...).Error(), "replace the embedded entry by using its id") {
+				t.Errorf("a replacement must not be told to replace the embedded entry by its id, which it does: %v", errs)
+			}
 		})
+	}
+}
+
+// The reported upgrade failure, end to end: origin/main's (v0.2.0-rc.2)
+// rke2-ingress-nginx.yaml, copied into --registry-dir as CONTRIBUTING says,
+// loads and validates, and the conflict it raises says to copy the file
+// again rather than to replace ingress-nginx too.
+func TestMergeConflictsOutdatedCopy(t *testing.T) {
+	const v020 = `schema_version: 2
+id: rke2-ingress-nginx
+display_name: RKE2 Ingress NGINX
+matchers:
+  images:
+    - rancher/nginx-ingress-controller # tagged nginx-<version>-hardenedN
+  charts:
+    - rke2-ingress-nginx
+support:
+  status: supported
+  citations:
+    - https://www.suse.com/c/kubecon-eu-2026-rke2-nginx-traefik-support/
+    - https://docs.rke2.io/reference/ingress_migration
+compat:
+  - range: ">=0.0.0"
+    k8s_max: "1.36"
+    citations:
+      - https://www.suse.com/c/kubecon-eu-2026-rke2-nginx-traefik-support/
+recommendation: Migrate to Traefik, the default RKE2 ingress controller from v1.36 (see the RKE2 ingress migration guide).
+`
+	extra, err := LoadExtra(writeEntry(t, t.TempDir(), "rke2-ingress-nginx.yaml", v020))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := MergeConflicts(base, extra)
+	if len(errs) != 1 {
+		t.Fatalf("want one conflict, got %v", errs)
+	}
+	msg := errs[0].Error()
+	for _, want := range []string{`"rancher/nginx-ingress-controller:*-hardened*"`, "copy of registry/data/rke2-ingress-nginx.yaml", "under ingress-nginx"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("conflict %q does not say %s", msg, want)
+		}
+	}
+	if strings.Contains(msg, "replace the embedded entry by using its id") {
+		t.Errorf("conflict %q tells an entry that already replaces its embedded one to replace by id", msg)
+	}
+}
+
+// A faithful copy of any embedded entry, or of all of them, is what
+// CONTRIBUTING tells an operator to start from: it must never conflict,
+// including the pairs whose tag pattern takes precedence over another
+// entry's path (rke2-ingress-nginx over ingress-nginx).
+func TestMergeConflictsFaithfulCopies(t *testing.T) {
+	base, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := MergeConflicts(base, base); len(errs) != 0 {
+		t.Errorf("a copy of the whole embedded registry conflicts: %v", errs)
+	}
+	for _, a := range base {
+		if errs := MergeConflicts(base, []AddOn{a}); len(errs) != 0 {
+			t.Errorf("a copy of %s conflicts: %v", a.ID, errs)
+		}
 	}
 }

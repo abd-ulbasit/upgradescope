@@ -3,10 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/abd-ulbasit/upgradescope/internal/mcp"
 )
@@ -86,5 +89,72 @@ func TestDocsMCPExamplesParse(t *testing.T) {
 	}
 	if seen < 3 {
 		t.Errorf("found %d `upgradescope mcp` commands in the docs; the pattern is stale", seen)
+	}
+}
+
+// TestDocsMCPPageSaysWhatTheClusterChooses: the MCP page names the report
+// fields whose text the cluster chooses and who chooses it, and says how
+// the server marks and cuts it, with the marker, _meta key and cap the
+// server uses.
+func TestDocsMCPPageSaysWhatTheClusterChooses(t *testing.T) {
+	page := strings.Join(strings.Fields(readDoc(t, mcpPage)), " ")
+	for _, want := range []string{
+		"`objects[].ignore` and `objects[].ignoreReason`",
+		"`upgradescope.dev/ignore-reason`",
+		"listed even when they suppress nothing",
+		"`suppressed[].reason`",
+		"`notAssessed[].reason`",
+		"whoever can create or annotate an object there chooses",
+		"**" + mcp.ClusterTextMarker + "**",
+		"`" + mcp.MetaClusterText + "`",
+		fmt.Sprintf("longer than %d KiB is cut, ending in `%s`", mcp.MaxClusterTextBytes>>10, strings.TrimSpace(mcp.ClusterTextCutMark)),
+		// The rule is inverted: not a list of fields that hold such text,
+		// but every string, but for the few the tool writes itself.
+		"not a list of fields that hold such text",
+		"every string in every tool's result, values and object keys alike",
+		"except numbers, booleans, the report's own field names, and the values of the few keys upgradescope writes itself",
+		"A field added to the report later is outside text until it is listed there",
+		"Every result of every tool (`scan`, `get_report`, `list_findings`, `registry_lookup` and `fleet_summary`)",
+		"never through a team's name or another key the document chose",
+		"A tool error is outside text whole",
+		// The output contract: two text blocks, the notice first.
+		"has two text blocks: a notice about the cluster's text in it (see [below](#what-to-keep-in-mind)), then the JSON",
+		"A tool error has two as well, the notice and then the error",
+		"read the JSON from `structuredContent`, or from the second text block, never the first",
+		"does not fall back to the pod's service account",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("%s does not say %q", mcpPage, want)
+		}
+	}
+	// The keys it lists as the tool's own are the ones the server treats so.
+	var listed []string
+	for _, k := range mcp.ToolWords() {
+		listed = append(listed, "`"+k+"`")
+	}
+	if want := strings.Join(listed, ", "); !strings.Contains(page, want) {
+		t.Errorf("%s does not list the keys the tool writes itself, %s", mcpPage, want)
+	}
+}
+
+// TestDocsMCPPageStatesTheHTTPLimits: the limits the MCP page states for
+// --http are the ones the server applies.
+func TestDocsMCPPageStatesTheHTTPLimits(t *testing.T) {
+	page := strings.Join(strings.Fields(readDoc(t, mcpPage)), " ")
+	l := mcpHTTPLimits
+	for _, want := range []string{
+		fmt.Sprintf("headers must arrive within %d seconds", int(l.readHeaderTimeout.Seconds())),
+		fmt.Sprintf("whole request within %d seconds", int(l.readTimeout.Seconds())),
+		fmt.Sprintf("at most %d KiB (`431` past that)", l.maxHeaderBytes>>10),
+		fmt.Sprintf("body at most %d MiB (`413`)", mcpsdk.DefaultMaxRequestBodyBytes>>20),
+		fmt.Sprintf("idle for %d seconds is closed", int(l.idleTimeout.Seconds())),
+		fmt.Sprintf("no request for %d minutes is closed", int(l.sessions.SessionTimeout.Minutes())),
+		fmt.Sprintf("at most %d sessions are open at once", l.sessions.MaxSessions),
+		"refused with `503`",
+		"connection is closed without reading the body",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("%s does not say %q", mcpPage, want)
+		}
 	}
 }

@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "files",
+  "source": "files",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "capabilities": {
+    "crds": {
+      "available": true
+    },
+    "api-usage": {
+      "available": true
+    },
+    "deprecated-calls": {
+      "available": false,
+      "reason": "files mode"
+    },
+    "helm": {
+      "available": false,
+      "reason": "files mode"
+    },
+    "addons": {
+      "available": true
+    },
+    "versions": {
+      "available": false,
+      "reason": "files mode"
+    }
+  },
+  "apiUsage": [
+    {
+      "group": "admissionregistration.k8s.io",
+      "version": "v1alpha1",
+      "kind": "MutatingAdmissionPolicy",
+      "count": 1,
+      "namespaces": {
+        "": 1
+      },
+      "objects": [
+        {
+          "name": "p",
+          "file": "rendered/all.yaml",
+          "line": 5
+        }
+      ]
+    }
+  ]
+}

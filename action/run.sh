@@ -143,8 +143,19 @@ validate() {
   # Empty is the default: the action ref's release, else latest.
   [ -z "$v" ] || [[ $v =~ ^(latest|preinstalled|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] ||
     die "invalid version '$v' (want latest, preinstalled or a release tag like v0.2.0)"
-  [[ $t =~ ^v?1\.[0-9]+(\.[0-9]+)?$ ]] ||
-    die "invalid target '$t' (want a Kubernetes minor version like 1.36)"
+  [[ $t =~ ^[0-9]+\.[0-9]+$ ]] ||
+    die "invalid target '$t' (want a Kubernetes minor version like 1.36, quoted in the workflow: target: \"1.36\")"
+  # The oldest minor the knowledge base covers (inventory.OldestCovered;
+  # TestActionFloorIsTheKnowledgeBaseFloor pins this line to it). Below it
+  # nothing is judged, and it is what YAML makes of an unquoted number:
+  # target: 1.30 reaches this step as 1.3, which would read ready.
+  local oldest=16
+  if [ "${t%%.*}" != 1 ] || [ "$((10#${t#*.}))" -lt "$oldest" ]; then
+    local hint= minor=$((10#${t#*.}))
+    # 1.1 to 1.9 are the YAML numbers 1.10 to 1.90; 1.0 is nothing's.
+    [ "${t%%.*}" != 1 ] || [ "${#t}" -ne 3 ] || [ "$minor" -lt 1 ] || hint=" Is this ${t}0 written as a YAML number? quote it (target: \"${t}0\")."
+    die "invalid target '$t': the oldest Kubernetes minor the knowledge base covers is 1.$oldest.$hint"
+  fi
   case $f in
     blocker | warning | never) ;;
     *) die "invalid fail-on '$f' (want blocker, warning or never)" ;;

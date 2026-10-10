@@ -377,7 +377,7 @@ func newTokensListCmd() *cobra.Command {
 					revoked = tk.RevokedAt.Format(time.RFC3339)
 				}
 				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n",
-					tk.ID, tk.ClusterName, prefix, tk.CreatedAt.Format(time.RFC3339), revoked)
+					tk.ID, esc(tk.ClusterName), esc(prefix), tk.CreatedAt.Format(time.RFC3339), revoked)
 			}
 			return tw.Flush()
 		},
@@ -403,7 +403,7 @@ func listReadTokens(cmd *cobra.Command, st store.Store) error {
 			revoked = tk.RevokedAt.Format(time.RFC3339)
 		}
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n",
-			tk.ID, teamList(tk.Teams), tk.Prefix, tk.CreatedAt.Format(time.RFC3339), revoked)
+			tk.ID, esc(teamList(tk.Teams)), esc(tk.Prefix), tk.CreatedAt.Format(time.RFC3339), revoked)
 	}
 	return tw.Flush()
 }

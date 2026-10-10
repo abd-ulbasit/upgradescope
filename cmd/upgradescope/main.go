@@ -9,7 +9,7 @@ import (
 
 func main() {
 	if err := cli.Root().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, cli.ErrorText(err))
 		os.Exit(cli.ExitCode(err)) // 2 = --fail-on threshold hit, 1 = error
 	}
 }

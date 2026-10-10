@@ -23,6 +23,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/sarif"
 	"github.com/abd-ulbasit/upgradescope/internal/suppress"
+	"github.com/abd-ulbasit/upgradescope/internal/textsafe"
 )
 
 // ErrGateFailed signals findings at or above the --fail-on threshold.
@@ -53,6 +54,52 @@ func ExitCode(err error) int {
 	default:
 		return 1
 	}
+}
+
+// ErrorText is err as the process prints it on stderr. An error can quote
+// a file name or a value from the manifests being scanned, so every control
+// character in it is shown as an escape, a newline too: a name holding a
+// newline must not start a second, forged line. The only newlines kept are
+// those between the errors of a newline-joined multi-error (errors.Join's,
+// or several %w joined by newlines alone), found by walking the error tree
+// rather than by looking at the text.
+func ErrorText(err error) string {
+	var b strings.Builder
+	writeError(&b, err)
+	return b.String()
+}
+
+func writeError(b *strings.Builder, err error) {
+	msg := err.Error()
+	switch u := err.(type) {
+	case interface{ Unwrap() []error }:
+		kids := u.Unwrap()
+		texts := make([]string, len(kids))
+		for i, k := range kids {
+			texts[i] = k.Error()
+		}
+		// Only a pure join (errors.Join) has a message that is its children's,
+		// separated by newlines; fmt.Errorf with several %w does not.
+		if len(kids) > 0 && msg == strings.Join(texts, "\n") {
+			for i, k := range kids {
+				if i > 0 {
+					b.WriteByte('\n')
+				}
+				writeError(b, k)
+			}
+			return
+		}
+	case interface{ Unwrap() error }:
+		// "context: %w" puts the wrapped error's text last; keep a join in it.
+		if k := u.Unwrap(); k != nil {
+			if kmsg := k.Error(); strings.HasSuffix(msg, kmsg) {
+				b.WriteString(textsafe.Escape(msg[:len(msg)-len(kmsg)]))
+				writeError(b, k)
+				return
+			}
+		}
+	}
+	b.WriteString(textsafe.Escape(msg))
 }
 
 type scanOptions struct {
@@ -119,9 +166,9 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 		for _, w := range sum.Warnings {
 			w.File = path.Join(opts.fileBase, w.File)
 			if w.Unassessed {
-				fmt.Fprintf(stderr, "warning: skipped %s\n", w)
+				fmt.Fprintf(stderr, "warning: skipped %s\n", esc(w.String()))
 			} else {
-				fmt.Fprintf(stderr, "warning: %s\n", w)
+				fmt.Fprintf(stderr, "warning: %s\n", esc(w.String()))
 			}
 		}
 		// Nothing scanned is not "nothing to fix": an empty render, a wrong
@@ -178,7 +225,7 @@ func evaluateScan(inv inventory.Inventory, k kb.KB, opts scanOptions, now time.T
 func planHops(inv inventory.Inventory, k kb.KB, opts scanOptions, now time.Time) []engine.Hop {
 	warn := func(msg string) {
 		if opts.stderr != nil {
-			fmt.Fprintf(opts.stderr, "warning: --plan: %s, so there is no upgrade plan; the report judges the target alone\n", msg)
+			fmt.Fprintf(opts.stderr, "warning: --plan: %s, so there is no upgrade plan; the report judges the target alone\n", esc(msg))
 		}
 	}
 	from := opts.fromVersion
@@ -326,6 +373,9 @@ func newScanCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if opts.filesDir != "" && cmd.Flags().Changed("team-label") {
+				return errTeamLabelNeedsCluster
+			}
 			if err := validateScanOptions(&opts); err != nil {
 				return err
 			}
@@ -354,7 +404,7 @@ func newScanCmd() *cobra.Command {
 			}
 			report, warnings := suppress.Apply(report, ignore.rules, suppress.Options{Now: time.Now(), Source: ignore.source, FileBase: ignore.fileBase})
 			for _, w := range warnings {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", esc(w))
 			}
 			if opts.writeBaseline != "" {
 				if err := writeBaselineFile(opts, report); err != nil {
@@ -398,8 +448,8 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
 	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown|junit|gitlab-codequality")
-	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
-	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never")
+	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution (live scans only: --files mode reads no Namespace objects, so all its findings are unattributed)")
+	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never (never always exits 0, even for a --target that is not an upgrade)")
 	cmd.Flags().BoolVar(&opts.allowIncomplete, "allow-incomplete", false, "with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed); a --target that is not an upgrade still fails")
 	cmd.Flags().StringVar(&opts.configFile, "config", "", "config file with ignore rules (default: "+suppress.ConfigFile+" in the scan root, else at the git repository root)")
 	cmd.Flags().StringVar(&opts.baselineFile, "baseline", "", "JSON report of an earlier scan (--output json or --write-baseline): the gate fails only on findings that are new since")
@@ -409,11 +459,13 @@ func newScanCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("target")
 	cmd.MarkFlagsMutuallyExclusive("files", "kubeconfig")
 	cmd.MarkFlagsMutuallyExclusive("files", "context")
-	cmd.MarkFlagsMutuallyExclusive("files", "team-label")
 	cmd.MarkFlagsMutuallyExclusive("files", "request-timeout")
 
 	return cmd
 }
+
+// errTeamLabelNeedsCluster is the refusal of --team-label with --files.
+var errTeamLabelNeedsCluster = errors.New("--team-label needs a live cluster: team attribution reads the labels of the cluster's Namespace objects, and --files mode reads none, so every finding of a files scan is unattributed (attribute teams with a live scan, the agent, or the server's gate with ?cluster=)")
 
 // manifestBase returns the directory that --files object paths
 // (collect.CollectFiles: relative to the scanned root; a single file's base
@@ -479,8 +531,9 @@ func withFileBase(r engine.Report, base string) engine.Report {
 }
 
 // scanLong is scan's --help text: the gate's exit codes, how --files reads
-// manifests, and how suppression and baselines change what it counts.
-const scanLong = `Scan a cluster (or rendered manifests) for upgrade readiness.
+// manifests, and how suppression and baselines change what it counts. The
+// knowledge base's floor in it is inventory.OldestCovered, not a copy.
+var scanLong = `Scan a cluster (or rendered manifests) for upgrade readiness.
 
 Exit codes: 0 when the gate passes; 1 on an operational error, including an
 invalid config file or baseline and a report that could not be written; 2
@@ -489,7 +542,11 @@ when the gate fails, which includes an unknown verdict.
 The gate (--fail-on) fails when a finding at or above the threshold remains,
 or (unless --allow-incomplete) when a required check was not assessed, so a
 blocker may have been missed. A --target that is not an upgrade of the
-cluster (at or below the minor its kube-apiserver runs) always fails it.
+cluster (at or below the minor its kube-apiserver runs) always fails it,
+--allow-incomplete notwithstanding; only --fail-on never, which always exits
+0, passes it. A --target below the oldest minor the knowledge base covers
+(` + inventory.OldestCovered().String() + `) is an error (exit 1), not a verdict: quote it in YAML and workflow
+files, where an unquoted 1.30 is the number 1.3.
 
 CI report formats: the exit code is the gate's in every --output format.
 --output junit writes JUnit XML, one test suite per finding category and one
@@ -528,7 +585,11 @@ add-ons: the container and init-container images and labels of Pod, Deployment,
 DaemonSet, StatefulSet, ReplicaSet, Job and CronJob pod templates, and
 IngressClass controllers, matched as a live scan matches them. Images injected
 at admission (a mesh sidecar) are not in the manifests. Version skew, Helm
-releases and deprecated API callers need a cluster and are not assessed.
+releases and deprecated API callers need a cluster and are not assessed, and
+so does team attribution: --files reads no Namespace objects, so every finding
+is unattributed and --team-label is refused. A manifest at an API version the
+target does not serve yet (introduced after it) is a blocker like a removed
+one, since applying it fails the same way; a live scan never reports that.
 
 Suppression: ignore rules in ` + suppress.ConfigFile + ` (found in the scan root,
 i.e. the --files directory or else the working directory, then at the git
@@ -671,7 +732,9 @@ func validatePlanOptions(opts *scanOptions) error {
 	case opts.from == "":
 		return errors.New("--plan with --files needs --from, the minor the cluster runs now")
 	}
-	from, err := inventory.ParseTarget(opts.from)
+	// A cluster's own version has no floor (unlike a target): a 1.15
+	// cluster plans here as it does live.
+	from, err := inventory.ParseClusterVersion(opts.from)
 	if err != nil {
 		return fmt.Errorf("invalid --from %q: %w", opts.from, err)
 	}

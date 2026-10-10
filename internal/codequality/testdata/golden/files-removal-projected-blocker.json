@@ -1,0 +1,38 @@
+[
+  {
+    "description": "admissionregistration.k8s.io/v1alpha1 MutatingAdmissionPolicy removed in 1.37 (projected) (1 object): p. Fix: migrate to admissionregistration.k8s.io/v1 MutatingAdmissionPolicy.",
+    "check_name": "removed-api/admissionregistration.k8s.io/v1alpha1/MutatingAdmissionPolicy",
+    "fingerprint": "4b4a854e41b4e0c3e79bf9602d646fb17e2b0cad9999d952622f3d27dc3183c9",
+    "severity": "critical",
+    "location": {
+      "path": "rendered/all.yaml",
+      "lines": {
+        "begin": 5
+      }
+    }
+  },
+  {
+    "description": "knowledge base does not cover Kubernetes 1.38 (newest known: 1.36). Findings may be incomplete; regenerate the knowledge base (kb version test-kb-1).",
+    "check_name": "kb-stale",
+    "fingerprint": "37c75cb4eb8abf585f404472e6c9ebb95b7b47c95a998ef91afb8610e4f62b90",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/kb-stale",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Not assessed: kb-coverage (required): knowledge base covers Kubernetes up to 1.36; target 1.38 cannot be assessed (API removals after 1.36 are projected from k8s.io/api lifecycle markers, not shipped releases). The verdict is unknown: a blocker may have been missed.",
+    "check_name": "not-assessed/kb-coverage",
+    "fingerprint": "21ff8b73ded6d4ac93b8e36cf784cb04806611d3e2b45fd5401bd6d9594d4a92",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/not-assessed/kb-coverage",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

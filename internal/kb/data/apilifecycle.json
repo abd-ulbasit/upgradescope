@@ -171,7 +171,13 @@
       "kind": "MutatingAdmissionPolicy",
       "introduced": "1.32",
       "deprecated": "1.35",
-      "removed": "1.38"
+      "removed": "1.38",
+      "replacement": {
+        "group": "admissionregistration.k8s.io",
+        "version": "v1",
+        "kind": "MutatingAdmissionPolicy"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "admissionregistration.k8s.io",
@@ -179,7 +185,13 @@
       "kind": "MutatingAdmissionPolicyBinding",
       "introduced": "1.32",
       "deprecated": "1.35",
-      "removed": "1.38"
+      "removed": "1.38",
+      "replacement": {
+        "group": "admissionregistration.k8s.io",
+        "version": "v1",
+        "kind": "MutatingAdmissionPolicyBinding"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "admissionregistration.k8s.io",
@@ -187,7 +199,13 @@
       "kind": "ValidatingAdmissionPolicy",
       "introduced": "1.26",
       "deprecated": "1.29",
-      "removed": "1.32"
+      "removed": "1.32",
+      "replacement": {
+        "group": "admissionregistration.k8s.io",
+        "version": "v1",
+        "kind": "ValidatingAdmissionPolicy"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "admissionregistration.k8s.io",
@@ -195,7 +213,13 @@
       "kind": "ValidatingAdmissionPolicyBinding",
       "introduced": "1.26",
       "deprecated": "1.29",
-      "removed": "1.32"
+      "removed": "1.32",
+      "replacement": {
+        "group": "admissionregistration.k8s.io",
+        "version": "v1",
+        "kind": "ValidatingAdmissionPolicyBinding"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "admissionregistration.k8s.io",
@@ -242,7 +266,13 @@
       "kind": "ValidatingAdmissionPolicy",
       "introduced": "1.28",
       "deprecated": "1.31",
-      "removed": "1.34"
+      "removed": "1.34",
+      "replacement": {
+        "group": "admissionregistration.k8s.io",
+        "version": "v1",
+        "kind": "ValidatingAdmissionPolicy"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "admissionregistration.k8s.io",
@@ -250,7 +280,13 @@
       "kind": "ValidatingAdmissionPolicyBinding",
       "introduced": "1.28",
       "deprecated": "1.31",
-      "removed": "1.34"
+      "removed": "1.34",
+      "replacement": {
+        "group": "admissionregistration.k8s.io",
+        "version": "v1",
+        "kind": "ValidatingAdmissionPolicyBinding"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "admissionregistration.k8s.io",
@@ -481,7 +517,13 @@
       "kind": "SelfSubjectReview",
       "introduced": "1.26",
       "deprecated": "1.29",
-      "removed": "1.32"
+      "removed": "1.32",
+      "replacement": {
+        "group": "authentication.k8s.io",
+        "version": "v1",
+        "kind": "SelfSubjectReview"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "authentication.k8s.io",
@@ -489,7 +531,13 @@
       "kind": "SelfSubjectReview",
       "introduced": "1.27",
       "deprecated": "1.30",
-      "removed": "1.33"
+      "removed": "1.33",
+      "replacement": {
+        "group": "authentication.k8s.io",
+        "version": "v1",
+        "kind": "SelfSubjectReview"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "authentication.k8s.io",
@@ -655,7 +703,13 @@
       "kind": "CronJob",
       "introduced": "1.17",
       "removed": "1.21",
-      "removedInferred": true
+      "replacement": {
+        "group": "batch",
+        "version": "v1",
+        "kind": "CronJob"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "certificates.k8s.io",
@@ -681,7 +735,13 @@
       "kind": "ClusterTrustBundle",
       "introduced": "1.26",
       "deprecated": "1.34",
-      "removed": "1.37"
+      "removed": "1.37",
+      "replacement": {
+        "group": "certificates.k8s.io",
+        "version": "v1",
+        "kind": "ClusterTrustBundle"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "certificates.k8s.io",
@@ -690,7 +750,13 @@
       "introduced": "1.34",
       "deprecated": "1.37",
       "removed": "1.35",
-      "removedInferred": true
+      "replacement": {
+        "group": "certificates.k8s.io",
+        "version": "v1",
+        "kind": "PodCertificateRequest"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "certificates.k8s.io",
@@ -787,7 +853,13 @@
       "kind": "EndpointSlice",
       "introduced": "1.17",
       "removed": "1.21",
-      "removedInferred": true
+      "replacement": {
+        "group": "discovery.k8s.io",
+        "version": "v1",
+        "kind": "EndpointSlice"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "discovery.k8s.io",
@@ -1077,7 +1149,13 @@
       "introduced": "1.27",
       "deprecated": "1.30",
       "removed": "1.31",
-      "removedInferred": true
+      "replacement": {
+        "group": "networking.k8s.io",
+        "version": "v1",
+        "kind": "IPAddress"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "networking.k8s.io",
@@ -1086,7 +1164,13 @@
       "introduced": "1.27",
       "deprecated": "1.30",
       "removed": "1.31",
-      "removedInferred": true
+      "replacement": {
+        "group": "networking.k8s.io",
+        "version": "v1",
+        "kind": "ServiceCIDR"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "networking.k8s.io",
@@ -1094,7 +1178,13 @@
       "kind": "IPAddress",
       "introduced": "1.31",
       "deprecated": "1.34",
-      "removed": "1.37"
+      "removed": "1.37",
+      "replacement": {
+        "group": "networking.k8s.io",
+        "version": "v1",
+        "kind": "IPAddress"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "networking.k8s.io",
@@ -1128,7 +1218,13 @@
       "kind": "ServiceCIDR",
       "introduced": "1.31",
       "deprecated": "1.34",
-      "removed": "1.37"
+      "removed": "1.37",
+      "replacement": {
+        "group": "networking.k8s.io",
+        "version": "v1",
+        "kind": "ServiceCIDR"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "node.k8s.io",
@@ -1367,7 +1463,13 @@
       "kind": "ResourceClaim",
       "introduced": "1.26",
       "removed": "1.27",
-      "removedInferred": true
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceClaim"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1375,7 +1477,13 @@
       "kind": "ResourceClaimTemplate",
       "introduced": "1.26",
       "removed": "1.27",
-      "removedInferred": true
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceClaimTemplate"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1399,7 +1507,13 @@
       "kind": "ResourceClaim",
       "introduced": "1.27",
       "removed": "1.31",
-      "removedInferred": true
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceClaim"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1415,7 +1529,13 @@
       "kind": "ResourceClaimTemplate",
       "introduced": "1.27",
       "removed": "1.31",
-      "removedInferred": true
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceClaimTemplate"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1439,7 +1559,13 @@
       "kind": "ResourceSlice",
       "introduced": "1.30",
       "removed": "1.31",
-      "removedInferred": true
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceSlice"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1461,7 +1587,13 @@
       "kind": "DeviceTaintRule",
       "introduced": "1.33",
       "deprecated": "1.36",
-      "removed": "1.39"
+      "removed": "1.39",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "DeviceTaintRule"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1527,7 +1659,13 @@
       "kind": "DeviceClass",
       "introduced": "1.32",
       "deprecated": "1.35",
-      "removed": "1.38"
+      "removed": "1.38",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "DeviceClass"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1535,7 +1673,13 @@
       "kind": "ResourceClaim",
       "introduced": "1.32",
       "deprecated": "1.35",
-      "removed": "1.38"
+      "removed": "1.38",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceClaim"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1543,7 +1687,13 @@
       "kind": "ResourceClaimTemplate",
       "introduced": "1.32",
       "deprecated": "1.35",
-      "removed": "1.38"
+      "removed": "1.38",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceClaimTemplate"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1551,7 +1701,13 @@
       "kind": "ResourceSlice",
       "introduced": "1.32",
       "deprecated": "1.35",
-      "removed": "1.38"
+      "removed": "1.38",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceSlice"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1559,7 +1715,13 @@
       "kind": "DeviceClass",
       "introduced": "1.33",
       "deprecated": "1.36",
-      "removed": "1.39"
+      "removed": "1.39",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "DeviceClass"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1567,7 +1729,13 @@
       "kind": "DeviceTaintRule",
       "introduced": "1.36",
       "deprecated": "1.39",
-      "removed": "1.42"
+      "removed": "1.42",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "DeviceTaintRule"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1575,7 +1743,13 @@
       "kind": "ResourceClaim",
       "introduced": "1.33",
       "deprecated": "1.36",
-      "removed": "1.39"
+      "removed": "1.39",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceClaim"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1583,7 +1757,13 @@
       "kind": "ResourceClaimTemplate",
       "introduced": "1.33",
       "deprecated": "1.36",
-      "removed": "1.39"
+      "removed": "1.39",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceClaimTemplate"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "resource.k8s.io",
@@ -1591,7 +1771,13 @@
       "kind": "ResourceSlice",
       "introduced": "1.33",
       "deprecated": "1.36",
-      "removed": "1.39"
+      "removed": "1.39",
+      "replacement": {
+        "group": "resource.k8s.io",
+        "version": "v1",
+        "kind": "ResourceSlice"
+      },
+      "replacementDefaulted": true
     },
     {
       "group": "scheduling.k8s.io",
@@ -1605,7 +1791,13 @@
       "kind": "PriorityClass",
       "introduced": "1.17",
       "removed": "1.23",
-      "removedInferred": true
+      "replacement": {
+        "group": "scheduling.k8s.io",
+        "version": "v1",
+        "kind": "PriorityClass"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "scheduling.k8s.io",
@@ -1723,12 +1915,13 @@
       "kind": "VolumeAttachment",
       "introduced": "1.9",
       "deprecated": "1.21",
-      "removed": "1.24",
+      "removed": "1.23",
       "replacement": {
         "group": "storage.k8s.io",
         "version": "v1",
         "kind": "VolumeAttachment"
-      }
+      },
+      "removedInferred": true
     },
     {
       "group": "storage.k8s.io",
@@ -1834,7 +2027,13 @@
       "introduced": "1.30",
       "deprecated": "1.33",
       "removed": "1.35",
-      "removedInferred": true
+      "replacement": {
+        "group": "storagemigration.k8s.io",
+        "version": "v1",
+        "kind": "StorageVersionMigration"
+      },
+      "removedInferred": true,
+      "replacementDefaulted": true
     },
     {
       "group": "storagemigration.k8s.io",

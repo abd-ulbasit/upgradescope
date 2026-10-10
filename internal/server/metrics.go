@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -37,6 +38,8 @@ type serverMetrics struct {
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
 	ingest   *prometheus.CounterVec
+	// retention is the retention prune's series (retention.go).
+	retention *retentionMetrics
 }
 
 func newServerMetrics(s *Server) *serverMetrics {
@@ -56,7 +59,11 @@ func newServerMetrics(s *Server) *serverMetrics {
 			Help: "Snapshot pushes by result: accepted, duplicate, unauthorized, forbidden, conflict, invalid, too_large, error.",
 		}, []string{"result"}),
 	}
-	m.reg.MustRegister(m.requests, m.duration, m.ingest, clusterCollector{s},
+	m.retention = newRetentionMetrics()
+	if s.cfg.Retention > 0 {
+		m.retention.start(storeKind(s.cfg.Store))
+	}
+	m.reg.MustRegister(m.requests, m.duration, m.ingest, m.retention.failures, m.retention.deleted, m.retention, clusterCollector{s},
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
 }
@@ -156,6 +163,66 @@ var (
 	descClusterStale = prometheus.NewDesc("upgradescope_cluster_stale",
 		"1 when the cluster's agent has not pushed within the server's --stale-after, else 0.", []string{"cluster"}, nil)
 )
+
+// retentionMetrics are the retention series of the server's registry.
+type retentionMetrics struct {
+	failures *prometheus.CounterVec // by store kind
+	deleted  *prometheus.CounterVec // by table
+
+	mu          sync.Mutex
+	lastSuccess time.Time // zero until the first complete prune
+}
+
+var descRetentionLastSuccess = prometheus.NewDesc("upgradescope_retention_last_success_timestamp_seconds",
+	"Unix time of the last retention prune that completed. Absent until the first one does; only set with --retention.", nil, nil)
+
+func newRetentionMetrics() *retentionMetrics {
+	return &retentionMetrics{
+		failures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "upgradescope_retention_prune_failures_total",
+			Help: "Retention prunes that failed, by store (sqlite or postgres). A failed prune deleted what its committed batches did and resumes on the next run.",
+		}, []string{"store"}),
+		deleted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "upgradescope_retention_rows_deleted_total",
+			Help: "Rows retention deleted, by table (snapshots or evaluations), failed prunes' committed batches included.",
+		}, []string{"table"}),
+	}
+}
+
+// start creates the series at 0, so that rate() and increase() have a
+// first sample to compare with. Called only when retention is on.
+func (m *retentionMetrics) start(kind string) {
+	m.failures.WithLabelValues(kind)
+	m.deleted.WithLabelValues("snapshots")
+	m.deleted.WithLabelValues("evaluations")
+}
+
+func (m *retentionMetrics) succeeded(at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastSuccess = at
+}
+
+func (m *retentionMetrics) Describe(ch chan<- *prometheus.Desc) { ch <- descRetentionLastSuccess }
+
+func (m *retentionMetrics) Collect(ch chan<- prometheus.Metric) {
+	m.mu.Lock()
+	at := m.lastSuccess
+	m.mu.Unlock()
+	if at.IsZero() {
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(descRetentionLastSuccess, prometheus.GaugeValue, float64(at.UnixNano())/1e9)
+}
+
+// storeKind names s for metrics: "sqlite" or "postgres", or "unknown" for
+// a store that does not say.
+func storeKind(s store.Store) string {
+	if k, ok := s.(interface{ Kind() string }); ok {
+		return k.Kind()
+	}
+	return "unknown"
+}
 
 var verdicts = []engine.Verdict{engine.VerdictReady, engine.VerdictBlocked, engine.VerdictUnknown}
 

@@ -105,6 +105,119 @@ Inputs, outputs, annotations, use without code scanning, and ignore rules
 and baselines in the action:
 [action/README.md](https://github.com/abd-ulbasit/upgradescope/blob/main/action/README.md).
 
+## Who can turn the gate off
+
+On a `pull_request` the gate judges the pull request's own files, and
+everything that can suppress a finding is among them. **A pull request can
+suppress its own findings, and the gate then passes.** This is how any
+linter with an in-repository config or inline disable comments behaves, and
+it is not hidden: a suppressed finding is listed with its reason in the
+`SUPPRESSED` section and the `N suppressed` line of the table, in the step
+summary, and as a SARIF suppression, and the file that did it is in the
+diff. But the gate is a control against a careless change, not against an
+author who wants to get past it, until you pin the inputs below.
+
+| What the gate trusts | Where `scan` reads it | A pull request can change it |
+|---|---|---|
+| Ignore rules | the file `--config` (the Action's `config`) names; with none named, `.upgradescope.yaml` in the scan root, then at the repository root | by adding or editing that file. One `ignore: [{category: removed-api, reason: x}]` next to a manifest with a removed API turns `READY no` and exit 2 into `READY yes` and exit 0 |
+| Object annotations | `upgradescope.dev/ignore` with `ignore-reason`, on the objects being scanned; no flag turns them off | by adding the pair to the offending object (in a chart template, a rendered file or a patch) |
+| The baseline | the file `--baseline` (the Action's `baseline`) names | by committing a baseline that holds its own findings |
+| The workflow and the Action's inputs | `.github/workflows/` in the pull request's merge commit | by editing the file: `fail-on: never`, `allow-incomplete`, another `version`, or removing the step |
+
+To hold the gate against a pull request's author:
+
+1. **Take the config and the baseline from the base commit.** The action's
+   `config` and `baseline` are paths in the workspace, and the action does
+   not care which commit wrote them, so check the base commit out beside the
+   pull request and copy its two files over the pull request's. Naming the
+   config also stops `scan` looking for any other: a
+   `.upgradescope.yaml` the pull request adds in the scan root is not read.
+   The copy fails the step when the base has no such file, so commit a
+   config (`ignore: []` is a valid empty one) and a baseline first, or drop
+   the lines you don't use. A pull request that changes either is then
+   judged by the old rules, so accepting a finding takes a pull request of
+   its own that changes only the config or the baseline, reviewed by the
+   people who own them; the new rules apply after it merges.
+
+   Two details of the snippet matter. The copy is the **last step before the
+   gate**, and it deletes the destination first (`rm -f --`): a pull request
+   can commit `.upgradescope.yaml` as a symlink to a file that an earlier
+   step writes (the output of `helm template`, say), and a plain `cp` writes
+   through the symlink, after which that step overwrites the trusted content
+   with the pull request's own. Removing the link and copying afterwards
+   leaves a regular file that nothing else touches. And the Action's
+   `config` points at the copy in the workspace, not at
+   `trusted/.upgradescope.yaml`, because the config's file globs resolve
+   relative to the config's directory.
+
+   The snippet also assumes that no step the pull request controls can write
+   into `trusted/`. The one that runs the pull request's code, `helm
+   template`, writes only below its `--output-dir` (`rendered/<chart>/...`);
+   if you add a step that runs a script or a build from the pull request,
+   have it write elsewhere and keep it before the copy.
+
+```yaml
+on: pull_request
+jobs:
+  upgrade-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7            # the pull request (its merge commit)
+        with:
+          persist-credentials: false
+      - name: Clear the path the base commit goes to
+        run: rm -rf -- trusted               # a pull request may have committed one
+      - uses: actions/checkout@v7            # the base commit, only the two files
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          sparse-checkout: |
+            /.upgradescope.yaml
+            /upgradescope-baseline.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: helm template my-release ./chart --output-dir rendered
+      - name: Take the config and baseline from the base commit, last
+        run: |
+          rm -f -- .upgradescope.yaml upgradescope-baseline.json
+          cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
+      - uses: abd-ulbasit/upgradescope@v0.2.0
+        id: gate
+        with:
+          path: rendered
+          target: "1.37"
+          version: v0.2.0
+          config: .upgradescope.yaml           # named, so no other config is looked for
+          baseline: upgradescope-baseline.json
+```
+
+2. **Review the files that decide.** Put `.upgradescope.yaml`, the baseline
+   and `.github/workflows/` in `CODEOWNERS`, turn on "Require review from
+   Code Owners" in branch protection or a ruleset, and make the gate job a
+   required status check. For the workflow itself, which a pull request can
+   edit, a required workflow in an organization ruleset can run a workflow
+   file from another repository, which the pull request cannot change.
+3. **Watch the annotations.** They live in the manifests, so a `CODEOWNERS`
+   entry cannot single them out, and no setting turns them off. To fail
+   the job when any finding was suppressed by one, add this after the gate
+   step (the `jq` of a GitHub-hosted runner reads the report; keep the
+   workflow under review, as in step 2):
+
+```yaml
+      - if: ${{ !cancelled() && steps.gate.outputs.report-json != '' }}
+        run: jq -e '[.suppressed[]? | select(.source == "annotation")] | length == 0' "$REPORT"
+        env:
+          REPORT: ${{ steps.gate.outputs.report-json }}
+```
+
+The server's gate endpoint has the same boundary: the `config` it is sent
+and the manifests' annotations come from the request, so the pipeline that
+posts them decides what is suppressed.
+[Suppressions and baselines](../guides/suppressions-and-baselines.md#who-can-turn-the-gate-off)
+describes each input.
+
 ## The CLI in any CI
 
 ```sh
@@ -136,6 +249,10 @@ same. One case is not seen: the cluster lists its custom resources only at
 versions its own CRDs deprecate or do not serve, so live custom resources
 at a version that a posted CRD newly deprecates or stops serving are not
 judged.
+
+A `target` below 1.16, the oldest minor the knowledge base covers, is a 400
+that says to quote the version, not a verdict: YAML makes an unquoted
+`target: 1.30` the number 1.3, which would read ready.
 
 A `target` newer than the server's knowledge base (a cluster already on its
 newest minor, upgrading to the next) makes the verdict `unknown`, and an
