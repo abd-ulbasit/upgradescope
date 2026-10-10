@@ -69,6 +69,20 @@ name: release
 # the higher one's own run moves Latest, once it has attested. A Latest
 # moved by hand is therefore not put back by a run on a lower tag; only the
 # highest release's own run (a re-run of it) restores it.
+# A re-run of the goreleaser job for the release that is already Latest sends
+# make_latest=false for it again (GoReleaser edits the existing release).
+# GitHub's REST reference for updating a release (PATCH
+# /repos/{owner}/{repo}/releases/{release_id}) defines make_latest as
+# whether the release "should be set as the latest release" (true, false or
+# legacy, default true for a newly published release), and does not say what
+# false does to a release that is already Latest. This workflow does not
+# depend on either answer: if GitHub demotes it, Latest falls back to
+# whatever GitHub then computes (an older, attested release or the same one
+# by its legacy date-and-semver rule), and the closing step, which a re-run
+# reaches only after the attestation step succeeded, reads releases/latest
+# and sets it back to this release when this is the highest. A re-run whose
+# attestation fails leaves Latest wherever GitHub put it, never on a release
+# this run could not attest.
 # hack/release-newest_test.sh runs these steps against a stub gh and pins
 # the order.
 #
@@ -273,8 +287,11 @@ jobs:
         run: |
           hack/release-newest.sh published >"$RUNNER_TEMP/releases"
           highest=$(hack/release-newest.sh highest <"$RUNNER_TEMP/releases")
+          # Whether this run's release is the highest, by the same version
+          # comparison as every other step (not a string comparison of tags).
+          own=$(hack/release-newest.sh is-newest "$GITHUB_REF_NAME" <"$RUNNER_TEMP/releases")
           latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name) || latest=
-          if [ "$highest" != "$GITHUB_REF_NAME" ]; then
+          if [ "$own" != true ]; then
             # Another run's release: it is published, but only its own run
             # attests it, and Latest must not name a release without an
             # attestation. That run ends with this same step.
@@ -289,7 +306,7 @@ jobs:
           case "$want" in
             sha256:*) ;;
             *)
-              if [ "$highest" = "$GITHUB_REF_NAME" ]; then
+              if [ "$own" = true ]; then
                 echo "::error::no digest for $IMAGE:$highest"
                 exit 1
               fi

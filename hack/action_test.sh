@@ -175,6 +175,15 @@ case \$url in
     [ "\$code" -lt 400 ] || { echo "curl: (22) The requested URL returned error: \$code" >&2; exit 22; } ;;
   "$releases/download/"*)
     f="$work/rel/\${url#"$releases/download/"}"
+    # The rate-limit fallback asks for checksums.txt of a tag with -w
+    # %{http_code}, no -f, following the redirect: the status is the
+    # answer. STUB_PROBE_FAIL sets it for every tag.
+    if [ "\$fmt" = '%{http_code}' ]; then
+      code=200
+      if [ -n "\${STUB_PROBE_FAIL:-}" ]; then code=\$STUB_PROBE_FAIL; elif [ ! -f "\$f" ]; then code=404; fi
+      printf '%s' "\$code"
+      exit 0
+    fi
     if [ -n "\${STUB_CURL_RETRIES:-}" ]; then
       # A transient failure under --retry: a line per retry, then the
       # attempts' errors, the last one being curl's final error.
@@ -660,14 +669,42 @@ done
 # "unpublished": the step cannot tell, and says so. That includes a 2xx or 3xx
 # answer (a 301 after a repository rename or transfer; the probe follows no
 # redirect): curl -f exits 0 for it, so only the status can tell it from 200.
-for st in 403 503 301 204; do
+for st in 503 301 204; do
   run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_API_FAIL=$st
   expect "a releases/tags API error ($st) fails: it cannot tell whether v9.9.10 is published" 1 \
     "cannot tell whether the release for v9.9.10, a tag at the action ref $sha_two, is published"
   has "...naming the HTTP status ($st)" "$work/out" "failed with HTTP $st)"
   hasnt "...and does not fall back to latest ($st)" "$work/calls" "$releases/latest"
+  hasnt "...and does not ask for checksums.txt instead ($st: not a rate limit)" "$work/calls" "checksums.txt"
   installed_nothing && ok "...and installs nothing ($st)" || fail "...and installs nothing ($st)" "$work/out"
 done
+# A rate limit (403 or 429; 60 requests an hour for the anonymous probe on
+# GitHub Enterprise Server and GHE.com) does not fail the step: whether a
+# release is published is then asked of its checksums.txt download, which
+# every published release has and which has no such limit. Anywhere the
+# probe is rate limited, on github.com or off it.
+for st in 403 429; do
+  for srv in https://github.com https://ghes.example.com; do
+    run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_API_FAIL=$st GITHUB_SERVER_URL=$srv
+    expect "an API rate limit ($st, $srv) falls back to checksums.txt: v9.9.10 is not published, v9.9.9 is" 0 \
+      "version defaults to v9.9.9, the release at the action ref $sha_two (v9.9.10, newer tags at the same commit, have no published release yet)"
+    has "...the unpublished tag was asked for by its checksums.txt ($st, $srv)" "$work/calls" "curl $releases/download/v9.9.10/checksums.txt"
+    has "...and so was the published one ($st, $srv)" "$work/calls" "curl $releases/download/v9.9.9/checksums.txt"
+    hasnt "...without the latest release ($st, $srv)" "$work/calls" "$releases/latest"
+  done
+  run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_unpub STUB_API_FAIL=$st STUB_LATEST=v9.9.4
+  expect "an API rate limit ($st) and tags with no release: the not-published failure, not a rate-limit error" 1 \
+    "the release for v9.9.12-rc.1, v9.9.11, the tag(s) at the action ref $sha_unpub, is not published yet"
+  hasnt "...and no fall back to latest ($st)" "$work/calls" "$releases/latest"
+  run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_API_FAIL=$st STUB_PROBE_FAIL=503
+  expect "an API rate limit ($st) and a checksums.txt request that fails too cannot tell, and says both statuses" 1 \
+    "failed with HTTP $st, and so did the request for $releases/download/v9.9.10/checksums.txt that stands in for it on a rate limit: HTTP 503)"
+  installed_nothing && ok "...and installs nothing ($st, both failed)" || fail "...and installs nothing ($st, both failed)" "$work/out"
+  run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_API_FAIL=$st STUB_PROBE_FAIL=301
+  expect "...a redirect that does not end in 200 is no answer either ($st, checksums.txt answers 301)" 1 "HTTP 301)"
+done
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_API_FAIL=403 STUB_PROBE_FAIL=200
+has "...and a checksums.txt that answers 200 says published (the newest tag v9.9.10 is chosen)" "$work/out" "version defaults to v9.9.10, the release at the action ref $sha_two"
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc_tag STUB_LATEST=v9.9.4
 warned "an annotated tag's own object is not the commit it tags" "no release tag"
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_float STUB_LATEST=v9.9.4
@@ -920,6 +957,7 @@ done
 # No verifier: fail, and say how to opt out.
 verifier= run install "$work/stub-curl:"
 expect "no gh and no cosign fails the step" 1 "verify-provenance is true, but neither gh nor cosign is on PATH to verify $asset (v9.9.9)"
+has "...saying gh $gh_min or later (or cosign) is needed" "$work/out" "gh $gh_min or later (or cosign) is needed to verify provenance"
 has "the failure says how to opt out" "$work/out" "or set verify-provenance: false to install on the checksum alone"
 installed_nothing && ok "no verifier: nothing installed" || fail "no verifier: nothing installed" "$work/out"
 
@@ -972,6 +1010,86 @@ run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.10
 expect "v0.2.0-rc.10 (numerically after rc.2) is verified" 0 "provenance OK: $asset (v0.2.0-rc.10)"
 verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
 expect "v0.2.0-rc.2 is verified with cosign without gh" 0 "provenance OK: checksums.txt (v0.2.0-rc.2) is signed by"
+
+# CI's action job proves provenance on the real v0.2.0-rc.2 with a gh spy
+# and a check of the spy's log, both scripts in ci.yml. They cannot run
+# offline for real, so run them here: the spy step's script as written, in
+# front of the stub gh; run.sh through it; then the check's script against
+# the log it recorded. The action asks gh for `attestation verify --help`
+# once and then runs one verify, so the log has exactly those two lines
+# (a check that counted one line failed CI on both runners, and nothing
+# here saw it).
+ci_step() { # ci_step <step name>: that step's run: script from ci.yml
+  awk -v name="$1" '
+    $0 == "      - name: " name { on = 1; next }
+    on && /^        run: \|$/ { run = 1; next }
+    on && !run && /^      - / { exit }
+    run && /^          / { sub(/^          /, ""); print; next }
+    run && /^$/ { print ""; next }
+    run { exit }' "$ci"
+}
+sim="$work/ci-sim"
+mkdir -p "$sim"
+ci_step "record the gh calls of the next step" >"$sim/spy.sh"
+ci_step "v0.2.0-rc.2 verified with gh attestation verify" >"$sim/check.sh"
+if [ -s "$sim/spy.sh" ] && [ -s "$sim/check.sh" ]; then ok "ci.yml's gh spy and its check are found"; else
+  fail "ci.yml's gh spy ('record the gh calls of the next step') and its check ('v0.2.0-rc.2 verified with gh attestation verify') are found"
+fi
+# ci_check <log>: the check's script, with RUNNER_TEMP at a fresh job's
+# directory holding <log> as gh-calls.log; its exit status.
+ci_check() {
+  local c=0
+  mkdir -p "$sim/job"
+  cp "$1" "$sim/job/gh-calls.log"
+  env -i PATH="$PATH" RUNNER_TEMP="$sim/job" bash "$sim/check.sh" >"$work/out" 2>&1 || c=$?
+  return $c
+}
+rm -rf "$sim/job"
+mkdir -p "$sim/job" && : >"$sim/job/path"
+env -i PATH="$work/stub-gh:$work/sys" RUNNER_TEMP="$sim/job" GITHUB_PATH="$sim/job/path" bash "$sim/spy.sh" >"$work/out" 2>&1 || fail "ci.yml's gh spy step runs" "$work/out"
+tmp="$sim/job"
+same_job=1 verifier="$sim/job/gh-spy:$work/stub-gh:" run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2
+unset same_job
+expect "the action installs v0.2.0-rc.2 through ci.yml's gh spy" 0 "provenance OK: $asset (v0.2.0-rc.2) was built by"
+if [ "$(wc -l <"$sim/job/gh-calls.log" | tr -d ' ')" = 2 ] &&
+  [ "$(sed -n 1p "$sim/job/gh-calls.log")" = "rc=0 gh attestation verify --help" ] &&
+  [[ "$(sed -n 2p "$sim/job/gh-calls.log")" == "rc=0 gh attestation verify $sim/job/upgradescope-dl."*"/$asset --repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml --source-ref refs/tags/v0.2.0-rc.2 --deny-self-hosted-runners" ]]; then
+  ok "the spy records the --help probe, then one verify"
+else
+  fail "the spy records the --help probe, then one verify" "$sim/job/gh-calls.log"
+fi
+if ci_check "$sim/job/gh-calls.log"; then ok "ci.yml's check accepts the gh calls the action makes"; else
+  fail "ci.yml's check accepts the gh calls the action makes" "$work/out"
+fi
+# The check must also refuse what is wrong. v/h/f: the lines of that log.
+v=$(sed -n 2p "$sim/job/gh-calls.log")
+h="rc=0 gh attestation verify --help"
+ci_refuses() { # ci_refuses <name> <log text>
+  printf '%s' "$2" >"$sim/bad.log"
+  if ci_check "$sim/bad.log"; then fail "ci.yml's check refuses $1" "$sim/bad.log"; else ok "ci.yml's check refuses $1"; fi
+}
+ci_refuses "a log with no --help probe (the verify alone)" "$v
+"
+ci_refuses "a verify followed by the --help" "$v
+$h
+"
+ci_refuses "a failed --help" "rc=1 gh attestation verify --help
+$v
+"
+ci_refuses "a second verify" "$h
+$v
+$v
+"
+ci_refuses "a verify that failed" "$h
+rc=1${v#rc=0}
+"
+ci_refuses "a verify for another tag" "$h
+${v/v0.2.0-rc.2/v0.2.0-rc.1}
+"
+ci_refuses "a verify without --deny-self-hosted-runners" "$h
+${v% --deny-self-hosted-runners}
+"
+ci_refuses "no log lines" ""
 # The SHA cases above install rc.2 as published; from here on it is tampered.
 tamper v0.2.0-rc.2
 run install "$work/stub-curl:" INPUT_VERSION=v0.2.0-rc.2

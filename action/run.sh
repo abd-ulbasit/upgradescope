@@ -151,18 +151,26 @@ newest_first() {
 # release_published <tag>: whether this repository has a published release
 # for tag, from the releases/tags/<tag> API (a draft, or a tag whose release
 # workflow has not published yet, answers 404). 0: published (200); 1: 404; 2:
-# the API could not be asked or answered otherwise (no network, a rate limit,
-# a 5xx after the retries, a 2xx other than 200 or a 3xx: curl -f exits 0
-# for those, so the status decides); api_status then holds curl's HTTP status
-# (000: no answer). GH_TOKEN, the workflow's github.token when the install step
+# the API could not be asked or answered otherwise (no network, a 5xx after
+# the retries, a 2xx other than 200 or a 3xx: curl -f exits 0 for those, so
+# the status decides); api_status then holds curl's HTTP status (000: no
+# answer). A 403 or a 429 is the rate limit (60 requests an hour per address
+# when anonymous, as on GitHub Enterprise Server and GHE.com): the API cannot
+# say, so checksums.txt of the release is asked for instead,
+# $releases/download/<tag>/checksums.txt, which every published release has
+# and which is not rate limited like the API (200 after the redirect to the
+# asset: published; 404: not; anything else: 2, with probe_status holding
+# that status). GH_TOKEN, the workflow's github.token when the install step
 # passes it, raises the rate limit that GitHub-hosted runners share; it goes
 # to api.github.com over https, with no redirect followed, and only when the
 # runner is on github.com (GITHUB_SERVER_URL unset or https://github.com): on
 # GitHub Enterprise Server or GHE.com the token belongs to the enterprise
 # host, which api.github.com rejects (401), so the probe is anonymous there.
 api_status=
+probe_status=
 release_published() {
   local rc=0 auth=()
+  probe_status=
   case ${GITHUB_SERVER_URL-https://github.com} in
     https://github.com | https://github.com/)
       [ -z "${GH_TOKEN-}" ] || auth=(-K -) ;;
@@ -178,6 +186,16 @@ release_published() {
   # only a 200 is "published".
   [ "$rc" -eq 0 ] && [ "$api_status" = 200 ] && return 0
   [ "$api_status" = 404 ] && return 1
+  case $api_status in
+    403 | 429)
+      # No -f: the status is the answer. The download redirects to the asset
+      # host, so the redirect is followed, https only.
+      probe_status=$(curl -sS --retry 3 --proto '=https' --proto-redir '=https' -L -o /dev/null -w '%{http_code}' \
+        "$releases/download/$1/checksums.txt" 2>/dev/null) || probe_status=000
+      [ "$probe_status" = 200 ] && return 0
+      [ "$probe_status" = 404 ] && return 1
+      ;;
+  esac
   return 2
 }
 
@@ -308,7 +326,7 @@ provenance() {
     logged "$dl/verify.log"
     die "provenance check failed: checksums.txt for $tag is not signed by $workflow at refs/tags/$tag (cosign verify-blob); nothing was installed"
   fi
-  die "verify-provenance is true, but neither gh nor cosign is on PATH to verify $asset ($tag); nothing was installed. GitHub-hosted runners have gh; elsewhere install gh or cosign (sigstore/cosign-installer) before this step, or set verify-provenance: false to install on the checksum alone"
+  die "verify-provenance is true, but neither gh nor cosign is on PATH to verify $asset ($tag); nothing was installed. gh $gh_min or later (or cosign) is needed to verify provenance: GitHub-hosted runners have gh; elsewhere install gh (preferred) or cosign (sigstore/cosign-installer) before this step, or set verify-provenance: false to install on the checksum alone"
 }
 
 # no_archive <what> <error file>: no release archive could be had (none for
@@ -410,7 +428,7 @@ install() {
         case $prc in
           0) tag=$t && break ;;
           1) unpublished="$unpublished${unpublished:+, }$t" ;;
-          *) die "cannot tell whether the release for $t, a tag at the action ref $sha, is published (the GitHub API request https://api.github.com/repos/$repo/releases/tags/$t failed with HTTP ${api_status:-000}); nothing was installed. Set version: to a published release (version: vX.Y.Z) and retry" ;;
+          *) die "cannot tell whether the release for $t, a tag at the action ref $sha, is published (the GitHub API request https://api.github.com/repos/$repo/releases/tags/$t failed with HTTP ${api_status:-000}${probe_status:+, and so did the request for $releases/download/$t/checksums.txt that stands in for it on a rate limit: HTTP $probe_status}); nothing was installed. Set version: to a published release (version: vX.Y.Z) and retry" ;;
         esac
       done
       if [ -n "$tag" ]; then

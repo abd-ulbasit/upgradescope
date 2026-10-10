@@ -61,7 +61,18 @@ Pick how the gate moves:
   API answers with an error), the step fails too, since it cannot tell, and
   names the HTTP status. The lookup sends `github.token` only on github.com
   runners; on GitHub Enterprise Server or GHE.com it is anonymous, since
-  api.github.com rejects an enterprise token. If
+  api.github.com rejects an enterprise token. **Rate limit:** an anonymous
+  request to api.github.com is limited to 60 an hour per address, shared by
+  everything on that address (all the jobs of a self-hosted runner's network,
+  and every GHES or GHE.com runner behind one NAT), and one SHA-pinned
+  install makes one request per tag at the commit. When the API answers 403
+  or 429, the action asks for that tag's `checksums.txt` release download
+  instead (every published release has one, and it is not subject to the API
+  limit): a 200 means published, a 404 means not published yet. Only if that
+  fails too does the step fail, naming both HTTP statuses. Any other API error
+  (a 5xx, an unexpected redirect) fails without the fallback. A runner that
+  can reach neither api.github.com nor github.com downloads cannot install
+  from github.com at all. If
   no release tag points at the commit, or the tag lookup fails (no `git` on
   the runner, no network), it runs `latest` and logs one `::warning` that
   says which. At any other ref (a branch, `v0`) an unset `version`
@@ -319,10 +330,12 @@ inputs above.
 | `security-events: write` | Only for `github/codeql-action/upload-sarif`. |
 | `actions: read` | Only for `upload-sarif` in private repositories. |
 
-The action downloads release assets anonymously. Its one GitHub API call is
+The action downloads release assets anonymously. Its GitHub API calls are
 `gh attestation verify`, which reads this repository's public attestations
-with `github.token`; the install step passes that token to gh as
-`GH_TOKEN`, and nothing else uses it. That needs no `attestations:`
+with `github.token`, and, for a SHA-pinned install with `version` unset, one
+`releases/tags/<tag>` lookup per tag at the commit; the install step passes
+`github.token` to both as `GH_TOKEN` (the lookup sends it only on github.com
+runners), and nothing else uses it. That needs no `attestations:`
 permission in your workflow: the permission scopes the token on your own
 repository, and this repository's attestations are public (on 2026-10-09
 the attestations endpoint answered an unauthenticated request for

@@ -297,6 +297,13 @@ want_rec "the first stable release, with v0.1.1 as Latest: v0.2.0 is made Latest
   "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.1.1 v0.2.0 v0.2.0-rc.2:pre
 want_rec "no Latest release yet: v0.2.0 is made Latest" v0.2.0 "" sha256:aaa \
   "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.2.0 v0.2.0-rc.2:pre
+# Whether this run's release is the highest is decided by the version
+# comparison every other step uses, not by comparing tag strings: a tag
+# spelled v0.02.0 is the version of the published v0.2.0, so it is the
+# highest and its run moves Latest (a string comparison read it as another
+# run's release and left Latest alone).
+want_rec "a tag spelled v0.02.0 is the version of the published v0.2.0: it is the highest, Latest moves" v0.02.0 v0.1.1 sha256:aaa \
+  "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.1.1 v0.2.0
 # A higher release racing this one: published, its attestation and image not
 # there yet. Its own run attests it and then moves Latest and :latest; this
 # run must move neither (#304: a Latest set here could name a release whose
@@ -428,8 +435,10 @@ else
   fail "the step that sets make_latest=true is not '$name'"
 fi
 # Nowhere else in the workflow moves Latest.
-if [ "$(nonc "$wf" | grep -cE 'make_latest *[=:]')" = 1 ]; then ok "release.yml sets make_latest in exactly one place"; else
-  fail "release.yml mentions make_latest outside the closing step" "$work/err"
+nonc "$wf" | grep -nE 'make_latest *[=:]' >"$work/mlat" || true
+if [ "$(wc -l <"$work/mlat" | tr -d ' ')" = 1 ]; then ok "release.yml sets make_latest in exactly one place"; else
+  echo "(want exactly one non-comment line mentioning make_latest; got $(wc -l <"$work/mlat" | tr -d ' '))" >>"$work/mlat"
+  fail "release.yml mentions make_latest other than once, in the closing step" "$work/mlat"
 fi
 # A failed attest step: every later step without a status function (if:
 # always(), failure(), cancelled()) is skipped, and so is a step whose job

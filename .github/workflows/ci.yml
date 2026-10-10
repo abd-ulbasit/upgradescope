@@ -665,7 +665,11 @@ jobs:
       # this job's token, then install the archive. A later step cannot read
       # an earlier one's log, so a gh ahead of the runner's on PATH records
       # each call the action makes (arguments and exit status) for the check
-      # after it.
+      # after it. The action asks gh for `attestation verify --help` once
+      # (the capability probe: every flag it passes must be listed), then
+      # runs one verify: exactly two calls, in that order. hack/action_test.sh
+      # runs the scripts of the spy step and of the check against run.sh's gh
+      # path, so they cannot drift from what the action does.
       - name: record the gh calls of the next step
         run: |
           set -euo pipefail
@@ -688,7 +692,7 @@ jobs:
           target: '1.36'
           fail-on: never # this step tests the install; the gate is tested above and below
           version: v0.2.0-rc.2
-      - name: v0.2.0-rc.2 verified with gh attestation verify, then installed from its archive
+      - name: v0.2.0-rc.2 verified with gh attestation verify
         run: |
           set -uo pipefail
           fail() { echo "::error::$*"; exit 1; }
@@ -700,14 +704,20 @@ jobs:
             *) fail "unexpected runner $(uname -s)/$(uname -m)" ;;
           esac
           cat "$RUNNER_TEMP/gh-calls.log" || fail "the action ran no gh"
-          [ "$(wc -l < "$RUNNER_TEMP/gh-calls.log")" -eq 1 ] || fail "the action ran gh more than once"
+          [ "$(wc -l < "$RUNNER_TEMP/gh-calls.log")" -eq 2 ] || fail "the action ran gh other than twice (--help once, then one verify)"
+          [ "$(sed -n 1p "$RUNNER_TEMP/gh-calls.log")" = "rc=0 gh attestation verify --help" ] \
+            || fail "the action's first gh call was not a passing 'gh attestation verify --help'"
           want="rc=0 gh attestation verify $RUNNER_TEMP/upgradescope-dl."
           want2="/$asset --repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml --source-ref refs/tags/v0.2.0-rc.2 --deny-self-hosted-runners"
-          got="$(cat "$RUNNER_TEMP/gh-calls.log")"
+          got="$(sed -n 2p "$RUNNER_TEMP/gh-calls.log")"
           case "$got" in
             "$want"*"$want2") ;;
             *) fail "want one passing '${want}XXXXXX$want2'" ;;
           esac
+      - name: v0.2.0-rc.2 installed from its archive
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; exit 1; }
           got="$(command -v upgradescope)"
           [ "$got" = "$RUNNER_TEMP/upgradescope-bin/upgradescope" ] \
             || fail "upgradescope resolved to '$got', not the release archive"
