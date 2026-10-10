@@ -233,13 +233,13 @@ func TestScanNoKubeconfigNamesPathsAndFilesAlternative(t *testing.T) {
 // A mistyped subcommand prints its suggestion on lines of its own (#338)
 // with a typed error, and the typed name is still escaped (#245).
 func TestUnknownCommandLayout(t *testing.T) {
-	run := func(arg string) error {
+	run := func(args ...string) error {
 		root := Root()
-		root.SetArgs([]string{arg})
+		root.SetArgs(args)
 		var out bytes.Buffer
 		root.SetOut(&out)
 		root.SetErr(&out)
-		return root.Execute()
+		return Execute(root)
 	}
 	err := run("scann")
 	want := "unknown command \"scann\" for \"upgradescope\"\n\nDid you mean this?\n\tscan"
@@ -252,6 +252,33 @@ func TestUnknownCommandLayout(t *testing.T) {
 	// Tests and callers that read the error itself still find cobra's text.
 	if !strings.Contains(err.Error(), "unknown command \"scann\" for \"upgradescope\"") {
 		t.Errorf("Error() = %q", err.Error())
+	}
+
+	// The usual way to mistype a subcommand is with its flags after it: the
+	// root has none of them, yet the refusal is still the unknown command
+	// with its suggestion, not an unknown flag (#338).
+	for _, args := range [][]string{
+		{"scann", "--target", "1.36", "--files", "x"},
+		{"scann", "--target=1.36"},
+		{"scann", "-o", "json"},
+		{"--target", "1.36", "scann"},
+		{"scann", "--files", ".", "--bogus"},
+	} {
+		if got := ErrorText(run(args...)); got != want {
+			t.Errorf("%q: ErrorText = %q, want %q", args, got, want)
+		}
+		if ExitCode(run(args...)) != 1 {
+			t.Errorf("%q: exit = %d, want 1", args, ExitCode(run(args...)))
+		}
+	}
+
+	// A mistyped flag of the root itself is still a flag error, with the
+	// usage pointer, not an unknown command.
+	for _, args := range [][]string{{"--bogus"}, {"-o", "json"}} {
+		got := ErrorText(run(args...))
+		if strings.Contains(got, "unknown command") || !strings.Contains(got, "unknown") || !strings.Contains(got, "run 'upgradescope --help' for usage") {
+			t.Errorf("%q: ErrorText = %q, want an unknown flag error", args, got)
+		}
 	}
 
 	// No suggestion, no suggestion block.

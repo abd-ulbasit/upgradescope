@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -107,18 +108,44 @@ func (e *unknownCommandError) text() string {
 	return b.String()
 }
 
-// rootArgs refuses an argument that is not a subcommand, as cobra does for
-// a root command with subcommands and no Args of its own, but with the
-// typed unknownCommandError.
-func rootArgs(cmd *cobra.Command, args []string) error {
-	if len(args) == 0 {
+// Execute runs root and returns its error. The root stays non-runnable, so
+// cobra finds an unknown command before it parses any flag and a mistyped
+// subcommand followed by that subcommand's flags ("scann --target 1.37") is
+// still refused as an unknown command, not as an unknown flag of the root.
+// That refusal is cobra's untyped error; Execute turns it into the typed
+// unknownCommandError, so that ErrorText can print its layout (#338).
+func Execute(root *cobra.Command) error {
+	cmd, err := root.ExecuteC()
+	if err != nil && cmd == root {
+		if typed := asUnknownCommand(root, err); typed != nil {
+			return typed
+		}
+	}
+	return err
+}
+
+// asUnknownCommand reads the typed name out of cobra's "unknown command %q
+// for %q" refusal of the root and rebuilds it with the suggestions as data.
+// It returns nil for any other error.
+func asUnknownCommand(root *cobra.Command, err error) *unknownCommandError {
+	const prefix = "unknown command "
+	rest, ok := strings.CutPrefix(err.Error(), prefix)
+	if !ok {
+		return nil
+	}
+	quoted, qerr := strconv.QuotedPrefix(rest)
+	if qerr != nil {
+		return nil
+	}
+	name, qerr := strconv.Unquote(quoted)
+	if qerr != nil {
 		return nil
 	}
 	var suggestions []string
-	if !cmd.DisableSuggestions {
-		suggestions = cmd.SuggestionsFor(args[0])
+	if !root.DisableSuggestions {
+		suggestions = root.SuggestionsFor(name)
 	}
-	return &unknownCommandError{name: args[0], path: cmd.CommandPath(), suggestions: suggestions}
+	return &unknownCommandError{name: name, path: root.CommandPath(), suggestions: suggestions}
 }
 
 func Root() *cobra.Command {
@@ -142,13 +169,6 @@ a fleet with 'serve'.`,
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		// Args is only consulted for a runnable command, and cobra's own
-		// check of the unknown command is an untyped error (see
-		// unknownCommandError); with no argument this is the help, as a
-		// command that is not runnable prints it.
-		Args:                       rootArgs,
-		SuggestionsMinimumDistance: 2, // cobra's default, which SuggestionsFor only applies when set
-		RunE:                       func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	root.SetVersionTemplate(`{{ upgradescopeVersion }}`)
 	// Usage is silenced (an error prints one line, not the whole usage), so
