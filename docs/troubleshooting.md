@@ -128,20 +128,33 @@ To accept a finding for now, with a reason and an expiry, use an
   #228), and `--pod-pass-max-age` a positive duration; 0 does not mean the
   default (3 and 1h). The chart's `agent.podPassEvery` and
   `agent.podPassMaxAge` are refused at `helm install` for the same values.
-- **The agent logs `pod-pass-max-age is at or below the interval`, and
-  every tick lists every pod.** A `--pod-pass-max-age` at or below
-  `--interval` (with `--pod-pass-every` above 1) is not refused, but it
-  cannot work as set: the last full pass is about one interval old by the
-  next tick, so that tick finds it too old and lists every pod, and only
-  a tick that the jitter (up to 10% either way) brings early can still
-  reuse it. The request savings of [the pod pass
+- **The agent logs `pod-pass-max-age is too short for pod-pass-every`, and
+  some or all ticks list every pod.** A `--pod-pass-max-age` that is
+  not above 1.1 times `--interval` times (`--pod-pass-every` minus one),
+  the `mustExceed` field of the warning, is not refused, but it cannot work
+  as set. Ticks are spaced by the interval with a jitter of 10% either way
+  (0.9 to 1.1 times the interval), and the sleep starts after the tick
+  ends, so the spacing also holds the tick's run time. A pass is reused
+  only while it is younger than the maximum age, and the last reuse after a
+  pass (the one `--pod-pass-every` minus one ticks later) is about that
+  many spacings old, up to 1.1 times the interval plus the run time each.
+  At or below the interval the pass is too old by the next tick, so only a
+  tick that the jitter brings early reuses it; between the interval and the
+  floor the first reuses work and the last ones depend on the draw. The
+  request savings of [the pod pass
   setting](operations/scale.md#the-pod-pass-every-nth-tick-228) are then
-  not there, and `--pod-pass-every` has no effect. Raise
-  `--pod-pass-max-age` above the interval times `--pod-pass-every` minus
-  one (at a 30-minute interval the default hour allows one reuse, and at
-  an hour or more none), or set `--pod-pass-every=1` (`agent.podPassEvery=1`)
-  if reading every pod on every tick is what you want, which also ends the
-  warning.
+  partly or wholly not there. Raise `--pod-pass-max-age` above the
+  `mustExceed` value, and leave room on top of it for the ticks' run
+  time, which the floor cannot know and which is a few seconds each at
+  2,001 nodes. Exceeding the floor is needed and, because of that run
+  time, not quite enough: at `--interval 10m --pod-pass-every 3` the floor
+  is 22 minutes, and 21 minutes fails on the second reuse whenever the
+  two spacings and their run time come to 21 minutes or more; 25 minutes
+  works unless ticks take more than a minute each. At a 30-minute
+  interval the default hour is under the floor of 66 minutes, so the last
+  of the two reuses is lost on the ticks the jitter spaces widely. Or set
+  `--pod-pass-every=1` (`agent.podPassEvery=1`) if reading every pod on
+  every tick is what you want, which also ends the warning.
 - **An add-on I just installed or upgraded is missing, or still shows its
   old version.** The agent lists the pods outside `kube-system` only every
   `--pod-pass-every` ticks (3 by default, so about every 30 minutes at the

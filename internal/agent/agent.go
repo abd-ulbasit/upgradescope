@@ -246,15 +246,29 @@ func forceSyncInEffect(forceSync, interval time.Duration) time.Duration {
 	return forceSync
 }
 
-// podPassAgeBelowInterval reports a --pod-pass-max-age that is at or below
-// the interval while --pod-pass-every would reuse a pass: ticks come about
-// one interval apart (the jitter is 10% either way, and the sleep follows
-// the tick), so the last full pass is as old as the max age by the next
-// tick, and whether a tick reuses it depends on the jitter. Defaults must
-// be applied. A max age above the interval allows one reuse; to allow
-// every-1 of them it must exceed the interval times every-1 (#228).
-func podPassAgeBelowInterval(cfg Config) bool {
-	return cfg.PodPassEvery > 1 && cfg.PodPassMaxAge <= cfg.Interval
+// podPassMaxAgeFloor is the age a --pod-pass-max-age must exceed for
+// --pod-pass-every to be able to reuse a pass on every one of the
+// every-1 ticks after it: every-1 of the longest spacing the jitter draws
+// between two ticks, 11/10 of the interval. It is a floor and not enough:
+// the sleep starts after a tick ends, so each spacing also holds that
+// tick's run time, which the floor leaves out because the agent does not
+// know it ahead. 0 when every is 1 or less, which reuses nothing.
+func podPassMaxAgeFloor(interval time.Duration, every int) time.Duration {
+	if every <= 1 {
+		return 0
+	}
+	return time.Duration(every-1) * jitterBy(interval, int64(interval/5))
+}
+
+// podPassMaxAgeTooShort reports a --pod-pass-max-age that is not above
+// podPassMaxAgeFloor while --pod-pass-every would reuse a pass. At or below
+// the interval the last full pass is as old as the max age by the next
+// tick, so only a tick the jitter brings early reuses it; between the
+// interval and the floor some reuses work and the last ones depend on the
+// jitter draws (and on the ticks' own run time, on top of the floor).
+// Defaults must be applied (#228).
+func podPassMaxAgeTooShort(cfg Config) bool {
+	return cfg.PodPassEvery > 1 && cfg.PodPassMaxAge <= podPassMaxAgeFloor(cfg.Interval, cfg.PodPassEvery)
 }
 
 // applyDefaults fills zero values and rejects invalid combinations.
@@ -847,9 +861,11 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 		log.Warn("force-sync-every is at or below the interval: an unchanged inventory is pushed every tick, as the agent pushes at most once a tick",
 			"forceSyncEvery", asked.String(), "interval", cfg.Interval.String(), "inEffect", cfg.ForceSyncEvery.String())
 	}
-	if podPassAgeBelowInterval(cfg) {
-		log.Warn("pod-pass-max-age is at or below the interval: the last full pass is that old by the next tick, so the pods outside kube-system are listed on every tick (but for a tick the jitter brings early) and pod-pass-every has no effect; raise pod-pass-max-age above the interval times pod-pass-every, or set pod-pass-every to 1 to say that is meant",
-			"podPassMaxAge", cfg.PodPassMaxAge.String(), "interval", cfg.Interval.String(), "podPassEvery", cfg.PodPassEvery)
+	if podPassMaxAgeTooShort(cfg) {
+		floor := podPassMaxAgeFloor(cfg.Interval, cfg.PodPassEvery)
+		log.Warn("pod-pass-max-age is too short for pod-pass-every: the ticks after a full pass can be as far as 1.1 times the interval apart, plus the time a tick takes, so a pass is not reliably reused for pod-pass-every minus one of them (not at all at or below the interval, but by a tick the jitter brings early) and the pods outside kube-system are listed on ticks that pod-pass-every would reuse; raise pod-pass-max-age above mustExceed plus the run time of the ticks in between (a few seconds each at 2,001 nodes), or set pod-pass-every to 1 to say that listing them every tick is meant",
+			"podPassMaxAge", cfg.PodPassMaxAge.String(), "interval", cfg.Interval.String(), "podPassEvery", cfg.PodPassEvery,
+			"mustExceed", floor.String())
 	}
 	obs := newObserver(log, k, cfg.Interval)
 	healthAddr := ""

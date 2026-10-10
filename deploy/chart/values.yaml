@@ -98,9 +98,13 @@ agent:
   # -- List every pod again when the last full pass is this old, whatever
   # podPassEvery says (agent --pod-pass-max-age): a Go duration of at least
   # 1m. A bound on how stale add-on evidence can be on a long interval, where
-  # podPassEvery ticks are longer than this. At or below the agent interval
-  # (agent.interval) whether a tick reuses a pass depends on the tick jitter,
-  # so almost every tick lists every pod; the agent logs a warning at start.
+  # podPassEvery ticks are longer than this. To reuse a pass on all of the
+  # podPassEvery-1 ticks after it, it must exceed 1.1 times the agent interval
+  # (agent.interval) times that many, plus the ticks' own run time (ticks are
+  # spaced by the interval with 10% jitter, and the sleep follows the tick);
+  # below that the agent logs a warning at start and lists every pod on the
+  # ticks that come late, and at or below the interval on all but a tick the
+  # jitter brings early.
   podPassMaxAge: 1h
   # -- Name of the ClusterReadiness object the agent manages: an RFC 1123
   # subdomain (dot-separated labels of lowercase letters, digits and -, each

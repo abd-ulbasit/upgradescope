@@ -43,13 +43,27 @@ quote them.
   (3.3 on the wire) in 4.4 s and 3.4 CPU-seconds. The requests are those
   of the earlier run at `9810fb6` (below); its time and CPU are not
   comparable, because this run was made with the ThinkPad's load average
-  at 8.5 to 11.9 (4 threads), and that run took 3.7 s, 3.0 CPU-seconds and
-  3.1 MiB on the wire. The numbers were measured before `8ca7e786` (a
+  at 8.5 to 11.9 (4 threads), and that run took 3.7 s and 3.0 CPU-seconds.
+  The wire bytes (3.3 MiB against 3.1) differ by fill, not by load: run 2
+  of the same day, on the same fill with `--pod-pass-every=1`, read 3.3 MiB
+  too (3.1 on one tick). The numbers were measured before `8ca7e786` (a
   change in the Helm releases or GitOps charts that name an add-on forces a
-  pass) and still hold at its head: the fill's charts (`chart-rel-NNNN`)
-  name no registry add-on, so the signature that trigger compares is empty
-  on every tick and the requests are unchanged. That was checked from the
-  seed (`hack/bench/seed/helm.go`) and the registry, not re-measured. The mean over a
+  pass) and before `81761afd` (a tick that lists every pod drops the held
+  pass before its first list) and still hold at `daf513a4`, the head of the
+  branch before this follow-up (checked, not re-measured). Of the commits in between, only
+  those two change what a tick does; the others are documentation, the
+  agent's start-up warning and the dashboard. For `8ca7e786`: the fill's
+  charts (`chart-rel-NNNN`) name no registry add-on, so the signature
+  that trigger compares is empty on every tick and the requests are
+  unchanged (checked from the seed, `hack/bench/seed/helm.go`, and the
+  registry). For `81761afd`, which moves the old pass's release from after
+  the first pod list to before it: at this fill the held pass is about
+  300 distinct (namespace, image) pairs (pod i is in namespace i%100 and
+  runs image i%12, so the pairs repeat with period lcm(100, 12) = 300), plus 4
+  pairs of add-on images and 4 labelled pods of the add-on pods (every 500th
+  pod, all in `bench-ns-000`), so a few tens of KiB. Holding it during the
+  list or not cannot move the peak heap (30.5 and 36.4 MiB) or the peak RSS
+  (63.6 MiB) by anything the 5 ms sampler could see, nor a request. The mean over a
   cycle of 3 is 23.7 requests, 35.3 MiB and 2.3 CPU-seconds (computed from
   those medians, not measured). The price is staleness: an add-on installed
   or upgraded right after a full pass, other than through Helm or a GitOps
@@ -484,18 +498,32 @@ pass began is reported as it was for the next `--pod-pass-every` minus 1
 ticks (2 at the default: about 20 minutes at the default 10-minute
 interval, with its jitter of up to 10%), and a tick does not reuse a pass
 that is `--pod-pass-max-age` old or more, which bites first on a long
-interval (at 30 minutes the default hour allows about one reuse, and from
-an hour, none). The age is measured when the tick reuses the pass, and
+interval (at 30 minutes the default hour allows the first reuse, which is
+a pass of about 30 minutes, and loses the second on the ticks the jitter
+spaces widely; from an hour, none). The age is measured when the tick reuses the pass, and
 that tick's report and ClusterReadiness status stay up until the next
 one, so a viewer can see evidence up to about the maximum age plus one
 interval old. An add-on removed or one whose last pod went away is
 likewise reported until the next full pass.
 
-A `--pod-pass-max-age` at or below `--interval` defeats the setting: the
+**The maximum age needed.** Ticks are spaced by the interval with a jitter
+of 10% either way (0.9 to 1.1 times it), and the sleep starts after a tick
+ends, so each spacing also holds that tick's run time. The last reuse after
+a pass is `--pod-pass-every` minus one spacings old, up to 1.1 times the
+interval plus the run time of each. So `--pod-pass-max-age` must exceed
+1.1 times `--interval` times (`--pod-pass-every` minus one), the floor, for
+every one of those reuses to work, and the floor is needed but not
+enough: the ticks' run time comes on top. At the default interval of 10
+minutes and `--pod-pass-every 3` the floor is 22 minutes, and 21 fails
+on the draws where the two spacings and their run time reach 21 minutes;
+25 works unless a tick takes over a minute (a reusing tick took 2.4 s
+here, a full one 4.4 s, the first 35 s). The default hour clears it. A
+maximum age at or below `--interval` defeats the setting most: the
 pass is about one interval old at the next tick, so every tick lists every
-pod but one the jitter brings early, and the agent logs a warning at start.
-To allow `--pod-pass-every` minus 1 reuses, the maximum age must exceed
-the interval times that many.
+pod but one the jitter brings early. Between the interval and the floor the
+first reuses work and the last ones depend on the draw. The agent logs a
+warning at start for any maximum age at or below the floor, with the floor
+in its `mustExceed` field (`TestRunWarnsWhenPodPassMaxAgeIsTooShortForPodPassEvery`).
 
 Which add-ons can be behind. Those in `kube-system` cannot: their pods are
 read on every tick. A change made through Helm (a new release, or a new
@@ -544,7 +572,12 @@ agent it is a multiple of the interval. The peak heap of a reusing tick is
 the higher by about 6 MiB (32.6 to 36.4 MiB over its 5 ticks, 29.7 and 30.5
 over the 2 full ones): the cache holds the evidence of the pass, but the
 sampler reads every 5 ms with the garbage not yet collected, and these runs
-did not separate the two. The requests of the two kinds of tick, by verb and
+did not separate the two. These figures come from `0b6fec28`, where a
+full-pass tick still held the previous pass while it read the new one;
+`81761afd` drops it first. The held pass is a few tens of KiB at this
+fill (the estimate under [the short answers](#the-short-answers), checked
+from the seed, not re-measured), so the peaks above are those of `daf513a4`
+to within what the sampler can see. The requests of the two kinds of tick, by verb and
 resource:
 
 | Verb | Resource | Lists every pod: requests, MiB | Reuses the pass: requests, MiB |
