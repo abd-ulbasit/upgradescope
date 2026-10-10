@@ -557,6 +557,9 @@ func TestParseOnce_WorstCaseCost(t *testing.T) {
 		{"16 distinct floats per document", func(n int) string { return ingressWith(n, 16, float) }},
 		{"300 distinct dotted versions per document", func(n int) string { return ingressWith(n, 300, version) }},
 		{"300 hex, underscored, exponent and negative scalars per document", func(n int) string { return ingressWith(n, 300, exotic) }},
+		// Declined late: the whole tree is walked, then the last value (.inf,
+		// which JSON cannot hold) leaves the document to kubectl's decoder.
+		{"300 distinct floats and a final .inf per document (declined)", func(n int) string { return ingressWith(n, 300, float) + "    z: .inf\n" }},
 		{"a Deployment and 0 distinct dotted versions", deployment(0)},
 		{"a Deployment and 16 distinct dotted versions", deployment(16)},
 		{"a Deployment and 64 distinct dotted versions", deployment(64)},
