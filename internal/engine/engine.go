@@ -197,7 +197,7 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known; %s %s is served from %s", target, gvString(later.Group, later.Version), later.Kind, from)
 		} else if succ, ok := idx.ServedSuccessor(e, target); ok {
-			f.Remediation = "migrate to " + successorRemedy(succ)
+			f.Remediation = "migrate to " + successorRemedy(succ, k.MaxKnownK8s, false)
 		} else if e.Replacement != nil {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known", target)
 		}
@@ -408,9 +408,16 @@ func UnservedKey(removalKey string) string { return removalKey + "/" + unservedK
 
 // BaseOfUnservedKey is the key of the removal of the API an unserved
 // finding's key names, and whether key is an unserved key at all.
+//
+// A Helm release's key is removed-api/helm-release/<namespace>/<name>, so
+// a release named "unserved" is not one: only an API key (group, version
+// and kind after the category) is.
 func BaseOfUnservedKey(key string) (string, bool) {
 	base, ok := strings.CutSuffix(key, "/"+unservedKeyPhase)
-	return base, ok && strings.HasPrefix(key, string(CatRemovedAPI)+"/")
+	if !ok || !strings.HasPrefix(base, string(CatRemovedAPI)+"/") || strings.HasPrefix(base, string(CatRemovedAPI)+"/helm-release/") {
+		return "", false
+	}
+	return base, true
 }
 
 // keyAPI is the group/version/name of an API finding's key, after its
@@ -426,20 +433,39 @@ func keyAPI(key string) string {
 // successorRemedy words the version ServedSuccessor found, with the
 // stability the user needs to know about: alpha and beta APIs are off by
 // default in kube-apiserver, and an alpha successor that is itself removed
-// later says when.
-func successorRemedy(succ kb.APILifecycleEntry) string {
+// later says when ("projected" when that is past maxKnown, as a finding
+// for that removal is titled). It has no nested parentheses: inList is
+// whether it is one element of a parenthesised list (a Helm release's
+// remediation), where the note follows a dash instead.
+func successorRemedy(succ kb.APILifecycleEntry, maxKnown inventory.Version, inList bool) string {
 	out := gvString(succ.Group, succ.Version) + " " + succ.Kind
-	switch {
-	case !kb.PreGA(succ.Version):
+	if !kb.PreGA(succ.Version) {
 		return out
-	case strings.Contains(succ.Version, "alpha"):
-		out += " (alpha; must be enabled"
-		if succ.Removed != nil {
-			out += "; itself removed in " + succ.Removed.String()
-		}
-		return out + ")"
 	}
-	return out + " (beta; may need enabling)"
+	note, later := "beta; may need enabling", ""
+	if strings.Contains(succ.Version, "alpha") {
+		note = "alpha; must be enabled"
+		if succ.Removed != nil {
+			later = "itself removed in " + succ.Removed.String()
+			switch projected := succ.Removed.Compare(maxKnown) > 0; {
+			case projected && inList:
+				later = "itself removed in the projected " + succ.Removed.String()
+			case projected:
+				later += " (projected)"
+			}
+		}
+	}
+	if inList {
+		if later != "" {
+			note += "; " + later
+		}
+		return out + " - " + note
+	}
+	out += " (" + note + ")"
+	if later != "" {
+		out += ", " + later
+	}
+	return out
 }
 
 // objectManagers returns the distinct ObjectRef managers, sorted.
@@ -2102,7 +2128,7 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
 			b.unserved = append(b.unserved, fmt.Sprintf("%s (%s %s is served from %s)", api, gvString(later.Group, later.Version), later.Kind, from))
 		} else if succ, ok := idx.ServedSuccessor(e, target); ok {
-			b.replacements = append(b.replacements, successorRemedy(succ))
+			b.replacements = append(b.replacements, successorRemedy(succ, maxKnown, true))
 		} else if e.Replacement != nil {
 			b.unserved = append(b.unserved, api)
 		}

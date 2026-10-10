@@ -60,7 +60,8 @@ func BenchmarkComputeDelta20k(b *testing.B) {
 
 // TestCarriedFoldMatchesFoldsInto: the index answers exactly what
 // comparing a caller with every carried finding through engine.FoldsInto
-// answered, plural forms, case, subresources and non-usage findings
+// answered, plural forms, case, subresources, non-usage findings and the
+// key of a not-served-yet finding (removed-api/.../unserved, #300)
 // included.
 func TestCarriedFoldMatchesFoldsInto(t *testing.T) {
 	var carried []findingHead
@@ -73,6 +74,9 @@ func TestCarriedFoldMatchesFoldsInto(t *testing.T) {
 		"removed-api/example.dev/v1/Day",
 		"removed-api/example.dev/v1/STATUS",
 		"removed-api/helm-release/ns/release",
+		"removed-api/helm-release/ns/unserved",                       // a release named so, not a phase
+		"removed-api/networking.k8s.io/v1beta1/ServiceCIDR/unserved", // #300: not served yet, the API is the base key's
+		"removed-api/example.dev/v1/Day/other",                       // four parts that are no phase: no API
 		"removed-api/core/v1",
 		"chart-incompat/helm-release/ns/r",
 		"eol-addon/ingress-nginx",
@@ -94,6 +98,9 @@ func TestCarriedFoldMatchesFoldsInto(t *testing.T) {
 		"deprecated-api-in-use/example.dev/v1/daies",
 		"deprecated-api-in-use/example.dev/v1/statuses",
 		"deprecated-api-in-use/example.dev/v2/gateways",
+		"deprecated-api-in-use/networking.k8s.io/v1beta1/servicecidrs",
+		"deprecated-api-in-use/networking.k8s.io/v1beta1/servicecidrs/status",
+		"deprecated-api-in-use/helm-release/ns/unserved",
 		"deprecated-api-in-use/helm-release/ns/release",
 		"deprecated-api-in-use/core/v1",
 		"removed-api/policy/v1beta1/PodSecurityPolicy",

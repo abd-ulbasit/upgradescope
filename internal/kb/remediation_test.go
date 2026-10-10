@@ -234,6 +234,19 @@ func TestRemediationNeverPointsAtRemovedAPI(t *testing.T) {
 		for minor := 9; minor <= k.MaxKnownK8s.Minor+3; minor++ { // #237 asks 1.20 onwards; every target is checked
 
 			target := *ver(minor)
+			// The served successor (#302) is advice too: of the entry's
+			// own kind, introduced after it, and served at the target.
+			if succ, ok := idx.ServedSuccessor(e, target); ok {
+				if succ.Group != e.Group || succ.Kind != e.Kind || succ.Version == e.Version || succ.Introduced.Compare(e.Introduced) <= 0 {
+					t.Errorf("%s/%s %s @%s: successor %s/%s %s is not a later version of the kind", e.Group, e.Version, e.Kind, target, succ.Group, succ.Version, succ.Kind)
+				}
+				if succ.Removed != nil && succ.Removed.Compare(target) <= 0 {
+					t.Errorf("%s/%s %s @%s: successor %s is removed in %s", e.Group, e.Version, e.Kind, target, succ.Version, succ.Removed)
+				}
+				if succ.Introduced.Compare(target) > 0 {
+					t.Errorf("%s/%s %s @%s: successor %s is introduced in %s, after the target", e.Group, e.Version, e.Kind, target, succ.Version, succ.Introduced)
+				}
+			}
 			r, ok := idx.ResolveReplacement(e, target)
 			if !ok {
 				continue
@@ -624,6 +637,7 @@ func TestServedSuccessor(t *testing.T) {
 		older, own,
 		entry("v1beta1", 35, nil),
 		entry("v1alpha3", 35, nil), // same release as the beta: the beta wins
+		entry("v1alpha0", 32, nil), // introduced with own, not after it: never its successor
 		entry("v1beta2", 38, nil),
 		entry("v1", 40, nil),
 	})

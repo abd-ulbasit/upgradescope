@@ -106,27 +106,38 @@ func TestRemovedAlphaRemediatesToTheServedSuccessor(t *testing.T) {
 		{"PodGroup v1alpha2 removed at 1.37", "scheduling.k8s.io", "v1alpha2", "PodGroup", 37, SevBlocker, "migrate to scheduling.k8s.io/v1beta1 PodGroup (beta; may need enabling)"},
 		{"LeaseCandidate v1alpha2 warned at 1.37", "coordination.k8s.io", "v1alpha2", "LeaseCandidate", 37, SevWarning, "migrate to coordination.k8s.io/v1beta1 LeaseCandidate (beta; may need enabling)"},
 		// v1beta1 is served from 1.33, after this removal: the newest served then is an alpha.
-		{"LeaseCandidate v1alpha1 removed at 1.32", "coordination.k8s.io", "v1alpha1", "LeaseCandidate", 32, SevBlocker, "migrate to coordination.k8s.io/v1alpha2 LeaseCandidate (alpha; must be enabled; itself removed in 1.38)"},
-		{"Workload v1alpha1 removed at 1.36", "scheduling.k8s.io", "v1alpha1", "Workload", 36, SevBlocker, "migrate to scheduling.k8s.io/v1alpha2 Workload (alpha; must be enabled; itself removed in 1.37)"},
+		{"LeaseCandidate v1alpha1 removed at 1.32", "coordination.k8s.io", "v1alpha1", "LeaseCandidate", 32, SevBlocker, "migrate to coordination.k8s.io/v1alpha2 LeaseCandidate (alpha; must be enabled), itself removed in 1.38 (projected)"},
+		{"Workload v1alpha1 removed at 1.36", "scheduling.k8s.io", "v1alpha1", "Workload", 36, SevBlocker, "migrate to scheduling.k8s.io/v1alpha2 Workload (alpha; must be enabled), itself removed in 1.37"},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			r := Evaluate(manifestsInv(manifestUsage(c.group, c.v, c.kd)), k, inventory.Version{Major: 1, Minor: c.target}, testNow)
-			var f Finding
-			for _, g := range r.Findings {
-				if g.Category == CatRemovedAPI {
-					f = g
+		for _, mode := range []struct {
+			name string
+			inv  inventory.Inventory
+		}{
+			{"manifests", manifestsInv(manifestUsage(c.group, c.v, c.kd))},
+			// KB-18: the live finding says it alike (no manager recorded:
+			// the kind itself goes away, so every stored object counts)
+			{"live", inventory.Inventory{SchemaVersion: 1, ClusterID: "live",
+				APIUsage: []inventory.APIUsage{{Group: c.group, Version: c.v, Kind: c.kd, Count: 1, Namespaces: map[string]int{"default": 1}}}}},
+		} {
+			t.Run(c.name+"/"+mode.name, func(t *testing.T) {
+				r := Evaluate(mode.inv, k, inventory.Version{Major: 1, Minor: c.target}, testNow)
+				var f Finding
+				for _, g := range r.Findings {
+					if g.Category == CatRemovedAPI {
+						f = g
+					}
 				}
-			}
-			if f.Severity != c.sev {
-				t.Fatalf("findings = %+v, want a removed-api %s", r.Findings, c.sev)
-			}
-			if !strings.HasPrefix(f.Remediation, c.want) {
-				t.Errorf("remediation = %q, want it to start %q", f.Remediation, c.want)
-			}
-			if f.Key != "removed-api/"+apiKey(c.group, c.v, c.kd) {
-				t.Errorf("key = %q: the removal keeps the bare key", f.Key)
-			}
-		})
+				if f.Severity != c.sev {
+					t.Fatalf("findings = %+v, want a removed-api %s", r.Findings, c.sev)
+				}
+				if f.Remediation != c.want {
+					t.Errorf("remediation = %q, want %q", f.Remediation, c.want)
+				}
+				if f.Key != "removed-api/"+apiKey(c.group, c.v, c.kd) {
+					t.Errorf("key = %q: the removal keeps the bare key", f.Key)
+				}
+			})
+		}
 	}
 }
 
@@ -135,8 +146,8 @@ func TestAlphaSuccessorSaysWhenItIsRemovedLater(t *testing.T) {
 	k := realKB(t)
 	r := Evaluate(manifestsInv(manifestUsage("coordination.k8s.io", "v1alpha1", "LeaseCandidate")), k, inventory.Version{Major: 1, Minor: 32}, testNow)
 	f := apiFindingFor(t, r, "removed in 1.32")
-	if !strings.Contains(f.Remediation, "removed in 1.38") {
-		t.Errorf("remediation = %q, want it to say v1alpha2 is removed in 1.38", f.Remediation)
+	if !strings.Contains(f.Remediation, "itself removed in 1.38 (projected)") {
+		t.Errorf("remediation = %q, want it to say v1alpha2 is removed in 1.38, projected (past the KB's %s)", f.Remediation, k.MaxKnownK8s)
 	}
 }
 
@@ -159,7 +170,121 @@ func TestHelmManifestRemediatesToTheServedSuccessor(t *testing.T) {
 			Namespaces: map[string]int{"platform": 1}, Objects: []inventory.ObjectRef{{Name: "w", Namespace: "platform", Line: 3}}}},
 	}
 	fs := evalHelmManifest(rel, kb.NewIndex(k.APILifecycle), nil, inventory.Version{Major: 1, Minor: 37}, k.MaxKnownK8s)
-	if len(fs) != 1 || !strings.Contains(fs[0].Remediation, "(scheduling.k8s.io/v1beta1 Workload (beta; may need enabling))") {
-		t.Errorf("findings = %+v, want the remediation to name v1beta1 Workload (beta; may need enabling)", fs)
+	if len(fs) != 1 || !strings.Contains(fs[0].Remediation, "renders supported APIs (scheduling.k8s.io/v1beta1 Workload - beta; may need enabling) before") {
+		t.Errorf("findings = %+v, want the remediation to name v1beta1 Workload and its stability without nesting parentheses", fs)
+	}
+
+	// An alpha successor removed past the horizon says it is projected,
+	// in words the list's parentheses do not nest.
+	rel.ManifestAPIs[0] = inventory.APIUsage{Group: "coordination.k8s.io", Version: "v1alpha1", Kind: "LeaseCandidate", Count: 1,
+		Namespaces: map[string]int{"platform": 1}, Objects: []inventory.ObjectRef{{Name: "l", Namespace: "platform", Line: 3}}}
+	fs = evalHelmManifest(rel, kb.NewIndex(k.APILifecycle), nil, inventory.Version{Major: 1, Minor: 32}, k.MaxKnownK8s)
+	if len(fs) != 1 || !strings.Contains(fs[0].Remediation, "(coordination.k8s.io/v1alpha2 LeaseCandidate - alpha; must be enabled; itself removed in the projected 1.38) before") {
+		t.Errorf("findings = %+v, want the alpha successor with its projected removal", fs)
+	}
+}
+
+// No remediation nests parentheses, for any removed or deprecated entry
+// at any target, live or in a Helm release's stored manifest.
+func TestSuccessorRemediationsDoNotNestParentheses(t *testing.T) {
+	k := realKB(t)
+	idx := kb.NewIndex(k.APILifecycle)
+	nested := func(s string) bool {
+		depth := 0
+		for _, r := range s {
+			switch r {
+			case '(':
+				depth++
+				if depth > 1 {
+					return true
+				}
+			case ')':
+				depth--
+			}
+		}
+		return false
+	}
+	succeeded := 0
+	for _, e := range k.APILifecycle {
+		for minor := 20; minor <= k.MaxKnownK8s.Minor+1; minor++ {
+			target := inventory.Version{Major: 1, Minor: minor}
+			succ, ok := idx.ServedSuccessor(e, target)
+			if !ok {
+				continue
+			}
+			succeeded++
+			for _, inList := range []bool{false, true} {
+				if out := successorRemedy(succ, k.MaxKnownK8s, inList); nested(out) {
+					t.Errorf("successorRemedy(%s/%s %s @%s, inList=%v) = %q nests parentheses", e.Group, e.Version, e.Kind, target, inList, out)
+				}
+			}
+			use := inventory.APIUsage{Group: e.Group, Version: e.Version, Kind: e.Kind, Count: 1, Namespaces: map[string]int{"platform": 1},
+				Objects: []inventory.ObjectRef{{Name: "x", Namespace: "platform", Line: 1}}}
+			rel := inventory.HelmRelease{Name: "r", Namespace: "platform", ChartName: "c", ChartVersion: "1", Status: "deployed", Revision: 1, ManifestAPIs: []inventory.APIUsage{use}}
+			for _, f := range evalHelmManifest(rel, idx, nil, target, k.MaxKnownK8s) {
+				if nested(f.Remediation) {
+					t.Errorf("%s/%s %s @%s: Helm remediation %q nests parentheses", e.Group, e.Version, e.Kind, target, f.Remediation)
+				}
+			}
+			for _, f := range Evaluate(manifestsInv(use), k, target, testNow).Findings {
+				if nested(f.Remediation) {
+					t.Errorf("%s/%s %s @%s: remediation %q nests parentheses", e.Group, e.Version, e.Kind, target, f.Remediation)
+				}
+			}
+		}
+	}
+	if succeeded == 0 {
+		t.Fatal("no entry had a served successor: the test checks nothing")
+	}
+}
+
+// successorRemedy's words: GA says nothing, beta and alpha say what they
+// need, an alpha removed later says when, projected past the horizon.
+func TestSuccessorRemedyWording(t *testing.T) {
+	horizon := inventory.Version{Major: 1, Minor: 37}
+	at := func(minor int) *inventory.Version { return &inventory.Version{Major: 1, Minor: minor} }
+	for _, c := range []struct {
+		version string
+		removed *inventory.Version
+		inList  bool
+		want    string
+	}{
+		{"v1", nil, false, "x.k8s.io/v1 Thing"},
+		{"v1", nil, true, "x.k8s.io/v1 Thing"},
+		{"v1beta1", nil, false, "x.k8s.io/v1beta1 Thing (beta; may need enabling)"},
+		{"v1beta1", nil, true, "x.k8s.io/v1beta1 Thing - beta; may need enabling"},
+		{"v1alpha1", nil, false, "x.k8s.io/v1alpha1 Thing (alpha; must be enabled)"},
+		{"v1alpha1", at(37), false, "x.k8s.io/v1alpha1 Thing (alpha; must be enabled), itself removed in 1.37"},
+		{"v1alpha1", at(38), false, "x.k8s.io/v1alpha1 Thing (alpha; must be enabled), itself removed in 1.38 (projected)"},
+		{"v1alpha1", at(37), true, "x.k8s.io/v1alpha1 Thing - alpha; must be enabled; itself removed in 1.37"},
+		{"v1alpha1", at(38), true, "x.k8s.io/v1alpha1 Thing - alpha; must be enabled; itself removed in the projected 1.38"},
+	} {
+		got := successorRemedy(kb.APILifecycleEntry{Group: "x.k8s.io", Version: c.version, Kind: "Thing", Removed: c.removed}, horizon, c.inList)
+		if got != c.want {
+			t.Errorf("successorRemedy(%s removed %v, inList=%v) = %q, want %q", c.version, c.removed, c.inList, got, c.want)
+		}
+	}
+}
+
+// A Helm release's key is not an API's: a release named "unserved" is no
+// unserved finding, and a rule for its key does not warn of a phase.
+func TestBaseOfUnservedKeyIgnoresHelmReleases(t *testing.T) {
+	for _, key := range []string{
+		"removed-api/helm-release/platform/unserved",
+		"deprecated-api/networking.k8s.io/v1beta1/ServiceCIDR/unserved",
+		"unserved",
+		"/unserved",
+		"removed-api/unserved", // a category and the phase alone: no API
+	} {
+		if base, ok := BaseOfUnservedKey(key); ok {
+			t.Errorf("BaseOfUnservedKey(%q) = %q, true", key, base)
+		}
+	}
+	if base, ok := BaseOfUnservedKey("removed-api/networking.k8s.io/v1beta1/ServiceCIDR/unserved"); !ok || base != "removed-api/networking.k8s.io/v1beta1/ServiceCIDR" {
+		t.Errorf("an API's unserved key = %q %v", base, ok)
+	}
+	// and a release named so keeps its key through the folding helpers
+	if got := keyAPI("removed-api/helm-release/platform/unserved"); got != "helm-release/platform/unserved" {
+		t.Errorf("keyAPI of a release named unserved = %q", got)
 	}
 }
