@@ -303,7 +303,7 @@ func (p *streamParser) document(start, end int, isJSON bool) {
 			root = n.Content[0]
 			last = lastLine(root)
 		}
-		p.decoded(root, err, text, first, isJSON, renderedFrom, true)
+		p.decoded(root, err, text, first, isJSON, renderedFrom)
 		if err != nil {
 			return
 		}
@@ -328,17 +328,17 @@ func (p *streamParser) document(start, end int, isJSON bool) {
 //     through an alias), or neither can read it, it is not assessed; what
 //     kubectl's decoder found in it is named with its text.
 //
-// sameDocument says root is the first node of text itself, so kubectl's
-// decoder can be given the JSON made of root rather than parse text again
-// (see kubectlFor).
-func (p *streamParser) decoded(root *yaml.Node, yerr error, text []byte, first int, isJSON bool, renderedFrom string, sameDocument bool) {
-	var kubectl []manifestObject
-	var kerr error
-	if sameDocument {
-		kubectl, kerr = p.kubectlFor(root, text, isJSON)
-	} else {
-		kubectl, kerr = kubectlDecode(text, isJSON)
-	}
+// root is the first node of text itself, so kubectl's decoder is given the
+// JSON made of root rather than parse text again (see kubectlFor).
+func (p *streamParser) decoded(root *yaml.Node, yerr error, text []byte, first int, isJSON bool, renderedFrom string) {
+	kubectl, kerr := p.kubectlFor(root, text, isJSON)
+	p.settle(root, yerr, text, first, renderedFrom, kubectl, kerr)
+}
+
+// settle is decoded given what kubectl's decoder found (kubectl, or kerr
+// when it could not read the document). A test hands it kubectlDecode's
+// answer for a text the walk's tree does not belong to.
+func (p *streamParser) settle(root *yaml.Node, yerr error, text []byte, first int, renderedFrom string, kubectl []manifestObject, kerr error) {
 	var named []gvk
 	for _, o := range kubectl {
 		named = append(named, gvk{o.group, o.version, o.kind})
