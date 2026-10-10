@@ -202,8 +202,8 @@ func TestServerTLSSecretIsNotTheIngressSecret(t *testing.T) {
 // tokens push) and the in-chart agent must bring its own.
 func TestSharedIngestTokenOptional(t *testing.T) {
 	objs := render(t, "server.enabled=true", "server.sharedIngestToken=false", "agent.serverToken=per-cluster")
-	if _, set := envVar(container(t, objs, "upgradescope-server"), "UPGRADESCOPE_INGEST_TOKEN"); set {
-		t.Error("server gets UPGRADESCOPE_INGEST_TOKEN with server.sharedIngestToken=false")
+	if slices.ContainsFunc(containerArgs(t, objs, "upgradescope-server"), func(a string) bool { return strings.HasPrefix(a, "--ingest-token-file=") }) {
+		t.Error("server gets --ingest-token-file with server.sharedIngestToken=false")
 	}
 	if sec := find(objs, "Secret", "upgradescope-server-tokens"); sec != nil {
 		for _, field := range []string{"stringData", "data"} {
@@ -217,8 +217,8 @@ func TestSharedIngestTokenOptional(t *testing.T) {
 	}
 	// Default: the shared token, as before.
 	objs = render(t, "server.enabled=true", "server.ingestToken=t")
-	if _, set := envVar(container(t, objs, "upgradescope-server"), "UPGRADESCOPE_INGEST_TOKEN"); !set {
-		t.Error("server lacks UPGRADESCOPE_INGEST_TOKEN by default")
+	if !slices.Contains(containerArgs(t, objs, "upgradescope-server"), "--ingest-token-file=/etc/upgradescope/secret-files/ingestToken") {
+		t.Error("server lacks --ingest-token-file by default")
 	}
 	// The shared token is rendered under data, not stringData: the API
 	// server turns stringData into data and keeps no record of it, so a

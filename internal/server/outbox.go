@@ -226,7 +226,8 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) bool {
 		return false
 	}
 	nctx, cancel := context.WithTimeout(ctx, s.notifyTimeout)
-	err = target.Notify(nctx, n)
+	called, sinkURL := pinSink(target)
+	err = called.Notify(nctx, n)
 	cancel()
 	if err == nil {
 		settle(s.cfg.Store.DeleteOutbox(ctx, m.ID))
@@ -236,7 +237,7 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) bool {
 	// webhook's path is its credential. The notifiers redact it already;
 	// this holds for any error a sink that names its URL returns
 	// (TestOutboxScrubsTheSinkURLFromAnyError).
-	errText := scrubSink(err, target)
+	errText := notify.Scrub(err.Error(), sinkURL)
 	if hold := retryAfterHold(err); hold > 0 {
 		s.holds.hold(m.Sink, s.now().Add(hold))
 	}
@@ -253,14 +254,15 @@ func (s *Server) deliver(ctx context.Context, m store.OutboxMessage) bool {
 	return true
 }
 
-// scrubSink is err's text with the URL of the sink that returned it
-// redacted (notify.Scrub): any sink that names its URL (notify.URLSink),
-// whether or not its own errors are redacted already.
-func scrubSink(err error, n notify.Notifier) string {
+// pinSink is the notifier to call for one delivery and the URL to scrub its
+// errors with, read once: a sink whose URL follows a mounted file could
+// otherwise post to one URL and scrub with another (notify.URLSink.Pin). A
+// sink with no URL scrubs nothing.
+func pinSink(n notify.Notifier) (notify.Notifier, string) {
 	if u, ok := n.(notify.URLSink); ok {
-		return notify.Scrub(err.Error(), u.SinkURL())
+		return u.Pin()
 	}
-	return err.Error()
+	return n, ""
 }
 
 // expiryCap is t, or the moment m outlives outboxMaxAge if that comes

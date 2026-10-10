@@ -31,12 +31,16 @@ Per-cluster tokens are 64 random hex characters, printed once by
 characters, which `tokens list` prints to tell them apart; never the
 token. `tokens revoke <cluster> --id <id>` revokes one and `--all` every
 active one of a cluster. To rotate without a gap: `tokens create`, put
-the new token in the agent's Secret, restart the agent (it reads the
-token at startup: `kubectl rollout restart deploy/<fullname>-agent`, where
-`<fullname>` is the release name plus `-upgradescope`, cut to 63
-characters, or the release name alone when it contains `upgradescope`),
-then
-revoke the old id.
+the new token in the agent's Secret (the chart mounts it as a file the
+agent re-reads, so no restart: the agent's next push after the kubelet has
+synced the Secret, up to about 60 to 90 seconds at its default settings
+plus a 5-second check, uses it, so wait for one successful push with the
+new token before you revoke the old id: revoking sooner answers the agent's
+pushes with 401 until the kubelet has synced; a token the agent got from
+`--server-token` or `$UPGRADESCOPE_SERVER_TOKEN` is read once at start and needs
+`kubectl rollout restart deploy/<fullname>-agent`, where `<fullname>` is the
+release name plus `-upgradescope`, cut to 63 characters, or the release name
+alone when it contains `upgradescope`), and then revoke the old id.
 
 Tokens are bearer secrets: anyone who sees one in transit can replay it.
 Serve HTTPS (`--tls-cert-file`, the chart's `server.tls`, or an Ingress
@@ -63,14 +67,17 @@ What read tokens do **not** do:
 - They cannot push snapshots or delete clusters: those need the ingest and
   admin tokens.
 
-Rotating `--read-token` means restarting the server and handing the new
-value to every consumer at once. With the chart, change the value
+Rotating `--read-token` means handing the new value to every consumer at
+once. With the chart, change the value
 (`helm upgrade --set server.readToken=<new>`, or the contents of your
-`server.existingSecret`) and then run `kubectl rollout restart
-deploy/<fullname>-server` (`<fullname>` as above): the token is an
-environment variable read at start,
-so until the restart the old token still works
-([Upgrade](upgrade.md#the-chart)). Stored read tokens rotate one consumer at
+`server.existingSecret`): the server mounts it as a file and re-reads it, so
+there is no restart, and the new token works once the kubelet has synced the
+Secret (up to about 60 to 90 seconds at its default settings) plus a
+5-second check; until then the old token still works
+([Upgrade](upgrade.md#the-chart)). A `--read-token` given as a flag or
+`$UPGRADESCOPE_READ_TOKEN` is read once at start and needs a restart
+(`kubectl rollout restart deploy/<fullname>-server`, `<fullname>` as above).
+Stored read tokens rotate one consumer at
 a time (`tokens create --read`, hand it out, `tokens revoke --read --id <id>`).
 For people, put an authenticating proxy in front of the server, which can
 also set each person's team scope:

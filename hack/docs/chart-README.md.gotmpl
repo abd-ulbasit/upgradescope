@@ -239,27 +239,45 @@ deletes the old object.
 
 ## Secrets
 
-Tokens and webhook URLs reach the containers only as environment variables
-from `secretKeyRef`, never as arguments, and never appear in a Deployment.
+Tokens, webhook URLs and the webhook key reach the containers as files
+mounted from the Secrets (never with `subPath`, which would not update), by
+the `*-file` flags, never as arguments, and never appear in a Deployment.
+Only the Postgres URL is still an environment variable.
 
-| Env var | Secret key | Source |
+| File flag | Secret key | Source |
 |---|---|---|
-| `UPGRADESCOPE_INGEST_TOKEN` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` (optional key without the agent); none with `server.sharedIngestToken=false` |
-| `UPGRADESCOPE_READ_TOKEN` (server) | `readToken` | `server.readToken`, or `server.existingSecret` with `server.readTokenFromSecret=true` |
-| `UPGRADESCOPE_ADMIN_TOKEN` (server) | `adminToken` | `server.adminToken`, or `server.existingSecret` with `server.adminTokenFromSecret=true` |
-| `UPGRADESCOPE_DB_URL` (server) | `server.database.key` | `server.database.existingSecret` (Postgres) |
-| `UPGRADESCOPE_SLACK_WEBHOOK` (server) | `slackWebhook` | `server.slackWebhook`, or optional key of `server.existingSecret` |
-| `UPGRADESCOPE_WEBHOOK_URL` (server) | `webhook` | `server.webhook`, or optional key of `server.existingSecret` |
-| `UPGRADESCOPE_WEBHOOK_SECRET` (server) | `webhookSecret` | `server.webhookSecret`, or optional key of `server.existingSecret` |
-| `UPGRADESCOPE_SERVER_TOKEN` (agent) | `serverToken`, or the server's `ingestToken` | `agent.existingSecret`, `agent.serverToken`, else the in-chart server's Secret |
+| `--ingest-token-file` (server) | `ingestToken` | `server.ingestToken`, generated, or `server.existingSecret` (optional key without the agent); none with `server.sharedIngestToken=false` |
+| `--read-token-file` (server) | `readToken` | `server.readToken`, or `server.existingSecret` with `server.readTokenFromSecret=true` |
+| `--admin-token-file` (server) | `adminToken` | `server.adminToken`, or `server.existingSecret` with `server.adminTokenFromSecret=true` |
+| `UPGRADESCOPE_DB_URL` (server, an environment variable) | `server.database.key` | `server.database.existingSecret` (Postgres) |
+| `--slack-webhook-file` (server) | `slackWebhook` | `server.slackWebhook`, or optional key of `server.existingSecret` |
+| `--webhook-file` (server) | `webhook` | `server.webhook`, or optional key of `server.existingSecret` |
+| `--webhook-secret-file` (server) | `webhookSecret` | `server.webhookSecret`, or optional key of `server.existingSecret` |
+| `--server-token-file` (agent) | `serverToken`, or the server's `ingestToken` | `agent.existingSecret`, `agent.serverToken`, else the in-chart server's Secret |
 
 `server.existingSecret` alone is enough for a combined install: the server
-and the in-chart agent both use its `ingestToken` key.
+and the in-chart agent both use its `ingestToken` key. The keys of an
+`existingSecret` that may be absent are mounted from a volume that tolerates
+a missing key, and `serve` is told so (`--optional-secret-file`).
 
-The containers read these variables once, when they start, and the chart
-does not restart them for you: after you change a token, a webhook value
+**Rotating needs no restart.** `serve` and the agent re-read a file when it
+changes, checked at most every 5 seconds and only when a request or a push
+needs the value. After you change a token, a webhook value
 (`helm upgrade --set server.readToken=<new>`) or the contents of a Secret
-you named (`server.existingSecret`, `agent.existingSecret`), run
+you named (`server.existingSecret`, `agent.existingSecret`), the new value is
+in use once the kubelet has synced the mounted Secret (up to about 60 to 90
+seconds at its default settings, from the Kubernetes documentation, not
+measured here) plus that check; until then the old value still works. A new
+file that is empty or unreadable keeps the old value, and the pod logs an
+error naming the file. With `server.replicas` above 1, each replica's kubelet syncs the Secret on
+its own schedule, so for up to that window an agent push can get a 401 from
+one replica and a 200 from another. A `UPGRADESCOPE_*_TOKEN` in
+`server.extraEnv` or `agent.extraEnv` no longer overrides the chart's file (a
+file wins over the environment): set the value in the Secret. A restart is
+still needed for what is not a mounted
+file: the Postgres URL, anything passed in `server.extraEnv`,
+`agent.extraEnv`, `server.extraArgs` or `agent.extraArgs`, and a Slack or
+webhook URL that was not set when the server started:
 
 ```sh
 kubectl -n <ns> rollout restart deploy/<fullname>-server deploy/<fullname>-agent
@@ -268,7 +286,6 @@ kubectl -n <ns> rollout restart deploy/<fullname>-server deploy/<fullname>-agent
 (`<fullname>` is the release name plus `-upgradescope`, cut to 63
 characters, or the release name alone when it contains `upgradescope`;
 the install NOTES print the command with your names).
-Until then the pods keep the old value, and the old token keeps working.
 No pod annotation carries a checksum of a secret, because anyone who can
 get pods or Deployments could read it, and test a short token against it
 offline. Every key is written under the chart-managed Secret's `data`, so

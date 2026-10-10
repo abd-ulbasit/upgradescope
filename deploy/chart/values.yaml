@@ -124,11 +124,19 @@ agent:
   # -- Bearer token for snapshot pushes, stored in a chart Secret. Ignored when
   # existingSecret is set. When both are empty and server.enabled=true, the
   # agent uses the in-chart server's ingest token (key ingestToken of its
-  # Secret, generated or server.existingSecret).
+  # Secret, generated or server.existingSecret). The token reaches the agent as
+  # a file mounted from the Secret (--server-token-file), never as an
+  # argument or an environment variable, and the agent re-reads it when it
+  # changes, so rotating it needs no restart: the new token is used by the
+  # first push after the kubelet has synced the mounted Secret (up to about
+  # 60 to 90s at its default settings) plus a 5s check. A push in between
+  # may get a 401 and is retried at the next tick. A new file that is empty
+  # or unreadable keeps the old token (the agent logs an error naming the
+  # file).
   serverToken: ""
   # -- Name of an existing Secret with key "serverToken" (preferred over an
-  # inline token for anything beyond dev). The token reaches the agent as
-  # $UPGRADESCOPE_SERVER_TOKEN from a secretKeyRef, never as an argument.
+  # inline token for anything beyond dev). Mounted as a file, re-read on
+  # change: see serverToken.
   existingSecret: ""
   # -- Port of the agent's /healthz (liveness), /readyz (a tick succeeded
   # within two intervals) and /metrics (Prometheus) listener, named "http"
@@ -233,6 +241,24 @@ server:
   # Renderers without cluster access (helm template, Argo CD) cannot look
   # the old token up and generate a new one on every render: under GitOps
   # set this or existingSecret. Ignored when existingSecret is set.
+  # This and the other tokens, webhook URLs and the webhook key of the
+  # server (and the agent's push token) reach the pods as files mounted from
+  # the Secret, never as arguments or environment variables, and serve
+  # re-reads a file when it changes. Rotating one (helm upgrade, or editing
+  # the Secret you named) needs no restart: it takes effect once the
+  # kubelet has synced the mounted Secret (up to about 60 to 90s at its
+  # default settings) plus a 5s check, and until then the old value still
+  # works. An empty or unreadable new file keeps the old value (serve logs
+  # an error naming the file). Not rotated this way: the Postgres URL
+  # (server.database), and anything passed in extraEnv or extraArgs; those
+  # need `kubectl rollout restart` (the install notes print it). A
+  # Slack or webhook URL is used by the server only if it was set when the
+  # server started; one added later needs a restart, one changed does not.
+  # With replicas above 1, each replica's kubelet syncs the Secret on its
+  # own schedule, so for up to that window an agent push can get a 401 from
+  # one replica and a 200 from another. A UPGRADESCOPE_*_TOKEN in extraEnv
+  # no longer overrides the file the chart passes (a file wins over the
+  # environment): set the value in the Secret.
   ingestToken: ""
   # -- Serve the shared ingest token at all. It may push as ANY cluster; false
   # leaves only per-cluster tokens (`upgradescope tokens create <cluster>`,
@@ -267,22 +293,34 @@ server:
   #   slackWebhook   optional; Slack notifications when present
   #   webhook        optional; generic webhook when present
   #   webhookSecret  optional; signs generic webhook requests when present
+  # Each key is mounted as a file (without subPath) and re-read when the
+  # Secret changes, so editing it rotates the value without a restart (see
+  # ingestToken for the latency). A key that may be absent and is added later
+  # is picked up for the ingest token and the webhook key. Deleting a key is
+  # not how you revoke a token: only the ingestToken key of a hub with no
+  # in-chart agent (agent.enabled=false) is optional, and deleting it stops
+  # that token working. With the in-chart agent the key is required, and
+  # deleting it does NOT revoke the token: the kubelet leaves a volume whose
+  # required item is missing as it was, so the old token stays in service and
+  # the other rotations in that Secret stop arriving until the key is back.
+  # Rotate the value instead. Emptying a key, or deleting another optional
+  # one, keeps the old value.
   existingSecret: ""
   # -- With existingSecret: protect the read API with its readToken key.
   readTokenFromSecret: false
   # -- With existingSecret: enable cluster administration with its adminToken key.
   adminTokenFromSecret: false
   # -- Optional Slack incoming-webhook URL for finding-delta notifications.
-  # Stored in the chart Secret and passed as $UPGRADESCOPE_SLACK_WEBHOOK; it
-  # never appears in the Deployment. Ignored when existingSecret is set.
+  # Stored in the chart Secret and mounted as a file (--slack-webhook-file);
+  # it never appears in the Deployment. Ignored when existingSecret is set.
   slackWebhook: ""
   # -- Optional generic webhook URL: POSTed one versioned JSON notification
   # per cluster and evaluation pass (schema in docs/reference/webhook.md). Stored
-  # like slackWebhook, as $UPGRADESCOPE_WEBHOOK_URL.
+  # like slackWebhook (--webhook-file).
   webhook: ""
   # -- Optional HMAC-SHA256 key: webhook requests then carry
-  # X-Upgradescope-Signature: sha256=<hex>. Stored like slackWebhook, as
-  # $UPGRADESCOPE_WEBHOOK_SECRET.
+  # X-Upgradescope-Signature: sha256=<hex>. Stored like slackWebhook
+  # (--webhook-secret-file).
   webhookSecret: ""
   # -- Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"]:
   # at most 4 entries (serve --targets takes 4 distinct minors; the chart

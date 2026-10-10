@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,12 +77,26 @@ func TestOutboxNeverLogsOrStoresSinkURLs(t *testing.T) {
 
 // rawURLNotifier is a sink whose errors repeat its URL as written and as
 // Go quotes it, as a notifier that does not redact its own errors would.
-type rawURLNotifier struct{ url string }
+type rawURLNotifier struct {
+	url   string
+	urlFn func() string // when set, the URL now, as a sink that follows a mounted file gives it
+}
 
-func (r *rawURLNotifier) SinkURL() string { return r.url }
+func (r *rawURLNotifier) SinkURL() string {
+	if r.urlFn != nil {
+		return r.urlFn()
+	}
+	return r.url
+}
+
+func (r *rawURLNotifier) Pin() (notify.Notifier, string) {
+	u := r.SinkURL()
+	return &rawURLNotifier{url: u}, u
+}
 
 func (r *rawURLNotifier) Notify(context.Context, notify.Notification) error {
-	return fmt.Errorf("post %s: refused (Post %q)", r.url, r.url)
+	u := r.SinkURL()
+	return fmt.Errorf("post %s: refused (Post %q)", u, u)
 }
 
 // The outbox scrubs a sink's URL from every error it logs or stores, not
@@ -119,5 +134,40 @@ func TestOutboxScrubsTheSinkURLFromAnyError(t *testing.T) {
 	}
 	if !strings.Contains(logged.String(), "giving up") {
 		t.Errorf("the log has no give-up line:\n%s", logged)
+	}
+}
+
+// A sink whose URL follows a rotating file can change it between the post
+// and the scrub. The delivery reads the URL once and scrubs with the one it
+// posted to, so an error that names the old URL raw leaves nothing of it in
+// the log or in last_error even when the file has moved on.
+func TestOutboxScrubsWithTheURLItPostedTo(t *testing.T) {
+	var reads atomic.Int32
+	rotating := &rawURLNotifier{urlFn: func() string {
+		if reads.Add(1) == 1 {
+			return "https://hooks.example.com/services/OLDSECRETOLD"
+		}
+		return "https://hooks.example.com/services/NEWSECRETNEW"
+	}}
+	logged := captureLog(t)
+	st := &lastErrorStore{Store: openSQLite(t)}
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s := newTestServer(t, nil, func(c *Config) { c.Store = st; c.Notifier = rotating })
+	s.now = clock.now
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	blockedThenClean(t, ts)
+
+	s.deliverOutbox(context.Background())
+	st.mu.Lock()
+	stored := strings.Join(st.errs, "\n")
+	st.mu.Unlock()
+	if stored == "" {
+		t.Fatal("no failed delivery was stored")
+	}
+	for what, text := range map[string]string{"the log": logged.String(), "last_error": stored} {
+		if strings.Contains(text, "SECRET") {
+			t.Errorf("%s carries a sink's secret:\n%s", what, text)
+		}
 	}
 }

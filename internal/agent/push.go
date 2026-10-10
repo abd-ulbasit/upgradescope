@@ -55,10 +55,13 @@ func backoff(attempt int) time.Duration {
 type pusher struct {
 	url   string // base server URL, trailing slash trimmed
 	token string
-	hc    *http.Client
-	log   *slog.Logger                                     // nil = slog.Default()
-	wait  func(ctx context.Context, d time.Duration) error // injectable for deterministic tests
-	now   func() time.Time                                 // nil = time.Now; injectable for deterministic tests
+	// tokenFn, when set, gives the token at each push in place of token: a
+	// token read from a mounted Secret, which follows a rotation.
+	tokenFn func() string
+	hc      *http.Client
+	log     *slog.Logger                                     // nil = slog.Default()
+	wait    func(ctx context.Context, d time.Duration) error // injectable for deterministic tests
+	now     func() time.Time                                 // nil = time.Now; injectable for deterministic tests
 	// jitter draws the retry jitter, uniform in [0, 1); nil = math/rand/v2's
 	// global source, seeded per process. Injectable for tests.
 	jitter func() float64
@@ -283,7 +286,11 @@ func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, retr
 	if err := ValidateServerURL(p.url); err != nil {
 		return true, 0, fmt.Errorf("push snapshot: %w", err)
 	}
-	if err := ValidateServerToken(p.token); err != nil {
+	token := p.token
+	if p.tokenFn != nil {
+		token = p.tokenFn()
+	}
+	if err := ValidateServerToken(token); err != nil {
 		return true, 0, fmt.Errorf("push snapshot: %w", err)
 	}
 	body, err := json.Marshal(pl)
@@ -302,7 +309,7 @@ func (p *pusher) send(ctx context.Context, pl pushPayload) (permanent bool, retr
 	if err != nil {
 		return true, 0, fmt.Errorf("build push request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+p.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	resp, err := p.hc.Do(req)

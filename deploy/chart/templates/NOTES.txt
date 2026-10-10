@@ -64,37 +64,66 @@ The full rule list and its reasons are in the chart README.
 {{- end }}
 {{- if and .Values.server.enabled .Values.agent.enabled }}
 {{- $gap := float64 (include "upgradescope.pushGapSeconds" .) }}
+{{- $syncSet := include "upgradescope.agentForceSyncSet" . }}
+{{- $syncText := "1h" }}
+{{- if include "upgradescope.agentForceSyncRead" . }}
+{{- $syncText = printf "the force-sync period (%.0fs, agent.extraArgs --force-sync-every)" (float64 (include "upgradescope.agentForceSyncSeconds" .)) }}
+{{- else if ne $syncSet "" }}
+{{- $syncText = "the default force-sync of 1h (assumed: agent.extraArgs --force-sync-every is not a duration this chart can read)" }}
+{{- end }}
 {{- if and .Values.server.staleAfter (lt (float64 (include "upgradescope.durationSeconds" .Values.server.staleAfter)) $gap) }}
 
 WARNING: server.staleAfter ({{ .Values.server.staleAfter }}) is below {{ printf "%.0f" $gap }}s, the larger of
-agent.interval ({{ .Values.agent.interval }}) and 1h, plus one interval. An unchanged cluster pushes
-at its next tick after the hourly force-sync, so up to that long apart, and
+agent.interval ({{ .Values.agent.interval }}) and {{ $syncText }}, plus one interval. An unchanged cluster pushes
+at its next tick after the force-sync, so up to that long apart, and
 healthy clusters will read stale between pushes. Raise it, or leave it
 empty to follow the interval.
+{{- end }}
+{{- if and (not .Values.server.staleAfter) (lt (float64 (include "upgradescope.staleAfterSeconds" .)) $gap) }}
+
+WARNING: the default stale threshold ({{ include "upgradescope.staleAfterSeconds" . }}s) is below {{ printf "%.0f" $gap }}s, the larger of
+agent.interval ({{ .Values.agent.interval }}) and {{ $syncText }}, plus one interval. An unchanged cluster pushes
+at its next tick after the force-sync, so up to that long apart, and
+healthy clusters will read stale between pushes. Set server.staleAfter
+above {{ printf "%.0f" $gap }}s, or shorten --force-sync-every.
 {{- end }}
 {{- $alert := .Values.metrics.prometheusRule.clusterStaleAfterSeconds | default 0 }}
 {{- if and .Values.metrics.prometheusRule.enabled $alert (lt (float64 $alert) $gap) }}
 
 WARNING: metrics.prometheusRule.clusterStaleAfterSeconds ({{ int64 $alert }}) is below
-{{ printf "%.0f" $gap }}, the larger of agent.interval ({{ .Values.agent.interval }}) and 1h, plus one interval.
-An unchanged cluster pushes at its next tick after the hourly force-sync,
+{{ printf "%.0f" $gap }}s, the larger of agent.interval ({{ .Values.agent.interval }}) and {{ $syncText }}, plus one interval.
+An unchanged cluster pushes at its next tick after the force-sync,
 so up to that long apart, and the UpgradescopeClusterStale alert's
 condition will hold between the pushes of healthy clusters. Raise it, or
 set it to 0 to follow the server's threshold.
 {{- end }}
 {{- end }}
+
 {{- if or .Values.server.enabled .Values.agent.enabled }}
 
-After you change a token or a webhook URL (server.ingestToken, readToken,
-adminToken, slackWebhook, webhook, webhookSecret, agent.serverToken), or the
+Rotating a token or a webhook URL needs no restart. serve and the agent read
+them from files mounted from the Secrets (no subPath, so the kubelet updates
+the files) and re-read a file when it changes, checked at most every 5s when
+a request or a push needs it. After you change server.ingestToken, readToken,
+adminToken, slackWebhook, webhook, webhookSecret, agent.serverToken, or the
 contents of a Secret you named (server.existingSecret, agent.existingSecret),
-restart the pods that read it:
+the new value is in use once the kubelet has synced the mounted Secret
+(up to about 60 to 90s at its default settings) plus that 5s; until then the
+old value still works. An agent push that arrives in that window with a token
+the server has already dropped gets a 401 and is retried at the next tick.
+A new file that is empty or unreadable keeps the old value, and the pod logs
+an error naming the file.{{ if and .Values.server.enabled (gt (int .Values.server.replicas) 1) }} Each server replica's kubelet syncs the Secret on its own schedule,
+so for up to that window a push can get a 401 from one replica and a 200 from
+another.{{ end }} A UPGRADESCOPE_*_TOKEN in server.extraEnv or agent.extraEnv no
+longer overrides these files: set the value in the Secret. No pod annotation carries a function of a secret
+value, so the pods are not restarted by a rotation.
+
+A restart is still needed for a value that does not come from the mounted
+files: the database URL (server.database.existingSecret), anything you pass in
+server.extraEnv, agent.extraEnv, server.extraArgs or agent.extraArgs (read
+once at start), and a Slack or webhook URL that was not set when the server
+started (a notification sink exists only if its URL was set at start). Then:
   kubectl -n {{ .Release.Namespace }} rollout restart{{ if .Values.server.enabled }} deploy/{{ include "upgradescope.serverFullname" . }}{{ end }}{{ if .Values.agent.enabled }} deploy/{{ include "upgradescope.derived" (dict "root" . "suffix" "-agent") }}{{ end }}
-The values reach the containers as environment variables, which are read
-once at start: helm upgrade changes the Secret, and the running pods keep
-the old token (it still works) until they restart. No pod annotation
-carries a function of a secret value, so the chart cannot restart them for
-you.
 {{- end }}
 
 Uninstall: helm uninstall keeps the CRD (Helm crds/ semantics). Full removal:

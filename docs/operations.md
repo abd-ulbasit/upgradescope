@@ -864,6 +864,15 @@ With `--webhook-secret` (`$UPGRADESCOPE_WEBHOOK_SECRET`,
 `--webhook-secret-file`), every delivery carries
 `X-Upgradescope-Signature: sha256=<hex HMAC-SHA256(secret, raw body)>`.
 
+The URLs (`--slack-webhook-file`, `--webhook-file`) and the key
+(`--webhook-secret-file`) are re-read when their files change, so a rotated
+Secret reaches the next delivery with no restart (checked at most every 5
+seconds; an empty or unreadable new file keeps the old value and is logged,
+naming the file). A sink exists only if its URL was set when the server
+started: adding one later, or taking one away, needs a restart. A value
+from the flag or the environment is read once
+([rotating secrets](operations/upgrade.md#the-chart)).
+
 Every field, the headers, how to verify the signature, and the JSON
 Schema the body validates against are in the
 [webhook reference](reference/webhook.md).

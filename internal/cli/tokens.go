@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,32 @@ type secretFlag struct {
 	env  string  // environment variable, e.g. "UPGRADESCOPE_INGEST_TOKEN"
 	dst  *string // the flag's value; resolve fills it from the file or env
 	file string  // --<name>-file
+
+	// optional lets --<name>-file name a file that does not exist yet: the
+	// value stays empty and the caller that watches the file picks it up
+	// when it appears (--optional-secret-file).
+	optional bool
+}
+
+// follow says in --<name>-file's help that the process re-reads the file: a
+// rotated Secret takes effect without a restart. Called for the secrets
+// serve and the agent follow, not for the others (--db-url-file is read
+// once).
+func (s *secretFlag) follow(cmd *cobra.Command) {
+	if f := cmd.Flags().Lookup(s.name + "-file"); f != nil {
+		f.Usage += "; the file is re-read when it changes (checked at most every 5s, when it is next needed), so a rotated Secret needs no restart. A value from the flag or the environment is read once"
+	}
+}
+
+// fromFile is the file the value was read from ("" = the flag or the
+// environment): the path a long-running process re-reads to follow a
+// rotation. A flag set on the command line wins over the file, which is then
+// not used.
+func (s *secretFlag) fromFile(cmd *cobra.Command) string {
+	if cmd.Flags().Changed(s.name) {
+		return ""
+	}
+	return s.file
 }
 
 // addSecretFlag registers --<name> and --<name>-file on cmd. Call resolve
@@ -57,10 +84,16 @@ func (s *secretFlag) resolve(cmd *cobra.Command) error {
 	if s.file != "" {
 		raw, err := os.ReadFile(s.file)
 		if err != nil {
+			if s.optional && errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return fmt.Errorf("--%s-file: %w", s.name, err)
 		}
 		v := strings.TrimSpace(string(raw))
 		if v == "" {
+			if s.optional {
+				return nil // an empty key of a Secret you manage reads as absent
+			}
 			return fmt.Errorf("--%s-file %s is empty", s.name, s.file)
 		}
 		*s.dst = v

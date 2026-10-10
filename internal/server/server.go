@@ -24,6 +24,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
+	"github.com/abd-ulbasit/upgradescope/internal/secretfile"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
@@ -103,6 +104,26 @@ type Config struct {
 	// rotated certificate needs no restart.
 	TLSCertFile string
 	TLSKeyFile  string
+
+	// IngestTokenFile, ReadTokenFile and AdminTokenFile name a file that
+	// holds the token (a mounted Secret), in place of IngestToken,
+	// ReadToken and AdminToken. They are read in New (a missing, empty or
+	// unacceptable file fails it) and re-read when the file changes,
+	// checked at most every 5 seconds on a request that needs the token, so
+	// a rotated token needs no restart; a new file that is empty or
+	// unreadable, or that would make two of the tokens equal, leaves the old
+	// token in service and is logged, naming the file and never the token.
+	IngestTokenFile string
+	ReadTokenFile   string
+	AdminTokenFile  string
+	// IngestTokenFileOptional lets IngestTokenFile be missing in New (no
+	// shared ingest token yet) and makes removing the file revoke the
+	// token: a key dropped from a Secret stops the old token working.
+	IngestTokenFileOptional bool
+
+	// secretOpts configures the three secretfile.Files (tests: clock, check
+	// interval, log).
+	secretOpts []secretfile.Option
 }
 
 // /gate concurrency and memory. Each evaluation decodes its manifests in
@@ -257,6 +278,7 @@ type Server struct {
 	maxGateAnswer    int64             // test override of gateAnswerLimit; 0 = --max-gate-bytes
 
 	teamMapHash        string                                                                                     // fingerprint of cfg.TeamMap stored with evaluations
+	tokens             tokenSources                                                                               // the ingest, read and admin tokens, from cfg or from files
 	sinks              []sink                                                                                     // cfg.Notifier flattened; outbox messages are per sink
 	outboxKick         chan struct{}                                                                              // wakes the delivery worker after a commit
 	holds              sinkHolds                                                                                  // sinks that asked to be left alone (Retry-After), in memory
@@ -295,9 +317,9 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("server: Config.TrustTeamHeader and Config.TrustedProxies must be set together: " +
 			"a team header is trusted only from the proxies that set it")
 	}
-	if cfg.ReadToken != "" && cfg.ReadToken == cfg.IngestToken {
-		return nil, errors.New("server: Config.ReadToken must differ from Config.IngestToken: " +
-			"every agent's push token would read the whole fleet, and every reader could push as any cluster")
+	tokens, err := newTokenSources(&cfg)
+	if err != nil {
+		return nil, err
 	}
 	allowed, err := allowedHostsOf(cfg)
 	if err != nil {
@@ -305,6 +327,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	s := &Server{
 		cfg:              cfg,
+		tokens:           tokens,
 		now:              time.Now,
 		listen:           net.Listen,
 		mux:              http.NewServeMux(),
@@ -775,10 +798,10 @@ func (s *Server) logStartup() {
 		names := append([]string{"localhost", "loopback addresses", "the address a request arrives on"}, s.allowedHosts...)
 		log.Printf("server: answering only requests whose Host is one of: %s (any port; add names with --allowed-host)", strings.Join(names, ", "))
 	}
-	if s.cfg.AdminToken == "" {
+	if s.tokens.admin() == "" {
 		log.Printf("server: no admin token: cluster delete and rename (DELETE/PATCH /api/v1/clusters/{id}) are refused")
 	}
-	if s.cfg.IngestToken == "" {
+	if s.tokens.ingest() == "" {
 		log.Printf("server: no shared ingest token: snapshot pushes need a per-cluster token ('upgradescope tokens create')")
 		return
 	}

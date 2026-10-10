@@ -223,21 +223,20 @@ themselves. Call with (dict "resources" .resources "extraEnv" .extraEnv).
 {{- end -}}
 
 {{/*
-secretKeyRef (name + key) for the agent's push token, first match wins:
+The Secret and key that hold the agent's push token, first match wins:
 agent.existingSecret (key serverToken), an inline agent.serverToken (chart
-Secret, key serverToken), then the in-chart server's own shared ingest token (key
-ingestToken of the server Secret, generated or existing).
+Secret, key serverToken), then the in-chart server's own shared ingest token
+(key ingestToken of the server Secret, generated or existing). Returned as a
+JSON object {"name": ..., "key": ...}. The agent mounts it as a file and
+re-reads it, so a rotated token needs no restart.
 */}}
-{{- define "upgradescope.agentTokenRef" -}}
+{{- define "upgradescope.agentTokenSource" -}}
 {{- if .Values.agent.existingSecret -}}
-name: {{ .Values.agent.existingSecret }}
-key: serverToken
+{{- dict "name" .Values.agent.existingSecret "key" "serverToken" | toJson -}}
 {{- else if .Values.agent.serverToken -}}
-name: {{ include "upgradescope.agentTokenSecretName" . }}
-key: serverToken
+{{- dict "name" (include "upgradescope.agentTokenSecretName" .) "key" "serverToken" | toJson -}}
 {{- else if and .Values.server.enabled .Values.server.sharedIngestToken -}}
-name: {{ include "upgradescope.serverSecretName" . }}
-key: ingestToken
+{{- dict "name" (include "upgradescope.serverSecretName" .) "key" "ingestToken" | toJson -}}
 {{- else if .Values.server.enabled -}}
 {{- fail "server.sharedIngestToken=false: the in-chart agent needs a per-cluster token. Mint one with 'upgradescope tokens create <cluster>' and set agent.existingSecret (key serverToken) or agent.serverToken" -}}
 {{- else -}}
@@ -259,6 +258,49 @@ key: ingestToken
 {{- fail "server.adminTokenFromSecret reads key adminToken from server.existingSecret; set server.existingSecret, or set server.adminToken instead" -}}
 {{- end -}}
 {{- if or (and .Values.server.adminToken (not .Values.server.existingSecret)) .Values.server.adminTokenFromSecret -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The keys of the server Secret that serve reads as files, as a JSON object
+{"required": [...], "optional": [...]}. Required keys are mounted with the
+Secret volume's kubelet check (a missing key keeps the pod from starting);
+optional ones are keys of an existingSecret that may be absent (the ingest
+token of a hub with no in-chart agent, and the notification URLs and signing
+key), mounted from a volume that tolerates a missing key, and serve is told
+they may be missing (--optional-secret-file). A chart-managed Secret holds
+exactly the keys that are set, so all of them are required.
+*/}}
+{{- define "upgradescope.serverSecretFiles" -}}
+{{- $v := .Values.server -}}
+{{- $required := list -}}
+{{- $optional := list -}}
+{{- if $v.sharedIngestToken -}}
+{{- if and $v.existingSecret (not .Values.agent.enabled) -}}
+{{- $optional = append $optional "ingestToken" -}}
+{{- else -}}
+{{- $required = append $required "ingestToken" -}}
+{{- end -}}
+{{- end -}}
+{{- if include "upgradescope.readTokenEnabled" . -}}
+{{- $required = append $required "readToken" -}}
+{{- end -}}
+{{- if include "upgradescope.adminTokenEnabled" . -}}
+{{- $required = append $required "adminToken" -}}
+{{- end -}}
+{{- range $key := list "slackWebhook" "webhook" "webhookSecret" -}}
+{{- if $v.existingSecret -}}
+{{- $optional = append $optional $key -}}
+{{- else if get $v $key -}}
+{{- $required = append $required $key -}}
+{{- end -}}
+{{- end -}}
+{{- dict "required" $required "optional" $optional | toJson -}}
+{{- end -}}
+
+{{/* The serve flag (without --, and without -file) that reads a key of the
+server Secret. */}}
+{{- define "upgradescope.serverSecretFlag" -}}
+{{- get (dict "ingestToken" "ingest-token" "readToken" "read-token" "adminToken" "admin-token" "slackWebhook" "slack-webhook" "webhook" "webhook" "webhookSecret" "webhook-secret") . -}}
 {{- end -}}
 
 {{/* Does the server use Postgres (server.database.existingSecret)? Non-empty string = yes. */}}
@@ -314,16 +356,66 @@ to 40m.
 {{- end -}}
 
 {{/*
+The agent's force-sync period in seconds: the value of --force-sync-every in
+agent.extraArgs (as --force-sync-every=2h or as two arguments), else the
+agent's default of 1h. The last one wins, as the flag parser does. A value
+the chart cannot read as a duration counts as the default.
+*/}}
+{{- define "upgradescope.agentForceSyncSeconds" -}}
+{{- $seconds := 3600.0 -}}
+{{- $args := .Values.agent.extraArgs | default list -}}
+{{- range $i, $arg := $args -}}
+{{- $v := "" -}}
+{{- if hasPrefix "--force-sync-every=" (toString $arg) -}}
+{{- $v = trimPrefix "--force-sync-every=" (toString $arg) -}}
+{{- else if and (eq (toString $arg) "--force-sync-every") (lt (add1 $i) (len $args)) -}}
+{{- $v = toString (index $args (add1 $i)) -}}
+{{- end -}}
+{{- if regexMatch "^([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h)" $v -}}
+{{- $parsed := float64 (include "upgradescope.durationSeconds" $v) -}}
+{{- if gt $parsed 0.0 -}}
+{{- $seconds = $parsed -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- printf "%f" $seconds -}}
+{{- end -}}
+
+{{/* Could the chart read a force-sync period from agent.extraArgs? Non-empty
+string = yes; empty when it is absent or every one is not a duration, and the
+NOTES then say they assumed the default. */}}
+{{- define "upgradescope.agentForceSyncRead" -}}
+{{- $args := .Values.agent.extraArgs | default list -}}
+{{- range $i, $arg := $args -}}
+{{- $v := "" -}}
+{{- if hasPrefix "--force-sync-every=" (toString $arg) -}}
+{{- $v = trimPrefix "--force-sync-every=" (toString $arg) -}}
+{{- else if and (eq (toString $arg) "--force-sync-every") (lt (add1 $i) (len $args)) -}}
+{{- $v = toString (index $args (add1 $i)) -}}
+{{- end -}}
+{{- if and (regexMatch "^([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h)" $v) (gt (float64 (include "upgradescope.durationSeconds" $v)) 0.0) -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Is the force-sync period set in agent.extraArgs? Non-empty string = yes. */}}
+{{- define "upgradescope.agentForceSyncSet" -}}
+{{- range $arg := .Values.agent.extraArgs | default list -}}
+{{- if or (hasPrefix "--force-sync-every=" (toString $arg)) (eq (toString $arg) "--force-sync-every") -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The longest gap between two pushes of an unchanged cluster whose agent runs
 at agent.interval, in whole seconds: it pushes at its next tick after the
-hourly force-sync, so up to max(interval, 1h) plus one interval (70m at the
-default 10m). A stale threshold the render accepts (above the interval) but
-below this flags healthy clusters stale between their pushes: the NOTES
-warn about it.
+force-sync period (1h unless agent.extraArgs sets --force-sync-every), so up
+to max(interval, force-sync) plus one interval (70m at the defaults). A
+stale threshold the render accepts (above the interval) but below this flags
+healthy clusters stale between their pushes: the NOTES warn about it.
 */}}
 {{- define "upgradescope.pushGapSeconds" -}}
 {{- $interval := float64 (include "upgradescope.durationSeconds" .Values.agent.interval) -}}
-{{- printf "%d" (int64 (ceil (addf (maxf $interval 3600.0) $interval))) -}}
+{{- $sync := float64 (include "upgradescope.agentForceSyncSeconds" .) -}}
+{{- printf "%d" (int64 (ceil (addf (maxf $interval $sync) $interval))) -}}
 {{- end -}}
 
 {{/* serve --stale-after: server.staleAfter as written, else "2h" when that is
