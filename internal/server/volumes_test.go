@@ -161,3 +161,26 @@ func TestMergeManifestsVolumePlugins(t *testing.T) {
 		t.Error("the cluster's inventory must not be modified")
 	}
 }
+
+// #362: a cluster row that names its PersistentVolumes and StorageClasses
+// keeps them, first, beside the posted manifests' located objects, so the
+// engine reads the row as mixed (cluster-scoped or no namespace set).
+func TestMergeManifestsVolumePluginsWithClusterObjects(t *testing.T) {
+	cluster := testInventory()
+	cluster.VolumePlugins = []inventory.VolumePluginUse{{Plugin: "rbd", Count: 2, Namespaces: map[string]int{"data": 1, "": 1},
+		Objects: []inventory.ObjectRef{{Name: "pv-rbd"}, {Name: "sc-rbd"}}}}
+	manifests := inventory.Inventory{
+		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{inventory.CapVolumes: {Available: true}},
+		VolumePlugins: []inventory.VolumePluginUse{{Plugin: "rbd", Count: 1, Namespaces: map[string]int{"": 1}, Objects: []inventory.ObjectRef{{Name: "pv-new", File: "pv.yaml", Line: 1}}}},
+	}
+	proposed := cluster
+	mergeManifests(&proposed, manifests)
+	want := []inventory.ObjectRef{{Name: "pv-rbd"}, {Name: "sc-rbd"}, {Name: "pv-new", File: "pv.yaml", Line: 1}}
+	if len(proposed.VolumePlugins) != 1 || proposed.VolumePlugins[0].Count != 3 || proposed.VolumePlugins[0].Namespaces[""] != 2 ||
+		fmt.Sprint(proposed.VolumePlugins[0].Objects) != fmt.Sprint(want) {
+		t.Fatalf("VolumePlugins = %+v, want rbd counted 3, 2 with no namespace, objects %+v", proposed.VolumePlugins, want)
+	}
+	if len(cluster.VolumePlugins[0].Objects) != 2 {
+		t.Error("the cluster's inventory must not be modified")
+	}
+}
