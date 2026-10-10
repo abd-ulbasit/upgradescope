@@ -244,7 +244,7 @@ their tests read every file of the checkout, not just the ones a filter names
 (`internal/server` decodes every YAML file in the tree, `internal/crd/apigroup`
 reads every tracked file), so a change to a workflow, an issue template or a
 script can fail them. So a pull request that changes only docs, Markdown or a
-workflow skips the Go-heavy jobs above and runs `lint`, `repo-checks`, `web`,
+workflow other than `ci.yml` skips the Go-heavy jobs above and runs `lint`, `repo-checks`, `web`,
 `helm`, `notices`, `kb-freshness`, `registry`, the `action` and
 `release-check` jobs when their own filters match, and those unit tests. The
 filters see at most 3000 changed files (the API lists no more), so a pull
