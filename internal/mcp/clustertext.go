@@ -462,7 +462,7 @@ func markedResult(doc json.RawMessage, instead string, schema *jsonschema.Resolv
 			return nil, nil, fmt.Errorf("marking the outside text: %w", errNotJSON)
 		}
 		if err := schema.Validate(&v); err != nil {
-			return nil, nil, fmt.Errorf("cutting the outside text to %d bytes would break the result's output schema (%s)", MaxClusterTextBytes, schemaReason(err))
+			return nil, nil, fmt.Errorf("the result, once its outside text is cut to %d bytes, does not follow its output schema (%s)", MaxClusterTextBytes, schemaReason(err))
 		}
 	}
 	note := found.notice()

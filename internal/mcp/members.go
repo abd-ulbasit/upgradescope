@@ -115,7 +115,7 @@ func (e *memberError) Error() string { return e.msg }
 
 func rule(at, format string, args ...any) error {
 	if at == "" {
-		at = "the top level"
+		at = "at the top level"
 	} else {
 		at = "at " + at
 	}

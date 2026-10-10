@@ -226,8 +226,8 @@ func docWithHop(t *testing.T, base, from, to, since string) string {
 // pattern (a minor, annualCostDelta) longer than MaxClusterTextBytes would be
 // cut by the marking and no longer match its pattern, which the SDK reports
 // as a JSON-RPC protocol error. checkReport refuses it as a tool error with
-// the field and the rule, from report_file and the fleet server alike, and
-// quotes none of it.
+// the field and the rule, from report_file, the fleet server and an
+// inventory judged at a target alike, and quotes none of it.
 func TestAnOverlongPatternValueIsRefusedNotCut(t *testing.T) {
 	long := overlong()
 	clean := compactGolden(t, "clean-cluster")
@@ -252,9 +252,14 @@ func TestAnOverlongPatternValueIsRefusedNotCut(t *testing.T) {
 			path := writeDoc(t, tc.doc)
 			cfg := localConfig()
 			cfg.Fleet = rawFleet(t, tc.doc)
+			cfg.Inventory = func(context.Context, string, string) (json.RawMessage, error) { return json.RawMessage(tc.doc), nil }
 			cs := connect(t, cfg)
 			for _, tool := range []string{ToolGetReport, ToolListFindings} {
-				for _, src := range []map[string]any{{"report_file": path}, {"cluster": "prod"}} {
+				for _, src := range []map[string]any{
+					{"report_file": path},
+					{"cluster": "prod"},
+					{"inventory_file": "/inv.json", "target": "1.37"},
+				} {
 					res, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: tool, Arguments: src})
 					if err != nil {
 						t.Fatalf("%s %v: a protocol error, not a tool error: %.300v", tool, src, err)
@@ -275,6 +280,67 @@ func TestAnOverlongPatternValueIsRefusedNotCut(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestThePatternValueBoundIsOverTwoKiB: a pattern-constrained value of exactly
+// MaxClusterTextBytes bytes is accepted and returned whole (the marking cuts
+// only what is over the bound), and one byte more is refused, at the same
+// bound the marking cuts at.
+func TestThePatternValueBoundIsOverTwoKiB(t *testing.T) {
+	clean := compactGolden(t, "clean-cluster")
+	at := func(n int) string { return "1." + strings.Repeat("0", n-2) }
+	docWith := func(minor string) string {
+		return strings.Replace(clean, `"target":"`, `"target":"`+minor+`","x":"`, 1)
+	}
+	exact, over := at(MaxClusterTextBytes), at(MaxClusterTextBytes+1)
+	if len(exact) != MaxClusterTextBytes || len(over) != MaxClusterTextBytes+1 {
+		t.Fatalf("fixture lengths %d and %d", len(exact), len(over))
+	}
+
+	// The check itself.
+	if err := checkMembers([]byte(docWith(exact))); err != nil {
+		t.Errorf("checkMembers refused a minor of exactly %d bytes: %v", MaxClusterTextBytes, err)
+	}
+	if err := checkMembers([]byte(docWith(over))); err == nil || !strings.Contains(err.Error(), "at /target") {
+		t.Errorf("checkMembers of a minor of %d bytes = %v, want a refusal at /target", MaxClusterTextBytes+1, err)
+	}
+
+	// Through the server.
+	cs := connect(t, localConfig())
+	res := call(t, cs, ToolGetReport, map[string]any{"report_file": writeDoc(t, docWith(exact))})
+	if res.IsError {
+		t.Fatalf("get_report refused a minor of exactly %d bytes: %.300s", MaxClusterTextBytes, text(res))
+	}
+	var got struct {
+		Target string `json:"target"`
+	}
+	if err := json.Unmarshal(structured(t, res), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Target != exact {
+		t.Errorf("the minor of exactly %d bytes came back changed (%d bytes)", MaxClusterTextBytes, len(got.Target))
+	}
+	res = call(t, cs, ToolGetReport, map[string]any{"report_file": writeDoc(t, docWith(over))})
+	if !res.IsError || !strings.Contains(text(res), "a value with a pattern is at most 2048 bytes") {
+		t.Errorf("get_report of a minor of %d bytes: isError=%v %.300q", MaxClusterTextBytes+1, res.IsError, text(res))
+	}
+}
+
+// TestARefusalAtTheRootReadsAtTheTopLevel: a refusal about the report's own
+// members names its place the way a schema failure does, "at the top level".
+func TestARefusalAtTheRootReadsAtTheTopLevel(t *testing.T) {
+	base := compactGolden(t, "clean-cluster")
+	for name, doc := range map[string]string{
+		"case":     withRootMember(t, base, `"Target":"1.40"`),
+		"repeated": withRootMember(t, base, `"target":"1.40"`),
+	} {
+		if err := checkMembers([]byte(doc)); err == nil || !strings.HasSuffix(err.Error(), "(at the top level)") {
+			t.Errorf("%s: %v, want a reason ending (at the top level)", name, err)
+		}
+	}
+	if err := checkMembers([]byte(strings.Replace(base, `"target":"`, `"target":"`+overlong()+`","x":"`, 1))); err == nil || !strings.HasSuffix(err.Error(), "(at /target)") {
+		t.Errorf("a refusal below the root = %v, want it to end (at /target)", err)
 	}
 }
 
@@ -308,7 +374,7 @@ func TestACutThatBreaksTheOutputSchemaIsAToolError(t *testing.T) {
 	if !res.IsError || !strings.HasPrefix(msg, errorNotice()) {
 		t.Fatalf("scan: isError=%v %.200q", res.IsError, msg)
 	}
-	if !strings.Contains(msg, "would break the result's output schema") || !strings.Contains(msg, "rule pattern") || strings.Contains(msg, "0000000000") {
+	if !strings.Contains(msg, "does not follow its output schema") || !strings.Contains(msg, "rule pattern") || strings.Contains(msg, "0000000000") {
 		t.Errorf("scan: %.400q, want the schema rule named and the value not quoted", msg)
 	}
 
