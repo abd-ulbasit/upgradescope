@@ -68,6 +68,13 @@ type Config struct {
 	// AllowAnonymousRead serves an open read API (ReadToken "") on an
 	// address that is not loopback. Without it Start refuses one.
 	AllowAnonymousRead bool
+	// RequireReadCredential keeps the read API closed whatever the store
+	// holds: it is never open (readOpen is false), so a read with no
+	// credential, or with a bearer nothing knows, is 401 even when no read
+	// token has been minted yet or the database was lost and replaced by an
+	// empty one. Without it the closed state lives only in the read_tokens
+	// rows (#295). New refuses it together with AllowAnonymousRead.
+	RequireReadCredential bool
 	// TrustTeamHeader and TrustedProxies, always together, are the
 	// trusted-proxy mode: a read whose TCP peer is in TrustedProxies and
 	// that carries this header (an authenticating proxy's group header,
@@ -316,6 +323,10 @@ func New(cfg Config) (*Server, error) {
 	if (cfg.TrustTeamHeader == "") != (len(cfg.TrustedProxies) == 0) {
 		return nil, errors.New("server: Config.TrustTeamHeader and Config.TrustedProxies must be set together: " +
 			"a team header is trusted only from the proxies that set it")
+	}
+	if cfg.RequireReadCredential && cfg.AllowAnonymousRead {
+		return nil, errors.New("server: Config.RequireReadCredential (--require-read-credential) and Config.AllowAnonymousRead " +
+			"(--allow-anonymous-read) contradict each other: one keeps the read API closed whatever the database holds, the other opens it")
 	}
 	tokens, err := newTokenSources(&cfg)
 	if err != nil {
@@ -697,11 +708,13 @@ func (h *heldResponse) reset() {
 // the address it actually bound, after binding, so no name resolution
 // decides it: "localhost" mapped to a routable address in /etc/hosts, a
 // hostname, or ":8080" (every interface) is refused, and nothing is
-// served on it in between.
+// served on it in between. With RequireReadCredential the API is never
+// open, so no address is refused for it.
 //
 // On a loopback address, every request must name a host the server
 // answers for (hostcheck.go), whatever the credentials: a DNS-rebinding
-// page reaches a loopback socket naming its own host.
+// page reaches a loopback socket naming its own host. Wherever it
+// listens, an anonymous read of an open read API must too (hostRefused).
 func (s *Server) Start() error {
 	ln, err := s.listen("tcp", s.cfg.Listen)
 	if err != nil {
@@ -785,18 +798,26 @@ func (s *Server) logStartup() {
 	log.Printf("server: listening on %s://%s", scheme, s.Addr())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if open, err := s.readOpen(ctx); err != nil {
+	open, err := s.readOpen(ctx)
+	switch {
+	case err != nil:
 		log.Printf("server: listing read tokens: %v", err)
-	} else if open {
+	case open:
 		log.Printf("WARN server: no read token: the read API, dashboard data and /api/v1/gate are open to anyone who can reach %s", s.Addr())
+	case s.cfg.RequireReadCredential:
+		s.warnNoReadCredential(ctx)
 	}
 	if s.cfg.TrustTeamHeader != "" {
 		log.Printf("WARN server: reads from %v carrying %s are scoped to the teams it lists: "+
 			"the proxy there must strip that header from what clients send", s.cfg.TrustedProxies, s.cfg.TrustTeamHeader)
 	}
-	if s.hostGuardActive() {
+	if s.hostGuardActive() || open {
 		names := append([]string{"localhost", "loopback addresses", "the address a request arrives on"}, s.allowedHosts...)
-		log.Printf("server: answering only requests whose Host is one of: %s (any port; add names with --allowed-host)", strings.Join(names, ", "))
+		what := "answering only requests whose Host is one of"
+		if !s.hostGuardActive() {
+			what = "while the read API is open, answering anonymous requests only when their Host is one of"
+		}
+		log.Printf("server: %s: %s (any port; add names with --allowed-host)", what, strings.Join(names, ", "))
 	}
 	if s.tokens.admin() == "" {
 		log.Printf("server: no admin token: cluster delete and rename (DELETE/PATCH /api/v1/clusters/{id}) are refused")
@@ -820,6 +841,28 @@ func (s *Server) logStartup() {
 			return
 		}
 	}
+}
+
+// warnNoReadCredential warns, with --require-read-credential, that nothing
+// can read yet: no --read-token, no trusted team header (the caller has
+// excluded both) and no active read token in the store. Reads are 401
+// until one is minted; it says how.
+func (s *Server) warnNoReadCredential(ctx context.Context) {
+	if s.tokens.read() != "" || s.cfg.TrustTeamHeader != "" {
+		return
+	}
+	toks, err := s.cfg.Store.ListReadTokens(ctx)
+	if err != nil {
+		log.Printf("server: listing read tokens: %v", err)
+		return
+	}
+	for _, tk := range toks {
+		if tk.RevokedAt == nil {
+			return
+		}
+	}
+	log.Printf("WARN server: --require-read-credential is set and no read credential exists yet (no --read-token, no active minted read token, no trusted team header): " +
+		"every read returns 401 until one is minted: 'upgradescope tokens create --read --teams '*'' with the same --db or --db-url, or set --read-token")
 }
 
 // Ready is closed once the listener is bound. It is NEVER closed when

@@ -402,8 +402,11 @@ func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 //  2. a bearer that is an active read token: its teams;
 //  3. a request from a trusted proxy that carries the team header: the
 //     teams it lists, never the whole fleet (proxyScope);
-//  4. otherwise the whole fleet when the read API is open (readOpen),
-//     whatever bearer was sent, as before read tokens existed; else 401.
+//  4. otherwise the whole fleet when the read API is open (readOpen) and the
+//     request presents no bearer at all; else 401. A bearer that matched
+//     nothing above is an unknown credential, and 401 even on an open API:
+//     it is never silently upgraded to the whole fleet, which a team token
+//     whose database was lost would otherwise be (#295).
 func (s *Server) readScope(w http.ResponseWriter, r *http.Request) (readScope, bool) {
 	if token := bearerToken(r); token != "" {
 		read, admin := s.tokens.read(), s.tokens.admin() // once each: one request, one value
@@ -427,7 +430,7 @@ func (s *Server) readScope(w http.ResponseWriter, r *http.Request) (readScope, b
 		internalErr(w, "listing read tokens", err)
 		return readScope{}, false
 	}
-	if open {
+	if open && bearerToken(r) == "" {
 		return fleetScope, true
 	}
 	errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
@@ -444,9 +447,12 @@ func equalToken(presented, configured string) bool {
 // --read-token, no trusted-proxy header, and no read token ever minted in
 // the store. Rows are never deleted, so once one is minted the answer stays
 // false (remembered, so it is asked until then only), and revoking the last
-// one does not open the read API again.
+// one does not open the read API again. That holds only while the same
+// database does: a lost, emptied or restored one has no rows, and the API
+// is open again. Config.RequireReadCredential is the answer that does not
+// depend on the data: with it the API is never open.
 func (s *Server) readOpen(ctx context.Context) (bool, error) {
-	if s.tokens.read() != "" || s.cfg.TrustTeamHeader != "" || s.readTokensMinted.Load() {
+	if s.cfg.RequireReadCredential || s.tokens.read() != "" || s.cfg.TrustTeamHeader != "" || s.readTokensMinted.Load() {
 		return false, nil
 	}
 	toks, err := s.cfg.Store.ListReadTokens(ctx)

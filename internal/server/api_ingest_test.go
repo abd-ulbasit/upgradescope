@@ -23,6 +23,14 @@ func newTestServer(t *testing.T, st *fakeStore, opts ...func(*Config)) *Server {
 	for _, o := range opts {
 		o(&cfg)
 	}
+	if len(cfg.AllowedHosts) == 0 {
+		// A server with no read token is open, and an open one answers
+		// anonymous reads only for names it knows (hostcheck.go).
+		// httptest.NewRequest names example.com: tests that drive the
+		// handler in memory are clients told that name. A test of the
+		// guard sets AllowedHosts itself.
+		cfg.AllowedHosts = []string{"example.com"}
+	}
 	s, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
