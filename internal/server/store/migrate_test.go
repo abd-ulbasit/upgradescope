@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -116,5 +117,27 @@ INSERT INTO does_not_exist VALUES (1);`)},
 	}
 	if n != 0 {
 		t.Errorf("failed migration was recorded (%d rows), want 0", n)
+	}
+}
+
+// TestPostgresMigration0010CreatesItsIndexIfNotExists pins the property the
+// upgrade note relies on without a database: the Postgres migration 0010
+// is CREATE INDEX IF NOT EXISTS, so an index an operator built with CREATE
+// INDEX CONCURRENTLY beforehand is accepted (the run against a real
+// Postgres is TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently).
+func TestPostgresMigration0010CreatesItsIndexIfNotExists(t *testing.T) {
+	src, err := pgMigrationsFS.ReadFile("pgmigrations/0010_evaluation_created_at.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stmts []string
+	for _, line := range strings.Split(string(src), "\n") {
+		if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "--") {
+			stmts = append(stmts, l)
+		}
+	}
+	want := "CREATE INDEX IF NOT EXISTS idx_evaluations_created_at ON evaluations (created_at, id);"
+	if len(stmts) != 1 || stmts[0] != want {
+		t.Errorf("statements = %q, want exactly %q", stmts, want)
 	}
 }

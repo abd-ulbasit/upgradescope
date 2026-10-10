@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -38,15 +39,21 @@ func seedInWindowEvaluations(t *testing.T, s *SQLite, n, reportBytes int) int64 
 // on 20,000 evaluations of 30 KB reports all inside the window, finds that
 // out from idx_evaluations_created_at (migration 0010) without reading
 // a report, and so does not hold SQLite's one write lock for longer than a
-// few milliseconds: a push of another cluster started with it commits in
-// well under 50 ms. Before the index every run scanned the table, the
-// reports' overflow pages included, 177-270 ms (five runs, commit 2f9de7cc, 10
-// October 2026; docs/operations/retention-and-backup.md) and growing with
-// the history (#297). The plan test pins the index; this pins the effect.
+// few milliseconds. Two bounds, each under 50 ms: Prune itself, and a push
+// of another cluster that starts 1 ms after Prune's first statement has been
+// sent (beforeStmt starts it), so it contends for the write lock if that
+// statement holds it, and commits only once the lock is free (SQLite's busy
+// handler waits on its own schedule, so it commits no sooner). Before the
+// index every run scanned the table, the reports' overflow pages included,
+// 177-270 ms (five runs, commit 2f9de7cc, 10 October 2026;
+// docs/operations/retention-and-backup.md) and growing with the history
+// (#297); with the index dropped back to ORDER BY id, this test fails on
+// both bounds (mutation-checked, see the commit). The plan test pins the
+// index; this pins the effect.
 // It writes 600 MB, so it does not run with -short, and it skips under the
-// race detector, whose slowdown the bounds are not for (the timing is the
-// proof, not a heap figure, though raceEnabled makes hack/test-heap.sh list
-// it).
+// race detector, whose slowdown the bounds are not for. It is a timing
+// proof, not a heap bound; it is in hack/test-heap.sh's set only because it
+// reads raceEnabled.
 func TestPruneWithNothingToDeleteIsCheap(t *testing.T) {
 	if testing.Short() {
 		t.Skip("writes 600 MB of reports")
@@ -59,22 +66,25 @@ func TestPruneWithNothingToDeleteIsCheap(t *testing.T) {
 	seedInWindowEvaluations(t, s, noopPruneEvaluations, noopPruneReportBytes)
 	other := mustCluster(t, s, "other")
 
+	// pushDelay is how long after Prune's first statement is sent the push
+	// begins: long enough for the statement to hold the write lock if it is
+	// going to, far shorter than the 177-270 ms it held it before the index.
+	const pushDelay = time.Millisecond
 	pushed := make(chan time.Duration, 1)
-	pushStarted := make(chan time.Time, 1)
-	go func() {
-		// A push of another cluster contending for the write lock, timed
-		// from its own start, not from the test's.
-		began := time.Now()
-		pushStarted <- began
-		_, _, err := s.InsertSnapshot(ctx, Snapshot{ClusterID: other, Hash: "bbb", KBVersion: "kb-1", AgentVersion: "v0.2.0", ReceivedAt: tBase, Inventory: []byte(`{}`)})
-		if err != nil {
-			t.Error(err)
-		}
-		pushed <- time.Since(began)
-	}()
-	// Prune starts once the push goroutine is running, so the push is
-	// already contending (or about to) as Prune takes its statements.
-	began := <-pushStarted
+	var once sync.Once
+	s.tuning.beforeStmt = func(string) {
+		once.Do(func() {
+			go func() {
+				time.Sleep(pushDelay)
+				began := time.Now()
+				_, _, err := s.InsertSnapshot(ctx, Snapshot{ClusterID: other, Hash: "bbb", KBVersion: "kb-1", AgentVersion: "v0.2.0", ReceivedAt: tBase, Inventory: []byte(`{}`)})
+				if err != nil {
+					t.Error(err)
+				}
+				pushed <- time.Since(began)
+			}()
+		})
+	}
 	start := time.Now()
 	res, err := s.Prune(ctx, tBase.Add(-90*24*time.Hour), nil)
 	took := time.Since(start)
@@ -89,8 +99,11 @@ func TestPruneWithNothingToDeleteIsCheap(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT (SELECT page_count FROM pragma_page_count) * (SELECT page_size FROM pragma_page_size)`).Scan(&size); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("database %d MB; %d evaluations of %d KB, nothing to delete: Prune %v, concurrent push (started %v before Prune) committed after %v", size>>20, noopPruneEvaluations, noopPruneReportBytes>>10, took, start.Sub(began), wait)
-	if took > 50*time.Millisecond || wait > 50*time.Millisecond {
-		t.Errorf("Prune took %v and the concurrent push %v, want both under 50ms", took, wait)
+	t.Logf("database %d MiB; %d evaluations of %d KB, nothing to delete: Prune %v, push begun %v after Prune's first statement committed after %v", size>>20, noopPruneEvaluations, noopPruneReportBytes>>10, took, pushDelay, wait)
+	if took > 50*time.Millisecond {
+		t.Errorf("Prune took %v, want under 50ms", took)
+	}
+	if wait > 50*time.Millisecond {
+		t.Errorf("a push begun %v after Prune's first statement took %v to commit, want under 50ms: Prune holds the write lock too long", pushDelay, wait)
 	}
 }

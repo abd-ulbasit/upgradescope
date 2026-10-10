@@ -90,20 +90,36 @@ under SQLite's single write lock, which every push and re-evaluation commit
 waits for. The index alone does not change this: the statement has to order
 by `created_at, id` as the index does (with `ORDER BY id` SQLite still
 scans), and the plan is pinned for both stores. The snapshot step still
-walks the snapshots table in id order: it reads the row's `received_at`,
-which comes before the inventory, so its cost follows the number of
-snapshots and not their size, but it is a scan.
+walks the snapshots table in id order, which is a scan. It reads `received_at`,
+which comes before the inventory in the row, so it does not read the
+inventories' overflow pages, but it does read the first page of every row, and
+a row with a large inventory fills that page on its own: so its cost follows
+the number of snapshots, and also their size until a page holds several rows
+(measured below; the page explanation is reasoning from SQLite's file format,
+not observed).
 
-Measured on SQLite with 20,000 evaluations of 30 KB reports (a 625 MB
-database) all inside the window, so that a prune deletes nothing
+Measured on SQLite with 20,000 evaluations of 30 KB reports (a 627 MiB database, 658,018,304 bytes, in
+every run that logged its size; MiB, not MB) all inside the window, so that a prune deletes nothing
 (`TestPruneWithNothingToDeleteIsCheap`), on an arm64 Mac, 10 October 2026,
 load average not recorded for these runs: before the index (commit
 `2f9de7cc`), five runs took 177 to 270 ms, and a push of another cluster
 started with the prune committed after 184 to 337 ms; with it (the code of
 commit `147ac1ef`), five runs took 0.27 to 0.43 ms, the push 0.62 to 1.3
-ms. The same test passes with its 50 ms bounds, which the scan failed in all
-five runs. The snapshot step on 20,000 snapshots of 30 KB (`TestPruneNothingToDeleteTiming`,
-load average about 100): 32, 45 and 45 ms for a prune that deletes nothing.
+ms. Those runs started the push together with the prune, which usually took
+the write lock first; the test now starts it 1 ms after the prune's first
+statement is sent, so that it contends if the statement holds the lock. In
+that form, with the index (commit `4098ec98` plus the test change), four
+runs took 0.24 to 0.61 ms for the prune and 0.28 to 0.49 ms for the push, and
+with the statement ordered by `id` again, the one run made took 190 ms and
+the push 239 ms; the test's 50 ms bounds fail on both then, and the push
+bound fails on its own. The snapshot step on 20,000 snapshots (`TestPruneNothingToDeleteTiming`,
+five runs of a prune that deletes nothing, commit `4098ec98` plus that test's
+1 KB case, load average 22 to 25): 28.9 to 30.6 ms with 30 KB inventories (a
+626 MiB database), 9.2 to 10.0 ms with 1 KB inventories (27 MiB). The
+earlier three runs of the 30 KB case, at a load average of about 100, took
+32, 45 and 45 ms. So the step is not independent of the snapshots' size,
+about three times as long at 30 KB as at 1 KB, and it grows with their
+number; the evaluation step, in the same runs, took 0.29 to 0.37 ms.
 The index has a price on a backlog: `TestPruneBacklogTiming` (the 60,000-row
 prune above), five runs of each at load average 64 to 86, took 1.73 to 3.38 s
 before (best 1.73 s, commit `2f9de7cc`) and 1.99 to 2.65 s after (best 1.99

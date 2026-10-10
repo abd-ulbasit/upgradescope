@@ -204,3 +204,40 @@ func TestPostgresPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently: an operator who
+// built idx_evaluations_created_at with CREATE INDEX CONCURRENTLY before the
+// upgrade (docs/operations/upgrade.md, so the build does not block writes
+// to evaluations) gets a migration 0010 that succeeds, records itself and
+// leaves the one index, not a failure of the replica's start.
+func TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently(t *testing.T) {
+	ctx := context.Background()
+	dsn := pgTestSchema(t, "mig10")
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	sub, err := fs.Sub(pgMigrationsFS, "pgmigrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migratePostgres(ctx, db, migrationsBefore(t, sub, "0010")); err != nil {
+		t.Fatalf("migrate to 0009: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE INDEX CONCURRENTLY idx_evaluations_created_at ON evaluations (created_at, id)`); err != nil {
+		t.Fatalf("CREATE INDEX CONCURRENTLY: %v", err)
+	}
+	p, err := OpenPostgres(dsn) // applies 0010
+	if err != nil {
+		t.Fatalf("OpenPostgres with the index already built: %v", err)
+	}
+	defer p.Close()
+	var recorded, indexes int
+	if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = '0010_evaluation_created_at.sql'`).Scan(&recorded); err != nil || recorded != 1 {
+		t.Errorf("migration 0010 recorded = (%d, %v), want 1", recorded, err)
+	}
+	if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_evaluations_created_at'`).Scan(&indexes); err != nil || indexes != 1 {
+		t.Errorf("idx_evaluations_created_at count = (%d, %v), want 1", indexes, err)
+	}
+}

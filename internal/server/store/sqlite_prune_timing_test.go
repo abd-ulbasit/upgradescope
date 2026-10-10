@@ -86,23 +86,31 @@ func TestPruneNothingToDeleteTiming(t *testing.T) {
 		if err := s.db.QueryRow(`SELECT (SELECT page_count FROM pragma_page_count) * (SELECT page_size FROM pragma_page_size)`).Scan(&size); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("%s, database %d MB: Prune that deletes nothing took %v", what, size>>20, took)
+		t.Logf("%s, database %d bytes (%d MiB): Prune that deletes nothing took %v", what, size, size>>20, took)
 	}
 	t.Run("evaluations", func(t *testing.T) {
 		s := newTestStore(t)
 		seedInWindowEvaluations(t, s, noopPruneEvaluations, noopPruneReportBytes)
 		timePrune(t, s, "20,000 evaluations of 30 KB")
 	})
-	t.Run("snapshots", func(t *testing.T) {
-		s := newTestStore(t)
-		cid := mustCluster(t, s, "prod")
-		if _, err := s.db.Exec(`
-			WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-			INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, inventory)
-			SELECT ?, 'h' || i, 'kb', 'v', strftime('%Y-%m-%dT%H:%M:%S.000000000Z', '2026-06-10 12:00:00', '-' || i || ' minutes'), zeroblob(?)
-			FROM n`, noopPruneEvaluations, cid, noopPruneReportBytes); err != nil {
-			t.Fatal(err)
-		}
-		timePrune(t, s, "20,000 snapshots of 30 KB")
-	})
+	// The snapshot step's cost is the number of snapshots, not their size:
+	// 20,000 snapshots of 30 KB (overflow pages for every inventory) and of
+	// 1 KB (no overflow, the inventory in the row's own page).
+	for _, sz := range []struct {
+		name  string
+		bytes int
+	}{{"snapshots", noopPruneReportBytes}, {"snapshots-small", 1 << 10}} {
+		t.Run(sz.name, func(t *testing.T) {
+			s := newTestStore(t)
+			cid := mustCluster(t, s, "prod")
+			if _, err := s.db.Exec(`
+				WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+				INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, inventory)
+				SELECT ?, 'h' || i, 'kb', 'v', strftime('%Y-%m-%dT%H:%M:%S.000000000Z', '2026-06-10 12:00:00', '-' || i || ' minutes'), zeroblob(?)
+				FROM n`, noopPruneEvaluations, cid, sz.bytes); err != nil {
+				t.Fatal(err)
+			}
+			timePrune(t, s, fmt.Sprintf("20,000 snapshots of %d KB", sz.bytes>>10))
+		})
+	}
 }

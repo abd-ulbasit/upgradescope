@@ -245,6 +245,44 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   (SQLite and Postgres alike). Back it up first
   ([Retention and backup](retention-and-backup.md)); an older server
   cannot read a newer schema.
+- **Migration 0010 builds an index on `evaluations`.** Retention finds old
+  evaluations from `idx_evaluations_created_at`
+  ([Retention and backup](retention-and-backup.md)), and the first start
+  after the upgrade builds it on the existing table, before the server
+  serves. What to expect and do:
+  - *SQLite* reads the `created_at` of every evaluation row once, and
+    `created_at` is stored after the report, so the read walks each
+    report's overflow pages. The server does not serve until it is done.
+    Measured on 20,000 evaluations of 30 KB reports (a 627 MiB database,
+    the file in the OS page cache), three builds took 187 to 197 ms on an
+    arm64 Mac, 10 October 2026, commit `4098ec98`. That is the only size
+    measured: a database far larger than memory, or on slow disk, has to
+    read it all from disk, and the time scales with the size of the file,
+    not with the number of rows.
+  - *Postgres* builds it with `CREATE INDEX`, inside the migration's
+    transaction, which blocks every insert, update and delete on
+    `evaluations` until the build finishes (reads continue). Pushes and
+    re-evaluations from the replicas still running the old version, and
+    the new replicas' own, wait that long, as do replicas starting
+    meanwhile (they queue on the migration's advisory lock). The build time
+    on a large Postgres database was not measured. On a large database,
+    upgrade in a quiet window, or build the index first, without blocking
+    writes, and let the migration find it:
+
+    ```sql
+    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_evaluations_created_at
+      ON evaluations (created_at, id);
+    ```
+
+    The migration is `CREATE INDEX IF NOT EXISTS` with that name, so it then
+    does nothing (`TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently`
+    runs this in CI). A `CONCURRENTLY` build that fails or is cancelled
+    leaves an invalid index of that name, which the migration would also
+    skip and Postgres would not use: check `SELECT indisvalid FROM pg_index
+    WHERE indexrelid = 'idx_evaluations_created_at'::regclass` and, if it is
+    false, `DROP INDEX` it and build it again. Replicas of the old
+    version keep working with the index present; it adds a little cost to
+    each insert.
 - **Team-scoped reads (0.2.0).** The migration that adds read tokens also
   records, with every evaluation, the teams it names. Evaluations written
   before it have none, so the first start re-evaluates every stored

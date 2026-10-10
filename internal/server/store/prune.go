@@ -36,6 +36,10 @@ type PruneTestHookSetter interface {
 type pruneTuning struct {
 	batchRows int
 	onBatch   func(PruneBatch)
+	// beforeStmt, set by a test in this package (not part of
+	// PruneTestHookSetter), is called just before each batched DELETE
+	// statement is sent, so a test can start work that contends with it.
+	beforeStmt func(table string)
 }
 
 func (t *pruneTuning) tune(batchRows int, onBatch func(PruneBatch)) {
@@ -105,6 +109,9 @@ func prune(ctx context.Context, d pruneDialect, t pruneTuning, at any, baselines
 	drain := func(table, stmt string) (int64, error) {
 		var total int64
 		for {
+			if t.beforeStmt != nil {
+				t.beforeStmt(table)
+			}
 			r, err := d.db.ExecContext(ctx, stmt, at, batch)
 			if err != nil {
 				return total, fmt.Errorf("prune %s: %w", table, err)
